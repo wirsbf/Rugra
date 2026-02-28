@@ -1,0 +1,82 @@
+[package]
+name = "rugra"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rugra Contributors"]
+description = "A Rust-based decompiler inspired by Ghidra for C/C++ binaries"
+license = "Apache-2.0"
+repository = "https://github.com/yourusername/rugra"
+readme = "README.md"
+keywords = ["decompiler", "reverse-engineering", "binary-analysis", "disassembler"]
+categories = ["development-tools", "parser-implementations"]
+
+[dependencies]
+once_cell = "1.19"
+# Binary parsing
+goblin = "0.8"
+object = "0.36"
+
+# Disassembly engines
+capstone = "0.12"
+iced-x86 = { version = "1.21", features = ["decoder", "encoder", "instr_info"] }
+
+# Data structures
+petgraph = "0.6"
+rustc-hash = "2.0"
+indexmap = "2.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# CLI (optional)
+clap = { version = "4.5", features = ["derive"], optional = true }
+
+# Utilities
+lazy_static = "1.4"
+bitvec = "1.0"
+num-traits = "0.2"
+num-derive = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.4"
+pretty_assertions = "1.4"
+
+[features]
+default = ["cli", "capstone"]
+cli = ["dep:clap"]
+capstone = []
+ffi-test = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rugra"
+required-features = ["cli"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.bench]
+inherits = "release"
+
+[[bench]]
+name = "decompile_bench"
+harness = false

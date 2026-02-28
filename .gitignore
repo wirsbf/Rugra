@@ -1,0 +1,45 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/build/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Test binaries
+/tests/binaries/*.o
+/tests/output/
+
+# Coverage
+*.profraw
+*.profdata
+/coverage/
+
+# Documentation
+/target/doc/
+
+# Temporary files
+*.tmp
+*.log

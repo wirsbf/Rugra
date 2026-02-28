@@ -1,0 +1,82 @@
+//! Varnode alignment verification logic.
+//!
+//! This module ensures that Rugra's Varnode representation matches Ghidra's
+//! internal Varnode class as defined in `varnode.hh`.
+
+use crate::pcode::{Varnode, AddressSpace};
+use crate::ffi::VarnodeFFI;
+
+/// Verify that a Rugra Varnode aligns with Ghidra's FFI representation.
+///
+/// This checks space, offset, and size parity.
+pub fn verify_varnode(rugra_vn: &Varnode, ghidra_vn: &VarnodeFFI) -> bool {
+    // Map Rugra AddressSpace to Ghidra Space ID for comparison
+    let rugra_space_id = match rugra_vn.space() {
+        AddressSpace::Register => 1,
+        AddressSpace::Ram => 2,
+        AddressSpace::Unique => 3, // Common ID for unique space, though not universal
+        AddressSpace::Const => 4,  // Common ID for constant space
+        _ => 0,
+    };
+
+    let space_match = if rugra_vn.is_unique() {
+        true // Skip strict space ID check for Unique as it varies by Architecture
+    } else {
+        rugra_space_id == ghidra_vn.space_id
+    };
+
+    let offset_match = rugra_vn.offset() == ghidra_vn.offset;
+    let size_match = rugra_vn.size() == ghidra_vn.size as usize;
+
+    if !space_match || !offset_match || !size_match {
+        eprintln!(
+            "[ALIGN DIFF] Varnode mismatch!\n  Rugra:  {}\n  Ghidra: Space={}, Offset=0x{:x}, Size={}",
+            rugra_vn, ghidra_vn.space_id, ghidra_vn.offset, ghidra_vn.size
+        );
+    }
+
+    space_match && offset_match && size_match
+}
+
+/// Verify a list of Varnodes (typically P-code operation inputs)
+pub fn verify_varnode_list(rugra_list: &[Varnode], ghidra_list: &[VarnodeFFI]) -> bool {
+    if rugra_list.len() != ghidra_list.len() {
+        eprintln!(
+            "[ALIGN DIFF] Varnode list length mismatch: Rugra={}, Ghidra={}",
+            rugra_list.len(),
+            ghidra_list.len()
+        );
+        return false;
+    }
+
+    rugra_list.iter()
+        .zip(ghidra_list.iter())
+        .all(|(r, g)| verify_varnode(r, g))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_varnode_alignment_success() {
+        let vn = Varnode::new_register(0x10, 4);
+        let ffi = VarnodeFFI {
+            space_id: 1,
+            offset: 0x10,
+            size: 4,
+        };
+        assert!(verify_varnode(&vn, &ffi));
+    }
+
+    #[test]
+    fn test_varnode_alignment_failure() {
+        let vn = Varnode::new_register(0x10, 4);
+        let ffi = VarnodeFFI {
+            space_id: 1,
+            offset: 0x11, // Wrong offset
+            size: 4,
+        };
+        assert!(!verify_varnode(&vn, &ffi));
+    }
+}

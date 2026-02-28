@@ -1,0 +1,3335 @@
+   Compiling rugra v0.1.0 (D:\ghidra\rugra)
+warning: unused import: `super::*`
+  --> src\varnode.rs:15:9
+   |
+15 |     use super::*;
+   |         ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::space::AddressSpace`
+ --> src\op.rs:7:5
+  |
+7 | use crate::space::AddressSpace;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+ --> src\op.rs:9:34
+  |
+9 | use std::collections::{BTreeSet, HashMap};
+  |                                  ^^^^^^^
+
+warning: unused import: `super::*`
+  --> src\op.rs:16:9
+   |
+16 |     use super::*;
+   |         ^^^^^^^^
+
+warning: unused import: `crate::type_system::Datatype`
+  --> src\op.rs:21:5
+   |
+21 | use crate::type_system::Datatype;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `stubs::*`
+  --> src\op.rs:22:5
+   |
+22 | use stubs::*;
+   |     ^^^^^^^^
+
+warning: unused import: `crate::varnode::Varnode`
+ --> src\typeop.rs:9:5
+  |
+9 | use crate::varnode::Varnode;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `RwLock`
+  --> src\typeop.rs:10:22
+   |
+10 | use std::sync::{Arc, RwLock};
+   |                      ^^^^^^
+
+warning: unused import: `stubs::*`
+  --> src\typeop.rs:20:5
+   |
+20 | use stubs::*;
+   |     ^^^^^^^^
+
+warning: unused import: `PcodeOpRef`
+ --> src\heritage.rs:8:26
+  |
+8 | use crate::op::{PcodeOp, PcodeOpRef};
+  |                          ^^^^^^^^^^
+
+warning: unused import: `Arc`
+  --> src\funcdata.rs:10:17
+   |
+10 | use std::sync::{Arc, RwLock, Weak};
+   |                 ^^^
+
+warning: unused import: `crate::block::BlockGraph`
+  --> src\printlanguage.rs:10:5
+   |
+10 | use crate::block::BlockGraph;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Arc` and `RwLock`
+  --> src\printlanguage.rs:11:17
+   |
+11 | use std::sync::{Arc, RwLock};
+   |                 ^^^  ^^^^^^
+
+warning: unused imports: `Arc` and `RwLock`
+  --> src\printc.rs:13:17
+   |
+13 | use std::sync::{Arc, RwLock};
+   |                 ^^^  ^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src\action.rs:9:5
+  |
+9 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `crate::cover::Cover`
+ --> src\merge.rs:6:5
+  |
+6 | use crate::cover::Cover;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::variable::HighVariable`
+ --> src\merge.rs:8:5
+  |
+8 | use crate::variable::HighVariable;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `FlowBlock`
+ --> src\blockaction.rs:6:44
+  |
+6 | use crate::block::{BlockBasic, BlockGraph, FlowBlock};
+  |                                            ^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\heritage.rs:354:17
+    |
+354 |             let mut op = op_ref.0.write().unwrap();
+    |                 ----^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: missing documentation for a constant
+  --> src\space.rs:23:1
+   |
+23 | pub const SPACEID_RAM: SpaceId = 0;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> src\lib.rs:44:9
+   |
+44 | #![warn(missing_docs)]
+   |         ^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:24:1
+   |
+24 | pub const SPACEID_REGISTER: SpaceId = 1;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:25:1
+   |
+25 | pub const SPACEID_UNIQUE: SpaceId = 2;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:26:1
+   |
+26 | pub const SPACEID_CONST: SpaceId = 3;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:27:1
+   |
+27 | pub const SPACEID_STACK: SpaceId = 4;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:28:1
+   |
+28 | pub const SPACEID_JOIN: SpaceId = 5;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\space.rs:29:1
+   |
+29 | pub const SPACEID_OVERLAY: SpaceId = 6;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a module
+  --> src\varnode.rs:14:1
+   |
+14 | pub mod stubs {
+   | ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\varnode.rs:93:5
+   |
+93 |     pub consumed: u64,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\varnode.rs:94:5
+   |
+94 |     pub nzm: u64,
+   |     ^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\varnode.rs:98:5
+   |
+98 |     pub fn new(size: usize, loc: Address) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:117:5
+    |
+117 |     pub fn get_addr(&self) -> &Address {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:121:5
+    |
+121 |     pub fn get_space(&self) -> AddressSpace {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:126:5
+    |
+126 |     pub fn get_offset(&self) -> u64 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:130:5
+    |
+130 |     pub fn get_val(&self) -> u64 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:134:5
+    |
+134 |     pub fn get_size(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:138:5
+    |
+138 |     pub fn get_create_index(&self) -> u32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:142:5
+    |
+142 |     pub fn is_constant(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:146:5
+    |
+146 |     pub fn is_input(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:150:5
+    |
+150 |     pub fn is_written(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:154:5
+    |
+154 |     pub fn is_free(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:158:5
+    |
+158 |     pub fn set_flags(&mut self, f: u32) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:162:5
+    |
+162 |     pub fn clear_flags(&mut self, f: u32) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\varnode.rs:281:5
+    |
+281 |     pub space: AddressSpace,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\varnode.rs:282:5
+    |
+282 |     pub offset: u64,
+    |     ^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\varnode.rs:283:5
+    |
+283 |     pub size: usize,
+    |     ^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\varnode.rs:287:5
+    |
+287 |     pub fn new(space: AddressSpace, offset: u64, size: usize) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\varnode.rs:325:5
+    |
+325 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:387:5
+    |
+387 |     pub fn clear(&mut self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:394:5
+    |
+394 |     pub fn num_varnodes(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\varnode.rs:398:5
+    |
+398 |     pub fn get_create_index(&self) -> u32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\varnode.rs:16:22
+   |
+16 |     #[derive(Debug)] pub struct SymbolEntry;
+   |                      ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\varnode.rs:17:22
+   |
+17 |     #[derive(Debug)] pub struct ValueSet;
+   |                      ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:28:5
+   |
+28 |     pub const MARK: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:29:5
+   |
+29 |     pub const CONSTANT: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:30:5
+   |
+30 |     pub const ANNOTATION: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:31:5
+   |
+31 |     pub const INPUT: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:32:5
+   |
+32 |     pub const WRITTEN: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:33:5
+   |
+33 |     pub const INSERT: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:34:5
+   |
+34 |     pub const IMPLIED: u32 = 1 << 6;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:35:5
+   |
+35 |     pub const EXPLICIT: u32 = 1 << 7;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:36:5
+   |
+36 |     pub const TYPELOCK: u32 = 1 << 8;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:37:5
+   |
+37 |     pub const NAMELOCK: u32 = 1 << 9;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:38:5
+   |
+38 |     pub const NOLOCALALIAS: u32 = 1 << 10;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:39:5
+   |
+39 |     pub const VOLATIL: u32 = 1 << 11;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:40:5
+   |
+40 |     pub const EXTERNREF: u32 = 1 << 12;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:41:5
+   |
+41 |     pub const READONLY: u32 = 1 << 13;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:42:5
+   |
+42 |     pub const PERSIST: u32 = 1 << 14;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:43:5
+   |
+43 |     pub const ADDRTIED: u32 = 1 << 15;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:44:5
+   |
+44 |     pub const UNAFFECTED: u32 = 1 << 16;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:45:5
+   |
+45 |     pub const SPACEBASE: u32 = 1 << 17;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:46:5
+   |
+46 |     pub const INDIRECTONLY: u32 = 1 << 18;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:47:5
+   |
+47 |     pub const DIRECTWRITE: u32 = 1 << 19;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:48:5
+   |
+48 |     pub const ADDRFORCE: u32 = 1 << 20;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:49:5
+   |
+49 |     pub const MAPPED: u32 = 1 << 21;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:50:5
+   |
+50 |     pub const INDIRECT_CREATION: u32 = 1 << 22;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:51:5
+   |
+51 |     pub const RETURN_ADDRESS: u32 = 1 << 23;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:52:5
+   |
+52 |     pub const COVERDIRTY: u32 = 1 << 24;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:53:5
+   |
+53 |     pub const PRECISLO: u32 = 1 << 25;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:54:5
+   |
+54 |     pub const PRECISHI: u32 = 1 << 26;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:55:5
+   |
+55 |     pub const INDIRECTSTORAGE: u32 = 1 << 27;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:56:5
+   |
+56 |     pub const HIDDENRETPARM: u32 = 1 << 28;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:57:5
+   |
+57 |     pub const INCIDENTAL_COPY: u32 = 1 << 29;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:58:5
+   |
+58 |     pub const AUTOLIVE_HOLD: u32 = 1 << 30;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\varnode.rs:59:5
+   |
+59 |     pub const PROTO_PARTIAL: u32 = 1 << 31;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a module
+  --> src\op.rs:15:1
+   |
+15 | pub mod stubs {
+   | ^^^^^^^^^^^^^
+
+warning: missing documentation for an associated constant
+  --> src\op.rs:64:5
+   |
+64 |     pub const NAME: &'static str = "iop";
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\op.rs:74:5
+   |
+74 |     pub flags: u32,
+   |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\op.rs:75:5
+   |
+75 |     pub addlflags: u32,
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\op.rs:87:5
+   |
+87 |     pub fn new(start: SeqNum, opcode: OpCode) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\op.rs:99:5
+   |
+99 |     pub fn get_opcode(&self) -> OpCode {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:103:5
+    |
+103 |     pub fn get_addr(&self) -> Address {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:107:5
+    |
+107 |     pub fn get_seq_num(&self) -> &SeqNum {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:111:5
+    |
+111 |     pub fn num_input(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:115:5
+    |
+115 |     pub fn get_in(&self, slot: usize) -> Option<&Arc<RwLock<Varnode>>> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:119:5
+    |
+119 |     pub fn get_out(&self) -> Option<&Arc<RwLock<Varnode>>> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:123:5
+    |
+123 |     pub fn is_dead(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:127:5
+    |
+127 |     pub fn is_call(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:131:5
+    |
+131 |     pub fn is_branch(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\op.rs:183:5
+    |
+183 |     pub piece_op: Weak<RwLock<PcodeOp>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\op.rs:184:5
+    |
+184 |     pub slot: i32,
+    |     ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\op.rs:185:5
+    |
+185 |     pub type_offset: i32,
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\op.rs:186:5
+    |
+186 |     pub leaf: bool,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\op.rs:190:5
+    |
+190 |     pub fn new(op: Weak<RwLock<PcodeOp>>, slot: i32, offset: i32) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:199:5
+    |
+199 |     pub fn is_leaf(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:203:5
+    |
+203 |     pub fn get_type_offset(&self) -> i32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:207:5
+    |
+207 |     pub fn get_slot(&self) -> i32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\op.rs:229:5
+    |
+229 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:253:5
+    |
+253 |     pub fn mark_alive(&mut self, op: PcodeOpRef) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:263:5
+    |
+263 |     pub fn mark_dead(&mut self, op: PcodeOpRef) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:273:5
+    |
+273 |     pub fn destroy(&mut self, op: PcodeOpRef) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:281:5
+    |
+281 |     pub fn find_op(&self, seq: &SeqNum) -> Option<PcodeOpRef> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:290:5
+    |
+290 |     pub fn clear(&mut self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:297:5
+    |
+297 |     pub fn is_empty(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:301:5
+    |
+301 |     pub fn get_uniqid(&self) -> u32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\op.rs:305:5
+    |
+305 |     pub fn set_uniqid(&mut self, val: u32) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\op.rs:18:5
+   |
+18 |     pub struct TypeOp;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:26:5
+   |
+26 |     pub const STARTBASIC: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:27:5
+   |
+27 |     pub const BRANCH: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:28:5
+   |
+28 |     pub const CALL: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:29:5
+   |
+29 |     pub const RETURNS: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:30:5
+   |
+30 |     pub const NOCOLLAPSE: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:31:5
+   |
+31 |     pub const DEAD: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:32:5
+   |
+32 |     pub const MARKER: u32 = 1 << 6;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:33:5
+   |
+33 |     pub const BOOLOUTPUT: u32 = 1 << 7;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:34:5
+   |
+34 |     pub const BOOLEAN_FLIP: u32 = 1 << 8;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:35:5
+   |
+35 |     pub const FALLTHRU_TRUE: u32 = 1 << 9;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:36:5
+   |
+36 |     pub const INDIRECT_SOURCE: u32 = 1 << 10;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:37:5
+   |
+37 |     pub const CODEREF: u32 = 1 << 11;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:38:5
+   |
+38 |     pub const STARTMARK: u32 = 1 << 12;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:39:5
+   |
+39 |     pub const MARK: u32 = 1 << 13;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:40:5
+   |
+40 |     pub const COMMUTATIVE: u32 = 1 << 14;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:41:5
+   |
+41 |     pub const UNARY: u32 = 1 << 15;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:42:5
+   |
+42 |     pub const BINARY: u32 = 1 << 16;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:43:5
+   |
+43 |     pub const SPECIAL: u32 = 1 << 17;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:44:5
+   |
+44 |     pub const TERNARY: u32 = 1 << 18;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:45:5
+   |
+45 |     pub const RETURN_COPY: u32 = 1 << 19;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:46:5
+   |
+46 |     pub const NONPRINTING: u32 = 1 << 20;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:47:5
+   |
+47 |     pub const HALT: u32 = 1 << 21;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:48:5
+   |
+48 |     pub const BADINSTRUCTION: u32 = 1 << 22;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:49:5
+   |
+49 |     pub const UNIMPLEMENTED: u32 = 1 << 23;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:50:5
+   |
+50 |     pub const NORETURN: u32 = 1 << 24;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:51:5
+   |
+51 |     pub const MISSING: u32 = 1 << 25;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:52:5
+   |
+52 |     pub const SPACEBASE_PTR: u32 = 1 << 26;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:53:5
+   |
+53 |     pub const INDIRECT_CREATION: u32 = 1 << 27;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:54:5
+   |
+54 |     pub const CALCULATED_BOOL: u32 = 1 << 28;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:55:5
+   |
+55 |     pub const HAS_CALLSPEC: u32 = 1 << 29;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:56:5
+   |
+56 |     pub const PTRFLOW: u32 = 1 << 30;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\op.rs:57:5
+   |
+57 |     pub const INDIRECT_STORE: u32 = 1 << 31;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\opcodes.rs:183:5
+    |
+183 |     pub fn name(&self) -> &'static str {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a module
+  --> src\typeop.rs:13:1
+   |
+13 | pub mod stubs {
+   | ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\typeop.rs:88:5
+   |
+88 |     pub opcode: OpCode,
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\typeop.rs:89:5
+   |
+89 |     pub name: String,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\typeop.rs:90:5
+   |
+90 |     pub flags: u32,
+   |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\typeop.rs:127:5
+    |
+127 |     pub opcode: OpCode,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\typeop.rs:128:5
+    |
+128 |     pub name: String,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\typeop.rs:129:5
+    |
+129 |     pub flags: u32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+456 | / binary_op!(
+457 | |     TypeOpIntAdd,
+458 | |     CPUI_INT_ADD,
+459 | |     "INT_ADD",
+460 | |     typeop_flags::ARITHMETIC_OP,
+461 | |     "+"
+462 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+463 | / binary_op!(
+464 | |     TypeOpIntSub,
+465 | |     CPUI_INT_SUB,
+466 | |     "INT_SUB",
+467 | |     typeop_flags::ARITHMETIC_OP,
+468 | |     "-"
+469 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+470 | / binary_op!(
+471 | |     TypeOpIntMult,
+472 | |     CPUI_INT_MULT,
+473 | |     "INT_MULT",
+474 | |     typeop_flags::ARITHMETIC_OP,
+475 | |     "*"
+476 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+477 | / binary_op!(
+478 | |     TypeOpIntDiv,
+479 | |     CPUI_INT_DIV,
+480 | |     "INT_DIV",
+481 | |     typeop_flags::ARITHMETIC_OP,
+482 | |     "/"
+483 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+484 | / binary_op!(
+485 | |     TypeOpIntSdiv,
+486 | |     CPUI_INT_SDIV,
+487 | |     "INT_SDIV",
+488 | |     typeop_flags::ARITHMETIC_OP,
+489 | |     "s/"
+490 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+491 | / binary_op!(
+492 | |     TypeOpIntRem,
+493 | |     CPUI_INT_REM,
+494 | |     "INT_REM",
+495 | |     typeop_flags::ARITHMETIC_OP,
+496 | |     "%"
+497 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+498 | / binary_op!(
+499 | |     TypeOpIntSrem,
+500 | |     CPUI_INT_SREM,
+501 | |     "INT_SREM",
+502 | |     typeop_flags::ARITHMETIC_OP,
+503 | |     "s%"
+504 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:205:9
+    |
+205 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+505 | / unary_op!(
+506 | |     TypeOpIntNeg,
+507 | |     CPUI_INT_NEG,
+508 | |     "INT_NEG",
+509 | |     typeop_flags::ARITHMETIC_OP,
+510 | |     "-"
+511 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:279:9
+    |
+279 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+512 | functional_binary_op!(TypeOpIntCarry, CPUI_INT_CARRY, "INT_CARRY", 0, "carry");
+    | ------------------------------------------------------------------------------ in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:279:9
+    |
+279 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+513 | functional_binary_op!(TypeOpIntScarry, CPUI_INT_SCARRY, "INT_SCARRY", 0, "scarry");
+    | ---------------------------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:279:9
+    |
+279 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+514 | / functional_binary_op!(
+515 | |     TypeOpIntSborrow,
+516 | |     CPUI_INT_SBORROW,
+517 | |     "INT_SBORROW",
+518 | |     0,
+519 | |     "sborrow"
+520 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+523 | / binary_op!(
+524 | |     TypeOpIntAnd,
+525 | |     CPUI_INT_AND,
+526 | |     "INT_AND",
+527 | |     typeop_flags::LOGICAL_OP,
+528 | |     "&"
+529 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+530 | / binary_op!(
+531 | |     TypeOpIntOr,
+532 | |     CPUI_INT_OR,
+533 | |     "INT_OR",
+534 | |     typeop_flags::LOGICAL_OP,
+535 | |     "|"
+536 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+537 | / binary_op!(
+538 | |     TypeOpIntXor,
+539 | |     CPUI_INT_XOR,
+540 | |     "INT_XOR",
+541 | |     typeop_flags::LOGICAL_OP,
+542 | |     "^"
+543 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:205:9
+    |
+205 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+544 | / unary_op!(
+545 | |     TypeOpIntNot,
+546 | |     CPUI_INT_NOT,
+547 | |     "INT_NOT",
+548 | |     typeop_flags::LOGICAL_OP,
+549 | |     "~"
+550 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+551 | / binary_op!(
+552 | |     TypeOpIntLeft,
+553 | |     CPUI_INT_LEFT,
+554 | |     "INT_LEFT",
+555 | |     typeop_flags::SHIFT_OP,
+556 | |     "<<"
+557 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+558 | / binary_op!(
+559 | |     TypeOpIntRight,
+560 | |     CPUI_INT_RIGHT,
+561 | |     "INT_RIGHT",
+562 | |     typeop_flags::SHIFT_OP,
+563 | |     ">>"
+564 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+565 | / binary_op!(
+566 | |     TypeOpIntSright,
+567 | |     CPUI_INT_SRIGHT,
+568 | |     "INT_SRIGHT",
+569 | |     typeop_flags::SHIFT_OP,
+570 | |     "s>>"
+571 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+574 | binary_op!(TypeOpIntEqual, CPUI_INT_EQUAL, "INT_EQUAL", 0, "==");
+    | ---------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+575 | / binary_op!(
+576 | |     TypeOpIntNotEqual,
+577 | |     CPUI_INT_NOTEQUAL,
+578 | |     "INT_NOTEQUAL",
+579 | |     0,
+580 | |     "!="
+581 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+582 | binary_op!(TypeOpIntLess, CPUI_INT_LESS, "INT_LESS", 0, "<");
+    | ------------------------------------------------------------ in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+583 | / binary_op!(
+584 | |     TypeOpIntSless,
+585 | |     CPUI_INT_SLESS,
+586 | |     "INT_SLESS",
+587 | |     typeop_flags::INHERITS_SIGN,
+588 | |     "s<"
+589 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+590 | / binary_op!(
+591 | |     TypeOpIntLessEqual,
+592 | |     CPUI_INT_LESSEQUAL,
+593 | |     "INT_LESSEQUAL",
+594 | |     0,
+595 | |     "<="
+596 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+597 | / binary_op!(
+598 | |     TypeOpIntSlessEqual,
+599 | |     CPUI_INT_SLESSEQUAL,
+600 | |     "INT_SLESSEQUAL",
+601 | |     typeop_flags::INHERITS_SIGN,
+602 | |     "s<="
+603 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+606 | / functional_unary_op!(
+607 | |     TypeOpIntZext,
+608 | |     CPUI_INT_ZEXT,
+609 | |     "INT_ZEXT",
+610 | |     typeop_flags::INHERITS_SIGN_ZERO,
+611 | |     "zext"
+612 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+613 | / functional_unary_op!(
+614 | |     TypeOpIntSext,
+615 | |     CPUI_INT_SEXT,
+616 | |     "INT_SEXT",
+617 | |     typeop_flags::INHERITS_SIGN,
+618 | |     "sext"
+619 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+620 | functional_unary_op!(TypeOpTrunc, CPUI_TRUNC, "TRUNC", 0, "trunc");
+    | ------------------------------------------------------------------ in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+623 | / binary_op!(
+624 | |     TypeOpFloatAdd,
+625 | |     CPUI_FLOAT_ADD,
+626 | |     "FLOAT_ADD",
+627 | |     typeop_flags::FLOATINGPOINT_OP,
+628 | |     "f+"
+629 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+630 | / binary_op!(
+631 | |     TypeOpFloatSub,
+632 | |     CPUI_FLOAT_SUB,
+633 | |     "FLOAT_SUB",
+634 | |     typeop_flags::FLOATINGPOINT_OP,
+635 | |     "f-"
+636 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+637 | / binary_op!(
+638 | |     TypeOpFloatMult,
+639 | |     CPUI_FLOAT_MULT,
+640 | |     "FLOAT_MULT",
+641 | |     typeop_flags::FLOATINGPOINT_OP,
+642 | |     "f*"
+643 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+644 | / binary_op!(
+645 | |     TypeOpFloatDiv,
+646 | |     CPUI_FLOAT_DIV,
+647 | |     "FLOAT_DIV",
+648 | |     typeop_flags::FLOATINGPOINT_OP,
+649 | |     "f/"
+650 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:205:9
+    |
+205 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+651 | / unary_op!(
+652 | |     TypeOpFloatNeg,
+653 | |     CPUI_FLOAT_NEG,
+654 | |     "FLOAT_NEG",
+655 | |     typeop_flags::FLOATINGPOINT_OP,
+656 | |     "f-"
+657 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+658 | / functional_unary_op!(
+659 | |     TypeOpFloatAbs,
+660 | |     CPUI_FLOAT_ABS,
+661 | |     "FLOAT_ABS",
+662 | |     typeop_flags::FLOATINGPOINT_OP,
+663 | |     "fabs"
+664 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+665 | / functional_unary_op!(
+666 | |     TypeOpFloatSqrt,
+667 | |     CPUI_FLOAT_SQRT,
+668 | |     "FLOAT_SQRT",
+669 | |     typeop_flags::FLOATINGPOINT_OP,
+670 | |     "fsqrt"
+671 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+672 | / binary_op!(
+673 | |     TypeOpFloatEqual,
+674 | |     CPUI_FLOAT_EQUAL,
+675 | |     "FLOAT_EQUAL",
+676 | |     typeop_flags::FLOATINGPOINT_OP,
+677 | |     "f=="
+678 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+679 | / binary_op!(
+680 | |     TypeOpFloatNotEqual,
+681 | |     CPUI_FLOAT_NOTEQUAL,
+682 | |     "FLOAT_NOTEQUAL",
+683 | |     typeop_flags::FLOATINGPOINT_OP,
+684 | |     "f!="
+685 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+686 | / binary_op!(
+687 | |     TypeOpFloatLess,
+688 | |     CPUI_FLOAT_LESS,
+689 | |     "FLOAT_LESS",
+690 | |     typeop_flags::FLOATINGPOINT_OP,
+691 | |     "f<"
+692 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+693 | / binary_op!(
+694 | |     TypeOpFloatLessEqual,
+695 | |     CPUI_FLOAT_LESSEQUAL,
+696 | |     "FLOAT_LESSEQUAL",
+697 | |     typeop_flags::FLOATINGPOINT_OP,
+698 | |     "f<="
+699 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+700 | / functional_unary_op!(
+701 | |     TypeOpFloatNan,
+702 | |     CPUI_FLOAT_NAN,
+703 | |     "FLOAT_NAN",
+704 | |     typeop_flags::FLOATINGPOINT_OP,
+705 | |     "isnan"
+706 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+707 | / functional_unary_op!(
+708 | |     TypeOpFloatFloat2Float,
+709 | |     CPUI_FLOAT_FLOAT2FLOAT,
+710 | |     "FLOAT_FLOAT2FLOAT",
+711 | |     typeop_flags::FLOATINGPOINT_OP,
+712 | |     "f2f"
+713 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+714 | / functional_unary_op!(
+715 | |     TypeOpFloatInt2Float,
+716 | |     CPUI_FLOAT_INT2FLOAT,
+717 | |     "FLOAT_INT2FLOAT",
+718 | |     typeop_flags::FLOATINGPOINT_OP,
+719 | |     "i2f"
+720 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+721 | / functional_unary_op!(
+722 | |     TypeOpFloatTrunc,
+723 | |     CPUI_FLOAT_TRUNC,
+724 | |     "FLOAT_TRUNC",
+725 | |     typeop_flags::FLOATINGPOINT_OP,
+726 | |     "ftrunc"
+727 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+728 | / functional_unary_op!(
+729 | |     TypeOpFloatCeil,
+730 | |     CPUI_FLOAT_CEIL,
+731 | |     "FLOAT_CEIL",
+732 | |     typeop_flags::FLOATINGPOINT_OP,
+733 | |     "fceil"
+734 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+735 | / functional_unary_op!(
+736 | |     TypeOpFloatFloor,
+737 | |     CPUI_FLOAT_FLOOR,
+738 | |     "FLOAT_FLOOR",
+739 | |     typeop_flags::FLOATINGPOINT_OP,
+740 | |     "ffloor"
+741 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |           pub struct $struct_name;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+742 | / functional_unary_op!(
+743 | |     TypeOpFloatRound,
+744 | |     CPUI_FLOAT_ROUND,
+745 | |     "FLOAT_ROUND",
+746 | |     typeop_flags::FLOATINGPOINT_OP,
+747 | |     "fround"
+748 | | );
+    | |_- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+751 | binary_op!(TypeOpBoolAnd, CPUI_BOOL_AND, "BOOL_AND", 0, "&&");
+    | ------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+752 | binary_op!(TypeOpBoolOr, CPUI_BOOL_OR, "BOOL_OR", 0, "||");
+    | ---------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:164:9
+    |
+164 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+753 | binary_op!(TypeOpBoolXor, CPUI_BOOL_XOR, "BOOL_XOR", 0, "^^");
+    | ------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:205:9
+    |
+205 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+754 | unary_op!(TypeOpBoolNot, CPUI_BOOL_NOT, "BOOL_NOT", 0, "!");
+    | ----------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:279:9
+    |
+279 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+757 | functional_binary_op!(TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat");
+    | -------------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:279:9
+    |
+279 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+758 | functional_binary_op!(TypeOpSubpiece, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece");
+    | ------------------------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+759 | functional_unary_op!(TypeOpPopcount, CPUI_POPCOUNT, "POPCOUNT", 0, "popcount");
+    | ------------------------------------------------------------------------------ in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:242:9
+    |
+242 |         pub struct $struct_name;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+760 | functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount");
+    | -------------------------------------------------------------------------- in this macro invocation
+    |
+    = note: this warning originates in the macro `functional_unary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:763:1
+    |
+763 | pub struct TypeOpBranch;
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:783:1
+    |
+783 | pub struct TypeOpCbranch;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:807:1
+    |
+807 | pub struct TypeOpBranchind;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:827:1
+    |
+827 | pub struct TypeOpCall;
+    | ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:851:1
+    |
+851 | pub struct TypeOpCallind;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:871:1
+    |
+871 | pub struct TypeOpReturn;
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:891:1
+    |
+891 | pub struct TypeOpPtradd;
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:939:1
+    |
+939 | pub struct TypeOpPtrsub;
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+   --> src\typeop.rs:981:1
+    |
+981 | pub struct TypeOpMulti;
+    | ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:1028:1
+     |
+1028 | pub struct TypeOpIndirect;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:1066:1
+     |
+1066 | pub struct TypeOpSegment;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:1092:1
+     |
+1092 | pub struct TypeOpCpoolref;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:1118:1
+     |
+1118 | pub struct TypeOpNew;
+     | ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:1144:1
+     |
+1144 | pub struct TypeOpCallother;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:279:9
+     |
+ 279 |         pub struct $struct_name;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1170 | functional_binary_op!(TypeOpInsert, CPUI_INSERT, "INSERT", 0, "insert");
+     | ----------------------------------------------------------------------- in this macro invocation
+     |
+     = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for a struct
+    --> src\typeop.rs:279:9
+     |
+ 279 |         pub struct $struct_name;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1171 | functional_binary_op!(TypeOpExtract, CPUI_EXTRACT, "EXTRACT", 0, "extract");
+     | --------------------------------------------------------------------------- in this macro invocation
+     |
+     = note: this warning originates in the macro `functional_binary_op` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: missing documentation for an associated function
+    --> src\typeop.rs:1181:5
+     |
+1181 |     pub fn new() -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+    --> src\typeop.rs:1280:5
+     |
+1280 |     pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\typeop.rs:15:5
+   |
+15 |     pub struct OpBehavior;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\typeop.rs:17:5
+   |
+17 |     pub struct Encoder;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:24:5
+   |
+24 |     pub const INHERITS_SIGN: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:25:5
+   |
+25 |     pub const INHERITS_SIGN_ZERO: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:26:5
+   |
+26 |     pub const SHIFT_OP: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:27:5
+   |
+27 |     pub const ARITHMETIC_OP: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:28:5
+   |
+28 |     pub const LOGICAL_OP: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\typeop.rs:29:5
+   |
+29 |     pub const FLOATINGPOINT_OP: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:18:5
+   |
+18 |     pub themap: BTreeMap<Address, SizePass>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\heritage.rs:22:1
+   |
+22 | pub struct SizePass {
+   | ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:23:5
+   |
+23 |     pub size: i32,
+   |     ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:24:5
+   |
+24 |     pub pass: i32,
+   |     ^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\heritage.rs:28:5
+   |
+28 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:34:5
+   |
+34 |     pub fn add(&mut self, addr: Address, size: i32, pass: i32) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:38:5
+   |
+38 |     pub fn find_pass(&self, addr: Address) -> i32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:42:5
+   |
+42 |     pub fn clear(&mut self) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:51:5
+   |
+51 |     pub queue: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:52:5
+   |
+52 |     pub curdepth: i32,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\heritage.rs:56:5
+   |
+56 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:63:5
+   |
+63 |     pub fn reset(&mut self, maxdepth: usize) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:69:5
+   |
+69 |     pub fn insert(&mut self, bl: Arc<RwLock<BlockBasic>>, depth: i32) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:76:5
+   |
+76 |     pub fn extract(&mut self) -> Option<Arc<RwLock<BlockBasic>>> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\heritage.rs:86:5
+   |
+86 |     pub fn empty(&self) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:95:5
+   |
+95 |     pub space: AddressSpace,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:96:5
+   |
+96 |     pub delay: i32,
+   |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:97:5
+   |
+97 |     pub deadcodedelay: i32,
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:98:5
+   |
+98 |     pub deadremoved: i32,
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\heritage.rs:99:5
+   |
+99 |     pub load_guard_search: bool,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:100:5
+    |
+100 |     pub warning_issued: bool,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:101:5
+    |
+101 |     pub has_call_placeholders: bool,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\heritage.rs:105:5
+    |
+105 |     pub fn new(space: AddressSpace) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:122:5
+    |
+122 |     pub op: Weak<RwLock<PcodeOp>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:123:5
+    |
+123 |     pub spc: AddressSpace,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:124:5
+    |
+124 |     pub pointer_base: u64,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:125:5
+    |
+125 |     pub minimum_offset: u64,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:126:5
+    |
+126 |     pub maximum_offset: u64,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:127:5
+    |
+127 |     pub step: i32,
+    |     ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:128:5
+    |
+128 |     pub analysis_state: i32,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:135:5
+    |
+135 |     pub fd: Option<Weak<RwLock<Funcdata>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:136:5
+    |
+136 |     pub globaldisjoint: LocationMap,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:137:5
+    |
+137 |     pub domchild: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:138:5
+    |
+138 |     pub augment: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:139:5
+    |
+139 |     pub flags: Vec<u32>,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:140:5
+    |
+140 |     pub depth: Vec<i32>,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:141:5
+    |
+141 |     pub maxdepth: i32,
+    |     ^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:142:5
+    |
+142 |     pub pass: i32,
+    |     ^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:143:5
+    |
+143 |     pub pq: PriorityQueue,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:144:5
+    |
+144 |     pub merge: Vec<Arc<RwLock<BlockBasic>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:145:5
+    |
+145 |     pub infolist: Vec<HeritageInfo>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:146:5
+    |
+146 |     pub load_guard: Vec<LoadGuard>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:147:5
+    |
+147 |     pub store_guard: Vec<LoadGuard>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:148:5
+    |
+148 |     pub load_copy_ops: Vec<Weak<RwLock<PcodeOp>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\heritage.rs:152:5
+    |
+152 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\heritage.rs:442:5
+    |
+442 |     pub fn get_pass(&self) -> i32 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\heritage.rs:446:5
+    |
+446 |     pub fn clear(&mut self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:465:5
+    |
+465 |     pub vn: Arc<RwLock<Varnode>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:466:5
+    |
+466 |     pub offset: u64,
+    |     ^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\heritage.rs:467:5
+    |
+467 |     pub traversals: u32,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\heritage.rs:456:5
+    |
+456 |     pub const BOUNDARY_NODE: u32 = 1 << 0;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\heritage.rs:457:5
+    |
+457 |     pub const MARK_NODE: u32 = 1 << 1;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\heritage.rs:458:5
+    |
+458 |     pub const MERGED_NODE: u32 = 1 << 2;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\fspec.rs:12:5
+   |
+12 |     pub const HIDDEN_RETURN: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\fspec.rs:13:5
+   |
+13 |     pub const INDIRECT_STORAGE: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\fspec.rs:14:5
+   |
+14 |     pub const THIS_POINTER: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\fspec.rs:15:5
+   |
+15 |     pub const NAME_LOCKED: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\fspec.rs:16:5
+   |
+16 |     pub const TYPE_LOCKED: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:12:5
+   |
+12 |     Plain,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:13:5
+   |
+13 |     Basic,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:14:5
+   |
+14 |     Graph,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:15:5
+   |
+15 |     Copy,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:16:5
+   |
+16 |     Goto,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:17:5
+   |
+17 |     MultiGoto,
+   |     ^^^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:18:5
+   |
+18 |     List,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:19:5
+   |
+19 |     Condition,
+   |     ^^^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:20:5
+   |
+20 |     If,
+   |     ^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:21:5
+   |
+21 |     WhileDo,
+   |     ^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:22:5
+   |
+22 |     DoWhile,
+   |     ^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:23:5
+   |
+23 |     Switch,
+   |     ^^^^^^
+
+warning: missing documentation for a variant
+  --> src\block.rs:24:5
+   |
+24 |     InfLoop,
+   |     ^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:41:5
+   |
+41 |     fn as_any(&self) -> &dyn std::any::Any;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:42:5
+   |
+42 |     fn get_index(&self) -> i32;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:43:5
+   |
+43 |     fn set_index(&mut self, i: i32);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:44:5
+   |
+44 |     fn get_type(&self) -> BlockType;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:45:5
+   |
+45 |     fn get_flags(&self) -> u32;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:46:5
+   |
+46 |     fn set_flags(&mut self, f: u32);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:48:5
+   |
+48 |     fn size_in(&self) -> usize;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:49:5
+   |
+49 |     fn size_out(&self) -> usize;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:51:5
+   |
+51 |     fn get_in(&self, slot: usize) -> Option<BlockEdge>;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:52:5
+   |
+52 |     fn get_out(&self, slot: usize) -> Option<BlockEdge>;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:54:5
+   |
+54 |     fn add_in_edge(&mut self, edge: BlockEdge);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:55:5
+   |
+55 |     fn add_out_edge(&mut self, edge: BlockEdge);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:57:5
+   |
+57 |     fn get_ops(&self) -> Vec<PcodeOpRef> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:60:5
+   |
+60 |     fn add_op(&mut self, _op: PcodeOpRef) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:61:5
+   |
+61 |     fn insert_op(&mut self, _index: usize, _op: PcodeOpRef) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:63:5
+   |
+63 |     fn get_start_addr(&self) -> Address {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:67:5
+   |
+67 |     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>>;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:70:5
+   |
+70 |     fn get_immed_dom(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:73:5
+   |
+73 |     fn set_immed_dom(&mut self, _dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:74:5
+   |
+74 |     fn get_dom_depth(&self) -> i32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:77:5
+   |
+77 |     fn set_dom_depth(&mut self, _depth: i32) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:78:5
+   |
+78 |     fn get_dom_children(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:81:5
+   |
+81 |     fn add_dom_child(&mut self, _child: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:82:5
+   |
+82 |     fn clear_dom_children(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:83:5
+   |
+83 |     fn get_dom_frontier(&self) -> std::collections::HashSet<i32> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:86:5
+   |
+86 |     fn add_to_dom_frontier(&mut self, _idx: i32) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\block.rs:87:5
+   |
+87 |     fn clear_dom_frontier(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\block.rs:121:5
+    |
+121 |     pub fn new(index: i32, start_addr: Address) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\block.rs:262:5
+    |
+262 |     pub fn new(point: Arc<RwLock<dyn FlowBlock + Send + Sync>>, reverse_index: i32) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:286:5
+    |
+286 |     pub index: i32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:287:5
+    |
+287 |     pub blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:288:5
+    |
+288 |     pub incoming: Vec<BlockEdge>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:289:5
+    |
+289 |     pub outgoing: Vec<BlockEdge>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:290:5
+    |
+290 |     pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:291:5
+    |
+291 |     pub flags: u32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\block.rs:295:5
+    |
+295 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\block.rs:306:5
+    |
+306 |     pub fn add_block(&mut self, bl: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\block.rs:310:5
+    |
+310 |     pub fn get_size(&self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\block.rs:314:5
+    |
+314 |     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\block.rs:318:5
+    |
+318 |     pub fn clear(&mut self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\block.rs:324:5
+    |
+324 | /     pub fn add_edge(
+325 | |         &mut self,
+326 | |         from: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+327 | |         to: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+328 | |     ) {
+    | |_____^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:631:5
+    |
+631 |     pub index: i32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:632:5
+    |
+632 |     pub flags: u32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:633:5
+    |
+633 |     pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:634:5
+    |
+634 |     pub original: Arc<RwLock<BlockBasic>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:680:5
+    |
+680 |     pub index: i32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:681:5
+    |
+681 |     pub flags: u32,
+    |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:682:5
+    |
+682 |     pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:683:5
+    |
+683 |     pub goto_target: Option<Arc<RwLock<BlockBasic>>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:684:5
+    |
+684 |     pub incoming: Vec<BlockEdge>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\block.rs:685:5
+    |
+685 |     pub outgoing: Vec<BlockEdge>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:29:5
+   |
+29 |     pub const TERMINAL: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:30:5
+   |
+30 |     pub const GOTO_TERMINAL: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:31:5
+   |
+31 |     pub const RETURN_TERMINAL: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:32:5
+   |
+32 |     pub const ENTRY_POINT: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:33:5
+   |
+33 |     pub const DEAD: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\block.rs:34:5
+   |
+34 |     pub const MARK: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\funcdata.rs:62:5
+   |
+62 |     pub fn get_name(&self) -> &str {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\funcdata.rs:66:5
+   |
+66 |     pub fn get_address(&self) -> &Address {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\funcdata.rs:70:5
+   |
+70 |     pub fn get_size(&self) -> i32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\funcdata.rs:83:5
+   |
+83 |     pub fn num_heritage_passes(&self) -> i32 {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:17:5
+   |
+17 |     Unknown = 0,
+   |     ^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:18:5
+   |
+18 |     Void = 1,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:19:5
+   |
+19 |     Bool = 2,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:20:5
+   |
+20 |     Int = 3,
+   |     ^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:21:5
+   |
+21 |     Uint = 4,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:22:5
+   |
+22 |     Float = 5,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:23:5
+   |
+23 |     Pointer = 6,
+   |     ^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:24:5
+   |
+24 |     Array = 7,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:25:5
+   |
+25 |     Struct = 8,
+   |     ^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:26:5
+   |
+26 |     Union = 9,
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:27:5
+   |
+27 |     Enum = 10,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:28:5
+   |
+28 |     Code = 11,
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:29:5
+   |
+29 |     Spacebase = 12,
+   |     ^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:49:5
+   |
+49 |     pub name: String,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:50:5
+   |
+50 |     pub offset: usize,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:51:5
+   |
+51 |     pub type_ptr: Arc<Datatype>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:57:5
+   |
+57 |     pub name: String,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:58:5
+   |
+58 |     pub size: usize,
+   |     ^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:59:5
+   |
+59 |     pub metatype: TypeMetatype,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:60:5
+   |
+60 |     pub id: u64,
+   |     ^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\type_system\datatype.rs:61:5
+   |
+61 |     pub flags: u32,
+   |     ^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\type_system\datatype.rs:65:5
+   |
+65 |     pub fn new(name: String, size: usize, metatype: TypeMetatype) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:81:5
+   |
+81 |     Void(TypeBase),
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:82:5
+   |
+82 |     Base(TypeBase), // Used for Int, Uint, Float, Bool, Char, Unicode
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:83:5
+   |
+83 |     Pointer(TypePointer),
+   |     ^^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:84:5
+   |
+84 |     Array(TypeArray),
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:85:5
+   |
+85 |     Struct(TypeStruct),
+   |     ^^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:86:5
+   |
+86 |     Enum(TypeEnum),
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:87:5
+   |
+87 |     Union(TypeUnion),
+   |     ^^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:88:5
+   |
+88 |     Code(TypeCode),
+   |     ^^^^
+
+warning: missing documentation for a variant
+  --> src\type_system\datatype.rs:89:5
+   |
+89 |     Spacebase(TypeSpacebase),
+   |     ^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:184:5
+    |
+184 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:185:5
+    |
+185 |     pub ptr_to: Arc<Datatype>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:186:5
+    |
+186 |     pub wordsize: usize,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:194:5
+    |
+194 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:195:5
+    |
+195 |     pub array_of: Arc<Datatype>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:196:5
+    |
+196 |     pub num_elements: usize,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:204:5
+    |
+204 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:205:5
+    |
+205 |     pub fields: Vec<TypeField>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:213:5
+    |
+213 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:214:5
+    |
+214 |     pub values: std::collections::BTreeMap<u64, String>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:222:5
+    |
+222 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:223:5
+    |
+223 |     pub fields: Vec<TypeField>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:231:5
+    |
+231 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:241:5
+    |
+241 |     pub base: TypeBase,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\type_system\datatype.rs:242:5
+    |
+242 |     pub address: Address,
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct
+  --> src\type_system\datatype.rs:11:22
+   |
+11 |     #[derive(Debug)] pub struct Funcdata;
+   |                      ^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:34:5
+   |
+34 |     pub const CORETYPE: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:35:5
+   |
+35 |     pub const CHARTYPE: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:36:5
+   |
+36 |     pub const ENUMTYPE: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:37:5
+   |
+37 |     pub const TYPEDEF: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:38:5
+   |
+38 |     pub const VARLENGTH: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:39:5
+   |
+39 |     pub const UTF16: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:40:5
+   |
+40 |     pub const UTF32: u32 = 1 << 6;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\type_system\datatype.rs:41:5
+   |
+41 |     pub const OPAQUE_STRUCT: u32 = 1 << 7;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\type_system\cast.rs:36:5
+   |
+36 |     pub fn new(promote_size: usize) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\prettyprint.rs:65:5
+   |
+65 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\prettyprint.rs:72:5
+   |
+72 |     pub fn get_output(self) -> String {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\printlanguage.rs:72:5
+   |
+72 |     pub name: String,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\printlanguage.rs:76:5
+   |
+76 |     pub fn new(name: &str) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\action.rs:56:5
+   |
+56 |     pub fn new(name: &str) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\action.rs:63:5
+   |
+63 |     pub fn add_action(&mut self, action: Box<dyn Action>) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\action.rs:91:5
+   |
+91 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\action.rs:98:5
+   |
+98 |     pub fn register_action(&mut self, action: Box<dyn Action>) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+   --> src\action.rs:102:5
+    |
+102 |     pub fn get_action(&self, name: &str) -> Option<&dyn Action> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\action.rs:127:5
+    |
+127 |     pub const NO_CHANGE: i32 = 0;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\action.rs:128:5
+    |
+128 |     pub const CHANGE: i32 = 1;
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+   --> src\action.rs:129:5
+    |
+129 |     pub const RESTART: i32 = 2;
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\coreaction.rs:15:5
+   |
+15 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\coreaction.rs:38:5
+   |
+38 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\coreaction.rs:83:5
+   |
+83 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\coreaction.rs:105:5
+    |
+105 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\coreaction.rs:125:5
+    |
+125 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\ruleaction.rs:19:5
+   |
+19 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+  --> src\ruleaction.rs:86:5
+   |
+86 |     pub fn new() -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\ruleaction.rs:162:5
+    |
+162 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for an associated function
+   --> src\ruleaction.rs:231:5
+    |
+231 |     pub fn new() -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:77:5
+   |
+77 |     pub const NAMELOCK: u32 = 1 << 0;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:78:5
+   |
+78 |     pub const TYPELOCK: u32 = 1 << 1;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:79:5
+   |
+79 |     pub const PERSIST: u32 = 1 << 2;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:80:5
+   |
+80 |     pub const ADDRTIED: u32 = 1 << 3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:81:5
+   |
+81 |     pub const UNUSED1: u32 = 1 << 4;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:82:5
+   |
+82 |     pub const CONSTANT: u32 = 1 << 5;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a constant
+  --> src\variable.rs:83:5
+   |
+83 |     pub const EXTRA_FLAGS: u32 = 1 << 6;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+  --> src\merge.rs:16:5
+   |
+16 |     pub fd: Arc<RwLock<Funcdata>>,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:84:5
+   |
+84 |     pub fn merge_adjacent(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:86:5
+   |
+86 |     pub fn merge_multi_entry(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:88:5
+   |
+88 |     pub fn merge_marker(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:90:5
+   |
+90 |     pub fn merge_by_datatype(&mut self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:92:5
+   |
+92 |     pub fn merge_test(&self, _v1: &Varnode, _v2: &Varnode) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a method
+  --> src\merge.rs:96:5
+   |
+96 |     pub fn merge_force(&mut self, _vn1: Arc<RwLock<Varnode>>, _vn2: Arc<RwLock<Varnode>>) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\merge.rs:102:5
+    |
+102 |     pub vn: Arc<RwLock<Varnode>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: missing documentation for a struct field
+   --> src\merge.rs:103:5
+    |
+103 |     pub block_index: i32,
+    |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: error finalizing incremental compilation session directory `\\?\D:\ghidra\rugra\target\debug\incremental\rugra-3liuisvzuy7oc\s-hg5x2twgkk-1416fcc-working`: 拒绝访问。 (os error 5)
+
+warning: `rugra` (lib) generated 461 warnings (run `cargo fix --lib -p rugra` to apply 18 suggestions)
+error[E0432]: unresolved import `rugra::Decompiler`
+ --> src\bin\rugra.rs:6:27
+  |
+6 | use rugra::{Architecture, Decompiler};
+  |                           ^^^^^^^^^^ no `Decompiler` in the root
+
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+   --> src\bin\rugra.rs:106:28
+    |
+106 |                         Ok(code) => {
+    |                            ^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `str`
+    = note: all local variables must have a statically known size
+
+error[E0277]: the size for values of type `str` cannot be known at compilation time
+   --> src\bin\rugra.rs:106:25
+    |
+106 |                         Ok(code) => {
+    |                         ^^^^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `Sized` is not implemented for `str`
+note: required by a bound in `std::prelude::v1::Ok`
+   --> C:\Users\wirs\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\result.rs:557:17
+    |
+557 | pub enum Result<T, E> {
+    |                 ^ required by this bound in `std::prelude::v1::Ok`
+...
+561 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     -- required by a bound in this tuple variant
+
+error[E0282]: type annotations needed
+   --> src\bin\rugra.rs:141:36
+    |
+141 |                         return Err(e.into());
+    |                                    ^ cannot infer type
+
+Some errors have detailed explanations: E0277, E0282, E0432.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `rugra` (bin "rugra") due to 4 previous errors
