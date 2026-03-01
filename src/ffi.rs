@@ -195,7 +195,6 @@ pub extern "C" fn rugra_add_test_op(
     }
 }
 
-}
 
 /// Set the binary data context for FFI analysis
 /// Allows Rugra to perform memory-backed verification
@@ -316,49 +315,6 @@ pub unsafe extern "C" fn rugra_compare_pcode(
         None => {
             println!("[RUGRA DIFF] 0x{:x}: Opcode mismatch. Ghidra Op: {}, Rugra has {} ops here",
                 op_addr, opcode, rugra_ops.len());
-        }
-    }
-}
-
-    });
-
-    match matching_op {
-        Some(r_op) => {
-            // Compare Output
-            match (r_op.output(), out_vn.as_ref()) {
-                (Some(r_out), Some(g_out)) => {
-                    if r_out.offset() != g_out.offset || r_out.size() != g_out.size as usize {
-                        println!("[RUGRA DIFF] 0x{:x}: Output mismatch. Rugra: {}, Ghidra offset: 0x{:x}, size: {}",
-                            op_addr, r_out, g_out.offset, g_out.size);
-                    }
-                }
-                (None, Some(_)) => println!(
-                    "[RUGRA DIFF] 0x{:x}: Ghidra has output, Rugra has NONE",
-                    op_addr
-                ),
-                (Some(_), None) => println!(
-                    "[RUGRA DIFF] 0x{:x}: Rugra has output, Ghidra has NONE",
-                    op_addr
-                ),
-                (None, None) => (),
-            }
-
-            // Compare Input Count
-            let r_input_count = r_op.inputs().len();
-            if r_input_count != input_count as usize {
-                println!(
-                    "[RUGRA DIFF] 0x{:x}: Input count mismatch. Rugra: {}, Ghidra: {}",
-                    op_addr, r_input_count, input_count
-                );
-            }
-        }
-        None => {
-            println!(
-                "[RUGRA DIFF] 0x{:x}: Opcode mismatch. Ghidra Op: {}, Rugra has {} ops here",
-                op_addr,
-                opcode,
-                rugra_ops.len()
-            );
         }
     }
 }

@@ -249,7 +249,6 @@ impl RuntimeVerifier {
             }
         }
 
-        }
 
         let result = VerifyResult::Match;
         self.stats.lock().unwrap().record(&result);

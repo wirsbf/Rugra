@@ -284,3 +284,47 @@ mod tests {
         assert!(!version().is_empty());
     }
 }
+
+
+#[no_mangle]
+pub extern "C" fn rugra_evaluate_constant(
+    opcode: i32,
+    size_out: usize,
+    val1: u64,
+    _size1: usize,
+    val2: u64,
+    _size2: usize,
+    has_val2: bool,
+) -> u64 {
+    let res = match opcode {
+        19 => val1.wrapping_add(val2), // CPUI_INT_ADD
+        20 => val1.wrapping_sub(val2), // CPUI_INT_SUB
+        32 => val1.wrapping_mul(val2), // CPUI_INT_MULT
+        11 => if val1 == val2 { 1 } else { 0 }, // CPUI_INT_EQUAL
+        _ => {
+            if has_val2 { val1.wrapping_add(val2) } else { val1 }
+        }
+    };
+
+    // Mask based on output size
+    if size_out > 0 && size_out < 8 {
+        let mask = (1u64 << (size_out * 8)).wrapping_sub(1);
+        res & mask
+    } else {
+        res
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: usize) {
+    println!("[RUGRA OBSERVE] JumpTable at 0x{:x}, Table: 0x{:x}, Entries: {}", op_addr, table_addr, size);
+    if size == 0 || size > 4096 {
+        println!("[RUGRA WARN] Suspect JumpTable size: {} at 0x{:x}", size, op_addr);
+    }
+    if table_addr % 4 != 0 {
+        println!("[RUGRA WARN] Unaligned JumpTable address: 0x{:x}", table_addr);
+    }
+    if table_addr == 0 && size > 0 {
+        println!("[RUGRA ERR] JumpTable at 0x{:x} has non-zero size but null address!", op_addr);
+    }
+}
