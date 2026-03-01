@@ -2,7 +2,8 @@
 //!
 //! Rules for simplifying algebraic expressions (identities, strength reduction, etc.)
 
-use crate::pcode::{PcodeOp, Program, Varnode, PcodeOperation};
+use crate::opcodes::OpCode;
+use crate::pcode::{ Program, Varnode, PcodeOperation};
 use crate::analysis::cfg::ControlFlowGraph;
 use crate::analysis::FunctionAnalysis;
 use super::{Rule, RuleResult};
@@ -29,12 +30,12 @@ impl Rule for RuleAlgebraicSimplification {
         let op = &program.operations()[op_idx];
 
         // We only care about binary operations with output
-        if op.output().is_none() || op.inputs().len() != 2 {
+        if op.output.as_ref().is_none() || op.inputs.as_slice().len() != 2 {
             return RuleResult::Skipped;
         }
 
-        let input1 = &op.inputs()[0];
-        let input2 = &op.inputs()[1];
+        let input1 = &op.inputs.as_slice()[0];
+        let input2 = &op.inputs.as_slice()[1];
 
         // Helper to check for specific constant value
         let is_const = |vn: &Varnode, val: u64| {
@@ -43,19 +44,19 @@ impl Rule for RuleAlgebraicSimplification {
 
         let mut replacement: Option<Varnode> = None;
 
-        match op.opcode() {
-            PcodeOp::IntAdd => {
+        match op.opcode {
+            OpCode::CPUI_INT_ADD => {
                 // x + 0 = x
                 if is_const(input2, 0) { replacement = Some(input1.clone()); }
                 else if is_const(input1, 0) { replacement = Some(input2.clone()); }
             },
-            PcodeOp::IntSub => {
+            OpCode::CPUI_INT_SUB => {
                 // x - 0 = x
                 if is_const(input2, 0) { replacement = Some(input1.clone()); }
                 // x - x = 0
                 else if input1 == input2 { replacement = Some(Varnode::new_constant(0, input1.size())); }
             },
-            PcodeOp::IntMult => {
+            OpCode::CPUI_INT_MULT => {
                 // x * 1 = x
                 if is_const(input2, 1) { replacement = Some(input1.clone()); }
                 else if is_const(input1, 1) { replacement = Some(input2.clone()); }
@@ -64,7 +65,7 @@ impl Rule for RuleAlgebraicSimplification {
                     replacement = Some(Varnode::new_constant(0, input1.size()));
                 }
             },
-            PcodeOp::IntAnd => {
+            OpCode::CPUI_INT_AND => {
                 // x & 0 = 0
                 if is_const(input2, 0) || is_const(input1, 0) {
                     replacement = Some(Varnode::new_constant(0, input1.size()));
@@ -72,14 +73,14 @@ impl Rule for RuleAlgebraicSimplification {
                 // x & x = x
                 else if input1 == input2 { replacement = Some(input1.clone()); }
             },
-            PcodeOp::IntOr => {
+            OpCode::CPUI_INT_OR => {
                 // x | 0 = x
                 if is_const(input2, 0) { replacement = Some(input1.clone()); }
                 else if is_const(input1, 0) { replacement = Some(input2.clone()); }
                 // x | x = x
                 else if input1 == input2 { replacement = Some(input1.clone()); }
             },
-            PcodeOp::IntXor => {
+            OpCode::CPUI_INT_XOR => {
                 // x ^ 0 = x
                 if is_const(input2, 0) { replacement = Some(input1.clone()); }
                 else if is_const(input1, 0) { replacement = Some(input2.clone()); }
@@ -99,7 +100,7 @@ impl Rule for RuleAlgebraicSimplification {
             let new_op = PcodeOperation::new(
                 op_mut.id(),
                 op_mut.seqnum(),
-                PcodeOp::Copy,
+                OpCode::CPUI_COPY,
                 Some(output),
                 vec![repl_input],
             );

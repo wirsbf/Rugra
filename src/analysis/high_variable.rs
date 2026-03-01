@@ -87,8 +87,8 @@ pub fn construct_high_variables(
             if op_idx >= program.operation_count() { continue; }
             let op = &program.operations()[op_idx];
 
-            if op.opcode() == PcodeOp::Copy {
-                if let (Some(out), Some(inp)) = (op.output(), op.inputs().get(0)) {
+            if op.opcode == OpCode::CPUI_COPY {
+                if let (Some(out), Some(inp)) = (op.output.as_ref(), op.inputs.as_slice().get(0)) {
                     if inp.is_constant() { continue; }
 
                     let out_name = format!("{:?}_{:x}_{}_{}", out.space(), out.offset(), out.size(), out.version());

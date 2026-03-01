@@ -142,7 +142,7 @@ pub fn compute_liveness(
             for (local_idx, &prog_op_idx) in block.operations.iter().enumerate() {
                 if prog_op_idx < program.operation_count() {
                     let op = &program.operations()[prog_op_idx];
-                    if let Some(output) = op.output() {
+                    if let Some(output) = op.output.as_ref() {
                         let vn_name_base = format!("{:?}_{:x}_{}", output.space(), output.offset(), output.size());
                         if var_name.starts_with(&vn_name_base) {
                             def_op_idx = local_idx + 1; // +1 for phi slots

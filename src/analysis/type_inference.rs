@@ -134,7 +134,7 @@ pub fn infer_types(program: &Program) -> Result<TypeInferenceAnalysis> {
 fn infer_types_from_sizes(program: &Program, analysis: &mut TypeInferenceAnalysis) {
     for op in program.operations() {
         // Check output
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             let key = varnode_key(output);
             if !analysis.varnode_types.contains_key(&key) {
                 if let Some(type_kind) = type_from_size(output.size()) {
@@ -148,7 +148,7 @@ fn infer_types_from_sizes(program: &Program, analysis: &mut TypeInferenceAnalysi
         }
 
         // Check inputs
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             let key = varnode_key(input);
             if !analysis.varnode_types.contains_key(&key) {
                 if let Some(type_kind) = type_from_size(input.size()) {
@@ -166,15 +166,15 @@ fn infer_types_from_sizes(program: &Program, analysis: &mut TypeInferenceAnalysi
 /// Detect pointer types from operations
 fn detect_pointers(program: &Program, analysis: &mut TypeInferenceAnalysis) {
     for op in program.operations() {
-        match op.opcode() {
+        match op.opcode {
             // LOAD and STORE indicate pointer usage
-            PcodeOp::Load => {
-                if let Some(ptr) = op.inputs().get(1) {
+            OpCode::CPUI_LOAD => {
+                if let Some(ptr) = op.inputs.as_slice().get(1) {
                     let key = varnode_key(ptr);
                     analysis.pointers.insert(key.clone());
 
                     // Update type to pointer
-                    let _element_type = if let Some(output) = op.output() {
+                    let _element_type = if let Some(output) = op.output.as_ref() {
                         type_from_size(output.size())
                     } else {
                         None
@@ -187,12 +187,12 @@ fn detect_pointers(program: &Program, analysis: &mut TypeInferenceAnalysis) {
                     });
                 }
             }
-            PcodeOp::Store => {
-                if let Some(ptr) = op.inputs().get(1) {
+            OpCode::CPUI_STORE => {
+                if let Some(ptr) = op.inputs.as_slice().get(1) {
                     let key = varnode_key(ptr);
                     analysis.pointers.insert(key.clone());
 
-                    let _element_type = if let Some(value) = op.inputs().get(2) {
+                    let _element_type = if let Some(value) = op.inputs.as_slice().get(2) {
                         type_from_size(value.size())
                     } else {
                         None
@@ -206,15 +206,15 @@ fn detect_pointers(program: &Program, analysis: &mut TypeInferenceAnalysis) {
                 }
             }
             // Pointer arithmetic
-            PcodeOp::IntAdd | PcodeOp::IntSub => {
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                 // Check if one operand is a pointer and other is integer
-                if let (Some(left), Some(right)) = (op.inputs().get(0), op.inputs().get(1)) {
+                if let (Some(left), Some(right)) = (op.inputs.as_slice().get(0), op.inputs.as_slice().get(1)) {
                     let left_key = varnode_key(left);
                     let right_key = varnode_key(right);
 
                     if analysis.is_pointer(&left_key) && !analysis.is_pointer(&right_key) {
                         // Result is also a pointer
-                        if let Some(output) = op.output() {
+                        if let Some(output) = op.output.as_ref() {
                             let out_key = varnode_key(output);
                             analysis.pointers.insert(out_key.clone());
 
@@ -238,16 +238,16 @@ fn detect_pointers(program: &Program, analysis: &mut TypeInferenceAnalysis) {
 /// Detect array access patterns
 fn detect_arrays(program: &Program, analysis: &mut TypeInferenceAnalysis) {
     for op in program.operations() {
-        if op.opcode() == PcodeOp::Load {
+        if op.opcode == OpCode::CPUI_LOAD {
             // Pattern: LOAD space, (base + index * scale)
             // Look for pointer arithmetic followed by load
-            if let Some(ptr) = op.inputs().get(1) {
+            if let Some(ptr) = op.inputs.as_slice().get(1) {
                 // Check if this is result of multiplication or addition
-                if let Some(element_type) = op.output().and_then(|o| type_from_size(o.size())) {
+                if let Some(element_type) = op.output.as_ref().and_then(|o| type_from_size(o.size())) {
                     let access = ArrayAccess {
                         base: varnode_key(ptr),
                         index: "unknown".to_string(), // Would need data flow analysis
-                        element_size: op.output().map(|o| o.size()).unwrap_or(1),
+                        element_size: op.output.as_ref().map(|o| o.size()).unwrap_or(1),
                         element_type: Some(element_type),
                     };
                     analysis.arrays.push(access);
@@ -260,17 +260,17 @@ fn detect_arrays(program: &Program, analysis: &mut TypeInferenceAnalysis) {
 /// Detect struct/object access patterns
 fn detect_structs(program: &Program, analysis: &mut TypeInferenceAnalysis) {
     for op in program.operations() {
-        match op.opcode() {
-            PcodeOp::Load | PcodeOp::Store => {
+        match op.opcode {
+            OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
                 // Pattern: access at base + constant offset
-                if let Some(ptr) = op.inputs().get(1) {
+                if let Some(ptr) = op.inputs.as_slice().get(1) {
                     // If pointer is constant offset from base, it's likely a struct field
                     if ptr.space() == AddressSpace::Ram {
                         let offset = ptr.offset() as i64;
-                        let field_size = if op.opcode() == PcodeOp::Load {
-                            op.output().map(|o| o.size()).unwrap_or(4)
+                        let field_size = if op.opcode == OpCode::CPUI_LOAD {
+                            op.output.as_ref().map(|o| o.size()).unwrap_or(4)
                         } else {
-                            op.inputs().get(2).map(|v| v.size()).unwrap_or(4)
+                            op.inputs.as_slice().get(2).map(|v| v.size()).unwrap_or(4)
                         };
 
                         let field_type = type_from_size(field_size);
@@ -302,10 +302,10 @@ fn propagate_types(program: &Program, analysis: &mut TypeInferenceAnalysis) {
         iterations += 1;
 
         for op in program.operations() {
-            match op.opcode() {
+            match op.opcode {
                 // Copy propagates type exactly
-                PcodeOp::Copy => {
-                    if let (Some(output), Some(input)) = (op.output(), op.inputs().get(0)) {
+                OpCode::CPUI_COPY => {
+                    if let (Some(output), Some(input)) = (op.output.as_ref(), op.inputs.as_slice().get(0)) {
                         let input_key = varnode_key(input);
                         let output_key = varnode_key(output);
 
@@ -318,8 +318,8 @@ fn propagate_types(program: &Program, analysis: &mut TypeInferenceAnalysis) {
                     }
                 }
                 // Arithmetic operations preserve integer types
-                PcodeOp::IntAdd | PcodeOp::IntSub | PcodeOp::IntMult | PcodeOp::IntDiv => {
-                    if let Some(output) = op.output() {
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV => {
+                    if let Some(output) = op.output.as_ref() {
                         let output_key = varnode_key(output);
                         if !analysis.varnode_types.contains_key(&output_key) {
                             // Infer as integer type based on size
@@ -335,9 +335,9 @@ fn propagate_types(program: &Program, analysis: &mut TypeInferenceAnalysis) {
                     }
                 }
                 // Comparison operations produce boolean
-                PcodeOp::IntEqual | PcodeOp::IntNotEqual | PcodeOp::IntLess |
-                PcodeOp::IntLessEqual | PcodeOp::IntSLess | PcodeOp::IntSLessEqual => {
-                    if let Some(output) = op.output() {
+                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_INT_LESS |
+                OpCode::CPUI_INT_LESSEqual | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEqual => {
+                    if let Some(output) = op.output.as_ref() {
                         let output_key = varnode_key(output);
                         if !analysis.varnode_types.contains_key(&output_key) {
                             analysis.set_type(output_key, InferredType {
@@ -383,7 +383,7 @@ mod tests {
         // Simple copy operation
         let src = Varnode::new_register(0, 4);
         let dst = Varnode::new_register(8, 4);
-        builder.add_op(PcodeOp::Copy, Some(dst), vec![src]);
+        builder.add_op(OpCode::CPUI_COPY, Some(dst), vec![src]);
 
         let program = builder.build();
         let analysis = infer_types(&program).unwrap();
@@ -398,7 +398,7 @@ mod tests {
         // LOAD operation - indicates pointer
         let ptr = Varnode::new_register(0, 8);
         let value = Varnode::new_register(8, 4);
-        builder.add_op(PcodeOp::Load, Some(value), vec![
+        builder.add_op(OpCode::CPUI_LOAD, Some(value), vec![
             Varnode::new_constant(0, 8), // space
             ptr.clone(),
         ]);
@@ -427,8 +427,8 @@ mod tests {
         let v2 = Varnode::new_register(8, 4);
         let v3 = Varnode::new_register(16, 4);
 
-        builder.add_op(PcodeOp::Copy, Some(v2.clone()), vec![v1]);
-        builder.add_op(PcodeOp::Copy, Some(v3), vec![v2]);
+        builder.add_op(OpCode::CPUI_COPY, Some(v2.clone()), vec![v1]);
+        builder.add_op(OpCode::CPUI_COPY, Some(v3), vec![v2]);
 
         let program = builder.build();
         let analysis = infer_types(&program).unwrap();
@@ -446,7 +446,7 @@ mod tests {
         let a = Varnode::new_register(8, 4);
         let b = Varnode::new_register(16, 4);
 
-        builder.add_op(PcodeOp::IntEqual, Some(result.clone()), vec![a, b]);
+        builder.add_op(OpCode::CPUI_INT_EQUAL, Some(result.clone()), vec![a, b]);
 
         let program = builder.build();
         let analysis = infer_types(&program).unwrap();

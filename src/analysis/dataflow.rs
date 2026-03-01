@@ -287,7 +287,7 @@ fn compute_live_variables(
                 let op = &ops[op_idx];
 
                 // Variables used before defined
-                for input in op.inputs() {
+                for input in op.inputs.as_slice() {
                     let var = varnode_to_string(input);
                     if !defs.contains(&var) {
                         uses.insert(var);
@@ -295,7 +295,7 @@ fn compute_live_variables(
                 }
 
                 // Variables defined
-                if let Some(output) = op.output() {
+                if let Some(output) = op.output.as_ref() {
                     defs.insert(varnode_to_string(output));
                 }
             }
@@ -372,7 +372,7 @@ fn build_use_def_chains(
 
     for (i, op) in ops.iter().enumerate() {
         // For each use
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             let var = varnode_to_string(input);
 
             // Find which block this operation is in
@@ -443,10 +443,10 @@ fn compute_available_expressions(
 
                 // Simple heuristic: arithmetic operations create available expressions
                 if matches!(
-                    op.opcode(),
-                    PcodeOp::IntAdd | PcodeOp::IntSub | PcodeOp::IntMult | PcodeOp::IntDiv
+                    op.opcode,
+                    OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV
                 ) {
-                    if let Some(output) = op.output() {
+                    if let Some(output) = op.output.as_ref() {
                         available.insert(varnode_to_string(output));
                     }
                 }
@@ -467,7 +467,7 @@ fn detect_dead_code(
 
     // Find definitions that are never used
     for (i, op) in ops.iter().enumerate() {
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             let var = varnode_to_string(output);
             let block_idx = find_block_for_operation(cfg, i);
 
@@ -568,8 +568,8 @@ mod tests {
         let v1 = Varnode::new_register(0, 4);
         let v2 = Varnode::new_register(8, 4);
 
-        builder.add_op(PcodeOp::Copy, Some(v1.clone()), vec![v2.clone()]);
-        builder.add_op(PcodeOp::IntAdd, Some(v2.clone()), vec![v1.clone(), v2.clone()]);
+        builder.add_op(OpCode::CPUI_COPY, Some(v1.clone()), vec![v2.clone()]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(v2.clone()), vec![v1.clone(), v2.clone()]);
 
         let program = builder.build();
         let cfg = ControlFlowGraph::from_program(&program).unwrap();
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn test_find_block_for_operation() {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
-        builder.add_op(PcodeOp::Copy, None, vec![]);
+        builder.add_op(OpCode::CPUI_COPY, None, vec![]);
 
         let program = builder.build();
         let cfg = ControlFlowGraph::from_program(&program).unwrap();

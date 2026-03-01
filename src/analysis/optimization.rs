@@ -5,7 +5,8 @@
 //! - Algebraic Simplification: Simplifies expressions using algebraic identities.
 //! - Dead Code Elimination: Removes operations whose results are not used (replaces with NOP).
 
-use crate::pcode::{PcodeOp, PcodeOperation, Program};
+use crate::opcodes::OpCode;
+use crate::pcode::{ PcodeOperation, Program};
 use crate::analysis::FunctionAnalysis;
 use super::rules::{RuleController, Action, ActionSimplify};
 use std::collections::HashSet;
@@ -50,7 +51,7 @@ impl Action for ActionDeadCodeElimination {
     }
 
     fn apply(&self, program: &mut Program, analysis: &FunctionAnalysis) -> bool {
-        let nop_count = program.operations().iter().filter(|op| op.opcode() == PcodeOp::Nop).count();
+        let nop_count = program.operations().iter().filter(|op| op.opcode == OpCode::CPUI_COPY /* NOP */).count();
         eprintln!("[DCE] Start: Found {} NOPs in program", nop_count);
 
         let cfg = match &analysis.cfg {
@@ -72,8 +73,8 @@ impl Action for ActionDeadCodeElimination {
         } else {
             // Fallback: Full scan of operations (Slower)
             for op in program.operations() {
-                if op.opcode() == PcodeOp::Nop { continue; }
-                for input in op.inputs() {
+                if op.opcode == OpCode::CPUI_COPY /* NOP */ { continue; }
+                for input in op.inputs.as_slice() {
                     // Unique space vars are SSA temps, or any varnode with version > 0
                     if input.is_unique() || input.version() > 0 {
                         used_keys.insert(format!("{:?}_{:x}_{}_{}", input.space(), input.offset(), input.size(), input.version()));
@@ -92,9 +93,9 @@ impl Action for ActionDeadCodeElimination {
 
                 let is_dead = {
                     let op = &program.operations()[op_idx];
-                    if op.opcode() == PcodeOp::Nop || op.has_side_effects() {
+                    if op.opcode == OpCode::CPUI_COPY /* NOP */ || op.has_side_effects() {
                         false
-                    } else if let Some(output) = op.output() {
+                    } else if let Some(output) = op.output.as_ref() {
                         // Eliminate dead temporaries (Unique) or SSA-versioned variables
                         if output.is_unique() || output.version() > 0 {
                             let key = format!("{:?}_{:x}_{}_{}", output.space(), output.offset(), output.size(), output.version());
@@ -110,7 +111,7 @@ impl Action for ActionDeadCodeElimination {
 
                 if is_dead {
                     let op = &mut program.operations_mut()[op_idx];
-                    let nop = PcodeOperation::new(op.id(), op.seqnum(), PcodeOp::Nop, None, Vec::new());
+                    let nop = PcodeOperation::new(op.id(), op.seqnum(), OpCode::CPUI_COPY /* NOP */, None, Vec::new());
                     *op = nop;
                     changed = true;
                 }
@@ -132,7 +133,7 @@ mod tests {
     fn test_constant_folding() {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
         let r0 = Varnode::new_register(0, 4);
-        builder.add_op(PcodeOp::IntAdd, Some(r0), vec![
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(r0), vec![
             Varnode::new_constant(10, 4),
             Varnode::new_constant(20, 4)
         ]);
@@ -153,16 +154,16 @@ mod tests {
         optimize_function(&mut program, &analysis);
 
         let op = &program.operations()[0];
-        assert_eq!(op.opcode(), PcodeOp::Copy);
-        assert_eq!(op.inputs()[0].constant_value(), Some(30));
+        assert_eq!(op.opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.inputs.as_slice()[0].constant_value(), Some(30));
     }
 
     #[test]
     fn test_algebraic_simplification() {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
-        builder.add_op(PcodeOp::IntAdd, Some(Varnode::new_register(0, 4)), vec![Varnode::new_register(1, 4), Varnode::new_constant(0, 4)]);
-        builder.add_op(PcodeOp::IntMult, Some(Varnode::new_register(2, 4)), vec![Varnode::new_register(3, 4), Varnode::new_constant(1, 4)]);
-        builder.add_op(PcodeOp::IntXor, Some(Varnode::new_register(4, 4)), vec![Varnode::new_register(5, 4), Varnode::new_register(5, 4)]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(Varnode::new_register(0, 4)), vec![Varnode::new_register(1, 4), Varnode::new_constant(0, 4)]);
+        builder.add_op(OpCode::CPUI_INT_MULT, Some(Varnode::new_register(2, 4)), vec![Varnode::new_register(3, 4), Varnode::new_constant(1, 4)]);
+        builder.add_op(OpCode::CPUI_INT_XOR, Some(Varnode::new_register(4, 4)), vec![Varnode::new_register(5, 4), Varnode::new_register(5, 4)]);
 
         let mut program = builder.build();
         let mut analysis = FunctionAnalysis::new();
@@ -180,17 +181,17 @@ mod tests {
         optimize_function(&mut program, &analysis);
 
         let ops = program.operations();
-        assert_eq!(ops[0].opcode(), PcodeOp::Copy);
-        assert_eq!(ops[1].opcode(), PcodeOp::Copy);
-        assert_eq!(ops[2].opcode(), PcodeOp::Copy);
+        assert_eq!(ops[0].opcode(), OpCode::CPUI_COPY);
+        assert_eq!(ops[1].opcode(), OpCode::CPUI_COPY);
+        assert_eq!(ops[2].opcode(), OpCode::CPUI_COPY);
     }
 
     #[test]
     fn test_dead_code_elimination() {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
-        builder.add_op(PcodeOp::IntAdd, Some(Varnode::new_unique(10, 4)), vec![Varnode::new_register(1, 4), Varnode::new_register(2, 4)]);
-        builder.add_op(PcodeOp::IntAdd, Some(Varnode::new_unique(20, 4)), vec![Varnode::new_register(3, 4), Varnode::new_register(4, 4)]);
-        builder.add_op(PcodeOp::Copy, Some(Varnode::new_register(5, 4)), vec![Varnode::new_unique(20, 4)]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(Varnode::new_unique(10, 4)), vec![Varnode::new_register(1, 4), Varnode::new_register(2, 4)]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(Varnode::new_unique(20, 4)), vec![Varnode::new_register(3, 4), Varnode::new_register(4, 4)]);
+        builder.add_op(OpCode::CPUI_COPY, Some(Varnode::new_register(5, 4)), vec![Varnode::new_unique(20, 4)]);
 
         let mut program = builder.build();
         let mut analysis = FunctionAnalysis::new();
@@ -208,7 +209,7 @@ mod tests {
         optimize_function(&mut program, &analysis);
 
         let ops = program.operations();
-        assert_eq!(ops[0].opcode(), PcodeOp::Nop);
-        assert!(ops[1].opcode() != PcodeOp::Nop);
+        assert_eq!(ops[0].opcode(), OpCode::CPUI_COPY /* NOP */);
+        assert!(ops[1].opcode() != OpCode::CPUI_COPY /* NOP */);
     }
 }

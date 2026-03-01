@@ -310,7 +310,7 @@ mod tests {
         let op = PcodeOpRaw::new(19); // INT_ADD
         assert_eq!(op.get_opcode(), 19);
         assert_eq!(op.num_input(), 0);
-        assert!(op.output().is_none());
+        assert!(op.output.as_ref().is_none());
     }
 
     #[test]
@@ -320,8 +320,8 @@ mod tests {
         op.add_input(VarnodeRaw::new(AddressSpace::Register, 4, 4));
 
         assert_eq!(op.num_input(), 2);
-        assert_eq!(op.inputs()[0].offset, 0);
-        assert_eq!(op.inputs()[1].offset, 4);
+        assert_eq!(op.inputs.as_slice()[0].offset, 0);
+        assert_eq!(op.inputs.as_slice()[1].offset, 4);
     }
 
     #[test]
@@ -340,8 +340,8 @@ mod tests {
         let mut op = PcodeOpRaw::new(19);
         op.set_output(VarnodeRaw::new(AddressSpace::Register, 8, 4));
 
-        assert!(op.output().is_some());
-        assert_eq!(op.output().unwrap().offset, 8);
+        assert!(op.output.as_ref().is_some());
+        assert_eq!(op.output.as_ref().unwrap().offset, 8);
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod tests {
 
         assert_eq!(op.get_opcode(), 19);
         assert_eq!(op.num_input(), 2);
-        assert!(op.output().is_some());
+        assert!(op.output.as_ref().is_some());
         assert!(op.seq_num().is_some());
     }
 
@@ -384,7 +384,7 @@ mod tests {
 
         assert_eq!(op.get_opcode(), 19);
         assert_eq!(op.num_input(), 2);
-        assert!(op.output().is_some());
+        assert!(op.output.as_ref().is_some());
 
         let encoded = op.encode();
         let decoded = PcodeOpRaw::decode(&encoded).unwrap();

@@ -223,7 +223,7 @@ fn detect_stack_variables(program: &Program, cfg: &crate::analysis::cfg::Control
             let op = &program.operations()[op_idx];
 
             // Look for stack access patterns
-            if let Some(output) = op.output() {
+            if let Some(output) = op.output.as_ref() {
             if output.space() == AddressSpace::Stack {
                 let offset = output.offset() as i64;
                 let size = output.size();
@@ -231,7 +231,7 @@ fn detect_stack_variables(program: &Program, cfg: &crate::analysis::cfg::Control
             }
         }
 
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             if input.space() == AddressSpace::Stack {
                 let offset = input.offset() as i64;
                 let size = input.size();
@@ -240,17 +240,17 @@ fn detect_stack_variables(program: &Program, cfg: &crate::analysis::cfg::Control
         }
 
         // Heuristic: Check for RSP-relative address calculations (RSP +/- const)
-        let inputs = op.inputs();
+        let inputs = op.inputs.as_slice();
         if inputs.len() == 2 {
-            let opcode = op.opcode();
-            if opcode == crate::pcode::PcodeOp::IntSub {
+            let opcode = op.opcode;
+            if opcode == crate::pcode::OpCode::CPUI_INT_SUB {
                 // RSP - const
                 if inputs[0].space() == AddressSpace::Register && inputs[0].offset() == rsp_offset &&
                    inputs[1].space() == AddressSpace::Const {
                        let offset = -(inputs[1].offset() as i64);
                        stack_accesses.entry(offset).or_insert_with(HashSet::new).insert(8);
                 }
-            } else if opcode == crate::pcode::PcodeOp::IntAdd {
+            } else if opcode == crate::pcode::OpCode::CPUI_INT_ADD {
                 // RSP + const (commutative)
                 let mut const_val = None;
                 let mut has_rsp = false;
@@ -306,7 +306,7 @@ fn detect_register_variables(program: &Program, cfg: &crate::analysis::cfg::Cont
         for &op_idx in &block.operations {
             if op_idx >= program.operation_count() { continue; }
             let op = &program.operations()[op_idx];
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             if output.space() == AddressSpace::Register {
                 let offset = output.offset();
                 let size = output.size();
@@ -316,7 +316,7 @@ fn detect_register_variables(program: &Program, cfg: &crate::analysis::cfg::Cont
             }
         }
 
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             if input.space() == AddressSpace::Register {
                 let offset = input.offset();
                 let size = input.size();
@@ -406,7 +406,7 @@ fn estimate_stack_frame_size(program: &Program) -> Option<usize> {
     let mut min_stack_offset = 0i64;
 
     for op in program.operations() {
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             if output.space() == AddressSpace::Stack {
                 let offset = output.offset() as i64;
                 max_stack_offset = max_stack_offset.max(offset);
@@ -414,7 +414,7 @@ fn estimate_stack_frame_size(program: &Program) -> Option<usize> {
             }
         }
 
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             if input.space() == AddressSpace::Stack {
                 let offset = input.offset() as i64;
                 max_stack_offset = max_stack_offset.max(offset);
@@ -443,7 +443,7 @@ pub fn analyze_variable_lifetimes(
         let addr = op.address();
 
         // Check output
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             if let Some(var_id) = analysis.find_variable_for_varnode(output) {
                 first_use.entry(var_id).or_insert(addr);
                 last_use.insert(var_id, addr);
@@ -451,7 +451,7 @@ pub fn analyze_variable_lifetimes(
         }
 
         // Check inputs
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             if let Some(var_id) = analysis.find_variable_for_varnode(input) {
                 first_use.entry(var_id).or_insert(addr);
                 last_use.insert(var_id, addr);
@@ -488,7 +488,7 @@ mod tests {
 
         // Create some stack accesses
         let stack_var = Varnode::new_stack((-8i64) as u64, 8);
-        builder.add_op(PcodeOp::Store, None, vec![
+        builder.add_op(OpCode::CPUI_STORE, None, vec![
             Varnode::new_constant(0, 8),
             stack_var.clone(),
             Varnode::new_constant(42, 8),
@@ -506,7 +506,7 @@ mod tests {
 
         // Multiple accesses to same stack location
         let stack_var = Varnode::new_stack((-16i64) as u64, 8);
-        builder.add_op(PcodeOp::Copy, Some(stack_var.clone()), vec![
+        builder.add_op(OpCode::CPUI_COPY, Some(stack_var.clone()), vec![
             Varnode::new_constant(10, 8),
         ]);
 
@@ -524,7 +524,7 @@ mod tests {
 
         // Register operations
         let reg = Varnode::new_register(40, 8); // rdi - first parameter
-        builder.add_op(PcodeOp::Copy, Some(Varnode::new_register(0, 8)), vec![reg]);
+        builder.add_op(OpCode::CPUI_COPY, Some(Varnode::new_register(0, 8)), vec![reg]);
 
         let program = builder.build();
         let reg_vars = detect_register_variables(&program);
@@ -555,10 +555,10 @@ mod tests {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
 
         // Create variables at different stack offsets
-        builder.add_op(PcodeOp::Copy, Some(Varnode::new_stack((-8i64) as u64, 8)), vec![
+        builder.add_op(OpCode::CPUI_COPY, Some(Varnode::new_stack((-8i64) as u64, 8)), vec![
             Varnode::new_constant(1, 8),
         ]);
-        builder.add_op(PcodeOp::Copy, Some(Varnode::new_stack((-32i64) as u64, 8)), vec![
+        builder.add_op(OpCode::CPUI_COPY, Some(Varnode::new_stack((-32i64) as u64, 8)), vec![
             Varnode::new_constant(2, 8),
         ]);
 

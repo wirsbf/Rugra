@@ -227,12 +227,12 @@ fn identify_variables(program: &Program) -> HashSet<String> {
 
     for op in program.operations() {
         // Add output variable
-        if let Some(output) = op.output() {
+        if let Some(output) = op.output.as_ref() {
             variables.insert(varnode_to_var_name(output));
         }
 
         // Add input variables
-        for input in op.inputs() {
+        for input in op.inputs.as_slice() {
             variables.insert(varnode_to_var_name(input));
         }
     }
@@ -258,13 +258,13 @@ fn place_phi_nodes(
             if op_idx >= ops.len() { continue; }
             let op = &ops[op_idx];
 
-            for input in op.inputs() {
+            for input in op.inputs.as_slice() {
                 let var_name = varnode_to_var_name(input);
                 if !varkill.contains(&var_name) {
                     globals.insert(var_name);
                 }
             }
-            if let Some(output) = op.output() {
+            if let Some(output) = op.output.as_ref() {
                 let var_name = varnode_to_var_name(output);
                 defs.entry(var_name.clone()).or_default().insert(block_idx);
                 varkill.insert(var_name);
@@ -514,7 +514,7 @@ mod tests {
         let v1 = Varnode::new_register(0, 4);
         let v2 = Varnode::new_register(8, 4);
 
-        builder.add_op(PcodeOp::Copy, Some(v1.clone()), vec![v2.clone()]);
+        builder.add_op(OpCode::CPUI_COPY, Some(v1.clone()), vec![v2.clone()]);
 
         let program = builder.build();
         let variables = identify_variables(&program);
@@ -526,10 +526,10 @@ mod tests {
     fn test_dominance_frontier_computation() {
         // Create a simple CFG
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
-        builder.add_op(PcodeOp::Copy, None, vec![]);
+        builder.add_op(OpCode::CPUI_COPY, None, vec![]);
 
         builder.at_address(Address::new(0x1010));
-        builder.add_op(PcodeOp::Copy, None, vec![]);
+        builder.add_op(OpCode::CPUI_COPY, None, vec![]);
 
         let program = builder.build();
         let cfg = ControlFlowGraph::from_program(&program).unwrap();

@@ -23,3 +23,6 @@ pub trait AlignmentCheck {
     /// Verify that this object is aligned with its Ghidra counterpart
     fn check_alignment(&self) -> bool;
 }
+pub mod heritage;
+pub mod block;
+pub mod action;

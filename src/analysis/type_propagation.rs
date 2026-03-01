@@ -134,7 +134,7 @@ impl TypeSolver {
     fn build_dependencies(&mut self, program: &Program, ssa: &SSAForm) {
         // Dependency from Op Inputs to Op Index
         for (i, op) in program.operations().iter().enumerate() {
-            for input in op.inputs() {
+            for input in op.inputs.as_slice() {
                 let key = varnode_to_key(input);
                 self.dependents.entry(key).or_insert_with(Vec::new).push(i);
             }
@@ -161,17 +161,17 @@ impl TypeSolver {
     ) {
         // Implementation of transfer functions for each opcode
 
-        let output_vn = match op.output() {
+        let output_vn = match op.output.as_ref() {
             Some(o) => o,
             None => return, // Store, Branch, etc. handled separately or don't propagate to output
         };
         let output_key = varnode_to_key(output_vn);
 
-        let inputs = op.inputs();
+        let inputs = op.inputs.as_slice();
         if inputs.is_empty() { return; }
 
-        match op.opcode() {
-            PcodeOp::Copy => {
+        match op.opcode {
+            OpCode::CPUI_COPY => {
                 let input_key = varnode_to_key(&inputs[0]);
                 if let Some(in_type) = self.types.get(&input_key).cloned() {
                     self.update_type(&output_key, in_type);
@@ -180,20 +180,20 @@ impl TypeSolver {
                     self.update_type(&input_key, out_type);
                 }
             }
-            PcodeOp::IntAdd | PcodeOp::IntSub => {
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                 let type1 = self.types.get(&varnode_to_key(&inputs[0])).cloned();
                 let type2 = inputs.get(1).and_then(|vn| self.types.get(&varnode_to_key(vn))).cloned();
 
                 let result_type = match (type1, type2) {
                     (Some(DataType::Pointer(target, sz)), Some(DataType::Pointer(_, _))) => {
-                        if op.opcode() == PcodeOp::IntSub {
+                        if op.opcode == OpCode::CPUI_INT_SUB {
                             DataType::Int(output_vn.size(), true)
                         } else {
                             DataType::Pointer(target, sz)
                         }
                     }
                     (Some(DataType::Pointer(target, sz)), _) | (_, Some(DataType::Pointer(target, sz))) => {
-                        if op.opcode() == PcodeOp::IntAdd {
+                        if op.opcode == OpCode::CPUI_INT_ADD {
                             if let DataType::Struct(struct_name) = target.as_ref() {
                                 let offset = inputs.iter().find_map(|vn| vn.constant_value());
                                 if let Some(off) = offset {
@@ -215,25 +215,25 @@ impl TypeSolver {
 
                 self.update_type(&output_key, result_type);
             }
-            PcodeOp::IntMult | PcodeOp::IntDiv | PcodeOp::IntSDiv | PcodeOp::IntRem | PcodeOp::IntSRem |
-            PcodeOp::IntAnd | PcodeOp::IntOr | PcodeOp::IntXor |
-            PcodeOp::IntNot | PcodeOp::IntNeg |
-            PcodeOp::IntLeft | PcodeOp::IntRight | PcodeOp::IntSRight => {
+            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM |
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR |
+            OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_NEG |
+            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
                 // Standard integer ops -> Int
                 // Size usually determined by output size
                 let out_type = DataType::Int(output_vn.size(), false); // Default unsigned
                 self.update_type(&output_key, out_type);
             }
-            PcodeOp::IntEqual | PcodeOp::IntNotEqual |
-            PcodeOp::IntLess | PcodeOp::IntLessEqual |
-            PcodeOp::IntSLess | PcodeOp::IntSLessEqual |
-            PcodeOp::FloatEqual | PcodeOp::FloatNotEqual |
-            PcodeOp::FloatLess | PcodeOp::FloatLessEqual |
-            PcodeOp::BoolAnd | PcodeOp::BoolOr | PcodeOp::BoolXor | PcodeOp::BoolNot => {
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL |
+            OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEqual |
+            OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEqual |
+            OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL |
+            OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEqual |
+            OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR | OpCode::CPUI_BOOL_NOT => {
                 // Comparison & Boolean -> Bool
                 self.update_type(&output_key, DataType::Bool);
             }
-            PcodeOp::Load => {
+            OpCode::CPUI_LOAD => {
                 // out = *ptr
                 if let Some(ptr) = inputs.get(1) {
                     let ptr_key = varnode_to_key(ptr);
@@ -247,7 +247,7 @@ impl TypeSolver {
                     }
                 }
             }
-            PcodeOp::Store => {
+            OpCode::CPUI_STORE => {
                 // *ptr = val
                 if let (Some(ptr), Some(val)) = (inputs.get(1), inputs.get(2)) {
                     let ptr_key = varnode_to_key(ptr);
@@ -262,11 +262,11 @@ impl TypeSolver {
                     }
                 }
             }
-            PcodeOp::IntZext | PcodeOp::IntSext => {
+            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
                 if let Some(in_type) = self.types.get(&varnode_to_key(&inputs[0])) {
                     let new_type = match in_type {
                         DataType::Int(_, signed) => {
-                            let is_signed = if op.opcode() == PcodeOp::IntSext { true } else { *signed };
+                            let is_signed = if op.opcode == OpCode::CPUI_INT_SEXT { true } else { *signed };
                             DataType::Int(output_vn.size(), is_signed)
                         }
                         DataType::Bool => DataType::Int(output_vn.size(), false),
@@ -276,18 +276,18 @@ impl TypeSolver {
                     self.update_type(&output_key, new_type);
                 }
             }
-            PcodeOp::FloatAdd | PcodeOp::FloatSub | PcodeOp::FloatMult | PcodeOp::FloatDiv |
-            PcodeOp::FloatNeg | PcodeOp::FloatAbs | PcodeOp::FloatSqrt |
-            PcodeOp::FloatCeil | PcodeOp::FloatFloor | PcodeOp::FloatRound => {
+            OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT | OpCode::CPUI_FLOAT_DIV |
+            OpCode::CPUI_FLOAT_NEG | OpCode::CPUI_FLOAT_ABS | OpCode::CPUI_FLOAT_SQRT |
+            OpCode::CPUI_FLOAT_CEIL | OpCode::CPUI_FLOAT_FLOOR | OpCode::CPUI_FLOAT_ROUND => {
                 self.update_type(&output_key, DataType::Float(output_vn.size()));
             }
-            PcodeOp::IntToFloat | PcodeOp::FloatToFloat => {
+            OpCode::CPUI_FLOAT_INT2FLOAT | OpCode::CPUI_FLOAT_FLOAT2FLOAT => {
                 self.update_type(&output_key, DataType::Float(output_vn.size()));
             }
-            PcodeOp::FloatToInt => {
+            OpCode::CPUI_FLOAT_TRUNC => {
                 self.update_type(&output_key, DataType::Int(output_vn.size(), true));
             }
-            PcodeOp::Trunc | PcodeOp::SubPiece => {
+            OpCode::CPUI_TRUNC | OpCode::CPUI_SUBPIECE => {
                 // out = trunc(in)
                 if let Some(in_vn) = inputs.get(0) {
                     if let Some(in_type) = self.types.get(&varnode_to_key(in_vn)).cloned() {
@@ -299,7 +299,7 @@ impl TypeSolver {
                     }
                 }
             }
-            PcodeOp::Call => {
+            OpCode::CPUI_CALL => {
                 // Call inputs: [0] target_addr, [1..] arguments
                 // We need the function name to look up the prototype
                 if let Some(target) = inputs.get(0) {
@@ -346,10 +346,10 @@ impl TypeSolver {
 
     fn propagate_api_call(&mut self, op: &PcodeOperation, binary: Option<&crate::binary::Binary>) {
         // This requires knowing the function name.
-        let func_name = match op.opcode() {
-            PcodeOp::Call => {
+        let func_name = match op.opcode {
+            OpCode::CPUI_CALL => {
                 // Heuristic: check if there's a symbol name associated with the first input (address)
-                if let Some(target) = op.inputs().get(0) {
+                if let Some(target) = op.inputs.as_slice().get(0) {
                     if let Some(addr_val) = target.constant_value() {
                         // Look up symbol in binary
                         if let Some(bin) = binary {
@@ -382,14 +382,14 @@ impl TypeSolver {
 
         if let Some(proto) = self.api_registry.get_prototype(func_name).cloned() {
             // 1. Propagate return type to output
-            if let Some(output) = op.output() {
+            if let Some(output) = op.output.as_ref() {
                 let output_key = varnode_to_key(output);
                 self.update_type(&output_key, proto.return_type.clone());
             }
 
             // 2. Propagate parameter types to inputs
             // Skip input[0] (target address)
-            let args = &op.inputs()[1..];
+            let args = &op.inputs.as_slice()[1..];
             for (i, arg) in args.iter().enumerate() {
                 if i < proto.parameter_types.len() {
                     let arg_key = varnode_to_key(arg);

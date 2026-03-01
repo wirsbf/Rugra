@@ -2,7 +2,8 @@
 //!
 //! Implements Ghidra's RuleConstant logic for folding operations with constant inputs.
 
-use crate::pcode::{PcodeOp, Varnode, PcodeOperation, Program};
+use crate::opcodes::OpCode;
+use crate::pcode::{ Varnode, PcodeOperation, Program};
 use crate::analysis::cfg::ControlFlowGraph;
 use crate::analysis::FunctionAnalysis;
 use super::{Rule, RuleResult};
@@ -23,33 +24,33 @@ impl Rule for RuleConstantFolding {
         let op = &program.operations()[op_idx];
 
         // Filter relevant opcodes
-        match op.opcode() {
-            PcodeOp::IntAdd | PcodeOp::IntSub | PcodeOp::IntMult | PcodeOp::IntDiv |
-            PcodeOp::IntSDiv | PcodeOp::IntRem | PcodeOp::IntSRem |
-            PcodeOp::IntAnd | PcodeOp::IntOr | PcodeOp::IntXor |
-            PcodeOp::IntNot | PcodeOp::IntNeg |
-            PcodeOp::IntLeft | PcodeOp::IntRight | PcodeOp::IntSRight |
-            PcodeOp::IntEqual | PcodeOp::IntNotEqual |
-            PcodeOp::IntLess | PcodeOp::IntSLess |
-            PcodeOp::IntLessEqual | PcodeOp::IntSLessEqual |
-            PcodeOp::IntZext | PcodeOp::IntSext => {},
+        match op.opcode {
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV |
+            OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM |
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR |
+            OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_NEG |
+            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT |
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL |
+            OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS |
+            OpCode::CPUI_INT_LESSEqual | OpCode::CPUI_INT_SLESSEqual |
+            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {},
             _ => return RuleResult::Skipped,
         }
 
         // Check if output exists
-        let output = match op.output() {
+        let output = match op.output.as_ref() {
             Some(o) => o.clone(),
             None => return RuleResult::Skipped,
         };
 
         // Check if all inputs are constant
-        let inputs = op.inputs();
+        let inputs = op.inputs.as_slice();
         if inputs.is_empty() || !inputs.iter().all(|vn| vn.is_constant()) {
             return RuleResult::Skipped;
         }
 
         // Calculate result
-        if let Some(result) = evaluate_constant_op(op.opcode(), inputs) {
+        if let Some(result) = evaluate_constant_op(op.opcode, inputs) {
             // Replace with Copy
             let new_input = Varnode::new_constant(result, output.size());
 
@@ -59,7 +60,7 @@ impl Rule for RuleConstantFolding {
             let new_op = PcodeOperation::new(
                 op_mut.id(),
                 op_mut.seqnum(),
-                PcodeOp::Copy,
+                OpCode::CPUI_COPY,
                 Some(output),
                 vec![new_input]
             );
@@ -94,10 +95,10 @@ pub fn evaluate_constant_op(opcode: PcodeOp, inputs: &[Varnode]) -> Option<u64> 
 
     // Unary ops
     match opcode {
-        PcodeOp::IntNot => return Some(!val1),
-        PcodeOp::IntNeg => return Some((-(val1 as i64)) as u64),
-        PcodeOp::IntZext => return Some(val1),
-        PcodeOp::IntSext => {
+        OpCode::CPUI_INT_NOT => return Some(!val1),
+        OpCode::CPUI_INT_NEG => return Some((-(val1 as i64)) as u64),
+        OpCode::CPUI_INT_ZEXT => return Some(val1),
+        OpCode::CPUI_INT_SEXT => {
             let extended = sign_extend(val1, size1);
             return Some(extended as u64);
         }
@@ -112,44 +113,44 @@ pub fn evaluate_constant_op(opcode: PcodeOp, inputs: &[Varnode]) -> Option<u64> 
     let size2 = inputs[1].size();
 
     match opcode {
-        PcodeOp::IntAdd => Some(val1.wrapping_add(val2)),
-        PcodeOp::IntSub => Some(val1.wrapping_sub(val2)),
-        PcodeOp::IntMult => Some(val1.wrapping_mul(val2)),
-        PcodeOp::IntDiv => if val2 == 0 { None } else { Some(val1.wrapping_div(val2)) },
-        PcodeOp::IntSDiv => {
+        OpCode::CPUI_INT_ADD => Some(val1.wrapping_add(val2)),
+        OpCode::CPUI_INT_SUB => Some(val1.wrapping_sub(val2)),
+        OpCode::CPUI_INT_MULT => Some(val1.wrapping_mul(val2)),
+        OpCode::CPUI_INT_DIV => if val2 == 0 { None } else { Some(val1.wrapping_div(val2)) },
+        OpCode::CPUI_INT_SDIV => {
             if val2 == 0 { None } else {
                 let s1 = sign_extend(val1, size1);
                 let s2 = sign_extend(val2, size2);
                 Some(s1.wrapping_div(s2) as u64)
             }
         },
-        PcodeOp::IntRem => if val2 == 0 { None } else { Some(val1.wrapping_rem(val2)) },
-        PcodeOp::IntSRem => {
+        OpCode::CPUI_INT_REM => if val2 == 0 { None } else { Some(val1.wrapping_rem(val2)) },
+        OpCode::CPUI_INT_SREM => {
             if val2 == 0 { None } else {
                 let s1 = sign_extend(val1, size1);
                 let s2 = sign_extend(val2, size2);
                 Some(s1.wrapping_rem(s2) as u64)
             }
         },
-        PcodeOp::IntAnd => Some(val1 & val2),
-        PcodeOp::IntOr => Some(val1 | val2),
-        PcodeOp::IntXor => Some(val1 ^ val2),
-        PcodeOp::IntLeft => Some(val1.wrapping_shl(val2 as u32)),
-        PcodeOp::IntRight => Some(val1.wrapping_shr(val2 as u32)),
-        PcodeOp::IntSRight => {
+        OpCode::CPUI_INT_AND => Some(val1 & val2),
+        OpCode::CPUI_INT_OR => Some(val1 | val2),
+        OpCode::CPUI_INT_XOR => Some(val1 ^ val2),
+        OpCode::CPUI_INT_LEFT => Some(val1.wrapping_shl(val2 as u32)),
+        OpCode::CPUI_INT_RIGHT => Some(val1.wrapping_shr(val2 as u32)),
+        OpCode::CPUI_INT_SRIGHT => {
             let s1 = sign_extend(val1, size1);
             Some(s1.wrapping_shr(val2 as u32) as u64)
         },
-        PcodeOp::IntEqual => Some(if val1 == val2 { 1 } else { 0 }),
-        PcodeOp::IntNotEqual => Some(if val1 != val2 { 1 } else { 0 }),
-        PcodeOp::IntLess => Some(if val1 < val2 { 1 } else { 0 }),
-        PcodeOp::IntSLess => {
+        OpCode::CPUI_INT_EQUAL => Some(if val1 == val2 { 1 } else { 0 }),
+        OpCode::CPUI_INT_NOTEQUAL => Some(if val1 != val2 { 1 } else { 0 }),
+        OpCode::CPUI_INT_LESS => Some(if val1 < val2 { 1 } else { 0 }),
+        OpCode::CPUI_INT_SLESS => {
             let s1 = sign_extend(val1, size1);
             let s2 = sign_extend(val2, size2);
             Some(if s1 < s2 { 1 } else { 0 })
         },
-        PcodeOp::IntLessEqual => Some(if val1 <= val2 { 1 } else { 0 }),
-        PcodeOp::IntSLessEqual => {
+        OpCode::CPUI_INT_LESSEqual => Some(if val1 <= val2 { 1 } else { 0 }),
+        OpCode::CPUI_INT_SLESSEqual => {
             let s1 = sign_extend(val1, size1);
             let s2 = sign_extend(val2, size2);
             Some(if s1 <= s2 { 1 } else { 0 })

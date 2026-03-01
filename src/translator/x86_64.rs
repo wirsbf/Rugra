@@ -6,7 +6,8 @@
 
 use super::{RegisterMap, Translator, X86_64RegisterMap};
 use crate::disasm::{Instruction, Operand};
-use crate::pcode::{PcodeOp, PcodeOperation, SeqNum, Varnode, PcodeBuilder};
+use crate::opcodes::OpCode;
+use crate::pcode::{ PcodeOperation, SeqNum, Varnode, PcodeBuilder};
 use crate::{Architecture, Result};
 
 pub struct X86_64Translator {
@@ -141,14 +142,14 @@ impl X86_64Translator {
                 let reg = Varnode::new_register(offset, *size);
                 if *size == 4 {
                     let full_reg = Varnode::new_register(offset, 8);
-                    builder.add_op(PcodeOp::IntZext, Some(full_reg), vec![src]);
+                    builder.add_op(OpCode::CPUI_INT_ZEXT, Some(full_reg), vec![src]);
                 } else {
-                    builder.add_op(PcodeOp::Copy, Some(reg), vec![src]);
+                    builder.add_op(OpCode::CPUI_COPY, Some(reg), vec![src]);
                 }
             }
             Operand::Memory { .. } => {
                 let addr_vn = self.operand_to_varnode(inst, op_idx)?;
-                builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), addr_vn, src]);
+                builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), addr_vn, src]);
             }
             _ => {}
         }
@@ -164,14 +165,14 @@ impl X86_64Translator {
     fn translate_movzx(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
-        builder.add_op(PcodeOp::IntZext, Some(dst), vec![src]);
+        builder.add_op(OpCode::CPUI_INT_ZEXT, Some(dst), vec![src]);
         Ok(())
     }
 
     fn translate_movsx(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
-        builder.add_op(PcodeOp::IntSext, Some(dst), vec![src]);
+        builder.add_op(OpCode::CPUI_INT_SEXT, Some(dst), vec![src]);
         Ok(())
     }
 
@@ -179,8 +180,8 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         if let Operand::Memory { .. } = &inst.operands[1] {
             let addr = builder.new_unique(8);
-            builder.add_op(PcodeOp::Copy, Some(addr.clone()), vec![Varnode::new_constant(0xdeadbeef, 8)]);
-            builder.add_op(PcodeOp::Copy, Some(dst), vec![addr]);
+            builder.add_op(OpCode::CPUI_COPY, Some(addr.clone()), vec![Varnode::new_constant(0xdeadbeef, 8)]);
+            builder.add_op(OpCode::CPUI_COPY, Some(dst), vec![addr]);
         }
         Ok(())
     }
@@ -189,7 +190,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntAdd, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res.clone(), builder)?;
         self.update_flags_arithmetic(inst, &res, builder)?;
         Ok(())
@@ -199,7 +200,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntSub, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res.clone(), builder)?;
         self.update_flags_arithmetic(inst, &res, builder)?;
         Ok(())
@@ -209,7 +210,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let one = Varnode::new_constant(1, dst.size());
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntAdd, Some(res.clone()), vec![dst.clone(), one]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(res.clone()), vec![dst.clone(), one]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -218,7 +219,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let one = Varnode::new_constant(1, dst.size());
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntSub, Some(res.clone()), vec![dst.clone(), one]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(res.clone()), vec![dst.clone(), one]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -226,7 +227,7 @@ impl X86_64Translator {
     fn translate_neg(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let dst = self.operand_to_varnode(inst, 0)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntNeg, Some(res.clone()), vec![dst.clone()]);
+        builder.add_op(OpCode::CPUI_INT_NEG, Some(res.clone()), vec![dst.clone()]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -235,7 +236,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntAnd, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_AND, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res.clone(), builder)?;
         self.update_flags_logical(inst, &res, builder)?;
         Ok(())
@@ -245,7 +246,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntOr, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_OR, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res.clone(), builder)?;
         self.update_flags_logical(inst, &res, builder)?;
         Ok(())
@@ -255,7 +256,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntXor, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_XOR, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res.clone(), builder)?;
         self.update_flags_logical(inst, &res, builder)?;
         Ok(())
@@ -264,7 +265,7 @@ impl X86_64Translator {
     fn translate_not(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let dst = self.operand_to_varnode(inst, 0)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntNot, Some(res.clone()), vec![dst.clone()]);
+        builder.add_op(OpCode::CPUI_INT_NOT, Some(res.clone()), vec![dst.clone()]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -273,7 +274,7 @@ impl X86_64Translator {
         let op0 = self.operand_to_varnode(inst, 0)?;
         let op1 = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(op0.size());
-        builder.add_op(PcodeOp::IntSub, Some(res.clone()), vec![op0, op1]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(res.clone()), vec![op0, op1]);
         self.update_flags_arithmetic(inst, &res, builder)?;
         Ok(())
     }
@@ -282,7 +283,7 @@ impl X86_64Translator {
         let op0 = self.operand_to_varnode(inst, 0)?;
         let op1 = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(op0.size());
-        builder.add_op(PcodeOp::IntAnd, Some(res.clone()), vec![op0, op1]);
+        builder.add_op(OpCode::CPUI_INT_AND, Some(res.clone()), vec![op0, op1]);
         self.update_flags_logical(inst, &res, builder)?;
         Ok(())
     }
@@ -290,10 +291,10 @@ impl X86_64Translator {
     fn translate_jmp(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         if let Some(target) = inst.metadata.branch_target {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
-            builder.add_op(PcodeOp::Branch, None, vec![target_vn]);
+            builder.add_op(OpCode::CPUI_BRANCH, None, vec![target_vn]);
         } else {
             let target = self.operand_to_varnode(inst, 0)?;
-            builder.add_op(PcodeOp::BranchInd, None, vec![target]);
+            builder.add_op(OpCode::CPUI_BRANCHInd, None, vec![target]);
         }
         Ok(())
     }
@@ -302,7 +303,7 @@ impl X86_64Translator {
         if let Some(target) = inst.metadata.branch_target {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
             let zf = Varnode::new_register(200, 1);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, zf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, zf]);
         }
         Ok(())
     }
@@ -312,8 +313,8 @@ impl X86_64Translator {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
             let zf = Varnode::new_register(200, 1);
             let cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolNot, Some(cond.clone()), vec![zf]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(cond.clone()), vec![zf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond]);
         }
         Ok(())
     }
@@ -324,8 +325,8 @@ impl X86_64Translator {
             let sf = Varnode::new_register(201, 1);
             let of = Varnode::new_register(203, 1);
             let cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolXor, Some(cond.clone()), vec![sf, of]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond]);
+            builder.add_op(OpCode::CPUI_BOOL_XOR, Some(cond.clone()), vec![sf, of]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond]);
         }
         Ok(())
     }
@@ -338,9 +339,9 @@ impl X86_64Translator {
             let zf = Varnode::new_register(200, 1);
             let cond1 = builder.new_unique(1);
             let cond2 = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolXor, Some(cond1.clone()), vec![sf, of]);
-            builder.add_op(PcodeOp::BoolOr, Some(cond2.clone()), vec![cond1, zf]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond2]);
+            builder.add_op(OpCode::CPUI_BOOL_XOR, Some(cond1.clone()), vec![sf, of]);
+            builder.add_op(OpCode::CPUI_BOOL_OR, Some(cond2.clone()), vec![cond1, zf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond2]);
         }
         Ok(())
     }
@@ -354,12 +355,12 @@ impl X86_64Translator {
             let cond1 = builder.new_unique(1);
             let cond2 = builder.new_unique(1);
             let cond3 = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolXor, Some(cond1.clone()), vec![sf, of]);
-            builder.add_op(PcodeOp::BoolNot, Some(cond2.clone()), vec![cond1]);
-            builder.add_op(PcodeOp::BoolNot, Some(cond3.clone()), vec![zf]);
+            builder.add_op(OpCode::CPUI_BOOL_XOR, Some(cond1.clone()), vec![sf, of]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(cond2.clone()), vec![cond1]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(cond3.clone()), vec![zf]);
             let final_cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolAnd, Some(final_cond.clone()), vec![cond2, cond3]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, final_cond]);
+            builder.add_op(OpCode::CPUI_BOOL_AND, Some(final_cond.clone()), vec![cond2, cond3]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, final_cond]);
         }
         Ok(())
     }
@@ -370,10 +371,10 @@ impl X86_64Translator {
             let sf = Varnode::new_register(201, 1);
             let of = Varnode::new_register(203, 1);
             let cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolXor, Some(cond.clone()), vec![sf, of]);
+            builder.add_op(OpCode::CPUI_BOOL_XOR, Some(cond.clone()), vec![sf, of]);
             let final_cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolNot, Some(final_cond.clone()), vec![cond]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, final_cond]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(final_cond.clone()), vec![cond]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, final_cond]);
         }
         Ok(())
     }
@@ -381,16 +382,16 @@ impl X86_64Translator {
     fn translate_call(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         if let Some(target) = inst.metadata.branch_target {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
-            builder.add_op(PcodeOp::Call, None, vec![target_vn]);
+            builder.add_op(OpCode::CPUI_CALL, None, vec![target_vn]);
         } else {
             let target = self.operand_to_varnode(inst, 0)?;
-            builder.add_op(PcodeOp::CallInd, None, vec![target]);
+            builder.add_op(OpCode::CPUI_CALLInd, None, vec![target]);
         }
         Ok(())
     }
 
     fn translate_ret(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
-        builder.add_op(PcodeOp::Return, None, Vec::new());
+        builder.add_op(OpCode::CPUI_RETURN, None, Vec::new());
         Ok(())
     }
 
@@ -398,8 +399,8 @@ impl X86_64Translator {
         let src = self.operand_to_varnode(inst, 0)?;
         let rsp = Varnode::new_register(32, 8);
         let eight = Varnode::new_constant(8, 8);
-        builder.add_op(PcodeOp::IntSub, Some(rsp.clone()), vec![rsp.clone(), eight]);
-        builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), rsp, src]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(rsp.clone()), vec![rsp.clone(), eight]);
+        builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), rsp, src]);
         Ok(())
     }
 
@@ -408,9 +409,9 @@ impl X86_64Translator {
         let rsp = Varnode::new_register(32, 8);
         let eight = Varnode::new_constant(8, 8);
         let val = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::Load, Some(val.clone()), vec![Varnode::new_constant(0, 4), rsp.clone()]);
+        builder.add_op(OpCode::CPUI_LOAD, Some(val.clone()), vec![Varnode::new_constant(0, 4), rsp.clone()]);
         self.store_operand(inst, 0, val, builder)?;
-        builder.add_op(PcodeOp::IntAdd, Some(rsp.clone()), vec![rsp, eight]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rsp.clone()), vec![rsp, eight]);
         Ok(())
     }
 
@@ -418,7 +419,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let count = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntLeft, Some(res.clone()), vec![dst.clone(), count]);
+        builder.add_op(OpCode::CPUI_INT_LEFT, Some(res.clone()), vec![dst.clone(), count]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -427,7 +428,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let count = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntRight, Some(res.clone()), vec![dst.clone(), count]);
+        builder.add_op(OpCode::CPUI_INT_RIGHT, Some(res.clone()), vec![dst.clone(), count]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -436,7 +437,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let count = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntSRight, Some(res.clone()), vec![dst.clone(), count]);
+        builder.add_op(OpCode::CPUI_INT_SRIGHT, Some(res.clone()), vec![dst.clone(), count]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -456,9 +457,9 @@ impl X86_64Translator {
             let zf = Varnode::new_register(200, 1);
             let cond1 = builder.new_unique(1);
             let cond2 = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolOr, Some(cond1.clone()), vec![cf, zf]);
-            builder.add_op(PcodeOp::BoolNot, Some(cond2.clone()), vec![cond1]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond2]);
+            builder.add_op(OpCode::CPUI_BOOL_OR, Some(cond1.clone()), vec![cf, zf]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(cond2.clone()), vec![cond1]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond2]);
         }
         Ok(())
     }
@@ -466,9 +467,9 @@ impl X86_64Translator {
     fn translate_stosq(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let rax = Varnode::new_register(0, 8);
         let rdi = Varnode::new_register(56, 8);
-        builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), rdi.clone(), rax]);
+        builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), rdi.clone(), rax]);
         let eight = Varnode::new_constant(8, 8);
-        builder.add_op(PcodeOp::IntAdd, Some(rdi.clone()), vec![rdi, eight]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rdi.clone()), vec![rdi, eight]);
         Ok(())
     }
 
@@ -476,11 +477,11 @@ impl X86_64Translator {
         let rsi = Varnode::new_register(48, 8);
         let rdi = Varnode::new_register(56, 8);
         let temp = builder.new_unique(8);
-        builder.add_op(PcodeOp::Load, Some(temp.clone()), vec![Varnode::new_constant(0, 4), rsi.clone()]);
-        builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), rdi.clone(), temp]);
+        builder.add_op(OpCode::CPUI_LOAD, Some(temp.clone()), vec![Varnode::new_constant(0, 4), rsi.clone()]);
+        builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), rdi.clone(), temp]);
         let eight = Varnode::new_constant(8, 8);
-        builder.add_op(PcodeOp::IntAdd, Some(rsi.clone()), vec![rsi, eight.clone()]);
-        builder.add_op(PcodeOp::IntAdd, Some(rdi.clone()), vec![rdi, eight]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rsi.clone()), vec![rsi, eight.clone()]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rdi.clone()), vec![rdi, eight]);
         Ok(())
     }
 
@@ -488,7 +489,7 @@ impl X86_64Translator {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
         let res = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntMult, Some(res.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_MULT, Some(res.clone()), vec![dst.clone(), src]);
         self.store_operand(inst, 0, res, builder)?;
         Ok(())
     }
@@ -496,14 +497,14 @@ impl X86_64Translator {
     fn translate_cdqe(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let eax = Varnode::new_register(0, 4);
         let rax = Varnode::new_register(0, 8);
-        builder.add_op(PcodeOp::IntSext, Some(rax), vec![eax]);
+        builder.add_op(OpCode::CPUI_INT_SEXT, Some(rax), vec![eax]);
         Ok(())
     }
 
     fn translate_cmov(&self, inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let dst = self.operand_to_varnode(inst, 0)?;
         let src = self.operand_to_varnode(inst, 1)?;
-        builder.add_op(PcodeOp::Copy, Some(dst), vec![src]);
+        builder.add_op(OpCode::CPUI_COPY, Some(dst), vec![src]);
         Ok(())
     }
 
@@ -512,10 +513,10 @@ impl X86_64Translator {
         let src = self.operand_to_varnode(inst, 1)?;
         let cf = Varnode::new_register(202, 1);
         let temp = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntSub, Some(temp.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(temp.clone()), vec![dst.clone(), src]);
         let cf_ext = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntZext, Some(cf_ext.clone()), vec![cf]);
-        builder.add_op(PcodeOp::IntSub, Some(dst), vec![temp, cf_ext]);
+        builder.add_op(OpCode::CPUI_INT_ZEXT, Some(cf_ext.clone()), vec![cf]);
+        builder.add_op(OpCode::CPUI_INT_SUB, Some(dst), vec![temp, cf_ext]);
         Ok(())
     }
 
@@ -523,7 +524,7 @@ impl X86_64Translator {
         if let Some(target) = inst.metadata.branch_target {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
             let cf = Varnode::new_register(202, 1);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cf]);
         }
         Ok(())
     }
@@ -533,10 +534,10 @@ impl X86_64Translator {
         let src = self.operand_to_varnode(inst, 1)?;
         let cf = Varnode::new_register(202, 1);
         let temp1 = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntAdd, Some(temp1.clone()), vec![dst.clone(), src]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(temp1.clone()), vec![dst.clone(), src]);
         let cf_ext = builder.new_unique(dst.size());
-        builder.add_op(PcodeOp::IntZext, Some(cf_ext.clone()), vec![cf]);
-        builder.add_op(PcodeOp::IntAdd, Some(dst.clone()), vec![temp1, cf_ext]);
+        builder.add_op(OpCode::CPUI_INT_ZEXT, Some(cf_ext.clone()), vec![cf]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(dst.clone()), vec![temp1, cf_ext]);
         self.update_flags_arithmetic(inst, &dst, builder)?;
         Ok(())
     }
@@ -545,7 +546,7 @@ impl X86_64Translator {
         let op0 = self.operand_to_varnode(inst, 0)?;
         let op1 = self.operand_to_varnode(inst, 1)?;
         let temp = builder.new_unique(op0.size());
-        builder.add_op(PcodeOp::Copy, Some(temp.clone()), vec![op0.clone()]);
+        builder.add_op(OpCode::CPUI_COPY, Some(temp.clone()), vec![op0.clone()]);
         self.store_operand(inst, 0, op1, builder)?;
         self.store_operand(inst, 1, temp, builder)?;
         Ok(())
@@ -554,18 +555,18 @@ impl X86_64Translator {
     fn translate_stosb(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let al = Varnode::new_register(0, 1);
         let rdi = Varnode::new_register(56, 8);
-        builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), rdi.clone(), al]);
+        builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), rdi.clone(), al]);
         let one = Varnode::new_constant(1, 8);
-        builder.add_op(PcodeOp::IntAdd, Some(rdi.clone()), vec![rdi, one]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rdi.clone()), vec![rdi, one]);
         Ok(())
     }
 
     fn translate_stosd(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
         let eax = Varnode::new_register(0, 4);
         let rdi = Varnode::new_register(56, 8);
-        builder.add_op(PcodeOp::Store, None, vec![Varnode::new_constant(0, 4), rdi.clone(), eax]);
+        builder.add_op(OpCode::CPUI_STORE, None, vec![Varnode::new_constant(0, 4), rdi.clone(), eax]);
         let four = Varnode::new_constant(4, 8);
-        builder.add_op(PcodeOp::IntAdd, Some(rdi.clone()), vec![rdi, four]);
+        builder.add_op(OpCode::CPUI_INT_ADD, Some(rdi.clone()), vec![rdi, four]);
         Ok(())
     }
 
@@ -574,8 +575,8 @@ impl X86_64Translator {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
             let cf = Varnode::new_register(202, 1);
             let cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolNot, Some(cond.clone()), vec![cf]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond]);
+            builder.add_op(OpCode::CPUI_BOOL_NOT, Some(cond.clone()), vec![cf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond]);
         }
         Ok(())
     }
@@ -586,8 +587,8 @@ impl X86_64Translator {
             let cf = Varnode::new_register(202, 1);
             let zf = Varnode::new_register(200, 1);
             let cond = builder.new_unique(1);
-            builder.add_op(PcodeOp::BoolOr, Some(cond.clone()), vec![cf, zf]);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, cond]);
+            builder.add_op(OpCode::CPUI_BOOL_OR, Some(cond.clone()), vec![cf, zf]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, cond]);
         }
         Ok(())
     }
@@ -596,7 +597,7 @@ impl X86_64Translator {
         if let Some(target) = inst.metadata.branch_target {
             let target_vn = Varnode::new_constant(target.as_u64(), 8);
             let of = Varnode::new_register(203, 1);
-            builder.add_op(PcodeOp::CBranch, None, vec![target_vn, of]);
+            builder.add_op(OpCode::CPUI_CBRANCH, None, vec![target_vn, of]);
         }
         Ok(())
     }
@@ -615,20 +616,20 @@ impl X86_64Translator {
             let bit_val = builder.new_unique(1);
             let mask = Varnode::new_constant(1 << bit, 1);
             let temp = builder.new_unique(1);
-            builder.add_op(PcodeOp::IntAnd, Some(temp.clone()), vec![ah.clone(), mask]);
-            builder.add_op(PcodeOp::IntNotEqual, Some(bit_val.clone()), vec![temp, Varnode::new_constant(0, 1)]);
-            builder.add_op(PcodeOp::Copy, Some(flag), vec![bit_val]);
+            builder.add_op(OpCode::CPUI_INT_AND, Some(temp.clone()), vec![ah.clone(), mask]);
+            builder.add_op(OpCode::CPUI_INT_NOTEQUAL, Some(bit_val.clone()), vec![temp, Varnode::new_constant(0, 1)]);
+            builder.add_op(OpCode::CPUI_COPY, Some(flag), vec![bit_val]);
         }
         Ok(())
     }
 
     fn translate_in(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
-        builder.add_op(PcodeOp::UserOp(1001), None, Vec::new());
+        builder.add_op(OpCode::CPUI_CALLOTHER /* UserOp */(1001), None, Vec::new());
         Ok(())
     }
 
     fn translate_out(&self, _inst: &Instruction, builder: &mut PcodeBuilder, _seqnum: SeqNum) -> Result<()> {
-        builder.add_op(PcodeOp::UserOp(1002), None, Vec::new());
+        builder.add_op(OpCode::CPUI_CALLOTHER /* UserOp */(1002), None, Vec::new());
         Ok(())
     }
 }
@@ -689,7 +690,7 @@ mod tests {
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].opcode(), PcodeOp::Copy);
+        assert_eq!(ops[0].opcode(), OpCode::CPUI_COPY);
     }
 
     #[test]
@@ -712,7 +713,7 @@ mod tests {
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert!(ops.len() > 0);
-        assert!(ops.iter().any(|op| op.opcode() == PcodeOp::IntAdd));
+        assert!(ops.iter().any(|op| op.opcode == OpCode::CPUI_INT_ADD));
     }
 
     #[test]
@@ -723,7 +724,7 @@ mod tests {
         assert!(result.is_ok());
         let ops = result.unwrap();
         assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].opcode(), PcodeOp::Return);
+        assert_eq!(ops[0].opcode(), OpCode::CPUI_RETURN);
     }
 
     #[test]

@@ -5,7 +5,8 @@
 
 use crate::analysis::cfg::{Conditional, ControlFlowGraph, Loop, LoopType};
 use crate::analysis::FunctionAnalysis;
-use crate::pcode::{PcodeOp, Program, Varnode};
+use crate::opcodes::OpCode;
+use crate::pcode::{ Program, Varnode};
 use std::collections::HashSet;
 
 /// Generate C code for a function analyzed in the given FunctionAnalysis.
@@ -78,7 +79,7 @@ fn generate_function_signature(
 
     let mut has_return_value = false;
     for op in program.operations() {
-        if op.opcode() == PcodeOp::Return && !op.inputs().is_empty() {
+        if op.opcode == OpCode::CPUI_RETURN && !op.inputs.as_slice().is_empty() {
             has_return_value = true;
             break;
         }
@@ -233,7 +234,7 @@ fn get_block_statements(
     for &op_idx in &block.operations {
         if op_idx >= program.operation_count() { continue; }
         let op = &program.operations()[op_idx];
-        if op.opcode() == PcodeOp::Nop || op.opcode() == PcodeOp::CBranch { continue; }
+        if op.opcode == OpCode::CPUI_COPY /* NOP */ || op.opcode == OpCode::CPUI_CBRANCH { continue; }
         if let Some(stmt) = pcode_to_statement(op, program, analysis, binary, used_names) {
             stmts.push(stmt);
         }
@@ -274,8 +275,8 @@ fn get_block_condition(
     for &op_idx in block.operations.iter().rev() {
         if op_idx >= program.operation_count() { continue; }
         let op = &program.operations()[op_idx];
-        if op.opcode() == PcodeOp::CBranch {
-            if let Some(cond_vn) = op.inputs().get(1) {
+        if op.opcode == OpCode::CPUI_CBRANCH {
+            if let Some(cond_vn) = op.inputs.as_slice().get(1) {
                 let expr = fold_expression(cond_vn, analysis, program, binary, used_names);
                 let fmt = formatter::CFormatter::new();
                 return fmt.format_expression(&expr);
@@ -294,10 +295,10 @@ fn pcode_to_statement(
 ) -> Option<ast::Statement> {
     use ast::*;
 
-    match op.opcode() {
-        PcodeOp::Copy => {
-            if let Some(output) = op.output() {
-                if let Some(input) = op.inputs().get(0) {
+    match op.opcode {
+        OpCode::CPUI_COPY => {
+            if let Some(output) = op.output.as_ref() {
+                if let Some(input) = op.inputs.as_slice().get(0) {
                     return Some(Statement::Assignment {
                         lhs: Box::new(varnode_to_expression(output, analysis, binary, used_names)),
                         rhs: Box::new(varnode_to_expression(input, analysis, binary, used_names)),
@@ -305,9 +306,9 @@ fn pcode_to_statement(
                 }
             }
         }
-        PcodeOp::Load => {
-            if let Some(output) = op.output() {
-                if let Some(ptr) = op.inputs().get(1) {
+        OpCode::CPUI_LOAD => {
+            if let Some(output) = op.output.as_ref() {
+                if let Some(ptr) = op.inputs.as_slice().get(1) {
                     return Some(Statement::Assignment {
                         lhs: Box::new(varnode_to_expression(output, analysis, binary, used_names)),
                         rhs: Box::new(Expression::Unary {
@@ -318,8 +319,8 @@ fn pcode_to_statement(
                 }
             }
         }
-        PcodeOp::Store => {
-            if let (Some(ptr), Some(value)) = (op.inputs().get(1), op.inputs().get(2)) {
+        OpCode::CPUI_STORE => {
+            if let (Some(ptr), Some(value)) = (op.inputs.as_slice().get(1), op.inputs.as_slice().get(2)) {
                 return Some(Statement::Assignment {
                     lhs: Box::new(Expression::Unary {
                         op: UnaryOp::Dereference,
@@ -329,9 +330,9 @@ fn pcode_to_statement(
                 });
             }
         }
-        PcodeOp::Call | PcodeOp::CallInd => {
-            if let Some(target) = op.inputs().get(0) {
-                let args = op.inputs().iter().skip(1)
+        OpCode::CPUI_CALL | OpCode::CPUI_CALLInd => {
+            if let Some(target) = op.inputs.as_slice().get(0) {
+                let args = op.inputs.as_slice().iter().skip(1)
                     .map(|vn| fold_expression(vn, analysis, program, binary, used_names))
                     .collect();
 
@@ -349,7 +350,7 @@ fn pcode_to_statement(
                 };
 
                 let call_expr = Expression::Call { function: Box::new(func_expr), arguments: args };
-                if let Some(output) = op.output() {
+                if let Some(output) = op.output.as_ref() {
                     return Some(Statement::Assignment {
                         lhs: Box::new(varnode_to_expression(output, analysis, binary, used_names)),
                         rhs: Box::new(call_expr),
@@ -359,12 +360,12 @@ fn pcode_to_statement(
                 }
             }
         }
-        PcodeOp::Return => {
-            let ret_val = op.inputs().get(0).map(|v| Box::new(varnode_to_expression(v, analysis, binary, used_names)));
+        OpCode::CPUI_RETURN => {
+            let ret_val = op.inputs.as_slice().get(0).map(|v| Box::new(varnode_to_expression(v, analysis, binary, used_names)));
             return Some(Statement::Return { value: ret_val });
         }
         _ => {
-            if let Some(output) = op.output() {
+            if let Some(output) = op.output.as_ref() {
                 if output.is_unique() {
                     if let Some(ssa) = &analysis.ssa {
                         let key = format!("{:?}_{:x}_{}_{}", output.space(), output.offset(), output.size(), output.version());
@@ -373,25 +374,25 @@ fn pcode_to_statement(
                         } else { return None; }
                     } else { return None; }
                 }
-                if op.inputs().len() >= 2 {
-                    let bin_op = match op.opcode() {
-                        PcodeOp::IntAdd => BinaryOp::Add,
-                        PcodeOp::IntSub => BinaryOp::Sub,
-                        PcodeOp::IntMult => BinaryOp::Mul,
-                        PcodeOp::IntDiv => BinaryOp::Div,
-                        PcodeOp::IntAnd => BinaryOp::And,
-                        PcodeOp::IntOr => BinaryOp::Or,
-                        PcodeOp::IntXor => BinaryOp::Xor,
-                        PcodeOp::IntLeft => BinaryOp::Shl,
-                        PcodeOp::IntRight => BinaryOp::Shr,
+                if op.inputs.as_slice().len() >= 2 {
+                    let bin_op = match op.opcode {
+                        OpCode::CPUI_INT_ADD => BinaryOp::Add,
+                        OpCode::CPUI_INT_SUB => BinaryOp::Sub,
+                        OpCode::CPUI_INT_MULT => BinaryOp::Mul,
+                        OpCode::CPUI_INT_DIV => BinaryOp::Div,
+                        OpCode::CPUI_INT_AND => BinaryOp::And,
+                        OpCode::CPUI_INT_OR => BinaryOp::Or,
+                        OpCode::CPUI_INT_XOR => BinaryOp::Xor,
+                        OpCode::CPUI_INT_LEFT => BinaryOp::Shl,
+                        OpCode::CPUI_INT_RIGHT => BinaryOp::Shr,
                         _ => return None,
                     };
                     return Some(Statement::Assignment {
                         lhs: Box::new(varnode_to_expression(output, analysis, binary, used_names)),
                         rhs: Box::new(Expression::Binary {
                             op: bin_op,
-                            left: Box::new(varnode_to_expression(&op.inputs()[0], analysis, binary, used_names)),
-                            right: Box::new(varnode_to_expression(&op.inputs()[1], analysis, binary, used_names)),
+                            left: Box::new(varnode_to_expression(&op.inputs.as_slice()[0], analysis, binary, used_names)),
+                            right: Box::new(varnode_to_expression(&op.inputs.as_slice()[1], analysis, binary, used_names)),
                         }),
                     });
                 }
@@ -409,33 +410,33 @@ fn fold_expression(
     used_names: &mut HashSet<String>,
 ) -> ast::Expression {
     if vn.is_unique() {
-        if let Some(def_op) = program.operations().iter().find(|op| op.output() == Some(vn)) {
-            match def_op.opcode() {
-                PcodeOp::IntAdd | PcodeOp::IntSub | PcodeOp::IntMult | PcodeOp::IntDiv |
-                PcodeOp::IntAnd | PcodeOp::IntOr | PcodeOp::IntXor |
-                PcodeOp::IntLeft | PcodeOp::IntRight => {
-                    if def_op.inputs().len() >= 2 {
-                         let bin_op = match def_op.opcode() {
-                            PcodeOp::IntAdd => ast::BinaryOp::Add,
-                            PcodeOp::IntSub => ast::BinaryOp::Sub,
-                            PcodeOp::IntMult => ast::BinaryOp::Mul,
-                            PcodeOp::IntDiv => ast::BinaryOp::Div,
-                            PcodeOp::IntAnd => ast::BinaryOp::And,
-                            PcodeOp::IntOr => ast::BinaryOp::Or,
-                            PcodeOp::IntXor => ast::BinaryOp::Xor,
-                            PcodeOp::IntLeft => ast::BinaryOp::Shl,
-                            PcodeOp::IntRight => ast::BinaryOp::Shr,
+        if let Some(def_op) = program.operations().iter().find(|op| op.output.as_ref() == Some(vn)) {
+            match def_op.opcode {
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV |
+                OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR |
+                OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT => {
+                    if def_op.inputs.as_slice().len() >= 2 {
+                         let bin_op = match def_op.opcode {
+                            OpCode::CPUI_INT_ADD => ast::BinaryOp::Add,
+                            OpCode::CPUI_INT_SUB => ast::BinaryOp::Sub,
+                            OpCode::CPUI_INT_MULT => ast::BinaryOp::Mul,
+                            OpCode::CPUI_INT_DIV => ast::BinaryOp::Div,
+                            OpCode::CPUI_INT_AND => ast::BinaryOp::And,
+                            OpCode::CPUI_INT_OR => ast::BinaryOp::Or,
+                            OpCode::CPUI_INT_XOR => ast::BinaryOp::Xor,
+                            OpCode::CPUI_INT_LEFT => ast::BinaryOp::Shl,
+                            OpCode::CPUI_INT_RIGHT => ast::BinaryOp::Shr,
                             _ => ast::BinaryOp::Add,
                         };
                         return ast::Expression::Binary {
                             op: bin_op,
-                            left: Box::new(fold_expression(&def_op.inputs()[0], analysis, program, binary, used_names)),
-                            right: Box::new(fold_expression(&def_op.inputs()[1], analysis, program, binary, used_names)),
+                            left: Box::new(fold_expression(&def_op.inputs.as_slice()[0], analysis, program, binary, used_names)),
+                            right: Box::new(fold_expression(&def_op.inputs.as_slice()[1], analysis, program, binary, used_names)),
                         };
                     }
                 }
-                PcodeOp::Copy => {
-                    if let Some(inp) = def_op.inputs().get(0) {
+                OpCode::CPUI_COPY => {
+                    if let Some(inp) = def_op.inputs.as_slice().get(0) {
                         return fold_expression(inp, analysis, program, binary, used_names);
                     }
                 }

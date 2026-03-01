@@ -517,20 +517,20 @@ pub mod cfg {
             for &op_idx in block.operations.iter().rev() {
                 if op_idx >= ops.len() { continue; }
                 let op = &ops[op_idx];
-                if op.opcode() == PcodeOp::CBranch {
+                if op.opcode == OpCode::CPUI_CBRANCH {
                     // Check condition input
-                    if let Some(cond) = op.inputs().get(1) {
+                    if let Some(cond) = op.inputs.as_slice().get(1) {
                         // Find definition of condition in this block
                         // Search backwards
                         if cond.is_unique() || cond.is_register() {
                              for &def_op_idx in block.operations.iter().rev() {
                                 if def_op_idx >= ops.len() { continue; }
                                 let def_op = &ops[def_op_idx];
-                                if let Some(out) = def_op.output() {
+                                if let Some(out) = def_op.output.as_ref() {
                                     if out == cond {
                                         // Found definition. Is it INT_EQUAL?
-                                        if def_op.opcode() == PcodeOp::IntEqual {
-                                            let inputs = def_op.inputs();
+                                        if def_op.opcode == OpCode::CPUI_INT_EQUAL {
+                                            let inputs = def_op.inputs.as_slice();
                                             if inputs.len() == 2 {
                                                 if let Some(c) = inputs[1].constant_value() {
                                                     let var_key = format!("{:?}_{:x}_{}", inputs[0].space(), inputs[0].offset(), inputs[0].size());
@@ -625,10 +625,10 @@ pub mod cfg {
 
             // 1. Identify leaders
             for (i, op) in ops.iter().enumerate() {
-                match op.opcode() {
-                    PcodeOp::Branch | PcodeOp::CBranch | PcodeOp::BranchInd => {
+                match op.opcode {
+                    OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHInd => {
                         // Target of the branch is a leader
-                        if let Some(target_vn) = op.inputs().get(0) {
+                        if let Some(target_vn) = op.inputs.as_slice().get(0) {
                             if target_vn.space().is_const() {
                                 // For P-code branches, the target is often an offset or absolute address
                                 // In many P-code implementations, it might be a relative index or an address
@@ -652,7 +652,7 @@ pub mod cfg {
                             leaders.insert(i + 1);
                         }
                     }
-                    PcodeOp::Call | PcodeOp::CallInd | PcodeOp::Return => {
+                    OpCode::CPUI_CALL | OpCode::CPUI_CALLInd | OpCode::CPUI_RETURN => {
                         // Instruction after call/return is a leader
                         if i + 1 < ops.len() {
                             leaders.insert(i + 1);
@@ -697,9 +697,9 @@ pub mod cfg {
                 let last_op_idx = *blocks[i].operations.last().unwrap();
                 let last_op = &ops[last_op_idx];
 
-                match last_op.opcode() {
-                    PcodeOp::Branch => {
-                        if let Some(target_vn) = last_op.inputs().get(0) {
+                match last_op.opcode {
+                    OpCode::CPUI_BRANCH => {
+                        if let Some(target_vn) = last_op.inputs.as_slice().get(0) {
                             let target_addr = Address::new(target_vn.offset());
                             if let Some(target_idx) = ops.iter().position(|o| o.address() == target_addr && o.seqnum().order == 0) {
                                 if let Some(&target_block_idx) = op_to_block.get(&target_idx) {
@@ -708,9 +708,9 @@ pub mod cfg {
                             }
                         }
                     }
-                    PcodeOp::CBranch => {
+                    OpCode::CPUI_CBRANCH => {
                         // Conditional branch has two successors: target and next
-                        if let Some(target_vn) = last_op.inputs().get(0) {
+                        if let Some(target_vn) = last_op.inputs.as_slice().get(0) {
                             let target_addr = Address::new(target_vn.offset());
                             if let Some(target_idx) = ops.iter().position(|o| o.address() == target_addr && o.seqnum().order == 0) {
                                 if let Some(&target_block_idx) = op_to_block.get(&target_idx) {
@@ -722,7 +722,7 @@ pub mod cfg {
                             blocks[i].successors.push(i + 1);
                         }
                     }
-                    PcodeOp::Return | PcodeOp::BranchInd => {
+                    OpCode::CPUI_RETURN | OpCode::CPUI_BRANCHInd => {
                         exits.push(i);
                     }
                     _ => {
@@ -912,11 +912,11 @@ mod tests {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
 
         // Block 0
-        builder.add_op(crate::pcode::PcodeOp::Copy, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_COPY, None, vec![]);
 
         // Block 1 (target of branch)
         builder.at_address(Address::new(0x1010));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         let program = builder.build();
         let cfg = cfg::ControlFlowGraph::from_program(&program).unwrap();
@@ -933,15 +933,15 @@ mod tests {
         // Block 0: Conditional branch
         let cond = crate::pcode::Varnode::new_register(0, 1);
         let target = crate::pcode::Varnode::new_constant(0x1020, 8);
-        builder.add_op(crate::pcode::PcodeOp::CBranch, None, vec![target, cond]);
+        builder.add_op(crate::pcode::OpCode::CPUI_CBRANCH, None, vec![target, cond]);
 
         // Block 1: Fallthrough
         builder.at_address(Address::new(0x1010));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         // Block 2: Target
         builder.at_address(Address::new(0x1020));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         let program = builder.build();
         let cfg = cfg::ControlFlowGraph::from_program(&program).unwrap();
@@ -960,15 +960,15 @@ mod tests {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
 
         // Block 0
-        builder.add_op(crate::pcode::PcodeOp::Copy, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_COPY, None, vec![]);
 
         // Block 1
         builder.at_address(Address::new(0x1010));
-        builder.add_op(crate::pcode::PcodeOp::Copy, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_COPY, None, vec![]);
 
         // Block 2
         builder.at_address(Address::new(0x1020));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         let program = builder.build();
         let cfg = cfg::ControlFlowGraph::from_program(&program).unwrap();
@@ -987,22 +987,22 @@ mod tests {
         let mut builder = PcodeBuilder::new(Address::new(0x1000));
 
         // Block 0: initialization
-        builder.add_op(crate::pcode::PcodeOp::Copy, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_COPY, None, vec![]);
 
         // Block 1: loop header (0x1010)
         builder.at_address(Address::new(0x1010));
         let cond = Varnode::new_register(0, 1);
         let target = Varnode::new_constant(0x1020, 8);
-        builder.add_op(crate::pcode::PcodeOp::CBranch, None, vec![target, cond]);
+        builder.add_op(crate::pcode::OpCode::CPUI_CBRANCH, None, vec![target, cond]);
 
         // Block 2: loop body (0x1020)
         builder.at_address(Address::new(0x1020));
         let loop_target = Varnode::new_constant(0x1010, 8);
-        builder.add_op(crate::pcode::PcodeOp::Branch, None, vec![loop_target]);
+        builder.add_op(crate::pcode::OpCode::CPUI_BRANCH, None, vec![loop_target]);
 
         // Block 3: exit (0x1030)
         builder.at_address(Address::new(0x1030));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         let program = builder.build();
         let cfg = cfg::ControlFlowGraph::from_program(&program).unwrap();
@@ -1022,15 +1022,15 @@ mod tests {
         // Block 0: conditional
         let cond = Varnode::new_register(0, 1);
         let target = Varnode::new_constant(0x1020, 8);
-        builder.add_op(crate::pcode::PcodeOp::CBranch, None, vec![target, cond]);
+        builder.add_op(crate::pcode::OpCode::CPUI_CBRANCH, None, vec![target, cond]);
 
         // Block 1: true branch
         builder.at_address(Address::new(0x1010));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         // Block 2: false branch
         builder.at_address(Address::new(0x1020));
-        builder.add_op(crate::pcode::PcodeOp::Return, None, vec![]);
+        builder.add_op(crate::pcode::OpCode::CPUI_RETURN, None, vec![]);
 
         let program = builder.build();
         let cfg = cfg::ControlFlowGraph::from_program(&program).unwrap();

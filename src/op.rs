@@ -270,6 +270,19 @@ impl PcodeOpBank {
         }
     }
 
+    
+    pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode) {
+        let mut op_borrow = op.0.write().unwrap();
+        op_borrow.opcode = new_opc;
+    }
+
+    pub fn destroy_dead(&mut self) {
+        for op in &self.deadlist {
+            self.optree.remove(op);
+        }
+        self.deadlist.clear();
+    }
+
     pub fn destroy(&mut self, op: PcodeOpRef) {
         self.optree.remove(&op);
         self.alivelist

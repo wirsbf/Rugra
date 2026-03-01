@@ -105,10 +105,10 @@ impl RuleController {
 
                     let opcode = {
                         let op = &program.operations()[op_idx];
-                        if op.opcode() == PcodeOp::Nop {
+                        if op.opcode == OpCode::CPUI_COPY /* NOP */ {
                             continue;
                         }
-                        op.opcode()
+                        op.opcode
                     };
 
                     let mut op_changed = false;

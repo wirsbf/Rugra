@@ -160,7 +160,7 @@ mod tests {
         let seqnum = SeqNum::new(crate::Address::new(0x1000), 0);
         builder.add_op(
             seqnum,
-            PcodeOp::Copy,
+            OpCode::CPUI_COPY,
             Some(temp.clone()),
             vec![Varnode::new_register(0, 4)],
         );
@@ -169,7 +169,7 @@ mod tests {
 
         let ops = builder.build();
         assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].opcode(), PcodeOp::Copy);
+        assert_eq!(ops[0].opcode(), OpCode::CPUI_COPY);
     }
 
     #[test]

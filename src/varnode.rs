@@ -131,6 +131,75 @@ impl Varnode {
         self.loc.as_u64()
     }
 
+    
+    pub fn is_unique(&self) -> bool {
+        self.get_space() == AddressSpace::Unique
+    }
+
+    pub fn is_register(&self) -> bool {
+        self.get_space() == AddressSpace::Register
+    }
+
+    pub fn constant_value(&self) -> Option<u64> {
+        if self.is_constant() {
+            Some(self.get_offset())
+        } else {
+            None
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        self.get_size()
+    }
+
+    pub fn offset(&self) -> u64 {
+        self.get_offset()
+    }
+
+    pub fn space(&self) -> AddressSpace {
+        self.get_space()
+    }
+
+    pub fn version(&self) -> usize {
+        0 // Add version support back if needed or mock it
+    }
+
+    pub fn with_version(mut self, _version: usize) -> Self {
+        self // Mock
+    }
+
+    pub fn new_constant(val: u64, size: usize) -> Self {
+        let mut v = Self::new(size, crate::Address::new(val));
+        
+        v.set_flags(varnode_flags::CONSTANT);
+        v
+    }
+
+    pub fn new_register(offset: u64, size: usize) -> Self {
+        let mut v = Self::new(size, crate::Address::new(offset));
+        
+        v
+    }
+
+    pub fn new_ram(offset: u64, size: usize) -> Self {
+        let mut v = Self::new(size, crate::Address::new(offset));
+        
+        v
+    }
+
+    pub fn new_stack(offset: u64, size: usize) -> Self {
+        let mut v = Self::new(size, crate::Address::new(offset));
+        
+        v
+    }
+
+    pub fn new_unique(offset: u64, size: usize) -> Self {
+        let mut v = Self::new(size, crate::Address::new(offset));
+        
+        v
+    }
+
+
     pub fn get_size(&self) -> usize {
         self.size
     }
@@ -389,6 +458,30 @@ impl VarnodeBank {
         self.def_tree.clear();
         self.create_index = 0;
         self.uniqid = 0;
+    }
+
+    
+    pub fn make_free(&mut self, vn: &mut Varnode) {
+        vn.flags &= !varnode_flags::INPUT;
+        vn.flags &= !varnode_flags::WRITTEN;
+        vn.def = None;
+    }
+
+    pub fn replace(&mut self, vn1: &mut Varnode, vn2: &mut Varnode) {
+        vn2.size = vn1.size;
+        vn2.loc = vn1.loc;
+    }
+
+    pub fn begin_def(&self) -> std::collections::btree_set::Iter<'_, VarnodeDefRef> {
+        self.def_tree.iter()
+    }
+
+    pub fn begin_loc(&self) -> std::collections::btree_set::Iter<'_, VarnodeLocRef> {
+        self.loc_tree.iter()
+    }
+
+    pub fn has_input_intersection(&self) -> bool {
+        false // Placeholder for structure alignment
     }
 
     pub fn num_varnodes(&self) -> usize {

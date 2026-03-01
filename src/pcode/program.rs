@@ -104,14 +104,14 @@ impl PcodeOperation {
     pub fn has_side_effects(&self) -> bool {
         matches!(
             self.opcode,
-            PcodeOp::Store
-                | PcodeOp::Branch
-                | PcodeOp::CBranch
-                | PcodeOp::BranchInd
-                | PcodeOp::Call
-                | PcodeOp::CallInd
-                | PcodeOp::Return
-                | PcodeOp::UserOp(_)
+            OpCode::CPUI_STORE
+                | OpCode::CPUI_BRANCH
+                | OpCode::CPUI_CBRANCH
+                | OpCode::CPUI_BRANCHInd
+                | OpCode::CPUI_CALL
+                | OpCode::CPUI_CALLInd
+                | OpCode::CPUI_RETURN
+                | OpCode::CPUI_CALLOTHER /* UserOp */(_)
         )
     }
 
@@ -414,13 +414,13 @@ mod tests {
         let op = PcodeOperation::new(
             PcodeId::new(0),
             SeqNum::new(Address::new(0x1000), 0),
-            PcodeOp::IntAdd,
+            OpCode::CPUI_INT_ADD,
             Some(output),
             vec![input1, input2],
         );
 
-        assert_eq!(op.opcode(), PcodeOp::IntAdd);
-        assert!(op.output().is_some());
+        assert_eq!(op.opcode, OpCode::CPUI_INT_ADD);
+        assert!(op.output.as_ref().is_some());
         assert_eq!(op.input_count(), 2);
     }
 
@@ -433,7 +433,7 @@ mod tests {
         let op = PcodeOperation::new(
             PcodeId::new(0),
             SeqNum::new(Address::new(0x1000), 0),
-            PcodeOp::Copy,
+            OpCode::CPUI_COPY,
             Some(Varnode::new_register(0, 4)),
             vec![Varnode::new_register(1, 4)],
         );
@@ -461,7 +461,7 @@ mod tests {
 
         let temp = builder.new_unique(4);
         builder.add_op(
-            PcodeOp::IntAdd,
+            OpCode::CPUI_INT_ADD,
             Some(temp.clone()),
             vec![
                 Varnode::new_register(0, 4),
@@ -470,7 +470,7 @@ mod tests {
         );
 
         builder.add_op(
-            PcodeOp::Copy,
+            OpCode::CPUI_COPY,
             Some(Varnode::new_register(2, 4)),
             vec![temp],
         );
@@ -485,7 +485,7 @@ mod tests {
         let op = PcodeOperation::new(
             PcodeId::new(0),
             SeqNum::new(Address::new(0x1000), 0),
-            PcodeOp::IntAdd,
+            OpCode::CPUI_INT_ADD,
             Some(Varnode::new_register(0, 4)),
             vec![
                 Varnode::new_register(1, 4),
@@ -503,7 +503,7 @@ mod tests {
         let store_op = PcodeOperation::new(
             PcodeId::new(0),
             SeqNum::new(Address::new(0x1000), 0),
-            PcodeOp::Store,
+            OpCode::CPUI_STORE,
             None,
             vec![
                 Varnode::new_constant(0, 4),
@@ -518,7 +518,7 @@ mod tests {
         let add_op = PcodeOperation::new(
             PcodeId::new(1),
             SeqNum::new(Address::new(0x1004), 0),
-            PcodeOp::IntAdd,
+            OpCode::CPUI_INT_ADD,
             Some(Varnode::new_register(0, 4)),
             vec![
                 Varnode::new_register(1, 4),
@@ -549,7 +549,7 @@ mod tests {
         program.add_operation(PcodeOperation::new(
             PcodeId::new(0),
             SeqNum::new(addr1, 0),
-            PcodeOp::Copy,
+            OpCode::CPUI_COPY,
             Some(Varnode::new_register(0, 4)),
             vec![Varnode::new_register(1, 4)],
         ));
@@ -557,7 +557,7 @@ mod tests {
         program.add_operation(PcodeOperation::new(
             PcodeId::new(1),
             SeqNum::new(addr1, 1),
-            PcodeOp::IntAdd,
+            OpCode::CPUI_INT_ADD,
             Some(Varnode::new_register(0, 4)),
             vec![
                 Varnode::new_register(0, 4),
@@ -568,7 +568,7 @@ mod tests {
         program.add_operation(PcodeOperation::new(
             PcodeId::new(2),
             SeqNum::new(addr2, 0),
-            PcodeOp::Return,
+            OpCode::CPUI_RETURN,
             None,
             vec![],
         ));

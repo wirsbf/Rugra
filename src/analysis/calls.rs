@@ -32,12 +32,12 @@ pub fn recover_call_semantics(program: &mut Program) {
     for i in 0..op_count {
         let op = &mut program.operations_mut()[i];
 
-        if matches!(op.opcode(), PcodeOp::Call | PcodeOp::CallInd) {
+        if matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLInd) {
             // 1. Add return value if missing
             // We assume functions return values in RAX.
             // If the function is void, this output will likely be dead code eliminated later
             // if it is not used.
-            if op.output().is_none() {
+            if op.output.as_ref().is_none() {
                 op.set_output(Some(ret_reg.clone()));
             }
 
@@ -47,7 +47,7 @@ pub fn recover_call_semantics(program: &mut Program) {
             // Note: inputs[0] is the call target.
 
             // Create a local check to avoid borrow checker issues with op.inputs_mut() later
-            let current_inputs = op.inputs().to_vec();
+            let current_inputs = op.inputs.as_slice().to_vec();
 
             for (offset, size) in &arg_regs {
                 let reg = Varnode::new_register(*offset, *size);
@@ -59,10 +59,10 @@ pub fn recover_call_semantics(program: &mut Program) {
                     op.inputs_mut().push(reg);
                 }
             }
-        } else if matches!(op.opcode(), PcodeOp::Return) {
+        } else if matches!(op.opcode, OpCode::CPUI_RETURN) {
             // 3. Mark return register (RAX) as used by RETURN to prevent DCE
             // from removing calculations that contribute to the return value.
-            if op.inputs().is_empty() {
+            if op.inputs.as_slice().is_empty() {
                 op.inputs_mut().push(ret_reg.clone());
             }
         }

@@ -2,7 +2,8 @@
 //!
 //! Rules for dataflow-based optimizations like copy propagation and dead code elimination.
 
-use crate::pcode::{PcodeOp, Program, Varnode, PcodeOperation};
+use crate::opcodes::OpCode;
+use crate::pcode::{ Program, Varnode, PcodeOperation};
 use crate::analysis::cfg::ControlFlowGraph;
 use crate::analysis::FunctionAnalysis;
 use super::{Rule, RuleResult};
@@ -18,7 +19,7 @@ impl Rule for RuleCopyPropagation {
     }
 
     fn target_opcode(&self) -> Option<PcodeOp> {
-        Some(PcodeOp::Copy)
+        Some(OpCode::CPUI_COPY)
     }
 
     fn apply(&self, op_idx: usize, program: &mut Program, _cfg: &ControlFlowGraph, _analysis: &FunctionAnalysis) -> RuleResult {
@@ -34,12 +35,12 @@ impl Rule for RuleCopyPropagation {
 
         let op = &program.operations()[op_idx];
 
-        let output = match op.output() {
+        let output = match op.output.as_ref() {
             Some(out) => out.clone(),
             None => return RuleResult::Skipped,
         };
 
-        let input = match op.inputs().get(0) {
+        let input = match op.inputs.as_slice().get(0) {
             Some(inp) => inp.clone(),
             None => return RuleResult::Skipped,
         };
@@ -59,7 +60,7 @@ impl Rule for RuleCopyPropagation {
 
             // Safety check: if next_op redefines 'input', we must stop propagation
             // e.g. A = COPY B; B = C; ... use A (cannot become use B)
-            if let Some(next_out) = next_op.output() {
+            if let Some(next_out) = next_op.output.as_ref() {
                 if next_out == &input {
                     break;
                 }
@@ -74,7 +75,7 @@ impl Rule for RuleCopyPropagation {
             }
 
             // If next_op redefines 'output', we stop (new value for A)
-            if let Some(next_out) = next_op.output() {
+            if let Some(next_out) = next_op.output.as_ref() {
                 if next_out == &output {
                     break;
                 }
@@ -110,7 +111,7 @@ impl Rule for RuleDeadCodeElimination {
             if op.has_side_effects() {
                 return RuleResult::Skipped;
             }
-            match op.output() {
+            match op.output.as_ref() {
                 Some(o) => o.clone(),
                 None => return RuleResult::Skipped,
             }
@@ -136,7 +137,7 @@ impl Rule for RuleDeadCodeElimination {
             let limit = std::cmp::min(program.operation_count(), op_idx + 200);
             for i in (op_idx + 1)..limit {
                 let next_op = &program.operations()[i];
-                for inp in next_op.inputs() {
+                for inp in next_op.inputs.as_slice() {
                     if inp == &output {
                         is_used = true;
                         break;
@@ -152,7 +153,7 @@ impl Rule for RuleDeadCodeElimination {
             let nop = crate::pcode::PcodeOperation::new(
                 op_mut.id(),
                 op_mut.seqnum(),
-                PcodeOp::Nop,
+                OpCode::CPUI_COPY /* NOP */,
                 None,
                 Vec::new()
             );
@@ -176,7 +177,7 @@ impl Rule for RuleGlobalPropagation {
     }
 
     fn target_opcode(&self) -> Option<PcodeOp> {
-        Some(PcodeOp::Copy)
+        Some(OpCode::CPUI_COPY)
     }
 
     fn apply(&self, op_idx: usize, program: &mut Program, cfg: &ControlFlowGraph, _analysis: &FunctionAnalysis) -> RuleResult {
@@ -185,11 +186,11 @@ impl Rule for RuleGlobalPropagation {
 
         let (output, input) = {
             let op = &program.operations()[op_idx];
-            let out = match op.output() {
+            let out = match op.output.as_ref() {
                 Some(o) => o.clone(),
                 None => return RuleResult::Skipped,
             };
-            let inp = match op.inputs().get(0) {
+            let inp = match op.inputs.as_slice().get(0) {
                 Some(i) => i.clone(),
                 None => return RuleResult::Skipped,
             };
@@ -251,10 +252,10 @@ impl Rule for RuleTypePropagation {
             None => return RuleResult::Skipped,
         };
 
-        match op.opcode() {
-            PcodeOp::IntZext | PcodeOp::IntSext => {
+        match op.opcode {
+            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
                 // If input and output are inferred to have the same type/size, this is a COPY
-                if let (Some(out_vn), Some(in_vn)) = (op.output(), op.inputs().get(0)) {
+                if let (Some(out_vn), Some(in_vn)) = (op.output.as_ref(), op.inputs.as_slice().get(0)) {
                     let out_key = format!("{:?}_{:x}_{}_{}", out_vn.space(), out_vn.offset(), out_vn.size(), out_vn.version());
                     let in_key = format!("{:?}_{:x}_{}_{}", in_vn.space(), in_vn.offset(), in_vn.size(), in_vn.version());
 
@@ -267,7 +268,7 @@ impl Rule for RuleTypePropagation {
                             *op_mut = PcodeOperation::new(
                                 op_mut.id(),
                                 op_mut.seqnum(),
-                                PcodeOp::Copy,
+                                OpCode::CPUI_COPY,
                                 Some(output),
                                 vec![input]
                             );
@@ -294,16 +295,16 @@ impl Rule for RuleIdentityCopy {
     }
 
     fn target_opcode(&self) -> Option<PcodeOp> {
-        Some(PcodeOp::Copy)
+        Some(OpCode::CPUI_COPY)
     }
 
     fn apply(&self, op_idx: usize, program: &mut Program, _cfg: &ControlFlowGraph, _analysis: &FunctionAnalysis) -> RuleResult {
         let op = &program.operations()[op_idx];
-        if let (Some(out), Some(inp)) = (op.output(), op.inputs().get(0)) {
+        if let (Some(out), Some(inp)) = (op.output.as_ref(), op.inputs.as_slice().get(0)) {
             if out == inp {
                 // Identity copy: replace with Nop
                 let op_mut = &mut program.operations_mut()[op_idx];
-                *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), PcodeOp::Nop, None, Vec::new());
+                *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), OpCode::CPUI_COPY /* NOP */, None, Vec::new());
                 return RuleResult::Applied;
             }
         }
@@ -320,19 +321,19 @@ impl Rule for RuleTruncationElimination {
     }
 
     fn target_opcode(&self) -> Option<PcodeOp> {
-        Some(PcodeOp::Trunc)
+        Some(OpCode::CPUI_TRUNC)
     }
 
     fn apply(&self, op_idx: usize, program: &mut Program, _cfg: &ControlFlowGraph, _analysis: &FunctionAnalysis) -> RuleResult {
         let op = &program.operations()[op_idx];
 
-        if let (Some(out_vn), Some(in_vn)) = (op.output(), op.inputs().get(0)) {
+        if let (Some(out_vn), Some(in_vn)) = (op.output.as_ref(), op.inputs.as_slice().get(0)) {
             // If output and input size are the same, it's a copy
             if out_vn.size() == in_vn.size() {
                 let output = out_vn.clone();
                 let input = in_vn.clone();
                 let op_mut = &mut program.operations_mut()[op_idx];
-                *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), PcodeOp::Copy, Some(output), vec![input]);
+                *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), OpCode::CPUI_COPY, Some(output), vec![input]);
                 return RuleResult::Applied;
             }
         }
@@ -369,9 +370,9 @@ impl Rule for RuleLoadStorePropagation {
             None => return RuleResult::Skipped,
         };
 
-        match op.opcode() {
-            PcodeOp::Load => {
-                if let (Some(out_vn), Some(addr_vn)) = (op.output(), op.inputs().get(1)) {
+        match op.opcode {
+            OpCode::CPUI_LOAD => {
+                if let (Some(out_vn), Some(addr_vn)) = (op.output.as_ref(), op.inputs.as_slice().get(1)) {
                     if let Some((space, offset)) = resolve_address_to_storage(addr_vn, program, analysis) {
                         if let Some(var) = var_analysis.resolve_storage(space, offset) {
                             let source = match var.storage {
@@ -388,14 +389,14 @@ impl Rule for RuleLoadStorePropagation {
                             };
                             let output = out_vn.clone();
                             let op_mut = &mut program.operations_mut()[op_idx];
-                            *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), PcodeOp::Copy, Some(output), vec![source]);
+                            *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), OpCode::CPUI_COPY, Some(output), vec![source]);
                             return RuleResult::Applied;
                         }
                     }
                 }
             }
-            PcodeOp::Store => {
-                if let (Some(addr_vn), Some(val_vn)) = (op.inputs().get(1), op.inputs().get(2)) {
+            OpCode::CPUI_STORE => {
+                if let (Some(addr_vn), Some(val_vn)) = (op.inputs.as_slice().get(1), op.inputs.as_slice().get(2)) {
                     if let Some((space, offset)) = resolve_address_to_storage(addr_vn, program, analysis) {
                         if let Some(var) = var_analysis.resolve_storage(space, offset) {
                             let dest = match var.storage {
@@ -412,7 +413,7 @@ impl Rule for RuleLoadStorePropagation {
                             };
                             let source = val_vn.clone();
                             let op_mut = &mut program.operations_mut()[op_idx];
-                            *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), PcodeOp::Copy, Some(dest), vec![source]);
+                            *op_mut = PcodeOperation::new(op_mut.id(), op_mut.seqnum(), OpCode::CPUI_COPY, Some(dest), vec![source]);
                             return RuleResult::Applied;
                         }
                     }
@@ -447,13 +448,13 @@ impl Rule for RuleControlFlowSimplification {
 
         let replacement = {
             let op = &program.operations()[op_idx];
-            match op.opcode() {
-                PcodeOp::CBranch => {
-                    if let Some(condition) = op.inputs().get(1) {
+            match op.opcode {
+                OpCode::CPUI_CBRANCH => {
+                    if let Some(condition) = op.inputs.as_slice().get(1) {
                         if let Some(val) = condition.constant_value() {
                             Some(Replacement::CBranch {
                                 val,
-                                target: op.inputs()[0].clone(),
+                                target: op.inputs.as_slice()[0].clone(),
                             })
                         } else {
                             None
@@ -462,8 +463,8 @@ impl Rule for RuleControlFlowSimplification {
                         None
                     }
                 }
-                PcodeOp::BranchInd => {
-                    if let Some(target) = op.inputs().get(0) {
+                OpCode::CPUI_BRANCHInd => {
+                    if let Some(target) = op.inputs.as_slice().get(0) {
                         if let Some(addr) = target.constant_value() {
                             Some(Replacement::BranchInd {
                                 addr,
@@ -476,11 +477,11 @@ impl Rule for RuleControlFlowSimplification {
                         None
                     }
                 }
-                PcodeOp::CallInd => {
-                    if let Some(target) = op.inputs().get(0) {
+                OpCode::CPUI_CALLInd => {
+                    if let Some(target) = op.inputs.as_slice().get(0) {
                         if let Some(addr) = target.constant_value() {
-                            let output = op.output().cloned();
-                            let other_inputs = op.inputs()[1..].to_vec();
+                            let output = op.output.as_ref().cloned();
+                            let other_inputs = op.inputs.as_slice()[1..].to_vec();
                             Some(Replacement::CallInd {
                                 addr,
                                 size: target.size(),
@@ -507,7 +508,7 @@ impl Rule for RuleControlFlowSimplification {
                         *op_mut = PcodeOperation::new(
                             op_mut.id(),
                             op_mut.seqnum(),
-                            PcodeOp::Branch,
+                            OpCode::CPUI_BRANCH,
                             None,
                             vec![target],
                         );
@@ -516,7 +517,7 @@ impl Rule for RuleControlFlowSimplification {
                         *op_mut = PcodeOperation::new(
                             op_mut.id(),
                             op_mut.seqnum(),
-                            PcodeOp::Nop,
+                            OpCode::CPUI_COPY /* NOP */,
                             None,
                             Vec::new(),
                         );
@@ -526,7 +527,7 @@ impl Rule for RuleControlFlowSimplification {
                     *op_mut = PcodeOperation::new(
                         op_mut.id(),
                         op_mut.seqnum(),
-                        PcodeOp::Branch,
+                        OpCode::CPUI_BRANCH,
                         None,
                         vec![Varnode::new_constant(addr, size)],
                     );
@@ -537,7 +538,7 @@ impl Rule for RuleControlFlowSimplification {
                     *op_mut = PcodeOperation::new(
                         op_mut.id(),
                         op_mut.seqnum(),
-                        PcodeOp::Call,
+                        OpCode::CPUI_CALL,
                         output,
                         new_inputs,
                     );
@@ -585,13 +586,13 @@ fn resolve_address_to_storage_rec(
             for &op_idx in &block.operations {
                 if op_idx >= program.operation_count() { continue; }
                 let op = &program.operations()[op_idx];
-                if let Some(out) = op.output() {
+                if let Some(out) = op.output.as_ref() {
                     if out == vn {
-                        match op.opcode() {
-                            PcodeOp::IntAdd => {
-                                if op.inputs().len() >= 2 {
-                                    let in1 = &op.inputs()[0];
-                                    let in2 = &op.inputs()[1];
+                        match op.opcode {
+                            OpCode::CPUI_INT_ADD => {
+                                if op.inputs.as_slice().len() >= 2 {
+                                    let in1 = &op.inputs.as_slice()[0];
+                                    let in2 = &op.inputs.as_slice()[1];
                                     // Check for RSP (32) or RBP (40) + offset
                                     if in1.is_register() && (in1.offset() == 32 || in1.offset() == 40) {
                                         if let Some(off) = in2.constant_value() {
@@ -600,8 +601,8 @@ fn resolve_address_to_storage_rec(
                                     }
                                 }
                             }
-                            PcodeOp::Copy => {
-                                return resolve_address_to_storage_rec(&op.inputs()[0], program, analysis, depth + 1);
+                            OpCode::CPUI_COPY => {
+                                return resolve_address_to_storage_rec(&op.inputs.as_slice()[0], program, analysis, depth + 1);
                             }
                             _ => {}
                         }
