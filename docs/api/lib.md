@@ -1,143 +1,66 @@
-# `lib.rs` API Reference
+# `lib.rs` API Reference (库入口与模块注册中心)
 
 **源代码路径**: `src/lib.rs`
 
 ## 模块说明 (Module Doc)
 
-# Rugra - Rust Ghidra-inspired Decompiler
+整个 Rugra crate 的根入口文件。负责声明和组织所有子模块，定义公开的 re-export 接口，并包含（目前被注释掉的）顶层 `Decompiler` 驱动结构体。
 
-A high-performance, memory-safe decompiler for C/C++ binaries written in Rust.
-Rugra aims to provide production-quality decompilation with a focus on correctness,
-performance, and extensibility.
+---
 
-## Architecture
+## 模块组织 (Module Layout)
 
-```text
-Binary → Loader → Disassembler → P-code IR → Analysis → AST → C Code
-↓                   ↓             ↓          ↓        ↓       ↓
-ELF              x86/ARM        SSA Form    CFG      Types   Output
-PE               MIPS           Optimizer   DFA
-Mach-O
-```
+### 核心 Ghidra 对齐层 (各 `pub mod`)
 
-## Modules
+| 模块 | Ghidra 对应 | 职责 |
+|------|-------------|------|
+| `address` | `address.hh` | 地址、序列号、范围 |
+| `space` | `space.hh` | 地址空间模型 |
+| `varnode` | `varnode.hh` | 数据元节点 |
+| `op` | `op.hh` | P-code 操作 |
+| `opcodes` | `opcodes.hh` | 操作码枚举 |
+| `typeop` | `typeop.hh` | 类型化操作行为 |
+| `heritage` | `heritage.hh` | SSA 构造 |
+| `fspec` | `fspec.hh` | 函数原型 |
+| `block` | `block.hh` | 基本块与控制流图 |
+| `funcdata` | `funcdata.hh` | 函数级容器 |
+| `pcoderaw` | `pcoderaw.hh` | 未加工 P-code |
+| `type_system` | `type.hh` | 数据类型系统 |
+| `prettyprint` | `prettyprint.hh` | Token 发射接口 |
+| `printlanguage` | `printlanguage.hh` | 打印语言框架 |
+| `printc` | `printc.hh` | C 语言打印器 |
+| `action` | `action.hh` | 分析行动框架 |
+| `coreaction` | `coreaction.hh` | 核心分析行动 |
+| `ruleaction` | `ruleaction.hh` | 操作码优化规则 |
+| `cover` | `cover.hh` | 变量生存跨度 |
+| `variable` | `variable.hh` | 高级变量 |
+| `merge` | `merge.hh` | 变量合并 |
+| `blockaction` | `blockaction.hh` | 控制流结构化 |
 
-- [`binary`] - Binary parsing and loading (ELF, PE, Mach-O)
-- [`pcode`] - P-code intermediate representation
-- [`analysis`] - Control flow, data flow, and type analysis
-- [`codegen`] - C code generation
+### 高级前端层
 
-## Quick Start
+| 模块 | 职责 |
+|------|------|
+| `binary` | ELF/PE/Mach-O 二进制解析 |
+| `pcode` | P-code 程序容器（旧版 API） |
+| `analysis` | 控制流/数据流/类型分析 |
+| `codegen` | C 代码生成 |
+| `disasm` | 反汇编器 |
+| `translator` | 指令→P-code 翻译器 |
 
-```rust,no_run
-use rugra::{Decompiler, Architecture};
+### 内部工具模块 (`mod`, 非 `pub`)
 
-# fn main() -> anyhow::Result<()> {
-// Load a binary
-let binary_data = std::fs::read("program.exe")?;
+*   `error`: 错误类型。
+*   `types`: `Architecture` 枚举等类型定义。
+*   `utils`: 通用工具函数。
 
-// Create decompiler
-let mut decompiler = Decompiler::new(Architecture::X86_64)?;
-decompiler.load_binary(&binary_data)?;
+---
 
-// Decompile a function
-let c_code = decompiler.decompile_function(0x401000)?;
-println!("{}", c_code);
-# Ok(())
-# }
-```
+## 公开 Re-exports
 
-## 导出的公共 API (Public API)
+`pub use` 导出了所有核心类型的快捷访问路径：`Address`, `SeqNum`, `Range`, `BlockBasic`, `Funcdata`, `FuncProto`, `AddressSpace`, `OpCode`, `Datatype`, `Architecture` 等。
 
-### `pub struct Decompiler`
+## 版本信息
 
-Main decompiler interface
-
-This is the primary entry point for using Rugra. It orchestrates the entire
-decompilation pipeline from binary loading to C code generation.
-
-# Example
-
-```rust,no_run
-use rugra::{Decompiler, Architecture};
-
-# fn main() -> anyhow::Result<()> {
-let mut dec = Decompiler::new(Architecture::X86_64)?;
-dec.load_binary(&std::fs::read("binary")?)?;
-let code = dec.decompile_function(0x1000)?;
-# Ok(())
-# }
-```
-
-### `pub fn new(arch: Architecture) -> Result<Self>`
-
-Create a new decompiler for the specified architecture
-
-# Arguments
-
-* `arch` - Target architecture (X86_64, ARM64, etc.)
-
-# Returns
-
-A new decompiler instance
-
-### `pub fn load_binary(&mut self, data: &[u8]) -> Result<()>`
-
-Load a binary file for analysis
-
-# Arguments
-
-* `data` - Raw binary data
-
-# Returns
-
-Result indicating success or failure
-
-### `pub fn decompile_function(&mut self, address: u64) -> Result<String>`
-
-Decompile a function at the given address
-
-# Arguments
-
-* `address` - Virtual address of the function entry point
-
-# Returns
-
-Decompiled C code as a string
-
-### `pub fn get_functions(&self) -> Result<Vec<Address>>`
-
-Get list of all functions in the binary
-
-# Returns
-
-Vector of function entry point addresses
-
-### `pub fn get_function_name(&self, addr: Address) -> Option<String>`
-
-Get the name of a function at the given address
-
-### `pub fn architecture(&self) -> Architecture`
-
-Get the target architecture
-
-### `pub fn clear_cache(&mut self)`
-
-Clear all caches
-
-### `pub const VERSION: &str = env!("CARGO_PKG_VERSION")`
-
-Version information
-
-### `pub fn version() -> &'static str`
-
-Get the version string
-
-### `pub extern "C" fn rugra_evaluate_constant(`
-
-*暂无代码注释*
-
-### `pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: usize)`
-
-*暂无代码注释*
-
+*   `pub const VERSION: &str`: 从 `Cargo.toml` 编译时注入的版本号。
+*   `pub fn version() -> &'static str`: 版本查询函数。
