@@ -1,0 +1,84 @@
+# `cover.rs` API Reference
+
+**源代码路径**: `src/cover.rs`
+
+## 模块说明 (Module Doc)
+
+Liveness cover for varnodes
+
+Corresponds to Ghidra's `cover.hh`
+
+## 导出的公共 API (Public API)
+
+### `pub struct CoverBlock`
+
+Range of P-code ops within a single basic block where a varnode is alive
+
+Corresponds to Ghidra's `CoverBlock` class
+
+### `pub fn new() -> Self`
+
+Create an empty cover block
+
+### `pub fn clear(&mut self)`
+
+Clear the cover block
+
+### `pub fn set_begin(&mut self, s: u32)`
+
+Set the start of liveness
+
+### `pub fn set_end(&mut self, e: u32)`
+
+Set the end of liveness
+
+### `pub fn empty(&self) -> bool`
+
+Check if the cover block is empty
+
+### `pub fn contain(&self, point: u32) -> bool`
+
+Check if the cover block contains a specific point
+
+### `pub fn merge(&mut self, other: &CoverBlock)`
+
+Merge another cover block into this one
+
+### `pub fn intersect(&mut self, other: &CoverBlock)`
+
+Intersect another cover block with this one
+
+### `pub struct Cover`
+
+Full liveness cover of a varnode across multiple blocks
+
+Corresponds to Ghidra's `Cover` class
+
+### `pub fn new() -> Self`
+
+Create a new empty cover
+
+### `pub fn clear(&mut self)`
+
+Clear the cover
+
+### `pub fn add_def_point(&mut self, block_idx: i32, point: u32)`
+
+Add a definition point to the cover
+
+### `pub fn add_ref_point(&mut self, block_idx: i32, point: u32)`
+
+Add a reference point to the cover
+
+### `pub fn contain(&self, block_idx: i32, point: u32) -> bool`
+
+Check if the cover contains a point within a block
+
+### `pub fn merge(&mut self, other: &Cover)`
+
+Merge another cover into this one
+
+### `pub fn intersect(&mut self, other: &Cover)`
+
+Intersect another cover with this one
+

@@ -1,0 +1,25 @@
+# `error.rs` API Reference
+
+**源代码路径**: `src/error.rs`
+
+## 模块说明 (Module Doc)
+
+Error types for Rugra
+
+This module defines all error types used throughout the decompiler.
+We use `thiserror` for ergonomic error handling.
+
+## 导出的公共 API (Public API)
+
+### `pub type Result<T> = std::result::Result<T, Error>`
+
+Result type alias for Rugra operations
+
+### `pub enum Error`
+
+Main error type for Rugra
+
+### `pub trait ErrorContext<T>`
+
+Helper trait for adding context to errors
+

@@ -1,0 +1,41 @@
+# `align/pcodeop.rs` API Reference
+
+**源代码路径**: `src/align/pcodeop.rs`
+
+## 模块说明 (Module Doc)
+
+PcodeOp and PcodeOperation alignment verification logic.
+
+This module ensures that Rugra's P-code operations match Ghidra's
+internal PcodeOp representation as defined in `op.hh`.
+
+## 导出的公共 API (Public API)
+
+### `pub fn map_ghidra_opcode(opcode: i32) -> Option<PcodeOp>`
+
+Map Ghidra OpCode integers to Rugra PcodeOp enum
+
+This mapping is based on Ghidra's opcodes.hh
+
+### `pub fn verify_opcode(rugra_op: PcodeOp, ghidra_opcode: i32) -> bool`
+
+Verify that a Rugra PcodeOp matches a Ghidra opcode
+
+### `pub fn verify_operation(`
+
+Verify that a complete PcodeOperation aligns with Ghidra's representation
+
+This checks:
+- Opcode match
+- SeqNum match
+- Input count and values
+- Output presence and value
+
+### `pub fn verify_inputs(rugra_inputs: &[Varnode], ghidra_inputs: &[VarnodeFFI]) -> bool`
+
+Verify input list alignment
+
+### `pub fn verify_output(rugra_output: Option<&Varnode>, ghidra_output: Option<&VarnodeFFI>) -> bool`
+
+Verify output alignment
+
