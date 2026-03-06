@@ -1,145 +1,45 @@
-# `pcoderaw.rs` API Reference
+# `pcoderaw.rs` API Reference (未加工微操元)
 
 **源代码路径**: `src/pcoderaw.rs`
 
 ## 模块说明 (Module Doc)
 
-Raw P-code operations
+本文件对应于 Ghidra 内部的 `pcoderaw.hh`。
+此类存在的意义在于：当汇编语言（例如通过 SLEIGH 翻译引擎）刚刚被解析出 P-code 微指令流时，这些操作**尚未被放入函数数据流网络中，也没有被赋予强类型引用智能指针，仅仅是最粗糙的中间码表达**。这种结构体负责承载早期的线性的、易于快速反序列化与缓存的动作数组阶段。只有经历后续建图阶段，它们才会被正式提升转译为 `op.rs` 内的带图论网络状态的 `PcodeOp`。
 
-This module corresponds to Ghidra's `pcoderaw.hh` and provides raw
-P-code operation structures used during initial translation before
-full P-code generation.
-
-# Overview
-
-PcodeOpRaw represents a P-code operation in its initial, unprocessed form.
-It's used by the SLEIGH translator before operations are fully constructed
-and added to the function's P-code representation.
+---
 
 ## 导出的公共 API (Public API)
 
-### `pub struct VarnodeRaw`
+### `pub struct VarnodeRaw` (无引用态变元数据)
 
-Raw varnode data (before full Varnode construction)
+处于孵化期的变量载体，只关心纯粹的选址与大小：
+*   **`pub space: AddressSpace`**: 存储在哪个模拟层区。
+*   **`pub offset: u64`**: 层区内切准偏移。
+*   **`pub size: usize`**: 吃多少字节宽度。
+*   *方法*: `pub fn to_varnode_data(&self) -> VarnodeData` 用于转换为序列化专用模型快照以供存储传输。
 
-Simplified representation used during P-code translation
+---
 
-### `pub fn new(space: AddressSpace, offset: u64, size: usize) -> Self`
+### `pub struct PcodeOpRaw` (无关联态操作算子)
 
-Create a new raw varnode
+此结构没有任何复杂的流图拓扑指针，一切皆为轻量级的标量表达。非常适合用于翻译引擎后端的平面推展！
+*   **`opcode: i32`**: （内部持有为 `i32` 原生整形，无缝对接 C 原生 Enum 字面量表映射）代表微操作语义。
+*   **`output: Option<VarnodeRaw>`**: 最多持有一个纯元出栈位。
+*   **`inputs: Vec<VarnodeRaw>`**: 持有其所需源引流入口位置描述的简单表阵。
+*   **`seqnum: Option<SeqNum>`**: （在完全就绪构建时打上的）时间线标识，用以最终追认自己是从哪个原初机码偏移位出生的。
 
-### `pub fn to_varnode_data(&self) -> VarnodeData`
+#### 装配操作函数
 
-Convert to VarnodeData
+*   `pub fn add_input(&mut self, varnode: VarnodeRaw)` / `pub fn clear_inputs(&mut self)` 
+    模拟压栈或者清扫其依赖的源槽区。
+*   `pub fn set_output(&mut self, varnode: VarnodeRaw)`: 将某个位置烙印为写出槽。
+*   `pub fn decode(s: &str) -> Option<Self>`: **极其关键的功能集**。它配合对应体系架构下的 SLEIGH 解析器输出物或调试文件，通过解析类似 `"19 -> register:0:4 register:4:4"` 的纯文本文本格式还原出一个未经连接的流网络结构初号机。
+*   `pub fn encode(&self) -> String`: 将一个原始微操压化为上面的一行格式化反编译微操打印流序列。
 
-### `pub struct PcodeOpRaw`
+---
 
-Raw P-code operation
+### `pub struct PcodeOpRawBuilder` (工厂构造器)
 
-Corresponds to Ghidra's `PcodeOpRaw` class in pcoderaw.hh
-
-This represents a P-code operation during the translation phase,
-before it's fully constructed and added to the function.
-
-### `pub fn new(opcode: i32) -> Self`
-
-Create a new raw P-code operation
-
-### `pub fn add_input(&mut self, varnode: VarnodeRaw)`
-
-Add an input varnode
-
-Corresponds to `addInput` in Ghidra
-
-### `pub fn clear_inputs(&mut self)`
-
-Clear all inputs
-
-Corresponds to `clearInputs` in Ghidra
-
-### `pub fn get_opcode(&self) -> i32`
-
-Get the opcode
-
-Corresponds to `getOpcode` in Ghidra
-
-### `pub fn num_input(&self) -> usize`
-
-Get the number of inputs
-
-Corresponds to `numInput` in Ghidra
-
-### `pub fn inputs(&self) -> &[VarnodeRaw]`
-
-Get the inputs
-
-### `pub fn set_output(&mut self, varnode: VarnodeRaw)`
-
-Set the output varnode
-
-Corresponds to `setOutput` in Ghidra
-
-### `pub fn output(&self) -> Option<&VarnodeRaw>`
-
-Get the output varnode
-
-### `pub fn set_seq_num(&mut self, seqnum: SeqNum)`
-
-Set the sequence number
-
-Corresponds to `setSeqNum` in Ghidra
-
-### `pub fn seq_num(&self) -> Option<SeqNum>`
-
-Get the sequence number
-
-### `pub fn set_behavior(&mut self, behavior: u32)`
-
-Set the behavior flags
-
-Corresponds to `setBehavior` in Ghidra
-
-### `pub fn behavior(&self) -> u32`
-
-Get the behavior flags
-
-### `pub fn decode(s: &str) -> Option<Self>`
-
-Decode from string format
-
-Corresponds to `decode` in Ghidra
-
-Format: "opcode output input1 input2 ..."
-
-### `pub fn encode(&self) -> String`
-
-Encode to string format
-
-### `pub struct PcodeOpRawBuilder`
-
-Builder for PcodeOpRaw
-
-### `pub fn new(opcode: i32) -> Self`
-
-Create a new builder
-
-### `pub fn output(mut self, space: AddressSpace, offset: u64, size: usize) -> Self`
-
-Set output
-
-### `pub fn input(mut self, space: AddressSpace, offset: u64, size: usize) -> Self`
-
-Add input
-
-### `pub fn seq_num(mut self, addr: Address, order: u32) -> Self`
-
-Set sequence number
-
-### `pub fn behavior(mut self, behavior: u32) -> Self`
-
-Set behavior
-
-### `pub fn build(self) -> PcodeOpRaw`
-
-Build the PcodeOpRaw
-
+应用常用的流水线组装模式（Builder Pattern）来给 SLEIGH 后端生成大量的翻译组提供连续的链式拼装。这在 Rust 侧大幅减少了临时变量代码的冗余。
+*   `builder.output(..).input(..).seq_num(..).build()`: 无缝构造法。
