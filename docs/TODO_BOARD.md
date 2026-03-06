@@ -14,6 +14,7 @@
 - [ ] 重启 FFI 测试桩编排：目前有了 API 文档，可以更有效地编写基于 `rugra_compare_pcode` 的 C++ / Rust 端对拍测试。
 
 ## 已完成 (Completed in Recent Sessions)
+- [x] **2026-03-07**: 在项目根目录建立了 `GEMINI.md` 指令映射文件。
 - [x] **2026-03-07**: 全面废弃自动化 API 文档生成，手工完成 `docs/api/` 下所有 66 个源文件的 34 份高要求 API/架构参考文档。
 - [x] **2026-03-07**: 初始化并规范化 `docs/alignment_docs/` 对齐追踪体系，设定了强制性的对齐文档模板。
 - [x] **2026-03-06**: 实现 RustVSR 最新项目架构向导梳理至 `PROJECT_STRUCTURE.md`。
