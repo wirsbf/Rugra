@@ -1,14 +1,14 @@
-# Code Generation Module Reference
+# 代码生成模块技术参考 (Code Generation)
 
-This document provides a rigorous function-level reference for `src/codegen/mod.rs`. This module translates the analyzed P-code IR and Control Flow Graph (CFG) into high-level C source code.
+本文档提供了 `src/codegen/mod.rs` 的结构级别技术规范。该模块负责将分析完毕的 P-code 中间表示与控制流图（CFG）最终翻译回高级的 C 源语言代码。
 
 ---
 
-## 1. Main Entry Point
+## 1. 顶层入口调度
 
 ### `generate_c_code`
 
-**Signature**:
+**签名**:
 ```rust
 pub fn generate_c_code(
     analysis: &FunctionAnalysis,
@@ -17,194 +17,63 @@ pub fn generate_c_code(
 ) -> Result<String>
 ```
 
-**Inputs**:
-*   `analysis`: The results of the analysis phase (CFG, SSA, Variables, Types).
-*   `program`: The optimized P-code program.
-*   `binary`: The loaded binary (for symbol resolution).
+**输入**:
+*   `analysis`: 分析阶段成果（包括 CFG、SSA、变量定义与类型推断）。
+*   `program`: 原始或经优化的 P-code 线性切片程序。
+*   `binary`: 可选二进制句柄（用于符号解析）。
 
-**Outputs**:
-*   `Result<String>`: The complete decompiled C function code.
-
-**Algorithm**:
-1.  **Structure Analysis**:
-    *   Call `cfg.detect_loops()` to find natural loops.
-    *   Call `cfg.identify_conditionals()` to find if-else blocks.
-    *   Call `cfg.identify_switches(program)` to find switch-case structures.
-2.  **Metadata Generation**:
-    *   Resolve function name using `binary.get_function_name` or fall back to `func_ADDRESS`.
-    *   Sanitize name (replace `.` with `_`).
-    *   Infer return type (check if any `RETURN` op has inputs).
-    *   Call `generate_function_signature`.
-3.  **Body Generation**:
-    *   Initialize `structured_blocks` set (tracks blocks already emitted).
-    *   Mark all loop body blocks as "structured" initially to prevent duplicate emission during sequential traversal (loops handle their own bodies).
-    *   Call `generate_structured_blocks` starting at Entry Block (0).
-4.  **Assembly**:
-    *   Combine Signature + Variable Declarations + Body + `}`.
+**完整流程**:
+1.  **控制流结构解析 (Structure Analysis)**:
+    *   通过 `cfg.detect_loops()` 寻找自然循环。
+    *   通过 `cfg.identify_conditionals()` 探查 if-else 块组。
+    *   通过 `cfg.identify_switches(program)` 鉴别 switch-case 代码结构。
+2.  **函数元数据生成 (Metadata Generation)**:
+    *   解析函数名（依赖符号表，否则 fallback 为 `func_地址`），过滤非法符号如小数点。
+    *   推断返回类型，利用 `generate_function_signature` 拼凑出 C 签名。
+3.  **块体代码生成 (Body Generation)**:
+    *   初始化 `structured_blocks` 哈希集以跟踪已经完成生成的结构块。
+    *   从 Entry (块 0) 开始调用 `generate_structured_blocks` 递归组装。为了防止多次生成，内层循环块自身在最初即标记为“已被结构化安排”。
+4.  **组装 (Assembly)**: 连接签名、推导出的本地变量声明、块体内容并包上 `}`。
 
 ---
 
-## 2. Structure Recovery
+## 2. 结构重组与还原 (Structure Recovery)
 
 ### `generate_structured_blocks`
 
-**Signature**:
-```rust
-fn generate_structured_blocks(
-    cfg: &ControlFlowGraph,
-    program: &Program,
-    analysis: &FunctionAnalysis,
-    ...,
-    start_block: usize,
-    loops: &[Loop],
-    conditionals: &[Conditional],
-    switches: &[Switch],
-    structured_blocks: &mut HashSet<usize>,
-    ...
-) -> String
-```
+该递归函数用于吐出特定控制流结构所嵌套的 C 代码。
 
-**Inputs**:
-*   `start_block`: The current block index to generate code for.
-*   `structured_blocks`: Mutable set of visited blocks to prevent infinite recursion/duplication.
-
-**Outputs**:
-*   `String`: The C code for the control flow structure rooted at `start_block`.
-
-**Algorithm**:
-1.  **Loop Check**: Is `start_block` a loop header?
-    *   **While**: Emit `while (cond) {`. Recurse for body. Emit `}`.
-    *   **Do-While**: Emit `do {`. Recurse for body. Emit `} while (cond);`.
-    *   **For**: Extract increment expression from latch block. Emit `for (; cond; inc) {`. Recurse for body. Emit `}`.
-    *   *Recursion*: Call `generate_structured_blocks` for successors **inside** the loop body.
-    *   *Next*: Call `generate_structured_blocks` for successors **outside** the loop (loop exit).
-2.  **Conditional Check**: Is `start_block` an if-header?
-    *   Emit `if (cond) {`.
-    *   Recurse for `true_branch`.
-    *   Emit `}`.
-    *   If `false_branch` exists (and isn't the merge point), emit `else {`, recurse, emit `}`.
-    *   *Next*: Jump to `merge_point` and continue generation.
-3.  **Switch Check**: Is `start_block` a switch header?
-    *   Emit `switch (expr) {`.
-    *   For each case: Emit `case val:`. Recurse for case target block. Emit `break;`.
-    *   Emit `}`.
-    *   *Next*: Jump to `merge_point`.
-4.  **Basic Block**: If no structure matches:
-    *   Call `generate_block_content(start_block)`.
-    *   Mark `start_block` as visited.
-    *   Follow CFG edges:
-        *   If 1 successor (fallthrough): Recurse.
-        *   If 0 successors (Return): Stop.
-        *   If jump to visited block (Back edge/Goto): Emit `goto label_X;`.
+**核心分发逻辑**:
+1.  **循环探测 (Loop Check)**: 若起始块 `start_block` 是某个循环结构的头部 (Header)：
+    *   **While / For**: 生成 `while (cond) {` -> 遍历体块 -> `}` (目前源码对侦测出的 For 循环结构统一降级使用 while 输出)。
+    *   **Do-While**: 生成 `do {` -> 遍历体块 -> `} while (cond);`。
+    *   最后跳到循环外的汇聚块并继续递归处理。
+2.  **条件重组 (Conditional Check)**: 
+    *   遇到普通条件判定：生成 `if (cond) {` 进真分支，接着判断是否有 `else {` 进入假分支（如果假分支不是共同合流点 Merge Point 的话），最后跳往合并块继续。
+3.  **普通基本块转义 (Basic Block)**:
+    *   所有结构都不命中的线性块，执行 `generate_block_content` 产生单块的具体计算表达式序列，顺着单出边（Fallthrough）往下递归生成。
+    *   *(注：当前分支暂未在转译核心落实基于分析层已标识 `Switch` 结构的对应 C 代码 `switch (expr)` 语句的精确还原输出)*。
 
 ---
 
-## 3. Statement Generation
-
-### `generate_block_content` / `get_block_statements`
-
-**Signature**:
-```rust
-fn get_block_statements(..., block_idx: usize, ...) -> Vec<ast::Statement>
-```
-
-**Inputs**:
-*   `block_idx`: Index of the basic block.
-
-**Outputs**:
-*   `Vec<ast::Statement>`: List of C statements.
-
-**Algorithm**:
-1.  Iterate over all P-code operations in the block.
-2.  **Filter Noise**:
-    *   Skip `NOP` and `CBRANCH` (handled by structure recovery).
-    *   **Stack Adjustment Filter**: Skip `INT_SUB` / `INT_ADD` on `RSP` (stack frame allocation).
-    *   **Prologue Filter**: If Block 0, skip `STORE` operations where:
-        *   The value is a callee-saved register (`RBX`, `RBP`, `R12`-`R15`).
-        *   The pointer is `RSP` or a Stack Temporary.
-        *   *Reason*: Hides `push rbp`, `push r15` etc.
-3.  **Translation**: Call `pcode_to_statement` for the op.
-4.  **Simplification**: Call `simplify_ast` to remove redundant assignments (e.g., `tmp = x; y = tmp` -> `y = x`).
+## 3. 语句和表达式翻译 (Statement & Expression)
 
 ### `pcode_to_statement`
 
-**Signature**:
-```rust
-fn pcode_to_statement(op: &PcodeOperation, ...) -> Option<ast::Statement>
-```
+将粗粒度的 P-code 直译为带分号的 C `ast::Statement`:
+*   **`COPY`**: 转换赋值 `lhs = rhs;` 
+*   **`LOAD` / `STORE`**: 解析带有解引用特征的 `*ptr` 行为。
+*   **计算类 / `INT_ADD`等**: 若探测到左右侧寄存器重叠，会自动折叠为缩写式，例如 `lhs += op2`。
+*   **`CALL`**: 通过函数符号与提取得到的入参，调用 `fold_expression`，将其全部翻译拼接。
 
-**Algorithm**:
-*   **`COPY`**: `lhs = rhs;` (Assignment).
-*   **`LOAD`**: `lhs = *ptr;` (Dereference).
-*   **`STORE`**: `*ptr = val;` (Assignment).
-*   **`INT_ADD`, etc**: `lhs = op1 + op2;`.
-    *   Detects `lhs = lhs + op2` pattern -> `lhs += op2`.
-*   **`CALL`**: `lhs = func(args...);` or `func(args...);`.
-    *   **Name**: Sanitizes function name (replace `.` with `_`).
-    *   **Arguments**: Iterates inputs[1..]. Calls `fold_expression` on each to inline temporary calculations.
-*   **`RETURN`**: `return val;` or `return;`.
-    *   Checks inputs[0]. If present, generates return value expression.
+### `fold_expression` (内联折叠)
+
+利用推导图和依赖关系：将一些为了底层存取方便而引入的独有变量（`Unique/Temporaries`）和中间版号多引入的废料语句缩短折叠：
+如 `INT_ADD(a, b)` 被内联后作为 `fold(a) + fold(b)`，或将 `PTR_ADD(base, offset)` 强翻译回对结构体成员/数组下标的 `base->field` 或 `base[idx]` 的操作。
 
 ---
 
-## 4. Expression Generation
+## 4. 元数据声明生成 (Metadata Generation)
 
-### `varnode_to_expression`
-
-**Signature**:
-```rust
-fn varnode_to_expression(vn: &Varnode, ...) -> ast::Expression
-```
-
-**Algorithm**:
-1.  **High Variables**: Check `analysis.high_variables`. If mapped, return the high-level variable name (e.g., `iVar1`).
-2.  **Recovered Variables**: Check `analysis.variables`. If mapped (Stack/Reg), return the recovered name (e.g., `local_8`, `param_1`).
-3.  **Constants**:
-    *   If valid address in binary -> Check if string literal exists -> Return string (`"hello"`).
-    *   If function address -> Return function name.
-    *   Else -> Return integer literal.
-4.  **Registers**: If unmapped, return register name (`rax`).
-5.  **Temporaries**: Return `uVarX`.
-
-### `fold_expression`
-
-**Signature**:
-```rust
-fn fold_expression(vn: &Varnode, ...) -> ast::Expression
-```
-
-**Inputs**:
-*   `vn`: The variable to potentially expand.
-
-**Outputs**:
-*   `Expression`: The AST expression representing the variable's value.
-
-**Algorithm**:
-1.  Get base expression via `varnode_to_expression(vn)`.
-2.  **Check Foldability**: Is `vn` a temporary (`Unique`) or SSA-versioned variable?
-3.  **Lookup Definition**: Find the P-code operation that defined `vn` (using `SSAForm` definitions).
-4.  **Expand**:
-    *   If defined by `INT_ADD(a, b)`: Return `BinaryExpr(fold(a) + fold(b))`.
-    *   If defined by `LOAD(ptr)`: Return `UnaryExpr(*fold(ptr))`.
-    *   If defined by `PTR_ADD(base, offset)`: Return field access `base->field` (if type info exists) or array index `base[idx]`.
-5.  *Recursion Limit*: Implicitly bounded by the depth of the SSA graph slice.
-
----
-
-## 5. Metadata
-
-### `generate_function_signature`
-
-**Algorithm**:
-1.  Start with `ret_type func_name(`.
-2.  Collect parameters from `VariableAnalysis` or `HighVariableMap`.
-3.  Sort by storage/index.
-4.  Append `type name` for each param, separated by commas.
-5.  End with `) {`.
-
-### `generate_variable_declarations`
-
-**Algorithm**:
-1.  Iterate all recovered variables.
-2.  Check if variable name is in `used_names` set (populated during body generation).
-3.  If used, emit declaration `type name;\n`.
+**`generate_variable_declarations` 逻辑**:
+在函数代码实体之前，检索之前确立的恢复变量组，如果检查它们在函数内被实际以各种形式使用过（在 `used_names` 集合中），才最终向代码开头吐出形如 `type name;\n` 的 C 层级前置声明语句。

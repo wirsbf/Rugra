@@ -1,205 +1,52 @@
-# Translator Module Reference
+# 转译模块技术参考 (Translator Module)
 
-This document provides a rigorous function-level reference for the `src/translator` module, specifically focusing on the x86-64 implementation.
+本文档提供了 `src/translator` 模块（特指 x86-64 架构翻译后端）的核心实现逻辑的技术规范参考。
 
 ---
 
-## 1. Main Entry Point (`x86_64.rs`)
+## 1. 主转译入口 (`x86_64.rs`)
 
 ### `X86_64Translator::translate`
 
-**Signature**:
+**签名**:
 ```rust
 fn translate(&self, instruction: &Instruction) -> Result<Vec<PcodeOperation>>
 ```
 
-**Inputs**:
-*   `instruction`: The disassembled machine instruction (from `iced-x86`).
+**输入**: 从二进制引擎(`iced-x86`)返回的一条机器指令。
+**输出**: 等价于该汇编语义的 `PcodeOperation` 操作序组。
 
-**Outputs**:
-*   `Result<Vec<PcodeOperation>>`: A sequence of P-code operations implementing the instruction's semantics.
-
-**Algorithm**:
-1.  Initialize a `PcodeBuilder` with the instruction's address.
-2.  Inspect `instruction.mnemonic`.
-3.  Dispatch to specific handler functions (e.g., `translate_mov`, `translate_add`) based on the mnemonic.
-4.  Collect and return the built operations from the builder.
+**核心逻辑**:
+依据 `instruction.mnemonic` (助记符) 进行分发调度（如：`translate_mov`、`translate_add`等），交由专门的翻译逻辑通过 `PcodeBuilder` 汇编出对应的微指令集。
 
 ---
 
-## 2. Data Movement
+## 2. 数据与指令移动 (Data Movement)
 
 ### `translate_mov`
-
-**Signature**:
-```rust
-fn translate_mov(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Source**: Call `operand_to_varnode(inst.operands[1])` to get the source value.
-2.  **Destination**: Call `store_operand(inst.operands[0], source)`.
-    *   *Note*: `store_operand` handles the implicit zero-extension for 32-bit register writes.
+解析操作数，通过调用底层的 `store_operand(dest, source)` 逻辑写入值。注意：对于 32 位寄存器的写入，`store_operand` 会自动产生一条 `INT_ZEXT` 将其零扩展至对应的 64 位寄存器（例如写入 `EAX` 会零扩展至 `RAX`）。
 
 ### `translate_lea` (Load Effective Address)
+目标是计算出地址数字，而不是地址解引用的值。
+源码实现较为简化：通过生成一个 `Unique` 临时变量存放临时魔法值 `0xdeadbeef`（作为地址桩），然后直接发出 `COPY` 将该魔法桩塞进目的寄存器。**注意：当前版本中并未实现完整的 `[Base + Index*Scale + Disp]` 加法基址推演 P-code 生成。**
 
-**Signature**:
-```rust
-fn translate_lea(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Check**: Ensure destination is a register and source is a memory operand.
-2.  **Calculate**: Call `translate_address` on the source memory operand `[Base + Index*Scale + Disp]`.
-    *   This generates `INT_ADD` / `INT_MULT` ops to compute the address.
-    *   It returns a `Varnode` holding the *address* (not the value at the address).
-3.  **Store**: Emit `PcodeOp::Copy` to move this calculated address into the destination register.
-
-### `translate_push`
-
-**Signature**:
-```rust
-fn translate_push(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Source**: Resolve operand 0 (value to push).
-2.  **Stack Pointer**: Get `RSP` varnode.
-3.  **Decrement**: Emit `new_rsp = INT_SUB(RSP, 8)`.
-4.  **Update RSP**: Emit `COPY RSP = new_rsp`.
-5.  **Store**: Emit `STORE(space=ram, ptr=RSP, value=source)`.
-
-### `translate_pop`
-
-**Signature**:
-```rust
-fn translate_pop(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Stack Pointer**: Get `RSP` varnode.
-2.  **Load**: Emit `val = LOAD(space=ram, ptr=RSP)`.
-3.  **Increment**: Emit `new_rsp = INT_ADD(RSP, 8)`.
-4.  **Update RSP**: Emit `COPY RSP = new_rsp`.
-5.  **Destination**: Call `store_operand(inst.operands[0], val)` to save the popped value.
+### `translate_push` 与 `translate_pop`
+1. 先计算栈顶新偏移指令 (`RSP ± 8`) 
+2. 随后触发内存 `STORE(space=ram, ptr=RSP, value=src)` 或 `LOAD(space=ram, ptr=RSP)`。
 
 ---
 
-## 3. Arithmetic and Logic
+## 3. 控制流转译
 
-### `translate_add` / `translate_sub`
+### `translate_call` (函数调用)
+若是目标直接明确（Direct Call），使用 `CALL(const_target)`。
+若目标是寄存器引用或寻址计算结果（Indirect Call），使用 `CALLIND(target_var)` 取代。
+注：真实的形参传递（入参注入）将放在 `src/analysis/calls.rs` 中二次推断，提升器阶段不做强行假定。
 
-**Signature**:
-```rust
-fn translate_add(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
+### `translate_jmp` 
+判断若是硬编码直接跳转则释放 `BRANCH(target)`，如果是动态计算（间接）的话释放 `BRANCHIND`。
+此处的明确分类是为了在生成控制流图(`CFG`) 时，能将难以预测的间接跳（如：跳转表、PLT Stubs等）单独标识，阻断错误的假定坠入执行。
 
-**Algorithm**:
-1.  **Operands**: Resolve op0 (dest/src1) and op1 (src2).
-2.  **Compute**: Emit `res = INT_ADD(op0, op1)` (or `INT_SUB`).
-3.  **Flags**: Call `update_flags_arithmetic` to update `ZF`, `SF`, `CF`, `OF`.
-4.  **Store**: Call `store_operand(inst.operands[0], res)` to update the destination.
-
----
-
-## 4. Control Flow
-
-### `translate_call`
-
-**Signature**:
-```rust
-fn translate_call(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Direct Call**: If `inst.branch_target()` is known:
-    *   Create `Const` varnode with target address.
-    *   Emit `CALL(target)`.
-2.  **Indirect Call**: Else (target is register/memory):
-    *   Resolve operand 0 via `operand_to_varnode`.
-    *   Emit `CALLIND(target_var)`.
-    *   *Note*: Argument/Return semantics are injected later by Analysis.
-
-### `translate_jmp`
-
-**Signature**:
-```rust
-fn translate_jmp(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Direct Jump**: If `inst.branch_target()` is known:
-    *   Create `Const` varnode.
-    *   Emit `BRANCH(target)`.
-2.  **Indirect Jump**: Else:
-    *   Resolve operand 0.
-    *   Emit `BRANCHIND(target_var)`.
-    *   *Significance*: This distinguishes dynamic jumps (switch tables, PLT stubs) from static control flow, ensuring correct CFG termination.
-
-### `translate_ret`
-
-**Signature**:
-```rust
-fn translate_ret(&self, inst: &Instruction, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Liveness Helper**:
-    *   Create input list.
-    *   Add `RAX` (and `EAX`) to input list if they exist.
-    *   Add `XMM0` if it exists.
-2.  **Emit**: Emit `RETURN(inputs...)`.
-    *   *Significance*: Explicitly marking `RAX` as an input prevents Dead Code Elimination from removing the function's return value calculation logic.
-
----
-
-## 5. Helpers
-
-### `operand_to_varnode`
-
-**Signature**:
-```rust
-fn operand_to_varnode(&self, operand: &Operand, builder: &mut PcodeBuilder, ...) -> Result<Varnode>
-```
-
-**Algorithm**:
-1.  **Register**: Look up name in `register_map`. Return Register Varnode.
-2.  **Immediate**: Return Const Varnode.
-3.  **Memory**:
-    *   Call `translate_address` to generate calculation ops.
-    *   Emit `LOAD(space=ram, ptr=address)` into a new temporary `val`.
-    *   Return `val`.
-
-### `store_operand`
-
-**Signature**:
-```rust
-fn store_operand(&self, dest: &Operand, src: Varnode, builder: &mut PcodeBuilder, ...) -> Result<()>
-```
-
-**Algorithm**:
-1.  **Register**:
-    *   Get destination Register Varnode (`dst`).
-    *   Emit `COPY dst = src`.
-    *   **Zero Extension Rule**: If `dst` size is 4 bytes (32-bit):
-        *   Find corresponding 64-bit register (e.g., `EAX` -> `RAX`).
-        *   Emit `INT_ZEXT` from `src` to the 64-bit register.
-2.  **Memory**:
-    *   Call `translate_address` to compute pointer.
-    *   Emit `STORE(space=ram, ptr=address, value=src)`.
-
-### `translate_address`
-
-**Signature**:
-```rust
-fn translate_address(&self, base, index, scale, disp, ...) -> Result<Varnode>
-```
-
-**Algorithm**:
-1.  **Base**: Start with `base` register value (or 0).
-2.  **Index**: If present:
-    *   Calculate `idx_val = index * scale` (via `INT_MULT`).
-    *   Update `current = current + idx_val` (via `INT_ADD`).
-3.  **Displacement**: If non-zero:
-    *   Update `current = current + disp` (via `INT_ADD`).
-4.  Return `current` (the effective address).
+### `translate_ret` (返回)
+发射 `RETURN(inputs...)` 且需要强行在输入参数里绑死 `RAX/EAX/XMM0`等常见存根对象。
+此举非常关键：这确保了数据流后置分析或者 “死代码消除”(DCE) Pass 不会因误判返回值没有使用者而在前向将核心逻辑删掉。

@@ -1,47 +1,49 @@
-# Rugra Source Code Reference
+# Rugra 源码与技术架构参考手册
 
-This directory contains detailed technical documentation for the internal modules of the Rugra decompiler. It is intended for contributors and developers who want to understand the implementation details of the decompilation pipeline.
+本目录存放了关于 Rugra 反编译器内部核心数据管线与分析模块的技术中文说明，专供所有贡献者和开发者随时查阅其内部流水线是如何工作演进的。
 
-## 📚 Module Reference
+## 📚 模块功能引用索引
 
-### 1. [Analysis Engine](analysis.md) (`src/analysis/`)
-The core intelligence of the decompiler.
-- **Control Flow Graph (CFG)**: Basic block construction and edge detection.
-- **SSA Form**: Static Single Assignment construction, dominance frontiers, and Phi placement.
-- **Variable Recovery**: Stack and register variable identification.
-- **Call Semantics**: Function argument and return value recovery (x86-64 ABI).
-- **Optimization**: Dead code elimination, copy propagation, and rule-based simplification.
+### 1. [分析引擎 (Analysis Engine)](analysis.md) (`src/analysis/`)
+整个反编译器在执行 P-code 之后最核心的智能化解析中枢。
+- **控制流图 (CFG)**: 基本块的切分构造以及所有的有向连通边侦测。
+- **SSA 表现层 (SSA Form)**: 静态单赋值树状模型的建立、支配边界分析、以及特殊的 Phi 参数多源节点合并注入算法。
+- **变量解封 (Variable Recovery)**: 确定各类底层栈内与虚拟寄存器存储空间的宿主，将其封存为可追溯逻辑“变量”。
+- **函数调用语境 (Call Semantics)**: 对于底层 `x86-64 ABI` 中的函数入参、出参寄存器行为模式做重构提炼。
+- **重置剥离与验证优化 (Optimization)**: 死代码的无用移除动作、传播常量的折叠、以及基于规则匹配（Rule-based）的数据简化等。
 
-### 2. [Code Generation](codegen.md) (`src/codegen/`)
-Converts analyzed P-code into high-level C code.
-- **Structured Blocks**: Algorithms for recovering `if`, `while`, `for`, and `switch` structures.
-- **AST**: Abstract Syntax Tree definitions for C.
-- **Formatting**: Textual output generation.
+### 2. [代码转义生成 (Code Generation)](codegen.md) (`src/codegen/`)
+将上方清洗完毕的 P-code 中间码，结合控制流反向折叠出极高可读性的 C 语言块体。
+- **结构剥离 (Structured Blocks)**: `if`, `while`, `for`, 以及 `switch` 分支套入及还原解体算法。
+- **虚拟抽象树 (AST)**: 为输出前映射准备的 C 语法高阶树表示子树。
+- **代码重排与格式化 (Formatting)**: 基于前置 AST 最终打印排版，将变量及语句正确拼接。
 
-### 3. [Translator](translator.md) (`src/translator/`)
-Bridges the gap between machine code and P-code.
-- **x86-64 Translator**: Mapping x86 instructions to P-code operations.
-- **Semantics**: Handling of flags, stack operations, and indirect jumps.
+### 3. [架构转译后端 (Translator)](translator.md) (`src/translator/`)
+衔接着原始汇编机器码与其通用指令表示语言（P-code）的纯净转译桥梁。
+- **x86-64 专门转译库**: 一对一地将反汇编出的特定 `x86_64` 族库指令映射展开为多条微指令序列集组合。
+- **特定微语义维护 (Semantics)**: 例如底层的寄存器硬件特性标记位（Flags）、进退栈、非硬编码动态间接越权调用转移管理。
 
-### 4. [P-code IR](pcode.md) (`src/pcode/`)
-The intermediate representation used throughout Rugra.
-- **Operations**: Definition of all P-code opcodes (`COPY`, `INT_ADD`, `CALL`, etc.).
-- **Varnodes**: Representation of variables (Register, Stack, RAM, Unique).
+### 4. [P-code 抽象层 (P-code IR)](pcode.md) (`src/pcode/`)
+支撑与贯穿起整个 Rugra 数据生态的中枢“通用虚拟架构”组件库。
+- **微操作原语集 (Operations)**: 所有动作定义，如 `COPY`, `INT_ADD`, `CALL` 等抽象机器词组设定。
+- **Varnodes (量槽/数据挂点)**: 是所有变量运算最直白的寄存实体宿主（可以是通用寄存器、动态构建 Unique 号计算池、固定内存 RAM 或即刻立即数）。
 
-## 🏗️ Architecture Overview
+---
 
-Rugra follows a linear pipeline architecture:
+## 🏗️ 代码全景纵跃概览
 
-1.  **Loader (`src/binary`)**: Parses the input binary (ELF/PE) and identifies functions.
-2.  **Disassembler (`src/disasm`)**: Uses `iced-x86` to decode raw bytes into instructions.
-3.  **Translator (`src/translator`)**: Lifts instructions into P-code operations.
-4.  **Analysis (`src/analysis`)**:
-    *   Builds CFG.
-    *   Recovers Variables.
-    *   Analyzes Call Semantics.
-    *   Constructs SSA form.
-    *   Optimizes and simplifies IR.
-5.  **Code Generation (`src/codegen`)**:
-    *   Recovers high-level control structures.
-    *   Generates C AST.
-    *   Formats final output.
+Rugra 全盘推崇严谨线性的状态化作业流水机器处理模型：
+
+1.  **加载阶段 (Loader - `src/binary`)**: 解析传入的反编译文件（如 `ELF/PE` 可执行文件格式），找到并提纯原始待解密的段落函数入口点（Functions）。
+2.  **反汇编阶段 (Disassembler - `src/disasm`)**: 利用原生 `iced-x86` 组件去强行撕裂底层的机械全字节，使其可视化为通用汇编字词指令面。
+3.  **高级转译阶段 (Translator - `src/translator`)**: 把汇编的词全貌转录提升 (Lifts) 为去硬件化（不关心硬件机器差异）的三地址表示指令组。
+4.  **深度分析阶段 (Analysis - `src/analysis`)**: 
+    *   构建无断点、相互可遍历连同的网图 (CFG)。
+    *   推测汇聚各个栈点变量的实体。
+    *   提炼方法/系统的调用痕迹和回文模式关联。
+    *   彻底拆分依赖，铺出静态单赋值网络图 (SSA)。
+    *   清扫不必要的赋值动作和废料死语句组。
+5.  **语法再构建输出阶段 (Code Generation - `src/codegen`)**:
+    *   逆向收束高自由度的扁平流网络，封堵还原带有严格逻辑约束结构的控制语法 (`if`/`while`)。
+    *   组装重写高级 AST 控制抽象语言树。
+    *   打印生成面向用户的最末端源代码。
