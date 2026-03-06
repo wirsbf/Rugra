@@ -1,116 +1,60 @@
-# `analysis/mod.rs` API Reference
+# `analysis/` API Reference (分析管道总览)
 
-**源代码路径**: `src/analysis/mod.rs`
+**源代码路径**: `src/analysis/`
 
 ## 模块说明 (Module Doc)
 
-Analysis module for decompilation
+本子目录收录了反编译管道中**所有高级分析算法**的旧版实现（基于 `pcode::Program` API）。
+包括控制流图构建、数据流分析、SSA 构造、类型推断、变量恢复、生存分析等。
 
-This module contains various analysis algorithms used during decompilation:
-- Control flow analysis (CFG construction, loop detection)
-- Data flow analysis (use-def chains, reaching definitions)
-- SSA construction (dominance frontiers, phi placement)
-- Type inference (constraint-based type recovery)
-- Variable recovery (stack variables, register allocation)
+---
 
-## 导出的公共 API (Public API)
+## 子模块导航
 
-### `pub struct FunctionAnalysis`
+### `mod.rs` (入口与主分析管道)
 
-Results of analyzing a function
+*   **`pub struct FunctionAnalysis`**: 分析结果总容器，聚合 CFG、DataFlow、SSA、TypeInfo、Variables、HighVariables、TypeSolver、TypeInference、Liveness 等可选分析产物。
+*   `pub fn analyze_function(program, binary) -> Result<FunctionAnalysis>`: **主入口**。按序执行 CFG 构建 → 数据流分析 → SSA 构造 → 优化 → 类型推断 → 变量恢复。
+*   内联定义了 `mod cfg` (控制流图构建)、`mod dataflow` (数据流分析)、`mod types` (类型分析) 等子模块。
 
-### `pub fn new() -> Self`
+### `ssa.rs` (SSA 构造)
 
-Create a new empty analysis
+旧版基于 `Program` 的 SSA 构造实现（`SSAForm`, `SSAVarnode`），已被 Ghidra 对齐层的 `heritage.rs` 策略性替代。
 
-### `pub fn analyze_function(program: &mut Program, binary: Option<&crate::binary::Binary>) -> Result<FunctionAnalysis>`
+### `variables.rs` (变量恢复)
 
-Analyze a P-code program
+栈变量识别、寄存器变量追踪、变量命名策略。
 
-This is the main entry point for analysis. It performs:
-1. Control flow graph construction
-2. Data flow analysis
-3. SSA construction (optional)
-4. Type inference (optional)
+### `type_inference.rs` (约束式类型推断)
 
-# Arguments
+基于类型格子的约束收集与求解。
 
-* `program` - The P-code program to analyze
-* `binary` - Optional reference to the binary (for symbol resolution)
+### `type_propagation.rs` (类型传播求解器)
 
-# Returns
+`TypeSolver`：约束驱动的全局类型传播引擎。
 
-Analysis results
+### `high_variable.rs` (高级变量映射)
 
-### `pub struct BasicBlock`
+`HighVariableMap`：将 SSA 版本合并为逻辑变量的映射管理。
 
-A basic block in the control flow graph
+### `liveness.rs` (生存分析)
 
-### `pub struct ControlFlowGraph`
+变量活跃区间计算，服务于变量合并决策。
 
-Control flow graph
+### `optimization.rs` (IR 优化)
 
-### `pub fn new() -> Self`
+常量折叠、死代码消除、复制传播等旧版优化 Pass。
 
-Create a new empty CFG
+### `calls.rs` (调用分析)
 
-### `pub fn compute_dominators(&self) -> HashMap<usize, usize>`
+函数调用点的参数/返回值恢复。
 
-Compute dominators for the CFG
+### `rules/` (分析规则子目录)
 
-### `pub fn detect_loops(&self) -> Vec<Loop>`
+*   `algebra.rs`: 代数化简规则。
+*   `constants.rs`: 常量折叠/评估引擎（含 `evaluate_constant_op`）。
+*   `dataflow.rs`: 数据流相关规则。
 
-Detect natural loops in the CFG
+### `api/mod.rs`
 
-### `pub fn identify_conditionals(&self) -> Vec<Conditional>`
-
-Identify if/else patterns in the CFG
-
-### `pub fn identify_switches(&self, program: &Program) -> Vec<Switch>`
-
-*暂无代码注释*
-
-### `pub fn from_program(program: &Program) -> Result<Self>`
-
-Build a CFG from a P-code program
-
-### `pub fn block_count(&self) -> usize`
-
-Get the number of blocks
-
-### `pub fn dominator_tree_string(&self) -> String`
-
-Get the dominator tree as a string for debugging
-
-### `pub enum LoopType`
-
-Information about a loop
-
-### `pub struct Loop`
-
-*暂无代码注释*
-
-### `pub struct Switch`
-
-*暂无代码注释*
-
-### `pub struct Conditional`
-
-Information about a conditional (if/else)
-
-### `pub struct DataFlowInfo`
-
-Data flow information
-
-### `pub fn new() -> Self`
-
-Create new data flow info
-
-### `pub struct TypeInfo`
-
-Type information for a program
-
-### `pub fn new() -> Self`
-
-Create new type info
-
+公开 API 层，用于外部调用分析功能。

@@ -1,74 +1,44 @@
-# `disasm/mod.rs` API Reference
+# `disasm/` API Reference (反汇编引擎)
 
-**源代码路径**: `src/disasm/mod.rs`
+**源代码路径**: `src/disasm/`
 
 ## 模块说明 (Module Doc)
 
-Disassembly module for Rugra
+提供体系结构相关的反汇编器，将原始机器码字节流转化为结构化的 `Instruction` 对象，供后续 P-code 翻译器消费。
 
-This module provides architecture-specific disassemblers for converting
-machine code into instructions that can be translated to P-code.
-
-Currently supported architectures:
-- x86-64 (via iced-x86)
-
-# Example
-
-```rust,no_run
-use rugra::disasm::{Disassembler, X86_64Disassembler};
-use rugra::Address;
-
-# fn example() -> rugra::Result<()> {
-let code = vec![0x48, 0x89, 0xc3]; // mov rbx, rax
-let mut disasm = X86_64Disassembler::new();
-let instructions = disasm.disassemble(&code, Address::new(0x1000))?;
-# Ok(())
-# }
-```
+---
 
 ## 导出的公共 API (Public API)
 
-### `pub struct Instruction`
+### `pub struct Instruction` (反汇编指令)
 
-A disassembled instruction
+*   **`address`**: 指令所在虚拟地址。
+*   **`bytes`**: 原始字节。
+*   **`mnemonic`**: 助记符（如 `"mov"`, `"add"`）。
+*   **`text`**: 完整文本表示。
+*   **`operands: Vec<Operand>`**: 操作数列表。
+*   **`metadata: InstructionMetadata`**: 辅助元数据。
+*   快捷方法：`is_branch()`, `is_call()`, `is_return()`, `next_address()`, `branch_target()`。
 
-### `pub fn new(address: Address) -> Self`
+### `pub enum Operand` (操作数)
 
-Create a new instruction
-
-### `pub fn is_branch(&self) -> bool`
-
-Check if this is a branch instruction
-
-### `pub fn is_call(&self) -> bool`
-
-Check if this is a call instruction
-
-### `pub fn is_return(&self) -> bool`
-
-Check if this is a return instruction
-
-### `pub fn next_address(&self) -> Address`
-
-Get the next instruction address (if not a branch)
-
-### `pub fn branch_target(&self) -> Option<Address>`
-
-Get the branch target (if this is a branch/call)
-
-### `pub enum Operand`
-
-Instruction operand
+`Register { name, size }` / `Immediate { value, size }` / `Memory { base, index, scale, displacement, size }`。
 
 ### `pub struct InstructionMetadata`
 
-Metadata about an instruction
+`is_branch`, `is_conditional`, `is_call`, `is_return`, `branch_target`, `reads_memory`, `writes_memory`, `reads_registers`, `writes_registers`。
 
-### `pub trait Disassembler`
+### `pub trait Disassembler` (反汇编器接口)
 
-Trait for architecture-specific disassemblers
+*   `fn disassemble(&mut self, code, start_address) -> Result<Vec<Instruction>>`: 批量反汇编。
+*   `fn disassemble_one(&mut self, code, address) -> Result<(Instruction, usize)>`: 单条反汇编。
 
-### `pub fn create_disassembler(arch: Architecture) -> Result<Box<dyn Disassembler>>`
+### `pub fn create_disassembler(arch) -> Result<Box<dyn Disassembler>>`
 
-Create a disassembler for the given architecture
+工厂函数。当前支持 `X86_64`（基于 `iced-x86`）。
 
+---
+
+### `x86_64.rs` (x86-64 反汇编器实现)
+
+`pub struct X86_64Disassembler`: 使用 `iced-x86` crate 实现的 64 位 x86 反汇编器，自动提取寄存器读写信息和分支目标。

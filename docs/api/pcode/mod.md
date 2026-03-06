@@ -1,59 +1,26 @@
-# `pcode/mod.rs` API Reference
+# `pcode/` API Reference (P-code 中间表示层)
 
-**源代码路径**: `src/pcode/mod.rs`
+**源代码路径**: `src/pcode/`
 
 ## 模块说明 (Module Doc)
 
-P-code Intermediate Representation
+本子目录提供了 Ghidra 启发的 P-code 中间表示 (IR)：一种体系结构无关的寄存器传输语言 (RTL)，用作从机器码到高级 C 代码转换的桥梁。
 
-This module implements Ghidra-inspired P-code, a register transfer language (RTL)
-used as the intermediate representation for decompilation.
+---
 
-P-code represents low-level operations in a generic, architecture-independent way,
-making it easier to analyze and transform machine code from different architectures.
+## 子文件导航
 
-# Architecture
+### `mod.rs` (入口与 Re-exports)
 
-```text
-Machine Code → P-code Operations → SSA Form → High-level IR → C Code
-```
+*   Re-export 了 `crate::varnode::*`、`crate::op::*`、`crate::address::SeqNum`、`crate::space::AddressSpace` 以保持向后兼容。
+*   `pub struct PcodeId(u64)`: P-code 操作的唯一标识符。`new(id)`, `as_u64()`, `next()`。
 
-# P-code Operations
+### `program.rs` (P-code 程序容器)
 
-P-code consists of a small set of operations that can represent any machine instruction:
+旧版 `Program` 结构体，管理一组 P-code 操作序列。包含：
+*   操作树 (`optree`)
+*   唯一 ID 分配器 (`uniqid`)
+*   入口地址 (`entry_point`)
+*   操作创建 (`create`)、查找、遍历 API
 
-- **Data Movement**: COPY, LOAD, STORE
-- **Arithmetic**: INT_ADD, INT_SUB, INT_MULT, INT_DIV, etc.
-- **Logical**: INT_AND, INT_OR, INT_XOR, INT_NOT
-- **Comparison**: INT_EQUAL, INT_LESS, INT_SLESS, etc.
-- **Control Flow**: BRANCH, CBRANCH, CALL, RETURN
-- **Type Conversion**: INT_ZEXT, INT_SEXT, TRUNC, etc.
-
-# Example
-
-x86: `add eax, ebx` might translate to:
-```text
-$U10:4 = INT_ADD eax:4, ebx:4
-eax:4 = COPY $U10:4
-ZF:1 = INT_EQUAL $U10:4, 0:4
-SF:1 = INT_SLESS $U10:4, 0:4
-```
-
-## 导出的公共 API (Public API)
-
-### `pub struct PcodeId(u64)`
-
-Unique identifier for a P-code operation
-
-### `pub const fn new(id: u64) -> Self`
-
-Create a new P-code ID
-
-### `pub const fn as_u64(&self) -> u64`
-
-Get the raw ID value
-
-### `pub fn next(&self) -> Self`
-
-Get the next ID
-
+> **注意**: 新的 Ghidra 对齐架构应使用 `funcdata.rs` 中的 `Funcdata` + `PcodeOpBank` + `VarnodeBank` 替代此旧版 `Program`。
