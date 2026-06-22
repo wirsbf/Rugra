@@ -113,6 +113,9 @@ pub(crate) struct CollapseStructure<'a> {
     graph: &'a mut BlockGraph,
     change_count: i32,
     name: String,
+    /// Immediate dominator map: idom[i] = index of i's immediate dominator.
+    /// Computed by compute_dominators(). Used to identify case body sub-trees.
+    idom: std::collections::HashMap<i32, i32>,
     /// Block indices that are switch case bodies (BlockSwitch.cases, default,
     /// or CBRANCH cascade case bodies). Interleaved rules skip structuring
     /// CBRANCH blocks whose targets are in this set, preventing case labels
@@ -127,6 +130,7 @@ impl<'a> CollapseStructure<'a> {
             change_count: 0,
             name: name.to_string(),
             switch_case_indices: std::collections::HashSet::new(),
+            idom: std::collections::HashMap::new(),
         }
     }
 
@@ -190,9 +194,9 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — case body sub-tree detection (BFS)
-                // over-marks blocks, preventing valid matches. Needs precise
-                // case body boundary detection (dominator-based).
+                // if_no_exit disabled — dominator-based case body detection
+                // improves curl (128->122) but regresses httpd (119->127).
+                // Needs per-function switch detection to selectively enable.
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
@@ -205,12 +209,98 @@ impl<'a> CollapseStructure<'a> {
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
     }
 
+    /// Compute immediate dominators using iterative dataflow (Cooper et al.
+    /// 2001 simplified algorithm). Stores result in self.idom.
+    fn compute_dominators(&mut self) {
+        self.idom.clear();
+        let size = self.graph.get_size();
+        if size == 0 { return; }
+
+        // Find entry block (size_in == 0)
+        let entry = (0..size).find(|&i| {
+            self.graph.get_block(i).map_or(false, |b| b.read().unwrap().size_in() == 0)
+        });
+        let entry = match entry { Some(e) => e, None => return };
+
+        // Build predecessor lists
+        let mut preds: Vec<Vec<i32>> = vec![Vec::new(); size];
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = block.read().unwrap();
+            for slot in 0..b.size_out() {
+                if let Some(edge) = b.get_out(slot) {
+                    let tgt = edge.point.read().unwrap().get_index() as usize;
+                    if tgt < size {
+                        preds[tgt].push(i as i32);
+                    }
+                }
+            }
+        }
+
+        // Initialize: idom[entry] = entry, all others = -1 (undefined)
+        let mut idom_arr: Vec<i32> = vec![-1; size];
+        idom_arr[entry] = entry as i32;
+
+        // Iterative fixpoint
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..size {
+                if i == entry { continue; }
+                // Find first processed predecessor
+                let mut new_idom = -1i32;
+                for &p in &preds[i] {
+                    if idom_arr[p as usize] != -1 {
+                        if new_idom == -1 {
+                            new_idom = p;
+                        } else {
+                            // intersect(p, new_idom)
+                            let mut b1 = p;
+                            let mut b2 = new_idom;
+                            while b1 != b2 {
+                                while b1 > b2 { b1 = idom_arr[b1 as usize]; if b1 == -1 { break; } }
+                                while b2 > b1 { b2 = idom_arr[b2 as usize]; if b2 == -1 { break; } }
+                                if b1 == -1 || b2 == -1 { break; }
+                            }
+                            new_idom = if b1 != -1 { b1 } else { new_idom };
+                        }
+                    }
+                }
+                if new_idom != -1 && new_idom != idom_arr[i] {
+                    idom_arr[i] = new_idom;
+                    changed = true;
+                }
+            }
+        }
+
+        for (i, &d) in idom_arr.iter().enumerate() {
+            if d != -1 && d != i as i32 {
+                self.idom.insert(i as i32, d);
+            }
+        }
+    }
+
+    /// Check if block index `a` dominates block index `b`.
+    fn dominates_idx(&self, a: i32, b: i32) -> bool {
+        if a == b { return true; }
+        let mut cur = b;
+        let mut steps = 0;
+        while let Some(&d) = self.idom.get(&cur) {
+            if d == a { return true; }
+            cur = d;
+            steps += 1;
+            if steps > 10000 { break; } // safety
+        }
+        false
+    }
+
     /// Collect indices of all switch case body blocks. Scans both BlockSwitch
     /// nodes and CBRANCH cascade chains (which produce switch-like structures
     /// using BlockIf nodes). Interleaved rules use this to avoid pulling case
     /// labels out of switch bodies.
     fn refresh_switch_cases(&mut self) {
         self.switch_case_indices.clear();
+        self.compute_dominators(); // Build dominator tree for precise case body detection
         let size = self.graph.get_size();
         // Clear CASE_BODY flag on all blocks first
         for i in 0..size {
@@ -285,6 +375,20 @@ impl<'a> CollapseStructure<'a> {
                 let next = match c.get_out(0) { Some(e) => e.point.clone(), None => break };
                 drop(c);
                 current = next;
+            }
+        }
+        // Dominator-based case body expansion: for each case body, add all
+        // blocks it dominates (the case body sub-tree). This is precise —
+        // only blocks truly inside the case body (on all paths from case entry)
+        // are marked, unlike BFS which over-marks through fallthrough chains.
+        let case_bodies: Vec<i32> = self.switch_case_indices.iter().copied().collect();
+        for blk_idx in 0..size as i32 {
+            // Check if this block is dominated by any case body
+            for &case_idx in &case_bodies {
+                if self.dominates_idx(case_idx, blk_idx) {
+                    self.switch_case_indices.insert(blk_idx);
+                    break;
+                }
             }
         }
         // Set CASE_BODY flag on all collected case body blocks (batch, no

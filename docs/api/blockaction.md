@@ -102,3 +102,11 @@ Create a new ActionNormalizeBranches instance
 - 尝试了 BFS 从 case body 沿 size_in==1 后继扩展收集 case body 内部块。但过度标记（case body 的 fallthrough 链很长，覆盖了过多块），导致 if_no_exit 完全不触发。
 - 回退 BFS 扩展，保留直接 case body 标记。if_no_exit 仍禁用。
 - 根本障碍：需要支配树（dominator tree）基础的 case body 边界检测。BFS 启发式不精确。
+
+### 2026-06-23（续）：支配树计算 + case body 子树检测
+
+- 新增 `compute_dominators()`（迭代数据流，Cooper 2001 简化算法），存储 idom 映射。
+- 新增 `dominates_idx(a, b)` 检查 a 是否支配 b。
+- `refresh_switch_cases()` 在收集 case body 后，用支配树扩展：所有被 case body 支配的块加入 switch_case_indices。这比 BFS 精确——只有真正在 case body 内（所有路径都经过 case 入口）的块被标记。
+- 启用 if_no_exit 后：curl 128→122（-6），但 httpd 119→127（+8 退步），gcc 52（1 个 case label 失败）。httpd 的 8 个嵌套 switch 中，支配树扩展过度阻止了有效匹配。
+- if_no_exit 仍禁用。需要 per-function switch 检测来选择性启用。
