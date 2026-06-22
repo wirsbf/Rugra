@@ -3500,6 +3500,36 @@ impl PrintLanguage for PrintC {
             if let Some(in1) = op.get_in(1) {
                 self.push_varnode(&in1.read().unwrap(), Some(op));
             }
+        } else {
+            // No explicit return value on the RETURN op. Check if RAX/EAX (offset 0x0)
+            // was written by an op just before this RETURN in the same block. If so,
+            // emit that value as the return — mirrors how Ghidra reconstructs
+            // 'xor eax,eax; ret' into 'return 0'.
+            use crate::space::AddressSpace;
+            if let Some(ref parent_arc) = op.parent {
+                if let Some(ref parent_dyn) = parent_arc.upgrade() {
+                    let block = parent_dyn.read().unwrap();
+                    let ops = block.get_ops();
+                    for op_ref in ops.iter().rev() {
+                        let o = op_ref.0.read().unwrap();
+                        if o.start == op.start { continue; }
+                        if let Some(ref out_arc) = o.output {
+                            let out_vn = out_arc.read().unwrap();
+                            if out_vn.get_space() == AddressSpace::Register
+                                && out_vn.get_offset() == 0x0
+                                && out_vn.get_size() >= 4
+                            {
+                                drop(out_vn);
+                                drop(o);
+                                self.emit.print(" ");
+                                let o2 = op_ref.0.read().unwrap();
+                                self.emit_inline_expr(&o2);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

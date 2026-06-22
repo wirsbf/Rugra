@@ -353,3 +353,7 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：char literal brace escape
 
 - printc 输出字符字面量时，brace/paren/quote 字符（`}`、`{`、`)`、`(`、`\`、`'`、`"`）用 hex escape（`}`）而非裸字符。原因：`if (bVar_0 == '}') return;` 里的 `}` 会被 post-process 的 brace 计数器（backfill、orphan-break、fix_pointer_arithmetic）误读为代码右花括号，导致函数体提前关闭。case label 同理。
+
+### 2026-06-23（续）：RETURN 返回值推断
+
+- `op_return()` 当 RETURN op 无显式返回值输入时，扫描同块 RETURN 前最后一个写 RAX/EAX 的 op，emit 其值作为返回值。对齐 Ghidra 把 `xor eax,eax; ret` 重构为 `return 0` 的行为。这是前端语义改进（非后处理 hack），缩小了与 Ghidra 的差距 4（返回值推断缺失）。
