@@ -188,8 +188,9 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — case label extraction still occurs for
-                // cascade tail blocks whose fallthrough is non-CBRANCH
+                // if_no_exit disabled — case body extraction can't be fully
+                // prevented at blockaction level; needs emit-layer case-label
+                // detection. See ALIGNMENT_PROGRESS.md obstacle analysis.
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
@@ -398,17 +399,30 @@ impl<'a> CollapseStructure<'a> {
         });
         if !has_cbranch { return false; }
 
-        // Don't apply if this CBRANCH is part of a cascade chain (its
-        // fallthrough leads to another CBRANCH). Structuring cascade members
-        // pulls case labels out of the switch body.
+        // Don't apply if this CBRANCH is part of a cascade chain. A cascade
+        // member is detected by: (a) its fallthrough leads to another CBRANCH,
+        // OR (b) one of its predecessors is a CBRANCH (cascade tail — reached
+        // via fallthrough from the previous CBRANCH in the chain).
         let is_cascade_member = {
-            if let Some(ft_edge) = b.get_out(0) {
+            let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
                 let ft = ft_edge.point.read().unwrap();
                 if ft.size_out() == 2 {
                     let ft_ops = ft.get_ops();
                     ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
                 } else { false }
-            } else { false }
+            } else { false };
+            let pred_is_cbranch = if b.size_in() >= 1 {
+                (0..b.size_in()).any(|slot| {
+                    if let Some(in_edge) = b.get_in(slot) {
+                        let pred = in_edge.point.read().unwrap();
+                        if pred.size_out() == 2 {
+                            let pred_ops = pred.get_ops();
+                            pred_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                        } else { false }
+                    } else { false }
+                })
+            } else { false };
+            ft_is_cbranch || pred_is_cbranch
         };
         if is_cascade_member { return false; }
 
