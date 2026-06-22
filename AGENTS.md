@@ -17,17 +17,39 @@ Rugra 是一个基于 Rust 开发的生产级、受 Ghidra 启发的 C/C++ 二�
 > ⚠️ **【最高指令】全自动化 24 小时无休止推进架构 (24/7 Autonomous Execution Pipeline)**
 > AI 拥有完全的自主决策权，**绝不等待指令，绝不主动停机**。无论是排查 Bug、实现对齐、还是编写文档，你都必须 24 小时、无休止地推进该项目。无论遇到什么编译错误、测试失败或逻辑不通，你必须自动捕获错误、自行调试、网络搜索，连续尝试直至解决。只有整个 Rugra 项目在 `CURRENT_STATUS.md` 中被标记为 100% 完工时，才允许歇息。遇到分歧时，自行根据 Ghidra 源码逻辑（标杆）拍板，**不要向人类求助**。
 
+> 🔴 **【原子化提交铁律 — Commit Per Change】（2026-06-23 新增，最高执行优先级）**
+>
+> **禁止积累未提交改动。** 每完成一个逻辑自洽的改动单元，必须**立即** `git commit`，绝不允许“攒一批一起提交”或“最后再统一整理”。这是对抗历史教训（226 个文件、3 万行未提交改动堆积、无法分离、无法 review）的根本纪律。
+>
+> 具体执行规则：
+>
+> 1. **改动单元的定义**：一个 bug 修复、一个 Action 实现、一组对齐测试、一批 API 文档同步——每个都是独立的 commit。禁止把不相关的改动塞进同一个 commit。
+> 2. **提交时机**：
+>    - 修复一个 bug 并通过验证 → 立即 commit。
+>    - 实现一个 Action/Rule → 立即 commit。
+>    - 更新一批 `docs/api/*.md` → 立即 commit。
+>    - 写完一个 example 或测试 → 立即 commit。
+>    - **绝不在会话结束时留下“一坨”未提交改动。**
+> 3. **提交前的必检（由 pre-commit hook 自动执行）**：
+>    - `cargo test` 必须通过（允许预存失败，但禁止新引入回归）。
+>    - `tools/check_doc_sync.py` 必须通过：staged 的每个 `src/*.rs` 必须有对应的 `docs/api/*.md` 同步变更。
+> 4. **Commit message 规范**：使用动词祈使句 + 类别前缀（见下方 💡 Commit Style）。message 体必须说明：改了什么、为什么改、如何验证。禁止空泛的“update”“fix bug”。
+> 5. **禁止 `git commit --no-verify`** 绕过 hook，除非有明确的技术阻塞原因并在 message 中注明。
+> 6. **会话收尾必检**：每次会话结束前，`git status` 必须显示 working tree clean（除 parent dir 与 rugra 无关的杂物外）。若有未提交改动，必须先整理成 commit 再结束会话。
+
 在使用 AI 助手迭代开发时，每次会话必须严格且同步地遵循以下步骤，缺一不可：
 
-1. **会话首读与摸底**：首先读取当前的 `AGENTS.md` 熟悉本目录规范。然后必须并查阅 `CURRENT_STATUS.md`、`GAP_ANALYSIS.md` 和 `ALIGNMENT_PROGRESS.md`，精确掌握当前项目与 Ghidra 对齐的功能鸿沟和验证进度。
+1. **会话首读与摸底**：首先读取当前的 `AGENTS.md` 熟悉本目录规范。然后必须并查阅 `CURRENT_STATUS.md`、`GAP_ANALYSIS.md` 和 `ALIGNMENT_PROGRESS.md`，精确掌握当前项目与 Ghidra 对齐的功能鸿沟和验证进度。**同时运行 `git status` 确认 working tree 干净——若有前序会话遗留的未提交改动，必须先整理成 commit 再开始新工作。**
 2. **文档与代码同批次绑定**：
-   - 所有架构决策、基建更新、模型抽象（如核心类的映射对应），必须与代码修改在**同一个 Commit / 批次**中完成说明的撰写。
-   - 只要发生了对齐进度的攻克（例如新的 Class 或 FFI Fuction 通关），必须当场更新 `ALIGNMENT_PROGRESS.md` 中的复选框与对应的验证状态！
+   - 所有架构决策、基建更新、模型抽象（如核心类的映射对应），必须与代码修改在**同一个 Commit** 中完成说明的撰写。
+   - 只要发生了对齐进度的攻克（例如新的 Class 或 FFI Fuction 通关），必须当场更新 `ALIGNMENT_PROGRESS.md` 中的复选框与对应的验证状态，并与代码改动一起 commit。
+   - 违反此规则的提交会被 pre-commit hook（`tools/check_doc_sync.py`）自动拦截。
 3. **架构严谨性**：涉及核心对象（`Varnode`, `PcodeOp`, `Address` 等）的代码时，必须保证 Rust 源码的方法具有完全对应的 Ghidra 语义实现记录。
 4. **强制收尾清算（未通过测试和未更文档禁止结束）**：
    - 必须确保所有的逻辑修改能通过全局或领域内的 `cargo test`。
    - 若引入了 FFI 对拍代码或跑通了新的测试用例，必须更新测试报告与文档。
    - 彻底梳理 `CURRENT_STATUS.md` 和 `ALIGNMENT_PROGRESS.md` 的版本日志。这是每次谈话后绝对必须执行的强性收尾动作。
+   - **`git status` 必须 clean**——这是会话结束的硬性门槛。
 
 ## 🧪 Consistency & Verification (一致性红线)
 
