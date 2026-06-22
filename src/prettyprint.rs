@@ -1480,7 +1480,136 @@ impl EmitNoMarkup {
         // If param_N was inferred as long/int (not pointer), `*param_N` is illegal C.
         // We collect all `*IDENT` occurrences (unary deref, not `*(` cast) and
         // rewrite their declarations to `_struct *` so the deref is legal.
-        Self::fix_unary_deref_declarations(&struct_pass)
+        let after_unary = Self::fix_unary_deref_declarations(&struct_pass);
+
+        // Twenty-third pass: backfill missing local-variable declarations.
+        // Scan each function body for `local_XX` identifiers used but not declared,
+        // and insert `int local_XX;` declarations to keep the output compilable.
+        Self::backfill_missing_locals(&after_unary)
+    }
+
+    /// For each function, find `local_XX` identifiers used in the body but not
+    /// declared, and insert `int local_XX;` declarations before the first
+    /// non-declaration body line.
+    fn backfill_missing_locals(text: &str) -> String {
+        use std::collections::BTreeSet;
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            out.push(line.to_string());
+            let trimmed = line.trim();
+            // Detect function signature opener: line ends with '{' and looks like a signature.
+            let is_sig = trimmed.ends_with('{')
+                && trimmed.contains('(')
+                && (trimmed.starts_with("int ") || trimmed.starts_with("long ")
+                    || trimmed.starts_with("void ") || trimmed.starts_with("char ")
+                    || trimmed.starts_with("short ") || trimmed.starts_with("bool ")
+                    || trimmed.contains(" *"));
+            if !is_sig { i += 1; continue; }
+
+            // Walk the declaration block: consecutive lines ending with ';' that
+            // contain no '(' or '=' (pure declarations). Track declared names and
+            // the indent. Stop at first non-declaration line (the body proper).
+            let mut declared: BTreeSet<String> = BTreeSet::new();
+            let mut j = i + 1;
+            let mut decl_indent = 2usize;
+            while j < lines.len() {
+                let t = lines[j].trim();
+                if t.is_empty() { j += 1; continue; }
+                if t.ends_with(';') && !t.contains('(') && !t.contains("return") {
+                    // Only treat as declaration if it has no '=' (assignment) —
+                    // pure decls are "type name;" or "type *name;"
+                    if !t.contains('=') {
+                        let indent = lines[j].len() - lines[j].trim_start().len();
+                        decl_indent = indent;
+                        let name: String = t.trim_end_matches(';')
+                            .split_whitespace()
+                            .last()
+                            .unwrap_or("")
+                            .trim_start_matches('*')
+                            .to_string();
+                        if !name.is_empty() { declared.insert(name); }
+                        j += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            // j now points at the first body line (after declarations + blank lines).
+            // Scan body until matching '}' for local_XX usage.
+            let body_end = {
+                let mut d = 1i32;
+                let mut k = j;
+                while k < lines.len() && d > 0 {
+                    for ch in lines[k].chars() {
+                        if ch == '{' { d += 1; }
+                        if ch == '}' { d -= 1; }
+                    }
+                    k += 1;
+                }
+                k
+            };
+            let mut used_locals: BTreeSet<String> = BTreeSet::new();
+            for k in j..body_end {
+                let lb = lines[k].as_bytes();
+                let mut p = 0;
+                while p < lb.len() {
+                    // Capture identifiers starting with a known auto-generated prefix
+                    // followed by hex digits: local_XX, lVar_XX, uVar_XX, iVar_XX, etc.
+                    let prefixes: &[&[u8]] = &[
+                        b"local_", b"lVar_", b"uVar_", b"iVar_", b"bVar_", b"sVar_",
+                        b"piVar_", b"pcVar_", b"psVar_", b"ppVar_", b"pvVar_",
+                        b"fVar_", b"dVar_",
+                    ];
+                    let mut matched = false;
+                    for pf in prefixes {
+                        let plen = pf.len();
+                        if p + plen <= lb.len() && &lb[p..p + plen] == *pf {
+                            let mut e = p + plen;
+                            while e < lb.len() && (lb[e].is_ascii_hexdigit() || lb[e] == b'_') { e += 1; }
+                            if e > p + plen {
+                                used_locals.insert(String::from_utf8_lossy(&lb[p..e]).to_string());
+                            }
+                            p = e;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched { p += 1; }
+                }
+            }
+            let missing: Vec<&String> = used_locals.iter()
+                    .filter(|n| !declared.contains(*n))
+                    .collect();
+                if !missing.is_empty() {
+                    let indent_str = " ".repeat(decl_indent);
+                    for k in (i + 1)..j {
+                        out.push(lines[k].to_string());
+                    }
+                    for m in &missing {
+                        // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
+                        let ty = if m.starts_with("lVar") || m.starts_with("uVar") {
+                            "long"
+                        } else if m.starts_with("iVar") || m.starts_with("bVar")
+                            || m.starts_with("sVar") || m.starts_with("local_") {
+                            "int"
+                        } else if m.starts_with("piVar") || m.starts_with("pcVar")
+                            || m.starts_with("psVar") || m.starts_with("ppVar")
+                            || m.starts_with("pvVar") {
+                            "char *"
+                        } else if m.starts_with("fVar") { "float" }
+                          else if m.starts_with("dVar") { "double" }
+                          else { "long" };
+                        out.push(format!("{}{} {};", indent_str, ty, m));
+                    }
+                    i = j;
+                    continue;
+                }
+            i += 1;
+        }
+        out.join("\n")
     }
 
     /// Rewrite declarations of variables appearing in `*IDENT` unary dereference
