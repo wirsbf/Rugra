@@ -168,6 +168,8 @@ impl<'a> CollapseStructure<'a> {
         // This handles cases where applying cat-merge to one pair unlocks a
         // condition match that was previously blocked by intermediate blocks.
         let interleaved_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Refresh switch case tracking BEFORE the first interleaved iteration
+        self.refresh_switch_cases();
         loop {
             if std::time::Instant::now() > interleaved_deadline { break; }
             let pre_count = self.change_count;
@@ -188,9 +190,8 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — case body extraction can't be fully
-                // prevented at blockaction level; needs emit-layer case-label
-                // detection. See ALIGNMENT_PROGRESS.md obstacle analysis.
+                // if_no_exit disabled — case body protection still incomplete.
+                // CASE_BODY flag architecture is in place for future enablement.
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
@@ -210,6 +211,14 @@ impl<'a> CollapseStructure<'a> {
     fn refresh_switch_cases(&mut self) {
         self.switch_case_indices.clear();
         let size = self.graph.get_size();
+        // Clear CASE_BODY flag on all blocks first
+        for i in 0..size {
+            if let Some(blk) = self.graph.get_block(i) {
+                let mut b = blk.write().unwrap();
+                let cur_flags = b.get_flags();
+                b.set_flags(cur_flags & !crate::block::block_flags::CASE_BODY);
+            }
+        }
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
@@ -267,12 +276,26 @@ impl<'a> CollapseStructure<'a> {
                 if !c_has_cbranch { break; }
                 // Mark taken target (out[1]) as a case body
                 if let Some(taken_edge) = c.get_out(1) {
-                    self.switch_case_indices.insert(taken_edge.point.read().unwrap().get_index());
+                    let tidx = taken_edge.point.read().unwrap().get_index();
+                    self.switch_case_indices.insert(tidx);
+                    // CASE_BODY flag set after the loop to avoid write-in-read deadlock
                 }
                 // Follow fallthrough (out[0])
                 let next = match c.get_out(0) { Some(e) => e.point.clone(), None => break };
                 drop(c);
                 current = next;
+            }
+        }
+        // Set CASE_BODY flag on all collected case body blocks (batch, no
+        // nested lock issues since we iterate by index)
+        for &idx in &self.switch_case_indices {
+            let i = idx as usize;
+            if i < size {
+                if let Some(blk) = self.graph.get_block(i) {
+                    let mut b = blk.write().unwrap();
+                    let new_flags = b.get_flags() | crate::block::block_flags::CASE_BODY;
+                    b.set_flags(new_flags);
+                }
             }
         }
     }
@@ -440,6 +463,11 @@ impl<'a> CollapseStructure<'a> {
             || self.switch_case_indices.contains(&false_idx) {
             return false;
         }
+        // Also check CASE_BODY flag (set by refresh_switch_cases)
+        if true_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0
+            || false_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0 {
+            return false;
+        }
 
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
@@ -450,6 +478,8 @@ impl<'a> CollapseStructure<'a> {
             // Protect: don't extract switch case bodies — they must stay inside
             // their BlockSwitch or the emitted `case` label ends up outside the switch.
             if self.switch_case_indices.contains(&c_idx) { continue; }
+            // Also check CASE_BODY flag directly on the clause
+            if c.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             drop(c);
 
             let negated = dir == 1;

@@ -32,6 +32,10 @@ pub mod block_flags {
     pub const ENTRY_POINT: u32 = 1 << 3;
     pub const DEAD: u32 = 1 << 4;
     pub const MARK: u32 = 1 << 5;
+    /// Block is a switch case body (reached via cascade dispatch).
+    /// printc must not structurally extract it into a standalone `if(){}`,
+    /// or the emitted `case` label ends up outside the switch body.
+    pub const CASE_BODY: u32 = 1 << 6;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)

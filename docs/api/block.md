@@ -782,3 +782,7 @@ RPO 常用于：
 ### 2026-06-23（续）：F_SWITCH_DISPATCH 边标记
 
 - `edge_flags` 新增 `F_SWITCH_DISPATCH` 用于标记 switch dispatch 边。
+
+### 2026-06-23（续）：CASE_BODY flag
+
+- `block_flags` 新增 `CASE_BODY`，标记 cascade switch 的 case body 块。供 blockaction/printc 层检测。

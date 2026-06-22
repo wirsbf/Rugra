@@ -74,3 +74,11 @@ Create a new ActionNormalizeBranches instance
 
 - `try_rule_if_no_exit` 加了 cascade member 双重检测：(a) fallthrough 指向 CBRANCH，或 (b) 任一前驱是 CBRANCH（cascade tail 签名）。
 - 仍禁用——非 cascade 的 CBRANCH 的 case body clause 仍被提取。根本解法是 emit 层检测 if_body 的 case 标签。
+
+### 2026-06-23（续）：CASE_BODY flag 架构 + pre-refresh + batch flag 设置
+
+- `block_flags` 新增 `CASE_BODY`。
+- `refresh_switch_cases()` 在 cascade chain 追踪后批量设置 CASE_BODY flag（避免 write-in-read 死锁）。
+- interleaved loop 开头先 refresh_switch_cases（确保 flag 在规则运行前是最新的）。
+- `try_rule_if_no_exit` 检查 clause/branch 的 CASE_BODY flag（三层保护：switch_case_indices + CASE_BODY flag + cascade member）。
+- if_no_exit 仍禁用——三层保护仍不够（某些 case body 的 flag 在规则运行时还未设置）。printc 的 CASE_BODY emit 保护已移除（太激进，破坏正常 BlockIf emit）。
