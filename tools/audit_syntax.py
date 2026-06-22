@@ -38,8 +38,7 @@ int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perfor
 int curl_easy_cleanup(); int curl_slist_free_all(); int helpf(); int parseconfig_constprop_0();
 int parseconfig(); int fopen(); int fwrite(); int fclose(); int free(); int malloc();
 int strdup(); int strnequal(); int strequal(); int next_url(); int glob_url();
-int strstr(); int strrchr(); int __xstat(); int __fprintf_chk(); int __printf_chk();
-int fputc(); int ferror(); int ap_get_local_host(); int ap_log_error();
+int strstr(); int strrchr(); int fputc(); int ferror(); int ap_get_local_host(); int ap_log_error();
 int ap_fini_vhost_config(); int ap_run_test_config(); int ap_init_vhost_config();
 int ap_parse_vhost_addrs(); int ap_matches_request_vhost();
 int ap_update_vhost_from_headers(); int ap_vhost_iterate_given_conn();
@@ -48,7 +47,11 @@ int ap_strcasecmp_match(); int ap_is_matchexp(); int ap_strcasestr();
 int ap_stripprefix(); int ap_pregsub(); int ap_getparents();
 int FUN_0002abc0(); int FUN_0002acb0(); int FUN_0002aa50(); int FUN_0002c520();
 int FUN_0002b1a0(); int FUN_0002ab70(); int FUN_0002a820(); int FUN_0002b070();
-int FUN_0002a710();
+int FUN_0002a710(); int FUN_0002b430(); int FUN_0002ae60();
+/* NOTE: gcc builtins (__fprintf_chk, __vfprintf_chk, __printf_chk, __sprintf_chk,
+ * __xstat, exit, puts, strlen, realloc, strchr) are NOT declared here — gcc
+ * provides their own prototypes, and declaring them with int() would cause
+ * 'conflicting types' or 'too many/few arguments' false failures. */
 """
 
 
