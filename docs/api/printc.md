@@ -321,3 +321,12 @@ raw semantics / P-code-like IR
   - 表达式地址 `*(a + b)`：`*(long *)(a + b)`
   - 默认：`*(long *)addr`
 - 原因：STORE 的地址操作数可能是 long/int scalar（非指针），直接 `*addr` 非法。`*(long *)` cast 让整数转指针再解引用，无论 addr 声明类型如何都合法。
+
+### 2026-06-23（续）：LOAD/STORE 全路径 cast 合法化
+
+- `op_load()` 和 `op_store()` 的所有地址解引用路径现在统一 emit `*(long *)addr`：
+  - LOAD 默认路径（非指针地址）
+  - STORE RIP-relative 路径（`*(RIP + sym)` → `*(long *)sym`）
+  - STORE 表达式地址（`*(a + b)` → `*(long *)(a + b)`）
+  - STORE 全局符号 / 合成 DAT_ 名
+- 原因：与之前的 `->field` 重写一致，地址操作数可能是 scalar，`*(long *)` cast 保证无论声明类型如何都合法。

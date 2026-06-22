@@ -1716,12 +1716,15 @@ impl PrintC {
                             self.push_input(def_op, 1);
                             self.emit.print(")");
                         } else {
-                            self.emit.tag_op("*");
+                            // *(long *)addr — default cast so *addr is legal C even
+                            // when addr was inferred as a non-pointer scalar.
+                            self.emit.print("*(long *)");
                             self.push_input(def_op, 1);
                         }
                     }
                 } else {
-                    self.emit.tag_op("*");
+                    // *(long *)addr — default cast form for bare LOAD address.
+                    self.emit.print("*(long *)");
                     self.push_input(def_op, 1);
                 }
             }
@@ -3020,11 +3023,11 @@ impl PrintLanguage for PrintC {
                     self.emit.print(&format!("*({} )", ptr_name));
                     self.push_input(op, 1);
                 } else {
-                    self.emit.tag_op("*");
+                    self.emit.print("*(long *)");
                     self.push_input(op, 1);
                 }
             } else {
-                self.emit.tag_op("*");
+                self.emit.print("*(long *)");
                 self.push_input(op, 1);
             }
         }
@@ -3051,11 +3054,11 @@ impl PrintLanguage for PrintC {
                     // Mark addition as inlined
                     self.inlined_ops.insert(*def_op.get_seq_num());
 
-                    // RIP-relative: *(RIP + sym) → just *sym or sym (for globals)
+                    // RIP-relative: *(RIP + sym) → *(long *)sym (cast for legality)
                     if let Some(non_rip_idx) = self.get_rip_relative_operand(&def_op) {
                         let operand = self.resolve_varnode(&def_op.inrefs[non_rip_idx])
                             .unwrap_or_else(|| def_op.inrefs[non_rip_idx].clone());
-                        self.emit.print("*");
+                        self.emit.print("*(long *)");
                         self.push_varnode(&operand.read().unwrap(), None);
                     } else if let Some(stack_name) = self.get_stack_variable_name(&def_op) {
                         // Stack variable: *(RSP + offset) → local_XX
@@ -3175,7 +3178,7 @@ impl PrintLanguage for PrintC {
                     self.push_input(op, 1);
                 }
             } else {
-                self.emit.tag_op("*");
+                self.emit.print("*(long *)");
                 self.push_input(op, 1);
             }
         }
