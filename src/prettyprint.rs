@@ -1526,18 +1526,28 @@ impl EmitNoMarkup {
             // Detect block-opening lines: "X {" or just "{".
             // Determine if the opener introduces a loop/switch context.
             if t.ends_with('{') {
-                let is_loop_ctx = t.starts_with("while ")
+                // Determine context: is this line a loop/switch header, or nested
+                // inside one? A break/continue is legal if ANY enclosing block is a
+                // loop or switch, so children inherit the parent's loop-ctx flag.
+                let is_loop_header = t.starts_with("while ")
                     || t.starts_with("for ")
                     || t.starts_with("do ")
                     || t.starts_with("switch ")
-                    || t.contains("} while (")
-                    || t == "{";
-                // For bare "{" we can't tell; inherit from parent (peek top)
+                    || t.contains("} while (");
                 let parent_is_loop = ctx_stack.last().copied().unwrap_or(false);
-                let this_ctx = if t == "{" {
-                    parent_is_loop
+                // Function signature lines (contain ')' and a return type) start a
+                // fresh function body — reset to false (no inherited loop context).
+                let is_function_sig = t.contains(')')
+                    && (t.starts_with("int ") || t.starts_with("long ")
+                        || t.starts_with("void ") || t.starts_with("char ")
+                        || t.starts_with("short ") || t.starts_with("bool "));
+                let this_ctx = if is_function_sig {
+                    false
+                } else if is_loop_header {
+                    true
                 } else {
-                    is_loop_ctx
+                    // Nested block (if/else/anonymous) — inherit parent context
+                    parent_is_loop
                 };
                 ctx_stack.push(this_ctx);
                 out.push(line.to_string());
@@ -1545,11 +1555,11 @@ impl EmitNoMarkup {
             }
             // Closing brace: pop context
             if t == "}" || t.starts_with("} while") || t.starts_with("} else") {
-                // Handle "} else {" — pops then pushes
+                // Handle "} else {" — pops then pushes (inherit parent context)
                 if t.starts_with("} else") {
                     ctx_stack.pop();
-                    // The else block: not a loop context unless it was (rare)
-                    ctx_stack.push(false);
+                    let parent_is_loop = ctx_stack.last().copied().unwrap_or(false);
+                    ctx_stack.push(parent_is_loop);
                 } else {
                     ctx_stack.pop();
                 }

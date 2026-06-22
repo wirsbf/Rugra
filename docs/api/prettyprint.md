@@ -81,3 +81,7 @@ Emitter that discards all output (used for discovery pass)
 ### 2026-06-23（续）：DAT_ 全局 backfill 恢复
 
 - `backfill_missing_locals()` 重新加入 `DAT_` 前缀扫描。之前移除是因为可能把 extern 放函数中间，但现在的声明块检测逻辑能正确把 extern 放在声明块末尾。DAT_ 名声明为 `extern long DAT_xxxxx;`。
+
+### 2026-06-23（续）：orphan break context 继承改进
+
+- `remove_orphan_breaks()` 的 context 栈改进：嵌套块（if/else/匿名）继承父块的 loop/switch context；函数签名行重置为 false；`} else {` 继承 parent。修复了 switch case 内嵌套 if 里的 break 被误删的问题。
