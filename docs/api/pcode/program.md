@@ -1,202 +1,243 @@
-# `pcode/program.rs` API Reference
+# `pcode/program.rs` API Reference（历史 Program 架构说明）
 
-**源代码路径**: `src/pcode/program.rs`
+**文档路径**: `docs/api/pcode/program.md`  
+**对应旧源码路径**: `src/pcode/program.rs`  
+**当前状态**: ⚠️ **历史遗留文档，仅作为旧版 `Program` 架构参考，不应视为当前主干 API 入口**
 
-## 模块说明 (Module Doc)
+---
 
-P-code program representation
+## 1. 文档定位
 
-This module defines the structure for P-code programs, which consist of
-sequences of P-code operations that represent machine code functions.
+本文档用于说明 Rugra 旧版 `Program` 容器在项目历史中的角色、边界与当前参考价值。
 
-## 导出的公共 API (Public API)
+它的作用是帮助读者理解：
 
-### `pub struct PcodeOperation`
+- 早期 Rugra
+ 如何组织一组 P-code 操作
+- 为什么项目曾经需要 `Program` 这样的中间容器
+- 为什么今天仍保留这份说明
+- 为什么现在不能再把它当作当前主线架构的权威入口
 
-A P-code operation with inputs and output
+这份文档**不是**当前主干实现状态的直接说明书。
 
-This represents a single P-code instruction with:
-- An opcode (the operation to perform)
-- Zero or one output varnode
-- Zero or more input varnodes
-- Metadata (ID, sequence number)
+---
 
-### `pub fn new(`
+## 2. 一句话结论
 
-Create a new P-code operation
+`Program` 应被理解为：
 
-# Arguments
+> **Rugra 早期围绕 P-code 操作集合组织分析流程时使用的旧版中间容器。它对理解项目历史和旧设计有参考价值，但当前主线已经不再应以它作为核心函数分析入口。**
 
-* `id` - Unique identifier
-* `seqnum` - Sequence number
-* `opcode` - Operation type
-* `output` - Output varnode (optional)
-* `inputs` - Input varnodes
+---
 
-### `pub fn id(&self) -> PcodeId`
+## 3. 历史背景
 
-Get the operation ID
+在较早阶段，Rugra 更明显地采用了一种“先生成 P-code 程序容器，再基于该容器做分析和输出”的组织方式。
 
-### `pub fn seqnum(&self) -> SeqNum`
+在这套设计下：
 
-Get the sequence number
+- 机器码先被反汇编
+- 再翻译为一组 P-code 操作
+- 这些操作被放入 `Program`
+- 后续分析、优化、打印围绕 `Program` 展开
 
-### `pub fn opcode(&self) -> PcodeOp`
+因此，`Program` 的历史定位可以概括为：
 
-Get the opcode
+- 一组 P-code 操作的集中容器
+- 旧版分析管线的输入对象
+- 旧版唯一 ID 与入口地址管理位置
+- 从翻译层到分析层的桥接对象
 
-### `pub fn output(&self) -> Option<&Varnode>`
+---
 
-Get the output varnode
+## 4. 为什么它现在被标记为“历史架构”
 
-### `pub fn inputs(&self) -> &[Varnode]`
+结合当前项目的文档基线和现有源码主线，Rugra 已经更明显地转向以下组织方式：
 
-Get the input varnodes
+- 用 `Funcdata` 表示单函数分析上下文
 
-### `pub fn output_mut(&mut self) -> Option<&mut Varnode>`
+- 用 `PcodeOp` / `Varnode` / block 图直接承载函数级 IR
+- 用 `Heritage` 和 `ActionDatabase` 驱动后续变换
+- 用 `PrintLanguage` / `PrintC` 组织输出层
+- 用 `align/` 下的模块逐步做 Ghidra 对齐
 
-Get a mutable reference to the output
+因此，当前更贴近真实主线的理解是：
 
-### `pub fn set_output(&mut self, output: Option<Varnode>)`
+```text
+PcodeOpRaw
+  -> Funcdata
+  -> PcodeOp / Varnode / Block
+  -> Heritage / Actions
+  -> PrintLanguage / PrintC
+```
 
-Set the output varnode
+而不是：
 
-### `pub fn inputs_mut(&mut self) -> &mut Vec<Varnode>`
+```text
+Program
+  -> analysis
+  -> codegen
+```
 
-Get a mutable reference to the inputs
+这也是为什么 `Program` 文档现在必须显式标记为“历史参考”。
 
-### `pub fn has_side_effects(&self) -> bool`
+---
 
-Check if this operation has side effects
+## 5. `Program` 的历史职责
 
-### `pub fn is_terminator(&self) -> bool`
+从旧架构角度看，`Program` 一般承担以下职责：
 
-Check if this operation is a terminator (ends a basic block)
+### 5.1 保存操作集合
+集中管理一批 P-code 操作，而不是让它们散落在多个局部结构中。
 
-### `pub fn input_count(&self) -> usize`
+### 5.2 维护唯一标识或顺序信息
+为操作分配或维护唯一 ID、顺序或入口信息，便于查找和遍历。
 
-Get the number of inputs
+### 5.3 作为分析输入对象
+让旧版的分析流程可以直接接收一个统一容器，而不是在函数级上下文中处理更复杂的对象网络。
 
-### `pub fn address(&self) -> Address`
+### 5.4 作为打印前的中间载体
+在旧设计下，它也常常是输出前的重要中间阶段。
 
-Get the address this operation came from
+---
 
-### `pub struct Program`
+## 6. 这类设计曾经为什么合理
 
-A P-code program representing a function
+从工程演化角度看，`Program` 架构并不是“错误设计”，它在早期通常有这些优点：
 
-This contains all P-code operations for a function, along with metadata
-about varnodes, basic blocks, and control flow.
+- 容易快速搭建原型
+- 容易集中管理 P-code 序列
+- 对从指令翻译到分析过渡比较直接
+- 对简单分析流程比较友好
+- 在工程还未演化出完整函数级上下文时，便于快速推进
 
-### `pub fn new() -> Self`
+但随着 Rugra 向更接近 Ghidra 的对象模型收敛，这种设计的局限逐渐显现，例如：
 
-Create a new empty P-code program
+- 不够自然地承载函数级全局上下文
+- 与 block / SSA / heritage / action 深度联动时不够灵活
+- 不如 `Funcdata` 那样贴近 Ghidra 的主对象语义
+- 容易让“操作集合”成为主语义中心，而不是“函数分析上下文”成为中心
 
-### `pub fn with_entry_point(entry: Address) -> Self`
+---
 
-Create a program with a known entry point
+## 7. 当前阅读这份文档时的正确姿势
 
-### `pub fn add_operation(&mut self, op: PcodeOperation)`
+### 可以把它当作
+- 历史架构说明
+- 旧版 API 的参考
+- 理解项目演化路径的材料
+- 帮助识别旧文档为什么会提到 `Program`
 
-Add a P-code operation to the program
+### 不应把它当作
+- 当前函数分析主入口
+- 当前最推荐的中间容器
+- 当前主线 API 总览
+- 当前端到端反编译流程的事实描述
+- 当前 README 示例应直接调用的对象
 
-### `pub fn operations(&self) -> &[PcodeOperation]`
+---
 
-Get all operations
+## 8. 如果你在旧文档里看到 `Program`
 
-### `pub fn operations_mut(&mut self) -> &mut Vec<PcodeOperation>`
+后续阅读其他历史文档时，如果你看到如下叙述：
 
-Get mutable access to all operations
+- `Program` 持有所有 P-code 操作
+- 分析函数接受 `Program`
+- 代码生成接受 `Program`
+- `Program` 是当前核心容器
 
-### `pub fn entry_point(&self) -> Option<Address>`
+请优先理解为：
 
-Get the entry point address
+> **这反映的是 Rugra 旧版分层思路，而不是当前主干架构现状。**
 
-### `pub fn set_entry_point(&mut self, addr: Address)`
+这类描述通常需要回到当前主线文档重新校准，建议对照：
 
-Set the entry point address
+- `docs/api/lib.md`
+- `docs/api/funcdata.md`
+- `docs/api/op.md`
+- `docs/api/varnode.md`
+- `docs/api/block.md`
+- `docs/api/heritage.md`
+- `docs/PROJECT_STRUCTURE.md`
+- `CURRENT_STATUS.md`
 
-### `pub fn new_unique_varnode(&mut self, size: usize) -> Varnode`
+---
 
-Generate a new unique varnode
+## 9. 与当前主线的替代关系
 
-### `pub fn new_operation_id(&mut self) -> PcodeId`
+当前更应优先关注的替代对象与模块包括：
 
-Generate a new operation ID
+### 9.1 `Funcdata`
+当前函数级总容器，承接 raw p-code 注入、block/CFG、heritage、action 与输出链路。
 
-### `pub fn operation_count(&self) -> usize`
+### 9.2 `PcodeOp`
+当前正式进入图结构的操作节点。
 
-Get the number of operations
+### 9.3 `Varnode`
+当前 storage-node / data-node 模型，是输入输出与 SSA 附着点。
 
-### `pub fn metadata(&self) -> &ProgramMetadata`
+### 9.4 `BlockBasic` / `BlockGraph`
+当前控制流结构的重要承载体。
 
-Get metadata
+### 9.5 `ActionDatabase`
+当前分析与变换流水线的重要组织方式。
 
-### `pub fn metadata_mut(&mut self) -> &mut ProgramMetadata`
+### 9.6 `PrintLanguage` / `PrintC`
+当前输出层主线。
 
-Get mutable metadata
+因此，如果你的目标是理解 Rugra **现在怎么工作**，应优先阅读这些对象，而不是从 `Program` 出发。
 
-### `pub fn operations_at_address(&self, addr: Address) -> Vec<&PcodeOperation>`
+---
 
-Find all operations at a specific address
+## 10. `Program` 文档当前应使用的口径
 
-### `pub fn find_operation(&self, id: PcodeId) -> Option<&PcodeOperation>`
+为了避免文档继续失真，后续引用 `Program` 时建议使用以下说法。
 
-Find an operation by ID
+### 推荐表述
+- “`Program` 是 Rugra 旧版 P-code 容器”
+- “该对象属于历史 Program 架构的一部分”
+- “当前主线已更多围绕 `Funcdata` 组织”
+- “本文件仅保留历史参考价值”
 
-### `pub fn clear(&mut self)`
+### 不推荐表述
+- “`Program` 是当前主分析容器”
+- “当前函数分析仍主要围绕 `Program` 展开”
+- “当前所有代码生成仍以 `Program` 为输入”
+- “`Program` 可以代表当前 Rugra 的主线 IR 架构”
 
-Clear all operations
+---
 
-### `pub fn is_empty(&self) -> bool`
+## 11. 如果未来发生变化
 
-Check if the program is empty
+如果未来项目又重新引入一个正式、稳定、未注释、可测试的 `Program` 主对象，并明确回到类似架构，那么本文档应被重写为“当前 API 说明”。
 
-### `pub struct ProgramMetadata`
+但在当前阶段，这份文档应始终维持：
 
-Metadata about a P-code program
+- **历史说明**
+- **低承诺**
+- **不夸大**
+- **不替当前主线背书**
 
-### `pub fn new() -> Self`
+---
 
-Create new metadata
+## 12. 推荐联动阅读
 
-### `pub fn with_name(mut self, name: String) -> Self`
+为了避免误用 `Program` 文档，建议同时阅读：
 
-Set the function name
+1. `docs/api/lib.md`
+2. `docs/api/funcdata.md`
+3. `docs/api/op.md`
+4. `docs/api/varnode.md`
+5. `docs/api/pcoderaw.md`
+6. `docs/api/block.md`
+7. `docs/api/heritage.md`
+8. `docs/PROJECT_STRUCTURE.md`
+9. `CURRENT_STATUS.md`
 
-### `pub fn set_property(&mut self, key: String, value: String)`
+---
 
-Set a property
+## 13. 最终结论
 
-### `pub fn get_property(&self, key: &str) -> Option<&String>`
+`docs/api/pcode/program.md` 当前应被视为：
 
-Get a property
-
-### `pub struct PcodeBuilder`
-
-Builder for creating P-code operations
-
-### `pub fn new(entry_point: Address) -> Self`
-
-Create a new builder for a program
-
-### `pub fn at_address(&mut self, addr: Address) -> &mut Self`
-
-Move to a new address
-
-### `pub fn add_op(`
-
-Add an operation
-
-### `pub fn new_unique(&mut self, size: usize) -> Varnode`
-
-Create a new unique varnode
-
-### `pub fn build(self) -> Program`
-
-Build and return the program
-
-### `pub fn program_mut(&mut self) -> &mut Program`
-
-Get a mutable reference to the program
-
+> **对 Rugra 旧版 `Program` 式 P-code 容器架构的保留说明。它有助于理解历史设计与旧文档，但不能继续被当成当前主干架构、当前主容器或当前稳定 API 的权威入口。**

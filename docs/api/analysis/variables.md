@@ -1,57 +1,229 @@
-# `analysis/variables.rs` API Reference
+# `analysis/variables.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/variables.rs`
+**文档路径**: `docs/api/analysis/variables.md`  
+**对应旧源码路径**: `src/analysis/variables.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Variable Recovery Module
+## 1. 文档定位
 
-This module implements variable recovery algorithms to identify and name
-variables from P-code IR, including:
-- Stack variable detection
-- Register lifetime analysis
-- Variable naming heuristics
-- Local variable tracking
+本文档用于说明旧版 `analysis/variables.rs` 这类“变量恢复”文档在当前 Rugra 文档体系中的正确定位。
 
-## 导出的公共 API (Public API)
+它**不是**当前主干变量恢复实现的权威说明，而更适合作为：
 
-### `pub struct Variable`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“变量恢复 / 命名恢复 / 栈变量识别”的背景说明
+- 后续 API 文档复核时的待核对入口
 
-Represents a recovered variable
+在当前阶段，这份文档的正确标签应当是：
 
-### `pub enum VariableStorage`
+> **历史遗留 / 待重新验证**
 
-Storage location for a variable
+---
 
-### `pub struct VariableAnalysis`
+## 2. 为什么需要标记为历史文档
 
-Variable recovery analysis results
+Rugra 当前文档体系已经明确区分：
 
-### `pub fn new() -> Self`
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 尚未完成验证的能力
 
-Create new empty analysis
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+原因包括：
 
-### `pub fn get_variable(&self, id: usize) -> Option<&Variable>`
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `BlockBasic`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
 
-Get variable by ID
+2. 旧版 `analysis/` 分层文档往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的变量恢复 / 生命周期 / 高级变量组织方式
 
-### `pub fn find_variable_for_varnode(&self, varnode: &Varnode) -> Option<usize>`
+3. 即使“变量恢复”这个主题今天仍然重要，也**不能**因为主题仍然重要，就把旧文档直接当作当前代码事实。
 
-Find which variable corresponds to a varnode
+---
 
-### `pub fn resolve_storage(&self, space: AddressSpace, offset: u64) -> Option<&Variable>`
+## 3. 这份文档现在可以表达什么
 
-Resolve a storage location to a variable
+在当前阶段，`variables.md` 最稳妥的职责是说明：
 
-### `pub fn add_variable(&mut self, var: Variable) -> usize`
+- Rugra 曾经或计划将“变量恢复”作为独立主题处理
+- 变量恢复通常涉及：
+  - 栈变量识别
+  - 寄存器变量生命周期分析
+  - 变量名生成与命名策略
+  - 存储位置到变量语义的映射
+  - 局部变量与逻辑变量的组织
+- 这些能力今天依然属于项目的重要目标方向
 
-Add a new variable
+但它**不能直接证明**：
 
-### `pub fn recover_variables(program: &Program, cfg: &crate::analysis::cfg::ControlFlowGraph) -> Result<VariableAnalysis>`
+- 当前 `src/analysis/variables.rs` 仍然是主线实现
+- 当前变量恢复逻辑已经稳定存在并可直接使用
+- 当前变量恢复结果已经接近成熟反编译器质量
+- 当前变量恢复已经与 Ghidra 完成运行时对拍验证
 
-Perform variable recovery on a P-code program
+---
 
-### `pub fn analyze_variable_lifetimes(`
+## 4. 变量恢复主题本身的重要性
 
-Analyze variable lifetimes (def-use chains)
+尽管本文档当前被标记为历史说明，但“variables” 这个主题本身依然是反编译链路中的关键组成部分。
 
+典型变量恢复通常会回答以下问题：
+
+### 4.1 哪些存储位置应被视为“同一个逻辑变量”
+也就是如何把底层：
+
+- 栈槽
+- 寄存器值
+- SSA 版本
+- 中间节点
+
+整理成更接近源码变量的逻辑实体。
+
+### 4.2 哪些值是栈变量
+例如：
+
+- 局部变量
+- 保存到栈上的临时值
+- 参数影子
+- 栈帧中的结构化槽位
+
+### 4.3 哪些值是寄存器变量
+也就是如何判断某些寄存器值：
+
+- 是否是函数参数
+- 是否是返回值传播
+- 是否只是短生命周期中间值
+- 是否适合合并成更高层变量
+
+### 4.4 如何命名变量
+变量恢复不仅是“找到变量”，还包括：
+
+- 命名策略
+- 临时名生成
+- 存储位置友好显示
+- 避免把底层位置直接暴露成不可读输出
+
+### 4.5 如何与类型和输出层联动
+变量恢复通常要和：
+
+- 类型传播
+- SSA
+- CFG
+- 打印层
+
+一起工作，才能生成更可读的伪 C 输出。
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“变量恢复”这个主题的历史入口
+- 它可能反映了项目早期对变量恢复的分层想法
+- 它可以帮助后续整理“变量恢复能力”应包含哪些部分
+
+### 不应这样理解
+- 它就是当前主干变量恢复实现
+- 只要有这份文档，当前变量恢复就已经成熟
+- 这份文档里的 API 现在一定还能直接对应到源码
+- 当前变量恢复已经完成与 Ghidra 的一致性验证
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的变量语义相关主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../varnode.md`
+- `../op.md`
+- `../heritage.md`
+- `../block.md`
+- `../printc.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `Varnode`
+- `PcodeOp`
+- `Heritage`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前变量恢复结果更可能以“分散在函数级主线对象和规则系统中”的方式存在，而不是继续严格停留在旧 `analysis/variables.rs` 那种目录分层里。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以考虑在后续统一引入这样的标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的变量恢复模块  
+2. 当前变量恢复是否围绕：
+   - `Funcdata`
+   - `Heritage`
+   - `Action`
+   - `Rule`
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 识别栈变量
+   - 恢复寄存器语义
+   - 组织逻辑变量
+   - 提供可读命名
+4. 当前这些能力是：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 一句话结论
+
+`docs/api/analysis/variables.md` 当前应被理解为：
+
+> **Rugra 旧版“变量恢复”分层思路的历史文档入口，可用于理解变量恢复主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

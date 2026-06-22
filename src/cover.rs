@@ -136,6 +136,57 @@ impl Cover {
             self.blocks.remove(&idx);
         }
     }
+
+    /// Non-mutating predicate: true iff this cover and `other` share at least
+    /// one live point. Used by cover-based merging to decide whether two
+    /// HighVariables are simultaneously live (and thus cannot share a name).
+    pub fn intersects(&self, other: &Cover) -> bool {
+        for (idx, cb) in &self.blocks {
+            if let Some(other_cb) = other.blocks.get(idx) {
+                let lo = std::cmp::max(cb.start, other_cb.start);
+                let hi = std::cmp::min(cb.end, other_cb.end);
+                if lo <= hi {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Like `intersects`, but ignores overlap at one specific point. Used by
+    /// copy-merge: the COPY op itself reads the input and writes the output,
+    /// so their covers always overlap at that single op — that overlap is the
+    /// merge point itself and must not block merging. Any OTHER overlap means
+    /// the two HighVariables are simultaneously live elsewhere and must not
+    /// merge.
+    pub fn intersects_except_at(
+        &self,
+        other: &Cover,
+        exclude_block: i32,
+        exclude_order: u32,
+    ) -> bool {
+        for (idx, cb) in &self.blocks {
+            let Some(other_cb) = other.blocks.get(idx) else {
+                continue;
+            };
+            let lo = std::cmp::max(cb.start, other_cb.start);
+            let hi = std::cmp::min(cb.end, other_cb.end);
+            if lo > hi {
+                continue;
+            }
+            if *idx == exclude_block && lo <= exclude_order && exclude_order <= hi {
+                // The overlap range includes the excluded point. If the range
+                // contains any OTHER point, that's a real overlap.
+                if hi > lo {
+                    return true;
+                }
+                // Range is exactly {exclude_order} — no real overlap, continue.
+            } else {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl fmt::Display for CoverBlock {
@@ -193,5 +244,105 @@ mod tests {
         assert_eq!(c1.blocks.get(&1).unwrap().end, 25);
         assert_eq!(c1.blocks.get(&2).unwrap().start, 5);
         assert_eq!(c1.blocks.get(&2).unwrap().end, 10);
+    }
+
+    /// Disjoint-block covers must not intersect: the canonical safe-merge case.
+    #[test]
+    fn test_intersect_disjoint_blocks() {
+        let mut c1 = Cover::new();
+        c1.add_def_point(1, 5);
+        c1.add_ref_point(1, 10);
+
+        let mut c2 = Cover::new();
+        c2.add_def_point(2, 5);
+        c2.add_ref_point(2, 10);
+
+        let mut tmp = c1.clone();
+        tmp.intersect(&c2);
+        assert!(tmp.blocks.is_empty(), "disjoint-block covers must not intersect");
+    }
+
+    /// Same-block non-overlapping ranges must yield empty intersection.
+    #[test]
+    fn test_intersect_disjoint_same_block() {
+        let mut c1 = Cover::new();
+        c1.add_def_point(1, 1);
+        c1.add_ref_point(1, 5);
+
+        let mut c2 = Cover::new();
+        c2.add_def_point(1, 10);
+        c2.add_ref_point(1, 20);
+
+        let mut tmp = c1.clone();
+        tmp.intersect(&c2);
+        match tmp.blocks.get(&1) {
+            None => {}
+            Some(cb) => {
+                assert!(cb.empty(), "disjoint same-block covers must yield empty CoverBlock, got {:?}", cb);
+            }
+        }
+    }
+
+    /// Overlapping same-block ranges must produce the tightened [max_start, min_end].
+    #[test]
+    fn test_intersect_overlapping_same_block() {
+        let mut c1 = Cover::new();
+        c1.add_def_point(1, 1);
+        c1.add_ref_point(1, 15);
+
+        let mut c2 = Cover::new();
+        c2.add_def_point(1, 10);
+        c2.add_ref_point(1, 20);
+
+        let mut tmp = c1.clone();
+        tmp.intersect(&c2);
+        let cb = tmp.blocks.get(&1).expect("overlapping same-block covers must keep the block");
+        assert!(!cb.empty(), "expected non-empty intersection, got {:?}", cb);
+        assert_eq!(cb.start, 10);
+        assert_eq!(cb.end, 15);
+    }
+
+    /// Multi-block intersect keeps overlapping blocks (narrowed) and drops disjoint ones.
+    #[test]
+    fn test_intersect_partial_multi_block() {
+        let mut c1 = Cover::new();
+        c1.add_def_point(1, 1);
+        c1.add_ref_point(1, 20);
+        c1.add_def_point(2, 1);
+        c1.add_ref_point(2, 20);
+
+        let mut c2 = Cover::new();
+        c2.add_def_point(1, 10);
+        c2.add_ref_point(1, 30);
+
+        let mut tmp = c1.clone();
+        tmp.intersect(&c2);
+        assert!(tmp.blocks.contains_key(&1), "overlapping block must survive intersect");
+        assert!(!tmp.blocks.contains_key(&2), "non-overlapping block must be dropped");
+        let cb = tmp.blocks.get(&1).unwrap();
+        assert_eq!(cb.start, 10);
+        assert_eq!(cb.end, 20);
+    }
+
+    /// `intersects` is a non-mutating predicate; it must not alter either cover.
+    #[test]
+    fn test_intersects_predicate() {
+        let mut c1 = Cover::new();
+        c1.add_def_point(1, 1);
+        c1.add_ref_point(1, 10);
+
+        let mut c2 = Cover::new();
+        c2.add_def_point(1, 20);
+        c2.add_ref_point(1, 30);
+
+        let mut c3 = Cover::new();
+        c3.add_def_point(1, 5);
+        c3.add_ref_point(1, 15);
+
+        assert!(!c1.intersects(&c2), "disjoint covers must not intersect");
+        assert!(c1.intersects(&c3), "overlapping covers must intersect");
+
+        assert_eq!(c1.blocks.get(&1).unwrap().start, 1);
+        assert_eq!(c1.blocks.get(&1).unwrap().end, 10);
     }
 }

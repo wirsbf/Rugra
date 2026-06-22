@@ -11,18 +11,19 @@
 //!
 //! Note: Runtime verification requires `once_cell` dependency in Cargo.toml
 
-pub mod varnode;
-pub mod pcodeop;
 pub mod address;
 pub mod datatype;
+pub mod function_snapshot;
+pub mod pcodeop;
 pub mod range;
 pub mod runtime_verify;
+pub mod varnode;
 
 /// Helper trait for objects that can be cross-verified with Ghidra
 pub trait AlignmentCheck {
     /// Verify that this object is aligned with its Ghidra counterpart
     fn check_alignment(&self) -> bool;
 }
-pub mod heritage;
-pub mod block;
 pub mod action;
+pub mod block;
+pub mod heritage;

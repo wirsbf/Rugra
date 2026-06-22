@@ -103,6 +103,10 @@ impl X86_64Disassembler {
                         size: inst.memory_size().size(),
                     })
                 }
+                OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
+                    let target = inst.near_branch64() as i64;
+                    Some(Operand::Immediate { value: target, size: 8 })
+                }
                 _ => None,
             };
 

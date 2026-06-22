@@ -4,22 +4,20 @@
 
 use crate::address::{Address, SeqNum};
 use crate::opcodes::OpCode;
-use crate::space::AddressSpace;
 use crate::varnode::Varnode;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock, Weak};
 
 use crate::block::FlowBlock;
 
 // Forward declarations/Stubs
 pub mod stubs {
-    use super::*;
+// use super::*;
     #[derive(Debug)]
     pub struct TypeOp;
 }
 
-use crate::type_system::Datatype;
-use stubs::*;
+
 
 /// Flags for PcodeOp properties (pcodeop_flags in Ghidra)
 pub mod pcodeop_flags {
@@ -57,6 +55,13 @@ pub mod pcodeop_flags {
     pub const INDIRECT_STORE: u32 = 1 << 31;
 }
 
+pub mod branch_type {
+    pub const NONE: u8 = 0;
+    pub const BREAK: u8 = 1;
+    pub const CONTINUE: u8 = 2;
+    pub const GOTO: u8 = 3;
+}
+
 /// Corresponds to Ghidra's `IopSpace` class in `op.hh`
 pub struct IopSpace;
 
@@ -69,18 +74,14 @@ impl IopSpace {
 /// Corresponds to Ghidra's `PcodeOp` class in `op.hh`
 #[derive(Debug)]
 pub struct PcodeOp {
-    /// Opcodes are handled via TypeOp pointers in Ghidra, we use enum + optional metadata
     pub opcode: OpCode,
     pub flags: u32,
     pub addlflags: u32,
-    /// Unique sequence number
     pub start: SeqNum,
-    /// Basic block containing this op
     pub parent: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
-    /// Output varnode (if any)
     pub output: Option<Arc<RwLock<Varnode>>>,
-    /// Input varnodes
     pub inrefs: Vec<Arc<RwLock<Varnode>>>,
+    pub branch_type: u8,
 }
 
 impl PcodeOp {
@@ -93,6 +94,7 @@ impl PcodeOp {
             parent: None,
             output: None,
             inrefs: Vec::new(),
+            branch_type: branch_type::NONE,
         }
     }
 
@@ -160,6 +162,7 @@ pub struct PcodeOpRef(pub Arc<RwLock<PcodeOp>>);
 
 impl PartialEq for PcodeOpRef {
     fn eq(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
     }
 }
@@ -174,6 +177,7 @@ impl PartialOrd for PcodeOpRef {
 
 impl Ord for PcodeOpRef {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         self.0.read().unwrap().cmp(&other.0.read().unwrap())
     }
 }
@@ -270,7 +274,6 @@ impl PcodeOpBank {
         }
     }
 
-    
     pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode) {
         let mut op_borrow = op.0.write().unwrap();
         op_borrow.opcode = new_opc;
@@ -317,5 +320,11 @@ impl PcodeOpBank {
 
     pub fn set_uniqid(&mut self, val: u32) {
         self.uniqid = val;
+    }
+}
+
+impl Default for PcodeOpBank {
+    fn default() -> Self {
+        Self::new()
     }
 }

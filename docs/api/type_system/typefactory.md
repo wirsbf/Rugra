@@ -1,4 +1,9 @@
-# `type_system/typefactory.rs` API Reference
+﻿# `type_system/typefactory.rs` API Reference
+
+## 文档状态
+
+- **状态**: 部分有效（需对照源码）
+
 
 **源代码路径**: `src/type_system/typefactory.rs`
 
@@ -50,4 +55,5 @@ Get the number of types currently managed
 ### `pub fn clear_non_core(&mut self)`
 
 Clear all non-core types
+
 

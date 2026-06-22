@@ -1,32 +1,87 @@
-# `ffi.rs` API Reference (C/FFI 外部对拍接口)
+# `ffi.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/ffi.rs`
 
 ## 模块说明 (Module Doc)
 
-本模块为 Rugra 提供 C-ABI 兼容的外部函数接口 (FFI)，**主要用途是嵌入到 Ghidra 的 C++ 反编译管线中进行实时对拍比较**，验证 Rust 端的常量折叠、P-code 生成等核心逻辑是否与 Ghidra 完全一致。
+FFI interface for Rugra
 
----
+This module provides C-compatible interfaces to Rugra's core logic,
+allowing it to be integrated into Ghidra's C++ decompiler or used for
+comparison testing ("对拍").
 
 ## 导出的公共 API (Public API)
 
-### C-ABI 导出函数 (`#[no_mangle] pub extern "C"`)
+### `pub struct VarnodeFFI`
 
-*   **`rugra_evaluate_constant(opcode, size_out, val1, size1, val2, size2, has_val2) -> u64`**  
-    **核心对拍函数**。接收一个 Ghidra 操作码整数和一对常量输入值，调用 Rugra 内部的 `evaluate_constant_op` 引擎进行常量折叠计算，返回结果值（已按输出大小进行掩码截断）。此函数被 Ghidra 插件在编译时链接并在每次常量折叠时同步调用以比较结果。
+C-compatible representation of a Varnode for FFI comparison
 
-*   **`rugra_version() -> *const c_char`**: 返回 Rugra 版本号的 C 字符串指针。
+### `pub extern "C" fn rugra_evaluate_constant(`
 
-*   **`rugra_init_test_program()`**: 初始化一个空白的内部测试 Program，供后续 FFI 测试调用。
+FFI interface for constant folding evaluation
 
-*   **`rugra_add_test_op(...)`**: 向当前测试 Program 中注入一条模拟的 P-code 操作（含操作码、输出 Varnode 等），用于从 Python/C++ 端构建 Rugra 分析状态以进行对拍。
+This matches Ghidra's OpBehavior::evaluateBinary/Unary logic.
 
-*   **`rugra_observe_jumptable(op_addr, table_addr, size)`**: 从 Ghidra 端接收跳转表恢复结果，执行基本验证（大小、对齐、空指针检查）并打印诊断日志。
+# Arguments
+* `opcode` - The Ghidra OpCode integer
+* `size_out` - Expected output size in bytes
+* `val1` - First input constant value
+* `size1` - First input size in bytes
+* `val2` - Second input constant value
+* `size2` - Second input size in bytes
+* `has_val2` - Boolean indicating if the second input is used (binary op)
 
-*   **`rugra_compare_pcode(op_addr, opcode, out_vn, inputs, input_count)`** (`unsafe`)  
-    **终极对拍函数**。将 Ghidra 传来的某个 P-code 操作与 Rugra 内部状态逐字段比较（操作码、输出 Varnode 偏移/大小、输入数量），打印所有不一致的 `[RUGRA DIFF]` 日志。
+# Returns
+The resulting constant value, or 0 if evaluation failed or opcode is unsupported.
 
-### 内部辅助
+### `pub extern "C" fn rugra_version() -> *const c_char`
 
-*   `fn map_ghidra_opcode(opcode: i32) -> Option<PcodeOp>`: Ghidra C++ 整型操作码到 Rust 枚举的映射表。
-*   `pub struct VarnodeFFI`: `#[repr(C)]` 的 Varnode 跨语言数据传输结构。
+Get the version of Rugra as a C string
+
+### `pub fn set_current_program(program: Funcdata)`
+
+Set the current program for comparison
+This is called by Rugra before starting the comparison with Ghidra
+
+### `pub extern "C" fn rugra_init_test_program()`
+
+Initialize a blank program for FFI testing
+
+### `pub extern "C" fn rugra_add_test_op(`
+
+Add an operation to the current test program
+This allows Python/C++ to simulate Rugra's analysis state for comparison tests
+
+### `pub extern "C" fn rugra_set_binary_data(_ptr: *const u8, len: usize)`
+
+Set the binary data context for FFI analysis
+Allows Rugra to perform memory-backed verification
+
+### `pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: usize)`
+
+Observe and validate a jumptable recovery in Ghidra
+
+This is used for comparison testing to ensure Rugra's jumptable
+recovery matches Ghidra's and is logically sound.
+
+### `pub unsafe extern "C" fn rugra_compare_pcode(`
+
+Compare a P-code operation from Ghidra with Rugra's internal state
+
+This is the "ultimate comparison" function that verifies if Rugra's
+entire analysis pipeline produces the same P-code structure as Ghidra.
+
+### `pub unsafe extern "C" fn rugra_check_varnode_version(`
+
+Intercept and compare SSA versioning (Heritage)
+
+### `pub unsafe extern "C" fn rugra_check_block_structure(`
+
+Intercept and compare Control Flow Graph structure
+
+### `pub unsafe extern "C" fn rugra_check_action_apply(`
+
+Intercept and compare Transformation Actions
+
+ 

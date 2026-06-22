@@ -6,8 +6,9 @@ use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::printlanguage::PrintLanguage;
 use crate::type_system::Datatype;
-use crate::varnode::Varnode;
-use std::sync::{Arc, RwLock};
+// use crate::varnode::Varnode;
+// use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 // Forward declarations/Stubs for related modules
 pub mod stubs {
@@ -17,7 +18,7 @@ pub mod stubs {
     pub struct Encoder;
 }
 
-use stubs::*;
+// use stubs::*;
 
 /// Flags for TypeOp properties (from Ghidra's TypeOp class)
 pub mod typeop_flags {
@@ -1285,17 +1286,27 @@ impl TypeOpManager {
 impl crate::op::PcodeOp {
     /// Push this operation to a language printer
     pub fn push(&self, lng: &mut dyn PrintLanguage) {
-        // In real Ghidra, this uses the TypeOpManager to find the TypeOp
-        // and then calls TypeOp::push. For now, we'll use a simplified dispatch.
         match self.opcode {
             OpCode::CPUI_COPY => lng.op_copy(self),
             OpCode::CPUI_LOAD => lng.op_load(self),
             OpCode::CPUI_STORE => lng.op_store(self),
             OpCode::CPUI_MULTIEQUAL => lng.op_multiequal(self),
             OpCode::CPUI_INDIRECT => lng.op_indirect(self),
-            OpCode::CPUI_CALL => lng.op_call(self),
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => lng.op_call(self),
             OpCode::CPUI_RETURN => lng.op_return(self),
-            _ => lng.op_binary(self), // Default to binary for most others for now
+            OpCode::CPUI_CBRANCH => lng.op_cbranch(self),
+            OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND => lng.op_branch(self),
+            // Unary ops
+            OpCode::CPUI_INT_NEG
+            | OpCode::CPUI_INT_NOT
+            | OpCode::CPUI_BOOL_NOT
+            | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_INT_ZEXT
+            | OpCode::CPUI_INT_SEXT => lng.op_unary(self),
+            // Default to binary for all other ops
+            _ => lng.op_binary(self),
         }
     }
 }

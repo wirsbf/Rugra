@@ -1,35 +1,238 @@
-# `analysis/high_variable.rs` API Reference
+# `analysis/high_variable.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/high_variable.rs`
+**文档路径**: `docs/api/analysis/high_variable.md`  
+**对应旧源码路径**: `src/analysis/high_variable.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-High-level variable analysis
+## 1. 文档定位
 
-This module implements the concept of "High Variables" (HighVariable),
-which groups multiple low-level SSA Varnodes into a single logical variable.
-This is crucial for producing readable C code, as it reverses the SSA splitting
-and register allocation artifacts.
+本文档用于说明旧版 `analysis/high_variable.rs` 这类“高级变量（High Variable）分析”文档在当前 Rugra 文档体系中的正确定位。
 
-## 导出的公共 API (Public API)
+它**不是**当前主干 `High Variable` 实现的权威说明，而更适合作为：
 
-### `pub struct HighVariable`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“SSA 变量合并为高层逻辑变量”的背景说明
+- 后续 API 文档复核时的待核对入口
+- 理解“为什么输出层会追求把多个低层节点合成单个逻辑变量”的概念参考
 
-A high-level variable representing a single logical entity in the decompiled code.
+在当前阶段，这份文档的正确标签应当是：
 
-### `pub struct HighVariableMap`
+> **历史遗留 / 待重新验证**
 
-Manages the mapping between Varnodes and HighVariables
+---
 
-### `pub fn new() -> Self`
+## 2. 为什么需要标记为历史文档
 
-*暂无代码注释*
+Rugra 当前文档基线已经明确区分：
 
-### `pub fn get_high_variable(&self, ssa_name: &str) -> Option<&HighVariable>`
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 尚未完成验证的能力
 
-Find the HighVariable for a given SSA variable name
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+对于 `high_variable.md` 来说，问题尤其明显，因为“高变量”这个主题很容易让人误以为：
 
-### `pub fn construct_high_variables(`
+- 当前已经完整实现了高级变量合并
+- 当前已经消除了 SSA 碎片化
+- 当前输出中的逻辑变量已经稳定恢复
+- 当前与 Ghidra 的 High Variable 行为已经一致
 
-Construct High Variables from SSA form and Variable Analysis results
+这些结论目前都**不能**仅凭旧文档直接成立。
 
+---
+
+## 3. `High Variable` 主题本身是什么
+
+尽管本文档当前应被标记为历史说明，但“High Variable”这个主题本身在反编译器里仍然非常重要。
+
+它通常解决的问题是：
+
+### 3.1 从低层 SSA 变量回到逻辑变量
+在 SSA 中，同一个源码变量可能被拆成多个版本：
+
+- `x_1`
+- `x_2`
+- `x_3`
+
+而高层输出更希望表达为一个逻辑变量：
+
+- `x`
+
+### 3.2 合并寄存器复用造成的碎片
+编译后的二进制里，寄存器可能被多次复用。  
+如果没有更高层的变量建模，输出会出现大量：
+
+- `uVar1`
+- `uVar2`
+- `tmp_3`
+- `reg_rax_7`
+
+这会严重降低可读性。
+
+### 3.3 为最终打印提供更接近源码的变量视角
+高变量分析的最终目标之一通常是：
+
+- 把多个低层 `Varnode`
+- 按数据流、生命周期、冲突关系、类型线索
+- 合并成更稳定的逻辑变量实体
+
+这对 `PrintC` 一类输出层非常关键。
+
+---
+
+## 4. 这份文档现在可以表达什么
+
+在当前阶段，`high_variable.md` 最稳妥的职责是说明：
+
+- Rugra 曾经或计划将“高级变量分析”作为独立主题处理
+- 这个主题通常涉及：
+  - SSA 变量聚合
+  - 逻辑变量恢复
+  - 生命周期与冲突分析
+  - 改善最终 C-like 输出可读性
+- 这些目标今天依然属于项目的重要方向
+
+但它**不能直接证明**：
+
+- 当前 `src/analysis/high_variable.rs` 仍然是主线实现
+- 当前 high variable 分析已经稳定接入主流程
+- 当前输出层已经真正依赖这套逻辑变量映射
+- 当前 High Variable 结果已经与 Ghidra 完成行为级对拍
+- 当前多版本 SSA 节点已经被可靠合并成用户可读变量
+
+---
+
+## 5. 旧文档中典型会描述什么
+
+旧版 `high_variable` 文档通常会描述以下概念：
+
+### `HighVariable`
+表示一个更高层的逻辑变量实体。
+
+它通常试图把多个低层 SSA 节点合并成一个语义上统一的变量。
+
+### `HighVariableMap`
+表示从低层节点到高层逻辑变量的映射管理结构。
+
+它通常承担：
+
+- 查询某个 SSA 名称属于哪个高变量
+- 维护高变量集合
+- 为打印和变量恢复提供桥接数据
+
+### 构造过程
+旧文档常常会提到类似：
+
+- 从 SSA 结果出发
+- 结合变量分析结果
+- 构造逻辑变量映射
+
+这些思路在概念上仍然成立，但**不能被直接当成当前主线事实**。
+
+---
+
+## 6. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“高变量恢复”主题的历史入口
+- 它可能反映了项目早期对输出层变量聚合的分层想法
+- 它可以帮助后续整理“如何从 SSA 回到逻辑变量”这一主题应包含哪些能力
+
+### 不应这样理解
+- 它就是当前主干高变量实现
+- 只要有这份文档，当前高变量恢复就已经成熟
+- 文档里的 API 现在一定还能直接对应到源码
+- 当前输出中的变量名已经稳定依赖 High Variable 合并得到
+- 当前 high variable 行为已经完成与 Ghidra 的一致性验证
+
+---
+
+## 7. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的变量恢复与输出主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../varnode.md`
+- `../op.md`
+- `../heritage.md`
+- `../action.md`
+- `../printc.md`
+- `../../data_contract.md`
+- `../../../CURRENT_STATUS.md`
+- `../../../ALIGNMENT_PROGRESS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `Varnode`
+- `PcodeOp`
+- `Heritage`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前高变量相关能力更可能以“分散在主线对象和输出逻辑中的恢复能力”方式存在，而不是继续严格停留在旧 `analysis/high_variable.rs` 分层里。
+
+---
+
+## 8. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以在后续统一采用以下标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 9. 如果未来要把它升级回“当前有效文档”，应核对什么
+
+后续若要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的高变量分析模块  
+2. 当前 high variable 逻辑是否仍围绕：
+   - `Funcdata`
+   - SSA 结果
+   - `Varnode`
+   - 变量恢复
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 合并 SSA 变量版本
+   - 组织逻辑变量实体
+   - 将结果接入输出层
+   - 对变量合并策略做测试或实验验证  
+4. 当前这些能力是：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档都不应恢复为“当前主干说明”。
+
+---
+
+## 10. 一句话结论
+
+`docs/api/analysis/high_variable.md` 当前应被理解为：
+
+> **Rugra 旧版“高级变量分析 / 逻辑变量聚合”分层思路的历史文档入口，可用于理解 high variable 主题在反编译输出中的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

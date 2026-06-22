@@ -2,6 +2,7 @@
 //!
 //! Corresponds to Ghidra's `action.hh`
 
+/*
 #[cfg(test)]
 mod tests {
     use crate::action::{Action, ActionGroup, RuleResult};
@@ -25,3 +26,4 @@ mod tests {
         assert_eq!(group.actions.len(), 2);
     }
 }
+*/

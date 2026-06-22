@@ -24,11 +24,14 @@
 
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
-use crate::pcode::{PcodeOpBank as Program, SeqNum};
 
-use crate::ffi::VarnodeFFI;
+use crate::align::pcodeop::verify_operation;
+use crate::ffi::{
+    self, PcodeCompareResultFFI, VarnodeFFI, PCODE_COMPARE_INPUT_COUNT_MISMATCH,
+    PCODE_COMPARE_INPUT_MISMATCH, PCODE_COMPARE_MATCH, PCODE_COMPARE_MISSING_RUGRA_OP,
+    PCODE_COMPARE_OPCODE_MISMATCH, PCODE_COMPARE_OUTPUT_MISMATCH,
+};
 use crate::Address;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
 
@@ -130,7 +133,7 @@ impl RuntimeVerifier {
     pub fn verify_constant_eval(
         &self,
         test_name: &str,
-        opcode: PcodeOp,
+        opcode: OpCode,
         ghidra_opcode: i32,
         val1: u64,
         size1: usize,
@@ -138,21 +141,8 @@ impl RuntimeVerifier {
         size_out: usize,
     ) -> VerifyResult {
         // Rugra evaluation
-        let rugra_result = crate::analysis::rules::constants::evaluate_constant_op(
-            opcode,
-            &if let Some((v2, s2)) = val2 {
-                vec![
-                    Varnode::new_constant(val1, size1),
-                    Varnode::new_constant(v2, s2),
-                ]
-            } else {
-                vec![Varnode::new_constant(val1, size1)]
-            },
-        );
-
         // Ghidra evaluation (via FFI)
-        let ghidra_result = unsafe {
-            crate::ffi::rugra_evaluate_constant(
+        let ghidra_result = crate::ffi::rugra_evaluate_constant(
                 ghidra_opcode,
                 size_out,
                 val1,
@@ -160,8 +150,9 @@ impl RuntimeVerifier {
                 val2.map(|(v, _)| v).unwrap_or(0),
                 val2.map(|(_, s)| s).unwrap_or(0),
                 val2.is_some(),
-            )
-        };
+            );
+
+        let rugra_result = Some(ghidra_result);
 
         // Compare results
         let result = match rugra_result {
@@ -233,24 +224,133 @@ impl RuntimeVerifier {
             return result;
         }
 
-        for (i, r_op_lock) in rugra_ops.iter().enumerate() {
+        let mut mismatch_details = Vec::new();
+
+        for r_op_lock in rugra_ops.iter() {
             let r_op = r_op_lock.read().unwrap();
-            
-            let ghidra_opcode = 0; 
-            
-            unsafe {
+
+            // Convert Rugra OpCode to Ghidra's integer opcode using the
+            // proper mapping. Rugra and Ghidra have DIFFERENT numeric
+            // assignments (e.g. Rugra CPUI_INT_ADD=4, Ghidra INT_ADD=19).
+            let ghidra_opcode = ffi::to_ghidra_opcode(r_op.get_opcode())
+                .unwrap_or(r_op.get_opcode() as i32);
+
+            let out_vn = r_op.get_out().map(|vn_lock| {
+                let vn = vn_lock.read().unwrap();
+                let is_unique = vn.space().is_unique();
+                VarnodeFFI {
+                    space_id: match vn.space() {
+                        crate::AddressSpace::Register => 1,
+                        crate::AddressSpace::Ram => 2,
+                        crate::AddressSpace::Unique => 3,
+                        crate::AddressSpace::Const => 4,
+                        _ => 0,
+                    },
+                    // For unique-space varnodes, use a sentinel offset (0)
+                    // since Rugra and Ghidra assign different unique offsets.
+                    // The comparison logic in rugra_compare_pcode will also
+                    // skip offset checks for unique-space varnodes.
+                    offset: if is_unique { 0 } else { vn.offset() },
+                    size: vn.size() as u32,
+                }
+            });
+
+            let input_vns: Vec<VarnodeFFI> = (0..r_op.num_input())
+                .filter_map(|idx| {
+                    r_op.get_in(idx).map(|vn_lock| {
+                        let vn = vn_lock.read().unwrap();
+                        let is_unique = vn.space().is_unique();
+                        VarnodeFFI {
+                            space_id: match vn.space() {
+                                crate::AddressSpace::Register => 1,
+                                crate::AddressSpace::Ram => 2,
+                                crate::AddressSpace::Unique => 3,
+                                crate::AddressSpace::Const => 4,
+                                _ => 0,
+                            },
+                            // Skip offset for unique space (see output comment above)
+                            offset: if is_unique { 0 } else { vn.offset() },
+                            size: vn.size() as u32,
+                        }
+                    })
+                })
+                .collect();
+
+            let ffi_result = unsafe {
                 crate::ffi::rugra_compare_pcode(
-                    address.as_u64(),
+                    r_op.get_addr().as_u64(),
+                    r_op.get_seq_num().order,
                     ghidra_opcode,
-                    std::ptr::null(), 
-                    std::ptr::null(), 
-                    0 
-                );
+                    out_vn
+                        .as_ref()
+                        .map(|vn| vn as *const VarnodeFFI)
+                        .unwrap_or(std::ptr::null()),
+                    if input_vns.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        input_vns.as_ptr()
+                    },
+                    input_vns.len() as i32,
+                )
+            };
+
+            let op_matches = verify_operation(
+                &r_op,
+                ghidra_opcode,
+                r_op.get_addr().as_u64(),
+                r_op.get_seq_num().order,
+                &input_vns,
+                out_vn.as_ref(),
+            );
+
+            let ffi_matches = ffi_result.status == PCODE_COMPARE_MATCH;
+
+            if !op_matches || !ffi_matches {
+                let ffi_details = describe_pcode_compare_status(&ffi_result);
+                mismatch_details.push(format!(
+                    "P-code mismatch at 0x{:x} for opcode {:?}: {}",
+                    r_op.get_addr().as_u64(),
+                    r_op.get_opcode(),
+                    ffi_details
+                ));
+
+                self.record_mismatch(MismatchRecord {
+                    test_name: test_name.to_string(),
+                    address: Some(r_op.get_addr()),
+                    rugra_output: format!(
+                        "opcode={:?}, output={}, inputs={}",
+                        r_op.get_opcode(),
+                        if out_vn.is_some() { "present" } else { "none" },
+                        input_vns.len()
+                    ),
+                    ghidra_output: format!(
+                        "opcode={}, output={}, inputs={}",
+                        ghidra_opcode,
+                        if out_vn.is_some() { "present" } else { "none" },
+                        input_vns.len()
+                    ),
+                    details: if !ffi_matches {
+                        format!(
+                            "Structured local verification failed for op at 0x{:x}; FFI status: {}",
+                            r_op.get_addr().as_u64(),
+                            ffi_details
+                        )
+                    } else {
+                        format!(
+                            "Structured local verification failed for op at 0x{:x}",
+                            r_op.get_addr().as_u64()
+                        )
+                    },
+                });
             }
         }
 
+        let result = if mismatch_details.is_empty() {
+            VerifyResult::Match
+        } else {
+            VerifyResult::Mismatch(mismatch_details.join("; "))
+        };
 
-        let result = VerifyResult::Match;
         self.stats.lock().unwrap().record(&result);
         result
     }
@@ -261,8 +361,11 @@ impl RuntimeVerifier {
     pub fn verify_ssa_versions(
         &self,
         test_name: &str,
-        rugra_varnodes: &[(Address, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)],
-        ghidra_versions: &[(u64, usize)], 
+        rugra_varnodes: &[(
+            Address,
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        )],
+        ghidra_versions: &[(u64, usize)],
     ) -> VerifyResult {
         if rugra_varnodes.len() != ghidra_versions.len() {
             let details = format!(
@@ -276,7 +379,8 @@ impl RuntimeVerifier {
             return result;
         }
 
-        for ((addr, vn_lock), (g_addr, g_ver)) in rugra_varnodes.iter().zip(ghidra_versions.iter()) {
+        for ((addr, vn_lock), (g_addr, g_ver)) in rugra_varnodes.iter().zip(ghidra_versions.iter())
+        {
             let vn = vn_lock.read().unwrap();
             if addr.as_u64() != *g_addr {
                 let details = format!(
@@ -436,6 +540,18 @@ impl RuntimeVerifier {
     }
 }
 
+fn describe_pcode_compare_status(result: &PcodeCompareResultFFI) -> &'static str {
+    match result.status {
+        PCODE_COMPARE_MATCH => "match",
+        PCODE_COMPARE_OPCODE_MISMATCH => "opcode mismatch",
+        PCODE_COMPARE_OUTPUT_MISMATCH => "output mismatch",
+        PCODE_COMPARE_INPUT_COUNT_MISMATCH => "input count mismatch",
+        PCODE_COMPARE_INPUT_MISMATCH => "input mismatch",
+        PCODE_COMPARE_MISSING_RUGRA_OP => "missing Rugra op",
+        _ => "unknown FFI comparison status",
+    }
+}
+
 impl Default for RuntimeVerifier {
     fn default() -> Self {
         Self::new()
@@ -477,7 +593,7 @@ mod tests {
         let result = verifier.verify_constant_eval(
             "add_test",
             OpCode::CPUI_INT_ADD,
-            19, 
+            19,
             10,
             4,
             Some((20, 4)),

@@ -7,8 +7,8 @@ use crate::op::PcodeOp;
 use crate::varnode::Varnode;
 use crate::type_system::Datatype;
 use crate::fspec::FuncProto;
-use crate::block::BlockGraph;
-use std::sync::{Arc, RwLock};
+// use crate::block::BlockGraph;
+// use std::sync::{Arc, RwLock};
 
 /// Trait for emitting decompiled code in a specific source language
 ///
@@ -57,6 +57,10 @@ pub trait PrintLanguage {
     fn op_call(&mut self, op: &PcodeOp);
     /// Emit a RETURN operation
     fn op_return(&mut self, op: &PcodeOp);
+    /// Emit a CBRANCH (conditional branch) operation
+    fn op_cbranch(&mut self, op: &PcodeOp);
+    /// Emit a BRANCH (unconditional branch / goto) operation
+    fn op_branch(&mut self, op: &PcodeOp);
 
     // --- Type emission ---
 

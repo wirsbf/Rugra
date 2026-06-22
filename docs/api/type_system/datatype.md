@@ -1,4 +1,9 @@
-# `type_system/datatype.rs` API Reference
+﻿# `type_system/datatype.rs` API Reference
+
+## 文档状态
+
+- **状态**: 部分有效（需对照源码）
+
 
 **源代码路径**: `src/type_system/datatype.rs`
 
@@ -135,4 +140,5 @@ Corresponds to Ghidra's `TypeCode` class in `type.hh`
 Type representing a spacebase (e.g. stack frame, register bank)
 
 Corresponds to Ghidra's `TypeSpacebase` class in `type.hh`
+
 

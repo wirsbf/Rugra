@@ -3,19 +3,21 @@
 //! This module ensures that Rugra's Varnode representation matches Ghidra's
 //! internal Varnode class as defined in `varnode.hh`.
 
-use crate::pcode::{Varnode, AddressSpace};
+use crate::varnode::Varnode;
+use crate::AddressSpace;
 use crate::ffi::VarnodeFFI;
 
 /// Verify that a Rugra Varnode aligns with Ghidra's FFI representation.
 ///
 /// This checks space, offset, and size parity.
 pub fn verify_varnode(rugra_vn: &Varnode, ghidra_vn: &VarnodeFFI) -> bool {
-    // Map Rugra AddressSpace to Ghidra Space ID for comparison
+    // Map Rugra AddressSpace to FFI convention space_id for comparison
+    // FFI convention: Register=1, Ram=2, Unique=3, Const=4
     let rugra_space_id = match rugra_vn.space() {
         AddressSpace::Register => 1,
         AddressSpace::Ram => 2,
-        AddressSpace::Unique => 3, // Common ID for unique space, though not universal
-        AddressSpace::Const => 4,  // Common ID for constant space
+        AddressSpace::Unique => 3,
+        AddressSpace::Const => 4,
         _ => 0,
     };
 
@@ -25,7 +27,13 @@ pub fn verify_varnode(rugra_vn: &Varnode, ghidra_vn: &VarnodeFFI) -> bool {
         rugra_space_id == ghidra_vn.space_id
     };
 
-    let offset_match = rugra_vn.offset() == ghidra_vn.offset;
+    // Skip offset comparison for unique-space varnodes since Rugra and Ghidra
+    // use different unique allocation strategies. Only compare space + size.
+    let offset_match = if rugra_vn.is_unique() || ghidra_vn.space_id == 3 {
+        true // Unique offsets are implementation-specific, not comparable
+    } else {
+        rugra_vn.offset() == ghidra_vn.offset
+    };
     let size_match = rugra_vn.size() == ghidra_vn.size as usize;
 
     if !space_match || !offset_match || !size_match {

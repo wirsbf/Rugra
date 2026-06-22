@@ -1,26 +1,258 @@
-# `analysis/optimization.rs` API Reference
+# `analysis/optimization.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/optimization.rs`
+**文档路径**: `docs/api/analysis/optimization.md`  
+**对应旧源码路径**: `src/analysis/optimization.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Optimization module for Rugra Decompiler (Phase 8)
+## 1. 文档定位
 
-This module implements various optimization passes to simplify the P-code IR:
-- Constant Folding: Evaluates expressions with constant operands at compile time.
-- Algebraic Simplification: Simplifies expressions using algebraic identities.
-- Dead Code Elimination: Removes operations whose results are not used (replaces with NOP).
+本文档用于说明旧版 `analysis/optimization.rs` 这类“优化阶段”文档在当前 Rugra 文档体系中的正确定位。
 
-## 导出的公共 API (Public API)
+它当前**不应**被理解为：
 
-### `pub fn optimize_function(program: &mut Program, analysis: &FunctionAnalysis)`
+- 当前主干优化流水线的权威说明
+- 当前默认优化阶段已经完整可用的证明
+- 当前优化行为已经与 Ghidra 完成对拍验证的证据
 
-Optimize the function by applying various simplification passes iteratively.
+它更适合作为：
 
-### `pub struct ActionDeadCodeElimination`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“优化阶段”的背景说明
+- 后续 API 文档复核时的待核对入口
 
-Action: Global Dead Code Elimination
+在当前阶段，这份文档的正确标签应当是：
 
-Removes operations whose results are not used anywhere in the function.
-Leverages global SSA information if available for precision.
+> **历史遗留 / 待重新验证**
 
+---
+
+## 2. 为什么需要标记为历史文档
+
+Rugra 当前已经明确区分：
+
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证框架
+- 尚未完成验证的能力
+
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+原因包括：
+
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `BlockBasic`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
+
+2. 旧版 `analysis/optimization.rs` 往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的“analysis -> optimization -> codegen”流水线组织方式
+
+3. 即使“优化”这个主题今天仍然重要，也**不能**因为主题仍然重要，就把旧文档直接当作当前代码事实。
+
+---
+
+## 3. 这份文档现在可以表达什么
+
+在当前阶段，`optimization.md` 最稳妥的职责是说明：
+
+- Rugra 曾经或计划将“优化”作为独立主题处理
+- 优化阶段通常会涉及：
+  - 常量折叠
+  - 代数化简
+  - 死代码消除
+  - 复制传播
+  - 规范化重写
+  - 为打印层准备更稳定 IR
+- 这些能力今天依然属于项目的重要目标方向
+
+但它**不能直接证明**：
+
+- 当前 `src/analysis/optimization.rs` 仍然是主线实现
+- 当前优化管线已经稳定存在并可直接使用
+- 当前优化结果已经与 Ghidra 完全一致
+- 当前优化行为已经完成运行时对拍验证
+- 当前“Phase 8/优化阶段”旧式表述仍然准确代表现状
+
+---
+
+## 4. “优化”主题本身的重要性
+
+尽管本文档当前被标记为历史说明，但“optimization” 这个主题本身依然是反编译链路中的关键组成部分。
+
+典型优化阶段通常会回答以下问题：
+
+### 4.1 哪些表达式可以在中间表示层提前化简
+例如：
+
+- 常量运算结果是否可提前求值
+- 明显等价恒等式是否可直接规约
+- 某些无意义操作是否可消除
+
+### 4.2 哪些中间节点其实已经没有存在必要
+例如：
+
+- 定义结果从未被使用
+- 某些 copy / 临时值只是噪音
+- 某些标记或辅助操作不应继续保留到后续阶段
+
+### 4.3 哪些局部结构可以被规范化
+例如：
+
+- 把多种等价低层形态规整成更统一的 IR
+- 为后续规则系统或打印层降低分支复杂度
+- 让变量恢复、类型传播或控制流整理更容易进行
+
+### 4.4 优化是否会影响后续输出质量
+优化并不只是“让 IR 更短”，它还会直接影响：
+
+- 数据流可读性
+- SSA 后续利用效果
+- 变量恢复质量
+- 最终 `PrintC` 输出的可读性
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“优化阶段”这个主题的历史入口
+- 它可能反映了项目早期对优化流程的分层想法
+- 它可以帮助后续整理“优化阶段应包含哪些能力”
+- 它对理解旧版流水线为什么会提到 `optimize_function(...)` 或 `ActionDeadCodeElimination` 有背景价值
+
+### 不应这样理解
+- 它就是当前主干优化实现
+- 只要有这份文档，当前优化体系就已经成熟
+- 文档里的 API 现在一定还能直接对应到当前源码主线
+- 当前常量折叠、DCE、代数化简已经完成系统级验证
+- 当前默认动作链里的优化行为就等于旧 `analysis/optimization.rs` 所描述的那套实现
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的优化和规范化主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../op.md`
+- `../varnode.md`
+- `../action.md`
+- `../coreaction.md`
+- `../ruleaction.md`
+- `../printc.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `PcodeOp`
+- `Varnode`
+- `Action`
+- `Rule`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前“优化”更可能以：
+
+- 分散在 Action / Rule 系统中
+- 依附于 `Funcdata` 主线
+- 与 `Heritage` / CFG / 输出层联动
+
+的方式存在，而不再严格等同于旧 `analysis/optimization.rs` 目录分层。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以考虑在后续统一引入这样的标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的优化模块  
+2. 当前优化能力是否围绕：
+   - `Funcdata`
+   - `Action`
+   - `Rule`
+   - `ActionDatabase`
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 完成常量折叠
+   - 完成局部代数化简
+   - 完成死代码消除
+   - 完成 copy / 噪音节点抑制
+   - 对这些行为建立验证证据
+4. 当前这些能力是：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 与旧文档术语的关系
+
+历史文档中如果出现以下词汇，应优先按“旧分析分层术语”理解：
+
+- `optimize_function(...)`
+- `FunctionAnalysis`
+- `Program`
+- `ActionDeadCodeElimination`
+- `Phase 8`
+- `analysis::optimization`
+
+这些表述不能自动代表当前主线仍然按相同方式组织。  
+当前更应优先回到：
+
+- `Funcdata`
+- `ActionDatabase`
+- `Rule`
+- `PrintC`
+- `CURRENT_STATUS.md`
+- `PROJECT_STRUCTURE.md`
+
+来判断现状。
+
+---
+
+## 10. 一句话结论
+
+`docs/api/analysis/optimization.md` 当前应被理解为：
+
+> **Rugra 旧版“优化阶段”分层思路的历史文档入口，可用于理解优化主题本身的重要性，但不能继续被当作当前主线实现、当前默认优化流水线或当前已验证能力的权威说明。**
+
+---

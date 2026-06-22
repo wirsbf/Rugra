@@ -1,5 +1,6 @@
 # `align/block.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/align/block.rs`
 
 ## 模块说明 (Module Doc)

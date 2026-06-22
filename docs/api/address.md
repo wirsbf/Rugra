@@ -1,49 +1,239 @@
-# `address.rs` API Reference (系统寻址元基元)
+# `address.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/address.rs`
 
 ## 模块说明 (Module Doc)
 
-这是所有内存、寄存器及操作指令定位定位的核心底层表示。它提供了在任何（甚至是完全虚拟或基于寄存器窗口偏移的）`AddressSpace` 中精确定位到一个字节序列的基础设施。
-这里完全照搬对齐了 Ghidra 的 `address.hh`，提供了 `Address`, `SeqNum` 以及 `Range` 这三个逆向工程中的基石型时空位控组件。
+Address representation and manipulation
 
----
+This module corresponds to Ghidra's `address.hh` and provides core address
+types used throughout the decompiler.
+
+# Core Types
+
+- [`Address`] - A memory address in a specific address space
+- [`SeqNum`] - Sequence number (address + order for P-code ops)
+- [`Range`] - An address range (first, last)
+- [`RangeList`] - A collection of non-overlapping address ranges
 
 ## 导出的公共 API (Public API)
 
-### `pub struct Address(u64)` (内存地址类型)
+### `pub struct Address(u64)`
 
-表示目标二进制切片内的一个虚拟内存地址（在内部被抹平升格为安全的、可包裹绝大部分寻址空间的 64 位无符号长整型）。
+Memory address type
 
-*   `pub const fn new(addr: u64) -> Self` / `pub const fn as_u64(&self) -> u64`: 原生类型的双向包装。
-*   `pub fn offset(&self, offset: i64) -> Self`: 核心的内存滑动计算函数，提供带符号步进能力的地址偏移叠加。
-*   `pub fn is_null(&self) -> bool` / `pub fn is_aligned(&self, alignment: u64) -> bool`: 给调度和分析阶段提供指针检验和按页对齐检验的支持。
-*   `pub fn next(&self) -> Self` / `pub fn prev(&self) -> Self`: 前进/后退一字节。
+Represents a virtual memory address in the target binary.
+Internally stored as u64 to support 64-bit architectures.
 
-*(注：系统中的 `Address` 大多数场景下并不特指“真·物理内存”。比如当位于 `Register` 空间时，一个 `Address(8)` 可能仅代表了相对于整个寄存器栈组基址向前便宜 8 字节处的某个 CPU 控制单元！)*
+Corresponds to Ghidra's `Address` class in `address.hh`
 
----
+### `pub const fn new(addr: u64) -> Self`
 
-### `pub struct SeqNum` (时空执行标记码)
+Create a new address
 
-由于把一句粗大的机器码汇编指令翻译推展到 P-code 时，会爆炸产生一连串的 SSA 微操作指令序列。此结构唯一地标定了这些同一次呼吸下的微指令的逻辑发生时序。这就是 **Seq**uence **Num**ber。
+### `pub const fn as_u64(&self) -> u64`
 
-*   **`pub addr: Address`**: 标示产生此序列的宏观母汇编指令原始内存坐落点。
-*   **`pub order: u32`**: （微指令发射序）在这个原始机码内部，它是第几个被发配执行的。
+Get the raw address value
 
-这不仅是溯源报错追踪用的“黑匣子记录仪”，更是 `PcodeOpBank` 里全局按执行流流淌排序、判断先后覆盖关系的主键！
+### `pub fn offset(&self, offset: i64) -> Self`
 
----
+Add an offset to the address
 
-### 区间与大范围封控管辖组 (Range System)
+### `pub fn is_null(&self) -> bool`
 
-处理变量作用域生命跨段查询与重影区覆盖检验。
+Check if address is null (0x0)
 
-*   **`pub struct Range`**: 一个拥有闭合边界区间（`first` 与 `last` 均为 `Address`）的微小跨度区段。
-    *   `pub fn overlaps(&self, other: &Range) -> bool` / `pub fn is_adjacent(&self, other: &Range) -> bool`: 在判断控制块是否被撕裂/接续重组时提供重并判定。
-*   **`pub struct RangeProperties`**: 提供附加在这个管控地域上的特殊功能魔数（如该区间属于特定的 ELF Section 或具备安全控制块等）。
+### `pub fn is_aligned(&self, alignment: u64) -> bool`
 
-#### `pub struct RangeList`
+Check if address is aligned to the given boundary
 
-一段巨大的非连接跨度集合记录册（内部是由 `Vec<Range>` 组合）。Ghidra 极重度依赖该类通过合并 (Merge/Insert) 来追踪某变量的覆盖作用范围 (Liveness Scope)。
-*   `pub fn insert_range(&mut self, new_range: Range)`: （**核心方法**）在推入跨度时内部引擎会**自动融合平滑掉所有发生交叠、首尾串联相邻的小范围**，确保记录册内始终维系最少数量的高效离散跨越图景。
+### `pub fn next(&self) -> Self`
+
+Get the next address
+
+### `pub fn prev(&self) -> Self`
+
+Get the previous address
+
+### `pub struct SeqNum`
+
+Sequence number for P-code operations within a single instruction
+
+When a machine instruction translates to multiple P-code ops,
+they are numbered sequentially using SeqNum.
+
+Corresponds to Ghidra's `SeqNum` class in `address.hh`
+
+### `pub fn new(addr: Address, order: u32) -> Self`
+
+Create a new sequence number
+
+### `pub fn next(&self) -> Self`
+
+Get the next sequence number at the same address
+
+### `pub fn get_addr(&self) -> Address`
+
+Get the address
+
+### `pub fn get_order(&self) -> u32`
+
+Get the order/time
+
+### `pub fn set_order(&mut self, order: u32)`
+
+Set the order/time
+
+### `pub fn decode(s: &str) -> Option<Self>`
+
+Decode from string format "addr:order"
+
+### `pub fn encode(&self) -> String`
+
+Encode to string format "addr:order"
+
+### `pub struct Range`
+
+Address range (inclusive first and last addresses)
+
+Corresponds to Ghidra's `Range` class in `address.hh`
+
+### `pub fn new(first: Address, last: Address) -> Option<Self>`
+
+Create a new range
+
+Returns `None` if first > last
+
+### `pub fn get_first(&self) -> Address`
+
+Get the first address
+
+### `pub fn get_last(&self) -> Address`
+
+Get the last address
+
+### `pub fn get_first_addr(&self) -> Address`
+
+Get the first address (Ghidra naming)
+
+### `pub fn get_last_addr(&self) -> Address`
+
+Get the last address (Ghidra naming)
+
+### `pub fn get_last_addr_open(&self) -> Address`
+
+Get the last address + 1 (open end)
+
+### `pub fn contains(&self, addr: Address) -> bool`
+
+Check if an address is contained in this range
+
+### `pub fn size(&self) -> u64`
+
+Get the size of the range in bytes
+
+### `pub fn overlaps(&self, other: &Range) -> bool`
+
+Check if this range overlaps with another
+
+### `pub fn is_adjacent(&self, other: &Range) -> bool`
+
+Check if this range is adjacent to another
+
+### `pub fn print_bounds(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+Print bounds (for debugging)
+
+### `pub fn decode(s: &str) -> Option<Self>`
+
+Decode from string format "first-last"
+
+### `pub fn decode_from_attributes(first: &str, last: &str) -> Option<Self>`
+
+Decode from attributes (XML-style)
+
+### `pub fn encode(&self) -> String`
+
+Encode to string format "first-last"
+
+### `pub struct RangeProperties`
+
+Properties associated with a range
+
+Corresponds to Ghidra's `RangeProperties` in address.hh
+
+### `pub fn new(flags: u32) -> Self`
+
+Create new range properties
+
+### `pub fn decode(s: &str) -> Option<Self>`
+
+Decode from string
+
+### `pub struct RangeList`
+
+List of non-overlapping address ranges
+
+Corresponds to Ghidra's `RangeList` class in `address.hh`
+
+### `pub fn new() -> Self`
+
+Create a new empty range list
+
+### `pub fn insert_range(&mut self, new_range: Range)`
+
+Insert a range into the list, merging overlapping ranges
+
+### `pub fn remove_range(&mut self, to_remove: Range)`
+
+Remove a range from the list
+
+### `pub fn in_range(&self, addr: Address) -> bool`
+
+Check if an address is in any range in the list
+
+### `pub fn num_ranges(&self) -> usize`
+
+Get the number of ranges in the list
+
+### `pub fn empty(&self) -> bool`
+
+Check if the list is empty
+
+### `pub fn ranges(&self) -> &[Range]`
+
+Get all ranges
+
+### `pub fn begin(&self) -> std::slice::Iter<'_, Range>`
+
+Get iterator to beginning
+
+### `pub fn end(&self) -> std::slice::Iter<'_, Range>`
+
+Get iterator to end
+
+### `pub fn merge(&mut self, other: &RangeList)`
+
+Merge another RangeList into this one
+
+### `pub fn clear(&mut self)`
+
+Clear all ranges
+
+### `pub fn longest_fit(&self, addr: Address) -> Option<&Range>`
+
+Find the longest fit for an address
+
+### `pub fn print_bounds(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+Print bounds of all ranges
+
+### `pub fn decode(s: &str) -> Option<Self>`
+
+Decode from string format (comma-separated ranges)
+
+### `pub fn encode(&self) -> String`
+
+Encode to string format (comma-separated ranges)
+

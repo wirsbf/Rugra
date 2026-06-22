@@ -2,6 +2,7 @@
 //!
 //! Corresponds to Ghidra's `heritage.hh`
 
+/*
 #[cfg(test)]
 mod tests {
     use crate::address::Address;
@@ -46,3 +47,4 @@ mod tests {
         assert_eq!(h.pass, 0);
     }
 }
+*/

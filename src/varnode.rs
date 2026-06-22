@@ -12,7 +12,7 @@ use std::sync::{Arc, Weak, RwLock};
 // Forward declarations/Stubs
 // These placeholders allow the code to compile while other modules are being aligned.
 pub mod stubs {
-    use super::*;
+// use super::*;
     #[derive(Debug)] pub struct SymbolEntry;
     #[derive(Debug)] pub struct ValueSet;
 }
@@ -74,7 +74,9 @@ pub struct Varnode {
     pub mergegroup: i16,
     /// Additional flags (addl_flags in Ghidra)
     pub addlflags: u16,
-    /// Location (space + offset)
+    /// Address space this varnode belongs to
+    pub address_space: AddressSpace,
+    /// Location (offset within the address space)
     pub loc: Address,
     /// PcodeOp that defines this varnode (if written)
     pub def: Option<Weak<RwLock<PcodeOp>>>,
@@ -95,6 +97,7 @@ pub struct Varnode {
 }
 
 impl Varnode {
+    /// Create a new varnode (defaults to Ram space for backward compatibility)
     pub fn new(size: usize, loc: Address) -> Self {
         Self {
             flags: 0,
@@ -102,6 +105,7 @@ impl Varnode {
             create_index: 0,
             mergegroup: 0,
             addlflags: 0,
+            address_space: AddressSpace::Ram,
             loc,
             def: None,
             high: None,
@@ -114,13 +118,20 @@ impl Varnode {
         }
     }
 
+    /// Create a new varnode with explicit address space
+    pub fn new_with_space(size: usize, space: AddressSpace, offset: u64) -> Self {
+        let mut vn = Self::new(size, Address::new(offset));
+        vn.address_space = space;
+        vn
+    }
+
     pub fn get_addr(&self) -> &Address {
         &self.loc
     }
 
+    /// Get the address space this varnode belongs to
     pub fn get_space(&self) -> AddressSpace {
-        // Address in current address.rs is just u64 wrapper, returning Ram as placeholder
-        AddressSpace::Ram
+        self.address_space
     }
 
     pub fn get_offset(&self) -> u64 {
@@ -164,39 +175,30 @@ impl Varnode {
         0 // Add version support back if needed or mock it
     }
 
-    pub fn with_version(mut self, _version: usize) -> Self {
+    pub fn with_version(self, _version: usize) -> Self {
         self // Mock
     }
 
     pub fn new_constant(val: u64, size: usize) -> Self {
-        let mut v = Self::new(size, crate::Address::new(val));
-        
+        let mut v = Self::new_with_space(size, AddressSpace::Const, val);
         v.set_flags(varnode_flags::CONSTANT);
         v
     }
 
     pub fn new_register(offset: u64, size: usize) -> Self {
-        let mut v = Self::new(size, crate::Address::new(offset));
-        
-        v
+        Self::new_with_space(size, AddressSpace::Register, offset)
     }
 
     pub fn new_ram(offset: u64, size: usize) -> Self {
-        let mut v = Self::new(size, crate::Address::new(offset));
-        
-        v
+        Self::new_with_space(size, AddressSpace::Ram, offset)
     }
 
     pub fn new_stack(offset: u64, size: usize) -> Self {
-        let mut v = Self::new(size, crate::Address::new(offset));
-        
-        v
+        Self::new_with_space(size, AddressSpace::Stack, offset)
     }
 
     pub fn new_unique(offset: u64, size: usize) -> Self {
-        let mut v = Self::new(size, crate::Address::new(offset));
-        
-        v
+        Self::new_with_space(size, AddressSpace::Unique, offset)
     }
 
 
@@ -270,6 +272,7 @@ pub struct VarnodeLocRef(pub Arc<RwLock<Varnode>>);
 
 impl PartialEq for VarnodeLocRef {
     fn eq(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
     }
 }
@@ -284,15 +287,13 @@ impl PartialOrd for VarnodeLocRef {
 
 impl Ord for VarnodeLocRef {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
-        // Corresponds to VarnodeCompareLocDef
         match a.loc.cmp(&b.loc) {
             std::cmp::Ordering::Equal => {
                 match a.size.cmp(&b.size) {
                     std::cmp::Ordering::Equal => {
-                        // Compare def (seqnum) if written
-                        // For now, fall back to create_index as a unique tie-breaker
                         a.create_index.cmp(&b.create_index)
                     }
                     ord => ord,
@@ -309,6 +310,7 @@ pub struct VarnodeDefRef(pub Arc<RwLock<Varnode>>);
 
 impl PartialEq for VarnodeDefRef {
     fn eq(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
     }
 }
@@ -323,17 +325,15 @@ impl PartialOrd for VarnodeDefRef {
 
 impl Ord for VarnodeDefRef {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
-        // Corresponds to VarnodeCompareDefLoc
 
-        // Input < Written < Free
         let a_cat = if a.is_input() { 0 } else if a.is_written() { 1 } else { 2 };
         let b_cat = if b.is_input() { 0 } else if b.is_written() { 1 } else { 2 };
 
         match a_cat.cmp(&b_cat) {
             std::cmp::Ordering::Equal => {
-                // If categories are same, sort by location then index
                 match a.loc.cmp(&b.loc) {
                     std::cmp::Ordering::Equal => a.create_index.cmp(&b.create_index),
                     ord => ord,
@@ -413,18 +413,31 @@ impl VarnodeBank {
         rc
     }
 
+    /// Create a new varnode with explicit address space
+    pub fn create_with_space(&mut self, size: usize, space: AddressSpace, offset: u64) -> Arc<RwLock<Varnode>> {
+        let vn_arc = self.create(size, Address::new(offset));
+        vn_arc.write().unwrap().address_space = space;
+        vn_arc
+    }
+
     /// Create a new unique varnode
     pub fn create_unique(&mut self, size: usize) -> Arc<RwLock<Varnode>> {
         let addr = Address::new(self.uniqid);
         self.uniqid += size as u64;
-        self.create(size, addr)
+        let vn_arc = self.create(size, addr);
+        vn_arc.write().unwrap().address_space = AddressSpace::Unique;
+        vn_arc
     }
 
     /// Create a new constant varnode
     pub fn create_constant(&mut self, size: usize, val: u64) -> Arc<RwLock<Varnode>> {
         let addr = Address::new(val);
         let vn = self.create(size, addr);
-        vn.write().unwrap().set_flags(varnode_flags::CONSTANT);
+        {
+            let mut vn_w = vn.write().unwrap();
+            vn_w.set_flags(varnode_flags::CONSTANT);
+            vn_w.address_space = AddressSpace::Const;
+        }
         vn
     }
 
@@ -502,6 +515,12 @@ impl VarnodeBank {
 impl fmt::Display for Varnode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.loc, self.size)
+    }
+}
+
+impl Default for VarnodeBank {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

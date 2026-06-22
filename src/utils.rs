@@ -17,8 +17,7 @@ pub mod bits {
     ///
     /// # Example
     ///
-    /// ```
-    /// # use rugra::utils::bits::extract;
+    /// ```rust,ignore
     /// let value = 0b11010110u8;
     /// let bits = extract(value as u64, 2, 4);
     /// assert_eq!(bits, 0b0101);

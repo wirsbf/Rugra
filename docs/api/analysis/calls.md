@@ -1,22 +1,223 @@
-# `analysis/calls.rs` API Reference
+# `analysis/calls.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/calls.rs`
+**文档路径**: `docs/api/analysis/calls.md`  
+**对应旧源码路径**: `src/analysis/calls.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Call analysis and argument recovery
+## 1. 文档定位
 
-This module implements heuristics to identify function arguments and return values
-for Call operations, based on standard calling conventions (currently x86-64).
+本文档用于说明旧版 `analysis/calls.rs` 这类“调用分析”文档在当前 Rugra 文档体系中的正确定位。
 
-## 导出的公共 API (Public API)
+它**不是**当前主干调用恢复实现的权威说明，而更适合作为：
 
-### `pub fn recover_call_semantics(program: &mut Program)`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“函数调用语义恢复”的背景说明
+- 后续 API 文档复核时的待核对入口
 
-Recover call arguments and return values based on calling convention
+在当前阶段，这份文档的正确标签应当是：
 
-This pass injects register usage into CALL/CALLIND operations so that
-subsequent analyses (Liveness, SSA) correctly track data flow across function calls.
+> **历史遗留 / 待重新验证**
 
-Currently hardcoded for x86-64 System V ABI.
+---
 
+## 2. 为什么需要标记为历史文档
+
+Rugra 当前文档体系已经明确
+区分：
+
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 尚未完成验证的能力
+
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+原因包括：
+
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `BlockBasic`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
+
+2. 旧版 `analysis/` 分层文档往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的调用
+/数据流/类型传播组织方式
+
+3. 即使“调用分析”这个主题今天仍然重要，也**不能**因为主题仍然重要，就把旧文档直接当作当前代码事实。
+
+---
+
+## 3. 这份文档现在可以表达什么
+
+在当前阶段，`calls.md` 最稳妥的职责是说明：
+
+- Rugra 曾经或计划将“调用分析”作为独立主题处理
+- 调用分析通常涉及：
+  - 调用点识别
+  - 参数恢复
+  - 返回值恢复
+  - 调用目标解析
+  - 外部符号/导入函数语义恢复
+- 这些能力今天依然属于项目的重要目标方向
+
+但它**不能直接证明**：
+
+- 当前 `src/analysis/calls.rs` 仍然是主线实现
+- 当前调用分析逻辑已经稳定存在并可直接使用
+- 当前调用参数恢复已与 Ghidra 完全一致
+- 当前调用恢复结果已经过运行时对拍验证
+
+---
+
+## 4. 调用分析主题本身的重要性
+
+尽管本文档当前被标记为历史说明，但“calls” 这个主题本身依然是反编译链路中的关键组成部分。
+
+典型调用分析通常会回答以下问题：
+
+### 4.1 这是不是一次函数调用
+也就是识别某条指令或某组 P-code 是否具有 call 语义。
+
+### 4.2 调用目标是谁
+可能包括：
+
+- 直接调用的函数地址
+- 导入函数
+- PLT/GOT 相关目标
+- 间接调用目标
+
+### 4.3 参数有哪些
+需要结合：
+
+- 调用约定
+- 寄存器传参
+- 栈传参
+- 调用前写入模式
+- P-code / SSA 数据流
+
+### 4.4 返回值在哪里
+通常需要识别：
+
+- 返回寄存器
+- 返回值传播
+- 特殊 ABI 情况
+
+### 4.5 能否恢复更高层调用表达
+也就是把底层调用语义还原成更接近：
+
+- `foo(a, b)`
+- `printf("...")`
+- `bar(x, y, z)`
+
+这类更高层的输出形式。
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“调用分析”这个主题的历史入口
+- 它可能反映了项目早期对调用恢复的分层想法
+- 它可以帮助后续整理“调用语义恢复”应包含哪些能力
+
+### 不应这样理解
+- 它就是当前主干调用恢复实现
+- 只要有这份文档，当前调用恢复就已经成熟
+- 这份文档里的 API 现在一定还能直接对应到源码
+- 当前调用恢复已经完成与 Ghidra 的一致性验证
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的调用语义相关主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../op.md`
+- `../varnode.md`
+- `../fspec.md`
+- `../printc.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `PcodeOp`
+- `Varnode`
+- `FuncProto`
+- `ProtoParameter`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前调用分析结果更可能以“分散在函数级主线对象和规则系统中”的方式存在，而不是继续严格停留在旧 `analysis/calls.rs` 那种目录分层里。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以考虑在后续统一引入这样的标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的调用分析模块  
+2. 当前调用分析是否围绕：
+   - `Funcdata`
+   - `Action`
+   - `Rule`
+   - `FuncProto`
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 恢复参数
+   - 恢复返回值
+   - 解析外部调用目标
+   - 对接符号名
+4. 当前这些能力是：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 一句话结论
+
+`docs/api/analysis/calls.md` 当前应被理解为：
+
+> **Rugra 旧版“调用分析”分层思路的历史文档入口，可用于理解调用恢复主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

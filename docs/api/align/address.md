@@ -1,5 +1,6 @@
 # `align/address.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/align/address.rs`
 
 ## 模块说明 (Module Doc)
@@ -28,3 +29,4 @@ used to distinguish multiple P-code operations for a single instruction.
 
 Helper to convert Ghidra space ID to Rugra AddressSpace for verification
 
+ 

@@ -43,3 +43,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# Decompilation output / debug artifacts (regenerable, do not commit)
+/result/
+
+# Agent/tooling scratch dirs (session-local)
+.sisyphus/
+.agents/
+.githooks/

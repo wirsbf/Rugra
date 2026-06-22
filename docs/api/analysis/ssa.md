@@ -1,84 +1,261 @@
-# `analysis/ssa.rs` API Reference
+# `analysis/ssa.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/ssa.rs`
+**文档路径**: `docs/api/analysis/ssa.md`  
+**对应旧源码路径**: `src/analysis/ssa.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**  
+**可信边界**: 本文档当前只应用于说明 Rugra 旧版 `analysis/ssa.rs` 分层的历史定位，**不应被当作当前 SSA 主线实现、当前验证状态或当前可用能力的权威说明**。
 
-## 模块说明 (Module Doc)
+---
 
-SSA (Static Single Assignment) Form Construction
+## 1. 文档定位
 
-This module implements SSA form construction for P-code IR, including:
-- Dominance frontier computation
-- Phi node placement
-- Variable renaming
-- SSA destruction (converting back from SSA)
+本文档用于标记并解释旧版 `analysis/ssa.rs` 文档在当前 Rugra 文档体系中的位置。
 
-## 导出的公共 API (Public API)
+它现在最适合承担的角色是：
 
-### `pub struct PhiNode`
+- 旧版 SSA 分层思路的历史入口
+- 说明项目曾经如何围绕独立 `analysis/ssa.rs` 组织 SSA 主题
+- 为后续逐篇 API 文档复核提供待核对目标
+- 帮助读者区分“当前 SSA 主线”与“旧版 SSA 文档层”
 
-A Phi node in SSA form
+它**不负责**说明以下内容：
 
-### `pub fn new(variable: String, output: String) -> Self`
+- 当前 Rugra 的 SSA 主实现一定仍在 `src/analysis/ssa.rs`
+- 当前 SSA 构造仍主要围绕旧 `SSAForm` / `PhiNode` / `SSAVariable` 这套结构展开
+- 当前 SSA 行为已经与 Ghidra 完成运行时一致性验证
+- 当前所有 SSA 相关能力都已完整实现并稳定可用
 
-Create a new phi node
+---
 
-### `pub fn add_input(&mut self, block: usize, var: String)`
+## 2. 为什么这份文档必须降级为历史说明
 
-Add an input from a predecessor block
+Rugra 当前文档基线已经明确：
 
-### `pub fn input_count(&self) -> usize`
+- 当前主线应优先围绕真实 `src/` 可见结构来理解
+- `analysis/` 目录整体不再默认视为当前主干架构的权威映射
+- 旧 `Program` / `analysis` / `codegen` / `translator` 分层应视为历史说明
+- 当前主线更接近围绕这些对象组织：
+  - `Funcdata`
+  - `PcodeOp`
+  - `Varnode`
+  - `BlockBasic`
+  - `Heritage`
+  - `ActionDatabase`
+  - `PrintLanguage`
+  - `PrintC`
 
-Get the number of inputs
+在这个前提下，`analysis/ssa.rs` 这类文档不能再继续被写成：
 
-### `pub struct SSAVariable`
+- 当前 SSA 主入口
+- 当前主要 Phi 管理实现
+- 当前最权威的版本分配结构定义
+- 当前运行时行为结论的直接依据
 
-SSA variable with version number
+因此，本页应明确标记为：
 
-### `pub fn new(base_name: String, version: usize) -> Self`
+> **历史遗留 / 待重新验证**
 
-Create a new SSA variable
+---
 
-### `pub fn full_name(&self) -> String`
+## 3. 旧版 `analysis/ssa.rs` 主题本身在讲什么
 
-Get the full SSA name (e.g., "x_1", "y_2")
+尽管它现在被降级为历史文档，但“SSA” 这个主题本身仍是 Rugra 反编译架构中的核心主题之一。
 
-### `pub struct SSAForm`
+旧版 `analysis/ssa.rs` 文档通常试图说明以下内容：
 
-SSA form representation
+### 3.1 SSA 形式本身
+也就是把普通赋值和重定义关系，转换成“每个变量只定义一次”的形式。
 
-### `pub fn new() -> Self`
+### 3.2 Phi / 合流节点
+在控制流汇合点，为同一逻辑值引入 `Phi` 风格节点，表达来自不同前驱路径的定义合流。
 
-Create new empty SSA form
+### 3.3 变量版本化
+把某个基础变量拆成多个版本，如：
 
-### `pub fn add_phi_node(&mut self, block: usize, phi: PhiNode)`
+- `x_1`
+- `x_2`
+- `x_3`
 
-Add a phi node to a block
+从而让 def-use 关系更清晰。
 
-### `pub fn get_phi_nodes(&self, block: usize) -> Option<&Vec<PhiNode>>`
+### 3.4 SSA 销毁或反变换
+在某些旧架构思路中，还会描述如何从 SSA 再回到更普通的形式，以便更方便做高层恢复或输出。
 
-Get phi nodes for a block
+这些内容从主题上看都是合理且重要的，但问题在于：
 
-### `pub fn next_version(&mut self, var: &str) -> usize`
+> **这些主题的重要性，不等于旧版 `analysis/ssa.rs` 文档今天仍然准确映射当前主线实现。**
 
-Get the next version for a variable
+---
 
-### `pub fn current_version(&self, var: &str) -> Option<usize>`
+## 4. 当前为什么不能直接把旧 SSA 文档当现状
 
-Get the current version for a variable
+当前不能继续把旧 `analysis/ssa.rs` 文档当作事实入口，主要原因有以下几点：
 
-### `pub fn add_definition(&mut self, ssa_var: String, block: usize)`
+### 4.1 当前主线已更明显转向 `heritage.rs`
+从现有文档和代码可见信息看，当前 SSA / heritage 主线已经更多围绕：
 
-Record a definition
+- `heritage.rs`
+- `Funcdata`
+- `Varnode`
+- `PcodeOp`
+- `BlockGraph`
 
-### `pub fn add_use(&mut self, ssa_var: String, block: usize)`
+而不是独立旧式 `analysis/ssa.rs` 作为主入口。
 
-Record a use
+### 4.2 旧文档容易把概念模型误写成当前实现
+例如旧文档中常见的：
 
-### `pub fn construct_ssa(`
+- `PhiNode`
+- `SSAVariable`
+- `SSAForm`
+- `construct_ssa(...)`
+- `destroy_ssa(...)`
 
-Construct SSA form from a CFG
+这些名称可能代表某一历史实现阶段的对象模型，但不能直接推出：
 
-### `pub fn destroy_ssa(_ssa: &SSAForm) -> Result<()>`
+- 当前主线仍以这些结构作为正式 API
+- 当前版本分配逻辑仍依赖这些对象
+- 当前输出层仍从这些结构直接消费结果
 
-Destroy SSA form (convert back to normal form)
+### 4.3 旧文档容易造成“SSA 已成熟”的错觉
+只要保留了一套完整的 SSA 文档，读者就很容易误判为：
 
+- SSA 构造已经成熟
+- Phi 放置已经完成
+- rename 已稳定
+- SSA 行为已经验证
+- 与 Ghidra 已达成一致
+
+但当前总控文档明确反对这种推断方式。
+
+---
+
+## 5. 当前更接近真实主线的 SSA 阅读入口
+
+如果你现在想理解 Rugra **当前更真实的 SSA 主线**，建议优先阅读以下文档，而不是优先阅读这份历史页：
+
+### 优先 API 文档
+- `../funcdata.md`
+- `../varnode.md`
+- `../op.md`
+- `../block.md`
+- `../heritage.md`
+- `../action.md`
+
+### 优先总控文档
+- `../../PROJECT_STRUCTURE.md`
+- `../../README.md`
+- `../../../CURRENT_STATUS.md`
+- `../../../ALIGNMENT_PROGRESS.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../data_contract.md`
+
+### 推荐理解方式
+当前更可靠的理解顺序应当是：
+
+1. `Funcdata`：函数级总容器  
+2. `Varnode`：值节点 / SSA 附着点  
+3. `PcodeOp`：操作节点  
+4. `BlockBasic` / CFG：控制流结构  
+5. `Heritage`：当前更接近主线的 SSA / Heritage 过程  
+6. `ActionDatabase`：后续动作与规则处理  
+
+也就是说，今天更应把 `heritage.rs` 看作 SSA 主线理解入口，而不是把 `analysis/ssa.rs` 当作默认事实起点。
+
+---
+
+## 6. 这份历史文档现在还能提供什么价值
+
+虽然它不再是当前主线说明，但仍然有这些价值：
+
+### 6.1 帮助理解项目历史演化
+它能说明 Rugra 曾经如何尝试把 SSA 做成一个独立分析分层。
+
+### 6.2 帮助识别旧术语来源
+当你在旧日志、旧设计稿、旧 API 文档里看到：
+
+- `PhiNode`
+- `SSAForm`
+- `SSAVariable`
+- `construct_ssa`
+- `destroy_ssa`
+
+时，可以知道这些术语来自旧架构语境。
+
+### 6.3 帮助后续做迁移审计
+如果将来要系统清理或复核旧文档，`analysis/ssa.md` 可以作为“SSA 历史页”的入口保留下来。
+
+---
+
+## 7. 当前不应从本页继续推导的结论
+
+阅读本页时，请特别避免继续推出以下结论：
+
+### 不应推导 1：当前 SSA 仍主要围绕 `SSAForm`
+当前更接近主线的理解应围绕 `Heritage` 与函数级上下文，而不是默认认为 `SSAForm` 仍是核心正式对象。
+
+### 不应推导 2：当前 Phi 模型一定还是旧 `PhiNode`
+旧文档中的 `PhiNode` 只说明历史分层曾经这样组织，不代表当前主线仍然如此。
+
+### 不应推导 3：版本号分配已经成熟稳定
+文档里有 `SSAVariable` 或 `next_version(...)` 一类术语，不等于当前版本分配已完成验证。
+
+### 不应推导 4：SSA 销毁逻辑当前已作为主流程使用
+旧架构里可能存在 `destroy_ssa(...)` 之类概念，但不能因此认定当前主线仍依赖它。
+
+### 不应推导 5：与 Ghidra 的 SSA 一致性已经成立
+这是当前最危险的误解之一。  
+旧文档里的概念完整度，绝不等于行为级证据。
+
+---
+
+## 8. 当前推荐状态标签
+
+若后续对 API 文档体系引入统一状态标识，本页最合适的标签应为：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前主线实现说明
+
+也可以纳入统一标签体系中的这一类：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 9. 后续若要重写为“当前有效文档”，需要核对什么
+
+如果将来要把 SSA 主题重新写回“当前主线 API 文档”，至少应先核清以下问题：
+
+1. 当前主线 SSA 过程是否完全围绕 `heritage.rs`
+2. 当前是否还存在独立可用的 `analysis/ssa.rs`
+3. 当前 Phi / MULTIEQUAL 的主对象是什么
+4. 当前版本分配逻辑究竟挂在：
+   - `Varnode`
+   - `Heritage`
+   - `Funcdata`
+   - 还是其他辅助结构上
+5. 当前是否已有：
+   - 可重复测试
+   - 运行时对拍
+   - 差异报告
+   - 样本级验证
+6. 当前 SSA 相关能力属于：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题没有核清之前，本页不能恢复为“当前主线说明”。
+
+---
+
+## 10. 一句话结论
+
+`docs/api/analysis/ssa.md` 当前应被理解为：
+
+> **Rugra 旧版独立 SSA 分层思路的历史文档入口。它有助于理解项目曾如何围绕 `SSAForm`、`PhiNode`、变量版本化等概念组织分析，但不能继续被当作当前主线 SSA 实现、当前验证状态或当前成熟能力的权威说明。**
+
+---

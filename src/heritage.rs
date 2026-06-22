@@ -5,9 +5,9 @@
 use crate::address::Address;
 use crate::block::{BlockBasic, FlowBlock};
 use crate::funcdata::Funcdata;
-use crate::op::{PcodeOp, PcodeOpRef};
+use crate::op::{PcodeOp, PcodeOpBank};
 use crate::space::AddressSpace;
-use crate::varnode::Varnode;
+use crate::varnode::{Varnode, VarnodeBank};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, RwLock, Weak};
 
@@ -167,7 +167,15 @@ impl Heritage {
             load_copy_ops: Vec::new(),
         }
     }
+}
 
+impl Default for Heritage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Heritage {
     /// Main entry point for heritage (SSA construction)
     pub fn heritage(&mut self) {
         if self.fd.is_none() {
@@ -189,16 +197,45 @@ impl Heritage {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
         let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
         let mut fd = fd_arc.write().unwrap();
+        
+        let mut vbank = std::mem::take(&mut fd.vbank);
+        let mut obank = std::mem::take(&mut fd.obank);
+        
+        self.place_multiequals_direct(&mut vbank, &mut obank, &fd.bblocks, &fd.sblocks);
+        
+        fd.vbank = vbank;
+        fd.obank = obank;
+    }
+
+    /// Insert Phi nodes directly using bank references (avoids lock deadlocks)
+    pub fn place_multiequals_direct(
+        &mut self,
+        vbank: &mut VarnodeBank,
+        obank: &mut PcodeOpBank,
+        bblocks: &crate::block::BlockGraph,
+        _sblocks: &crate::block::BlockGraph,
+    ) {
 
         // Standard SSA Phi node placement algorithm
         let mut worklist = VecDeque::new();
         let mut ever_on_worklist = std::collections::HashSet::new();
         let mut has_phi_node = std::collections::HashSet::new();
 
-        // Collect definitions for all varnodes
-        let mut defs_by_addr: BTreeMap<Address, Vec<i32>> = BTreeMap::new();
-        for vn_ref in &fd.vbank.loc_tree {
+        let mut defs_by_loc: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();
+        for vn_ref in &vbank.loc_tree {
             let vn = vn_ref.0.read().unwrap();
+            let space = vn.get_space();
+            let delay = self
+                .infolist
+                .iter()
+                .find(|info| info.space == space)
+                .map(|info| info.delay)
+                .unwrap_or(0);
+
+            if self.pass < delay {
+                continue;
+            }
+
             if vn.is_written() {
                 if let Some(op_arc) = vn.def.as_ref().and_then(|w| w.upgrade()) {
                     let op = op_arc.read().unwrap();
@@ -207,32 +244,37 @@ impl Heritage {
                         continue;
                     }
                     if let Some(parent_arc) = op.parent.as_ref().and_then(|w| w.upgrade()) {
-                        defs_by_addr
-                            .entry(vn.loc)
-                            .or_default()
-                            .push(parent_arc.read().unwrap().get_index());
+                        let block = parent_arc.read().unwrap();
+                        if (block.get_flags() & crate::block::block_flags::DEAD) == 0 {
+                            defs_by_loc
+                                .entry((space, vn.loc))
+                                .or_default()
+                                .push(block.get_index());
+                        }
                     }
                 }
             } else if vn.is_input() {
                 // Inputs act as definitions at the entry block
-                let entry_block_idx = fd
-                    .bblocks
+                let entry_block_idx = bblocks
                     .blocks
                     .iter()
-                    .filter(|b| b.read().unwrap().size_in() == 0)
+                    .filter(|b| {
+                        let block = b.read().unwrap();
+                        block.size_in() == 0 && (block.get_flags() & crate::block::block_flags::DEAD) == 0
+                    })
                     .map(|b| b.read().unwrap().get_index())
                     .next()
                     .unwrap_or(-1);
                 if entry_block_idx != -1 {
-                    defs_by_addr
-                        .entry(vn.loc)
+                    defs_by_loc
+                        .entry((space, vn.loc))
                         .or_default()
                         .push(entry_block_idx);
                 }
             }
         }
 
-        for (addr, blocks) in defs_by_addr {
+        for ((space, addr), blocks) in defs_by_loc {
             worklist.clear();
             ever_on_worklist.clear();
             has_phi_node.clear();
@@ -243,8 +285,7 @@ impl Heritage {
             }
 
             while let Some(x_idx) = worklist.pop_front() {
-                let df = fd
-                    .bblocks
+                let df = bblocks
                     .blocks
                     .iter()
                     .find(|b| b.read().unwrap().get_index() == x_idx)
@@ -253,7 +294,7 @@ impl Heritage {
 
                 for y_idx in df {
                     if !has_phi_node.contains(&y_idx) {
-                        self.insert_multiequal(&mut fd, addr, y_idx);
+                        self.insert_multiequal_direct(vbank, obank, bblocks, space, addr, y_idx);
                         has_phi_node.insert(y_idx);
                         if !ever_on_worklist.contains(&y_idx) {
                             ever_on_worklist.insert(y_idx);
@@ -266,9 +307,24 @@ impl Heritage {
     }
 
     /// Helper to insert a MULTIEQUAL (Phi) op into a block
-    fn insert_multiequal(&mut self, fd: &mut Funcdata, addr: Address, block_idx: i32) {
-        let block_arc = fd
-            .bblocks
+    fn insert_multiequal(&mut self, fd: &mut Funcdata, space: AddressSpace, addr: Address, block_idx: i32) {
+        let mut vbank = std::mem::take(&mut fd.vbank);
+        let mut obank = std::mem::take(&mut fd.obank);
+        self.insert_multiequal_direct(&mut vbank, &mut obank, &fd.bblocks, space, addr, block_idx);
+        fd.vbank = vbank;
+        fd.obank = obank;
+    }
+
+    fn insert_multiequal_direct(
+        &mut self,
+        vbank: &mut VarnodeBank,
+        obank: &mut PcodeOpBank,
+        bblocks: &crate::block::BlockGraph,
+        space: AddressSpace,
+        addr: Address,
+        block_idx: i32,
+    ) {
+        let block_arc = bblocks
             .blocks
             .iter()
             .find(|b| b.read().unwrap().get_index() == block_idx)
@@ -280,30 +336,37 @@ impl Heritage {
             (b.get_start_addr(), b.size_in())
         };
 
-        let op_ref = fd
-            .obank
-            .create(crate::opcodes::OpCode::CPUI_MULTIEQUAL, num_in, start_addr);
-        // op_ref.0.write().unwrap().parent = Some(Arc::downgrade(&block_arc));
+        let op_ref = obank.create(crate::opcodes::OpCode::CPUI_MULTIEQUAL, num_in, start_addr);
         block_arc.write().unwrap().insert_op(0, op_ref.clone());
 
-        // Find size from existing definitions if possible
-        let size = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .find(|vn| vn.0.read().unwrap().loc == addr)
-            .map(|vn| vn.0.read().unwrap().size)
-            .unwrap_or(4); // Fallback to 4
+        // Query globaldisjoint LocationMap for precise size (note: LocationMap also uses Address only, which is a broader bug, but we fallback to vbank)
+        let size = self
+            .globaldisjoint
+            .themap
+            .get(&addr)
+            .map(|sp| sp.size)
+            .unwrap_or_else(|| {
+                // Fallback to searching vbank if not tracked
+                vbank
+                    .loc_tree
+                    .iter()
+                    .find(|vn| {
+                        let vn_read = vn.0.read().unwrap();
+                        vn_read.get_space() == space && vn_read.loc == addr
+                    })
+                    .map(|vn| vn.0.read().unwrap().size)
+                    .unwrap_or(4) as i32
+            }) as usize;
 
-        let out_vn = fd.vbank.create(size, addr);
-        fd.vbank.set_def(out_vn.clone(), Arc::downgrade(&op_ref.0));
+        let out_vn = vbank.create_with_space(size, space, addr.as_u64());
+        vbank.set_def(out_vn.clone(), Arc::downgrade(&op_ref.0));
 
         {
             let mut op = op_ref.0.write().unwrap();
             op.output = Some(out_vn);
             // Initialize inrefs with placeholders so they can be filled by index
             for _ in 0..num_in {
-                let placeholder = fd.vbank.create(size, addr);
+                let placeholder = vbank.create_with_space(size, space, addr.as_u64());
                 op.inrefs.push(placeholder);
             }
         }
@@ -314,20 +377,26 @@ impl Heritage {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
         let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
         let mut fd = fd_arc.write().unwrap();
+        
+        let mut vbank = std::mem::take(&mut fd.vbank);
+        self.rename_direct(&mut vbank, &fd.bblocks);
+        fd.vbank = vbank;
+    }
 
-        let mut stacks: BTreeMap<Address, Vec<Arc<RwLock<Varnode>>>> = BTreeMap::new();
+    /// Perform SSA renaming directly using bank references
+    pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
+        let mut stacks: BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>> = BTreeMap::new();
 
         // Push initial/input varnodes to stacks
-        for vn_ref in &fd.vbank.def_tree {
+        for vn_ref in &vbank.def_tree {
             let vn = vn_ref.0.read().unwrap();
             if vn.is_input() {
-                stacks.entry(vn.loc).or_default().push(vn_ref.0.clone());
+                stacks.entry((vn.address_space, vn.loc)).or_default().push(vn_ref.0.clone());
             }
         }
 
         // Find entry blocks
-        let entry_blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = fd
-            .bblocks
+        let entry_blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = bblocks
             .blocks
             .iter()
             .filter(|b| b.read().unwrap().size_in() == 0)
@@ -335,7 +404,7 @@ impl Heritage {
             .collect();
 
         for entry in entry_blocks {
-            self.visit_rename(&mut fd, entry, &mut stacks);
+            self.visit_rename_direct(vbank, entry, &mut stacks);
         }
     }
 
@@ -343,20 +412,50 @@ impl Heritage {
         &mut self,
         fd: &mut Funcdata,
         block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        stacks: &mut BTreeMap<Address, Vec<Arc<RwLock<Varnode>>>>,
+        stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
     ) {
-        let mut defined_here = Vec::new();
+        let mut vbank = std::mem::take(&mut fd.vbank);
+        self.visit_rename_direct(&mut vbank, block_arc, stacks);
+        fd.vbank = vbank;
+    }
+
+    fn visit_rename_direct(
+        &mut self,
+        _vbank: &mut VarnodeBank,
+        block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
+    ) {
+        self.visit_rename_impl(_vbank, block_arc, stacks, 0);
+    }
+
+    fn visit_rename_impl(
+        &mut self,
+        _vbank: &mut VarnodeBank,
+        block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
+        depth: usize,
+    ) {
+        if depth > 200 {
+            return; // Safety limit for deep dominator trees
+        }
+
+        if (block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD) != 0 {
+            return;
+        }
+
+        let mut defined_here: Vec<(AddressSpace, Address)> = Vec::new();
 
         // 1. Process Phis (MULTIEQUAL) - only their outputs
-        // We do this first because Phis logically happen at the very start of the block
         let ops = block_arc.read().unwrap().get_ops();
         for op_ref in &ops {
-            let mut op = op_ref.0.write().unwrap();
+            let op = op_ref.0.write().unwrap();
             if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
                 if let Some(out_vn) = &op.output {
-                    let addr = out_vn.read().unwrap().loc;
-                    stacks.entry(addr).or_default().push(out_vn.clone());
-                    defined_here.push(addr);
+                    let vn_read = out_vn.read().unwrap();
+                    let key = (vn_read.address_space, vn_read.loc);
+                    drop(vn_read);
+                    stacks.entry(key).or_default().push(out_vn.clone());
+                    defined_here.push(key);
                 }
             }
         }
@@ -370,8 +469,11 @@ impl Heritage {
 
             // Rewrite inputs
             for i in 0..op.inrefs.len() {
-                let addr = op.inrefs[i].read().unwrap().loc;
-                if let Some(stack) = stacks.get(&addr) {
+                let key = {
+                    let vn_read = op.inrefs[i].read().unwrap();
+                    (vn_read.address_space, vn_read.loc)
+                };
+                if let Some(stack) = stacks.get(&key) {
                     if let Some(new_vn) = stack.last() {
                         op.inrefs[i] = new_vn.clone();
                         new_vn
@@ -385,9 +487,11 @@ impl Heritage {
 
             // Rewrite output
             if let Some(out_vn) = &op.output {
-                let addr = out_vn.read().unwrap().loc;
-                stacks.entry(addr).or_default().push(out_vn.clone());
-                defined_here.push(addr);
+                let vn_read = out_vn.read().unwrap();
+                let key = (vn_read.address_space, vn_read.loc);
+                drop(vn_read);
+                stacks.entry(key).or_default().push(out_vn.clone());
+                defined_here.push(key);
             }
         }
 
@@ -403,8 +507,11 @@ impl Heritage {
                     let mut op = op_ref.0.write().unwrap();
                     if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
                         if let Some(out_vn) = &op.output {
-                            let addr = out_vn.read().unwrap().loc;
-                            if let Some(stack) = stacks.get(&addr) {
+                            let key = {
+                                let vn_read = out_vn.read().unwrap();
+                                (vn_read.address_space, vn_read.loc)
+                            };
+                            if let Some(stack) = stacks.get(&key) {
                                 if let Some(new_vn) = stack.last() {
                                     if my_in_idx < op.inrefs.len() {
                                         op.inrefs[my_in_idx] = new_vn.clone();
@@ -418,7 +525,6 @@ impl Heritage {
                             }
                         }
                     } else {
-                        // Phis are always at the beginning, so if we see a non-phi, we can stop
                         break;
                     }
                 }
@@ -428,12 +534,12 @@ impl Heritage {
         // 4. Recurse to children in dominator tree
         let children = block_arc.read().unwrap().get_dom_children();
         for child in children {
-            self.visit_rename(fd, child, stacks);
+            self.visit_rename_impl(_vbank, child, stacks, depth + 1);
         }
 
         // 5. Pop stacks
-        for addr in defined_here {
-            if let Some(stack) = stacks.get_mut(&addr) {
+        for key in defined_here {
+            if let Some(stack) = stacks.get_mut(&key) {
                 stack.pop();
             }
         }

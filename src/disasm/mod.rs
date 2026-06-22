@@ -21,8 +21,10 @@
 //! ```
 
 mod x86_64;
+pub mod x86_lift;
 
 pub use x86_64::X86_64Disassembler;
+pub use x86_lift::X86Lifter;
 
 use std::fmt;
 use crate::{Address, Architecture, Result};

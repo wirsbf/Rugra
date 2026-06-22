@@ -1,45 +1,208 @@
-# `analysis/liveness.rs` API Reference
+# `analysis/liveness.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/liveness.rs`
+**文档路径**: `docs/api/analysis/liveness.md`  
+**对应旧源码路径**: `src/analysis/liveness.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Liveness Analysis for SSA Variables
+## 1. 文档定位
 
-This module computes the live ranges of SSA variables to support
-variable merging and interference graph construction.
+本文档用于说明旧版 `analysis/liveness.rs` 这类“活跃性分析”文档在当前 Rugra 文档体系中的正确位置。
 
-## 导出的公共 API (Public API)
+在当前阶段，这份文档**不应**被当作：
 
-### `pub struct InstructionIndex`
+- 当前主干实现的权威说明
+- 当前活跃性分析 API 的正式入口
+- 当前已验证能力的事实证明
 
-Represents a specific instruction location
+它更适合作为：
 
-### `pub struct LiveRange`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“活跃性分析（liveness）”的背景说明
+- 后续文档审计时的待核对入口
 
-Liveness information for a single SSA variable
+因此，这份文档当前最合适的标签是：
 
-### `pub fn intersects(&self, other: &LiveRange) -> bool`
+> **历史遗留 / 待重新验证**
 
-Check if this live range intersects with another
+---
 
-### `pub struct LivenessAnalysis`
+## 2. 为什么需要标记为历史文档
 
-Analysis result containing live ranges for all SSA variables
+Rugra 当前的文档体系已经明确区分：
 
-### `pub fn new() -> Self`
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 未完成验证的能力
 
-*暂无代码注释*
+在这个基线下，`analysis/` 目录整体都不应再默认视为当前主干 API 的准确映射。其原因包括：
 
-### `pub fn get_live_range(&self, var: &str) -> Option<&LiveRange>`
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `BlockBasic`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
 
-*暂无代码注释*
+2. 旧版 `analysis/` 分层文档往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的数据流 / 活跃性 / 类型传播组织方式
 
-### `pub fn interfere(&self, var1: &str, var2: &str) -> bool`
+3. 即使“活跃性分析”这个主题今天仍然重要，也**不能**因为主题仍然重要，就把旧文档直接当成当前代码事实。
 
-Check if two variables interfere (cannot be merged)
+---
 
-### `pub fn compute_liveness(`
+## 3. 这份文档现在可以表达什么
 
-Compute liveness for all variables in SSA form
+在当前阶段，`liveness.md` 最稳妥的职责是说明：
 
+- Rugra 曾经或计划将“活跃性分析”作为独立主题处理
+- 活跃性分析通常涉及：
+  - 变量在某一程序点是否仍然存活
+  - 活跃区间（live range）计算
+  - 干涉关系（interference）判断
+  - 变量合并、寄存器复用、变量恢复的前置支撑
+- 这些能力今天依然属于项目的重要目标方向
+
+但它**不能直接证明**：
+
+- 当前 `src/analysis/liveness.rs` 仍然是主线实现
+- 当前活跃性分析逻辑已经稳定存在并可直接使用
+- 当前 live range 计算已与 Ghidra 完全一致
+- 当前干涉图或变量合并前提已经过运行时对拍验证
+
+---
+
+## 4. 活跃性分析主题本身的重要性
+
+尽管本文档当前被标记为历史说明，但“liveness” 这个主题在反编译链路中依然很重要。
+
+典型活跃性分析通常会回答以下问题：
+
+### 4.1 一个值在某个程序点是否仍然活跃
+也就是：它之后还会不会被继续使用。
+
+### 4.2 一个变量的活跃区间从哪里开始，到哪里结束
+这通常会影响：
+
+- 变量恢复
+- 变量合并
+- 冗余变量裁剪
+- 更高层变量命名策略
+
+### 4.3 两个值是否相互干涉
+如果两个值的活跃区间重叠，则它们通常不能安全合并为同一个高层变量。
+
+### 4.4 哪些值是短生命周期临时量，哪些值更像真实逻辑变量
+这对提升输出可读性非常关键。
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“活跃性分析”这个主题的历史入口
+- 它可能反映了项目早期对 liveness 分析的分层思路
+- 它有助于后续整理：当前主线若要恢复或强化 liveness，需要覆盖哪些能力
+
+### 不应这样理解
+- 它就是当前主干活跃性分析实现
+- 只要有这份文档，当前 live range 计算就已经成熟
+- 这份文档里的接口现在一定还能直接对应到源码
+- 当前变量干涉 / 活跃区间结果已经完成与 Ghidra 的一致性验证
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的活跃性与变量相关主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../op.md`
+- `../varnode.md`
+- `../block.md`
+- `../heritage.md`
+- `../action.md`
+- `../printc.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `PcodeOp`
+- `Varnode`
+- `BlockBasic`
+- `Heritage`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前活跃性相关结果，更可能以“分散在函数级主线对象、SSA 过程和规则系统中”的方式存在，而不是继续严格停留在旧 `analysis/liveness.rs` 那种目录分层里。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+如果后续为 API 文档系统统一引入状态标签体系，建议使用：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的活跃性分析模块  
+2. 当前活跃性分析是否围绕：
+   - `Funcdata`
+   - `Heritage`
+   - `Action`
+   - `Rule`
+   - `BlockBasic`
+   来组织  
+3. 当前是否已经具备：
+   - 活跃区间计算
+   - 干涉判断
+   - 面向变量合并的分析结果
+   - 与高层变量恢复的接入路径
+4. 当前这些能力属于：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 一句话结论
+
+`docs/api/analysis/liveness.md` 当前应被理解为：
+
+> **Rugra 旧版“活跃性分析”分层思路的历史文档入口，可用于理解 liveness 主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

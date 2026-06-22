@@ -1,57 +1,239 @@
-# `analysis/type_inference.rs` API Reference
+# `analysis/type_inference.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/type_inference.rs`
+**文档路径**: `docs/api/analysis/type_inference.md`  
+**对应旧源码路径**: `src/analysis/type_inference.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Type Inference Module
+## 1. 文档定位
 
-This module implements type inference algorithms to recover type information
-from P-code IR, including:
-- Basic type propagation
-- Pointer detection
-- Struct/array recognition
-- Type constraint solving
+本文档用于说明旧版 `analysis/type_inference.rs` 这类“类型推断”文档在当前 Rugra 文档体系中的正确定位。
 
-## 导出的公共 API (Public API)
+它**不是**当前主干类型恢复实现的权威说明，而更适合作为：
 
-### `pub struct InferredType`
+- 历史分析分层的参考材料
+- 项目曾经如何规划“类型推断 / 类型恢复”主题的背景说明
+- 后续 API 文档全面复核时的待核对入口
 
-Inferred type information for a varnode
+在当前阶段，这份文档最合适的标签应当是：
 
-### `pub enum InferenceSource`
+> **历史遗留 / 待重新验证**
 
-Source of type inference
+---
 
-### `pub struct TypeInferenceAnalysis`
+## 2. 为什么需要标记为历史文档
 
-Type inference analysis results
+Rugra 当前的总控文档已经明确区分：
 
-### `pub struct ArrayAccess`
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 已实现能力与待验证能力
 
-Represents an array access pattern
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+原因包括：
 
-### `pub struct StructAccess`
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `Datatype`
+   - `TypeMetatype`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
 
-Represents a struct/object access pattern
+2. 旧版 `analysis/` 分层文档往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的类型推断、类型传播与变量恢复组织方式
 
-### `pub fn new() -> Self`
+3. 即使“类型推断”这个主题今天依然重要，也**不能**因为主题仍然重要，就把旧文档直接当作当前代码事实。
 
-Create new empty analysis
+---
 
-### `pub fn get_type(&self, varnode_key: &str) -> Option<&InferredType>`
+## 3. 这份文档现在可以表达什么
 
-Get inferred type for a varnode
+在当前阶段，`type_inference.md` 最稳妥的职责是说明：
 
-### `pub fn set_type(&mut self, varnode_key: String, inferred_type: InferredType)`
+- Rugra 曾经或计划将“类型推断”作为独立分析主题处理
+- 类型推断通常关注：
+  - 基本类型传播
+  - 指针识别
+  - 结构体 / 数组访问模式识别
+  - 约束收集与求解
+  - 为高层输出提供更可读的类型语义
+- 这些能力今天仍然属于项目的重要目标方向
 
-Set inferred type for a varnode
+但它**不能直接证明**：
 
-### `pub fn is_pointer(&self, varnode_key: &str) -> bool`
+- 当前 `src/analysis/type_inference.rs` 仍然是主线实现
+- 当前类型推断逻辑已经稳定存在并可直接使用
+- 当前类型推断结果已与 Ghidra 完全一致
+- 当前类型恢复结果已经过运行时对拍验证
+- 当前输出中的类型信息已经具有稳定、全面、可依赖的正确性
 
-Check if a varnode is inferred to be a pointer
+---
 
-### `pub fn infer_types(program: &Program) -> Result<TypeInferenceAnalysis>`
+## 4. 类型推断主题本身的重要性
 
-Perform type inference on a P-code program
+尽管本文档当前被标记为历史说明，但“type inference” 这个主题本身依然是反编译链路中的关键组成部分。
 
+典型类型推断通常会回答以下问题：
+
+### 4.1 这个值像什么类型
+例如：
+
+- 整数
+- 布尔
+- 指针
+- 数组元素
+- 结构体字段访问基址
+- 返回值或参数类型候选
+
+### 4.2 某个节点是否应被视为指针
+这通常需要结合：
+
+- 地址空间
+- 加法/减法模式
+- 内存访问模式
+- 调用语义
+- 数据流传播
+
+### 4.3 能否识别结构体 / 数组访问模式
+例如：
+
+- `base + offset`
+- 规律偏移访问
+- 下标式访问模式
+- 多字段访问聚类
+
+### 4.4 类型信息是否可以沿数据流传播
+这通常需要结合：
+
+- 定义-使用关系
+- SSA 版本
+- 操作码语义
+- 约束传播
+- 合流点保守处理
+
+### 4.5 这些类型信息是否足以提升输出质量
+最终目的是让输出层更容易生成类似：
+
+- `int *`
+- `char *`
+- `struct foo *`
+- `array[i]`
+- `obj->field`
+
+这类更接近高级语言的表达。
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“类型推断”这个主题的历史入口
+- 它可能反映了项目早期对类型恢复的分层想法
+- 它可以帮助后续整理“当前类型恢复主线应该包含哪些能力”
+
+### 不应这样理解
+- 它就是当前主干类型恢复实现
+- 只要有这份文档，当前类型推断就已经成熟
+- 文档里的接口现在一定还能直接对应到源码
+- 当前类型信息已经足以稳定支撑高质量输出
+- 当前类型推断已经完成与 Ghidra 的一致性验证
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的类型相关主线**，建议优先查看这些文档与核心对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../op.md`
+- `../varnode.md`
+- `../typeop.md`
+- `../printc.md`
+- `../../data_contract.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先类型相关对象
+- `Datatype`
+- `TypeMetatype`
+- `Varnode`
+- `PcodeOp`
+- `Funcdata`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前类型恢复结果更可能以“分散在函数级主线对象和规则系统中”的方式存在，而不是继续严格停留在旧 `analysis/type_inference.rs` 那种目录分层里。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以在后续统一引入这样的标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的类型推断模块  
+2. 当前类型恢复是否围绕：
+   - `Funcdata`
+   - `Varnode`
+   - `PcodeOp`
+   - `Datatype`
+   - `TypeMetatype`
+   - `Action`
+   - `Rule`
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 做基础类型传播
+   - 识别指针
+   - 处理结构体 / 数组访问模式
+   - 将结果真正反馈到输出层
+4. 当前这些能力属于：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 一句话结论
+
+`docs/api/analysis/type_inference.md` 当前应被理解为：
+
+> **Rugra 旧版“类型推断”分层思路的历史文档入口，可用于理解类型恢复主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

@@ -1,20 +1,267 @@
-# `analysis/rules/constants.rs` API Reference
+# `analysis/rules/constants.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/rules/constants.rs`
+**文档路径**: `docs/api/analysis/rules/constants.md`  
+**对应旧源码路径**: `src/analysis/rules/constants.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**  
+**可信边界**: 本文档当前只应用于说明 Rugra 旧版“常量折叠规则”分层的历史定位，**不应被当作当前主线规则实现、当前优化能力成熟度或当前验证状态的权威说明**。
 
-## 模块说明 (Module Doc)
+---
 
-Constant folding rules
+## 1. 文档定位
 
-Implements Ghidra's RuleConstant logic for folding operations with constant inputs.
+本文档用于标记并解释旧版 `analysis/rules/constants.rs` 文档在当前 Rugra 文档体系中的位置。
 
-## 导出的公共 API (Public API)
+在当前阶段，它最适合承担的角色是：
 
-### `pub struct RuleConstantFolding`
+- 旧版规则分层中“常量折叠 / 常量求值”主题的历史入口
+- 帮助理解项目曾经如何将常量规则组织为独立规则文件
+- 为后续逐篇 API 文档复核提供待核对目标
+- 帮助读者区分“当前主线中的规则体系”与“旧版 `analysis/rules` 分层”
 
-Rule: Fold operations with constant inputs into a single constant copy
+它**不负责**说明以下内容：
 
-### `pub fn evaluate_constant_op(opcode: PcodeOp, inputs: &[Varnode]) -> Option<u64>`
+- 当前 Rugra 的常量折叠主实现一定仍在 `src/analysis/rules/constants.rs`
+- 当前常量规则仍主要围绕旧版 `RuleConstantFolding` 结构组织
+- 当前常量求值行为已经与 Ghidra 完成运行时一致性验证
+- 当前常量折叠能力已经全面、稳定、成熟可用
 
-Helper to evaluate constant operations
+---
 
+## 2. 为什么这份文档必须降级为历史说明
+
+Rugra 当前文档基线已经明确：
+
+- 当前主线应优先围绕真实 `src/` 可见结构来理解
+- 旧 `analysis/`、`pcode/`、`codegen/`、`translator/` 分层文档应整体视为历史说明
+- 当前主线更接近围绕以下对象与模块组织：
+  - `Funcdata`
+  - `PcodeOp`
+  - `Varnode`
+  - `Heritage`
+  - `ActionDatabase`
+  - `Rule`
+  - `PrintLanguage`
+  - `PrintC`
+
+在这个前提下，`analysis/rules/constants.rs` 这类文档不能再继续被写成：
+
+- 当前常量折叠主入口
+- 当前最权威的常量求值 API 说明
+- 当前默认规则管线的真实映射
+- 当前已验证优化行为的直接证据
+
+因此，本页应明确标记为：
+
+> **历史遗留 / 待重新验证**
+
+---
+
+## 3. 旧版 `constants.rs` 主题本身在讲什么
+
+尽管它现在被降级为历史文档，但“常量折叠 / 常量规则”这个主题本身仍是 Rugra 反编译链路中的核心主题之一。
+
+旧版 `analysis/rules/constants.rs` 文档通常试图说明以下内容：
+
+### 3.1 常量折叠
+也就是：当某个操作的输入已经都是常量时，是否可以直接在中间表示层提前求值并替换结果。
+
+例如：
+
+- `1 + 2 -> 3`
+- `x & 0 -> 0`
+- `x ^ x -> 0`
+- `x * 1 -> x`
+
+### 3.2 常量求值辅助函数
+旧文档中常见类似：
+
+- `evaluate_constant_op(...)`
+
+这一类函数通常用于：
+
+- 按 opcode 评估常量表达式
+- 支撑规则系统中的常量折叠
+- 作为局部重写前的语义求值入口
+
+### 3.3 规则对象
+旧文档中常见类似：
+
+- `RuleConstantFolding`
+
+它通常代表：
+
+- 一条局部规则
+- 面向含常量输入的操作
+- 尝试把操作折叠成更简单结果
+- 为后续 IR 简化和输出层减负
+
+这些内容从主题角度看都合理且重要，但问题在于：
+
+> **主题本身重要，不等于旧版 `analysis/rules/constants.rs` 文档今天仍然准确映射当前主线实现。**
+
+---
+
+## 4. 当前为什么不能直接把旧常量
+规则文档当现状
+
+当前不能继续把旧 `analysis/rules/constants.rs` 文档当作事实入口，主要原因有以下几点：
+
+### 4.1 当前主线已经更明显地转向 `action.rs` / `ruleaction.rs`
+从现有文档和可见主线判断，当前规则系统更应优先围绕：
+
+- `action.rs`
+- `coreaction.rs`
+- `ruleaction.rs`
+- `Funcdata`
+- `PcodeOp`
+
+来理解，而不是默认从旧 `analysis/rules/constants.rs` 出发。
+
+### 4.2 旧文档容易把“规则存在”写成“规则体系成熟”
+只要保留一份完整的常量规则文档，读者就很容易误判为：
+
+- 当前常量折叠已经成熟
+- 当前常量求值覆盖足够全面
+- 当前所有关键 opcode 都已支持折叠
+- 当前优化质量已接近成熟反编译器
+
+但这些结论都不能仅凭文档存在成立。
+
+### 4.3 旧文档容易制造“已完成验证”的错觉
+即使旧文档里提到了：
+
+- `RuleConstantFolding`
+- `evaluate_constant_op(...)`
+- 某些与 Ghidra 对应的规则逻辑
+
+也不能直接推出：
+
+- 常量规则已与 Ghidra 完全一致
+- 求值逻辑已完成运行时对拍
+- 当前优化结果已经过系统验证
+
+---
+
+## 5. 当前更接近真实主线的阅读入口
+
+如果你现在想理解 Rugra **当前更真实的常量折叠 / 局部规则主线**，建议优先阅读以下文档，而不是优先阅读这份历史页：
+
+### 优先 API 文档
+- `../mod.md`
+- `../../action.md`
+- `../../coreaction.md`
+- `../../ruleaction.md`
+- `../../op.md`
+- `../../varnode.md`
+- `../../funcdata.md`
+
+### 优先总控文档
+- `../../../PROJECT_STRUCTURE.md`
+- `../../README.md`
+- `../../../../CURRENT_STATUS.md`
+- `../../../../ALIGNMENT_PROGRESS.md`
+- `../../../VERIFICATION_GUIDE.md`
+
+### 推荐理解方式
+当前更可靠的理解顺序应当是：
+
+1. `Funcdata`：函数级总容器  
+2. `PcodeOp`：操作节点  
+3. `Varnode`：值节点  
+4. `Action` / `Rule`：当前规则和动作体系  
+5. `ruleaction.rs`：更接近当前规则型变换实现  
+6. `PrintC`：最终如何受这些优化影响  
+
+也就是说，今天更应把当前规则系统看作围绕 `ActionDatabase` 与主线对象组织，而不是默认认为旧 `analysis/rules/constants.rs` 仍是主要事实入口。
+
+---
+
+## 6. 这份历史文档现在还能提供什么价值
+
+虽然它不再是当前主线说明，但仍然有这些价值：
+
+### 6.1 帮助理解项目历史演化
+它能说明 Rugra 曾经如何尝试把常量折叠规则做成独立规则文件。
+
+### 6.2 帮助识别旧术语来源
+当你在旧日志、旧设计稿、旧 API 文档里看到：
+
+- `RuleConstantFolding`
+- `evaluate_constant_op`
+- `analysis::rules::constants`
+- “Ghidra's RuleConstant logic”
+
+就可以知道这些术语来自旧规则分层语境。
+
+### 6.3 帮助后续做迁移审计
+如果将来要系统清理或复核旧文档，`analysis/rules/constants.md` 可以作为“常量规则历史页”的入口保留下来。
+
+---
+
+## 7. 当前不应从本页继续推导的结论
+
+阅读本页时，请特别避免继续推出以下结论：
+
+### 不应推导 1：当前常量折叠仍主要围绕旧 `RuleConstantFolding`
+当前更接近主线的理解应围绕当前 `Action` / `Rule` 体系，而不是默认认为旧规则对象仍是核心正式入口。
+
+### 不应推导 2：当前 `evaluate_constant_op(...)` 就是当前主求值真相源
+旧文档中的辅助函数只说明历史上曾这样组织，不代表当前主线仍保持完全相同的组织方式。
+
+### 不应推导 3：当前常量折叠覆盖已成熟
+文档中出现“RuleConstant logic”或示例规则，不等于当前所有关键运算都已经稳定折叠。
+
+### 不应推导 4：常量折叠行为已经验证完成
+这是当前最危险的误解之一。旧文档的存在，绝不等于行为级证据。
+
+---
+
+## 8. 当前推荐状态标签
+
+若后续对 API 文档体系引入统一状态标识，本页最合适的标签应为：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前主线实现说明
+
+也可以纳入统一标签体系中的这一类：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 9. 后续若要重写为“当前有效文档”，需要核对什么
+
+如果将来要把“常量规则”主题重新写回“当前主线 API 文档”，至少应先核清以下问题：
+
+1. 当前主线中的常量折叠是否主要围绕 `ruleaction.rs` 或其它规则系统实现  
+2. 当前是否还存在可用的独立 `analysis/rules/constants.rs` 实现  
+3. 当前常量求值逻辑究竟挂在：
+   - `Rule`
+   - `Action`
+   - `PcodeOp`
+   - 还是其它辅助函数上  
+4. 当前是否已有：
+   - 可重复测试
+   - 运行时对拍
+   - 差异报告
+   - 样本级验证  
+5. 当前常量折叠相关能力属于：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题没有核清之前，本页不能恢复为“当前主线说明”。
+
+---
+
+## 10. 一句话结论
+
+`docs/api/analysis/rules/constants.md` 当前应被理解为：
+
+> **Rugra 旧版“常量折叠规则”分层思路的历史文档入口。它有助于理解项目曾如何围绕 `RuleConstantFolding` 与常量求值辅助逻辑组织局部优化，但不能继续被当作当前主线规则实现、当前验证状态或当前成熟能力的权威说明。**
+
+---

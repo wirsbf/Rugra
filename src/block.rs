@@ -34,6 +34,20 @@ pub mod block_flags {
     pub const MARK: u32 = 1 << 5;
 }
 
+/// Flags for edge properties (corresponds to Ghidra's edge_flags)
+///
+/// These flags annotate outgoing edges of structured blocks
+/// to indicate whether the edge represents a `break`, `continue`,
+/// or plain `goto` in the final C output.
+pub mod edge_flags {
+    /// Edge represents a `break` out of the enclosing loop
+    pub const F_BREAK_EDGE: u32 = 1 << 0;
+    /// Edge represents a `continue` to the loop header
+    pub const F_CONTINUE_EDGE: u32 = 1 << 1;
+    /// Edge represents an unstructured `goto`
+    pub const F_GOTO_EDGE: u32 = 1 << 2;
+}
+
 /// Common interface for all types of blocks (Basic, Graph, Condition, etc.)
 ///
 /// Corresponds to Ghidra's `FlowBlock` base class
@@ -266,6 +280,18 @@ impl BlockEdge {
             reverse_index,
         }
     }
+
+    pub fn is_break(&self) -> bool {
+        self.flags & edge_flags::F_BREAK_EDGE != 0
+    }
+
+    pub fn is_continue(&self) -> bool {
+        self.flags & edge_flags::F_CONTINUE_EDGE != 0
+    }
+
+    pub fn is_goto(&self) -> bool {
+        self.flags & edge_flags::F_GOTO_EDGE != 0
+    }
 }
 
 /// A reference to a block for use in collections
@@ -326,14 +352,23 @@ impl BlockGraph {
         from: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         to: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     ) {
-        let mut f = from.write().unwrap();
-        let mut t = to.write().unwrap();
+        // Check for self-loop: same Arc → single write lock to avoid deadlock
+        if Arc::ptr_eq(&from, &to) {
+            let mut b = from.write().unwrap();
+            let out_idx = b.size_out() as i32;
+            let in_idx = b.size_in() as i32;
+            b.add_out_edge(BlockEdge::new(to.clone(), in_idx));
+            b.add_in_edge(BlockEdge::new(from.clone(), out_idx));
+        } else {
+            let mut f = from.write().unwrap();
+            let mut t = to.write().unwrap();
 
-        let out_idx = f.size_out() as i32;
-        let in_idx = t.size_in() as i32;
+            let out_idx = f.size_out() as i32;
+            let in_idx = t.size_in() as i32;
 
-        f.add_out_edge(BlockEdge::new(to.clone(), in_idx));
-        t.add_in_edge(BlockEdge::new(from.clone(), out_idx));
+            f.add_out_edge(BlockEdge::new(to.clone(), in_idx));
+            t.add_in_edge(BlockEdge::new(from.clone(), out_idx));
+        }
     }
 
     /// Build the dominator tree for the graph
@@ -356,38 +391,48 @@ impl BlockGraph {
         idom_indices[start_node_index] = start_node_index as i32;
 
         let mut changed = true;
-        while changed {
+        let max_dom_iters = self.blocks.len() * 3 + 10;
+        let mut dom_iters = 0;
+        while changed && dom_iters < max_dom_iters {
+            dom_iters += 1;
             changed = false;
             for i in 1..rpo.len() {
                 let node = &rpo[i];
                 let node_idx = node.read().unwrap().get_index() as usize;
 
-                let size_in = node.read().unwrap().size_in();
+                // Pre-collect predecessor indices to avoid holding read lock during edge traversal
+                let preds: Vec<usize> = {
+                    let n = node.read().unwrap();
+                    let size_in = n.size_in();
+                    let mut edges = Vec::with_capacity(size_in);
+                    for slot in 0..size_in {
+                        if let Some(edge) = n.get_in(slot) {
+                            edges.push(edge.point.clone());
+                        }
+                    }
+                    drop(n); // Release node read lock before reading edge targets
+                    edges.iter().map(|p| p.read().unwrap().get_index() as usize).collect()
+                };
+
                 let mut new_idom_idx = -1i32;
 
                 // Find first processed predecessor
-                for slot in 0..size_in {
-                    if let Some(edge) = node.read().unwrap().get_in(slot) {
-                        let pred_idx = edge.point.read().unwrap().get_index() as usize;
-                        if idom_indices[pred_idx] != -1 {
-                            new_idom_idx = pred_idx as i32;
-                            break;
-                        }
+                for &pred_idx in &preds {
+                    if idom_indices[pred_idx] != -1 {
+                        new_idom_idx = pred_idx as i32;
+                        break;
                     }
                 }
 
                 if new_idom_idx != -1 {
-                    for slot in 0..size_in {
-                        if let Some(edge) = node.read().unwrap().get_in(slot) {
-                            let pred_idx = edge.point.read().unwrap().get_index() as usize;
-                            if pred_idx as i32 != new_idom_idx && idom_indices[pred_idx] != -1 {
-                                new_idom_idx = self.intersect(
-                                    pred_idx as i32,
-                                    new_idom_idx,
-                                    &idom_indices,
-                                    &rpo_indices,
-                                );
-                            }
+                    for &pred_idx in &preds {
+                        if pred_idx as i32 != new_idom_idx && idom_indices[pred_idx] != -1 {
+                            new_idom_idx = self.intersect(
+                                pred_idx as i32,
+                                new_idom_idx,
+                                &idom_indices,
+                                &rpo_indices,
+                            );
                         }
                     }
 
@@ -413,12 +458,22 @@ impl BlockGraph {
     }
 
     fn intersect(&self, mut b1: i32, mut b2: i32, idom: &[i32], rpo: &[i32]) -> i32 {
+        let max_iters = idom.len() * 2 + 10;
+        let mut iters = 0;
         while b1 != b2 {
             while rpo[b1 as usize] > rpo[b2 as usize] {
-                b1 = idom[b1 as usize];
+                let next = idom[b1 as usize];
+                if next == b1 || next < 0 { return b1; } // safety: self-loop or uninitialized
+                b1 = next;
+                iters += 1;
+                if iters > max_iters { return b1; }
             }
             while rpo[b2 as usize] > rpo[b1 as usize] {
-                b2 = idom[b2 as usize];
+                let next = idom[b2 as usize];
+                if next == b2 || next < 0 { return b2; } // safety: self-loop or uninitialized
+                b2 = next;
+                iters += 1;
+                if iters > max_iters { return b2; }
             }
         }
         b1
@@ -430,15 +485,29 @@ impl BlockGraph {
     pub fn build_dom_depth(&mut self) {
         let rpo = self.calc_rpo();
         for node_ref in &rpo {
-            let mut node = node_ref.write().unwrap();
-            let size_in = node.size_in();
-            if size_in == 0 || (node.get_flags() & block_flags::ENTRY_POINT) != 0 {
-                node.set_dom_depth(0);
-            } else if let Some(ref idom_weak) = node.get_immed_dom() {
-                if let Some(idom_ref) = idom_weak.upgrade() {
-                    let depth = idom_ref.read().unwrap().get_dom_depth() + 1;
-                    node.set_dom_depth(depth);
+            // Get idom depth first without holding node's lock
+            let idom_depth = {
+                let node = node_ref.read().unwrap();
+                let size_in = node.size_in();
+                if size_in == 0 || (node.get_flags() & block_flags::ENTRY_POINT) != 0 {
+                    Some(0i32) // entry: depth 0
+                } else if let Some(ref idom_weak) = node.get_immed_dom() {
+                    if let Some(idom_ref) = idom_weak.upgrade() {
+                        if Arc::ptr_eq(&idom_ref, node_ref) {
+                            Some(0) // self-dom
+                        } else {
+                            drop(node); // release read lock before reading idom
+                            Some(idom_ref.read().unwrap().get_dom_depth() + 1)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
+            };
+            if let Some(depth) = idom_depth {
+                node_ref.write().unwrap().set_dom_depth(depth);
             }
         }
     }
@@ -487,20 +556,25 @@ impl BlockGraph {
             }
 
             if incoming.len() >= 2 {
+                let b_index = b_ref.read().unwrap().get_index();
+                let b_idom_ref = b_ref
+                    .read()
+                    .unwrap()
+                    .get_immed_dom()
+                    .and_then(|w| w.upgrade());
+
                 for edge in incoming {
                     let mut runner_ref = edge.point.clone();
-                    let b_idom_ref = b_ref
-                        .read()
-                        .unwrap()
-                        .get_immed_dom()
-                        .and_then(|w| w.upgrade());
 
-                    if let Some(idom) = b_idom_ref {
-                        while !Arc::ptr_eq(&runner_ref, &idom) {
+                    if let Some(ref idom) = b_idom_ref {
+                        let max_steps = self.blocks.len() + 2;
+                        let mut steps = 0;
+                        while !Arc::ptr_eq(&runner_ref, idom) && steps < max_steps {
+                            steps += 1;
                             runner_ref
                                 .write()
                                 .unwrap()
-                                .add_to_dom_frontier(b_ref.read().unwrap().get_index());
+                                .add_to_dom_frontier(b_index);
 
                             let next_runner = runner_ref
                                 .read()
@@ -509,6 +583,7 @@ impl BlockGraph {
                                 .and_then(|w| w.upgrade());
 
                             if let Some(nr) = next_runner {
+                                if Arc::ptr_eq(&nr, &runner_ref) { break; } // self-loop
                                 runner_ref = nr;
                             } else {
                                 break;
@@ -726,3 +801,300 @@ impl FlowBlock for BlockGoto {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
 }
+
+// ===== Structured Block Types =====
+// These are produced by CollapseStructure and walked by PrintC.
+
+/// A structured if-then or if-then-else block.
+///
+/// Corresponds to Ghidra's `BlockIf`. Contains:
+/// - `condition`: the block ending with CBRANCH
+/// - `if_body`: the "true" branch
+/// - `else_body`: optional "false" branch (None = if-then without else)
+#[derive(Debug)]
+pub struct BlockIf {
+    pub index: i32,
+    pub condition: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub if_body: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub else_body: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// When true, the CBRANCH condition should be negated before emitting.
+    /// Set when the if_body comes from the false edge (Triangle-reverse pattern).
+    pub negated: bool,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockIf {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::If }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        // Return condition block ops for the conditional test
+        self.condition.read().unwrap().get_ops()
+    }
+}
+
+/// A structured while-do loop block.
+///
+/// Corresponds to Ghidra's `BlockWhileDo`. Contains:
+/// - `condition`: the loop header block (with CBRANCH for the loop test)
+/// - `body`: the loop body block(s)
+#[derive(Debug)]
+pub struct BlockWhileDo {
+    pub index: i32,
+    pub condition: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub body: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockWhileDo {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::WhileDo }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        self.condition.read().unwrap().get_ops()
+    }
+}
+
+/// Represents a DO-WHILE loop
+///
+/// Corresponds to Ghidra's `BlockDoWhile` class
+#[derive(Debug)]
+pub struct BlockDoWhile {
+    pub index: i32,
+    pub condition: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    // Do-While loops logically have the condition at the end which evaluates the body that it's fused with.
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockDoWhile {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::DoWhile }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        self.condition.read().unwrap().get_ops()
+    }
+}
+
+/// A structured sequence of blocks (linear fallthrough).
+///
+/// Corresponds to Ghidra's `BlockList`. Represents blocks that execute
+/// sequentially with no branching between them.
+#[derive(Debug)]
+pub struct BlockList {
+    pub index: i32,
+    pub children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl BlockList {
+    /// Create a new sequence block containing the given children in order.
+    pub fn new(index: i32, children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>) -> Self {
+        Self {
+            index,
+            children,
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+        }
+    }
+}
+
+impl FlowBlock for BlockList {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::List }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address {
+        self.children.first()
+            .map(|c| c.read().unwrap().get_start_addr())
+            .unwrap_or_else(|| Address::new(0))
+    }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        // Concatenate ops from all children in order
+        let mut all_ops = Vec::new();
+        for child in &self.children {
+            all_ops.extend(child.read().unwrap().get_ops());
+        }
+        all_ops
+    }
+}
+
+/// Boolean operator type for `BlockCondition`.
+///
+/// Corresponds to Ghidra's `BlockCondition::optype`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoolOp {
+    And,
+    Or,
+}
+
+/// A structured boolean condition block (short-circuit && or ||).
+///
+/// Corresponds to Ghidra's `BlockCondition`. Represents two CBRANCH blocks
+/// whose control flow encodes a short-circuit boolean expression:
+///
+/// **AND pattern**: A's false edge and B's false edge go to the same target.
+/// ```text
+///     A (CBRANCH)
+///    / \
+///   |   B (CBRANCH)
+///   |  / \
+///   C    D
+///   ^--- both false edges → C  ==> if(a && b) { D } else { C }
+/// ```
+///
+/// **OR pattern**: A's true edge and B's true edge go to the same target.
+/// ```text
+///     A (CBRANCH)
+///    / \
+///   B   |
+///  / \  |
+/// D   C---
+///     ^--- both true edges → C  ==> if(a || b) { C } else { D }
+/// ```
+#[derive(Debug)]
+pub struct BlockCondition {
+    pub index: i32,
+    pub op_type: BoolOp,
+    /// First condition block (block A — the outer condition).
+    pub first: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    /// Second condition block (block B — the inner condition).
+    pub second: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockCondition {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::Condition }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address { self.first.read().unwrap().get_start_addr() }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        // Concatenate ops from both condition blocks
+        let mut ops = self.first.read().unwrap().get_ops();
+        ops.extend(self.second.read().unwrap().get_ops());
+        ops
+    }
+}
+
+/// A structured switch-case block.
+///
+/// Corresponds to Ghidra's `BlockSwitch`. Contains:
+/// - `control`: the switch control block (normally contains the BRANCHIND op)
+/// - `cases`: ordered list of case body blocks
+/// - `case_values`: list of values corresponding to each case block
+/// - `default_case`: optional default block
+/// - `index_varnode`: optional variable controlling the switch index
+#[derive(Debug)]
+pub struct BlockSwitch {
+    pub index: i32,
+    pub control: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub case_values: Vec<Vec<u64>>,
+    pub index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockSwitch {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn get_index(&self) -> i32 { self.index }
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn get_type(&self) -> BlockType { BlockType::Switch }
+    fn get_flags(&self) -> u32 { self.flags }
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn get_start_addr(&self) -> Address { self.control.read().unwrap().get_start_addr() }
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        self.control.read().unwrap().get_ops()
+    }
+}
+

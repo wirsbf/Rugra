@@ -6,7 +6,7 @@ use crate::funcdata::Funcdata;
 use crate::error::Result;
 use crate::coreaction::*;
 use crate::blockaction::*;
-use std::sync::Arc;
+// use std::sync::Arc;
 
 /// Base trait for all analysis actions
 ///
@@ -105,14 +105,35 @@ impl ActionDatabase {
             .map(|a| a.as_ref())
     }
 
+    /// Run all registered actions on the given function data
+    pub fn apply_all(&self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
+        let mut total = 0;
+        for action in &self.all_actions {
+            total += action.apply(fd)?;
+        }
+        Ok(total)
+    }
+
     /// Set up default decompiler actions
     pub fn set_default_actions(&mut self) {
         let mut decompile_group = ActionGroup::new("decompile");
 
         decompile_group.add_action(Box::new(ActionStart::new()));
         decompile_group.add_action(Box::new(ActionHeritage::new()));
+        decompile_group.add_action(Box::new(ActionInferParams::new())); // Early: before copy propagation removes Register varnodes
         decompile_group.add_action(Box::new(ActionConstantPtr::new()));
         decompile_group.add_action(Box::new(ActionCse::new()));
+        decompile_group.add_action(Box::new(ActionSimplify::new()));
+        // Merge BEFORE copy propagation: copy-merge needs the COPY ops to
+        // still be alive, and DeadCode would otherwise remove them.
+        decompile_group.add_action(Box::new(ActionMergeType::new()));
+        // Type inference BEFORE copy propagation: ActionTypeInfer assigns
+        // types to COPY ops' inputs/outputs. Then CopyPropagate propagates
+        // those types along with use redirection, so surviving Register-space
+        // varnodes inherit types from the Unique-space temporaries.
+        decompile_group.add_action(Box::new(ActionTypeInfer::new()));
+        decompile_group.add_action(Box::new(ActionCopyPropagate::new()));
+        decompile_group.add_action(Box::new(ActionCallParams::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
         decompile_group.add_action(Box::new(ActionBlockStructure::new()));
         decompile_group.add_action(Box::new(ActionNormalizeBranches::new()));

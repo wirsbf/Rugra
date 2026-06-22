@@ -1,43 +1,226 @@
-# `analysis/type_propagation.rs` API Reference
+# `analysis/type_propagation.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/type_propagation.rs`
+**文档路径**: `docs/api/analysis/type_propagation.md`  
+**对应旧源码路径**: `src/analysis/type_propagation.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**
 
-## 模块说明 (Module Doc)
+---
 
-Constraint-based Type Propagation
+## 1. 文档定位
 
-This module implements a type propagation algorithm inspired by Ghidra's
-data type propagation system. It uses a constraint solving approach to
-infer types for variables in the P-code IR.
+本文档用于说明旧版 `analysis/type_propagation.rs` 这类“类型传播”文档在当前 Rugra 文档体系中的正确定位。
 
-# Algorithm
-1. Assign initial types based on known facts (constants, API calls).
-2. Generate constraints for each P-code operation (e.g., ADD inputs must match output).
-3. Iteratively propagate types through the constraint graph until convergence.
+它当前**不是**当前主干类型系统实现的权威说明，而更适合作为：
 
-## 导出的公共 API (Public API)
+- 历史分析分层的参考材料
+- 项目曾经如何规划“约束式类型传播”的背景说明
+- 后续 API 文档复核时的待核对入口
 
-### `pub struct TypeSolver`
+在当前阶段，这份文档应被理解为：
 
-Type solver state
+> **历史遗留 / 待重新验证**
 
-### `pub fn new() -> Self`
+---
 
-*暂无代码注释*
+## 2. 为什么需要标记为历史文档
 
-### `pub fn solve(`
+Rugra 当前文档体系已经明确区分：
 
-Run type propagation algorithm
+- 当前主线对象与模块
+- 历史分层架构
+- 静态结构对齐
+- 运行时验证
+- 尚未完成验证的能力
 
-### `pub fn get_type(&self, var: &str) -> Option<&DataType>`
+在这个基线下，`analysis/` 目录整体都不应再默认被视为当前主干 API 的准确映射。  
+这同样适用于 `type_propagation.rs` 主题文档。
 
-*暂无代码注释*
+主要原因包括：
 
-### `pub fn parse_ssa_properties(name: &str) -> Option<(AddressSpace, u64, usize, usize)>`
+1. 当前主线已经更多围绕以下对象组织：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Varnode`
+   - `Datatype`
+   - `TypeMetatype`
+   - `Heritage`
+   - `ActionDatabase`
+   - `PrintLanguage`
+   - `PrintC`
 
-*暂无代码注释*
+2. 旧版 `analysis/` 文档往往对应：
+   - 旧的 `Program` 风格容器
+   - 旧的分析入口
+   - 旧的数据流/SSA/类型传播组织方式
 
-### `pub fn varnode_to_key(vn: &Varnode) -> String`
+3. 即使“类型传播”这个主题今天仍然重要，也**不能**因为主题仍然重要，就把旧文档直接当作当前代码事实。
 
-Helper to generate a key for a Varnode, including SSA version for global propagation.
+---
 
+## 3. 这份文档现在可以表达什么
+
+在当前阶段，`type_propagation.md` 最稳妥的职责是说明：
+
+- Rugra 曾经或计划将“类型传播”作为独立主题处理
+- 类型传播通常涉及：
+  - 类型约束生成
+  - 类型在数据流图中的前向/后向传播
+  - 已知事实与未知事实之间的逐步收敛
+  - 指针、整数、结构体等类型类别的传播与约束
+  - 为后续变量恢复和输出层提供更稳定的类型基础
+- 这些能力今天依然属于项目的重要目标方向
+
+但它**不能直接证明**：
+
+- 当前 `src/analysis/type_propagation.rs` 仍然是主线实现
+- 当前类型传播逻辑已经稳定存在并可直接使用
+- 当前类型传播结果已与 Ghidra 完全一致
+- 当前类型传播行为已经过运行时对拍验证
+- 旧文档里提到的 solver API 现在仍与源码一一对应
+
+---
+
+## 4. 类型传播主题本身的重要性
+
+虽然本文档当前被标记为历史说明，但“type propagation” 本身依然是反编译链路中的关键主题之一。
+
+典型类型传播通常会回答以下问题：
+
+### 4.1 某个值的初始类型线索是什么
+例如：
+
+- 常量值暗示的位宽或符号性
+- 调用约定提供的参数类型线索
+- 已知库函数签名提供的约束
+- 某些内存访问模式暗示的指针语义
+
+### 4.2 类型如何沿数据流传播
+也就是：
+
+- 一个操作输入的类型如何影响输出类型
+- 某个 `LOAD` / `STORE` / `PTRADD` / 算术运算如何施加类型约束
+- 某个 SSA 值在不同使用点之间如何逐步收敛到更稳定的类型
+
+### 4.3 冲突类型如何处理
+包括：
+
+- 不同路径传播来的类型不一致
+- 某个值既像整数又像指针
+- 某些结构体访问和数组访问模式彼此冲突
+- 推断结果需要保守降级时如何表示“未知”或“未定”
+
+### 4.4 类型传播如何服务后续阶段
+最终类型传播结果通常会影响：
+
+- 变量恢复
+- 函数签名恢复
+- 输出层可读性
+- 结构体字段显示
+- 指针表达式显示
+
+因此，即使这份文档当前是历史说明，**类型传播这个主题本身依旧是当前项目的重要能力方向**。
+
+---
+
+## 5. 当前阅读这份文档时的正确姿势
+
+### 可以这样理解
+- 它是“类型传播”这个主题的历史入口
+- 它可能反映了项目早期对约束式类型传播的分层想法
+- 它可以帮助后续整理“类型传播应包含哪些能力”
+- 它能说明项目曾经希望通过 solver/constraint 方式推进类型恢复
+
+### 不应这样理解
+- 它就是当前主干类型传播实现
+- 只要有这份文档，当前类型传播就已经成熟
+- 这份文档里的 API 现在一定还能直接对应到源码
+- 当前类型传播已经完成与 Ghidra 的一致性验证
+
+---
+
+## 6. 与当前主线更接近的阅读入口
+
+如果你想理解 Rugra **当前更真实的类型相关主线**，建议优先查看这些文档与源码对象：
+
+### 优先文档
+- `../lib.md`
+- `../funcdata.md`
+- `../op.md`
+- `../varnode.md`
+- `../typeop.md`
+- `../type_system/`
+- `../printc.md`
+- `../../VERIFICATION_GUIDE.md`
+- `../../../CURRENT_STATUS.md`
+
+### 优先源码对象
+- `Funcdata`
+- `PcodeOp`
+- `Varnode`
+- `Datatype`
+- `TypeMetatype`
+- `ActionDatabase`
+- `PrintC`
+
+原因是当前类型相关结果更可能以“分散在函数级主线对象、统一类型系统和规则系统中”的方式存在，而不是继续严格停留在旧 `analysis/type_propagation.rs` 那种目录分层里。
+
+---
+
+## 7. 当前推荐状态标签
+
+后续如果继续维护这份文档，建议在页首或索引中为其保持如下状态：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前实现权威说明
+
+也可以考虑在后续统一引入这样的标签体系：
+
+- `已核对（当前有效）`
+- `部分有效（需对照源码）`
+- `历史遗留（仅供参考）`
+- `明显过期（待重写）`
+
+而本文件当前最合适的状态就是：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 8. 后续重写时应核对什么
+
+未来如果要把这份文档重新升级为“当前有效 API 文档”，至少应核对以下问题：
+
+1. 当前是否仍存在独立的类型传播模块  
+2. 当前类型传播是否围绕：
+   - `Funcdata`
+   - `Action`
+   - `Rule`
+   - `Datatype`
+   - `TypeMetatype`
+   - `PrintC`
+   来组织  
+3. 当前是否已经：
+   - 建立统一类型约束模型
+   - 支持关键操作的类型传播
+   - 把结果回写到打印或变量恢复阶段
+   - 对接已知函数签名或 ABI 线索
+4. 当前这些能力是：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题未核清之前，这份文档不应恢复为“当前主干说明”。
+
+---
+
+## 9. 一句话结论
+
+`docs/api/analysis/type_propagation.md` 当前应被理解为：
+
+> **Rugra 旧版“约束式类型传播”分层思路的历史文档入口，可用于理解类型传播主题本身的重要性，但不能继续被当作当前主线实现或当前已验证能力的权威说明。**
+
+---

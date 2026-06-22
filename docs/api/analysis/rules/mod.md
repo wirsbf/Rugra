@@ -1,54 +1,282 @@
-# `analysis/rules/mod.rs` API Reference
+# `analysis/rules/mod.rs` API Reference（历史/待复核说明）
 
-**源代码路径**: `src/analysis/rules/mod.rs`
+**文档路径**: `docs/api/analysis/rules/mod.md`  
+**对应旧源码路径**: `src/analysis/rules/mod.rs`  
+**当前状态**: ⚠️ **历史遗留文档，待根据当前源码主线重新核实**  
+**可信边界**: 本文档当前只应用于说明 Rugra 旧版“规则化优化系统”分层的历史定位，**不应被当作当前主线规则系统、当前默认优化流水线或当前已验证能力的权威说明**。
 
-## 模块说明 (Module Doc)
+---
 
-Rule-based optimization system
+## 1. 文档定位
 
-This module implements a rule-based simplification engine inspired by Ghidra's
-decompiler architecture. It allows defining small, focused optimization rules
-that are applied iteratively until the P-code stabilizes.
+本文档用于说明旧版 `analysis/rules/mod.rs` 这类“规则化优化系统”文档在当前 Rugra 文档体系中的正确位置。
 
-## 导出的公共 API (Public API)
+它现在最适合承担的角色是：
 
-### `pub enum RuleResult`
+- 旧版规则系统分层的历史入口
+- 说明项目曾经如何围绕独立 `analysis/rules/` 目录组织规则化优化
+- 为后续逐篇 API 文档复核提供待核对目标
+- 帮助读者区分“当前 Action / Rule 主线”与“旧版 analysis/rules 文档层”
 
-Result of applying a rule
+它**不负责**说明以下内容：
 
-### `pub trait Rule`
+- 当前 Rugra 的规则系统主实现一定仍在 `src/analysis/rules/`
+- 当前默认规则控制器仍主要围绕旧 `RuleController` / `RuleResult` / `ActionSimplify` 这套结构展开
+- 当前规则执行行为已经与 Ghidra 完成运行时一致性验证
+- 当前所有规则都已完整实现并稳定可用
 
-A simplification rule that can be applied to a P-code operation
+---
 
-### `pub trait Action`
+## 2. 为什么这份文档必须降级为历史说明
 
-Represents a major optimization pass or action
+Rugra 当前文档基线已经明确：
 
-### `pub struct RuleController`
+- 当前主线应优先围绕真实 `src/` 可见结构来理解
+- `analysis/` 目录整体不再默认视为当前主干架构的权威映射
+- 旧 `Program` / `analysis` / `codegen` / `translator` 分层应视为历史说明
+- 当前主线更接近围绕这些对象组织：
+  - `Funcdata`
+  - `PcodeOp`
+  - `Varnode`
+  - `BlockBasic`
+  - `Heritage`
+  - `ActionDatabase`
+  - `Action`
+  - `Rule`
+  - `PrintLanguage`
+  - `PrintC`
 
-Controller that manages and applies optimization rules
+在这个前提下，`analysis/rules/mod.rs` 这类文档不能再继续被写成：
 
-### `pub fn new() -> Self`
+- 当前规则系统的主入口
+- 当前优化控制器的权威说明
+- 当前默认规则集的真实清单
+- 当前运行时行为结论的直接依据
 
-Create a new rule controller
+因此，本页应明确标记为：
 
-### `pub fn add_rule<R: Rule + 'static>(&mut self, rule: R)`
+> **历史遗留 / 待重新验证**
 
-Register a new rule
+---
 
-### `pub fn apply_rules(&self, program: &mut Program, cfg: &ControlFlowGraph, analysis: &FunctionAnalysis) -> bool`
+## 3. 旧版 `analysis/rules/` 主题本身在讲什么
 
-Apply all rules iteratively until convergence
+尽管它现在被降级为历史文档，但“规则系统”这个主题本身仍是 Rugra 反编译架构中的重要组成部分。
 
-### `pub struct ActionSimplify`
+旧版 `analysis/rules/mod.rs` 文档通常试图说明以下内容：
 
-Action that applies a set of rules repeatedly
+### 3.1 规则化优化框架
+也就是把大量局部简化、替换、规约逻辑，抽象成一组可注册、可迭代应用的规则。
 
-### `pub fn new(controller: RuleController) -> Self`
+### 3.2 规则执行结果
+通过类似 `RuleResult` 的结构表达：
 
-*暂无代码注释*
+- 无变化
+- 有变化
+- 需要继续迭代
+- 某类重启或重新扫描语义
 
-### `pub fn with_defaults() -> Self`
+### 3.3 规则控制器
+通过类似 `RuleController` 的对象：
 
-Create a controller pre-populated with default optimization rules
+- 注册规则
+- 管理规则集合
+- 迭代执行规则
+- 直到 IR 收敛或达到停止条件
 
+### 3.4 规则驱动的动作层
+旧文档中常会把某些“批量执行规则”的能力包装成类似 `ActionSimplify` 的对象，让规则系统进入更高层流水线。
+
+这些主题从概念上看都合理且重要，但问题在于：
+
+> **这些主题的重要性，不等于旧版 `analysis/rules/` 文档今天仍然准确映射当前主线实现。**
+
+---
+
+## 4. 当前为什么不能直接把旧规则文档当现状
+
+当前不能继续把旧 `analysis/rules/mod.rs` 文档当作事实入口，主要原因如下。
+
+### 4.1 当前主线已更明显转向 `action.rs` / `ruleaction.rs`
+从现有文档和代码可见信息看，当前规则与动作主线已经更多围绕：
+
+- `action.rs`
+- `coreaction.rs`
+- `ruleaction.rs`
+- `Funcdata`
+- `PcodeOp`
+- `Varnode`
+
+而不是独立旧式 `analysis/rules/mod.rs` 作为主入口。
+
+### 4.2 旧文档容易把旧控制器模型误写成当前实现
+例如旧文档中常见的：
+
+- `RuleResult`
+- `Rule`
+- `Action`
+- `RuleController`
+- `ActionSimplify`
+- `apply_rules(...)`
+
+这些名称可能代表某一历史实现阶段的对象模型，但不能直接推出：
+
+- 当前主线仍以这些结构作为正式 API
+- 当前默认规则执行仍依赖 `RuleController`
+- 当前优化阶段仍由旧 `analysis/rules/` 统一调度
+- 当前输出层仍从这套旧结构直接受益
+
+### 4.3 旧文档容易造成“规则系统已成熟”的错觉
+只要保留了一套完整的规则系统文档，读者就很容易误判为：
+
+- 规则系统已经成熟
+- 规则库已经很丰富
+- 默认规则顺序已经稳定
+- 行为已经验证
+- 与 Ghidra 已达成一致
+
+但当前总控文档明确反对这种推断方式。
+
+---
+
+## 5. 当前更接近真实主线的规则阅读入口
+
+如果你现在想理解 Rugra **当前更真实的规则与动作主线**，建议优先阅读以下文档，而不是优先阅读这份历史页：
+
+### 优先 API 文档
+- `../../action.md`
+- `../../coreaction.md`
+- `../../ruleaction.md`
+- `../../funcdata.md`
+- `../../op.md`
+- `../../varnode.md`
+- `../../printc.md`
+
+### 优先总控文档
+- `../../../PROJECT_STRUCTURE.md`
+- `../../../README.md`
+- `../../../../CURRENT_STATUS.md`
+- `../../../../ALIGNMENT_PROGRESS.md`
+- `../../../VERIFICATION_GUIDE.md`
+- `../../../data_contract.md`
+
+### 推荐理解方式
+当前更可靠的理解顺序应当是：
+
+1. `Funcdata`：函数级总容器  
+2. `PcodeOp` / `Varnode`：规则作用的主要对象  
+3. `Action`：高层阶段性处理  
+4. `Rule`：局部变换与重写  
+5. `ActionDatabase`：当前更接近主线的调度入口  
+6. `PrintC`：消费更稳定、更简化后的结果  
+
+也就是说，今天更应把：
+
+- `action.rs`
+- `coreaction.rs`
+- `ruleaction.rs`
+
+看作规则与动作主线的理解入口，而不是把 `analysis/rules/mod.rs` 当作默认事实起点。
+
+---
+
+## 6. 这份历史文档现在还能提供什么价值
+
+虽然它不再是当前主线说明，但仍然有这些价值：
+
+### 6.1 帮助理解项目历史演化
+它能说明 Rugra 曾经如何尝试把规则系统做成一个独立分析分层。
+
+### 6.2 帮助识别旧术语来源
+当你在旧日志、旧设计稿、旧 API 文档里看到：
+
+- `RuleController`
+- `RuleResult`
+- `ActionSimplify`
+- `analysis::rules`
+- `apply_rules(...)`
+
+时，可以知道这些术语来自旧架构语境。
+
+### 6.3 帮助后续做迁移审计
+如果将来要系统清理或复核旧文档，`analysis/rules/mod.md` 可以作为“规则系统历史页”的入口保留下来。
+
+---
+
+## 7. 当前不应从本页继续推导的结论
+
+阅读本页时，请特别避免继续推出以下结论：
+
+### 不应推导 1：当前规则系统仍主要围绕 `RuleController`
+当前更接近主线的理解应围绕 `ActionDatabase` 与 `Rule` / `Action` 抽象，而不是默认认为 `RuleController` 仍是核心正式对象。
+
+### 不应推导 2：当前规则执行仍由旧 `analysis/rules/` 统一驱动
+旧文档中的控制器结构，只说明历史分层曾经这样组织，不代表当前主线仍然如此。
+
+### 不应推导 3：规则库已经成熟稳定
+文档里有多个规则类名或统一控制器，不等于当前规则数量、覆盖率和质量已经足够成熟。
+
+### 不应推导 4：规则行为已经完成与 Ghidra 的一致性验证
+这类结论必须依赖运行时验证、样本对拍、差异报告和状态文档，而不是依赖历史 API 文档本身。
+
+### 不应推导 5：默认优化流水线就是旧文档中的那套顺序
+旧架构里可能存在统一 `apply_rules(...)` 流程，但不能因此认定当前主线仍依赖它。
+
+---
+
+## 8. 当前推荐状态标签
+
+若后续对 API 文档体系引入统一状态标识，本页最合适的标签应为：
+
+- **状态**: 历史遗留
+- **可信度**: 待核对
+- **用途**: 主题参考 / 迁移参考
+- **不应用途**: 当前主线实现说明
+
+也可以纳入统一标签体系中的这一类：
+
+> **历史遗留（仅供参考）**
+
+---
+
+## 9. 后续若要重写为“当前有效文档”，需要核对什么
+
+如果将来要把规则系统主题重新写回“当前主线 API 文档”，至少应先核清以下问题：
+
+1. 当前主线规则执行是否完全围绕 `action.rs` / `ruleaction.rs`
+2. 当前是否还存在独立可用的 `analysis/rules/mod.rs`
+3. 当前默认规则控制入口究竟是：
+   - `ActionDatabase`
+   - 规则动作组
+   - 某种新的控制器
+   - 还是其他辅助结构
+4. 当前规则执行逻辑究竟挂在：
+   - `Funcdata`
+   - `PcodeOp`
+   - `Action`
+   - `Rule`
+   - `ActionDatabase`
+   上
+5. 当前是否已有：
+   - 可重复测试
+   - 运行时对拍
+   - 差异报告
+   - 样本级验证
+6. 当前规则相关能力属于：
+   - 已实现
+   - 部分实现
+   - 计划中
+   - 已验证
+   - 尚未验证
+
+在这些问题没有核清之前，本页不能恢复为“当前主线说明”。
+
+---
+
+## 10. 一句话结论
+
+`docs/api/analysis/rules/mod.md` 当前应被理解为：
+
+> **Rugra 旧版独立规则化优化分层思路的历史文档入口。它有助于理解项目曾如何围绕 `RuleController`、`RuleResult`、局部规则与简化动作组织优化流程，但不能继续被当作当前主线规则系统、当前验证状态或当前成熟能力的权威说明。**
+
+---

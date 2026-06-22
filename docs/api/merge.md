@@ -1,28 +1,88 @@
-# `merge.rs` API Reference (高级变量合并管理器)
+# `merge.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/merge.rs`
 
 ## 模块说明 (Module Doc)
 
-对应 Ghidra `merge.hh`。SSA 构造结束后，同一个 C 语言变量会在数据流中分裂为多个跨版本 `Varnode`。`Merge` 模块的职责就是**将这些散碎的 SSA 分身重新收拢聚合到同一个 `HighVariable` 下**，使之在最终反编译输出中呈现为一个统一的人类可读变量。
+High-level variable merging logic
 
----
+Corresponds to Ghidra's `merge.hh`. This module is responsible for
+merging multiple SSA Varnodes into a single HighVariable.
 
 ## 导出的公共 API (Public API)
 
-### `pub struct Merge` (合并调度器)
+### `pub struct Merge`
 
-*   `pub fn new(fd: Arc<RwLock<Funcdata>>) -> Self`: 绑定到一个函数级容器上。
-*   `pub fn merge_all(&mut self)`: **一键执行全量合并流程**。内部按优先级依次调度五种合并策略：
-    1. `merge_addr_tied()` — 地址绑定合并：将同地址同大小的 Varnode 在生存范围不冲突时合并。
-    2. `merge_adjacent()` — 相邻合并（桩）。
-    3. `merge_multi_entry()` — 多入口合并（桩）。
-    4. `merge_marker()` — 标记合并（桩）。
-    5. `merge_by_datatype()` — 按数据类型合并（桩）。
+Manages the process of merging Varnodes into HighVariables
 
-*   `pub fn merge_test(&self, v1: &Varnode, v2: &Varnode) -> bool`: 判断两个 Varnode 是否可安全合并（依据 Cover 不重叠等条件）。当前为桩返回 `false`。
-*   `pub fn merge_force(&mut self, vn1, vn2)`: 强制合并两个 Varnode 为同一个 HighVariable（桩）。
+Corresponds to Ghidra's `Merge` class. Groups SSA varnodes that
+represent the same logical variable into `HighVariable` instances,
+then assigns human-readable names to each group.
+
+### `pub fn new() -> Self`
+
+Create a new Merge instance
+
+### `pub fn clear(&mut self, fd: &mut Funcdata)`
+
+Clear all existing HighVariables and reset merge state
+
+### `pub fn merge_all(&mut self, fd: &mut Funcdata)`
+
+Perform the full merging + naming pipeline
+
+### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
+
+Merge varnodes that are tied to the same address+size.
+
+This is the primary merge pass: varnodes at the same location
+and with the same size are different SSA versions of the same
+logical variable and should share a HighVariable.
+
+### `pub fn merge_test(&self, v1: &Varnode, v2: &Varnode) -> bool`
+
+Test whether two varnodes can be merged into the same HighVariable.
+
+Returns true if they share the same address space and size, and
+neither is a constant or annotation (which should never be merged).
+
+### `pub fn merge_force(&mut self, vn1: Arc<RwLock<Varnode>>, vn2: Arc<RwLock<Varnode>>)`
+
+Force-merge two varnodes into the same HighVariable.
+
+If vn1 already has a HighVariable, add vn2 to it (or vice versa).
+If neither has one, create a new HighVariable for both.
+
+### `pub fn assign_names(&mut self, fd: &mut Funcdata)`
+
+Assign human-readable names to all HighVariables in the function.
+
+Naming follows Ghidra conventions:
+- Stack negative offset → `local_Xh`
+- Stack positive offset → `param_stack_Xh`
+- Register → `uVarN`
+- Unique temp → `uVarN`
+- RAM global → `DAT_XXXXXXXX`
+
+### `pub fn merge_adjacent(&mut self, _fd: &mut Funcdata)`
+
+Merge adjacent varnodes (placeholder for future enhancement)
+
+### `pub fn merge_multi_entry(&mut self, _fd: &mut Funcdata)`
+
+Merge multi-entry varnodes (placeholder for future enhancement)
+
+### `pub fn merge_marker(&mut self, _fd: &mut Funcdata)`
+
+Merge marker varnodes (placeholder for future enhancement)
+
+### `pub fn merge_by_datatype(&mut self, _fd: &mut Funcdata)`
+
+Merge by datatype compatibility (placeholder for future enhancement)
 
 ### `pub struct BlockVarnode`
 
-记录一个 Varnode 及其所在基本块的索引，用于合并算法中的分组排序。
+Represents a varnode within a specific block for merging purposes
+
+ 

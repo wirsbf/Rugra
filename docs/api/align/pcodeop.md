@@ -1,5 +1,6 @@
 # `align/pcodeop.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/align/pcodeop.rs`
 
 ## 模块说明 (Module Doc)
@@ -11,15 +12,9 @@ internal PcodeOp representation as defined in `op.hh`.
 
 ## 导出的公共 API (Public API)
 
-### `pub fn map_ghidra_opcode(opcode: i32) -> Option<PcodeOp>`
+### `pub fn verify_opcode(rugra_op: OpCode, ghidra_opcode: i32) -> bool`
 
-Map Ghidra OpCode integers to Rugra PcodeOp enum
-
-This mapping is based on Ghidra's opcodes.hh
-
-### `pub fn verify_opcode(rugra_op: PcodeOp, ghidra_opcode: i32) -> bool`
-
-Verify that a Rugra PcodeOp matches a Ghidra opcode
+Verify that a Rugra OpCode matches a Ghidra opcode
 
 ### `pub fn verify_operation(`
 
@@ -39,3 +34,4 @@ Verify input list alignment
 
 Verify output alignment
 
+ 

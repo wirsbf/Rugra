@@ -46,6 +46,7 @@ lazy_static = "1.4"
 bitvec = "1.0"
 num-traits = "0.2"
 num-derive = "0.4"
+jingle_sleigh = "0.5.2"
 
 [dev-dependencies]
 criterion = "0.5"
@@ -59,7 +60,7 @@ capstone = []
 ffi-test = []
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "rugra"

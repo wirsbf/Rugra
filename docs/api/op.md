@@ -1,63 +1,824 @@
-# `op.rs` API Reference (操作算子对象)
+# `op.rs` API Reference
 
 **源代码路径**: `src/op.rs`
 
-## 模块说明 (Module Doc)
+## 文档状态
 
-此类为抽象表示 P-code IR 层核心操作的集结。它将独立流离的 `Varnode`（参数/变量）以网络边（流依赖）的形式打通构成控制数据流网络。
-该模块旨在实现与老版 Ghidra 代码 `op.hh` 中对于 `PcodeOp` 及附属组织形式的一致映射构造。
+- **状态**: 已核对（当前有效）
+- **文档目标**: 解释 Rugra 当前 `PcodeOp` 相关结构、标志位和操作银行的职责
+- **可信边界**: 本文以当前 `src/op.rs` 所体现的 **P-code 操作结构建模** 为核心，不再沿用旧式“完整旧架构已稳定可用”的写法
+- **阅读方式**: 请结合以下文件一起看：
+  - `src/op.rs`
+  - `src/opcodes.rs`
+  - `src/varnode.rs`
+  - `src/address.rs`
+  - `src/funcdata.rs`
+  - `docs/data_contract.md`
+
+> 若本文与源码不一致，应以当前源码为准，并优先修正文档。
+
+---
+
+## 模块定位
+
+`op.rs` 是 Rugra 当前 **P-code 操作层** 的核心模块之一，主要负责：
+
+1. 定义单条 P-code 操作的结构表示：`PcodeOp`
+2. 定义与操作状态相关的一组位标志（flags）
+3. 提供操作引用包装类型：`PcodeOpRef`
+4. 提供操作片段/拼接分析辅助结构：`PieceNode`
+5. 提供操作容器：`PcodeOpBank`
+
+它在整体链路中的位置大致是：
+
+- `pcoderaw.rs` 表示更原始的、接近 lifting 输出的操作
+- `op.rs` 表示进入图结构后的正式操作对象
+- `funcdata.rs` 将这些对象组织到单函数分析上下文中
+- `heritage.rs`、`action.rs`、`ruleaction.rs` 等在此基础上做 SSA、重写和分析
+- `printlanguage.rs` / `printc.rs` 最终消费这些结构并生成文本输出
 
 ---
 
-## 导出的公共 API (Public API)
+## 与 Ghidra 的关系
 
-### `pub mod pcodeop_flags` (算子的执行特性标识位)
+本文档中涉及的核心类型主要对应 Ghidra 的：
 
-决定某个特定操作指令的宏观特性与不可剔除性的布尔级组合掩码：
-*   **`STARTBASIC`**: 表明这是一块基本块 (Basic Block) 的头领节点指令。
-*   **`BRANCH` / `CALL` / `RETURNS`**: 表述此操作会打断线性的自然堕落式执行，并引发控制流越阶跳跃（具有函数层副作用）。
-*   **`NOCOLLAPSE` / `DEAD` / `MARKER`**: 优化过程中的生死存亡判定： `DEAD` 表示其结果悬空并已经被死代码擦除引擎确认消灭离线；`NOCOLLAPSE` 意味着其具有特殊意义禁止在代数化简中被压扁折叠。
-*   **`COMMUTATIVE` / `UNARY` / `BINARY` / `TERNARY`**: 描述该指令特性的多元组与自交换数学特征（比如 INT_ADD 可安全交换运算两侧）。
-*   **`BADINSTRUCTION` / `UNIMPLEMENTED`**: 解析、解码与恢复错误断言位。
+- `op.hh`
+- `PcodeOp`
+- `PcodeOpBank`
+- 若干与操作属性相关的 flag 语义
+
+但需要明确：
+
+- **结构命名接近 Ghidra，不等于运行时行为已经与 Ghidra 完全一致**
+- 本模块当前应被理解为 **Rugra 的现行操作层建模基础**
+- 与 Ghidra 的“行为级一致性”仍需依赖单独的验证与对拍文档，而不是由 API 文档直接证明
 
 ---
+
+## 核心设计思路
+
+`op.rs` 的关注点不是“如何直接生成 C 代码”，而是如何为函数级分析提供一个可变换、可追踪、可链接的操作图层。
+
+它解决的问题包括：
+
+- 一条 P-code 操作如何保存 opcode、输入、输出、时序信息
+- 如何标记这条操作是否为：
+  - 分支
+  - 调用
+  - 已死亡
+  - 布尔输出
+  - 不可折叠
+  - 间接来源
+  - 非打印节点
+- 如何将操作对象放进容器统一管理
+- 如何在重写、DCE、SSA、结构恢复过程中追踪这些对象
+
+---
+
+## 公共 API 总览
+
+当前本文重点覆盖以下公共项：
+
+- `TypeOp`
+- 一组公开的操作标志常量
+- `IopSpace`
+- `PcodeOp`
+- `PcodeOpRef`
+- `PieceNode`
+- `PcodeOpBank`
+
+---
+
+## 1. `TypeOp`
+
+### `pub struct TypeOp`
+
+`TypeOp` 是与操作类型语义相关的结构体。
+
+### 当前文档口径
+
+从当前模块职责来看，`TypeOp` 更适合被理解为：
+
+- 操作语义分类/行为支持的基础类型
+- 与 opcode 的高级语义或类别信息有关
+- 为更高层的分析或规则处理提供辅助
+
+### 说明
+
+由于当前公开文档中缺少更详细的源码注释，本文不把它夸大描述为完整稳定的“行为数据库”或“完全对齐 Ghidra 的语义工厂”。
+
+更保守的理解是：
+
+- 它属于操作语义层的一部分
+- 它可能参与操作类别、属性或行为推断
+- 具体字段和使用方式应以 `src/op.rs` 实现为准
+
+---
+
+## 2. 操作标志位常量（flags）
+
+`op.rs` 公开了一大组 `u32` 标志位常量，用于描述一条 `PcodeOp` 的属性状态。
+
+这些常量本质上属于：
+
+- **位掩码（bit flags）**
+- **操作元信息**
+- **规则系统和打印系统的判定依据**
+
+### 标志位的作用
+
+这些标志不是“单独的业务对象”，而是用来回答类似问题：
+
+- 这条操作是不是分支？
+- 这条操作是不是调用？
+- 这条操作是不是已经被标记为 dead？
+- 这条操作是否有布尔输出？
+- 这条操作是不是不可折叠？
+- 这条操作是不是特殊控制流节点？
+- 这条操作是不是仅用于内部分析、不应出现在最终打印中？
+
+### 当前公开常量
+
+- `STARTBASIC`
+- `BRANCH`
+- `CALL`
+- `RETURNS`
+- `NOCOLLAPSE`
+- `DEAD`
+- `MARKER`
+- `BOOLOUTPUT`
+- `BOOLEAN_FLIP`
+- `FALLTHRU_TRUE`
+- `INDIRECT_SOURCE`
+- `CODEREF`
+- `STARTMARK`
+- `MARK`
+- `COMMUTATIVE`
+- `UNARY`
+- `BINARY`
+- `SPECIAL`
+- `TERNARY`
+- `RETURN_COPY`
+- `NONPRINTING`
+- `HALT`
+- `BADINSTRUCTION`
+- `UNIMPLEMENTED`
+- `NORETURN`
+- `MISSING`
+- `SPACEBASE_PTR`
+- `INDIRECT_CREATION`
+- `CALCULATED_BOOL`
+- `HAS_CALLSPEC`
+- `PTRFLOW`
+- `INDIRECT_STORE`
+
+---
+
+### 标志位分组理解
+
+虽然源码里这些是平铺的常量，但在阅读时可以按语义粗分：
+
+#### A. 控制流相关
+- `STARTBASIC`
+- `BRANCH`
+- `CALL`
+- `RETURNS`
+- `HALT`
+- `NORETURN`
+- `FALLTHRU_TRUE`
+
+这类标志帮助回答：
+
+- 是否会切分基本块
+- 是否影响 CFG 边
+- 是否代表函数调用/返回语义
+- 是否是停止点
+
+#### B. 生命周期与状态相关
+- `DEAD`
+- `MARKER`
+- `MARK`
+- `MISSING`
+- `UNIMPLEMENTED`
+- `BADINSTRUCTION`
+
+这类标志帮助规则系统和错误处理识别：
+
+- 节点是否还活着
+- 节点是否为内部标记用途
+- 节点是否由坏指令或未实现语义产生
+
+#### C. 运算性质相关
+- `COMMUTATIVE`
+- `UNARY`
+- `BINARY`
+- `TERNARY`
+- `SPECIAL`
+- `BOOLOUTPUT`
+- `BOOLEAN_FLIP`
+- `CALCULATED_BOOL`
+
+这类标志更偏操作语义，用于：
+
+- 简化匹配
+- 规则分类
+- 打印与表达式生成
+- 条件逻辑推断
+
+#### D. 间接/内存/调用语义相关
+- `INDIRECT_SOURCE`
+- `INDIRECT_CREATION`
+- `INDIRECT_STORE`
+- `HAS_CALLSPEC`
+- `SPACEBASE_PTR`
+- `PTRFLOW`
+- `RETURN_COPY`
+- `CODEREF`
+
+这类标志常用于更高层分析，例如：
+
+- 间接引用
+- 指针流
+- 调用语义
+- 返回值复制
+- 地址/代码引用识别
+
+#### E. 输出与显示控制相关
+- `NONPRINTING`
+- `NOCOLLAPSE`
+
+这类标志偏向表示层或规则约束层，帮助决定：
+
+- 某些节点是否适合进入最终文本输出
+- 某些节点是否可以被折叠、合并或简化
+
+---
+
+## 3. `IopSpace`
+
+### `pub struct IopSpace`
+
+`IopSpace` 对应 Ghidra 中 `op.hh` 的相关概念。
+
+它更适合被理解为：
+
+- 与 P-code 操作引用或内部操作空间有关的辅助结构
+- 为某些特殊操作节点或间接操作标识提供命名/空间支撑
+
+### `pub const NAME: &'static str = "iop"`
+
+这是 `IopSpace` 暴露的名称常量。
+
+### 语义理解
+
+`"iop"` 一般可理解为：
+
+- internal op / indirect op 之类的内部命名空间
+- 用来给某类“不是普通 RAM / register / unique”的操作相关对象提供可识别标签
+
+### 注意事项
+
+在当前文档层面，不应把 `IopSpace` 夸大解释为完整独立的“通用地址空间体系”或“最终用户可感知空间”。
+
+它更像：
+
+- 内部语义工具
+- 用于支持 IR / op 级建模
+- 不直接面向最终 C 代码使用者
+
+---
+
+## 4. `PcodeOp`
 
 ### `pub struct PcodeOp`
 
-代表数据流网络上的一根功能纤维（一个独立 P-code 中间指令节点）。
+`PcodeOp` 是本模块最核心的类型，表示 **一条正式进入 Rugra IR 图结构的 P-code 操作**。
 
-*   **`pub opcode: OpCode`**: 核心动作枚举词（挂钩跨全系统的加减跳、比较等行为定性词汇）。
-*   **`pub start: SeqNum`**: 此微操源自于原始二进制机码字节流中的具体位置序列坐标。用于查错与追溯映射还原。
-*   **`pub parent: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>`**: 向上指引它被编排落户在哪一个图状基本块/容器域中。
-*   **`pub output: Option<Arc<RwLock<Varnode>>>`**: 本次执行可能触发覆写的输出结果变元（单端出线）。
-*   **`pub inrefs: Vec<Arc<RwLock<Varnode>>>`**: 计算过程必须消耗消费的上游输入变元参宿群（多端入线）。
+它承担的核心职责包括：
 
-#### 关联核心查询指引
+- 保存该操作的 `OpCode`
+- 保存该操作的输入列表
+- 保存可选输出
+- 保存操作时序锚点 `SeqNum`
+- 保存与标志位相关的状态
+- 为后续：
+  - SSA
+  - def-use
+  - DCE
+  - 规则重写
+  - CFG/结构化打印
+  提供操作级访问入口
 
-*   `pub fn get_addr(&self) -> Address` / `pub fn get_seq_num(&self) -> &SeqNum`  
-    获取该操作的发源原态机码位置或唯一追溯编号。
-*   `pub fn get_in(&self, slot: usize) -> Option<&Arc<RwLock<Varnode>>>` / `pub fn get_out(&self) -> Option<&Arc<RwLock<Varnode>>>`  
-    检索该算子的进出口挂载节点（如果它是一个 CALL 或者是 BRANCH，它有可能无输出宿主而返回 None）。
-*   `pub fn is_dead(&self) -> bool` / `pub fn is_call(&self) -> bool` / `pub fn is_branch(&self) -> bool`  
-    读取内部挂载的掩码标志位，提供面向高级扫描器的特判通道。
+### 核心语义
+
+可以把 `PcodeOp` 理解为：
+
+> “图中的一条带有输入、输出、时序和语义类别的操作节点。”
+
+它不是：
+
+- 原始 lifting 结果本身（那更接近 `PcodeOpRaw`）
+- 最终高层 AST 节点
+- 直接面向用户的 C 代码语句
+
+它是 Rugra 当前反编译分析主链路中的 **正式 IR 操作节点**。
 
 ---
 
+### `pub fn new(start: SeqNum, opcode: OpCode) -> Self`
+
+创建新的 `PcodeOp`。
+
+#### 参数
+- `start`: 该操作的时序/地址锚点
+- `opcode`: 操作码
+
+#### 返回
+- 一个新的 `PcodeOp`
+
+#### 作用
+这是最基础的构造入口，用于在图中创建一条操作记录。
+
+#### 约束理解
+新建后的 `PcodeOp` 一般还需要进一步补充：
+
+- 输入
+- 输出
+- 标志状态
+- 图中链接关系
+
+因此它是“节点创建起点”，不是“完整操作生命周期的终点”。
+
+---
+
+### `pub fn get_opcode(&self) -> OpCode`
+
+获取当前操作的操作码。
+
+#### 用途
+常用于：
+
+- 分析分支
+- 规则匹配
+- 打印阶段判断
+- 分类判断（算术、控制流、调用、比较等）
+
+---
+
+### `pub fn get_addr(&self) -> Address`
+
+获取该操作关联的地址。
+
+#### 语义
+这是从操作的时序锚点中提取出的地址语义，用于：
+
+- 调试
+- 查找
+- 报错定位
+- CFG / block 相关逻辑
+
+#### 注意
+这里的地址是 IR 操作关联的地址锚点，不应简单理解为“源码行号”或“最终语句地址”。
+
+---
+
+### `pub fn get_seq_num(&self) -> &SeqNum`
+
+获取该操作的完整序号对象。
+
+#### 用途
+比 `get_addr()` 更完整，因为 `SeqNum` 通常还包含：
+
+- 地址
+- 顺序
+- 时间/局部序
+
+这对同一机器指令展开出多条 P-code 时尤其重要。
+
+---
+
+### `pub fn num_input(&self) -> usize`
+
+返回输入数量。
+
+#### 用途
+常用于：
+
+- 操作分类
+- 规则匹配
+- 防御式遍历
+- 打印表达式时检查输入是否合法
+
+---
+
+### `pub fn get_in(&self, slot: usize) -> Option<&Arc<RwLock<Varnode>>>`
+
+获取指定输入槽位的输入 `Varnode`。
+
+#### 参数
+- `slot`: 输入位置索引
+
+#### 返回
+- 对应输入 varnode 的只读引用包装，若不存在则返回 `None`
+
+#### 说明
+之所以返回带锁的共享引用，说明当前 Rugra 的操作对象与 varnode 对象是图式共享结构，而不是简单值复制。
+
+---
+
+### `pub fn get_out(&self) -> Option<&Arc<RwLock<Varnode>>>`
+
+获取输出 `Varnode`。
+
+#### 返回
+- 若该操作有输出，则返回输出节点
+- 否则返回 `None`
+
+#### 说明
+不是所有操作都有输出，例如某些控制流类操作就可能没有普通意义上的输出 varnode。
+
+---
+
+### `pub fn is_dead(&self) -> bool`
+
+判断该操作是否被标记为 dead。
+
+#### 语义
+通常用于：
+
+- 死代码消除
+- 清理阶段
+- 打印过滤
+- 规则跳过
+
+#### 注意
+“dead” 是操作生命周期状态，不等于对象已经物理销毁。
+
+---
+
+### `pub fn is_call(&self) -> bool`
+
+判断该操作是否具有调用语义。
+
+#### 用途
+可用于：
+
+- 调用恢复
+- 参数与返回值分析
+- 打印阶段生成调用表达式
+
+---
+
+### `pub fn is_branch(&self) -> bool`
+
+判断该操作是否具有分支语义。
+
+#### 用途
+可用于：
+
+- 基本块切分
+- CFG 边构建
+- 结构化控制流恢复
+
+---
+
+## 5. `PcodeOpRef`
+
+### `pub struct PcodeOpRef(pub Arc<RwLock<PcodeOp>>)`
+
+这是对 `Arc<RwLock<PcodeOp>>` 的包装类型。
+
+### 作用
+
+它的主要作用是：
+
+- 让 `PcodeOp` 的共享引用更方便进入集合或银行结构
+- 统一操作对象在容器层的引用形式
+- 避免在上层接口中到处直接暴露底层锁包装类型
+
+### 为什么需要包装
+
+因为当前 Rugra 的 IR 不是简单的树或线性列表，而是带有共享引用关系的图结构。  
+`PcodeOpRef` 让以下事情更容易处理：
+
+- 存入 bank
+- 在多个分析阶段共享同一节点
+- 做标记、销毁、替换时保留同一对象身份
+
+---
+
+## 6. `PieceNode`
+
+### `pub struct PieceNode`
+
+`PieceNode` 对应 Ghidra `op.hh` 中的相关结构，用于表示与“piece / 拼接 / 分片”语义有关的节点。
+
+### 适合理解为
+
+- 某种与操作局部片段有关的辅助结构
+- 为分析复合数据拼接关系提供支持
+- 在处理子片段、piece 合成、偏移等场景下使用
+
+### 当前不要夸大理解的部分
+
+在当前文档层面，不应把它描述成一个“完整的结构化表达式系统”或“通用 AST 片段节点”。
+
+更保守的说法是：
+
+- 它是 P-code 操作分析中的辅助节点
+- 它与某个 `PcodeOp` 的弱引用、输入槽位和偏移量有关
+- 它主要服务于内部 IR 级处理，而不是直接服务于最终 C 输出
+
+---
+
+### `pub fn new(op: Weak<RwLock<PcodeOp>>, slot: i32, offset: i32) -> Self`
+
+创建新的 `PieceNode`。
+
+#### 参数
+- `op`: 关联的操作弱引用
+- `slot`: 所关联的输入槽位
+- `offset`: 类型或片段偏移
+
+---
+
+### `pub fn is_leaf(&self) -> bool`
+
+判断当前片段节点是否为叶子节点。
+
+#### 用途
+适合用于：
+
+- 片段树/分解结构遍历
+- 判断是否还能继续展开
+- 递归处理终止条件
+
+---
+
+### `pub fn get_type_offset(&self) -> i32`
+
+获取类型偏移量。
+
+### `pub fn get_slot(&self) -> i32`
+
+获取关联输入槽位。
+
+这两个接口都属于 `PieceNode` 的基础查询接口，用于在片段分析中定位当前节点的上下文。
+
+---
+
+## 7. `PcodeOpBank`
+
 ### `pub struct PcodeOpBank`
 
-操作算子的超级管家。由于 PcodeOp 基于共享智能指针互相关联极深，且常伴随优化插入/剔除等结构突变行为，本类维护着函数级别下的全量生命集。
-对应 Ghidra 内用以集中分封管理控制网点的 `PcodeOpBank` 类：
+`PcodeOpBank` 是当前 Rugra 中 **统一管理 P-code 操作对象的容器**。
 
-*   `pub optree: BTreeSet<PcodeOpRef>`: 全量基于原始序列坐标点 (`SeqNum`) 的自平衡有序算子集。
-*   `pub alivelist: Vec<PcodeOpRef>` / `pub deadlist: Vec<PcodeOpRef>`: 动态维持生与死（如死代码已确认标记移除的）列表供集中批扫消杀。
+你可以把它理解为：
 
-#### 生命周期及调度 API
+> “函数级 P-code 操作节点的银行/仓库/统一管理器”。
 
-*   `pub fn create(&mut self, opcode: OpCode, num_inputs: usize, addr: Address) -> PcodeOpRef`  
-    **唯一正确**的新操作创建挂载口。申请配发一个尚未链接孤立的新微指令。在内部其被强制分配递增的安全子序号并默认投入存活树池中！
-*   `pub fn mark_alive(&mut self, op: PcodeOpRef)` / `pub fn mark_dead(&mut self, op: PcodeOpRef)`  
-    通知管理器调整某个算子实例的“生死簿”户籍位置（将伴随相应的状态掩码位拔插改动）。
-*   `pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode)`  
-    在不需要打断连接流树的情况下暴力更新一个旧有节点的操作行为类型（如代数折叠发现把 `ADD(a,0)` 优化退化时调用并转变成一枚空转的 `COPY`）。
-*   `pub fn destroy_dead(&mut self)` / `pub fn destroy(&mut self, op: PcodeOpRef)`  
-    向指定或标记死亡的无根系/无效操作进行抹杀释放。
+它通常承担：
+
+- 创建操作
+- 保存操作
+- 查询操作
+- 标记操作状态
+- 修改 opcode
+- 清理 dead 操作
+- 销毁指定操作
+
+在 Rugra 当前架构里，它通常会与以下对象协作：
+
+- `Funcdata`
+- `VarnodeBank`（若在其他模块中定义）
+- `BlockBasic`
+- `ActionDatabase`
+
+---
+
+### `pub fn new() -> Self`
+
+创建空的 `PcodeOpBank`。
+
+---
+
+### `pub fn create(&mut self, opcode: OpCode, num_inputs: usize, addr: Address) -> PcodeOpRef`
+
+创建一条新的操作并加入 bank。
+
+#### 参数
+- `opcode`: 操作码
+- `num_inputs`: 输入数量
+- `addr`: 操作关联地址
+
+#### 返回
+- 新建操作的引用包装 `PcodeOpRef`
+
+#### 作用
+这是 bank 层的统一创建入口，适合保证：
+
+- 操作统一纳管
+- 节点身份稳定
+- 后续查找、标记和销毁一致
+
+#### 说明
+与 `PcodeOp::new` 相比，这个入口更偏“容器负责的创建与注册”。
+
+---
+
+### `pub fn mark_alive(&mut self, op: PcodeOpRef)`
+
+将操作标记为活跃。
+
+#### 用途
+适用于：
+
+- 恢复被误判的节点
+- 重写后重新启用节点
+- 生命周期管理
+
+---
+
+### `pub fn mark_dead(&mut self, op: PcodeOpRef)`
+
+将操作标记为死亡。
+
+#### 用途
+适用于：
+
+- DCE
+- 重写中替换旧节点
+- 延迟清理策略
+
+#### 注意
+被标记 dead 不等于立刻从 bank 中物理移除。
+
+---
+
+### `pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode)`
+
+修改某条操作的 opcode。
+
+#### 用途
+可用于：
+
+- 规则重写
+- 语义规范化
+- 将某类操作替换为更简化的形式
+
+#### 风险
+修改 opcode 必须保证：
+
+- 输入/输出数量仍然语义合理
+- 不会破坏下游打印或分析假设
+- 图仍保持自洽
+
+---
+
+### `pub fn destroy_dead(&mut self)`
+
+销毁所有已经被标记为 dead 的操作。
+
+#### 作用
+这是延迟清理机制的重要部分。
+
+#### 典型使用方式
+常见流程是：
+
+1. 先 `mark_dead`
+2. 后统一 `destroy_dead`
+
+这种方式比“见一个删一个”更安全，因为它允许规则系统先完成批量重写，再统一收尾。
+
+---
+
+### `pub fn destroy(&mut self, op: PcodeOpRef)`
+
+销毁指定操作。
+
+#### 说明
+与 `destroy_dead` 相比，这是更直接的单节点销毁入口。
+
+#### 注意
+调用前通常需要确保：
+
+- 引用关系可安全解除
+- 不会留下悬空输入/输出链接
+- 上层图与 bank 状态保持一致
+
+---
+
+### `pub fn find_op(&self, seq: &SeqNum) -> Option<PcodeOpRef>`
+
+按 `SeqNum` 查找操作。
+
+#### 参数
+- `seq`: 目标操作的时序锚点
+
+#### 返回
+- 找到则返回 `Some(PcodeOpRef)`
+- 否则返回 `None`
+
+#### 作用
+这是调试、对齐、验证、图遍历时非常关键的查找入口。
+
+---
+
+## 8. 当前模块在主流程中的作用
+
+`op.rs` 当前可以被放在以下主链路中理解：
+
+```text
+PcodeOpRaw
+  ↓
+注入 Funcdata
+  ↓
+创建/组织 PcodeOp 与 Varnode
+  ↓
+由 PcodeOpBank 管理操作节点
+  ↓
+被 CFG / SSA / Action / Rule / Print 层消费
+```
+
+也就是说，本模块不负责：
+
+- 直接从二进制解码机器码
+- 直接输出最终 C 源码
+- 单独完成 SSA
+- 单独完成变量恢复
+
+它负责的是：
+
+- 把“操作”这件事稳定地建模出来
+- 让后续所有分析和打印都有统一的操作节点可用
+
+---
+
+## 9. 当前文档边界与风险提醒
+
+在使用 `op.rs` API 时，请特别注意以下几点：
+
+### 9.1 不要把结构存在等同于能力完成
+例如：
+
+- 有 `PcodeOp`
+- 有 `PcodeOpBank`
+- 有大量 flags
+
+并不自动代表：
+
+- 所有优化规则都已完善
+- 所有 opcode 都已完整消费
+- 与 Ghidra 行为已经完全一致
+
+---
+
+### 9.2 不要把 `PcodeOp` 当成最终高层语句
+`PcodeOp` 是 IR 节点，不是最终用户看到的高级 C 语句。
+
+---
+
+### 9.3 修改 opcode 或标志位时要同步考虑图一致性
+任何对 `PcodeOp` 的重写都可能影响：
+
+- Varnode 连接
+- CFG 切分
+- SSA 语义
+- 打印行为
+- DCE 与清理阶段
+
+---
+
+### 9.4 `PcodeOpBank` 是统一真相源之一
+如果某操作已经由 bank 管理，就不应在其他地方偷偷维护一套脱离 bank 的“影子节点集”。
+
+---
+
+## 10. 推荐联动阅读
+
+想继续理解本模块，建议接着看：
+
+1. `opcodes.md`
+   - 看 opcode 语义分类
+
+2. `varnode.md`
+   - 看操作的输入输出节点如何表示
+
+3. `pcoderaw.md`
+   - 看原始操作如何进入正式图结构
+
+4. `funcdata.md`
+   - 看操作如何进入单函数上下文
+
+5. `heritage.md`
+   - 看这些操作如何进入 SSA / heritage 相关过程
+
+6. `printlanguage.md` / `printc.md`
+   - 看这些操作如何最终参与文本输出
+
+---
+
+## 11. 一句话总结
+
+`op.rs` 是 Rugra 当前 P-code 操作层的核心建模模块：它定义了**操作节点是什么、如何被标记、如何被引用、如何被统一管理**，并为后续的 SSA、规则重写、控制流分析和打印输出提供操作级基础设施。

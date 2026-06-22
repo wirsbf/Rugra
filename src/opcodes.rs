@@ -257,6 +257,186 @@ impl OpCode {
             OpCode::CPUI_MAX => "MAX",
         }
     }
+
+    /// Convert from raw integer opcode to OpCode enum
+    ///
+    /// Used by the P-code injection bridge to convert `PcodeOpRaw.opcode`
+    /// integer values into typed `OpCode` variants.
+    pub fn from_i32(raw: i32) -> Option<OpCode> {
+        match raw {
+            1 => Some(OpCode::CPUI_COPY),
+            2 => Some(OpCode::CPUI_LOAD),
+            3 => Some(OpCode::CPUI_STORE),
+            4 => Some(OpCode::CPUI_INT_ADD),
+            5 => Some(OpCode::CPUI_INT_SUB),
+            6 => Some(OpCode::CPUI_INT_MULT),
+            7 => Some(OpCode::CPUI_INT_DIV),
+            8 => Some(OpCode::CPUI_INT_SDIV),
+            9 => Some(OpCode::CPUI_INT_REM),
+            10 => Some(OpCode::CPUI_INT_SREM),
+            11 => Some(OpCode::CPUI_INT_NEG),
+            12 => Some(OpCode::CPUI_INT_CARRY),
+            13 => Some(OpCode::CPUI_INT_SCARRY),
+            14 => Some(OpCode::CPUI_INT_SBORROW),
+            15 => Some(OpCode::CPUI_INT_AND),
+            16 => Some(OpCode::CPUI_INT_OR),
+            17 => Some(OpCode::CPUI_INT_XOR),
+            18 => Some(OpCode::CPUI_INT_NOT),
+            19 => Some(OpCode::CPUI_INT_LEFT),
+            20 => Some(OpCode::CPUI_INT_RIGHT),
+            21 => Some(OpCode::CPUI_INT_SRIGHT),
+            22 => Some(OpCode::CPUI_INT_EQUAL),
+            23 => Some(OpCode::CPUI_INT_NOTEQUAL),
+            24 => Some(OpCode::CPUI_INT_LESS),
+            25 => Some(OpCode::CPUI_INT_SLESS),
+            26 => Some(OpCode::CPUI_INT_LESSEQUAL),
+            27 => Some(OpCode::CPUI_INT_SLESSEQUAL),
+            28 => Some(OpCode::CPUI_INT_ZEXT),
+            29 => Some(OpCode::CPUI_INT_SEXT),
+            30 => Some(OpCode::CPUI_TRUNC),
+            31 => Some(OpCode::CPUI_FLOAT_ADD),
+            32 => Some(OpCode::CPUI_FLOAT_SUB),
+            33 => Some(OpCode::CPUI_FLOAT_MULT),
+            34 => Some(OpCode::CPUI_FLOAT_DIV),
+            35 => Some(OpCode::CPUI_FLOAT_NEG),
+            36 => Some(OpCode::CPUI_FLOAT_ABS),
+            37 => Some(OpCode::CPUI_FLOAT_SQRT),
+            38 => Some(OpCode::CPUI_FLOAT_EQUAL),
+            39 => Some(OpCode::CPUI_FLOAT_NOTEQUAL),
+            40 => Some(OpCode::CPUI_FLOAT_LESS),
+            41 => Some(OpCode::CPUI_FLOAT_LESSEQUAL),
+            42 => Some(OpCode::CPUI_FLOAT_NAN),
+            43 => Some(OpCode::CPUI_FLOAT_FLOAT2FLOAT),
+            44 => Some(OpCode::CPUI_FLOAT_INT2FLOAT),
+            45 => Some(OpCode::CPUI_FLOAT_TRUNC),
+            46 => Some(OpCode::CPUI_FLOAT_CEIL),
+            47 => Some(OpCode::CPUI_FLOAT_FLOOR),
+            48 => Some(OpCode::CPUI_FLOAT_ROUND),
+            49 => Some(OpCode::CPUI_BRANCH),
+            50 => Some(OpCode::CPUI_CBRANCH),
+            51 => Some(OpCode::CPUI_BRANCHIND),
+            52 => Some(OpCode::CPUI_CALL),
+            53 => Some(OpCode::CPUI_CALLIND),
+            54 => Some(OpCode::CPUI_RETURN),
+            55 => Some(OpCode::CPUI_PIECE),
+            56 => Some(OpCode::CPUI_SUBPIECE),
+            57 => Some(OpCode::CPUI_BOOL_AND),
+            58 => Some(OpCode::CPUI_BOOL_OR),
+            59 => Some(OpCode::CPUI_BOOL_XOR),
+            60 => Some(OpCode::CPUI_BOOL_NOT),
+            61 => Some(OpCode::CPUI_POPCOUNT),
+            62 => Some(OpCode::CPUI_LZCOUNT),
+            63 => Some(OpCode::CPUI_CALLOTHER),
+            64 => Some(OpCode::CPUI_MULTIEQUAL),
+            65 => Some(OpCode::CPUI_INDIRECT),
+            66 => Some(OpCode::CPUI_CPOOLREF),
+            67 => Some(OpCode::CPUI_NEW),
+            68 => Some(OpCode::CPUI_SEGMENTOP),
+            69 => Some(OpCode::CPUI_PTRADD),
+            70 => Some(OpCode::CPUI_PTRSUB),
+            71 => Some(OpCode::CPUI_EXTRACT),
+            72 => Some(OpCode::CPUI_INSERT),
+            73 => Some(OpCode::CPUI_MAX),
+            _ => None,
+        }
+    }
+
+    /// Check if this opcode is a control flow terminator (ends a basic block)
+    pub fn is_block_terminator(&self) -> bool {
+        matches!(
+            self,
+            OpCode::CPUI_BRANCH
+                | OpCode::CPUI_CBRANCH
+                | OpCode::CPUI_BRANCHIND
+                | OpCode::CPUI_RETURN
+        )
+    }
+
+    /// Check if this opcode is commutative (operand order doesn't matter)
+    pub fn is_commutative(&self) -> bool {
+        matches!(
+            self,
+            OpCode::CPUI_INT_ADD
+                | OpCode::CPUI_INT_MULT
+                | OpCode::CPUI_INT_AND
+                | OpCode::CPUI_INT_OR
+                | OpCode::CPUI_INT_XOR
+                | OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_BOOL_AND
+                | OpCode::CPUI_BOOL_OR
+                | OpCode::CPUI_BOOL_XOR
+                | OpCode::CPUI_FLOAT_ADD
+                | OpCode::CPUI_FLOAT_MULT
+                | OpCode::CPUI_FLOAT_EQUAL
+                | OpCode::CPUI_FLOAT_NOTEQUAL
+        )
+    }
+
+    /// Check if this opcode is a deterministic, side-effect-free operation
+    /// suitable for CSE (Common Subexpression Elimination).
+    ///
+    /// Excludes LOAD/STORE (memory side-effects), branches, calls, and
+    /// SSA-internal ops (MULTIEQUAL, INDIRECT).
+    pub fn is_commutative_or_pure(&self) -> bool {
+        matches!(
+            self,
+            // Arithmetic
+            OpCode::CPUI_INT_ADD
+                | OpCode::CPUI_INT_SUB
+                | OpCode::CPUI_INT_MULT
+                | OpCode::CPUI_INT_DIV
+                | OpCode::CPUI_INT_SDIV
+                | OpCode::CPUI_INT_REM
+                | OpCode::CPUI_INT_SREM
+                | OpCode::CPUI_INT_NEG
+                | OpCode::CPUI_INT_CARRY
+                | OpCode::CPUI_INT_SCARRY
+                | OpCode::CPUI_INT_SBORROW
+                // Bitwise
+                | OpCode::CPUI_INT_AND
+                | OpCode::CPUI_INT_OR
+                | OpCode::CPUI_INT_XOR
+                | OpCode::CPUI_INT_NOT
+                | OpCode::CPUI_INT_LEFT
+                | OpCode::CPUI_INT_RIGHT
+                | OpCode::CPUI_INT_SRIGHT
+                // Comparison
+                | OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_LESS
+                | OpCode::CPUI_INT_SLESS
+                | OpCode::CPUI_INT_LESSEQUAL
+                | OpCode::CPUI_INT_SLESSEQUAL
+                // Extension/Truncation
+                | OpCode::CPUI_INT_ZEXT
+                | OpCode::CPUI_INT_SEXT
+                | OpCode::CPUI_TRUNC
+                // Float arithmetic
+                | OpCode::CPUI_FLOAT_ADD
+                | OpCode::CPUI_FLOAT_SUB
+                | OpCode::CPUI_FLOAT_MULT
+                | OpCode::CPUI_FLOAT_DIV
+                | OpCode::CPUI_FLOAT_NEG
+                | OpCode::CPUI_FLOAT_ABS
+                | OpCode::CPUI_FLOAT_SQRT
+                | OpCode::CPUI_FLOAT_EQUAL
+                | OpCode::CPUI_FLOAT_NOTEQUAL
+                | OpCode::CPUI_FLOAT_LESS
+                | OpCode::CPUI_FLOAT_LESSEQUAL
+                | OpCode::CPUI_FLOAT_NAN
+                // Boolean
+                | OpCode::CPUI_BOOL_AND
+                | OpCode::CPUI_BOOL_OR
+                | OpCode::CPUI_BOOL_XOR
+                | OpCode::CPUI_BOOL_NOT
+                // Misc pure
+                | OpCode::CPUI_POPCOUNT
+                | OpCode::CPUI_LZCOUNT
+                | OpCode::CPUI_PIECE
+                | OpCode::CPUI_SUBPIECE
+        )
+    }
 }
 
 impl fmt::Display for OpCode {

@@ -1,47 +1,155 @@
-# `types.rs` API Reference (基础类型定义库)
+﻿# `types.rs` API Reference
 
-**源代码路径**: `src/types.rs`（内部模块，非 `pub`）
+## 文档状态
+
+- **状态**: 部分有效（需对照源码）
+
+
+**源代码路径**: `src/types.rs`
 
 ## 模块说明 (Module Doc)
 
-本文件定义了 Rugra 全局使用的基础值类型和枚举，包括简化版地址、目标架构描述、数据类型格子 (Type Lattice)、调用约定和字节序等。**注意**：此处的 `Address` 是旧版简化模型（基于 `u64` 的 newtype），与对齐 Ghidra 的 `address.rs` 中的 `Address`（包含 `AddressSpace`）不同。
+Core type definitions for Rugra
 
----
+This module contains fundamental types used throughout the decompiler,
+including address types, architecture definitions, and basic data types.
 
 ## 导出的公共 API (Public API)
 
-### `pub struct Address(u64)` (简化地址)
+### `pub struct Address(u64)`
 
-*   `new(addr: u64)` / `as_u64()` / `offset(i64)` / `is_null()` / `is_aligned(u64)`: 基础地址运算。
+Memory address type
 
-### `pub enum Architecture` (目标 CPU 架构)
+Represents a virtual memory address in the target binary.
+Internally stored as u64 to support 64-bit architectures.
 
-支持：`X86`, `X86_64`, `ARM`, `ARM64`, `MIPS`, `MIPS64`, `RISCV32`, `RISCV64`, `PPC`, `PPC64`。
-*   `pointer_size()` / `is_64bit()` / `register_count()` / `name()`: 架构属性查询。
+### `pub const fn new(addr: u64) -> Self`
 
-### `pub enum TypeKind` (基本数据类型种类)
+Create a new address
 
-用于旧版分析管道的类型枚举：`Void`, `Bool`, `Int8`~`UInt64`, `Float32`/`Float64`, `Pointer`, `Array`, `Struct`, `Union`, `Function`, `Unknown`。
-*   `size_bytes()` / `is_integer()` / `is_signed()` / `is_float()` / `is_pointer()`: 类型判定。
+### `pub const fn as_u64(&self) -> u64`
 
-### `pub enum DataType` (丰富数据类型表示)
+Get the raw address value
 
-用于类型推断格子运算的代数数据类型：
-*   `Unknown(usize)` / `Void` / `Bool` / `Int(usize, bool)` / `Float(usize)` / `Pointer(Box<DataType>, usize)` / `Array(Box<DataType>, usize)` / `Struct(String)`。
-*   `pub fn meet(&self, other: &DataType) -> DataType`: **类型格子的 meet 运算**（最大下界），用于在 Phi 节点处合并两个分支的类型。
+### `pub fn offset(&self, offset: i64) -> Self`
 
-### `pub enum CallingConvention` (调用约定)
+Add an offset to the address
 
-`C`, `Stdcall`, `Fastcall`, `Win64`, `SysV64`, `AAPCS`, `Unknown`。
+### `pub fn is_null(&self) -> bool`
 
-### `pub enum Endianness` (字节序)
+Check if address is null (0x0)
 
-`Little` / `Big`，含 `native()` 编译期检测。
+### `pub fn is_aligned(&self, alignment: u64) -> bool`
 
-### `pub struct StructDef` / `pub struct FieldDef` (结构体定义)
+Check if address is aligned to the given boundary
 
-管理自动推断或用户声明的结构体字段布局。
+### `pub enum Architecture`
+
+Target CPU architecture
+
+### `pub const fn pointer_size(&self) -> usize`
+
+Get the pointer size in bytes for this architecture
+
+### `pub const fn pointer_bits(&self) -> usize`
+
+Get the pointer size in bits for this architecture
+
+### `pub const fn is_64bit(&self) -> bool`
+
+Check if this is a 64-bit architecture
+
+### `pub const fn register_count(&self) -> usize`
+
+Get the register count (approximate)
+
+### `pub const fn name(&self) -> &'static str`
+
+Get architecture name as string
+
+### `pub enum TypeKind`
+
+Data type sizes and kinds
+
+### `pub const fn size_bytes(&self) -> Option<usize>`
+
+Get the size in bytes of this type (if fixed-size)
+
+### `pub const fn is_integer(&self) -> bool`
+
+Check if this is an integer type
+
+### `pub const fn is_signed(&self) -> bool`
+
+Check if this is a signed integer type
+
+### `pub const fn is_float(&self) -> bool`
+
+Check if this is a floating point type
+
+### `pub const fn is_pointer(&self) -> bool`
+
+Check if this is a pointer type
+
+### `pub enum CallingConvention`
+
+Calling convention
+
+### `pub enum Endianness`
+
+Endianness
+
+### `pub const fn native() -> Self`
+
+Get the native endianness of the current system
+
+### `pub enum DataType`
+
+Rich data type representation for analysis
+
+### `pub fn size(&self) -> usize`
+
+Get the size of the type in bytes
+
+### `pub fn is_unknown(&self) -> bool`
+
+Check if this is an unknown type
+
+### `pub fn is_pointer(&self) -> bool`
+
+Check if this is a pointer type
+
+### `pub fn is_integer(&self) -> bool`
+
+Check if this is an integer type
+
+### `pub fn meet(&self, other: &DataType) -> DataType`
+
+The "meet" operation in the type lattice.
+Combines two types into their greatest lower bound.
+
+### `pub struct StructDef`
+
+A structure definition
+
+### `pub struct FieldDef`
+
+A field in a structure
+
+### `pub fn new(name: String) -> Self`
+
+Create a new empty struct definition
+
+### `pub fn add_field(&mut self, name: String, data_type: DataType, offset: usize)`
+
+Add a field to the struct
+
+### `pub fn size(&self) -> usize`
+
+Get the total size of the struct
 
 ### `pub fn parse_type_string(s: &str, size: usize) -> DataType`
 
-从 C 风格类型字符串解析为 `DataType`（支持 `int`, `unsigned long`, `float`, `void`, `struct xxx`, 指针 `*` 等）。
+Parse a C-style type string into a DataType
+
+

@@ -4,7 +4,7 @@
 //! internal Address and SeqNum classes as defined in `address.hh`.
 
 use crate::Address;
-use crate::pcode::{SeqNum, AddressSpace};
+use crate::{SeqNum, AddressSpace};
 
 /// Verify that a Rugra Address aligns with Ghidra's representation.
 ///

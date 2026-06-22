@@ -3,9 +3,11 @@
 //! Corresponds to Ghidra's `blockaction.hh`
 
 use crate::action::{action_status, Action};
-use crate::block::{BlockBasic, BlockGraph, FlowBlock};
+use crate::address::Address;
+use crate::block::{BlockBasic, BlockCondition, BlockGraph, BlockIf, BlockList, BlockSwitch, BlockWhileDo, BoolOp, FlowBlock};
 use crate::error::Result;
 use crate::funcdata::Funcdata;
+use crate::opcodes::OpCode;
 use std::sync::{Arc, RwLock};
 
 /// Action for recovering high-level control flow structures
@@ -29,14 +31,21 @@ impl Action for ActionBlockStructure {
             return Ok(action_status::NO_CHANGE);
         }
 
+        // Need at least 1 basic block to structure
+        if fd.bblocks.get_size() == 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+
         // Build a copy of the basic block graph into the structure graph
         build_copy(&mut fd.sblocks, &fd.bblocks);
+        eprintln!("[BLOCKSTRUCT] {} build_copy done sblocks={}", fd.name, fd.sblocks.get_size());
 
         // Collapse structured patterns iteratively
-        let mut collapse = CollapseStructure::new(&mut fd.sblocks);
+        let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name);
         collapse.collapse_all();
+        eprintln!("[BLOCKSTRUCT] {} collapse_all done blocks={}", fd.name, fd.sblocks.get_size());
 
-        Ok(action_status::NO_CHANGE)
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str {
@@ -71,7 +80,8 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
         }
     }
 
-    // Copy edges
+    // Copy edges — collect first, then add (avoids borrow conflicts)
+    let mut edges_to_add: Vec<(usize, usize)> = Vec::new();
     for i in 0..bblocks.get_size() {
         if let Some(bb) = bblocks.get_block(i) {
             let bb_read = bb.read().unwrap();
@@ -79,110 +89,1493 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
             for j in 0..size_out {
                 if let Some(edge) = bb_read.get_out(j) {
                     let target_idx = edge.point.read().unwrap().get_index() as usize;
-                    if let (Some(from), Some(to)) =
-                        (sblocks.get_block(i), sblocks.get_block(target_idx))
-                    {
-                        drop(bb_read);
-                        sblocks.add_edge(from, to);
-                        break;
-                    }
+                    edges_to_add.push((i, target_idx));
                 }
             }
+        }
+    }
+
+    // Now add all edges without holding any read locks
+    for (from_idx, to_idx) in edges_to_add {
+        if let (Some(from), Some(to)) = (sblocks.get_block(from_idx), sblocks.get_block(to_idx)) {
+            sblocks.add_edge(from, to);
         }
     }
 }
 
 /// Structure for iteratively collapsing control flow patterns
 ///
-/// Corresponds to Ghidra's `CollapseStructure` class
-struct CollapseStructure<'a> {
+/// Corresponds to Ghidra's `CollapseStructure` class.
+/// Detects if-then, if-then-else, sequence, and while-do patterns
+/// from a flat CFG and replaces them with structured `BlockIf`,
+/// `BlockWhileDo`, and `BlockList` nodes.
+pub(crate) struct CollapseStructure<'a> {
     graph: &'a mut BlockGraph,
     change_count: i32,
+    name: String,
 }
 
 impl<'a> CollapseStructure<'a> {
-    fn new(graph: &'a mut BlockGraph) -> Self {
+    pub(crate) fn new(graph: &'a mut BlockGraph, name: &str) -> Self {
         Self {
             graph,
             change_count: 0,
+            name: name.to_string(),
         }
     }
 
     /// Collapse all structured patterns until fixpoint
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
-    fn collapse_all(&mut self) {
-        // First pass: collapse simple conditions
-        self.collapse_conditions();
+    pub(crate) fn collapse_all(&mut self) {
+        let max_iterations = self.graph.get_size() * 2 + 2;
+        let mut iterations = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
 
-        // Iteratively collapse internal structures
-        let mut isolated_count = self.collapse_internal(None);
-        while isolated_count < self.graph.get_size() {
-            // If stuck, select a goto target and try again
-            isolated_count = self.collapse_internal(None);
+        loop {
+            if std::time::Instant::now() > deadline {
+                eprintln!("[COLLAPSE] {} deadline hit iter={}", self.name, iterations);
+                break; // wall-clock safety limit
+            }
+            let pre_count = self.change_count;
+
+            // Pass 1: collapse loops (while-do)
+            let t = std::time::Instant::now();
+            self.collapse_loops();
+            eprintln!("[COLLAPSE] {} loops {:?} blocks={}", self.name, t.elapsed(), self.graph.get_size());
+
+            if std::time::Instant::now() > deadline { eprintln!("[COLLAPSE] {} deadline after loops", self.name); break; }
+
+            // Pass 2: collapse if-then and if-then-else conditions
+            let t = std::time::Instant::now();
+            self.collapse_conditions();
+            eprintln!("[COLLAPSE] {} conditions {:?} blocks={}", self.name, t.elapsed(), self.graph.get_size());
+
+            if std::time::Instant::now() > deadline { eprintln!("[COLLAPSE] {} deadline after conditions", self.name); break; }
+
+            // Pass 3: collapse boolean short-circuit (&&/||)
+            self.collapse_bool_conditions();
+
+            // Pass 3.5: collapse switches (BRANCHIND-based)
+            self.collapse_switches();
+
+            // Pass 3.6: collapse CBRANCH cascades (cmp+je chain switches)
+            self.collapse_cbranch_cascades();
+
+            // Pass 4: collapse linear sequences (A→B where B has 1 in)
+            self.collapse_sequences();
+
+            iterations += 1;
+            if self.change_count == pre_count || iterations >= max_iterations {
+                break; // fixpoint or safety limit
+            }
         }
     }
 
-    /// Collapse condition blocks (simple if-then-else patterns)
-    ///
-    /// Corresponds to Ghidra's `CollapseStructure::collapseConditions`
-    fn collapse_conditions(&mut self) {
+    /// Check if `dom` block dominates `node` block
+    fn dominates(&self, dom: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, node: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
+        let dom_idx = dom.read().unwrap().get_index();
+        let mut curr = node.clone();
+        let max_depth = 1000; // Safety limit to prevent infinite traversal
+        for _ in 0..max_depth {
+            if curr.read().unwrap().get_index() == dom_idx {
+                return true;
+            }
+            let immed_dom = curr.read().unwrap().get_immed_dom();
+            match immed_dom {
+                Some(weak_parent) => {
+                    if let Some(parent) = weak_parent.upgrade() {
+                        curr = parent;
+                    } else {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        false
+    }
+
+
+    fn collapse_loops(&mut self) {
+        self.graph.build_dom_tree();
+
         let size = self.graph.get_size();
+        let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
+
         for i in 0..size {
-            if let Some(block) = self.graph.get_block(i) {
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+
+            let mut true_is_backedge = false;
+            let mut false_is_backedge = false;
+            
+            let mut true_target = None;
+            let mut false_target = None;
+
+            if b.size_out() == 2 {
+                let ops = b.get_ops();
+                let has_cbranch = ops.last().map_or(false, |op_ref| {
+                    op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+                });
+                
+                if has_cbranch {
+                    if let Some(true_edge) = b.get_out(0) {
+                        true_target = Some(true_edge.point.clone());
+                        if self.dominates(&true_edge.point, &block) {
+                            true_is_backedge = true;
+                        }
+                    }
+                    if let Some(false_edge) = b.get_out(1) {
+                        false_target = Some(false_edge.point.clone());
+                        if self.dominates(&false_edge.point, &block) {
+                            false_is_backedge = true;
+                        }
+                    }
+                }
+            }
+
+            let cond_idx = b.get_index();
+            drop(b);
+
+            if true_is_backedge && !false_is_backedge {
+                if let Some(tb) = true_target {
+                    if tb.read().unwrap().get_index() == cond_idx {
+                        let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                            Arc::new(RwLock::new(crate::block::BlockDoWhile {
+                                index: cond_idx,
+                                condition: block.clone(),
+                                incoming: Vec::new(),
+                                outgoing: Vec::new(),
+                                parent: None,
+                                flags: 0,
+                            }));
+                        replacements.push((i, while_block));
+                        self.change_count += 1;
+                        continue;
+                    }
+                }
+            } else if false_is_backedge && !true_is_backedge {
+                if let Some(fb) = false_target {
+                    if fb.read().unwrap().get_index() == cond_idx {
+                        let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                            Arc::new(RwLock::new(crate::block::BlockDoWhile {
+                                index: cond_idx,
+                                condition: block.clone(),
+                                incoming: Vec::new(),
+                                outgoing: Vec::new(),
+                                parent: None,
+                                flags: 0,
+                            }));
+                        replacements.push((i, while_block));
+                        self.change_count += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Simple While-Do check (A -> B -> A)
+            if !true_is_backedge && !false_is_backedge {
                 let b = block.read().unwrap();
                 if b.size_out() == 2 {
-                    // Potential if-then-else
-                    // Placeholder for actual structuring logic
+                    if let (Some(te), Some(fe)) = (b.get_out(0), b.get_out(1)) {
+                        let tb = te.point.clone();
+                        let _fb = fe.point.clone();
+                        drop(b);
+                        
+                        let tbr = tb.read().unwrap();
+                        if tbr.size_out() == 1 && tbr.size_in() == 1 {
+                            if let Some(out_edge) = tbr.get_out(0) {
+                                if out_edge.point.read().unwrap().get_index() == cond_idx {
+                                    drop(tbr);
+                                    let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                        Arc::new(RwLock::new(BlockWhileDo {
+                                            index: cond_idx,
+                                            condition: block.clone(),
+                                            body: tb.clone(),
+                                            incoming: Vec::new(),
+                                            outgoing: Vec::new(),
+                                            parent: None,
+                                            flags: 0,
+                                        }));
+                                    replacements.push((i, while_block));
+                                    self.change_count += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        }
+
+        // Natural loop detection: find latch blocks with unconditional
+        // BRANCH back to a dominating header (header has CBRANCH with 2 out).
+        // This handles multi-block loop bodies that the simple A→B→A check misses.
+        for i in 0..size {
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+            if b.size_out() != 1 {
+                continue;
+            }
+
+            let ops = b.get_ops();
+            let has_branch = ops.last().map_or(false, |op_ref| {
+                op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCH
+            });
+            if !has_branch {
+                continue;
+            }
+
+            let target_edge = match b.get_out(0) {
+                Some(e) => e,
+                None => continue,
+            };
+            let latch_idx = b.get_index();
+            drop(b);
+
+            if !self.dominates(&target_edge.point, &block) {
+                continue;
+            }
+
+            let header = target_edge.point.clone();
+            let header_idx = header.read().unwrap().get_index();
+
+            if replacements.iter().any(|(idx, _)| *idx == header_idx as usize) {
+                continue;
+            }
+            if replacements.iter().any(|(idx, _)| *idx == latch_idx as usize) {
+                continue;
+            }
+
+            let header_has_cbranch = {
+                let h = header.read().unwrap();
+                if h.size_out() != 2 {
+                    continue;
+                }
+                let ops = h.get_ops();
+                ops.last().map_or(false, |op_ref| {
+                    op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+                })
+            };
+            if !header_has_cbranch {
+                continue;
+            }
+
+            let h = header.read().unwrap();
+            let out0 = h.get_out(0).unwrap().point.clone();
+            let out1 = h.get_out(1).unwrap().point.clone();
+            drop(h);
+
+            let out0_idx = out0.read().unwrap().get_index();
+            let out1_idx = out1.read().unwrap().get_index();
+
+            let (body_entry, _exit_block) = if out0_idx == header_idx as i32 || out1_idx == latch_idx {
+                (out1.clone(), out0.clone())
+            } else {
+                (out0.clone(), out1.clone())
+            };
+
+            let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockWhileDo {
+                    index: header_idx,
+                    condition: header.clone(),
+                    body: body_entry,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            replacements.push((header_idx as usize, while_block));
+            self.change_count += 1;
+        }
+
+        // CBRANCH-latch loop detection: find blocks ending with CBRANCH
+        // where one outgoing edge is a back-edge to a dominating header.
+        // This handles do-while and while-do patterns where the latch
+        // itself contains the loop condition (common in real binaries).
+        for i in 0..size {
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            if replacements.iter().any(|(idx, _)| *idx == i) {
+                continue;
+            }
+
+            let b = block.read().unwrap();
+            if b.size_out() != 2 {
+                continue;
+            }
+
+            let ops = b.get_ops();
+            let has_cbranch = ops.last().map_or(false, |op_ref| {
+                op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+            });
+            if !has_cbranch {
+                continue;
+            }
+
+            let out0_edge = match b.get_out(0) {
+                Some(e) => e,
+                None => continue,
+            };
+            let out1_edge = match b.get_out(1) {
+                Some(e) => e,
+                None => continue,
+            };
+
+            let latch_idx = b.get_index();
+            let out0_target = out0_edge.point.clone();
+            let out1_target = out1_edge.point.clone();
+            drop(b);
+
+            let out0_is_backedge = self.dominates(&out0_target, &block);
+            let out1_is_backedge = self.dominates(&out1_target, &block);
+
+            // Exactly one edge should be a back-edge
+            if out0_is_backedge == out1_is_backedge {
+                continue;
+            }
+
+            let (header, _exit) = if out0_is_backedge {
+                (out0_target.clone(), out1_target.clone())
+            } else {
+                (out1_target.clone(), out0_target.clone())
+            };
+
+            let header_idx = header.read().unwrap().get_index();
+
+            if replacements.iter().any(|(idx, _)| *idx == header_idx as usize) {
+                continue;
+            }
+
+            // If latch == header, this is a self-loop do-while
+            // (already handled in Phase 1 above, but catch any missed ones)
+            if header_idx == latch_idx {
+                let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(crate::block::BlockDoWhile {
+                        index: latch_idx,
+                        condition: block.clone(),
+                        incoming: Vec::new(),
+                        outgoing: Vec::new(),
+                        parent: None,
+                        flags: 0,
+                    }));
+                replacements.push((i, while_block));
+                self.change_count += 1;
+                continue;
+            }
+
+            // Header is a different block from latch — this is a multi-block
+            // loop where the latch contains the condition.
+            // Check if header has a CBRANCH (while-do with condition at top AND bottom).
+            // If header is a simple fall-through, it's a do-while with the
+            // condition at the latch.
+            let header_out_count = header.read().unwrap().size_out();
+
+            if header_out_count <= 1 {
+                // Header is a simple block → do-while with condition at latch
+                let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(crate::block::BlockDoWhile {
+                        index: header_idx,
+                        condition: block.clone(),
+                        incoming: Vec::new(),
+                        outgoing: Vec::new(),
+                        parent: None,
+                        flags: 0,
+                    }));
+                replacements.push((header_idx as usize, while_block));
+                self.change_count += 1;
+            } else {
+                // Header has CBRANCH too → while-do pattern:
+                // header decides entry, latch decides repeat.
+                // Use header as condition block, latch's block as body end.
+                let h = header.read().unwrap();
+                let h_out0 = h.get_out(0).map(|e| e.point.clone());
+                let h_out1 = h.get_out(1).map(|e| e.point.clone());
+                drop(h);
+
+                // Determine which of header's exits leads into the loop body
+                let body_entry = if let Some(ref ho0) = h_out0 {
+                    let ho0_idx = ho0.read().unwrap().get_index();
+                    if ho0_idx == latch_idx || self.dominates(&block, ho0) {
+                        h_out0.clone()
+                    } else {
+                        h_out1.clone()
+                    }
+                } else {
+                    h_out1.clone()
+                };
+
+                if let Some(body) = body_entry {
+                    let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                        Arc::new(RwLock::new(BlockWhileDo {
+                            index: header_idx,
+                            condition: header.clone(),
+                            body,
+                            incoming: Vec::new(),
+                            outgoing: Vec::new(),
+                            parent: None,
+                            flags: 0,
+                        }));
+                    replacements.push((header_idx as usize, while_block));
+                    self.change_count += 1;
+                }
+            }
+        }
+
+        for (idx, replacement) in replacements {
+            if idx < self.graph.blocks.len() {
+                self.graph.blocks[idx] = replacement;
             }
         }
     }
 
-    /// Collapse internal structures iteratively
+    /// Detect and collapse if-then (triangle) and if-then-else (diamond) patterns.
     ///
-    /// Corresponds to Ghidra's `CollapseStructure::collapseInternal`
-    fn collapse_internal(&mut self, _target: Option<Arc<RwLock<BlockBasic>>>) -> usize {
-        let mut isolated_count = 0;
+    /// **Triangle** (if-then, no else):
+    /// ```text
+    ///     A (CBRANCH, 2-out)
+    ///    / \
+    ///   B   C
+    ///    \ /
+    ///     C  (B has 1 out → C)
+    /// ```
+    ///
+    /// **Diamond** (if-then-else):
+    /// ```text
+    ///     A (CBRANCH, 2-out)
+    ///    / \
+    ///   B   C
+    ///    \ /
+    ///     D  (both B and C have 1 out → D)
+    /// ```
+    fn collapse_conditions(&mut self) {
+        // Collect candidate indices first to avoid borrow conflicts
+        let size = self.graph.get_size();
+        let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
 
-        // Count isolated blocks (no incoming or outgoing edges)
-        for i in 0..self.graph.get_size() {
-            if let Some(block) = self.graph.get_block(i) {
-                let b = block.read().unwrap();
-                if b.size_in() == 0 && b.size_out() == 0 {
-                    isolated_count += 1;
+        for i in 0..size {
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+            if b.size_out() != 2 {
+                continue;
+            }
+
+            // Check that this block ends with a CBRANCH
+            let ops = b.get_ops();
+            let has_cbranch = ops.last().map_or(false, |op_ref| {
+                let op = op_ref.0.read().unwrap();
+                op.opcode == OpCode::CPUI_CBRANCH
+            });
+            if !has_cbranch {
+                continue;
+            }
+
+            let true_edge = match b.get_out(0) { Some(e) => e, None => continue };
+            let false_edge = match b.get_out(1) { Some(e) => e, None => continue };
+            let true_block = true_edge.point.clone();
+            let false_block = false_edge.point.clone();
+            let true_idx = true_block.read().unwrap().get_index();
+            let false_idx = false_block.read().unwrap().get_index();
+            let cond_idx = b.get_index();
+            drop(b); // release read lock
+
+            // --- Try Triangle: true_block → false_block (if-then, no else) ---
+            {
+                let tb = true_block.read().unwrap();
+                if tb.size_out() == 1 && tb.size_in() == 1 {
+                    if let Some(edge) = tb.get_out(0) {
+                        let target_idx = edge.point.read().unwrap().get_index();
+                        if target_idx == false_idx {
+                            drop(tb);
+                            // Triangle match: condition=block, if_body=true_block, merge=false_block
+                            // CBRANCH out(0)=true edge → if_body is the taken branch → no negation
+                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                Arc::new(RwLock::new(BlockIf {
+                                    index: cond_idx,
+                                    condition: block.clone(),
+                                    if_body: true_block.clone(),
+                                    else_body: None,
+                                    negated: false,
+                                    incoming: Vec::new(),
+                                    outgoing: Vec::new(),
+                                    parent: None,
+                                    flags: 0,
+                                }));
+                            replacements.push((i, if_block));
+                            self.change_count += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // --- Try Triangle reverse: false_block → true_block ---
+            {
+                let fb = false_block.read().unwrap();
+                if fb.size_out() == 1 && fb.size_in() == 1 {
+                    if let Some(edge) = fb.get_out(0) {
+                        let target_idx = edge.point.read().unwrap().get_index();
+                        if target_idx == true_idx {
+                            drop(fb);
+                            // Triangle-reverse: if_body is the FALSE edge block (out(1)).
+                            // The CBRANCH condition is written for the TRUE edge, so we must
+                            // negate it to correctly gate the false-edge body.
+                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                Arc::new(RwLock::new(BlockIf {
+                                    index: cond_idx,
+                                    condition: block.clone(),
+                                    if_body: false_block.clone(),
+                                    else_body: None,
+                                    negated: true,
+                                    incoming: Vec::new(),
+                                    outgoing: Vec::new(),
+                                    parent: None,
+                                    flags: 0,
+                                }));
+                            replacements.push((i, if_block));
+                            self.change_count += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // --- Try Diamond: both true_block and false_block → same merge block D ---
+            {
+                let tb = true_block.read().unwrap();
+                let fb = false_block.read().unwrap();
+                if tb.size_out() == 1 && fb.size_out() == 1
+                    && tb.size_in() == 1 && fb.size_in() == 1
+                {
+                    let t_target = tb.get_out(0).map(|e| e.point.read().unwrap().get_index());
+                    let f_target = fb.get_out(0).map(|e| e.point.read().unwrap().get_index());
+                    if let (Some(tt), Some(ft)) = (t_target, f_target) {
+                        if tt == ft {
+                            drop(tb);
+                            drop(fb);
+                            // Diamond match: if_body=true edge, else_body=false edge → no negation
+                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                Arc::new(RwLock::new(BlockIf {
+                                    index: cond_idx,
+                                    condition: block.clone(),
+                                    if_body: true_block.clone(),
+                                    else_body: Some(false_block.clone()),
+                                    negated: false,
+                                    incoming: Vec::new(),
+                                    outgoing: Vec::new(),
+                                    parent: None,
+                                    flags: 0,
+                                }));
+                            replacements.push((i, if_block));
+                            self.change_count += 1;
+                            continue;
+                        }
+                    }
                 }
             }
         }
 
-        // Placeholder: In full implementation, this would apply
-        // structural collapse rules (if-then-else, while-do, do-while, etc.)
-        // until no more patterns can be matched
-
-        isolated_count
+        // Apply replacements
+        for (idx, replacement) in replacements {
+            if idx < self.graph.blocks.len() {
+                self.graph.blocks[idx] = replacement;
+            }
+        }
     }
 
-    fn get_change_count(&self) -> i32 {
+    /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
+    ///
+    /// Implements Ghidra's `ruleBlockOr` from `blockaction.cc`.
+    ///
+    /// AND: A→true→B, A→false→C, B→false→C  ==>  if(a && b)
+    /// OR:  A→false→B, A→true→C, B→true→C   ==>  if(a || b)
+    fn collapse_bool_conditions(&mut self) {
+        let size = self.graph.get_size();
+        let mut replacements: Vec<(usize, usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
+
+        for i in 0..size {
+            let block_a = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let a = block_a.read().unwrap();
+            if a.size_out() != 2 {
+                continue;
+            }
+
+            // A must end with CBRANCH
+            let ops_a = a.get_ops();
+            let has_cbranch = ops_a.last().map_or(false, |op_ref| {
+                let op = op_ref.0.read().unwrap();
+                op.opcode == OpCode::CPUI_CBRANCH
+            });
+            if !has_cbranch {
+                continue;
+            }
+
+            // out(0) = true edge, out(1) = false edge (Ghidra convention)
+            let true_edge_a = match a.get_out(0) { Some(e) => e, None => continue };
+            let false_edge_a = match a.get_out(1) { Some(e) => e, None => continue };
+            let true_target_a = true_edge_a.point.clone();
+            let false_target_a = false_edge_a.point.clone();
+            let true_idx_a = true_target_a.read().unwrap().get_index();
+            let false_idx_a = false_target_a.read().unwrap().get_index();
+            let a_idx = a.get_index();
+            drop(a);
+
+            // Try AND pattern: A→true→B (B has CBRANCH, 1 in), A→false→C, B→false→C
+            {
+                let b_block = true_target_a.clone();
+                let b = b_block.read().unwrap();
+                if b.size_in() == 1 && b.size_out() == 2 {
+                    let b_ops = b.get_ops();
+                    let b_has_cbranch = b_ops.last().map_or(false, |op_ref| {
+                        let op = op_ref.0.read().unwrap();
+                        op.opcode == OpCode::CPUI_CBRANCH
+                    });
+                    if b_has_cbranch {
+                        let false_edge_b = b.get_out(1);
+                         if let Some(ref fe_b) = false_edge_b {
+                            let false_idx_b = fe_b.point.read().unwrap().get_index();
+                            if false_idx_b == false_idx_a {
+                                // AND match: both false edges → same target
+                                // Outgoing: out(0)=B's true target, out(1)=shared false target
+                                let true_edge_b = b.get_out(0);
+                                let b_idx = b.get_index();
+                                drop(b);
+                                let mut out_edges = Vec::new();
+                                if let Some(te_b) = true_edge_b {
+                                    out_edges.push(te_b);
+                                }
+                                out_edges.push(fe_b.clone());
+                                let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                    Arc::new(RwLock::new(BlockCondition {
+                                        index: a_idx,
+                                        op_type: BoolOp::And,
+                                        first: block_a.clone(),
+                                        second: b_block.clone(),
+                                        incoming: Vec::new(),
+                                        outgoing: out_edges,
+                                        parent: None,
+                                        flags: 0,
+                                    }));
+                                replacements.push((i, b_idx as usize, cond_block));
+                                self.change_count += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                drop(b);
+            }
+
+            // Try OR pattern: A→false→B (B has CBRANCH, 1 in), A→true→C, B→true→C
+            {
+                let b_block = false_target_a.clone();
+                let b = b_block.read().unwrap();
+                if b.size_in() == 1 && b.size_out() == 2 {
+                    let b_ops = b.get_ops();
+                    let b_has_cbranch = b_ops.last().map_or(false, |op_ref| {
+                        let op = op_ref.0.read().unwrap();
+                        op.opcode == OpCode::CPUI_CBRANCH
+                    });
+                    if b_has_cbranch {
+                        let true_edge_b = b.get_out(0);
+                        if let Some(ref te_b) = true_edge_b {
+                            let true_idx_b = te_b.point.read().unwrap().get_index();
+                            if true_idx_b == true_idx_a {
+                                // OR match: both true edges → same target
+                                // Outgoing: out(0)=shared true target, out(1)=B's false target
+                                let false_edge_b = b.get_out(1);
+                                let b_idx = b.get_index();
+                                drop(b);
+                                let mut out_edges = Vec::new();
+                                out_edges.push(te_b.clone());
+                                if let Some(fe_b) = false_edge_b {
+                                    out_edges.push(fe_b);
+                                }
+                                let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                                    Arc::new(RwLock::new(BlockCondition {
+                                        index: a_idx,
+                                        op_type: BoolOp::Or,
+                                        first: block_a.clone(),
+                                        second: b_block.clone(),
+                                        incoming: Vec::new(),
+                                        outgoing: out_edges,
+                                        parent: None,
+                                        flags: 0,
+                                    }));
+                                replacements.push((i, b_idx as usize, cond_block));
+                                self.change_count += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                drop(b);
+            }
+        }
+
+        // Apply replacements: replace A's slot, mark B's slot as absorbed
+        for (a_slot, b_idx, replacement) in replacements {
+            if a_slot < self.graph.blocks.len() {
+                self.graph.blocks[a_slot] = replacement;
+            }
+            // Mark B as absorbed by replacing with a dummy empty basic block
+            if (b_idx as usize) < self.graph.blocks.len() {
+                let dummy: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(BlockBasic::new(b_idx as i32, crate::address::Address::new(0))));
+                self.graph.blocks[b_idx as usize] = dummy;
+            }
+        }
+    }
+
+    /// Collapse linear sequences: when block A has exactly 1 out → block B,
+    /// and B has exactly 1 in (from A), merge them into a `BlockList`.
+    fn collapse_sequences(&mut self) {
+        let size = self.graph.get_size();
+        let mut merged: Vec<bool> = vec![false; size];
+
+        for i in 0..size {
+            if merged[i] { continue; }
+
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+            if b.size_out() != 1 {
+                continue;
+            }
+
+            let succ_edge = match b.get_out(0) { Some(e) => e, None => continue };
+            let succ = succ_edge.point.clone();
+            let succ_idx = succ.read().unwrap().get_index() as usize;
+            drop(b);
+
+            if succ_idx >= size || merged[succ_idx] || succ_idx == i {
+                continue;
+            }
+
+            let s = succ.read().unwrap();
+            if s.size_in() != 1 {
+                continue;
+            }
+            drop(s);
+
+            // Sequence match: merge block[i] and block[succ_idx] into BlockList
+            let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockList::new(
+                    block.read().unwrap().get_index(),
+                    vec![block.clone(), succ.clone()],
+                )));
+
+            self.graph.blocks[i] = list_block;
+            merged[succ_idx] = true;
+            self.change_count += 1;
+        }
+    }
+
+    fn collapse_switches(&mut self) {
+        let size = self.graph.get_size();
+        let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
+
+        for i in 0..size {
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+            
+            // Check if block contains BRANCHIND
+            let ops = b.get_ops();
+            let has_branchind = ops.iter().any(|op_ref| {
+                op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND
+            });
+            if !has_branchind {
+                continue;
+            }
+
+            let size_out = b.size_out();
+            if size_out < 1 {
+                continue;
+            }
+
+            let mut index_varnode = None;
+            for op_ref in &ops {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
+                    index_varnode = Some(op.inrefs[0].clone());
+                    break;
+                }
+            }
+
+            let mut cases = Vec::new();
+            let mut case_values = Vec::new();
+            for j in 0..size_out {
+                if let Some(edge) = b.get_out(j) {
+                    cases.push(edge.point.clone());
+                    case_values.push(vec![j as u64]);
+                }
+            }
+
+            let ctrl_idx = b.get_index();
+            drop(b);
+
+            let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockSwitch {
+                    index: ctrl_idx,
+                    control: block.clone(),
+                    cases,
+                    default_case: None,
+                    case_values,
+                    index_varnode,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+
+            replacements.push((i, switch_block));
+            self.change_count += 1;
+        }
+
+        for (idx, replacement) in replacements {
+            if idx < self.graph.blocks.len() {
+                self.graph.blocks[idx] = replacement;
+            }
+        }
+    }
+
+    /// Collapse CBRANCH cascades into `BlockSwitch`.
+    ///
+    /// Detects chains of blocks where each block ends with CBRANCH comparing
+    /// the same variable to a different constant, implementing a switch-case
+    /// via comparison cascades (cmp+je chains from GCC -O2).
+    ///
+    /// Pattern:
+    ///   Block A: cmp var, K1 → je case1, fallthrough B
+    ///   Block B: cmp var, K2 → je case2, fallthrough C
+    ///   Block C: cmp var, K3 → je case3, fallthrough D (default)
+    ///   case1, case2, case3 all → merge_point
+    ///
+    /// Corresponds to Ghidra's `ruleBlockSwitch` for CBRANCH cascades.
+    fn collapse_cbranch_cascades(&mut self) {
+        use crate::opcodes::OpCode;
+
+        let size = self.graph.get_size();
+        let mut consumed: Vec<bool> = vec![false; size];
+        let mut replacements: Vec<(usize, Vec<usize>, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
+
+        for i in 0..size {
+            if consumed[i] { continue; }
+            let block = match self.graph.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let b = block.read().unwrap();
+            if b.size_out() != 2 { continue; }
+
+            // Check if this block ends with CBRANCH
+            let ops = b.get_ops();
+            let has_cbranch = ops.last().map_or(false, |op_ref| {
+                op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+            });
+            if !has_cbranch { continue; }
+
+            // Get the taken target (case body) — edge 1
+            let taken_block = match b.get_out(1) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
+            drop(b);
+
+            // Walk the fallthrough chain collecting consecutive CBRANCH blocks
+            let mut chain: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = vec![(i, block.clone())];
+            let mut case_bodies: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = vec![taken_block];
+            let mut case_values: Vec<u64> = Vec::new();
+
+            // Try to get case value for first block
+            let first_ops = self.graph.blocks[i].read().unwrap().get_ops();
+            case_values.push(self.get_cbranch_case_info(&first_ops).unwrap_or(0));
+
+            let mut current_idx = i;
+            let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            visited.insert(i);
+            loop {
+                let current_block = match self.graph.get_block(current_idx) {
+                    Some(b) => b,
+                    None => break,
+                };
+                let cb = current_block.read().unwrap();
+                if cb.size_out() != 2 { break; }
+
+                // Fallthrough = edge 0
+                let fallthrough_edge = match cb.get_out(0) {
+                    Some(e) => e,
+                    None => break,
+                };
+                let next_block = fallthrough_edge.point.clone();
+                let next_idx = next_block.read().unwrap().get_index() as usize;
+                drop(cb);
+
+                if visited.contains(&next_idx) { break; }
+                visited.insert(next_idx);
+
+                if next_idx >= size || consumed[next_idx] || next_idx == current_idx {
+                    break;
+                }
+
+                // Check if next block also has CBRANCH
+                let nb = next_block.read().unwrap();
+                if nb.size_out() != 2 {
+                    // Try following this non-CBRANCH block's single outgoing edge
+                    // (skip over case body blocks in the chain)
+                    if nb.size_out() == 1 {
+                        if let Some(skip_edge) = nb.get_out(0) {
+                            let skip_block = skip_edge.point.clone();
+                            let skip_idx = skip_block.read().unwrap().get_index() as usize;
+                            drop(nb);
+                            if skip_idx < size && !consumed[skip_idx] && skip_idx != next_idx {
+                                let sb = skip_block.read().unwrap();
+                                if sb.size_out() == 2 {
+                                    let skip_ops = sb.get_ops();
+                                    let skip_has_cb = skip_ops.last().map_or(false, |op_ref| {
+                                        op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+                                    });
+                                    if skip_has_cb {
+                                        if let Some(skip_taken) = sb.get_out(1) {
+                                            let st = skip_taken.point.clone();
+                                            drop(sb);
+                                            let skip_block_ops = self.graph.blocks[skip_idx].read().unwrap().get_ops();
+                                            let cv = self.get_cbranch_case_info(&skip_block_ops)
+                                                .unwrap_or(chain.len() as u64);
+                                            chain.push((skip_idx, skip_block.clone()));
+                                            case_bodies.push(st);
+                                            case_values.push(cv);
+                                            current_idx = skip_idx;
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                let next_ops = nb.get_ops();
+                let next_has_cbranch = next_ops.last().map_or(false, |op_ref| {
+                    op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+                });
+                if !next_has_cbranch { break; }
+
+                // Get case body (taken = edge 1)
+                let next_taken = match nb.get_out(1) {
+                    Some(e) => e.point.clone(),
+                    None => break,
+                };
+                drop(nb);
+
+                // Get case value
+                let next_block_ops = self.graph.blocks[next_idx].read().unwrap().get_ops();
+                let case_val = self.get_cbranch_case_info(&next_block_ops)
+                    .unwrap_or(chain.len() as u64);
+
+                chain.push((next_idx, next_block.clone()));
+                case_bodies.push(next_taken);
+                case_values.push(case_val);
+                current_idx = next_idx;
+            }
+
+            // Need at least 3 comparisons to form a switch
+            if chain.len() < 3 { continue; }
+
+            // The last comparison's fallthrough is the default case
+            let last_block = &chain.last().unwrap().1;
+            let lb = last_block.read().unwrap();
+            let default_case = lb.get_out(0).map(|e| e.point.clone());
+            drop(lb);
+
+            // Build index_varnode by scanning all chain blocks for a valid
+            // comparison. The first block is preferred, but CBRANCH cascades
+            // sometimes have a non-standard head (e.g. a range guard) while
+            // later blocks use the canonical INT_EQUAL pattern. Walking the
+            // whole chain mirrors Ghidra's approach of finding the common
+            // compared operand across all case blocks.
+            let mut index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>> = None;
+            for (chain_block_idx, _) in &chain {
+                let chain_ops = self.graph.blocks[*chain_block_idx].read().unwrap().get_ops();
+                if let Some(vn) = self.find_compared_varnode(&chain_ops) {
+                    index_varnode = Some(vn);
+                    break;
+                }
+            }
+            // Fallback: if no block yielded a clean comparison chain, scan
+            // every chain block for ANY comparison op with a non-const
+            // operand. In a CBRANCH cascade every case compares the same
+            // variable, so any non-const operand of any INT_* comparison in
+            // any chain block is a valid switch index.
+            if index_varnode.is_none() {
+                for (chain_block_idx, _) in &chain {
+                    let chain_ops = self.graph.blocks[*chain_block_idx].read().unwrap().get_ops();
+                    for op_ref in chain_ops.iter() {
+                        let op = op_ref.0.read().unwrap();
+                        match op.opcode {
+                            crate::opcodes::OpCode::CPUI_INT_EQUAL
+                            | crate::opcodes::OpCode::CPUI_INT_NOTEQUAL
+                            | crate::opcodes::OpCode::CPUI_INT_LESS
+                            | crate::opcodes::OpCode::CPUI_INT_SLESS
+                            | crate::opcodes::OpCode::CPUI_INT_LESSEQUAL
+                            | crate::opcodes::OpCode::CPUI_INT_SLESSEQUAL => {
+                                if op.inrefs.len() >= 2 {
+                                    let i0 = op.inrefs[0].read().unwrap();
+                                    let i1 = op.inrefs[1].read().unwrap();
+                                    if i1.get_space() != crate::space::AddressSpace::Const {
+                                        index_varnode = Some(op.inrefs[1].clone());
+                                        break;
+                                    } else if i0.get_space() != crate::space::AddressSpace::Const {
+                                        index_varnode = Some(op.inrefs[0].clone());
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if index_varnode.is_some() { break; }
+                }
+            }
+
+            // Create BlockSwitch
+            let ctrl_idx = chain[0].1.read().unwrap().get_index();
+            let case_vals: Vec<Vec<u64>> = case_values.iter().map(|v| vec![*v]).collect();
+
+            let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockSwitch {
+                    index: ctrl_idx,
+                    control: chain[0].1.clone(),
+                    cases: case_bodies.clone(),
+                    default_case,
+                    case_values: case_vals,
+                    index_varnode,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+
+            let consumed_indices: Vec<usize> = chain.iter().map(|(idx, _)| *idx).collect();
+            for &idx in &consumed_indices {
+                consumed[idx] = true;
+            }
+
+            // Also consume the case body blocks
+            for body in &case_bodies {
+                let body_idx = body.read().unwrap().get_index() as usize;
+                if body_idx < size {
+                    consumed[body_idx] = true;
+                }
+            }
+            if let Some(ref def) = switch_block.read().unwrap()
+                .as_any().downcast_ref::<BlockSwitch>()
+                .and_then(|s| s.default_case.as_ref())
+            {
+                let def_idx = def.read().unwrap().get_index() as usize;
+                if def_idx < size {
+                    consumed[def_idx] = true;
+                }
+            }
+
+            replacements.push((i, consumed_indices, switch_block));
+            self.change_count += 1;
+        }
+
+        // Apply replacements
+        for (primary_idx, extra_indices, replacement) in replacements {
+            if primary_idx < self.graph.blocks.len() {
+                self.graph.blocks[primary_idx] = replacement;
+                for &idx in &extra_indices[1..] {
+                    if idx < self.graph.blocks.len() {
+                        // Create empty placeholder with valid index (no ops, no edges)
+                        let placeholder: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                            Arc::new(RwLock::new(BlockBasic::new(idx as i32, Address::new(0))));
+                        self.graph.blocks[idx] = placeholder;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extract the compared variable from a block's ops.
+    ///
+    /// Handles two patterns:
+    /// 1. Direct: CBRANCH(_, INT_EQUAL(var, const))
+    /// 2. x86 flag: CBRANCH(_, ZF) where ZF = INT_EQUAL(INT_SUB(var, const), 0)
+    ///
+    /// Uses space+offset matching (SSA-safe).
+    fn get_cbranch_compared_var(&self, ops: &[crate::op::PcodeOpRef]) -> Option<(crate::space::AddressSpace, u64)> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+
+        let cbranch_op = ops.last()?;
+        let cb = cbranch_op.0.read().unwrap();
+        if cb.opcode != OpCode::CPUI_CBRANCH { return None; }
+        if cb.inrefs.len() < 2 { return None; }
+
+        let cond_vn = cb.inrefs[1].read().unwrap();
+        let cond_space = cond_vn.get_space();
+        let cond_offset = cond_vn.get_offset();
+        let cond_size = cond_vn.get_size();
+        drop(cond_vn);
+        drop(cb);
+
+        // Search backwards for the op that produces the condition (by space+offset+size)
+        for op_ref in ops.iter().rev() {
+            let op = op_ref.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let out_vn = out.read().unwrap();
+                if out_vn.get_space() == cond_space && out_vn.get_offset() == cond_offset && out_vn.get_size() == cond_size {
+                    drop(out_vn);
+                    match op.opcode {
+                        OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                            if op.inrefs.len() >= 2 {
+                                let in0 = op.inrefs[0].read().unwrap();
+                                let in1 = op.inrefs[1].read().unwrap();
+                                if in1.get_space() == AddressSpace::Const && in0.get_space() != AddressSpace::Const {
+                                    if in1.get_offset() == 0 {
+                                        // x86 cmp: INT_EQUAL(INT_SUB(var, const), 0)
+                                        let s = in0.get_space(); let o = in0.get_offset(); let sz = in0.get_size();
+                                        drop(in0); drop(in1);
+                                        return self.find_sub_source(ops, s, o, sz);
+                                    }
+                                    return Some((in0.get_space(), in0.get_offset()));
+                                } else if in0.get_space() == AddressSpace::Const && in1.get_space() != AddressSpace::Const {
+                                    if in0.get_offset() == 0 {
+                                        let s = in1.get_space(); let o = in1.get_offset(); let sz = in1.get_size();
+                                        drop(in0); drop(in1);
+                                        return self.find_sub_source(ops, s, o, sz);
+                                    }
+                                    return Some((in1.get_space(), in1.get_offset()));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper: find INT_SUB(var, const) producing target varnode, return (var_space, var_offset).
+    fn find_sub_source(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<(crate::space::AddressSpace, u64)> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+        for op_ref in ops.iter().rev() {
+            let op = op_ref.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let ov = out.read().unwrap();
+                if ov.get_space() == ts && ov.get_offset() == to && ov.get_size() == tsz {
+                    drop(ov);
+                    if op.opcode == OpCode::CPUI_INT_SUB && op.inrefs.len() >= 2 {
+                        let i0 = op.inrefs[0].read().unwrap();
+                        let i1 = op.inrefs[1].read().unwrap();
+                        if i1.get_space() == AddressSpace::Const && i0.get_space() != AddressSpace::Const {
+                            return Some((i0.get_space(), i0.get_offset()));
+                        } else if i0.get_space() == AddressSpace::Const && i1.get_space() != AddressSpace::Const {
+                            return Some((i1.get_space(), i1.get_offset()));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract the constant case value from a CBRANCH comparison.
+    fn get_cbranch_case_info(&self, ops: &[crate::op::PcodeOpRef]) -> Option<u64> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+
+        let cbranch_op = ops.last()?;
+        let cb = cbranch_op.0.read().unwrap();
+        if cb.opcode != OpCode::CPUI_CBRANCH { return None; }
+        if cb.inrefs.len() < 2 { return None; }
+        let cv = cb.inrefs[1].read().unwrap();
+        let cs = cv.get_space(); let co = cv.get_offset(); let csz = cv.get_size();
+        drop(cv); drop(cb);
+
+        for op_ref in ops.iter().rev() {
+            let op = op_ref.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let ov = out.read().unwrap();
+                if ov.get_space() == cs && ov.get_offset() == co && ov.get_size() == csz {
+                    drop(ov);
+                    match op.opcode {
+                        OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                            if op.inrefs.len() >= 2 {
+                                let i0 = op.inrefs[0].read().unwrap();
+                                let i1 = op.inrefs[1].read().unwrap();
+                                if i1.get_space() == AddressSpace::Const && i0.get_space() != AddressSpace::Const {
+                                    if i1.get_offset() == 0 {
+                                        let s = i0.get_space(); let o = i0.get_offset(); let sz = i0.get_size();
+                                        drop(i0); drop(i1);
+                                        return self.find_sub_constant(ops, s, o, sz);
+                                    }
+                                    return Some(i1.get_offset());
+                                } else if i0.get_space() == AddressSpace::Const && i1.get_space() != AddressSpace::Const {
+                                    if i0.get_offset() == 0 {
+                                        let s = i1.get_space(); let o = i1.get_offset(); let sz = i1.get_size();
+                                        drop(i0); drop(i1);
+                                        return self.find_sub_constant(ops, s, o, sz);
+                                    }
+                                    return Some(i0.get_offset());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper: extract constant from INT_SUB producing target varnode.
+    fn find_sub_constant(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<u64> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+        for op_ref in ops.iter().rev() {
+            let op = op_ref.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let ov = out.read().unwrap();
+                if ov.get_space() == ts && ov.get_offset() == to && ov.get_size() == tsz {
+                    drop(ov);
+                    if op.opcode == OpCode::CPUI_INT_SUB && op.inrefs.len() >= 2 {
+                        let i0 = op.inrefs[0].read().unwrap();
+                        let i1 = op.inrefs[1].read().unwrap();
+                        if i1.get_space() == AddressSpace::Const { return Some(i1.get_offset()); }
+                        if i0.get_space() == AddressSpace::Const { return Some(i0.get_offset()); }
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the actual varnode being compared for switch index display.
+    ///
+    /// Walks backwards from the CBRANCH's condition varnode. If the
+    /// condition is defined directly by a comparison (INT_EQUAL etc.),
+    /// returns the non-const operand. If it is defined by BOOL_NEGATE
+    /// or COPY, chases through that op to find the underlying comparison.
+    /// This handles cascades where the original comparison is negated or
+    /// copied before being consumed by CBRANCH.
+    fn find_compared_varnode(&self, ops: &[crate::op::PcodeOpRef]) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+
+        let cbranch_op = ops.last()?;
+        let cb = cbranch_op.0.read().unwrap();
+        if cb.opcode != OpCode::CPUI_CBRANCH { return None; }
+        if cb.inrefs.len() < 2 { return None; }
+        let cv = cb.inrefs[1].read().unwrap();
+        let cs = cv.get_space(); let co = cv.get_offset(); let csz = cv.get_size();
+        drop(cv); drop(cb);
+
+        // Chase through COPY/BOOL_NEGATE/MULTIEQUAL to find the comparison.
+        // Bound the chase depth to avoid pathological loops.
+        let mut target = (cs, co, csz);
+        for _ in 0..4 {
+            let def_op = ops.iter().rev().find_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if let Some(ref out) = op.output {
+                    let ov = out.read().unwrap();
+                    if ov.get_space() == target.0 && ov.get_offset() == target.1 && ov.get_size() == target.2 {
+                        return Some(op_ref.clone());
+                    }
+                }
+                None
+            })?;
+
+            let def = def_op.0.read().unwrap();
+            match def.opcode {
+                OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_LESS
+                | OpCode::CPUI_INT_SLESS
+                | OpCode::CPUI_INT_LESSEQUAL
+                | OpCode::CPUI_INT_SLESSEQUAL => {
+                    if def.inrefs.len() >= 2 {
+                        let i0 = def.inrefs[0].read().unwrap();
+                        let i1 = def.inrefs[1].read().unwrap();
+                        if i1.get_space() == AddressSpace::Const && i0.get_space() != AddressSpace::Const {
+                            if i1.get_offset() == 0 {
+                                let s = i0.get_space(); let o = i0.get_offset(); let sz = i0.get_size();
+                                drop(i0); drop(i1);
+                                return self.find_sub_var_vn(ops, s, o, sz);
+                            }
+                            drop(i0); drop(i1);
+                            return Some(def.inrefs[0].clone());
+                        } else if i0.get_space() == AddressSpace::Const && i1.get_space() != AddressSpace::Const {
+                            if i0.get_offset() == 0 {
+                                let s = i1.get_space(); let o = i1.get_offset(); let sz = i1.get_size();
+                                drop(i0); drop(i1);
+                                return self.find_sub_var_vn(ops, s, o, sz);
+                            }
+                            drop(i0); drop(i1);
+                            return Some(def.inrefs[1].clone());
+                        }
+                    }
+                    return None;
+                }
+                OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL => {
+                    if def.inrefs.is_empty() { return None; }
+                    let src = def.inrefs[0].read().unwrap();
+                    target = (src.get_space(), src.get_offset(), src.get_size());
+                    drop(src);
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Helper: find the non-const varnode input of INT_SUB producing target.
+    fn find_sub_var_vn(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+        for op_ref in ops.iter().rev() {
+            let op = op_ref.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let ov = out.read().unwrap();
+                if ov.get_space() == ts && ov.get_offset() == to && ov.get_size() == tsz {
+                    drop(ov);
+                    if op.opcode == OpCode::CPUI_INT_SUB && op.inrefs.len() >= 2 {
+                        let i0 = op.inrefs[0].read().unwrap();
+                        let i1 = op.inrefs[1].read().unwrap();
+                        if i1.get_space() == AddressSpace::Const {
+                            drop(i0); drop(i1);
+                            return Some(op.inrefs[0].clone());
+                        } else if i0.get_space() == AddressSpace::Const {
+                            drop(i0); drop(i1);
+                            return Some(op.inrefs[1].clone());
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    fn _get_change_count(&self) -> i32 {
         self.change_count
     }
 }
 
 /// Action for performing final transformations on the block structure
 ///
-/// Corresponds to Ghidra's `ActionFinalStructure`
+/// Corresponds to Ghidra's `ActionFinalStructure`.
+/// Tags remaining unstructured branches as GOTO and removes unreachable
+/// ops that follow unconditional BRANCH or RETURN within a basic block.
 pub struct ActionFinalStructure;
 
 impl ActionFinalStructure {
-    /// Create a new ActionFinalStructure instance
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionFinalStructure {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        // Final cleanup and normalization of the structure tree
-        Ok(action_status::NO_CHANGE)
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        use crate::op::branch_type;
+
+        let mut changed = 0;
+
+        // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
+        // by ActionNormalizeBranches)
+        for op_ref in &fd.obank.alivelist {
+            let mut op = op_ref.0.write().unwrap();
+            if op.branch_type != branch_type::NONE {
+                continue;
+            }
+            match op.opcode {
+                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH => {
+                    op.branch_type = branch_type::GOTO;
+                    changed += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // Remove unreachable ops after unconditional BRANCH or RETURN
+        let mut dead_indices: Vec<usize> = Vec::new();
+        let mut hit_terminator = false;
+        let mut prev_addr: Option<u64> = None;
+
+        for (idx, op_ref) in fd.obank.alivelist.iter().enumerate() {
+            let op = op_ref.0.read().unwrap();
+            let cur_addr = op.get_addr().as_u64();
+
+            // Non-sequential address jump → new basic block
+            if let Some(prev) = prev_addr {
+                if cur_addr < prev || cur_addr > prev + 32 {
+                    hit_terminator = false;
+                }
+            }
+            prev_addr = Some(cur_addr);
+
+            if hit_terminator {
+                dead_indices.push(idx);
+                continue;
+            }
+
+            match op.opcode {
+                OpCode::CPUI_BRANCH | OpCode::CPUI_RETURN => {
+                    hit_terminator = true;
+                }
+                _ => {}
+            }
+        }
+
+        // Reverse removal preserves indices
+        for &idx in dead_indices.iter().rev() {
+            if idx < fd.obank.alivelist.len() {
+                fd.obank.alivelist.remove(idx);
+                changed += 1;
+            }
+        }
+
+        if changed > 0 {
+            Ok(1)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
 
     fn get_name(&self) -> &str {
@@ -203,8 +1596,121 @@ impl ActionNormalizeBranches {
 }
 
 impl Action for ActionNormalizeBranches {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        Ok(action_status::NO_CHANGE)
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        let mut changed = 0;
+        let size = fd.sblocks.get_size();
+
+        // Collect loop header/exit pairs from structured blocks
+        let mut loop_info: Vec<(crate::address::Address, Option<crate::address::Address>)> = Vec::new();
+
+        for i in 0..size {
+            let block = match fd.sblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let block_type = block.read().unwrap().get_type();
+
+            match block_type {
+                crate::block::BlockType::WhileDo => {
+                    let block_read = block.read().unwrap();
+                    if let Some(wd) = block_read.as_any().downcast_ref::<BlockWhileDo>() {
+                        let header_addr = wd.condition.read().unwrap().get_start_addr();
+
+                        // The exit block is the false-branch target of the CBRANCH
+                        // in the condition block.
+                        let exit_addr = {
+                            let cond = wd.condition.read().unwrap();
+                            if cond.size_out() >= 2 {
+                                // false edge (slot 0 for while-do) is typically the exit
+                                // but which slot is exit depends on the loop structure.
+                                // For while(cond), true edge → exit, false edge → body.
+                                // Check both edges to find the one NOT pointing at body.
+                                let body_addr = wd.body.read().unwrap().get_start_addr();
+                                let out0_addr = cond.get_out(0).map(|e| e.point.read().unwrap().get_start_addr());
+                                let out1_addr = cond.get_out(1).map(|e| e.point.read().unwrap().get_start_addr());
+
+                                if out0_addr == Some(body_addr) {
+                                    out1_addr
+                                } else {
+                                    out0_addr
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
+                        loop_info.push((header_addr, exit_addr));
+                    }
+                }
+                crate::block::BlockType::DoWhile => {
+                    let block_read = block.read().unwrap();
+                    if let Some(dwd) = block_read.as_any().downcast_ref::<crate::block::BlockDoWhile>() {
+                        let header_addr = dwd.condition.read().unwrap().get_start_addr();
+                        let exit_addr = {
+                            let cond = dwd.condition.read().unwrap();
+                            if cond.size_out() >= 2 {
+                                cond.get_out(1).map(|e| e.point.read().unwrap().get_start_addr())
+                            } else {
+                                None
+                            }
+                        };
+                        loop_info.push((header_addr, exit_addr));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if loop_info.is_empty() {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Walk ALL ops and tag BRANCH/CBRANCH that target loop headers or exits
+        for op_ref in &fd.obank.alivelist {
+            let mut op = op_ref.0.write().unwrap();
+            match op.opcode {
+                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH => {
+                    if op.branch_type != crate::op::branch_type::NONE {
+                        continue;
+                    }
+                    // Input[0] is the branch target address varnode
+                    let target_addr = match op.inrefs.get(0) {
+                        Some(vn_arc) => vn_arc.read().unwrap().get_offset(),
+                        None => continue,
+                    };
+
+                    for (header_addr, exit_addr) in &loop_info {
+                        if target_addr == header_addr.as_u64() {
+                            // Skip the header's own CBRANCH (the loop condition test itself)
+                            if op.get_addr().as_u64() == header_addr.as_u64() {
+                                continue;
+                            }
+                            op.branch_type = crate::op::branch_type::CONTINUE;
+                            changed += 1;
+                            break;
+                        }
+                        if let Some(ref exit) = exit_addr {
+                            if target_addr == exit.as_u64() {
+                                if op.get_addr().as_u64() == header_addr.as_u64() {
+                                    continue;
+                                }
+                                op.branch_type = crate::op::branch_type::BREAK;
+                                changed += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if changed > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
 
     fn get_name(&self) -> &str {

@@ -1,5 +1,6 @@
 # `align/varnode.rs` API Reference
 
+**状态**: 已核对（当前有效）  
 **源代码路径**: `src/align/varnode.rs`
 
 ## 模块说明 (Module Doc)
@@ -21,3 +22,4 @@ This checks space, offset, and size parity.
 
 Verify a list of Varnodes (typically P-code operation inputs)
 
+ 

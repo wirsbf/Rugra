@@ -1,286 +1,192 @@
-//! End-to-end decompilation example
+//! End-to-end decompilation example using the new concurrent pipeline
 //!
-//! This example demonstrates the complete decompilation pipeline:
-//! 1. Machine code → Disassembly
-//! 2. Disassembly → P-code IR
-//! 3. P-code → Control Flow Graph
-//! 4. Analysis
-//! 5. C code generation
+//! This example demonstrates the full decompilation pipeline:
+//! 1. Manually construct P-code operations for a simple function
+//! 2. Inject them into a Funcdata container
+//! 3. Run the ActionDatabase analysis pipeline
+//! 4. Print C output via PrintC
 
 use rugra::{
-    Address, Result,
-    disasm::{Disassembler, X86_64Disassembler},
-    translator::{Translator, X86_64Translator},
-    pcode::Program,
-    analysis::{analyze_function, cfg::ControlFlowGraph},
-    codegen::generate_c_code,
+    Address,
+    Funcdata,
+    action::ActionDatabase,
+    opcodes::OpCode,
+    pcoderaw::{PcodeOpRaw, VarnodeRaw},
+    prettyprint::EmitNoMarkup,
+    printc::PrintC,
+    printlanguage::PrintLanguage,
+    space::AddressSpace,
 };
 
-fn main() -> Result<()> {
-    println!("=== Rugra Decompilation Demo ===\n");
+fn main() {
+    println!("=== Rugra Decompilation Demo (End-to-End Pipeline) ===\n");
 
     // Example 1: Simple addition function
     println!("Example 1: Simple Addition Function");
     println!("-----------------------------------");
-    decompile_addition_function()?;
+    decompile_addition_function();
 
-    println!("\n");
+    println!();
 
     // Example 2: Conditional function
     println!("Example 2: Conditional Function");
-    println!("--------------------------------");
-    decompile_conditional_function()?;
-
-    println!("\n");
-
-    // Example 3: Loop function
-    println!("Example 3: Loop Function");
-    println!("------------------------");
-    decompile_loop_function()?;
-
-    Ok(())
+    println!("-------------------------------");
+    decompile_conditional_function();
 }
 
-/// Decompile a simple addition function
-///
-/// C equivalent:
-/// ```c
-/// int add(int a, int b) {
-///     return a + b;
-/// }
-/// ```
-fn decompile_addition_function() -> Result<()> {
-    // x86-64 assembly:
-    // mov rax, rdi     ; rax = first argument
-    // add rax, rsi     ; rax += second argument
-    // ret              ; return rax
-    let machine_code: Vec<u8> = vec![
-        0x48, 0x89, 0xf8,  // mov rax, rdi
-        0x48, 0x01, 0xf0,  // add rax, rsi
-        0xc3,              // ret
-    ];
+/// Decompile a simple `int64_t add(int64_t a, int64_t b) { return a + b; }`
+fn decompile_addition_function() {
+    // x86-64 System V ABI:
+    //   RDI = first param  (offset 0x38 in Ghidra register space)
+    //   RSI = second param (offset 0x30)
+    //   RAX = return value (offset 0x00)
+    //
+    // P-code equivalent:
+    //   COPY  RAX <- RDI       ; move first arg to return register
+    //   INT_ADD RAX <- RAX, RSI ; add second arg
+    //   RETURN (RAX)           ; return
 
-    println!("Machine code: {:02x?}", machine_code);
+    let mut ops = Vec::new();
+
+    // Op 0: RAX = COPY(RDI)
+    let mut op0 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+    op0.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
+    op0.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
+    ops.push(op0);
+
+    // Op 1: RAX = INT_ADD(RAX, RSI)
+    let mut op1 = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+    op1.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
+    op1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));  // RAX
+    op1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8));  // RSI
+    ops.push(op1);
+
+    // Op 2: RETURN(RAX)
+    let mut op2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+    op2.add_input(VarnodeRaw::new(AddressSpace::Const, 0x1000, 8));   // return target
+    op2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));  // RAX (return value)
+    ops.push(op2);
+
+    // Step 1: Create Funcdata and inject P-code
+    let mut fd = Funcdata::new("add", Address::new(0x1000), 7);
+    fd.inject_raw_ops(&ops);
+
+    println!("Injected {} P-code ops into Funcdata", fd.obank.alivelist.len());
+    println!("Created {} basic blocks", fd.bblocks.get_size());
+    println!("Created {} varnodes", fd.vbank.num_varnodes());
     println!();
 
-    // Step 1: Disassemble
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(&machine_code, Address::new(0x1000))?;
+    // Step 2: Setup self-ref and run ActionDatabase
+    let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+    fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
 
-    println!("Disassembly:");
-    for instr in &instructions {
-        println!("  {}", instr);
-    }
-    println!();
+    let mut db = ActionDatabase::new();
+    db.set_default_actions();
 
-    // Step 2: Translate to P-code
-    let translator = X86_64Translator::new();
-    let mut program = Program::with_entry_point(Address::new(0x1000));
-
-    for instr in &instructions {
-        let pcode_ops = translator.translate(instr)?;
-        for op in pcode_ops {
-            program.add_operation(op);
+    if let Some(decompile_action) = db.get_action("decompile") {
+        let mut fd_write = fd_arc.write().unwrap();
+        match decompile_action.apply(&mut *fd_write) {
+            Ok(changes) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+            Err(e) => println!("Pipeline error: {}", e),
         }
     }
+    println!();
 
-    println!("P-code IR:");
-    for op in program.operations() {
-        println!("  {}", op);
+    // Step 3: Emit C code via PrintC
+    println!("Generated C output:");
+    println!("--------------------");
+    let emit = Box::new(EmitNoMarkup::new());
+    let mut printer = PrintC::new(emit);
+    let fd_read = fd_arc.read().unwrap();
+    printer.doc_function(&fd_read);
+    drop(fd_read);
+
+    // Retrieve the buffered output via downcast
+    let emit_box = printer.take_emit();
+    let emit_any: Box<dyn std::any::Any> = emit_box.into_any();
+    if let Ok(emit_no_markup) = emit_any.downcast::<EmitNoMarkup>() {
+        println!("{}", emit_no_markup.get_output());
     }
-    println!();
-
-    // Step 3: Build Control Flow Graph
-    let cfg = ControlFlowGraph::from_program(&program)?;
-    println!("Control Flow Graph:");
-    println!("  Blocks: {}", cfg.block_count());
-    println!("  Entry: {}", cfg.entry);
-    println!("  Exits: {:?}", cfg.exits);
-    println!();
-
-    // Step 4: Analyze
-    let analysis = analyze_function(&mut program, None)?;
-    println!("Analysis complete");
-    println!();
-
-    // Step 5: Generate C code
-    let c_code = generate_c_code(&analysis, &program, None)?;
-    println!("Generated C code:");
-    println!("{}", c_code);
-
-    Ok(())
 }
 
-/// Decompile a conditional function
-///
-/// C equivalent:
+/// Decompile a conditional function:
 /// ```c
-/// int max(int a, int b) {
-///     if (a > b) {
-///         return a;
-///     } else {
-///         return b;
-///     }
+/// int64_t abs_val(int64_t x) {
+///     if (x < 0) return -x;
+///     return x;
 /// }
 /// ```
-fn decompile_conditional_function() -> Result<()> {
-    // x86-64 assembly:
-    // cmp rdi, rsi     ; compare a and b
-    // jle .else        ; if a <= b, jump to else
-    // mov rax, rdi     ; return a
-    // ret
-    // .else:
-    // mov rax, rsi     ; return b
-    // ret
-    let machine_code: Vec<u8> = vec![
-        0x48, 0x39, 0xf7,  // cmp rdi, rsi
-        0x7e, 0x05,        // jle +5 (to 0x100a)
-        0x48, 0x89, 0xf8,  // mov rax, rdi
-        0xc3,              // ret
-        // else branch (0x100a):
-        0x48, 0x89, 0xf0,  // mov rax, rsi
-        0xc3,              // ret
-    ];
+fn decompile_conditional_function() {
+    let mut ops = Vec::new();
 
-    println!("Machine code: {:02x?}", machine_code);
+    // Block 0: Compare and branch
+    // Op 0: uVar = INT_SLESS(RDI, 0)
+    let mut op0 = PcodeOpRaw::new(OpCode::CPUI_INT_SLESS as i32);
+    op0.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+    op0.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
+    op0.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));        // 0
+    ops.push(op0);
+
+    // Op 1: CBRANCH(target=block2_addr, uVar)
+    let mut op1 = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+    op1.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1030, 8));     // branch target = block 2 start (op3 addr)
+    op1.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));   // condition
+    ops.push(op1);
+
+    // Block 1 (fallthrough, x >= 0): RETURN(RDI)
+    let mut op2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+    op2.add_input(VarnodeRaw::new(AddressSpace::Const, 0x1010, 8));   // return target
+    op2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
+    ops.push(op2);
+
+    // Block 2 (branch target, x < 0): RAX = INT_NEG(RDI); RETURN(RAX)
+    let mut op3 = PcodeOpRaw::new(OpCode::CPUI_INT_NEG as i32);
+    op3.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
+    op3.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
+    ops.push(op3);
+
+    let mut op4 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+    op4.add_input(VarnodeRaw::new(AddressSpace::Const, 0x1020, 8));   // return target
+    op4.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));  // RAX
+    ops.push(op4);
+
+    // Create Funcdata and inject
+    let mut fd = Funcdata::new("abs_val", Address::new(0x1000), 32);
+    fd.inject_raw_ops(&ops);
+
+    println!("Injected {} P-code ops into Funcdata", fd.obank.alivelist.len());
+    println!("Created {} basic blocks", fd.bblocks.get_size());
     println!();
 
-    // Step 1: Disassemble
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(&machine_code, Address::new(0x1000))?;
+    // Run ActionDatabase
+    let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+    fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
 
-    println!("Disassembly:");
-    for instr in &instructions {
-        println!("  {}", instr);
-    }
-    println!();
+    let mut db = ActionDatabase::new();
+    db.set_default_actions();
 
-    // Step 2: Translate to P-code
-    let translator = X86_64Translator::new();
-    let mut program = Program::with_entry_point(Address::new(0x1000));
-
-    for instr in &instructions {
-        let pcode_ops = translator.translate(instr)?;
-        for op in pcode_ops {
-            program.add_operation(op);
+    if let Some(decompile_action) = db.get_action("decompile") {
+        let mut fd_write = fd_arc.write().unwrap();
+        match decompile_action.apply(&mut *fd_write) {
+            Ok(changes) => println!("ActionDatabase pipeline completed. Changes: {}", changes),
+            Err(e) => println!("Pipeline error: {}", e),
         }
     }
-
-    println!("P-code IR: {} operations", program.operation_count());
     println!();
 
-    // Step 3: Build Control Flow Graph
-    let cfg = ControlFlowGraph::from_program(&program)?;
-    println!("Control Flow Graph:");
-    println!("  Blocks: {}", cfg.block_count());
-    println!("  Entry: {}", cfg.entry);
-    println!("  Exits: {:?}", cfg.exits);
+    // Emit C code
+    println!("Generated C output:");
+    println!("--------------------");
+    let emit = Box::new(EmitNoMarkup::new());
+    let mut printer = PrintC::new(emit);
+    let fd_read = fd_arc.read().unwrap();
+    printer.doc_function(&fd_read);
+    drop(fd_read);
 
-    for (i, block) in cfg.blocks.iter().enumerate() {
-        println!("  Block {}: {} ops, successors: {:?}",
-            i, block.operations.len(), block.successors);
+    // Retrieve the buffered output via downcast
+    let emit_box = printer.take_emit();
+    let emit_any: Box<dyn std::any::Any> = emit_box.into_any();
+    if let Ok(emit_no_markup) = emit_any.downcast::<EmitNoMarkup>() {
+        println!("{}", emit_no_markup.get_output());
     }
-    println!();
-
-    // Step 4: Analyze
-    let analysis = analyze_function(&mut program, None)?;
-    println!("Analysis complete");
-    println!();
-
-    // Step 5: Generate C code
-    let c_code = generate_c_code(&analysis, &program, None)?;
-    println!("Generated C code:");
-    println!("{}", c_code);
-
-    Ok(())
-}
-
-/// Decompile a loop function
-///
-/// C equivalent:
-/// ```c
-/// int sum_n(int n) {
-///     int sum = 0;
-///     for (int i = 0; i < n; i++) {
-///         sum += i;
-///     }
-///     return sum;
-/// }
-/// ```
-fn decompile_loop_function() -> Result<()> {
-    // x86-64 assembly:
-    // xor eax, eax     ; sum = 0
-    // xor ecx, ecx     ; i = 0
-    // .loop:
-    // cmp ecx, edi     ; compare i and n
-    // jge .end         ; if i >= n, exit loop
-    // add eax, ecx     ; sum += i
-    // inc ecx          ; i++
-    // jmp .loop        ; repeat
-    // .end:
-    // ret
-    let machine_code: Vec<u8> = vec![
-        0x31, 0xc0,        // xor eax, eax
-        0x31, 0xc9,        // xor ecx, ecx
-        // loop (0x1004):
-        0x39, 0xf9,        // cmp ecx, edi
-        0x7d, 0x06,        // jge +6 (to 0x100e)
-        0x01, 0xc8,        // add eax, ecx
-        0xff, 0xc1,        // inc ecx
-        0xeb, 0xf6,        // jmp -10 (to 0x1004)
-        // end (0x100e):
-        0xc3,              // ret
-    ];
-
-    println!("Machine code: {:02x?}", machine_code);
-    println!();
-
-    // Step 1: Disassemble
-    let mut disasm = X86_64Disassembler::new();
-    let instructions = disasm.disassemble(&machine_code, Address::new(0x1000))?;
-
-    println!("Disassembly:");
-    for instr in &instructions {
-        println!("  {}", instr);
-    }
-    println!();
-
-    // Step 2: Translate to P-code
-    let translator = X86_64Translator::new();
-    let mut program = Program::with_entry_point(Address::new(0x1000));
-
-    for instr in &instructions {
-        let pcode_ops = translator.translate(instr)?;
-        for op in pcode_ops {
-            program.add_operation(op);
-        }
-    }
-
-    println!("P-code IR: {} operations", program.operation_count());
-    println!();
-
-    // Step 3: Build Control Flow Graph
-    let cfg = ControlFlowGraph::from_program(&program)?;
-    println!("Control Flow Graph:");
-    println!("  Blocks: {}", cfg.block_count());
-    println!("  Entry: {}", cfg.entry);
-    println!("  Exits: {:?}", cfg.exits);
-
-    for (i, block) in cfg.blocks.iter().enumerate() {
-        println!("  Block {}: addr 0x{:x}, {} ops, successors: {:?}",
-            i, block.start_addr.as_u64(), block.operations.len(), block.successors);
-    }
-    println!();
-
-    // Step 4: Analyze
-    let analysis = analyze_function(&mut program, None)?;
-    println!("Analysis complete");
-    println!();
-
-    // Step 5: Generate C code
-    let c_code = generate_c_code(&analysis, &program, None)?;
-    println!("Generated C code:");
-    println!("{}", c_code);
-
-    Ok(())
 }

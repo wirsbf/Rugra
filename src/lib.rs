@@ -23,77 +23,72 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
-//! use rugra::{Decompiler, Architecture};
+//! ```rust,ignore
+//! use rugra::Funcdata;
+//! use rugra::action::ActionDatabase;
 //!
-//! # fn main() -> anyhow::Result<()> {
-//! // Load a binary
-//! let binary_data = std::fs::read("program.exe")?;
+//! // Create a Funcdata for the target function
+//! let mut fd = Funcdata::new("main", rugra::Address::new(0x401000));
 //!
-//! // Create decompiler
-//! let mut decompiler = Decompiler::new(Architecture::X86_64)?;
-//! decompiler.load_binary(&binary_data)?;
+//! // Inject raw P-code operations (from a lifter)
+//! // fd.inject_raw_ops(&raw_ops);
 //!
-//! // Decompile a function
-//! let c_code = decompiler.decompile_function(0x401000)?;
-//! println!("{}", c_code);
-//! # Ok(())
-//! # }
+//! // Run the analysis pipeline
+//! let db = ActionDatabase::build_default();
+//! db.apply(&mut fd).expect("analysis pipeline");
+//!
+//! // Generate C output via PrintC
 //! ```
 
-#![warn(missing_docs)]
+#![allow(missing_docs)] // Re-enable when approaching stable release
 #![warn(clippy::all)]
 #![allow(dead_code)] // During development
 
 // Core Ghidra-aligned modules
-pub mod address;       // ← address.hh
-pub mod space;         // ← space.hh
-pub mod varnode;       // ← varnode.hh
-pub mod op;            // ← op.hh
-pub mod opcodes;       // ← opcodes.hh
-pub mod typeop;        // ← typeop.hh
-pub mod heritage;      // ← heritage.hh
-pub mod fspec;         // ← fspec.hh
-pub mod block;         // ← block.hh
-pub mod funcdata;      // ← funcdata.hh
-pub mod pcoderaw;      // ← pcoderaw.hh
-pub mod type_system;   // ← type.hh
-pub mod prettyprint;    // ← prettyprint.hh
+pub mod action; // ← action.hh
+pub mod address; // ← address.hh
+pub mod block; // ← block.hh
+pub mod blockaction;
+pub mod coreaction; // ← coreaction.hh
+pub mod cover; // ← cover.hh
+pub mod fspec; // ← fspec.hh
+pub mod funcdata; // ← funcdata.hh
+pub mod heritage; // ← heritage.hh
+pub mod merge; // ← merge.hh
+pub mod op; // ← op.hh
+pub mod opcodes; // ← opcodes.hh
+pub mod pcoderaw; // ← pcoderaw.hh
+pub mod prettyprint; // ← prettyprint.hh
+pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh
-pub mod printc;        // ← printc.hh
-pub mod action;        // ← action.hh
-pub mod coreaction;    // ← coreaction.hh
-pub mod ruleaction;    // ← ruleaction.hh
-pub mod cover;         // ← cover.hh
-pub mod variable;      // ← variable.hh
-pub mod merge;         // ← merge.hh
-pub mod blockaction;   // ← blockaction.hh
+pub mod ruleaction; // ← ruleaction.hh
+pub mod space; // ← space.hh
+pub mod type_system; // ← type.hh
+pub mod typeop; // ← typeop.hh
+pub mod variable; // ← variable.hh
+pub mod varnode; // ← varnode.hh // ← blockaction.hh
 
 // Temporarily disabled - legacy modules using old Program API
 // TODO: Update these to use new Arc<RwLock<>> architecture
-// pub mod binary;
-// pub mod pcode;
-// pub mod analysis;
-// pub mod codegen;
-// pub mod disasm;
-// pub mod translator;
-// pub mod ffi;
-// pub mod align;
+pub mod align;
+pub mod binary;
+pub mod disasm;
+pub mod ffi;
 
 mod error;
 mod types;
 mod utils;
 
 // Re-exports
+pub use address::{Address, Range, RangeList, RangeProperties, SeqNum};
+pub use block::{BlockBasic, BlockEdge, BlockRef};
 pub use error::{Error, Result};
-pub use address::{Address, SeqNum, Range, RangeList, RangeProperties};
-pub use block::{BlockBasic, BlockRef, BlockEdge};
-pub use funcdata::Funcdata;
 pub use fspec::{FuncProto, ProtoParameter};
-pub use space::AddressSpace;
+pub use funcdata::Funcdata;
 pub use opcodes::OpCode;
-pub use types::Architecture;
+pub use space::AddressSpace;
 pub use type_system::{Datatype, TypeMetatype};
+pub use types::Architecture;
 
 // use std::collections::HashMap;
 
@@ -282,49 +277,5 @@ mod tests {
     #[test]
     fn test_version() {
         assert!(!version().is_empty());
-    }
-}
-
-
-#[no_mangle]
-pub extern "C" fn rugra_evaluate_constant(
-    opcode: i32,
-    size_out: usize,
-    val1: u64,
-    _size1: usize,
-    val2: u64,
-    _size2: usize,
-    has_val2: bool,
-) -> u64 {
-    let res = match opcode {
-        19 => val1.wrapping_add(val2), // CPUI_INT_ADD
-        20 => val1.wrapping_sub(val2), // CPUI_INT_SUB
-        32 => val1.wrapping_mul(val2), // CPUI_INT_MULT
-        11 => if val1 == val2 { 1 } else { 0 }, // CPUI_INT_EQUAL
-        _ => {
-            if has_val2 { val1.wrapping_add(val2) } else { val1 }
-        }
-    };
-
-    // Mask based on output size
-    if size_out > 0 && size_out < 8 {
-        let mask = (1u64 << (size_out * 8)).wrapping_sub(1);
-        res & mask
-    } else {
-        res
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: usize) {
-    println!("[RUGRA OBSERVE] JumpTable at 0x{:x}, Table: 0x{:x}, Entries: {}", op_addr, table_addr, size);
-    if size == 0 || size > 4096 {
-        println!("[RUGRA WARN] Suspect JumpTable size: {} at 0x{:x}", size, op_addr);
-    }
-    if table_addr % 4 != 0 {
-        println!("[RUGRA WARN] Unaligned JumpTable address: 0x{:x}", table_addr);
-    }
-    if table_addr == 0 && size > 0 {
-        println!("[RUGRA ERR] JumpTable at 0x{:x} has non-zero size but null address!", op_addr);
     }
 }

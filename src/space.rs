@@ -39,7 +39,7 @@ pub const SPACEID_OVERLAY: SpaceId = 6;
 /// - Const: Constant values
 /// - Stack: Stack space
 /// - Other: Custom address spaces
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum AddressSpace {
     /// Normal memory (RAM)
     Ram,

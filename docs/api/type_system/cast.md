@@ -1,4 +1,9 @@
-# `type_system/cast.rs` API Reference
+﻿# `type_system/cast.rs` API Reference
+
+## 文档状态
+
+- **状态**: 部分有效（需对照源码）
+
 
 **源代码路径**: `src/type_system/cast.rs`
 
@@ -27,4 +32,5 @@ Corresponds to Ghidra's `CastStrategyC` class.
 ### `pub fn new(promote_size: usize) -> Self`
 
 *暂无代码注释*
+
 
