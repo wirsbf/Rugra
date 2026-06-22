@@ -834,3 +834,34 @@ gcc 语法 100% 是必要条件但非充分条件。语义对齐 Ghidra 需要�
 3. 参数类型传播（LOAD/STORE 地址反推指针类型）
 4. 结构体字段恢复（从指针偏移 + 类型库）
 5. 变量名传播（从符号表/类型库）
+
+### 控制流差距根因分析（2026-06-23 深入）
+
+对 getparameter.constprop.0（121 个基本块，Rugra 4 if vs Ghidra 42 if）的深入分析：
+
+**根因**：Rugra 的 `collapse_all`（blockaction.rs）在 121 块上运行后，**块数不变（仍 121）**——没有任何规则匹配。
+
+**Ghidra blockaction.cc 的结构化流程**：
+1. `orderLoopBodies` — 循环识别 + 排序
+2. `collapseConditions` — `ruleBlockOr`（&&/|| 短路折叠）
+3. `collapseInternal` — 反复执行 10+ 规则直到收敛：
+   - `ruleBlockGoto` / `ruleBlockCat` / `ruleBlockProperIf` / `ruleBlockIfElse`
+   - `ruleBlockWhileDo` / `ruleBlockDoWhile` / `ruleBlockInfLoop`
+   - `ruleBlockSwitch` / `ruleCaseFallthru`
+
+**Rugra 当前的 collapse_all**：
+- `collapse_loops` — 基础循环检测（自然循环 + CBRANCH latch）
+- `collapse_conditions` — 只做简单 Triangle（if-then）和 Diamond（if-then-else），要求 size_in==1 && size_out==1
+- `collapse_switches` — BRANCHIND switch 检测
+- `collapse_bool_conditions` — &&/|| 折叠
+
+**缺失**：
+1. **多轮迭代直到收敛**（Ghidra 反复跑直到 change==false；Rugra 只跑 3 轮固定）
+2. **ruleBlockProperIf 通用化**（Rugra 的 Triangle 条件太严格）
+3. **ruleBlockIfElse**（完整 if-else 结构化）
+4. **ruleBlockWhileDo/DoWhile 的完整实现**
+5. **ruleCaseFallthru**（switch case fallthrough 处理）
+
+**改进路线**：移植 Ghidra 的 collapseInternal 到 Rugra blockaction.rs，实现 10+ 规则的多轮迭代。这是缩小控制流差距（128/119）的唯一途径。
+
+**尝试过的 printc 层修复**（递归 Basic 块后继）失败了——破坏 switch 结构（case label 出现在 switch 体外）。控制流结构化必须在 blockaction 层完成，不能在 printc 层 ad-hoc 处理。
