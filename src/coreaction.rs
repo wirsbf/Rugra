@@ -700,7 +700,7 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             "ap_regcomp" | "ap_regfree" => 1,
             "ap_ht_time" => 4,
             "ap_pregcomp" | "ap_pregfree" | "ap_strcasestr" | "ap_stripprefix" => 1,
-            "ap_strcmp_match" | "ap_strcasecmp_match" => 1,
+            "ap_strcmp_match" | "ap_strcasecmp_match" => 2,
             "ap_os_is_path_absolute" | "ap_is_matchexp" => 1,
             "ap_field_noparam" => 2,
             "ap_fini_vhost_config" | "ap_parse_vhost_addrs" => 2,
@@ -1161,6 +1161,16 @@ impl Action for ActionInferParams {
                 crate::address::Address::new(*offset),
             ));
             expected_abi_idx += 1;
+        }
+
+        // If this function has a known parameter count in the signature database,
+        // trust it over the inferred count. The database encodes the real C
+        // signature (e.g. ap_strcasecmp_match takes 2 args, not 4); without this
+        // the function definition signature and the call-site argument trimming
+        // would disagree, producing 'too few/many arguments' errors.
+        let known_n = known_param_count(Some(fd.get_name()));
+        if known_n < params.len() {
+            params.truncate(known_n);
         }
 
         if !params.is_empty() && fd.funcp.parameters.is_empty() {

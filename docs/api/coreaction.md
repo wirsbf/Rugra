@@ -171,3 +171,8 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 ### 2026-06-23：参数指针类型检测
 
 - `ActionInferParams` 现在扫描所有 LOAD/STORE 的地址输入（input[1]），若该 varnode 是 INPUT 参数寄存器，则把对应参数类型从 size-based scalar 提升为 `long *` 指针。对齐 Ghidra 的 `ActionActiveParam` 指针恢复逻辑。
+
+### 2026-06-23（续）：函数签名与 known_param_count 同步
+
+- `ActionInferParams` 现在在推断参数后，如果当前函数在 `known_param_count` 数据库中有记录，用它的值裁剪推断的参数数。修复函数定义签名与调用处参数裁剪不一致导致的 `too few/many arguments` 错误。
+- `ap_strcmp_match`/`ap_strcasecmp_match` 从 1 参数修正为 2 参数。
