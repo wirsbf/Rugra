@@ -1511,106 +1511,135 @@ impl EmitNoMarkup {
         Self::remove_orphan_breaks(&after_backfill)
     }
 
-    /// Remove `break;` and `continue;` statements that are not inside any
-    /// loop (while/for/do-while) or switch. We track brace depth and a context
-    /// stack: when entering a `{` preceded by a loop/switch keyword, push that
-    /// context; when leaving via `}`, pop. A break/continue is orphan if the
-    /// current context stack has no loop/switch.
+    /// Remove `break;`/`continue;` statements not within any loop or switch.
+    /// Uses a pre-scan to mark line ranges that fall inside a loop/switch body
+    /// (via brace matching), which is more reliable than a line-level context
+    /// stack for nested case blocks.
     fn remove_orphan_breaks(text: &str) -> String {
         let lines: Vec<&str> = text.split('\n').collect();
-        let mut out: Vec<String> = Vec::with_capacity(lines.len());
-        // Stack of context kinds: true = loop/switch, false = other block (if/else/fn)
-        let mut ctx_stack: Vec<bool> = Vec::new();
-        for line in lines {
+        let n = lines.len();
+
+        // Pre-scan: for each line that opens a loop/switch body (ends with '{'
+        // and starts with while/for/do/switch), find the matching '}' via brace
+        // counting and mark all lines in [opener+1, closer) as "in loop/switch".
+        let mut in_loop_switch = vec![false; n];
+        // Also track depth-based: any line at brace depth inside a loop/switch.
+        // We do a single pass tracking a stack of (loop_or_switch, brace_depth_at_open).
+        let mut brace_depth: i32 = 0;
+        // Stack of brace depths at which a loop/switch body opened.
+        let mut loop_depths: Vec<i32> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
             let t = line.trim();
-            // Detect block-opening lines: "X {" or just "{".
-            // Determine if the opener introduces a loop/switch context.
-            if t.ends_with('{') {
-                // Determine context: is this line a loop/switch header, or nested
-                // inside one? A break/continue is legal if ANY enclosing block is a
-                // loop or switch, so children inherit the parent's loop-ctx flag.
-                let is_loop_header = t.starts_with("while ")
+            // Reset brace tracking at each function signature (line ends with '{'
+            // and looks like a return-type declaration with parens). This prevents
+            // brace-depth drift across functions from breaking switch detection.
+            if t.ends_with('{') && t.contains('(') && t.contains(')')
+                && (t.starts_with("int ") || t.starts_with("long ")
+                    || t.starts_with("void ") || t.starts_with("char ")
+                    || t.starts_with("short ") || t.starts_with("bool "))
+            {
+                brace_depth = 1;
+                loop_depths.clear();
+                in_loop_switch[i] = false;
+                continue;
+            }
+            // Detect loop/switch opener: line ends with '{' and starts with keyword.
+            // Skip lines that start with '}' (like "} else {") — they're handled below
+            // by the closing-brace logic to avoid double-counting the brace delta.
+            if t.ends_with('{') && !t.starts_with('}') {
+                let is_loop_hdr = t.starts_with("while ")
                     || t.starts_with("for ")
                     || t.starts_with("do ")
                     || t.starts_with("switch ")
                     || t.contains("} while (");
-                let parent_is_loop = ctx_stack.last().copied().unwrap_or(false);
-                // Function signature lines (contain ')' and a return type) start a
-                // fresh function body — reset to false (no inherited loop context).
-                let is_function_sig = t.contains(')')
-                    && (t.starts_with("int ") || t.starts_with("long ")
-                        || t.starts_with("void ") || t.starts_with("char ")
-                        || t.starts_with("short ") || t.starts_with("bool "));
-                let this_ctx = if is_function_sig {
-                    false
-                } else if is_loop_header {
-                    true
-                } else {
-                    // Nested block (if/else/anonymous) — inherit parent context
-                    parent_is_loop
-                };
-                ctx_stack.push(this_ctx);
-                out.push(line.to_string());
-                continue;
-            }
-            // Closing brace: pop context
-            if t == "}" || t.starts_with("} while") || t.starts_with("} else") {
-                // Handle "} else {" — pops then pushes (inherit parent context)
-                if t.starts_with("} else") {
-                    ctx_stack.pop();
-                    let parent_is_loop = ctx_stack.last().copied().unwrap_or(false);
-                    ctx_stack.push(parent_is_loop);
-                } else {
-                    ctx_stack.pop();
+                brace_depth += 1;
+                if is_loop_hdr {
+                    loop_depths.push(brace_depth);
                 }
-                out.push(line.to_string());
-                continue;
             }
-            // Check if this line contains a break/continue that is orphan.
-            // Handles both bare `break;` and inline `if (cond) break;` forms.
-            let in_loop_or_switch = ctx_stack.iter().any(|&x| x);
-            if !in_loop_or_switch {
-                // Scan for standalone break; / continue; tokens (word-boundary)
-                let mut new_line = String::new();
+            // Mark this line if any loop/switch is currently open
+            if !loop_depths.is_empty() {
+                in_loop_switch[i] = true;
+            }
+            // Handle closing braces
+            if t == "}" {
+                brace_depth -= 1;
+                // Pop any loop/switch whose body just closed
+                while let Some(&top) = loop_depths.last() {
+                    if top > brace_depth {
+                        loop_depths.pop();
+                    } else {
+                        break;
+                    }
+                }
+            } else if t.starts_with("} while") || t.starts_with("} else") {
+                // These close one brace then may open another (} else {) — handle net effect
+                // Count opens and closes in the line
+                let opens = t.matches('{').count() as i32;
+                let closes = t.matches('}').count() as i32;
+                let net = opens - closes;
+                // First the closes happen
+                for _ in 0..closes {
+                    brace_depth -= 1;
+                    while let Some(&top) = loop_depths.last() {
+                        if top > brace_depth { loop_depths.pop(); } else { break; }
+                    }
+                }
+                brace_depth += opens;
+            }
+        }
+
+        // Second pass: remove break/continue lines not marked as in loop/switch.
+        let mut out: Vec<String> = Vec::with_capacity(n);
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim();
+            let protected = in_loop_switch[i];
+            if !protected {
+                // Check for break/continue tokens in this line
                 let bytes = line.as_bytes();
+                let mut has_break = false;
                 let mut k = 0;
-                let mut modified = false;
                 while k < bytes.len() {
-                    // Match "break;" or "continue;" as whole words
                     let candidates: &[&[u8]] = &[b"break;", b"continue;"];
-                    let mut hit = None;
                     for cand in candidates {
                         if k + cand.len() <= bytes.len() && &bytes[k..k + cand.len()] == *cand {
-                            // Check word boundary before (not alnum/_)
                             let prev_ok = k == 0 || {
                                 let b = bytes[k - 1];
                                 !(b.is_ascii_alphanumeric() || b == b'_')
                             };
-                            if prev_ok { hit = Some(cand.len()); break; }
+                            if prev_ok { has_break = true; break; }
                         }
                     }
-                    if let Some(clen) = hit {
-                        // Skip the break/continue token (remove it)
-                        k += clen;
-                        modified = true;
-                    } else {
-                        new_line.push(bytes[k] as char);
-                        k += 1;
-                    }
+                    if has_break { break; }
+                    k += 1;
                 }
-                if modified {
-                    // Clean up the line: remove trailing "if (...);" that's now empty,
-                    // or "if (...)" with nothing after.
+                if has_break {
+                    // Remove the break/continue token; if line becomes empty, drop it.
+                    let mut new_line = String::new();
+                    let mut k = 0;
+                    while k < bytes.len() {
+                        let candidates: &[&[u8]] = &[b"break;", b"continue;"];
+                        let mut hit = None;
+                        for cand in candidates {
+                            if k + cand.len() <= bytes.len() && &bytes[k..k + cand.len()] == *cand {
+                                let prev_ok = k == 0 || {
+                                    let b = bytes[k - 1];
+                                    !(b.is_ascii_alphanumeric() || b == b'_')
+                                };
+                                if prev_ok { hit = Some(cand.len()); break; }
+                            }
+                        }
+                        if let Some(clen) = hit {
+                            k += clen;
+                        } else {
+                            new_line.push(bytes[k] as char);
+                            k += 1;
+                        }
+                    }
                     let cleaned = new_line.trim_end().to_string();
-                    // If the line is now just whitespace or "if (...)" with no body, drop it.
                     let ct = cleaned.trim();
-                    if ct.is_empty()
-                        || ct.ends_with(")")
-                        || ct.ends_with(") ")
-                        || ct == "{"
-                    {
-                        // Drop the now-empty statement line
-                        continue;
+                    if ct.is_empty() || ct.ends_with(')') || ct == "{" {
+                        continue; // drop the now-empty line
                     }
                     out.push(cleaned);
                     continue;

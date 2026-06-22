@@ -85,3 +85,9 @@ Emitter that discards all output (used for discovery pass)
 ### 2026-06-23（续）：orphan break context 继承改进
 
 - `remove_orphan_breaks()` 的 context 栈改进：嵌套块（if/else/匿名）继承父块的 loop/switch context；函数签名行重置为 false；`} else {` 继承 parent。修复了 switch case 内嵌套 if 里的 break 被误删的问题。
+
+### 2026-06-23（续）：orphan break 的 switch 范围追踪 + brace 双计修复
+
+- 重写 `remove_orphan_breaks()`：用 brace 深度 + loop/switch 深度栈预扫描，标记每行是否在 loop/switch 体内。比行级 context 栈更可靠。
+- 修复 `} else {` 的 brace 双计 bug：这类行既匹配 `endswith("{")` 又匹配 `starts_with("} else")`，导致 brace_depth 多 +1。现在 `endswith("{")` 排除以 `}` 开头的行。
+- 函数签名行重置 brace_depth=1，防止跨函数累积。
