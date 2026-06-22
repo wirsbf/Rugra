@@ -51,3 +51,6 @@ Thumbs.db
 .sisyphus/
 .agents/
 .githooks/
+
+# Vendored Ghidra source (reference only, do not commit; huge tree)
+/ghidra/

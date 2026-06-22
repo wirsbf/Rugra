@@ -25,8 +25,9 @@ def run_test():
 
     # Load DLL
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    dll_path_release = os.path.join(script_dir, "target", "release", "rugra.dll")
-    dll_path_debug = os.path.join(script_dir, "target", "debug", "rugra.dll")
+    root_dir = os.path.dirname(script_dir)
+    dll_path_release = os.path.join(root_dir, "target", "release", "rugra.dll")
+    dll_path_debug = os.path.join(root_dir, "target", "debug", "rugra.dll")
 
     if os.path.exists(dll_path_release):
         dll_path = dll_path_release
