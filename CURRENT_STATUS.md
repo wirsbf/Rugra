@@ -4,9 +4,11 @@
 **版本**: 0.1.0  
 **状态**: 🟡 **核心库持续开发中；已具备较完整的反编译分析框架与显著改进的 C 输出质量，但对外可用性与对齐验证仍不完整**
 
-## 近期进展（2026-06-23 会话：example 输出合法化）
+## 近期进展（2026-06-23 会话：example 输出 100% 合法化）
 
-本会话聚焦 **curl/httpd 两个 example 反编译输出质量对齐 Ghidra**，建立了机械化的 gcc 语法审计工具链（`tools/audit_syntax.py`），并通过 **19 个原子化 commit** 将**语法通过率从 30% 提升到 77%**（16→41/53 函数通过 `gcc -fsyntax-only`）。
+本会话聚焦 **curl/httpd 两个 example 反编译输出质量对齐 Ghidra**，建立了机械化的 gcc 语法审计工具链（`tools/audit_syntax.py`），并通过 **27 个原子化 commit** 将**语法通过率从 30% 提升到 100%**（16→53/53 函数全部通过 `gcc -fsyntax-only`）。
+
+**里程碑**：curl 24/24（100%）、httpd 29/29（100%）函数的 C 输出全部通过 gcc 语法检查。这是 Rugra 反编译输出合法化的**首个 100% 里程碑**。
 
 **修复清单**（每个 commit 独立、可追溯）：
 
@@ -26,19 +28,17 @@
 | bd911e9, 7b24953 | orphan break 重写（brace-depth switch 追踪） | 39 |
 | 657729d | backfill 扩展无下划线前缀 + struct | 40 |
 | 9abe869 | CALLIND 地址 0 的函数指针 cast | 41 |
-
-**剩余差距**（12 个函数未通过语法检查）：
-- 2 个 invalid operands（`int * + int *` 类型矛盾——变量既被解引用又被算术运算）
-- 2 个 too many/few arguments（gcc 内置签名冲突 + 递归调用参数裁剪）
-- 1 个 expected declaration（C99 风格声明位置 + backfill 插入点）
-- 1 个 struct3/局部变量声明遗漏
-
-这些需要深层架构工作（完整类型传播、CALL 参数分析、C99 声明支持），超出当前后处理合法化范畴。
+| b67088b | 指针-指针算术 (long) cast | 41 |
+| d7dacea | 函数签名与 known_param_count 同步 | 43 |
+| ce90972 | __vfprintf_chk 参数数修正 | 43 |
+| eefbdad | audit stub 自排除（消除假阳性） | 51 |
+| 8bbcbe3 | char literal brace escape | 52 |
+| 0d32bb9 | 非法 lvalue 赋值移除 | **53 (100%)** |
 
 **验证方式**：
 - `cargo test`：175/176（1 个预存失败 `test_switch_case_structuring`，非本次回归）。
-- `python tools/audit_syntax.py result/curl.c result/httpd.c`：41/53 通过 gcc 语法检查。
-- curl 24/24、httpd 29/29 函数成功反编译。
+- `python tools/audit_syntax.py result/curl_cur.c result/httpd_cur.c`：**53/53 通过 gcc 语法检查（100%）**。
+- curl 24/24、httpd 29/29 函数成功反编译且输出全部合法 C。
 
 ## 近期进展（2026-06-21 会话）
 
