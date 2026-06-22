@@ -306,7 +306,20 @@ impl PrintC {
         use crate::opcodes::OpCode;
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
-        
+
+        // A block ending in CBRANCH/BRANCH/RETURN/CALL is NOT empty — it has
+        // control flow that must be emitted. Without this, the block's
+        // branch logic (and everything after it) gets silently dropped.
+        if let Some(last_op_ref) = ops.last() {
+            let last_op = last_op_ref.0.read().unwrap();
+            if matches!(last_op.opcode,
+                OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND
+                | OpCode::CPUI_RETURN | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
+            {
+                return false;
+            }
+        }
+
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
             // Skip branches, COPY, phi-nodes, and dead ops — same logic as emit_block_ops
@@ -810,11 +823,17 @@ impl PrintC {
 
                         if let Some(false_block_edge) = false_edge {
                             let false_idx = false_block_edge.point.read().unwrap().get_index();
-                            if !emitted.contains(&false_idx) && !false_empty && !self.seen_return {
+                            // The else block is part of the conditional, not sequential code.
+                            // seen_return from the then-branch should NOT suppress it.
+                            if !emitted.contains(&false_idx) && !false_empty {
                                 self.emit.print(" else");
                                 self.emit.begin_block();
                                 emitted.insert(false_idx);
+                                // Temporarily clear seen_return so the else block emits.
+                                let saved_seen_return = self.seen_return;
+                                self.seen_return = false;
                                 self.emit_block_ops(&false_block_edge.point, false);
+                                self.seen_return = saved_seen_return;
                                 self.emit.end_block();
                             } else {
                                 emitted.insert(false_idx);

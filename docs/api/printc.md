@@ -357,3 +357,9 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：RETURN 返回值推断
 
 - `op_return()` 当 RETURN op 无显式返回值输入时，扫描同块 RETURN 前最后一个写 RAX/EAX 的 op，emit 其值作为返回值。对齐 Ghidra 把 `xor eax,eax; ret` 重构为 `return 0` 的行为。这是前端语义改进（非后处理 hack），缩小了与 Ghidra 的差距 4（返回值推断缺失）。
+
+### 2026-06-23（续）：else 分支 seen_return 抑制修复 + is_block_body_empty 控制流感知
+
+- `is_block_body_empty()` 现在对以 CBRANCH/BRANCH/RETURN/CALL 结尾的块返回 false（有控制流的块不是空）。
+- emit_block_structured 的 legacy if/else 分支：else 块不再被 then 分支的 seen_return 抑制。else 是条件分支的一部分，不应受 then 分支的 return 影响。emit else 时临时清除 seen_return。
+- 这是前端语义改进，恢复了大量被错误丢失的控制流分支。
