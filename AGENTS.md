@@ -14,6 +14,9 @@ Rugra 是一个基于 Rust 开发的生产级、受 Ghidra 启发的 C/C++ 二�
 
 **历史教训：过去开发中经常出现文档与代码脱节、进度更新不及时、不规范的情况。从现在起，任何以“下次补”为由的偷懒都是不可被接受的违规行为。**
 
+> ⚠️ **【最高指令】全自动化 24 小时无休止推进架构 (24/7 Autonomous Execution Pipeline)**
+> AI 拥有完全的自主决策权，**绝不等待指令，绝不主动停机**。无论是排查 Bug、实现对齐、还是编写文档，你都必须 24 小时、无休止地推进该项目。无论遇到什么编译错误、测试失败或逻辑不通，你必须自动捕获错误、自行调试、网络搜索，连续尝试直至解决。只有整个 Rugra 项目在 `CURRENT_STATUS.md` 中被标记为 100% 完工时，才允许歇息。遇到分歧时，自行根据 Ghidra 源码逻辑（标杆）拍板，**不要向人类求助**。
+
 在使用 AI 助手迭代开发时，每次会话必须严格且同步地遵循以下步骤，缺一不可：
 
 1. **会话首读与摸底**：首先读取当前的 `AGENTS.md` 熟悉本目录规范。然后必须并查阅 `CURRENT_STATUS.md`、`GAP_ANALYSIS.md` 和 `ALIGNMENT_PROGRESS.md`，精确掌握当前项目与 Ghidra 对齐的功能鸿沟和验证进度。
@@ -53,6 +56,38 @@ RustVSR 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一�
 - **避免静默失败**：严格按照 `anyhow::Result` 和 `thiserror` (定义在 `src/error.rs` 中)返回具有明确上下文的异常，不要擅自 `.unwrap()`。
 - 所有名称（包括由于对齐 Ghidra 而引入的模型）都使用精准语义化英文（`snake_case` 或 `PascalCase`为主，常量为 `SCREAMING_SNAKE_CASE`）。绝不可混杂缩写或魔术数字。
 
+## 🐛 调试输出规范 (Debug Output Convention)
+
+**所有调试输出必须遵循以下约定：**
+
+### 1. 格式要求
+- 使用 `eprintln!`（输出到 stderr），不要用 `println!`（污染 stdout 的反编译结果）。
+- 必须使用 `[TAG]` 前缀格式，便于 grep 过滤和批量清除。
+- 函数名和关键变量必须出现在日志中。
+
+### 2. 已有的标准 TAG（保持一致）
+| TAG | 用途 | 示例 |
+|-----|------|------|
+| `[ACTION]` | 动作流水线每步耗时 | `[ACTION] main / heritage 401.9µs` |
+| `[STEP]` | 生命周期里程碑 | `[STEP] main inject done 4.8ms bblocks=102` |
+| `[INJECT]` | P-code 注入阶段 | `[INJECT] main phase2 done bblocks=68` |
+| `[COLLAPSE]` | 控制流结构化 | `[COLLAPSE] main loops 148µs blocks=102` |
+| `[BLOCKSTRUCT]` | 块结构构建 | `[BLOCKSTRUCT] main build_copy done sblocks=16` |
+| `[PREPASS]` | 预遍原型收集 | `[PREPASS] Collected 156 prototypes` |
+| `[DECOMP]` | 逐函数反编译进度 | `[DECOMP] 1/30 main @ 0x25a0` |
+| `[PTRSTAMP]` | 指针类型标记 | `[PTRSTAMP] main stamped 238 varnodes` |
+
+### 3. 临时调试 vs 永久日志
+- **永久日志**（保留）：上述标准 TAG，用于持续监控反编译质量。它们在 release 模式下通过 `eprintln!` 输出到 stderr，不影响 stdout 的 C 代码输出。
+- **临时调试**（必须删除）：一次性排查用的 `[DBG]`、`[DEBUG]`、`[VNDBG]`、`[HUNGDBG]` 等 TAG，在提交前必须全部删除。
+- **判断标准**：如果一段调试日志的生命周期不超过单次开发会话，它就是临时的。
+
+### 4. 禁止事项
+- ❌ 禁止在 `println!` 中输出调试信息（会混入反编译 C 代码输出）。
+- ❌ 禁止在根目录或 `src/` 目录下创建临时 `.txt`、`.log` 调试输出文件。
+- ❌ 禁止保留 `// TODO: remove this debug` 注释。
+- ✅ 调试输出文件统一放 `result/` 目录，并在提交前清理过期的中间产物。
+
 ## 📁 Artifacts & Document Routing (子文档内容描述与归属)
 
 本项目的进展性文档有着严格的分类要求。各文档的具体作用如下，绝不能把信息记错位置或随意丢弃在根目录：
@@ -89,3 +124,33 @@ RustVSR 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一�
 align: verify SSA parameter propagation logic matching Ghidra 11.0 output
 core: implement reaching definitions pass in analysis engine
 ```
+
+## 🎯 反编译质量评估 (Decompilation Quality Status)
+
+**目标：** 与 Ghidra 反编译质量对齐，以 `curl` 和 `httpd` 等真实二进制为验证基准。
+
+**当前进展（2026-06-22）：**
+
+Rugra 已具备完整的反编译流水线（`Funcdata -> Heritage/SSA -> MergeType -> TypeInfer -> CopyPropagate -> BlockStructure -> PrintC`），24/24 个 curl 函数成功反编译。关键能力：
+
+- C 风格控制结构输出（if/else, while, switch/case, do-while）
+- SSA 构建与 HighVariable 合并（Cover-based merge）
+- 函数参数跟踪（lifter 发射 arg 寄存器 + prototype DB 裁剪）
+- Hungarian 命名（`piVar_` 指针变量, `iVar_` 整数变量）
+- 字符串常量、结构体字段访问恢复
+- Switch 条件提取（CBRANCH cascade + BOOL_OR 检测）
+- OOM 防护（GuardAlloc + 循环检测）
+
+**剩余差距（按优先级排序）：**
+
+1. **高级变量合并**：`HighVariable` 合并覆盖率有限（Cover 传递性传播不完整），导致部分 `uVar` 碎片残留。
+2. **控制流结构化**：4-5 个残留 `goto`（不可归约 CFG），需移植 Ghidra `blockaction.cc` 的块复制/分裂算法。
+3. **for 循环恢复**：需要归纳变量分析（Induction Variable Analysis）。
+4. **类型传播深度**：ActionTypeInfer 已实现基础传播，但指针类型覆盖率不足（需要更完整的 def-use 链追踪）。
+5. **库签名匹配**：无标准库函数签名数据库（libc/winapi）。
+
+**验证方式：**
+- `cargo test`：176 个单元测试。
+- `cargo run --release --example curl_decompile`：curl 反编译质量验证。
+- `cargo run --release --example httpd_decompile`：httpd（strip 二进制）反编译质量验证。
+- 输出中的 `goto`、`uVar`、`empty_switch`、`no_arg` 计数作为质量指标。

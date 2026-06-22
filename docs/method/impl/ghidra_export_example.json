@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "function": {
+    "name": "load_example",
+    "entry": {
+      "space": "Ram",
+      "offset": 4096
+    },
+    "size": 3
+  },
+  "summary": {
+    "pcode_op_count": 2,
+    "basic_block_count": 1,
+    "varnode_count": 4,
+    "has_symbols": false,
+    "has_strings": false
+  },
+  "pcode": {
+    "ops": [
+      {
+        "seq": {
+          "addr": {
+            "space": "Ram",
+            "offset": 4096
+          },
+          "order": 0
+        },
+        "opcode": "CPUI_LOAD",
+        "output": {
+          "space": "Unique",
+          "offset": 256,
+          "size": 8
+        },
+        "inputs": [
+          {
+            "space": "Const",
+            "offset": 2,
+            "size": 8
+          },
+          {
+            "space": "Register",
+            "offset": 24,
+            "size": 8
+          }
+        ]
+      },
+      {
+        "seq": {
+          "addr": {
+            "space": "Ram",
+            "offset": 4096
+          },
+          "order": 1
+        },
+        "opcode": "CPUI_COPY",
+        "output": {
+          "space": "Register",
+          "offset": 0,
+          "size": 8
+        },
+        "inputs": [
+          {
+            "space": "Unique",
+            "offset": 256,
+            "size": 8
+          }
+        ]
+      }
+    ]
+  },
+  "cfg": {
+    "blocks": [
+      {
+        "index": 0,
+        "start": {
+          "space": "Ram",
+          "offset": 4096
+        },
+        "ops": [
+          {
+            "addr": {
+              "space": "Ram",
+              "offset": 4096
+            },
+            "order": 0
+          },
+          {
+            "addr": {
+              "space": "Ram",
+              "offset": 4096
+            },
+            "order": 1
+          }
+        ],
+        "successors": [],
+        "predecessors": []
+      }
+    ]
+  },
+  "ssa": {
+    "varnodes": [
+      {
+        "varnode": {
+          "space": "Const",
+          "offset": 2,
+          "size": 8
+        },
+        "version": 0,
+        "is_input": false,
+        "is_written": false,
+        "defining_op": null,
+        "uses": []
+      },
+      {
+        "varnode": {
+          "space": "Register",
+          "offset": 0,
+          "size": 8
+        },
+        "version": 0,
+        "is_input": false,
+        "is_written": true,
+        "defining_op": {
+          "addr": {
+            "space": "Ram",
+            "offset": 4096
+          },
+          "order": 1
+        },
+        "uses": []
+      },
+      {
+        "varnode": {
+          "space": "Register",
+          "offset": 24,
+          "size": 8
+        },
+        "version": 0,
+        "is_input": false,
+        "is_written": false,
+        "defining_op": null,
+        "uses": []
+      },
+      {
+        "varnode": {
+          "space": "Unique",
+          "offset": 256,
+          "size": 8
+        },
+        "version": 0,
+        "is_input": false,
+        "is_written": true,
+        "defining_op": {
+          "addr": {
+            "space": "Ram",
+            "offset": 4096
+          },
+          "order": 0
+        },
+        "uses": []
+      }
+    ]
+  },
+  "tags": [
+    "ghidra_reference",
+    "manual_example"
+  ],
+  "notes": [
+    "Hand-crafted reference snapshot for mov rax, [rbx] (0x48 0x8b 0x03)",
+    "Used to test Rugra JSON import path"
+  ]
+}

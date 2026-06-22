@@ -1,571 +1,733 @@
-# Rugra-Ghidra 输出一致性验证指南
+# Rugra-Ghid
+ra 验证指南
 
-> **重要声明**: 当前 Rugra 项目**不能保证**与 Ghidra 的输出完全一致。本文档说明如何进行验证以及已知的差异。
+> **
+状态声明**：截至当前仓库可见代码与文档状态，
+Rugra 的验证体系仍处于
+**未完成**阶段。  
+> 已经具备一部分静态对齐测试与运行时验证框架代码，但**不能据
+此宣称**已经完成了与 Ghidra 的端到端一致性验证，也**不能宣称**当前输出与 Ghidra 100% 等价。
 
-## 📋 目录
+本文档用于说明：
 
-1. [现状说明](#现状说明)
-2. [验证层次](#验证层次)
-3. [环境准备](#环境准备)
-4. [验证步骤](#验证步骤)
-5. [已知差异](#已知差异)
-6. [问题排查](#问题排查)
-
----
-
-## 🔴 现状说明
-
-### 已完成
-- ✅ **静态类型对齐**: 核心数据结构（Varnode, PcodeOp, Address 等）的字段对齐
-- ✅ **FFI 接口**: 部分 FFI 函数用于与 Ghidra C++ 通信
-- ✅ **单元测试**: 每个对齐模块都有独立的单元测试
-
-### 未完成（关键）
-- ❌ **运行时对拍**: 没有实际运行时比对 Rugra 和 Ghidra 的输出
-- ❌ **端到端测试**: 没有用真实二进制文件进行完整的反编译对比
-- ❌ **SSA 一致性**: Varnode 的 SSA 版本号分配算法未验证
-- ❌ **优化规则顺序**: Action/Rule 的应用顺序可能不同
-- ❌ **浮点数精度**: 浮点运算的精度和舍入模式未对齐
-- ❌ **跳转表恢复**: 跳转表识别算法可能有差异
-
-### 风险评估
-| 组件 | 一致性风险 | 说明 |
-|------|-----------|------|
-| P-code 生成 | **中** | 基本操作应该一致，但 unique 空间分配可能不同 |
-| 常量折叠 | **低** | 简单算术运算应该一致 |
-| SSA 构造 | **高** | 版本号分配算法必须完全一致，否则后续分析全错 |
-| 控制流分析 | **高** | 基本块划分、支配树计算必须一致 |
-| 类型推断 | **中** | 类型传播规则可能有细微差异 |
-| 代码生成 | **高** | C 代码输出格式、变量命名可能完全不同 |
+1. 当前已经具备哪些验证能力
+2. 哪些关键验证
+仍未真正落地
+3. 如何区分“静态对齐”与“运行时
+对拍”
+4. 当前阶段建议采用什么验证路径
+5.
+ 5. 阅读和更新本文件时应避免哪些失真表述
+ 6. 如何为验证类结论补充证据来源
 
 ---
 
-## 📊 验证层次
+## 1
+. 验证目标
 
-### Level 1: 单元测试（已完成 ✅）
+Rugra 的验证工作不是单一测试，而是分层目标：
 
-```rust
-// 示例：验证 Address 对齐
-#[test]
-fn test_address_alignment() {
-    let addr = Address::new(0x1000);
-    let space = AddressSpace::Ram;
-    assert!(verify_address(&addr, &space, 0x1000, 2));
-}
-```
+- **结构层验证**：核心数据结构是否与 Ghidra 的概念模型基本对齐
+- **算法层验证**：P-code、SSA、CFG、类型传播等核心算法行为是否一致
+- **输出层验证**：最终伪 C 输出在语义上是否接近或等价
+- **回归层验证**：修改后是否破坏现有行为
 
-**状态**: ✅ 所有静态对齐测试通过  
-**限制**: 只验证数据结构，不验证算法行为
+当前项目**已在结构层迈出了一部分**，但**算法层与输出层仍未完成**。
 
 ---
 
-### Level 2: 常量求值对拍（部分完成 ⚠️）
+## 2. 当前可确认的真实状态
 
-```rust
-// 运行时比对常量折叠结果
-let verifier = global_verifier();
-let result = verifier.verify_constant_eval(
-    "add_1_2",
-    PcodeOp::IntAdd,
-    19,  // Ghidra INT_ADD opcode
-    1, 4,
-    Some((2, 4)),
-    4
-);
+结合当前代码与文档，项目验证现状应按以下方式理解。
 
-assert!(result.is_match());
-```
+### 2.1 已具备的部分
 
-**要求**:
-1. Ghidra 必须通过 FFI 加载（需要 `ghidra_bridge` 或自定义 JNI）
-2. 调用 `rugra_evaluate_constant` FFI 函数
-3. 比对结果
+#### A. 静态对齐测试存在
+`src/align/` 下已经存在若干面向 Ghidra 核心概念的对齐模块，例如：
 
-**运行**:
-```bash
-# 需要先编译 Ghidra C++ FFI 库
-cd ghidra/Ghidra/Features/Decompiler/src/decompile/cpp
-make
+- `address.rs`
+- `varnode.rs`
+- `pcodeop.rs`
+- `datatype.rs`
+- `range.rs`
+- `heritage.rs`
+- `block.rs`
+- `action.rs`
 
-# 运行对拍测试
-cd rugra
-cargo test runtime_verify::tests --features ffi-test
-```
+这些模块说明项目已经围绕 Ghidra 的概念模型开展了映射与验证工作。
 
----
+#### B. 运行时验证框架代码存在
+`src/align/runtime_verify.rs` 已经存在，说明项目已经开始设计运行时比对框架，框架中可见的目标包括：
 
-### Level 3: P-code 生成对拍（未实现 ❌）
+- 常量求值比对
+- P-code 生成比对
+- SSA 版本验证
+- CFG 结构验证
+- 差异记录与统计
 
-**测试目标**: 确保同一条机器指令生成相同的 P-code 序列
+但这只能说明“**框架方向存在**”，**不能直接等价于验证已经完成**。  
+按当前最近一次最小样本推进记录看，`mov rbx, rax` 这条样本已经从“框架级真实运行记录”进一步推进到：比较入口能够接收 **真实 opcode、真实 output、真实 input 列表**，并由 `verify_pcode_generation(...)` 基于结构化本地比较结果返回 `Match` 或 `Mismatch(...)`，不再无条件返回 `Match`。  
+进一步地，当前比较入口也已经不再只是 stdout 日志副作用：`rugra_compare_pcode(...)` 现在会返回结构化比较状态，调用侧可以区分 `match`、`opcode mismatch`、`output mismatch`、`input count mismatch`、`input mismatch`、`missing Rugra op` 等结果类型。
 
-**实现方案**:
-```python
-# Python 脚本，使用 ghidra_bridge
-import ghidra_bridge
-import subprocess
-import json
-
-def compare_pcode(binary_path, address):
-    # 1. Ghidra 反编译
-    with ghidra_bridge.GhidraBridge() as bridge:
-        bridge.remote_import("ghidra")
-        currentProgram = bridge.remote_eval("currentProgram")
-        
-        instr = currentProgram.getListing().getInstructionAt(
-            bridge.remote_eval(f"toAddr(0x{address:x})")
-        )
-        
-        ghidra_pcodes = []
-        for pcode in instr.getPcode():
-            ghidra_pcodes.append({
-                'opcode': pcode.getOpcode(),
-                'inputs': [str(v) for v in pcode.getInputs()],
-                'output': str(pcode.getOutput()) if pcode.getOutput() else None
-            })
-    
-    # 2. Rugra 反编译
-    rugra_result = subprocess.run(
-        ['cargo', 'run', '--', 'pcode', binary_path, f'0x{address:x}'],
-        capture_output=True, text=True
-    )
-    rugra_pcodes = json.loads(rugra_result.stdout)
-    
-    # 3. 比对
-    if len(ghidra_pcodes) != len(rugra_pcodes):
-        print(f"FAIL: P-code count mismatch at 0x{address:x}")
-        print(f"  Ghidra: {len(ghidra_pcodes)} ops")
-        print(f"  Rugra:  {len(rugra_pcodes)} ops")
-        return False
-    
-    for i, (g, r) in enumerate(zip(ghidra_pcodes, rugra_pcodes)):
-        if g['opcode'] != r['opcode']:
-            print(f"FAIL: Opcode mismatch at 0x{address:x}:{i}")
-            return False
-    
-    return True
-```
-
-**状态**: ❌ 未实现  
-**优先级**: 🔴 **高** - 这是最基础的验证
+#### C. FFI 相关代码存在
+仓库中存在 `src/ffi.rs`，且运行时验证框架中引用了 FFI 接口。这说明项目确实计划走“Rust 实现 ↔ Ghidra/相关原生能力”的跨边界验证路线。
 
 ---
 
-### Level 4: SSA 构造对拍（未实现 ❌）
+### 2.2 明确未完成的部分
 
-**关键问题**: SSA 版本号必须完全一致，否则后续所有分析都会出错
+以下事项目前**不能**视为已完成：
 
-**测试方法**:
-```rust
-// 比对 SSA 版本号
-let verifier = global_verifier();
+#### A. 不能确认运行时对拍已经全面打通
+虽然有 `runtime_verify.rs`，但从可见代码来看，若干逻辑仍处于框架、占位、简化比较或待环境集成状态，不能视为“已稳定可用的完整运行时验证体系”。
 
-// Rugra SSA
-let rugra_program = /* 反编译结果 */;
-let rugra_versions: Vec<(Address, usize)> = rugra_program
-    .operations()
-    .iter()
-    .filter_map(|op| op.output())
-    .map(|vn| (op.seqnum().addr, vn.version()))
-    .collect();
+#### B. 不能确认 Ghidra FFI 集成已经形成稳定工作流
+当前仓库有相关接口与文档描述，但不能据此断言：
 
-// Ghidra SSA (需要通过 FFI 获取)
-let ghidra_versions = get_ghidra_ssa_versions(binary, func_addr);
+- 已完成全部链接配置
+- 已在本地/CI 中稳定运行
+- 已有大规模真实样本验证结果
+- 已得到可靠的一致性统计
 
-// 验证
-let result = verifier.verify_ssa_versions(
-    "test_function",
-    &rugra_versions,
-    &ghidra_versions
-);
+#### C. 不能确认 SSA / CFG / P-code 已与 Ghidra 严格一致
+这些是反编译器的核心语义层。  
+除非存在真实运行结果、稳定测试样本和明确统计，否则不能写成“已保障一致性”。
 
-assert!(result.is_match(), "SSA versions must match exactly!");
-```
+#### D. 不能确认端到端输出验证已完成
+当前不能把“能够生成某些 C 风格输出”表述为：
 
-**状态**: ❌ 未实现  
-**优先级**: 🔴 **极高** - SSA 是反编译的核心
+- 已完成与 Ghidra 输出对比
+- 已经语义等价
+- 已达到 1:1 对齐
+- 已达到生产级完全可信
 
 ---
 
-### Level 5: 控制流图对拍（未实现 ❌）
+## 3. 验证层级划分
 
-**测试要点**:
-- 基本块划分必须完全一致
-- 支配树结构必须相同
-- 循环识别结果必须相同
+为了避免文档失真，项目中的“验证”应严格分层描述。
 
-```rust
-let verifier = global_verifier();
+### Level 1：静态结构对齐
+目标：验证 Rust 中的数据结构、字段语义、基本行为与 Ghidra 概念模型相近。
 
-// Rugra CFG
-let rugra_blocks = rugra_analysis.cfg.blocks()
-    .map(|b| (b.start_addr, b.successors().clone()))
-    .collect();
+典型对象：
 
-// Ghidra CFG
-let ghidra_blocks = get_ghidra_cfg(binary, func_addr);
+- `Address`
+- `SeqNum`
+- `Varnode`
+- `PcodeOp`
+- `DataType`
+- `Range`
+- `RangeList`
 
-let result = verifier.verify_cfg_structure(
-    "test_cfg",
-    &rugra_blocks,
-    &ghidra_blocks
-);
-```
+这一层能说明：
 
-**状态**: ❌ 未实现  
-**优先级**: 🔴 **高**
+- 模型命名和字段组织较接近
+- 某些基础行为有单元测试覆盖
+- 为后续算法对齐提供了基础
 
----
+这一层**不能说明**：
 
-### Level 6: 端到端输出对比（未实现 ❌）
-
-**测试目标**: 比对最终的 C 代码输出
-
-**方法**:
-```bash
-#!/bin/bash
-# 1. Ghidra 反编译
-java -jar ghidra.jar -import test.exe -scriptPath . -postScript DecompileToC.java
-
-# 2. Rugra 反编译
-cargo run -- decompile test.exe > rugra_output.c
-
-# 3. 规范化比对（因为格式可能不同）
-diff -u \
-  <(clang-format ghidra_output.c | sed 's/var_[0-9]*/VAR/g') \
-  <(clang-format rugra_output.c | sed 's/var_[0-9]*/VAR/g')
-```
-
-**预期差异**:
-- ✅ **可接受**: 变量命名不同（`var_1` vs `local_10`）
-- ✅ **可接受**: 空白和格式不同
-- ✅ **可接受**: 等价的类型表示（`int*` vs `int *`）
-- ❌ **不可接受**: 控制流结构不同
-- ❌ **不可接受**: 运算逻辑不同
-
-**状态**: ❌ 未实现  
-**优先级**: 🟡 **中** - 格式差异不影响语义
+- 算法行为已一致
+- 反编译输出已一致
+- 整体系统已经通过对拍
 
 ---
 
-## 🛠️ 环境准备
+### Level 2：运行时局部对拍
+目标：在受控输入下，对某一局部行为做比较。
 
-### 1. 安装 Ghidra
+可能包括：
 
-```bash
-# 下载 Ghidra 11.0+
-wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.0_build/ghidra_11.0_PUBLIC_20231222.zip
-unzip ghidra_11.0_PUBLIC_20231222.zip
-```
+- 常量折叠结果
+- 单条指令的 P-code 序列
+- 单个函数的 SSA 版本分配
+- 单个函数的基本块划分
 
-### 2. 编译 Ghidra FFI 库
+这一层如果未来真正落地，才有资格讨论：
 
-```bash
-cd ghidra/Ghidra/Features/Decompiler/src/decompile/cpp
-make
+- 哪些局部行为一致
+- 哪些局部行为存在偏差
+- 差异集中在哪个算法阶段
 
-# 生成 libdecomp.so (Linux) 或 decomp.dll (Windows)
-```
-
-### 3. 配置 Rugra FFI
-
-在 `rugra/Cargo.toml` 中：
-```toml
-[dependencies]
-once_cell = "1.19"
-
-[features]
-ffi-test = []
-
-[build-dependencies]
-cc = "1.0"
-```
-
-在 `rugra/build.rs` 中：
-```rust
-fn main() {
-    println!("cargo:rustc-link-search=native=../ghidra/build/lib");
-    println!("cargo:rustc-link-lib=dylib=decomp");
-}
-```
-
-### 4. 设置测试二进制
-
-```bash
-# 使用标准测试程序
-cd rugra/tests/binaries
-wget https://github.com/lifting-bits/anvill-test-data/raw/master/curl/curl
-```
+当前这一层已经不再只是纯占位框架：至少在第一条最小样本 `mov rbx, rax` 上，Rugra 侧已经能够把真实的 opcode / output / input 元数据送入比较层，比较入口也已经能够返回结构化状态码，随后再由 `verify_pcode_generation(...)` 汇总为 `VerifyResult`。  
+但这一层**仍然不能被表述为已完成**，因为当前比较虽然已经具备“结构化返回路径”，参考数据仍主要来自 Rugra 侧本地构造与当前程序态，并不等价于“已接入稳定、完整、可信的 Ghidra 参考侧逐字段结果”。
 
 ---
 
-## ✅ 验证步骤
+### Level 3：端到端语义验证
+目标：针对真实二进制，比较整个函数或程序的反编译结果。
 
-### Step 1: 运行静态对齐测试
+可能比较内容：
 
-```bash
-cd rugra
+- 控制流结构是否接近
+- 调用参数与返回值恢复是否接近
+- 变量恢复是否合理
+- 伪 C 代码语义是否等价
+
+这一层是最难的，也最接近用户真实感知质量。  
+**当前不能宣称这一层已经完成。**
+
+---
+
+### Level 4：持续回归验证
+目标：每次改动后快速发现回归。
+
+理想形态包括：
+
+- `cargo test`
+- 指定模块测试
+- 对齐模块测试
+- 示例样本回归
+- 未来可能加入的 FFI/样本级验证
+
+这一层是项目走向稳定工程化的关键，但当前仍应视为**持续建设中**。
+
+---
+
+## 4. 当前建议采用的验证策略
+
+在运行时对拍尚未完全落地前，建议使用“**保守、分层、可复现**”的验证路线。
+
+### 第一步：先保证普通 Rust 测试可运行
+优先确保基础测试不退化：
+
+```text
+cargo test
+```
+
+如果某次改动只影响某个局部模块，应优先运行该模块相关测试。
+
+---
+
+### 第二步：运行对齐相关测试
+针对 `align` 相关模块运行聚焦测试，确认结构层行为未退化。
+
+可按实际测试命名运行类似：
+
+```text
 cargo test --lib align::
 ```
 
-**预期输出**:
-```
-running 25 tests
-test align::address::tests::test_address_alignment ... ok
-test align::varnode::tests::test_varnode_alignment_success ... ok
-test align::pcodeop::tests::test_verify_opcode ... ok
-...
-test result: ok. 25 passed; 0 failed
-```
+或更细粒度地针对具体子模块执行。
 
-✅ **全部通过** → 进入 Step 2  
-❌ **有失败** → 修复静态对齐问题
+> 注意：是否能够直接使用某条命令，取决于当前工程内测试命名、feature 和平台环境。  
+> 文档中不应把“可能可运行”写成“已经稳定跑通”。
 
 ---
 
-### Step 2: 运行常量求值对拍
+### 第三步：检查运行时验证框架是否仍可编译
+当修改了 `src/align/runtime_verify.rs`、`src/ffi.rs` 或对齐模块时，至少应确认：
 
-```bash
-# 确保 Ghidra FFI 已加载
-export LD_LIBRARY_PATH=../ghidra/build/lib:$LD_LIBRARY_PATH
+- 代码仍然可编译
+- 接口没有失配
+- 没有因为签名变更导致框架彻底失效
 
-cargo test --features ffi-test runtime_verify::test_constant_eval
-```
-
-**预期输出**:
-```
-=== Verification Statistics ===
-Total Tests:    100
-Matches:        100 (100.00%)
-Mismatches:     0
-Ghidra Errors:  0
-Rugra Errors:   0
-```
-
-✅ **100% 匹配** → 进入 Step 3  
-⚠️ **95%+ 匹配** → 检查差异，可能可接受  
-❌ **<95% 匹配** → 存在严重问题
+如果运行时验证尚未可执行，也应至少保持“框架不被进一步破坏”。
 
 ---
 
-### Step 3: P-code 生成对拍（需要实现）
+### 第四步：先用最小样本维持局部验证链路
 
-```bash
-# 使用 Python 脚本
-python3 scripts/verify_pcode.py tests/binaries/curl 0x401000
-```
+在端到端样本恢复之前，建议优先维护“单条指令 / 小型指令序列”的最小验证记录，例如：
 
-**预期输出**:
-```
-Testing instruction at 0x401000: push rbp
-  Ghidra: 3 P-code ops
-  Rugra:  3 P-code ops
-  ✓ Opcode match
-  ✓ Input count match
-  ✓ Output match
-PASS
-```
+- `mov rbx, rax`
+- `add rax, 1`
+- `sub rax, 8`
 
----
+这类样本的价值在于：
 
-### Step 4: 生成对拍报告
+- 可以稳定复现输入字节与预期 lifting 结果
+- 可以把问题限定在 `disasm -> x86_lift -> pcoderaw -> funcdata -> runtime_verify -> ffi` 的最小链路
+- 可以更清楚地区分：
+  - 入口是否可执行
+  - 比较参数是否真实
+  - 结果是否被结构化回传
+  - 当前差异究竟来自 Rugra 侧实现，还是参考侧数据仍未真正接入
 
-```rust
-// 在 tests/ 目录下创建集成测试
-use rugra::align::runtime_verify::global_verifier;
-
-#[test]
-fn full_verification_suite() {
-    let verifier = global_verifier();
-    verifier.reset();
-    
-    // 运行所有验证测试
-    run_constant_eval_tests(&verifier);
-    run_pcode_generation_tests(&verifier);
-    run_ssa_tests(&verifier);
-    run_cfg_tests(&verifier);
-    
-    // 生成报告
-    let report = verifier.generate_report();
-    std::fs::write("verification_report.txt", report).unwrap();
-    
-    let stats = verifier.get_stats();
-    assert!(
-        stats.success_rate() >= 95.0,
-        "Verification success rate too low: {:.2}%",
-        stats.success_rate()
-    );
-}
-```
+> 这类最小样本属于 **Level 2：运行时局部对拍** 的基础建设。  
+> 即使某条样本通过，也**不能**直接外推出“更大范围样本已完成一致性验证”。
 
 ---
 
-## ⚠️ 已知差异
+### 第五步：针对示例和样本做人工审阅
+对于当前阶段，人工审阅仍然重要。可结合：
 
-### 1. Unique 空间分配
-**问题**: Rugra 和 Ghidra 对 temporary varnode 的 unique offset 分配可能不同
+- `examples/`
+- 反编译输出样本
+- `CURRENT_STATUS.md`
+- `GAP_ANALYSIS.md`
 
-**影响**: 不影响语义，但会导致逐字节比对失败
+重点确认：
 
-**解决**: 使用规范化比对，忽略 unique offset 差异
+- 输出是否明显退化
+- 控制流是否出现明显错误
+- 是否引入新的无意义变量碎片
+- 是否出现明显错误的调用恢复
 
----
-
-### 2. 优化规则应用顺序
-**问题**: Rugra 的 Action/Rule 应用顺序可能与 Ghidra 不同
-
-**影响**: 最终结果应该相同，但中间状态不同
-
-**解决**: 只比对最终输出，不比对中间状态
-
----
-
-### 3. 浮点数表示
-**问题**: 浮点常量的字符串表示可能不同（`1.0` vs `1.000000`）
-
-**影响**: 仅格式差异
-
-**解决**: 使用数值比对，允许误差范围
+这类检查属于“人工质量审阅”，**不能冒充自动一致性验证**。
 
 ---
 
-### 4. 变量命名
-**问题**: Rugra 使用 `var_1`, Ghidra 使用 `local_10`
+## 4.1 第一条最小 P-code 样本记录：`mov rbx, rax`
 
-**影响**: 仅命名差异
+为了把“最小 P-code 对拍重入计划”从草案推进到真实记录，当前已经补入第一条最小样本的可执行记录口径。
 
-**解决**: 规范化后比对
+### 样本信息
 
----
+- **样本 ID**：`PCode-Min-001`
+- **目标层级**：`Level 2：运行时局部对拍`
+- **机器码**：`48 89 c3`
+- **汇编文本**：`mov rbx, rax`
+- **Rugra 入口链路**：
+  - `src/disasm/x86_64.rs`
+  - `src/disasm/x86_lift.rs`
+  - `src/funcdata.rs`
+  - `src/align/runtime_verify.rs`
+  - `src/ffi.rs`
 
-## 🐛 问题排查
+  ### 当前可确认的真实结果
 
-### 问题: FFI 调用失败
+  基于当前仓库中的最小测试链路，这条样本已经能够完成以下步骤：
 
-**症状**:
-```
-Error: cannot load libdecomp.so
-```
+  1. 反汇编得到单条 `mov rbx, rax`
+  2. `X86Lifter` 生成 1 条 raw P-code
+  3. 该 raw P-code 的 opcode 为 `CPUI_COPY`
+  4. 输出 varnode 为寄存器空间 `rbx`
+     - offset: `0x18`
+     - size: `8`
+  5. 输入 varnode 为寄存器空间 `rax`
+     - offset: `0x00`
+     - size: `8`
+  6. `Funcdata::inject_raw_ops(...)` 后：
+     - op 数量为 `1`
+     - basic block 数量为 `1`
+  7. `verify_pcode_generation(...)` 在给定 `ghidra_op_count = 1` 时返回 `Match`
 
-**解决**:
-```bash
-# 检查库路径
-ldd target/debug/rugra | grep decomp
+  ### 当前仍需明确区分的限制
 
-# 设置 LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/path/to/ghidra/build/lib:$LD_LIBRARY_PATH
-```
+这条记录**不能**被解读为“已经与 Ghidra 完整对齐”，但它也已经不再停留在最早的纯占位比较阶段。当前更准确的边界是：
 
----
+- 当前不再只是 op 数量比较，比较入口已能消费：
+  - opcode
+  - output varnode
+  - input varnode 列表
+- 当前比较入口已能返回结构化状态，而不只是打印日志
+- 当前 `verify_pcode_generation(...)` 已会消费该结构化状态，并据此生成 `Match` / `Mismatch(...)`
 
-### 问题: P-code 数量不匹配
+但以下限制仍然存在：
 
-**症状**:
-```
-FAIL: P-code count mismatch at 0x401000
-  Ghidra: 3 ops
-  Rugra:  5 ops
-```
+- 当前参考信息仍主要来自 Rugra 侧本地构造，而不是 Ghidra 独立返回的结构化结果
+- 当前还没有形成“Ghidra 参考侧结果 -> 结构化返回 -> 统一差异报告”的完整双边闭环
+- 当前仍不能把最小样本的本地结构化通过，外推出更大范围的真实 parity 结论
 
-**排查步骤**:
-1. 检查 Rugra 是否生成了额外的 NOP 操作
-2. 检查 Ghidra 是否合并了某些操作
-3. 查看 SLEIGH 规范是否一致
+因此，这条样本当前更准确的结论是：
 
----
+> **Rugra 已经具备第一条最小 `mov reg, reg` 样本的本地可执行验证记录，**
+> **并已具备结构化 FFI 比较返回路径，**
+> **但目前仍处于“局部结构化验证已建立、真实 Ghidra 侧独立参考尚未完整接入”的阶段。**
 
-### 问题: SSA 版本号不匹配
+### 当前差异分类
 
-**症状**:
-```
-SSA version mismatch at 0x401010: Rugra v2, Ghidra v3
-```
+建议把这条样本当前归类为：
 
-**原因**: 这是**严重问题**，说明 SSA 构造算法不一致
+- `已可运行`
+- `已形成真实记录`
+- `比较入口已触发`
+- `已具备结构化 FFI 返回路径`
+- `尚未形成真实 Ghidra 侧逐字段对拍`
 
-**解决**: 需要详细调试 Heritage 算法，确保：
-1. Phi 节点插入位置相同
-2. 变量重命名顺序相同
-3. 支配边界计算相同
+### 证据来源
 
----
+- 代码入口：
+  - `src/disasm/x86_64.rs`
+  - `src/disasm/x86_lift.rs`
+  - `src/funcdata.rs`
+  - `src/align/runtime_verify.rs`
+  - `src/ffi.rs`
+- 当前最小样本测试：
+  - `src/funcdata.rs` 中新增的 `test_mov_reg_reg_minimal_alignment_path`
+- 本地测试现象：
+  - 测试通过
+  - 同时输出一条比较入口日志，表明当前 FFI 比较仍在使用占位参考信息
 
-## 📈 验证指标
+### 下一步最小动作
 
-### 最低要求
-- ✅ 静态对齐测试: **100% 通过**
-- ✅ 常量求值: **≥ 99% 一致**
-- ⚠️ P-code 生成: **≥ 95% 一致**
-- ❌ SSA 构造: **100% 一致**（不容妥协）
-- ⚠️ CFG 结构: **≥ 98% 一致**
+围绕这条样本，后续最优先的动作应是：
 
-### 理想目标
-- 🎯 所有测试: **100% 一致**
-- 🎯 端到端输出: **语义等价**（格式可以不同）
-
----
-
-## 🔧 持续集成
-
-在 `.github/workflows/verify.yml` 中：
-```yaml
-name: Ghidra Alignment Verification
-
-on: [push, pull_request]
-
-jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Install Ghidra
-        run: |
-          wget https://github.com/.../ghidra.zip
-          unzip ghidra.zip
-      
-      - name: Build Ghidra FFI
-        run: |
-          cd ghidra/Ghidra/Features/Decompiler/src/decompile/cpp
-          make
-      
-      - name: Run verification
-        run: |
-          cd rugra
-          cargo test --features ffi-test runtime_verify::
-      
-      - name: Generate report
-        run: |
-          cargo run --bin verify_report
-          cat verification_report.txt
-      
-      - name: Check threshold
-        run: |
-          # 确保成功率 ≥ 95%
-          python3 scripts/check_threshold.py verification_report.txt
-```
+1. 让比较入口返回的不只是状态码，还能携带更细粒度的结构化差异信息
+2. 让 `verify_pcode_generation(...)` 消费来自参考侧的独立结果，而不是主要依赖 Rugra 本地构造数据
+3. 将当前“已具备结构化返回路径”的状态，推进到真正的双边逐字段比较
+4. 在完成后，再复制同样流程到：
+   - `add rax, 1`
+   - `sub rax, 8`
 
 ---
 
-## 📝 总结
+## 4.2 第二条最小 P-code 样本记录：`add rax, 1`
 
-### 当前能保证的
-1. ✅ 数据结构字段对齐（静态）
-2. ✅ 基本的常量求值一致（部分）
+在继续推进最小 P-code 对拍重入计划时，当前已经补入第二条样本 `add rax, 1` 的失败记录。  
+这条记录的价值不在于“验证通过”，而在于它第一次把算术类 opcode 的最小链路差异明确暴露出来。
 
-### 当前不能保证的
-1. ❌ P-code 生成完全一致
-2. ❌ SSA 构造完全一致
-3. ❌ 控制流分析完全一致
-4. ❌ 最终 C 代码输出一致
+### 样本信息
 
-### 下一步工作
-1. 🔴 **优先**: 实现 P-code 生成对拍测试
-2. 🔴 **优先**: 实现 SSA 构造验证
-3. 🟡 **重要**: 实现 CFG 结构验证
-4. 🟢 **可选**: 实现端到端输出比对
+- **样本 ID**：`PCode-Min-002`
+- **目标层级**：`Level 2：运行时局部对拍`
+- **机器码**：`48 83 c0 01`
+- **汇编文本**：`add rax, 1`
+- **Rugra 入口链路**：
+  - `src/disasm/x86_64.rs`
+  - `src/disasm/x86_lift.rs`
+  - `src/funcdata.rs`
+  - `src/align/runtime_verify.rs`
+  - `src/ffi.rs`
+
+### 当前可确认的真实结果
+
+基于当前仓库中的最小测试链路，这条样本已经能够完成以下步骤：
+
+1. 反汇编得到单条 `add rax, 1`
+2. `X86Lifter` 当前为其生成 `2` 条 raw P-code
+3. 第一条 raw P-code 为：
+   - opcode = `CPUI_INT_ADD`
+   - output = unique 临时 varnode
+   - inputs = `rax` 与常量 `1`
+4. 第二条 raw P-code 为：
+   - opcode = `CPUI_COPY`
+   - output = `rax`
+   - input = 上一步的 unique 临时 varnode
+5. `Funcdata::inject_raw_ops(...)` 后：
+   - op 数量为 `2`
+   - basic block 数量为 `1`
+
+### 当前失败现象
+
+这条样本当前**尚未通过**最小局部验证。  
+按最近一次测试记录，运行时日志中已经出现了两类明确差异：
+
+1. 第一条 op 地址处出现 opcode mismatch：
+   - `Opcode mismatch. Ghidra Op: 4`
+2. 第二条 op 地址处出现输入比较失败：
+   - `Input mismatch at index 0`
+   - 当前日志中表现为 unique 输入在空间/偏移比较上与参考侧口径未对齐
+
+对应地，最小测试当前返回失败，而不是 `VerifyResult::Match`。
+
+### 当前最准确的结论
+
+这条样本当前应被描述为：
+
+- `已可运行`
+- `已形成失败记录`
+- `已暴露算术类 opcode 路径中的局部比较错位`
+- `尚未形成局部对拍通过记录`
+
+换句话说：
+
+> `add rax, 1` 已从“计划样本”推进为“真实失败样本记录”，  
+> 但当前结果表明 Rugra 侧 lifting 产物、FFI 比较口径或参考数据组织之间仍存在错位，尚不能写成局部 parity 已建立。
+
+### 当前差异分类
+
+建议把这条样本当前归类为：
+
+- `已可运行`
+- `已形成真实失败记录`
+- `算术类 opcode 已进入最小验证范围`
+- `当前存在 opcode 比较错位`
+- `当前存在 unique 输入比较错位`
+- `尚未形成真实 Ghidra 侧逐字段对拍通过结果`
+
+### 证据来源
+
+- 代码入口：
+  - `src/disasm/x86_64.rs`
+  - `src/disasm/x86_lift.rs`
+  - `src/funcdata.rs`
+  - `src/align/runtime_verify.rs`
+  - `src/ffi.rs`
+- 当前最小样本测试：
+  - `src/funcdata.rs` 中新增的 `test_add_rax_imm_minimal_alignment_path`
+- 本地测试现象：
+  - `Opcode mismatch. Ghidra Op: 4`
+  - `Input mismatch at index 0`
+  - 最终测试失败
+
+### 下一步最小动作
+
+围绕这条样本，后续最优先的动作应是：
+
+1. 先确认当前 `add rax, 1` 的两条 op 是否就是 Rugra 侧期望的最小表示
+2. 继续检查 opcode 比较错位为何表现为 `Ghidra Op: 4`
+3. 继续检查 unique 输入在 FFI 比较中的空间 ID / 偏移口径
+4. 先把该样本从“失败记录”推进到“局部结构化比较可通过”
+5. 再继续推进：
+   - `sub rax, 8`
 
 ---
 
-**最后更新**: 2024  
-**维护者**: Rugra Team  
-**状态**: 🚧 开发中，不保证完全一致
+## 5. 验证结论的证据来源规则
+
+为了避免把“计划中”“框架存在”“局部观察”写成既成事实，后续更新本文件时，所有高风险验证结论都应尽量附带**证据来源**。  
+这里的“证据来源”不是要求写成长篇证明，而是要求让读者能够追溯：
+
+- 该结论依据了哪类文件或结果
+- 该结论属于结构层、局部运行时对拍，还是端到端观察
+- 该结论是“已验证”“待验证”还是“仅有框架/入口”
+
+### 5.1 哪些结论必须补证据来源
+以下类型的表述，后续都应尽量补充证据来源说明：
+
+- “某验证已完成”
+- “某行为已与 Ghidra 一致”
+- “某项运行时对拍已通过”
+- “某条最小样本已形成真实记录”
+- “某条样本只达到框架级比较”
+- “某个输出质量已提升”
+- “某项 FFI 验证已打通”
+- “某项差异已定位/已消除”
+- “某命令可以稳定复现某结果”
+
+如果暂时无法给出证据来源，应该降级表述为：
+
+- “当前仓库可见代码表明……”
+- “已存在相关框架/入口，但尚待实测……”
+- “按现有文档与代码判断……”
+- “尚缺可复现的运行结果支撑……”
+
+### 5.2 可接受的证据来源类型
+可作为验证结论依据的材料包括：
+
+- **源码文件**
+  - 例如 `src/align/runtime_verify.rs`
+  - 例如 `src/ffi.rs`
+  - 例如 `src/align/*.rs`
+- **测试**
+  - 单元测试
+  - 集成测试
+  - `cargo test` 的可复现结果
+- **示例 / 样本**
+  - `examples/` 下的样本运行
+  - 指定真实二进制样本的实验记录
+- **文档化实验记录**
+  - `docs/AgentLog/`
+  - `docs/experiments/`
+  - 未来的差异报告或验证记录
+- **人工审阅结果**
+  - 仅可用于说明“观察到某现象”
+  - 不应冒充自动化运行时一致性验证
+
+### 5.3 推荐写法
+后续若需要在本文件中写入验证结论，建议尽量采用类似格式：
+
+- **结论**：当前已存在 SSA 运行时验证框架入口  
+  **证据来源**：`src/align/runtime_verify.rs`、`src/ffi.rs`
+
+- **结论**：当前仅能确认静态结构对齐已建立，尚不能确认运行时一致  
+  **证据来源**：`src/align/address.rs`、`src/align/varnode.rs`、`ALIGNMENT_PROGRESS.md`
+
+- **结论**：某示例输出在人工审阅下看起来更接近 C 风格  
+  **证据来源**：`examples/` 运行结果、对应会话日志、人工审阅记录  
+  **说明**：这不等于已完成端到端语义等价验证
+
+### 5.4 不可接受的写法
+以下写法在没有明确证据来源时应避免：
+
+- “已经完全验证”
+- “已经 100% 一致”
+- “所有对拍都已通过”
+- “输出已经达到 Ghidra 水平”
+- “FFI 已稳定打通”
+- “验证体系已完成闭环”
+
+除非同时能指出：
+
+- 对应代码入口
+- 可执行路径
+- 样本或测试结果
+- 差异是否仍存在
+
+### 5.5 最低要求
+即使不补完整的“证据来源”小节，后续至少也应做到：
+
+1. 能指出相关代码文件  
+2. 能说明属于哪个验证层级  
+3. 能明确是“框架存在”还是“结果已验证”  
+4. 能区分自动验证与人工观察
+
+---
+
+## 6. `runtime_verify.rs` 应如何被正确描述
+
+当前对 `src/align/runtime_verify.rs` 的正确表述应是：
+
+> 它是一个**运行时验证框架草案/早期实现**，用于承载 Rugra 与外部参考实现之间的行为比对逻辑。  
+> 它表明项目正在建设运行时一致性验证能力，并且现在已经具备“比较入口返回结构化状态 -> 调用侧消费状态 -> 统一映射到 `VerifyResult`”这一基础返回路径，  
+> 但**并不代表所有验证路径都已打通，也不代表这些验证已被持续执行**。
+
+换句话说，它可以被描述为：
+
+- 已存在的验证基础设施
+- 正在建设的比对框架
+- 已开始具备结构化返回路径的局部验证入口
+- 后续对拍工作的入口
+
+但**不应被描述为**：
+
+- 已完成的完整验证系统
+- 已证明一致性的证据本身
+- 已投入稳定生产使用的验证平台
+
+---
+
+## 6. 当前文档允许使用的表述
+
+为了修复文档失真，后续文档和日志请尽量使用下面这类表述。
+
+### 推荐表述
+- “已实现静态结构对齐的部分测试”
+- “已建立运行时验证框架”
+- “尚未完成 Ghidra FFI 的稳定集成验证”
+- “当前不能宣称与 Ghidra 100% 一致”
+- “已具备对拍方向，但仍缺少稳定的端到端结果”
+- “按当前仓库可见状态，运行时一致性仍待验证”
+
+### 禁止或不推荐表述
+- “已保障一致性”
+- “与 Ghidra 完全一致”
+- “运行时验证已完成”
+- “端到端输出已完成对拍”
+- “SSA 已确认 100% 一致”
+- “所有验证能力已具备并可稳定运行”
+
+---
+
+## 7. 已知风险区域
+
+在没有完整运行时验证前，以下区域都应被视为高风险区。
+
+### 7.1 P-code 生成
+风险点：
+
+- 单条指令的 P-code 序列可能与 Ghidra 不同
+- 临时变量 / unique 空间策略可能不同
+- 部分架构语义边界条件可能未覆盖
+
+### 7.2 SSA 构建
+风险点：
+
+- Phi 节点放置位置
+- 变量重命名顺序
+- 版本号分配
+- 某些边界控制流下的合流处理
+
+这是高优先级风险，因为一旦偏离，会影响后续大量分析结果。
+
+### 7.3 CFG 结构恢复
+风险点：
+
+- 基本块划分
+- 边关系
+- 支配关系
+- 循环识别
+
+CFG 偏差会进一步放大到 SSA、变量恢复与控制流结构化。
+
+### 7.4 类型传播与变量恢复
+风险点：
+
+- 类型传播方向不稳定
+- 对调用约定的理解不充分
+- 栈变量/寄存器变量恢复策略偏差
+- 高层变量合并不足
+
+### 7.5 最终输出层
+风险点：
+
+- 结构化程度不足
+- 命名质量不稳定
+- 局部语义正确但全局可读性差
+- 与 Ghidra 输出风格差异很大
+
+---
+
+## 8. 推荐的近期验证里程碑
+
+为了让验证体系真正走向可信，建议近期按以下顺序推进。
+
+### Milestone 1：清理文档失真
+先统一修正文档中的夸大结论，确保所有地方都承认：
+
+- 运行时验证未完成
+- 端到端一致性未证明
+- 当前结论以真实代码和测试为准
+
+### Milestone 2：固定一组最小验证样本
+选择少量、稳定、可重复的目标：
+
+- 简单算术函数
+- 分支函数
+- 循环函数
+- 简单调用函数
+
+针对这些样本建立最小对拍集合。
+
+### Milestone 3：让运行时验证至少覆盖一个真实闭环
+先打通一个最小闭环，例如：
+
+- 常量求值对拍  
+或
+- 单条指令 P-code 对拍  
+或
+- 小函数 SSA 对拍
+
+当前最小 `mov rbx, rax` 样本已经把闭环推进到“结构化 FFI 返回路径已建立”的阶段；后续真正要补齐的，是让该返回路径接入独立参考侧数据，并沉淀出可复核的差异分类。  
+同时，`add rax, 1` 已经进入“真实失败样本记录”阶段，这说明最小闭环不再只是停留在单一 `mov` 指令，而是已经开始暴露算术类 opcode 的实际差异点。  
+只要有一个闭环真实跑通，就比泛泛而谈“全部都在做”更可信。
+
+### Milestone 4：沉淀差异报告格式
+当出现不一致时，需要明确记录：
+
+- 测试对象
+- 地址/函数
+- Rugra 输出
+- 参考输出
+- 差异类别
+- 初步原因判断
+
+### Milestone 5：再谈端到端样本验证
+在局部行为没有验证清楚前，不应过早把主要精力放在“大样本最终输出比较”上。
+
+---
+
+## 9. 与其他文档的关系
+
+本文件应与以下文档保持一致：
+
+- `CURRENT_STATUS.md`
+- `ALIGNMENT_PROGRESS.md`
+- `GAP_ANALYSIS.md`
+- `docs/TODO_BOARD.md`
+- `docs/PROJECT_STRUCTURE.md`
+
+同步原则：
+
+- 如果本文件说“运行时验证未完成”，其他总控文档不能再写“已保障一致性”
+- 如果本文件说“CLI 当前不可作为稳定对拍入口”，其他文档不能把 CLI 写成完整可用产品
+- 如果本文件说“端到端对拍未完成”，状态文档不能写成“已完成 Ghidra 质量对齐”
+
+---
+
+## 10. 当前结论
+
+截至当前仓库可见状态，Rugra 的验证工作应当被准确描述为：
+
+- **静态对齐：已有一部分基础**
+- **运行时验证：已有框架，但未完成**
+- **FFI 对拍：有方向与接口，但未形成可信闭环**
+- **端到端一致性：尚未证明**
+- **最终质量结论：应保持审慎，不可夸大**
+
+因此，当前最准确的总述是：
+
+> Rugra 已经开始建设面向 Ghidra 的多层验证体系，但现阶段仍处于“结构层已有进展、运行时与端到端层面尚未完成”的状态。任何关于“已完全对齐”或“已保障一致性”的表述都应视为失真，后续文档与日志应统一回到这一真实基线之上。

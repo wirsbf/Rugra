@@ -1,265 +1,373 @@
 # Rugra 🦀
 
-**一个基于 Rust 的、灵感源自 Ghidra 的 C/C++ 二进制反编译器**
+**一个基于 Rust 的、受 Ghidra 启发的 C/C++ 二进制反编译与程序分析框架**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/yourusername/rugra)
+[![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
 
 ---
 
-## 🎯 项目愿景
+## 项目定位
 
-Rugra 旨在提供一个**生产级、内存安全的反编译器**，用于分析已编译的 C/C++ 二进制文件。完全使用 Rust 语言从零构建，它结合了：
+`Rugra` 是一个使用 Rust 编写的二进制分析与反编译实验性框架，目标是围绕 Ghidra 风格的核心语义模型，逐步构建以下能力：
 
-- 🔒 **内存安全** - Rust 的所有权系统防止了常见的内存漏洞
-- ⚡ **高性能** - 基于 LLVM 后端的零成本抽象优化
-- 🏗️ **现代架构** - 清晰、模块化的设计，易于扩展
-- 🌐 **多架构支持** - 支持 x86, x64, ARM, MIPS, RISC-V 等
-- 🧪 **生产就绪** - 全面的测试覆盖和健壮的错误处理
+- 二进制格式解析
+- 指令反汇编与提升
+- P-code 风格中间表示
+- SSA、控制流与数据流分析
+- 类型与变量恢复
+- C 风格伪代码输出
+- 与 Ghidra 核心语义做对齐验证
 
-## 🚀 快速开始
+当前仓库中的主要工程位于 `rugra/`，其代码结构和文档显示，项目重点是**反编译与程序分析**，而不是其它类型的二进制识别流水线。
 
-### 安装
+---
+
+## 当前状态
+
+### 已确认的现状
+
+从当前代码与文档可以确认：
+
+- 项目是一个 **Rust 库优先** 的反编译框架
+- 核心模块围绕 Ghidra 风格对象展开，例如：
+  - `Address`
+  - `Varnode`
+  - `PcodeOp`
+  - `Funcdata`
+  - `ActionDatabase`
+  - `PrintC`
+- 已包含以下源码模块：
+  - `src/address.rs`
+  - `src/space.rs`
+  - `src/varnode.rs`
+  - `src/op.rs`
+  - `src/opcodes.rs`
+  - `src/funcdata.rs`
+  - `src/heritage.rs`
+  - `src/printc.rs`
+  - `src/action.rs`
+  - `src/block.rs`
+  - `src/binary/`
+  - `src/disasm/`
+  - `src/align/`
+- 存在针对 Ghidra 对齐的验证框架与文档：
+  - `ALIGNMENT_PROGRESS.md`
+  - `docs/VERIFICATION_GUIDE.md`
+  - `src/align/runtime_verify.rs`
+
+### 需要明确说明的限制
+
+当前版本**不能**在文档层面声称以下内容已经完全成立：
+
+- 不能声称“已达到生产级”
+- 不能声称“与 Ghidra 100% 输出一致”
+- 不能声称“所有 CLI 功能均可直接使用”
+- 不能声称“多架构已经全面支持”
+- 不能声称“端到端质量已稳定达到商业反编译器水平”
+
+这些结论都需要以真实代码状态、测试结果和验证报告为准。
+
+---
+
+## 当前架构概览
+
+Rugra 当前的核心思路是：
+
+```text
+Binary
+  ↓
+Binary Parsing / Loading
+  ↓
+Disassembly / Lifting
+  ↓
+P-code-like IR / Raw P-code injection
+  ↓
+Funcdata + ActionDatabase pipeline
+  ↓
+SSA / Heritage / CFG-related analysis
+  ↓
+PrintLanguage / PrintC
+  ↓
+C-like pseudocode
+```
+
+更具体地说，当前工程的重心在于：
+
+1. **将底层二进制与指令语义映射到 Rugra 的内部对象模型**
+2. **围绕 `Funcdata` 组织分析流程**
+3. **通过 `ActionDatabase` 驱动一系列分析与转换**
+4. **逐步对齐 Ghidra 的核心对象语义与部分运行时行为**
+5. **输出结构化程度不断改进的 C 风格结果**
+
+---
+
+## 代码结构
+
+### 根级关键文件
+
+- `Cargo.toml`：Rust 包配置
+- `src/lib.rs`：库入口与公共模块导出
+- `src/bin/rugra.rs`：CLI 入口
+- `CURRENT_STATUS.md`：当前状态报告
+- `GAP_ANALYSIS.md`：与 Ghidra 的能力差距分析
+- `ALIGNMENT_PROGRESS.md`：对齐进度跟踪
+
+### 核心源码模块
+
+#### 核心对象与 IR
+- `src/address.rs`
+- `src/space.rs`
+- `src/varnode.rs`
+- `src/op.rs`
+- `src/opcodes.rs`
+- `src/pcoderaw.rs`
+
+#### 函数级分析核心
+- `src/funcdata.rs`
+- `src/heritage.rs`
+- `src/block.rs`
+- `src/blockaction.rs`
+- `src/merge.rs`
+- `src/variable.rs`
+- `src/cover.rs`
+
+#### Action / Rule 体系
+- `src/action.rs`
+- `src/coreaction.rs`
+- `src/ruleaction.rs`
+
+#### 类型与输出
+- `src/type_system/`
+- `src/typeop.rs
+`
+- `src/prettyprint.rs`
+- `src/printlanguage.rs`
+- `src/printc.rs`
+
+#### 二进制与反汇编
+- `src/binary/`
+- `src/disasm/`
+
+#### 对齐与验证
+- `src/align/`
+- `src/
+ffi.rs`
+
+### 文档
+系统
+
+- `docs/PROJECT_STRUCTURE.md`
+- `docs/TODO_BOARD.md`
+- `docs/VER
+IFICATION_GUIDE.md`
+- `docs/api/`
+-
+ `docs/AgentLog/`
+- `docs/alignment_docs/`
+- `docs/decisions/`
+- `docs/method/`
+- `docs
+/workflow/`
+
+---
+
+## CLI 现状
+
+当前 `src/bin/r
+ugra.rs` 的
+实现处于**临时禁用/占
+位状态**，会输出提示信息，而不是提供完整命令行功能。
+
+因此
+，下面这些典型命令**不应再
+被视为当前版本已验证可用的公开能力**：
+
+-
+ `rugra decompile ...`
+- `rugra analyze ...`
+- `rugra pcode ...
+`
+
+如果后续 CLI 恢复并补齐参数解析、子命令和文档，再重新更新本 README。
+
+---
+
+## 库使用方式
+
+当前更适合把 Rugra 理解为一个**可继续演化的库框架**，而
+不是已经封装完毕的终端产品。
+
+一个更贴近当前代码状态的使用思路是：
+
+1. 构造或获取目标函数的 `Funcdata`
+2. 注入或生成原始 P-code / 指令语义
+3. 通过 `ActionDatabase` 运行分析流程
+4. 使用 `PrintLanguage` / `PrintC` 生成输出
+
+示意流程：
+
+```text
+create Funcdata
+  ↓
+inject raw operations or lifted semantics
+  ↓
+run ActionDatabase
+  ↓
+inspect CFG / SSA / variables / types
+  ↓
+render C-like output with PrintC
+```
+
+> 注意：上面的流程代表当前架构方向，不等同于
+“对所有真实二进制都已形成稳定、统一、可直接调用的公开 API”。
+
+---
+
+## 构建与测试
+
+### 构建
 
 ```bash
-# 克隆仓库
-git clone https://github.com/yourusername/rugra.git
-cd rugra
-
-# 构建项目
+cargo build
 cargo build --release
+```
 
-# 运行测试
+### 测试
+
+```bash
 cargo test
-
-# 安装命令行工具
-cargo install --path .
 ```
 
-### 代码示例
-
-```rust
-use rugra::{Decompiler, Architecture};
-
-fn main() -> anyhow::Result<()> {
-    // 加载二进制文件
-    let binary_data = std::fs::read("program.exe")?;
-    
-    // 创建针对 x86-64 的反编译器实例
-    let mut decompiler = Decompiler::new(Architecture::X86_64)?;
-    decompiler.load_binary(&binary_data)?;
-    
-    // 反编译指定地址的函数
-    let c_code = decompiler.decompile_function(0x401000)?;
-    println!("{}", c_code);
-    
-    Ok(())
-}
-```
-
-### 命令行使用
+### 文档
 
 ```bash
-# 反编译单个函数
-rugra decompile binary.exe --address 0x401000
-
-# 批量反编译所有函数
-rugra decompile binary.exe --all
-
-# 输出到文件
-rugra decompile binary.exe --address 0x401000 -o output.c
-
-# 分析二进制结构
-rugra analyze binary.exe
-```
-
-## 📚 架构设计
-
-Rugra 遵循多阶段的反编译流水线：
-
-```
-┌─────────────┐
-│   二进制    │  (ELF, PE, Mach-O)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   加载器    │  解析二进制格式
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   反汇编    │  x86/ARM/MIPS → 汇编指令
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  P-code IR  │  架构无关的中间表示 (Lift)
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  SSA 构建   │  静态单赋值形式转换
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   分析引擎  │  控制流/数据流分析, 类型推断
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   AST 生成  │  高级抽象语法树
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   C 代码生成 │  生成可读的 C 代码
-└─────────────┘
-```
-
-### 核心组件
-
-#### 1. **二进制解析** (`src/binary/`)
-- 基于 `goblin` 支持 ELF, PE, Mach-O 格式
-- 提取符号表和重定位信息
-- 段 (Section) 和 节 (Segment) 映射
-- **PLT 解析**：自动识别外部导入函数 (如 `printf`)
-
-#### 2. **P-code 中间表示** (`src/pcode/`)
-- 灵感源自 Ghidra 的中间表示语言
-- 包含 60+ 种操作码
-- 架构无关的语义表达
-- P-code 示例:
-  ```
-  # x86: add eax, ebx
-  $U10:4 = INT_ADD eax:4, ebx:4
-  eax:4 = COPY $U10:4
-  ZF:1 = INT_EQUAL $U10:4, 0:4
-  ```
-
-#### 3. **分析引擎** (`src/analysis/`)
-- **控制流分析**: CFG 构建, 循环检测 (Dominator Trees)
-- **数据流分析**: Use-def 链, 到达定值 (Reaching Definitions)
-- **SSA 构建**: 支配边界计算, Φ (Phi) 节点放置
-- **类型推断**: 基于约束的类型恢复系统
-- **变量恢复**: 栈变量识别, 寄存器分配分析
-- **优化**: 常量折叠, 代数简化, 死代码消除
-
-#### 4. **代码生成** (`src/codegen/`)
-- 格式化良好的 C 代码输出
-- 类型重构
-- 控制流结构化 (恢复 if/while/for)
-- **智能变量命名**: 消除原始寄存器名 (如 `uVar1`, `param_1`)
-- **字符串恢复**: 自动将指针解析为字符串字面量
-
-## 🎨 功能特性
-
-### 当前已实现 ✅
-
-- [x] 项目结构与构建系统
-- [x] 核心类型系统 (Address, Architecture, Types)
-- [x] P-code IR 定义 (60+ opcodes)
-- [x] 实用工具模块 (位操作, 格式化等)
-- [x] 全面的测试套件
-- [x] 二进制解析 (ELF/PE/Mach-O)
-- [x] 反汇编 (x86-64 via iced-x86)
-- [x] P-code 生成 (Lifting)
-- [x] 控制流图构建 (CFG)
-- [x] SSA 构建 (支配树, Phi 节点)
-- [x] 数据流分析 (到达定值, Use-Def 链)
-- [x] 类型推断 (基于数据流的全局传播)
-- [x] 优化 (常量折叠, 增强版 SSA 死代码消除, 代数简化, 控制流简化)
-- [x] 结构体恢复 (自动从指针访问模式推断结构体布局)
-- [x] C 代码生成 (结构化控制流, 变量命名, `struct.field` 语法支持)
-- [x] PLT/GOT 解析 (外部函数名恢复)
-- [x] 字符串字面量恢复 (指针转字符串)
-
-### 项目状态与路线图 🗺️
-
-Rugra 已完成了最初的 8 阶段开发路线图，实现了一个能够处理复杂真实二进制文件（如 `curl`）的功能性反编译器。然而，与 Ghidra 或 IDA Pro 等行业标杆相比，仍有一定差距。
-
-请参阅 [**GAP_ANALYSIS.md**](GAP_ANALYSIS.md) 了解详细的功能差距对比。
-
-#### Phase 1-8: 核心基础 (已完成)
-- [x] **Phase 1-3**: 反汇编与 P-code 提升 (x86-64)
-- [x] **Phase 4**: 控制流分析 (CFG, 循环检测)
-- [x] **Phase 5**: 变量恢复 (栈与寄存器分析)
-- [x] **Phase 6**: SSA 形式构建
-- [x] **Phase 7**: 数据流分析
-- [x] **Phase 8**: 优化与简化
-- [x] **Phase 8.5**: 细节打磨 (字符串恢复, 内存修复, 命名优化)
-
-#### Phase 9: 高级特性与优化 (已完成)
-- [x] **Phase 9**: 高级特性与优化 (已完成)
-- [x] **控制流简化**: 自动识别并消除死分支，简化间接跳转。
-- [x] **迭代式结构体恢复**: 自动从指针算术 (`p+8`) 中逆向出结构体定义并生成 `p->field_8` 代码。
-- [x] **类型系统重构**: 引入统一的 `DataType` 系统，支持更复杂的类型传播。
-- [x] **增强型死代码消除**: 利用 SSA 版本信息移除未使用的寄存器定义。
-
-#### Phase 10: 控制流重构与函数分析 (已完成)
-- [x] **For 循环恢复**: 自动识别并重构 `for (init; cond; inc)` 循环结构。
-- [x] **Switch 语句恢复**: 初步支持通过级联 If-Else 链识别 Switch 结构。
-- [x] **调用语义恢复**: 基于 x86-64 ABI 自动恢复函数调用的参数和返回值。
-- [x] **PLT/GOT 修复**: 修复了 PLT 桩代码导致的控制流穿透和幽灵变量问题。
-- [x] **函数签名优化**: 自动使用符号名并推断返回类型。
-
-#### Phase 11+: 未来展望
-- [ ] **高级 Switch 恢复**: 支持跳转表 (Jump Table) 形式的 Switch。
-- [ ] **类型库**: 自动识别标准库函数 (libc) 及其参数类型。
-- [ ] **多架构支持**: 添加 ARM64 和 MIPS 翻译器。
-- [ ] **C++ 支持**: 虚函数表 (vtable) 恢复。
-
-## 🔬 技术细节
-
-### 支持的架构
-
-| 架构 | 状态 | 备注 |
-|--------------|--------|-------|
-| x86 32-bit   | 🚧 计划中 | Intel/AMD 32-bit |
-| x86-64       | ✅ 已支持 | 主要开发焦点 |
-| ARM 32-bit   | 📅 路线图 | ARMv7 |
-| ARM64        | 📅 路线图 | AArch64 |
-| MIPS         | 📅 路线图 | MIPS32/64 |
-| RISC-V       | 📅 未来 | RV32/RV64 |
-| PowerPC      | 📅 未来 | PPC32/64 |
-
-### 二进制格式
-
-- ✅ ELF (Linux)
-- ✅ PE (Windows)
-- ✅ Mach-O (macOS)
-
-## 🧪 测试
-
-```bash
-# 运行所有测试
-cargo test
-
-# 运行特定测试
-cargo test test_pcode_generation
-```
-
-## 📖 文档
-
-```bash
-# 生成并打开文档
 cargo doc --open
 ```
 
-## 🤝 贡献
+### 与 Ghidra 对齐验证
 
-欢迎贡献代码！
 
-## 📜 许可证
+如需查看对齐与验证相关信息，请优先阅读：
 
-Rugra 基于 Apache 2.0 许可证开源。
+- `ALIGNMENT_PROGRESS.md`
+- `docs/VERIFICATION_GUIDE.md`
+- `CURRENT_STATUS.md`
+
+如果涉及 FFI 或运行时对拍，需根据本地环境额外配置
+相应依赖与验证链路。
 
 ---
 
-**状态**: ✅ **核心功能已完成** - 功能性反编译器
+## 对齐
+验证说明
 
-**当前版本**: 0.3.0 (Alpha)
+Rugra 的一个重要目标是与 Ghidra 的核心语义模型进行对齐，但这件事必须分层理解。
 
-**最后更新**: 2024
+### 当前已具备的基础
+
+- 已有一组静态对齐与结构级验证模块
+- 已有运行时验证框架雏形
+- 已有针对若干核心对象的对齐文档与测试入口
+
+### 当前不能夸大的
+结论
+
+以下结论目前都不应写成既成事实：
+
+- “所有 P-code 生成与 Ghidra 完全一致”
+- “
+SSA 版本分配已经全部通过对拍”
+- “控制流结构恢复已经达到 1:1 对齐”
+- “最终 C 输出
+已经与 Ghidra 完全等价”
+
+这些都应该以实际验证结果为准，并在以下文档中
+体现：
+
+- `CURRENT_STATUS.md`
+- `ALIGNMENT_PROGRESS.md`
+- `docs/VERIFICATION_GUIDE.md`
+
+---
+
+## 文档索引
+
+
+为了避免文档与代码状态脱节，建议按下面
+的入口阅读：
+
+### 先看全局定位
+- `README.md`
+
+### 再看项目结构
+- `docs/PROJECT_STRUCTURE.md`
+
+### 再看当前进展
+- `CURRENT_STATUS.md`
+- `GAP_ANALYSIS.md`
+- `ALIGNMENT_PROGRESS.md`
+
+### 再看待办与
+最近变更
+
+- `docs/TODO_BOARD.md`
+- `docs/AgentLog/`
+
+### 查 API 与源码映射
+- `docs/api/`
+
+### 查验证方法
+- `docs/VERIFICATION_GUIDE.md`
+
+---
+
+## 适合关注这个项目的人
+
+如果你对下面这些方向感兴趣，这个项目会比较值得关注：
+
+- Rust 实现的反编译器框架
+- Ghidra 风格中间语义与对象模型
+- 二进制分析与逆向工程
+- P-code / SSA / CFG / 类型恢复
+- 将传统 C++ 反编译器架构迁移到 Rust 的工程实践
+
+---
+
+## 开发约束
+
+本
+项目强调以下原则：
+
+- 以真实代码状态为准
+- 代码与文档必须同批次同步
+- 不把未验证结果写成完成状态
+- 尽量保持模块职责清晰
+- 优先修复失真文档与错误索引
+
+- 与 Ghidra 的“对齐”必须依赖可说明的验证依据
+
+---
+
+## 近期
+优先事项
+
+按当前可见文档，后续更合理的重点
+包括：
+
+1. 修正文档失真与错误索引
+2. 明确
+ `src/` 与 `docs/api/` 的映射关系
+3. 收敛 README、状态文档、进度文档之间的矛盾表述
+
+4. 继续补齐运行时验证链路
+5. 持续改进 `Funcdata -> ActionDatabase -> PrintC` 的端到端质量
+6. 在 CLI 真正恢复后，再重新公开命令行使用说明
+
+---
+
+## 许可证
+
+Rugra 使用 Apache 2.0 许可证。
+
+---
