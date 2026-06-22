@@ -2726,6 +2726,27 @@ impl PrintLanguage for PrintC {
         // Pass 2: Final Emission
         self.seen_return = false;
 
+        // Emit Ghidra-style typedefs at the top of each function. These mirror
+        // the declarations Ghidra prepends to every decompiled function so its
+        // output is self-contained C. byte/bool come from size-based inference
+        // in ActionInferParams/ActionTypeInfer; without these typedefs the
+        // emitted `byte bVarN;` declarations fail C compilation.
+        // `_struct` is a generic backing type for pointer variables that get
+        // dereferenced via `->field_N` (see fix_deref_declarations): declaring
+        // such a variable as `_struct *` keeps `X->field_N` legal C.
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned char byte;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long undefined;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long undefined4;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef unsigned long long undefined8;");
+        self.emit.tag_line(0);
+        self.emit.print("typedef struct { char _anon[256]; } _struct;");
+        self.emit.tag_line(0);
+        self.emit.print("");
+
         // 1. Emit signature from function prototype
         let is_main = fd.get_name() == "main";
         if is_main {

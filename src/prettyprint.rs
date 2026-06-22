@@ -75,7 +75,13 @@ impl EmitNoMarkup {
         }
     }
 
-    pub fn get_output(self) -> String {
+    pub fn get_output(mut self) -> String {
+        // Always run post-processing so callers that forget to invoke
+        // post_process() still get the normalized output (struct deref rewrite,
+        // dead-code elimination, empty-case removal, etc.). This makes
+        // EmitNoMarkup's output match what doc_function -> post_process would
+        // produce, regardless of the call site.
+        self.post_process();
         self.output
     }
 
@@ -1454,7 +1460,75 @@ impl EmitNoMarkup {
         let output_joined = output_final2.join("\n");
         let struct_pass = Self::canonicalize_struct_deref(&output_joined);
 
+        // Twenty-first pass: rewrite `X->field_N` to `*(long *)(X + N)`.
+        //
+        // printc emits `ptr->field_N` at multiple sites (struct field access,
+        // LOAD/STORE of ptr+offset, binary operand folding) under the
+        // assumption that `ptr` has a known struct type. We do not track
+        // concrete struct layouts, so the emitted `->field_N` is only valid C
+        // when a matching struct declaration exists — which it usually does not.
+        //
+        // Rather than fabricate struct types, we normalize every `IDENT->field_N`
+        // (and `IDENT->field_0xN`) occurrence to the equivalent, always-legal
+        // `*(long *)(IDENT + 0xN)` cast form. This is semantically identical to
+        // what Ghidra emits for pointer arithmetic into unknown structs and
+        // removes the entire class of "invalid type argument of '->'" errors.
+        let struct_pass = Self::rewrite_struct_deref(&struct_pass);
         struct_pass
+    }
+
+    /// Rewrite every `IDENT->field_N` / `IDENT->field_0xN` to
+    /// `*(long *)(IDENT + 0xN)`. Also handles `EXPR)->field_N` (grouped base).
+    fn rewrite_struct_deref(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            // Detect `->field_` (8 bytes)
+            if i + 8 <= bytes.len() && &bytes[i..i + 8] == b"->field_" {
+                // Walk back to find the base identifier (or closing paren for grouped expr).
+                let mut start = i;
+                while start > 0 {
+                    let b = bytes[start - 1];
+                    if b.is_ascii_alphanumeric() || b == b'_' || b == b')' || b == b']' {
+                        start -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let base = &text[start..i];
+                // Forward: parse the offset after "field_" — either hex (no 0x) or "0xN"
+                let after = &text[i + 8..];
+                let (offset_str, consumed): (&str, usize) = if after.starts_with("0x") {
+                    let hex_end = after[2..].find(|c: char| !c.is_ascii_hexdigit()).map_or(after.len(), |p| p + 2);
+                    (&after[..hex_end], 8 + hex_end)
+                } else {
+                    let hex_end = after.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(after.len());
+                    (&after[..hex_end], 8 + hex_end)
+                };
+                // Normalize offset to 0xN form
+                let off_val = if let Some(h) = offset_str.strip_prefix("0x") {
+                    u64::from_str_radix(h, 16).ok()
+                } else {
+                    u64::from_str_radix(offset_str, 16).ok()
+                };
+                if let Some(off) = off_val {
+                    // The base identifier was already pushed to `out` byte-by-byte
+                    // as we scanned past it. Truncate `out` back to before the base,
+                    // then emit the cast form. (base length in chars == i - start,
+                    // but `out` accumulated bytes; since we push bytes one at a time,
+                    // we truncate by the byte-length of the base slice.)
+                    let base_byte_len = i - start;
+                    out.truncate(out.len() - base_byte_len);
+                    out.push_str(&format!("*(long *)({} + 0x{:x})", base, off));
+                    i += consumed;
+                    continue;
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        out
     }
 
     /// Convert `*(varname + N)` and `*varname + N` patterns to `varname->field_N` in C output text.
@@ -1535,9 +1609,10 @@ impl EmitNoMarkup {
                     };
                     if let Some(off) = offset_val {
                         if off > 0 && off <= 4096 {
-                            // Convert to var->field_N
-                            result2.push_str(var_name);
-                            result2.push_str(&format!("->field_{:x}", off));
+                            // Emit `*(long *)(var + N)` instead of `var->field_N`.
+                            // We don't track concrete struct layouts; the cast form
+                            // is always legal C regardless of var's declared type.
+                            result2.push_str(&format!("*(long *)({} + 0x{:x})", var_name, off));
                             // Skip past: var_end already consumed var, now skip whitespace + "+" + whitespace + number
                             // We know rest = re_result[var_end..]
                             // spaces_before_plus = rest.len() - rest_trim.len()
@@ -1602,7 +1677,12 @@ impl EmitNoMarkup {
         if offset > 4096 || base.is_empty() { return None; }
         if base.chars().next()?.is_ascii_digit() { return None; } // base is a literal number
 
-        Some(format!("{}->field_{:x}", base, offset))
+        // Emit `*(long *)(base + N)` instead of `base->field_N`.
+        // We don't track concrete struct layouts, so `->field_N` would require a
+        // backing struct type that may not match reality. The cast-and-deref form
+        // is always legal C regardless of base's declared type and is
+        // semantically equivalent to what Ghidra emits for unknown structs.
+        Some(format!("*(long *)({} + 0x{:x})", base, offset))
     }
     /// Scans backward through already-emitted lines.
     fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool {
