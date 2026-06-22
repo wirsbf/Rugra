@@ -67,3 +67,9 @@ Emitter that discards all output (used for discovery pass)
 
 - 新增 `backfill_missing_locals()` post-process pass：扫描每个函数 body 里使用但未声明的 `local_XX`/`lVar_XX`/`uVar_XX`/`iVar_XX` 等匈牙利前缀变量，按前缀推断类型（lVar/uVar→long, iVar/bVar/local_→int, piVar/pcVar→char*），在声明块末尾补声明。兜底覆盖 mark_variable_used 路径不完整导致的遗漏。
 
+
+
+### 2026-06-23（续）：DCE 改进
+
+- 空行不再重置 dead zone（它们不让后续死代码可达）。
+- 同 indent 或更深的 `}` 保持 dead（它关闭 dead zone 内的块）。

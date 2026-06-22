@@ -706,11 +706,27 @@ impl EmitNoMarkup {
             }
 
             if dead_after_return && indent >= dead_indent {
-                // In dead zone — check if this is a structural element that ends the dead zone
-                if t == "}" || t.starts_with("case ") || t.starts_with("default:")
-                    || t.is_empty() {
+                // In dead zone — check if this is a structural element that ends the dead zone.
+                // A `}` only ends the dead zone if it's at a SHALLOWER indent than where return
+                // occurred (i.e. it closes a block that contains the return). A `}` at the same
+                // or deeper indent is itself dead code and should be removed.
+                if t == "}" {
+                    if indent < dead_indent {
+                        // Closes the dead block — end dead zone, keep the brace
+                        dead_after_return = false;
+                        alive.push(line.clone());
+                    } else {
+                        // Dead closing brace — skip
+                        continue;
+                    }
+                } else if t.starts_with("case ") || t.starts_with("default:") {
+                    // Switch case label — end dead zone (reachable via case fallthrough)
                     dead_after_return = false;
                     alive.push(line.clone());
+                } else if t.is_empty() {
+                    // Blank lines in dead zone — skip without resetting (they don't make
+                    // following dead code reachable).
+                    continue;
                 } else {
                     // Dead code — skip
                     continue;
