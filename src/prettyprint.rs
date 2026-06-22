@@ -1700,7 +1700,7 @@ impl EmitNoMarkup {
                 break;
             }
             // j now points at the first body line (after declarations + blank lines).
-            // Scan body until matching '}' for local_XX usage.
+            // Scan body until matching '}' for auto-generated variable usage.
             let body_end = {
                 let mut d = 1i32;
                 let mut k = j;
@@ -1718,19 +1718,30 @@ impl EmitNoMarkup {
                 let lb = lines[k].as_bytes();
                 let mut p = 0;
                 while p < lb.len() {
-                    // Capture identifiers starting with a known auto-generated prefix
-                    // followed by hex digits: local_XX, lVar_XX, uVar_XX, iVar_XX, etc.
+                    // Match identifiers with auto-generated prefixes:
+                    // - local_XX, lVar_XX (with underscore + hex)
+                    // - bVar592, lVar21 (prefix + digits, no underscore)
+                    // - struct3, struct5 (struct + digit)
                     let prefixes: &[&[u8]] = &[
                         b"local_", b"lVar_", b"uVar_", b"iVar_", b"bVar_", b"sVar_",
                         b"piVar_", b"pcVar_", b"psVar_", b"ppVar_", b"pvVar_",
                         b"fVar_", b"dVar_", b"DAT_",
+                        b"lVar", b"uVar", b"iVar", b"bVar", b"sVar",
+                        b"piVar", b"pcVar", b"psVar", b"ppVar", b"pvVar",
+                        b"fVar", b"dVar", b"struct",
                     ];
                     let mut matched = false;
                     for pf in prefixes {
                         let plen = pf.len();
                         if p + plen <= lb.len() && &lb[p..p + plen] == *pf {
                             let mut e = p + plen;
-                            while e < lb.len() && (lb[e].is_ascii_hexdigit() || lb[e] == b'_') { e += 1; }
+                            // For underscore prefixes: hex digits and underscores
+                            // For non-underscore: digits only
+                            if lb[p + plen - 1] == b'_' {
+                                while e < lb.len() && (lb[e].is_ascii_hexdigit() || lb[e] == b'_') { e += 1; }
+                            } else {
+                                while e < lb.len() && lb[e].is_ascii_digit() { e += 1; }
+                            }
                             if e > p + plen {
                                 used_locals.insert(String::from_utf8_lossy(&lb[p..e]).to_string());
                             }
@@ -1753,11 +1764,14 @@ impl EmitNoMarkup {
                     for m in &missing {
                         // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
                         // DAT_ prefixed names are synthetic globals → declare as extern long.
+                        // structN names are stack-allocated structs → declare as int (placeholder).
                         if m.starts_with("DAT_") {
                             out.push(format!("{}extern long {};", indent_str, m));
                             continue;
                         }
-                        let ty = if m.starts_with("lVar") || m.starts_with("uVar") {
+                        let ty = if m.starts_with("struct") {
+                            "int"
+                        } else if m.starts_with("lVar") || m.starts_with("uVar") {
                             "long"
                         } else if m.starts_with("iVar") || m.starts_with("bVar")
                             || m.starts_with("sVar") || m.starts_with("local_") {
