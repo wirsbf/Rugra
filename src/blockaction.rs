@@ -128,48 +128,214 @@ impl<'a> CollapseStructure<'a> {
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
     pub(crate) fn collapse_all(&mut self) {
-        let max_iterations = self.graph.get_size() * 2 + 2;
+        let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
 
+        // First pass: collapse sequences and conditions in the traditional
+        // phase-based approach (existing behavior).
         loop {
             if std::time::Instant::now() > deadline {
                 eprintln!("[COLLAPSE] {} deadline hit iter={}", self.name, iterations);
-                break; // wall-clock safety limit
+                break;
             }
             let pre_count = self.change_count;
 
-            // Pass 1: collapse loops (while-do)
-            let t = std::time::Instant::now();
             self.collapse_loops();
-            eprintln!("[COLLAPSE] {} loops {:?} blocks={}", self.name, t.elapsed(), self.graph.get_size());
-
-            if std::time::Instant::now() > deadline { eprintln!("[COLLAPSE] {} deadline after loops", self.name); break; }
-
-            // Pass 2: collapse if-then and if-then-else conditions
-            let t = std::time::Instant::now();
+            if std::time::Instant::now() > deadline { break; }
             self.collapse_conditions();
-            eprintln!("[COLLAPSE] {} conditions {:?} blocks={}", self.name, t.elapsed(), self.graph.get_size());
-
-            if std::time::Instant::now() > deadline { eprintln!("[COLLAPSE] {} deadline after conditions", self.name); break; }
-
-            // Pass 3: collapse boolean short-circuit (&&/||)
+            if std::time::Instant::now() > deadline { break; }
             self.collapse_bool_conditions();
-
-            // Pass 3.5: collapse switches (BRANCHIND-based)
             self.collapse_switches();
-
-            // Pass 3.6: collapse CBRANCH cascades (cmp+je chain switches)
             self.collapse_cbranch_cascades();
-
-            // Pass 4: collapse linear sequences (A→B where B has 1 in)
             self.collapse_sequences();
 
             iterations += 1;
             if self.change_count == pre_count || iterations >= max_iterations {
-                break; // fixpoint or safety limit
+                break;
             }
         }
+
+        // Second phase: Ghidra-style interleaved rule application.
+        // Repeatedly try rules on each block until a full pass makes no change.
+        // This handles cases where applying cat-merge to one pair unlocks a
+        // condition match that was previously blocked by intermediate blocks.
+        let interleaved_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() > interleaved_deadline { break; }
+            let pre_count = self.change_count;
+            let size = self.graph.get_size();
+            for i in 0..size {
+                if std::time::Instant::now() > interleaved_deadline { break; }
+                let block = match self.graph.get_block(i) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                // Skip fully collapsed blocks (no in/out edges)
+                let (si, so) = {
+                    let b = block.read().unwrap();
+                    (b.size_in(), b.size_out())
+                };
+                if si == 0 && so == 0 { continue; }
+
+                // Try rules in Ghidra order: cat → proper-if → if-else → sequences
+                if self.try_rule_cat(i) { continue; }
+                if self.try_rule_proper_if(i) { continue; }
+                if self.try_rule_if_else(i) { continue; }
+            }
+            iterations += 1;
+            if self.change_count == pre_count || iterations >= max_iterations {
+                break;
+            }
+        }
+        eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
+    }
+
+    /// ruleBlockCat: merge A→B (B has exactly 1 in from A) into BlockList.
+    /// Unlike collapse_sequences, this runs within the interleaved loop so
+    // the merge is immediately visible to subsequent if/else checks.
+    fn try_rule_cat(&mut self, i: usize) -> bool {
+        let size = self.graph.get_size();
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 1 { return false; }
+        let succ_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let succ = succ_edge.point.clone();
+        let succ_idx = succ.read().unwrap().get_index() as usize;
+        drop(b);
+        if succ_idx >= size || succ_idx == i { return false; }
+        let s = succ.read().unwrap();
+        if s.size_in() != 1 { return false; }
+        drop(s);
+        // Don't merge if succ is a switch or has goto edges
+        // (simplified check: succ must have <=1 out or end in CBRANCH)
+
+        let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockList::new(
+                block.read().unwrap().get_index(),
+                vec![block.clone(), succ.clone()],
+            )));
+        self.graph.blocks[i] = list_block;
+        self.change_count += 1;
+        true
+    }
+
+    /// ruleBlockProperIf: detect if-then pattern (generalized Triangle).
+    /// A CBRANCH block with 2 out-edges, where one out-edge block (clause)
+    /// has 1 in and 1 out, and its out-edge points to the other branch.
+    fn try_rule_proper_if(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+
+        // Check that this block ends with a CBRANCH
+        let ops = b.get_ops();
+        let has_cbranch = ops.last().map_or(false, |op_ref| {
+            op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+        });
+        if !has_cbranch { return false; }
+
+        let cond_idx = b.get_index();
+        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
+        let true_block = true_edge.point.clone();
+        let false_block = false_edge.point.clone();
+        let true_idx = true_block.read().unwrap().get_index();
+        let false_idx = false_block.read().unwrap().get_index();
+        drop(b);
+
+        // Try both directions (i=0: true clause, i=1: false clause)
+        for dir in 0..2 {
+            let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
+            let merge = if dir == 0 { false_block.clone() } else { true_block.clone() };
+            let merge_idx = if dir == 0 { false_idx } else { true_idx };
+
+            let c = clause.read().unwrap();
+            if c.size_in() != 1 { continue; }
+            if c.size_out() != 1 { continue; }
+            let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
+            let target_idx = clause_out.point.read().unwrap().get_index();
+            drop(c);
+            if target_idx != merge_idx { continue; }
+
+            // Match found: clause → merge. Create BlockIf.
+            let negated = dir == 1; // if clause is the false edge, negate
+            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockIf {
+                    index: cond_idx,
+                    condition: block.clone(),
+                    if_body: clause.clone(),
+                    else_body: None,
+                    negated,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            self.graph.blocks[i] = if_block;
+            self.change_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// ruleBlockIfElse: detect if-then-else pattern.
+    /// A CBRANCH block with 2 out-edges, both clause blocks have 1 in and
+    /// 1 out, and both out-edges point to the same merge block.
+    fn try_rule_if_else(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+
+        let ops = b.get_ops();
+        let has_cbranch = ops.last().map_or(false, |op_ref| {
+            op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+        });
+        if !has_cbranch { return false; }
+
+        let cond_idx = b.get_index();
+        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
+        let true_block = true_edge.point.clone();
+        let false_block = false_edge.point.clone();
+        drop(b);
+
+        // Check both clauses: 1 in, 1 out, same merge target
+        let tb = true_block.read().unwrap();
+        let fb = false_block.read().unwrap();
+        if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
+        if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
+
+        let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
+        let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
+        drop(tb); drop(fb);
+
+        if t_out != f_out { return false; } // both must merge to same block
+
+        let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockIf {
+                index: cond_idx,
+                condition: block.clone(),
+                if_body: true_block.clone(),
+                else_body: Some(false_block.clone()),
+                negated: false,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            }));
+        self.graph.blocks[i] = if_block;
+        self.change_count += 1;
+        true
     }
 
     /// Check if `dom` block dominates `node` block
