@@ -1517,10 +1517,32 @@ impl EmitNoMarkup {
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
-        // printc occasionally emits STORE as 'expr = val' where 'expr' is not a
-        // valid lvalue (e.g. 'RSP + a * b = c'). These are erroneous STORE address
-        // renders; deleting the line is safer than emitting uncompilable C.
         Self::remove_illegal_lvalue_assignments(&after_ptr_arith)
+    }
+
+    /// Remove `case N:` and `default:` lines that appear outside any switch
+    /// statement. These arise when structured BlockIf extraction pulls a
+    /// cascade switch's case body out of its switch context.
+    fn remove_orphan_case_labels(text: &str) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
+        let mut switch_depth: i32 = 0;
+        for line in lines {
+            let t = line.trim();
+            // Track switch nesting
+            if t.starts_with("switch ") && t.ends_with('{') {
+                switch_depth += 1;
+            }
+            if t == "}" || t.starts_with("} ") {
+                if switch_depth > 0 { switch_depth -= 1; }
+            }
+            // Check if this is a case/default label outside switch
+            if switch_depth == 0 && (t.starts_with("case ") || t == "default:") {
+                continue;
+            }
+            out.push(line.to_string());
+        }
+        out.join("\n")
     }
 
     /// Remove assignment lines whose left-hand side is not a valid C lvalue.
@@ -2581,11 +2603,61 @@ impl Emit for NullEmit {
     fn tag_variable(&mut self, _text: &str, _id: u64) {}
     fn tag_op(&mut self, _text: &str) {}
     fn tag_field(&mut self, _text: &str, _id: u64) {}
+    fn tag_line(&mut self, _indent: i32) {}
     fn tag_func_name(&mut self, _text: &str, _id: u64) {}
     fn tag_comment(&mut self, _text: &str) {}
     fn tag_label(&mut self, _text: &str) {}
     fn tag_case_label(&mut self, _text: &str) {}
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+}
+
+/// Emit adapter that records whether any printed text contains `case `
+/// (a switch case label). Used by printc to detect if a BlockIf's body
+/// would emit a case label outside its switch context.
+pub struct CaseDetectEmit {
+    has_case: bool,
+}
+
+impl CaseDetectEmit {
+    pub fn new() -> Self {
+        Self { has_case: false }
+    }
+    pub fn has_case(&self) -> bool {
+        self.has_case
+    }
+}
+
+impl Emit for CaseDetectEmit {
+    fn print(&mut self, text: &str) {
+        if text.contains("case ") || text.contains("default:") {
+            self.has_case = true;
+        }
+    }
+    fn begin_block(&mut self) {}
+    fn end_block(&mut self) {}
+    fn open_paren(&mut self) {}
+    fn close_paren(&mut self) {}
+    fn begin_function(&mut self) {}
+    fn end_function(&mut self) {}
+    fn tag_type(&mut self, _text: &str, _id: u64) {}
+    fn tag_variable(&mut self, text: &str, _id: u64) {
+        if text.contains("case ") { self.has_case = true; }
+    }
+    fn tag_op(&mut self, _text: &str) {}
+    fn tag_field(&mut self, _text: &str, _id: u64) {}
+    fn tag_line(&mut self, _indent: i32) {}
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    fn tag_func_name(&mut self, _text: &str, _id: u64) {}
+    fn tag_comment(&mut self, _text: &str) {}
+    fn tag_label(&mut self, _text: &str) {}
+    fn tag_case_label(&mut self, _text: &str) {
+        self.has_case = true; // Any case_label tag = case label emitted
+    }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 }
+

@@ -190,8 +190,8 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — case body protection still incomplete.
-                // CASE_BODY flag architecture is in place for future enablement.
+                // if_no_exit disabled — dry-run case detection still misses
+                // some case labels from nested emit_block_structured paths
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }

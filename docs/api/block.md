@@ -786,3 +786,7 @@ RPO 常用于：
 ### 2026-06-23（续）：CASE_BODY flag
 
 - `block_flags` 新增 `CASE_BODY`，标记 cascade switch 的 case body 块。供 blockaction/printc 层检测。
+
+### 2026-06-23（续）：CASE_BODY flag
+
+- `block_flags::CASE_BODY` 标记 cascade switch case body。

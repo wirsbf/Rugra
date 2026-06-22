@@ -82,3 +82,9 @@ Create a new ActionNormalizeBranches instance
 - interleaved loop 开头先 refresh_switch_cases（确保 flag 在规则运行前是最新的）。
 - `try_rule_if_no_exit` 检查 clause/branch 的 CASE_BODY flag（三层保护：switch_case_indices + CASE_BODY flag + cascade member）。
 - if_no_exit 仍禁用——三层保护仍不够（某些 case body 的 flag 在规则运行时还未设置）。printc 的 CASE_BODY emit 保护已移除（太激进，破坏正常 BlockIf emit）。
+
+### 2026-06-23（续）：interleaved + if_no_exit + CASE_BODY 架构
+
+- interleaved 规则框架（cat/proper_if/if_else/if_no_exit）。
+- refresh_switch_cases 完整 cascade chain 追踪 + batch CASE_BODY flag 设置。
+- if_no_exit 暂禁用（dry-run case 检测不完整）。

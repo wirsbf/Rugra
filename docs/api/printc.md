@@ -368,3 +368,6 @@ raw semantics / P-code-like IR
 
 - BlockIf（结构化 if-else）的 else body emit 也移除了 seen_return 检查，临时清除 seen_return。
 - httpd 控制流差 168→119（-29
+### 2026-06-23（续）：case_body_indices 字段
+
+- `PrintC` 新增 `case_body_indices` 收集 switch case body 块索引，供 BlockIf emit 检测。

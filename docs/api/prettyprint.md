@@ -103,3 +103,11 @@ Emitter that discards all output (used for discovery pass)
 ### 2026-06-23（续）：非法 lvalue 赋值移除
 
 - 新增 `remove_illegal_lvalue_assignments()` post-process pass：检测 LHS 含顶层二元运算符（`RSP + expr = val`）的非法赋值行并移除。这些来自 printc op_store 对复杂地址的错误渲染。
+
+### 2026-06-23（续）：CaseDetectEmit + case_body_indices + dry-run 检测
+
+- 新增 `CaseDetectEmit`（Emit 适配器），记录 emit 是否产生 `case`/`default:`/`tag_case_label`。
+- `PrintC` 新增 `case_body_indices` 字段，在 doc_function 开始时从 BlockSwitch.cases/default + CASE_BODY flag 收集。
+- 实现了 dry-run case-label 检测（临时替换 emit 为 CaseDetectEmit，emit if_body 检查）。
+- 但 dry-run 只覆盖 emit_block_ops（不覆盖 emit_block_structured 的嵌套路径），漏掉部分 case label。
+- if_no_exit 仍禁用。printc 的 CASE_BODY emit 保护已移除（破坏正常 BlockIf）。

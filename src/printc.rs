@@ -80,6 +80,9 @@ pub struct PrintC {
     value_def_map: HashMap<(crate::space::AddressSpace, u64), Arc<RwLock<PcodeOp>>>,
     /// Track post-return state across blocks
     seen_return: bool,
+    /// Block indices that are switch case bodies. BlockIf emit checks this to
+    /// avoid extracting case bodies (which would pull `case` labels out of switch).
+    case_body_indices: HashSet<i32>,
     /// Track ops that have been inlined into consumers (and should not be emitted as standalone lines)
     inlined_ops: HashSet<SeqNum>,
     /// Track variable names actually used in the emitted code (for declaration pruning)
@@ -146,6 +149,7 @@ impl PrintC {
             def_map: HashMap::new(),
             value_def_map: HashMap::new(),
             seen_return: false,
+            case_body_indices: HashSet::new(),
             inlined_ops: HashSet::new(),
             used_varnode_names: HashSet::new(),
             used_varnode_types: HashMap::new(),
@@ -2769,6 +2773,30 @@ impl PrintLanguage for PrintC {
         } else {
             &fd.bblocks
         };
+
+        // Collect all switch case body block indices. BlockIf emit checks this
+        // to avoid extracting case bodies (which pulls `case` labels out of switch).
+        self.case_body_indices.clear();
+        for i in 0..graph.get_size() {
+            if let Some(block_arc) = graph.get_block(i) {
+                let b = block_arc.read().unwrap();
+                if b.get_type() == crate::block::BlockType::Switch {
+                    if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
+                        for case in &bs.cases {
+                            self.case_body_indices.insert(case.read().unwrap().get_index());
+                        }
+                        if let Some(ref dc) = bs.default_case {
+                            self.case_body_indices.insert(dc.read().unwrap().get_index());
+                        }
+                    }
+                }
+                // Also collect CASE_BODY flagged blocks (cascade switch cases)
+                if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 {
+                    self.case_body_indices.insert(b.get_index());
+                }
+            }
+        }
+
 
         let mut discovery_emitted: HashSet<i32> = HashSet::new();
         for i in 0..graph.get_size() {
