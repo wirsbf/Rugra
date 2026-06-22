@@ -73,3 +73,7 @@ Emitter that discards all output (used for discovery pass)
 
 - 空行不再重置 dead zone（它们不让后续死代码可达）。
 - 同 indent 或更深的 `}` 保持 dead（它关闭 dead zone 内的块）。
+
+### 2026-06-23（续）：orphan break/continue 移除
+
+- 新增 `remove_orphan_breaks()` post-process pass：跟踪 brace 深度与 loop/switch 上下文栈，删除不在任何 loop/switch 内的 break/continue 语句。支持裸 `break;` 和内联 `if (cond) break;` 两种形式。内联形式移除 break 后若行变空则整行删除。

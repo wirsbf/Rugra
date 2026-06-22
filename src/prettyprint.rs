@@ -1501,7 +1501,114 @@ impl EmitNoMarkup {
         // Twenty-third pass: backfill missing local-variable declarations.
         // Scan each function body for `local_XX` identifiers used but not declared,
         // and insert `int local_XX;` declarations to keep the output compilable.
-        Self::backfill_missing_locals(&after_unary)
+        let after_backfill = Self::backfill_missing_locals(&after_unary);
+
+        // Twenty-fourth pass: remove orphan break/continue statements that are
+        // not within any loop or switch. These arise from incomplete control-flow
+        // structuring (e.g. dead code after an early return). gcc rejects them as
+        // 'break statement not within loop or switch'; deleting the bare statement
+        // (not its enclosing line context) makes the output compilable.
+        Self::remove_orphan_breaks(&after_backfill)
+    }
+
+    /// Remove `break;` and `continue;` statements that are not inside any
+    /// loop (while/for/do-while) or switch. We track brace depth and a context
+    /// stack: when entering a `{` preceded by a loop/switch keyword, push that
+    /// context; when leaving via `}`, pop. A break/continue is orphan if the
+    /// current context stack has no loop/switch.
+    fn remove_orphan_breaks(text: &str) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
+        // Stack of context kinds: true = loop/switch, false = other block (if/else/fn)
+        let mut ctx_stack: Vec<bool> = Vec::new();
+        for line in lines {
+            let t = line.trim();
+            // Detect block-opening lines: "X {" or just "{".
+            // Determine if the opener introduces a loop/switch context.
+            if t.ends_with('{') {
+                let is_loop_ctx = t.starts_with("while ")
+                    || t.starts_with("for ")
+                    || t.starts_with("do ")
+                    || t.starts_with("switch ")
+                    || t.contains("} while (")
+                    || t == "{";
+                // For bare "{" we can't tell; inherit from parent (peek top)
+                let parent_is_loop = ctx_stack.last().copied().unwrap_or(false);
+                let this_ctx = if t == "{" {
+                    parent_is_loop
+                } else {
+                    is_loop_ctx
+                };
+                ctx_stack.push(this_ctx);
+                out.push(line.to_string());
+                continue;
+            }
+            // Closing brace: pop context
+            if t == "}" || t.starts_with("} while") || t.starts_with("} else") {
+                // Handle "} else {" — pops then pushes
+                if t.starts_with("} else") {
+                    ctx_stack.pop();
+                    // The else block: not a loop context unless it was (rare)
+                    ctx_stack.push(false);
+                } else {
+                    ctx_stack.pop();
+                }
+                out.push(line.to_string());
+                continue;
+            }
+            // Check if this line contains a break/continue that is orphan.
+            // Handles both bare `break;` and inline `if (cond) break;` forms.
+            let in_loop_or_switch = ctx_stack.iter().any(|&x| x);
+            if !in_loop_or_switch {
+                // Scan for standalone break; / continue; tokens (word-boundary)
+                let mut new_line = String::new();
+                let bytes = line.as_bytes();
+                let mut k = 0;
+                let mut modified = false;
+                while k < bytes.len() {
+                    // Match "break;" or "continue;" as whole words
+                    let candidates: &[&[u8]] = &[b"break;", b"continue;"];
+                    let mut hit = None;
+                    for cand in candidates {
+                        if k + cand.len() <= bytes.len() && &bytes[k..k + cand.len()] == *cand {
+                            // Check word boundary before (not alnum/_)
+                            let prev_ok = k == 0 || {
+                                let b = bytes[k - 1];
+                                !(b.is_ascii_alphanumeric() || b == b'_')
+                            };
+                            if prev_ok { hit = Some(cand.len()); break; }
+                        }
+                    }
+                    if let Some(clen) = hit {
+                        // Skip the break/continue token (remove it)
+                        k += clen;
+                        modified = true;
+                    } else {
+                        new_line.push(bytes[k] as char);
+                        k += 1;
+                    }
+                }
+                if modified {
+                    // Clean up the line: remove trailing "if (...);" that's now empty,
+                    // or "if (...)" with nothing after.
+                    let cleaned = new_line.trim_end().to_string();
+                    // If the line is now just whitespace or "if (...)" with no body, drop it.
+                    let ct = cleaned.trim();
+                    if ct.is_empty()
+                        || ct.ends_with(")")
+                        || ct.ends_with(") ")
+                        || ct == "{"
+                    {
+                        // Drop the now-empty statement line
+                        continue;
+                    }
+                    out.push(cleaned);
+                    continue;
+                }
+            }
+            out.push(line.to_string());
+        }
+        out.join("\n")
     }
 
     /// For each function, find `local_XX` identifiers used in the body but not
