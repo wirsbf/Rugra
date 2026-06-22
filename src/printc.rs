@@ -696,6 +696,13 @@ impl PrintC {
 
                     // Print each case block
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
+                        // Skip case if its body was already extracted by BlockIf
+                        // (e.g. via try_rule_if_no_exit). Emitting the case label
+                        // without the body causes 'case label not within switch'.
+                        let case_idx = case_block.read().unwrap().get_index();
+                        if emitted.contains(&case_idx) {
+                            continue;
+                        }
                         let values = &switch_data.case_values[idx];
                         for val in values {
                             self.emit.tag_line(0);
@@ -733,6 +740,10 @@ impl PrintC {
 
                     // Print default case
                     if let Some(ref def_block) = switch_data.default_case {
+                        let def_idx = def_block.read().unwrap().get_index();
+                        if emitted.contains(&def_idx) {
+                            // Skip default if extracted
+                        } else {
                         self.emit.tag_line(0);
                         self.emit.print("default:");
                         self.emit.begin_block();
@@ -746,6 +757,7 @@ impl PrintC {
                             self.emit.print("break;");
                         }
                         self.emit.end_block();
+                        }
                     }
 
                     self.emit.end_block();
