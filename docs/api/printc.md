@@ -371,3 +371,9 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：case_body_indices 字段
 
 - `PrintC` 新增 `case_body_indices` 收集 switch case body 块索引，供 BlockIf emit 检测。
+
+### 2026-06-23（续）：dry-run 覆盖 emit_block_structured
+
+- CaseDetectEmit dry-run 现在覆盖 emit_block_structured（递归检测嵌套 BlockSwitch/BlockIf 的 case label），不只是 emit_block_ops。
+- 但发现 case label 问题的根因是 emit 顺序（BlockIf 提取 case body 后，BlockSwitch 的 case label emit 与 body emit 的 emitted 去重不匹配），不是 if_body 内容。dry-run 无法检测这种顺序问题。
+- if_no_exit 仍禁用。需要 emit 层重构（BlockSwitch 的 case emit 检查 emitted set）。

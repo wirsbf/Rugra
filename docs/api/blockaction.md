@@ -88,3 +88,7 @@ Create a new ActionNormalizeBranches instance
 - interleaved 规则框架（cat/proper_if/if_else/if_no_exit）。
 - refresh_switch_cases 完整 cascade chain 追踪 + batch CASE_BODY flag 设置。
 - if_no_exit 暂禁用（dry-run case 检测不完整）。
+
+### 2026-06-23（续）：if_no_exit 仍禁用
+
+- 根因确认：case label 问题是 emit 顺序（BlockIf 提取 case body 后 emitted 去重不匹配），非 if_body 内容。需要 emit 层重构。

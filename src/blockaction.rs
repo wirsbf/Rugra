@@ -190,8 +190,8 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — dry-run case detection still misses
-                // some case labels from nested emit_block_structured paths
+                // if_no_exit disabled — case label issue is emit-order, not
+                // if_body content. Dry-run can't detect it. Needs emit refactor.
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
