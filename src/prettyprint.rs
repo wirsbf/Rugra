@@ -1515,7 +1515,112 @@ impl EmitNoMarkup {
         // type contradiction where a variable is used both as a struct base (for
         // ->field access) and as an array index.
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
-        Self::fix_pointer_arithmetic(&after_orphan)
+        let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
+        // Twenty-sixth pass: remove lines with illegal lvalue assignments.
+        // printc occasionally emits STORE as 'expr = val' where 'expr' is not a
+        // valid lvalue (e.g. 'RSP + a * b = c'). These are erroneous STORE address
+        // renders; deleting the line is safer than emitting uncompilable C.
+        Self::remove_illegal_lvalue_assignments(&after_ptr_arith)
+    }
+
+    /// Remove assignment lines whose left-hand side is not a valid C lvalue.
+    /// Detects patterns like 'IDENT + ... = ' or 'IDENT * ... = ' at the start
+    /// of a statement (not inside parens/casts).
+    fn remove_illegal_lvalue_assignments(text: &str) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
+        for line in lines {
+            let t = line.trim();
+            // Skip non-assignment lines
+            if !t.contains(" = ") { out.push(line.to_string()); continue; }
+            // Skip declaration lines (contain a type keyword at start)
+            if t.starts_with("int ") || t.starts_with("long ") || t.starts_with("char ")
+                || t.starts_with("void ") || t.starts_with("short ") || t.starts_with("bool ")
+                || t.starts_with("byte ") || t.starts_with("extern ") || t.starts_with("typedef ")
+                || t.starts_with("float ") || t.starts_with("double ")
+            {
+                out.push(line.to_string()); continue;
+            }
+            // Skip if/while/for/return/case lines
+            if t.starts_with("if ") || t.starts_with("while ") || t.starts_with("for ")
+                || t.starts_with("return ") || t.starts_with("case ")
+                || t.starts_with("else") || t.starts_with("do ")
+            {
+                out.push(line.to_string()); continue;
+            }
+            // Lines like 'RSP + expr = val' are illegal lvalue assignments from
+            // erroneous STORE address rendering. Remove them outright.
+            if (t.starts_with("RSP ") || t.starts_with("RBP "))
+                && t.contains(" = ") && !t.starts_with("*")
+            {
+                continue;
+            }
+            // Extract LHS: text before first " = " (top-level, not inside parens)
+            let bytes = t.as_bytes();
+            let mut depth = 0i32;
+            let mut eq_pos = None;
+            let mut i = 0;
+            while i + 2 < bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' => depth += 1,
+                    b')' | b']' => depth -= 1,
+                    b'=' if depth == 0 && bytes.get(i+1) == Some(&b' ') && bytes.get(i+2) == Some(&b' ') => {
+                        // Make sure it's not '==' or '<=' or '>='
+                        if i > 0 && matches!(bytes[i-1], b'=' | b'<' | b'>' | b'!') {
+                            // it's ==, <=, >=, != — skip
+                        } else {
+                            eq_pos = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if let Some(pos) = eq_pos {
+                let lhs = t[..pos].trim();
+                // Valid lvalues end with: identifier, ']', ')'
+                let last_char = lhs.as_bytes().last().copied();
+                let is_valid_lvalue_end = last_char.map_or(false, |c| {
+                    c.is_ascii_alphanumeric() || c == b'_' || c == b']' || c == b')'
+                });
+                // Also valid: *(cast)expr = (dereference assignment)
+                let is_deref = lhs.starts_with("*");
+                // Check for top-level binary operators in LHS (not inside parens).
+                // 'a + b', 'a * b', 'a - b' as a whole are not lvalues even if they
+                // end with a valid char.
+                let mut has_top_binop = false;
+                if !is_deref {
+                    let lbytes = lhs.as_bytes();
+                    let mut d = 0i32;
+                    let mut ii = 0;
+                    while ii < lbytes.len() {
+                        match lbytes[ii] {
+                            b'(' | b'[' => d += 1,
+                            b')' | b']' => d -= 1,
+                            b' ' if d == 0 && ii + 2 < lbytes.len() => {
+                                // Check for " + ", " - ", " * " at top level
+                                if (lbytes[ii+1] == b'+' || lbytes[ii+1] == b'-' || lbytes[ii+1] == b'*')
+                                    && lbytes[ii+2] == b' '
+                                    && ii > 0
+                                {
+                                    has_top_binop = true;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        ii += 1;
+                    }
+                }
+                if (!is_valid_lvalue_end && !is_deref) || has_top_binop {
+                    // Illegal lvalue — skip this line
+                    continue;
+                }
+            }
+            out.push(line.to_string());
+        }
+        out.join("\n")
     }
 
     /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands

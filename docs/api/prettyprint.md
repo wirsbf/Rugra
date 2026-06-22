@@ -99,3 +99,7 @@ Emitter that discards all output (used for discovery pass)
 ### 2026-06-23（续）：指针算术合法化
 
 - 新增 `fix_pointer_arithmetic()` post-process pass：检测 `ptrA + ptrB` / `ptrA * ptrB`（两者都声明为指针类型），把右操作数 cast 成 `(long)`，使运算变为 pointer + integer。跳过赋值语句的 LHS。
+
+### 2026-06-23（续）：非法 lvalue 赋值移除
+
+- 新增 `remove_illegal_lvalue_assignments()` post-process pass：检测 LHS 含顶层二元运算符（`RSP + expr = val`）的非法赋值行并移除。这些来自 printc op_store 对复杂地址的错误渲染。
