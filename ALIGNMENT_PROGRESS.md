@@ -775,3 +775,42 @@ ra 语义对齐”
 **Rugra 当前已经具备一批面向 Ghidra 的静态对齐基础与运行时验证框架雏形，但尚不能根据现有仓库信息宣称已完成运行时 parity 或
 端到端一致性；最准确的状态是：结构
 对齐在推进，行为对齐仍待系统验证。**
+
+## 12. Ghidra 参考输出语义对比（2026-06-23）
+
+本节记录首次使用可运行 Ghidra（11.3.2 headless）对 curl 二进制生成参考反编译输出，并与 Rugra 输出做逐函数语义对比的结果。
+
+### 证据来源
+- Ghidra 参考输出：`tools/ghidra_decompile_all.py` 脚本运行 `ghidra_11.3.2` headless 生成
+- Rugra 输出：`examples/curl_decompile` + `examples/httpd_decompile`
+- gcc 语法通过率：53/53（100%）— 但这只是语法合法性，不等于语义等价
+
+### 系统性语义差距（按优先级）
+
+#### 差距 1：参数类型恢复缺失（最高优先级）
+- Ghidra：`int my_fwrite(void *buffer, size_t size, size_t nmemb, FILE *stream)`
+- Rugra：`int my_fwrite(long param_1, long param_2, long param_3, long param_4)`
+- 根因：ActionInferParams 只按 size 给 scalar 类型，不传播指针/结构体类型
+
+#### 差距 2：结构体字段访问未恢复
+- Ghidra：`stream->_IO_read_ptr`、`config->url`
+- Rugra：`*(long *)(piVar_18 + 0x8)`
+- 根因：无结构体布局恢复（Ghidra 用 FILE/Configurable 等已知类型）
+
+#### 差距 3：控制流分支丢失
+- Ghidra SetHTTPrequest：`if ((*store != UNSPEC) && (*store != req)) { return SetHTTPrequest(...); }`
+- Rugra：只输出 `if (iVar10 == 0) {...}`，丢失 `&&` 分支和 tail call
+- 根因：blockaction.rs 控制流结构化不完整，未处理 CBRANCH 级联到 tail call
+
+#### 差距 4：返回值推断缺失
+- Ghidra：`return -1;` / `return 0;`
+- Rugra：`return;`（void）
+- 根因：未从 RETURN op 的输入推断返回值
+
+#### 差距 5：变量名传播缺失
+- Ghidra：`__s, config, glob, pOVar15`
+- Rugra：`lVar_0, piVar_18, struct1`
+- 根因：无类型库/调试符号集成
+
+### 结论
+gcc 语法 100% 是必要条件但非充分条件。语义对齐 Ghidra 需要前端架构改进（类型传播、结构体恢复、控制流结构化），是 `GAP_ANALYSIS.md` 列出的长期工作。
