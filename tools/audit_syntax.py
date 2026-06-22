@@ -104,8 +104,15 @@ def audit_one(text: str, label: str):
     err_kinds = {}
     failures = []
     for name, body in funcs:
-        # 包成独立编译单元
-        src = STUB_HEADERS + "\n" + body + "\n"
+        # Build stub that excludes the function being compiled (avoids
+        # 'conflicting types' when our int() stub disagrees with the
+        # function's own inferred signature).
+        stub = STUB_HEADERS
+        # Remove any stub declaration line mentioning this function name
+        stub_lines = [l for l in stub.split('\n')
+                      if not (f' {name}(' in l or f' {name};' in l)]
+        stub = '\n'.join(stub_lines)
+        src = stub + "\n" + body + "\n"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False, encoding="utf-8") as f:
             f.write(src)
             tmp = f.name
