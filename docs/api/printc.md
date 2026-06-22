@@ -308,3 +308,7 @@ raw semantics / P-code-like IR
 ### 2026-06-23：自包含 C 输出
 
 - `doc_function()` 现在在每个函数前 emit Ghidra 风格的 typedef：`byte`、`undefined`、`undefined4`、`undefined8`、`_struct`。原因：`ActionInferParams`/`ActionTypeInfer` 的 size-based 推断会生成 `byte bVarN;` 声明，缺少 typedef 时无法通过 C 编译。`_struct` 是被解引用变量的泛型后备类型（配合 prettyprint 的 `->field` 重写）。
+
+### 2026-06-23（续）：声明白名单覆盖双命名格式
+
+- `is_declarable` 现在同时匹配两种 HighVariable 命名：`bVar60`（merge.rs 生成的 prefix+digits）和 `bVar_60`（printc fallback 的 prefix+`_`+hex）。此前只匹配带下划线的，导致 `bVar60`/`lVar21` 等 Register 空间变量被声明过滤掉，在函数体里引用却未声明。

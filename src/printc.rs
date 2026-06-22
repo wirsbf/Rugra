@@ -863,16 +863,26 @@ impl PrintC {
             }
             // Don't declare RIP/RSP/RBP — they're pseudo/frame registers, not local variables
             // Also don't declare any raw register names — they're architectural temporaries.
-            // We allow declaration of any auto-generated Hungarian-prefixed local name
-            // (lVar_/iVar_/uVar_/bVar_/sVar_ and pointer variants piVar_/pcVar_/psVar_/ppVar_/pvVar_)
-            // since var_prefix() may assign any of these based on inferred type.
+            // We allow declaration of any auto-generated Hungarian-prefixed local name.
+            // Two naming conventions exist:
+            //   - `bVar60`, `lVar21`  (HighVariable name from merge.rs: prefix + digits)
+            //   - `bVar_60`, `lVar_a8` (fallback name from printc: prefix + `_` + hex)
+            // Both must be declarable. We match prefix-followed-by-digit-or-underscore.
             if space == AddressSpace::Register {
                 const DECL_PREFIXES: &[&str] = &[
-                    "lVar_", "uVar_", "iVar_", "bVar_", "sVar_",
-                    "piVar_", "pcVar_", "psVar_", "ppVar_", "pvVar_",
-                    "fVar_", "dVar_",
+                    "lVar", "uVar", "iVar", "bVar", "sVar",
+                    "piVar", "pcVar", "psVar", "ppVar", "pvVar",
+                    "fVar", "dVar",
                 ];
-                if DECL_PREFIXES.iter().any(|p| name.starts_with(p)) {
+                let is_auto_local = DECL_PREFIXES.iter().any(|p| {
+                    if let Some(rest) = name.strip_prefix(p) {
+                        // After the prefix, must start with a digit (bVar60) or '_' (bVar_60)
+                        rest.starts_with(|c: char| c.is_ascii_digit() || c == '_')
+                    } else {
+                        false
+                    }
+                });
+                if is_auto_local {
                     // Allow declaring variables renamed from registers
                 } else {
                     // All standard x86-64 GPRs, segments, flags should not be declared as locals
