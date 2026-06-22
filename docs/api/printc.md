@@ -330,3 +330,7 @@ raw semantics / P-code-like IR
   - STORE 表达式地址（`*(a + b)` → `*(long *)(a + b)`）
   - STORE 全局符号 / 合成 DAT_ 名
 - 原因：与之前的 `->field` 重写一致，地址操作数可能是 scalar，`*(long *)` cast 保证无论声明类型如何都合法。
+
+### 2026-06-23（续）：callee-saved/帧寄存器声明
+
+- `is_declarable` 现在允许声明 RSP/RBP/RBX/R12-R15（callee-saved + 帧寄存器）为 `long`。原因：栈帧分析不完整时，这些寄存器名会出现在表达式里（如 `glob_word(RBP + 4, ...)`）。声明为 `long` 保证输出可编译，同时不改变语义（它们确实是 8 字节寄存器）。RIP（0x200）仍是伪寄存器，不声明。

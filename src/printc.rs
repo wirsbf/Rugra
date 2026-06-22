@@ -863,12 +863,13 @@ impl PrintC {
             }
             // Don't declare RIP/RSP/RBP — they're pseudo/frame registers, not local variables
             // Also don't declare any raw register names — they're architectural temporaries.
-            // We allow declaration of any auto-generated Hungarian-prefixed local name.
-            // Two naming conventions exist:
-            //   - `bVar60`, `lVar21`  (HighVariable name from merge.rs: prefix + digits)
-            //   - `bVar_60`, `lVar_a8` (fallback name from printc: prefix + `_` + hex)
-            // Both must be declarable. We match prefix-followed-by-digit-or-underscore.
+            // Don't declare RIP — it's a pseudo register, not a real variable.
+            // RSP/RBP and callee-saved (R12-R15, RBX) may appear in expressions
+            // when stack-frame analysis is incomplete; declaring them as `long`
+            // keeps the output compilable (they are real 8-byte registers).
             if space == AddressSpace::Register {
+                // RIP (0x200) is a pseudo register — never declare
+                if offset == 0x200 { return false; }
                 const DECL_PREFIXES: &[&str] = &[
                     "lVar", "uVar", "iVar", "bVar", "sVar",
                     "piVar", "pcVar", "psVar", "ppVar", "pvVar",
@@ -876,7 +877,6 @@ impl PrintC {
                 ];
                 let is_auto_local = DECL_PREFIXES.iter().any(|p| {
                     if let Some(rest) = name.strip_prefix(p) {
-                        // After the prefix, must start with a digit (bVar60) or '_' (bVar_60)
                         rest.starts_with(|c: char| c.is_ascii_digit() || c == '_')
                     } else {
                         false
@@ -885,8 +885,24 @@ impl PrintC {
                 if is_auto_local {
                     // Allow declaring variables renamed from registers
                 } else {
-                    // All standard x86-64 GPRs, segments, flags should not be declared as locals
-                    return false;
+                    // Callee-saved + frame registers: allow declaration as long
+                    // (RSP=0x20, RBP=0x28, RBX=0x18, R12=0xa0..R15=0xb8)
+                    const DECL_REG_OFFSETS: &[u64] = &[
+                        0x20, 0x28, 0x18, 0xa0, 0xa8, 0xb0, 0xb8,
+                    ];
+                    if !DECL_REG_OFFSETS.contains(&offset) {
+                        // All other raw register names (RAX/RCX/flags) — not declared
+                        return false;
+                    }
+                    // For these, only declare if the name is the raw register name
+                    // (RBP, RSP, RBX, R12-R15) — not some other identifier at this offset
+                    const RAW_REG_NAMES: &[&str] = &[
+                        "RSP", "ESP", "RBP", "EBP", "RBX", "EBX",
+                        "R12", "R13", "R14", "R15",
+                    ];
+                    if !RAW_REG_NAMES.contains(&name) {
+                        return false;
+                    }
                 }
             }
             // Don't declare names that come from the global symbol or string table
