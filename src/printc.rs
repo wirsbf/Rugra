@@ -495,17 +495,24 @@ impl PrintC {
                         }
                         self.emit.end_block();
 
-                        // Emit else body if present, non-empty, and we haven't already returned
+                        // Emit else body if present and non-empty.
+                        // seen_return from the then-branch must NOT suppress the else.
                         if let Some(ref else_body) = if_data.else_body {
-                            if !else_body_empty && !self.seen_return {
+                            if !else_body_empty {
                                 self.emit.print(" else");
                                 self.emit.begin_block();
                                 let else_body_type = else_body.read().unwrap().get_type();
                                 if matches!(else_body_type, BlockType::Basic) {
                                     emitted.insert(else_body.read().unwrap().get_index());
+                                    let saved = self.seen_return;
+                                    self.seen_return = false;
                                     self.emit_block_ops(else_body, true);
+                                    self.seen_return = saved;
                                 } else {
+                                    let saved = self.seen_return;
+                                    self.seen_return = false;
                                     self.emit_block_structured(else_body, graph, emitted);
+                                    self.seen_return = saved;
                                 }
                                 self.emit.end_block();
                             } else {

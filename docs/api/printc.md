@@ -363,3 +363,8 @@ raw semantics / P-code-like IR
 - `is_block_body_empty()` 现在对以 CBRANCH/BRANCH/RETURN/CALL 结尾的块返回 false（有控制流的块不是空）。
 - emit_block_structured 的 legacy if/else 分支：else 块不再被 then 分支的 seen_return 抑制。else 是条件分支的一部分，不应受 then 分支的 return 影响。emit else 时临时清除 seen_return。
 - 这是前端语义改进，恢复了大量被错误丢失的控制流分支。
+
+### 2026-06-23（续）：BlockIf 结构化 else 也修复 seen_return 抑制
+
+- BlockIf（结构化 if-else）的 else body emit 也移除了 seen_return 检查，临时清除 seen_return。
+- httpd 控制流差 168→119（-29
