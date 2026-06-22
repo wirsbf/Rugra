@@ -865,3 +865,22 @@ gcc 语法 100% 是必要条件但非充分条件。语义对齐 Ghidra 需要�
 **改进路线**：移植 Ghidra 的 collapseInternal 到 Rugra blockaction.rs，实现 10+ 规则的多轮迭代。这是缩小控制流差距（128/119）的唯一途径。
 
 **尝试过的 printc 层修复**（递归 Basic 块后继）失败了——破坏 switch 结构（case label 出现在 switch 体外）。控制流结构化必须在 blockaction 层完成，不能在 printc 层 ad-hoc 处理。
+
+### 最终控制流差距状态（2026-06-23 会话结束）
+
+interleaved 规则框架已实现但对复杂 CFG 无额外改善。控制流差距：
+
+| 函数 | Rugra if | Ghidra if | 差距 | 根因 |
+|------|----------|-----------|------|------|
+| getparameter | 4 | 42 | 38 | 121 块 0 个被结构化 |
+| glob_word | 1 | 7 | 6 | 循环+条件嵌套缺失 |
+| glob_set | 3 | 7 | 4 | 多入口合并点 |
+| main | 28 | 65 | 37 | 复杂 switch/if 嵌套 |
+
+**需要移植的 Ghidra 规则**（按优先级）：
+1. `ruleBlockGoto` — 标记不可归约块为 goto（让其它规则能继续）
+2. `ruleBlockCat` 链式扩展 — 沿 size_in==1 链合并多个顺序块
+3. 循环-条件嵌套 — 先识别循环，在循环体内做条件折叠
+4. `ruleCaseFallthru` — switch case fallthrough 处理
+
+这些需要 FlowBlock trait 扩展（支配树、回边、goto 标记接口），是多会话架构工作。
