@@ -345,3 +345,7 @@ raw semantics / P-code-like IR
 - `op_store` 生成 synthetic `DAT_xxxxx` 名时现在调用 `mark_variable_used`，确保它在 `used_varnode_types` 中，从而被 extern 声明收集捕获。
 - extern 收集移除了 `DAT_` 前缀排除（之前 synthetic DAT_ 名被排除在 extern 之外）。
 
+
+### 2026-06-23（续）：CALLIND 地址 0 的 cast
+
+- `op_call` 当目标地址为 0（未解析的间接调用）时，emit `(*(void(*)())0)` 而非 `(*0x0)`。函数指针 cast 让调用合法。

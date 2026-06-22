@@ -3394,7 +3394,10 @@ impl PrintLanguage for PrintC {
             drop(target_vn);
             if target_addr == 0 {
                 if !self.discovery_pass {
-                    self.emit.tag_variable("(*0x0)", 0);
+                    // Indirect call via unresolved pointer (address 0). Emit a
+                    // function-pointer cast so the call is legal C regardless
+                    // of how the target was represented.
+                    self.emit.tag_variable("(*(void(*)())0)", 0);
                 }
             } else if let Some(sym_name) = self.symbol_table.get(&target_addr) {
                 self.emit.tag_variable(sym_name, 0);
