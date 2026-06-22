@@ -95,3 +95,7 @@ Emitter that discards all output (used for discovery pass)
 ### 2026-06-23（续）：backfill 扩展无下划线前缀 + struct
 
 - `backfill_missing_locals()` 现在同时匹配带下划线（`bVar_592`）和无下划线（`bVar592`）两种匈牙利命名，以及 `struct3` 栈结构体名。类型推断：structN → int（占位），其余按原规则。
+
+### 2026-06-23（续）：指针算术合法化
+
+- 新增 `fix_pointer_arithmetic()` post-process pass：检测 `ptrA + ptrB` / `ptrA * ptrB`（两者都声明为指针类型），把右操作数 cast 成 `(long)`，使运算变为 pointer + integer。跳过赋值语句的 LHS。

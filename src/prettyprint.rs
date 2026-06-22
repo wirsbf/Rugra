@@ -1508,7 +1508,106 @@ impl EmitNoMarkup {
         // structuring (e.g. dead code after an early return). gcc rejects them as
         // 'break statement not within loop or switch'; deleting the bare statement
         // (not its enclosing line context) makes the output compilable.
-        Self::remove_orphan_breaks(&after_backfill)
+        // Twenty-fifth pass: fix pointer-pointer arithmetic.
+        // When two pointer-typed variables appear in `a + b` or `a * b`, C rejects
+        // it ('invalid operands'). We cast the second operand to (long) so the
+        // operation becomes pointer + integer, which is legal. This handles the
+        // type contradiction where a variable is used both as a struct base (for
+        // ->field access) and as an array index.
+        let after_orphan = Self::remove_orphan_breaks(&after_backfill);
+        Self::fix_pointer_arithmetic(&after_orphan)
+    }
+
+    /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands
+    /// are declared as pointer types, and cast the right operand to `(long)`.
+    fn fix_pointer_arithmetic(text: &str) -> String {
+        // Collect names declared as pointers (type contains '*')
+        use std::collections::HashSet;
+        let mut ptr_names: HashSet<String> = HashSet::new();
+        for line in text.lines() {
+            let t = line.trim();
+            if t.ends_with(';') && t.contains('*') && !t.contains('(') && !t.contains("return") {
+                // Declaration like "int * piVar_0;" or "long * uVar_b0;"
+                // Extract the variable name (last token before ';', after '*')
+                let name: String = t.trim_end_matches(';')
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("")
+                    .trim_start_matches('*')
+                    .to_string();
+                if !name.is_empty() && name.chars().next().map_or(false, |c| c.is_ascii_alphabetic()) {
+                    ptr_names.insert(name);
+                }
+            }
+        }
+        if ptr_names.is_empty() {
+            return text.to_string();
+        }
+        // Scan for `ptrA + ptrB` or `ptrA * ptrB` and cast ptrB to (long)
+        let mut out = String::with_capacity(text.len());
+        for line in text.lines() {
+            // Look for patterns: IDENT + IDENT or IDENT * IDENT where both are pointers
+            let mut new_line = line.to_string();
+            // Repeat to handle multiple occurrences on one line
+            loop {
+                let changed = Self::try_fix_one_ptr_arith(&new_line, &ptr_names);
+                match changed {
+                    Some(fixed) => { new_line = fixed; }
+                    None => break,
+                }
+            }
+            out.push_str(&new_line);
+            out.push('\n');
+        }
+        // Remove trailing newline added by loop
+        if out.ends_with('\n') && !text.ends_with('\n') {
+            out.pop();
+        }
+        out
+    }
+
+    /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
+    /// if a fix was applied, None otherwise. Skips the LHS of assignments.
+    fn try_fix_one_ptr_arith(line: &str, ptr_names: &std::collections::HashSet<String>) -> Option<String> {
+        // Don't touch the LHS of an assignment. Find the first " = " and only
+        // consider text after it (the RHS), or the whole line if no assignment.
+        let eq_pos = line.find(" = ");
+        let scan_start = match eq_pos {
+            Some(pos) => pos + 3,
+            None => 0,
+        };
+        let bytes = line.as_bytes();
+        let mut i = scan_start;
+        while i + 2 < bytes.len() {
+            // Check for " + " or " * " (operator surrounded by spaces)
+            if bytes[i] == b' ' &&
+                (bytes[i + 1] == b'+' || bytes[i + 1] == b'*') &&
+                bytes[i + 2] == b' '
+            {
+                // Extract left operand: walk back from i to get the identifier
+                let mut left_start = i;
+                while left_start > scan_start && (bytes[left_start - 1].is_ascii_alphanumeric() || bytes[left_start - 1] == b'_') {
+                    left_start -= 1;
+                }
+                let left_name = String::from_utf8_lossy(&bytes[left_start..i]).to_string();
+                // Extract right operand: walk forward from i+3
+                let mut right_end = i + 3;
+                while right_end < bytes.len() && (bytes[right_end].is_ascii_alphanumeric() || bytes[right_end] == b'_') {
+                    right_end += 1;
+                }
+                let right_name = String::from_utf8_lossy(&bytes[i + 3..right_end]).to_string();
+
+                // Both must be pointer-typed names
+                if ptr_names.contains(&left_name) && ptr_names.contains(&right_name) {
+                    // Cast the right operand to (long)
+                    let before = &line[..i + 3];
+                    let after = &line[right_end..];
+                    return Some(format!("{}(long){}{}", before, right_name, after));
+                }
+            }
+            i += 1;
+        }
+        None
     }
 
     /// Remove `break;`/`continue;` statements not within any loop or switch.
