@@ -3096,7 +3096,10 @@ impl PrintLanguage for PrintC {
                                 self.emit.print(&format!("->field_0x{:x}", off));
                             }
                         } else {
-                            self.emit.print("*(");
+                            // Emit as *(long *)(a + b) — the cast makes it legal C
+                            // regardless of whether a/b are pointers or scalars,
+                            // since integer-to-pointer cast is allowed.
+                            self.emit.print("*(long *)(");
                             let a = self.resolve_varnode(&def_op.inrefs[0]).unwrap_or_else(|| def_op.inrefs[0].clone());
                             let b = self.resolve_varnode(&def_op.inrefs[1]).unwrap_or_else(|| def_op.inrefs[1].clone());
                             self.push_varnode(&a.read().unwrap(), None);
@@ -3134,7 +3137,8 @@ impl PrintLanguage for PrintC {
                 if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
                     if let Some(sym_name) = self.symbol_table.get(&addr_offset) {
                         drop(addr_vn);
-                        self.emit.print("*");
+                        // *(long *)sym — cast makes dereference legal regardless of sym's type
+                        self.emit.print("*(long *)");
                         self.emit.tag_variable(sym_name, 0);
                         self.emit.tag_op(" = ");
                         self.push_input(op, 2);
@@ -3145,7 +3149,7 @@ impl PrintLanguage for PrintC {
                     if addr_offset >= 0x10000 && addr_offset < 0x1000000 {
                         let syn_name = format!("DAT_{:05x}", addr_offset);
                         drop(addr_vn);
-                        self.emit.print("*");
+                        self.emit.print("*(long *)");
                         self.emit.tag_variable(&syn_name, 0);
                         self.emit.tag_op(" = ");
                         self.push_input(op, 2);
@@ -3153,7 +3157,7 @@ impl PrintLanguage for PrintC {
                     }
                 }
                 drop(addr_vn);
-                
+
                 // Typed dereference for STORE address
                 let addr_type_name = addr_arc.read().unwrap().v_type.as_ref()
                     .and_then(|t| if matches!(t.as_ref(), Datatype::Pointer(_)) {
@@ -3165,7 +3169,9 @@ impl PrintLanguage for PrintC {
                     self.emit.print(&format!("*({} )", ptr_name));
                     self.push_input(op, 1);
                 } else {
-                    self.emit.tag_op("*");
+                    // *(long *)addr — default cast form so *addr is legal C even
+                    // when addr was inferred as a non-pointer scalar.
+                    self.emit.print("*(long *)");
                     self.push_input(op, 1);
                 }
             } else {

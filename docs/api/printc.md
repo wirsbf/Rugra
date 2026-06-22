@@ -312,3 +312,12 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：声明白名单覆盖双命名格式
 
 - `is_declarable` 现在同时匹配两种 HighVariable 命名：`bVar60`（merge.rs 生成的 prefix+digits）和 `bVar_60`（printc fallback 的 prefix+`_`+hex）。此前只匹配带下划线的，导致 `bVar60`/`lVar21` 等 Register 空间变量被声明过滤掉，在函数体里引用却未声明。
+
+### 2026-06-23（续）：STORE 地址 cast 合法化
+
+- `op_store()` 所有地址解引用路径现在统一 emit `*(long *)addr` 形式：
+  - 全局符号：`*(long *)sym_name`
+  - 合成 DAT 名：`*(long *)DAT_xxxxx`
+  - 表达式地址 `*(a + b)`：`*(long *)(a + b)`
+  - 默认：`*(long *)addr`
+- 原因：STORE 的地址操作数可能是 long/int scalar（非指针），直接 `*addr` 非法。`*(long *)` cast 让整数转指针再解引用，无论 addr 声明类型如何都合法。
