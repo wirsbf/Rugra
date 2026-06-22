@@ -692,8 +692,10 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "ap_vhost_iterate_given_conn" => 5,
 
             "__sprintf_chk" | "__fprintf_chk" | "__printf_chk"
-            | "__snprintf_chk" | "__vfprintf_chk"
+            | "__snprintf_chk"
             | "__isoc99_sscanf" | "sscanf" => 5,
+            // __vfprintf_chk(fp, flag, format, va_list) — 4 fixed args, not variadic
+            "__vfprintf_chk" => 4,
 
             "maprintf" | "maprintf_constprop_0" => 2,
             "strdup" => 1,

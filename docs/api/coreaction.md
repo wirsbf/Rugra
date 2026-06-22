@@ -176,3 +176,7 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 
 - `ActionInferParams` 现在在推断参数后，如果当前函数在 `known_param_count` 数据库中有记录，用它的值裁剪推断的参数数。修复函数定义签名与调用处参数裁剪不一致导致的 `too few/many arguments` 错误。
 - `ap_strcmp_match`/`ap_strcasecmp_match` 从 1 参数修正为 2 参数。
+
+### 2026-06-23（续）：__vfprintf_chk 参数数修正
+
+- `__vfprintf_chk` 从 5 参数修正为 4 参数（`fp, flag, format, va_list`），与其它 `__*_chk` 可变参数函数区分。
