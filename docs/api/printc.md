@@ -349,3 +349,7 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：CALLIND 地址 0 的 cast
 
 - `op_call` 当目标地址为 0（未解析的间接调用）时，emit `(*(void(*)())0)` 而非 `(*0x0)`。函数指针 cast 让调用合法。
+
+### 2026-06-23（续）：char literal brace escape
+
+- printc 输出字符字面量时，brace/paren/quote 字符（`}`、`{`、`)`、`(`、`\`、`'`、`"`）用 hex escape（`}`）而非裸字符。原因：`if (bVar_0 == '}') return;` 里的 `}` 会被 post-process 的 brace 计数器（backfill、orphan-break、fix_pointer_arithmetic）误读为代码右花括号，导致函数体提前关闭。case label 同理。

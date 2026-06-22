@@ -677,7 +677,13 @@ impl PrintC {
                             self.emit.tag_line(0);
                             // Format case value: char literal for printable ASCII, else numeric
                             let case_label = if *val >= 0x20 && *val <= 0x7e {
-                                format!("case '{}':", *val as u8 as char)
+                                let ch = *val as u8 as char;
+                                // Escape brace/paren chars to avoid confusing post-process brace counters
+                                if matches!(ch, '}' | '{' | ')' | '(' | '\'' | '\\' | '"') || ch == '\0' {
+                                    format!("case '\\x{:x}':", *val as u8)
+                                } else {
+                                    format!("case '{}':", ch)
+                                }
                             } else if *val >= 256 {
                                 format!("case 0x{:x}:", val)
                             } else {
@@ -3848,7 +3854,14 @@ impl PrintLanguage for PrintC {
                     // Printable ASCII — show as char literal only for clearly char-like values
                     // that are NEVER used as sizes/counts/flags (letters, some punctuation)
                     let ch = val as u8 as char;
-                    if ch.is_ascii_alphabetic() || "/'=.@[]".contains(ch) {
+                    // Brace/paren/bracket chars in single quotes ('}', '{', ')') confuse
+                    // text-level brace counting in post-process passes. Emit them as hex
+                    // escape instead so the literal braces aren't mistaken for code braces.
+                    let needs_escape = matches!(ch, '}' | '{' | ')' | '(' | '\'' | '\\' | '"')
+                        || ch == '\0';
+                    if needs_escape {
+                        format!("'\\x{:x}'", val as u8)
+                    } else if ch.is_ascii_alphabetic() || "/=.@[]".contains(ch) {
                         format!("'{}'", ch)
                     } else {
                         // Numbers 0-9, and punctuation like - & * ( ) + etc.
