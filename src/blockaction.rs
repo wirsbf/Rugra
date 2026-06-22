@@ -178,7 +178,7 @@ impl<'a> CollapseStructure<'a> {
                 };
                 if si == 0 && so == 0 { continue; }
 
-                // Try rules in Ghidra order: cat → proper-if → if-else → sequences
+                // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
@@ -266,6 +266,57 @@ impl<'a> CollapseStructure<'a> {
 
             // Match found: clause → merge. Create BlockIf.
             let negated = dir == 1; // if clause is the false edge, negate
+            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockIf {
+                    index: cond_idx,
+                    condition: block.clone(),
+                    if_body: clause.clone(),
+                    else_body: None,
+                    negated,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            self.graph.blocks[i] = if_block;
+            self.change_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// ruleBlockIfNoExit: detect if-then where the clause has NO out-edge
+    /// (ends with RETURN/exit). The clause doesn't merge back — it exits.
+    /// Mirrors Ghidra's ruleBlockIfNoExit (blockaction.cc:1481).
+    fn try_rule_if_no_exit(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+
+        let ops = b.get_ops();
+        let has_cbranch = ops.last().map_or(false, |op_ref| {
+            op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+        });
+        if !has_cbranch { return false; }
+
+        let cond_idx = b.get_index();
+        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
+        let true_block = true_edge.point.clone();
+        let false_block = false_edge.point.clone();
+        drop(b);
+
+        for dir in 0..2 {
+            let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
+            let c = clause.read().unwrap();
+            if c.size_in() != 1 { continue; }
+            if c.size_out() != 0 { continue; } // Must have no out-edge (RETURN/exit)
+            drop(c);
+
+            let negated = dir == 1;
             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockIf {
                     index: cond_idx,
