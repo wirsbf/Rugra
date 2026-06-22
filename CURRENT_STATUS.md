@@ -1,8 +1,36 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-06-21  
+**日期**: 2026-06-23  
 **版本**: 0.1.0  
 **状态**: 🟡 **核心库持续开发中；已具备较完整的反编译分析框架与显著改进的 C 输出质量，但对外可用性与对齐验证仍不完整**
+
+## 近期进展（2026-06-23 会话：example 输出合法化）
+
+本会话聚焦 **curl/httpd 两个 example 反编译输出质量对齐 Ghidra**，建立了机械化的 gcc 语法审计工具链（`tools/audit_syntax.py`），并通过 10 个原子化 commit 将**语法通过率从 30% 提升到 64%**（16→34/53 函数通过 `gcc -fsyntax-only`）。
+
+**修复清单**（每个 commit 独立、可追溯）：
+
+1. **phase3 read-before-write 顺序检测**（93ffb5a）：参数寄存器被误判为非参数（RDX 先读后写），my_fwrite 从 2 参数修复为 4 参数。
+2. **is_declarable 双命名格式**（51d1843）：`bVar60` 和 `bVar_60` 两种 HighVariable 命名都纳入声明白名单。
+3. **unary deref char* + 参数指针检测**（2fc3476）：`*param_N` 解引用的变量声明为 `char *`；LOAD/STORE 地址为 INPUT 参数时推断为指针。
+4. **STORE/LOAD/RIP cast 合法化**（5c315d2, e353c4e）：所有 `*addr` 统一 emit `*(long *)addr`，无论 addr 声明类型如何都合法。
+5. **callee-saved/帧寄存器声明**（50e6fd5）：RSP/RBP/RBX/R12-R15 允许声明为 `long`。
+6. **extern 全局声明**（72ed08c）：函数体引用的 Ram/Const 全局自动 emit `extern long NAME;`。
+7. **栈变量声明兜底**（1ab1c78）：post-process 扫描 body 补缺失的 `local_XX`/`lVar_XX` 声明。
+8. **synthetic DAT_ mark**（cbc51b2）：`op_store` 生成 `DAT_xxxxx` 时 mark，确保 extern 声明。
+9. **Ghidra typedef emit**（38a0041）：每个函数前 emit `byte`/`undefined`/`_struct` typedef。
+10. **auto post_process**（38a0041）：`get_output()` 自动调 post_process，example 不再跳过后处理。
+
+**剩余差距**（19 个函数未通过语法检查）：
+- 3 个 break not within loop（return 后死代码 + 控制流结构化）
+- 2 个 `(*0x0)` 间接调用（CALLIND 地址未解析）
+- 2 个 invalid operands（int* + int* 类型错误）
+- 括号不平衡、参数数量不匹配等边缘案例
+
+**验证方式**：
+- `cargo test`：175/176（1 个预存失败 `test_switch_case_structuring`，非本次回归）。
+- `python tools/audit_syntax.py result/curl.c result/httpd.c`：34/53 通过 gcc 语法检查。
+- curl 24/24、httpd 29/29 函数成功反编译。
 
 ## 近期进展（2026-06-21 会话）
 
