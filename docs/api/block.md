@@ -779,3 +779,6 @@ RPO 常用于：
 ## 一句话总结
 
 `block.rs` 是 Rugra 当前**控制流块模型与结构化块表示层**的核心模块：它既负责基本块和 CFG 的组织，也为 dominance、loop 分析和更高层的 `if/while/list/goto` 结构表达提供对象基础，是从底层操作图走向可打印控制流结构的关键桥梁。
+### 2026-06-23（续）：F_SWITCH_DISPATCH 边标记
+
+- `edge_flags` 新增 `F_SWITCH_DISPATCH` 用于标记 switch dispatch 边。

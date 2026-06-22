@@ -113,6 +113,11 @@ pub(crate) struct CollapseStructure<'a> {
     graph: &'a mut BlockGraph,
     change_count: i32,
     name: String,
+    /// Block indices that are switch case bodies (BlockSwitch.cases, default,
+    /// or CBRANCH cascade case bodies). Interleaved rules skip structuring
+    /// CBRANCH blocks whose targets are in this set, preventing case labels
+    /// from being pulled out of switch bodies.
+    switch_case_indices: std::collections::HashSet<i32>,
 }
 
 impl<'a> CollapseStructure<'a> {
@@ -121,6 +126,7 @@ impl<'a> CollapseStructure<'a> {
             graph,
             change_count: 0,
             name: name.to_string(),
+            switch_case_indices: std::collections::HashSet::new(),
         }
     }
 
@@ -148,6 +154,7 @@ impl<'a> CollapseStructure<'a> {
             self.collapse_bool_conditions();
             self.collapse_switches();
             self.collapse_cbranch_cascades();
+            self.refresh_switch_cases();
             self.collapse_sequences();
 
             iterations += 1;
@@ -181,14 +188,65 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
+                // if_no_exit disabled — causes case label issues
+                // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
             iterations += 1;
+            self.refresh_switch_cases();
             if self.change_count == pre_count || iterations >= max_iterations {
                 break;
             }
         }
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
+    }
+
+    /// Collect indices of all switch case body blocks. Scans both BlockSwitch
+    /// nodes and CBRANCH cascade chains (which produce switch-like structures
+    /// using BlockIf nodes). Interleaved rules use this to avoid pulling case
+    /// labels out of switch bodies.
+    fn refresh_switch_cases(&mut self) {
+        self.switch_case_indices.clear();
+        let size = self.graph.get_size();
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = block.read().unwrap();
+            let bt = b.get_type();
+            // BlockSwitch: collect its case + default bodies
+            if bt == crate::block::BlockType::Switch {
+                if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
+                    for case in &bs.cases {
+                        self.switch_case_indices.insert(case.read().unwrap().get_index());
+                    }
+                    if let Some(ref dc) = bs.default_case {
+                        self.switch_case_indices.insert(dc.read().unwrap().get_index());
+                    }
+                }
+            }
+            drop(b);
+            // CBRANCH cascade: detect by checking if this block is the head of a
+            // chain of CBRANCH blocks where the taken target (out edge 1) is a
+            // case body. Mark all such taken targets.
+            // (This catches the cascade switches that collapse_cbranch_cascades
+            // couldn't fully merge, or that were created as BlockIf chains.)
+        }
+        // Also detect CBRANCH cascade case bodies by scanning for blocks whose
+        // out-edge[1] target has size_in >= 2 (multi-entry = switch case merge)
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = block.read().unwrap();
+            if b.size_out() != 2 { continue; }
+            let ops = b.get_ops();
+            let has_cbranch = ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+            if !has_cbranch { continue; }
+            // Check if out[1] (taken target) has >=2 in-edges (switch case signature)
+            if let Some(edge) = b.get_out(1) {
+                let target_si = edge.point.read().unwrap().size_in();
+                if target_si >= 2 {
+                    self.switch_case_indices.insert(edge.point.read().unwrap().get_index());
+                }
+            }
+        }
     }
 
     /// ruleBlockCat: merge A→B (B has exactly 1 in from A) into BlockList.
@@ -250,6 +308,13 @@ impl<'a> CollapseStructure<'a> {
         let false_idx = false_block.read().unwrap().get_index();
         drop(b);
 
+        // Protect: if either branch target is a switch case body, don't
+        // structurally extract it — would pull `case` label out of switch.
+        if self.switch_case_indices.contains(&true_idx)
+            || self.switch_case_indices.contains(&false_idx) {
+            return false;
+        }
+
         // Try both directions (i=0: true clause, i=1: false clause)
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
@@ -257,8 +322,11 @@ impl<'a> CollapseStructure<'a> {
             let merge_idx = if dir == 0 { false_idx } else { true_idx };
 
             let c = clause.read().unwrap();
+            let c_idx = c.get_index();
             if c.size_in() != 1 { continue; }
             if c.size_out() != 1 { continue; }
+            // Protect switch case bodies
+            if self.switch_case_indices.contains(&c_idx) { continue; }
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             let target_idx = clause_out.point.read().unwrap().get_index();
             drop(c);
@@ -288,6 +356,7 @@ impl<'a> CollapseStructure<'a> {
     /// ruleBlockIfNoExit: detect if-then where the clause has NO out-edge
     /// (ends with RETURN/exit). The clause doesn't merge back — it exits.
     /// Mirrors Ghidra's ruleBlockIfNoExit (blockaction.cc:1481).
+    /// Protected against switch case extraction via switch_case_indices.
     fn try_rule_if_no_exit(&mut self, i: usize) -> bool {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
@@ -307,13 +376,25 @@ impl<'a> CollapseStructure<'a> {
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
+        let true_idx = true_block.read().unwrap().get_index();
+        let false_idx = false_block.read().unwrap().get_index();
         drop(b);
+
+        // Protect switch case bodies
+        if self.switch_case_indices.contains(&true_idx)
+            || self.switch_case_indices.contains(&false_idx) {
+            return false;
+        }
 
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let c = clause.read().unwrap();
+            let c_idx = c.get_index();
             if c.size_in() != 1 { continue; }
             if c.size_out() != 0 { continue; } // Must have no out-edge (RETURN/exit)
+            // Protect: don't extract switch case bodies — they must stay inside
+            // their BlockSwitch or the emitted `case` label ends up outside the switch.
+            if self.switch_case_indices.contains(&c_idx) { continue; }
             drop(c);
 
             let negated = dir == 1;

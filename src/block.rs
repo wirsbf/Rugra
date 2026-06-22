@@ -46,6 +46,10 @@ pub mod edge_flags {
     pub const F_CONTINUE_EDGE: u32 = 1 << 1;
     /// Edge represents an unstructured `goto`
     pub const F_GOTO_EDGE: u32 = 1 << 2;
+    /// Edge is a switch dispatch (from switch control block to a case body).
+    /// Blocks reached via this edge must not be structurally extracted by
+    /// interleaved rules, or their `case` label ends up outside the switch.
+    pub const F_SWITCH_DISPATCH: u32 = 1 << 3;
 }
 
 /// Common interface for all types of blocks (Basic, Graph, Condition, etc.)
