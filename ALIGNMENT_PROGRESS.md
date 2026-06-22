@@ -884,3 +884,24 @@ interleaved 规则框架已实现但对复杂 CFG 无额外改善。控制流差
 4. `ruleCaseFallthru` — switch case fallthrough 处理
 
 这些需要 FlowBlock trait 扩展（支配树、回边、goto 标记接口），是多会话架构工作。
+
+### 控制流结构化架构障碍（2026-06-23 深入）
+
+尝试安全启用 `try_rule_if_no_exit`（if-then with RETURN clause）的多次实验均失败：
+
+**实验 1**：无保护启用 → main 的 switch case label 出现在 switch 体外（gcc 报 `case label not within switch statement`）
+**实验 2**：加 `switch_case_indices` 保护（跳过 BlockSwitch.cases）→ 仍有 case label 问题，因为 main 的 switch 是 CBRANCH cascade（BlockIf 类型），不是 BlockSwitch
+**实验 3**：加 `cond block size_in <= 1` 保护 → 仍有 case label 问题，因为 case 内的 CBRANCH 也可以 size_in==1（通过 fallthrough 进入）
+
+**根本障碍**：Rugra 缺少 Ghidra 的以下机制：
+1. **`isSwitchOut` / `isGotoOut` 边标记** — Ghidra 在 FlowBlock 边上标记哪些是 switch dispatch 出边
+2. **`ruleBlockGoto`** — 在结构化前标记不可归约边为 goto，打破僵局
+3. **switch 上下文传播** — 结构化时知道哪些块在 switch case body 内
+
+**解决路线**：
+1. 给 BlockEdge 加 `label_type` 字段（switch_out/goto_out/break_edge/normal）
+2. 在 collapse_switches / collapse_cbranch_cascades 后标记所有 case body 的入边为 switch_out
+3. 在 interleaved 规则里检查边标记，跳过 switch case 内的结构化
+4. 实现 ruleBlockGoto 标记不可归约边
+
+这些是 FlowBlock/BlockEdge/BlockGraph 的底层架构改动，需要多会话持续工作。
