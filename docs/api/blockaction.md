@@ -96,3 +96,9 @@ Create a new ActionNormalizeBranches instance
 ### 2026-06-23（续）：if_no_exit 仍禁用
 
 - BlockSwitch emitted 检查已加，但嵌套 switch emit 顺序问题仍在。if_no_exit 禁用。
+
+### 2026-06-23（续）：BFS 子树扩展实验 + 回退
+
+- 尝试了 BFS 从 case body 沿 size_in==1 后继扩展收集 case body 内部块。但过度标记（case body 的 fallthrough 链很长，覆盖了过多块），导致 if_no_exit 完全不触发。
+- 回退 BFS 扩展，保留直接 case body 标记。if_no_exit 仍禁用。
+- 根本障碍：需要支配树（dominator tree）基础的 case body 边界检测。BFS 启发式不精确。

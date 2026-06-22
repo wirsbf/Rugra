@@ -190,8 +190,9 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — BlockSwitch emitted check helps but
-                // nested switch + BlockIf extraction still breaks case order
+                // if_no_exit disabled — case body sub-tree detection (BFS)
+                // over-marks blocks, preventing valid matches. Needs precise
+                // case body boundary detection (dominator-based).
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
