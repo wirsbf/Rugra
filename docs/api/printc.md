@@ -339,3 +339,9 @@ raw semantics / P-code-like IR
 
 - `doc_function()` 现在在 typedef 后、签名前 emit `extern long NAME;` 声明，覆盖函数体引用的所有 Ram/Const 空间全局变量（来自符号表/字符串表，非函数调用目标）。对齐 Ghidra 的自包含输出——每个函数引用的全局都有可见声明。
 - 同时扫描 `used_varnode_names` 捕获符号表里的全局名（如 `glob_buffer`）。
+
+### 2026-06-23（续）：synthetic DAT_ 全局声明收集
+
+- `op_store` 生成 synthetic `DAT_xxxxx` 名时现在调用 `mark_variable_used`，确保它在 `used_varnode_types` 中，从而被 extern 声明收集捕获。
+- extern 收集移除了 `DAT_` 前缀排除（之前 synthetic DAT_ 名被排除在 extern 之外）。
+

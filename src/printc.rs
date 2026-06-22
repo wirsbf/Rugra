@@ -2786,7 +2786,6 @@ impl PrintLanguage for PrintC {
         for (name, (_type, space, offset)) in &self.used_varnode_types {
             if matches!(space, AddressSpace::Ram | AddressSpace::Const)
                 && !self.call_targets.contains(offset)
-                && !name.starts_with("DAT_")
                 && !name.starts_with('"')
                 && !name.is_empty()
                 && name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
@@ -3207,6 +3206,8 @@ impl PrintLanguage for PrintC {
                     // Typical ELF data sections are in the range 0x10000..0x1000000
                     if addr_offset >= 0x10000 && addr_offset < 0x1000000 {
                         let syn_name = format!("DAT_{:05x}", addr_offset);
+                        // Mark as used so an extern declaration is emitted (self-contained output)
+                        self.mark_variable_used(syn_name.clone(), addr_space, addr_offset, "long".to_string());
                         drop(addr_vn);
                         self.emit.print("*(long *)");
                         self.emit.tag_variable(&syn_name, 0);

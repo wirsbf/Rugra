@@ -1590,6 +1590,11 @@ impl EmitNoMarkup {
                     }
                     for m in &missing {
                         // Infer type from prefix: lVar/uVar/piVar etc → long/long/pointer
+                        // DAT_ prefixed names are synthetic globals → declare as extern long.
+                        if m.starts_with("DAT_") {
+                            out.push(format!("{}extern long {};", indent_str, m));
+                            continue;
+                        }
                         let ty = if m.starts_with("lVar") || m.starts_with("uVar") {
                             "long"
                         } else if m.starts_with("iVar") || m.starts_with("bVar")
