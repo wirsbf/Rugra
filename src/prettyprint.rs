@@ -1684,7 +1684,7 @@ impl EmitNoMarkup {
                     let prefixes: &[&[u8]] = &[
                         b"local_", b"lVar_", b"uVar_", b"iVar_", b"bVar_", b"sVar_",
                         b"piVar_", b"pcVar_", b"psVar_", b"ppVar_", b"pvVar_",
-                        b"fVar_", b"dVar_",
+                        b"fVar_", b"dVar_", b"DAT_",
                     ];
                     let mut matched = false;
                     for pf in prefixes {
