@@ -188,7 +188,8 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — causes case label issues
+                // if_no_exit disabled — case label extraction still occurs for
+                // cascade tail blocks whose fallthrough is non-CBRANCH
                 // if self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
@@ -230,8 +231,10 @@ impl<'a> CollapseStructure<'a> {
             // (This catches the cascade switches that collapse_cbranch_cascades
             // couldn't fully merge, or that were created as BlockIf chains.)
         }
-        // Also detect CBRANCH cascade case bodies by scanning for blocks whose
-        // out-edge[1] target has size_in >= 2 (multi-entry = switch case merge)
+        // Detect CBRANCH cascade chains: a sequence of CBRANCH blocks connected
+        // via fallthrough (out[0]), where each has a taken target (out[1]).
+        // A chain of 2+ such blocks is a cascade switch; all taken targets are
+        // case bodies and must not be structurally extracted.
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
@@ -239,12 +242,36 @@ impl<'a> CollapseStructure<'a> {
             let ops = b.get_ops();
             let has_cbranch = ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
             if !has_cbranch { continue; }
-            // Check if out[1] (taken target) has >=2 in-edges (switch case signature)
-            if let Some(edge) = b.get_out(1) {
-                let target_si = edge.point.read().unwrap().size_in();
-                if target_si >= 2 {
-                    self.switch_case_indices.insert(edge.point.read().unwrap().get_index());
+            // Check if fallthrough (out[0]) leads to another CBRANCH (cascade)
+            let fallthrough = match b.get_out(0) { Some(e) => e.point.clone(), None => { continue; } };
+            let ft_is_cbranch = {
+                let ft = fallthrough.read().unwrap();
+                if ft.size_out() != 2 { false }
+                else {
+                    let ft_ops = ft.get_ops();
+                    ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
                 }
+            };
+            if !ft_is_cbranch { continue; }
+            // This is a cascade head. Walk the chain and mark all taken targets.
+            let mut current = block.clone();
+            let mut visited = std::collections::HashSet::new();
+            loop {
+                let cur_idx = current.read().unwrap().get_index();
+                if !visited.insert(cur_idx) { break; } // cycle guard
+                let c = current.read().unwrap();
+                if c.size_out() != 2 { break; }
+                let c_ops = c.get_ops();
+                let c_has_cbranch = c_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+                if !c_has_cbranch { break; }
+                // Mark taken target (out[1]) as a case body
+                if let Some(taken_edge) = c.get_out(1) {
+                    self.switch_case_indices.insert(taken_edge.point.read().unwrap().get_index());
+                }
+                // Follow fallthrough (out[0])
+                let next = match c.get_out(0) { Some(e) => e.point.clone(), None => break };
+                drop(c);
+                current = next;
             }
         }
     }
@@ -370,6 +397,20 @@ impl<'a> CollapseStructure<'a> {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
+
+        // Don't apply if this CBRANCH is part of a cascade chain (its
+        // fallthrough leads to another CBRANCH). Structuring cascade members
+        // pulls case labels out of the switch body.
+        let is_cascade_member = {
+            if let Some(ft_edge) = b.get_out(0) {
+                let ft = ft_edge.point.read().unwrap();
+                if ft.size_out() == 2 {
+                    let ft_ops = ft.get_ops();
+                    ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                } else { false }
+            } else { false }
+        };
+        if is_cascade_member { return false; }
 
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
