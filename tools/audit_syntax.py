@@ -60,8 +60,8 @@ def split_functions(text: str):
     i = 0
     while i < len(lines):
         line = lines[i]
-        # Capture typedef lines (emitted before each function by printc)
-        if line.strip().startswith("typedef "):
+        # Capture typedef and extern lines (emitted before each function by printc)
+        if line.strip().startswith("typedef ") or line.strip().startswith("extern "):
             pending_typedefs.append(line)
             i += 1
             continue

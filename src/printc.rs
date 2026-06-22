@@ -2776,6 +2776,46 @@ impl PrintLanguage for PrintC {
         self.emit.tag_line(0);
         self.emit.print("");
 
+        // Emit extern declarations for referenced global variables that are not
+        // function call targets. Ghidra's output is self-contained: every global
+        // referenced in a function body has a visible declaration. We approximate
+        // this by declaring any Ram/Const-space name (from symbol/string tables)
+        // as `extern long NAME;` so the body compiles even when the global's real
+        // type/layout is unknown.
+        let mut emitted_globals: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (name, (_type, space, offset)) in &self.used_varnode_types {
+            if matches!(space, AddressSpace::Ram | AddressSpace::Const)
+                && !self.call_targets.contains(offset)
+                && !name.starts_with("DAT_")
+                && !name.starts_with('"')
+                && !name.is_empty()
+                && name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+            {
+                emitted_globals.insert(name.clone());
+            }
+        }
+        // Also scan used_varnode_names for symbol-table globals not captured above
+        for name in &self.used_varnode_names {
+            // Only add names that look like symbols (not local var prefixes, not keywords)
+            if name.contains('.') || name.contains('-') || name.contains('>') { continue; }
+            if name.starts_with("param_") || name.starts_with("local_") { continue; }
+            let is_local_prefix = ["lVar","uVar","iVar","bVar","sVar","piVar","pcVar","psVar","ppVar","pvVar","fVar","dVar","DAT_","LAB_"].iter().any(|p| name.starts_with(p));
+            if is_local_prefix { continue; }
+            if ["argc","argv","RBP","RSP","RBX","R12","R13","R14","R15"].contains(&name.as_str()) { continue; }
+            // Check it's a known symbol from the binary
+            if self.symbol_table.values().any(|s| s == name) {
+                emitted_globals.insert(name.clone());
+            }
+        }
+        for name in &emitted_globals {
+            self.emit.tag_line(0);
+            self.emit.print(&format!("extern long {};", name));
+        }
+        if !emitted_globals.is_empty() {
+            self.emit.tag_line(0);
+            self.emit.print("");
+        }
+
         // 1. Emit signature from function prototype
         let is_main = fd.get_name() == "main";
         if is_main {

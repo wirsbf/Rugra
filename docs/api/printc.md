@@ -334,3 +334,8 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：callee-saved/帧寄存器声明
 
 - `is_declarable` 现在允许声明 RSP/RBP/RBX/R12-R15（callee-saved + 帧寄存器）为 `long`。原因：栈帧分析不完整时，这些寄存器名会出现在表达式里（如 `glob_word(RBP + 4, ...)`）。声明为 `long` 保证输出可编译，同时不改变语义（它们确实是 8 字节寄存器）。RIP（0x200）仍是伪寄存器，不声明。
+
+### 2026-06-23（续）：自包含全局变量声明
+
+- `doc_function()` 现在在 typedef 后、签名前 emit `extern long NAME;` 声明，覆盖函数体引用的所有 Ram/Const 空间全局变量（来自符号表/字符串表，非函数调用目标）。对齐 Ghidra 的自包含输出——每个函数引用的全局都有可见声明。
+- 同时扫描 `used_varnode_names` 捕获符号表里的全局名（如 `glob_buffer`）。
