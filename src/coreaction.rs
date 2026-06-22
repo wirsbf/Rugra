@@ -1099,6 +1099,37 @@ impl Action for ActionInferParams {
         param_candidates.sort_by_key(|(i, _, _, _)| *i);
         param_candidates.dedup_by_key(|(i, _, _, _)| *i);
 
+        // Detect which parameter registers are used as pointers (LOAD/STORE address input).
+        // A parameter that feeds a LOAD/STORE address slot is a pointer; its declared type
+        // must be a pointer type, otherwise the emitted `*param_N` fails C compilation.
+        // This mirrors Ghidra's ActionActiveParam pointer recovery.
+        let mut ptr_param_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if matches!(op.opcode, OpCode::CPUI_LOAD | OpCode::CPUI_STORE) && op.inrefs.len() > 1 {
+                // input[1] is the address varnode (input[0] is the space id)
+                let addr_vn = op.inrefs[1].read().unwrap();
+                if addr_vn.get_space() == AddressSpace::Register && addr_vn.is_input() {
+                    ptr_param_offsets.insert(addr_vn.get_offset());
+                }
+            }
+        }
+        // Also scan block-local ops (STORE/COPY patterns where param feeds address calc)
+        for blk_i in 0..fd.bblocks.get_size() {
+            if let Some(block_arc) = fd.bblocks.get_block(blk_i) {
+                let block = block_arc.read().unwrap();
+                for op_ref in block.get_ops() {
+                    let op = op_ref.0.read().unwrap();
+                    if matches!(op.opcode, OpCode::CPUI_STORE) && op.inrefs.len() > 1 {
+                        let addr_vn = op.inrefs[1].read().unwrap();
+                        if addr_vn.get_space() == AddressSpace::Register && addr_vn.is_input() {
+                            ptr_param_offsets.insert(addr_vn.get_offset());
+                        }
+                    }
+                }
+            }
+        }
+
         let mut params = Vec::new();
         let mut expected_abi_idx = 0usize;
         for (abi_idx, offset, size, v_type) in &param_candidates {
@@ -1106,14 +1137,24 @@ impl Action for ActionInferParams {
             if *abi_idx != expected_abi_idx {
                 break;
             }
-            let type_arc = v_type.clone().unwrap_or_else(|| {
-                Arc::new(match size {
-                    1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
-                    2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
-                    4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
-                    _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+            // If this parameter is used as a LOAD/STORE address, force pointer type
+            let type_arc = if ptr_param_offsets.contains(offset) {
+                let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                    base: crate::type_system::datatype::TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
+                    ptr_to: base,
+                    wordsize: 1,
+                }))
+            } else {
+                v_type.clone().unwrap_or_else(|| {
+                    Arc::new(match size {
+                        1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
+                        2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
+                        4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
+                        _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+                    })
                 })
-            });
+            };
             params.push(crate::fspec::ProtoParameter::new(
                 format!("param_{}", params.len() + 1),
                 type_arc,

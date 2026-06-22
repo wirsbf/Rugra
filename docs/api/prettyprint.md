@@ -57,3 +57,8 @@ Emitter that discards all output (used for discovery pass)
 - `try_convert_ptr_add()` 与 second pass 的 `*var + N` 模式同样改为 emit cast 形式。
 - while-break 折叠 pass：`while(cond){stmt;break;}` → `if(cond) stmt`。
 - 空 switch case 移除 pass：删除 `case N: { break; }` fallthrough 组。
+
+### 2026-06-23（续）：一元解引用声明合法化
+
+- 新增 `fix_unary_deref_declarations()`：扫描所有 `*IDENT` 一元解引用模式，把这些 IDENT 的声明从 scalar（long/int/byte）改成 `char *`。原因：printc 对 STORE/LOAD 发射 `*param_N = val`，若 param_N 被推断为 long/int 则非法。`char *` 既能解引用又能赋标量值。
+- 参数签名同步重写：签名行里的 `long param_N` 若属于 derefed 集合，改为 `char * param_N`。

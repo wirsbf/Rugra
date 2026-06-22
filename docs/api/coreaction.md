@@ -168,3 +168,6 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 *暂无代码注释*
 
  
+### 2026-06-23：参数指针类型检测
+
+- `ActionInferParams` 现在扫描所有 LOAD/STORE 的地址输入（input[1]），若该 varnode 是 INPUT 参数寄存器，则把对应参数类型从 size-based scalar 提升为 `long *` 指针。对齐 Ghidra 的 `ActionActiveParam` 指针恢复逻辑。

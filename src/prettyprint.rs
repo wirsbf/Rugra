@@ -1474,7 +1474,110 @@ impl EmitNoMarkup {
         // what Ghidra emits for pointer arithmetic into unknown structs and
         // removes the entire class of "invalid type argument of '->'" errors.
         let struct_pass = Self::rewrite_struct_deref(&struct_pass);
-        struct_pass
+
+        // Twenty-second pass: fix declarations of variables dereferenced via `*X`.
+        // printc emits `*param_N = val` for STORE when the address is a parameter.
+        // If param_N was inferred as long/int (not pointer), `*param_N` is illegal C.
+        // We collect all `*IDENT` occurrences (unary deref, not `*(` cast) and
+        // rewrite their declarations to `_struct *` so the deref is legal.
+        Self::fix_unary_deref_declarations(&struct_pass)
+    }
+
+    /// Rewrite declarations of variables appearing in `*IDENT` unary dereference
+    /// patterns to pointer type, so `*param_N` is legal C.
+    fn fix_unary_deref_declarations(text: &str) -> String {
+        use std::collections::HashSet;
+        // Collect IDENTs used as `*IDENT` (unary deref).
+        // Patterns: `*IDENT =`, `= *IDENT`, `(*IDENT)`, `*IDENT;`, `*IDENT,`
+        // Exclude `*( ... )` (cast) and `** ` (double deref handled separately).
+        let mut derefed: HashSet<String> = HashSet::new();
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Look for `*` not preceded by `(` or `*` or alnum, and not followed by `(`.
+            if bytes[i] == b'*' {
+                let prev_alnum = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_' || bytes[i - 1] == b')');
+                let next_is_paren = i + 1 < bytes.len() && bytes[i + 1] == b'(';
+                let next_is_star = i + 1 < bytes.len() && bytes[i + 1] == b'*';
+                // Skip if it's a `type *X` declaration (preceded by whitespace after type word) — hard to detect perfectly,
+                // but we only act on IDENTs that also appear in declarations, so false positives are harmless.
+                if !prev_alnum && !next_is_paren && !next_is_star {
+                    // Capture following identifier
+                    let mut j = i + 1;
+                    // skip whitespace
+                    while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+                    let id_start = j;
+                    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
+                    if j > id_start {
+                        let name = String::from_utf8_lossy(&bytes[id_start..j]).to_string();
+                        if name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
+                            derefed.insert(name);
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        if derefed.is_empty() {
+            return text.to_string();
+        }
+        // Rewrite scalar declarations of these names to `_struct *`.
+        let scalar_types = [
+            "long", "int", "short", "char", "byte", "bool",
+            "undefined", "undefined4", "undefined8",
+        ];
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
+        for line in lines {
+            let trimmed = line.trim_start();
+            let indent_len = line.len() - trimmed.len();
+            let mut rewritten = None;
+            for ty in &scalar_types {
+                let prefix = format!("{} ", ty);
+                if let Some(rest) = trimmed.strip_prefix(&prefix) {
+                    if rest.starts_with('*') { break; } // already pointer
+                    let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                    if !name.is_empty() && derefed.contains(&name) {
+                        let indent_str = &line[..indent_len];
+                        // Declare as `char *`: `*(char *)X` yields a char, which can be
+                        // assigned scalar values (0-255), indexed, and compared — covering
+                        // the common STORE/LOAD patterns without knowing the real type.
+                        rewritten = Some(format!("{}char * {};", indent_str, name));
+                        break;
+                    }
+                }
+            }
+            // Also handle parameter declarations in function signature: `long param_1` -> `_struct * param_1`
+            // These appear on the signature line, not as standalone declarations.
+            if rewritten.is_none() {
+                // Check if this is a signature line containing `(long param_N, ...)`
+                // We rewrite param types inline if they're in derefed set.
+                let mut new_line = line.to_string();
+                for name in &derefed {
+                    for ty in &scalar_types {
+                        let pat = format!("{} {}", ty, name);
+                        let repl = format!("char * {}", name);
+                        // Only replace if not already pointer (avoid `long * param` -> `_struct * * param`)
+                        let pat_idx = new_line.find(&pat);
+                        if let Some(idx) = pat_idx {
+                            // Check char before is not '*'
+                            let before_ok = idx == 0 || {
+                                let b = new_line.as_bytes()[idx - 1];
+                                b != b'*'
+                            };
+                            if before_ok {
+                                new_line = new_line.replacen(&pat, &repl, 1);
+                            }
+                        }
+                    }
+                }
+                if new_line != line {
+                    rewritten = Some(new_line);
+                }
+            }
+            out.push(rewritten.unwrap_or_else(|| line.to_string()));
+        }
+        out.join("\n")
     }
 
     /// Rewrite every `IDENT->field_N` / `IDENT->field_0xN` to
