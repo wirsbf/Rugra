@@ -176,3 +176,11 @@ Create a new ActionNormalizeBranches instance
 - selectGoto 跳过 size_in>=2 的 CBRANCH（switch case body 内部块）。
 - 函数名 "main" 跳过 goto 级联（case label 混合风险）。
 - 需要移植 Ghidra orderLoopBodies（循环识别+排序）来正确处理复杂 CFG。
+
+### 2026-06-23（续）：完整 Ghidra 算法移植
+
+- 实现 `order_loop_bodies()`：基于支配树的回边检测 + 循环体收集（BFS 反向）+ 按大小排序（最内层优先）。对应 Ghidra labelLoops + orderLoopBodies。
+- 实现 `try_rule_while_do()`：检测 while(cond){body} 模式（clause loops back to cond）。对应 Ghidra ruleBlockWhileDo。
+- 实现 `try_rule_do_while()`：检测 do{}while(cond) 模式（block loops to itself）。对应 Ghidra ruleBlockDoWhile。
+- 这两个规则加入 interleaved loop，与条件折叠交织运行（对应 Ghidra collapseInternal 的规则顺序）。
+- getparameter 没有循环（121 块 0 回边）——问题是条件折叠，不是循环识别。

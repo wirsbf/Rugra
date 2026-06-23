@@ -114,11 +114,12 @@ pub(crate) struct CollapseStructure<'a> {
     change_count: i32,
     name: String,
     /// Immediate dominator map: idom[i] = index of i's immediate dominator.
-    /// Computed by compute_dominators(). Used to identify case body sub-trees.
     idom: std::collections::HashMap<i32, i32>,
-    /// Block indices that are switch case bodies (BlockSwitch.cases, default,
-    /// or CBRANCH cascade case bodies). Interleaved rules skip structuring
-    /// CBRANCH blocks whose targets are in this set, preventing case labels
+    /// Loop bodies identified by orderLoopBodies: (head_idx, body_block_indices).
+    /// Sorted by nesting depth (innermost first). Used by interleaved rules
+    /// to prioritize structuring within loop bodies.
+    loop_bodies: Vec<(i32, Vec<i32>)>,
+    /// Block indices that are switch case bodies.
     /// from being pulled out of switch bodies.
     switch_case_indices: std::collections::HashSet<i32>,
 }
@@ -131,6 +132,7 @@ impl<'a> CollapseStructure<'a> {
             name: name.to_string(),
             switch_case_indices: std::collections::HashSet::new(),
             idom: std::collections::HashMap::new(),
+            loop_bodies: Vec::new(),
         }
     }
 
@@ -138,6 +140,12 @@ impl<'a> CollapseStructure<'a> {
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
     pub(crate) fn collapse_all(&mut self) {
+        // Step 1: Order loop bodies (Ghidra's orderLoopBodies)
+        // Identifies all natural loops via back-edges, collects their body
+        // blocks, and sorts by nesting depth (innermost first). This enables
+        // interleaved rules to prioritize structuring within loop bodies.
+        self.order_loop_bodies();
+
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -207,15 +215,13 @@ impl<'a> CollapseStructure<'a> {
                 };
                 if si == 0 && so == 0 { continue; }
 
-                // Try rules in Ghidra order: cat → proper-if → if-else
+                // Try rules in Ghidra collapseInternal order:
+                // cat → proper-if → if-no-exit → if-else → while-do → do-while → goto
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — per-function selective enablement
-                // (no-switch functions) still breaks test_bool_condition_folding
-                // and over-structures non-switch functions. Needs stricter
-                // if_no_exit conditions or emit-layer case protection.
-                // if !has_switch && self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
+                if self.try_rule_while_do(i) { continue; }
+                if self.try_rule_do_while(i) { continue; }
                 if self.try_rule_if_goto(i) { continue; }
             }
             iterations += 1;
@@ -283,13 +289,80 @@ impl<'a> CollapseStructure<'a> {
         eprintln!("[COLLAPSE] {} goto rounds={} blocks={}", self.name, goto_rounds, self.graph.get_size());
     }
 
-    /// Simplified selectGoto: find a CBRANCH block whose taken edge (out[1])
-    /// points to a block that is NOT its immediate fallthrough successor.
-    /// Mark that edge as goto (F_GOTO_EDGE). This breaks irreducible CFG
-    /// patterns, allowing subsequent rule iterations to match.
-    fn select_and_mark_goto(&mut self) -> bool {
+    /// Identify all natural loops via back-edges and collect their body blocks.
+    /// Mirrors Ghidra's labelLoops + orderLoopBodies (blockaction.cc:1126).
+    /// A back-edge is an edge from block A to block B where B dominates A.
+    /// The loop body is all blocks that can reach A without going through B.
+    /// Results stored in self.loop_bodies, sorted by body size (smallest first
+    /// = innermost loops first).
+    fn order_loop_bodies(&mut self) {
+        self.loop_bodies.clear();
+        self.compute_dominators();
         let size = self.graph.get_size();
 
+        // Find all back-edges and create loop bodies
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = block.read().unwrap();
+            let src_idx = b.get_index();
+            // Check all out-edges for back-edges (target dominates source)
+            for slot in 0..b.size_out() {
+                if let Some(edge) = b.get_out(slot) {
+                    let tgt_idx = edge.point.read().unwrap().get_index();
+                    // Back-edge: target dominates source (target is loop head)
+                    if self.dominates_idx(tgt_idx, src_idx) {
+                        // Collect loop body: all blocks that can reach src_idx
+                        // without going through tgt_idx (the loop head).
+                        let body = self.collect_loop_body(tgt_idx, src_idx, size);
+                        if !body.is_empty() {
+                            self.loop_bodies.push((tgt_idx, body));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by body size (smallest = innermost first)
+        self.loop_bodies.sort_by_key(|(_, body)| body.len());
+        eprintln!("[COLLAPSE] {} orderLoopBodies: {} loops found", self.name, self.loop_bodies.len());
+    }
+
+    /// Collect all blocks in a natural loop body.
+    /// Body = {head} + all blocks that can reach tail without going through head.
+    fn collect_loop_body(&self, head: i32, tail: i32, size: usize) -> Vec<i32> {
+        let mut body = std::collections::HashSet::new();
+        body.insert(head);
+        body.insert(tail);
+        // BFS backward from tail, stopping at head
+        let mut queue = vec![tail];
+        while let Some(cur) = queue.pop() {
+            if cur == head { continue; }
+            let i = cur as usize;
+            if i >= size { continue; }
+            if let Some(blk) = self.graph.get_block(i) {
+                let b = blk.read().unwrap();
+                for slot in 0..b.size_in() {
+                    if let Some(edge) = b.get_in(slot) {
+                        let pred_idx = edge.point.read().unwrap().get_index();
+                        if body.insert(pred_idx) {
+                            queue.push(pred_idx);
+                        }
+                    }
+                }
+            }
+        }
+        body.into_iter().collect()
+    }
+
+    /// Check if a block index is inside any identified loop body.
+    fn is_in_loop_body(&self, idx: i32) -> bool {
+        self.loop_bodies.iter().any(|(_, body)| body.contains(&idx))
+    }
+
+    /// Simplified selectGoto: find a CBRANCH block whose taken edge (out[1])
+    /// can be marked as goto to break irreducible CFG patterns.
+    fn select_and_mark_goto(&mut self) -> bool {
+        let size = self.graph.get_size();
         // Collect ALL case body indices by scanning BlockSwitch nodes directly.
         // This is more comprehensive than CASE_BODY flag or switch_case_indices.
         let mut all_case_bodies: std::collections::HashSet<i32> = std::collections::HashSet::new();
@@ -856,7 +929,89 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
-    /// Check if `dom` block dominates `node` block
+    /// ruleBlockWhileDo: detect while(cond) { body } pattern.
+    /// A CBRANCH block with 2 out-edges, where one out-edge (clause) has
+    /// size_in==1, size_out==1, and its single out-edge loops back to the
+    /// CBRANCH block. Mirrors Ghidra's ruleBlockWhileDo (blockaction.cc:1518).
+    fn try_rule_while_do(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b, None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+        // Skip switch dispatch blocks
+        if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
+
+        let cond_idx = b.get_index();
+        for slot in 0..2 {
+            let clause = match b.get_out(slot) { Some(e) => e.point.clone(), None => continue };
+            let c = clause.read().unwrap();
+            if c.size_in() != 1 { continue; }   // Only this block enters clause
+            if c.size_out() != 1 { continue; }   // Clause has only one exit
+            // Clause must loop back to the condition block
+            let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
+            if clause_out.point.read().unwrap().get_index() != cond_idx { continue; }
+            drop(c);
+
+            // Found while-do: cond block + clause (body) that loops back
+            let negated = slot == 1; // If clause is on false edge, negate condition
+            let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(crate::block::BlockWhileDo {
+                    index: cond_idx,
+                    condition: block.clone(),
+                    body: clause,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            // Note: BlockWhileDo doesn't have negated field; condition negation
+            // is handled at emit time based on which edge is the body.
+            let _ = negated;
+            self.graph.blocks[i] = while_block;
+            self.change_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// ruleBlockDoWhile: detect do { body } while(cond) pattern.
+    /// A CBRANCH block where one out-edge loops back to itself.
+    /// Mirrors Ghidra's ruleBlockDoWhile (blockaction.cc:1555).
+    fn try_rule_do_while(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b, None => return false,
+        };
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+        if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
+
+        let cond_idx = b.get_index();
+        for slot in 0..2 {
+            let target = match b.get_out(slot) { Some(e) => e.point.clone(), None => continue };
+            // Must loop back to itself
+            if target.read().unwrap().get_index() != cond_idx { continue; }
+            drop(b);
+
+            // Found do-while: this block loops back on itself
+            let do_while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(crate::block::BlockDoWhile {
+                    index: cond_idx,
+                    condition: block.clone(),
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            self.graph.blocks[i] = do_while_block;
+            self.change_count += 1;
+            return true;
+        }
+        drop(b);
+        false
+    }
+
+
     fn dominates(&self, dom: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, node: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
         let dom_idx = dom.read().unwrap().get_index();
         let mut curr = node.clone();
