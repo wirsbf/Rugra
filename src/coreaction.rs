@@ -746,11 +746,8 @@ fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
         "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"]),
         "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
         "progressbarinit" => Some(vec!["ptr"]),  // void*
-        // httpd functions (source: Apache httpd)
+        // httpd functions — only ones we're confident about
         "ap_fini_vhost_config" => Some(vec!["ptr", "ptr"]),
-        "ap_init_vhost_config" => Some(vec!["ptr", "ptr", "ptr"]),
-        "ap_update_vhost_given_ip" => Some(vec!["ptr", "ptr"]),
-        "ap_matches_request_vhost" => Some(vec!["ptr", "ptr"]),
         "ap_parse_vhost_addrs" => Some(vec!["ptr", "ptr"]),
         _ => None,
     }

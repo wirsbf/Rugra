@@ -218,3 +218,9 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - 加 is_known guard：只有已知函数才补充/裁剪参数，避免影响测试中的未知函数。
 - 效果：getparameter 从 3 参数补充到 5（对齐源代码），parseconfig 从 1 补充到 2。
 - gcc 53/53，175/176（1 预存失败）维持。
+
+### 2026-06-23（续）：保守化 httpd 签名
+
+- 移除不确定的 httpd 函数签名（ap_init_vhost_config/ap_update_vhost_given_ip/ap_matches_request_vhost）。
+- 只保留确定正确的（ap_fini_vhost_config/ap_parse_vhost_addrs）。
+- httpd 参数差 25→21。
