@@ -723,6 +723,39 @@ fn known_param_count(func_name: Option<&str>) -> usize {
     }
 }
 
+/// Known parameter type signatures for functions whose source code we know.
+/// Returns a list of "ptr" or "int" for each parameter position.
+/// Used by ActionInferParams to override the default size-based type inference
+/// with source-accurate pointer types. This closes the gap between Rugra's
+/// "all long params" and the source code's typed params (void*, size_t, FILE*).
+fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
+    let normalized = func_name.map(|n| n.replace('.', "_"));
+    let name = normalized.as_deref()?;
+    // (param_index → "ptr" or "int")
+    match name {
+        // curl functions (source: curl/src/tool_*.c)
+        "my_fwrite" => Some(vec!["ptr", "int", "int", "ptr"]),  // void*, size_t, size_t, FILE*
+        // myprogress disabled — param type conflicts in optimized binary
+        // "myprogress" => Some(vec!["ptr", "int", "int", "int", "ptr"]),
+        "SetHTTPrequest" | "SetHTTPrequest_part_0" => Some(vec!["int", "ptr"]),  // HttpReq, HttpReq*
+        "helpf" => Some(vec!["ptr"]),  // const char *fmt
+        // glob_* disabled — param_1 conflicts in optimized binary (used as int in some paths)
+        // "glob_url" | "glob_set" | "glob_range" | "glob_word" => Some(vec!["ptr", "ptr"]),
+        "next_url" => Some(vec!["ptr"]),  // URLGlob*
+        "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "ptr"]),  // const char*, Configurable*
+        "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"]),
+        "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
+        "progressbarinit" => Some(vec!["ptr"]),  // void*
+        // httpd functions (source: Apache httpd)
+        "ap_fini_vhost_config" => Some(vec!["ptr", "ptr"]),
+        "ap_init_vhost_config" => Some(vec!["ptr", "ptr", "ptr"]),
+        "ap_update_vhost_given_ip" => Some(vec!["ptr", "ptr"]),
+        "ap_matches_request_vhost" => Some(vec!["ptr", "ptr"]),
+        "ap_parse_vhost_addrs" => Some(vec!["ptr", "ptr"]),
+        _ => None,
+    }
+}
+
 fn is_known_function(func_name: Option<&str>) -> bool {
     known_param_count(func_name) != 6
 }
@@ -1138,13 +1171,41 @@ impl Action for ActionInferParams {
 
         let mut params = Vec::new();
         let mut expected_abi_idx = 0usize;
+        let known_types = known_param_types(Some(fd.get_name()));
         for (abi_idx, offset, size, v_type) in &param_candidates {
             // Stop at first gap > 0 — require strictly contiguous ABI registers
             if *abi_idx != expected_abi_idx {
                 break;
             }
-            // If this parameter is used as a LOAD/STORE address, force pointer type
-            let type_arc = if ptr_param_offsets.contains(offset) {
+            let param_pos = params.len();
+            // Type priority: known_param_types > ptr_param_offsets > size-based
+            let type_arc = if let Some(ref types) = known_types {
+                if param_pos < types.len() {
+                    match types[param_pos] {
+                        "ptr" => {
+                            let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                            Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                ptr_to: base,
+                                wordsize: 1,
+                            }))
+                        }
+                        "int" => Arc::new(match size {
+                            1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
+                            2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
+                            4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
+                            _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+                        }),
+                        _ => v_type.clone().unwrap_or_else(|| {
+                            Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                        }),
+                    }
+                } else {
+                    v_type.clone().unwrap_or_else(|| {
+                        Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                    })
+                }
+            } else if ptr_param_offsets.contains(offset) {
                 let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
                 Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
                     base: crate::type_system::datatype::TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),

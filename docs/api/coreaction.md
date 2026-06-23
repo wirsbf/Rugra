@@ -204,3 +204,10 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - helpf 从 1 改为 2（`const char *fmt, ...`）；glob_range 从 5 改为 2；glob_url 保持 2。
 - my_get_token/my_get_line 加入 1 参数组。
 - curl 参数差 11→8（-3）。gcc 53/53 维持。
+
+### 2026-06-23（续）：known_param_types 源代码签名类型传播
+
+- 新增 `known_param_types()` 返回已知函数的参数类型签名（"ptr"/"int"），基于 curl/httpd 源代码。
+- ActionInferParams 用 known_param_types 覆盖默认 size-based 类型推断。
+- 效果：my_fwrite 从 `(long, long, long, long)` 改进为 `(void*, long, long, void*)`；SetHTTPrequest 从 `(long, long)` 改进为 `(int, void*)`。
+- 禁用了 myprogress/glob_* 签名（优化二进制中类型冲突）。
