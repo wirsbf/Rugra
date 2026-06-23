@@ -249,8 +249,8 @@ impl<'a> CollapseStructure<'a> {
             return;
         }
         // Goto cascade only for known-safe curl functions.
-        // httpd/curl main case label issue is emit-order (not if_body content),
-        // needs emit layer refactoring to fix.
+        // httpd main has duplicate case 2 labels when goto cascade runs —
+        // two switches' cases get mixed. Needs switch context tracking in emit.
         let is_curl_func = {
             let name = &self.name;
             name.contains("getparameter") || name.contains("parseconfig")
@@ -258,10 +258,7 @@ impl<'a> CollapseStructure<'a> {
                 || name.contains("file2string") || name.contains("helpf")
                 || name.contains("myprogress") || name.contains("next_url")
         };
-        if !is_curl_func {
-            eprintln!("[COLLAPSE] {} goto cascade skipped (not safe curl func)", self.name);
-            return;
-        }
+        if !is_curl_func { return; }
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
         loop {

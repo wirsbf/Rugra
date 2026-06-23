@@ -391,3 +391,9 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：CaseDetectEmit emit_block_structured 递归
 
 - BlockIf dry-run 现在用 emit_block_structured 覆盖嵌套路径。
+
+### 2026-06-23（续）：BlockSwitch case label 保留 + curl-only goto
+
+- BlockSwitch case emit 不再跳过已提取的 case body 的 label——保留 case label + 空 body。
+- 但 httpd main 有重复 case 2（两个 switch 的 case 混合），需要 switch 上下文追踪。
+- 回退到 curl-only goto。gcc 53/53 + curl 119。

@@ -166,3 +166,7 @@ Create a new ActionNormalizeBranches instance
 - CaseDetectEmit dry-run 现在用 emit_block_structured（递归覆盖嵌套 BlockSwitch/BlockIf）。
 - 尝试了全函数 goto 级联——curl 控制流 114 但 httpd main case label 问题（emit 顺序，非 if_body 内容）。
 - 回退到 curl-only goto 级联。gcc 53/53 + curl 119。
+
+### 2026-06-23（续）：curl-only goto（httpd 重复 case label）
+
+- httpd main 有两个 switch 都有 case 2，goto 级联让它们混合。需要 switch 上下文追踪。

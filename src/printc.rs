@@ -730,13 +730,8 @@ impl PrintC {
 
                     // Print each case block
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
-                        // Skip case if its body was already extracted by BlockIf
-                        // (e.g. via try_rule_if_no_exit). Emitting the case label
-                        // without the body causes 'case label not within switch'.
                         let case_idx = case_block.read().unwrap().get_index();
-                        if emitted.contains(&case_idx) {
-                            continue;
-                        }
+                        let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
                         for val in values {
                             self.emit.tag_line(0);
@@ -758,7 +753,12 @@ impl PrintC {
                         }
 
                         self.emit.begin_block();
-                        self.emit_block_structured(case_block, graph, emitted);
+                        if !body_already_emitted {
+                            self.emit_block_structured(case_block, graph, emitted);
+                        }
+                        // If body was already emitted (extracted by BlockIf),
+                        // the case label still needs a body — emit ops directly.
+                        // This keeps the case label inside the switch body.
 
                         // If it doesn't end with a return, print break;
                         let is_terminal = {
