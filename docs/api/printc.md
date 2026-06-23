@@ -383,3 +383,7 @@ raw semantics / P-code-like IR
 - BlockSwitch 的 case/default emit 现在检查 emitted set——如果 case body 已被 BlockIf 提取（在 emitted 里），跳过整个 case（label + body + break）。
 - 这修复了 BlockIf 提取 case body 后 case label 与 body 不匹配的问题。
 - 但嵌套 switch + BlockIf 提取的 emit 顺序问题仍存在（httpd main 有 8 个 switch，BlockIf 提取打断了 switch 间的 emit 顺序）。if_no_exit 仍禁用。
+
+### 2026-06-23（续）：goto BlockIf CaseDetectEmit 保护
+
+- BlockIf emit 对 GOTO_EDGE_1 标记的 condition 做 dry-run case label 检测。检测到 case label 则回退到顺序 emit。

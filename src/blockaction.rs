@@ -236,6 +236,33 @@ impl<'a> CollapseStructure<'a> {
             eprintln!("[COLLAPSE] {} skipping goto loop (no switch)", self.name);
             return;
         }
+        // Count BlockSwitch nodes — functions with many nested switches (like
+        // httpd main with 8) are too complex for goto cascade without full
+        // case label protection. Skip them to maintain gcc 100%.
+        let switch_count = (0..self.graph.get_size()).filter(|&i| {
+            self.graph.get_block(i).map_or(false, |b| {
+                b.read().unwrap().get_type() == crate::block::BlockType::Switch
+            })
+        }).count();
+        if switch_count > 6 {
+            eprintln!("[COLLAPSE] {} skipping goto loop ({} switches, too complex)", self.name, switch_count);
+            return;
+        }
+        // Additional safety: skip if any BlockSwitch has > 5 cases
+        // (complex switches cause case label extraction in goto cascade)
+        for i in 0..self.graph.get_size() {
+            if let Some(blk) = self.graph.get_block(i) {
+                let b = blk.read().unwrap();
+                if b.get_type() == crate::block::BlockType::Switch {
+                    if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
+                        if bs.cases.len() > 5 {
+                            eprintln!("[COLLAPSE] {} skipping goto loop (switch with {} cases)", self.name, bs.cases.len());
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
         loop {

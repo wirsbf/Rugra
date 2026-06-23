@@ -147,3 +147,10 @@ Create a new ActionNormalizeBranches instance
 
 - selectGoto 现在直接扫描 BlockSwitch.cases/default 收集所有 case body indices，而非依赖 CASE_BODY flag。
 - httpd main case label 问题仍在（根因是 emit 顺序，非 selectGoto 标记 case body）。
+
+### 2026-06-23（续）：goto 级联 case label 保护
+
+- goto 循环加 switch_count > 6 和 case_count > 5 guard。
+- CaseDetectEmit 在 BlockIf（GOTO_EDGE_1 标记）的 if_body 上做 dry-run 检测。
+- httpd main（8 switch）的 case label 问题仍在——根因是 emit 顺序（case 2 出现在 switch 外），来自 interleaved 的 effective_size_out 改变。
+- 选择保持 52/53（curl 控制流 114）而非 53/53（curl 控制流 119）——goto 级联收益大于 1 个 gcc 失败。

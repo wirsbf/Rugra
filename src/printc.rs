@@ -413,6 +413,31 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let if_block = block.as_any().downcast_ref::<BlockIf>();
                 if let Some(if_data) = if_block {
+                    // Goto-cascade protection: if the condition block has
+                    // GOTO_EDGE_1 flag (created by selectGoto), dry-run emit
+                    // the if_body to check for case labels. If found, fall
+                    // back to sequential emit to avoid pulling case labels
+                    // out of switch bodies.
+                    let cond_has_goto = if_data.condition.read().unwrap().get_flags()
+                        & crate::block::block_flags::GOTO_EDGE_1 != 0;
+                    let seq_emit = if cond_has_goto {
+                        let saved_emit = std::mem::replace(&mut self.emit, Box::new(crate::prettyprint::CaseDetectEmit::new()));
+                        self.emit_block_ops(&if_data.if_body, false);
+                        let has_case = self.emit.as_any_mut()
+                            .and_then(|a| a.downcast_mut::<crate::prettyprint::CaseDetectEmit>())
+                            .map_or(false, |d| d.has_case());
+                        self.emit = saved_emit;
+                        if has_case {
+                            let if_idx = if_data.if_body.read().unwrap().get_index();
+                            emitted.insert(if_idx);
+                            self.emit_block_ops(&if_data.condition, false);
+                            self.emit_block_ops(&if_data.if_body, false);
+                            true
+                        } else { false }
+                    } else { false };
+                    if seq_emit {
+                        // Already emitted sequentially, skip normal BlockIf processing
+                    } else {
                     // Check if bodies have any emittable ops — skip empty if/else blocks
                     let if_body_empty = self.is_block_body_empty(&if_data.if_body);
                     let else_body_empty = if_data.else_body.as_ref()
@@ -524,6 +549,7 @@ impl PrintC {
                             }
                         }
                     }
+                    } // end seq_emit else
                 } else {
                     // Fallback: emit flat
                     self.emit_block_ops(block_arc, false);
