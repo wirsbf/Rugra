@@ -663,7 +663,8 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "curl_slist_free_all"
             | "helpf" | "hugehelp"
             | "ap_open_stderr_log" | "ap_setup_prelinked_modules"
-            | "ap_get_server_built" | "ap_show_mpm" | "ap_get_local_host" => 1,
+            | "ap_get_server_built" | "ap_show_mpm" | "ap_get_local_host"
+            | "progressbarinit" => 1,
 
             "strcpy" | "strcat" | "strcmp" | "strstr" | "strchr" | "strrchr"
             | "strpbrk" | "strtok" | "fopen" | "fdopen" | "freopen"
@@ -672,24 +673,24 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "memcmp" | "strequal" | "strnequal" | "GetStr"
             | "glob_url" | "glob_set"
             | "curl_slist_append" | "fputc" | "fgetc"
-            | "parseconfig_constprop_0" | "getparameter.constprop.0"
+            | "SetHTTPrequest" | "SetHTTPrequest_part_0"
             | "ap_log_error" | "ap_exists_config_define" => 2,
 
             "memcpy" | "memmove" | "memset" | "strncpy" | "strncat" | "strncmp"
             | "fread" | "strtol" | "strtoul" | "strtod"
             | "read" | "write" | "open" | "fcntl" | "ioctl"
-            | "getparameter_constprop_0" | "SetHTTPrequest" | "SetHTTPrequest_part_0"
             | "__xstat"
             | "curl_easy_setopt"
             | "glob_word" | "next_url"
             | "ap_mpm_query" => 3,
 
             "fseek" | "snprintf" | "fwrite" | "my_fwrite"
-            | "file2string.part.0"
+            | "parseconfig_constprop_0" | "parseconfig"
             | "ap_update_vhost_from_headers" => 4,
 
             "match_url" | "myprogress" | "glob_range"
-            | "ap_vhost_iterate_given_conn" => 5,
+            | "ap_vhost_iterate_given_conn"
+            | "getparameter.constprop.0" | "getparameter_constprop_0" => 5,
 
             "__sprintf_chk" | "__fprintf_chk" | "__printf_chk"
             | "__snprintf_chk"

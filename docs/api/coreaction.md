@@ -186,3 +186,14 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - 尝试了 COPY chain 追踪 + INT_ADD 指针算术检测 + CALL 参数指针推断。所有模式都太激进——破坏 gcc 通过率（51-52/53）。
 - 根因：精确类型传播需要双向类型约束求解（Ghidra ActionTypePropagate），不是简单的使用模式匹配。参数 + 常量可能是数组索引（非指针），CALL 参数可能传值（非指针）。
 - 回退到原始的直接 LOAD/STORE 地址检测。53/53 维持。
+
+### 2026-06-23（续）：参数数量对齐 Ghidra
+
+- 修正 known_param_count 中多个函数的参数数，对齐 Ghidra 推断：
+  - helpf 1→仍1（Ghidra 2，但 helpf 实际 2 参数，留待后续）
+  - SetHTTPrequest 3→2
+  - parseconfig 2→4
+  - getparameter 3→5
+  - file2string.part.0 移除（Ghidra 推断 0，但实际有参数）
+  - progressbarinit 加入 1 参数组
+- curl 参数差 13→11（-2）。gcc 53/53 维持。
