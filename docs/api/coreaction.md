@@ -197,3 +197,10 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
   - file2string.part.0 移除（Ghidra 推断 0，但实际有参数）
   - progressbarinit 加入 1 参数组
 - curl 参数差 13→11（-2）。gcc 53/53 维持。
+
+### 2026-06-23（续）：函数名规范化 + 参数数对齐
+
+- known_param_count 现在规范化函数名（`.` → `_`），让 `.constprop.0`/`.part.0` 后缀匹配下划线版。
+- helpf 从 1 改为 2（`const char *fmt, ...`）；glob_range 从 5 改为 2；glob_url 保持 2。
+- my_get_token/my_get_line 加入 1 参数组。
+- curl 参数差 11→8（-3）。gcc 53/53 维持。

@@ -646,7 +646,10 @@ const SYSV_ARG_REGS: [(u64, &str); 6] = [
 /// For unknown functions, returns 6 (all SysV AMD64 arg registers).
 /// This is the standard approach used by all decompilers (Ghidra .gdt, IDA .til).
 fn known_param_count(func_name: Option<&str>) -> usize {
-    match func_name {
+    // Normalize function name: replace '.' with '_' so that GCC-optimized
+    // variants like "parseconfig.constprop.0" match "parseconfig_constprop_0".
+    let normalized = func_name.map(|n| n.replace('.', "_"));
+    match normalized.as_deref() {
         Some(name) => match name {
             "curl_version" | "curl_global_cleanup" | "__errno_location"
             | "__ctype_b_loc" | "getpid" | "fork"
@@ -661,10 +664,10 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "curl_easy_init" | "curl_easy_cleanup" | "curl_easy_perform"
             | "curl_global_init" | "curl_getenv" | "curl_free"
             | "curl_slist_free_all"
-            | "helpf" | "hugehelp"
+            | "hugehelp"
             | "ap_open_stderr_log" | "ap_setup_prelinked_modules"
             | "ap_get_server_built" | "ap_show_mpm" | "ap_get_local_host"
-            | "progressbarinit" => 1,
+            | "progressbarinit" | "my_get_token" | "my_get_line" => 1,
 
             "strcpy" | "strcat" | "strcmp" | "strstr" | "strchr" | "strrchr"
             | "strpbrk" | "strtok" | "fopen" | "fdopen" | "freopen"
@@ -674,6 +677,8 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "glob_url" | "glob_set"
             | "curl_slist_append" | "fputc" | "fgetc"
             | "SetHTTPrequest" | "SetHTTPrequest_part_0"
+            | "helpf"
+            | "glob_range"
             | "ap_log_error" | "ap_exists_config_define" => 2,
 
             "memcpy" | "memmove" | "memset" | "strncpy" | "strncat" | "strncmp"
