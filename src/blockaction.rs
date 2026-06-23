@@ -292,8 +292,12 @@ impl<'a> CollapseStructure<'a> {
             // Skip if this block IS a switch case body (don't mark goto on case body blocks)
             let my_idx = b.get_index();
             if self.switch_case_indices.contains(&my_idx) { continue; }
+            if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             // Skip if taken target is a switch case body
             if self.switch_case_indices.contains(&taken_target_idx) { continue; }
+            // Also check taken target's CASE_BODY flag
+            let taken_flags = b.get_out(1).map(|e| e.point.read().unwrap().get_flags()).unwrap_or(0);
+            if taken_flags & crate::block::block_flags::CASE_BODY != 0 { continue; }
 
             drop(b);
             // Mark out[1] (taken edge) as goto via block flag

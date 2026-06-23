@@ -138,3 +138,7 @@ Create a new ActionNormalizeBranches instance
 - goto 循环重构：每次 selectGoto 后跑内层 fixpoint（所有规则到收敛），再 selectGoto。级联效应：标记一个 goto → BlockIf 创建 → 新块暴露 → 下一个 goto 标记 → ...
 - has_switch guard：只对有 switch 的函数跑 goto 循环。
 - curl 控制流差 128→114（-14，-11
+### 2026-06-23（续）：selectGoto CASE_BODY 保护
+
+- selectGoto 现在检查块自身和 taken target 的 CASE_BODY flag + switch_case_indices。
+- httpd main 的 case label 问题仍在（CASE_BODY flag 不够全面）。gcc 52/53。
