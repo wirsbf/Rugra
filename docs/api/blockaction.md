@@ -207,3 +207,9 @@ Create a new ActionNormalizeBranches instance
 - 跨 switch 检测：如果 block 和 target 属于完全不同的 switch（无交集），跳过 goto。
 - httpd main 仍标记 goto——cascade case body 的所有权不匹配跨 switch 检测的逻辑。
 - 需要更精确的 cascade chain 分组（同一 cascade chain 的所有 case 属于同一个虚拟 switch）。
+
+### 2026-06-23（续）：cascade head 分组
+
+- 同一 cascade chain 的所有 case body + member CBRANCH 分配到同一虚拟 switch（用 cascade head index）。
+- 但 case label 问题不是跨 switch——是同一 cascade 内部的 goto 标记改变了 emit 顺序。
+- 需要在 selectGoto 里跳过所有 cascade chain 内部的 CBRANCH（不只跨 switch 的）。

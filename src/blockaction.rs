@@ -403,8 +403,9 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
         }
-        // Cascade chain ownership: each cascade chain is treated as a virtual
-        // switch (negative index). All taken targets of the chain belong to it.
+        // Cascade chain ownership: group all case bodies in the same cascade
+        // chain under one virtual switch id (the cascade head's index).
+        // This ensures cross-switch detection treats one cascade as one switch.
         for i in 0..size as i32 {
             let blk = match self.graph.get_block(i as usize) { Some(b) => b, None => continue };
             let b = blk.read().unwrap();
@@ -421,11 +422,46 @@ impl<'a> CollapseStructure<'a> {
                 } else { false }
             } else { false };
             if ft_is_cbranch {
-                // This is a cascade member — mark its taken target as owned by cascade
+                // Find cascade head: walk back via in-edges to find the first
+                // CBRANCH whose predecessor is NOT a CBRANCH fallthrough.
+                let mut head = i;
+                let mut cur = i;
+                let mut steps = 0;
+                loop {
+                    if steps > 200 { break; } // safety
+                    let cur_blk = match self.graph.get_block(cur as usize) { Some(b) => b, None => break };
+                    let cb = cur_blk.read().unwrap();
+                    // Check if any predecessor is a CBRANCH that falls through to cur
+                    let mut pred_is_cbranch_ft = false;
+                    for slot in 0..cb.size_in() {
+                        if let Some(in_edge) = cb.get_in(slot) {
+                            let pred = in_edge.point.read().unwrap();
+                            if pred.size_out() == 2 {
+                                let pred_ops = pred.get_ops();
+                                let pred_has_cbranch = pred_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+                                if pred_has_cbranch {
+                                    // Check if pred's fallthrough (out[0]) leads to cur
+                                    if let Some(ft) = pred.get_out(0) {
+                                        if ft.point.read().unwrap().get_index() == cur {
+                                            pred_is_cbranch_ft = true;
+                                            head = pred.get_index();
+                                            cur = pred.get_index();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !pred_is_cbranch_ft { break; }
+                    steps += 1;
+                }
+                // Use cascade head as virtual switch id
+                let virtual_sw = -(head + 1);
                 if let Some(taken_edge) = b.get_out(1) {
                     let taken_idx = taken_edge.point.read().unwrap().get_index();
-                    // Use cascade head index as virtual switch id
-                    switch_owners.entry(taken_idx).or_default().insert(-i - 1);
+                    switch_owners.entry(taken_idx).or_default().insert(virtual_sw);
+                    switch_owners.entry(b.get_index()).or_default().insert(virtual_sw);
                 }
             }
         }
