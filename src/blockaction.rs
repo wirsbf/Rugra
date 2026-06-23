@@ -174,6 +174,22 @@ impl<'a> CollapseStructure<'a> {
         let interleaved_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         // Refresh switch case tracking BEFORE the first interleaved iteration
         self.refresh_switch_cases();
+        // Detect if this function contains any BlockSwitch. if_no_exit is only
+        // safe to enable when there are no switches (no case labels to extract).
+        // Functions with switches (e.g. httpd main with 8 switches) keep
+        // if_no_exit disabled to avoid case label extraction issues.
+        let has_switch = {
+            let mut found = false;
+            for i in 0..self.graph.get_size() {
+                if let Some(blk) = self.graph.get_block(i) {
+                    if blk.read().unwrap().get_type() == crate::block::BlockType::Switch {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            found
+        };
         loop {
             if std::time::Instant::now() > interleaved_deadline { break; }
             let pre_count = self.change_count;
@@ -194,10 +210,11 @@ impl<'a> CollapseStructure<'a> {
                 // Try rules in Ghidra order: cat → proper-if → if-else
                 if self.try_rule_cat(i) { continue; }
                 if self.try_rule_proper_if(i) { continue; }
-                // if_no_exit disabled — dominator-based case body detection
-                // improves curl (128->122) but regresses httpd (119->127).
-                // Needs per-function switch detection to selectively enable.
-                // if self.try_rule_if_no_exit(i) { continue; }
+                // if_no_exit disabled — per-function selective enablement
+                // (no-switch functions) still breaks test_bool_condition_folding
+                // and over-structures non-switch functions. Needs stricter
+                // if_no_exit conditions or emit-layer case protection.
+                // if !has_switch && self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
             }
             iterations += 1;

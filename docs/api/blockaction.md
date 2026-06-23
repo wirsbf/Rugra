@@ -110,3 +110,10 @@ Create a new ActionNormalizeBranches instance
 - `refresh_switch_cases()` 在收集 case body 后，用支配树扩展：所有被 case body 支配的块加入 switch_case_indices。这比 BFS 精确——只有真正在 case body 内（所有路径都经过 case 入口）的块被标记。
 - 启用 if_no_exit 后：curl 128→122（-6），但 httpd 119→127（+8 退步），gcc 52（1 个 case label 失败）。httpd 的 8 个嵌套 switch 中，支配树扩展过度阻止了有效匹配。
 - if_no_exit 仍禁用。需要 per-function switch 检测来选择性启用。
+
+### 2026-06-23（续）：per-function switch 检测 + if_no_exit 选择性启用实验
+
+- collapse_all 的 interleaved loop 开头检测函数是否含 BlockSwitch（has_switch）。
+- if_no_exit 选择性启用：无 switch 的函数启用（has_switch=false）。
+- 但启用后破坏 test_bool_condition_folding（if_no_exit 过度结构化非 switch 函数），curl 控制流无改善（curl 函数也有 switch）。
+- if_no_exit 仍禁用。has_switch 检测架构保留。
