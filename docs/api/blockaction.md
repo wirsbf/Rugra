@@ -170,3 +170,9 @@ Create a new ActionNormalizeBranches instance
 ### 2026-06-23（续）：curl-only goto（httpd 重复 case label）
 
 - httpd main 有两个 switch 都有 case 2，goto 级联让它们混合。需要 switch 上下文追踪。
+
+### 2026-06-23（续）：switch 隔离 + main 跳过
+
+- selectGoto 跳过 size_in>=2 的 CBRANCH（switch case body 内部块）。
+- 函数名 "main" 跳过 goto 级联（case label 混合风险）。
+- 需要移植 Ghidra orderLoopBodies（循环识别+排序）来正确处理复杂 CFG。
