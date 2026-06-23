@@ -228,39 +228,40 @@ impl<'a> CollapseStructure<'a> {
 
         // Ghidra-style selectGoto loop: when interleaved rules reach fixpoint
         // but blocks remain unstructured, mark edges as goto to break the
-        // impasse, then re-iterate. This is the key mechanism for handling
-        // irreducible CFGs (like getparameter's 121 blocks).
-        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        // impasse, then re-iterate ALL rules to fixpoint. Repeat until all
+        // blocks are structured or no more goto candidates.
+        // Only runs for functions WITH switches (where goto marking helps most).
+        // Functions without switches don't need goto (interleaved handles them).
+        if !has_switch {
+            eprintln!("[COLLAPSE] {} skipping goto loop (no switch)", self.name);
+            return;
+        }
+        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
-            // Count isolated blocks (no in/out edges = fully structured)
-            let isolated = (0..self.graph.get_size()).filter(|&i| {
-                self.graph.get_block(i).map_or(true, |b| {
-                    let b = b.read().unwrap();
-                    b.size_in() == 0 && b.size_out() == 0
-                })
-            }).count();
-            if isolated >= self.graph.get_size() { break; } // All structured
 
-            // selectGoto: find an edge to mark as goto.
-            // Heuristic: find a CBRANCH block whose taken edge (out[1]) points
-            // to a non-adjacent block (cross-jump). Mark it as goto.
+            // selectGoto: mark one edge as goto
             let goto_marked = self.select_and_mark_goto();
-            if !goto_marked { break; } // No more goto candidates
-
-            // Re-iterate all rules after marking goto
-            let pre_count = self.change_count;
-            let size = self.graph.get_size();
-            for i in 0..size {
-                if std::time::Instant::now() > goto_deadline { break; }
-                if self.try_rule_cat(i) { continue; }
-                if self.try_rule_proper_if(i) { continue; }
-                if self.try_rule_if_else(i) { continue; }
-            }
-            self.refresh_switch_cases();
+            if !goto_marked { break; }
             goto_rounds += 1;
-            if self.change_count == pre_count || goto_rounds > 20 { break; }
+
+            // Inner fixpoint: re-iterate ALL rules until no change
+            let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                if std::time::Instant::now() > inner_deadline { break; }
+                let pre_count = self.change_count;
+                let size = self.graph.get_size();
+                for i in 0..size {
+                    if std::time::Instant::now() > inner_deadline { break; }
+                    if self.try_rule_cat(i) { continue; }
+                    if self.try_rule_proper_if(i) { continue; }
+                    if self.try_rule_if_goto(i) { continue; }
+                    if self.try_rule_if_else(i) { continue; }
+                }
+                self.refresh_switch_cases();
+                if self.change_count == pre_count { break; } // fixpoint
+            }
         }
         eprintln!("[COLLAPSE] {} goto rounds={} blocks={}", self.name, goto_rounds, self.graph.get_size());
     }
@@ -288,7 +289,10 @@ impl<'a> CollapseStructure<'a> {
             // Skip if this block's GOTO_EDGE_1 is already set
             if b.get_flags() & crate::block::block_flags::GOTO_EDGE_1 != 0 { continue; }
 
-            // Skip switch case bodies
+            // Skip if this block IS a switch case body (don't mark goto on case body blocks)
+            let my_idx = b.get_index();
+            if self.switch_case_indices.contains(&my_idx) { continue; }
+            // Skip if taken target is a switch case body
             if self.switch_case_indices.contains(&taken_target_idx) { continue; }
 
             drop(b);

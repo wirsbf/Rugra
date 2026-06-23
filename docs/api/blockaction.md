@@ -132,3 +132,9 @@ Create a new ActionNormalizeBranches instance
 - 新增 `try_rule_if_goto`：当 CBRANCH 块的 taken edge 被 selectGoto 标记为 goto 时，创建 BlockIf（negated）。
 - selectGoto 放宽条件（移除 "skip next block" 限制）。
 - 当前效果不显著（控制流差不变 128），因为单次 goto 标记 + BlockIf 创建不足以打破 121 块的僵局。需要多轮迭代 + goto 标记的级联效应。
+
+### 2026-06-23（续）：多轮 goto 级联迭代
+
+- goto 循环重构：每次 selectGoto 后跑内层 fixpoint（所有规则到收敛），再 selectGoto。级联效应：标记一个 goto → BlockIf 创建 → 新块暴露 → 下一个 goto 标记 → ...
+- has_switch guard：只对有 switch 的函数跑 goto 循环。
+- curl 控制流差 128→114（-14，-11
