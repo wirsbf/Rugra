@@ -213,3 +213,9 @@ Create a new ActionNormalizeBranches instance
 - 同一 cascade chain 的所有 case body + member CBRANCH 分配到同一虚拟 switch（用 cascade head index）。
 - 但 case label 问题不是跨 switch——是同一 cascade 内部的 goto 标记改变了 emit 顺序。
 - 需要在 selectGoto 里跳过所有 cascade chain 内部的 CBRANCH（不只跨 switch 的）。
+
+### 2026-06-23（续）：intra-cascade 保护
+
+- selectGoto 跳过所有 cascade member（fallthrough→CBRANCH 或 pred→CBRANCH ft）。
+- 但 httpd main case label 问题来自 BlockSwitch（非 cascade）的 case body 被 goto 提取。
+- 需要 emit 层修复：BlockSwitch emit 时确保所有 case label 在正确 switch 体内。

@@ -501,6 +501,35 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
 
+            // INTRA-CASCADE PROTECTION: Skip CBRANCH blocks that are part of
+            // a cascade switch chain. goto marking within a cascade changes
+            // case body emit order, causing case label issues.
+            let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
+                let ft = ft_edge.point.read().unwrap();
+                if ft.size_out() == 2 {
+                    let ft_ops = ft.get_ops();
+                    ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                } else { false }
+            } else { false };
+            let pred_is_cbranch_ft = if b.size_in() >= 1 {
+                (0..b.size_in()).any(|slot| {
+                    if let Some(in_edge) = b.get_in(slot) {
+                        let pred = in_edge.point.read().unwrap();
+                        if pred.size_out() == 2 {
+                            let pred_ops = pred.get_ops();
+                            let pred_has_cbranch = pred_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+                            if pred_has_cbranch {
+                                if let Some(ft) = pred.get_out(0) {
+                                    return ft.point.read().unwrap().get_index() == my_idx;
+                                }
+                            }
+                        }
+                    }
+                    false
+                })
+            } else { false };
+            if ft_is_cbranch || pred_is_cbranch_ft { continue; }
+
             drop(b);
             // Mark out[1] (taken edge) as goto via block flag
             let mut block_w = block.write().unwrap();
