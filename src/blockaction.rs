@@ -271,16 +271,35 @@ impl<'a> CollapseStructure<'a> {
     /// Mark that edge as goto (F_GOTO_EDGE). This breaks irreducible CFG
     /// patterns, allowing subsequent rule iterations to match.
     fn select_and_mark_goto(&mut self) -> bool {
-        use crate::block::edge_flags::F_GOTO_EDGE;
         let size = self.graph.get_size();
+
+        // Collect ALL case body indices by scanning BlockSwitch nodes directly.
+        // This is more comprehensive than CASE_BODY flag or switch_case_indices.
+        let mut all_case_bodies: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for i in 0..size {
+            if let Some(blk) = self.graph.get_block(i) {
+                let b = blk.read().unwrap();
+                if b.get_type() == crate::block::BlockType::Switch {
+                    if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
+                        for case in &bs.cases {
+                            all_case_bodies.insert(case.read().unwrap().get_index());
+                        }
+                        if let Some(ref dc) = bs.default_case {
+                            all_case_bodies.insert(dc.read().unwrap().get_index());
+                        }
+                    }
+                }
+            }
+        }
+        // Also include switch_case_indices (cascade cases)
+        for &idx in &self.switch_case_indices {
+            all_case_bodies.insert(idx);
+        }
+
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
             if b.size_out() != 2 { continue; }
-            // Skip if already has goto edges
-            let out0_flags = b.get_out(0).map(|e| e.flags).unwrap_or(0);
-            let out1_flags = b.get_out(1).map(|e| e.flags).unwrap_or(0);
-            if (out0_flags & F_GOTO_EDGE) != 0 || (out1_flags & F_GOTO_EDGE) != 0 { continue; }
 
             let taken_target_idx = match b.get_out(1) {
                 Some(e) => e.point.read().unwrap().get_index(),
@@ -291,10 +310,10 @@ impl<'a> CollapseStructure<'a> {
 
             // Skip if this block IS a switch case body (don't mark goto on case body blocks)
             let my_idx = b.get_index();
-            if self.switch_case_indices.contains(&my_idx) { continue; }
+            if all_case_bodies.contains(&my_idx) { continue; }
             if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             // Skip if taken target is a switch case body
-            if self.switch_case_indices.contains(&taken_target_idx) { continue; }
+            if all_case_bodies.contains(&taken_target_idx) { continue; }
             // Also check taken target's CASE_BODY flag
             let taken_flags = b.get_out(1).map(|e| e.point.read().unwrap().get_flags()).unwrap_or(0);
             if taken_flags & crate::block::block_flags::CASE_BODY != 0 { continue; }

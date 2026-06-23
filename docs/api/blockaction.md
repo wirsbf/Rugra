@@ -142,3 +142,8 @@ Create a new ActionNormalizeBranches instance
 
 - selectGoto 现在检查块自身和 taken target 的 CASE_BODY flag + switch_case_indices。
 - httpd main 的 case label 问题仍在（CASE_BODY flag 不够全面）。gcc 52/53。
+
+### 2026-06-23（续）：all_case_bodies 检查
+
+- selectGoto 现在直接扫描 BlockSwitch.cases/default 收集所有 case body indices，而非依赖 CASE_BODY flag。
+- httpd main case label 问题仍在（根因是 emit 顺序，非 selectGoto 标记 case body）。
