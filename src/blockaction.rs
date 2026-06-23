@@ -374,6 +374,62 @@ impl<'a> CollapseStructure<'a> {
             all_case_bodies.insert(idx);
         }
 
+        // Build switch ownership map: block_idx -> set of switch indices.
+        // Covers both BlockSwitch nodes AND CBRANCH cascade chains.
+        let mut switch_owners: std::collections::HashMap<i32, std::collections::HashSet<i32>> =
+            std::collections::HashMap::new();
+        // BlockSwitch ownership (forward BFS from each case body)
+        for sw_idx in 0..size as i32 {
+            let sw_blk = match self.graph.get_block(sw_idx as usize) { Some(b) => b, None => continue };
+            let sw_b = sw_blk.read().unwrap();
+            if sw_b.get_type() != crate::block::BlockType::Switch { continue; }
+            if let Some(bs) = sw_b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
+                for case in &bs.cases {
+                    let case_start = case.read().unwrap().get_index();
+                    let mut queue = vec![case_start];
+                    let mut visited = std::collections::HashSet::new();
+                    while let Some(cur) = queue.pop() {
+                        if !visited.insert(cur) { continue; }
+                        switch_owners.entry(cur).or_default().insert(sw_idx);
+                        if let Some(cb) = self.graph.get_block(cur as usize) {
+                            let c = cb.read().unwrap();
+                            for slot in 0..c.size_out() {
+                                if let Some(e) = c.get_out(slot) {
+                                    queue.push(e.point.read().unwrap().get_index());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Cascade chain ownership: each cascade chain is treated as a virtual
+        // switch (negative index). All taken targets of the chain belong to it.
+        for i in 0..size as i32 {
+            let blk = match self.graph.get_block(i as usize) { Some(b) => b, None => continue };
+            let b = blk.read().unwrap();
+            if b.size_out() != 2 { continue; }
+            let ops = b.get_ops();
+            let has_cbranch = ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+            if !has_cbranch { continue; }
+            // Check if this is a cascade member (fallthrough to another CBRANCH)
+            let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
+                let ft = ft_edge.point.read().unwrap();
+                if ft.size_out() == 2 {
+                    let ft_ops = ft.get_ops();
+                    ft_ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                } else { false }
+            } else { false };
+            if ft_is_cbranch {
+                // This is a cascade member — mark its taken target as owned by cascade
+                if let Some(taken_edge) = b.get_out(1) {
+                    let taken_idx = taken_edge.point.read().unwrap().get_index();
+                    // Use cascade head index as virtual switch id
+                    switch_owners.entry(taken_idx).or_default().insert(-i - 1);
+                }
+            }
+        }
+
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
@@ -394,6 +450,20 @@ impl<'a> CollapseStructure<'a> {
             if all_case_bodies.contains(&taken_target_idx) { continue; }
             // Skip if taken target is shared by multiple switches (would mix cases)
             if multi_switch_bodies.contains(&taken_target_idx) { continue; }
+
+            // CROSS-SWITCH BOUNDARY DETECTION: Check if this block and its
+            // taken target belong to different switches. If so, marking goto
+            // would create a BlockIf spanning multiple switches, mixing cases.
+            let my_switches = switch_owners.get(&my_idx);
+            let target_switches = switch_owners.get(&taken_target_idx);
+            if let (Some(ms), Some(ts)) = (my_switches, target_switches) {
+                // Check if they share any common switch
+                let shared = ms.intersection(ts).count();
+                if shared == 0 {
+                    // Block and target belong to entirely different switches
+                    continue;
+                }
+            }
 
             drop(b);
             // Mark out[1] (taken edge) as goto via block flag

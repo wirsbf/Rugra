@@ -200,3 +200,10 @@ Create a new ActionNormalizeBranches instance
 - multi_switch_bodies：跟踪被多个 BlockSwitch 引用的 case body，不标记 goto。
 - curl 控制流 120→114（-6）。但 httpd main case label 问题仍在——CBRANCH cascade case 不在 BlockSwitch.cases 里，multi_switch_bodies 不覆盖。
 - 根本修复需要 emit 层重构（BlockSwitch 的 case body 完整性保证）。
+
+### 2026-06-23（续）：跨 switch 边界检测 + cascade chain 所有权
+
+- switch_owners 扩展覆盖 cascade chain（用负 index 作为虚拟 switch id）。
+- 跨 switch 检测：如果 block 和 target 属于完全不同的 switch（无交集），跳过 goto。
+- httpd main 仍标记 goto——cascade case body 的所有权不匹配跨 switch 检测的逻辑。
+- 需要更精确的 cascade chain 分组（同一 cascade chain 的所有 case 属于同一个虚拟 switch）。
