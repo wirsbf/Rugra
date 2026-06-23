@@ -188,3 +188,7 @@ Create a new ActionNormalizeBranches instance
 ### 2026-06-23（续）：getparameter 控制流改善
 
 - 14 轮 goto 级联让 getparameter 从 8 if 增加到 15 if（Ghidra 42 if 的 36
+### 2026-06-23（续）：BlockIf outgoing 回退
+
+- 尝试给 if_goto 创建的 BlockIf 设 outgoing（让 cat 合并）——破坏正常行为（gcc 52, 控制流 129）。回退到 outgoing 为空。
+- Rugra 的结构化块设计：outgoing 为空，控制流由内部结构决定。

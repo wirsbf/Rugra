@@ -909,16 +909,14 @@ impl<'a> CollapseStructure<'a> {
         // Don't extract switch case bodies
         if self.switch_case_indices.contains(&body_idx) { return false; }
 
-        // Create BlockIf with negated condition:
-        // Original: if (cond) goto target; else fallthrough to body
-        // Structured: if (!cond) { body }
+        // Create BlockIf with negated condition.
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
                 index: cond_idx,
                 condition: block.clone(),
                 if_body: body_block,
                 else_body: None,
-                negated: true, // Negate: if (!cond) do body
+                negated: true,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 parent: None,
