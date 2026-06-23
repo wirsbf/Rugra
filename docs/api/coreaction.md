@@ -180,3 +180,9 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 ### 2026-06-23（续）：__vfprintf_chk 参数数修正
 
 - `__vfprintf_chk` 从 5 参数修正为 4 参数（`fp, flag, format, va_list`），与其它 `__*_chk` 可变参数函数区分。
+
+### 2026-06-23（续）：类型传播引擎实验
+
+- 尝试了 COPY chain 追踪 + INT_ADD 指针算术检测 + CALL 参数指针推断。所有模式都太激进——破坏 gcc 通过率（51-52/53）。
+- 根因：精确类型传播需要双向类型约束求解（Ghidra ActionTypePropagate），不是简单的使用模式匹配。参数 + 常量可能是数组索引（非指针），CALL 参数可能传值（非指针）。
+- 回退到原始的直接 LOAD/STORE 地址检测。53/53 维持。

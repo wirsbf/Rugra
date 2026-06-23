@@ -1109,14 +1109,12 @@ impl Action for ActionInferParams {
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             if matches!(op.opcode, OpCode::CPUI_LOAD | OpCode::CPUI_STORE) && op.inrefs.len() > 1 {
-                // input[1] is the address varnode (input[0] is the space id)
                 let addr_vn = op.inrefs[1].read().unwrap();
                 if addr_vn.get_space() == AddressSpace::Register && addr_vn.is_input() {
                     ptr_param_offsets.insert(addr_vn.get_offset());
                 }
             }
         }
-        // Also scan block-local ops (STORE/COPY patterns where param feeds address calc)
         for blk_i in 0..fd.bblocks.get_size() {
             if let Some(block_arc) = fd.bblocks.get_block(blk_i) {
                 let block = block_arc.read().unwrap();
