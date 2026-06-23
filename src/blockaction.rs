@@ -891,7 +891,7 @@ impl<'a> CollapseStructure<'a> {
         let flags = b.get_flags();
         // Must have GOTO_EDGE_1 set (taken edge is goto)
         if flags & crate::block::block_flags::GOTO_EDGE_1 == 0 { return false; }
-        if b.size_out() != 2 { return false; } // Original had 2 edges
+        if b.size_out() != 2 { return false; }
 
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {

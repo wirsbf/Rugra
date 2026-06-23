@@ -184,3 +184,7 @@ Create a new ActionNormalizeBranches instance
 - 实现 `try_rule_do_while()`：检测 do{}while(cond) 模式（block loops to itself）。对应 Ghidra ruleBlockDoWhile。
 - 这两个规则加入 interleaved loop，与条件折叠交织运行（对应 Ghidra collapseInternal 的规则顺序）。
 - getparameter 没有循环（121 块 0 回边）——问题是条件折叠，不是循环识别。
+
+### 2026-06-23（续）：getparameter 控制流改善
+
+- 14 轮 goto 级联让 getparameter 从 8 if 增加到 15 if（Ghidra 42 if 的 36
