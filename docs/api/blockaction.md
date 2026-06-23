@@ -117,3 +117,9 @@ Create a new ActionNormalizeBranches instance
 - if_no_exit 选择性启用：无 switch 的函数启用（has_switch=false）。
 - 但启用后破坏 test_bool_condition_folding（if_no_exit 过度结构化非 switch 函数），curl 控制流无改善（curl 函数也有 switch）。
 - if_no_exit 仍禁用。has_switch 检测架构保留。
+
+### 2026-06-23（续）：selectGoto + collapseInternal(target) 框架
+
+- 实现了简化版 `select_and_mark_goto()`：找到 CBRANCH 块的跨跳 taken edge，标记为 goto（GOTO_TERMINAL flag）。
+- 加了 goto 循环：interleaved 达到 fixpoint 后，selectGoto + re-iterate。
+- 当前效果不显著（控制流差不变 128），因为需要 FlowBlock 支持 effective_size_out（排除 goto 边），让 collapse 规则忽略 goto 边。这是底层 trait 扩展。

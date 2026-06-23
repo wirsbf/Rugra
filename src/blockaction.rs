@@ -224,6 +224,89 @@ impl<'a> CollapseStructure<'a> {
             }
         }
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
+
+        // Ghidra-style selectGoto loop: when interleaved rules reach fixpoint
+        // but blocks remain unstructured, mark edges as goto to break the
+        // impasse, then re-iterate. This is the key mechanism for handling
+        // irreducible CFGs (like getparameter's 121 blocks).
+        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut goto_rounds = 0;
+        loop {
+            if std::time::Instant::now() > goto_deadline { break; }
+            // Count isolated blocks (no in/out edges = fully structured)
+            let isolated = (0..self.graph.get_size()).filter(|&i| {
+                self.graph.get_block(i).map_or(true, |b| {
+                    let b = b.read().unwrap();
+                    b.size_in() == 0 && b.size_out() == 0
+                })
+            }).count();
+            if isolated >= self.graph.get_size() { break; } // All structured
+
+            // selectGoto: find an edge to mark as goto.
+            // Heuristic: find a CBRANCH block whose taken edge (out[1]) points
+            // to a non-adjacent block (cross-jump). Mark it as goto.
+            let goto_marked = self.select_and_mark_goto();
+            if !goto_marked { break; } // No more goto candidates
+
+            // Re-iterate all rules after marking goto
+            let pre_count = self.change_count;
+            let size = self.graph.get_size();
+            for i in 0..size {
+                if std::time::Instant::now() > goto_deadline { break; }
+                if self.try_rule_cat(i) { continue; }
+                if self.try_rule_proper_if(i) { continue; }
+                if self.try_rule_if_else(i) { continue; }
+            }
+            self.refresh_switch_cases();
+            goto_rounds += 1;
+            if self.change_count == pre_count || goto_rounds > 20 { break; }
+        }
+        eprintln!("[COLLAPSE] {} goto rounds={} blocks={}", self.name, goto_rounds, self.graph.get_size());
+    }
+
+    /// Simplified selectGoto: find a CBRANCH block whose taken edge (out[1])
+    /// points to a block that is NOT its immediate fallthrough successor.
+    /// Mark that edge as goto (F_GOTO_EDGE). This breaks irreducible CFG
+    /// patterns, allowing subsequent rule iterations to match.
+    fn select_and_mark_goto(&mut self) -> bool {
+        use crate::block::edge_flags::F_GOTO_EDGE;
+        let size = self.graph.get_size();
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = block.read().unwrap();
+            if b.size_out() != 2 { continue; }
+            // Skip if already has goto edges
+            let out0_flags = b.get_out(0).map(|e| e.flags).unwrap_or(0);
+            let out1_flags = b.get_out(1).map(|e| e.flags).unwrap_or(0);
+            if (out0_flags & F_GOTO_EDGE) != 0 || (out1_flags & F_GOTO_EDGE) != 0 { continue; }
+
+            // Check if taken edge (out[1]) is a cross-jump (target is not
+            // the block right after this one in the block list)
+            let taken_target_idx = match b.get_out(1) {
+                Some(e) => e.point.read().unwrap().get_index(),
+                None => continue,
+            };
+            // Skip if taken target is the next block (normal if-then)
+            if taken_target_idx as usize == i + 1 { continue; }
+
+            // Skip switch case bodies
+            if self.switch_case_indices.contains(&taken_target_idx) { continue; }
+
+            drop(b);
+            // Mark out[1] (taken edge) as goto
+            // We need to set the flag on the edge. BlockEdge.flags is public.
+            let mut block_w = block.write().unwrap();
+            // Edges are stored in the block's outgoing Vec — modify in place
+            // Note: we can't directly modify edges through FlowBlock trait.
+            // Instead, set a block flag to indicate goto on edge 1.
+            let cur_flags = block_w.get_flags();
+            block_w.set_flags(cur_flags | crate::block::block_flags::GOTO_TERMINAL);
+            drop(block_w);
+            self.change_count += 1;
+            eprintln!("[COLLAPSE] {} marked goto on block {} edge→{}", self.name, i, taken_target_idx);
+            return true;
+        }
+        false
     }
 
     /// Compute immediate dominators using iterative dataflow (Cooper et al.
