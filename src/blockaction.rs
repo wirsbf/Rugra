@@ -236,28 +236,8 @@ impl<'a> CollapseStructure<'a> {
         // but blocks remain unstructured, mark edges as goto to break the
         // impasse, then re-iterate ALL rules to fixpoint. Repeat until all
         // blocks are structured or no more goto candidates.
-        // Only runs for functions WITH switches (where goto marking helps most).
-        // Functions without switches don't need goto (interleaved handles them).
-        if !has_switch {
-            eprintln!("[COLLAPSE] {} skipping goto loop (no switch)", self.name);
-            return;
-        }
-        // Count BlockSwitch nodes — functions with many nested switches (like
-        // httpd main with 8) are too complex for goto cascade without full
-        // case label protection. Skip them to maintain gcc 100%.
-        let switch_count = (0..self.graph.get_size()).filter(|&i| {
-            self.graph.get_block(i).map_or(false, |b| {
-                b.read().unwrap().get_type() == crate::block::BlockType::Switch
-            })
-        }).count();
-        if switch_count > 6 {
-            eprintln!("[COLLAPSE] {} skipping goto loop ({} switches, too complex)", self.name, switch_count);
-            return;
-        }
-        // Goto cascade only for functions without multi-switch risk.
-        // Skip functions with name "main" (httpd/curl main have nested switches
-        // that cause case label mixing with goto cascade).
-        if self.name == "main" { return; }
+        // Ghidra-style selectGoto loop: runs for ALL functions (no hacks).
+        // Case label protection is handled in printc's emit layer, not here.
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
@@ -364,18 +344,26 @@ impl<'a> CollapseStructure<'a> {
     fn select_and_mark_goto(&mut self) -> bool {
         let size = self.graph.get_size();
         // Collect ALL case body indices by scanning BlockSwitch nodes directly.
-        // This is more comprehensive than CASE_BODY flag or switch_case_indices.
+        // Also track how many switches reference each case body — if a body
+        // is shared by multiple switches, goto marking on it would mix them.
         let mut all_case_bodies: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        let mut multi_switch_bodies: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        let mut case_ref_count: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
         for i in 0..size {
             if let Some(blk) = self.graph.get_block(i) {
                 let b = blk.read().unwrap();
                 if b.get_type() == crate::block::BlockType::Switch {
                     if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
                         for case in &bs.cases {
-                            all_case_bodies.insert(case.read().unwrap().get_index());
+                            let cidx = case.read().unwrap().get_index();
+                            all_case_bodies.insert(cidx);
+                            let count = case_ref_count.entry(cidx).or_insert(0);
+                            *count += 1;
+                            if *count > 1 { multi_switch_bodies.insert(cidx); }
                         }
                         if let Some(ref dc) = bs.default_case {
-                            all_case_bodies.insert(dc.read().unwrap().get_index());
+                            let didx = dc.read().unwrap().get_index();
+                            all_case_bodies.insert(didx);
                         }
                     }
                 }
@@ -391,12 +379,6 @@ impl<'a> CollapseStructure<'a> {
             let b = block.read().unwrap();
             if b.size_out() != 2 { continue; }
 
-            // SWITCH ISOLATION: Skip CBRANCH blocks that have multiple in-edges
-            // (they are likely inside a switch case body, reached by multiple
-            // dispatch paths). Marking goto on these blocks can mix different
-            // switches' case bodies.
-            if b.size_in() >= 2 { continue; }
-
             let taken_target_idx = match b.get_out(1) {
                 Some(e) => e.point.read().unwrap().get_index(),
                 None => continue,
@@ -410,9 +392,8 @@ impl<'a> CollapseStructure<'a> {
             if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             // Skip if taken target is a switch case body
             if all_case_bodies.contains(&taken_target_idx) { continue; }
-            // Also check taken target's CASE_BODY flag
-            let taken_flags = b.get_out(1).map(|e| e.point.read().unwrap().get_flags()).unwrap_or(0);
-            if taken_flags & crate::block::block_flags::CASE_BODY != 0 { continue; }
+            // Skip if taken target is shared by multiple switches (would mix cases)
+            if multi_switch_bodies.contains(&taken_target_idx) { continue; }
 
             drop(b);
             // Mark out[1] (taken edge) as goto via block flag

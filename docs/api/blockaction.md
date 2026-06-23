@@ -192,3 +192,11 @@ Create a new ActionNormalizeBranches instance
 
 - 尝试给 if_goto 创建的 BlockIf 设 outgoing（让 cat 合并）——破坏正常行为（gcc 52, 控制流 129）。回退到 outgoing 为空。
 - Rugra 的结构化块设计：outgoing 为空，控制流由内部结构决定。
+
+### 2026-06-23（续）：移除所有 hack + multi_switch_bodies 保护
+
+- 移除所有临时 hack（has_switch guard, switch_count>6, name=="main" skip, size_in>=2 skip）。
+- goto 级联现在对所有函数运行。
+- multi_switch_bodies：跟踪被多个 BlockSwitch 引用的 case body，不标记 goto。
+- curl 控制流 120→114（-6）。但 httpd main case label 问题仍在——CBRANCH cascade case 不在 BlockSwitch.cases 里，multi_switch_bodies 不覆盖。
+- 根本修复需要 emit 层重构（BlockSwitch 的 case body 完整性保证）。

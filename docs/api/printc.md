@@ -397,3 +397,7 @@ raw semantics / P-code-like IR
 - BlockSwitch case emit 不再跳过已提取的 case body 的 label——保留 case label + 空 body。
 - 但 httpd main 有重复 case 2（两个 switch 的 case 混合），需要 switch 上下文追踪。
 - 回退到 curl-only goto。gcc 53/53 + curl 119。
+
+### 2026-06-23（续）：BlockSwitch case emit 回退
+
+- case body 已 emitted 时跳过整个 case（label + body）。
