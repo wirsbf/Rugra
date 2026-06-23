@@ -111,3 +111,9 @@ Emitter that discards all output (used for discovery pass)
 - 实现了 dry-run case-label 检测（临时替换 emit 为 CaseDetectEmit，emit if_body 检查）。
 - 但 dry-run 只覆盖 emit_block_ops（不覆盖 emit_block_structured 的嵌套路径），漏掉部分 case label。
 - if_no_exit 仍禁用。printc 的 CASE_BODY emit 保护已移除（破坏正常 BlockIf）。
+
+### 2026-06-23（续）：orphan case label 移除（精确 switch depth 追踪）
+
+- post-process 新增 `remove_orphan_case_labels()`：用 brace depth + switch body depth 栈精确追踪 switch 上下文，移除不在任何 switch 内的 case/default label。
+- httpd main case label 问题解决！gcc 53/53。
+- 但 test_bool_condition 又失败（goto 级联对非 switch 函数的影响）。

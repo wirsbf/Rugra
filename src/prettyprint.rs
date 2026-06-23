@@ -1517,29 +1517,65 @@ impl EmitNoMarkup {
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
-        Self::remove_illegal_lvalue_assignments(&after_ptr_arith)
+        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
+        // Twenty-seventh pass: remove case labels outside switch bodies.
+        // Uses precise switch-depth tracking (counting switch{ and matching }).
+        Self::remove_orphan_case_labels(&after_lvalue)
     }
 
     /// Remove `case N:` and `default:` lines that appear outside any switch
-    /// statement. These arise when structured BlockIf extraction pulls a
-    /// cascade switch's case body out of its switch context.
+    /// statement. Uses a precise switch-depth tracker that counts `switch (...) {`
+    /// openers and their matching `}` closers.
     fn remove_orphan_case_labels(text: &str) -> String {
         let lines: Vec<&str> = text.split('\n').collect();
         let mut out: Vec<String> = Vec::with_capacity(lines.len());
-        let mut switch_depth: i32 = 0;
+        // Stack of brace depths at which switch bodies open.
+        // When we see `switch (...) {`, we push the current brace depth + 1
+        // (the depth of the switch body). When brace depth drops below that,
+        // the switch body has closed.
+        let mut brace_depth: i32 = 0;
+        let mut switch_body_depths: Vec<i32> = Vec::new();
+
         for line in lines {
             let t = line.trim();
-            // Track switch nesting
-            if t.starts_with("switch ") && t.ends_with('{') {
-                switch_depth += 1;
+
+            // Check if this line opens a switch body
+            let opens_switch = t.starts_with("switch ") && t.ends_with('{');
+
+            // Count braces on this line (excluding those in char literals like '\x7d')
+            // Simple heuristic: count { and } outside of single-quoted chars.
+            // Since we escape brace chars in char literals (from earlier pass),
+            // bare { and } on the line are structural.
+            for ch in t.chars() {
+                match ch {
+                    '{' => brace_depth += 1,
+                    '}' => brace_depth -= 1,
+                    _ => {}
+                }
             }
-            if t == "}" || t.starts_with("} ") {
-                if switch_depth > 0 { switch_depth -= 1; }
+
+            if opens_switch {
+                // The switch body starts at the current brace_depth
+                // (after counting the { on this line)
+                switch_body_depths.push(brace_depth);
             }
-            // Check if this is a case/default label outside switch
-            if switch_depth == 0 && (t.starts_with("case ") || t == "default:") {
+
+            // Pop closed switches
+            while let Some(&sd) = switch_body_depths.last() {
+                if brace_depth < sd {
+                    switch_body_depths.pop();
+                } else {
+                    break;
+                }
+            }
+
+            // Check if this is a case/default label
+            let is_case = t.starts_with("case ") || t == "default:";
+            if is_case && switch_body_depths.is_empty() {
+                // Orphan case label — skip it
                 continue;
             }
+
             out.push(line.to_string());
         }
         out.join("\n")
