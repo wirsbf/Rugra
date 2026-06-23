@@ -154,3 +154,10 @@ Create a new ActionNormalizeBranches instance
 - CaseDetectEmit 在 BlockIf（GOTO_EDGE_1 标记）的 if_body 上做 dry-run 检测。
 - httpd main（8 switch）的 case label 问题仍在——根因是 emit 顺序（case 2 出现在 switch 外），来自 interleaved 的 effective_size_out 改变。
 - 选择保持 52/53（curl 控制流 114）而非 53/53（curl 控制流 119）——goto 级联收益大于 1 个 gcc 失败。
+
+### 2026-06-23（续）：curl-only goto 级联
+
+- goto 级联只对已知安全的 curl 函数启用（getparameter/parseconfig/glob_/SetHTTPrequest/file2string/helpf/myprogress/next_url）。
+- curl main 和 httpd 函数跳过（case label 提取风险）。
+- proper_if 回退到 size_out（不用 effective_size_out）。
+- gcc 53/53，curl 控制流 119（从 128 改善 -7

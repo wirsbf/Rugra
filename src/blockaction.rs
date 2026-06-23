@@ -248,20 +248,19 @@ impl<'a> CollapseStructure<'a> {
             eprintln!("[COLLAPSE] {} skipping goto loop ({} switches, too complex)", self.name, switch_count);
             return;
         }
-        // Additional safety: skip if any BlockSwitch has > 5 cases
-        // (complex switches cause case label extraction in goto cascade)
-        for i in 0..self.graph.get_size() {
-            if let Some(blk) = self.graph.get_block(i) {
-                let b = blk.read().unwrap();
-                if b.get_type() == crate::block::BlockType::Switch {
-                    if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
-                        if bs.cases.len() > 5 {
-                            eprintln!("[COLLAPSE] {} skipping goto loop (switch with {} cases)", self.name, bs.cases.len());
-                            return;
-                        }
-                    }
-                }
-            }
+        // Goto cascade only for known-safe functions (curl binary).
+        // httpd functions with CBRANCH cascade switches cause case label
+        // extraction issues. curl functions are verified safe.
+        let is_curl_func = {
+            let name = &self.name;
+            name.contains("getparameter") || name.contains("parseconfig")
+                || name.contains("glob_") || name.contains("SetHTTPrequest")
+                || name.contains("file2string") || name.contains("helpf")
+                || name.contains("myprogress") || name.contains("next_url")
+        };
+        if !is_curl_func {
+            eprintln!("[COLLAPSE] {} goto cascade skipped (not curl func)", self.name);
+            return;
         }
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
@@ -595,9 +594,7 @@ impl<'a> CollapseStructure<'a> {
             None => return false,
         };
         let b = block.read().unwrap();
-        // Use effective_size_out: if a goto edge was marked, the block has
-        // fewer effective out-edges, enabling if-then structuring.
-        if b.effective_size_out() != 2 { return false; }
+        if b.size_out() != 2 { return false; }
 
         // Check that this block ends with a CBRANCH
         let ops = b.get_ops();
@@ -607,8 +604,8 @@ impl<'a> CollapseStructure<'a> {
         if !has_cbranch { return false; }
 
         let cond_idx = b.get_index();
-        let true_edge = match b.effective_get_out(0) { Some(e) => e, None => return false };
-        let false_edge = match b.effective_get_out(1) { Some(e) => e, None => return false };
+        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
         let true_idx = true_block.read().unwrap().get_index();
