@@ -36,6 +36,11 @@ pub mod block_flags {
     /// printc must not structurally extract it into a standalone `if(){}`,
     /// or the emitted `case` label ends up outside the switch body.
     pub const CASE_BODY: u32 = 1 << 6;
+    /// Out-edge[1] (taken edge) is marked as goto by selectGoto.
+    /// effective_size_out excludes this edge.
+    pub const GOTO_EDGE_1: u32 = 1 << 7;
+    /// Out-edge[0] (fallthrough) is marked as goto by selectGoto.
+    pub const GOTO_EDGE_0: u32 = 1 << 8;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)
@@ -69,6 +74,32 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     fn size_in(&self) -> usize;
     fn size_out(&self) -> usize;
+
+    /// Number of out-edges excluding goto-marked edges.
+    /// GOTO_EDGE_0 marks out[0] as goto, GOTO_EDGE_1 marks out[1].
+    fn effective_size_out(&self) -> usize {
+        let total = self.size_out();
+        let flags = self.get_flags();
+        let mut count = total;
+        if flags & block_flags::GOTO_EDGE_0 != 0 && total >= 1 { count -= 1; }
+        if flags & block_flags::GOTO_EDGE_1 != 0 && total >= 2 { count -= 1; }
+        count
+    }
+
+    /// Get the i-th non-goto out-edge (skipping goto-marked edges).
+    fn effective_get_out(&self, slot: usize) -> Option<BlockEdge> {
+        let flags = self.get_flags();
+        let total = self.size_out();
+        let mut effective_idx = 0usize;
+        for i in 0..total {
+            let is_goto = (i == 0 && flags & block_flags::GOTO_EDGE_0 != 0)
+                       || (i == 1 && flags & block_flags::GOTO_EDGE_1 != 0);
+            if is_goto { continue; }
+            if effective_idx == slot { return self.get_out(i); }
+            effective_idx += 1;
+        }
+        None
+    }
 
     fn get_in(&self, slot: usize) -> Option<BlockEdge>;
     fn get_out(&self, slot: usize) -> Option<BlockEdge>;

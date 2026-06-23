@@ -216,6 +216,7 @@ impl<'a> CollapseStructure<'a> {
                 // if_no_exit conditions or emit-layer case protection.
                 // if !has_switch && self.try_rule_if_no_exit(i) { continue; }
                 if self.try_rule_if_else(i) { continue; }
+                if self.try_rule_if_goto(i) { continue; }
             }
             iterations += 1;
             self.refresh_switch_cases();
@@ -280,27 +281,21 @@ impl<'a> CollapseStructure<'a> {
             let out1_flags = b.get_out(1).map(|e| e.flags).unwrap_or(0);
             if (out0_flags & F_GOTO_EDGE) != 0 || (out1_flags & F_GOTO_EDGE) != 0 { continue; }
 
-            // Check if taken edge (out[1]) is a cross-jump (target is not
-            // the block right after this one in the block list)
             let taken_target_idx = match b.get_out(1) {
                 Some(e) => e.point.read().unwrap().get_index(),
                 None => continue,
             };
-            // Skip if taken target is the next block (normal if-then)
-            if taken_target_idx as usize == i + 1 { continue; }
+            // Skip if this block's GOTO_EDGE_1 is already set
+            if b.get_flags() & crate::block::block_flags::GOTO_EDGE_1 != 0 { continue; }
 
             // Skip switch case bodies
             if self.switch_case_indices.contains(&taken_target_idx) { continue; }
 
             drop(b);
-            // Mark out[1] (taken edge) as goto
-            // We need to set the flag on the edge. BlockEdge.flags is public.
+            // Mark out[1] (taken edge) as goto via block flag
             let mut block_w = block.write().unwrap();
-            // Edges are stored in the block's outgoing Vec — modify in place
-            // Note: we can't directly modify edges through FlowBlock trait.
-            // Instead, set a block flag to indicate goto on edge 1.
             let cur_flags = block_w.get_flags();
-            block_w.set_flags(cur_flags | crate::block::block_flags::GOTO_TERMINAL);
+            block_w.set_flags(cur_flags | crate::block::block_flags::GOTO_EDGE_1);
             drop(block_w);
             self.change_count += 1;
             eprintln!("[COLLAPSE] {} marked goto on block {} edge→{}", self.name, i, taken_target_idx);
@@ -546,7 +541,9 @@ impl<'a> CollapseStructure<'a> {
             None => return false,
         };
         let b = block.read().unwrap();
-        if b.size_out() != 2 { return false; }
+        // Use effective_size_out: if a goto edge was marked, the block has
+        // fewer effective out-edges, enabling if-then structuring.
+        if b.effective_size_out() != 2 { return false; }
 
         // Check that this block ends with a CBRANCH
         let ops = b.get_ops();
@@ -556,8 +553,8 @@ impl<'a> CollapseStructure<'a> {
         if !has_cbranch { return false; }
 
         let cond_idx = b.get_index();
-        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
-        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
+        let true_edge = match b.effective_get_out(0) { Some(e) => e, None => return false };
+        let false_edge = match b.effective_get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
         let true_idx = true_block.read().unwrap().get_index();
@@ -750,6 +747,57 @@ impl<'a> CollapseStructure<'a> {
                 if_body: true_block.clone(),
                 else_body: Some(false_block.clone()),
                 negated: false,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            }));
+        self.graph.blocks[i] = if_block;
+        self.change_count += 1;
+        true
+    }
+
+    /// ruleBlockIfGoto: when a CBRANCH block has GOTO_EDGE_1 set (taken edge
+    /// marked as goto by selectGoto), structure it as if(cond) goto target.
+    /// The remaining effective edge (fallthrough) becomes the if-body.
+    /// This creates a BlockIf whose condition is negated (if NOT cond, do body).
+    fn try_rule_if_goto(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let b = block.read().unwrap();
+        let flags = b.get_flags();
+        // Must have GOTO_EDGE_1 set (taken edge is goto)
+        if flags & crate::block::block_flags::GOTO_EDGE_1 == 0 { return false; }
+        if b.size_out() != 2 { return false; } // Original had 2 edges
+
+        let ops = b.get_ops();
+        let has_cbranch = ops.last().map_or(false, |op_ref| {
+            op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+        });
+        if !has_cbranch { return false; }
+
+        let cond_idx = b.get_index();
+        // The non-goto edge (out[0]) is the fallthrough = the "if body"
+        let body_edge = match b.get_out(0) { Some(e) => e, None => return false };
+        let body_block = body_edge.point.clone();
+        let body_idx = body_block.read().unwrap().get_index();
+        drop(b);
+
+        // Don't extract switch case bodies
+        if self.switch_case_indices.contains(&body_idx) { return false; }
+
+        // Create BlockIf with negated condition:
+        // Original: if (cond) goto target; else fallthrough to body
+        // Structured: if (!cond) { body }
+        let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockIf {
+                index: cond_idx,
+                condition: block.clone(),
+                if_body: body_block,
+                else_body: None,
+                negated: true, // Negate: if (!cond) do body
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 parent: None,

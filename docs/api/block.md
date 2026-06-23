@@ -790,3 +790,8 @@ RPO 常用于：
 ### 2026-06-23（续）：CASE_BODY flag
 
 - `block_flags::CASE_BODY` 标记 cascade switch case body。
+
+### 2026-06-23（续）：effective_size_out + GOTO_EDGE flags
+
+- FlowBlock 新增 `effective_size_out()`/`effective_get_out()`，排除 goto 标记边。
+- block_flags 新增 `GOTO_EDGE_0`/`GOTO_EDGE_1`。

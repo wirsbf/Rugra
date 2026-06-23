@@ -123,3 +123,12 @@ Create a new ActionNormalizeBranches instance
 - 实现了简化版 `select_and_mark_goto()`：找到 CBRANCH 块的跨跳 taken edge，标记为 goto（GOTO_TERMINAL flag）。
 - 加了 goto 循环：interleaved 达到 fixpoint 后，selectGoto + re-iterate。
 - 当前效果不显著（控制流差不变 128），因为需要 FlowBlock 支持 effective_size_out（排除 goto 边），让 collapse 规则忽略 goto 边。这是底层 trait 扩展。
+
+### 2026-06-23（续）：effective_size_out + try_rule_if_goto
+
+- FlowBlock 新增 `effective_size_out()` 和 `effective_get_out()`（排除 GOTO_EDGE_0/GOTO_EDGE_1 标记的边）。
+- block_flags 新增 GOTO_EDGE_0/GOTO_EDGE_1。
+- try_rule_proper_if 用 effective_size_out/effective_get_out。
+- 新增 `try_rule_if_goto`：当 CBRANCH 块的 taken edge 被 selectGoto 标记为 goto 时，创建 BlockIf（negated）。
+- selectGoto 放宽条件（移除 "skip next block" 限制）。
+- 当前效果不显著（控制流差不变 128），因为单次 goto 标记 + BlockIf 创建不足以打破 121 块的僵局。需要多轮迭代 + goto 标记的级联效应。
