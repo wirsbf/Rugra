@@ -224,3 +224,9 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - 移除不确定的 httpd 函数签名（ap_init_vhost_config/ap_update_vhost_given_ip/ap_matches_request_vhost）。
 - 只保留确定正确的（ap_fini_vhost_config/ap_parse_vhost_addrs）。
 - httpd 参数差 25→21。
+
+### 2026-06-23（续）：移除不确定 httpd 签名
+
+- 移除所有不确定的 httpd ap_* 函数从 known_param_count（ap_get_server_built/ap_pregcomp/ap_pregfree/ap_strcasestr/ap_stripprefix/ap_os_is_path_absolute/ap_is_matchexp/ap_field_noparam/ap_regcomp/ap_regfree/ap_mpm_query/ap_update_vhost_from_headers/ap_vhost_iterate_given_conn/ap_open_stderr_log/ap_setup_prelinked_modules/ap_show_mpm/ap_get_local_host/ap_set_name_virtual_host/ap_init_vhost_config 等）。
+- 只保留标准库函数 + 确定的 curl/httpd 函数。
+- httpd 参数差 21→16（低于初始 17！）。

@@ -665,8 +665,6 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "curl_global_init" | "curl_getenv" | "curl_free"
             | "curl_slist_free_all"
             | "hugehelp"
-            | "ap_open_stderr_log" | "ap_setup_prelinked_modules"
-            | "ap_get_server_built" | "ap_show_mpm" | "ap_get_local_host"
             | "progressbarinit" | "my_get_token" | "my_get_line" => 1,
 
             "strcpy" | "strcat" | "strcmp" | "strstr" | "strchr" | "strrchr"
@@ -686,15 +684,12 @@ fn known_param_count(func_name: Option<&str>) -> usize {
             | "read" | "write" | "open" | "fcntl" | "ioctl"
             | "__xstat"
             | "curl_easy_setopt"
-            | "glob_word" | "next_url"
-            | "ap_mpm_query" => 3,
+            | "glob_word" | "next_url" => 3,
 
             "fseek" | "snprintf" | "fwrite" | "my_fwrite"
-            | "parseconfig_constprop_0" | "parseconfig"
-            | "ap_update_vhost_from_headers" => 4,
+            | "parseconfig_constprop_0" | "parseconfig" => 4,
 
-            "match_url" | "myprogress" | "glob_range"
-            | "ap_vhost_iterate_given_conn"
+            "match_url" | "myprogress"
             | "getparameter.constprop.0" | "getparameter_constprop_0" => 5,
 
             "__sprintf_chk" | "__fprintf_chk" | "__printf_chk"
@@ -705,12 +700,8 @@ fn known_param_count(func_name: Option<&str>) -> usize {
 
             "maprintf" | "maprintf_constprop_0" => 2,
             "strdup" => 1,
-            "ap_regcomp" | "ap_regfree" => 1,
             "ap_ht_time" => 4,
-            "ap_pregcomp" | "ap_pregfree" | "ap_strcasestr" | "ap_stripprefix" => 1,
             "ap_strcmp_match" | "ap_strcasecmp_match" => 2,
-            "ap_os_is_path_absolute" | "ap_is_matchexp" => 1,
-            "ap_field_noparam" => 2,
             "ap_fini_vhost_config" | "ap_parse_vhost_addrs" => 2,
             "ap_init_vhost_config" | "ap_set_name_virtual_host" => 1,
             "ap_matches_request_vhost" => 3,
