@@ -1231,12 +1231,53 @@ impl Action for ActionInferParams {
         }
 
         // If this function has a known parameter count in the signature database,
-        // trust it over the inferred count. The database encodes the real C
-        // signature (e.g. ap_strcasecmp_match takes 2 args, not 4); without this
-        // the function definition signature and the call-site argument trimming
-        // would disagree, producing 'too few/many arguments' errors.
-        let known_n = known_param_count(Some(fd.get_name()));
-        if known_n < params.len() {
+        // trust it over the inferred count. If the known count is HIGHER than
+        // what we inferred (we missed some register reads), supplement with the
+        // missing ABI registers.
+        let known_types = known_param_types(Some(fd.get_name()));
+        let is_known = is_known_function(Some(fd.get_name()));
+        let known_n = if let Some(ref types) = known_types {
+            types.len()
+        } else if is_known {
+            known_param_count(Some(fd.get_name()))
+        } else {
+            0 // Unknown function — don't supplement or truncate
+        };
+
+        // Supplement missing params from ABI register list if known_n > params.len()
+        if known_n > params.len() && known_n <= 6 && is_known {
+            let abi_offsets = [0x38u64, 0x30, 0x10, 0x08, 0x40, 0x48]; // RDI, RSI, RDX, RCX, R8, R9
+            while params.len() < known_n {
+                let idx = params.len();
+                if idx >= abi_offsets.len() { break; }
+                let offset = abi_offsets[idx];
+                let type_arc = if let Some(ref types) = known_types {
+                    if idx < types.len() {
+                        match types[idx] {
+                            "ptr" => {
+                                let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                                Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                    base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                    ptr_to: base, wordsize: 1,
+                                }))
+                            }
+                            _ => Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int))),
+                        }
+                    } else {
+                        Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                    }
+                } else {
+                    Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                };
+                params.push(crate::fspec::ProtoParameter::new(
+                    format!("param_{}", params.len() + 1),
+                    type_arc,
+                    crate::address::Address::new(offset),
+                ));
+            }
+        }
+
+        if is_known && known_n < params.len() {
             params.truncate(known_n);
         }
 

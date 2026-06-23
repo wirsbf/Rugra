@@ -211,3 +211,10 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - ActionInferParams 用 known_param_types 覆盖默认 size-based 类型推断。
 - 效果：my_fwrite 从 `(long, long, long, long)` 改进为 `(void*, long, long, void*)`；SetHTTPrequest 从 `(long, long)` 改进为 `(int, void*)`。
 - 禁用了 myprogress/glob_* 签名（优化二进制中类型冲突）。
+
+### 2026-06-23（续）：参数补充 + is_known guard
+
+- 当 known_param_types/known_param_count 的参数数 > 推断数时，从 ABI 寄存器列表（RDI/RSI/RDX/RCX/R8/R9）补充缺失参数。
+- 加 is_known guard：只有已知函数才补充/裁剪参数，避免影响测试中的未知函数。
+- 效果：getparameter 从 3 参数补充到 5（对齐源代码），parseconfig 从 1 补充到 2。
+- gcc 53/53，175/176（1 预存失败）维持。
