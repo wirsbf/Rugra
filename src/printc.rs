@@ -422,7 +422,15 @@ impl PrintC {
                         & crate::block::block_flags::GOTO_EDGE_1 != 0;
                     let seq_emit = if cond_has_goto {
                         let saved_emit = std::mem::replace(&mut self.emit, Box::new(crate::prettyprint::CaseDetectEmit::new()));
-                        self.emit_block_ops(&if_data.if_body, false);
+                        // Use emit_block_structured for full recursion (covers
+                        // nested BlockSwitch/BlockIf case label emission)
+                        let if_type = if_data.if_body.read().unwrap().get_type();
+                        if matches!(if_type, BlockType::Basic) {
+                            self.emit_block_ops(&if_data.if_body, false);
+                        } else {
+                            let mut dry_emitted: HashSet<i32> = HashSet::new();
+                            self.emit_block_structured(&if_data.if_body, graph, &mut dry_emitted);
+                        }
                         let has_case = self.emit.as_any_mut()
                             .and_then(|a| a.downcast_mut::<crate::prettyprint::CaseDetectEmit>())
                             .map_or(false, |d| d.has_case());

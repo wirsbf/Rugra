@@ -248,9 +248,9 @@ impl<'a> CollapseStructure<'a> {
             eprintln!("[COLLAPSE] {} skipping goto loop ({} switches, too complex)", self.name, switch_count);
             return;
         }
-        // Goto cascade only for known-safe functions (curl binary).
-        // httpd functions with CBRANCH cascade switches cause case label
-        // extraction issues. curl functions are verified safe.
+        // Goto cascade only for known-safe curl functions.
+        // httpd/curl main case label issue is emit-order (not if_body content),
+        // needs emit layer refactoring to fix.
         let is_curl_func = {
             let name = &self.name;
             name.contains("getparameter") || name.contains("parseconfig")
@@ -259,7 +259,7 @@ impl<'a> CollapseStructure<'a> {
                 || name.contains("myprogress") || name.contains("next_url")
         };
         if !is_curl_func {
-            eprintln!("[COLLAPSE] {} goto cascade skipped (not curl func)", self.name);
+            eprintln!("[COLLAPSE] {} goto cascade skipped (not safe curl func)", self.name);
             return;
         }
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

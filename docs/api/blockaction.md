@@ -161,3 +161,8 @@ Create a new ActionNormalizeBranches instance
 - curl main 和 httpd 函数跳过（case label 提取风险）。
 - proper_if 回退到 size_out（不用 effective_size_out）。
 - gcc 53/53，curl 控制流 119（从 128 改善 -7
+### 2026-06-23（续）：CaseDetectEmit 递归 dry-run + curl-only goto
+
+- CaseDetectEmit dry-run 现在用 emit_block_structured（递归覆盖嵌套 BlockSwitch/BlockIf）。
+- 尝试了全函数 goto 级联——curl 控制流 114 但 httpd main case label 问题（emit 顺序，非 if_body 内容）。
+- 回退到 curl-only goto 级联。gcc 53/53 + curl 119。

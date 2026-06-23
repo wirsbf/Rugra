@@ -387,3 +387,7 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：goto BlockIf CaseDetectEmit 保护
 
 - BlockIf emit 对 GOTO_EDGE_1 标记的 condition 做 dry-run case label 检测。检测到 case label 则回退到顺序 emit。
+
+### 2026-06-23（续）：CaseDetectEmit emit_block_structured 递归
+
+- BlockIf dry-run 现在用 emit_block_structured 覆盖嵌套路径。
