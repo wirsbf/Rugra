@@ -401,3 +401,9 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：BlockSwitch case emit 回退
 
 - case body 已 emitted 时跳过整个 case（label + body）。
+
+### 2026-06-23（续）：case body 完整性实验
+
+- 强制 emit case body（从 emitted 移除）→ curl 109 但 gcc 51（重复 body）。
+- 回退到 body_already_emitted（保留 label + 空 body）→ gcc 52 + curl 114。
+- 正确修复：blockaction 层用支配树检测跨 switch 边界，防止 goto 级联创建跨 switch BlockIf。
