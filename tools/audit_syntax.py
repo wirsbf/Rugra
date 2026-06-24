@@ -26,14 +26,13 @@ PREFIX_TYPE = {
 STUB_HEADERS = r"""
 #include <stdbool.h>
 #include <stddef.h>
-/*
- * typedefs (byte/undefined/_struct) are emitted inline by printc before each
- * function body, so we must NOT redefine them here (would cause 'conflicting
- * types' errors).
- *
- * Extern function stubs: declare as int() (unspecified args, implicit int
- * return) to avoid conflicting with Rugra's inferred signatures.
- */
+/* Base typedefs (also emitted inline by printc, but needed for standalone audit) */
+typedef unsigned char byte;
+typedef unsigned long undefined;
+typedef unsigned long undefined4;
+typedef unsigned long long undefined8;
+/* _struct typedef — check for .struct.h sibling file from struct_recover.py */
+/* Fallback if no struct.h exists */
 int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perform();
 int curl_easy_cleanup(); int curl_slist_free_all(); int helpf(); int parseconfig_constprop_0();
 int parseconfig(); int fopen(); int fwrite(); int fclose(); int free(); int malloc();
@@ -103,11 +102,19 @@ def audit_one(text: str, label: str):
     total_err = 0
     err_kinds = {}
     failures = []
+    # Check for struct.h sibling (from struct_recover.py)
+    struct_h_path = Path(label).with_suffix('.struct.h')
+    struct_typedef = ""
+    if struct_h_path.exists():
+        struct_typedef = struct_h_path.read_text()
+    else:
+        struct_typedef = "typedef struct { char _anon[256]; } _struct;\n"
+
     for name, body in funcs:
         # Build stub that excludes the function being compiled (avoids
         # 'conflicting types' when our int() stub disagrees with the
         # function's own inferred signature).
-        stub = STUB_HEADERS
+        stub = STUB_HEADERS + struct_typedef
         # Remove any stub declaration line mentioning this function name
         stub_lines = [l for l in stub.split('\n')
                       if not (f' {name}(' in l or f' {name};' in l)]

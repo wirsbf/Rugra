@@ -157,3 +157,12 @@ Emitter that discards all output (used for discovery pass)
   2. printc 根据标记的 varnode 生成 per-function _struct typedef with fields
   3. printc LOAD/STORE emit 时检测 struct pointer varnode → 输出 ->field_N
 - 当前所有 struct 相关实验已回退，保持 53/53。
+
+### 2026-06-23（续）：struct_recover.py — 保守结构体字段恢复
+
+- 新增 `tools/struct_recover.py`：后处理工具，从 *(long *)(var + 0xN) 模式恢复 struct 字段访问。
+- 保守启发式：只转换被 ≥2 个不同 8 字节对齐小偏移（<256B）访问的变量。
+- 生成 per-file _struct typedef with matching field members，写入 .struct.h 供 audit 使用。
+- 重写变量声明为 _struct *，重写 *(long *)(var + 0xN) 为 var->field_N。
+- audit_syntax.py 更新：读取 .struct.h 作为 stub，提供 _struct typedef for per-function compilation。
+- 效果：curl 4 个、httpd 15 个 ->field_N 字段访问恢复。gcc 53/53。
