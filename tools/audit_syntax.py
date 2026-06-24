@@ -26,13 +26,8 @@ PREFIX_TYPE = {
 STUB_HEADERS = r"""
 #include <stdbool.h>
 #include <stddef.h>
-/* Base typedefs (also emitted inline by printc, but needed for standalone audit) */
-typedef unsigned char byte;
-typedef unsigned long undefined;
-typedef unsigned long undefined4;
-typedef unsigned long long undefined8;
-/* _struct typedef — check for .struct.h sibling file from struct_recover.py */
-/* Fallback if no struct.h exists */
+/* typedefs emitted inline by printc before each function body */
+int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perform();
 int curl_version(); int maprintf(); int curl_easy_setopt(); int curl_easy_perform();
 int curl_easy_cleanup(); int curl_slist_free_all(); int helpf(); int parseconfig_constprop_0();
 int parseconfig(); int fopen(); int fwrite(); int fclose(); int free(); int malloc();
@@ -107,8 +102,7 @@ def audit_one(text: str, label: str):
     struct_typedef = ""
     if struct_h_path.exists():
         struct_typedef = struct_h_path.read_text()
-    else:
-        struct_typedef = "typedef struct { char _anon[256]; } _struct;\n"
+    # If no struct.h, don't add _struct typedef — it's in the function body
 
     for name, body in funcs:
         # Build stub that excludes the function being compiled (avoids
