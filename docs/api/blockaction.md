@@ -305,3 +305,10 @@ Create a new ActionNormalizeBranches instance
 - apply_rules_to_children 调用 try_rule_cat_arc 处理嵌套子块。
 - 效果：getparameter if 从 13→9（cat 合并触发了部分嵌套块合并）。
 - gcc 53/53，175/176 测试。控制流差 148（cat 改变了结构，需后续 proper_if 补充）。
+
+### 2026-06-25：try_rule_proper_if_arc — block Arc 参数重构第2个方法
+
+- try_rule_proper_if_arc：直接接收 block Arc，适用于嵌套子块。
+- 移除 switch_case_indices guard（DEAD flag + orphan removal 处理 case label）。
+- apply_rules_to_children 调用 try_rule_cat_arc + try_rule_proper_if_arc。
+- gcc 53/53，175/176 测试。getparameter 仍 9 if，控制流差 148。

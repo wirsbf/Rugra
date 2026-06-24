@@ -283,8 +283,8 @@ impl<'a> CollapseStructure<'a> {
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy => {
                     let child_idx = child.read().unwrap().get_index() as usize;
                     if child_idx < self.graph.get_size() {
-                        // Use arc-based cat for nested blocks, graph-index for top-level
                         if self.try_rule_cat_arc(child, child_idx) { continue; }
+                        if self.try_rule_proper_if_arc(child, child_idx) { continue; }
                         self.apply_rules_to_block(child_idx);
                     }
                 }
@@ -1012,16 +1012,18 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
+        self.try_rule_proper_if_arc(&block, i)
+    }
+
+    /// ruleBlockProperIf operating directly on a block Arc.
+    fn try_rule_proper_if_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
-
-        // Check that this block ends with a CBRANCH
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
-
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
@@ -1031,40 +1033,21 @@ impl<'a> CollapseStructure<'a> {
         let false_idx = false_block.read().unwrap().get_index();
         drop(b);
 
-        // Protect: if either branch target is a switch case body, don't
-        // structurally extract it — would pull `case` label out of switch.
-        if self.switch_case_indices.contains(&true_idx)
-            || self.switch_case_indices.contains(&false_idx) {
-            return false;
-        }
-
-        // Try both directions (i=0: true clause, i=1: false clause)
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let merge = if dir == 0 { false_block.clone() } else { true_block.clone() };
             let merge_idx = if dir == 0 { false_idx } else { true_idx };
-
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            // Count non-structural in-edges: ignore edges from switch dispatch blocks.
-            // Switch dispatch edges come from BlockSwitch control blocks or CBRANCH
-            // cascade members. We check if any in-edge source is a BlockSwitch or
-            // a block we know is a switch dispatch (marked CASE_BODY or is a cascade
-            // member whose taken edge targets this clause).
             let non_structural_in = self.count_non_structural_in_edges(&c);
             if non_structural_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
-            // Note: we no longer skip switch case body blocks here — the DEAD flag
-            // and orphan case label removal handle case label integrity at emit time.
-            // Removing this guard allows CBRANCH blocks inside case bodies to be
-            // structured into BlockIf, which is what we need for control-flow recovery.
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             let target_idx = clause_out.point.read().unwrap().get_index();
             drop(c);
             if target_idx != merge_idx { continue; }
 
-            // Match found: clause → merge. Create BlockIf.
-            let negated = dir == 1; // if clause is the false edge, negate
+            let negated = dir == 1;
             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockIf {
                     index: cond_idx,
@@ -1072,16 +1055,18 @@ impl<'a> CollapseStructure<'a> {
                     if_body: clause.clone(),
                     else_body: None,
                     negated,
-                    incoming: Vec::new(),
-                    outgoing: Vec::new(),
-                    parent: None,
-                    flags: 0,
+                    incoming: Vec::new(), outgoing: Vec::new(),
+                    parent: None, flags: 0,
                 }));
-            self.graph.blocks[i] = if_block.clone();
-            // If this block was a switch case body, update the owning BlockSwitch
-            // to point to the new BlockIf instead of the old Basic block.
+            // Install at graph_idx if matching
+            let size = self.graph.get_size();
+            if graph_idx < size {
+                let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
+                if cur == cond_idx {
+                    self.graph.blocks[graph_idx] = if_block.clone();
+                }
+            }
             self.update_switch_case_reference(cond_idx, &if_block);
-            // Mark consumed clause block as DEAD
             let clause_idx_val = clause.read().unwrap().get_index() as usize;
             if clause_idx_val < self.graph.get_size() {
                 let cf = clause.read().unwrap().get_flags();
