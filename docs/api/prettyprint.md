@@ -126,3 +126,11 @@ Emitter that discards all output (used for discovery pass)
 - -> 在 long 类型上非法，gcc 从 53/53 降到 40/53。
 - 禁用 recover_struct_fields —— 需要 struct 类型传播引擎才能正确使用 -> 运算符。
 - Ghidra 能用 -> 是因为有类型库（FILE*, Configurable* 等）的 struct 定义。
+
+### 2026-06-23（续）：struct 类型传播实验（-> 需要 DWARF 布局）
+
+- 尝试了 struct 类型传播：将指针偏移访问的变量提升为 _struct * 并用 -> 访问字段。
+- gcc 拒绝 ->field_N 即使使用 flexible array member（struct 需要已知成员定义）。
+- 结论：-> 运算符需要类型库的 struct 布局定义。*(long *)(ptr + offset) 是正确的有效 C 表示。
+- Ghidra 能用 -> 是因为有 DWARF/debug info 的 struct 定义。
+- 禁用 struct field recovery，保持 *(long *)(ptr + offset) 格式。
