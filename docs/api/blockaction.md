@@ -278,3 +278,11 @@ Create a new ActionNormalizeBranches instance
 - getparameter 仍 13 if——递归应用虽然触发了但 try_rule_proper_if 仍未匹配。
   原因：case body 子块在 BlockList 内通过 Arc ptr 匹配 graph.blocks 时，
   指针不匹配（ruleCaseFallthru 创建了新的 BlockList arc）。
+
+### 2026-06-25：block-index-based lookup
+
+- apply_rules_to_children 改用 block index 查找（不比较 Arc 指针）。
+- gcc 53/53，175/176 测试，控制流差 130。
+- getparameter 仍 13 if——rules 在递归子块上不触发因为
+  try_rule_proper_if 检查的是 graph.blocks[i] 而子块可能已被
+  ruleCaseFallthru 吸收到 BlockList 中（graph.blocks[idx] 是空壳）。
