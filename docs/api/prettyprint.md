@@ -117,3 +117,12 @@ Emitter that discards all output (used for discovery pass)
 - post-process 新增 `remove_orphan_case_labels()`：用 brace depth + switch body depth 栈精确追踪 switch 上下文，移除不在任何 switch 内的 case/default label。
 - httpd main case label 问题解决！gcc 53/53。
 - 但 test_bool_condition 又失败（goto 级联对非 switch 函数的影响）。
+
+### 2026-06-23（续）：结构体字段恢复实验
+
+- 实现了 recover_struct_fields：将 *(long *)(ptr + 0xN) 转换为 ptr->field_N。
+- 恢复了 53 个字段访问（curl）。
+- 但 -> 运算符要求左侧是 struct pointer 类型，而 Rugra 声明指针为 long/int。
+- -> 在 long 类型上非法，gcc 从 53/53 降到 40/53。
+- 禁用 recover_struct_fields —— 需要 struct 类型传播引擎才能正确使用 -> 运算符。
+- Ghidra 能用 -> 是因为有类型库（FILE*, Configurable* 等）的 struct 定义。

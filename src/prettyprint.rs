@@ -1519,8 +1519,64 @@ impl EmitNoMarkup {
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
         let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
         // Twenty-seventh pass: remove case labels outside switch bodies.
-        // Uses precise switch-depth tracking (counting switch{ and matching }).
-        Self::remove_orphan_case_labels(&after_lvalue)
+        let after_case = Self::remove_orphan_case_labels(&after_lvalue);
+        // Note: struct field recovery (->field_N) requires struct pointer type
+        // declarations. Without a type library, Rugra uses *(long *)(ptr+off)
+        // which is valid C for all pointer types. -> operator requires struct*.
+        // Self::recover_struct_fields(&after_case)  // disabled — needs struct types
+        after_case
+    }
+
+    /// Convert *(long *)(ptr + 0xN) patterns to ptr->field_N.
+    fn recover_struct_fields(text: &str) -> String {
+        let mut result = text.to_string();
+        let mut search_from = 0;
+        loop {
+            let pos = match result[search_from..].find("*(long *)(").or_else(|| result[search_from..].find("*(int *)(")) {
+                Some(p) => search_from + p,
+                None => break,
+            };
+            let prefix_len = if &result[pos..pos+10] == "*(long *)(" { 10 } else { 9 };
+            let paren_start = pos + prefix_len;
+            if paren_start >= result.len() { break; }
+            let rest = &result[paren_start..];
+            let mut depth = 1i32;
+            let mut close_offset = 0usize;
+            for (idx, ch) in rest.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => { depth -= 1; if depth == 0 { close_offset = idx; break; } }
+                    _ => {}
+                }
+            }
+            if depth != 0 { break; }
+            let inner = &rest[..close_offset];
+            let inner_trim = inner.trim();
+            let mut matched = false;
+            if let Some(plus_pos) = inner_trim.rfind(" + ") {
+                let base = inner_trim[..plus_pos].trim();
+                let offset_str = inner_trim[plus_pos + 3..].trim();
+                if !base.is_empty()
+                    && base.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+                {
+                    let offset_clean = offset_str.trim_start_matches("0x");
+                    if !offset_clean.is_empty()
+                        && offset_clean.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        let replacement = format!("{}->field_{}", base, offset_clean);
+                        let end = paren_start + close_offset + 1;
+                        result.replace_range(pos..end, &replacement);
+                        search_from = pos + replacement.len();
+                        matched = true;
+                    }
+                }
+            }
+            if !matched {
+                // Skip past this occurrence
+                search_from = pos + prefix_len;
+            }
+        }
+        result
     }
 
     /// Remove `case N:` and `default:` lines that appear outside any switch
