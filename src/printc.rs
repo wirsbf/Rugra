@@ -80,6 +80,7 @@ pub struct PrintC {
     value_def_map: HashMap<(crate::space::AddressSpace, u64), Arc<RwLock<PcodeOp>>>,
     /// Track post-return state across blocks
     seen_return: bool,
+    succ_recursion_depth: u32,
     /// Block indices that are switch case bodies. BlockIf emit checks this to
     /// avoid extracting case bodies (which would pull `case` labels out of switch).
     case_body_indices: HashSet<i32>,
@@ -149,6 +150,7 @@ impl PrintC {
             def_map: HashMap::new(),
             value_def_map: HashMap::new(),
             seen_return: false,
+            succ_recursion_depth: 0,
             case_body_indices: HashSet::new(),
             inlined_ops: HashSet::new(),
             used_varnode_names: HashSet::new(),
@@ -895,7 +897,16 @@ impl PrintC {
                         }
                     }
                 } else {
+                    let return_in_block = {
+                        let b = block_arc.read().unwrap();
+                        let ops = b.get_ops();
+                        ops.last().map_or(false, |op_ref| {
+                            op_ref.0.read().unwrap().opcode == OpCode::CPUI_RETURN
+                        })
+                    };
                     self.emit_block_ops(block_arc, false);
+                    // Successor recursion disabled — causes issues with non-switch
+                    // functions (canary blocks). ruleCaseFallthru handles case chaining.
                 }
             }
         }

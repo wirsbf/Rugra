@@ -407,3 +407,11 @@ raw semantics / P-code-like IR
 - 强制 emit case body（从 emitted 移除）→ curl 109 但 gcc 51（重复 body）。
 - 回退到 body_already_emitted（保留 label + 空 body）→ gcc 52 + curl 114。
 - 正确修复：blockaction 层用支配树检测跨 switch 边界，防止 goto 级联创建跨 switch BlockIf。
+
+### 2026-06-24：Basic 块后继递归实验（已禁用）
+
+- 尝试在 emit_block_structured 的 Basic 块 else 分支中递归后继块。
+- 问题：file2string_part_0 的 canary 块后继递归触发了未声明变量错误。
+- 根因：canary 检查块在 RETURN 后仍有 fallthrough 后继，但递归越过了 RETURN。
+- return_in_block 检查 + func_addr 范围 + depth limit 都无法完全修复。
+- 禁用递归，保留 ruleCaseFallthru 处理 switch case body 链式。
