@@ -134,3 +134,13 @@ Emitter that discards all output (used for discovery pass)
 - 结论：-> 运算符需要类型库的 struct 布局定义。*(long *)(ptr + offset) 是正确的有效 C 表示。
 - Ghidra 能用 -> 是因为有 DWARF/debug info 的 struct 定义。
 - 禁用 struct field recovery，保持 *(long *)(ptr + offset) 格式。
+
+### 2026-06-23（续）：struct 字段恢复 — 需要 P-code 级类型传播
+
+- 尝试了匿名 struct typedef 注入（per-function post_process）。
+- 问题：typedef 在函数体内（非法 C），-> 运算符需要 file-scope struct 定义。
+- 根本结论：struct 字段恢复需要 P-code 级类型传播引擎（ActionTypePropagate），
+  让 printc 在 emit 时知道变量是 struct pointer 类型。
+  文本级 post-process 无法正确注入 struct 定义（作用域问题）。
+- Ghidra 通过 DWARF 类型库 + P-code 类型传播实现。
+- 保持 *(long *)(ptr + offset) 格式（有效 C）。

@@ -1520,21 +1520,24 @@ impl EmitNoMarkup {
         let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
         // Twenty-seventh pass: remove case labels outside switch bodies.
         let after_case = Self::remove_orphan_case_labels(&after_lvalue);
-        // Struct field recovery (->field_N) requires real struct layout types.
-        // Without a type library (DWARF/debug info), *(long *)(ptr + offset)
-        // is the correct valid-C representation. -> operator needs known struct
-        // member definitions — gcc rejects ->field_N on _struct * even with
-        // flexible array members.
+        // Struct field recovery (-> operator) requires struct type definitions
+        // at file scope. post_process runs per-function, so struct typedefs
+        // end up inside function bodies (illegal C). Keep *(long *)(ptr + offset)
+        // which is valid C for all pointer types. Struct field recovery needs
+        // type propagation engine (ActionTypePropagate) at P-code level, not
+        // text post-processing.
         after_case
     }
 
-    /// Convert *(long *)(ptr + 0xN) to ptr->field_N AND rewrite ptr's
-    /// declaration from long/void*/int to _struct * so -> is valid C.
-    fn recover_struct_fields_with_types(text: &str) -> String {
-        use std::collections::HashSet;
-        // Phase 1: Find all variables that are accessed via *(long *)(var + offset)
-        // These need _struct * type declaration.
-        let mut struct_vars: HashSet<String> = HashSet::new();
+    /// Per-variable anonymous struct field recovery.
+    /// Groups *(long *)(var + offset) patterns by variable, generates an
+    /// anonymous struct with matching fields, declares var as struct *,
+    /// and rewrites accesses to var->field_OFFSET.
+    fn recover_struct_fields_anon(text: &str) -> String {
+        use std::collections::{HashMap, HashSet};
+
+        // Phase 1: Collect var → set of offsets
+        let mut var_offsets: HashMap<String, HashSet<u64>> = HashMap::new();
         let mut search = 0;
         loop {
             let pos = match text[search..].find("*(long *)(").or_else(|| text[search..].find("*(int *)(")) {
@@ -1555,84 +1558,114 @@ impl EmitNoMarkup {
                 let base = inner[..pp].trim();
                 let offset_str = inner[pp+3..].trim();
                 if !base.is_empty() && base.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
-                    let oc = offset_str.trim_start_matches("0x");
-                    if !oc.is_empty() && oc.chars().all(|c| c.is_ascii_hexdigit()) {
-                        struct_vars.insert(base.to_string());
+                    let off_val = if let Some(h) = offset_str.strip_prefix("0x") {
+                        u64::from_str_radix(h, 16).ok()
+                    } else {
+                        offset_str.parse::<u64>().ok()
+                    };
+                    if let Some(off) = off_val {
+                        var_offsets.entry(base.to_string()).or_default().insert(off);
                     }
                 }
             }
             search = pos + prefix_len;
         }
 
-        if struct_vars.is_empty() { return text.to_string(); }
+        if var_offsets.is_empty() { return text.to_string(); }
 
-        // Phase 2: Rewrite declarations — change "long VAR" / "void * VAR" / "int * VAR"
-        // to "_struct * VAR" for all vars in struct_vars.
-        let mut result = text.to_string();
-        for var in &struct_vars {
-            // Patterns: "long VAR;" → "_struct * VAR;"
-            //           "void * VAR;" → "_struct * VAR;"
-            //           "char * VAR;" → "_struct * VAR;"
-            //           "int * VAR;" → "_struct * VAR;"
-            // Only in declaration lines (end with ;)
-            let decl_patterns = [
-                format!("long {};", var),
-                format!("long *{};", var),
-                format!("void * {};", var),
-                format!("char * {};", var),
-                format!("int * {};", var),
-                format!("long * {};", var),
-                format!("_struct * {};", var), // already done
-            ];
-            let replacement = format!("_struct * {};", var);
-            for pat in &decl_patterns {
-                if pat == &replacement { continue; }
-                result = result.replace(pat, &replacement);
+        // Phase 2: For each variable, build an anonymous struct with fields
+        let mut struct_decls: Vec<String> = Vec::new();
+        let mut var_struct_types: HashMap<String, String> = HashMap::new();
+
+        for (var, offsets) in &var_offsets {
+            let struct_id = format!("_anon_{}", var.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
+            let mut members: Vec<String> = Vec::new();
+            let mut prev_end: u64 = 0;
+            let mut sorted_offsets: Vec<u64> = offsets.iter().copied().collect();
+            sorted_offsets.sort();
+            for &off in &sorted_offsets {
+                if off > prev_end {
+                    members.push(format!("  char _pad_{:x}[{}];", off, off - prev_end));
+                }
+                members.push(format!("  long field_{:x};", off));
+                prev_end = off + 8;
             }
+            struct_decls.push(format!("typedef struct {{\n{}\n}} {};", members.join("\n"), struct_id));
+            var_struct_types.insert(var.clone(), struct_id);
         }
 
-        // Phase 3: Rewrite field accesses *(long *)(var + 0xN) → var->field_N
-        let mut final_result = String::with_capacity(result.len());
-        let mut srch = 0;
-        loop {
-            let pos = match result[srch..].find("*(long *)(").or_else(|| result[srch..].find("*(int *)(")) {
-                Some(p) => srch + p, None => break,
-            };
-            // Copy everything before the match
-            final_result.push_str(&result[srch..pos]);
-            let prefix_len = if &result[pos..pos+10] == "*(long *)(" { 10 } else { 9 };
-            let paren_start = pos + prefix_len;
-            let rest = &result[paren_start..];
-            let mut depth = 1i32;
-            let mut close_off = 0usize;
-            for (idx, ch) in rest.char_indices() {
-                match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 { close_off = idx; break; } } _ => {} }
+        // Phase 3: Rewrite the text line by line
+        let mut result = String::with_capacity(text.len());
+        let mut decl_inserted = false;
+        let lines: Vec<&str> = text.split('\n').collect();
+
+        for line in &lines {
+            let trimmed = line.trim();
+            // Insert struct declarations before the first typedef/extern/func
+            // (the printc-emitted typedef block at the top of each function)
+            if !decl_inserted && trimmed.starts_with("typedef unsigned char byte;") {
+                // Insert BEFORE the typedefs so they're at file scope
+                result.push_str(&struct_decls.join("\n"));
+                result.push('\n');
+                result.push('\n');
+                decl_inserted = true;
             }
-            if depth != 0 {
-                final_result.push_str(&result[pos..]);
-                break;
-            }
-            let inner = rest[..close_off].trim();
-            let mut converted = false;
-            if let Some(pp) = inner.rfind(" + ") {
-                let base = inner[..pp].trim();
-                let offset_str = inner[pp+3..].trim();
-                if struct_vars.contains(base) {
-                    let oc = offset_str.trim_start_matches("0x");
-                    if !oc.is_empty() && oc.chars().all(|c| c.is_ascii_hexdigit()) {
-                        final_result.push_str(&format!("{}->field_{}", base, oc));
-                        srch = paren_start + close_off + 1;
-                        converted = true;
-                    }
+
+
+            let mut new_line = line.to_string();
+            // Rewrite variable declarations
+            for (var, struct_id) in &var_struct_types {
+                let patterns = [
+                    format!("long {};", var),
+                    format!("long * {};", var),
+                    format!("void * {};", var),
+                    format!("char * {};", var),
+                    format!("int * {};", var),
+                    format!("_struct * {};", var),
+                ];
+                let replacement = format!("{} * {};", struct_id, var);
+                for pat in &patterns {
+                    new_line = new_line.replace(pat, &replacement);
                 }
             }
-            if !converted {
-                final_result.push_str(&result[pos..paren_start + close_off + 1]);
-                srch = paren_start + close_off + 1;
+            // Rewrite *(long *)(var + offset) → var->field_offset
+            loop {
+                let pos = match new_line.find("*(long *)(").or_else(|| new_line.find("*(int *)(")) {
+                    Some(p) => p, None => break,
+                };
+                let prefix_len = if &new_line[pos..pos+10] == "*(long *)(" { 10 } else { 9 };
+                let paren_start = pos + prefix_len;
+                if paren_start >= new_line.len() { break; }
+                let rest = &new_line[paren_start..];
+                let mut depth = 1i32;
+                let mut close_off = 0usize;
+                for (idx, ch) in rest.char_indices() {
+                    match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 { close_off = idx; break; } } _ => {} }
+                }
+                if depth != 0 { break; }
+                let inner = rest[..close_off].trim();
+                let mut found = false;
+                if let Some(pp) = inner.rfind(" + ") {
+                    let base = inner[..pp].trim();
+                    let offset_str = inner[pp+3..].trim();
+                    if var_struct_types.contains_key(base) {
+                        let oc = offset_str.trim_start_matches("0x");
+                        if !oc.is_empty() && oc.chars().all(|c| c.is_ascii_hexdigit()) {
+                            let repl = format!("{}->field_{}", base, oc);
+                            new_line.replace_range(pos..paren_start + close_off + 1, &repl);
+                            found = true;
+                        }
+                    }
+                }
+                if !found { break; }
             }
+
+            result.push_str(&new_line);
+            result.push('\n');
         }
-        final_result.push_str(&result[srch..]);
-        final_result
+
+        if !text.ends_with('\n') && result.ends_with('\n') { result.pop(); }
+        result
     }
 
     /// Remove `case N:` and `default:` lines that appear outside any switch
