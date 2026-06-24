@@ -297,3 +297,11 @@ Create a new ActionNormalizeBranches instance
 - 移除 try_rule_proper_if 中的 switch_case_indices 检查。
 - 无效果——proper_if 仍不匹配（clause size_in 或 target_idx 不满足条件）。
 - 确认：规则无法匹配不是因为 guard，而是因为 graph-index vs block-Arc 的根本不匹配。
+
+### 2026-06-25：try_rule_cat_arc — block Arc 参数重构第1个方法
+
+- try_rule_cat_arc：直接接收 block Arc，适用于 BlockList 嵌套子块。
+- 使用 count_non_structural_in_edges 替代 size_in 检查。
+- apply_rules_to_children 调用 try_rule_cat_arc 处理嵌套子块。
+- 效果：getparameter if 从 13→9（cat 合并触发了部分嵌套块合并）。
+- gcc 53/53，175/176 测试。控制流差 148（cat 改变了结构，需后续 proper_if 补充）。

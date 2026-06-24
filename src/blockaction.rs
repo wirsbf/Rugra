@@ -283,6 +283,8 @@ impl<'a> CollapseStructure<'a> {
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy => {
                     let child_idx = child.read().unwrap().get_index() as usize;
                     if child_idx < self.graph.get_size() {
+                        // Use arc-based cat for nested blocks, graph-index for top-level
+                        if self.try_rule_cat_arc(child, child_idx) { continue; }
                         self.apply_rules_to_block(child_idx);
                     }
                 }
@@ -876,38 +878,50 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
+        self.try_rule_cat_arc(&block, i)
+    }
+
+    /// ruleBlockCat operating directly on a block Arc.
+    /// Works for nested blocks in BlockList/BlockSwitch children.
+    fn try_rule_cat_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
+        let size = self.graph.get_size();
         let b = block.read().unwrap();
         if b.size_out() != 1 { return false; }
-        // Don't merge BlockCondition (&&/||) — it's a structured bool fold result
         if b.get_type() == crate::block::BlockType::Condition { return false; }
         let succ_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let succ = succ_edge.point.clone();
         let succ_idx = succ.read().unwrap().get_index() as usize;
         drop(b);
-        if succ_idx >= size || succ_idx == i { return false; }
-        let s = succ.read().unwrap();
-        if s.size_in() != 1 { return false; }
-        // Don't merge if successor is a structured block (BlockCondition, BlockIf, etc.)
-        // — these are results of earlier collapse passes and should not be
-        // merged into a BlockList by the interleaved cat rule.
-        let succ_type = s.get_type();
+        if succ_idx >= size || succ_idx == graph_idx { return false; }
+        let non_structural_in = {
+            let s = succ.read().unwrap();
+            self.count_non_structural_in_edges(&s)
+        };
+        if non_structural_in != 1 { return false; }
+        let succ_type = succ.read().unwrap().get_type();
         if succ_type != crate::block::BlockType::Basic && succ_type != crate::block::BlockType::Copy {
             return false;
         }
-        drop(s);
-        // Don't merge if succ is a switch or has goto edges
-        // (simplified check: succ must have <=1 out or end in CBRANCH)
 
         let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockList::new(
                 block.read().unwrap().get_index(),
                 vec![block.clone(), succ.clone()],
             )));
-        self.graph.blocks[i] = list_block;
-        // Mark the successor as DEAD — its ops are now emitted via BlockList children.
-        // This prevents emit_block_structured from outputting it as a standalone block.
-        let succ_idx = succ.read().unwrap().get_index() as usize;
-        if succ_idx < size {
+        // Install at graph_idx if it's the same block, otherwise update parent reference
+        if graph_idx < size {
+            let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
+            let blk_idx = block.read().unwrap().get_index();
+            if cur == blk_idx {
+                self.graph.blocks[graph_idx] = list_block.clone();
+            }
+        }
+        // Update switch case reference if needed
+        let block_idx = block.read().unwrap().get_index();
+        self.update_switch_case_reference(block_idx, &list_block);
+        // Mark successor as DEAD
+        let sidx = succ.read().unwrap().get_index() as usize;
+        if sidx < size {
             let cur = succ.read().unwrap().get_flags();
             succ.write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
         }
