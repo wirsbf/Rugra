@@ -925,3 +925,18 @@ BlockSwitch.cases[i] 是单个 Basic 块，但它的 out-edge 指向更多 Basic
 6. 递归：新 BlockList 的最后一个块也可能 fallthrough
 
 这会让 case body 包含完整的 if-else 逻辑链。
+
+### 边管理障碍最终诊断（2026-06-25）
+
+实现了 `count_non_structural_in_edges`：忽略来自 BlockSwitch、switch_case_indices、DEAD 块的入边。
+
+**结果**：getparameter 仍 13 if。原因：interleaved 规则的 change_count 在增加（iter=4），但 blocks 仍 121。
+
+**深层原因**：即使 proper_if 匹配了 case body 内的 CBRANCH（因为非结构化入边==1），创建的 BlockIf 在 graph.blocks[i] 替换了原块，但**不更新 switch case body 的引用**。BlockSwitch.cases 仍指向原始 Basic 块（现在是空壳），而不是新的 BlockIf。
+
+**正确的解决方案**：
+1. CollapseStructure 创建 BlockIf 后，需要**更新 BlockSwitch.cases** 指向新的 BlockIf
+2. 这需要 CollapseStructure 能反向查找哪个 BlockSwitch 拥有某个 case body 块
+3. 然后替换 case body 引用为新的 BlockIf
+
+这是 emit 层无法解决的问题——需要 blockaction 层的结构化块所有权追踪。

@@ -254,3 +254,8 @@ Create a new ActionNormalizeBranches instance
 - 对 getparameter 无效果——121 块中没有 cat 可匹配的简单 A→B 链。
 - 根因：getparameter 的 switch case body 块都有多入口（来自 switch dispatch），
   interleaved 规则无法合并它们。需要 case body 内部的 CBRANCH 结构化。
+
+### 2026-06-25：non-structural edge counting
+
+- count_non_structural_in_edges：忽略来自 BlockSwitch/cascade/DEAD 的入边。
+- getparameter 仍 13 if——BlockIf 创建后不更新 BlockSwitch.cases 引用。
