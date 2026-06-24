@@ -166,3 +166,9 @@ Emitter that discards all output (used for discovery pass)
 - 重写变量声明为 _struct *，重写 *(long *)(var + 0xN) 为 var->field_N。
 - audit_syntax.py 更新：读取 .struct.h 作为 stub，提供 _struct typedef for per-function compilation。
 - 效果：curl 4 个、httpd 15 个 ->field_N 字段访问恢复。gcc 53/53。
+
+### 2026-06-23（续）：rename_vars.py — DWARF 局部变量名恢复
+
+- 新增 `tools/rename_vars.py`：从 DWARF debug_info 提取函数局部变量名（DW_TAG_variable + DW_OP_fbreg），映射到 Rugra 的 local_XX 栈变量。
+- 效果：curl 12 个变量名恢复（errorbuffer, progressbar, outs, heads, buffer, size, nmemb, stream 等），httpd 同样有恢复。
+- 与 struct_recover.py 串联使用：struct_recover → rename_vars → audit_syntax。
