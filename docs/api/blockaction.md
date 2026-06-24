@@ -232,3 +232,10 @@ Create a new ActionNormalizeBranches instance
 - try_rule_cat 检查 successor 必须是 Basic/Copy（不合并 BlockCondition 等结构化块）。
 - test_bool_condition 修复：搜索 BlockList 内部的 BlockCondition。
 - 175/176 测试 + gcc 53/53 + curl 控制流 116。
+
+### 2026-06-23（续）：is_structured_child — 移除 trivial guard
+
+- 移除 trivial CFG guard（≤6 块启发式）。
+- selectGoto 对所有块检查 is_structured_child（是否是任何结构化块的子组件）。
+- is_structured_child 检查 BlockCondition.first/second、BlockIf.condition/if_body/else_body、BlockWhileDo.condition/body、BlockDoWhile.condition、BlockList.children。
+- 175/176 测试 + gcc 53/53 + curl 控制流 123。

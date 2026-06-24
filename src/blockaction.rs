@@ -246,16 +246,12 @@ impl<'a> CollapseStructure<'a> {
         // but blocks remain unstructured, mark edges as goto to break the
         // impasse, then re-iterate ALL rules to fixpoint. Repeat until all
         // blocks are structured or no more goto candidates.
-        // Ghidra-style selectGoto loop: runs when the graph has irreducible
-        // patterns. Skip only for trivially-structured CFGs (small graphs
-        // where first phase + interleaved fully structured everything).
-        // Heuristic: skip if graph has <= 6 blocks AND interleaved made
-        // no changes (likely a test fixture or simple function).
-        let is_trivial = self.graph.get_size() <= 6 && self.change_count == pre_interleaved_count;
-        if is_trivial {
-            eprintln!("[COLLAPSE] {} trivial CFG ({} blocks, no interleaved changes), skipping goto cascade", self.name, self.graph.get_size());
-            return;
-        }
+        // Ghidra-style selectGoto loop: runs for all functions with irreducible
+        // patterns. No block-count heuristic — correct behavior for all CFGs.
+        // BlockCondition/BlockIf sub-blocks are isolated (empty edges) by the
+        // first phase, so interleaved + goto cascade only process real blocks.
+        // The cat-rule successor type check prevents merging into structured blocks.
+        eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
@@ -357,7 +353,56 @@ impl<'a> CollapseStructure<'a> {
         self.loop_bodies.iter().any(|(_, body)| body.contains(&idx))
     }
 
-    /// Simplified selectGoto: find a CBRANCH block whose taken edge (out[1])
+    /// Check if a block index is a sub-component of any structured block
+    /// (BlockCondition.first/second, BlockIf.condition/if_body/else_body,
+    /// BlockWhileDo.condition/body, etc.). These blocks should not be
+    /// processed by interleaved rules or goto cascade.
+    fn is_structured_child(&self, idx: i32, size: usize) -> bool {
+        use crate::block::{BlockIf, BlockCondition, BlockWhileDo, BlockDoWhile, BlockList};
+        for i in 0..size {
+            let blk = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let b = blk.read().unwrap();
+            match b.get_type() {
+                crate::block::BlockType::Condition => {
+                    if let Some(bc) = b.as_any().downcast_ref::<BlockCondition>() {
+                        if bc.first.read().unwrap().get_index() == idx { return true; }
+                        if bc.second.read().unwrap().get_index() == idx { return true; }
+                    }
+                }
+                crate::block::BlockType::If => {
+                    if let Some(bi) = b.as_any().downcast_ref::<BlockIf>() {
+                        if bi.condition.read().unwrap().get_index() == idx { return true; }
+                        if bi.if_body.read().unwrap().get_index() == idx { return true; }
+                        if let Some(ref eb) = bi.else_body {
+                            if eb.read().unwrap().get_index() == idx { return true; }
+                        }
+                    }
+                }
+                crate::block::BlockType::WhileDo => {
+                    if let Some(wd) = b.as_any().downcast_ref::<BlockWhileDo>() {
+                        if wd.condition.read().unwrap().get_index() == idx { return true; }
+                        if wd.body.read().unwrap().get_index() == idx { return true; }
+                    }
+                }
+                crate::block::BlockType::DoWhile => {
+                    if let Some(dw) = b.as_any().downcast_ref::<BlockDoWhile>() {
+                        if dw.condition.read().unwrap().get_index() == idx { return true; }
+                    }
+                }
+                crate::block::BlockType::List => {
+                    if let Some(bl) = b.as_any().downcast_ref::<BlockList>() {
+                        for child in &bl.children {
+                            if child.read().unwrap().get_index() == idx { return true; }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+
     /// can be marked as goto to break irreducible CFG patterns.
     fn select_and_mark_goto(&mut self) -> bool {
         let size = self.graph.get_size();
@@ -488,6 +533,10 @@ impl<'a> CollapseStructure<'a> {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
             if b.size_out() != 2 { continue; }
+
+            // Skip blocks that are sub-components of structured blocks.
+            let my_idx = b.get_index();
+            if self.is_structured_child(my_idx, size) { continue; }
 
             let taken_target_idx = match b.get_out(1) {
                 Some(e) => e.point.read().unwrap().get_index(),
