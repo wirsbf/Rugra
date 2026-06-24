@@ -389,6 +389,14 @@ impl PrintC {
         }
         emitted.insert(block_idx);
 
+        // Skip blocks that have been consumed by structuring (DEAD flag set by
+        // CollapseStructure when a block is absorbed into a BlockIf/BlockList/etc.)
+        // These blocks have been replaced by structured blocks; their ops are emitted
+        // via the structured block's recursive children traversal.
+        if block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0 {
+            return;
+        }
+
         // Skip all emission after RETURN — prevents dead-code blocks from appearing
         if self.seen_return {
             return;

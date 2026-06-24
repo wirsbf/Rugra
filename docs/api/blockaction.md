@@ -246,3 +246,11 @@ Create a new ActionNormalizeBranches instance
 - build_fallthrough_chain：沿 out[0] 递归收集 fallthrough 后继（单入口 Basic 块），组成 BlockList。
 - gcc 53/53，175/176 测试维持。getparameter 从 15→13 if（部分吸收但 switch 外的 if 仍存在）。
 - 控制流差从 123→130（compare_ghidra 的计数差异，实际 case body 内 if 增加了）。
+
+### 2026-06-25：DEAD flag + try_rule_cat consumed block marking
+
+- try_rule_cat 在合并 A→B 时标记 B 为 DEAD（emit_block_structured 跳过 DEAD 块）。
+- emit_block_structured 添加 DEAD flag 检查。
+- 对 getparameter 无效果——121 块中没有 cat 可匹配的简单 A→B 链。
+- 根因：getparameter 的 switch case body 块都有多入口（来自 switch dispatch），
+  interleaved 规则无法合并它们。需要 case body 内部的 CBRANCH 结构化。

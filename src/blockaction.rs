@@ -844,6 +844,13 @@ impl<'a> CollapseStructure<'a> {
                 vec![block.clone(), succ.clone()],
             )));
         self.graph.blocks[i] = list_block;
+        // Mark the successor as DEAD — its ops are now emitted via BlockList children.
+        // This prevents emit_block_structured from outputting it as a standalone block.
+        let succ_idx = succ.read().unwrap().get_index() as usize;
+        if succ_idx < size {
+            let cur = succ.read().unwrap().get_flags();
+            succ.write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
+        }
         self.change_count += 1;
         true
     }

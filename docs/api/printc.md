@@ -415,3 +415,4 @@ raw semantics / P-code-like IR
 - 根因：canary 检查块在 RETURN 后仍有 fallthrough 后继，但递归越过了 RETURN。
 - return_in_block 检查 + func_addr 范围 + depth limit 都无法完全修复。
 - 禁用递归，保留 ruleCaseFallthru 处理 switch case body 链式。
+### 2026-06-25：DEAD flag emit skip
