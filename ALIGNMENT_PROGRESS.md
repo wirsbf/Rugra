@@ -905,3 +905,23 @@ interleaved 规则框架已实现但对复杂 CFG 无额外改善。控制流差
 4. 实现 ruleBlockGoto 标记不可归约边
 
 这些是 FlowBlock/BlockEdge/BlockGraph 的底层架构改动，需要多会话持续工作。
+
+### 控制流恢复路线（2026-06-24 更新）
+
+**核心差距**：getparameter 15 if vs Ghidra 42 if
+
+**根因**：case body 的 fallthrough 后继块不在 case 的结构化块内。
+BlockSwitch.cases[i] 是单个 Basic 块，但它的 out-edge 指向更多 Basic 块。
+这些后继块在 emit 时被放在 switch 之外。
+
+**解决方案**：实现 `ruleCaseFallthru`（对应 Ghidra blockaction.cc:1707）
+
+算法：
+1. 对每个 BlockSwitch 的每个 case body block
+2. 如果 case body 的最后一个 op 不是 RETURN/BREAK（即 fallthrough）
+3. 找到 case body 的 out-edge 目标（fallthrough 后继）
+4. 如果后继块只有一个 in-edge（来自此 case body）
+5. 将后继块合并到 case body 的 BlockList 中
+6. 递归：新 BlockList 的最后一个块也可能 fallthrough
+
+这会让 case body 包含完整的 if-else 逻辑链。
