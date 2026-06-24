@@ -285,6 +285,7 @@ impl<'a> CollapseStructure<'a> {
                     if child_idx < self.graph.get_size() {
                         if self.try_rule_cat_arc(child, child_idx) { continue; }
                         if self.try_rule_proper_if_arc(child, child_idx) { continue; }
+                        if self.try_rule_if_else_arc(child, child_idx) { continue; }
                         self.apply_rules_to_block(child_idx);
                     }
                 }
@@ -1184,15 +1185,18 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
+        self.try_rule_if_else_arc(&block, i)
+    }
+
+    /// ruleBlockIfElse operating directly on a block Arc.
+    fn try_rule_if_else_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
-
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
-
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
@@ -1200,17 +1204,16 @@ impl<'a> CollapseStructure<'a> {
         let false_block = false_edge.point.clone();
         drop(b);
 
-        // Check both clauses: 1 in, 1 out, same merge target
         let tb = true_block.read().unwrap();
         let fb = false_block.read().unwrap();
-        if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
+        let t_nsi = self.count_non_structural_in_edges(&tb);
+        let f_nsi = self.count_non_structural_in_edges(&fb);
+        if t_nsi != 1 || f_nsi != 1 { return false; }
         if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
-
         let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
         let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
         drop(tb); drop(fb);
-
-        if t_out != f_out { return false; } // both must merge to same block
+        if t_out != f_out { return false; }
 
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
@@ -1219,12 +1222,23 @@ impl<'a> CollapseStructure<'a> {
                 if_body: true_block.clone(),
                 else_body: Some(false_block.clone()),
                 negated: false,
-                incoming: Vec::new(),
-                outgoing: Vec::new(),
-                parent: None,
-                flags: 0,
+                incoming: Vec::new(), outgoing: Vec::new(),
+                parent: None, flags: 0,
             }));
-        self.graph.blocks[i] = if_block;
+        let size = self.graph.get_size();
+        if graph_idx < size {
+            let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
+            if cur == cond_idx { self.graph.blocks[graph_idx] = if_block.clone(); }
+        }
+        self.update_switch_case_reference(cond_idx, &if_block);
+        // Mark both clauses as DEAD
+        for clause in &[&true_block, &false_block] {
+            let cidx = clause.read().unwrap().get_index() as usize;
+            if cidx < size {
+                let cf = clause.read().unwrap().get_flags();
+                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
+            }
+        }
         self.change_count += 1;
         true
     }

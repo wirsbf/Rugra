@@ -312,3 +312,9 @@ Create a new ActionNormalizeBranches instance
 - 移除 switch_case_indices guard（DEAD flag + orphan removal 处理 case label）。
 - apply_rules_to_children 调用 try_rule_cat_arc + try_rule_proper_if_arc。
 - gcc 53/53，175/176 测试。getparameter 仍 9 if，控制流差 148。
+
+### 2026-06-25：try_rule_if_else_arc — block Arc 参数重构第3个方法
+
+- try_rule_if_else_arc：直接接收 block Arc，使用 count_non_structural_in_edges。
+- apply_rules_to_children 调用 cat_arc + proper_if_arc + if_else_arc。
+- gcc 53/53，175/176 测试。getparameter 仍 9 if。
