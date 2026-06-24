@@ -855,6 +855,81 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    /// Update any BlockSwitch that has `old_idx` as a case body to point to `new_block`.
+    /// This ensures switch case bodies that get structured into BlockIf/BlockList
+    /// are correctly referenced by their owning BlockSwitch.
+    fn update_switch_case_reference(&mut self, old_idx: i32, new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let size = self.graph.get_size();
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let bt = { let b = block.read().unwrap(); b.get_type() };
+            if bt != crate::block::BlockType::Switch { continue; }
+            let (sw_fields) = {
+                let b = block.read().unwrap();
+                let sw = match b.as_any().downcast_ref::<BlockSwitch>() { Some(s) => s, None => continue };
+                let in_cases = sw.cases.iter().any(|c| c.read().unwrap().get_index() == old_idx);
+                let in_default = sw.default_case.as_ref().map_or(false, |d| d.read().unwrap().get_index() == old_idx);
+                if !in_cases && !in_default { continue; }
+                (sw.index, sw.control.clone(), sw.cases.clone(),
+                 sw.default_case.clone(), sw.case_values.clone(), sw.index_varnode.clone())
+            };
+            // Rebuild with updated references
+            let mut new_cases = Vec::new();
+            for case in &sw_fields.2 {
+                if case.read().unwrap().get_index() == old_idx {
+                    new_cases.push(new_block.clone());
+                } else {
+                    new_cases.push(case.clone());
+                }
+            }
+            let new_default = sw_fields.3.as_ref().map(|d| {
+                if d.read().unwrap().get_index() == old_idx { new_block.clone() } else { d.clone() }
+            });
+            let new_sw: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockSwitch {
+                    index: sw_fields.0, control: sw_fields.1, cases: new_cases,
+                    default_case: new_default, case_values: sw_fields.4,
+                    index_varnode: sw_fields.5,
+                    incoming: Vec::new(), outgoing: Vec::new(), parent: None, flags: 0,
+                }));
+            self.graph.blocks[i] = new_sw;
+            eprintln!("[COLLAPSE] {} updated BlockSwitch case {} → BlockIf", self.name, old_idx);
+            break;
+        }
+    }
+
+    /// Count in-edges that are NOT from switch dispatch blocks.
+    /// Switch dispatch edges come from BlockSwitch nodes or CBRANCH cascade
+    /// members (blocks whose taken edge targets a CASE_BODY block).
+    /// These structural edges should not prevent proper_if/if_else matching.
+    fn count_non_structural_in_edges(&self, block: &std::sync::RwLockReadGuard<'_, dyn FlowBlock + Send + Sync>) -> usize {
+        let total = block.size_in();
+        let mut structural = 0;
+        for slot in 0..total {
+            if let Some(in_edge) = block.get_in(slot) {
+                let pred = in_edge.point.read().unwrap();
+                let pred_type = pred.get_type();
+                // Edge from BlockSwitch control → structural
+                if pred_type == crate::block::BlockType::Switch {
+                    structural += 1;
+                    continue;
+                }
+                // Edge from a CBRANCH cascade member → structural
+                // (cascade members are blocks in switch_case_indices)
+                if self.switch_case_indices.contains(&pred.get_index()) {
+                    structural += 1;
+                    continue;
+                }
+                // Edge from a DEAD block (already consumed by structuring) → structural
+                if pred.get_flags() & crate::block::block_flags::DEAD != 0 {
+                    structural += 1;
+                    continue;
+                }
+            }
+        }
+        total - structural
+    }
+
     /// ruleBlockProperIf: detect if-then pattern (generalized Triangle).
     /// A CBRANCH block with 2 out-edges, where one out-edge block (clause)
     /// has 1 in and 1 out, and its out-edge points to the other branch.
@@ -897,7 +972,13 @@ impl<'a> CollapseStructure<'a> {
 
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            if c.size_in() != 1 { continue; }
+            // Count non-structural in-edges: ignore edges from switch dispatch blocks.
+            // Switch dispatch edges come from BlockSwitch control blocks or CBRANCH
+            // cascade members. We check if any in-edge source is a BlockSwitch or
+            // a block we know is a switch dispatch (marked CASE_BODY or is a cascade
+            // member whose taken edge targets this clause).
+            let non_structural_in = self.count_non_structural_in_edges(&c);
+            if non_structural_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
             // Protect switch case bodies
             if self.switch_case_indices.contains(&c_idx) { continue; }
@@ -920,7 +1001,16 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            self.graph.blocks[i] = if_block;
+            self.graph.blocks[i] = if_block.clone();
+            // If this block was a switch case body, update the owning BlockSwitch
+            // to point to the new BlockIf instead of the old Basic block.
+            self.update_switch_case_reference(cond_idx, &if_block);
+            // Mark consumed clause block as DEAD
+            let clause_idx_val = clause.read().unwrap().get_index() as usize;
+            if clause_idx_val < self.graph.get_size() {
+                let cf = clause.read().unwrap().get_flags();
+                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
+            }
             self.change_count += 1;
             return true;
         }

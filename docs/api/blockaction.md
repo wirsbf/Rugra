@@ -259,3 +259,12 @@ Create a new ActionNormalizeBranches instance
 
 - count_non_structural_in_edges：忽略来自 BlockSwitch/cascade/DEAD 的入边。
 - getparameter 仍 13 if——BlockIf 创建后不更新 BlockSwitch.cases 引用。
+
+### 2026-06-25：structured-block ownership tracking
+
+- update_switch_case_reference：当 proper_if 创建 BlockIf 时，更新 BlockSwitch.cases 引用。
+- count_non_structural_in_edges：忽略结构化入边。
+- 问题：interleaved 规则只处理顶层 graph.blocks，不递归进入 BlockList/BlockSwitch.cases 的子块。
+- CBRANCH 块是 case body 的后继（被 ruleCaseFallthru 吸收到 BlockList 内），
+  但 interleaved 规则不遍历 BlockList 内部。
+- 需要：递归规则应用——让 interleaved 规则能进入 BlockList 子块进行结构化。
