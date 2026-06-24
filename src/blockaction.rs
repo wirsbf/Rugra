@@ -215,25 +215,43 @@ impl<'a> CollapseStructure<'a> {
                     Some(b) => b,
                     None => continue,
                 };
-                // Skip fully collapsed blocks (no in/out edges)
-                let (si, so) = {
-                    let b = block.read().unwrap();
-                    (b.size_in(), b.size_out())
-                };
-                if si == 0 && so == 0 { continue; }
-                // Skip structured blocks (BlockCondition/BlockIf/BlockWhileDo/etc.)
-                // — interleaved rules should only process Basic blocks.
                 let bt = block.read().unwrap().get_type();
-                if bt != crate::block::BlockType::Basic && bt != crate::block::BlockType::Copy { continue; }
 
-                // Try rules in Ghidra collapseInternal order:
-                // cat → proper-if → if-no-exit → if-else → while-do → do-while → goto
-                if self.try_rule_cat(i) { continue; }
-                if self.try_rule_proper_if(i) { continue; }
-                if self.try_rule_if_else(i) { continue; }
-                if self.try_rule_while_do(i) { continue; }
-                if self.try_rule_do_while(i) { continue; }
-                if self.try_rule_if_goto(i) { continue; }
+                // For Basic/Copy blocks: apply rules directly
+                if bt == crate::block::BlockType::Basic || bt == crate::block::BlockType::Copy {
+                    self.apply_rules_to_block(i);
+                    continue;
+                }
+
+                // For BlockList: recursively apply rules to children
+                if bt == crate::block::BlockType::List {
+                    let children = {
+                        let b = block.read().unwrap();
+                        match b.as_any().downcast_ref::<BlockList>() {
+                            Some(bl) => bl.children.clone(),
+                            None => continue,
+                        }
+                    };
+                    self.apply_rules_to_children(&children);
+                    continue;
+                }
+
+                // For BlockSwitch: recursively apply rules to case bodies
+                if bt == crate::block::BlockType::Switch {
+                    let cases_and_default = {
+                        let b = block.read().unwrap();
+                        match b.as_any().downcast_ref::<BlockSwitch>() {
+                            Some(sw) => {
+                                let mut all = sw.cases.clone();
+                                if let Some(ref dc) = sw.default_case { all.push(dc.clone()); }
+                                all
+                            }
+                            None => continue,
+                        }
+                    };
+                    self.apply_rules_to_children(&cases_and_default);
+                    continue;
+                }
             }
             iterations += 1;
             self.refresh_switch_cases();
@@ -242,29 +260,79 @@ impl<'a> CollapseStructure<'a> {
             }
         }
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
+        self.run_goto_cascade();
+    }
 
-        // Ghidra-style selectGoto loop: when interleaved rules reach fixpoint
-        // but blocks remain unstructured, mark edges as goto to break the
-        // impasse, then re-iterate ALL rules to fixpoint. Repeat until all
-        // blocks are structured or no more goto candidates.
-        // Ghidra-style selectGoto loop: runs for all functions with irreducible
-        // patterns. No block-count heuristic — correct behavior for all CFGs.
-        // BlockCondition/BlockIf sub-blocks are isolated (empty edges) by the
-        // first phase, so interleaved + goto cascade only process real blocks.
-        // The cat-rule successor type check prevents merging into structured blocks.
-        eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
+    /// Apply interleaved rules to a single block at graph index i.
+    fn apply_rules_to_block(&mut self, i: usize) {
+        if self.try_rule_cat(i) { return; }
+        if self.try_rule_proper_if(i) { return; }
+        if self.try_rule_if_else(i) { return; }
+        if self.try_rule_while_do(i) { return; }
+        if self.try_rule_do_while(i) { return; }
+        if self.try_rule_if_goto(i) { return; }
+    }
+
+    /// Apply interleaved rules recursively to children of a structured block.
+    /// For each child: if it's Basic/Copy, find its graph index and apply rules.
+    /// If it's BlockList, recurse into its children.
+    fn apply_rules_to_children(&mut self, children: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>]) {
+        for child in children {
+            let bt = child.read().unwrap().get_type();
+            match bt {
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy => {
+                    // Find the child's index in graph.blocks and apply rules
+                    let child_idx = child.read().unwrap().get_index() as usize;
+                    if child_idx < self.graph.get_size() {
+                        // Verify the graph still has this block
+                        if let Some(gb) = self.graph.get_block(child_idx) {
+                            let gb_ptr = Arc::as_ptr(&gb) as *const ();
+                            let child_ptr = Arc::as_ptr(child) as *const ();
+                            if gb_ptr == child_ptr {
+                                self.apply_rules_to_block(child_idx);
+                            }
+                        }
+                    }
+                }
+                crate::block::BlockType::List => {
+                    let sub_children = {
+                        let b = child.read().unwrap();
+                        match b.as_any().downcast_ref::<BlockList>() {
+                            Some(bl) => bl.children.clone(),
+                            None => continue,
+                        }
+                    };
+                    self.apply_rules_to_children(&sub_children);
+                }
+                crate::block::BlockType::Switch => {
+                    let sub_children = {
+                        let b = child.read().unwrap();
+                        match b.as_any().downcast_ref::<BlockSwitch>() {
+                            Some(sw) => {
+                                let mut all = sw.cases.clone();
+                                if let Some(ref dc) = sw.default_case { all.push(dc.clone()); }
+                                all
+                            }
+                            None => continue,
+                        }
+                    };
+                    self.apply_rules_to_children(&sub_children);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Ghidra-style selectGoto loop
+    fn run_goto_cascade(&mut self) {
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
-
-            // selectGoto: mark one edge as goto
             let goto_marked = self.select_and_mark_goto();
             if !goto_marked { break; }
             goto_rounds += 1;
-
-            // Inner fixpoint: re-iterate ALL rules until no change
             let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             loop {
                 if std::time::Instant::now() > inner_deadline { break; }
@@ -278,7 +346,7 @@ impl<'a> CollapseStructure<'a> {
                     if self.try_rule_if_else(i) { continue; }
                 }
                 self.refresh_switch_cases();
-                if self.change_count == pre_count { break; } // fixpoint
+                if self.change_count == pre_count { break; }
             }
         }
         eprintln!("[COLLAPSE] {} goto rounds={} blocks={}", self.name, goto_rounds, self.graph.get_size());

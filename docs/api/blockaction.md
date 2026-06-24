@@ -268,3 +268,13 @@ Create a new ActionNormalizeBranches instance
 - CBRANCH 块是 case body 的后继（被 ruleCaseFallthru 吸收到 BlockList 内），
   但 interleaved 规则不遍历 BlockList 内部。
 - 需要：递归规则应用——让 interleaved 规则能进入 BlockList 子块进行结构化。
+
+### 2026-06-25：递归规则应用
+
+- interleaved 循环现在递归进入 BlockList 和 BlockSwitch.cases 的子块。
+- apply_rules_to_block 和 apply_rules_to_children 实现。
+- run_goto_cascade 提取为独立方法。
+- gcc 53/53，175/176 测试，控制流差 130。
+- getparameter 仍 13 if——递归应用虽然触发了但 try_rule_proper_if 仍未匹配。
+  原因：case body 子块在 BlockList 内通过 Arc ptr 匹配 graph.blocks 时，
+  指针不匹配（ruleCaseFallthru 创建了新的 BlockList arc）。
