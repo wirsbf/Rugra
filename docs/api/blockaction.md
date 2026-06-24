@@ -318,3 +318,10 @@ Create a new ActionNormalizeBranches instance
 - try_rule_if_else_arc：直接接收 block Arc，使用 count_non_structural_in_edges。
 - apply_rules_to_children 调用 cat_arc + proper_if_arc + if_else_arc。
 - gcc 53/53，175/176 测试。getparameter 仍 9 if。
+
+### 2026-06-25：try_rule_if_no_exit_arc — block Arc 参数重构第4个方法
+
+- try_rule_if_no_exit_arc：直接接收 block Arc，使用 count_non_structural_in_edges。
+- 嵌套调用中禁用——non_structural_in 在嵌套块上过于激进（17 个测试回归）。
+- 保留方法定义供后续调试。
+- gcc 53/53，175/176 测试。getparameter 仍 9 if。

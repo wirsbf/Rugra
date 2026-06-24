@@ -286,6 +286,8 @@ impl<'a> CollapseStructure<'a> {
                         if self.try_rule_cat_arc(child, child_idx) { continue; }
                         if self.try_rule_proper_if_arc(child, child_idx) { continue; }
                         if self.try_rule_if_else_arc(child, child_idx) { continue; }
+                        // if_no_exit_arc disabled for nested — causes test regressions
+                        // if self.try_rule_if_no_exit_arc(child, child_idx) { continue; }
                         self.apply_rules_to_block(child_idx);
                     }
                 }
@@ -1088,19 +1090,18 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
+        self.try_rule_if_no_exit_arc(&block, i)
+    }
+
+    fn try_rule_if_no_exit_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
-
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
-
-        // Don't apply if this CBRANCH is part of a cascade chain. A cascade
-        // member is detected by: (a) its fallthrough leads to another CBRANCH,
-        // OR (b) one of its predecessors is a CBRANCH (cascade tail — reached
-        // via fallthrough from the previous CBRANCH in the chain).
+        // Skip cascade members
         let is_cascade_member = {
             let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
                 let ft = ft_edge.point.read().unwrap();
@@ -1129,32 +1130,15 @@ impl<'a> CollapseStructure<'a> {
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
-        let true_idx = true_block.read().unwrap().get_index();
-        let false_idx = false_block.read().unwrap().get_index();
         drop(b);
-
-        // Protect switch case bodies
-        if self.switch_case_indices.contains(&true_idx)
-            || self.switch_case_indices.contains(&false_idx) {
-            return false;
-        }
-        // Also check CASE_BODY flag (set by refresh_switch_cases)
-        if true_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0
-            || false_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0 {
-            return false;
-        }
 
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            if c.size_in() != 1 { continue; }
-            if c.size_out() != 0 { continue; } // Must have no out-edge (RETURN/exit)
-            // Protect: don't extract switch case bodies — they must stay inside
-            // their BlockSwitch or the emitted `case` label ends up outside the switch.
-            if self.switch_case_indices.contains(&c_idx) { continue; }
-            // Also check CASE_BODY flag directly on the clause
-            if c.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
+            let non_structural_in = self.count_non_structural_in_edges(&c);
+            if non_structural_in != 1 { continue; }
+            if c.size_out() != 0 { continue; }
             drop(c);
 
             let negated = dir == 1;
@@ -1165,12 +1149,20 @@ impl<'a> CollapseStructure<'a> {
                     if_body: clause.clone(),
                     else_body: None,
                     negated,
-                    incoming: Vec::new(),
-                    outgoing: Vec::new(),
-                    parent: None,
-                    flags: 0,
+                    incoming: Vec::new(), outgoing: Vec::new(),
+                    parent: None, flags: 0,
                 }));
-            self.graph.blocks[i] = if_block;
+            let size = self.graph.get_size();
+            if graph_idx < size {
+                let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
+                if cur == cond_idx { self.graph.blocks[graph_idx] = if_block.clone(); }
+            }
+            self.update_switch_case_reference(cond_idx, &if_block);
+            let cidx = clause.read().unwrap().get_index() as usize;
+            if cidx < size {
+                let cf = clause.read().unwrap().get_flags();
+                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
+            }
             self.change_count += 1;
             return true;
         }
