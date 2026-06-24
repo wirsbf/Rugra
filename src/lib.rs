@@ -47,6 +47,7 @@
 // Core Ghidra-aligned modules
 pub mod action; // ← action.hh
 pub mod address; // ← address.hh
+pub mod analysis; // ← type propagation
 pub mod block; // ← block.hh
 pub mod blockaction;
 pub mod coreaction; // ← coreaction.hh

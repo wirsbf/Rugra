@@ -133,6 +133,7 @@ impl ActionDatabase {
         // varnodes inherit types from the Unique-space temporaries.
         decompile_group.add_action(Box::new(ActionTypeInfer::new()));
         decompile_group.add_action(Box::new(ActionCopyPropagate::new()));
+        decompile_group.add_action(Box::new(ActionTypePropagate::new()));
         decompile_group.add_action(Box::new(ActionCallParams::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
         decompile_group.add_action(Box::new(ActionBlockStructure::new()));
@@ -141,6 +142,23 @@ impl ActionDatabase {
 
         self.register_action(Box::new(decompile_group));
     }
+}
+
+/// ActionTypePropagate: Conservative P-code struct pointer type propagation.
+/// Marks varnodes used as base in >=2 distinct small (<256B, 8-byte-aligned)
+/// offsets via INT_ADD → LOAD/STORE. Mirrors Ghidra's ActionTypePropagate.
+pub struct ActionTypePropagate;
+
+impl ActionTypePropagate {
+    pub fn new() -> Self { Self }
+}
+
+impl Action for ActionTypePropagate {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        crate::analysis::type_infer::propagate_types(fd);
+        Ok(0)
+    }
+    fn get_name(&self) -> &str { "typepropagate" }
 }
 
 /// Status codes for Action execution

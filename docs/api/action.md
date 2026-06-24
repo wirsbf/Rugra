@@ -563,3 +563,6 @@ Funcdata ready
 ## 一句话总结
 
 `action.rs` 是 Rugra 当前 **Action / Rule 分析流水线的抽象与调度入口**：它定义了什么是动作、什么是规则、如何把动作组织成组、如何通过数据库建立默认分析管线。它是当前主线架构中非常关键的过程组织层，但不应被文档夸大成“所有分析能力已成熟”或“与 Ghidra 动作体系已完全一致”的证明。
+### 2026-06-24：ActionTypePropagate 集成
+
+- ActionTypePropagate 在 ActionCopyPropagate 之后运行，保守标记 struct pointer varnode。

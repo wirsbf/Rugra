@@ -389,3 +389,6 @@
    等当前真实导出对象理解整个框架
 
 如果后续 `lib.rs` 重新恢复高层 facade API，本文档应同步更新；在此之前，任何继续把旧 `Decompiler` 当作当前公开主接口的说明，都应视为过期描述。
+### 2026-06-24：analysis 模块
+
+- 新增 `pub mod analysis` 包含 type_infer（保守 ActionTypePropagate）。

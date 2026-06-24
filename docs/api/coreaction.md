@@ -230,3 +230,12 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 - 移除所有不确定的 httpd ap_* 函数从 known_param_count（ap_get_server_built/ap_pregcomp/ap_pregfree/ap_strcasestr/ap_stripprefix/ap_os_is_path_absolute/ap_is_matchexp/ap_field_noparam/ap_regcomp/ap_regfree/ap_mpm_query/ap_update_vhost_from_headers/ap_vhost_iterate_given_conn/ap_open_stderr_log/ap_setup_prelinked_modules/ap_show_mpm/ap_get_local_host/ap_set_name_virtual_host/ap_init_vhost_config 等）。
 - 只保留标准库函数 + 确定的 curl/httpd 函数。
 - httpd 参数差 21→16（低于初始 17！）。
+
+### 2026-06-24：保守 ActionTypePropagate（≥2 不同小偏移）
+
+- 新增 `src/analysis/type_infer.rs`：P-code 级保守类型传播。
+- 只标记被 ≥2 个不同 8 字节对齐小偏移（<256B）访问的 varnode 为 `_struct *`。
+- COPY 链传播：INT_ADD base → COPY target 也标记。
+- 集成到 action pipeline（ActionCopyPropagate 之后）。
+- 效果：curl 3 个、httpd 2 个 varnode 被标记为 _struct *（保守，避免 type conflict）。
+- gcc 53/53，175/176 测试。
