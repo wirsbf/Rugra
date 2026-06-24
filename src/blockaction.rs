@@ -281,7 +281,6 @@ impl<'a> CollapseStructure<'a> {
             let bt = child.read().unwrap().get_type();
             match bt {
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy => {
-                    // Use block index to find the graph position (not Arc ptr)
                     let child_idx = child.read().unwrap().get_index() as usize;
                     if child_idx < self.graph.get_size() {
                         self.apply_rules_to_block(child_idx);

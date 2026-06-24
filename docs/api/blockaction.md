@@ -286,3 +286,8 @@ Create a new ActionNormalizeBranches instance
 - getparameter 仍 13 if——rules 在递归子块上不触发因为
   try_rule_proper_if 检查的是 graph.blocks[i] 而子块可能已被
   ruleCaseFallthru 吸收到 BlockList 中（graph.blocks[idx] 是空壳）。
+
+### 2026-06-25：临时块安装实验（已回退）
+
+- 尝试临时安装子块 Arc 到 graph.blocks[idx]——破坏 9 个测试（图状态被永久修改）。
+- 回退到 graph-index 查找。需要完整的 block Arc 参数重构。
