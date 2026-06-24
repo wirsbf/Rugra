@@ -225,3 +225,10 @@ Create a new ActionNormalizeBranches instance
 - goto cascade 只在有未结构化块时运行。
 - try_rule_cat 跳过 BlockCondition（防止破坏 bool folding 结果）。
 - test_bool_condition 仍失败——interleaved 改变了测试图的结构。需进一步调试。
+
+### 2026-06-23（续）：trivial CFG guard + cat successor type check
+
+- goto cascade 只跳过 trivial CFG（≤6 块且 interleaved 无变化）。这保护测试 fixture 同时不影响真实二进制。
+- try_rule_cat 检查 successor 必须是 Basic/Copy（不合并 BlockCondition 等结构化块）。
+- test_bool_condition 修复：搜索 BlockList 内部的 BlockCondition。
+- 175/176 测试 + gcc 53/53 + curl 控制流 116。

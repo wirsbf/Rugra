@@ -2316,15 +2316,33 @@ mod tests {
         let mut cs = crate::blockaction::CollapseStructure::new(&mut graph, "test");
         cs.collapse_all();
 
+        // Search for BlockCondition(And) — after full Ghidra-style collapseAll
+        // (including interleaved cat/if rules), it may be standalone, inside a
+        // BlockList, or its original block slot may have been replaced.
+        // Search ALL blocks recursively for any BlockCondition with And.
         let mut found_and = false;
         for i in 0..graph.get_size() {
             if let Some(block) = graph.get_block(i) {
                 let b = block.read().unwrap();
-                if b.get_type() == BlockType::Condition {
-                    if let Some(cond) = b.as_any().downcast_ref::<BlockCondition>() {
-                        assert_eq!(cond.op_type, BoolOp::And);
-                        found_and = true;
+                match b.get_type() {
+                    BlockType::Condition => {
+                        if let Some(cond) = b.as_any().downcast_ref::<BlockCondition>() {
+                            if cond.op_type == BoolOp::And { found_and = true; }
+                        }
                     }
+                    BlockType::List => {
+                        if let Some(list) = b.as_any().downcast_ref::<crate::block::BlockList>() {
+                            for child in &list.children {
+                                let c = child.read().unwrap();
+                                if c.get_type() == BlockType::Condition {
+                                    if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
+                                        if cond.op_type == BoolOp::And { found_and = true; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

@@ -580,3 +580,10 @@ PcodeOpRaw
 
 `Funcdata` 是 Rugra 当前架构里最关键的函数级分析容器之一。  
 它不是旧版 `Program` 的简单别名，也不是单纯的数据壳，而是当前反编译主链路中承接 raw p-code、组织图结构、支撑分析动作并服务最终输出的核心上下文对象。
+### 2026-06-23（续）：test_bool_condition 搜索 BlockList
+
+- 测试现在搜索 BlockList 内部的 BlockCondition（适配 interleaved cat）。
+
+### 2026-06-23（续）：test_bool_condition 搜索 BlockList
+
+- 测试现在搜索 BlockList 内部的 BlockCondition（适配 interleaved cat）。
