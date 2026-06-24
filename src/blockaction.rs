@@ -236,8 +236,19 @@ impl<'a> CollapseStructure<'a> {
         // but blocks remain unstructured, mark edges as goto to break the
         // impasse, then re-iterate ALL rules to fixpoint. Repeat until all
         // blocks are structured or no more goto candidates.
-        // Ghidra-style selectGoto loop: runs for ALL functions (no hacks).
-        // Case label protection is handled in printc's emit layer, not here.
+        // Ghidra-style selectGoto loop: only runs if interleaved phase left
+        // unstructured blocks (non-isolated blocks remain). This prevents
+        // goto cascade from interfering with reducible CFGs (like test fixtures).
+        let has_unstructured = (0..self.graph.get_size()).any(|i| {
+            self.graph.get_block(i).map_or(false, |b| {
+                let b = b.read().unwrap();
+                b.size_in() > 0 || b.size_out() > 0
+            })
+        });
+        if !has_unstructured {
+            eprintln!("[COLLAPSE] {} all blocks structured, skipping goto cascade", self.name);
+            return;
+        }
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
@@ -750,6 +761,8 @@ impl<'a> CollapseStructure<'a> {
         };
         let b = block.read().unwrap();
         if b.size_out() != 1 { return false; }
+        // Don't merge BlockCondition (&&/||) — it's a structured bool fold result
+        if b.get_type() == crate::block::BlockType::Condition { return false; }
         let succ_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let succ = succ_edge.point.clone();
         let succ_idx = succ.read().unwrap().get_index() as usize;

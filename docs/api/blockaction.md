@@ -219,3 +219,9 @@ Create a new ActionNormalizeBranches instance
 - selectGoto 跳过所有 cascade member（fallthrough→CBRANCH 或 pred→CBRANCH ft）。
 - 但 httpd main case label 问题来自 BlockSwitch（非 cascade）的 case body 被 goto 提取。
 - 需要 emit 层修复：BlockSwitch emit 时确保所有 case label 在正确 switch 体内。
+
+### 2026-06-23（续）：has_unstructured guard + BlockCondition cat protection
+
+- goto cascade 只在有未结构化块时运行。
+- try_rule_cat 跳过 BlockCondition（防止破坏 bool folding 结果）。
+- test_bool_condition 仍失败——interleaved 改变了测试图的结构。需进一步调试。
