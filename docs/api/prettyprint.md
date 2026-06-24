@@ -144,3 +144,16 @@ Emitter that discards all output (used for discovery pass)
   文本级 post-process 无法正确注入 struct 定义（作用域问题）。
 - Ghidra 通过 DWARF 类型库 + P-code 类型传播实现。
 - 保持 *(long *)(ptr + offset) 格式（有效 C）。
+
+### 2026-06-23（续）：ActionTypePropagate 实验结论
+
+- 实现了 ActionTypePropagate（P-code 级 struct pointer 类型传播）。
+- ActionTypePropagate 标记所有 LOAD/STORE 地址中的 base varnode 为 _struct *。
+- 问题：标记过于激进——所有参与指针算术的变量都被标记为 _struct *，
+  导致 type conflict（_struct * 赋值给 long，gcc 拒绝）。
+- 需要保守启发式：只有被 >=2 个不同小偏移（<256B）访问的变量才标记为 struct pointer。
+- 结构体字段恢复（->field_N）需要：
+  1. ActionTypePropagate 只标记真正的 struct pointer（保守启发式）
+  2. printc 根据标记的 varnode 生成 per-function _struct typedef with fields
+  3. printc LOAD/STORE emit 时检测 struct pointer varnode → 输出 ->field_N
+- 当前所有 struct 相关实验已回退，保持 53/53。
