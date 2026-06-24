@@ -1040,8 +1040,10 @@ impl<'a> CollapseStructure<'a> {
             let non_structural_in = self.count_non_structural_in_edges(&c);
             if non_structural_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
-            // Protect switch case bodies
-            if self.switch_case_indices.contains(&c_idx) { continue; }
+            // Note: we no longer skip switch case body blocks here — the DEAD flag
+            // and orphan case label removal handle case label integrity at emit time.
+            // Removing this guard allows CBRANCH blocks inside case bodies to be
+            // structured into BlockIf, which is what we need for control-flow recovery.
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             let target_idx = clause_out.point.read().unwrap().get_index();
             drop(c);

@@ -291,3 +291,9 @@ Create a new ActionNormalizeBranches instance
 
 - 尝试临时安装子块 Arc 到 graph.blocks[idx]——破坏 9 个测试（图状态被永久修改）。
 - 回退到 graph-index 查找。需要完整的 block Arc 参数重构。
+
+### 2026-06-25：case body guard 移除实验
+
+- 移除 try_rule_proper_if 中的 switch_case_indices 检查。
+- 无效果——proper_if 仍不匹配（clause size_in 或 target_idx 不满足条件）。
+- 确认：规则无法匹配不是因为 guard，而是因为 graph-index vs block-Arc 的根本不匹配。
