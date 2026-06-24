@@ -325,3 +325,10 @@ Create a new ActionNormalizeBranches instance
 - 嵌套调用中禁用——non_structural_in 在嵌套块上过于激进（17 个测试回归）。
 - 保留方法定义供后续调试。
 - gcc 53/53，175/176 测试。getparameter 仍 9 if。
+
+### 2026-06-25：移除 dominator tree expansion（对齐 Ghidra）
+
+- Ghidra 的 f_switch_out 只标记 case body 入口块，不标记内部块。
+- 移除了 switch_case_indices 的 dominator tree expansion。
+- 这让 interleaved 规则能处理 case body 内部的 CBRANCH 块。
+- gcc 53/53，175/176 测试。getparameter 仍 9 if。

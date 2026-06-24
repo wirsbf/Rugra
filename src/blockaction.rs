@@ -844,20 +844,13 @@ impl<'a> CollapseStructure<'a> {
                 current = next;
             }
         }
-        // Dominator-based case body expansion: for each case body, add all
-        // blocks it dominates (the case body sub-tree). This is precise —
-        // only blocks truly inside the case body (on all paths from case entry)
-        // are marked, unlike BFS which over-marks through fallthrough chains.
-        let case_bodies: Vec<i32> = self.switch_case_indices.iter().copied().collect();
-        for blk_idx in 0..size as i32 {
-            // Check if this block is dominated by any case body
-            for &case_idx in &case_bodies {
-                if self.dominates_idx(case_idx, blk_idx) {
-                    self.switch_case_indices.insert(blk_idx);
-                    break;
-                }
-            }
-        }
+        // NOTE: Ghidra only marks case body ENTRY blocks as f_switch_out.
+        // It does NOT mark blocks dominated by case bodies. Internal blocks
+        // inside case bodies are handled by collapseInternal's flat iteration
+        // (they're not isSwitchOut(), so rules process them normally).
+        // We must NOT expand switch_case_indices via dominator tree — it
+        // prevents interleaved rules from structuring CBRANCH blocks inside
+        // case bodies, which is the exact problem we've been hitting.
         // Set CASE_BODY flag on all collected case body blocks (batch, no
         // nested lock issues since we iterate by index)
         for &idx in &self.switch_case_indices {
