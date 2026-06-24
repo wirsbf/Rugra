@@ -239,3 +239,10 @@ Create a new ActionNormalizeBranches instance
 - selectGoto 对所有块检查 is_structured_child（是否是任何结构化块的子组件）。
 - is_structured_child 检查 BlockCondition.first/second、BlockIf.condition/if_body/else_body、BlockWhileDo.condition/body、BlockDoWhile.condition、BlockList.children。
 - 175/176 测试 + gcc 53/53 + curl 控制流 123。
+
+### 2026-06-24：ruleCaseFallthru 实现
+
+- 实现了 `collapse_case_fallthru()`：扫描 BlockSwitch 的 case body，将 fallthrough 后继块吸收到 BlockList。
+- build_fallthrough_chain：沿 out[0] 递归收集 fallthrough 后继（单入口 Basic 块），组成 BlockList。
+- gcc 53/53，175/176 测试维持。getparameter 从 15→13 if（部分吸收但 switch 外的 if 仍存在）。
+- 控制流差从 123→130（compare_ghidra 的计数差异，实际 case body 内 if 增加了）。

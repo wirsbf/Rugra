@@ -163,6 +163,7 @@ impl<'a> CollapseStructure<'a> {
             self.collapse_bool_conditions();
             self.collapse_switches();
             self.collapse_cbranch_cascades();
+            self.collapse_case_fallthru();
             self.refresh_switch_cases();
             self.collapse_sequences();
 
@@ -2255,7 +2256,129 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    /// Extract the compared variable from a block's ops.
+    /// ruleCaseFallthru: absorb fallthrough successor blocks into switch case
+    /// bodies. When a case body block doesn't end with RETURN/BREAK, its
+    /// out-edge target is a "fallthrough" successor. If that successor has
+    /// a single in-edge (from this case body), merge it into a BlockList.
+    /// Mirrors Ghidra's ruleCaseFallthru (blockaction.cc:1707).
+    fn collapse_case_fallthru(&mut self) {
+        use crate::block::block_flags;
+        let size = self.graph.get_size();
+
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let bt = {
+                let b = block.read().unwrap();
+                b.get_type()
+            };
+            if bt != crate::block::BlockType::Switch { continue; }
+
+            // Read case body indices and check for fallthrough
+            let (case_indices, default_idx) = {
+                let b = block.read().unwrap();
+                let sw = match b.as_any().downcast_ref::<BlockSwitch>() {
+                    Some(s) => s, None => continue,
+                };
+                let ci: Vec<i32> = sw.cases.iter().map(|c| c.read().unwrap().get_index()).collect();
+                let di = sw.default_case.as_ref().map(|d| d.read().unwrap().get_index());
+                (ci, di)
+            };
+
+            // For each case, build fallthrough chain and create BlockList
+            let mut new_cases: Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> = Vec::new();
+            for &case_idx in &case_indices {
+                let case_body = match self.graph.get_block(case_idx as usize) {
+                    Some(b) => b, None => { new_cases.push(None); continue; }
+                };
+                let chain = self.build_fallthrough_chain(&case_body, size, i, &case_indices, default_idx);
+                if chain.len() > 1 {
+                    let lb: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                        Arc::new(RwLock::new(crate::block::BlockList::new(case_idx, chain)));
+                    new_cases.push(Some(lb));
+                    self.change_count += 1;
+                } else {
+                    new_cases.push(None);
+                }
+            }
+
+            // Build default fallthrough chain
+            let new_default: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = if let Some(di) = default_idx {
+                let def_body = match self.graph.get_block(di as usize) {
+                    Some(b) => Some(b), None => None,
+                };
+                if let Some(db) = def_body {
+                    let chain = self.build_fallthrough_chain(&db, size, i, &case_indices, default_idx);
+                    if chain.len() > 1 {
+                        let lb: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                            Arc::new(RwLock::new(crate::block::BlockList::new(di, chain)));
+                        self.change_count += 1;
+                        Some(lb)
+                    } else { None }
+                } else { None }
+            } else { None };
+
+            // Apply changes to BlockSwitch by replacing it
+            if new_cases.iter().any(|c| c.is_some()) || new_default.is_some() {
+                let b = block.read().unwrap();
+                let sw = match b.as_any().downcast_ref::<BlockSwitch>() {
+                    Some(s) => s, None => continue,
+                };
+                let mut new_case_list = Vec::new();
+                for (idx, nc) in new_cases.iter().enumerate() {
+                    if let Some(ref lb) = nc {
+                        new_case_list.push(lb.clone());
+                    } else {
+                        new_case_list.push(sw.cases[idx].clone());
+                    }
+                }
+                let new_def = new_default.or_else(|| sw.default_case.clone());
+                let ctrl_idx = sw.index;
+                let ctrl = sw.control.clone();
+                let cv = sw.case_values.clone();
+                let iv = sw.index_varnode.clone();
+                drop(b);
+
+                let new_sw: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(BlockSwitch {
+                        index: ctrl_idx, control: ctrl, cases: new_case_list,
+                        default_case: new_def, case_values: cv, index_varnode: iv,
+                        incoming: Vec::new(), outgoing: Vec::new(), parent: None, flags: 0,
+                    }));
+                self.graph.blocks[i] = new_sw;
+            }
+        }
+    }
+
+    fn build_fallthrough_chain(
+        &self, start: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        size: usize, switch_idx: usize,
+        case_indices: &[i32], default_idx: Option<i32>,
+    ) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        use crate::block::block_flags;
+        let mut chain = vec![start.clone()];
+        let mut current = start.clone();
+        loop {
+            let cur = current.read().unwrap();
+            if cur.get_flags() & block_flags::RETURN_TERMINAL != 0 { break; }
+            if cur.size_out() == 0 { break; }
+            let succ_edge = match cur.get_out(0) { Some(e) => e, None => break };
+            let succ = succ_edge.point.clone();
+            let succ_idx = succ.read().unwrap().get_index();
+            drop(cur);
+            if succ_idx as usize >= size || succ_idx as usize == switch_idx { break; }
+            if case_indices.contains(&succ_idx) { break; }
+            if default_idx == Some(succ_idx) { break; }
+            let succ_in = succ.read().unwrap().size_in();
+            if succ_in != 1 { break; }
+            let st = succ.read().unwrap().get_type();
+            if st != crate::block::BlockType::Basic && st != crate::block::BlockType::Copy { break; }
+            if chain.iter().any(|b| b.read().unwrap().get_index() == succ_idx) { break; }
+            chain.push(succ.clone());
+            current = succ;
+        }
+        chain
+    }
+
     ///
     /// Handles two patterns:
     /// 1. Direct: CBRANCH(_, INT_EQUAL(var, const))
