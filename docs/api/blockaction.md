@@ -495,3 +495,10 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
   避免把它们错误纳入 cascade chain 导致 duplicate case_values。
 - 验证：176/176 测试。curl 24/24。httpd 仍 28/29（ap_getparents duplicate case 未完全修复，
   其他路径的 case_values 计算问题）。
+
+### 2026-06-26（续）：identify_internal 捕获 install_idx 块的外部入边
+
+- self_identify 现在也捕获 install_idx 块（cond/head）的外部入边（排除 consumed 块和自环），
+  使结构化块（如 WhileDo）从函数入口可达。仅捕获入边（不捕获出边，避免 httpd 边双重计数）。
+- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（11 while）。
+- getparameter WhileDo 仍不可达（head=21 仅自环前驱，函数特定 CFG 问题）。

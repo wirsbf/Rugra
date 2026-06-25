@@ -1144,6 +1144,32 @@ impl<'a> CollapseStructure<'a> {
         let mut new_in: Vec<crate::block::BlockEdge> = Vec::new();
         let mut new_out: Vec<crate::block::BlockEdge> = Vec::new();
 
+        // Capture external in-edges of the install_idx block (cond/head).
+        // These are in-edges whose source is NOT in consumed_set AND NOT the
+        // install_idx block itself (self-loop) AND NOT the new_block (avoid
+        // double-counting). Without this, WhileDo loops whose head was at
+        // install_idx become unreachable (only self-loop preds remain).
+        // NOTE: do NOT capture out-edges of install_idx here — the head's
+        // out-edges go to consumed clauses (internal) or merge blocks (already
+        // captured via the consumed blocks' boundary out-edges). Capturing them
+        // here would double-count and break httpd.
+        if install_idx < size {
+            if let Some(cb) = self.graph.get_block(install_idx) {
+                let c = cb.read().unwrap();
+                for slot in 0..c.size_in() {
+                    if let Some(e) = c.get_in(slot) {
+                        let src_idx = e.point.read().unwrap().get_index();
+                        // Exclude: consumed blocks, install_idx itself (self-loop),
+                        // and the new_block (not yet installed, but guard anyway).
+                        if !consumed_set.contains(&src_idx)
+                            && src_idx != install_idx as i32 {
+                            new_in.push(crate::block::BlockEdge::new(e.point.clone(), new_out.len() as i32));
+                        }
+                    }
+                }
+            }
+        }
+
         for &c_idx in consumed_indices {
             let ci = c_idx as usize;
             if ci >= size { continue; }
