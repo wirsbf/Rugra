@@ -553,3 +553,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 - tracedag.rs 实现 BadEdgeScore 评分（siblingedge/terminal/distance/depth）和 visit-count 追踪。
 - 当前仍 DISABLED：open_branch/retire_branch 需更新 visit-count。验证（禁用）：176/176 测试。
+
+### 2026-06-26（续）：TraceDAG back-edge 过滤（仍禁用）
+
+- open_branch 跳过 back-edge（target index <= dest）。
+- 启用时 gcc 无回归但 test_bool_condition_folding 失败。仍 DISABLED。

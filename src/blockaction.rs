@@ -360,12 +360,9 @@ impl<'a> CollapseStructure<'a> {
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
             // consumes the marked blocks (newBlockGoto), preventing infinite loops.
             let clip_marked = if !goto_marked { self.clip_extra_roots() } else { false };
-            // TraceDAG: DISABLED — the implementation needs visit-count updates
-            // in open_branch/retire_branch (currently only remove_trace updates it),
-            // causing stale counts and wrong edge selection. Needs further work.
-            // let tdag_marked = if !goto_marked && !clip_marked {
-            //     self.run_tracedag()
-            // } else { false };
+            // TraceDAG: DISABLED — still marks wrong edges on simple functions
+            // (test_bool_condition_folding regression). Needs isLoopDAGOut-style
+            // edge filtering and visit-count verification.
             let tdag_marked = false;
             if !goto_marked && !clip_marked && !tdag_marked { break; }
             goto_rounds += 1;

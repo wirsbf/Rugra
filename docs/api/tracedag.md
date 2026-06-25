@@ -36,3 +36,9 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - remove_trace 更新 visit-count（标记 goto 时增加计数，忽略该边）。
 - 当前仍 DISABLED：open_branch/retire_branch 需在节点打开/退休时更新 visit-count，
   否则计数过时导致错误边选择。需进一步修复后启用。
+
+## 2026-06-26 更新2：back-edge 过滤
+
+- open_branch 现在跳过 back-edge（target index <= dest），防止追踪回环。
+- 启用测试时 gcc 无回归（curl 24/24, httpd 29/29）但 test_bool_condition_folding 失败
+  （简单函数被错误标记边）。仍 DISABLED。

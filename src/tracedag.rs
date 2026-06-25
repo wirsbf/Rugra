@@ -235,10 +235,14 @@ impl<'a> TraceDAG<'a> {
             paths: Vec::new(),
         });
 
-        // Create sub-traces for each out-edge of dest
+        // Create sub-traces for each out-edge of dest.
+        // Skip back-edges (target index < dest, roughly reverse-post-order)
+        // and edges to blocks already opened (avoid cycles).
         let size_out = self.size_out(dest);
         for eo in 0..size_out {
             if let Some(target) = self.get_out(dest, eo) {
+                // Skip back-edges (simple heuristic: target index <= dest)
+                if target <= dest { continue; }
                 let new_trace_idx = self.traces.len();
                 self.traces.push(BlockTrace {
                     top_bp: new_bp_idx,
