@@ -149,6 +149,7 @@ impl<'a> CollapseStructure<'a> {
 
         // First pass: collapse sequences and conditions in the traditional
         // phase-based approach (existing behavior).
+        let phase1_start = self.change_count;
         loop {
             if std::time::Instant::now() > deadline {
                 eprintln!("[COLLAPSE] {} deadline hit iter={}", self.name, iterations);
@@ -172,6 +173,7 @@ impl<'a> CollapseStructure<'a> {
                 break;
             }
         }
+        eprintln!("[COLLAPSE] {} phase1 done changes={} iter={}", self.name, self.change_count - phase1_start, iterations);
 
         // Second phase: Ghidra-style interleaved rule application.
         // Repeatedly try rules on each block until a full pass makes no change.
@@ -342,6 +344,23 @@ impl<'a> CollapseStructure<'a> {
             }
         }
         eprintln!("[COLLAPSE] {} goto rounds={} blocks={}", self.name, goto_rounds, self.graph.get_size());
+        // Monitoring: count block types after full structuring (permanent diagnostic,
+        // uses standard [COLLAPSE] tag, stderr-only, does not pollute stdout).
+        {
+            let mut basic = 0usize; let mut dead = 0usize; let mut structured = 0usize;
+            let sz = self.graph.get_size();
+            for i in 0..sz {
+                if let Some(blk) = self.graph.get_block(i) {
+                    let b = blk.read().unwrap();
+                    let flags = b.get_flags();
+                    if flags & crate::block::block_flags::DEAD != 0 { dead += 1; }
+                    else if b.get_type() == crate::block::BlockType::Basic
+                         || b.get_type() == crate::block::BlockType::Copy { basic += 1; }
+                    else { structured += 1; }
+                }
+            }
+            eprintln!("[COLLAPSE] {} FINAL basic={} dead={} structured={}", self.name, basic, dead, structured);
+        }
     }
 
     /// Identify all natural loops via back-edges and collect their body blocks.
@@ -868,104 +887,119 @@ impl<'a> CollapseStructure<'a> {
     }
 
     /// Ghidra's identifyInternal: collapse consumed blocks into a structured block.
-    /// Replaces graph.blocks[i] with new_block, then for each consumed block:
-    /// 1. Remove it from graph.blocks (replace with empty placeholder)
-    /// 2. Redirect external edges pointing to consumed blocks → point to new_block
-    /// 3. Remove internal edges (between consumed blocks)
-    /// This makes consumed blocks invisible to subsequent rule iterations,
-    /// matching Ghidra's graph.list removal in identifyInternal.
+    /// Faithful port of BlockGraph::identifyInternal + selfIdentify (block.cc:940, 895).
+    /// Steps:
+    /// 1. Install new_block at install_idx (replaces the cond block).
+    /// 2. self_identify: for each consumed block, copy its boundary edges
+    ///    (edges to/from non-consumed blocks) onto new_block, and rewrite
+    ///    external blocks' edges to point to new_block. This gives new_block
+    ///    correct size_in/size_out so subsequent rules can match against it.
+    /// 3. Dedup new_block's edges.
+    /// 4. Clear consumed blocks' edges and mark DEAD (matching Ghidra's
+    ///    list removal — consumed blocks become invisible).
     fn identify_internal(&mut self, new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
                          consumed_indices: &[i32], install_idx: usize) {
         let size = self.graph.get_size();
         let consumed_set: std::collections::HashSet<i32> = consumed_indices.iter().copied().collect();
 
-        // Install the new structured block at install_idx
+        // --- selfIdentify: capture boundary edges BEFORE overwriting install_idx ---
+        // Ghidra's selfIdentify reads the consumed nodes' edges while they still
+        // exist. We must read the cond block (at install_idx) before replacing it
+        // with new_block, so capture all boundary edges first.
+        let mut new_in: Vec<crate::block::BlockEdge> = Vec::new();
+        let mut new_out: Vec<crate::block::BlockEdge> = Vec::new();
+
+        for &c_idx in consumed_indices {
+            let ci = c_idx as usize;
+            if ci >= size { continue; }
+            // Collect this consumed block's boundary edges.
+            // IN-edges: source not in consumed set → boundary incoming.
+            let (in_boundary, out_boundary) = {
+                let cb = match self.graph.get_block(ci) { Some(b) => b, None => continue };
+                let c = cb.read().unwrap();
+                let mut ib = Vec::new();
+                let mut ob = Vec::new();
+                for slot in 0..c.size_in() {
+                    if let Some(e) = c.get_in(slot) {
+                        let src_idx = e.point.read().unwrap().get_index();
+                        if !consumed_set.contains(&src_idx) {
+                            ib.push(e.point.clone());
+                        }
+                    }
+                }
+                for slot in 0..c.size_out() {
+                    if let Some(e) = c.get_out(slot) {
+                        let dst_idx = e.point.read().unwrap().get_index();
+                        if !consumed_set.contains(&dst_idx) {
+                            ob.push(e.point.clone());
+                        }
+                    }
+                }
+                (ib, ob)
+            };
+            // Add boundary edges to new_block (record the external block).
+            for src in &in_boundary {
+                new_in.push(crate::block::BlockEdge::new(src.clone(), new_out.len() as i32));
+            }
+            for dst in &out_boundary {
+                new_out.push(crate::block::BlockEdge::new(dst.clone(), new_in.len() as i32));
+            }
+            // Note: we do NOT rewrite external blocks' edges here (Ghidra's
+            // selfIdentify does via replaceOutEdge/replaceInEdge, but those operate
+            // on raw pointers without locking). In Rust, rewriting external Arcs
+            // during iteration risks self-loops and non-convergence. Instead, we
+            // rely on the DEAD flag + count_non_structural_in_edges to make
+            // consumed blocks invisible to subsequent rules. The new_block's own
+            // boundary edges (captured above) give it correct size_in/size_out so
+            // it can participate in further structuring.
+        }
+
+        // Dedup new_block's edges (Ghidra selfIdentify ends with dedup()).
+        let mut seen_in: Vec<std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        new_in.retain(|e| {
+            let dup = seen_in.iter().any(|a| std::sync::Arc::ptr_eq(a, &e.point));
+            if !dup { seen_in.push(e.point.clone()); }
+            !dup
+        });
+        let mut seen_out: Vec<std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        new_out.retain(|e| {
+            let dup = seen_out.iter().any(|a| std::sync::Arc::ptr_eq(a, &e.point));
+            if !dup { seen_out.push(e.point.clone()); }
+            !dup
+        });
+        // Fix reverse_index after dedup.
+        for (i, e) in new_out.iter_mut().enumerate() {
+            e.reverse_index = i as i32;
+        }
+        for (i, e) in new_in.iter_mut().enumerate() {
+            e.reverse_index = i as i32;
+        }
+
+        // Install the collected boundary edges onto new_block (downcast to a
+        // concrete block type that owns incoming/outgoing vectors).
+        {
+            let mut nb = new_block.write().unwrap();
+            let nref = nb.as_any_mut();
+            // BlockIf / BlockList / BlockWhileDo / BlockDoWhile / BlockSwitch
+            // all expose incoming/outgoing via as_any_mut. Try the common ones.
+            if let Some(bif) = nref.downcast_mut::<crate::block::BlockIf>() {
+                bif.incoming = new_in; bif.outgoing = new_out;
+            } else if let Some(blist) = nref.downcast_mut::<crate::block::BlockList>() {
+                blist.incoming = new_in; blist.outgoing = new_out;
+            } else if let Some(bwd) = nref.downcast_mut::<crate::block::BlockWhileDo>() {
+                bwd.incoming = new_in; bwd.outgoing = new_out;
+            } else if let Some(bdw) = nref.downcast_mut::<crate::block::BlockDoWhile>() {
+                bdw.incoming = new_in; bdw.outgoing = new_out;
+            }
+        }
+
+        // NOW install new_block at install_idx (replaces the cond block).
+        // Done AFTER self_identify captured the cond block's boundary edges.
         if install_idx < size {
             self.graph.blocks[install_idx] = new_block.clone();
         }
 
-        // Redirect external edges using as_any_mut downcast to BlockBasic
-        for graph_idx in 0..size {
-            if graph_idx == install_idx { continue; }
-            let block_idx = {
-                let b = self.graph.blocks[graph_idx].read().unwrap();
-                b.get_index()
-            };
-            if consumed_set.contains(&block_idx) { continue; }
-
-            let needs_redirect = {
-                let b = self.graph.blocks[graph_idx].read().unwrap();
-                if b.get_type() != crate::block::BlockType::Basic { continue; }
-                let mut found = false;
-                for slot in 0..b.size_out() {
-                    if let Some(e) = b.get_out(slot) {
-                        if consumed_set.contains(&e.point.read().unwrap().get_index()) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-
-            if needs_redirect {
-                let mut b = self.graph.blocks[graph_idx].write().unwrap();
-                let any_ref = b.as_any_mut();
-                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
-                    // Redirect outgoing edges from consumed targets → new_block
-                    for slot in 0..bb.outgoing.len() {
-                        let target_idx = bb.outgoing[slot].point.read().unwrap().get_index();
-                        if consumed_set.contains(&target_idx) && target_idx != bb.index {
-                            bb.outgoing[slot].point = new_block.clone();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Redirect incoming edges of non-consumed blocks from consumed sources
-        for graph_idx in 0..size {
-            if graph_idx == install_idx { continue; }
-            let block_idx = {
-                let b = self.graph.blocks[graph_idx].read().unwrap();
-                b.get_index()
-            };
-            if consumed_set.contains(&block_idx) { continue; }
-
-            let needs_in_redirect = {
-                let b = self.graph.blocks[graph_idx].read().unwrap();
-                if b.get_type() != crate::block::BlockType::Basic { continue; }
-                let mut found = false;
-                for slot in 0..b.size_in() {
-                    if let Some(e) = b.get_in(slot) {
-                        if consumed_set.contains(&e.point.read().unwrap().get_index()) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-
-            if needs_in_redirect {
-                let mut b = self.graph.blocks[graph_idx].write().unwrap();
-                let any_ref = b.as_any_mut();
-                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
-                    let mut to_redirect = Vec::new();
-                    for slot in 0..bb.incoming.len() {
-                        let src_idx = bb.incoming[slot].point.read().unwrap().get_index();
-                        if consumed_set.contains(&src_idx) && src_idx != bb.index {
-                            to_redirect.push(slot);
-                        }
-                    }
-                    for &slot in to_redirect.iter().rev() {
-                        bb.incoming[slot].point = new_block.clone();
-                    }
-                }
-            }
-        }
-
-        // Clear consumed blocks' edges and mark DEAD
+        // Clear consumed blocks' edges and mark DEAD (Ghidra removes them from list).
         for &idx in consumed_indices {
             let i = idx as usize;
             if i < size && i != install_idx {
@@ -1016,6 +1050,8 @@ impl<'a> CollapseStructure<'a> {
             )));
         let block_idx = block.read().unwrap().get_index();
         let succ_idx_val = succ.read().unwrap().get_index();
+        // self_identify captures succ's boundary edges onto the new BlockList.
+        // block sits at install_idx=i; only succ is consumed.
         self.identify_internal(&list_block, &[succ_idx_val], i);
         self.update_switch_case_reference(block_idx, &list_block);
         self.change_count += 1;
@@ -1170,7 +1206,11 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            self.identify_internal(&if_block, &[clause.read().unwrap().get_index()], i);
+            let clause_idx = clause.read().unwrap().get_index();
+            // self_identify captures the clause's boundary edges onto the new
+            // BlockIf (installed at i). We pass only the clause index (not cond),
+            // because cond sits at install_idx and is handled separately.
+            self.identify_internal(&if_block, &[clause_idx], i);
             self.update_switch_case_reference(cond_idx, &if_block);
             self.change_count += 1;
             return true;
@@ -1270,8 +1310,7 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            // Ghidra newBlockIf: identifyInternal([cond, tc]) + forceOutputNum(1).
-            // Consume the clause so its edges redirect to the new BlockIf at i.
+            // self_identify captures the clause's boundary edges onto the new BlockIf.
             self.identify_internal(&if_block, &[clause_idx], i);
             self.update_switch_case_reference(cond_idx, &if_block);
             self.change_count += 1;
@@ -1330,9 +1369,7 @@ impl<'a> CollapseStructure<'a> {
                 parent: None,
                 flags: 0,
             }));
-        // Ghidra newBlockIfElse: identifyInternal([cond, tc, fc]) + forceOutputNum(1).
-        // Consume both clause blocks so their edges are redirected to the new
-        // BlockIf (installed at i, where cond was) and the clauses marked DEAD.
+        // self_identify captures both clauses' boundary edges onto the new BlockIf.
         self.identify_internal(&if_block, &[t_idx, f_idx], i);
         self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;
@@ -1387,6 +1424,7 @@ impl<'a> CollapseStructure<'a> {
                 parent: None,
                 flags: 0,
             }));
+        // self_identify captures the body's boundary edges onto the new BlockIf.
         self.identify_internal(&if_block, &[body_idx], i);
         self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;

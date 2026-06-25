@@ -376,3 +376,28 @@ Create a new ActionNormalizeBranches instance
   被结构化时 BlockSwitch 的引用同步更新。
 - gcc 53/53（curl 24/24，httpd 29/29），175/176 测试（预存失败不变）。
 - getparameter 13→12 if，curl 总 if 105→104。httpd 97 if、0 goto。
+
+### 2026-06-24：identify_internal 移植 Ghidra selfIdentify（边界边捕获）
+
+**根因诊断**：identify_internal 此前只安装新结构块 + 标记消费块 DEAD，但从未填充新结构块
+自身的 incoming/outgoing 边向量。这导致 BlockIf/BlockList 安装后 size_in=0 size_out=0，
+外部指向它们的块看到"空块"，无法继续结构化（getparameter 出现 block62 BlockIf in=0out=0
+孤立项，85 个 basic 块未结构化）。
+
+**修复**：忠实移植 Ghidra `BlockGraph::selfIdentify`（block.cc:895）。在覆盖 install_idx
+之前，遍历 consumed_indices 的每个块，收集其边界边（源/目的不在 consumed_set 的边）到
+new_block 的 new_in/new_out，然后 dedup（Ghidra selfIdentify 以 dedup() 结尾），最后将
+收集到的边安装到 new_block（按 BlockIf/BlockList/BlockWhileDo/BlockDoWhile 类型 downcast）。
+
+**设计取舍**：不重写外部块的边 Arc（Ghidra 用 replaceOutEdge/replaceInEdge 基于裸指针无锁
+完成）。Rust 中在迭代期间重写外部 Arc 会导致自环/不收敛（myprogress 超时）。改为依赖 DEAD
+flag + count_non_structural_in_edges 使消费块对后续规则不可见；new_block 自身的边界边
+（已捕获）让它有正确的 size_in/size_out 以参与进一步结构化。
+
+**试验排除**：将 cond_idx 加入 consumed_indices（模拟 Ghidra newBlockIf 传 [cond,tc]）会
+导致 if 结构坍塌（curl 104→83 if，getparameter 12→6 if，structured 28→25）+ myprogress
+超时。根因是 cond 在 install_idx，其内部边（→clause）被错误计入边界。最终只消费 clause
+（cond 由 install 位置自然接管）。
+
+**验证**：curl 104→101 if，24/24 gcc，24 函数（无超时）；httpd 97→94 if，0 goto，29/29 gcc。
+175/176 测试（预存失败不变）。getparameter FINAL basic 85（orphans 消除）。
