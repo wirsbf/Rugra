@@ -942,8 +942,26 @@ impl PrintC {
                         })
                     };
                     self.emit_block_ops(block_arc, false);
-                    // Successor recursion disabled — causes issues with non-switch
-                    // functions (canary blocks). ruleCaseFallthru handles case chaining.
+                    // Successor recursion: after emitting this block's ops, follow
+                    // out-edges to structured blocks (WhileDo/DoWhile/If/Switch/etc).
+                    // This is needed because WhileDo loops may be reachable only via
+                    // a basic block's out-edge, and without recursion they'd be
+                    // stranded in the unreachable loop. Only recurse into structured
+                    // blocks (not basic blocks) to avoid canary block issues.
+                    let outs: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+                        let b = block_arc.read().unwrap();
+                        (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
+                    };
+                    for succ in &outs {
+                        let succ_idx = succ.read().unwrap().get_index();
+                        if emitted.contains(&succ_idx) { continue; }
+                        let st = succ.read().unwrap().get_type();
+                        // Only recurse into structured blocks, not basic blocks.
+                        if st != crate::block::BlockType::Basic
+                           && st != crate::block::BlockType::Copy {
+                            self.emit_block_structured(succ, graph, emitted);
+                        }
+                    }
                 }
             }
         }

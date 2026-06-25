@@ -456,3 +456,10 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - emit_block_structured 的 seen_return 检查现在跳过控制结构块（WhileDo/DoWhile/If/List），
   这些块代表可达控制流路径，必须在 RETURN 后仍渲染。
 - 验证：176/176 测试。curl 24/24 gcc（3 个 while 循环）。httpd 29/29 gcc（11 个 while 循环）。
+
+### 2026-06-26（续）：基本块 emit 后递归结构化后继块
+
+- 非 CBRANCH 基本块 emit 操作后，现在递归 follow out-edges 到结构化块（WhileDo/DoWhile/If/Switch 等）。
+  只递归结构化块（不递归基本块）避免 canary 问题。
+- 之前后继递归被禁用（canary blocks），导致 WhileDo 等只能通过 unreachable-loop 输出。
+- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while，从 11 增加）。
