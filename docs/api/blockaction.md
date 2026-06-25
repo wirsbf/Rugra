@@ -523,3 +523,11 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
   （Triangle: false/true_block, Diamond: D 块），而非 merge 块的 out-edge。
   之前读 merge 的 out-edge 会跳过 merge 块（如 WhileDo），破坏可达性。
 - 验证：176/176 测试。curl 24/24 gcc（3 while, 100 ifs）。httpd 29/29 gcc（13 while）。
+
+### 2026-06-26（续）：identify_internal 更新指向旧块的 Arc 边引用
+
+**根因**：identify_internal 执行 self.graph.blocks[install_idx] = new_block 时，其他块的
+out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块不可达。
+**修复**：安装 new_block 前保存 old_block Arc，安装后扫描所有块的 incoming/outgoing，
+将 Arc::ptr_eq(old_block) 的边重定向到 new_block。覆盖 BlockBasic/BlockList/BlockIf/BlockWhileDo。
+**验证**：176/176 测试。curl 24/24 gcc（3 while, 102 ifs）。httpd 29/29 gcc（16 while，从 13 增加！）。

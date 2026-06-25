@@ -1285,8 +1285,67 @@ impl<'a> CollapseStructure<'a> {
 
         // NOW install new_block at install_idx (replaces the cond block).
         // Done AFTER self_identify captured the cond block's boundary edges.
+        // IMPORTANT: capture the old block's Arc BEFORE replacing, then update
+        // all other blocks' out-edges that pointed to the old block to point to
+        // new_block. Without this, Arc-identity edges keep pointing at the old
+        // (now-replaced) block, making the new structured block unreachable.
         if install_idx < size {
+            let old_block = self.graph.blocks[install_idx].clone();
             self.graph.blocks[install_idx] = new_block.clone();
+            // Scan all blocks; for any out-edge whose point Arc-matches old_block,
+            // redirect it to new_block.
+            for gi in 0..size {
+                if gi == install_idx { continue; }
+                let gb = match self.graph.get_block(gi) { Some(b) => b, None => continue };
+                let mut gw = gb.write().unwrap();
+                let gref = gw.as_any_mut();
+                // BlockBasic edges:
+                if let Some(bb) = gref.downcast_mut::<crate::block::BlockBasic>() {
+                    for e in bb.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in bb.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                } else if let Some(blist) = gref.downcast_mut::<crate::block::BlockList>() {
+                    for e in blist.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in blist.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                } else if let Some(bif) = gref.downcast_mut::<crate::block::BlockIf>() {
+                    for e in bif.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in bif.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                } else if let Some(bwd) = gref.downcast_mut::<crate::block::BlockWhileDo>() {
+                    for e in bwd.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in bwd.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                }
+            }
         }
 
         // Clear consumed blocks' edges and mark DEAD (Ghidra removes them from list).
