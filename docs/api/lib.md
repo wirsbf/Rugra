@@ -392,3 +392,8 @@
 ### 2026-06-24：analysis 模块
 
 - 新增 `pub mod analysis` 包含 type_infer（保守 ActionTypePropagate）。
+
+### 2026-06-26：新增 tracedag 模块
+
+- 添加 `pub mod tracedag;` — Ghidra TraceDAG (blockaction.cc:499-1014) 的 Rust 移植骨架。
+- 追踪控制流图找 likely goto 边，当前已禁用（需完整 BadEdgeScore + visit-count）。

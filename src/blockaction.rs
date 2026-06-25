@@ -360,7 +360,16 @@ impl<'a> CollapseStructure<'a> {
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
             // consumes the marked blocks (newBlockGoto), preventing infinite loops.
             let clip_marked = if !goto_marked { self.clip_extra_roots() } else { false };
-            if !goto_marked && !clip_marked { break; }
+            // TraceDAG: when both select_and_mark_goto and clip_extra_roots find
+            // nothing, run the TraceDAG algorithm. DISABLED — the simplified
+            // implementation (check_open/select_bad_edge approximations) marks
+            // wrong edges, causing regressions. Needs full BadEdgeScore + visit-
+            // count tracking before enabling.
+            // let tdag_marked = if !goto_marked && !clip_marked {
+            //     self.run_tracedag()
+            // } else { false };
+            let tdag_marked = false;
+            if !goto_marked && !clip_marked && !tdag_marked { break; }
             goto_rounds += 1;
             let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             loop {
@@ -926,6 +935,57 @@ impl<'a> CollapseStructure<'a> {
             }
         }
         false
+    }
+
+    /// Run the TraceDAG algorithm (Ghidra's selectGoto main path) to find
+    /// likely unstructured edges. When found, mark them as goto on the source
+    /// block so try_rule_if_goto/try_rule_goto can consume them, allowing the
+    /// remaining control flow to be structured as if/while.
+    fn run_tracedag(&mut self) -> bool {
+        let edges = crate::tracedag::generate_likely_gotos(self.graph);
+        if edges.is_empty() {
+            return false;
+        }
+        let mut marked = 0;
+        for fe in &edges {
+            // Mark the source block's out-edge to dest as goto
+            let src_i = fe.top as usize;
+            if src_i < self.graph.get_size() {
+                if let Some(blk) = self.graph.get_block(src_i) {
+                    // Find which out-slot goes to fe.bottom
+                    let dest_idx = fe.bottom;
+                    let mut found_slot = None;
+                    {
+                        let b = blk.read().unwrap();
+                        for slot in 0..b.size_out() {
+                            if let Some(e) = b.get_out(slot) {
+                                if e.point.read().unwrap().get_index() == dest_idx {
+                                    found_slot = Some(slot);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(slot) = found_slot {
+                        let mut bw = blk.write().unwrap();
+                        let cur_flags = bw.get_flags();
+                        if slot == 0 {
+                            bw.set_flags(cur_flags | crate::block::block_flags::GOTO_EDGE_0);
+                        } else if slot == 1 {
+                            bw.set_flags(cur_flags | crate::block::block_flags::GOTO_EDGE_1);
+                        }
+                        marked += 1;
+                    }
+                }
+            }
+        }
+        if marked > 0 {
+            eprintln!("[COLLAPSE] {} TraceDAG marked {} likely goto edges", self.name, marked);
+            self.change_count += marked;
+            true
+        } else {
+            false
+        }
     }
 
     /// Compute immediate dominators using iterative dataflow (Cooper et al.

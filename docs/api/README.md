@@ -777,3 +777,8 @@ P-code 相关文档分区。
 3. 明确能力边界
 
 只要坚持这三点，这套 API 文档才能真正服务于 Rugra 的持续开发，而不是继续放大认知偏差。
+## tracedag.md — TraceDAG (selectGoto 主算法)
+
+Ghidra blockaction.cc 行 499-1014 的 TraceDAG 移植。追踪控制流图找 likely goto 边。
+当前实现是骨架（BranchPoint/BlockTrace 结构 + pushBranches 算法），但 check_open 和
+select_bad_edge 使用简化近似（需完整 BadEdgeScore + visit-count 追踪），已禁用。

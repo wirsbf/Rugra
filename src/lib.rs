@@ -75,6 +75,7 @@ pub mod align;
 pub mod binary;
 pub mod disasm;
 pub mod ffi;
+pub mod tracedag;
 
 mod error;
 mod types;

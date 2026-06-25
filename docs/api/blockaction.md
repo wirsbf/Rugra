@@ -540,3 +540,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - 修复：collapse_switches 移到最后（collapse_sequences 之后），对齐 Ghidra。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 - getparameter 仍有 1 switch（multiin CBR 阻止 if/while 消费这些块，需 TraceDAG）。
+
+### 2026-06-26（续）：TraceDAG 骨架移植（已禁用）
+
+- 新增 src/tracedag.rs：BranchPoint/BlockTrace 结构 + pushBranches 算法骨架。
+- 集成到 run_goto_cascade（当 select_and_mark_goto 和 clip_extra_roots 都无结果时触发）。
+- 当前 DISABLED：check_open/select_bad_edge 使用简化近似，需完整 BadEdgeScore + visit-count
+  追踪后才能安全启用。
+- 验证（禁用状态）：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
