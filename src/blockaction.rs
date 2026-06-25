@@ -2794,6 +2794,13 @@ impl<'a> CollapseStructure<'a> {
 
                 // Check if next block also has CBRANCH
                 let nb = next_block.read().unwrap();
+                // Stop cascade at structured blocks (WhileDo/DoWhile/If/etc) —
+                // they are not part of a CBRANCH cascade and including them
+                // produces duplicate case_values.
+                let nb_type = nb.get_type();
+                if nb_type != crate::block::BlockType::Basic && nb_type != crate::block::BlockType::Copy {
+                    break;
+                }
                 if nb.size_out() != 2 {
                     // Try following this non-CBRANCH block's single outgoing edge
                     // (skip over case body blocks in the chain)

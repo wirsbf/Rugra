@@ -488,3 +488,10 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 - 验证：176/176 测试。curl 24/24 gcc，102 if。getparameter TYPES whiledo=1（循环保留）。
 - httpd 28/29 gcc（ap_getparents duplicate case — collapse_cbranch_cascades 级联链包含
   WhileDo 导致 case_values 重复，独立 switch 检测 bug，需后续修复）。
+
+### 2026-06-26（续）：collapse_cbranch_cascades 级联链遇结构化块停止
+
+- 级联链遍历 CBRANCH fallthrough 时，遇到 WhileDo/DoWhile/If 等结构化块立即停止，
+  避免把它们错误纳入 cascade chain 导致 duplicate case_values。
+- 验证：176/176 测试。curl 24/24。httpd 仍 28/29（ap_getparents duplicate case 未完全修复，
+  其他路径的 case_values 计算问题）。
