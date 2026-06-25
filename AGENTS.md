@@ -53,7 +53,24 @@ Rugra 是一个基于 Rust 开发的生产级、受 Ghidra 启发的 C/C++ 二�
 
 ## 🧪 Consistency & Verification (一致性红线)
 
-RustVSR 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一致性（Alignment）**：
+Rugra 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一致性（Alignment）**：
+
+> 🔴 **【Ghidra 源码对齐铁律 — Read Ghidra Source Before Claiming Limits】（2026-06-25 新增）**
+>
+> **禁止声称"架构极限"。** Rugra 的目标是达到或超越 Ghidra 的反编译质量。Ghidra 能做到的，Rugra 也必须能做到。如果 Rugra 输出不优于 Ghidra，则不是架构极限，而是实现不足。
+>
+> 具体执行规则：
+>
+> 1. **遇到任何"做不到"的情况，必须先读 Ghidra 源码**：`ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/` 下有完整 Ghidra 反编译器 C++ 源码。遇到控制流结构化、类型传播、变量名恢复等问题，必须先查看 Ghidra 对应的实现（如 `blockaction.cc`、`coreaction.cc`、`type.cc` 等），理解其算法，然后完整移植到 Rugra。
+> 2. **不要简化版**：Ghidra 的算法必须完整实现。简化版会导致输出质量差距。如果 Ghidra 用边标志系统（`f_switch_out`/`f_goto_edge`/`f_irreducible`/`f_back_edge`），Rugra 也必须实现等效的边标志系统。
+> 3. **不要用文本后处理代替 P-code 级分析**：`struct_recover.py` 和 `rename_vars.py` 是临时工具，真正的目标是 P-code 级类型传播引擎（ActionTypePropagate）和 DWARF debug_info 集成。
+> 4. **Ghidra 源码路径**：`ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`。关键文件：
+>    - `blockaction.cc` — 控制流结构化（collapseInternal、ruleBlock*、selectGoto）
+>    - `coreaction.cc` — 核心分析动作（ActionTypePropagate、ActionInferParams）
+>    - `block.hh` — FlowBlock 边标志定义（f_switch_out 等）
+>    - `type.cc` / `typeop.cc` — 类型系统与类型传播
+
+RugraVSR 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一致性（Alignment）**：
 任何涉及 P-code 生成、SSA 构造或控制流分析等阶段的改动：
 - 🔴 **SSA 版本分配（Version Allocation）**：必须保证 100% 相同配置下与 Ghidra 的行为严格一致，不容任何妥协。
 - 必须基于 `src/align/` (对齐目录) 编写和通过相应的静态类与 FFI 的跨语言验证测试（`runtime_verify`）。
