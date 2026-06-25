@@ -548,3 +548,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - 当前 DISABLED：check_open/select_bad_edge 使用简化近似，需完整 BadEdgeScore + visit-count
   追踪后才能安全启用。
 - 验证（禁用状态）：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
+
+### 2026-06-26（续）：TraceDAG 完整 BadEdgeScore + visit-count（仍禁用）
+
+- tracedag.rs 实现 BadEdgeScore 评分（siblingedge/terminal/distance/depth）和 visit-count 追踪。
+- 当前仍 DISABLED：open_branch/retire_branch 需更新 visit-count。验证（禁用）：176/176 测试。

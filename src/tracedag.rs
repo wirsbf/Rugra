@@ -12,6 +12,7 @@
 use crate::block::BlockGraph;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::collections::HashMap;
 
 /// A floating (likely goto) edge: (source_block_idx, dest_block_idx).
 #[derive(Clone, Debug)]
@@ -65,6 +66,9 @@ pub struct TraceDAG<'a> {
     roots: Vec<i32>,
     /// The likely goto edges discovered.
     pub likely_goto: Vec<FloatingEdge>,
+    /// Visit-count tracking: block_idx → count of traced in-edges.
+    /// A node can be opened when visit_count == size_in (all in-edges traced).
+    visit_count: HashMap<i32, i32>,
 }
 
 impl<'a> TraceDAG<'a> {
@@ -76,6 +80,7 @@ impl<'a> TraceDAG<'a> {
             active_list: Vec::new(),
             roots: Vec::new(),
             likely_goto: Vec::new(),
+            visit_count: HashMap::new(),
         }
     }
 
@@ -151,7 +156,8 @@ impl<'a> TraceDAG<'a> {
     }
 
     /// Check if a trace can push into its dest node.
-    /// A node can only be opened if all incoming edges have been traced.
+    /// A node can only be opened if all incoming edges have been traced
+    /// (visit_count == size_in). Uses visit-count tracking (Ghidra's approach).
     fn check_open(&self, trace_idx: usize) -> bool {
         let trace = &self.traces[trace_idx];
         if trace.terminal {
@@ -166,20 +172,12 @@ impl<'a> TraceDAG<'a> {
         if dest < 0 {
             return false;
         }
-        // Count in-edges and check if all have been traced (via visit count).
-        // Simplified: check if dest has size_in <= edgelump (all edges accounted for).
-        // In Ghidra, this uses visitCount. We approximate: a node is openable if
-        // its size_in matches the number of traced edges reaching it.
-        // For now, use a simpler heuristic: openable if size_in == 1 or all
-        // predecessors have been traced.
-        // TODO: implement visit-count tracking for full fidelity.
-        let sin = self.size_in(dest);
-        if sin <= trace.edgelump as usize {
-            return true;
-        }
-        // Check if all in-edges are from blocks already consumed/traced
-        // (This is the loopDAGIn check in Ghidra)
-        false
+        // Check visit-count: a node is openable when the number of traced
+        // in-edges (visit_count + edgelump) >= size_in of the dest block.
+        let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
+        let ignore = trace.edgelump + vc;
+        let sin = self.size_in(dest) as i32;
+        ignore >= sin
     }
 
     /// Check if a BranchPoint can be retired (all paths terminal or to same exit).
@@ -325,10 +323,17 @@ impl<'a> TraceDAG<'a> {
     fn remove_trace(&mut self, trace_idx: usize) {
         let bottom = self.traces[trace_idx].bottom_block_idx;
         let dest = self.traces[trace_idx].dest_block_idx;
+        let edgelump = self.traces[trace_idx].edgelump;
 
         // Record as likely goto
         if bottom >= 0 && dest >= 0 {
             self.likely_goto.push(FloatingEdge { top: bottom, bottom: dest });
+        }
+
+        // Update visit count: ignore this edge (mark as goto so the dest
+        // node can be opened later without this edge being traced).
+        if dest >= 0 {
+            *self.visit_count.entry(dest).or_insert(0) += edgelump;
         }
 
         let top_bp = self.traces[trace_idx].top_bp;
@@ -348,19 +353,99 @@ impl<'a> TraceDAG<'a> {
         self.traces[trace_idx].terminal = true;
     }
 
-    /// Select the worst edge to mark as goto (simplified BadEdgeScore).
+    /// Select the worst edge to mark as goto using BadEdgeScore.
+    /// Scores: siblingedge (shared BranchPoint), terminal (dest has no out),
+    /// distance (between branch points), depth. The highest score = most likely bad edge.
     fn select_bad_edge(&self) -> usize {
-        // Simplified: pick the first non-terminal active trace
-        // TODO: implement full BadEdgeScore (distance, siblingedge, terminal)
+        struct Score {
+            trace_idx: usize,
+            exit_block: i32,
+            distance: i32,    // -1 = not yet computed
+            siblingedge: i32,
+            terminal: i32,    // 1 if dest has size_out==0
+            bp_depth: usize,
+        }
+
+        let mut scores: Vec<Score> = Vec::new();
         for &idx in &self.active_list {
-            if !self.traces[idx].terminal {
-                let bp = &self.branch_points[self.traces[idx].top_bp];
-                if bp.depth > 0 || self.traces[idx].bottom_block_idx >= 0 {
-                    return idx;
+            let trace = &self.traces[idx];
+            if trace.terminal { continue; }
+            let bp = &self.branch_points[trace.top_bp];
+            // Skip virtual edges (root, no real bottom)
+            if bp.depth == 0 && trace.bottom_block_idx < 0 { continue; }
+            let dest = trace.dest_block_idx;
+            scores.push(Score {
+                trace_idx: idx,
+                exit_block: dest,
+                distance: -1,
+                siblingedge: 0,
+                terminal: if dest >= 0 && self.size_out(dest) == 0 { 1 } else { 0 },
+                bp_depth: bp.depth,
+            });
+        }
+
+        if scores.is_empty() {
+            return self.active_list[0];
+        }
+
+        // Sort by exit_block to find conflicts (same dest)
+        scores.sort_by_key(|s| s.exit_block);
+
+        // Process conflicts: traces to the same exit block
+        let mut i = 0;
+        while i < scores.len() {
+            let mut j = i + 1;
+            while j < scores.len() && scores[j].exit_block == scores[i].exit_block {
+                j += 1;
+            }
+            if j - i > 1 {
+                // Conflict: multiple traces to same exit. Compute distance/sibling.
+                for a in i..j {
+                    for b in (a+1)..j {
+                        let bp_a = self.traces[scores[a].trace_idx].top_bp;
+                        let bp_b = self.traces[scores[b].trace_idx].top_bp;
+                        if bp_a == bp_b {
+                            scores[a].siblingedge += 1;
+                            scores[b].siblingedge += 1;
+                        }
+                        // Simplified distance: depth difference
+                        let dist = (self.branch_points[bp_a].depth as i32 -
+                                    self.branch_points[bp_b].depth as i32).abs();
+                        if scores[a].distance == -1 || scores[a].distance > dist {
+                            scores[a].distance = dist;
+                        }
+                        if scores[b].distance == -1 || scores[b].distance > dist {
+                            scores[b].distance = dist;
+                        }
+                    }
                 }
             }
+            i = j;
         }
-        self.active_list[0]
+
+        // Select max: higher siblingedge > higher terminal > higher distance > higher depth
+        // (compareFinal: op2 is "less likely bad" if it has smaller siblingedge,
+        //  or smaller terminal, or smaller distance, or smaller depth)
+        let mut best = 0;
+        for k in 1..scores.len() {
+            let s = &scores[k];
+            let b = &scores[best];
+            // s is MORE likely bad than best if:
+            let is_more_likely = if s.siblingedge != b.siblingedge {
+                s.siblingedge > b.siblingedge
+            } else if s.terminal != b.terminal {
+                s.terminal > b.terminal
+            } else if s.distance != b.distance {
+                s.distance > b.distance
+            } else {
+                s.bp_depth > b.bp_depth
+            };
+            if is_more_likely {
+                best = k;
+            }
+        }
+
+        scores[best].trace_idx
     }
 
     /// Main algorithm: push traces forward, marking bad edges as goto.

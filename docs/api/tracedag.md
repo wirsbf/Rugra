@@ -28,3 +28,11 @@ likely goto 边：top=源块索引，bottom=目标块索引。
 
 check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第一个活跃 trace
 而非完整 BadEdgeScore 评分。需实现 visit-count 追踪和 BadEdgeScore 后才能启用。
+
+## 2026-06-26 更新：完整 BadEdgeScore + visit-count 追踪
+
+- check_open 改为 visit-count 追踪（block_idx → 已追踪入边计数）。
+- select_bad_edge 改为完整 BadEdgeScore 评分（siblingedge/terminal/distance/depth）。
+- remove_trace 更新 visit-count（标记 goto 时增加计数，忽略该边）。
+- 当前仍 DISABLED：open_branch/retire_branch 需在节点打开/退休时更新 visit-count，
+  否则计数过时导致错误边选择。需进一步修复后启用。
