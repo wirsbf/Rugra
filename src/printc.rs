@@ -750,11 +750,17 @@ impl PrintC {
                     self.emit.begin_block();
 
                     // Print each case block
+                    let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
                         let case_idx = case_block.read().unwrap().get_index();
                         let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
+                        // Skip duplicate case values (two CBRANCH blocks comparing
+                        // the same constant produce duplicate cases in one switch).
+                        let has_new_value = values.iter().any(|v| !emitted_case_values.contains(v));
+                        if !has_new_value { continue; }
                         for val in values {
+                            if !emitted_case_values.insert(*val) { continue; }
                             self.emit.tag_line(0);
                             // Format case value: char literal for printable ASCII, else numeric
                             let case_label = if *val >= 0x20 && *val <= 0x7e {

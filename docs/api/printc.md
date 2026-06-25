@@ -444,3 +444,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
   导致循环体操作不被输出。
 - 修复：WhileDo emit 时检查 body 是否 DEAD，若 DEAD 则用 emit_block_ops 直接输出操作。
 - 验证：176/176 测试。getparameter TYPES whiledo=1（循环保留）。
+
+### 2026-06-26（续）：switch case_values 去重（修复 ap_getparents duplicate case）
+
+- 两个 CBRANCH 块比较相同常量时会在同一 switch 产生重复 case。emit switch case 时用
+  emitted_case_values 集合去重，跳过已输出的 case value。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc（恢复！）。
