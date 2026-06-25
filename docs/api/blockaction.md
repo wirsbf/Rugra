@@ -432,3 +432,26 @@ flag + count_non_structural_in_edges 使消费块对后续规则不可见；new_
   加自环保护（跳过 Arc::ptr_eq(new_block)），且只消费 clause（不消费 cond），
   避免了之前 cond-in-consumed 导致的 myprogress 超时。
 - 验证：curl 101 if，24/24 gcc；httpd 96 if，0 goto，29/29 gcc。175/176 测试。
+
+### 2026-06-24：实现 ruleBlockGoto + clip_extra_roots fallback（goto-cascade 收敛）
+
+**根因**：之前的 clip_extra_roots fallback 导致 httpd 超时。根因是 goto 标记（GOTO_EDGE_0/1）
+后没有规则消费这些块——Ghidra 的 ruleBlockGoto 会把 goto 标记的块结构化为 BlockGoto/
+BlockIfGoto/BlockMultiGoto，使它们从图中"消失"并让周围 cat/if 规则能继续合并。Rugra 缺失
+这个规则，导致 goto 标记永远不收敛。
+
+**修复**：
+- **try_rule_goto**（对应 Ghidra ruleBlockGoto size_out==1 分支 / newBlockGoto）：
+  检测 GOTO_EDGE_0 + size_out==1 的 Basic 块，包装为 BlockGoto（identify_internal 消费原块，
+  self_identify 捕获边界边）。BlockGoto 加入 identify_internal 的 downcast 链。
+  （size_out==2 + GOTO_EDGE_1 分支已由 try_rule_if_goto 处理 = newBlockIfGoto。）
+- **clip_extra_roots**（对应 Ghidra clipExtraRoots）：作为 select_and_mark_goto 的 fallback，
+  检测多根（size_in==0, index>0）的 Basic/Copy 块，onlyReachableFromRoot 收集 body，
+  markExitsAsGotos 标记出口边为 goto。跳过已结构化块（BlockGoto 等）避免重标记。
+- **max_goto_rounds=40 cap**：防止相互不可归约根导致的失控循环（Ghidra 在此情况抛
+  LowlevelError，Rugra 改为 cap）。
+- try_rule_goto 加入 apply_rules_to_block 和 goto-cascade 内层循环的规则链。
+
+**验证**：curl 101 if，0 goto，24/24 gcc；httpd 91 if，29/29 gcc（不超时）；
+175/176 测试（预存失败不变）。getparameter FINAL basic 85→84，structured 28→29。
+multiin CBR 仍=4（需 TraceDAG 进一步处理）。

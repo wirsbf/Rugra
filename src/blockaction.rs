@@ -273,6 +273,7 @@ impl<'a> CollapseStructure<'a> {
         if self.try_rule_while_do(i) { return; }
         if self.try_rule_do_while(i) { return; }
         if self.try_rule_if_goto(i) { return; }
+        if self.try_rule_goto(i) { return; }
     }
 
     /// Apply interleaved rules recursively to children of a structured block.
@@ -322,10 +323,19 @@ impl<'a> CollapseStructure<'a> {
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut goto_rounds = 0;
+        // Hard cap on rounds to prevent runaway loops when clip/goto structuring
+        // doesn't fully converge (e.g. mutually-irreducible roots). Ghidra's
+        // selectGoto throws LowlevelError in this case; we cap instead.
+        let max_goto_rounds = 40;
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
+            if goto_rounds >= max_goto_rounds { break; }
             let goto_marked = self.select_and_mark_goto();
-            if !goto_marked { break; }
+            // Fallback: clip_extra_roots marks irreducible cross-over edges as
+            // goto when select_and_mark_goto finds nothing. try_rule_goto then
+            // consumes the marked blocks (newBlockGoto), preventing infinite loops.
+            let clip_marked = if !goto_marked { self.clip_extra_roots() } else { false };
+            if !goto_marked && !clip_marked { break; }
             goto_rounds += 1;
             let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             loop {
@@ -338,6 +348,7 @@ impl<'a> CollapseStructure<'a> {
                     if self.try_rule_proper_if(i) { continue; }
                     if self.try_rule_if_goto(i) { continue; }
                     if self.try_rule_if_else(i) { continue; }
+                    if self.try_rule_goto(i) { continue; }
                 }
                 self.refresh_switch_cases();
                 if self.change_count == pre_count { break; }
@@ -714,6 +725,86 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    /// Ghidra's clipExtraRoots (blockaction.cc:1108): find distinct control-flow
+    /// roots (size_in==0, index > 0), and for the subset of blocks ONLY reachable
+    /// from that root, mark their exiting edges as goto. Handles irreducible
+    /// cross-over edges. Returns true if any new edges were marked as goto.
+    /// Pairs with try_rule_goto which consumes the marked blocks (newBlockGoto).
+    fn clip_extra_roots(&mut self) -> bool {
+        let size = self.graph.get_size();
+        for root_idx in 1..size as i32 {
+            let root_blk = match self.graph.get_block(root_idx as usize) { Some(b) => b, None => continue };
+            {
+                let r = root_blk.read().unwrap();
+                if r.size_in() != 0 { continue; }
+                // Skip already-structured blocks (BlockGoto, BlockIf, etc.) — they
+                // are consumed/structured and shouldn't be re-processed by clip.
+                let rt = r.get_type();
+                if rt != crate::block::BlockType::Basic && rt != crate::block::BlockType::Copy { continue; }
+            }
+            // onlyReachableFromRoot: collect blocks reachable only from root.
+            let mut body: Vec<i32> = vec![root_idx];
+            let mut in_body: std::collections::HashSet<i32> = std::collections::HashSet::new();
+            in_body.insert(root_idx);
+            let mut visit_count: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+            let mut i = 0;
+            while i < body.len() {
+                let cur = body[i]; i += 1;
+                let cur_blk = match self.graph.get_block(cur as usize) { Some(b) => b, None => continue };
+                let c = cur_blk.read().unwrap();
+                for slot in 0..c.size_out() {
+                    if let Some(e) = c.get_out(slot) {
+                        let nxt = e.point.read().unwrap().get_index();
+                        if in_body.contains(&nxt) { continue; }
+                        let count = visit_count.entry(nxt).or_insert(0);
+                        *count += 1;
+                        let nxt_in = e.point.read().unwrap().size_in() as i32;
+                        if *count >= nxt_in {
+                            in_body.insert(nxt);
+                            body.push(nxt);
+                        }
+                    }
+                }
+            }
+            // markExitsAsGotos: mark out-edges to non-body targets as goto.
+            let mut changecount = 0;
+            for &bidx in &body {
+                let bb = match self.graph.get_block(bidx as usize) { Some(b) => b, None => continue };
+                let exit_edges: Vec<usize> = {
+                    let b = bb.read().unwrap();
+                    let existing = b.get_flags();
+                    let mut ex = Vec::new();
+                    for slot in 0..b.size_out() {
+                        if let Some(e) = b.get_out(slot) {
+                            let t = e.point.read().unwrap().get_index();
+                            if in_body.contains(&t) { continue; }
+                            let already_goto = (slot == 0 && existing & crate::block::block_flags::GOTO_EDGE_0 != 0)
+                                            || (slot == 1 && existing & crate::block::block_flags::GOTO_EDGE_1 != 0);
+                            if already_goto { continue; }
+                            ex.push(slot);
+                        }
+                    }
+                    ex
+                };
+                if exit_edges.is_empty() { continue; }
+                let mut bw = bb.write().unwrap();
+                let mut cur_flags = bw.get_flags();
+                for &slot in &exit_edges {
+                    if slot == 0 { cur_flags |= crate::block::block_flags::GOTO_EDGE_0; }
+                    if slot == 1 { cur_flags |= crate::block::block_flags::GOTO_EDGE_1; }
+                }
+                bw.set_flags(cur_flags);
+                changecount += 1;
+            }
+            if changecount > 0 {
+                eprintln!("[COLLAPSE] {} clipExtraRoots: root={} body={} gotos={}", self.name, root_idx, body.len(), changecount);
+                self.change_count += changecount;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Compute immediate dominators using iterative dataflow (Cooper et al.
     /// 2001 simplified algorithm). Stores result in self.idom.
     fn compute_dominators(&mut self) {
@@ -1031,7 +1122,7 @@ impl<'a> CollapseStructure<'a> {
         {
             let mut nb = new_block.write().unwrap();
             let nref = nb.as_any_mut();
-            // BlockIf / BlockList / BlockWhileDo / BlockDoWhile / BlockSwitch
+            // BlockIf / BlockList / BlockWhileDo / BlockDoWhile / BlockGoto / BlockSwitch
             // all expose incoming/outgoing via as_any_mut. Try the common ones.
             if let Some(bif) = nref.downcast_mut::<crate::block::BlockIf>() {
                 bif.incoming = new_in; bif.outgoing = new_out;
@@ -1041,6 +1132,8 @@ impl<'a> CollapseStructure<'a> {
                 bwd.incoming = new_in; bwd.outgoing = new_out;
             } else if let Some(bdw) = nref.downcast_mut::<crate::block::BlockDoWhile>() {
                 bdw.incoming = new_in; bdw.outgoing = new_out;
+            } else if let Some(bgt) = nref.downcast_mut::<crate::block::BlockGoto>() {
+                bgt.incoming = new_in; bgt.outgoing = new_out;
             }
         }
 
@@ -1526,6 +1619,69 @@ impl<'a> CollapseStructure<'a> {
         self.identify_internal(&if_block, &[body_idx], i);
         self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;
+        true
+    }
+
+    /// Ghidra ruleBlockGoto (blockaction.cc:1450), pure-goto branch (size_out==1).
+    /// A block whose single out-edge is marked as goto (GOTO_EDGE_0) becomes a
+    /// BlockGoto. This lets clip_extra_roots / select_and_mark_goto consumed:
+    /// without it, goto-marked single-out blocks never get structured and the
+    /// goto-cascade loops forever. Mirrors Ghidra newBlockGoto(bl): wrap bl in a
+    /// BlockGoto storing the goto target, consume [bl], forceOutputNum(1).
+    /// The BlockGoto behaves as a single node so surrounding cat/if rules can
+    /// merge it; at emit time it renders the block's ops followed by a goto.
+    fn try_rule_goto(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b, None => return false,
+        };
+        let (idx, flags, size_out, goto_target) = {
+            let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic { return false; }
+            let flags = b.get_flags();
+            // Must have a goto-marked out-edge
+            let has_goto = (b.size_out() >= 1 && flags & crate::block::block_flags::GOTO_EDGE_0 != 0)
+                        || (b.size_out() >= 2 && flags & crate::block::block_flags::GOTO_EDGE_1 != 0);
+            if !has_goto { return false; }
+            // Pure-goto case: size_out==1 with GOTO_EDGE_0. (size_out==2 with
+            // GOTO_EDGE_1 is handled by try_rule_if_goto as newBlockIfGoto.)
+            if b.size_out() != 1 { return false; }
+            if flags & crate::block::block_flags::GOTO_EDGE_0 == 0 { return false; }
+            let target = b.get_out(0).map(|e| e.point.clone());
+            (b.get_index(), flags, b.size_out(), target)
+        };
+        let goto_target = match goto_target { Some(t) => t, None => return false };
+
+        // Build a BlockGoto wrapping the block. Store the goto target.
+        // The BlockGoto is installed at i; the original block (Basic) is consumed.
+        // Per Ghidra newBlockGoto: identifyInternal([bl]) + forceOutputNum(1) +
+        // removeEdge(ret, ret->getOut(0)). We model forceOutputNum(1)+removeEdge
+        // by giving the BlockGoto an empty out-edge list (the goto is "absorbed").
+        let goto_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = {
+            // BlockGoto.goto_target is Option<Arc<BlockBasic>>; downcast target.
+            let target_bb = goto_target.clone();
+            let target_basic = target_bb.read().unwrap().as_any()
+                .downcast_ref::<crate::block::BlockBasic>().map(|_| {
+                    // We can't easily get the Arc<BlockBasic> from dyn; store None
+                    // and rely on the original block's ops for emit. The goto
+                    // target is implicit via the consumed block's out-edge.
+                    None::<Arc<RwLock<crate::block::BlockBasic>>>
+                }).flatten();
+            let _ = target_basic; // BlockGoto target kept implicit for now
+            Arc::new(RwLock::new(crate::block::BlockGoto {
+                index: idx,
+                flags: 0,
+                parent: None,
+                goto_target: None, // implicit; emit uses wrapped block's BRANCH op
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+            }))
+        };
+        // Consume the original block (at i). self_identify captures its boundary
+        // edges onto the BlockGoto so it has correct size_in for further merging.
+        self.identify_internal(&goto_block, &[idx], i);
+        self.update_switch_case_reference(idx, &goto_block);
+        self.change_count += 1;
+        eprintln!("[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})", self.name, idx, size_out);
         true
     }
 
