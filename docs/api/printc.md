@@ -437,3 +437,10 @@ seen_return 保存/恢复启用后更多 case body 被 emit，触发该 bug 导�
 
 **验证**：176/176 测试通过（含 test_switch_case_structuring，输出 case 0 + case 1）。
 curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
+
+### 2026-06-26（续）：WhileDo body emit 用 emit_block_ops 绕过 DEAD 检查
+
+- WhileDo body 被 identify_internal 消费（DEAD）。emit_block_structured 会跳过 DEAD 块，
+  导致循环体操作不被输出。
+- 修复：WhileDo emit 时检查 body 是否 DEAD，若 DEAD 则用 emit_block_ops 直接输出操作。
+- 验证：176/176 测试。getparameter TYPES whiledo=1（循环保留）。

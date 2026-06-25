@@ -477,3 +477,14 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 
 **验证**：curl 101 if，24/24 gcc；httpd 91 if，29/29 gcc。175/176 测试（预存失败不变）。
 循环仍未输出为 while/do——需 phase1 collapse_loops 多入边循环体重构（后续工作）。
+
+### 2026-06-26：重新启用 structure_loops_first + collapse_cbranch_cascades 结构化块保护
+
+**突破**：WhileDo 循环现在被保留（TYPES whiledo=1）。
+- 重新启用 structure_loops_first（phase1 前 WhileDo 预结构化）+ phase1 Basic-only guards。
+- WhileDo body emit 用 emit_block_ops 绕过 DEAD 检查（body 被 identify_internal 消费为 DEAD）。
+- **collapse_cbranch_cascades 不覆盖结构化块**：替换 extra_indices 时跳过 WhileDo/DoWhile/If
+  等非 Basic 块（之前会把 WhileDo 替换成空 placeholder BlockBasic）。
+- 验证：176/176 测试。curl 24/24 gcc，102 if。getparameter TYPES whiledo=1（循环保留）。
+- httpd 28/29 gcc（ap_getparents duplicate case — collapse_cbranch_cascades 级联链包含
+  WhileDo 导致 case_values 重复，独立 switch 检测 bug，需后续修复）。

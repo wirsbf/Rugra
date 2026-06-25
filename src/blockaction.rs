@@ -143,6 +143,11 @@ impl<'a> CollapseStructure<'a> {
         // Step 1: Order loop bodies (Ghidra's orderLoopBodies)
         self.order_loop_bodies();
 
+        // Step 1b: Structure WhileDo loops (innermost-first) before phase1, so
+        // loop heads are preserved as BlockWhileDo instead of being consumed
+        // by phase1's collapse_conditions.
+        self.structure_loops_first();
+
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -505,6 +510,80 @@ impl<'a> CollapseStructure<'a> {
         self.loop_bodies.iter().any(|(_, body)| body.contains(&idx))
     }
 
+    /// Structure detected WhileDo loops (innermost-first) BEFORE phase1 runs,
+    /// so loop heads are preserved as BlockWhileDo instead of being consumed
+    /// by phase1's collapse_conditions. Only the clean WhileDo pattern
+    /// (head=CBR, body=Basic/Copy with single back-edge to head) is structured.
+    fn structure_loops_first(&mut self) {
+        if self.loop_bodies.is_empty() { return; }
+        let loops = self.loop_bodies.clone();
+        for (head_idx, _body) in &loops {
+            let head_idx = *head_idx;
+            let hi = head_idx as usize;
+            if hi >= self.graph.get_size() { continue; }
+            let head_blk = match self.graph.get_block(hi) { Some(b)=>b, None=>continue };
+            {
+                let h = head_blk.read().unwrap();
+                if h.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+                if h.get_type() != crate::block::BlockType::Basic { continue; }
+                if h.size_out() != 2 { continue; }
+                let has_cbranch = h.get_ops().last().map_or(false, |o| {
+                    o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_CBRANCH
+                });
+                if !has_cbranch { continue; }
+            }
+            let cond_idx = head_blk.read().unwrap().get_index();
+            let is_dowhile = {
+                let h = head_blk.read().unwrap();
+                (0..h.size_out()).any(|s| {
+                    h.get_out(s).map_or(false, |e| e.point.read().unwrap().get_index() == cond_idx)
+                })
+            };
+            if is_dowhile { continue; }
+            let body_info = {
+                let h = head_blk.read().unwrap();
+                let mut found = None;
+                for s in 0..h.size_out() {
+                    if let Some(e) = h.get_out(s) {
+                        let body_blk = e.point.clone();
+                        let body_idx = body_blk.read().unwrap().get_index();
+                        if body_idx == cond_idx { continue; }
+                        let loops_back = (0..body_blk.read().unwrap().size_out()).any(|bs| {
+                            body_blk.read().unwrap().get_out(bs).map_or(false, |be| {
+                                be.point.read().unwrap().get_index() == cond_idx
+                            })
+                        });
+                        if loops_back { found = Some((body_blk, body_idx)); break; }
+                    }
+                }
+                found
+            };
+            if let Some((body_blk, body_idx)) = body_info {
+                let body_ok = {
+                    let bd = body_blk.read().unwrap();
+                    let bt = bd.get_type();
+                    (bt == crate::block::BlockType::Basic || bt == crate::block::BlockType::Copy)
+                        && bd.get_flags() & crate::block::block_flags::CASE_BODY == 0
+                        && bd.get_flags() & crate::block::block_flags::DEAD == 0
+                };
+                if !body_ok { continue; }
+                let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                    Arc::new(RwLock::new(crate::block::BlockWhileDo {
+                        index: cond_idx,
+                        condition: head_blk.clone(),
+                        body: body_blk.clone(),
+                        incoming: Vec::new(),
+                        outgoing: Vec::new(),
+                        parent: None,
+                        flags: 0,
+                    }));
+                self.identify_internal(&while_block, &[body_idx], hi);
+                self.change_count += 1;
+                eprintln!("[COLLAPSE] {} structure_loops_first WhileDo head={} body={}", self.name, cond_idx, body_idx);
+            }
+        }
+    }
+
     /// Check if a block index is a sub-component of any structured block
     /// (BlockCondition.first/second, BlockIf.condition/if_body/else_body,
     /// BlockWhileDo.condition/body, etc.). These blocks should not be
@@ -684,6 +763,8 @@ impl<'a> CollapseStructure<'a> {
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 2 { continue; }
 
             // Skip blocks that are sub-components of structured blocks.
@@ -972,6 +1053,8 @@ impl<'a> CollapseStructure<'a> {
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 2 { continue; }
             let ops = b.get_ops();
             let has_cbranch = ops.last().map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
@@ -1208,6 +1291,8 @@ impl<'a> CollapseStructure<'a> {
         // bl->sizeOut() != 1
         {
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { return false; }
             if b.size_out() != 1 { return false; }
             // bl->isSwitchOut() — skip switch dispatch blocks
             if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
@@ -1858,10 +1943,11 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
 
             let mut true_is_backedge = false;
             let mut false_is_backedge = false;
-            
             let mut true_target = None;
             let mut false_target = None;
 
@@ -1971,6 +2057,8 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 1 {
                 continue;
             }
@@ -2061,6 +2149,8 @@ impl<'a> CollapseStructure<'a> {
             }
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 2 {
                 continue;
             }
@@ -2220,6 +2310,8 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 2 {
                 continue;
             }
@@ -2364,6 +2456,8 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let a = block_a.read().unwrap();
+            if a.get_type() != crate::block::BlockType::Basic
+               && a.get_type() != crate::block::BlockType::Copy { continue; }
             if a.size_out() != 2 {
                 continue;
             }
@@ -2510,6 +2604,8 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 1 {
                 continue;
             }
@@ -2642,6 +2738,8 @@ impl<'a> CollapseStructure<'a> {
             };
 
             let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy { continue; }
             if b.size_out() != 2 { continue; }
 
             // Check if this block ends with CBRANCH
@@ -2864,6 +2962,14 @@ impl<'a> CollapseStructure<'a> {
                 self.graph.blocks[primary_idx] = replacement;
                 for &idx in &extra_indices[1..] {
                     if idx < self.graph.blocks.len() {
+                        // Don't clobber already-structured blocks (WhileDo/DoWhile/If/etc)
+                        // created by structure_loops_first — only replace Basic/Copy blocks.
+                        let is_structured = {
+                            let b = self.graph.blocks[idx].read().unwrap();
+                            let t = b.get_type();
+                            t != crate::block::BlockType::Basic && t != crate::block::BlockType::Copy
+                        };
+                        if is_structured { continue; }
                         // Create empty placeholder with valid index (no ops, no edges)
                         let placeholder: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                             Arc::new(RwLock::new(BlockBasic::new(idx as i32, Address::new(0))));

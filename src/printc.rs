@@ -588,7 +588,15 @@ impl PrintC {
 
                     self.emit.begin_block();
                     self.loop_depth += 1;
-                    self.emit_block_structured(&while_data.body, graph, emitted);
+                    // The body was consumed (DEAD) by identify_internal.
+                    // emit_block_structured skips DEAD blocks, so emit ops directly.
+                    let body_is_dead = while_data.body.read().unwrap().get_flags()
+                        & crate::block::block_flags::DEAD != 0;
+                    if body_is_dead {
+                        self.emit_block_ops(&while_data.body, true);
+                    } else {
+                        self.emit_block_structured(&while_data.body, graph, emitted);
+                    }
                     self.loop_depth -= 1;
                     self.emit.end_block();
                 } else {
