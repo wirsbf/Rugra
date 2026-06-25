@@ -2652,11 +2652,17 @@ impl<'a> CollapseStructure<'a> {
             drop(s);
 
             // Sequence match: merge block[i] and block[succ_idx] into BlockList
+            // The BlockList's out-edges come from the LAST child's out-edges
+            // (the sequence continues from where the last block ends).
+            let succ_outs: Vec<crate::block::BlockEdge> = {
+                let s = succ.read().unwrap();
+                (0..s.size_out()).filter_map(|slot| s.get_out(slot)).collect()
+            };
+            let block_idx_val = block.read().unwrap().get_index();
+            let mut list_bl = BlockList::new(block_idx_val, vec![block.clone(), succ.clone()]);
+            list_bl.outgoing = succ_outs;
             let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                Arc::new(RwLock::new(BlockList::new(
-                    block.read().unwrap().get_index(),
-                    vec![block.clone(), succ.clone()],
-                )));
+                Arc::new(RwLock::new(list_bl));
 
             self.graph.blocks[i] = list_block;
             merged[succ_idx] = true;

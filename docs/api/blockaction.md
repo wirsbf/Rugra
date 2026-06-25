@@ -502,3 +502,10 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
   使结构化块（如 WhileDo）从函数入口可达。仅捕获入边（不捕获出边，避免 httpd 边双重计数）。
 - 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（11 while）。
 - getparameter WhileDo 仍不可达（head=21 仅自环前驱，函数特定 CFG 问题）。
+
+### 2026-06-26（续）：collapse_sequences 保留 BlockList 的 out-edges
+
+- collapse_sequences 合并 block→succ 为 BlockList 时，原来 BlockList::new 不复制 out-edges，
+  导致 BlockList 后续的边（包括指向 WhileDo 的边）丢失，WhileDo 变为不可达。
+- 修复：BlockList.outging = succ（最后一个 child）的 out-edges，保持控制流连续性。
+- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（13 while，从 12 增加）。
