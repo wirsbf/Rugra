@@ -815,3 +815,9 @@ RPO 常用于：
 - get_in/get_out 也过滤 DEAD 边。
 - 效果：后继块的 effective size_in 减少，使 proper_if 能匹配。
 - 175/176 测试（预存失败）。
+
+### 2026-06-25：回退到简单 DEAD size_in/out
+
+- 移除动态过滤（死锁/性能问题）。
+- BlockBasic size_in/out 在 DEAD 时返回 0。
+- gcc 53/53，175/176 测试。getparameter 5 if。
