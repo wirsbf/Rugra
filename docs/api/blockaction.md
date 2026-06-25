@@ -516,3 +516,10 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
   outgoing 为空，导致 BlockIf 后续的边丢失。
 - 修复：BlockIf.outgoing = merge 块的 out-edges（Triangle: false/true_block, Diamond: D 块）。
 - 验证：176/176 测试。curl 24/24 gcc（3 while, 98 ifs 从 106 下降）。httpd 29/29 gcc（13 while）。
+
+### 2026-06-26（续）：BlockIf out-edge 指向 merge 块本身（非 merge 的 out-edge）
+
+- collapse_conditions 的 Triangle/Diamond 匹配创建 BlockIf 时，out-edge 现在指向 merge 块本身
+  （Triangle: false/true_block, Diamond: D 块），而非 merge 块的 out-edge。
+  之前读 merge 的 out-edge 会跳过 merge 块（如 WhileDo），破坏可达性。
+- 验证：176/176 测试。curl 24/24 gcc（3 while, 100 ifs）。httpd 29/29 gcc（13 while）。

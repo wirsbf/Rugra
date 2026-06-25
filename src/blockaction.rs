@@ -2371,12 +2371,11 @@ impl<'a> CollapseStructure<'a> {
                             drop(tb);
                             // Triangle match: condition=block, if_body=true_block, merge=false_block
                             // CBRANCH out(0)=true edge → if_body is the taken branch → no negation
-                            // BlockIf's out-edge = the merge block's out-edges (control continues
-                            // after the if). Preserves reachability to subsequent structured blocks.
-                            let merge_outs: Vec<crate::block::BlockEdge> = {
-                                let mb = false_block.read().unwrap();
-                                (0..mb.size_out()).filter_map(|slot| mb.get_out(slot)).collect()
-                            };
+                            // BlockIf's out-edge points to the merge block (false_block) itself,
+                            // so control flow continues to it after the if.
+                            let merge_outs: Vec<crate::block::BlockEdge> = vec![
+                                crate::block::BlockEdge::new(false_block.clone(), 0),
+                            ];
                             let mut bif = BlockIf {
                                 index: cond_idx,
                                 condition: block.clone(),
@@ -2409,11 +2408,10 @@ impl<'a> CollapseStructure<'a> {
                             // Triangle-reverse: if_body is the FALSE edge block (out(1)).
                             // The CBRANCH condition is written for the TRUE edge, so we must
                             // negate it to correctly gate the false-edge body.
-                            // BlockIf's out-edge = merge block (true_block)'s out-edges.
-                            let merge_outs: Vec<crate::block::BlockEdge> = {
-                                let mb = true_block.read().unwrap();
-                                (0..mb.size_out()).filter_map(|slot| mb.get_out(slot)).collect()
-                            };
+                            // BlockIf's out-edge points to the merge block (true_block) itself.
+                            let merge_outs: Vec<crate::block::BlockEdge> = vec![
+                                crate::block::BlockEdge::new(true_block.clone(), 0),
+                            ];
                             let mut bif = BlockIf {
                                 index: cond_idx,
                                 condition: block.clone(),
@@ -2449,14 +2447,11 @@ impl<'a> CollapseStructure<'a> {
                             drop(tb);
                             drop(fb);
                             // Diamond match: if_body=true edge, else_body=false edge → no negation
-                            // BlockIf's out-edge = merge block (tt/ft)'s out-edges.
-                            let merge_blk_idx = tt;
-                            let merge_outs: Vec<crate::block::BlockEdge> = {
-                                if let Some(mb) = self.graph.get_block(merge_blk_idx as usize) {
-                                    let m = mb.read().unwrap();
-                                    (0..m.size_out()).filter_map(|slot| m.get_out(slot)).collect()
-                                } else { Vec::new() }
-                            };
+                            // BlockIf's out-edge points to the merge block (D) itself.
+                            let merge_blk = self.graph.get_block(tt as usize);
+                            let merge_outs: Vec<crate::block::BlockEdge> = if let Some(mb) = merge_blk {
+                                vec![crate::block::BlockEdge::new(mb, 0)]
+                            } else { Vec::new() };
                             let mut bif = BlockIf {
                                 index: cond_idx,
                                 condition: block.clone(),
