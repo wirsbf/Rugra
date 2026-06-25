@@ -219,6 +219,8 @@ impl<'a> CollapseStructure<'a> {
 
                 // For Basic/Copy blocks: apply rules directly
                 if bt == crate::block::BlockType::Basic || bt == crate::block::BlockType::Copy {
+                    // Skip consumed blocks (Ghidra: sizeIn==0 && sizeOut==0)
+                    if block.read().unwrap().is_consumed() { continue; }
                     self.apply_rules_to_block(i);
                     continue;
                 }

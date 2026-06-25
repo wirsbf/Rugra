@@ -795,3 +795,9 @@ RPO 常用于：
 
 - FlowBlock 新增 `effective_size_out()`/`effective_get_out()`，排除 goto 标记边。
 - block_flags 新增 `GOTO_EDGE_0`/`GOTO_EDGE_1`。
+
+### 2026-06-25：is_consumed() + 对齐 Ghidra collapseInternal
+
+- FlowBlock::is_consumed() — DEAD flag 检查，对齐 Ghidra sizeIn==0&&sizeOut==0。
+- interleaved 循环跳过 consumed 块。
+- gcc 53/53，175/176 测试。getparameter 5 if，控制流差 174。

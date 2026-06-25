@@ -339,3 +339,5 @@ Create a new ActionNormalizeBranches instance
 - 改用 Ghidra 的原始 size_in() + switch_case_indices（只标记 case body 入口块）。
 - 移除了 dominator tree expansion（对齐 Ghidra f_switch_out 只标记入口块）。
 - gcc 53/53，175/176 测试。getparameter 从 9→5 if，控制流差 174（因为移除了过度保护，结构发生变化）。
+
+### 2026-06-25：blockaction is_consumed + Ghidra aligned size_in
