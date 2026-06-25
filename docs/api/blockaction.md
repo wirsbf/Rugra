@@ -531,3 +531,12 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **修复**：安装 new_block 前保存 old_block Arc，安装后扫描所有块的 incoming/outgoing，
 将 Arc::ptr_eq(old_block) 的边重定向到 new_block。覆盖 BlockBasic/BlockList/BlockIf/BlockWhileDo。
 **验证**：176/176 测试。curl 24/24 gcc（3 while, 102 ifs）。httpd 29/29 gcc（16 while，从 13 增加！）。
+
+### 2026-06-26（续）：对齐 Ghidra rule 顺序（switch 检测最后）
+
+- Ghidra 的 collapseInternal 顺序：cat → proper_if → if_else → while_do → do_while →
+  inf_loop → switch（switch 最后）。这让循环/if 结构化优先消费块。
+- Rugra 的 phase1 原顺序：collapse_switches 在 collapse_sequences 之前。
+- 修复：collapse_switches 移到最后（collapse_sequences 之后），对齐 Ghidra。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
+- getparameter 仍有 1 switch（multiin CBR 阻止 if/while 消费这些块，需 TraceDAG）。

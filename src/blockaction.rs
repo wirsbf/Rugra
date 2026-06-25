@@ -167,11 +167,16 @@ impl<'a> CollapseStructure<'a> {
             self.collapse_conditions();
             if std::time::Instant::now() > deadline { break; }
             self.collapse_bool_conditions();
-            self.collapse_switches();
+            // Switch detection LAST (after loops/conditions/sequences), matching
+            // Ghidra's collapseInternal order where ruleBlockSwitch runs after
+            // cat/proper_if/if_else/while_do/do_while. This lets loop/if structuring
+            // consume blocks before switch detection, producing if/while instead of
+            // switch when the control flow is structurable.
             self.collapse_cbranch_cascades();
             self.collapse_case_fallthru();
-            self.refresh_switch_cases();
             self.collapse_sequences();
+            self.collapse_switches();
+            self.refresh_switch_cases();
 
             iterations += 1;
             if self.change_count == pre_count || iterations >= max_iterations {
