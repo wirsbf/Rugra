@@ -172,3 +172,11 @@ Emitter that discards all output (used for discovery pass)
 - 新增 `tools/rename_vars.py`：从 DWARF debug_info 提取函数局部变量名（DW_TAG_variable + DW_OP_fbreg），映射到 Rugra 的 local_XX 栈变量。
 - 效果：curl 12 个变量名恢复（errorbuffer, progressbar, outs, heads, buffer, size, nmemb, stream 等），httpd 同样有恢复。
 - 与 struct_recover.py 串联使用：struct_recover → rename_vars → audit_syntax。
+
+### 2026-06-26：pass19 不再移除大括号（naive 计数误删 case '}' 中的 }）
+
+- pass19（Nineteenth pass: remove unmatched extra closing braces）原用 naive 大括号计数
+  检测函数闭合，但当函数含 `case '}'` 等 char/string 字面量中的 `}` 时误判 depth<0，
+  移除函数闭合 `}`，导致函数边界损坏（ap_getparents）。
+- 改为 emit as-is（不移除大括号）。naive 计数不可靠，真正的平衡应由 emit 的
+  begin_block/end_block 配对保证。

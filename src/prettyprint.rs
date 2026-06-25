@@ -1269,24 +1269,12 @@ impl EmitNoMarkup {
 
                     // Check if depth reached 0 cleanly, or has extra/missing braces
                     if depth < 0 {
-                        // More `}` than `{` — collect lines and strip trailing extra `}`
-                        let mut func_lines: Vec<String> = pass18[func_start..func_end].to_vec();
-                        let excess = (-depth) as usize;
-                        // Remove trailing `}` lines from end, up to excess count
-                        let mut removed = 0;
-                        let fl_len = func_lines.len();
-                        let mut scan = fl_len;
-                        while scan > 0 && removed < excess {
-                            scan -= 1;
-                            let lt = func_lines[scan].trim();
-                            if lt == "}" || lt == "}}" {
-                                let brace_count = lt.chars().filter(|&c| c == '}').count();
-                                func_lines.remove(scan);
-                                removed += brace_count;
-                            }
-                        }
-                        for fl in func_lines {
-                            pass19.push(fl);
+                        // More `}` than `{` — emit as-is. The naive brace count
+                        // over-counts `}` inside char/string literals (e.g.
+                        // case '}'), so removing braces based on it corrupts
+                        // function boundaries. Leave the output unchanged.
+                        for fi in func_start..func_end {
+                            pass19.push(pass18[fi].clone());
                         }
                     } else {
                         // Normal or missing braces — emit as-is (missing brace is rarer)

@@ -423,3 +423,17 @@ raw semantics / P-code-like IR
   emitted，防止 doc_function 的 root/unreachable 循环（行 3116-3134）重复访问。
 - 这是 single-ownership 原则：消费块只通过其结构化父块 emit，不通过后继遍历重入。
 - 验证：curl 24/24 gcc，httpd 29/29 gcc。175/176 测试（test_switch_case 预存失败不变）。
+
+### 2026-06-26（续）：修复 pass19 naive 大括号移除 + 重新启用 seen_return 保存/恢复
+
+**根因**：post_process_output 的 pass19 用 naive 大括号计数（直接数 { }）检测函数闭合，
+当函数含 char/string 字面量中的 `}`（如 `case '}'`）时会误判 depth<0，移除函数闭合 `}`。
+seen_return 保存/恢复启用后更多 case body 被 emit，触发该 bug 导致 ap_getparents 函数边界损坏。
+
+**修复**：
+- pass19 不再移除大括号（naive 计数不可靠），改为 emit as-is。
+- 重新启用 switch case body emit 的 seen_return 保存/恢复（每个 case 是独立控制流路径，
+  一个 case 的 return 不应抑制其他 case 的 body）。
+
+**验证**：176/176 测试通过（含 test_switch_case_structuring，输出 case 0 + case 1）。
+curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。

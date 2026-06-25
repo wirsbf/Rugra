@@ -767,7 +767,10 @@ impl PrintC {
 
                         self.emit.begin_block();
                         if !body_already_emitted {
+                            let saved_seen_return = self.seen_return;
+                            self.seen_return = false;
                             self.emit_block_structured(case_block, graph, emitted);
+                            self.seen_return = saved_seen_return;
                         }
 
                         // If it doesn't end with a return, print break;
