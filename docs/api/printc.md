@@ -469,3 +469,10 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - BlockList emit 完所有 children 后，现在 follow out-edges 到结构化块（WhileDo/If/Switch 等）。
 - 与基本块后继递归对称，确保 BlockList 的后续结构化块被访问。
 - 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while）。
+
+### 2026-06-26（续）：if-empty-check 不抑制结构化块（WhileDo/DoWhile）
+
+- 基本块的 if-branch empty-check（两分支空/单分支空/legacy if-else）在直接 emitted.insert
+  分支索引时，现在只对 Basic/Copy 块插入，不抑制 WhileDo/DoWhile 等结构化块。
+- 之前 WhileDo 被直接 insert 到 emitted 集合而不被 emit，导致不可达。
+- 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while，从 19 增加）。

@@ -880,16 +880,26 @@ impl PrintC {
                         // Both branches empty — emit the condition block ops but skip the if/else
                         self.emit_block_ops(block_arc, true);
                         if let Some(ref te) = true_edge {
-                            emitted.insert(te.point.read().unwrap().get_index());
+                            let t = te.point.read().unwrap().get_type();
+                            // Don't suppress structured blocks (WhileDo/DoWhile) — they must emit.
+                            if t == crate::block::BlockType::Basic || t == crate::block::BlockType::Copy {
+                                emitted.insert(te.point.read().unwrap().get_index());
+                            }
                         }
                         if let Some(ref fe) = false_edge {
-                            emitted.insert(fe.point.read().unwrap().get_index());
+                            let f = fe.point.read().unwrap().get_type();
+                            if f == crate::block::BlockType::Basic || f == crate::block::BlockType::Copy {
+                                emitted.insert(fe.point.read().unwrap().get_index());
+                            }
                         }
                     } else if true_empty && !false_empty {
                         // True branch empty, false has code → negate: if (!cond) { false_code }
                         self.emit_block_ops(block_arc, true);
                         if let Some(ref te) = true_edge {
-                            emitted.insert(te.point.read().unwrap().get_index());
+                            let t = te.point.read().unwrap().get_type();
+                            if t == crate::block::BlockType::Basic || t == crate::block::BlockType::Copy {
+                                emitted.insert(te.point.read().unwrap().get_index());
+                            }
                         }
 
                         self.emit.tag_line(0);
@@ -908,8 +918,11 @@ impl PrintC {
                         self.emit.print(&format!("if ({})", negated_cond2));
                         if let Some(false_block_edge) = false_edge {
                             let false_idx = false_block_edge.point.read().unwrap().get_index();
+                            let ft = false_block_edge.point.read().unwrap().get_type();
                             self.emit.begin_block();
-                            emitted.insert(false_idx);
+                            if ft == crate::block::BlockType::Basic || ft == crate::block::BlockType::Copy {
+                                emitted.insert(false_idx);
+                            }
                             self.emit_block_ops(&false_block_edge.point, false);
                             self.emit.end_block();
                         }
@@ -925,20 +938,26 @@ impl PrintC {
 
                         if let Some(true_block_edge) = true_edge {
                             let true_idx = true_block_edge.point.read().unwrap().get_index();
+                            let tt = true_block_edge.point.read().unwrap().get_type();
                             self.emit.begin_block();
-                            emitted.insert(true_idx);
+                            if tt == crate::block::BlockType::Basic || tt == crate::block::BlockType::Copy {
+                                emitted.insert(true_idx);
+                            }
                             self.emit_block_ops(&true_block_edge.point, false);
                             self.emit.end_block();
                         }
 
                         if let Some(false_block_edge) = false_edge {
                             let false_idx = false_block_edge.point.read().unwrap().get_index();
+                            let ft = false_block_edge.point.read().unwrap().get_type();
                             // The else block is part of the conditional, not sequential code.
                             // seen_return from the then-branch should NOT suppress it.
                             if !emitted.contains(&false_idx) && !false_empty {
                                 self.emit.print(" else");
                                 self.emit.begin_block();
-                                emitted.insert(false_idx);
+                                if ft == crate::block::BlockType::Basic || ft == crate::block::BlockType::Copy {
+                                    emitted.insert(false_idx);
+                                }
                                 // Temporarily clear seen_return so the else block emits.
                                 let saved_seen_return = self.seen_return;
                                 self.seen_return = false;
@@ -946,7 +965,9 @@ impl PrintC {
                                 self.seen_return = saved_seen_return;
                                 self.emit.end_block();
                             } else {
-                                emitted.insert(false_idx);
+                                if ft == crate::block::BlockType::Basic || ft == crate::block::BlockType::Copy {
+                                    emitted.insert(false_idx);
+                                }
                             }
                         }
                     }
