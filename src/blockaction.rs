@@ -2371,18 +2371,25 @@ impl<'a> CollapseStructure<'a> {
                             drop(tb);
                             // Triangle match: condition=block, if_body=true_block, merge=false_block
                             // CBRANCH out(0)=true edge → if_body is the taken branch → no negation
+                            // BlockIf's out-edge = the merge block's out-edges (control continues
+                            // after the if). Preserves reachability to subsequent structured blocks.
+                            let merge_outs: Vec<crate::block::BlockEdge> = {
+                                let mb = false_block.read().unwrap();
+                                (0..mb.size_out()).filter_map(|slot| mb.get_out(slot)).collect()
+                            };
+                            let mut bif = BlockIf {
+                                index: cond_idx,
+                                condition: block.clone(),
+                                if_body: true_block.clone(),
+                                else_body: None,
+                                negated: false,
+                                incoming: Vec::new(),
+                                outgoing: merge_outs,
+                                parent: None,
+                                flags: 0,
+                            };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(BlockIf {
-                                    index: cond_idx,
-                                    condition: block.clone(),
-                                    if_body: true_block.clone(),
-                                    else_body: None,
-                                    negated: false,
-                                    incoming: Vec::new(),
-                                    outgoing: Vec::new(),
-                                    parent: None,
-                                    flags: 0,
-                                }));
+                                Arc::new(RwLock::new(bif));
                             replacements.push((i, if_block));
                             self.change_count += 1;
                             continue;
@@ -2402,18 +2409,24 @@ impl<'a> CollapseStructure<'a> {
                             // Triangle-reverse: if_body is the FALSE edge block (out(1)).
                             // The CBRANCH condition is written for the TRUE edge, so we must
                             // negate it to correctly gate the false-edge body.
+                            // BlockIf's out-edge = merge block (true_block)'s out-edges.
+                            let merge_outs: Vec<crate::block::BlockEdge> = {
+                                let mb = true_block.read().unwrap();
+                                (0..mb.size_out()).filter_map(|slot| mb.get_out(slot)).collect()
+                            };
+                            let mut bif = BlockIf {
+                                index: cond_idx,
+                                condition: block.clone(),
+                                if_body: false_block.clone(),
+                                else_body: None,
+                                negated: true,
+                                incoming: Vec::new(),
+                                outgoing: merge_outs,
+                                parent: None,
+                                flags: 0,
+                            };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(BlockIf {
-                                    index: cond_idx,
-                                    condition: block.clone(),
-                                    if_body: false_block.clone(),
-                                    else_body: None,
-                                    negated: true,
-                                    incoming: Vec::new(),
-                                    outgoing: Vec::new(),
-                                    parent: None,
-                                    flags: 0,
-                                }));
+                                Arc::new(RwLock::new(bif));
                             replacements.push((i, if_block));
                             self.change_count += 1;
                             continue;
@@ -2436,18 +2449,27 @@ impl<'a> CollapseStructure<'a> {
                             drop(tb);
                             drop(fb);
                             // Diamond match: if_body=true edge, else_body=false edge → no negation
+                            // BlockIf's out-edge = merge block (tt/ft)'s out-edges.
+                            let merge_blk_idx = tt;
+                            let merge_outs: Vec<crate::block::BlockEdge> = {
+                                if let Some(mb) = self.graph.get_block(merge_blk_idx as usize) {
+                                    let m = mb.read().unwrap();
+                                    (0..m.size_out()).filter_map(|slot| m.get_out(slot)).collect()
+                                } else { Vec::new() }
+                            };
+                            let mut bif = BlockIf {
+                                index: cond_idx,
+                                condition: block.clone(),
+                                if_body: true_block.clone(),
+                                else_body: Some(false_block.clone()),
+                                negated: false,
+                                incoming: Vec::new(),
+                                outgoing: merge_outs,
+                                parent: None,
+                                flags: 0,
+                            };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(BlockIf {
-                                    index: cond_idx,
-                                    condition: block.clone(),
-                                    if_body: true_block.clone(),
-                                    else_body: Some(false_block.clone()),
-                                    negated: false,
-                                    incoming: Vec::new(),
-                                    outgoing: Vec::new(),
-                                    parent: None,
-                                    flags: 0,
-                                }));
+                                Arc::new(RwLock::new(bif));
                             replacements.push((i, if_block));
                             self.change_count += 1;
                             continue;

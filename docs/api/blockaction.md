@@ -509,3 +509,10 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
   导致 BlockList 后续的边（包括指向 WhileDo 的边）丢失，WhileDo 变为不可达。
 - 修复：BlockList.outging = succ（最后一个 child）的 out-edges，保持控制流连续性。
 - 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（13 while，从 12 增加）。
+
+### 2026-06-26（续）：collapse_conditions 保留 BlockIf 的 out-edges
+
+- collapse_conditions 的 Triangle/Triangle-reverse/Diamond 匹配创建 BlockIf 时，原来
+  outgoing 为空，导致 BlockIf 后续的边丢失。
+- 修复：BlockIf.outgoing = merge 块的 out-edges（Triangle: false/true_block, Diamond: D 块）。
+- 验证：176/176 测试。curl 24/24 gcc（3 while, 98 ifs 从 106 下降）。httpd 29/29 gcc（13 while）。
