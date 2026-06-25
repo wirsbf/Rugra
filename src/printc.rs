@@ -587,7 +587,10 @@ impl PrintC {
                                 }
                                 self.emit.end_block();
                             } else {
-                                emitted.insert(else_body.read().unwrap().get_index());
+                                let ebt = else_body.read().unwrap().get_type();
+                                if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
+                                    emitted.insert(else_body.read().unwrap().get_index());
+                                }
                             }
                         }
                     }

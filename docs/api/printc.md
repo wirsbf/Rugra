@@ -482,3 +482,8 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - BlockIf 的 has_case/both-empty/if-body-empty 路径的 emitted.insert 现在只对 Basic/Copy 插入。
 - 避免结构化块（WhileDo）被直接 insert 到 emitted 而不被 emit。
 - 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while）。
+
+### 2026-06-26（续）：BlockIf else-body empty 路径 emitted.insert 加 Basic-only 守卫
+
+- 行 590（else-body empty 分支）的 emitted.insert 现在只对 Basic/Copy 插入。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
