@@ -476,3 +476,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
   分支索引时，现在只对 Basic/Copy 块插入，不抑制 WhileDo/DoWhile 等结构化块。
 - 之前 WhileDo 被直接 insert 到 emitted 集合而不被 emit，导致不可达。
 - 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while，从 19 增加）。
+
+### 2026-06-26（续）：BlockIf body emit 的 emitted.insert 加 Basic-only 守卫
+
+- BlockIf 的 has_case/both-empty/if-body-empty 路径的 emitted.insert 现在只对 Basic/Copy 插入。
+- 避免结构化块（WhileDo）被直接 insert 到 emitted 而不被 emit。
+- 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while）。

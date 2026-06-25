@@ -459,7 +459,10 @@ impl PrintC {
                         self.emit = saved_emit;
                         if has_case {
                             let if_idx = if_data.if_body.read().unwrap().get_index();
-                            emitted.insert(if_idx);
+                            let ibt = if_data.if_body.read().unwrap().get_type();
+                            if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
+                                emitted.insert(if_idx);
+                            }
                             self.emit_block_ops(&if_data.condition, false);
                             self.emit_block_ops(&if_data.if_body, false);
                             true
@@ -475,15 +478,24 @@ impl PrintC {
                     
                     if if_body_empty && else_body_empty {
                         // Both bodies empty — skip entire if/else, just emit condition block's ops
-                        emitted.insert(if_data.if_body.read().unwrap().get_index());
+                        let ibt = if_data.if_body.read().unwrap().get_type();
+                        if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
+                            emitted.insert(if_data.if_body.read().unwrap().get_index());
+                        }
                         if let Some(ref eb) = if_data.else_body {
-                            emitted.insert(eb.read().unwrap().get_index());
+                            let ebt = eb.read().unwrap().get_type();
+                            if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
+                                emitted.insert(eb.read().unwrap().get_index());
+                            }
                         }
                         self.emit_block_ops(&if_data.condition, true);
                     } else if if_body_empty && !else_body_empty && if_data.else_body.is_some() {
                         // if_body is empty, else_body has code.
                         self.emit_block_ops(&if_data.condition, true);
-                        emitted.insert(if_data.if_body.read().unwrap().get_index());
+                        let ibt = if_data.if_body.read().unwrap().get_type();
+                        if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
+                            emitted.insert(if_data.if_body.read().unwrap().get_index());
+                        }
                         let else_body = if_data.else_body.as_ref().unwrap();
                         self.emit.tag_line(0);
                         if if_data.negated {
