@@ -563,3 +563,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 - generate_likely_gotos 跳过 < 10 块的函数，防止误标 goto。
 - TraceDAG 已启用。验证：176/176 测试。curl 24/24。httpd 29/29。
+
+### 2026-06-26（续）：TraceDAG pre-phase1 尝试（回退）
+
+- 尝试在 phase1 前运行 TraceDAG 标记 goto 边，防止 switch 形成。
+- 结果：curl 3/24 gcc（灾难回归）。push_branches 算法过早触发 select_bad_edge
+  （check_open 太严格，很多节点无法打开）。已回退。
+- collapse_switches 的 goto-edge 守卫保留（正确但 TraceDAG 未启用时无效）。
+- 验证（回退后）：176/176 测试。curl 24/24。httpd 29/29。

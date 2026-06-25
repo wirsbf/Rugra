@@ -148,6 +148,11 @@ impl<'a> CollapseStructure<'a> {
         // by phase1's collapse_conditions.
         self.structure_loops_first();
 
+        // TraceDAG before phase1: DISABLED — marks too many edges, causing
+        // massive regressions (curl 3/24 gcc). The push_branches algorithm
+        // fires select_bad_edge prematurely (check_open too strict).
+        // self.run_tracedag();
+
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
