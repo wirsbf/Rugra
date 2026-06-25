@@ -821,3 +821,5 @@ RPO 常用于：
 - 移除动态过滤（死锁/性能问题）。
 - BlockBasic size_in/out 在 DEAD 时返回 0。
 - gcc 53/53，175/176 测试。getparameter 5 if。
+
+### 2026-06-25：set_flags 清空 edges（实验）

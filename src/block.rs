@@ -229,8 +229,13 @@ impl FlowBlock for BlockBasic {
     }
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
+        // When setting DEAD flag, clear edges (aligns with Ghidra identifyInternal
+        // which removes consumed blocks from graph, making their edges invisible)
+        if (f & block_flags::DEAD) != 0 {
+            self.incoming.clear();
+            self.outgoing.clear();
+        }
     }
-
     fn size_in(&self) -> usize {
         if self.is_consumed() { return 0; }
         self.incoming.len()
