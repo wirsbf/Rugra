@@ -463,3 +463,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
   只递归结构化块（不递归基本块）避免 canary 问题。
 - 之前后继递归被禁用（canary blocks），导致 WhileDo 等只能通过 unreachable-loop 输出。
 - 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while，从 11 增加）。
+
+### 2026-06-26（续）：BlockList emit 后递归结构化后继块
+
+- BlockList emit 完所有 children 后，现在 follow out-edges 到结构化块（WhileDo/If/Switch 等）。
+- 与基本块后继递归对称，确保 BlockList 的后续结构化块被访问。
+- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while）。

@@ -650,6 +650,23 @@ impl PrintC {
                     for child in &list_data.children {
                         self.emit_block_structured(child, graph, emitted);
                     }
+                    // After emitting all children, follow the List's out-edges to
+                    // structured blocks (WhileDo etc). The List's out-edges come
+                    // from self_identify and may point to a WhileDo that was
+                    // structured before the List was formed.
+                    let outs: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+                        let b = block_arc.read().unwrap();
+                        (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
+                    };
+                    for succ in &outs {
+                        let succ_idx = succ.read().unwrap().get_index();
+                        if emitted.contains(&succ_idx) { continue; }
+                        let st = succ.read().unwrap().get_type();
+                        if st != crate::block::BlockType::Basic
+                           && st != crate::block::BlockType::Copy {
+                            self.emit_block_structured(succ, graph, emitted);
+                        }
+                    }
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
