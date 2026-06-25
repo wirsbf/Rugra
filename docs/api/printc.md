@@ -450,3 +450,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - 两个 CBRANCH 块比较相同常量时会在同一 switch 产生重复 case。emit switch case 时用
   emitted_case_values 集合去重，跳过已输出的 case value。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc（恢复！）。
+
+### 2026-06-26（续）：seen_return 不抑制控制结构块（WhileDo/DoWhile/If/List）
+
+- emit_block_structured 的 seen_return 检查现在跳过控制结构块（WhileDo/DoWhile/If/List），
+  这些块代表可达控制流路径，必须在 RETURN 后仍渲染。
+- 验证：176/176 测试。curl 24/24 gcc（3 个 while 循环）。httpd 29/29 gcc（11 个 while 循环）。

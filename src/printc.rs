@@ -400,8 +400,17 @@ impl PrintC {
             return;
         }
 
-        // Skip all emission after RETURN — prevents dead-code blocks from appearing
-        if self.seen_return {
+        // Skip all emission after RETURN — prevents dead-code blocks from appearing.
+        // BUT control structures (WhileDo/DoWhile/If/etc) must still render even
+        // after a RETURN, because they represent reachable code paths. For these,
+        // save/restore seen_return so the RETURN doesn't suppress the structure.
+        let bt = block_arc.read().unwrap().get_type();
+        let is_control_struct = matches!(bt,
+            crate::block::BlockType::WhileDo
+            | crate::block::BlockType::DoWhile
+            | crate::block::BlockType::If
+            | crate::block::BlockType::List);
+        if self.seen_return && !is_control_struct {
             return;
         }
 
