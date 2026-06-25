@@ -180,3 +180,10 @@ Emitter that discards all output (used for discovery pass)
   移除函数闭合 `}`，导致函数边界损坏（ap_getparents）。
 - 改为 emit as-is（不移除大括号）。naive 计数不可靠，真正的平衡应由 emit 的
   begin_block/end_block 配对保证。
+
+### 2026-06-26（续）：post_process pass10 不移除 while/do/for/switch 结构
+
+- pass10（remove dead code after return）现在保留 while/do/for/switch 控制流结构，
+  即使它们出现在 return 之后。这些是可达控制流，不是死代码。
+- 之前 WhileDo 循环在 unreachable-loop 中 emit（return 之后）被 pass10 移除。
+- 验证：176/176 测试。curl 24/24 gcc（5 while，从 3 增加）。httpd 29/29 gcc（19 while，从 16 增加）。

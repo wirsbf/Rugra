@@ -723,6 +723,12 @@ impl EmitNoMarkup {
                     // Switch case label — end dead zone (reachable via case fallthrough)
                     dead_after_return = false;
                     alive.push(line.clone());
+                } else if t.starts_with("while (") || t.starts_with("do ") || t.starts_with("for (") || t.starts_with("switch (") {
+                    // Control-flow structures (loops/switches) are not dead code even
+                    // after a return — they may be reachable via fallthrough or represent
+                    // structured control flow that the emit traversal placed after a return.
+                    dead_after_return = false;
+                    alive.push(line.clone());
                 } else if t.is_empty() {
                     // Blank lines in dead zone — skip without resetting (they don't make
                     // following dead code reachable).
