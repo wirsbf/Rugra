@@ -455,3 +455,25 @@ BlockIfGoto/BlockMultiGoto，使它们从图中"消失"并让周围 cat/if 规�
 **验证**：curl 101 if，0 goto，24/24 gcc；httpd 91 if，29/29 gcc（不超时）；
 175/176 测试（预存失败不变）。getparameter FINAL basic 85→84，structured 28→29。
 multiin CBR 仍=4（需 TraceDAG 进一步处理）。
+
+### 2026-06-24：循环结构化诊断 + skip-orphan/cat-head 安全保护
+
+**诊断**：orderLoopBodies 检测到 getparameter 有 2 个嵌套循环（head=21，内层 bodysize=2、
+外层 bodysize=4），但最终 TYPES whiledo=0 dowhile=0——循环未被结构化为 while/do。
+
+**根因**：循环头 block 21 的边在 phase1 collapse_loops 运行前/中被清除（out=0 in=0），
+变成 orphan 块。phase1 的 collapse_loops While-Do 检测要求 clause size_in==1，但循环体
+block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phase1 三角匹配（collapse_conditions）
+消耗成 BlockIf，而非 while/do。禁用 phase1 collapse_conditions/sequences 虽然让 curl if 从
+101→77（更紧凑），但破坏 gcc 语法（curl 20/24、httpd 28/29），已回退。
+
+**安全改进（保留）**：
+- **apply_rules_to_block skip-orphan guard**：跳过边已清除（size_in==0 && size_out==0）
+  但未标记 DEAD 的 orphan 块，防止 spurious 匹配破坏图。
+- **try_rule_cat loop-head guard**：cat-chain 扩展时不消费 loop_bodies 中的循环头，
+  对齐 Ghidra isDecisionOut 语义（循环头必须留给 while_do/do_while）。
+- **try_rule_while_do** 放宽 clause 检查为 count_non_structural_in_edges（忽略 DEAD/goto 源）。
+- 监控日志：TYPES（whiledo/dowhile/if/list/other 计数）+ loop head/bodysize。
+
+**验证**：curl 101 if，24/24 gcc；httpd 91 if，29/29 gcc。175/176 测试（预存失败不变）。
+循环仍未输出为 while/do——需 phase1 collapse_loops 多入边循环体重构（后续工作）。

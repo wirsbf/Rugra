@@ -267,6 +267,21 @@ impl<'a> CollapseStructure<'a> {
 
     /// Apply interleaved rules to a single block at graph index i.
     fn apply_rules_to_block(&mut self, i: usize) {
+        // Skip blocks whose edges were already cleared by an earlier
+        // identify_internal (consumed/orphaned but not yet marked DEAD). These
+        // blocks have size_in==0 && size_out==0 but aren't the function entry,
+        // so they can't match any rule — and matching them would corrupt the
+        // graph (e.g. a loop head whose edges got cleared mid-structuring).
+        {
+            let b = match self.graph.get_block(i) { Some(b)=>b, None=>return };
+            let r = b.read().unwrap();
+            if r.get_flags() & crate::block::block_flags::DEAD != 0 { return; }
+            if r.size_in() == 0 && r.size_out() == 0 {
+                // Orphaned block (consumed but not DEAD-flagged). Skip it to
+                // avoid corrupting the graph via spurious matches.
+                return;
+            }
+        }
         if self.try_rule_cat(i) { return; }
         if self.try_rule_proper_if(i) { return; }
         if self.try_rule_if_else(i) { return; }
@@ -371,6 +386,25 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
             eprintln!("[COLLAPSE] {} FINAL basic={} dead={} structured={}", self.name, basic, dead, structured);
+            // Count structured block subtypes (WhileDo/DoWhile/If/etc)
+            if structured > 0 {
+                let mut wd = 0; let mut dw = 0; let mut ifs = 0; let mut lst = 0; let mut oth = 0;
+                for i in 0..sz {
+                    if let Some(blk) = self.graph.get_block(i) {
+                        let b = blk.read().unwrap();
+                        if b.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+                        match b.get_type() {
+                            crate::block::BlockType::WhileDo => wd += 1,
+                            crate::block::BlockType::DoWhile => dw += 1,
+                            crate::block::BlockType::If => ifs += 1,
+                            crate::block::BlockType::List => lst += 1,
+                            crate::block::BlockType::Basic | crate::block::BlockType::Copy => {}
+                            _ => oth += 1,
+                        }
+                    }
+                }
+                eprintln!("[COLLAPSE] {} TYPES whiledo={} dowhile={} if={} list={} other={}", self.name, wd, dw, ifs, lst, oth);
+            }
             // Categorize unstructured CBRANCHes: loop-back-edge vs multi-in-edge
             if basic > 10 {
                 let mut loop_cbr = 0; let mut multiin_cbr = 0; let mut single_cbr = 0;
@@ -434,6 +468,9 @@ impl<'a> CollapseStructure<'a> {
         // Sort by body size (smallest = innermost first)
         self.loop_bodies.sort_by_key(|(_, body)| body.len());
         eprintln!("[COLLAPSE] {} orderLoopBodies: {} loops found", self.name, self.loop_bodies.len());
+        for (head, body) in &self.loop_bodies {
+            eprintln!("[COLLAPSE] {} loop head={} bodysize={}", self.name, head, body.len());
+        }
     }
 
     /// Collect all blocks in a natural loop body.
@@ -1223,6 +1260,10 @@ impl<'a> CollapseStructure<'a> {
             if n_type != crate::block::BlockType::Basic && n_type != crate::block::BlockType::Copy {
                 break;
             }
+            // Don't consume a loop head — it must remain available for
+            // try_rule_while_do/try_rule_do_while. Ghidra's isDecisionOut guard
+            // achieves this implicitly; we check loop_bodies explicitly.
+            if self.loop_bodies.iter().any(|(h, _)| *h == next_idx) { break; }
             // Extend chain (Ghidra: nodes.push_back(outblock))
             nodes.push(next.clone());
 
@@ -1702,8 +1743,13 @@ impl<'a> CollapseStructure<'a> {
         for slot in 0..2 {
             let clause = match b.get_out(slot) { Some(e) => e.point.clone(), None => continue };
             let c = clause.read().unwrap();
-            if c.size_in() != 1 { continue; }   // Only this block enters clause
-            if c.size_out() != 1 { continue; }   // Clause has only one exit
+            // Accept both Basic and structured (BlockList) clauses. Ghidra's
+            // ruleBlockWhileDo requires sizeIn()==1, but after cat-chaining the
+            // body may be a BlockList that still has a single back-edge to cond.
+            // We use count_non_structural_in_edges to ignore DEAD/goto sources.
+            let clause_in = self.count_non_structural_in_edges(&c);
+            if clause_in != 1 { continue; }
+            if c.size_out() != 1 { continue; }
             // Clause must loop back to the condition block
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             if clause_out.point.read().unwrap().get_index() != cond_idx { continue; }
