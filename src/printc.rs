@@ -3233,6 +3233,24 @@ impl PrintLanguage for PrintC {
             }
         }
 
+        // 2d. Force-emit WhileDo/DoWhile blocks that were marked emitted but
+        // never actually rendered. Use a FRESH emitted set so the loop isn't
+        // skipped by the stale emitted entry from if-empty paths.
+        {
+            let mut fresh_emitted: HashSet<i32> = HashSet::new();
+            for i in 0..graph.get_size() {
+                if let Some(block_arc) = graph.get_block(i) {
+                    let bt = block_arc.read().unwrap().get_type();
+                    if bt == crate::block::BlockType::WhileDo || bt == crate::block::BlockType::DoWhile {
+                        let block_idx = block_arc.read().unwrap().get_index();
+                        if !fresh_emitted.contains(&block_idx) {
+                            self.emit_block_structured(&block_arc, graph, &mut fresh_emitted);
+                        }
+                    }
+                }
+            }
+        }
+
         self.emit.end_block();
 
         // Post-process: eliminate redundant gotos and orphan labels (P3)

@@ -487,3 +487,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 
 - 行 590（else-body empty 分支）的 emitted.insert 现在只对 Basic/Copy 插入。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
+
+### 2026-06-26（续）：force-emit WhileDo/DoWhile 块（fresh emitted set）
+
+- 2d 遍历：用 fresh emitted set 强制 emit 所有 WhileDo/DoWhile 块，绕过 stale emitted 条目。
+- 大幅增加循环恢复：curl 15 while（从 5），httpd 40 while（从 20）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
