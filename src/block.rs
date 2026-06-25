@@ -66,6 +66,7 @@ pub mod edge_flags {
 /// Corresponds to Ghidra's `FlowBlock` base class
 pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     fn get_index(&self) -> i32;
     fn set_index(&mut self, i: i32);
     fn get_type(&self) -> BlockType;
@@ -207,6 +208,9 @@ impl FlowBlock for BlockBasic {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     fn get_index(&self) -> i32 {
         self.index
     }
@@ -295,6 +299,34 @@ impl FlowBlock for BlockBasic {
     }
     fn clear_dom_frontier(&mut self) {
         self.dom_frontier.clear();
+    }
+}
+
+/// BlockBasic-specific methods for edge manipulation (Ghidra identifyInternal support)
+impl BlockBasic {
+    pub fn replace_out_edge_target(&mut self, slot: usize, new_target: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        if slot < self.outgoing.len() {
+            self.outgoing[slot].point = new_target;
+        }
+    }
+
+    pub fn replace_in_edge_source(&mut self, slot: usize, new_source: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        if slot < self.incoming.len() {
+            self.incoming[slot].point = new_source;
+        }
+    }
+
+    pub fn clear_edges(&mut self) {
+        self.incoming.clear();
+        self.outgoing.clear();
+    }
+
+    pub fn get_outgoing(&self) -> &[BlockEdge] {
+        &self.outgoing
+    }
+
+    pub fn get_incoming(&self) -> &[BlockEdge] {
+        &self.incoming
     }
 }
 
@@ -752,6 +784,7 @@ impl FlowBlock for BlockCopy {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_index(&self) -> i32 {
         self.index
     }
@@ -803,6 +836,7 @@ impl FlowBlock for BlockGoto {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_index(&self) -> i32 {
         self.index
     }
@@ -869,6 +903,7 @@ impl FlowBlock for BlockIf {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::If }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
@@ -908,6 +943,7 @@ impl FlowBlock for BlockWhileDo {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::WhileDo }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
@@ -944,6 +980,7 @@ impl FlowBlock for BlockDoWhile {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::DoWhile }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
@@ -994,6 +1031,7 @@ impl FlowBlock for BlockList {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::List }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
@@ -1072,6 +1110,7 @@ impl FlowBlock for BlockCondition {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::Condition }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
@@ -1119,6 +1158,7 @@ impl FlowBlock for BlockSwitch {
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn get_index(&self) -> i32 { self.index }
     fn set_index(&mut self, i: i32) { self.index = i; }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     fn get_type(&self) -> BlockType { BlockType::Switch }
     fn get_flags(&self) -> u32 { self.flags }
     fn set_flags(&mut self, f: u32) { self.flags |= f; }

@@ -884,14 +884,18 @@ impl<'a> CollapseStructure<'a> {
             self.graph.blocks[install_idx] = new_block.clone();
         }
 
-        // For each consumed block, redirect external edges:
-        // External blocks that have an edge TO a consumed block should redirect
-        // that edge to point to new_block instead.
+        // Redirect external edges using as_any_mut downcast to BlockBasic
         for graph_idx in 0..size {
             if graph_idx == install_idx { continue; }
-            // Check if this block has outgoing edges to consumed blocks
+            let block_idx = {
+                let b = self.graph.blocks[graph_idx].read().unwrap();
+                b.get_index()
+            };
+            if consumed_set.contains(&block_idx) { continue; }
+
             let needs_redirect = {
                 let b = self.graph.blocks[graph_idx].read().unwrap();
+                if b.get_type() != crate::block::BlockType::Basic { continue; }
                 let mut found = false;
                 for slot in 0..b.size_out() {
                     if let Some(e) = b.get_out(slot) {
@@ -906,30 +910,71 @@ impl<'a> CollapseStructure<'a> {
 
             if needs_redirect {
                 let mut b = self.graph.blocks[graph_idx].write().unwrap();
-                // Redirect outgoing edges from consumed blocks to new_block
-                for slot in 0..b.size_out() {
-                    if let Some(e) = b.get_out(slot) {
-                        let target_idx = e.point.read().unwrap().get_index();
-                        if consumed_set.contains(&target_idx) && target_idx != b.get_index() {
-                            // Redirect: replace edge target with new_block
-                            // We need to do this on the outgoing vector
-                            // BlockBasic has pub outgoing — but we can't downcast here
-                            // Use add_out_edge to add new edge, then remove old
+                let any_ref = b.as_any_mut();
+                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
+                    // Redirect outgoing edges from consumed targets → new_block
+                    for slot in 0..bb.outgoing.len() {
+                        let target_idx = bb.outgoing[slot].point.read().unwrap().get_index();
+                        if consumed_set.contains(&target_idx) && target_idx != bb.index {
+                            bb.outgoing[slot].point = new_block.clone();
                         }
                     }
                 }
             }
         }
 
-        // Mark consumed blocks as DEAD (keep as placeholder, don't remove from array
-        // to avoid index shifting). Their edges are now invisible via is_consumed().
+        // Redirect incoming edges of non-consumed blocks from consumed sources
+        for graph_idx in 0..size {
+            if graph_idx == install_idx { continue; }
+            let block_idx = {
+                let b = self.graph.blocks[graph_idx].read().unwrap();
+                b.get_index()
+            };
+            if consumed_set.contains(&block_idx) { continue; }
+
+            let needs_in_redirect = {
+                let b = self.graph.blocks[graph_idx].read().unwrap();
+                if b.get_type() != crate::block::BlockType::Basic { continue; }
+                let mut found = false;
+                for slot in 0..b.size_in() {
+                    if let Some(e) = b.get_in(slot) {
+                        if consumed_set.contains(&e.point.read().unwrap().get_index()) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+
+            if needs_in_redirect {
+                let mut b = self.graph.blocks[graph_idx].write().unwrap();
+                let any_ref = b.as_any_mut();
+                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
+                    let mut to_redirect = Vec::new();
+                    for slot in 0..bb.incoming.len() {
+                        let src_idx = bb.incoming[slot].point.read().unwrap().get_index();
+                        if consumed_set.contains(&src_idx) && src_idx != bb.index {
+                            to_redirect.push(slot);
+                        }
+                    }
+                    for &slot in to_redirect.iter().rev() {
+                        bb.incoming[slot].point = new_block.clone();
+                    }
+                }
+            }
+        }
+
+        // Clear consumed blocks' edges and mark DEAD
         for &idx in consumed_indices {
             let i = idx as usize;
             if i < size && i != install_idx {
-                let b = self.graph.blocks[i].read().unwrap();
-                let cur = b.get_flags();
-                drop(b);
-                self.graph.blocks[i].write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
+                let mut b = self.graph.blocks[i].write().unwrap();
+                let any_ref = b.as_any_mut();
+                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
+                    bb.clear_edges();
+                }
+                b.set_flags(crate::block::block_flags::DEAD);
             }
         }
     }
@@ -969,14 +1014,10 @@ impl<'a> CollapseStructure<'a> {
                 block.read().unwrap().get_index(),
                 vec![block.clone(), succ.clone()],
             )));
-        self.graph.blocks[i] = list_block;
-        // Mark the successor as DEAD — its ops are now emitted via BlockList children.
-        // This prevents emit_block_structured from outputting it as a standalone block.
-        let succ_idx = succ.read().unwrap().get_index() as usize;
-        if succ_idx < size {
-            let cur = succ.read().unwrap().get_flags();
-            succ.write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
-        }
+        let block_idx = block.read().unwrap().get_index();
+        let succ_idx_val = succ.read().unwrap().get_index();
+        self.identify_internal(&list_block, &[succ_idx_val], i);
+        self.update_switch_case_reference(block_idx, &list_block);
         self.change_count += 1;
         true
     }
@@ -1129,16 +1170,8 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            self.graph.blocks[i] = if_block.clone();
-            // If this block was a switch case body, update the owning BlockSwitch
-            // to point to the new BlockIf instead of the old Basic block.
+            self.identify_internal(&if_block, &[clause.read().unwrap().get_index()], i);
             self.update_switch_case_reference(cond_idx, &if_block);
-            // Mark consumed clause block as DEAD
-            let clause_idx_val = clause.read().unwrap().get_index() as usize;
-            if clause_idx_val < self.graph.get_size() {
-                let cf = clause.read().unwrap().get_flags();
-                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
-            }
             self.change_count += 1;
             return true;
         }

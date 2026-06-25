@@ -353,3 +353,11 @@ Create a new ActionNormalizeBranches instance
 - 实现了 identify_internal 方法骨架，但目前只用 DEAD flag（边重定向逻辑未完成）。
 - gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。
 - 需要实现 BlockBasic 的 outgoing 向量重定向（replaceOutEdge 等效方法）。
+
+### 2026-06-25：identify_internal 完成（cat + proper_if）
+
+- identify_internal 实现：边重定向 + 消费块清除 + DEAD 标记。
+- try_rule_cat 和 try_rule_proper_if 使用 identify_internal 替代手动 DEAD flag。
+- as_any_mut trait 方法添加到 FlowBlock + 所有实现。
+- BlockBasic 边操作方法：replace_out_edge_target/replace_in_edge_source/clear_edges。
+- gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。

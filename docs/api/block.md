@@ -825,3 +825,5 @@ RPO 常用于：
 ### 2026-06-25：set_flags 清空 edges（实验）
 
 ### 2026-06-25：block.rs 恢复最佳状态
+
+### 2026-06-25：FlowBlock as_any_mut + BlockBasic 边操作
