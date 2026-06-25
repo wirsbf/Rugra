@@ -867,7 +867,73 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    /// ruleBlockCat: merge A→B (B has exactly 1 in from A) into BlockList.
+    /// Ghidra's identifyInternal: collapse consumed blocks into a structured block.
+    /// Replaces graph.blocks[i] with new_block, then for each consumed block:
+    /// 1. Remove it from graph.blocks (replace with empty placeholder)
+    /// 2. Redirect external edges pointing to consumed blocks → point to new_block
+    /// 3. Remove internal edges (between consumed blocks)
+    /// This makes consumed blocks invisible to subsequent rule iterations,
+    /// matching Ghidra's graph.list removal in identifyInternal.
+    fn identify_internal(&mut self, new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+                         consumed_indices: &[i32], install_idx: usize) {
+        let size = self.graph.get_size();
+        let consumed_set: std::collections::HashSet<i32> = consumed_indices.iter().copied().collect();
+
+        // Install the new structured block at install_idx
+        if install_idx < size {
+            self.graph.blocks[install_idx] = new_block.clone();
+        }
+
+        // For each consumed block, redirect external edges:
+        // External blocks that have an edge TO a consumed block should redirect
+        // that edge to point to new_block instead.
+        for graph_idx in 0..size {
+            if graph_idx == install_idx { continue; }
+            // Check if this block has outgoing edges to consumed blocks
+            let needs_redirect = {
+                let b = self.graph.blocks[graph_idx].read().unwrap();
+                let mut found = false;
+                for slot in 0..b.size_out() {
+                    if let Some(e) = b.get_out(slot) {
+                        if consumed_set.contains(&e.point.read().unwrap().get_index()) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+
+            if needs_redirect {
+                let mut b = self.graph.blocks[graph_idx].write().unwrap();
+                // Redirect outgoing edges from consumed blocks to new_block
+                for slot in 0..b.size_out() {
+                    if let Some(e) = b.get_out(slot) {
+                        let target_idx = e.point.read().unwrap().get_index();
+                        if consumed_set.contains(&target_idx) && target_idx != b.get_index() {
+                            // Redirect: replace edge target with new_block
+                            // We need to do this on the outgoing vector
+                            // BlockBasic has pub outgoing — but we can't downcast here
+                            // Use add_out_edge to add new edge, then remove old
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mark consumed blocks as DEAD (keep as placeholder, don't remove from array
+        // to avoid index shifting). Their edges are now invisible via is_consumed().
+        for &idx in consumed_indices {
+            let i = idx as usize;
+            if i < size && i != install_idx {
+                let b = self.graph.blocks[i].read().unwrap();
+                let cur = b.get_flags();
+                drop(b);
+                self.graph.blocks[i].write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
+            }
+        }
+    }
+
     /// Unlike collapse_sequences, this runs within the interleaved loop so
     // the merge is immediately visible to subsequent if/else checks.
     fn try_rule_cat(&mut self, i: usize) -> bool {

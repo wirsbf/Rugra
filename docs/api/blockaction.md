@@ -347,3 +347,9 @@ Create a new ActionNormalizeBranches instance
 - 回退 Ghidra 对齐实验（raw size_in + dominator tree removal）。
 - 恢复 count_non_structural_in_edges + dominator tree expansion。
 - getparameter 13 if，控制流差 130，gcc 53/53，175/176 测试。
+
+### 2026-06-25：identify_internal 框架（边重定向未完成）
+
+- 实现了 identify_internal 方法骨架，但目前只用 DEAD flag（边重定向逻辑未完成）。
+- gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。
+- 需要实现 BlockBasic 的 outgoing 向量重定向（replaceOutEdge 等效方法）。
