@@ -3,6 +3,10 @@
 **状态**: 已核对（当前有效）  
 **源代码路径**: `src/blockaction.rs`
 
+> 监控日志：collapse_all 结尾输出 `[COLLAPSE] {name} FINAL basic={} dead={} structured={}`，
+> 以及当未结构化 basic 块 >10 时输出 `[COLLAPSE] {name} CBR-CAT loop={} multiin={} single={}`，
+> 用于跟踪结构化覆盖率。均为 stderr、标准 [COLLAPSE] tag。
+
 ## 模块说明 (Module Doc)
 
 Control flow structuring actions

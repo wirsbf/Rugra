@@ -386,9 +386,6 @@ impl<'a> CollapseStructure<'a> {
             }
         }
     }
-            }
-        }
-    }
 
     /// Identify all natural loops via back-edges and collect their body blocks.
     /// Mirrors Ghidra's labelLoops + orderLoopBodies (blockaction.cc:1126).
