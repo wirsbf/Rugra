@@ -360,6 +360,30 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
             eprintln!("[COLLAPSE] {} FINAL basic={} dead={} structured={}", self.name, basic, dead, structured);
+            // Categorize unstructured CBRANCHes: loop-back-edge vs multi-in-edge
+            if basic > 10 {
+                let mut loop_cbr = 0; let mut multiin_cbr = 0; let mut single_cbr = 0;
+                for i in 0..sz {
+                    if let Some(blk) = self.graph.get_block(i) {
+                        let b = blk.read().unwrap();
+                        if b.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+                        if b.get_type() != crate::block::BlockType::Basic { continue; }
+                        let has_cbranch = b.get_ops().last().map_or(false, |o| o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_CBRANCH);
+                        if !has_cbranch || b.size_out() != 2 { continue; }
+                        let idx = b.get_index();
+                        let mut has_backedge = false;
+                        for slot in 0..2 {
+                            if let Some(e) = b.get_out(slot) {
+                                if e.point.read().unwrap().get_index() == idx { has_backedge = true; }
+                            }
+                        }
+                        if has_backedge { loop_cbr += 1; }
+                        else if b.size_in() > 1 { multiin_cbr += 1; }
+                        else { single_cbr += 1; }
+                    }
+                }
+                eprintln!("[COLLAPSE] {} CBR-CAT loop={} multiin={} single={}", self.name, loop_cbr, multiin_cbr, single_cbr);
+            }
         }
     }
 
@@ -1013,46 +1037,93 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    /// Unlike collapse_sequences, this runs within the interleaved loop so
-    // the merge is immediately visible to subsequent if/else checks.
+    /// Ghidra's ruleBlockCat (blockaction.cc:1284): concatenate a chain of
+    /// blocks into a single BlockList. Faithful port with chain extension.
+    /// bl must have 1 out-edge to outblock, outblock has 1 in-edge, and bl must
+    /// be the START of a chain (its in-edge source has >1 out OR bl has >1 in).
+    /// Then extend the chain while each link has 1 out, 1 in, no switch, no goto.
     fn try_rule_cat(&mut self, i: usize) -> bool {
         let size = self.graph.get_size();
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return false,
         };
-        let b = block.read().unwrap();
-        if b.size_out() != 1 { return false; }
-        // Don't merge BlockCondition (&&/||) — it's a structured bool fold result
-        if b.get_type() == crate::block::BlockType::Condition { return false; }
-        let succ_edge = match b.get_out(0) { Some(e) => e, None => return false };
-        let succ = succ_edge.point.clone();
-        let succ_idx = succ.read().unwrap().get_index() as usize;
-        drop(b);
-        if succ_idx >= size || succ_idx == i { return false; }
-        let s = succ.read().unwrap();
-        if s.size_in() != 1 { return false; }
-        // Don't merge if successor is a structured block (BlockCondition, BlockIf, etc.)
-        // — these are results of earlier collapse passes and should not be
-        // merged into a BlockList by the interleaved cat rule.
-        let succ_type = s.get_type();
-        if succ_type != crate::block::BlockType::Basic && succ_type != crate::block::BlockType::Copy {
-            return false;
+        // bl->sizeOut() != 1
+        {
+            let b = block.read().unwrap();
+            if b.size_out() != 1 { return false; }
+            // bl->isSwitchOut() — skip switch dispatch blocks
+            if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
+            if b.get_type() == crate::block::BlockType::Condition { return false; }
         }
-        drop(s);
-        // Don't merge if succ is a switch or has goto edges
-        // (simplified check: succ must have <=1 out or end in CBRANCH)
+        // bl must be the START of a chain: (sizeIn==1 && getIn(0)->sizeOut==1) → false
+        // i.e. bl is a chain start if it has multiple in-edges, OR its sole
+        // predecessor has multiple out-edges (bl is a branch target).
+        {
+            let b = block.read().unwrap();
+            let block_idx = b.get_index();
+            if b.size_in() == 1 {
+                if let Some(in_edge) = b.get_in(0) {
+                    let pred_out = in_edge.point.read().unwrap().size_out();
+                    if pred_out == 1 { return false; } // not start of chain
+                }
+            }
+            // bl->getOut(0) == bl → no looping
+            if let Some(out_edge) = b.get_out(0) {
+                if out_edge.point.read().unwrap().get_index() == block_idx { return false; }
+            }
+        }
 
-        let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-            Arc::new(RwLock::new(BlockList::new(
-                block.read().unwrap().get_index(),
-                vec![block.clone(), succ.clone()],
-            )));
+        // Build the cat chain starting with [block, outblock]
+        let mut nodes: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        nodes.push(block.clone());
+
+        // outblock = bl->getOut(0); checks: != bl, sizeIn==1, !isSwitchOut
+        let mut cur = block.clone();
+        loop {
+            let cur_out = {
+                let c = cur.read().unwrap();
+                if c.size_out() != 1 { break; }
+                c.get_out(0).map(|e| e.point.clone())
+            };
+            let next = match cur_out { Some(n) => n, None => break };
+            let next_idx = next.read().unwrap().get_index();
+            let cur_idx = cur.read().unwrap().get_index();
+            // outblock == bl → no looping
+            if next_idx == cur_idx { break; }
+            let (n_in, n_out, n_type, n_flags) = {
+                let n = next.read().unwrap();
+                (n.size_in(), n.size_out(), n.get_type(), n.get_flags())
+            };
+            // outblock->sizeIn() != 1 → stop (something else hits outblock)
+            if n_in != 1 { break; }
+            // outblock->isSwitchOut() → stop
+            if n_flags & crate::block::block_flags::CASE_BODY != 0 { break; }
+            // Don't merge structured blocks (BlockIf, BlockCondition, etc.)
+            if n_type != crate::block::BlockType::Basic && n_type != crate::block::BlockType::Copy {
+                break;
+            }
+            // Extend chain (Ghidra: nodes.push_back(outblock))
+            nodes.push(next.clone());
+
+            // Continue extending while outblock->sizeOut()==1 and conditions hold
+            if n_out != 1 { break; }
+            cur = next;
+            // Safety: limit chain length
+            if nodes.len() > 64 { break; }
+        }
+
+        // Need at least 2 nodes to form a cat
+        if nodes.len() < 2 { return false; }
+
+        // Consume all nodes except the first (block stays at install_idx=i).
+        // Ghidra newBlockList(nodes) passes ALL nodes to identifyInternal; here
+        // block sits at install_idx so we consume nodes[1..].
         let block_idx = block.read().unwrap().get_index();
-        let succ_idx_val = succ.read().unwrap().get_index();
-        // self_identify captures succ's boundary edges onto the new BlockList.
-        // block sits at install_idx=i; only succ is consumed.
-        self.identify_internal(&list_block, &[succ_idx_val], i);
+        let consumed: Vec<i32> = nodes[1..].iter().map(|n| n.read().unwrap().get_index()).collect();
+        let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockList::new(block_idx, nodes)));
+        self.identify_internal(&list_block, &consumed, i);
         self.update_switch_case_reference(block_idx, &list_block);
         self.change_count += 1;
         true
@@ -1457,6 +1528,7 @@ impl<'a> CollapseStructure<'a> {
 
             // Found while-do: cond block + clause (body) that loops back
             let negated = slot == 1; // If clause is on false edge, negate condition
+            let clause_idx = clause.read().unwrap().get_index();
             let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(crate::block::BlockWhileDo {
                     index: cond_idx,
@@ -1467,10 +1539,11 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            // Note: BlockWhileDo doesn't have negated field; condition negation
-            // is handled at emit time based on which edge is the body.
+            // Ghidra newBlockWhileDo: identifyInternal([cond, cl]) + forceOutputNum(1).
+            // Consume the body clause; self_identify captures its boundary edges.
             let _ = negated;
-            self.graph.blocks[i] = while_block;
+            self.identify_internal(&while_block, &[clause_idx], i);
+            self.update_switch_case_reference(cond_idx, &while_block);
             self.change_count += 1;
             return true;
         }
@@ -1505,7 +1578,12 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            self.graph.blocks[i] = do_while_block;
+            // Ghidra newBlockDoWhile(condcl): identifyInternal([condcl]).
+            // The condcl block is consumed so its boundary edges (entry from
+            // outside the loop, exit to the fallthrough) are captured onto the
+            // new BlockDoDoWhile. condcl sits at install_idx=i.
+            self.identify_internal(&do_while_block, &[cond_idx], i);
+            self.update_switch_case_reference(cond_idx, &do_while_block);
             self.change_count += 1;
             return true;
         }

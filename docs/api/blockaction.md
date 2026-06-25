@@ -401,3 +401,19 @@ flag + count_non_structural_in_edges 使消费块对后续规则不可见；new_
 
 **验证**：curl 104→101 if，24/24 gcc，24 函数（无超时）；httpd 97→94 if，0 goto，29/29 gcc。
 175/176 测试（预存失败不变）。getparameter FINAL basic 85（orphans 消除）。
+
+### 2026-06-24：完整移植 ruleBlockCat 链式合并 + while_do/do_while 使用 identify_internal
+
+- **try_rule_cat 链式扩展**：忠实移植 Ghidra `ruleBlockCat`（blockaction.cc:1284）。
+  此前仅合并 2 个块。现在：bl 必须是链首（sizeIn==1 且唯一前驱 sizeOut==1 时返回
+  false），然后沿 out(0) 扩展链（每条链 sizeIn==1、sizeOut==1、非 CASE_BODY、非结构化块），
+  最终将 [block, out0, out1, ...] 全部合并为 BlockList，consume nodes[1..]。
+  对齐 Ghidra newBlockList(nodes) 传整条链给 identifyInternal。
+- **try_rule_while_do / try_rule_do_while 改用 identify_internal**：
+  此前这两个规则仍用 `self.graph.blocks[i] = block`（手动安装，不捕获边界边）。
+  now：while_do 用 identify_internal(&block, &[clause_idx], i)（Ghidra newBlockWhileDo
+  consume [cond,cl]，clause 在 Rust 端 consume）；do_while 用 identify_internal(&block,
+  &[cond_idx], i)（Ghidra newBlockDoWhile consume [condcl]，自回环块）。
+  消除了 while/do-while 产生的 orphan 边。
+- 至此 7/7 个 try_rule_* 方法全部使用 identify_internal，架构一致。
+- 验证：curl 101 if，24/24 gcc；httpd 94 if，0 goto，29/29 gcc。175/176 测试（预存失败不变）。
