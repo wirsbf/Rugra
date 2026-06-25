@@ -69,6 +69,8 @@ pub struct TraceDAG<'a> {
     /// Visit-count tracking: block_idx → count of traced in-edges.
     /// A node can be opened when visit_count == size_in (all in-edges traced).
     visit_count: HashMap<i32, i32>,
+    /// Set of blocks already opened (avoid re-opening).
+    opened: std::collections::HashSet<i32>,
 }
 
 impl<'a> TraceDAG<'a> {
@@ -81,6 +83,7 @@ impl<'a> TraceDAG<'a> {
             roots: Vec::new(),
             likely_goto: Vec::new(),
             visit_count: HashMap::new(),
+            opened: std::collections::HashSet::new(),
         }
     }
 
@@ -157,7 +160,8 @@ impl<'a> TraceDAG<'a> {
 
     /// Check if a trace can push into its dest node.
     /// A node can only be opened if all incoming edges have been traced
-    /// (visit_count == size_in). Uses visit-count tracking (Ghidra's approach).
+    /// (visit_count == size_in) OR it was already opened. Uses the `opened`
+    /// set to track previously-opened nodes.
     fn check_open(&self, trace_idx: usize) -> bool {
         let trace = &self.traces[trace_idx];
         if trace.terminal {
@@ -171,6 +175,10 @@ impl<'a> TraceDAG<'a> {
         let dest = trace.dest_block_idx;
         if dest < 0 {
             return false;
+        }
+        // Already opened — allow re-entry
+        if self.opened.contains(&dest) {
+            return true;
         }
         // Check visit-count: a node is openable when the number of traced
         // in-edges (visit_count + edgelump) >= size_in of the dest block.
@@ -221,6 +229,8 @@ impl<'a> TraceDAG<'a> {
     /// Open a branch: create new BranchPoint at dest node with sub-traces.
     fn open_branch(&mut self, trace_idx: usize) {
         let dest = self.traces[trace_idx].dest_block_idx;
+        // Mark this node as opened
+        self.opened.insert(dest);
         let top_bp = self.traces[trace_idx].top_bp;
         let parent_depth = self.branch_points[top_bp].depth;
         let parent_pathout = self.traces[trace_idx].pathout;
@@ -243,6 +253,8 @@ impl<'a> TraceDAG<'a> {
             if let Some(target) = self.get_out(dest, eo) {
                 // Skip back-edges (simple heuristic: target index <= dest)
                 if target <= dest { continue; }
+                // Increment visit_count for target (this edge is now traced)
+                *self.visit_count.entry(target).or_insert(0) += 1;
                 let new_trace_idx = self.traces.len();
                 self.traces.push(BlockTrace {
                     top_bp: new_bp_idx,

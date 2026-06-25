@@ -48,3 +48,9 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - generate_likely_gotos 跳过 < 10 块的简单函数（防止误标 goto 边）。
 - TraceDAG 已启用！176/176 测试通过。curl 24/24 gcc。httpd 29/29 gcc。
 - getparameter 仍 10 if（switch 检测先消费块，需进一步对齐）。
+
+## 2026-06-26 更新4：opened 集合 + visit-count 边递增
+
+- 新增 opened 集合追踪已打开的节点，check_open 对已打开节点直接返回 true。
+- open_branch 在创建子 trace 时递增目标节点的 visit_count（追踪入边）。
+- TraceDAG 现在在 phase1 前安全运行（176/176 测试，curl 24/24，httpd 29/29）。

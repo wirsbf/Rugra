@@ -148,10 +148,11 @@ impl<'a> CollapseStructure<'a> {
         // by phase1's collapse_conditions.
         self.structure_loops_first();
 
-        // TraceDAG before phase1: DISABLED — marks too many edges, causing
-        // massive regressions (curl 3/24 gcc). The push_branches algorithm
-        // fires select_bad_edge prematurely (check_open too strict).
-        // self.run_tracedag();
+        // Step 1c: Run TraceDAG BEFORE phase1 to mark likely goto edges.
+        // This must happen before switch detection so goto-marked edges prevent
+        // switch formation, allowing the remaining control flow to be structured
+        // as if/while instead of switch (matching Ghidra's approach).
+        self.run_tracedag();
 
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
@@ -2830,6 +2831,13 @@ impl<'a> CollapseStructure<'a> {
                 op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND
             });
             if !has_branchind {
+                continue;
+            }
+
+            // If any out-edge is marked as goto (by TraceDAG), skip switch
+            // formation — the control flow should be structured as if/goto.
+            let flags = b.get_flags();
+            if flags & (crate::block::block_flags::GOTO_EDGE_0 | crate::block::block_flags::GOTO_EDGE_1) != 0 {
                 continue;
             }
 

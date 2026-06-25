@@ -571,3 +571,10 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
   （check_open 太严格，很多节点无法打开）。已回退。
 - collapse_switches 的 goto-edge 守卫保留（正确但 TraceDAG 未启用时无效）。
 - 验证（回退后）：176/176 测试。curl 24/24。httpd 29/29。
+
+### 2026-06-26（续）：TraceDAG pre-phase1 启用（opened 集合 + visit-count 边递增）
+
+- opened 集合追踪已打开节点；open_branch 递增目标 visit_count。
+- TraceDAG 在 phase1 前安全运行，标记 goto 边阻止 switch 形成。
+- collapse_switches 检查 goto 标志，跳过已标记 goto 的 BRANCHIND 块。
+- 验证：176/176 测试。curl 24/24 gcc（15 while）。httpd 29/29 gcc（39 while）。
