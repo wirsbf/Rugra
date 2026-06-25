@@ -386,6 +386,9 @@ impl<'a> CollapseStructure<'a> {
             }
         }
     }
+            }
+        }
+    }
 
     /// Identify all natural loops via back-edges and collect their body blocks.
     /// Mirrors Ghidra's labelLoops + orderLoopBodies (blockaction.cc:1126).
@@ -968,14 +971,41 @@ impl<'a> CollapseStructure<'a> {
             for dst in &out_boundary {
                 new_out.push(crate::block::BlockEdge::new(dst.clone(), new_in.len() as i32));
             }
-            // Note: we do NOT rewrite external blocks' edges here (Ghidra's
-            // selfIdentify does via replaceOutEdge/replaceInEdge, but those operate
-            // on raw pointers without locking). In Rust, rewriting external Arcs
-            // during iteration risks self-loops and non-convergence. Instead, we
-            // rely on the DEAD flag + count_non_structural_in_edges to make
-            // consumed blocks invisible to subsequent rules. The new_block's own
-            // boundary edges (captured above) give it correct size_in/size_out so
-            // it can participate in further structuring.
+            // Rewrite external blocks' edges to point to new_block, mirroring
+            // Ghidra selfIdentify's replaceOutEdge/replaceInEdge. This keeps
+            // parent CBRANCH out-edges consistent when their clause is consumed
+            // elsewhere (otherwise the parent's edge points at a now-DEAD block).
+            // Only Basic external blocks are rewritten (structured blocks keep
+            // their own edge vectors and are handled when they are the parent).
+            for src in &in_boundary {
+                let s_any = src.clone();
+                // Avoid self-loop: don't rewrite new_block's own edge
+                if std::sync::Arc::ptr_eq(&s_any, new_block) { continue; }
+                let mut sb = s_any.write().unwrap();
+                let sref = sb.as_any_mut();
+                if let Some(bb) = sref.downcast_mut::<crate::block::BlockBasic>() {
+                    for eslot in 0..bb.outgoing.len() {
+                        let t = bb.outgoing[eslot].point.read().unwrap().get_index();
+                        if t == c_idx {
+                            bb.outgoing[eslot].point = new_block.clone();
+                        }
+                    }
+                }
+            }
+            for dst in &out_boundary {
+                let d_any = dst.clone();
+                if std::sync::Arc::ptr_eq(&d_any, new_block) { continue; }
+                let mut db = d_any.write().unwrap();
+                let dref = db.as_any_mut();
+                if let Some(bb) = dref.downcast_mut::<crate::block::BlockBasic>() {
+                    for dslot in 0..bb.incoming.len() {
+                        let s = bb.incoming[dslot].point.read().unwrap().get_index();
+                        if s == c_idx {
+                            bb.incoming[dslot].point = new_block.clone();
+                        }
+                    }
+                }
+            }
         }
 
         // Dedup new_block's edges (Ghidra selfIdentify ends with dedup()).

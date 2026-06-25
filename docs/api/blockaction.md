@@ -417,3 +417,14 @@ flag + count_non_structural_in_edges 使消费块对后续规则不可见；new_
   消除了 while/do-while 产生的 orphan 边。
 - 至此 7/7 个 try_rule_* 方法全部使用 identify_internal，架构一致。
 - 验证：curl 101 if，24/24 gcc；httpd 94 if，0 goto，29/29 gcc。175/176 测试（预存失败不变）。
+
+### 2026-06-24：identify_internal 恢复外部边重写（对齐 Ghidra selfIdentify）
+
+- 之前 self_identify 出于死锁/自环顾虑跳过了外部边重写。但这导致父 CBRANCH 的
+  out-edge 在其 clause 被别处结构化（consume+DEAD）后变成悬空指针，无法继续结构化
+  （getparameter 11 个 single-in CBR 中 8 个 clause size_out!=1，无法匹配 proper_if）。
+- 恢复 Ghidra selfIdentify 的 replaceOutEdge/replaceInEdge 语义：捕获边界边后，
+  将外部 Basic 块指向消费块的 out-edge 重写为 new_block，incoming 对称处理。
+  加自环保护（跳过 Arc::ptr_eq(new_block)），且只消费 clause（不消费 cond），
+  避免了之前 cond-in-consumed 导致的 myprogress 超时。
+- 验证：curl 101 if，24/24 gcc；httpd 96 if，0 goto，29/29 gcc。175/176 测试。
