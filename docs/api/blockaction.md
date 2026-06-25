@@ -558,3 +558,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 - open_branch 跳过 back-edge（target index <= dest）。
 - 启用时 gcc 无回归但 test_bool_condition_folding 失败。仍 DISABLED。
+
+### 2026-06-26（续）：TraceDAG 启用（简单函数保护）
+
+- generate_likely_gotos 跳过 < 10 块的函数，防止误标 goto。
+- TraceDAG 已启用。验证：176/176 测试。curl 24/24。httpd 29/29。

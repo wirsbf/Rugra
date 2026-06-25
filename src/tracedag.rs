@@ -501,6 +501,9 @@ impl<'a> TraceDAG<'a> {
 /// Returns a list of (source_block_idx, dest_block_idx) edges that should be
 /// marked as unstructured goto to allow structured recovery.
 pub fn generate_likely_gotos(graph: &BlockGraph) -> Vec<FloatingEdge> {
+    // Skip small/simple functions — they don't need goto edge marking.
+    if graph.get_size() < 10 { return Vec::new(); }
+
     // Find root blocks (size_in == 0)
     let roots: Vec<i32> = (0..graph.get_size())
         .filter_map(|i| {

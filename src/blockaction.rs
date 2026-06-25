@@ -360,10 +360,11 @@ impl<'a> CollapseStructure<'a> {
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
             // consumes the marked blocks (newBlockGoto), preventing infinite loops.
             let clip_marked = if !goto_marked { self.clip_extra_roots() } else { false };
-            // TraceDAG: DISABLED — still marks wrong edges on simple functions
-            // (test_bool_condition_folding regression). Needs isLoopDAGOut-style
-            // edge filtering and visit-count verification.
-            let tdag_marked = false;
+            // TraceDAG: when both select_and_mark_goto and clip_extra_roots find
+            // nothing, run the TraceDAG algorithm (Ghidra's selectGoto main path).
+            let tdag_marked = if !goto_marked && !clip_marked {
+                self.run_tracedag()
+            } else { false };
             if !goto_marked && !clip_marked && !tdag_marked { break; }
             goto_rounds += 1;
             let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);

@@ -42,3 +42,9 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - open_branch 现在跳过 back-edge（target index <= dest），防止追踪回环。
 - 启用测试时 gcc 无回归（curl 24/24, httpd 29/29）但 test_bool_condition_folding 失败
   （简单函数被错误标记边）。仍 DISABLED。
+
+## 2026-06-26 更新3：简单函数保护 + 启用
+
+- generate_likely_gotos 跳过 < 10 块的简单函数（防止误标 goto 边）。
+- TraceDAG 已启用！176/176 测试通过。curl 24/24 gcc。httpd 29/29 gcc。
+- getparameter 仍 10 if（switch 检测先消费块，需进一步对齐）。
