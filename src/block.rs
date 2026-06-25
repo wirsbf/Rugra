@@ -232,18 +232,32 @@ impl FlowBlock for BlockBasic {
     }
 
     fn size_in(&self) -> usize {
-        if self.is_consumed() { 0 } else { self.incoming.len() }
+        if self.is_consumed() { return 0; }
+        // Count only non-DEAD incoming edges (aligns with Ghidra's identifyInternal
+        // which removes consumed blocks from the graph list)
+        self.incoming.iter().filter(|e| {
+            !e.point.read().unwrap().is_consumed()
+        }).count()
     }
     fn size_out(&self) -> usize {
-        if self.is_consumed() { 0 } else { self.outgoing.len() }
+        if self.is_consumed() { return 0; }
+        // Count only non-DEAD outgoing edges
+        self.outgoing.iter().filter(|e| {
+            !e.point.read().unwrap().is_consumed()
+        }).count()
     }
 
     fn get_in(&self, slot: usize) -> Option<BlockEdge> {
-        self.incoming.get(slot).cloned()
+        // Return only non-DEAD incoming edges, indexed by visible position
+        self.incoming.iter().filter(|e| {
+            !e.point.read().unwrap().is_consumed()
+        }).nth(slot).cloned()
     }
 
     fn get_out(&self, slot: usize) -> Option<BlockEdge> {
-        self.outgoing.get(slot).cloned()
+        self.outgoing.iter().filter(|e| {
+            !e.point.read().unwrap().is_consumed()
+        }).nth(slot).cloned()
     }
 
     fn add_in_edge(&mut self, edge: BlockEdge) {

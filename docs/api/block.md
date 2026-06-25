@@ -808,3 +808,10 @@ RPO 常用于：
 - 对齐 Ghidra collapseInternal 的 sizeIn==0&&sizeOut==0 检查。
 - curl 24/24 OK，httpd 12/29（大量函数因 consumed 块边清零导致变量声明遗漏）。
 - 175/176 测试。
+
+### 2026-06-25：过滤 DEAD 边的 size_in/out
+
+- BlockBasic::size_in/out 过滤来自 DEAD 块的边（对齐 Ghidra identifyInternal）。
+- get_in/get_out 也过滤 DEAD 边。
+- 效果：后继块的 effective size_in 减少，使 proper_if 能匹配。
+- 175/176 测试（预存失败）。
