@@ -416,3 +416,10 @@ raw semantics / P-code-like IR
 - return_in_block 检查 + func_addr 范围 + depth limit 都无法完全修复。
 - 禁用递归，保留 ruleCaseFallthru 处理 switch case body 链式。
 ### 2026-06-25：DEAD flag emit skip
+
+### 2026-06-26：emit_block_structured DEAD 块标记为 emitted（single-ownership）
+
+- DEAD 块（被 identify_internal 消费的块）在 emit_block_structured 跳过时现在也标记为
+  emitted，防止 doc_function 的 root/unreachable 循环（行 3116-3134）重复访问。
+- 这是 single-ownership 原则：消费块只通过其结构化父块 emit，不通过后继遍历重入。
+- 验证：curl 24/24 gcc，httpd 29/29 gcc。175/176 测试（test_switch_case 预存失败不变）。

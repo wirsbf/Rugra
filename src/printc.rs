@@ -392,8 +392,11 @@ impl PrintC {
         // Skip blocks that have been consumed by structuring (DEAD flag set by
         // CollapseStructure when a block is absorbed into a BlockIf/BlockList/etc.)
         // These blocks have been replaced by structured blocks; their ops are emitted
-        // via the structured block's recursive children traversal.
+        // via the structured block's recursive children traversal. Mark as emitted
+        // so doc_function's root/unreachable loops don't re-visit them (single-
+        // ownership: a consumed block is emitted only via its structured parent).
         if block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0 {
+            emitted.insert(block_idx);
             return;
         }
 
