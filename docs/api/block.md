@@ -801,3 +801,10 @@ RPO 常用于：
 - FlowBlock::is_consumed() — DEAD flag 检查，对齐 Ghidra sizeIn==0&&sizeOut==0。
 - interleaved 循环跳过 consumed 块。
 - gcc 53/53，175/176 测试。getparameter 5 if，控制流差 174。
+
+### 2026-06-25：BlockBasic size_in/out 返回 0 当 consumed
+
+- BlockBasic::size_in/size_out 在 DEAD flag 设置时返回 0。
+- 对齐 Ghidra collapseInternal 的 sizeIn==0&&sizeOut==0 检查。
+- curl 24/24 OK，httpd 12/29（大量函数因 consumed 块边清零导致变量声明遗漏）。
+- 175/176 测试。

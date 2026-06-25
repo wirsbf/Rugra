@@ -232,10 +232,10 @@ impl FlowBlock for BlockBasic {
     }
 
     fn size_in(&self) -> usize {
-        self.incoming.len()
+        if self.is_consumed() { 0 } else { self.incoming.len() }
     }
     fn size_out(&self) -> usize {
-        self.outgoing.len()
+        if self.is_consumed() { 0 } else { self.outgoing.len() }
     }
 
     fn get_in(&self, slot: usize) -> Option<BlockEdge> {
