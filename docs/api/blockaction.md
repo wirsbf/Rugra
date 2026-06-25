@@ -361,3 +361,18 @@ Create a new ActionNormalizeBranches instance
 - as_any_mut trait 方法添加到 FlowBlock + 所有实现。
 - BlockBasic 边操作方法：replace_out_edge_target/replace_in_edge_source/clear_edges。
 - gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。
+
+### 2026-06-24：identify_internal 扩展到 if_else + if_no_exit + if_goto
+
+- 将 identify_internal 从 try_rule_cat/try_rule_proper_if 扩展到剩余三个产生 BlockIf 的规则。
+- `try_rule_if_else`：对齐 Ghidra `newBlockIfElse(cond,tc,fc)` → identifyInternal([cond,tc,fc])，
+  消费两个 clause 块（边重定向到新 BlockIf + 标记 DEAD），替换原先的 `self.graph.blocks[i]=if_block`。
+- `try_rule_if_no_exit`：对齐 Ghidra `newBlockIf(cond,tc)` → identifyInternal([cond,tc])，
+  消费 clause 块。
+- `try_rule_if_goto`：对齐 Ghidra `newBlockIfGoto(cond)`（注意：Ghidra 只消费 cond，
+  body 通过 forceFalseEdge 保持外部）。Rust 的 BlockIf 架构将 body 嵌入 if_body，
+  因此消费 body 块以避免悬挂可见节点，语义上等价于"clause 被吸收进 BlockIf"。
+- 三个规则都补充了 update_switch_case_reference 调用，保证 switch case body
+  被结构化时 BlockSwitch 的引用同步更新。
+- gcc 53/53（curl 24/24，httpd 29/29），175/176 测试（预存失败不变）。
+- getparameter 13→12 if，curl 总 if 105→104。httpd 97 if、0 goto。

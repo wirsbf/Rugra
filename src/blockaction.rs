@@ -1257,6 +1257,7 @@ impl<'a> CollapseStructure<'a> {
             drop(c);
 
             let negated = dir == 1;
+            let clause_idx = clause.read().unwrap().get_index();
             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockIf {
                     index: cond_idx,
@@ -1269,7 +1270,10 @@ impl<'a> CollapseStructure<'a> {
                     parent: None,
                     flags: 0,
                 }));
-            self.graph.blocks[i] = if_block;
+            // Ghidra newBlockIf: identifyInternal([cond, tc]) + forceOutputNum(1).
+            // Consume the clause so its edges redirect to the new BlockIf at i.
+            self.identify_internal(&if_block, &[clause_idx], i);
+            self.update_switch_case_reference(cond_idx, &if_block);
             self.change_count += 1;
             return true;
         }
@@ -1312,6 +1316,8 @@ impl<'a> CollapseStructure<'a> {
 
         if t_out != f_out { return false; } // both must merge to same block
 
+        let t_idx = true_block.read().unwrap().get_index();
+        let f_idx = false_block.read().unwrap().get_index();
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
                 index: cond_idx,
@@ -1324,7 +1330,11 @@ impl<'a> CollapseStructure<'a> {
                 parent: None,
                 flags: 0,
             }));
-        self.graph.blocks[i] = if_block;
+        // Ghidra newBlockIfElse: identifyInternal([cond, tc, fc]) + forceOutputNum(1).
+        // Consume both clause blocks so their edges are redirected to the new
+        // BlockIf (installed at i, where cond was) and the clauses marked DEAD.
+        self.identify_internal(&if_block, &[t_idx, f_idx], i);
+        self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;
         true
     }
@@ -1361,11 +1371,15 @@ impl<'a> CollapseStructure<'a> {
         if self.switch_case_indices.contains(&body_idx) { return false; }
 
         // Create BlockIf with negated condition.
+        // Note: Ghidra's newBlockIfGoto consumes only [cond] and keeps the body
+        // external via forceFalseEdge. Our BlockIf architecture embeds the body,
+        // so we consume it (identify_internal) to avoid a dangling visible node
+        // and mark DEAD, matching the "clause absorbed into BlockIf" semantics.
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
                 index: cond_idx,
                 condition: block.clone(),
-                if_body: body_block,
+                if_body: body_block.clone(),
                 else_body: None,
                 negated: true,
                 incoming: Vec::new(),
@@ -1373,7 +1387,8 @@ impl<'a> CollapseStructure<'a> {
                 parent: None,
                 flags: 0,
             }));
-        self.graph.blocks[i] = if_block;
+        self.identify_internal(&if_block, &[body_idx], i);
+        self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;
         true
     }
