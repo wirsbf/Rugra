@@ -54,3 +54,10 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - 新增 opened 集合追踪已打开的节点，check_open 对已打开节点直接返回 true。
 - open_branch 在创建子 trace 时递增目标节点的 visit_count（追踪入边）。
 - TraceDAG 现在在 phase1 前安全运行（176/176 测试，curl 24/24，httpd 29/29）。
+
+## 2026-06-26 更新5：back-edge 过滤 + opened 集合双重保护
+
+- open_branch 同时使用 back-edge 过滤（target <= dest）和 opened 集合检查。
+- back-edge 过滤防止追踪进入循环（匹配 Ghidra isLoopDAGOut 语义）。
+- opened 集合防止重复打开已打开的节点。
+- getparameter: 13 ifs, 0 switch（从 10 ifs + 1 switch 改善）。

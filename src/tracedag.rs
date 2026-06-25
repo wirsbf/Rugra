@@ -246,13 +246,17 @@ impl<'a> TraceDAG<'a> {
         });
 
         // Create sub-traces for each out-edge of dest.
-        // Skip back-edges (target index < dest, roughly reverse-post-order)
-        // and edges to blocks already opened (avoid cycles).
+        // Skip back-edges (target index < dest) and edges to already-opened nodes.
+        // The back-edge filter (target <= dest) prevents tracing into cycles
+        // which would cause infinite loops. This matches Ghidra's isLoopDAGOut
+        // which excludes edges that would create cycles in the trace DAG.
         let size_out = self.size_out(dest);
         for eo in 0..size_out {
             if let Some(target) = self.get_out(dest, eo) {
                 // Skip back-edges (simple heuristic: target index <= dest)
                 if target <= dest { continue; }
+                // Skip edges to already-opened nodes (true cycles)
+                if self.opened.contains(&target) { continue; }
                 // Increment visit_count for target (this edge is now traced)
                 *self.visit_count.entry(target).or_insert(0) += 1;
                 let new_trace_idx = self.traces.len();
