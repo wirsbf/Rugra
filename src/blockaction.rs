@@ -2931,6 +2931,13 @@ impl<'a> CollapseStructure<'a> {
             });
             if !has_cbranch { continue; }
 
+            // If CBRANCH has goto-marked edges (by TraceDAG), skip cascade
+            // switch formation — control flow should be structured as if/goto.
+            let cflags = b.get_flags();
+            if cflags & (crate::block::block_flags::GOTO_EDGE_0 | crate::block::block_flags::GOTO_EDGE_1) != 0 {
+                continue;
+            }
+
             // Get the taken target (case body) — edge 1
             let taken_block = match b.get_out(1) {
                 Some(e) => e.point.clone(),

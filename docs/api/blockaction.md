@@ -578,3 +578,9 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - TraceDAG 在 phase1 前安全运行，标记 goto 边阻止 switch 形成。
 - collapse_switches 检查 goto 标志，跳过已标记 goto 的 BRANCHIND 块。
 - 验证：176/176 测试。curl 24/24 gcc（15 while）。httpd 29/29 gcc（39 while）。
+
+### 2026-06-26（续）：collapse_cbranch_cascades 检查 goto 标志
+
+- CBRANCH cascade switch 检测现在检查 goto 标志，跳过已标记 goto 的 CBRANCH 块。
+- getparameter 从 10 if + 1 switch 变为 13 if + 0 switch（向 Ghidra 42 if 收敛）。
+- 验证：176/176 测试。curl 24/24。httpd 29/29。
