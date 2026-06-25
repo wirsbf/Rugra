@@ -889,11 +889,8 @@ impl<'a> CollapseStructure<'a> {
         let succ_idx = succ.read().unwrap().get_index() as usize;
         drop(b);
         if succ_idx >= size || succ_idx == graph_idx { return false; }
-        let non_structural_in = {
-            let s = succ.read().unwrap();
-            self.count_non_structural_in_edges(&s)
-        };
-        if non_structural_in != 1 { return false; }
+        // Align with Ghidra: raw size_in(), not non-structural edge counting
+        if succ.read().unwrap().size_in() != 1 { return false; }
         let succ_type = succ.read().unwrap().get_type();
         if succ_type != crate::block::BlockType::Basic && succ_type != crate::block::BlockType::Copy {
             return false;
@@ -1035,9 +1032,13 @@ impl<'a> CollapseStructure<'a> {
             let merge_idx = if dir == 0 { false_idx } else { true_idx };
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            let non_structural_in = self.count_non_structural_in_edges(&c);
-            if non_structural_in != 1 { continue; }
+            // Align with Ghidra: use raw size_in(), NOT count_non_structural_in_edges.
+            // Ghidra's switch dispatch edges only point to case body ENTRY blocks.
+            // Internal blocks inside case bodies have correct sizeIn() == 1.
+            if c.size_in() != 1 { continue; }
             if c.size_out() != 1 { continue; }
+            // Skip switch case body entry blocks (Ghidra: clauseblock->isSwitchOut())
+            if self.switch_case_indices.contains(&c_idx) { continue; }
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             let target_idx = clause_out.point.read().unwrap().get_index();
             drop(c);
@@ -1129,9 +1130,9 @@ impl<'a> CollapseStructure<'a> {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            let non_structural_in = self.count_non_structural_in_edges(&c);
-            if non_structural_in != 1 { continue; }
+            if c.size_in() != 1 { continue; }
             if c.size_out() != 0 { continue; }
+            if self.switch_case_indices.contains(&c_idx) { continue; }
             drop(c);
 
             let negated = dir == 1;
@@ -1191,9 +1192,8 @@ impl<'a> CollapseStructure<'a> {
 
         let tb = true_block.read().unwrap();
         let fb = false_block.read().unwrap();
-        let t_nsi = self.count_non_structural_in_edges(&tb);
-        let f_nsi = self.count_non_structural_in_edges(&fb);
-        if t_nsi != 1 || f_nsi != 1 { return false; }
+        // Align with Ghidra: raw size_in(), not non-structural edge counting
+        if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
         if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
         let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
         let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };

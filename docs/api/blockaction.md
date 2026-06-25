@@ -332,3 +332,10 @@ Create a new ActionNormalizeBranches instance
 - 移除了 switch_case_indices 的 dominator tree expansion。
 - 这让 interleaved 规则能处理 case body 内部的 CBRANCH 块。
 - gcc 53/53，175/176 测试。getparameter 仍 9 if。
+
+### 2026-06-25：对齐 Ghidra — 移除 count_non_structural_in_edges
+
+- 移除了 try_rule_cat_arc/proper_if_arc/if_no_exit_arc/if_else_arc 中的 count_non_structural_in_edges。
+- 改用 Ghidra 的原始 size_in() + switch_case_indices（只标记 case body 入口块）。
+- 移除了 dominator tree expansion（对齐 Ghidra f_switch_out 只标记入口块）。
+- gcc 53/53，175/176 测试。getparameter 从 9→5 if，控制流差 174（因为移除了过度保护，结构发生变化）。
