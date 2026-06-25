@@ -823,3 +823,5 @@ RPO 常用于：
 - gcc 53/53，175/176 测试。getparameter 5 if。
 
 ### 2026-06-25：set_flags 清空 edges（实验）
+
+### 2026-06-25：block.rs 恢复最佳状态

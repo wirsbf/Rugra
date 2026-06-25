@@ -219,8 +219,6 @@ impl<'a> CollapseStructure<'a> {
 
                 // For Basic/Copy blocks: apply rules directly
                 if bt == crate::block::BlockType::Basic || bt == crate::block::BlockType::Copy {
-                    // Skip consumed blocks (Ghidra: sizeIn==0 && sizeOut==0)
-                    if block.read().unwrap().is_consumed() { continue; }
                     self.apply_rules_to_block(i);
                     continue;
                 }
@@ -285,11 +283,6 @@ impl<'a> CollapseStructure<'a> {
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy => {
                     let child_idx = child.read().unwrap().get_index() as usize;
                     if child_idx < self.graph.get_size() {
-                        if self.try_rule_cat_arc(child, child_idx) { continue; }
-                        if self.try_rule_proper_if_arc(child, child_idx) { continue; }
-                        if self.try_rule_if_else_arc(child, child_idx) { continue; }
-                        // if_no_exit_arc disabled for nested — causes test regressions
-                        // if self.try_rule_if_no_exit_arc(child, child_idx) { continue; }
                         self.apply_rules_to_block(child_idx);
                     }
                 }
@@ -846,13 +839,20 @@ impl<'a> CollapseStructure<'a> {
                 current = next;
             }
         }
-        // NOTE: Ghidra only marks case body ENTRY blocks as f_switch_out.
-        // It does NOT mark blocks dominated by case bodies. Internal blocks
-        // inside case bodies are handled by collapseInternal's flat iteration
-        // (they're not isSwitchOut(), so rules process them normally).
-        // We must NOT expand switch_case_indices via dominator tree — it
-        // prevents interleaved rules from structuring CBRANCH blocks inside
-        // case bodies, which is the exact problem we've been hitting.
+        // Dominator-based case body expansion: for each case body, add all
+        // blocks it dominates (the case body sub-tree). This is precise —
+        // only blocks truly inside the case body (on all paths from case entry)
+        // are marked, unlike BFS which over-marks through fallthrough chains.
+        let case_bodies: Vec<i32> = self.switch_case_indices.iter().copied().collect();
+        for blk_idx in 0..size as i32 {
+            // Check if this block is dominated by any case body
+            for &case_idx in &case_bodies {
+                if self.dominates_idx(case_idx, blk_idx) {
+                    self.switch_case_indices.insert(blk_idx);
+                    break;
+                }
+            }
+        }
         // Set CASE_BODY flag on all collected case body blocks (batch, no
         // nested lock issues since we iterate by index)
         for &idx in &self.switch_case_indices {
@@ -876,47 +876,38 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        self.try_rule_cat_arc(&block, i)
-    }
-
-    /// ruleBlockCat operating directly on a block Arc.
-    /// Works for nested blocks in BlockList/BlockSwitch children.
-    fn try_rule_cat_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
-        let size = self.graph.get_size();
         let b = block.read().unwrap();
         if b.size_out() != 1 { return false; }
+        // Don't merge BlockCondition (&&/||) — it's a structured bool fold result
         if b.get_type() == crate::block::BlockType::Condition { return false; }
         let succ_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let succ = succ_edge.point.clone();
         let succ_idx = succ.read().unwrap().get_index() as usize;
         drop(b);
-        if succ_idx >= size || succ_idx == graph_idx { return false; }
-        // Align with Ghidra: raw size_in(), not non-structural edge counting
-        if succ.read().unwrap().size_in() != 1 { return false; }
-        let succ_type = succ.read().unwrap().get_type();
+        if succ_idx >= size || succ_idx == i { return false; }
+        let s = succ.read().unwrap();
+        if s.size_in() != 1 { return false; }
+        // Don't merge if successor is a structured block (BlockCondition, BlockIf, etc.)
+        // — these are results of earlier collapse passes and should not be
+        // merged into a BlockList by the interleaved cat rule.
+        let succ_type = s.get_type();
         if succ_type != crate::block::BlockType::Basic && succ_type != crate::block::BlockType::Copy {
             return false;
         }
+        drop(s);
+        // Don't merge if succ is a switch or has goto edges
+        // (simplified check: succ must have <=1 out or end in CBRANCH)
 
         let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockList::new(
                 block.read().unwrap().get_index(),
                 vec![block.clone(), succ.clone()],
             )));
-        // Install at graph_idx if it's the same block, otherwise update parent reference
-        if graph_idx < size {
-            let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
-            let blk_idx = block.read().unwrap().get_index();
-            if cur == blk_idx {
-                self.graph.blocks[graph_idx] = list_block.clone();
-            }
-        }
-        // Update switch case reference if needed
-        let block_idx = block.read().unwrap().get_index();
-        self.update_switch_case_reference(block_idx, &list_block);
-        // Mark successor as DEAD
-        let sidx = succ.read().unwrap().get_index() as usize;
-        if sidx < size {
+        self.graph.blocks[i] = list_block;
+        // Mark the successor as DEAD — its ops are now emitted via BlockList children.
+        // This prevents emit_block_structured from outputting it as a standalone block.
+        let succ_idx = succ.read().unwrap().get_index() as usize;
+        if succ_idx < size {
             let cur = succ.read().unwrap().get_flags();
             succ.write().unwrap().set_flags(cur | crate::block::block_flags::DEAD);
         }
@@ -1007,18 +998,16 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        self.try_rule_proper_if_arc(&block, i)
-    }
-
-    /// ruleBlockProperIf operating directly on a block Arc.
-    fn try_rule_proper_if_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
+
+        // Check that this block ends with a CBRANCH
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
+
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
@@ -1028,25 +1017,40 @@ impl<'a> CollapseStructure<'a> {
         let false_idx = false_block.read().unwrap().get_index();
         drop(b);
 
+        // Protect: if either branch target is a switch case body, don't
+        // structurally extract it — would pull `case` label out of switch.
+        if self.switch_case_indices.contains(&true_idx)
+            || self.switch_case_indices.contains(&false_idx) {
+            return false;
+        }
+
+        // Try both directions (i=0: true clause, i=1: false clause)
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let merge = if dir == 0 { false_block.clone() } else { true_block.clone() };
             let merge_idx = if dir == 0 { false_idx } else { true_idx };
+
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            // Align with Ghidra: use raw size_in(), NOT count_non_structural_in_edges.
-            // Ghidra's switch dispatch edges only point to case body ENTRY blocks.
-            // Internal blocks inside case bodies have correct sizeIn() == 1.
-            if c.size_in() != 1 { continue; }
+            // Count non-structural in-edges: ignore edges from switch dispatch blocks.
+            // Switch dispatch edges come from BlockSwitch control blocks or CBRANCH
+            // cascade members. We check if any in-edge source is a BlockSwitch or
+            // a block we know is a switch dispatch (marked CASE_BODY or is a cascade
+            // member whose taken edge targets this clause).
+            let non_structural_in = self.count_non_structural_in_edges(&c);
+            if non_structural_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
-            // Skip switch case body entry blocks (Ghidra: clauseblock->isSwitchOut())
-            if self.switch_case_indices.contains(&c_idx) { continue; }
+            // Note: we no longer skip switch case body blocks here — the DEAD flag
+            // and orphan case label removal handle case label integrity at emit time.
+            // Removing this guard allows CBRANCH blocks inside case bodies to be
+            // structured into BlockIf, which is what we need for control-flow recovery.
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             let target_idx = clause_out.point.read().unwrap().get_index();
             drop(c);
             if target_idx != merge_idx { continue; }
 
-            let negated = dir == 1;
+            // Match found: clause → merge. Create BlockIf.
+            let negated = dir == 1; // if clause is the false edge, negate
             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockIf {
                     index: cond_idx,
@@ -1054,18 +1058,16 @@ impl<'a> CollapseStructure<'a> {
                     if_body: clause.clone(),
                     else_body: None,
                     negated,
-                    incoming: Vec::new(), outgoing: Vec::new(),
-                    parent: None, flags: 0,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
                 }));
-            // Install at graph_idx if matching
-            let size = self.graph.get_size();
-            if graph_idx < size {
-                let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
-                if cur == cond_idx {
-                    self.graph.blocks[graph_idx] = if_block.clone();
-                }
-            }
+            self.graph.blocks[i] = if_block.clone();
+            // If this block was a switch case body, update the owning BlockSwitch
+            // to point to the new BlockIf instead of the old Basic block.
             self.update_switch_case_reference(cond_idx, &if_block);
+            // Mark consumed clause block as DEAD
             let clause_idx_val = clause.read().unwrap().get_index() as usize;
             if clause_idx_val < self.graph.get_size() {
                 let cf = clause.read().unwrap().get_flags();
@@ -1086,18 +1088,19 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        self.try_rule_if_no_exit_arc(&block, i)
-    }
-
-    fn try_rule_if_no_exit_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
+
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
-        // Skip cascade members
+
+        // Don't apply if this CBRANCH is part of a cascade chain. A cascade
+        // member is detected by: (a) its fallthrough leads to another CBRANCH,
+        // OR (b) one of its predecessors is a CBRANCH (cascade tail — reached
+        // via fallthrough from the previous CBRANCH in the chain).
         let is_cascade_member = {
             let ft_is_cbranch = if let Some(ft_edge) = b.get_out(0) {
                 let ft = ft_edge.point.read().unwrap();
@@ -1126,15 +1129,32 @@ impl<'a> CollapseStructure<'a> {
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
+        let true_idx = true_block.read().unwrap().get_index();
+        let false_idx = false_block.read().unwrap().get_index();
         drop(b);
+
+        // Protect switch case bodies
+        if self.switch_case_indices.contains(&true_idx)
+            || self.switch_case_indices.contains(&false_idx) {
+            return false;
+        }
+        // Also check CASE_BODY flag (set by refresh_switch_cases)
+        if true_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0
+            || false_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0 {
+            return false;
+        }
 
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
             if c.size_in() != 1 { continue; }
-            if c.size_out() != 0 { continue; }
+            if c.size_out() != 0 { continue; } // Must have no out-edge (RETURN/exit)
+            // Protect: don't extract switch case bodies — they must stay inside
+            // their BlockSwitch or the emitted `case` label ends up outside the switch.
             if self.switch_case_indices.contains(&c_idx) { continue; }
+            // Also check CASE_BODY flag directly on the clause
+            if c.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
             drop(c);
 
             let negated = dir == 1;
@@ -1145,20 +1165,12 @@ impl<'a> CollapseStructure<'a> {
                     if_body: clause.clone(),
                     else_body: None,
                     negated,
-                    incoming: Vec::new(), outgoing: Vec::new(),
-                    parent: None, flags: 0,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
                 }));
-            let size = self.graph.get_size();
-            if graph_idx < size {
-                let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
-                if cur == cond_idx { self.graph.blocks[graph_idx] = if_block.clone(); }
-            }
-            self.update_switch_case_reference(cond_idx, &if_block);
-            let cidx = clause.read().unwrap().get_index() as usize;
-            if cidx < size {
-                let cf = clause.read().unwrap().get_flags();
-                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
-            }
+            self.graph.blocks[i] = if_block;
             self.change_count += 1;
             return true;
         }
@@ -1173,18 +1185,15 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        self.try_rule_if_else_arc(&block, i)
-    }
-
-    /// ruleBlockIfElse operating directly on a block Arc.
-    fn try_rule_if_else_arc(&mut self, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, graph_idx: usize) -> bool {
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
+
         let ops = b.get_ops();
         let has_cbranch = ops.last().map_or(false, |op_ref| {
             op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
         if !has_cbranch { return false; }
+
         let cond_idx = b.get_index();
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
@@ -1192,15 +1201,17 @@ impl<'a> CollapseStructure<'a> {
         let false_block = false_edge.point.clone();
         drop(b);
 
+        // Check both clauses: 1 in, 1 out, same merge target
         let tb = true_block.read().unwrap();
         let fb = false_block.read().unwrap();
-        // Align with Ghidra: raw size_in(), not non-structural edge counting
         if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
         if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
+
         let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
         let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
         drop(tb); drop(fb);
-        if t_out != f_out { return false; }
+
+        if t_out != f_out { return false; } // both must merge to same block
 
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
@@ -1209,23 +1220,12 @@ impl<'a> CollapseStructure<'a> {
                 if_body: true_block.clone(),
                 else_body: Some(false_block.clone()),
                 negated: false,
-                incoming: Vec::new(), outgoing: Vec::new(),
-                parent: None, flags: 0,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
             }));
-        let size = self.graph.get_size();
-        if graph_idx < size {
-            let cur = self.graph.blocks[graph_idx].read().unwrap().get_index();
-            if cur == cond_idx { self.graph.blocks[graph_idx] = if_block.clone(); }
-        }
-        self.update_switch_case_reference(cond_idx, &if_block);
-        // Mark both clauses as DEAD
-        for clause in &[&true_block, &false_block] {
-            let cidx = clause.read().unwrap().get_index() as usize;
-            if cidx < size {
-                let cf = clause.read().unwrap().get_flags();
-                clause.write().unwrap().set_flags(cf | crate::block::block_flags::DEAD);
-            }
-        }
+        self.graph.blocks[i] = if_block;
         self.change_count += 1;
         true
     }

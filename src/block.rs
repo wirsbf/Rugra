@@ -75,14 +75,6 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn size_in(&self) -> usize;
     fn size_out(&self) -> usize;
 
-    /// Check if this block has been consumed by structuring (DEAD flag).
-    /// Ghidra removes consumed blocks from the graph; Rugra uses DEAD flag
-    /// and checks it here so collapseInternal skips them (like Ghidra's
-    /// `if ((bl->sizeIn()==0)&&(bl->sizeOut()==0))` check).
-    fn is_consumed(&self) -> bool {
-        self.get_flags() & block_flags::DEAD != 0
-    }
-
     /// Number of out-edges excluding goto-marked edges.
     /// GOTO_EDGE_0 marks out[0] as goto, GOTO_EDGE_1 marks out[1].
     fn effective_size_out(&self) -> usize {
@@ -229,19 +221,12 @@ impl FlowBlock for BlockBasic {
     }
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
-        // When setting DEAD flag, clear edges (aligns with Ghidra identifyInternal
-        // which removes consumed blocks from graph, making their edges invisible)
-        if (f & block_flags::DEAD) != 0 {
-            self.incoming.clear();
-            self.outgoing.clear();
-        }
     }
+
     fn size_in(&self) -> usize {
-        if self.is_consumed() { return 0; }
         self.incoming.len()
     }
     fn size_out(&self) -> usize {
-        if self.is_consumed() { return 0; }
         self.outgoing.len()
     }
 

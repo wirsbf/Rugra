@@ -341,3 +341,9 @@ Create a new ActionNormalizeBranches instance
 - gcc 53/53，175/176 测试。getparameter 从 9→5 if，控制流差 174（因为移除了过度保护，结构发生变化）。
 
 ### 2026-06-25：blockaction is_consumed + Ghidra aligned size_in
+
+### 2026-06-25：恢复最佳状态
+
+- 回退 Ghidra 对齐实验（raw size_in + dominator tree removal）。
+- 恢复 count_non_structural_in_edges + dominator tree expansion。
+- getparameter 13 if，控制流差 130，gcc 53/53，175/176 测试。
