@@ -233,6 +233,90 @@ impl Varnode {
     pub fn clear_flags(&mut self, f: u32) {
         self.flags &= !f;
     }
+
+    // --- Ghidra-faithful varnode flag accessors (varnode.hh:235-330) ---
+    // These mirror the C++ inline methods used by the core Actions
+    // (ActionMarkExplicit, ActionMarkImplied, ActionRestrictLocal, etc.).
+
+    /// Has this been visited by the current algorithm? (varnode.hh:263)
+    pub fn is_mark(&self) -> bool {
+        (self.flags & varnode_flags::MARK) != 0
+    }
+    /// Mark this Varnode for breadcrumb algorithms. (varnode.hh:303)
+    pub fn set_mark(&mut self) {
+        self.flags |= varnode_flags::MARK;
+    }
+    /// Clear the mark on this Varnode. (varnode.hh:304)
+    pub fn clear_mark(&mut self) {
+        self.flags &= !varnode_flags::MARK;
+    }
+
+    /// Is this an implied variable? (varnode.hh:235)
+    pub fn is_implied(&self) -> bool {
+        (self.flags & varnode_flags::IMPLIED) != 0
+    }
+    /// Mark this as an implied variable in the final C source. (varnode.hh:309)
+    pub fn set_implied(&mut self) {
+        self.flags |= varnode_flags::IMPLIED;
+    }
+    /// Clear the implied mark. (varnode.hh:310)
+    pub fn clear_implied(&mut self) {
+        self.flags &= !varnode_flags::IMPLIED;
+    }
+
+    /// Is this an explicitly printed variable? (varnode.hh:236)
+    pub fn is_explicit(&self) -> bool {
+        (self.flags & varnode_flags::EXPLICIT) != 0
+    }
+    /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
+    pub fn set_explicit(&mut self) {
+        self.flags |= varnode_flags::EXPLICIT;
+    }
+    /// Clear the explicit mark. (varnode.hh:312)
+    pub fn clear_explicit(&mut self) {
+        self.flags &= !varnode_flags::EXPLICIT;
+    }
+
+    /// Is this value affected by a legitimate function input? (varnode.hh:247)
+    pub fn is_direct_write(&self) -> bool {
+        (self.flags & varnode_flags::DIRECTWRITE) != 0
+    }
+    /// Mark this as directly affected by a legal input. (varnode.hh:305)
+    pub fn set_direct_write(&mut self) {
+        self.flags |= varnode_flags::DIRECTWRITE;
+    }
+    /// Mark this as not directly affected. (varnode.hh:306)
+    pub fn clear_direct_write(&mut self) {
+        self.flags &= !varnode_flags::DIRECTWRITE;
+    }
+
+    /// Is the high-level variable tied to an address? (varnode.hh:250)
+    /// Ghidra: (flags & (addrtied|insert)) == (addrtied|insert).
+    pub fn is_addr_tied(&self) -> bool {
+        (self.flags & (varnode_flags::ADDRTIED | varnode_flags::INSERT))
+            == (varnode_flags::ADDRTIED | varnode_flags::INSERT)
+    }
+
+    /// Does this storage location persist beyond the function? (varnode.hh:246)
+    pub fn is_persist(&self) -> bool {
+        (self.flags & varnode_flags::PERSIST) != 0
+    }
+
+    /// Is this a value preserved across the function? (varnode.hh:255)
+    pub fn is_unaffected(&self) -> bool {
+        (self.flags & varnode_flags::UNAFFECTED) != 0
+    }
+    /// Mark Varnode as unaffected. (varnode.hh:167)
+    pub fn set_unaffected(&mut self) {
+        self.flags |= varnode_flags::UNAFFECTED;
+    }
+
+    /// Is this an abnormal input to the function? (varnode.hh:240)
+    /// Ghidra: (flags & (input|directwrite)) == input.
+    pub fn is_illegal_input(&self) -> bool {
+        (self.flags & (varnode_flags::INPUT | varnode_flags::DIRECTWRITE))
+            == varnode_flags::INPUT
+    }
 }
 
 impl PartialEq for Varnode {
@@ -536,5 +620,53 @@ mod tests {
 
         assert_eq!(bank.num_varnodes(), 1);
         assert_eq!(vn.read().unwrap().get_size(), 4);
+    }
+
+    // --- Ghidra-faithful flag accessors (varnode.hh:235-330) ---
+
+    #[test]
+    fn test_varnode_mark_flag() {
+        let mut v = Varnode::new(4, Address::new(0));
+        assert!(!v.is_mark());
+        v.set_mark();
+        assert!(v.is_mark());
+        v.clear_mark();
+        assert!(!v.is_mark());
+    }
+
+    #[test]
+    fn test_varnode_explicit_implied_flags() {
+        let mut v = Varnode::new(4, Address::new(0));
+        assert!(!v.is_explicit());
+        assert!(!v.is_implied());
+        v.set_explicit();
+        assert!(v.is_explicit());
+        v.set_implied();
+        assert!(v.is_implied());
+        v.clear_explicit();
+        assert!(!v.is_explicit());
+        v.clear_implied();
+        assert!(!v.is_implied());
+    }
+
+    #[test]
+    fn test_varnode_addr_tied_requires_both_flags() {
+        // is_addr_tied is true only when BOTH addrtied AND insert are set
+        // (varnode.hh:250).
+        let mut v = Varnode::new(4, Address::new(0));
+        v.set_flags(varnode_flags::ADDRTIED);
+        assert!(!v.is_addr_tied()); // only addrtied → false
+        v.set_flags(varnode_flags::INSERT);
+        assert!(v.is_addr_tied()); // both → true
+    }
+
+    #[test]
+    fn test_varnode_illegal_input() {
+        // is_illegal_input: input set but directwrite clear (varnode.hh:240).
+        let mut v = Varnode::new(4, Address::new(0));
+        v.set_flags(varnode_flags::INPUT);
+        assert!(v.is_illegal_input());
+        v.set_direct_write();
+        assert!(!v.is_illegal_input()); // input|directwrite → not illegal
     }
 }

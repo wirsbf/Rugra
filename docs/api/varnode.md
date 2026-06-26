@@ -615,3 +615,17 @@
 
 `Varnode` 是 Rugra 当前 storage-node 模型中的基础数据节点：  
 它统一承载“位置 + 大小 + 节点状态 + 分析附着点”这几类信息，是从原始 P-code、函数级图模型、SSA 分析到最终打印输出之间最重要的底层数据载体之一。
+## 2026-06-26：Ghidra-faithful flag 访问器（varnode.hh:235-330）
+
+新增与 Ghidra 一致的 Varnode flag 访问/设置方法，解锁 coreaction Action
+（ActionMarkExplicit/MarkImplied/RestrictLocal 等）：
+
+- `is_mark/set_mark/clear_mark` (varnode.hh:263,303,304)
+- `is_implied/set_implied/clear_implied` (varnode.hh:235,309,310)
+- `is_explicit/set_explicit/clear_explicit` (varnode.hh:236,311,312)
+- `is_direct_write/set_direct_write/clear_direct_write` (varnode.hh:247,305,306)
+- `is_addr_tied`（addrtied|insert 同置，varnode.hh:250）
+- `is_persist` (246), `is_unaffected/set_unaffected` (255,167)
+- `is_illegal_input`（input 置而 directwrite 清，varnode.hh:240）
+
+测试：varnode::tests 4 个新增（mark、explicit/implied、addr_tied 双标志、illegal_input）。
