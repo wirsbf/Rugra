@@ -640,3 +640,9 @@
 - `lone_descend(&self) -> Option<Arc<RwLock<PcodeOp>>>` — `Varnode::loneDescend`：返回唯一后代 op（无或多个则 None）。
 - `has_no_descend(&self) -> bool` — `Varnode::hasNoDescend`：无后代读取。
 解锁 RuleDoubleShift/RuleSubZext/RuleXorCollapse 等独占使用检查。
+
+## 2026-06-26（续）：consume/nzm 访问器
+
+- `get_consume() -> u64` / `set_consume(val)`（varnode.hh:205-206）：dead-code 维护的 consumed 位掩码。
+- `get_nzm() -> u64` / `set_nzm(val)`：Heritage 维护的 nzm 字段原始访问。
+解锁 RuleOrConsume/RuleAndMask 等依赖 consume 的 Rule。

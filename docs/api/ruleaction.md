@@ -418,3 +418,13 @@ INT_AND 与 PIECE 简化：当 AND mask 清零某半时：
 用 get_nz_mask 判断是否有益；LEFT+常量需 loneDescend 或 OR/PIECE 子情形。op-edit 创建新 shift + AND。
 
 测试：ruleaction::tests +1（RIGHT 路径常量 mask 交换）。
+
+### 2026-06-26（续）：RuleOrConsume + get_consume/set_consume/get_nzm/set_nzm
+
+#### Varnode consume/nzm 访问器（varnode.hh:205-206）
+`get_consume/set_consume`（dead-code 维护的 consumed 掩码）、`get_nzm/set_nzm`（Heritage 维护的 nzm 字段）。Rugra Varnode 已有字段，此前无访问器。
+
+#### `pub struct RuleOrConsume`（ruleaction.cc:344-371）
+`V = A | B => COPY(B)` 当 nzm(A) & consume(V) == 0（A 贡献的位均未被消费）。也处理 XOR。
+
+测试：ruleaction::tests +1（consume=0 → A 丢弃 → COPY(B)）。

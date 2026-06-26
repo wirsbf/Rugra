@@ -3512,6 +3512,50 @@ impl Rule for RuleAndCommute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Simplify INT_OR/INT_XOR with an unconsumed input:
+///   `V = A | B  =>  V = B  if  nzm(A) & consume(V) == 0`
+///
+/// Faithful to Ghidra's `RuleOrConsume` (ruleaction.cc:344-371). When one
+/// operand's non-zero mask doesn't overlap the output's consumed bits, that
+/// operand contributes nothing and can be dropped — collapse to COPY.
+pub struct RuleOrConsume;
+
+impl RuleOrConsume {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleOrConsume {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (consume, in0_nzm, in1_nzm, size) = {
+            let op = op_arc.read().unwrap();
+            let outvn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let size = outvn.read().unwrap().get_size();
+            if size > 8 { return Ok(action_status::NO_CHANGE); }
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let consume = outvn.read().unwrap().get_consume();
+            let n0 = in0.read().unwrap().get_nz_mask();
+            let n1 = in1.read().unwrap().get_nz_mask();
+            (consume, n0, n1, size)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if consume & in0_nzm == 0 {
+            // in0 unconsumed → drop it, COPY in1.
+            fd.op_remove_input(&follow, 0);
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            return Ok(action_status::CHANGE);
+        } else if consume & in1_nzm == 0 {
+            fd.op_remove_input(&follow, 1);
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "or_consume" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5887,5 +5931,33 @@ mod tests {
         let a = and_op.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_RIGHT);
         assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
+    }
+
+    // --- RuleOrConsume (ruleaction.cc:344) ---
+
+    #[test]
+    fn test_or_consume_unconsumed_input() {
+        // (A | B) where consume(out) & nzm(A) == 0 → COPY(B)
+        // Set consume=0 on the output (no bits consumed) so A is dropped.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_constant(1, 0xff);
+        let b = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        out.write().unwrap().set_consume(0); // nothing consumed
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![a, b.clone()];
+            o.output = Some(out);
+        }
+        let rule = RuleOrConsume::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &b));
     }
 }

@@ -354,6 +354,30 @@ impl Varnode {
             None
         }
     }
+
+    /// Get the mask of consumed bits. Faithful to `Varnode::getConsume`
+    /// (varnode.hh:205). Maintained by the dead-code algorithm.
+    pub fn get_consume(&self) -> u64 {
+        self.consumed
+    }
+
+    /// Set the mask of consumed bits. Faithful to `Varnode::setConsume`
+    /// (varnode.hh:206).
+    pub fn set_consume(&mut self, val: u64) {
+        self.consumed = val;
+    }
+
+    /// Get the stored non-zero mask (the Heritage-maintained field).
+    /// Faithful to accessing the `nzm` field directly. This is the raw stored
+    /// value; prefer get_nz_mask for the conservative approximation.
+    pub fn get_nzm(&self) -> u64 {
+        self.nzm
+    }
+
+    /// Set the stored non-zero mask.
+    pub fn set_nzm(&mut self, val: u64) {
+        self.nzm = val;
+    }
 }
 
 impl PartialEq for Varnode {
