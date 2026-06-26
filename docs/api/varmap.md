@@ -32,8 +32,17 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 ### `pub struct AliasChecker`
 栈指针别名分析器。对应 Ghidra AliasChecker。
-- `gather(&mut self, fd: &Funcdata)` — 从函数收集别名信息
-- `get_aliases(&self) -> &[u64]` — 获取已排序的别名偏移列表
+**2026-06-26 完整对齐**（此前为简化版，仅扫描 STORE）：
+- `pub aliases: Vec<u64>` — 排序的别名偏移（varmap.cc `alias`）
+- `pub add_base: Vec<AddBase>` — 加法基根（base + index）
+- `gather_internal(&mut self, fd)` — `AliasChecker::gatherInternal` (varmap.cc:660)
+- `gather_additive_base(&mut self, startvn)` — `AliasChecker::gatherAdditiveBase` (varmap.cc:741)，递归 BFS 追踪 INT_ADD/INT_SUB/PTRADD/PTRSUB/SEGMENTOP/COPY 后继
+- `has_local_alias(&self, vn)` — `AliasChecker::hasLocalAlias` (varmap.cc:711)
+- `derive_boundaries(&mut self, local_boundary)` — `AliasChecker::deriveBoundaries`
+
+辅助函数：
+- `fn gather_offset(vn)` — `AliasChecker::gatherOffset` (varmap.cc:817)，递归求和常量偏移（COPY/ADD/SUB/PTRADD/SEGMENTOP），末尾按 size 掩码（calc_mask）
+- `fn find_spacebase_input(fd)` — `Funcdata::findSpacebaseInput`，Rugra 中 RSP = Register@0x20 size8 无 def 的输入 varnode
 
 ### `pub struct MapState`
 范围提示收集器和重构器。对应 Ghidra MapState。

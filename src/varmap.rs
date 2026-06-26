@@ -20,7 +20,7 @@ use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::type_system::Datatype;
 use crate::type_system::TypeMetatype;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Range type for RangeHint (varmap.hh:RangeType)
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -476,78 +476,339 @@ impl RangeHint {
     }
 }
 
+/// An additive-base entry: the result varnode of an additive expression plus
+/// an optional non-constant index varnode. Corresponds to Ghidra's
+/// `AliasChecker::AddBase` (varmap.hh:130).
+#[derive(Clone)]
+pub struct AddBase {
+    /// The additive expression result varnode.
+    pub base: Arc<RwLock<Varnode>>,
+    /// A non-constant index varnode (or None if the offset is fully constant).
+    pub index: Option<Arc<RwLock<Varnode>>>,
+}
+
 /// AliasChecker: analyzes pointer aliasing on the stack.
-/// Corresponds to Ghidra's AliasChecker (varmap.hh:137).
+/// Corresponds to Ghidra's AliasChecker (varmap.hh:137). Faithful port of
+/// varmap.cc:660-731 (gatherInternal/gather/gatherAdditiveBase/gatherOffset).
 pub struct AliasChecker {
-    /// Sorted list of alias starting offsets
+    /// Sorted list of alias offsets (varmap.cc `alias`).
     pub aliases: Vec<u64>,
-    /// Additive base references
-    pub add_base: Vec<(u64, Option<u64>)>, // (base_offset, index_offset)
-    /// Boundary offset for local vs parameter region
+    /// Additive-base references collected from the spacebase (varmap.cc `addBase`).
+    pub add_base: Vec<AddBase>,
+    /// Boundary between local and parameter region (varmap.cc `localBoundary`).
     local_boundary: u64,
-    /// Direction of stack growth (-1 = grows down)
+    /// The lowest alias offset seen (varmap.cc `aliasBoundary`), initialised to
+    /// `local_extreme` and shrunk toward the locals region.
+    alias_boundary: u64,
+    /// Stack growth direction: 1 for negative growth (x86), -1 otherwise.
+    /// Matches Ghidra's convention where direction==1 is the normal case.
     direction: i32,
+    /// Whether the alias calculation has been performed.
+    calculated: bool,
 }
 
 impl AliasChecker {
+    /// The "infinitely far" boundary, so the first real alias always wins.
+    /// Ghidra initialises `localExtreme` from `space->getHighest()`.
+    const LOCAL_EXTREME: u64 = u64::MAX;
+
     pub fn new(direction: i32) -> Self {
         Self {
             aliases: Vec::new(),
             add_base: Vec::new(),
             local_boundary: 0x1000000,
+            alias_boundary: Self::LOCAL_EXTREME,
             direction,
+            calculated: false,
         }
     }
 
-    /// Gather alias information from a function's varnodes.
-    /// Looks for stack pointer (RSP) additive uses.
-    /// Corresponds to AliasChecker::gatherInternal (varmap.cc:660).
-    pub fn gather(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Find the stack base input varnode (RSP in x86-64)
-        // Then trace additive uses (INT_ADD, PTRADD, PTRSUB, etc.)
-        // For each additive use, extract the constant offset → alias boundary
+    /// Configure local/parameter boundaries from a function prototype.
+    /// Corresponds to `AliasChecker::deriveBoundaries` (varmap.cc ~590).
+    /// For a negative-growing stack the locals occupy offsets below
+    /// `local_boundary`; the parameter region is above it.
+    pub fn derive_boundaries(&mut self, local_boundary: u64) {
+        self.local_boundary = local_boundary;
+    }
+
+    /// If there is a stack (spacebase) pointer, find its input Varnode, and look
+    /// for additive uses of it. Then calculate the offsets that start an aliased
+    /// region. Faithful to `AliasChecker::gatherInternal` (varmap.cc:660).
+    pub fn gather_internal(&mut self, fd: &crate::funcdata::Funcdata) {
+        self.calculated = true;
+        self.alias_boundary = Self::LOCAL_EXTREME;
         self.aliases.clear();
         self.add_base.clear();
 
-        // Simplified: scan for STORE/LOAD ops using stack-relative addresses
-        // This captures the alias boundaries for the stack
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            match op.opcode {
-                OpCode::CPUI_STORE => {
-                    if op.inrefs.len() >= 2 {
-                        let ptr_vn = &op.inrefs[1];
-                        if ptr_vn.read().unwrap().get_space() == crate::space::AddressSpace::Register {
-                            // Check if this is RSP-derived pointer
-                            if let Some(def) = ptr_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-                                let def_op = def.read().unwrap();
-                                if def_op.opcode == OpCode::CPUI_INT_ADD || def_op.opcode == OpCode::CPUI_PTRSUB {
-                                    if def_op.inrefs.len() >= 2 {
-                                        let const_in = &def_op.inrefs[1];
-                                        if const_in.read().unwrap().get_space() == crate::space::AddressSpace::Const {
-                                            let offset = const_in.read().unwrap().get_offset();
-                                            self.aliases.push(offset);
-                                        }
-                                    }
+        // Find the spacebase input varnode (RSP). Rugra models RSP as the
+        // Register-space input varnode at offset 0x20, size 8.
+        let spacebase = match find_spacebase_input(fd) {
+            Some(vn) => vn,
+            None => return, // No possible alias
+        };
+
+        // Recursively collect additive roots.
+        self.gather_additive_base(&spacebase);
+
+        for entry in self.add_base.clone().into_iter() {
+            let offset = gather_offset(&entry.base);
+            // Ghidra converts via addressToByte(offset, wordSize); wordSize==1
+            // for the stack space, so the offset is already in bytes.
+            self.aliases.push(offset);
+            if self.direction == 1 {
+                // Negative stack growth: offsets above local_boundary are params.
+                if offset < self.local_boundary {
+                    continue;
+                }
+            } else {
+                if offset > self.local_boundary {
+                    continue;
+                }
+            }
+            // Anything after (below, for negative growth) a pointer reference is
+            // aliased, regardless of stack direction.
+            if offset < self.alias_boundary {
+                self.alias_boundary = offset;
+            }
+        }
+
+        self.sort_aliases();
+    }
+
+    /// Gather result Varnodes for all sums that `startvn` is involved in.
+    /// Faithful to `AliasChecker::gatherAdditiveBase` (varmap.cc:741).
+    ///
+    /// A sum is any expression involving only the additive operators
+    /// INT_ADD, INT_SUB, PTRADD, PTRSUB, and SEGMENTOP (plus COPY). The routine
+    /// traverses forward through descendants that are additive operations and
+    /// collects the roots of the traversed trees.
+    fn gather_additive_base(&mut self, startvn: &Arc<RwLock<Varnode>>) {
+        // Marked varnodes (by raw pointer identity within this borrow scope).
+        let mut marked: std::collections::HashSet<*const Varnode> = std::collections::HashSet::new();
+        // Work queue of (varnode, index).
+        let mut vnqueue: Vec<AddBase> = Vec::new();
+
+        let start_ptr = Arc::as_ptr(startvn) as *const Varnode;
+        marked.insert(start_ptr);
+        vnqueue.push(AddBase { base: startvn.clone(), index: None });
+
+        let mut i = 0;
+        while i < vnqueue.len() {
+            let cur = vnqueue[i].clone();
+            i += 1;
+            let mut indexvn = cur.index.clone();
+            let mut nonadduse = false;
+
+            // Iterate over descendants (ops that read this varnode).
+            let descend_refs: Vec<_> = {
+                let vn = cur.base.read().unwrap();
+                vn.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+
+            for op_ref in descend_refs {
+                let op = op_ref.read().unwrap();
+                match op.opcode {
+                    OpCode::CPUI_COPY => {
+                        nonadduse = true; // COPY is both a non-add use and part of ADD.
+                        if let Some(out) = op.output.clone() {
+                            let p = Arc::as_ptr(&out) as *const Varnode;
+                            if !marked.contains(&p) {
+                                marked.insert(p);
+                                vnqueue.push(AddBase { base: out, index: indexvn.clone() });
+                            }
+                        }
+                    }
+                    OpCode::CPUI_INT_SUB => {
+                        // If the pointer is the subtrahend (input 1), it's a non-add use.
+                        let vn_ptr = Arc::as_ptr(&cur.base);
+                        let in1_ptr = op.inrefs.get(1).map(|v| Arc::as_ptr(v));
+                        if in1_ptr == Some(vn_ptr) {
+                            nonadduse = true;
+                            // break out of this op's processing
+                        } else {
+                            // Otherwise the other operand may be a non-const index.
+                            if let Some(othervn) = op.inrefs.get(1) {
+                                let ov = othervn.read().unwrap();
+                                if !ov.is_constant() {
+                                    indexvn = Some(othervn.clone());
+                                }
+                            }
+                            if let Some(out) = op.output.clone() {
+                                let p = Arc::as_ptr(&out) as *const Varnode;
+                                if !marked.contains(&p) {
+                                    marked.insert(p);
+                                    vnqueue.push(AddBase { base: out, index: indexvn.clone() });
                                 }
                             }
                         }
                     }
+                    OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRADD => {
+                        // Check if something non-constant is being added.
+                        let in0 = op.inrefs.get(0);
+                        let in1 = op.inrefs.get(1);
+                        let vn_ptr = Arc::as_ptr(&cur.base);
+                        let othervn = if in1.map(|v| Arc::as_ptr(v)) == Some(vn_ptr) {
+                            in0
+                        } else {
+                            in1
+                        };
+                        if let Some(other) = othervn {
+                            let ov = other.read().unwrap();
+                            if !ov.is_constant() {
+                                indexvn = Some(other.clone());
+                            }
+                        }
+                        // fallthru to PTRSUB/SEGMENTOP output handling
+                        if let Some(out) = op.output.clone() {
+                            let p = Arc::as_ptr(&out) as *const Varnode;
+                            if !marked.contains(&p) {
+                                marked.insert(p);
+                                vnqueue.push(AddBase { base: out, index: indexvn.clone() });
+                            }
+                        }
+                    }
+                    OpCode::CPUI_PTRSUB | OpCode::CPUI_SEGMENTOP => {
+                        if let Some(out) = op.output.clone() {
+                            let p = Arc::as_ptr(&out) as *const Varnode;
+                            if !marked.contains(&p) {
+                                marked.insert(p);
+                                vnqueue.push(AddBase { base: out, index: indexvn.clone() });
+                            }
+                        }
+                    }
+                    _ => {
+                        nonadduse = true; // Used in a non-additive expression.
+                    }
                 }
-                _ => {}
+            }
+
+            if nonadduse {
+                self.add_base.push(AddBase { base: cur.base.clone(), index: indexvn.clone() });
             }
         }
-        self.sort_alias();
+        // Ghidra clears marks here; our HashSet is dropped at scope end.
     }
 
-    fn sort_alias(&mut self) {
+    fn sort_aliases(&mut self) {
         self.aliases.sort();
-        self.aliases.dedup();
+    }
+
+    /// Rough analysis of whether `vn` might be aliased by another pointer.
+    /// Faithful to `AliasChecker::hasLocalAlias` (varmap.cc:711).
+    pub fn has_local_alias(&self, vn: &Varnode) -> bool {
+        if !self.calculated {
+            return true; // Conservative: assume alias if uncalculated.
+        }
+        if vn.get_space() != crate::space::AddressSpace::Stack {
+            return false;
+        }
+        if self.direction == -1 {
+            return false; // Positive growth: not a good test.
+        }
+        vn.get_offset() >= self.alias_boundary
     }
 
     pub fn get_aliases(&self) -> &[u64] {
         &self.aliases
     }
+
+    pub fn get_add_base(&self) -> &[AddBase] {
+        &self.add_base
+    }
+}
+
+/// Find the stack-pointer input Varnode for a function (the spacebase).
+/// Corresponds to `Funcdata::findSpacebaseInput`. Rugra models RSP as the
+/// Register-space, offset 0x20, size-8 input varnode.
+fn find_spacebase_input(fd: &crate::funcdata::Funcdata) -> Option<Arc<RwLock<Varnode>>> {
+    for vn_arc in &fd.vbank.loc_tree {
+        let vn = vn_arc.0.read().unwrap();
+        if vn.is_free() {
+            continue;
+        }
+        if vn.get_space() == crate::space::AddressSpace::Register
+            && vn.get_offset() == 0x20
+            && vn.get_size() == 8
+            && vn.def.is_none()
+        {
+            // An input varnode (no defining op).
+            return Some(vn_arc.0.clone());
+        }
+    }
+    None
+}
+
+/// If the given Varnode is a sum result, return the constant portion of the sum.
+/// Faithful to `AliasChecker::gatherOffset` (varmap.cc:817).
+///
+/// Treats `vn` as the result of a series of ADD operations and sums all the
+/// constant terms by traversing the syntax tree backwards through additive ops.
+fn gather_offset(vn: &Arc<RwLock<Varnode>>) -> u64 {
+    let v = vn.read().unwrap();
+    if v.is_constant() {
+        return v.get_offset();
+    }
+    let def = match v.def.as_ref().and_then(|w| w.upgrade()) {
+        Some(d) => d,
+        None => return 0,
+    };
+    drop(v);
+    let op = def.read().unwrap();
+    let retval: u64;
+    match op.opcode {
+        OpCode::CPUI_COPY => {
+            let in0 = op.inrefs[0].clone();
+            drop(op);
+            retval = gather_offset(&in0);
+        }
+        OpCode::CPUI_PTRSUB | OpCode::CPUI_INT_ADD => {
+            let in0 = op.inrefs[0].clone();
+            let in1 = op.inrefs[1].clone();
+            drop(op);
+            retval = gather_offset(&in0).wrapping_add(gather_offset(&in1));
+        }
+        OpCode::CPUI_INT_SUB => {
+            let in0 = op.inrefs[0].clone();
+            let in1 = op.inrefs[1].clone();
+            drop(op);
+            retval = gather_offset(&in0).wrapping_sub(gather_offset(&in1));
+        }
+        OpCode::CPUI_PTRADD => {
+            let in0 = op.inrefs[0].clone();
+            let in1 = op.inrefs[1].clone();
+            let in2 = op.inrefs.get(2).cloned();
+            let in1_const = {
+                let iv = in1.read().unwrap();
+                iv.is_constant()
+            };
+            if in1_const {
+                let mult = in2.map(|m| m.read().unwrap().get_offset()).unwrap_or(1);
+                let in1_off = in1.read().unwrap().get_offset();
+                drop(op);
+                retval = gather_offset(&in0).wrapping_add(in1_off.wrapping_mul(mult));
+            } else {
+                let mult_is_one = in2.map(|m| m.read().unwrap().get_offset() == 1).unwrap_or(false);
+                drop(op);
+                if mult_is_one {
+                    retval = gather_offset(&in0).wrapping_add(gather_offset(&in1));
+                } else {
+                    retval = gather_offset(&in0);
+                }
+            }
+        }
+        OpCode::CPUI_SEGMENTOP => {
+            let in2 = op.inrefs[2].clone();
+            drop(op);
+            retval = gather_offset(&in2);
+        }
+        _ => {
+            retval = 0;
+        }
+    }
+    // Ghidra masks to the varnode size: retval & calc_mask(vn->getSize()).
+    let size = vn.read().unwrap().get_size();
+    let mask = if size >= 64 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
+    retval & mask
 }
 
 /// MapState: gathers RangeHints and restructures them into Symbols.
@@ -724,7 +985,7 @@ impl ScopeLocal {
 
         // Gather alias info
         let mut checker = AliasChecker::new(self.stack_direction);
-        checker.gather(fd);
+        checker.gather_internal(fd);
         let aliases = checker.get_aliases().to_vec();
 
         // Restructure: merge overlapping ranges into disjoint symbols
