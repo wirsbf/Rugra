@@ -233,3 +233,13 @@ INT_LESSEQUAL 与极值常量的简化：
 当两操作数的 NZMask 表明符号位为 0（均为已知非负）时，将 INT_SLESS→INT_LESS、INT_SLESSEQUAL→INT_LESSEQUAL。
 
 测试：address.rs +4（signbit_negative/calc_mask/leastsigbit/mostsigbit）；ruleaction::tests +3（SlessToLess 正常/负不变/Slessequal）。
+
+### 2026-06-26（续）：RuleOrCollapse + RuleConcatLeftShift
+
+#### `pub struct RuleOrCollapse`（ruleaction.cc:373-401）
+`V | c => c` 当 NZM(V)|c == c（V 能置位的位都已被 c 覆盖）→ COPY。用 get_nz_mask。
+
+#### `pub struct RuleConcatLeftShift`（ruleaction.cc:5004-5042）
+`concat(V, zext(W) << c) => concat(concat(V, W), 0)`。当 PIECE 低位是 zext(W) 的对齐左移（c 为 8 倍数且移到最高有效边界）时，重构为两级 PIECE。用 op-edit API 创建新 PIECE op。
+
+测试：ruleaction::tests +3（OrCollapse 覆盖/部分不变；ConcatLeftShift 重构）。

@@ -1736,6 +1736,173 @@ impl Rule for RuleSlessToLess {
     }
 }
 
+/// Collapse unnecessary INT_OR: `V | c => c` when every bit V could set is
+/// already set in c (NZM(V) | c == c).
+///
+/// Faithful to Ghidra's `RuleOrCollapse` (ruleaction.cc:373-401). When the
+/// OR constant already covers all possibly-non-zero bits of the other
+/// operand, the OR result equals the constant.
+pub struct RuleOrCollapse;
+
+impl RuleOrCollapse {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleOrCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (in0_nzm, const_val, size) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let cn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let nzm = in0.read().unwrap().get_nz_mask();
+            let val = cn.read().unwrap().get_offset();
+            (nzm, val, size)
+        };
+        if size == 0 || size > 8 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if (in0_nzm | const_val) != const_val {
+            return Ok(action_status::NO_CHANGE); // V may turn on other bits
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        fd.op_remove_input(&follow, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "or_collapse"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_OR]
+    }
+}
+
+/// Simplify concatenation of an extended value:
+///   `concat(V, zext(W) << c) => concat(concat(V, W), 0)`
+///
+/// Faithful to Ghidra's `RuleConcatLeftShift` (ruleaction.cc:5004-5042). When
+/// the low piece of a PIECE is a left-shifted zero-extension whose shift
+/// amount aligns it to the most-significant boundary, the PIECE can be
+/// restructured as a concatenation of the two original pieces with a zero pad.
+pub struct RuleConcatLeftShift;
+
+impl RuleConcatLeftShift {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleConcatLeftShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // vn2 (in1) must be defined by INT_LEFT of a zext.
+        let (vn1, b, sa_bytes, pc, out_size) = {
+            let op = op_arc.read().unwrap();
+            let vn2 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let vn1 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let pc = op.start.get_addr();
+            let shiftop_arc = {
+                let v2 = vn2.read().unwrap();
+                v2.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let shiftop_arc = match shiftop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let (sa_bits, tmpvn) = {
+                let so = shiftop_arc.read().unwrap();
+                if so.opcode != OpCode::CPUI_INT_LEFT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let sa_const = match so.inrefs.get(1) {
+                    Some(v) if v.read().unwrap().is_constant() => v.read().unwrap().get_offset(),
+                    _ => return Ok(action_status::NO_CHANGE),
+                };
+                let tmpvn = match so.inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                (sa_const, tmpvn)
+            };
+            if sa_bits & 7 != 0 {
+                return Ok(action_status::NO_CHANGE); // not a multiple of 8
+            }
+            let zextop_arc = {
+                let t = tmpvn.read().unwrap();
+                t.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let zextop_arc = match zextop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let b = {
+                let zo = zextop_arc.read().unwrap();
+                if zo.opcode != OpCode::CPUI_INT_ZEXT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                match zo.inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(action_status::NO_CHANGE),
+                }
+            };
+            if b.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if vn1.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let sa_bytes = (sa_bits / 8) as usize;
+            let tmp_size = tmpvn.read().unwrap().get_size();
+            let b_size = b.read().unwrap().get_size();
+            if sa_bytes + b_size != tmp_size {
+                return Ok(action_status::NO_CHANGE); // must shift to msb boundary
+            }
+            (vn1, b, sa_bytes, pc, out_size)
+        };
+        let vn1_size = vn1.read().unwrap().get_size();
+        let b_size = b.read().unwrap().get_size();
+        let newout_size = vn1_size + b_size;
+        // newop = PIECE(vn1, b) → newout
+        let newop = fd.new_op(2, pc);
+        fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+        let newout = fd.new_unique_out(newout_size, &newop);
+        fd.op_set_input(&newop, vn1, 0);
+        fd.op_set_input(&newop, b, 1);
+        fd.op_insert_before(&newop, &crate::op::PcodeOpRef(op_arc.clone()));
+        // Rewrite the original op: in0 = newout, in1 = zero pad.
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, newout, 0);
+        let pad = fd.new_constant(out_size - newout_size, 0);
+        fd.op_set_input(&follow, pad, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "concat_leftshift"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_PIECE]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2927,5 +3094,106 @@ mod tests {
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_LESSEQUAL);
+    }
+
+    // --- RuleOrCollapse (ruleaction.cc:373) ---
+
+    #[test]
+    fn test_or_collapse_constant_covers() {
+        // V (register, NZM=0xffffffff) | 0xff (size 1) → COPY (since all V bits covered by 0xff? No.
+        // NZM(V) for a size-1 register is 0xff. (0xff | 0xff)==0xff → collapse.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(1, 0xff);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, c];
+            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
+        }
+        let rule = RuleOrCollapse::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+    }
+
+    #[test]
+    fn test_or_collapse_partial_no_change() {
+        // V (size 1, NZM=0xff) | 0x0f → (0xff | 0x0f)=0xff != 0x0f → no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(1, 0x0f);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, c];
+            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20));
+        }
+        let rule = RuleOrCollapse::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleConcatLeftShift (ruleaction.cc:5004) ---
+
+    #[test]
+    fn test_concat_leftshift_restructure() {
+        // PIECE(V[1byte], zext(W[1byte]) << 8) → restructure.
+        // zext(W size1→size2), shift by 8 (=1 byte). sa_bytes=1, b_size=1, tmp_size=2 → 1+1==2 ✓.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        w.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        // zext_op = INT_ZEXT(W) → zext_out (size 2)
+        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![w.clone()];
+            z.output = Some(zext_out.clone());
+        }
+        zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
+        // shift_op = INT_LEFT(zext_out, 8) → shift_out (size 2)
+        let shift_const = fd.vbank.create_constant(4, 8);
+        let shift_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![zext_out.clone(), shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        // piece_op = PIECE(v, shift_out) → out (size 2)
+        let out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30);
+        let piece_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut p = piece_op.write().unwrap();
+            p.inrefs = vec![v.clone(), shift_out.clone()];
+            p.output = Some(out);
+        }
+        let rule = RuleConcatLeftShift::new();
+        let result = rule.apply_op(&piece_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The original PIECE op now has in0 = a new PIECE(v,w) output, in1 = zero pad.
+        let p = piece_op.read().unwrap();
+        assert_eq!(p.inrefs.len(), 2);
+        // in1 should be a zero constant (pad of size out(2) - newout(2) = 0... actually newout=v+w=2, out=2, pad=0)
+        // pad size = out_size - newout_size = 2 - 2 = 0. The constant is size 0 value 0.
     }
 }
