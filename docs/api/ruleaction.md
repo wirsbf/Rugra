@@ -497,3 +497,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 ### 2026-06-26（续）：RuleCollectTerms 完整形式
 
 更新 RuleCollectTerms 使用 `distribute_int_mult_add` 处理 INT_MULT 系数场景（ruleaction.cc:130-133），完成完整移植。
+
+### 2026-06-26（续）：RuleBitUndistribute
+
+#### `pub struct RuleBitUndistribute`（ruleaction.cc:2620-2695）
+逆向分配位运算：
+- `zext(V) & zext(W) => zext(V & W)`
+- `(V >> X) | (W >> X) => (V | W) >> X`
+当两输入到 INT_AND/OR/XOR 是同一扩展/移位操作时，提取公共操作。
+
+测试：ruleaction::tests +1（zext & zext → zext(and)）。

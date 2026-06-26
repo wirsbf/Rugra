@@ -3941,6 +3941,97 @@ impl Rule for RuleCollectTerms {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
+/// Undo distributed operations through INT_AND, INT_OR, INT_XOR:
+///   `zext(V) & zext(W)  =>  zext(V & W)`
+///   `(V >> X) | (W >> X)  =>  (V | W) >> X`
+///
+/// Faithful to Ghidra's `RuleBitUndistribute` (ruleaction.cc:2620-2695).
+/// When both inputs to a bitwise op are the same extension/shift operation
+/// applied to different values, factor the common operation out.
+pub struct RuleBitUndistribute;
+
+impl RuleBitUndistribute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleBitUndistribute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (opc_outer, vn1_def, vn2_def) = {
+            let op = op_arc.read().unwrap();
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let d1 = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let d2 = vn2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            match (d1, d2) {
+                (Some(a), Some(b)) => (op.opcode, a, b),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let inner_opc = vn1_def.read().unwrap().opcode;
+        if vn2_def.read().unwrap().opcode != inner_opc {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let (in1, in2): (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                         std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) = match inner_opc {
+            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
+                let i1 = vn1_def.read().unwrap().inrefs.get(0).cloned();
+                let i2 = vn2_def.read().unwrap().inrefs.get(0).cloned();
+                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                if i1.read().unwrap().is_free() || i2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+                if i1.read().unwrap().get_size() != i2.read().unwrap().get_size() { return Ok(action_status::NO_CHANGE); }
+                // Remove the second input (we'll build the inner op from in1+in2).
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_remove_input(&follow, 1);
+                (i1, i2)
+            }
+            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+                let s1 = vn1_def.read().unwrap().inrefs.get(1).cloned();
+                let s2 = vn2_def.read().unwrap().inrefs.get(1).cloned();
+                let (s1, s2) = match (s1, s2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                let vnextra = if s1.read().unwrap().is_constant() && s2.read().unwrap().is_constant() {
+                    if s1.read().unwrap().get_offset() != s2.read().unwrap().get_offset() { return Ok(action_status::NO_CHANGE); }
+                    let size = s1.read().unwrap().get_size();
+                    let val = s1.read().unwrap().get_offset();
+                    Some(fd.new_constant(size, val))
+                } else if std::sync::Arc::ptr_eq(&s1, &s2) {
+                    if s1.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+                    Some(s1)
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                };
+                let i1 = vn1_def.read().unwrap().inrefs.get(0).cloned();
+                let i2 = vn2_def.read().unwrap().inrefs.get(0).cloned();
+                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                if i1.read().unwrap().is_free() || i2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_set_input(&follow, vnextra.unwrap(), 1);
+                (i1, i2)
+            }
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        // Build the inner op: in1 opc_outer in2
+        let pc = op_arc.read().unwrap().start.get_addr();
+        let inner_size = in1.read().unwrap().get_size();
+        let newext = fd.new_op(2, pc);
+        let smalllogic = fd.new_unique_out(inner_size, &newext);
+        fd.op_set_input(&newext, in1, 0);
+        fd.op_set_input(&newext, in2, 1);
+        fd.op_set_opcode(&newext, opc_outer);
+        // Rewrite op: opc_inner(smalllogic, [vnextra])
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, inner_opc);
+        fd.op_set_input(&follow, smalllogic, 0);
+        fd.op_insert_before(&newext, &follow);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "bit_undistribute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6566,5 +6657,48 @@ mod tests {
         let v0 = outer_r.inrefs[1].read().unwrap().get_offset();
         let _v1 = outer_r.inrefs[0].read().unwrap().get_offset();
         assert!(v0 == 0 || v0 == 8);
+    }
+
+    // --- RuleBitUndistribute (ruleaction.cc:2620) ---
+
+    #[test]
+    fn test_bit_undistribute_zext() {
+        // zext(V) & zext(W) => zext(V & W)  (size 1 → size 2)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        w.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        // zext(V)
+        let zv_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zv = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_ZEXT)));
+        zv.write().unwrap().inrefs = vec![v.clone()];
+        zv.write().unwrap().output = Some(zv_out.clone());
+        zv_out.write().unwrap().def = Some(Arc::downgrade(&zv));
+        zv_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        // zext(W)
+        let zw_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let zw = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_ZEXT)));
+        zw.write().unwrap().inrefs = vec![w.clone()];
+        zw.write().unwrap().output = Some(zw_out.clone());
+        zw_out.write().unwrap().def = Some(Arc::downgrade(&zw));
+        zw_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        // AND(zv_out, zw_out)
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![zv_out, zw_out];
+            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleBitUndistribute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // op should now be INT_ZEXT with 1 input (the inner AND).
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_ZEXT);
+        assert_eq!(a.inrefs.len(), 1);
     }
 }
