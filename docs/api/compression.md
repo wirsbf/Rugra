@@ -29,3 +29,10 @@ Wrapper for the inflate algorithm (compression.hh:55).
 ## L3 gap
 - Actual deflate/inflate via `flate2` crate. Current implementation is a
   pass-through stub (no compression applied).
+
+## 2026-06-27（续）：flate2 集成 — compression.rs 达到 L3
+
+- **Compress**：使用 flate2 ZlibEncoder 实现真实 deflate 压缩。
+- **Decompress**：使用 flate2 ZlibDecoder 实现真实 inflate 解压。
+- **compress_all/decompress_all**：一次性压缩/解压，使用 flate2。
+- 所有 L3 缺口已关闭。
