@@ -69,6 +69,38 @@ Rugra 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一致
 >    - `coreaction.cc` — 核心分析动作（ActionTypePropagate、ActionInferParams）
 >    - `block.hh` — FlowBlock 边标志定义（f_switch_out 等）
 >    - `type.cc` / `typeop.cc` — 类型系统与类型传播
+>    - `varmap.cc` / `varmap.hh` — 局部变量映射与栈帧重构
+>    - `jumptable.cc` — 间接跳转表分析
+>    - `condexe.cc` — 条件执行分析（RuleOrPredicate）
+>    - `merge.cc` — HighVariable 合并
+
+> 🔴 **【Ghidra 源码先读铁律 — Read Ghidra Source Before Implementing ANY Module】（2026-06-26 新增）**
+>
+> **移植任何 Ghidra 模块之前，必须先完整阅读对应的 Ghidra C++ 源码。** 不允许凭记忆或推测实现。
+>
+> 具体执行规则：
+>
+> 1. **实现顺序**：对于 ALIGNMENT_ROADMAP.md 中列出的每个 L1（缺失）或 L2（部分实现）模块，实现前必须：
+>    a. 打开 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/<module>.cc` 完整阅读
+>    b. 打开对应的 `.hh` 头文件理解类结构和接口
+>    c. 理解该模块依赖的其他模块（如 varmap.cc 依赖 funcdata、type、variable）
+>    d. 然后才开始编写 Rust 代码
+> 2. **禁止"多会话项目"借口**：遇到技术难题时，禁止声明"这是一个多会话项目"。必须继续尝试不同方案，阅读 Ghidra 源码找答案。每轮交互必须有实质性推动（不一定是代码改动，可以是 Ghidra 源码分析、方案设计、调试追踪），但禁止重复"目标尚未完成"。
+> 3. **禁止空轮**：每轮对话必须有实质性产出之一：
+>    - 新代码 commit
+>    - Ghidra 源码深度分析（记录到 ALIGNMENT_ROADMAP.md 或 docs/alignment_docs/）
+>    - Bug 根因定位（记录修复方案）
+>    - 测试验证证据（输出对比、gcc 审计、if/while 计数）
+>    - 禁止纯"状态声明"轮（如"目标尚未完成，需要多会话"）
+
+> 🔴 **【L1/L2/L3 路线图维护铁律 — Keep ALIGNMENT_ROADMAP.md Updated】（2026-06-26 新增）**
+>
+> **每个模块的状态变更必须当场更新 ALIGNMENT_ROADMAP.md。**
+>
+> 1. **L1→L2**：开始实现某模块时，立即在 ALIGNMENT_ROADMAP.md 中将其从 📋 L1 改为 🔧 L2，记录实现方案。
+> 2. **L2→L3**：完成实现并通过验证后，立即改为 ✅ L3，附测试证据。
+> 3. **新模块发现**：实现过程中发现新的 Ghidra 模块依赖，立即添加到 ALIGNMENT_ROADMAP.md 的 L1 列表。
+> 4. **禁止路线图过时**：ALIGNMENT_ROADMAP.md 必须始终反映当前真实状态。
 
 RugraVSR 需要强验证，而 **Rugra 更加依赖与原版 Ghidra 对拍的一致性（Alignment）**：
 任何涉及 P-code 生成、SSA 构造或控制流分析等阶段的改动：
