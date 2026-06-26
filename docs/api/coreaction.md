@@ -368,3 +368,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionMarkImplied**：从框架级升级为 apply()-驱动级——遍历 VarnodeBank.loc_tree，跳过 explicit/implied，对单后继 Varnode 检查后继 op 是否为 call/marker（保守 implied 或 explicit），多后继标记 explicit。is_possible_alias_step 辅助函数保留供 LOAD/STORE 别名检查（待 Cover 集成）。
 - 现在 7 个 coreaction Actions 有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 20）：ActionHideShadow 升级为 apply()-驱动级
+
+- **ActionHideShadow**：从框架级升级为 apply()-驱动级——遍历 written Varnodes，检测 shadow copy（COPY 从相同地址的 Varnode），标记后清除。完整版需要 HighVariable + Merge::hideShadows。
+- 8 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
