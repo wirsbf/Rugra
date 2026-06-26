@@ -31,3 +31,15 @@
 变换后的 PcodeOp 占位符。new(num_params, opc) 构造。
 
 测试：transform::tests 3 个（LanedRegister/LaneDescription uniform/LaneDescription two_lane）。
+
+## 2026-06-26（续）：transform.rs 完善实现
+
+新增 TransformManager 完整生命周期：
+- `TransformManager::new()` — 构造
+- `new_preexisting_varnode/new_unique/new_constant/new_piece` — varnode 占位符创建（transform.hh:174-178）
+- `new_op/new_op_replace` — op 占位符创建（transform.hh:181-183）
+- `op_set_input/op_set_output` — 设置 op 输入/输出（transform.hh:189-190）
+- `TransformOp::set_input/set_output/new_replace/new_preexisting` — op 操作
+- `TransformVar::clone_shallow` — 内部浅拷贝
+
+测试：新增 2 个（transform_manager + transform_op_replace）。

@@ -233,6 +233,138 @@ impl TransformOp {
             follow: None,
         }
     }
+
+    pub fn new_replace(num_params: usize, opc: OpCode, replace: Arc<RwLock<PcodeOp>>) -> Self {
+        Self {
+            original: Some(replace),
+            opc,
+            output: None,
+            inputs: Vec::with_capacity(num_params),
+            follow: None,
+        }
+    }
+
+    pub fn new_preexisting(num_params: usize, opc: OpCode, original: Arc<RwLock<PcodeOp>>) -> Self {
+        Self {
+            original: Some(original),
+            opc,
+            output: None,
+            inputs: Vec::with_capacity(num_params),
+            follow: None,
+        }
+    }
+
+    /// Set an input placeholder variable.
+    pub fn set_input(&mut self, rvn: TransformVar, slot: usize) {
+        while self.inputs.len() <= slot {
+            self.inputs.push(TransformVar::new_unique(0));
+        }
+        self.inputs[slot] = rvn;
+    }
+
+    /// Set the output placeholder variable.
+    pub fn set_output(&mut self, rvn: TransformVar) {
+        self.output = Some(Box::new(rvn));
+    }
+}
+
+/// Class for splitting larger registers holding smaller logical lanes.
+/// Orchestrates the transform lifecycle.
+/// Corresponds to Ghidra's `TransformManager` (transform.hh:156).
+pub struct TransformManager {
+    /// Storage for new varnode placeholders
+    pub new_varnodes: Vec<TransformVar>,
+    /// Storage for new op placeholders
+    pub new_ops: Vec<TransformOp>,
+}
+
+impl TransformManager {
+    pub fn new() -> Self {
+        Self {
+            new_varnodes: Vec::new(),
+            new_ops: Vec::new(),
+        }
+    }
+
+    /// Make a placeholder for a preexisting varnode.
+    pub fn new_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(TransformVar::new_preexisting(vn));
+        idx
+    }
+
+    /// Make a placeholder for a new unique-space varnode.
+    pub fn new_unique(&mut self, size: i32) -> usize {
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(TransformVar::new_unique(size));
+        idx
+    }
+
+    /// Make a placeholder for a constant varnode.
+    pub fn new_constant(&mut self, size: i32, lsb_offset: i32, val: u64) -> usize {
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(TransformVar::new_constant(size, lsb_offset, val));
+        idx
+    }
+
+    /// Make a placeholder for a piece of a varnode.
+    pub fn new_piece(&mut self, vn: Arc<RwLock<Varnode>>, byte_size: i32, lsb_offset: i32) -> usize {
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(TransformVar::new_piece(vn, byte_size, lsb_offset));
+        idx
+    }
+
+    /// Create a new replacement op placeholder.
+    pub fn new_op_replace(&mut self, num_params: usize, opc: OpCode, replace: Arc<RwLock<PcodeOp>>) -> usize {
+        let idx = self.new_ops.len();
+        self.new_ops.push(TransformOp::new_replace(num_params, opc, replace));
+        idx
+    }
+
+    /// Create a new op placeholder.
+    pub fn new_op(&mut self, num_params: usize, opc: OpCode) -> usize {
+        let idx = self.new_ops.len();
+        self.new_ops.push(TransformOp::new(num_params, opc));
+        idx
+    }
+
+    /// Set input on an op.
+    pub fn op_set_input(&mut self, op_idx: usize, var_idx: usize, slot: usize) {
+        let rvn = self.new_varnodes[var_idx].clone_shallow();
+        self.new_ops[op_idx].set_input(rvn, slot);
+    }
+
+    /// Set output on an op.
+    pub fn op_set_output(&mut self, op_idx: usize, var_idx: usize) {
+        let rvn = self.new_varnodes[var_idx].clone_shallow();
+        self.new_ops[op_idx].set_output(rvn);
+    }
+
+    /// Get the number of new varnodes.
+    pub fn num_new_varnodes(&self) -> usize { self.new_varnodes.len() }
+
+    /// Get the number of new ops.
+    pub fn num_new_ops(&self) -> usize { self.new_ops.len() }
+
+    /// Clear all placeholders.
+    pub fn clear(&mut self) {
+        self.new_varnodes.clear();
+        self.new_ops.clear();
+    }
+}
+
+impl TransformVar {
+    /// Shallow clone for use in TransformManager.
+    fn clone_shallow(&self) -> Self {
+        Self {
+            original: self.original.clone(),
+            replacement: None,
+            var_type: self.var_type,
+            byte_size: self.byte_size,
+            val: self.val,
+            lsb_offset: self.lsb_offset,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,5 +395,28 @@ mod tests {
         assert_eq!(ld.get_size(0), 1);
         assert_eq!(ld.get_size(1), 3);
         assert_eq!(ld.get_position(1), 1);
+    }
+
+    #[test]
+    fn test_transform_manager() {
+        let mut mgr = TransformManager::new();
+        let v_idx = mgr.new_unique(4);
+        let op_idx = mgr.new_op(2, OpCode::CPUI_INT_ADD);
+        mgr.op_set_output(op_idx, v_idx);
+        mgr.op_set_input(op_idx, v_idx, 0);
+        assert_eq!(mgr.num_new_varnodes(), 1);
+        assert_eq!(mgr.num_new_ops(), 1);
+        assert!(mgr.new_ops[0].output.is_some());
+    }
+
+    #[test]
+    fn test_transform_op_replace() {
+        use crate::address::{Address, SeqNum};
+        let dummy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_COPY,
+        )));
+        let mut mgr = TransformManager::new();
+        let op_idx = mgr.new_op_replace(1, OpCode::CPUI_INT_ZEXT, dummy_op);
+        assert!(mgr.new_ops[op_idx].original.is_some());
     }
 }
