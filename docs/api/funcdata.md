@@ -670,3 +670,7 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `get_call_specs_mut(i) -> Option<&mut FuncCallSpecs>` — 可变访问。
 - `add_call_specs(fc) -> usize` — 添加调用规格。
 - `get_func_proto() -> &FuncProto` / `get_func_proto_mut() -> &mut FuncProto` — 函数原型访问。
+
+### 2026-06-27（续 2）：op_bool_negate
+
+- `op_bool_negate(vn, op, insert_after)` — `Funcdata::opBoolNegate`（funcdata_op.cc:560）：插入 BOOL_NOT（CPUI_BOOL_NEGATE）op 取反 vn，返回输出 varnode。insert_after 控制插入位置。解锁 RuleBooleanUndistribute/RuleBoolZext 等。

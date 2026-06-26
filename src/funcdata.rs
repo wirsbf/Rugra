@@ -808,6 +808,29 @@ impl Funcdata {
         }
     }
 
+    /// Insert a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra) of `vn`, returning the
+    /// new output Varnode. Faithful to `Funcdata::opBoolNegate`
+    /// (funcdata_op.cc:560-572). If `insert_after` is true, the negate op is
+    /// inserted after `op`; otherwise before.
+    pub fn op_bool_negate(
+        &mut self,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &crate::op::PcodeOpRef,
+        insert_after: bool,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let addr = op.0.read().unwrap().get_addr();
+        let negate_op = self.new_op(1, addr);
+        self.op_set_opcode(&negate_op, crate::opcodes::OpCode::CPUI_BOOL_NOT);
+        let res_vn = self.new_unique_out(1, &negate_op);
+        self.op_set_input(&negate_op, vn, 0);
+        if insert_after {
+            self.op_insert_after(&negate_op, op);
+        } else {
+            self.op_insert_before(&negate_op, op);
+        }
+        res_vn
+    }
+
     /// Inject raw P-code operations into this Funcdata
     ///
     /// This is the bridge between raw P-code translation output (e.g., from
