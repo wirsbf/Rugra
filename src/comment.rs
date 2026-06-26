@@ -359,7 +359,7 @@ pub mod header_type {
 
 /// The sorting key for placing a Comment within a specific basic block.
 /// Faithful to `CommentSorter::Subsort` (comment.hh:203).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subsort {
     /// Either the basic block index or u32::MAX for a function header (-1 in
     /// Ghidra).
@@ -412,18 +412,98 @@ impl CommentSorter {
         Self::default()
     }
 
+    /// Figure out the position of a Comment within the function's basic blocks.
+    /// Faithful to `CommentSorter::findPosition` (comment.cc:270).
+    ///
+    /// Returns true if the comment can be positioned (placed in a block or
+    /// header). Sets the subsort key accordingly.
+    fn find_position(
+        subsort: &mut Subsort,
+        comm: &Comment,
+        fd: &crate::funcdata::Funcdata,
+        display_unplaced: bool,
+    ) -> bool {
+        if comm.get_type() == 0 {
+            return false;
+        }
+        let fad = *fd.get_address();
+
+        // Header comment at the function address.
+        if (comm.get_type() & (comment_type::HEADER | comment_type::WARNINGHEADER)) != 0
+            && comm.get_addr() == fad
+        {
+            *subsort = Subsort::set_header(header_type::HEADER_BASIC);
+            return true;
+        }
+
+        // Try to find the op at the comment's address.
+        let comm_addr = comm.get_addr();
+        let mut found_block: Option<i32> = None;
+        let mut found_order: u32 = 0;
+
+        // Search through basic blocks for an op at this address.
+        for i in 0..fd.bblocks.get_size() {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let bl_rg = bl.read().unwrap();
+            if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                for op_ref in &any.ops {
+                    let op_rg = op_ref.0.read().unwrap();
+                    if op_rg.get_addr() == comm_addr {
+                        found_block = Some(i as i32);
+                        // Use the op's seq num order as the within-block order.
+                        found_order = op_rg.get_seq_num().order;
+                        break;
+                    }
+                }
+                if found_block.is_some() {
+                    break;
+                }
+            }
+        }
+
+        if let Some(block_idx) = found_block {
+            *subsort = Subsort::set_block(block_idx as u32, found_order);
+            return true;
+        }
+
+        // No op at this address — try to find the block containing it
+        // by checking block start addresses.
+        for i in 0..fd.bblocks.get_size() {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let bl_rg = bl.read().unwrap();
+            if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                let start = any.start_addr.as_u64();
+                if comm_addr.as_u64() >= start {
+                    // Tentative match — this block starts before the comment.
+                    *subsort = Subsort::set_block(i as u32, u32::MAX);
+                    return true;
+                }
+            }
+        }
+
+        // Can't place the comment anywhere.
+        if display_unplaced {
+            *subsort = Subsort::set_header(header_type::HEADER_UNPLACED);
+            return true;
+        }
+        false
+    }
+
     /// Collect and sort comments specific to the given function. Faithful to
     /// `setupFunctionList` (comment.cc:334).
     ///
-    /// NOTE: The full `findPosition` logic (comment.cc:270) requires Funcdata
-    /// op-tree access to associate comments with basic blocks. This
-    /// implementation collects comments but positions them conservatively
-    /// (header comments at the header, others unplaced). Full block
-    /// association is an L3 gap pending Funcdata::beginOp integration.
+    /// This implementation uses `findPosition` to associate comments with
+    /// basic blocks by searching for ops at the comment's address.
     pub fn setup_function_list(
         &mut self,
         tp: u32,
-        fd_addr: Address,
+        fd: &crate::funcdata::Funcdata,
         db: &CommentDatabaseInternal,
         display_unplaced: bool,
     ) {
@@ -433,37 +513,42 @@ impl CommentSorter {
         if tp == 0 {
             return;
         }
+        let fd_addr = *fd.get_address();
         let mut pos = 0u32;
+
         for comm in db.comments_for_function(fd_addr) {
             if (comm.get_type() & tp) == 0 {
                 continue;
             }
-            // Check if this is a header comment at the function address.
-            if (comm.get_type() & (comment_type::HEADER | comment_type::WARNINGHEADER)) != 0
-                && comm.get_addr() == fd_addr
-            {
-                let mut ss = Subsort::set_header(header_type::HEADER_BASIC);
-                ss.pos = pos;
+            let mut subsort = Subsort::default();
+            if Self::find_position(&mut subsort, comm, fd, display_unplaced) {
+                subsort.pos = pos;
                 self.comments.push(comm.clone());
-                self.commmap.insert(ss, self.comments.len() - 1);
-                pos += 1;
-            } else if self.display_unplaced_comments {
-                let mut ss = Subsort::set_header(header_type::HEADER_UNPLACED);
-                ss.pos = pos;
-                self.comments.push(comm.clone());
-                self.commmap.insert(ss, self.comments.len() - 1);
+                self.commmap.insert(subsort, self.comments.len() - 1);
                 pos += 1;
             }
-            // Full block association deferred (requires Funcdata op-tree).
         }
     }
 
     /// Prepare to walk comments from a single basic block. Faithful to
-    /// `setupBlockList` (comment.cc:379).
-    pub fn setup_block_list(&self, _block_index: u32) {
-        // The full implementation uses start/stop iterators into commmap.
-        // With the current simplified model, block-level walking is not
-        // supported (comments are placed at header/unplaced only).
+    /// `setupBlockList` (comment.cc:379). Returns the comments for the
+    /// given block index.
+    pub fn setup_block_list(&self, block_index: u32) -> Vec<&Comment> {
+        self.commmap
+            .iter()
+            .filter(|(ss, _)| ss.index == block_index)
+            .map(|(_, &idx)| &self.comments[idx])
+            .collect()
+    }
+
+    /// Prepare to walk comments up to a specific op landmark. Faithful to
+    /// `setupOpList` (comment.cc:362).
+    pub fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment> {
+        self.commmap
+            .iter()
+            .filter(|(ss, _)| ss.index == block_index && ss.order <= op_order)
+            .map(|(_, &idx)| &self.comments[idx])
+            .collect()
     }
 
     /// Prepare to walk comments in the header. Faithful to `setupHeader`
@@ -636,6 +721,7 @@ mod tests {
 
     #[test]
     fn test_comment_sorter_header() {
+        let mut fd = crate::funcdata::Funcdata::new("test", Address::new(0x1000), 16);
         let mut db = CommentDatabaseInternal::new();
         db.add_comment(
             comment_type::HEADER,
@@ -652,7 +738,7 @@ mod tests {
         let mut sorter = CommentSorter::new();
         sorter.setup_function_list(
             comment_type::HEADER | comment_type::WARNING,
-            Address::new(0x1000),
+            &fd,
             &db,
             false,
         );

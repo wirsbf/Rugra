@@ -55,3 +55,15 @@ Sorts comments into and within basic blocks (comment.hh:195).
 - `CommentSorter::findPosition` (comment.cc:270): associate comments with
   basic blocks via `Funcdata::beginOp`/op address lookup.
 - Full `setup_block_list`/`setup_op_list` iterator walking within a block.
+
+## 2026-06-27（续）：CommentSorter::findPosition 完整实现 — comment.rs 达到 L3
+
+- **CommentSorter::find_position**：完整实现——遍历 Funcdata 的基本块和 ops，查找注释地址对应的 op，将注释关联到基本块。支持 3 种情况：
+  1. Header 注释在函数地址 → HEADER_BASIC
+  2. 注释地址有对应 op → 关联到该 op 的基本块 + seq order
+  3. 注释地址无 op 但在块范围内 → 关联到块末尾
+  4. 无法定位 → HEADER_UNPLACED（如果 displayUnplaced=true）
+- **setup_function_list**：现接受 Funcdata 参数（而非 Address），调用 find_position。
+- **setup_block_list**：现返回指定块的注释列表（Vec<&Comment>）。
+- **setup_op_list**：现返回指定块中 op_order 之前的注释列表。
+- comment.rs 所有 L3 缺口已关闭。
