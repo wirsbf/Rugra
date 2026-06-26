@@ -4032,6 +4032,106 @@ impl Rule for RuleBitUndistribute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
+/// Deduplicate boolean expressions:
+///   `(A && B) && (A && C)  =>  A && (B && C)`
+///   `(A || B) || (A || C)  =>  A || (B || C)`
+///
+/// Faithful to Ghidra's `RuleBooleanDedup` (ruleaction.cc:2840-2955). When
+/// two BOOL_AND/BOOL_OR ops share a common boolean sub-expression, factor it
+/// out. Uses functional_equality for matching (simplified from Ghidra's
+/// BooleanMatch::evaluate).
+pub struct RuleBooleanDedup;
+
+impl RuleBooleanDedup {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleBooleanDedup {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (central_opc, ins, opc0, opc1) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_BOOL_AND && op.opcode != OpCode::CPUI_BOOL_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn0.read().unwrap().is_written() || !vn1.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let op0 = vn0.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let op1 = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let (op0, op1) = match (op0, op1) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+            let opc0 = op0.read().unwrap().opcode;
+            let opc1 = op1.read().unwrap().opcode;
+            if !matches!(opc0, OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR) { return Ok(action_status::NO_CHANGE); }
+            if !matches!(opc1, OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR) { return Ok(action_status::NO_CHANGE); }
+            let ins: Vec<_> = {
+                let o0 = op0.read().unwrap();
+                let o1 = op1.read().unwrap();
+                vec![
+                    o0.inrefs.get(0).cloned().unwrap(),
+                    o0.inrefs.get(1).cloned().unwrap(),
+                    o1.inrefs.get(0).cloned().unwrap(),
+                    o1.inrefs.get(1).cloned().unwrap(),
+                ]
+            };
+            if ins.iter().any(|v| v.read().unwrap().is_free()) { return Ok(action_status::NO_CHANGE); }
+            (op.opcode, ins, opc0, opc1)
+        };
+        // Find a matching pair among the 4 inputs (simplified: use functional_equality).
+        // Ghidra uses BooleanMatch which also handles complement via BOOL_NEGATE.
+        // We handle only the direct match case (not complement/flipped).
+        let pairs = [(0,2),(0,3),(1,2),(1,3)];
+        let mut found: Option<(usize, usize, usize, usize)> = None;
+        for (ai, bi) in &pairs {
+            if functional_equality_eq(&ins[*ai], &ins[*bi]) {
+                found = Some((*ai, *bi, 1 - *ai, 4 - *bi)); // leftA, rightA, leftO, rightO
+                break;
+            }
+        }
+        let (leftA_idx, rightA_idx, leftO_idx, rightO_idx) = match found {
+            Some(f) => f,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let leftA = ins[leftA_idx].clone();
+        let leftO = ins[leftO_idx].clone();
+        let rightO = ins[rightO_idx].clone();
+        // Determine the opcodes.
+        let (final_opc, bc_opc) = if central_opc == opc0 && central_opc == opc1 {
+            (central_opc, central_opc)
+        } else if opc0 == opc1 && central_opc != opc0 {
+            (opc0, central_opc)
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        };
+        // Build inner op: leftO bc_opc rightO
+        let pc = op_arc.read().unwrap().start.get_addr();
+        let bc_op = fd.new_op(2, pc);
+        let tmp = fd.new_unique_out(1, &bc_op);
+        fd.op_set_opcode(&bc_op, bc_opc);
+        fd.op_set_input(&bc_op, leftO, 0);
+        fd.op_set_input(&bc_op, rightO, 1);
+        fd.op_insert_before(&bc_op, &crate::op::PcodeOpRef(op_arc.clone()));
+        // Rewrite op: final_opc(leftA, tmp)
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, final_opc);
+        fd.op_set_input(&follow, leftA, 0);
+        fd.op_set_input(&follow, tmp, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "boolean_dedup" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR] }
+}
+
+/// Helper: exact varnode equality (same Arc pointer).
+fn functional_equality_eq(
+    a: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    b: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> bool {
+    std::sync::Arc::ptr_eq(a, b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6700,5 +6800,46 @@ mod tests {
         let a = and_op.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_ZEXT);
         assert_eq!(a.inrefs.len(), 1);
+    }
+
+    // --- RuleBooleanDedup (ruleaction.cc:2840) ---
+
+    #[test]
+    fn test_boolean_dedup_and_and() {
+        // (A && B) && (A && C) => A && (B && C)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        a.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let b = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        b.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x12);
+        c.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        // A && B
+        let ab_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let ab = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_BOOL_AND)));
+        ab.write().unwrap().inrefs = vec![a.clone(), b.clone()];
+        ab.write().unwrap().output = Some(ab_out.clone());
+        ab_out.write().unwrap().def = Some(Arc::downgrade(&ab));
+        ab_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        // A && C
+        let ac_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let ac = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_BOOL_AND)));
+        ac.write().unwrap().inrefs = vec![a.clone(), c.clone()];
+        ac.write().unwrap().output = Some(ac_out.clone());
+        ac_out.write().unwrap().def = Some(Arc::downgrade(&ac));
+        ac_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        // (A&&B) && (A&&C)
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_AND,
+        )));
+        outer.write().unwrap().inrefs = vec![ab_out, ac_out];
+        let rule = RuleBooleanDedup::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        // Should be BOOL_AND(A, newop)
+        assert_eq!(o.opcode, OpCode::CPUI_BOOL_AND);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &a));
     }
 }

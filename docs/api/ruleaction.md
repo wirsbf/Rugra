@@ -507,3 +507,14 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 当两输入到 INT_AND/OR/XOR 是同一扩展/移位操作时，提取公共操作。
 
 测试：ruleaction::tests +1（zext & zext → zext(and)）。
+
+### 2026-06-26（续）：RuleBooleanDedup
+
+#### `pub struct RuleBooleanDedup`（ruleaction.cc:2840-2955）
+布尔表达式去重：
+- `(A && B) && (A && C) => A && (B && C)`
+- `(A || B) || (A || C) => A || (B || C)`
+当两个 BOOL_AND/BOOL_OR 共享一个公共布尔子表达式时，提取公共因子。
+当前移植了直接匹配形式（Ghidra 的 BooleanMatch::evaluate 互补形式待补）。
+
+测试：ruleaction::tests +1（A&&B && A&&C → A && (B&&C)）。
