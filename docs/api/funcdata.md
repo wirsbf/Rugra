@@ -590,3 +590,22 @@ PcodeOpRaw
 ### 2026-06-23（续）：test_bool_condition 搜索 BlockList
 
 - 测试现在搜索 BlockList 内部的 BlockCondition（适配 interleaved cat）。
+
+## 2026-06-26：Funcdata P-code op 编辑 API（funcdata.hh:281-479）
+
+新增与 Ghidra 一致的 P-code op 构造/编辑方法，解锁 ruleaction/coreaction
+中需创建或改写 P-code 的 Rule/Action（此前 Rugra 仅原地改 op 字段，无法
+创建新 op）。忠实对应 funcdata.hh：
+
+- `new_op(inputs, pc)` — `Funcdata::newOp` (444)
+- `new_unique_out(s, op)` — `Funcdata::newUniqueOut` (281)
+- `new_constant(s, val)` — `Funcdata::newConstant` (283)
+- `new_unique(s)` — `Funcdata::newUnique` (288)
+- `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)
+- `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
+- `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput` (479)
+- `op_remove_input(op, slot)` — `Funcdata::opRemoveInput` (478)
+- `op_insert_before(op, follow)` — `Funcdata::opInsertBefore` (454)，alivelist 顺序
+
+**已知限制**：新建 op 仅进 alivelist，未挂到 BlockBasic.get_ops()（块编辑
+infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅保证数据流正确。

@@ -97,3 +97,16 @@ Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
 - `get_opcodes`：`[CPUI_INT_NOT]`（注意：Rugra `CPUI_INT_NOT` == Ghidra `INT_NEGATE`；Rugra `CPUI_INT_NEG` == Ghidra `INT_2COMP`）。
 
 测试：ruleaction::tests 3 个新增（AND→0、OR→全1、无匹配→NO_CHANGE）。
+
+### 2026-06-26（续）：Funcdata op-edit API + RuleNotDistribute
+
+#### Funcdata op-edit API（解锁创建/改写 P-code 的 Rule）
+见 docs/api/funcdata.md。
+
+#### `pub struct RuleNotDistribute`（ruleaction.cc:1139-1183）
+德摩根律：`!(V && W) => !V || !W`，`!(V || W) => !V && !W`。
+- `apply_op`：BOOL_NOT(BOOL_AND/OR(V,W)) → 创建两个 BOOL_NOT(V)/BOOL_NOT(W)，
+  原 op 改写为对偶逻辑 op（AND↔OR）。
+- `get_opcodes`：`[CPUI_BOOL_NOT]`（Rugra CPUI_BOOL_NOT == Ghidra BOOL_NEGATE）。
+
+测试：ruleaction::tests +2（AND→OR、非 bool 内层 NO_CHANGE）+ Funcdata API +3。

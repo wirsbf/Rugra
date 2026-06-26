@@ -547,6 +547,91 @@ impl Rule for RuleNegateIdentity {
     }
 }
 
+/// Distribute BOOL_NEGATE via De Morgan's law:
+///   `!(V && W)  =>  !V || !W`
+///   `!(V || W)  =>  !V && !W`
+///
+/// Faithful to Ghidra's `RuleNotDistribute` (ruleaction.cc:1139-1183). Creates
+/// two new BOOL_NEGATE ops for the operands and rewrites the original op into
+/// the dual logic op, using the Funcdata op-edit API.
+pub struct RuleNotDistribute;
+
+impl RuleNotDistribute {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleNotDistribute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // op is BOOL_NEGATE(in0). in0 must be defined by a BOOL_AND/BOOL_OR.
+        let compop_arc = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.first() {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in0r = in0.read().unwrap();
+            in0r.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let compop_arc = match compop_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let new_opcode = {
+            let compop = compop_arc.read().unwrap();
+            match compop.opcode {
+                OpCode::CPUI_BOOL_AND => OpCode::CPUI_BOOL_OR,
+                OpCode::CPUI_BOOL_OR => OpCode::CPUI_BOOL_AND,
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        // Capture the two operands of the comparison op.
+        let in_v1 = compop_arc.read().unwrap().inrefs.get(0).cloned();
+        let in_v2 = compop_arc.read().unwrap().inrefs.get(1).cloned();
+        let (in_v1, in_v2) = match (in_v1, in_v2) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+
+        let pc = {
+            let op = op_arc.read().unwrap();
+            op.start.get_addr()
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+
+        // newneg1 = BOOL_NEGATE(in_v1) → newout1
+        let newneg1 = fd.new_op(1, pc);
+        fd.op_set_opcode(&newneg1, OpCode::CPUI_BOOL_NOT);
+        let newout1 = fd.new_unique_out(1, &newneg1);
+        fd.op_set_input(&newneg1, in_v1, 0);
+        fd.op_insert_before(&newneg1, &follow);
+
+        // newneg2 = BOOL_NEGATE(in_v2) → newout2
+        let newneg2 = fd.new_op(1, pc);
+        fd.op_set_opcode(&newneg2, OpCode::CPUI_BOOL_NOT);
+        let newout2 = fd.new_unique_out(1, &newneg2);
+        fd.op_set_input(&newneg2, in_v2, 0);
+        fd.op_insert_before(&newneg2, &follow);
+
+        // Rewrite the original op: opcode := dual, inputs := [newout1, newout2].
+        fd.op_set_opcode(&follow, new_opcode);
+        {
+            let mut op = op_arc.write().unwrap();
+            op.inrefs = vec![newout1, newout2];
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "not_distribute"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_BOOL_NOT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,6 +867,107 @@ mod tests {
 
         let rule = RuleNegateIdentity::new();
         let result = rule.apply_op(&neg_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- Funcdata op-edit API (funcdata.hh:281-479) ---
+
+    #[test]
+    fn test_funcdata_new_op_and_unique_out() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = fd.new_op(1, Address::new(0x1000));
+        // newOp defaults opcode to COPY.
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let out = fd.new_unique_out(4, &op);
+        // output is set, varnode is WRITTEN, def links back to op.
+        assert!(op.0.read().unwrap().output.is_some());
+        assert!(out.read().unwrap().is_written());
+        assert!(out.read().unwrap().def.as_ref().and_then(|w| w.upgrade()).is_some());
+    }
+
+    #[test]
+    fn test_funcdata_op_set_opcode_and_input() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
+        let in_vn = fd.new_constant(4, 0x10);
+        fd.op_set_input(&op, in_vn, 0);
+        assert_eq!(op.0.read().unwrap().inrefs.len(), 1);
+    }
+
+    #[test]
+    fn test_funcdata_op_insert_and_remove_input() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let op = fd.new_op(2, Address::new(0x1000));
+        let v1 = fd.new_constant(4, 1);
+        let v2 = fd.new_constant(4, 2);
+        fd.op_set_input(&op, v1, 0);
+        fd.op_insert_input(&op, v2, 1);
+        assert_eq!(op.0.read().unwrap().inrefs.len(), 2);
+        fd.op_remove_input(&op, 1);
+        assert_eq!(op.0.read().unwrap().inrefs.len(), 1);
+    }
+
+    // --- RuleNotDistribute (ruleaction.cc:1139-1183) De Morgan ---
+
+    #[test]
+    fn test_not_distribute_bool_and_to_or() {
+        // BOOL_NOT(BOOL_AND(V, W)) → BOOL_OR(BOOL_NOT(V), BOOL_NOT(W))
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BOOL_AND,
+        )));
+        let and_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![v, w];
+            a.output = Some(and_out.clone());
+        }
+        and_out.write().unwrap().def = Some(Arc::downgrade(&and_op));
+        let not_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        not_op.write().unwrap().inrefs = vec![and_out];
+
+        let rule = RuleNotDistribute::new();
+        let result = rule.apply_op(&not_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // Original not_op is now BOOL_OR with 2 inputs.
+        let n = not_op.read().unwrap();
+        assert_eq!(n.opcode, OpCode::CPUI_BOOL_OR);
+        assert_eq!(n.inrefs.len(), 2);
+    }
+
+    #[test]
+    fn test_not_distribute_non_bool_inner_no_change() {
+        // BOOL_NOT(INT_ADD(...)) → no change.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        let add_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        {
+            let mut a = add_op.write().unwrap();
+            a.inrefs = vec![v, w];
+            a.output = Some(add_out.clone());
+        }
+        add_out.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        let not_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        not_op.write().unwrap().inrefs = vec![add_out];
+
+        let rule = RuleNotDistribute::new();
+        let result = rule.apply_op(&not_op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 }
