@@ -196,7 +196,7 @@
 | 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | EmitNoMarkup 对齐；post_process 已实现 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 基本函数规格；缺少完整选项系统 | `fspec.cc` |
 | 37 | `options.cc` | — | 📋 L1 | **完全缺失**：选项系统（影响配置驱动行为） | `options.cc` |
-| 38 | `comment.cc` | — | 📋 L1 | **完全缺失**：注释恢复 | `comment.cc` |
+| 38 | `comment.cc` | `comment.rs` | 🔧 L2 | **骨架已移植**：Comment + comment_type 标志 + CommentDatabaseInternal（add_comment/clear_type/comments_for_function/encode/decode）+ CommentSorter（setup_function_list/header_comments）+ Subsort。L3 缺 CommentSorter::findPosition 的基本块关联（需 Funcdata op-tree） | `comment.cc` |
 
 ---
 

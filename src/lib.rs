@@ -54,6 +54,7 @@ pub mod blockaction;
 pub mod callgraph; // ← callgraph.hh
 pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
+pub mod comment; // ← comment.hh
 pub mod constseq; // ← constseq.hh
 pub mod cover; // ← cover.hh
 pub mod database; // ← database.hh (Symbol/Scope/Database)

@@ -489,3 +489,7 @@
 ## 2026-06-27（续 3）：新增 marshal 模块（XML 序列化基础设施）
 
 - `pub mod marshal;` — 对应 `marshal.hh` + `xml.hh`，序列化基础设施。AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database.rs/override.rs/arch.rs 的 XML encode/decode L3 缺口。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析。
+
+## 2026-06-27（续 4）：新增 comment 模块
+
+- `pub mod comment;` — 对应 `comment.hh`，注释数据库。Comment + comment_type 标志 + CommentDatabaseInternal（add_comment/clear_type/comments_for_function/encode/decode）+ CommentSorter（setup_function_list/header_comments）+ Subsort。L3 缺 CommentSorter::findPosition 的基本块关联（需 Funcdata op-tree）。
