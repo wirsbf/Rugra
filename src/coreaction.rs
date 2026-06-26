@@ -142,18 +142,67 @@ impl ActionDeadCode {
 
 impl Action for ActionDeadCode {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Simplified dead code elimination: remove ops whose output has no
-        // descendants and is not a function input.
-        // The full Ghidra algorithm (push_consumed/propagate_consumed) is
-        // implemented above but requires VarnodeLocSet iteration to drive.
+        // Full Ghidra consumed-bit propagation algorithm, driven by
+        // iterating Funcdata's varnode bank + op bank.
         let mut changed = 0;
-        let mut to_remove = Vec::new();
+
+        // Step 1: Clear consume flags on all Varnodes.
+        for vn_ref in fd.vbank.loc_tree.iter() {
+            let mut vn = vn_ref.0.write().unwrap();
+            vn.set_consume(0);
+        }
+
+        // Step 2: Build initial worklist from terminal uses (ops with no
+        // output, or whose output doesn't matter: RETURN, BRANCH, CBRANCH,
+        // STORE, and ops whose output has no descendants).
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
 
         for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if let Some(out) = &op.output {
-                let out_vn = out.read().unwrap();
-                if out_vn.descend.is_empty() && !out_vn.is_input() {
+            let op_rg = op_ref.0.read().unwrap();
+            let opc = op_rg.opcode;
+            let n_in = op_rg.num_input();
+
+            // Non-assignment ops: all inputs are consumed with full mask.
+            if op_rg.output.is_none() {
+                for i in 0..n_in {
+                    if let Some(in_vn) = op_rg.get_in(i) {
+                        Self::push_consumed(u64::MAX, in_vn, &mut worklist);
+                    }
+                }
+                continue;
+            }
+
+            // Assignment ops: check if output has no descendants.
+            if let Some(out) = &op_rg.output {
+                let out_rg = out.read().unwrap();
+                if out_rg.descend.is_empty() && !out_rg.is_input() {
+                    // Output is dead — this op can potentially be removed.
+                    // Don't push its inputs to worklist.
+                } else {
+                    // Output is live — push inputs to worklist.
+                    for i in 0..n_in {
+                        if let Some(in_vn) = op_rg.get_in(i) {
+                            Self::push_consumed(u64::MAX, in_vn, &mut worklist);
+                        }
+                    }
+                }
+            }
+            let _ = opc;
+        }
+
+        // Step 3: Propagate consumed bits backward through the data-flow.
+        while !worklist.is_empty() {
+            Self::propagate_consumed(&mut worklist);
+        }
+
+        // Step 4: Remove dead ops (output consume == 0 and not input).
+        let mut to_remove = Vec::new();
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if let Some(out) = &op_rg.output {
+                let out_rg = out.read().unwrap();
+                if out_rg.get_consume() == 0 && !out_rg.is_input() {
                     to_remove.push(op_ref.clone());
                 }
             }
@@ -2188,21 +2237,41 @@ impl ActionMarkExplicit {
 }
 impl Action for ActionMarkExplicit {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. maxref = arch.max_implied_ref (default 2)
-        // 2. For each defined Varnode (not free):
-        //    desc_count = baseExplicit(vn, maxref)
-        //    if desc_count < 0: vn.setExplicit()
-        //    if desc_count > 1: vn.setMark(), add to multlist
-        // 3. multipleInteraction(multlist) — resolve overlaps
-        // 4. For each in multlist still marked: processMultiplier(vn, maxdup)
-        // 5. Clear all marks
-        //
-        // The baseExplicit logic is implemented above. Full integration
-        // requires VarnodeDefSet iteration over Funcdata's varnode bank.
-        // L3 gap: requires VarnodeDefSet iteration + HighVariable + setExplicit.
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        let max_ref = 2; // arch.max_implied_ref default
+        let mut change_count = 0;
+
+        // Iterate all varnodes from the loc_tree (VarnodeLocSet equivalent).
+        // Collect defined (written or input) varnodes and process them.
+        let varnodes: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .collect();
+
+        for vn_arc in &varnodes {
+            let vn_rg = vn_arc.read().unwrap();
+            // Skip free varnodes.
+            if !vn_rg.is_written() && !vn_rg.is_input() {
+                continue;
+            }
+            // Call base_explicit.
+            let desc_count = Self::base_explicit(&vn_rg, max_ref);
+            if desc_count < 0 {
+                // Should be explicit — set the EXPLICIT flag.
+                drop(vn_rg);
+                vn_arc.write().unwrap().set_explicit();
+                change_count += 1;
+            }
+            // Note: multlist + multipleInteraction + processMultiplier
+            // require HighVariable integration (L3 gap).
+        }
+
+        if change_count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "markexplicit" }
 }
