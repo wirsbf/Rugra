@@ -193,3 +193,14 @@ INT_LESSEQUAL 与极值常量的简化：
 `V ^^ W => V != W`。布尔 XOR 等价于布尔不等。
 
 测试：ruleaction::tests +3（Piece2Zext、Piece2Sext、Bxor2NotEqual）。
+
+### 2026-06-26（续）：RuleTermOrder + RuleShift2Mult
+
+#### `pub struct RuleTermOrder`（ruleaction.cc:645-674）
+交换交换律 op 的输入，使常量在 slot 1（`INT_ADD(5,V) => INT_ADD(V,5)`），消除表达式组合爆炸。
+
+#### `pub struct RuleShift2Mult`（ruleaction.cc:3720-3771）
+将参与算术（INT_ADD/SUB/MULT）或其输入由算术定义的常量移位转为乘法：
+`(V << c) => V * (1<<c)`，c<32。
+
+测试：ruleaction::tests +4（TermOrder 交换/已序不变；Shift2Mult 喂入 ADD 转乘/非算术不变）。

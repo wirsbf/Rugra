@@ -1413,6 +1413,140 @@ impl Rule for RuleBxor2NotEqual {
     }
 }
 
+/// Order the inputs to commutative operations so constants come last.
+///
+/// Faithful to Ghidra's `RuleTermOrder` (ruleaction.cc:645-674). For any
+/// commutative op, if slot 0 is a constant and slot 1 is not, swap them. This
+/// normalises expressions and eliminates combinatorial variation.
+pub struct RuleTermOrder;
+
+impl RuleTermOrder {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleTermOrder {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let should_swap = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in1 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            in0.read().unwrap().is_constant() && !in1.read().unwrap().is_constant()
+        };
+        if !should_swap {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_swap_input(&follow, 0, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "term_order"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // The full commutative list (ruleaction.cc:655).
+        vec![
+            OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL,
+            OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_XOR,
+            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR,
+            OpCode::CPUI_INT_MULT,
+            OpCode::CPUI_BOOL_XOR, OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR,
+            // CARRY/SCARRY and FLOAT_* commutative ops are included in Ghidra;
+            // Rugra may not exercise them yet but listing is harmless.
+        ]
+    }
+}
+
+/// Convert a constant shift used arithmetically into a multiply:
+///   `(V << c)` used in INT_ADD/INT_SUB/INT_MULT, or `V << c` itself feeding
+///   such an op, becomes `V * (1 << c)`.
+///
+/// Faithful to Ghidra's `RuleShift2Mult` (ruleaction.cc:3720-3771). Rewrites
+/// INT_LEFT/INT_RIGHT with a small (<32) constant shift amount into an
+/// INT_MULT by a power-of-two when the shift participates in or feeds an
+/// arithmetic operation.
+pub struct RuleShift2Mult;
+
+impl RuleShift2Mult {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleShift2Mult {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // constvn (in1) must be a constant shift amount < 32.
+        let (vn, val) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = constvn.read().unwrap().get_offset();
+            if val >= 32 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn = match op.output.as_ref() {
+                Some(o) => o.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (vn, val as u32)
+        };
+        // The shift feeds, or its input is defined by, an arithmetic op.
+        let arithop_input = {
+            let op = op_arc.read().unwrap();
+            op.inrefs.get(0).and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade()))
+        };
+        let mut found_arith = false;
+        if let Some(a) = &arithop_input {
+            let opc = a.read().unwrap().opcode;
+            if matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT) {
+                found_arith = true;
+            }
+        }
+        if !found_arith {
+            // Check descendants.
+            let descend_refs: Vec<_> = {
+                let v = vn.read().unwrap();
+                v.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for d in descend_refs {
+                let opc = d.read().unwrap().opcode;
+                if matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT) {
+                    found_arith = true;
+                    break;
+                }
+            }
+        }
+        if !found_arith {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let size = vn.read().unwrap().get_size();
+        let mult_const = fd.new_constant(size, 1u64 << val);
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, mult_const, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_MULT);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "shift2mult"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2362,5 +2496,104 @@ mod tests {
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
+    }
+
+    // --- RuleTermOrder (ruleaction.cc:645) ---
+
+    #[test]
+    fn test_term_order_swaps_const_first() {
+        // INT_ADD(5, V) => INT_ADD(V, 5)  (swap so constant is last)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let five = fd.vbank.create_constant(4, 5);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        op.write().unwrap().inrefs = vec![five, v.clone()];
+        let rule = RuleTermOrder::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert!(Arc::ptr_eq(&op.read().unwrap().inrefs[0], &v));
+        assert_eq!(op.read().unwrap().inrefs[1].read().unwrap().get_val(), 5);
+    }
+
+    #[test]
+    fn test_term_order_const_last_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let five = fd.vbank.create_constant(4, 5);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        op.write().unwrap().inrefs = vec![v, five];
+        let rule = RuleTermOrder::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleShift2Mult (ruleaction.cc:3720) ---
+
+    #[test]
+    fn test_shift2mult_left_feeding_add() {
+        // (V << 3) feeding INT_ADD => rewrite shift as INT_MULT by 8
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let shift_const = fd.vbank.create_constant(4, 3);
+        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        // add_op = INT_ADD(shift_out, W) — shift_out feeds an ADD.
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        add_op.write().unwrap().inrefs = vec![shift_out.clone(), w];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&add_op));
+
+        let rule = RuleShift2Mult::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let s = shift_op.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_MULT);
+        assert_eq!(s.inrefs[1].read().unwrap().get_val(), 1u64 << 3);
+    }
+
+    #[test]
+    fn test_shift2mult_no_arith_no_change() {
+        // (V << 3) feeding only a STORE (non-arith) => no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let shift_const = fd.vbank.create_constant(4, 3);
+        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        // A non-arith consumer.
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        copy_op.write().unwrap().inrefs = vec![shift_out.clone()];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+
+        let rule = RuleShift2Mult::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }
