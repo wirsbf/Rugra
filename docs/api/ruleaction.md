@@ -534,3 +534,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 新增辅助函数 `pull_back_op(range, op)` — 简化版 pullBack（unary/binary 分发，不跟踪 constMarkup/usenzmask）。
   - 修复 CircleRange::union 返回码语义对齐 Ghidra circleUnion（0=single, 1=two pieces, 2=full）+ 相邻范围合并。
   - 测试：`(V<5)||(V==5) => V<6`（语义等价 V<=5）。
+
+## 2026-06-27（续 2）：RuleFloatRange 完整移植
+
+- **RuleFloatRange**：完整忠实移植 ruleaction.cc:1439-1518。合并浮点范围条件：
+  - `(V f< W)||(V f== W) => V f<= W`（FLOAT_LESS + FLOAT_EQUAL via BOOL_OR → FLOAT_LESSEQUAL）
+  - `(V f<= W)&&(V f!= W) => V f< W`（FLOAT_LESSEQUAL + FLOAT_NOTEQUAL via BOOL_AND → FLOAT_LESS）
+  - 算法：识别 cmp1（LESS/LESSEQUAL）+ cmp2（other），验证两个比较操作数一致（nvn1 + cvn1），合并为单一比较 op。
+  - 测试：`(V f< 5.0)||(V f== 5.0) => V f<= 5.0`。

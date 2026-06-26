@@ -162,7 +162,7 @@
 | `RuleMultiCollapse` | 3254 | functionalEqualityLevel |
 | `RuleEarlyRemoval` | 25 | opDestroy/doesDeadcode/isAutoLive |
 | `RuleRangeMeld` | 1357 | ✅ **完整算法** — pullBack/intersect/union/translate_to_op（ruleaction.cc:1346-1437） |
-| `RuleFloatRange` | 1450 | float 类型 |
+| `RuleFloatRange` | 1450 | ✅ **完整算法** — 浮点比较合并（ruleaction.cc:1439-1518） |
 | `RuleBitUndistribute` | 2634 | zext/sext 后代追踪 |
 | `RuleBooleanUndistribute` | 2731 | 后代追踪 |
 | `RuleBooleanDedup` | 2852 | 后代追踪 |

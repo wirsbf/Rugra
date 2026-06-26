@@ -4351,6 +4351,157 @@ fn pull_back_op(
     }
 }
 
+/// Merge float range conditions of the form: `V f< c, c f< V, V f== c` etc.
+///
+/// Faithful to Ghidra's `RuleFloatRange` (ruleaction.cc:1439-1518).
+///
+/// Convert `(V f< W)||(V f== W)   =>   V f<= W` and
+/// `(V f<= W)&&(V f!= W)   =>   V f< W` by pattern-matching the two float
+/// comparison sub-ops feeding a BOOL_OR/BOOL_AND.
+pub struct RuleFloatRange;
+
+impl RuleFloatRange {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleFloatRange {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Extract the two comparison sub-ops.
+        let (central_opc, vn1, vn2) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_BOOL_OR && op.opcode != OpCode::CPUI_BOOL_AND {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (op.opcode, vn1, vn2)
+        };
+
+        // Get the defining ops.
+        let cmp1_arc = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let cmp2_arc = vn2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let (cmp1_arc, cmp2_arc) = match (cmp1_arc, cmp2_arc) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+
+        // Determine which is the LESS/LESSEQUAL operator (cmp1) and which is
+        // the "other" operator (cmp2). Ghidra swaps if cmp1 is not LESS/LESSEQUAL.
+        let cmp1_code = cmp1_arc.read().unwrap().opcode;
+        let (cmp1_arc, cmp2_arc) = if cmp1_code != OpCode::CPUI_FLOAT_LESS && cmp1_code != OpCode::CPUI_FLOAT_LESSEQUAL {
+            // Swap: cmp1 becomes the original cmp2, cmp2 becomes the original cmp1.
+            (cmp2_arc, cmp1_arc)
+        } else {
+            (cmp1_arc, cmp2_arc)
+        };
+
+        let cmp1_code = cmp1_arc.read().unwrap().opcode;
+        let cmp2_code = cmp2_arc.read().unwrap().opcode;
+
+        // Determine the result opcode.
+        let result_opc = if cmp1_code == OpCode::CPUI_FLOAT_LESS {
+            if cmp2_code == OpCode::CPUI_FLOAT_EQUAL && central_opc == OpCode::CPUI_BOOL_OR {
+                Some(OpCode::CPUI_FLOAT_LESSEQUAL)
+            } else {
+                None
+            }
+        } else if cmp1_code == OpCode::CPUI_FLOAT_LESSEQUAL {
+            if cmp2_code == OpCode::CPUI_FLOAT_NOTEQUAL && central_opc == OpCode::CPUI_BOOL_AND {
+                Some(OpCode::CPUI_FLOAT_LESS)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let result_opc = match result_opc {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // Verify both comparisons compare the same things.
+        // Set nvn1 to a non-constant off of cmp1 (slot1).
+        let (slot1, nvn1) = {
+            let c1 = cmp1_arc.read().unwrap();
+            let in0 = c1.inrefs.get(0).cloned();
+            let in1 = c1.inrefs.get(1).cloned();
+            match (in0, in1) {
+                (Some(v0), _) if !v0.read().unwrap().is_constant() => (0usize, v0),
+                (_, Some(v1)) if !v1.read().unwrap().is_constant() => (1usize, v1),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        if nvn1.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // cvn1 is the "other" slot off of cmp1.
+        let cvn1 = cmp1_arc.read().unwrap().inrefs.get(1 - slot1).cloned();
+        let cvn1 = match cvn1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+
+        // Find nvn1 in cmp2's inputs.
+        let (slot2, matchvn) = {
+            let c2 = cmp2_arc.read().unwrap();
+            let in0 = c2.inrefs.get(0).cloned();
+            let in1 = c2.inrefs.get(1).cloned();
+            if let Some(ref v) = in0 {
+                if std::sync::Arc::ptr_eq(v, &nvn1) {
+                    (0usize, in1)
+                } else if let Some(ref v1) = in1 {
+                    if std::sync::Arc::ptr_eq(v1, &nvn1) {
+                        (1usize, in0)
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        };
+        let matchvn = match matchvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+
+        // Verify cvn1 matches matchvn.
+        let cvn1_is_const = cvn1.read().unwrap().is_constant();
+        let cvn1_free = cvn1.read().unwrap().is_free();
+        if cvn1_is_const {
+            if !matchvn.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if matchvn.read().unwrap().get_offset() != cvn1.read().unwrap().get_offset() {
+                return Ok(action_status::NO_CHANGE);
+            }
+        } else if !std::sync::Arc::ptr_eq(&cvn1, &matchvn) {
+            return Ok(action_status::NO_CHANGE);
+        } else if cvn1_free {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Collapse the 2 comparisons into 1.
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, result_opc);
+        fd.op_set_input(&follow, nvn1.clone(), slot1);
+        if cvn1_is_const {
+            let (sz, off) = {
+                let r = cvn1.read().unwrap();
+                (r.get_size(), r.get_offset())
+            };
+            let new_const = fd.new_constant(sz, off);
+            fd.op_set_input(&follow, new_const, 1 - slot1);
+        } else {
+            fd.op_set_input(&follow, cvn1.clone(), 1 - slot1);
+        }
+        let _ = slot2;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "float_range" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7106,6 +7257,43 @@ mod tests {
             "expected INT_LESS or INT_LESSEQUAL, got {:?}",
             o.opcode
         );
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    #[test]
+    fn test_rule_float_range_less_or_equal() {
+        // (V f< 5.0) || (V f== 5.0)  =>  V f<= 5.0
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0x40590000, 8)));
+        c5.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        // FLOAT_LESS(V, 5.0)
+        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_FLOAT_LESS)));
+        less.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        less.write().unwrap().output = Some(less_out.clone());
+        less_out.write().unwrap().def = Some(Arc::downgrade(&less));
+        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // FLOAT_EQUAL(V, 5.0)
+        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_FLOAT_EQUAL)));
+        eq.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        eq.write().unwrap().output = Some(eq_out.clone());
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq));
+        eq_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // BOOL_OR(less_out, eq_out)
+        let outer = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR)));
+        outer.write().unwrap().inrefs = vec![less_out, eq_out];
+
+        let rule = RuleFloatRange::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_FLOAT_LESSEQUAL);
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
     }
 }
