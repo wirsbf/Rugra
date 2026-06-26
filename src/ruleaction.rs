@@ -4959,6 +4959,114 @@ impl Rule for RuleSubExtComm {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
+/// Cleanup: Convert INT_2COMP to INT_MULT: `-V => V * -1`. Faithful to
+/// Ghidra's `Rule2Comp2Mult` (ruleaction.cc:3980-3995).
+pub struct Rule2Comp2Mult;
+
+impl Rule2Comp2Mult {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for Rule2Comp2Mult {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to Rule2Comp2Mult::applyOp (ruleaction.cc:3987-3995).
+        // Ghidra INT_2COMP maps to Rugra INT_NEG (two's complement).
+        let in0 = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_NEG {
+                return Ok(action_status::NO_CHANGE);
+            }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let size = in0.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_MULT);
+        let neg_one = fd.new_constant(size, calc_mask(size));
+        fd.op_insert_input(&follow, neg_one, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "2comp2mult" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEG] }
+}
+
+/// Cleanup: Convert INT_2COMP to INT_SUB: `-V => 0 - V`. Faithful to
+/// Ghidra's `Rule2Comp2Sub` (ruleaction.cc:7236-7256).
+pub struct Rule2Comp2Sub;
+
+impl Rule2Comp2Sub {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for Rule2Comp2Sub {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7242-7256).
+        let in0 = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_NEG {
+                return Ok(action_status::NO_CHANGE);
+            }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let size = in0.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_SUB);
+        // Insert a zero constant as the first input.
+        let zero = fd.new_constant(size, 0);
+        fd.op_insert_input(&follow, zero, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "2comp2sub" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEG] }
+}
+
+/// Transform INT_CARRY using a constant: `carry(V,c) => -c <= V`. Faithful to
+/// Ghidra's `RuleCarryElim` (ruleaction.cc:3997-4030).
+pub struct RuleCarryElim;
+
+impl RuleCarryElim {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleCarryElim {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleCarryElim::applyOp (ruleaction.cc:4008-4030).
+        let (vn1, off, vn2_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_CARRY {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn2.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if vn1.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let off = vn2.read().unwrap().get_offset();
+            let sz = vn2.read().unwrap().get_size();
+            (vn1, off, sz)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if off == 0 {
+            // Trivial case: carry(V, 0) => false.
+            fd.op_remove_input(&follow, 1);
+            let false_const = fd.new_constant(1, 0);
+            fd.op_set_input(&follow, false_const, 0);
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            return Ok(action_status::CHANGE);
+        }
+        // -off (two's complement).
+        let neg_off = off.wrapping_neg() & calc_mask(vn2_size);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_LESSEQUAL);
+        fd.op_set_input(&follow, vn1.clone(), 1);
+        let c = fd.new_constant(vn1.read().unwrap().get_size(), neg_off);
+        fd.op_set_input(&follow, c, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "carry_elim" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_CARRY] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
