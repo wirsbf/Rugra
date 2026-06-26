@@ -553,3 +553,14 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `build_subpiece(fd, base_vn, out_size, shift)` — 创建新 SUBPIECE op
   - `apply_op` — 主算法：检查 SUBPIECE(MULTIEQUAL)，计算使用范围，检查各分支 consume，为每个分支创建/查找 SUBPIECE，构建新的窄 MULTIEQUAL，替换后代
   - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；opInsertBegin 用 op_insert_before 替代
+
+## 2026-06-27（续 4）：RuleAndMask 完整移植
+
+- **RuleAndMask**：完整忠实移植 ruleaction.cc:300-342。折叠不必要的 INT_AND：
+  - `V = A & B`，计算 NZM(A) ∩ NZM(B)。
+  - 如果交集为 0（AND 结果总为 0）→ COPY(#0)
+  - 如果 consumed bits 全为 0 → COPY(#0)
+  - 如果交集 == NZM(A) 且 input(1) 是常量 → COPY(A)
+  - 否则不做变换
+  - isHeritageKnown：常量视为 known（Rugra 常量无 INPUT/WRITTEN flag 但仍 known）。
+  - 测试：`V = A & #0`（NZM(A)=0）→ COPY(#0)。

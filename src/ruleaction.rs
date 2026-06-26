@@ -4132,6 +4132,87 @@ fn functional_equality_eq(
     std::sync::Arc::ptr_eq(a, b)
 }
 
+/// Collapse unnecessary INT_AND. Faithful to Ghidra's `RuleAndMask`
+/// (ruleaction.cc:300-342).
+///
+/// Given `V = A & B`, compute the intersection of NZM(A) and NZM(B). If the
+/// result is 0 (always zero) or matches one of the inputs' NZM, replace the
+/// AND with a COPY of the constant 0 or the matching input.
+pub struct RuleAndMask;
+
+impl RuleAndMask {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAndMask {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (out_size, mask1, mask2, in0, in1, out_consume) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_AND {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_size = match op.output.as_ref() {
+                Some(o) => o.read().unwrap().get_size(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if out_size > 8 {
+                return Ok(action_status::NO_CHANGE); // uintb precision limit
+            }
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_consume = op.output.as_ref().map(|o| o.read().unwrap().get_consume()).unwrap_or(0);
+            let (m1, m2) = {
+                let r0 = in0.read().unwrap();
+                let r1 = in1.read().unwrap();
+                (r0.get_nz_mask(), r1.get_nz_mask())
+            };
+            (out_size, m1, m2, in0, in1, out_consume)
+        };
+
+        // Compute the AND mask.
+        let and_mask = if mask1 == 0 { 0 } else { mask1 & mask2 };
+
+        let replace_vn = if and_mask == 0 {
+            // Result of AND is always zero.
+            Some(fd.new_constant(out_size, 0))
+        } else if (and_mask & out_consume) == 0 {
+            // Consumed bits are all zero.
+            Some(fd.new_constant(out_size, 0))
+        } else if and_mask == mask1 {
+            // Result equals input(0), but only if input(1) is the constant mask.
+            if !in1.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            Some(in0.clone())
+        } else {
+            None
+        };
+
+        let replace_vn = match replace_vn {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // isHeritageKnown — Ghidra returns true for constants and non-free
+        // varnodes. Rugra's constants are "free" (no INPUT/WRITTEN flag) but
+        // are still heritage-known, so we only bail on non-constant free varnodes.
+        let replace_is_const = replace_vn.read().unwrap().is_constant();
+        let replace_is_free = replace_vn.read().unwrap().is_free();
+        if replace_is_free && !replace_is_const {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_input(&follow, replace_vn, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "and_mask" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
@@ -7528,6 +7609,31 @@ mod tests {
             o.opcode
         );
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    #[test]
+    fn test_rule_and_mask_zero_result() {
+        // V = A & 0  =>  V = #0  (when NZM(A) has no overlap with 0)
+        // Build: INT_AND(A, #0) where A has NZM = 0 (simulate constant 0).
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let a = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0, 4)));
+        a.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        a.write().unwrap().set_nzm(0); // NZM = 0
+        let c0 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0, 4)));
+        c0.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        c0.write().unwrap().set_nzm(0);
+        let out_vn = Arc::new(RwLock::new(crate::varnode::Varnode::new_register(0x30, 4)));
+        let op = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_AND)));
+        op.write().unwrap().inrefs = vec![a.clone(), c0.clone()];
+        op.write().unwrap().output = Some(out_vn.clone());
+        out_vn.write().unwrap().def = Some(Arc::downgrade(&op));
+
+        let rule = RuleAndMask::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 0);
     }
 
     #[test]
