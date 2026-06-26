@@ -180,3 +180,16 @@ INT_LESSEQUAL 与极值常量的简化：
 模式同 AddMultCollapse，但用于 AND/OR/XOR。
 
 测试：ruleaction::tests +4（OrMask 全掩码/部分不变；AndOrLump 双 AND/双 OR）。
+
+### 2026-06-26（续）：RulePiece2Zext + RulePiece2Sext + RuleBxor2NotEqual
+
+#### `pub struct RulePiece2Zext`（ruleaction.cc:207-230）
+`concat(0, V) => zext(V)`。PIECE 的高位(in0)为常量 0 时，塌缩为 INT_ZEXT。
+
+#### `pub struct RulePiece2Sext`（ruleaction.cc:232-259）
+`concat(V s>> (8*size-1), V) => sext(V)`。PIECE 高位是低位的符号位算术右移时，塌缩为 INT_SEXT。
+
+#### `pub struct RuleBxor2NotEqual`（ruleaction.cc:261-274）
+`V ^^ W => V != W`。布尔 XOR 等价于布尔不等。
+
+测试：ruleaction::tests +3（Piece2Zext、Piece2Sext、Bxor2NotEqual）。

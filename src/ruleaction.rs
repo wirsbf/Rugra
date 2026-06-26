@@ -1264,6 +1264,155 @@ impl Rule for RuleAndOrLump {
     }
 }
 
+/// Concatenation with zero high bits becomes a zero-extension:
+///   `concat(0, V)  =>  zext(V)`
+///
+/// Faithful to Ghidra's `RulePiece2Zext` (ruleaction.cc:207-230). When the
+/// most-significant (input 0) piece of a PIECE is a constant 0, the PIECE
+/// collapses into an INT_ZEXT of the low piece.
+pub struct RulePiece2Zext;
+
+impl RulePiece2Zext {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RulePiece2Zext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        let is_zero_high = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            constvn.read().unwrap().is_constant() && constvn.read().unwrap().get_offset() == 0
+        };
+        if !is_zero_high {
+            return Ok(action_status::NO_CHANGE);
+        }
+        {
+            let mut op = op_arc.write().unwrap();
+            op.inrefs.remove(0);
+            op.opcode = OpCode::CPUI_INT_ZEXT;
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "piece2zext"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_PIECE]
+    }
+}
+
+/// Concatenation with sign bits becomes a sign-extension:
+///   `concat(V s>> #0x1f, V)  =>  sext(V)`
+///
+/// Faithful to Ghidra's `RulePiece2Sext` (ruleaction.cc:232-259). When the
+/// high piece of a PIECE is a sign-bit shift (`V s>> (8*size-1)`) of the low
+/// piece V, the PIECE collapses into an INT_SEXT of V.
+pub struct RulePiece2Sext;
+
+impl RulePiece2Sext {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RulePiece2Sext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        let matches = {
+            let op = op_arc.read().unwrap();
+            let shiftout = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let low_vn = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let shiftop_arc = {
+                let s = shiftout.read().unwrap();
+                s.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let shiftop_arc = match shiftop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let (is_sright, shift_n, shift_x) = {
+                let so = shiftop_arc.read().unwrap();
+                if so.opcode != OpCode::CPUI_INT_SRIGHT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let n_const = match so.inrefs.get(1) {
+                    Some(v) if v.read().unwrap().is_constant() => v.read().unwrap().get_offset(),
+                    _ => return Ok(action_status::NO_CHANGE),
+                };
+                let x = match so.inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                (true, n_const as i64, x)
+            };
+            if !is_sright {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if !std::sync::Arc::ptr_eq(&shift_x, &low_vn) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let x_size = low_vn.read().unwrap().get_size() as i64;
+            shift_n == 8 * x_size - 1
+        };
+        if !matches {
+            return Ok(action_status::NO_CHANGE);
+        }
+        {
+            let mut op = op_arc.write().unwrap();
+            op.inrefs.remove(0);
+            op.opcode = OpCode::CPUI_INT_SEXT;
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "piece2sext"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_PIECE]
+    }
+}
+
+/// Eliminate BOOL_XOR: `V ^^ W  =>  V != W`.
+///
+/// Faithful to Ghidra's `RuleBxor2NotEqual` (ruleaction.cc:261-274). A
+/// boolean XOR is semantically a boolean inequality, so rewrite it directly.
+pub struct RuleBxor2NotEqual;
+
+impl RuleBxor2NotEqual {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleBxor2NotEqual {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        op_arc.write().unwrap().opcode = OpCode::CPUI_INT_NOTEQUAL;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "bxor2notequal"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_BOOL_XOR]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2132,5 +2281,86 @@ mod tests {
         let o = outer.read().unwrap();
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
         assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0x01 | 0x02); // = 3
+    }
+
+    // --- RulePiece2Zext (ruleaction.cc:207) ---
+
+    #[test]
+    fn test_piece2zext_zero_high() {
+        // PIECE(0, V) => ZEXT(V)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let zero = fd.vbank.create_constant(2, 0);
+        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![zero, v.clone()];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+        }
+        let rule = RulePiece2Zext::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_ZEXT);
+        assert_eq!(o.inrefs.len(), 1);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    // --- RulePiece2Sext (ruleaction.cc:232) ---
+
+    #[test]
+    fn test_piece2sext_sign_shift() {
+        // PIECE(V s>> (8*size-1), V) => SEXT(V). size=1 → shift by 7.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let shift_const = fd.vbank.create_constant(4, 7);
+        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SRIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v.clone(), shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        let piece_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut p = piece_op.write().unwrap();
+            p.inrefs = vec![shift_out, v.clone()];
+            p.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RulePiece2Sext::new();
+        let result = rule.apply_op(&piece_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let p = piece_op.read().unwrap();
+        assert_eq!(p.opcode, OpCode::CPUI_INT_SEXT);
+        assert_eq!(p.inrefs.len(), 1);
+        assert!(Arc::ptr_eq(&p.inrefs[0], &v));
+    }
+
+    // --- RuleBxor2NotEqual (ruleaction.cc:261) ---
+
+    #[test]
+    fn test_bxor2notequal() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BOOL_XOR,
+        )));
+        op.write().unwrap().inrefs = vec![v, w];
+        let rule = RuleBxor2NotEqual::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
     }
 }
