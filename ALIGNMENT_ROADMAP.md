@@ -152,7 +152,7 @@
 | `RuleOrConsume` | 353 | getConsume |
 | `RuleCollectTerms` | 107 | TermOrder/AdditiveEdge |
 | `RuleSelectCse` | 187 | CSE 基础设施 |
-| `RulePushMulti` | 1074 | functionalEqualityLevel/opDestroy |
+| `RulePushMulti` | 1074 | ✅ **完整算法** — findSubstitute + functional_equality_level + op_uninsert/insert_before（ruleaction.cc:1060-1137） |
 | `RulePullsubMulti` | 880 | ✅ **完整算法** — minMaxUse/replaceDescendants/findSubpiece/buildSubpiece/applyOp（ruleaction.cc:678-952）；hasLoopIn/isPrecisLo/Hi/isJoin 用保守默认 |
 | `RulePullsubIndirect` | 962 | INDIRECT 处理 |
 | `RuleBooleanNegate` | 2969 | isBooleanValue/isTypeRecoveryOn |

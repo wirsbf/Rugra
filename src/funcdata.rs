@@ -834,6 +834,35 @@ impl Funcdata {
         }
     }
 
+    /// Remove `op` from the alive list without destroying it. Faithful to
+    /// `Funcdata::opUninsert` (funcdata.hh). The op is still alive (not dead)
+    /// but temporarily detached from the ordered list, so it can be re-inserted
+    /// elsewhere.
+    pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
+        self.obank
+            .alivelist
+            .retain(|r| !std::sync::Arc::ptr_eq(&r.0, &op.0));
+    }
+
+    /// Insert `op` at the beginning of a basic block's op list. Faithful to
+    /// `Funcdata::opInsertBegin` (funcdata.hh:457). Rugra inserts at the start
+    /// of the alive list (best-effort for block-begin placement).
+    pub fn op_insert_begin(&mut self, op: &crate::op::PcodeOpRef, _bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+        self.obank.alivelist.insert(0, op.clone());
+    }
+
+    /// Get the input slot of `vn` within `op`. Faithful to `PcodeOp::getSlot`.
+    /// Returns the slot index, or -1 if not found.
+    pub fn op_get_slot(&self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {
+        let o = op.0.read().unwrap();
+        for (i, v) in o.inrefs.iter().enumerate() {
+            if std::sync::Arc::ptr_eq(v, vn) {
+                return i as i32;
+            }
+        }
+        -1
+    }
+
     /// Insert a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra) of `vn`, returning the
     /// new output Varnode. Faithful to `Funcdata::opBoolNegate`
     /// (funcdata_op.cc:560-572). If `insert_after` is true, the negate op is

@@ -680,3 +680,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `is_type_recovery_on()` — `Funcdata::isTypeRecoveryOn`（funcdata.hh:150）：检查 TYPE_RECOVERY_ON 标志。
 - `set_type_recovery_on(on)` — 启用/禁用类型恢复。
 - 新增 `flags: u32` 字段 + `funcdata_flags::TYPE_RECOVERY_ON` 常量。解锁 RuleBoolZext。
+
+### 2026-06-27（续 4）：op_uninsert / op_insert_begin / op_get_slot
+
+- `op_uninsert(op)` — `Funcdata::opUninsert`（funcdata.hh）：从 alivelist 移除 op 但不销毁（用于重新插入）。
+- `op_insert_begin(op, bb)` — `Funcdata::opInsertBegin`（funcdata.hh:457）：在块开头插入 op。
+- `op_get_slot(op, vn) -> i32` — `PcodeOp::getSlot`：返回 vn 在 op 中的输入槽位（-1 未找到）。

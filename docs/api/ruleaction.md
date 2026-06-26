@@ -583,3 +583,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - INT_EQUAL/INT_NOTEQUAL：将扩展布尔与 0/-1 比较改为未扩展布尔与 0/1 比较
   - INT_AND/OR/XOR：两侧都是扩展布尔时，先做布尔运算再扩展
   - 依赖：is_boolean_value ✅、is_type_recovery_on ✅、op_bool_negate ✅、lone_descend ✅
+
+## 2026-06-27（续 7）：RulePushMulti 完整移植
+
+- **RulePushMulti**：完整忠实移植 ruleaction.cc:1060-1137。简化两分支 MULTIEQUAL，其中两个输入以功能等价方式构造：
+  - 检测 `MULTIEQUAL(op1_out, op2_out)` 其中 op1/op2 功能等价
+  - COPY 特殊情况：MERGE of 2 shadowing varnodes → findSubstitute + totalReplace
+  - 通用情况：验证 loneDescend，移动 op1 的输出到 MULTIEQUAL 输出（unify），op_uninsert + op_insert_before 重新定位
+  - `find_substitute(in1, in2)` — 搜索已存在的 MULTIEQUAL[in1,in2] 或 CSE
+  - 依赖：functional_equality_level ✅、total_replace ✅、op_destroy ✅、op_uninsert ✅、op_insert_before ✅

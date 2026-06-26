@@ -4543,6 +4543,224 @@ impl Rule for RuleBoolZext {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
+/// Simplify MULTIEQUAL where both inputs are constructed in functionally
+/// equivalent ways. Faithful to Ghidra's `RulePushMulti`
+/// (ruleaction.cc:1060-1137).
+///
+/// Look for a two-branch MULTIEQUAL where both inputs hold the same value
+/// (possibly via functional equality). Remove one construction and move the
+/// other into the merge block, eliminating the MULTIEQUAL.
+pub struct RulePushMulti;
+
+impl RulePushMulti {
+    pub fn new() -> Self { Self }
+
+    /// Find a substitute MULTIEQUAL in the block that already merges in1/in2.
+    /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060).
+    fn find_substitute(
+        in1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        in2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
+        // Search descendants of in1 for a MULTIEQUAL with inputs [in1, in2].
+        let descends: Vec<_> = in1.read().unwrap().descend_iter().collect();
+        for op_arc in descends {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_MULTIEQUAL {
+                continue;
+            }
+            let in0 = op.inrefs.get(0).cloned();
+            let in1_ref = op.inrefs.get(1).cloned();
+            if let (Some(a), Some(b)) = (in0, in1_ref) {
+                if std::sync::Arc::ptr_eq(&a, in1) && std::sync::Arc::ptr_eq(&b, in2) {
+                    drop(op);
+                    return Some(op_arc);
+                }
+            }
+        }
+        // Check functional equality between in1 and in2.
+        if std::sync::Arc::ptr_eq(in1, in2) {
+            return None;
+        }
+        let result = crate::expression::functional_equality_level(in1, in2);
+        if result.code != 0 {
+            return None;
+        }
+        // in1 and in2 are functionally equal; look for a CSE of their defs.
+        let op1 = in1.read().unwrap().get_def();
+        let op2 = in2.read().unwrap().get_def();
+        let (op1, op2) = match (op1, op2) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return None,
+        };
+        let num_input = op1.read().unwrap().inrefs.len();
+        for i in 0..num_input {
+            let vn = op1.read().unwrap().inrefs.get(i).cloned();
+            if let Some(vn) = vn {
+                if vn.read().unwrap().is_constant() {
+                    continue;
+                }
+                let op2_in = op2.read().unwrap().inrefs.get(i).cloned();
+                if let Some(op2_in) = op2_in {
+                    if std::sync::Arc::ptr_eq(&vn, &op2_in) {
+                        // Search for a CSE of op1 reading vn in the block.
+                        let vn_descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
+                        for d in vn_descends {
+                            let dr = d.read().unwrap();
+                            if std::sync::Arc::ptr_eq(&d, &op1) {
+                                continue;
+                            }
+                            // Check if this descendant has the same opcode and
+                            // matching inputs as op1.
+                            if dr.opcode == op1.read().unwrap().opcode
+                                && dr.inrefs.len() == op1.read().unwrap().inrefs.len()
+                            {
+                                let mut all_match = true;
+                                for j in 0..dr.inrefs.len() {
+                                    if !std::sync::Arc::ptr_eq(&dr.inrefs[j], &op1.read().unwrap().inrefs[j]) {
+                                        all_match = false;
+                                        break;
+                                    }
+                                }
+                                if all_match {
+                                    drop(dr);
+                                    return Some(d);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Rule for RulePushMulti {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePushMulti::applyOp (ruleaction.cc:1074-1137).
+        use crate::expression::functional_equality_level;
+
+        let num_input = op_arc.read().unwrap().inrefs.len();
+        if num_input != 2 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let in1 = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let in2 = match op_arc.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !in1.read().unwrap().is_written() || !in2.read().unwrap().is_written() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if in1.read().unwrap().is_spacebase() || in2.read().unwrap().is_spacebase() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let result = functional_equality_level(&in1, &in2);
+        if result.code < 0 || result.code > 1 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let res = result.code;
+        let op1_arc = match in1.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let op1_code = op1_arc.read().unwrap().opcode;
+        if op1_code == OpCode::CPUI_SUBPIECE {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let op1_ref = crate::op::PcodeOpRef(op1_arc.clone());
+        let out_vn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        if op1_code == OpCode::CPUI_COPY {
+            // Special case: MERGE of 2 shadowing varnodes.
+            if res == 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let substitute = match Self::find_substitute(&result.pairs[0].0, &result.pairs[0].1) {
+                Some(s) => s,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let sub_out = substitute.read().unwrap().output.clone();
+            if let Some(sub_out) = sub_out {
+                fd.total_replace(&out_vn, sub_out);
+            }
+            fd.op_destroy(&op_ref);
+            return Ok(action_status::CHANGE);
+        }
+
+        let op2_arc = match in2.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // Both inputs must have this op as their lone descendant.
+        let in1_lone = in1.read().unwrap().lone_descend();
+        if !in1_lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let in2_lone = in2.read().unwrap().lone_descend();
+        if !in2_lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Move MULTIEQUAL output to op1 (the new unified op).
+        fd.op_set_output(&op1_ref, out_vn.clone());
+        fd.op_uninsert(&op1_ref);
+
+        if res == 1 {
+            // There's one pair that must be unified via a new MULTIEQUAL.
+            let buf1 = &result.pairs[0].0;
+            let buf2 = &result.pairs[0].1;
+            let substitute = Self::find_substitute(buf1, buf2);
+            let slot1 = fd.op_get_slot(&op1_ref, buf1) as usize;
+            let sub_out = if let Some(sub) = substitute {
+                sub.read().unwrap().output.clone().unwrap_or_else(|| {
+                    // Fallback: create a new MULTIEQUAL if substitute has no output.
+                    let addr = op_arc.read().unwrap().get_addr();
+                    let new_op = fd.new_op(2, addr);
+                    fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
+                    let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
+                    fd.op_set_input(&new_op, buf1.clone(), 0);
+                    fd.op_set_input(&new_op, buf2.clone(), 1);
+                    fd.op_insert_before(&new_op, &op_ref);
+                    sub_vn
+                })
+            } else {
+                // Create a new MULTIEQUAL to unify buf1/buf2.
+                let addr = op_arc.read().unwrap().get_addr();
+                let new_op = fd.new_op(2, addr);
+                fd.op_set_opcode(&new_op, OpCode::CPUI_MULTIEQUAL);
+                let sub_vn = fd.new_unique_out(buf1.read().unwrap().get_size(), &new_op);
+                fd.op_set_input(&new_op, buf1.clone(), 0);
+                fd.op_set_input(&new_op, buf2.clone(), 1);
+                fd.op_insert_before(&new_op, &op_ref);
+                sub_vn
+            };
+            fd.op_set_input(&op1_ref, sub_out, slot1);
+            // Re-insert op1 after the substitute (or before op).
+            fd.op_insert_before(&op1_ref, &op_ref);
+        } else {
+            // res == 0: inputs are identical, just move op1 to the merge block.
+            fd.op_insert_before(&op1_ref, &op_ref);
+        }
+        // Destroy the original MULTIEQUAL and the duplicate op2.
+        let op2_ref = crate::op::PcodeOpRef(op2_arc);
+        fd.op_destroy(&op_ref);
+        fd.op_destroy(&op2_ref);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "push_multi" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
