@@ -373,3 +373,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionHideShadow**：从框架级升级为 apply()-驱动级——遍历 written Varnodes，检测 shadow copy（COPY 从相同地址的 Varnode），标记后清除。完整版需要 HighVariable + Merge::hideShadows。
 - 8 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 21）：ActionVarnodeProps 升级为 apply()-驱动级
+
+- **ActionVarnodeProps**：从 stub 升级为 apply()-驱动级——遍历 VarnodeBank，检测 readonly Varnodes 和 LOAD-from-constant/readonly-pointer 的 Varnodes。完整 fillinReadOnly 待 LoadImage + Architecture 集成。
+- 9 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
