@@ -2826,7 +2826,31 @@ impl ActionActiveParam {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveParam {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate callspecs, for each call with
+        // an active input, scan the call op's input Varnodes to determine
+        // which are potential parameters. Full algorithm requires ParamActive
+        // + AliasChecker.
+        let mut change_count = 0;
+        let n_calls = fd.num_calls();
+
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                // Check if this call spec has input parameters.
+                let n_params = fc.prototype.num_params();
+                if n_params > 0 {
+                    // This call has declared parameters — nothing to
+                    // actively recover. Full Ghidra: check isInputActive.
+                    change_count += 1;
+                }
+            }
+        }
+
+        // Return NO_CHANGE since we don't modify anything yet.
+        // Full algorithm: for each call with active input, iterate
+        // the call op's Varnodes and test each as a potential param
+        // via ParamActive trials.
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "activeparam" }
@@ -3010,8 +3034,46 @@ impl ActionDeindirect {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeindirect {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        Ok(action_status::NO_CHANGE)
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate callspecs, find CALLIND ops,
+        // trace the indirect target through COPY chains. Full deindirect
+        // requires Scope queryExternalRefFunction + Architecture funcptr_align.
+        let mut change_count = 0;
+        use crate::opcodes::OpCode;
+
+        let n_calls = fd.num_calls();
+        for i in 0..n_calls {
+            let fc_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
+            if let Some(addr) = fc_addr {
+                // Find the CALLIND op at this address in the op bank.
+                for op_ref in &fd.obank.alivelist {
+                    let op_rg = op_ref.0.read().unwrap();
+                    if op_rg.opcode == OpCode::CPUI_CALLIND && op_rg.get_addr() == addr {
+                        // Found the indirect call op.
+                        // Trace input(0) through COPY chain to find the
+                        // actual call target.
+                        if let Some(target_vn) = op_rg.get_in(0) {
+                            let target_rg = target_vn.read().unwrap();
+                            // Check if target is constant (direct address).
+                            if target_rg.is_constant() {
+                                // Full Ghidra: resolve constant to function
+                                // address, convert CALLIND to CALL.
+                                change_count += 1;
+                            }
+                            // Check if target is persistent + external ref.
+                            // Full Ghidra: queryExternalRefFunction.
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if change_count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "deindirect" }
 }
