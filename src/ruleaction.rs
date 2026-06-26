@@ -3413,6 +3413,105 @@ impl Rule for RuleAndPiece {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Commute a shift through an AND so the AND applies to the pre-shift value:
+///   `(V << c) & mask  =>  (V & (mask >> c)) << c`
+///   `(V >> c) & mask  =>  (V & (mask << c)) >> c`
+///
+/// Faithful to Ghidra's `RuleAndCommute` (ruleaction.cc:1519-1626). Ports the
+/// primary INT_LEFT/INT_RIGHT path (the OR/PIECE sub-cases use getNZMask to
+/// decide benefit). When the shift's other input (a constant) can be commuted
+/// with the AND, perform the commute by creating a new shift + AND.
+pub struct RuleAndCommute;
+
+impl RuleAndCommute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAndCommute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (size, pc) = {
+            let op = op_arc.read().unwrap();
+            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
+            (size, op.start.get_addr())
+        };
+        let fullmask = crate::address::calc_mask(size);
+        // Scan both slots: slot i holds a shift (V op c), slot 1-i is othervn.
+        let mut found: Option<(usize, std::sync::Arc<std::sync::RwLock<PcodeOp>>, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+        for i in 0..2usize {
+            let shiftvn = { let op = op_arc.read().unwrap(); op.inrefs.get(i).cloned() };
+            let shiftvn = match shiftvn { Some(v) => v, None => continue };
+            let shiftop_arc = { shiftvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let shiftop_arc = match shiftop_arc { Some(a) => a, None => continue };
+            let opc = shiftop_arc.read().unwrap().opcode;
+            if opc != OpCode::CPUI_INT_LEFT && opc != OpCode::CPUI_INT_RIGHT { continue; }
+            let savn = match shiftop_arc.read().unwrap().inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => continue,
+            };
+            let sa = savn.read().unwrap().get_offset() as usize;
+            let orvn = match shiftop_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
+            let othervn = match othervn { Some(v) => v, None => continue };
+            let othermask = othervn.read().unwrap().get_nz_mask();
+            if othermask == 0 || othermask == fullmask { continue; }
+            // Decide if commute is beneficial (othermask bits affected by shift).
+            let adjusted = if opc == OpCode::CPUI_INT_RIGHT {
+                if (fullmask >> sa) == othermask { continue; }
+                othermask << sa
+            } else {
+                if ((fullmask << sa) & fullmask) == othermask { continue; }
+                othermask >> sa
+            };
+            if adjusted == 0 || adjusted == fullmask { continue; }
+            // For LEFT with constant othervn, require loneDescend for stability.
+            if opc == OpCode::CPUI_INT_LEFT && othervn.read().unwrap().is_constant() {
+                if shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                // Otherwise check if orvn is an OR/PIECE (beneficial sub-case).
+                let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+                if let Some(oa) = orop_arc {
+                    let oc = oa.read().unwrap().opcode;
+                    if oc == OpCode::CPUI_INT_OR || oc == OpCode::CPUI_PIECE {
+                        found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                        break;
+                    }
+                }
+                continue;
+            }
+            found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+            break;
+        }
+        let (i, shiftop_arc, opc, savn, orvn, othervn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) };
+        // Build new shift (commuted direction) of othervn by savn.
+        let newop1 = fd.new_op(2, pc);
+        let new_shift_opc = if opc == OpCode::CPUI_INT_LEFT { OpCode::CPUI_INT_RIGHT } else { OpCode::CPUI_INT_LEFT };
+        fd.op_set_opcode(&newop1, new_shift_opc);
+        let newvn1 = fd.new_unique_out(size, &newop1);
+        fd.op_set_input(&newop1, othervn, 0);
+        fd.op_set_input(&newop1, savn.clone(), 1);
+        fd.op_insert_before(&newop1, &crate::op::PcodeOpRef(op_arc.clone()));
+        // AND(orvn, newvn1)
+        let newop2 = fd.new_op(2, pc);
+        fd.op_set_opcode(&newop2, OpCode::CPUI_INT_AND);
+        let newvn2 = fd.new_unique_out(size, &newop2);
+        fd.op_set_input(&newop2, orvn, 0);
+        fd.op_set_input(&newop2, newvn1, 1);
+        fd.op_insert_before(&newop2, &crate::op::PcodeOpRef(op_arc.clone()));
+        // Rewrite op: opc(newvn2, savn)
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, newvn2, 0);
+        fd.op_set_input(&follow, savn, 1);
+        fd.op_set_opcode(&follow, opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "and_commute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5742,5 +5841,51 @@ mod tests {
         // The new input[0] should be the output of a ZEXT(L) op.
         let a2 = and_op.read().unwrap();
         assert_eq!(a2.inrefs.len(), 2);
+    }
+
+    // --- RuleAndCommute (ruleaction.cc:1519) ---
+
+    #[test]
+    fn test_and_commute_right_shift() {
+        // (V >> 4) & 0x0f0f (size 2) — othermask=0x0f0f, not full(0xffff).
+        // RIGHT path: adjusted = 0x0f0f << 4 = 0xf0f0 (nonzero, != full).
+        // othervn not constant → found set.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 4);
+        let shift_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v.clone(), sa.clone()];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        // W = register with NZM = fullmask = 0xffff. To get partial, use a
+        // SUBPIECE-derived varnode? Simpler: this test will be NO_CHANGE for
+        // a register (NZM=full). Document that and test the constant-LEFT
+        // path instead, which is the more common real case.
+        let w = fd.vbank.create_constant(2, 0x0f0f);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![shift_out, w];
+            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleAndCommute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // othervn is a constant (0x0f0f), opc=RIGHT (not LEFT), so the
+        // LEFT-constant loneDescend guard doesn't apply; RIGHT path accepts.
+        assert_eq!(result, action_status::CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_RIGHT);
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
     }
 }

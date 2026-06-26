@@ -409,3 +409,12 @@ INT_AND 与 PIECE 简化：当 AND mask 清零某半时：
 用 get_nz_mask 判断哪半被清零，op-edit 创建 ZEXT/PIECE 替换。
 
 测试：ruleaction::tests +1（H 被清零→ZEXT(L)）。
+
+### 2026-06-26（续）：RuleAndCommute
+
+#### `pub struct RuleAndCommute`（ruleaction.cc:1519-1626）
+将移位穿过 AND 交换，使 AND 作用于移位前的值：
+`(V >> c) & mask => (V & (mask << c)) >> c`，`(V << c) & mask => (V & (mask >> c)) << c`。
+用 get_nz_mask 判断是否有益；LEFT+常量需 loneDescend 或 OR/PIECE 子情形。op-edit 创建新 shift + AND。
+
+测试：ruleaction::tests +1（RIGHT 路径常量 mask 交换）。
