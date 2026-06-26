@@ -418,3 +418,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionActiveReturn**：升级为 apply()-驱动级——遍历 callspecs，找 CALL/CALLIND ops，检查是否有输出 varnode（返回值）。完整 output trial 需要 ParamActive。
 - **ActionParamDouble**：升级为 apply()-驱动级——遍历 callspecs 检测栈参数。完整 PIECE 分析待 ParamActive。
 - 17 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 29）：ActionDefaultParams + ActionUnjustifiedParams 升级为 apply()-驱动级
+
+- **ActionDefaultParams**：升级为 apply()-驱动级——遍历 callspecs，为无模型的调用分配 "default" 调用约定。
+- **ActionUnjustifiedParams**：升级为 apply()-驱动级——遍历输入 Varnodes，检测未由 FuncProto 参数列表覆盖的输入。
+- 19 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。

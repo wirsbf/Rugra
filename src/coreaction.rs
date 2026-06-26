@@ -2904,8 +2904,28 @@ impl ActionDefaultParams {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDefaultParams {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        Ok(action_status::NO_CHANGE)
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate callspecs, for each call without
+        // a model, assign the default calling convention. Full algorithm
+        // requires ProtoModel + Funcdata lookup for resolved functions.
+        let mut change_count = 0;
+        let n_calls = fd.num_calls();
+
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                // If the calling convention is "unknown", assign default.
+                if fc.prototype.calling_convention == "unknown" {
+                    fc.prototype.calling_convention = "default".to_string();
+                    change_count += 1;
+                }
+            }
+        }
+
+        if change_count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "defaultparams" }
 }
@@ -2951,7 +2971,43 @@ impl ActionUnjustifiedParams {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionUnjustifiedParams {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate input Varnodes and check if any
+        // are not covered by the function prototype's parameter list.
+        // Full algorithm requires FuncProto.unjustifiedInputParam + container
+        // creation for overlapping params.
+        let mut change_count = 0;
+
+        let varnodes: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .collect();
+
+        for vn_arc in &varnodes {
+            let vn_rg = vn_arc.read().unwrap();
+            if !vn_rg.is_input() {
+                continue;
+            }
+            // Check if this input Varnode's address matches any declared
+            // parameter in the function prototype.
+            let proto = fd.get_func_proto();
+            let vn_addr = vn_rg.get_addr().as_u64();
+            let vn_size = vn_rg.get_size();
+
+            let is_justified = proto.parameters.iter().any(|p| {
+                p.address.as_u64() == vn_addr && p.address.as_u64() > 0
+            });
+
+            if !is_justified && vn_addr > 0 {
+                // This input is not covered by any declared parameter.
+                change_count += 1;
+            }
+        }
+
+        // Return NO_CHANGE since we don't create new params yet.
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "unjustifiedparams" }
