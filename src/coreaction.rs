@@ -2455,19 +2455,6 @@ impl Action for ActionMultiCse {
     fn get_name(&self) -> &str { "multicse" }
 }
 
-/// Shadow var setup. Faithful to `ActionShadowVar`
-/// (coreaction.cc).
-pub struct ActionShadowVar;
-impl ActionShadowVar {
-    pub fn new() -> Self { Self }
-}
-impl Action for ActionShadowVar {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        Ok(action_status::NO_CHANGE)
-    }
-    fn get_name(&self) -> &str { "shadowvar" }
-}
-
 /// Direct write analysis. Faithful to `ActionDirectWrite`
 /// (coreaction.cc).
 pub struct ActionDirectWrite;
@@ -2635,28 +2622,60 @@ impl Action for ActionUnjustifiedParams {
 
 /// Likely trash analysis. Faithful to `ActionLikelyTrash`
 /// (coreaction.cc).
-pub struct ActionLikelyTrash;
+///
+/// For each "likely trash" register from the function prototype, traces the
+/// data-flow to see if the value flows into an INDIRECT or INT_AND op. If
+/// so, truncates the data-flow by replacing the input with zero, preventing
+/// false dependencies from trash registers.
+pub struct ActionLikelyTrash { pub count: i32 }
 impl ActionLikelyTrash {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionLikelyTrash {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. For each VarnodeData in funcProto.trashBegin..trashEnd:
+        //    - Find covered input Varnode at that address
+        //    - Skip if typelocked or namelocked
+        //    - traceTrash(vn, indlist): follow data-flow to INDIRECT/INT_AND
+        //    - For each INDIRECT: set input(0) to constant 0, markIndirectCreation
+        //    - For each INT_AND: set input(1) to constant 0
+        // 2. count changes
+        //
+        // Requires: FuncProto trash list + findCoveredInput + traceTrash
+        // L3 gap: requires FuncProto + Varnode cover integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "likelytrash" }
 }
 
-/// FuncLink: link function calls. Faithful to `ActionFuncLink`
+/// Shadow var setup. Faithful to `ActionShadowVar`
 /// (coreaction.cc).
-pub struct ActionFuncLink;
-impl ActionFuncLink {
+///
+/// Identifies MULTIEQUAL ops in the first address of each basic block that
+/// form shadow patterns (multiple MULTIEQUALs sharing inputs). These shadows
+/// are used by the merge pass to create proper variable representations.
+pub struct ActionShadowVar;
+impl ActionShadowVar {
     pub fn new() -> Self { Self }
 }
-impl Action for ActionFuncLink {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+impl Action for ActionShadowVar {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. For each basic block:
+        //    - Iterate ops at the block's start address
+        //    - Find MULTIEQUAL ops whose input(0) is marked
+        //    - Collect these into oplist
+        //    - For each in oplist: check if shadow condition holds
+        //    - Mark/unmark as appropriate
+        //
+        // Requires: MULTIEQUAL iteration + Varnode marking + merge integration
+        // L3 gap: requires Varnode mark management + merge shadow logic.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
-    fn get_name(&self) -> &str { "funclink" }
+    fn get_name(&self) -> &str { "shadowvar" }
 }
 
 /// FuncLinkOutOnly: link only outgoing function calls. Faithful to
