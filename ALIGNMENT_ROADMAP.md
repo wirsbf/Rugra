@@ -195,7 +195,7 @@
 | 34 | `printlanguage.cc` | `printlanguage.rs` | 🔧 L2 | Emit 架构对齐；缺少完整 markup 支持 | `printlanguage.cc` |
 | 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | EmitNoMarkup 对齐；post_process 已实现 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 基本函数规格；缺少完整选项系统 | `fspec.cc` |
-| 37 | `options.cc` | — | 📋 L1 | **完全缺失**：选项系统（影响配置驱动行为） | `options.cc` |
+| 37 | `options.cc` | `options.rs` | 🔧 L2 | **骨架已移植**：ArchOption trait + OptionDatabase 分发器 + 37 个注册选项。9 个完全功能化（inferconstptr/analyzeforloops/readonly/jumptablemax/maxinstruction/aliasblock/nanignore/splitdatatype/defaultprototype 直接修改 Architecture 字段）。L3 缺 PrintLanguage/ActionDatabase 选项 + XML decode | `options.cc` |
 | 38 | `comment.cc` | `comment.rs` | 🔧 L2 | **骨架已移植**：Comment + comment_type 标志 + CommentDatabaseInternal（add_comment/clear_type/comments_for_function/encode/decode）+ CommentSorter（setup_function_list/header_comments）+ Subsort。L3 缺 CommentSorter::findPosition 的基本块关联（需 Funcdata op-tree） | `comment.cc` |
 
 ---

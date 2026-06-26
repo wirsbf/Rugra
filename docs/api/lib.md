@@ -493,3 +493,7 @@
 ## 2026-06-27（续 4）：新增 comment 模块
 
 - `pub mod comment;` — 对应 `comment.hh`，注释数据库。Comment + comment_type 标志 + CommentDatabaseInternal（add_comment/clear_type/comments_for_function/encode/decode）+ CommentSorter（setup_function_list/header_comments）+ Subsort。L3 缺 CommentSorter::findPosition 的基本块关联（需 Funcdata op-tree）。
+
+## 2026-06-27（续 5）：新增 options 模块
+
+- `pub mod options;` — 对应 `options.hh`，架构配置选项系统。ArchOption trait + OptionDatabase 分发器 + 37 个注册选项。9 个选项完全功能化（直接修改 Architecture 字段：inferconstptr/analyzeforloops/readonly/jumptablemax/maxinstruction/aliasblock/nanignore/splitdatatype/defaultprototype），其余为 stub（待 PrintLanguage/ActionDatabase 集成）。
