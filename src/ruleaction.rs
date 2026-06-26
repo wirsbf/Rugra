@@ -2487,6 +2487,121 @@ impl Rule for RuleShiftCompare {
     }
 }
 
+/// Transform AND-compare to larger-domain AND-compare:
+///   `(sub(V,c) & mask) == 0  =>  (V & (mask << c*8)) == 0`
+///   `(zext(V) & mask) == 0   =>  (V & mask) == 0`
+///
+/// Faithful to Ghidra's `RuleAndCompare` (ruleaction.cc:1729-1796).
+pub struct RuleAndCompare;
+
+impl RuleAndCompare {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleAndCompare {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (andvn) = {
+            let op = op_arc.read().unwrap();
+            let in1 = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            if in1.read().unwrap().get_offset() != 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let andop_arc = {
+            let a = andvn.read().unwrap();
+            a.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let andop_arc = match andop_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let (andconst, subvn) = {
+            let ao = andop_arc.read().unwrap();
+            if ao.opcode != OpCode::CPUI_INT_AND {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let mask_vn = match ao.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let mc = mask_vn.read().unwrap().get_offset();
+            let subvn = match ao.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (mc, subvn)
+        };
+        let subop_arc = {
+            let s = subvn.read().unwrap();
+            s.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let subop_arc = match subop_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let (basevn, andconst_eff, andvn_size, andop_pc) = {
+            let so = subop_arc.read().unwrap();
+            let andvn_size = andvn.read().unwrap().get_size();
+            let andop_pc = andop_arc.read().unwrap().start.get_addr();
+            match so.opcode {
+                OpCode::CPUI_SUBPIECE => {
+                    let basevn = match so.inrefs.get(0) {
+                        Some(v) => v.clone(),
+                        None => return Ok(action_status::NO_CHANGE),
+                    };
+                    if basevn.read().unwrap().get_size() > 8 {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    let trunc_offset = so.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    (basevn, andconst << (trunc_offset * 8), andvn_size, andop_pc)
+                }
+                OpCode::CPUI_INT_ZEXT => {
+                    let basevn = match so.inrefs.get(0) {
+                        Some(v) => v.clone(),
+                        None => return Ok(action_status::NO_CHANGE),
+                    };
+                    let bs = basevn.read().unwrap().get_size();
+                    (basevn, andconst & crate::address::calc_mask(bs), andvn_size, andop_pc)
+                }
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        if andconst == crate::address::calc_mask(andvn_size) || basevn.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let basevn_size = basevn.read().unwrap().get_size();
+        let constvn = fd.new_constant(basevn_size, andconst_eff);
+        let newop = fd.new_op(2, andop_pc);
+        fd.op_set_opcode(&newop, OpCode::CPUI_INT_AND);
+        let newout = fd.new_unique_out(basevn_size, &newop);
+        fd.op_set_input(&newop, basevn, 0);
+        fd.op_set_input(&newop, constvn, 1);
+        fd.op_insert_before(&newop, &crate::op::PcodeOpRef(andop_arc.clone()));
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, newout, 0);
+        let zero = fd.new_constant(basevn_size, 0);
+        fd.op_set_input(&follow, zero, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "and_compare"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4193,5 +4308,50 @@ mod tests {
         let result = rule.apply_op(&eq_op, &mut fd).unwrap();
         // NZM=0xffffffff loses low bits → no conversion (until Heritage wires NZM).
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleAndCompare (ruleaction.cc:1729) ---
+
+    #[test]
+    fn test_and_compare_zext_push() {
+        // (zext(V) & 0xff) == 0 => (V & 0xff) == 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![v.clone()];
+            z.output = Some(zext_out.clone());
+        }
+        zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
+        let mask = fd.vbank.create_constant(2, 0xff);
+        let and_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![zext_out, mask];
+            a.output = Some(and_out.clone());
+        }
+        and_out.write().unwrap().def = Some(Arc::downgrade(&and_op));
+        let zero = fd.vbank.create_constant(2, 0);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        eq_op.write().unwrap().inrefs = vec![and_out, zero];
+        let rule = RuleAndCompare::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let e = eq_op.read().unwrap();
+        // in1 should be 0 of base size (1).
+        assert_eq!(e.inrefs[1].read().unwrap().get_val(), 0);
     }
 }

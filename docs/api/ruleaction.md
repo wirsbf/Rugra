@@ -301,3 +301,13 @@ INT_LESSEQUAL 与极值常量的简化：
 当 NZM 表明移位丢信息时不转换（AND-mask 子形式暂缓）。
 
 测试：ruleaction::tests +2（左移丢高位不变；右移寄存器丢低位不变——记录保守 NZM 行为，待 Heritage 提供 NZM 后可触发）。
+
+### 2026-06-26（续）：RuleAndCompare
+
+#### `pub struct RuleAndCompare`（ruleaction.cc:1729-1796）
+AND-比较变换，把 AND 推到更大的定义域：
+- `(sub(V,c) & mask) == 0 => (V & (mask << c*8)) == 0`
+- `(zext(V) & mask) == 0 => (V & mask) == 0`
+当 AND 常量 != calc_mask（非退化）且 basevn 非 free 时，创建新的 INT_AND(basevn, adjusted_mask) 并改写比较。
+
+测试：ruleaction::tests +1（zext 推送：in1 归零到 base size）。
