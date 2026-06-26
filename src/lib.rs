@@ -70,6 +70,7 @@ pub mod subflow; // ← subflow.hh
 pub mod transform; // ← transform.hh
 pub mod type_system; // ← type.hh
 pub mod typeop; // ← typeop.hh
+pub mod unify; // ← unify.hh
 pub mod variable; // ← variable.hh
 pub mod varnode; // ← varnode.hh // ← blockaction.hh
 

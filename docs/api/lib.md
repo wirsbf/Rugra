@@ -419,3 +419,7 @@
 ## 2026-06-26（续）：新增 subflow 模块
 
 - `pub mod subflow;` — 对应 `subflow.hh`，子流分析。ReplaceVarnode/ReplaceOp/PatchRecord/SubvariableFlow 骨架已实现。
+
+## 2026-06-26（续）：新增 unify 模块
+
+- `pub mod unify;` — 对应 `unify.hh`，统一化模式匹配。UnifyState/RHSConstant/UnifyConstraint 骨架已实现。
