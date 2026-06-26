@@ -204,3 +204,16 @@ INT_LESSEQUAL 与极值常量的简化：
 `(V << c) => V * (1<<c)`，c<32。
 
 测试：ruleaction::tests +4（TermOrder 交换/已序不变；Shift2Mult 喂入 ADD 转乘/非算术不变）。
+
+### 2026-06-26（续）：RuleDoubleSub + RuleTrivialShift
+
+#### `pub struct RuleDoubleSub`（ruleaction.cc:1796-1823）
+`sub(sub(V,a),b) => sub(V, a+b)`。链式 SUBPIECE 折叠，跳过中间层。
+
+#### `pub struct RuleTrivialShift`（ruleaction.cc:3515-3542）
+平凡移位简化：
+- `V << 0 => COPY(V)`
+- `V << c (c >= 8*size, 逻辑移位) => COPY(0)`
+- INT_SRIGHT 超 size 不变（无法预测符号位）
+
+测试：ruleaction::tests +4（DoubleSub 折叠；TrivialShift 移0/超size归零/sright超size不变）。

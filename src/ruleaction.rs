@@ -1547,6 +1547,129 @@ impl Rule for RuleShift2Mult {
     }
 }
 
+/// Simplify chained SUBPIECE: `sub(sub(V, a), b)  =>  sub(V, a+b)`.
+///
+/// Faithful to Ghidra's `RuleDoubleSub` (ruleaction.cc:1796-1823). When a
+/// SUBPIECE's input is itself a SUBPIECE, skip the middleman by pointing at
+/// the original base varnode and summing the two offsets.
+pub struct RuleDoubleSub;
+
+impl RuleDoubleSub {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleDoubleSub {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // in0 must be defined by a SUBPIECE.
+        let (base_vn, offset2) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let offset2 = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.read().unwrap().get_offset(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let op2_arc = {
+                let i0 = in0.read().unwrap();
+                i0.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let op2_arc = match op2_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if op2_arc.read().unwrap().opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let base_vn = op2_arc.read().unwrap().inrefs.get(0).cloned();
+            match base_vn {
+                Some(b) => (b, offset2),
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let offset1 = {
+            let in0 = op_arc.read().unwrap().inrefs[0].clone();
+            let op2_arc = in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            match op2_arc {
+                Some(a) => a.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0),
+                None => 0,
+            }
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, base_vn, 0);
+        let combined = fd.new_constant(4, offset1 + offset2);
+        fd.op_set_input(&follow, combined, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "double_sub"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_SUBPIECE]
+    }
+}
+
+/// Simplify trivial shifts: `V << 0 => V`, `V << c (c>=size) => 0`.
+///
+/// Faithful to Ghidra's `RuleTrivialShift` (ruleaction.cc:3515-3542). A shift
+/// by zero is a copy; a (logical) shift by ≥ the value size yields zero.
+/// INT_SRIGHT by ≥ size is left alone (sign-bit semantics).
+pub struct RuleTrivialShift;
+
+impl RuleTrivialShift {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleTrivialShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (val, in0_size, is_sright) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = constvn.read().unwrap().get_offset();
+            let in0_size = match op.inrefs.get(0) {
+                Some(v) => v.read().unwrap().get_size(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (val, in0_size, op.opcode == OpCode::CPUI_INT_SRIGHT)
+        };
+        if val != 0 {
+            // Non-trivial unless shift >= size.
+            if val < 8 * in0_size as u64 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if is_sright {
+                return Ok(action_status::NO_CHANGE); // Can't predict signbit.
+            }
+            // Logical shift >= size → 0.
+            let follow = crate::op::PcodeOpRef(op_arc.clone());
+            let zero = fd.new_constant(in0_size, 0);
+            fd.op_set_input(&follow, zero, 0);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "trivial_shift"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2594,6 +2717,97 @@ mod tests {
 
         let rule = RuleShift2Mult::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleDoubleSub (ruleaction.cc:1796) ---
+
+    #[test]
+    fn test_double_sub_collapse() {
+        // sub(sub(V, 2), 1) => sub(V, 3)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let off1 = fd.vbank.create_constant(4, 2);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), off1];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        let off2 = fd.vbank.create_constant(4, 1);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out, off2];
+            o.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleDoubleSub::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 3);
+    }
+
+    // --- RuleTrivialShift (ruleaction.cc:3515) ---
+
+    #[test]
+    fn test_trivial_shift_zero() {
+        // V << 0 => COPY(V)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleTrivialShift::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs.len(), 1);
+    }
+
+    #[test]
+    fn test_trivial_shift_oversize_zero() {
+        // V (size 1) << 8 => COPY(0)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let eight = fd.vbank.create_constant(4, 8);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        op.write().unwrap().inrefs = vec![v, eight];
+        let rule = RuleTrivialShift::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    #[test]
+    fn test_trivial_shift_sright_oversize_no_change() {
+        // V (size 1) s>> 8 => no change (can't predict signbit)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let eight = fd.vbank.create_constant(4, 8);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SRIGHT,
+        )));
+        op.write().unwrap().inrefs = vec![v, eight];
+        let rule = RuleTrivialShift::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 }
