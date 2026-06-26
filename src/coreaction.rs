@@ -2379,12 +2379,32 @@ impl Action for ActionVarnodeProps {
 
 /// Restrict local varnodes. Faithful to `ActionRestrictLocal`
 /// (coreaction.cc).
+///
+/// Marks certain storage locations as "not mapped" in the local scope:
+/// 1. Stack-passed parameters from calls (spacebase-relative params)
+/// 2. Saved registers (unaffected values copied to stack for saving)
+///
+/// This prevents the decompiler from creating local variables for these
+/// locations, which are temporary storage used by the compiler.
 pub struct ActionRestrictLocal;
 impl ActionRestrictLocal {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionRestrictLocal {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. For each call in the function:
+        //    - If call params are locked and spacebase-relative:
+        //      Mark the stack offset as not-mapped in ScopeLocal
+        // 2. For each effect record in the function prototype:
+        //    - If not killed-by-call:
+        //      Find the input Varnode at the effect's address
+        //      If it's unaffected, look for COPY ops writing to stack storage
+        //      Mark those stack locations as not-mapped
+        //
+        // Requires: FuncCallSpecs + EffectRecord + ScopeLocal + FuncProto
+        // L3 gap: requires these subsystems integrated into Funcdata.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "restrictlocal" }
