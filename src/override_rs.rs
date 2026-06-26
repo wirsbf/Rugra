@@ -14,6 +14,7 @@
 //! Ghidra reference: ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/override.{hh,cc}.
 
 use crate::address::Address;
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use std::collections::BTreeMap;
 
 /// Flow-override type enumeration. Faithful to `Override` enum
@@ -296,6 +297,205 @@ impl Override {
         }
         lines
     }
+
+    /// Encode the override commands to a stream. Faithful to
+    /// `Override::encode` (override.cc:294). All commands are written as
+    /// children of a root `<override>` element. If there are no overrides,
+    /// nothing is written.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        if self.is_empty() {
+            return;
+        }
+        let override_elem = ElementId::new("override", 0);
+        encoder.open_element(&override_elem);
+
+        // Force-goto: <forcegoto><addr/><addr/></forcegoto>
+        let fg_elem = ElementId::new("forcegoto", 0);
+        let addr_elem = ElementId::new("addr", 0);
+        for (target, dest) in &self.forcegoto {
+            encoder.open_element(&fg_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), target.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), dest.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.close_element(&fg_elem);
+        }
+
+        // Dead-code delay: <deadcodedelay space="idx" delay="N"/>
+        let dcd_elem = ElementId::new("deadcodedelay", 0);
+        for (space_idx, delay) in self.deadcode_delays() {
+            encoder.open_element(&dcd_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), space_idx as u64);
+            encoder.write_signed_integer(&AttributeId::new("delay", 0), delay as i64);
+            encoder.close_element(&dcd_elem);
+        }
+
+        // Indirect override: <indirectoverride><addr/><addr/></indirectoverride>
+        let io_elem = ElementId::new("indirectoverride", 0);
+        for (callpoint, directcall) in &self.indirectover {
+            encoder.open_element(&io_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), callpoint.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), directcall.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.close_element(&io_elem);
+        }
+
+        // Proto override: <protooverride><addr/></protooverride>
+        // (FuncProto encoding deferred until fspec integration.)
+        let po_elem = ElementId::new("protooverride", 0);
+        for callpoint in self.protoover.keys() {
+            encoder.open_element(&po_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), callpoint.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.close_element(&po_elem);
+        }
+
+        // Multistage jump: <multistagejump><addr/></multistagejump>
+        let msj_elem = ElementId::new("multistagejump", 0);
+        for addr in &self.multistagejump {
+            encoder.open_element(&msj_elem);
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), addr.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.close_element(&msj_elem);
+        }
+
+        // Flow override: <flow type="..."><addr/></flow>
+        let flow_elem = ElementId::new("flow", 0);
+        for (addr, flow) in &self.flowoverride {
+            encoder.open_element(&flow_elem);
+            encoder.write_string(&AttributeId::new("type", 0), flow.to_string());
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), addr.as_u64());
+            encoder.close_element(&addr_elem);
+            encoder.close_element(&flow_elem);
+        }
+
+        encoder.close_element(&override_elem);
+    }
+
+    /// Parse an `<override>` element containing override commands. Faithful to
+    /// `Override::decode` (override.cc:356).
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let override_id = decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            decoder.open_element();
+            match elem_name.as_str() {
+                "indirectoverride" => {
+                    let (cp, dc) = read_two_addrs(decoder);
+                    if let (Some(cp), Some(dc)) = (cp, dc) {
+                        self.insert_indirect_override(cp, dc);
+                    }
+                }
+                "protooverride" => {
+                    let cp = read_one_addr(decoder);
+                    if let Some(cp) = cp {
+                        self.insert_proto_override(cp);
+                    }
+                }
+                "forcegoto" => {
+                    let (target, dest) = read_two_addrs(decoder);
+                    if let (Some(t), Some(d)) = (target, dest) {
+                        self.insert_force_goto(t, d);
+                    }
+                }
+                "deadcodedelay" => {
+                    let mut space_idx = 0u64;
+                    let mut delay = 0i64;
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 {
+                            break;
+                        }
+                        match decoder.attribute_name(aid).as_deref() {
+                            Some("delay") => delay = decoder.read_signed_integer(),
+                            Some("space") => space_idx = decoder.read_unsigned_integer(),
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    if delay >= 0 {
+                        self.insert_deadcode_delay(space_idx as usize, delay as i32);
+                    }
+                }
+                "multistagejump" => {
+                    let cp = read_one_addr(decoder);
+                    if let Some(cp) = cp {
+                        self.insert_multistage_jump(cp);
+                    }
+                }
+                "flow" => {
+                    let mut flow_type = FlowOverride::None;
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 {
+                            break;
+                        }
+                        if decoder.attribute_name(aid).as_deref() == Some("type") {
+                            flow_type = FlowOverride::from_string(&decoder.read_string());
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    let addr = read_one_addr(decoder);
+                    if let Some(addr) = addr {
+                        if flow_type != FlowOverride::None {
+                            self.insert_flow_override(addr, flow_type);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(override_id);
+    }
+}
+
+/// Read a single `<addr>` child element, returning its address offset.
+/// Returns None if no addr element is found.
+fn read_one_addr(decoder: &mut dyn Decoder) -> Option<Address> {
+    let sub_id = decoder.peek_element();
+    if sub_id == 0 {
+        return None;
+    }
+    if decoder.element_name(sub_id).as_deref() != Some("addr") {
+        return None;
+    }
+    decoder.open_element();
+    let mut offset = 0u64;
+    loop {
+        let aid = decoder.next_attribute_id();
+        if aid == 0 {
+            break;
+        }
+        if decoder.attribute_name(aid).as_deref() == Some("space") {
+            offset = decoder.read_unsigned_integer();
+        } else {
+            let _ = decoder.read_string();
+        }
+    }
+    decoder.close_element(sub_id);
+    Some(Address::new(offset))
+}
+
+/// Read two consecutive `<addr>` child elements (e.g. for forcegoto/indirectoverride).
+fn read_two_addrs(decoder: &mut dyn Decoder) -> (Option<Address>, Option<Address>) {
+    let first = read_one_addr(decoder);
+    let second = read_one_addr(decoder);
+    (first, second)
 }
 
 #[cfg(test)]
@@ -419,5 +619,62 @@ mod tests {
         o.insert_deadcode_delay(2, 5);
         let pairs: Vec<_> = o.deadcode_delays().collect();
         assert_eq!(pairs, vec![(0, 2), (2, 5)]);
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        use crate::marshal::{IdRegistry, TreeDecoder, TreeEncoder};
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        {
+            let mut r = registry.write().unwrap();
+            for nm in &["space", "delay", "type"] {
+                r.register_attribute(nm);
+            }
+            for nm in &[
+                "override", "forcegoto", "deadcodedelay", "indirectoverride",
+                "protooverride", "multistagejump", "flow", "addr",
+            ] {
+                r.register_element(nm);
+            }
+        }
+        // Build an override with several command types.
+        let mut o = Override::new();
+        o.insert_force_goto(Address::new(0x1000), Address::new(0x2000));
+        o.insert_deadcode_delay(1, 3);
+        o.insert_indirect_override(Address::new(0x3000), Address::new(0x4000));
+        o.insert_proto_override(Address::new(0x5000));
+        o.insert_multistage_jump(Address::new(0x6000));
+        o.insert_flow_override(Address::new(0x7000), FlowOverride::Call);
+
+        // Encode.
+        let mut enc = TreeEncoder::new(registry.clone());
+        o.encode(&mut enc);
+        let doc = enc.into_document();
+        assert!(doc.get_root().is_some(), "override element should be encoded");
+
+        // Decode into a fresh override.
+        let root = doc.get_root().unwrap().clone();
+        let mut o2 = Override::new();
+        let mut dec = TreeDecoder::new(root, registry.clone());
+        o2.decode(&mut dec);
+
+        // Verify round-trip.
+        assert_eq!(o2.query_force_goto(Address::new(0x1000)), Some(Address::new(0x2000)));
+        assert_eq!(o2.get_deadcode_delay(1), 3);
+        assert_eq!(o2.apply_indirect(Address::new(0x3000)), Some(Address::new(0x4000)));
+        assert!(o2.apply_prototype(Address::new(0x5000)));
+        assert!(o2.query_multistage_jumptable(Address::new(0x6000)));
+        assert_eq!(o2.get_flow_override(Address::new(0x7000)), FlowOverride::Call);
+    }
+
+    #[test]
+    fn test_encode_empty_writes_nothing() {
+        use crate::marshal::{IdRegistry, TreeEncoder};
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        let mut enc = TreeEncoder::new(registry);
+        let o = Override::new();
+        o.encode(&mut enc);
+        let doc = enc.into_document();
+        assert!(doc.get_root().is_none(), "empty override should write nothing");
     }
 }

@@ -56,3 +56,20 @@ single function. Faithful to `Override` (override.hh:50).
 ## 2026-06-27（续）：apply_force_gotos CFG 集成
 
 - `apply_force_gotos(fd: &mut Funcdata) -> usize`（override.cc:204）：将所有 force-goto 覆写推入函数，调用 `fd.force_goto`。返回成功应用的覆写数。解锁 jumptable.rs 的 CFG 重写 L3 缺口。
+
+## 2026-06-27（续 2）：XML encode/decode 完成 — override.rs 达到 L3
+
+**Override 新增方法**：
+- `encode(encoder)`（override.cc:294）：编码 `<override>` 根元素 + 所有子命令：
+  - `<forcegoto>` + 两个 `<addr>` 子元素
+  - `<deadcodedelay>` + space/delay 属性
+  - `<indirectoverride>` + 两个 `<addr>` 子元素
+  - `<protooverride>` + `<addr>` 子元素
+  - `<multistagejump>` + `<addr>` 子元素
+  - `<flow type="...">` + `<addr>` 子元素
+- `decode(decoder)`（override.cc:356）：解码完整 `<override>` 元素（按 element_name 分发）。
+- 空覆写不写入任何内容（与 Ghidra 一致）。
+
+辅助函数：`read_one_addr(decoder) -> Option<Address>` + `read_two_addrs(decoder)`。
+
+测试：新增 2 个（encode/decode round-trip + empty encode）。override.rs 所有 L3 缺口已关闭。
