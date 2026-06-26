@@ -20,3 +20,14 @@ LEFT/RIGHT/SRIGHT/EQUAL/NOTEQUAL/LESS/SLESS/LESSEQUAL/SLESSEQUAL/
 CARRY/SCARRY/SBORROW/BOOL_AND/BOOL_OR/BOOL_XOR）。
 
 测试：opbehavior::tests 6 个（add/sub/and-or-xor/shifts/compare/unary）。
+
+## 2026-06-26（续）：opbehavior.rs 完善实现
+
+新增完整 opbehavior 功能：
+- `evaluate_unary`: 新增 POPCOUNT/LZCOUNT
+- `evaluate_binary`: 新增 PTRADD/PTRSUB/PIECE
+- `evaluate_ternary`: PTRADD 三元求值（opbehavior.hh:71）
+- `recover_input_unary`: 逆操作恢复（opbehavior.hh:77）
+- `recover_input_binary`: 逆操作恢复（opbehavior.hh:74）
+
+覆盖 Ghidra 的全部 evaluate/recoverInput 方法。
