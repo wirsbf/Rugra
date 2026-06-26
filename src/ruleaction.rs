@@ -5583,6 +5583,112 @@ impl Rule for RuleHumptyOr {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
+/// Simplify INT_EQUAL applied to 0: `0 == V + W * -1 => V == W`.
+/// Faithful to Ghidra's `RuleEqual2Zero` (ruleaction.cc:5857-5924).
+///
+/// Also handles `0 == V + c => V == -c` (constant offset). Applies to
+/// INT_NOTEQUAL as well. The sum must only be used in boolean comparisons.
+pub struct RuleEqual2Zero;
+
+impl RuleEqual2Zero {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleEqual2Zero {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleEqual2Zero::applyOp (ruleaction.cc:5868-5924).
+        let (addvn, central_opc) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            // Find which input is zero.
+            let addvn = if vn0.read().unwrap().is_constant() && vn0.read().unwrap().get_offset() == 0 {
+                vn1
+            } else if vn1.read().unwrap().is_constant() && vn1.read().unwrap().get_offset() == 0 {
+                vn0
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            };
+            (addvn, op.opcode)
+        };
+        // Make sure the sum is only used in comparisons.
+        let descends: Vec<_> = addvn.read().unwrap().descend_iter().collect();
+        for dop in &descends {
+            if !dop.read().unwrap().is_bool_output() {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // Get the addop.
+        if !addvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let addop = match addvn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+        let vn = addop.read().unwrap().inrefs.get(0).cloned();
+        let vn2 = addop.read().unwrap().inrefs.get(1).cloned();
+        let (vn, vn2) = match (vn, vn2) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+
+        // Determine posvn and unnegvn.
+        let (posvn, unnegvn) = if vn2.read().unwrap().is_constant() {
+            // 0 == V + c => V == -c
+            let val = vn2.read().unwrap().get_offset();
+            let neg_val = val.wrapping_neg().wrapping_sub(1).wrapping_add(1) & calc_mask(vn2.read().unwrap().get_size());
+            // uintb_negate(val-1, size) = (~val+1) & mask = -val & mask
+            let _ = neg_val;
+            let negated = (0i64.wrapping_sub(val as i64) as u64) & calc_mask(vn2.read().unwrap().get_size());
+            (vn.clone(), fd.new_constant(vn2.read().unwrap().get_size(), negated))
+        } else {
+            // Check for INT_MULT by -1.
+            let (negvn, posvn) = if vn.read().unwrap().is_written() {
+                let vn_def = vn.read().unwrap().get_def();
+                if let Some(d) = vn_def {
+                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
+                        (vn.clone(), vn2.clone())
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else if vn2.read().unwrap().is_written() {
+                let vn2_def = vn2.read().unwrap().get_def();
+                if let Some(d) = vn2_def {
+                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
+                        (vn2.clone(), vn.clone())
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            };
+            // Verify the multiplier is -1.
+            let negvn_def = negvn.read().unwrap().get_def();
+            let negop = match negvn_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let mult_const = match negop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !mult_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let unnegvn = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let multiplier = mult_const.read().unwrap().get_offset();
+            if multiplier != calc_mask(unnegvn.read().unwrap().get_size()) { return Ok(action_status::NO_CHANGE); }
+            (posvn, unnegvn)
+        };
+        let _ = central_opc;
+        fd.op_set_input(&follow, posvn, 0);
+        fd.op_set_input(&follow, unnegvn, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "equal2zero" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

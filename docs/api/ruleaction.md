@@ -642,3 +642,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `(V & ff00) | (V & 00ff) => V`（所有位覆盖 → COPY）
   - `(V & W) | (V & X) => V & (W|X)`（部分覆盖 → AND）
   - 非常量掩码：创建 INT_OR(b,c) + INT_AND(a,result)，检查 NZMask 防止 RuleAndDistribute 反转
+
+## 2026-06-27（续 14）：比较简化规则
+
+- **RuleEqual2Zero**：完整移植 ruleaction.cc:5857-5924。简化与 0 的比较：
+  - `0 == V + W * -1 => V == W`（乘以 -1 的形式）
+  - `0 == V + c => V == -c`（常量偏移形式）
+  - 验证 addvn 的所有后代都是布尔比较（isBoolOutput）
