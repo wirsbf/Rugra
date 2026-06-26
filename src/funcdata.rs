@@ -305,6 +305,86 @@ impl Funcdata {
         self.obank.mark_dead(op.clone());
     }
 
+    /// Recursively destroy an op and its now-dead defining ops. Faithful to
+    /// `Funcdata::opDestroyRecursive` (funcdata_op.cc:228-247). Destroys the
+    /// given op, then for each input Varnode that becomes dead (its only
+    /// reader was this op and it is not auto-live/call/indirect-source),
+    /// recursively destroys its defining op.
+    pub fn op_destroy_recursive(&mut self, op: &crate::op::PcodeOpRef) {
+        let mut scratch: Vec<crate::op::PcodeOpRef> = Vec::new();
+        scratch.push(op.clone());
+        let mut pos = 0;
+        while pos < scratch.len() {
+            let cur = scratch[pos].clone();
+            pos += 1;
+            // Collect input varnodes and check if their defining ops should be
+            // recursively destroyed.
+            let inrefs = cur.0.read().unwrap().inrefs.clone();
+            for in_vn in &inrefs {
+                let (is_written, lone_descend_none, def) = {
+                    let vn_rg = in_vn.read().unwrap();
+                    let lone = vn_rg.lone_descend();
+                    (
+                        vn_rg.is_written(),
+                        lone.is_none(),
+                        vn_rg.get_def(),
+                    )
+                };
+                if !is_written {
+                    continue;
+                }
+                if lone_descend_none {
+                    continue; // Still has descendants (or no def).
+                }
+                let Some(def_op) = def else { continue };
+                let def_ref = crate::op::PcodeOpRef(def_op);
+                // Skip call and indirect-source ops (faithful to Ghidra).
+                let is_call = def_ref.0.read().unwrap().is_call();
+                let is_indirect_source = {
+                    let f = def_ref.0.read().unwrap().flags;
+                    (f & crate::op::pcodeop_flags::INDIRECT_SOURCE) != 0
+                };
+                if is_call || is_indirect_source {
+                    continue;
+                }
+                scratch.push(def_ref);
+            }
+            self.op_destroy(&cur);
+        }
+    }
+
+    /// Replace every read reference of `vn` with `newvn`. Faithful to
+    /// `Funcdata::totalReplace` (funcdata_varnode.cc:1474-1487). Walks all
+    /// descendant ops of `vn` and sets their input slot to `newvn`.
+    pub fn total_replace(
+        &self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        newvn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        // Snapshot descendant ops and their slots referencing vn.
+        let replacements: Vec<(crate::op::PcodeOpRef, usize)> = {
+            let vn_rg = vn.read().unwrap();
+            vn_rg
+                .descend
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .filter_map(|op_arc| {
+                    let op_rg = op_arc.read().unwrap();
+                    // Find the slot referencing vn.
+                    let slot = op_rg
+                        .inrefs
+                        .iter()
+                        .position(|v| std::sync::Arc::ptr_eq(v, vn))?;
+                    drop(op_rg);
+                    Some((crate::op::PcodeOpRef(op_arc), slot))
+                })
+                .collect()
+        };
+        for (op, slot) in replacements {
+            self.op_set_input(&op, newvn.clone(), slot);
+        }
+    }
+
     /// Unset an input slot. Faithful to `Funcdata::opUnsetInput`
     /// (funcdata_op.cc). Removes the descend link from the input varnode and
     /// sets the slot to None (represented as removing from inrefs in Rugra).

@@ -3150,30 +3150,167 @@ impl Action for ActionLikelyTrash {
 /// Identifies MULTIEQUAL ops in the first address of each basic block that
 /// form shadow patterns (multiple MULTIEQUALs sharing inputs). These shadows
 /// are used by the merge pass to create proper variable representations.
-pub struct ActionShadowVar;
+pub struct ActionShadowVar {
+    /// Change counter (mirrors Ghidra's `count`).
+    pub count: i32,
+}
 impl ActionShadowVar {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionShadowVar {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. For each basic block:
-        //    - Iterate ops at the block's start address
-        //    - Find MULTIEQUAL ops whose input(0) is marked
-        //    - Collect these into oplist
-        //    - For each in oplist: check if shadow condition holds
-        //    - Mark/unmark as appropriate
+        // Faithful to ActionShadowVar::apply (coreaction.cc:892-946).
         //
+        // For each basic block, iterate the ops at the block's start address.
+        // MULTIEQUAL (phi) ops whose input(0) was already seen (marked) in this
+        // block are collected. Then for each collected MULTIEQUAL, walk
+        // backward through the block's MULTIEQUALs looking for one whose inputs
+        // all match; if found, rewrite the collected op as a COPY of the
+        // earlier op's output.
+        use crate::block::BlockBasic;
         use crate::opcodes::OpCode;
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_MULTIEQUAL {
-                // Potential shadow var candidate.
+        use std::sync::Arc;
+
+        let mut local_count = 0i32;
+
+        // Phase 1: per-block scan to find candidate MULTIEQUALs whose input(0)
+        // is a duplicate (already marked).
+        // oplist holds MULTIEQUAL ops that should be rewritten.
+        let mut oplist: Vec<crate::op::PcodeOpRef> = Vec::new();
+        // vnlist holds input(0) Varnodes that were marked, so we can clear
+        // marks afterward.
+        let mut vnlist: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+
+        for i in 0..fd.bblocks.get_size() {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            // Read the block's ops and its start offset.
+            let (start_offset, block_ops): (u64, Vec<crate::op::PcodeOpRef>) = {
+                let bl_rg = bl.read().unwrap();
+                if let Some(bb) = bl_rg.as_any().downcast_ref::<BlockBasic>() {
+                    let start = if let Some(first) = bb.ops.first() {
+                        first.0.read().unwrap().get_addr().as_u64()
+                    } else {
+                        continue;
+                    };
+                    (start, bb.ops.clone())
+                } else {
+                    continue;
+                }
+            };
+
+            // Iterate ops at the start address. Ghidra walks via beginOp until
+            // the address changes, collecting MULTIEQUALs whose input(0) is
+            // already marked.
+            for op_ref in &block_ops {
+                let op_addr = op_ref.0.read().unwrap().get_addr().as_u64();
+                if op_addr != start_offset {
+                    break; // Past the start address group.
+                }
+                let opcode = op_ref.0.read().unwrap().opcode;
+                if opcode != OpCode::CPUI_MULTIEQUAL {
+                    continue;
+                }
+                let in0 = op_ref.0.read().unwrap().get_in(0).cloned();
+                let Some(in0_vn) = in0 else { continue };
+                let already_marked = in0_vn.read().unwrap().is_mark();
+                if already_marked {
+                    oplist.push(op_ref.clone());
+                } else {
+                    in0_vn.write().unwrap().set_mark();
+                    vnlist.push(in0_vn);
+                }
             }
+            // Clear marks set during this block's scan.
+            for vn in &vnlist {
+                vn.write().unwrap().clear_mark();
+            }
+            vnlist.clear();
+        }
+
+        // Phase 2: for each candidate op, walk backward through the block's
+        // ops looking for a MULTIEQUAL with identical inputs. If found,
+        // rewrite the candidate as a COPY of the earlier op's output.
+        for op in &oplist {
+            // Gather this op's block ops and find the op's index.
+            let block_ops = get_block_ops(fd, op);
+            let op_idx = match block_ops.iter().position(|o| Arc::ptr_eq(&o.0, &op.0)) {
+                Some(idx) => idx,
+                None => continue,
+            };
+            // Snapshot inputs for comparison.
+            let op_inputs: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+                let op_rg = op.0.read().unwrap();
+                op_rg.inrefs.iter().cloned().collect()
+            };
+            // Walk backward from op_idx.
+            for prev_idx in (0..op_idx).rev() {
+                let prev = &block_ops[prev_idx];
+                let prev_opcode = prev.0.read().unwrap().opcode;
+                if prev_opcode != OpCode::CPUI_MULTIEQUAL {
+                    continue;
+                }
+                // Check if all inputs match.
+                let prev_rg = prev.0.read().unwrap();
+                if prev_rg.inrefs.len() != op_inputs.len() {
+                    continue;
+                }
+                let all_match = prev_rg
+                    .inrefs
+                    .iter()
+                    .zip(&op_inputs)
+                    .all(|(a, b)| Arc::ptr_eq(a, b));
+                if !all_match {
+                    continue;
+                }
+                // Found a match: rewrite op as COPY(prev_output).
+                let prev_out = prev_rg.output.clone();
+                drop(prev_rg);
+                if let Some(prev_out) = prev_out {
+                    fd.op_set_opcode(op, OpCode::CPUI_COPY);
+                    // Ghidra: opSetAllInput(op, {prev_out}). In Rugra, we
+                    // truncate inputs to 1 and set slot 0.
+                    while op.0.read().unwrap().inrefs.len() > 1 {
+                        fd.op_remove_input(op, op.0.read().unwrap().inrefs.len() - 1);
+                    }
+                    if op.0.read().unwrap().inrefs.is_empty() {
+                        fd.op_set_input(op, prev_out, 0);
+                    } else {
+                        fd.op_set_input(op, prev_out, 0);
+                    }
+                    local_count += 1;
+                }
+                break;
+            }
+        }
+
+        if local_count > 0 {
+            return Ok(action_status::CHANGE);
         }
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "shadowvar" }
+}
+
+/// Helper: get the basic-block ops list containing the given op. Returns an
+/// empty Vec if the op is not in any BlockBasic.
+fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef> {
+    use crate::block::BlockBasic;
+    for i in 0..fd.bblocks.get_size() {
+        let bl = match fd.bblocks.get_block(i) {
+            Some(b) => b,
+            None => continue,
+        };
+        let bl_rg = bl.read().unwrap();
+        if let Some(bb) = bl_rg.as_any().downcast_ref::<BlockBasic>() {
+            if bb.ops.iter().any(|o| std::sync::Arc::ptr_eq(&o.0, &op.0)) {
+                return bb.ops.clone();
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// FuncLink: link function calls. Faithful to `ActionFuncLink`

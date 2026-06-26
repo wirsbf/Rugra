@@ -451,7 +451,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 最后升级的 10 个 Actions：
 - **ActionDirectWrite**：遍历 VarnodeBank 检查 spacebase 输入。
 - **ActionLikelyTrash**：访问 FuncProto。
-- **ActionShadowVar**：扫描 MULTIEQUAL ops。
+- **ActionShadowVar**：✅ **完整算法** — 逐基本块遍历 start-address 处的 MULTIEQUAL，检测 input(0) 重复标记（shadow），收集候选后向前搜索匹配 inputs 的 MULTIEQUAL 并重写为 COPY（faithful to coreaction.cc:892-946）。
 - **ActionConditionalConst**：扫描 CBRANCH + 常量条件检测。
 - **ActionForceGoto**：override 应用框架。
 - **ActionRestrictLocal**：遍历 callspecs。
@@ -461,3 +461,16 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionNameVars**：遍历输入 Varnodes。
 
 **零 stub** = 58/58 Actions 都在 apply() 中访问 Funcdata 数据。
+
+## 2026-06-27（续 16）：ActionShadowVar 完整算法实现
+
+- **ActionShadowVar**：完整忠实移植 coreaction.cc:892-946。两阶段算法：
+  1. **Phase 1（逐块扫描）**：对每个基本块，遍历 start-address 处的 ops，对每个 MULTIEQUAL 检查 input(0) 是否已被标记（说明此前在同一个块中出现过相同 input(0) 的 MULTIEQUAL）。如果是，收集到 oplist；否则标记 input(0)。
+  2. **Phase 2（重写）**：对每个候选 op，向前搜索块内 MULTIEQUAL，检查是否所有 inputs 完全匹配（Arc::ptr_eq）。如果找到，将候选 op 重写为 COPY(匹配 op 的 output)，并截断 inputs 到 1。
+  - 新增辅助函数 `get_block_ops(fd, op)` — 查找包含给定 op 的 BlockBasic 的 ops 列表。
+  - 返回 CHANGE 计数（如有重写）。
+
+## 2026-06-27（续 16b）：Funcdata 基础设施补充
+
+- **Funcdata::op_destroy_recursive(op)** — faithful to funcdata_op.cc:228-247。递归销毁 op 及其变为死代码的定义 op（跳过 call/indirect-source/auto-live）。用于 ActionMultiCse/constseq 等需要递归清理的变换。
+- **Funcdata::total_replace(vn, newvn)** — faithful to funcdata_varnode.cc:1474-1487。将 vn 的所有读取引用替换为 newvn。用于 ActionMultiCse 的 totalReplace 和 constseq 的 totalReplace。

@@ -628,6 +628,11 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
 解锁 RuleEarlyRemoval。
 
+### 2026-06-27（续）：op_destroy_recursive / total_replace
+
+- `op_destroy_recursive(op)` — `Funcdata::opDestroyRecursive`（funcdata_op.cc:228）：递归销毁 op 及其变为死代码的定义 op（跳过 call/indirect-source）。使用 scratch worklist 避免递归栈溢出。
+- `total_replace(vn, newvn)` — `Funcdata::totalReplace`（funcdata_varnode.cc:1474）：将 vn 的所有读取引用替换为 newvn（遍历 descend 链 + op_set_input）。解锁 ActionMultiCse、constseq。
+
 ### 2026-06-26（续）：op_unset_output / new_varnode_out
 
 - `op_unset_output(op)` — `Funcdata::opUnsetOutput`：断开 op 输出 def 链。
