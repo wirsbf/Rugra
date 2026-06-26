@@ -76,6 +76,7 @@ pub mod binary;
 pub mod disasm;
 pub mod ffi;
 pub mod tracedag;
+pub mod varmap;
 
 mod error;
 mod types;
