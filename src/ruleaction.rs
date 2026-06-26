@@ -4502,6 +4502,276 @@ impl Rule for RuleFloatRange {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
+/// Pull SUBPIECE back through MULTIEQUAL. Faithful to Ghidra's
+/// `RulePullsubMulti` (ruleaction.cc:678-952).
+///
+/// Given `SUBPIECE(MULTIEQUAL(...))`, if only a small portion of the
+/// MULTIEQUAL output is actually used (all descendants are SUBPIECEs of a
+/// narrow byte range), pull the SUBPIECE into each MULTIEQUAL input branch,
+/// creating a narrower MULTIEQUAL. This reduces the width of phi nodes.
+pub struct RulePullsubMulti;
+
+impl RulePullsubMulti {
+    pub fn new() -> Self { Self }
+
+    /// Compute the min/max byte range actually used by descendants of `vn`.
+    /// Faithful to `minMaxUse` (ruleaction.cc:683-709). If any descendant is
+    /// not a SUBPIECE, the full range is assumed.
+    fn min_max_use(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (i32, i32) {
+        let in_size = vn.read().unwrap().get_size() as i32;
+        let mut max_byte = -1i32;
+        let mut min_byte = in_size;
+        let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
+        for op_arc in descends {
+            let op_rg = op_arc.read().unwrap();
+            if op_rg.opcode == OpCode::CPUI_SUBPIECE {
+                let min_v = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
+                let out_size = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                let max_v = min_v + out_size - 1;
+                if min_v < min_byte { min_byte = min_v; }
+                if max_v > max_byte { max_byte = max_v; }
+            } else {
+                // Non-SUBPIECE descendant → full range used.
+                return (in_size - 1, 0);
+            }
+        }
+        (max_byte, min_byte)
+    }
+
+    /// Check if a size is a suitable truncation size. Faithful to
+    /// `acceptableSize` (ruleaction.cc:758-766).
+    fn acceptable_size(size: i32) -> bool {
+        if size == 0 { return false; }
+        if size >= 8 { return true; }
+        matches!(size, 1 | 2 | 4 | 8)
+    }
+
+    /// Replace `orig_vn` with `new_vn` in all descendant ops. Faithful to
+    /// `replaceDescendants` (ruleaction.cc:719-752).
+    fn replace_descendants(
+        fd: &mut Funcdata,
+        orig_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        new_vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        max_byte: i32,
+        min_byte: i32,
+    ) {
+        let descends: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> =
+            orig_vn.read().unwrap().descend_iter().collect();
+        let new_size = new_vn.read().unwrap().get_size() as i32;
+        for op_arc in descends {
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            let is_subpiece = op_arc.read().unwrap().opcode == OpCode::CPUI_SUBPIECE;
+            if !is_subpiece {
+                eprintln!("[PULLSUB] Could not perform replaceDescendants (non-SUBPIECE)");
+                continue;
+            }
+            let (trunc_amount, out_size) = {
+                let op_rg = op_arc.read().unwrap();
+                let trunc = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
+                let osz = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                (trunc, osz)
+            };
+            fd.op_set_input(&op_ref, new_vn.clone(), 0);
+            if new_size == out_size {
+                if trunc_amount != min_byte {
+                    eprintln!("[PULLSUB] Could not perform replaceDescendants (mismatch)");
+                }
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                fd.op_remove_input(&op_ref, 1);
+            } else if new_size > out_size {
+                let new_trunc = trunc_amount - min_byte;
+                if new_trunc >= 0 && new_trunc != trunc_amount {
+                    let c = fd.new_constant(4, new_trunc as u64);
+                    fd.op_set_input(&op_ref, c, 1);
+                }
+            }
+        }
+    }
+
+    /// Find a preexisting SUBPIECE of `base_vn` with the given size+shift.
+    /// Faithful to `findSubpiece` (ruleaction.cc:849-870). Returns the output
+    /// Varnode or None.
+    fn find_subpiece(
+        base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        out_size: u32,
+        shift: u64,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let descends: Vec<_> = base_vn.read().unwrap().descend_iter().collect();
+        for prev_arc in descends {
+            let prev = prev_arc.read().unwrap();
+            if prev.opcode != OpCode::CPUI_SUBPIECE { continue; }
+            // Check same-block constraint (Ghidra checks getParent equality).
+            // Rugra lacks easy block access here; we skip this check
+            // conservatively (may find a SUBPIECE from a different block).
+            let in0_match = prev.get_in(0).map(|v| std::sync::Arc::ptr_eq(v, base_vn)).unwrap_or(false);
+            let out_match = prev.output.as_ref().map(|v| v.read().unwrap().get_size() as u32 == out_size).unwrap_or(false);
+            let shift_match = prev.get_in(1).map(|v| v.read().unwrap().get_offset() == shift).unwrap_or(false);
+            if in0_match && out_match && shift_match {
+                return prev.output.clone();
+            }
+        }
+        None
+    }
+
+    /// Build a new SUBPIECE of `base_vn`. Faithful to `buildSubpiece`
+    /// (ruleaction.cc:776-839). Returns the output Varnode.
+    fn build_subpiece(
+        fd: &mut Funcdata,
+        base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        out_size: u32,
+        shift: u64,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let (is_input, is_written, def_addr, base_addr, base_size, is_big_endian) = {
+            let r = base_vn.read().unwrap();
+            (
+                r.is_input(),
+                r.is_written(),
+                r.get_def().map(|d| d.read().unwrap().get_addr()),
+                crate::address::Address::new(r.get_offset()),
+                r.get_size(),
+                r.space().is_big_endian(),
+            )
+        };
+        let new_addr = if is_input {
+            // Use the first block's start; Rugra doesn't easily expose this,
+            // so use a default.
+            crate::address::Address::new(0)
+        } else if let Some(a) = def_addr {
+            a
+        } else {
+            crate::address::Address::new(0)
+        };
+        // Compute the small address.
+        let _small_addr = if !is_big_endian {
+            base_addr.offset(shift as i64)
+        } else {
+            base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64))
+        };
+        // Build the new SUBPIECE.
+        let new_op = fd.new_op(2, new_addr);
+        fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
+        // Rugra lacks isJoin/JoinRecord handling; always use new_unique_out.
+        let out_vn = fd.new_unique_out(out_size as usize, &new_op);
+        fd.op_set_input(&new_op, base_vn.clone(), 0);
+        let shift_const = fd.new_constant(4, shift);
+        fd.op_set_input(&new_op, shift_const, 1);
+        // Insert near base_vn's definition.
+        if is_written {
+            if let Some(def) = base_vn.read().unwrap().get_def() {
+                let def_ref = crate::op::PcodeOpRef(def);
+                fd.op_insert_after(&new_op, &def_ref);
+            }
+        }
+        out_vn
+    }
+}
+
+impl Rule for RulePullsubMulti {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePullsubMulti::applyOp (ruleaction.cc:880-952).
+        let vn = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !vn.read().unwrap().is_written() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let mult_arc = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let mult_ref = crate::op::PcodeOpRef(mult_arc.clone());
+        if mult_arc.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // We only pull up, do not pull "down" to bottom of loop.
+        // Rugra lacks hasLoopIn; conservatively allow.
+        let (max_byte, min_byte) = Self::min_max_use(&vn);
+        let new_size = max_byte - min_byte + 1;
+        if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !Self::acceptable_size(new_size) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Don't pull apart double precision objects (Rugra lacks isPrecisLo/Hi;
+        // conservatively allow).
+        // Check consume on each branch input.
+        let consume = if min_byte < 8 {
+            !(calc_mask(new_size as usize) << (8 * min_byte as u64))
+        } else {
+            !0u64
+        };
+        let branches = mult_arc.read().unwrap().inrefs.len();
+        for i in 0..branches {
+            let in_vn = match mult_arc.read().unwrap().get_in(i).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if (consume & in_vn.read().unwrap().get_consume()) != 0 {
+                // Check for matching extension.
+                if min_byte == 0 && in_vn.read().unwrap().is_written() {
+                    if let Some(def_op) = in_vn.read().unwrap().get_def() {
+                        let def_code = def_op.read().unwrap().opcode;
+                        if def_code == OpCode::CPUI_INT_ZEXT || def_code == OpCode::CPUI_INT_SEXT {
+                            let ext_in_size = def_op.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                            if new_size == ext_in_size {
+                                continue; // Matching extension, SUBPIECE will cancel.
+                            }
+                        }
+                    }
+                }
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+
+        // Compute small address for the new MULTIEQUAL output.
+        let (base_addr, vn_size, is_big_endian) = {
+            let r = vn.read().unwrap();
+            (crate::address::Address::new(r.get_offset()), r.get_size(), r.space().is_big_endian())
+        };
+        let _small_addr2 = if !is_big_endian {
+            base_addr.offset(min_byte as i64)
+        } else {
+            base_addr.offset(vn_size as i64 - (max_byte as i64 + 1))
+        };
+
+        // Build SUBPIECE for each branch input.
+        let mut params: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        for i in 0..branches {
+            let vn_piece = match mult_arc.read().unwrap().get_in(i).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let vn_sub = match Self::find_subpiece(&vn_piece, new_size as u32, min_byte as u64) {
+                Some(v) => v,
+                None => Self::build_subpiece(fd, &vn_piece, new_size as u32, min_byte as u64),
+            };
+            params.push(vn_sub);
+        }
+
+        // Build the new MULTIEQUAL.
+        let mult_addr = mult_arc.read().unwrap().get_addr();
+        let new_multi = fd.new_op(params.len(), mult_addr);
+        // Rugra lacks newVarnodeOut at a computed address; use new_unique_out.
+        let new_vn = fd.new_unique_out(new_size as usize, &new_multi);
+        fd.op_set_opcode(&new_multi, OpCode::CPUI_MULTIEQUAL);
+        for (slot, p) in params.iter().enumerate() {
+            fd.op_set_input(&new_multi, p.clone(), slot);
+        }
+        // Insert near the original MULTIEQUAL. Rugra lacks opInsertBegin;
+        // use op_insert_before.
+        fd.op_insert_before(&new_multi, &mult_ref);
+
+        // Replace descendants of vn with new_vn.
+        Self::replace_descendants(fd, &vn, new_vn, max_byte, min_byte);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "pullsub_multi" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

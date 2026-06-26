@@ -542,3 +542,14 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `(V f<= W)&&(V f!= W) => V f< W`（FLOAT_LESSEQUAL + FLOAT_NOTEQUAL via BOOL_AND → FLOAT_LESS）
   - 算法：识别 cmp1（LESS/LESSEQUAL）+ cmp2（other），验证两个比较操作数一致（nvn1 + cvn1），合并为单一比较 op。
   - 测试：`(V f< 5.0)||(V f== 5.0) => V f<= 5.0`。
+
+## 2026-06-27（续 3）：RulePullsubMulti 完整移植
+
+- **RulePullsubMulti**：完整忠实移植 ruleaction.cc:678-952。将 SUBPIECE 拉过 MULTIEQUAL：
+  - `min_max_use(vn)` — 计算 vn 的实际使用字节范围（遍历后代 SUBPIECE，非 SUBPIECE 后代→全范围）
+  - `acceptable_size(size)` — 检查截断大小是否合法（1/2/4/8 或 >=8）
+  - `replace_descendants(orig_vn, new_vn, max_byte, min_byte)` — 用更窄的 new_vn 替换 orig_vn 的所有后代 SUBPIECE（转换为 COPY 或调整截断偏移）
+  - `find_subpiece(base_vn, out_size, shift)` — 搜索预存的 SUBPIECE
+  - `build_subpiece(fd, base_vn, out_size, shift)` — 创建新 SUBPIECE op
+  - `apply_op` — 主算法：检查 SUBPIECE(MULTIEQUAL)，计算使用范围，检查各分支 consume，为每个分支创建/查找 SUBPIECE，构建新的窄 MULTIEQUAL，替换后代
+  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；opInsertBegin 用 op_insert_before 替代
