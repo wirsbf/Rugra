@@ -530,3 +530,7 @@
 ## 2026-06-27（续 13）：新增 paramid 模块
 
 - `pub mod paramid;` — 对应 `paramid.hh`，参数识别分析。ParamMeasure（walk_forward/walk_backward 数据流分类）+ ParamRank（i32 常量，允许重复值如 Ghidra）+ ParamIDAnalysis + WalkState。calculate_rank 主入口。L3 缺 Funcdata 集成 + isLoopIn + XML encode。
+
+## 2026-06-27（续 14）：新增 unionresolve 模块
+
+- `pub mod unionresolve;` — 对应 `unionresolve.hh`，联合体字段解析。ResolvedUnion（resolve/base/field_num/lock）+ ResolveEdge（type_id/op_time/encoding + 指针编码）+ DirType（FitDown/FitUp）+ Trial（向下/向上试验）+ VisitMark（已访问标记）+ ScoreUnionFields（评分框架 + compute_best_index + run stub）。解锁 ActionUnionStats。L3 缺完整评分算法（需 TypeFactory + PcodeOp）。
