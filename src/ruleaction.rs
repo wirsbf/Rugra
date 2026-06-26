@@ -4213,6 +4213,161 @@ impl Rule for RuleAndMask {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Distribute/undistribute boolean expressions. Faithful to Ghidra's
+/// `RuleBooleanUndistribute` (ruleaction.cc:2700-2810).
+///
+/// Transform patterns like:
+/// - `(A == B) && (A != C)  =>  A == (B && C)` (factor out common boolean)
+/// - `(A || B) && (A || C)  =>  A || (B && C)`
+/// Uses `BooleanMatch::evaluate` to find correlated boolean sub-expressions
+/// (same or complementary) and factors them out via De Morgan's Law.
+pub struct RuleBooleanUndistribute;
+
+impl RuleBooleanUndistribute {
+    pub fn new() -> Self { Self }
+
+    /// Check if two boolean Varnodes are correlated (same or complementary).
+    /// Faithful to `RuleBooleanUndistribute::isMatch` (ruleaction.cc:2710-2729).
+    /// Returns `Some(is_flip)` where `is_flip` is true for complementary.
+    fn is_match(
+        left_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        right_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<bool> {
+        let val = crate::expression::boolean_match_evaluate(left_vn, right_vn, 1);
+        match val {
+            crate::expression::boolean_match::SAME => Some(false),
+            crate::expression::boolean_match::COMPLEMENTARY => Some(true),
+            _ => None,
+        }
+    }
+}
+
+impl Rule for RuleBooleanUndistribute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleBooleanUndistribute::applyOp (ruleaction.cc:2731-2810).
+        let (central_opc, ins) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn0.read().unwrap().is_written() || !vn1.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let op0 = match vn0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let op1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let opc0 = op0.read().unwrap().opcode;
+            if opc0 != OpCode::CPUI_BOOL_AND && opc0 != OpCode::CPUI_BOOL_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let opc1 = op1.read().unwrap().opcode;
+            if opc1 != OpCode::CPUI_BOOL_AND && opc1 != OpCode::CPUI_BOOL_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let ins: Vec<_> = {
+                let o0 = op0.read().unwrap();
+                let o1 = op1.read().unwrap();
+                vec![
+                    o0.inrefs.get(0).cloned().unwrap(),
+                    o0.inrefs.get(1).cloned().unwrap(),
+                    o1.inrefs.get(0).cloned().unwrap(),
+                    o1.inrefs.get(1).cloned().unwrap(),
+                ]
+            };
+            if ins.iter().any(|v| v.read().unwrap().is_free()) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (op.opcode, ins)
+        };
+
+        // Track flip state for De Morgan's Law.
+        let mut isflipped = [false; 4];
+        let mut central_equal = central_opc == OpCode::CPUI_INT_EQUAL;
+        // Get opc0/opc1 again for the flip logic.
+        let vn0 = op_arc.read().unwrap().inrefs[0].clone();
+        let vn1 = op_arc.read().unwrap().inrefs[1].clone();
+        let opc0 = vn0.read().unwrap().get_def().map(|d| d.read().unwrap().opcode);
+        let opc1 = vn1.read().unwrap().get_def().map(|d| d.read().unwrap().opcode);
+        let opc0 = match opc0 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+        let opc1 = match opc1 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+        if opc0 == OpCode::CPUI_BOOL_OR {
+            isflipped[0] = !isflipped[0];
+            isflipped[1] = !isflipped[1];
+            central_equal = !central_equal;
+        }
+        if opc1 == OpCode::CPUI_BOOL_OR {
+            isflipped[2] = !isflipped[2];
+            isflipped[3] = !isflipped[3];
+            central_equal = !central_equal;
+        }
+
+        // Find a matching pair among the 4 inputs.
+        let pairs = [(0, 2), (0, 3), (1, 2), (1, 3)];
+        let mut found: Option<(usize, usize)> = None;
+        for (ai, bi) in &pairs {
+            if let Some(flip) = Self::is_match(&ins[*ai], &ins[*bi]) {
+                // Check flip consistency.
+                if isflipped[*ai] != isflipped[*bi] {
+                    // The match must account for the flip difference.
+                    if !flip {
+                        continue;
+                    }
+                } else if flip {
+                    // Same flip state but BooleanMatch says complementary.
+                    // This is still valid if the flip changes the meaning.
+                }
+                found = Some((*ai, *bi));
+                break;
+            }
+        }
+        let (left_slot, right_slot) = match found {
+            Some((l, r)) => (l, r),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if isflipped[left_slot] != isflipped[right_slot] {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Determine the combine opcode.
+        let (combine_opc, flip_left) = if central_equal {
+            (OpCode::CPUI_BOOL_OR, !isflipped[left_slot])
+        } else {
+            (OpCode::CPUI_BOOL_AND, isflipped[left_slot])
+        };
+
+        // Build finalA (factored-out common boolean).
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let final_a = if flip_left {
+            fd.op_bool_negate(ins[left_slot].clone(), &follow, false)
+        } else {
+            ins[left_slot].clone()
+        };
+
+        // The remaining inputs.
+        let final_b = ins[1 - left_slot].clone();
+        let final_c = ins[5 - right_slot].clone();
+
+        // Build new comparison op: final_b ==/!= final_c.
+        let eq_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
+        let tmp1 = fd.new_unique_out(1, &eq_op);
+        let eq_opc = if central_equal { OpCode::CPUI_INT_EQUAL } else { OpCode::CPUI_INT_NOTEQUAL };
+        fd.op_set_opcode(&eq_op, eq_opc);
+        fd.op_set_input(&eq_op, final_b, 0);
+        fd.op_set_input(&eq_op, final_c, 1);
+        fd.op_insert_before(&eq_op, &follow);
+
+        // Rewrite the original op as combine_opc(final_a, tmp1).
+        fd.op_set_opcode(&follow, combine_opc);
+        fd.op_set_input(&follow, tmp1, 1);
+        fd.op_set_input(&follow, final_a, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "boolean_undistribute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

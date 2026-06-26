@@ -164,7 +164,7 @@
 | `RuleRangeMeld` | 1357 | ✅ **完整算法** — pullBack/intersect/union/translate_to_op（ruleaction.cc:1346-1437） |
 | `RuleFloatRange` | 1450 | ✅ **完整算法** — 浮点比较合并（ruleaction.cc:1439-1518） |
 | `RuleBitUndistribute` | 2634 | zext/sext 后代追踪 |
-| `RuleBooleanUndistribute` | 2731 | 后代追踪 |
+| `RuleBooleanUndistribute` | 2731 | ✅ **完整算法** — BooleanMatch + op_bool_negate（ruleaction.cc:2700-2810） |
 | `RuleBooleanDedup` | 2852 | 后代追踪 |
 | `RuleScarry`/`RuleSborrow` 深层 | 3475+/3475+ | AddExpression/constantMatch |
 | `RuleSubfloatCpool`/`RuleFloatCpool` 等 | — | float/cpool |

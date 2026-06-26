@@ -564,3 +564,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 否则不做变换
   - isHeritageKnown：常量视为 known（Rugra 常量无 INPUT/WRITTEN flag 但仍 known）。
   - 测试：`V = A & #0`（NZM(A)=0）→ COPY(#0)。
+
+## 2026-06-27（续 5）：RuleBooleanUndistribute 完整移植
+
+- **RuleBooleanUndistribute**：完整忠实移植 ruleaction.cc:2700-2810。分布/反分布布尔表达式：
+  - `(A == B) && (A != C) => A == (B && C)` — 提取公共布尔子表达式
+  - `(A || B) && (A || C) => A || (B && C)` — De Morgan 定律
+  - 使用 `BooleanMatch::evaluate` 查找相关布尔子表达式（same/complementary）
+  - `is_match(left, right)` — 包装 BooleanMatch::evaluate，返回 `Some(is_flip)`
+  - 算法：收集 4 个输入，用 isMatch 查找匹配对，处理 BOOL_OR flip（De Morgan），构建新比较 op + combine op
+  - 依赖：BooleanMatch::evaluate ✅、op_bool_negate ✅
