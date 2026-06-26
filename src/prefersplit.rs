@@ -8,8 +8,12 @@
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/prefersplit.{hh,cc}.
 
-use crate::address::Address;
+use crate::address::{calc_mask, Address};
+use crate::funcdata::Funcdata;
+use crate::op::PcodeOpRef;
+use crate::opcodes::OpCode;
 use crate::space::AddressSpace;
+use crate::varnode::Varnode;
 use std::sync::{Arc, RwLock};
 
 /// A record indicating that a specific storage location should be split into
@@ -39,8 +43,8 @@ impl PreferSplitRecord {
     }
 
     /// Compare two records for sorting. Faithful to `operator<`
-    /// (prefersplit.cc). Orders by space index, then size (descending), then
-    /// offset.
+    /// (prefersplit.cc:23-31). Orders by space index, then size (descending),
+    /// then offset.
     pub fn less_than(&self, op2: &PreferSplitRecord) -> bool {
         let s1 = self.storage_space.space_id();
         let s2 = op2.storage_space.space_id();
@@ -55,7 +59,7 @@ impl PreferSplitRecord {
 }
 
 /// Sort a vector of PreferSplitRecords. Faithful to `PreferSplitManager::initialize`
-/// (prefersplit.cc).
+/// (prefersplit.cc:552-556).
 pub fn initialize(records: &mut Vec<PreferSplitRecord>) {
     records.sort_by(|a, b| {
         if a.less_than(b) {
@@ -68,77 +72,64 @@ pub fn initialize(records: &mut Vec<PreferSplitRecord>) {
     });
 }
 
-/// An instance of a split varnode being processed. Faithful to
-/// `PreferSplitManager::SplitInstance` (prefersplit.hh:34).
-#[derive(Debug)]
+/// An instance of a split varnode being processed. Faithful to the private
+/// nested class `PreferSplitManager::SplitInstance` (prefersplit.hh:34-42).
+///
+/// In Ghidra this holds a raw `Varnode*`; Rugra uses an `Arc` reference. The
+/// `hi`/`lo` fields hold the computed most-/least-significant piece varnodes.
+#[derive(Clone)]
 pub struct SplitInstance {
     /// Number of initial bytes in the first piece.
     pub splitoffset: i32,
-    /// The original varnode offset being split.
-    pub vn_offset: u64,
-    /// The size of the original varnode.
-    pub vn_size: u32,
-    /// The most-significant piece offset.
-    pub hi_offset: Option<u64>,
-    /// The least-significant piece offset.
-    pub lo_offset: Option<u64>,
+    /// The original varnode being split.
+    pub vn: Arc<RwLock<Varnode>>,
+    /// The most-significant piece (filled by `fillin_instance`).
+    pub hi: Option<Arc<RwLock<Varnode>>>,
+    /// The least-significant piece (filled by `fillin_instance`).
+    pub lo: Option<Arc<RwLock<Varnode>>>,
+}
+
+impl std::fmt::Debug for SplitInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SplitInstance")
+            .field("splitoffset", &self.splitoffset)
+            .field("vn", &"<Varnode>")
+            .field("hi", &self.hi.as_ref().map(|_| "<Varnode>"))
+            .field("lo", &self.lo.as_ref().map(|_| "<Varnode>"))
+            .finish()
+    }
 }
 
 impl SplitInstance {
-    /// Construct given the varnode details and split offset. Faithful to the
+    /// Construct given the varnode reference and split offset. Faithful to the
     /// constructor (prefersplit.hh:41).
-    pub fn new(vn_offset: u64, vn_size: u32, off: i32) -> Self {
+    pub fn new(vn: Arc<RwLock<Varnode>>, off: i32) -> Self {
         Self {
             splitoffset: off,
-            vn_offset,
-            vn_size,
-            hi_offset: None,
-            lo_offset: None,
+            vn,
+            hi: None,
+            lo: None,
         }
-    }
-
-    /// Define the varnode pieces. Faithful to `fillinInstance`
-    /// (prefersplit.cc). Computes the hi/lo piece sizes based on endianness.
-    /// `sethi`/`setlo` control which pieces to compute.
-    pub fn fillin(&mut self, bigendian: bool, sethi: bool, setlo: bool) {
-        let losize = if bigendian {
-            self.vn_size as i32 - self.splitoffset
-        } else {
-            self.splitoffset
-        };
-        let hisize = self.vn_size as i32 - losize;
-        if setlo {
-            // The low piece is at the base offset, size losize.
-            self.lo_offset = Some(self.vn_offset);
-        }
-        if sethi {
-            // The high piece is at base + losize, size hisize.
-            self.hi_offset = Some(self.vn_offset + losize as u64);
-        }
-        let _ = hisize;
-    }
-
-    /// Get the low piece size in bytes.
-    pub fn lo_size(&self, bigendian: bool) -> u32 {
-        if bigendian {
-            (self.vn_size as i32 - self.splitoffset) as u32
-        } else {
-            self.splitoffset as u32
-        }
-    }
-
-    /// Get the high piece size in bytes.
-    pub fn hi_size(&self, bigendian: bool) -> u32 {
-        self.vn_size - self.lo_size(bigendian)
     }
 }
 
 /// Manages the splitting of varnodes based on a list of PreferSplitRecords.
-/// Faithful to `PreferSplitManager` (prefersplit.hh:33).
+/// Faithful to `PreferSplitManager` (prefersplit.hh:33-72).
 pub struct PreferSplitManager {
+    /// The Funcdata being operated on (set via `split`/`split_additional`).
+    data: Option<*mut Funcdata>,
     /// The records describing which storage locations to split.
     records: Vec<PreferSplitRecord>,
+    /// COPY ops of temporaries that need additional splitting
+    /// (prefersplit.hh:45). Stored as `PcodeOpRef` to keep the Arc alive.
+    tempsplits: Vec<PcodeOpRef>,
 }
+
+// SAFETY: The raw `*mut Funcdata` pointer is only dereferenced within `&mut`
+// methods of `PreferSplitManager`, which is held uniquely while the split pass
+// runs. The pointer mirrors Ghidra's `Funcdata* data` field and is never
+// shared across threads concurrently.
+unsafe impl Send for PreferSplitManager {}
 
 impl Default for PreferSplitManager {
     fn default() -> Self {
@@ -149,12 +140,27 @@ impl Default for PreferSplitManager {
 impl PreferSplitManager {
     /// Construct an empty manager.
     pub fn new() -> Self {
-        Self { records: Vec::new() }
+        Self {
+            data: None,
+            records: Vec::new(),
+            tempsplits: Vec::new(),
+        }
     }
 
-    /// Initialize with records and sort them. Faithful to `init` +
-    /// `initialize`.
-    pub fn init(&mut self, mut records: Vec<PreferSplitRecord>) {
+    /// Bind this manager to a `Funcdata` and a records list. Faithful to
+    /// `PreferSplitManager::init` (prefersplit.cc:529-534). The records are
+    /// sorted via `initialize`.
+    pub fn init(&mut self, fd: &mut Funcdata, rec: Vec<PreferSplitRecord>) {
+        self.data = Some(fd as *mut Funcdata);
+        let mut rec = rec;
+        initialize(&mut rec);
+        self.records = rec;
+    }
+
+    /// Set/replace the records list (sorted). Used when the manager is bound
+    /// to a Funcdata only at split time.
+    pub fn set_records(&mut self, records: Vec<PreferSplitRecord>) {
+        let mut records = records;
         initialize(&mut records);
         self.records = records;
     }
@@ -169,11 +175,22 @@ impl PreferSplitManager {
         &self.records
     }
 
-    /// Find the split record that applies to a varnode with the given storage
-    /// details. Faithful to `findRecord` (prefersplit.cc). Returns None if no
+    /// Find the split record that applies to a varnode. Faithful to
+    /// `findRecord(Varnode*)` (prefersplit.cc:536-550). Returns None if no
     /// matching record.
-    pub fn find_record(&self, space: AddressSpace, size: u32, offset: u64) -> Option<&PreferSplitRecord> {
-        // Binary search for the matching record.
+    pub fn find_record_vn(&self, vn: &Arc<RwLock<Varnode>>) -> Option<&PreferSplitRecord> {
+        let vn_rg = vn.read().unwrap();
+        self.find_record(vn_rg.space(), vn_rg.get_size() as u32, vn_rg.get_offset())
+    }
+
+    /// Find the split record by storage details. Binary-searches the sorted
+    /// records vector. Faithful to the `lower_bound` in `findRecord`.
+    pub fn find_record(
+        &self,
+        space: AddressSpace,
+        size: u32,
+        offset: u64,
+    ) -> Option<&PreferSplitRecord> {
         let mut lo = 0usize;
         let mut hi = self.records.len();
         let search_space = space.space_id();
@@ -183,165 +200,921 @@ impl PreferSplitManager {
             let rec_space = rec.storage_space.space_id();
             if rec_space < search_space
                 || (rec_space == search_space && rec.storage_size > size)
-                || (rec_space == search_space && rec.storage_size == size && rec.storage_offset < offset)
+                || (rec_space == search_space
+                    && rec.storage_size == size
+                    && rec.storage_offset < offset)
             {
                 lo = mid + 1;
             } else if rec_space > search_space
                 || (rec_space == search_space && rec.storage_size < size)
-                || (rec_space == search_space && rec.storage_size == size && rec.storage_offset > offset)
+                || (rec_space == search_space
+                    && rec.storage_size == size
+                    && rec.storage_offset > offset)
             {
                 hi = mid;
             } else {
-                // Exact match.
                 return Some(rec);
             }
         }
         None
     }
 
-    /// The main split entry point. Faithful to `split` (prefersplit.cc).
-    ///
-    /// This implementation scans the Funcdata's VarnodeBank for Varnodes
-    /// matching split records, and for each matching Varnode that is
-    /// defined by a COPY or is a lone-descend input, performs the actual
-    /// split by creating SUBPIECE ops for the hi/lo pieces and replacing
-    /// the original with COPY ops from the pieces.
-    pub fn split(&mut self, fd: &mut crate::funcdata::Funcdata) {
-        use crate::opcodes::OpCode;
+    // ---- Private helpers (faithful port of prefersplit.cc) ----
 
-        let varnodes: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .collect();
-
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            // Check if this Varnode matches any split record.
-            let rec = self.find_record(
-                vn_rg.space(),
-                vn_rg.get_size() as u32,
-                vn_rg.get_offset(),
-            );
-            let Some(rec) = rec else { continue };
-
-            let splitoffset = rec.splitoffset;
-            let vn_size = vn_rg.get_size();
-            let is_written = vn_rg.is_written();
-            let is_constant = vn_rg.is_constant();
-            let has_no_descend = vn_rg.has_no_descend();
-            let def_opc = if is_written {
-                vn_rg.get_def().map(|d| d.read().unwrap().opcode)
+    /// Define the varnode pieces of `inst`. Faithful to `fillinInstance`
+    /// (prefersplit.cc:33-67). Computes hi/lo pieces based on endianness and,
+    /// for constants, splits the constant value.
+    fn fillin_instance(
+        &mut self,
+        inst: &mut SplitInstance,
+        bigendian: bool,
+        sethi: bool,
+        setlo: bool,
+    ) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let (losize, hisize, vn_offset, is_const, const_val) = {
+            let vn_rg = inst.vn.read().unwrap();
+            let vn_size = vn_rg.get_size() as i32;
+            let losize = if bigendian {
+                vn_size - inst.splitoffset
             } else {
-                None
+                inst.splitoffset
             };
-            drop(vn_rg);
+            let hisize = vn_size - losize;
+            (
+                losize,
+                hisize,
+                vn_rg.get_offset(),
+                vn_rg.is_constant(),
+                vn_rg.get_offset(),
+            )
+        };
 
-            // Only split if the Varnode is not already linked (hasNoDescend
-            // or is free input with loneDescend).
-            if is_written && has_no_descend {
-                // Varnode is defined but not used — can split it.
-                if let Some(opc) = def_opc {
-                    match opc {
-                        OpCode::CPUI_COPY => {
-                            // Split a COPY: create SUBPIECE ops for hi/lo
-                            // pieces of both input and output.
-                            self.split_copy(fd, vn_arc, splitoffset);
+        if is_const {
+            let loval = const_val & calc_mask(losize as usize);
+            let hival = (const_val >> (8 * losize as u64)) & calc_mask(hisize as usize);
+            if setlo && inst.lo.is_none() {
+                inst.lo = Some(fd.new_constant(losize as usize, loval));
+            }
+            if sethi && inst.hi.is_none() {
+                inst.hi = Some(fd.new_constant(hisize as usize, hival));
+            }
+        } else if bigendian {
+            if setlo && inst.lo.is_none() {
+                let vn_arc = fd.vbank.create_with_space(
+                    losize as usize,
+                    inst.vn.read().unwrap().space(),
+                    vn_offset + inst.splitoffset as u64,
+                );
+                inst.lo = Some(vn_arc);
+            }
+            if sethi && inst.hi.is_none() {
+                let sp = inst.vn.read().unwrap().space();
+                let vn_arc = fd
+                    .vbank
+                    .create_with_space(hisize as usize, sp, vn_offset);
+                inst.hi = Some(vn_arc);
+            }
+        } else {
+            if setlo && inst.lo.is_none() {
+                let sp = inst.vn.read().unwrap().space();
+                let vn_arc = fd
+                    .vbank
+                    .create_with_space(losize as usize, sp, vn_offset);
+                inst.lo = Some(vn_arc);
+            }
+            if sethi && inst.hi.is_none() {
+                let sp = inst.vn.read().unwrap().space();
+                let vn_arc = fd.vbank.create_with_space(
+                    hisize as usize,
+                    sp,
+                    vn_offset + inst.splitoffset as u64,
+                );
+                inst.hi = Some(vn_arc);
+            }
+        }
+    }
+
+    /// Create COPY ops based on input `ininst` and output `outinst` to replace
+    /// `op`. Faithful to `createCopyOps` (prefersplit.cc:69-87). Pushes the two
+    /// new COPY ops onto `tempsplits`.
+    fn create_copy_ops(
+        &mut self,
+        ininst: &SplitInstance,
+        outinst: &SplitInstance,
+        op: &PcodeOpRef,
+        _istemp: bool,
+    ) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let addr = op.0.read().unwrap().get_addr();
+
+        let hiop = fd.new_op(1, addr);
+        let loop_ = fd.new_op(1, addr);
+        fd.op_set_opcode(&hiop, OpCode::CPUI_COPY);
+        fd.op_set_opcode(&loop_, OpCode::CPUI_COPY);
+
+        // Insert new COPYs immediately after the original operation.
+        fd.op_insert_after(&loop_, op);
+        fd.op_insert_after(&hiop, op);
+
+        // Unset input so we can reassign free inputs to new ops.
+        fd.op_unset_input(op, 0);
+
+        // Outputs are the pieces of the original.
+        if let Some(hi) = &outinst.hi {
+            fd.op_set_output(&hiop, hi.clone());
+        }
+        if let Some(lo) = &outinst.lo {
+            fd.op_set_output(&loop_, lo.clone());
+        }
+        // Inputs come from the (already-split) input instance.
+        if let Some(hi) = &ininst.hi {
+            fd.op_set_input(&hiop, hi.clone(), 0);
+        }
+        if let Some(lo) = &ininst.lo {
+            fd.op_set_input(&loop_, lo.clone(), 0);
+        }
+        self.tempsplits.push(hiop);
+        self.tempsplits.push(loop_);
+    }
+
+    /// Check that `inst` defined by `def` (a COPY) is really splittable.
+    /// Faithful to `testDefiningCopy` (prefersplit.cc:89-105). Returns
+    /// `Some(istemp)` on success, `None` on failure.
+    fn test_defining_copy(&self, inst: &SplitInstance, def: &PcodeOpRef) -> Option<bool> {
+        let invn = def.0.read().unwrap().get_in(0).cloned()?;
+        let invn_rg = invn.read().unwrap();
+        if invn_rg.is_constant() {
+            return Some(false);
+        }
+        let istemp = if invn_rg.space() != AddressSpace::Unique {
+            // IPTR_INTERNAL check. Non-temporary inputs must match a record
+            // with the same splitoffset and be free.
+            let inrec = self.find_record_vn(&invn)?;
+            if inrec.splitoffset != inst.splitoffset {
+                return None;
+            }
+            if !invn_rg.is_free() {
+                return None;
+            }
+            false
+        } else {
+            true
+        };
+        Some(istemp)
+    }
+
+    /// Do split of a prefered split varnode that is defined by a COPY.
+    /// Faithful to `splitDefiningCopy` (prefersplit.cc:107-116).
+    fn split_defining_copy(&mut self, inst: &mut SplitInstance, def: &PcodeOpRef, istemp: bool) {
+        let invn = match def.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let mut ininst = SplitInstance::new(invn, inst.splitoffset);
+        self.fillin_instance(inst, bigendian, true, true);
+        self.fillin_instance(&mut ininst, bigendian, true, true);
+        self.create_copy_ops(&ininst, inst, def, istemp);
+    }
+
+    /// Check that `inst` read by `readop` (a COPY) is really splittable.
+    /// Faithful to `testReadingCopy` (prefersplit.cc:118-131).
+    fn test_reading_copy(&self, inst: &SplitInstance, readop: &PcodeOpRef) -> Option<bool> {
+        let outvn = readop.0.read().unwrap().get_out().cloned()?;
+        let outvn_rg = outvn.read().unwrap();
+        let istemp = if outvn_rg.space() != AddressSpace::Unique {
+            let outrec = self.find_record_vn(&outvn)?;
+            if outrec.splitoffset != inst.splitoffset {
+                return None;
+            }
+            false
+        } else {
+            true
+        };
+        Some(istemp)
+    }
+
+    /// Do split of varnode that is read by a COPY. Faithful to
+    /// `splitReadingCopy` (prefersplit.cc:133-142).
+    fn split_reading_copy(&mut self, inst: &mut SplitInstance, readop: &PcodeOpRef, istemp: bool) {
+        let outvn = match readop.0.read().unwrap().get_out().cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let mut outinst = SplitInstance::new(outvn, inst.splitoffset);
+        self.fillin_instance(inst, bigendian, true, true);
+        self.fillin_instance(&mut outinst, bigendian, true, true);
+        self.create_copy_ops(inst, &outinst, readop, istemp);
+    }
+
+    /// Check that `inst` defined by ZEXT is really splittable. Faithful to
+    /// `testZext` (prefersplit.cc:144-158).
+    fn test_zext(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
+        let invn = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return false,
+        };
+        let invn_rg = invn.read().unwrap();
+        if invn_rg.is_constant() {
+            return true;
+        }
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let vn_size = inst.vn.read().unwrap().get_size() as i32;
+        let losize = if bigendian {
+            vn_size - inst.splitoffset
+        } else {
+            inst.splitoffset
+        };
+        invn_rg.get_size() as i32 == losize
+    }
+
+    /// Split an INT_ZEXT-defined varnode. Faithful to `splitZext`
+    /// (prefersplit.cc:160-188). The low piece is the ZEXT input (or the
+    /// constant split); the high piece is a constant 0 (or the high bits of
+    /// the constant).
+    fn split_zext(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let invn = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let vn_size = inst.vn.read().unwrap().get_size() as i32;
+        let (losize, hisize) = if bigendian {
+            (vn_size - inst.splitoffset, inst.splitoffset)
+        } else {
+            (inst.splitoffset, vn_size - inst.splitoffset)
+        };
+
+        let (is_const, const_val) = {
+            let r = invn.read().unwrap();
+            (r.is_constant(), r.get_offset())
+        };
+
+        let mut ininst = SplitInstance::new(invn.clone(), inst.splitoffset);
+        if is_const {
+            let loval = const_val & calc_mask(losize as usize);
+            let hival = (const_val >> (8 * losize as u64)) & calc_mask(hisize as usize);
+            ininst.lo = Some(fd.new_constant(losize as usize, loval));
+            ininst.hi = Some(fd.new_constant(hisize as usize, hival));
+        } else {
+            ininst.lo = Some(invn.clone());
+            ininst.hi = Some(fd.new_constant(hisize as usize, 0));
+        }
+
+        self.fillin_instance(inst, bigendian, true, true);
+        self.create_copy_ops(&ininst, inst, op, false);
+    }
+
+    /// Check that `inst` defined by PIECE is really splittable. Faithful to
+    /// `testPiece` (prefersplit.cc:190-200).
+    fn test_piece(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let op_rg = op.0.read().unwrap();
+        if bigendian {
+            if let Some(in0) = op_rg.get_in(0) {
+                if in0.read().unwrap().get_size() as i32 != inst.splitoffset {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else if let Some(in1) = op_rg.get_in(1) {
+            if in1.read().unwrap().get_size() as i32 != inst.splitoffset {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Split a PIECE-defined varnode. Faithful to `splitPiece`
+    /// (prefersplit.cc:202-227). The PIECE's two inputs already are the hi/lo
+    /// pieces; we create COPY ops to forward them to the split outputs.
+    fn split_piece(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        let loin = match op.0.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let hiin = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+
+        self.fillin_instance(inst, bigendian, true, true);
+        let addr = op.0.read().unwrap().get_addr();
+        let hiop = fd.new_op(1, addr);
+        let loop_ = fd.new_op(1, addr);
+        fd.op_set_opcode(&hiop, OpCode::CPUI_COPY);
+        fd.op_set_opcode(&loop_, OpCode::CPUI_COPY);
+        if let Some(hi) = &inst.hi {
+            fd.op_set_output(&hiop, hi.clone());
+        }
+        if let Some(lo) = &inst.lo {
+            fd.op_set_output(&loop_, lo.clone());
+        }
+        fd.op_insert_after(&loop_, op);
+        fd.op_insert_after(&hiop, op);
+        fd.op_unset_input(op, 0);
+        fd.op_unset_input(op, 1);
+
+        // If the input is a constant, duplicate it (Ghidra clones constants so
+        // each op has its own Varnode).
+        let hiin_use = {
+            let r = hiin.read().unwrap();
+            if r.is_constant() {
+                fd.new_constant(r.get_size(), r.get_offset())
+            } else {
+                hiin.clone()
+            }
+        };
+        fd.op_set_input(&hiop, hiin_use, 0);
+        let loin_use = {
+            let r = loin.read().unwrap();
+            if r.is_constant() {
+                fd.new_constant(r.get_size(), r.get_offset())
+            } else {
+                loin.clone()
+            }
+        };
+        fd.op_set_input(&loop_, loin_use, 0);
+    }
+
+    /// Check that `inst` read by SUBPIECE is really splittable. Faithful to
+    /// `testSubpiece` (prefersplit.cc:229-246).
+    fn test_subpiece(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
+        let vn_size = inst.vn.read().unwrap().get_size() as i32;
+        let outvn_size = match op.0.read().unwrap().get_out() {
+            Some(v) => v.read().unwrap().get_size() as i32,
+            None => return false,
+        };
+        let suboff = match op.0.read().unwrap().get_in(1) {
+            Some(c) => c.read().unwrap().get_offset() as i32,
+            None => return false,
+        };
+        if suboff == 0 {
+            if vn_size - inst.splitoffset != outvn_size {
+                return false;
+            }
+        } else {
+            if vn_size - suboff != inst.splitoffset {
+                return false;
+            }
+            if outvn_size != inst.splitoffset {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Rewrite a SUBPIECE that extracts a logical piece into a COPY. Faithful
+    /// to `splitSubpiece` (prefersplit.cc:248-263).
+    fn split_subpiece(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let suboff = op
+            .0
+            .read()
+            .unwrap()
+            .get_in(1)
+            .map(|c| c.read().unwrap().get_offset() as i32)
+            .unwrap_or(0);
+        let grabbinglo = suboff == 0;
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        self.fillin_instance(inst, bigendian, !grabbinglo, grabbinglo);
+        fd.op_set_opcode(op, OpCode::CPUI_COPY);
+        fd.op_remove_input(op, 1);
+        let invn = if grabbinglo {
+            inst.lo.clone()
+        } else {
+            inst.hi.clone()
+        };
+        if let Some(vn) = invn {
+            fd.op_set_input(op, vn, 0);
+        }
+    }
+
+    /// Test if a LOAD-defined split is possible. Faithful to `testLoad`
+    /// (prefersplit.cc:265-269), which always returns true.
+    fn test_load(&self, _inst: &SplitInstance, _op: &PcodeOpRef) -> bool {
+        true
+    }
+
+    /// Split a LOAD that defines the varnode into two LOADs. Faithful to
+    /// `splitLoad` (prefersplit.cc:271-314).
+    fn split_load(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        self.fillin_instance(inst, bigendian, true, true);
+
+        let addr = op.0.read().unwrap().get_addr();
+        let ptrvn = match op.0.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let spaceid_vn = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+
+        let hiop = fd.new_op(2, addr);
+        let loop_ = fd.new_op(2, addr);
+        let addop = fd.new_op(2, addr);
+        fd.op_set_opcode(&hiop, OpCode::CPUI_LOAD);
+        fd.op_set_opcode(&loop_, OpCode::CPUI_LOAD);
+        fd.op_set_opcode(&addop, OpCode::CPUI_INT_ADD);
+
+        fd.op_insert_after(&loop_, op);
+        fd.op_insert_after(&hiop, op);
+        fd.op_insert_after(&addop, op);
+        fd.op_unset_input(op, 1); // Free up ptrvn
+
+        let ptrvn_size = ptrvn.read().unwrap().get_size();
+        let addvn = fd.new_unique_out(ptrvn_size, &addop);
+        fd.op_set_input(&addop, ptrvn.clone(), 0);
+        let off_const = fd.new_constant(ptrvn_size, inst.splitoffset as u64);
+        fd.op_set_input(&addop, off_const, 1);
+
+        if let Some(hi) = &inst.hi {
+            fd.op_set_output(&hiop, hi.clone());
+        }
+        if let Some(lo) = &inst.lo {
+            fd.op_set_output(&loop_, lo.clone());
+        }
+
+        // Duplicate the spaceid constant into the two new LOADs.
+        let (sid_size, sid_off) = {
+            let r = spaceid_vn.read().unwrap();
+            (r.get_size(), r.get_offset())
+        };
+        let sid_hi = fd.new_constant(sid_size, sid_off);
+        fd.op_set_input(&hiop, sid_hi, 0);
+        let sid_lo = fd.new_constant(sid_size, sid_off);
+        fd.op_set_input(&loop_, sid_lo, 0);
+
+        // Don't read a free varnode twice: re-create it if free.
+        let ptrvn_use = recreate_if_free(fd, &ptrvn);
+
+        if bigendian {
+            fd.op_set_input(&hiop, ptrvn_use.clone(), 1);
+            fd.op_set_input(&loop_, addvn, 1);
+        } else {
+            fd.op_set_input(&hiop, addvn, 1);
+            fd.op_set_input(&loop_, ptrvn_use, 1);
+        }
+    }
+
+    /// Test if a STORE reading the split varnode is splittable. Faithful to
+    /// `testStore` (prefersplit.cc:316-320), which always returns true.
+    fn test_store(&self, _inst: &SplitInstance, _op: &PcodeOpRef) -> bool {
+        true
+    }
+
+    /// Split a STORE into two STOREs, one for each piece. Faithful to
+    /// `splitStore` (prefersplit.cc:322-365).
+    fn split_store(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let bigendian = inst.vn.read().unwrap().space().is_big_endian();
+        self.fillin_instance(inst, bigendian, true, true);
+
+        let addr = op.0.read().unwrap().get_addr();
+        let ptrvn = match op.0.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let spaceid_vn = match op.0.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+
+        let hiop = fd.new_op(3, addr);
+        let loop_ = fd.new_op(3, addr);
+        let addop = fd.new_op(2, addr);
+        fd.op_set_opcode(&hiop, OpCode::CPUI_STORE);
+        fd.op_set_opcode(&loop_, OpCode::CPUI_STORE);
+        fd.op_set_opcode(&addop, OpCode::CPUI_INT_ADD);
+
+        fd.op_insert_after(&loop_, op);
+        fd.op_insert_after(&hiop, op);
+        fd.op_insert_after(&addop, op);
+        fd.op_unset_input(op, 1); // Free up ptrvn
+        fd.op_unset_input(op, 2); // Free up inst
+
+        let ptrvn_size = ptrvn.read().unwrap().get_size();
+        let addvn = fd.new_unique_out(ptrvn_size, &addop);
+        fd.op_set_input(&addop, ptrvn.clone(), 0);
+        let off_const = fd.new_constant(ptrvn_size, inst.splitoffset as u64);
+        fd.op_set_input(&addop, off_const, 1);
+
+        if let Some(hi) = &inst.hi {
+            fd.op_set_input(&hiop, hi.clone(), 2);
+        }
+        if let Some(lo) = &inst.lo {
+            fd.op_set_input(&loop_, lo.clone(), 2);
+        }
+
+        let (sid_size, sid_off) = {
+            let r = spaceid_vn.read().unwrap();
+            (r.get_size(), r.get_offset())
+        };
+        let sid_hi = fd.new_constant(sid_size, sid_off);
+        fd.op_set_input(&hiop, sid_hi, 0);
+        let sid_lo = fd.new_constant(sid_size, sid_off);
+        fd.op_set_input(&loop_, sid_lo, 0);
+
+        let ptr_use = recreate_if_free(fd, &ptrvn);
+        if bigendian {
+            fd.op_set_input(&hiop, ptr_use.clone(), 1);
+            fd.op_set_input(&loop_, addvn, 1);
+        } else {
+            fd.op_set_input(&hiop, addvn, 1);
+            fd.op_set_input(&loop_, ptr_use, 1);
+        }
+    }
+
+    /// Test if `inst` can be readily split, and if so, do the split. Faithful
+    /// to `splitVarnode` (prefersplit.cc:367-428). Returns true if split.
+    fn split_varnode(&mut self, inst: &mut SplitInstance) -> bool {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let (is_written, has_no_descend) = {
+            let vn_rg = inst.vn.read().unwrap();
+            (vn_rg.is_written(), vn_rg.has_no_descend())
+        };
+
+        if is_written {
+            if !has_no_descend {
+                return false; // Already linked in
+            }
+            let def = match inst.vn.read().unwrap().get_def() {
+                Some(d) => PcodeOpRef(d),
+                None => return false,
+            };
+            let code = def.0.read().unwrap().opcode;
+            let destroy_op = match code {
+                OpCode::CPUI_COPY => {
+                    let istemp = match self.test_defining_copy(inst, &def) {
+                        Some(t) => t,
+                        None => return false,
+                    };
+                    self.split_defining_copy(inst, &def, istemp);
+                    true
+                }
+                OpCode::CPUI_PIECE => {
+                    if !self.test_piece(inst, &def) {
+                        return false;
+                    }
+                    self.split_piece(inst, &def);
+                    true
+                }
+                OpCode::CPUI_LOAD => {
+                    if !self.test_load(inst, &def) {
+                        return false;
+                    }
+                    self.split_load(inst, &def);
+                    true
+                }
+                OpCode::CPUI_INT_ZEXT => {
+                    if !self.test_zext(inst, &def) {
+                        return false;
+                    }
+                    self.split_zext(inst, &def);
+                    true
+                }
+                _ => return false,
+            };
+            if destroy_op {
+                fd.op_destroy(&def);
+            }
+            true
+        } else {
+            // Not written: must be free with a single descendant (loneDescend).
+            if !inst.vn.read().unwrap().is_free() {
+                return false;
+            }
+            let op = match inst.vn.read().unwrap().lone_descend() {
+                Some(o) => PcodeOpRef(o),
+                None => return false,
+            };
+            let code = op.0.read().unwrap().opcode;
+            let destroy_op = match code {
+                OpCode::CPUI_COPY => {
+                    let istemp = match self.test_reading_copy(inst, &op) {
+                        Some(t) => t,
+                        None => return false,
+                    };
+                    self.split_reading_copy(inst, &op, istemp);
+                    true
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    if !self.test_subpiece(inst, &op) {
+                        return false;
+                    }
+                    self.split_subpiece(inst, &op);
+                    return true; // Do not destroy op; it has been transformed.
+                }
+                OpCode::CPUI_STORE => {
+                    if !self.test_store(inst, &op) {
+                        return false;
+                    }
+                    self.split_store(inst, &op);
+                    true
+                }
+                _ => return false,
+            };
+            if destroy_op {
+                fd.op_destroy(&op);
+            }
+            true
+        }
+    }
+
+    /// Apply a single split record. Faithful to `splitRecord`
+    /// (prefersplit.cc:430-449). Iterates over all varnodes at the record's
+    /// storage location, splitting each one. Ghidra re-iterates after each
+    /// successful split; Rugra loops until no matches remain.
+    fn split_record(&mut self, rec: &PreferSplitRecord) {
+        let addr = Address::new(rec.storage_offset);
+        let size = rec.storage_size as usize;
+
+        loop {
+            let matches: Vec<Arc<RwLock<Varnode>>> = {
+                let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+                fd.vbank
+                    .loc_tree
+                    .iter()
+                    .filter(|v| {
+                        let r = v.0.read().unwrap();
+                        r.get_size() == size && r.get_offset() == addr.as_u64()
+                    })
+                    .map(|v| v.0.clone())
+                    .collect()
+            };
+            if matches.is_empty() {
+                break;
+            }
+            let mut any_split = false;
+            for vn in matches {
+                let mut inst = SplitInstance::new(vn, rec.splitoffset);
+                if self.split_varnode(&mut inst) {
+                    any_split = true;
+                }
+            }
+            if !any_split {
+                break;
+            }
+        }
+    }
+
+    /// Test whether a temporary (defined via PIECE/LOAD/ZEXT and read via
+    /// SUBPIECE/STORE) can be split as a unit. Faithful to `testTemporary`
+    /// (prefersplit.cc:451-491).
+    fn test_temporary(&self, inst: &SplitInstance) -> bool {
+        let def = match inst.vn.read().unwrap().get_def() {
+            Some(d) => PcodeOpRef(d),
+            None => return false,
+        };
+        let code = def.0.read().unwrap().opcode;
+        match code {
+            OpCode::CPUI_PIECE => {
+                if !self.test_piece(inst, &def) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_LOAD => {
+                if !self.test_load(inst, &def) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_INT_ZEXT => {
+                if !self.test_zext(inst, &def) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        // Each descendant must be a SUBPIECE or STORE that passes its test.
+        let descends: Vec<PcodeOpRef> = inst
+            .vn
+            .read()
+            .unwrap()
+            .descend_iter()
+            .map(PcodeOpRef)
+            .collect();
+        for readop in &descends {
+            let rc = readop.0.read().unwrap().opcode;
+            match rc {
+                OpCode::CPUI_SUBPIECE => {
+                    if !self.test_subpiece(inst, readop) {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_STORE => {
+                    if !self.test_store(inst, readop) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Split a temporary varnode. Faithful to `splitTemporary`
+    /// (prefersplit.cc:493-527). Splits the defining op, then each reader.
+    fn split_temporary(&mut self, inst: &mut SplitInstance) {
+        let fd = unsafe { &mut *self.data.expect("PreferSplitManager not initialized") };
+        let def = match inst.vn.read().unwrap().get_def() {
+            Some(d) => PcodeOpRef(d),
+            None => return,
+        };
+        let code = def.0.read().unwrap().opcode;
+        match code {
+            OpCode::CPUI_PIECE => self.split_piece(inst, &def),
+            OpCode::CPUI_LOAD => self.split_load(inst, &def),
+            OpCode::CPUI_INT_ZEXT => self.split_zext(inst, &def),
+            _ => {}
+        }
+
+        // Process each descendant. Re-read the descend list each iteration
+        // because split_subpiece/split_store may mutate it.
+        loop {
+            let readop = match inst.vn.read().unwrap().descend_iter().next() {
+                Some(o) => PcodeOpRef(o),
+                None => break,
+            };
+            let rc = readop.0.read().unwrap().opcode;
+            match rc {
+                OpCode::CPUI_SUBPIECE => self.split_subpiece(inst, &readop),
+                OpCode::CPUI_STORE => {
+                    self.split_store(inst, &readop);
+                    fd.op_destroy(&readop);
+                }
+                _ => break,
+            }
+        }
+        fd.op_destroy(&def);
+    }
+
+    /// The main split entry point. Faithful to `split`
+    /// (prefersplit.cc:558-563). Applies every split record in turn.
+    pub fn split(&mut self, fd: &mut Funcdata) {
+        self.data = Some(fd as *mut Funcdata);
+        self.tempsplits.clear();
+        let records: Vec<PreferSplitRecord> = self.records.clone();
+        for rec in &records {
+            self.split_record(rec);
+        }
+    }
+
+    /// Split additional temporaries connected to the COPYs created by `split`.
+    /// Faithful to `splitAdditional` (prefersplit.cc:565-629).
+    pub fn split_additional(&mut self, fd: &mut Funcdata) {
+        self.data = Some(fd as *mut Funcdata);
+
+        // Gather candidate ops: SUBPIECEs feeding into the tempsplit COPYs, and
+        // PIECEs fed by the tempsplit COPY outputs.
+        let mut defops: Vec<PcodeOpRef> = Vec::new();
+        for op in self.tempsplits.clone() {
+            if op.0.read().unwrap().is_dead() {
+                continue;
+            }
+            // Look at the COPY's input.
+            if let Some(invn) = op.0.read().unwrap().get_in(0).cloned() {
+                let invn_rg = invn.read().unwrap();
+                if invn_rg.is_written() {
+                    let candidate = invn_rg.get_def().map(PcodeOpRef);
+                    drop(invn_rg);
+                    if let Some(defop) = candidate {
+                        let (is_subpiece, in0vn) = {
+                            let r = defop.0.read().unwrap();
+                            (
+                                r.opcode == OpCode::CPUI_SUBPIECE,
+                                r.get_in(0).cloned(),
+                            )
+                        };
+                        if is_subpiece {
+                            if let Some(in0vn) = in0vn {
+                                if in0vn.read().unwrap().space() == AddressSpace::Unique {
+                                    defops.push(defop);
+                                }
+                            }
                         }
-                        OpCode::CPUI_PIECE => {
-                            // Split a PIECE: the two inputs already are
-                            // the hi/lo pieces.
-                            self.split_piece_op(fd, vn_arc, splitoffset);
-                        }
-                        _ => {
-                            // Other op types (LOAD, INT_ZEXT) need more
-                            // complex handling — skip for now.
+                    }
+                }
+            }
+            // Look at the COPY's output descendants.
+            if let Some(outvn) = op.0.read().unwrap().get_out().cloned() {
+                let descends: Vec<PcodeOpRef> = outvn
+                    .read()
+                    .unwrap()
+                    .descend_iter()
+                    .map(PcodeOpRef)
+                    .collect();
+                for defop in descends {
+                    let (is_piece, outvn2) = {
+                        let r = defop.0.read().unwrap();
+                        (r.opcode == OpCode::CPUI_PIECE, r.get_out().cloned())
+                    };
+                    if is_piece {
+                        if let Some(outvn2) = outvn2 {
+                            if outvn2.read().unwrap().space() == AddressSpace::Unique {
+                                defops.push(defop);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    /// Split a COPY-defined Varnode. Creates SUBPIECE ops to extract
-    /// the hi and lo pieces from the COPY's input, then replaces the
-    /// COPY output with the pieces.
-    fn split_copy(
-        &self,
-        fd: &mut crate::funcdata::Funcdata,
-        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        splitoffset: i32,
-    ) {
-        use crate::address::Address;
-        use crate::opcodes::OpCode;
-
-        let vn_rg = vn_arc.read().unwrap();
-        let vn_size = vn_rg.get_size();
-        let losize = splitoffset as usize;
-        let hisize = vn_size - losize;
-
-        let def = vn_rg.get_def();
-        drop(vn_rg);
-
-        let Some(def_op) = def else { return };
-        let def_rg = def_op.read().unwrap();
-        if def_rg.opcode != OpCode::CPUI_COPY {
-            return;
-        }
-        let in_vn = def_rg.get_in(0).cloned();
-        let def_addr = def_rg.get_addr();
-        drop(def_rg);
-
-        let Some(in_vn) = in_vn else { return };
-
-        // Create SUBPIECE(low_half) = SUBPIECE(input, 0)
-        let lo_op = fd.new_op(2, def_addr);
-        fd.op_set_opcode(&lo_op, OpCode::CPUI_SUBPIECE);
-        let lo_out = fd.new_unique_out(losize, &lo_op);
-        fd.op_set_input(&lo_op, in_vn.clone(), 0);
-        let const_zero = fd.new_constant(4, 0);
-        fd.op_set_input(&lo_op, const_zero, 1);
-
-        // Create SUBPIECE(high_half) = SUBPIECE(input, losize)
-        let hi_op = fd.new_op(2, def_addr);
-        fd.op_set_opcode(&hi_op, OpCode::CPUI_SUBPIECE);
-        let hi_out = fd.new_unique_out(hisize, &hi_op);
-        fd.op_set_input(&hi_op, in_vn, 0);
-        let const_lo = fd.new_constant(4, losize as u64);
-        fd.op_set_input(&hi_op, const_lo, 1);
-    }
-
-    /// Split a PIECE-defined Varnode. The PIECE's two inputs are already
-    /// the hi and lo pieces — just mark them as the split result.
-    fn split_piece_op(
-        &self,
-        fd: &mut crate::funcdata::Funcdata,
-        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        _splitoffset: i32,
-    ) {
-        // PIECE(high, low) already has the two pieces as inputs.
-        // No new ops needed — the defining PIECE op's inputs are the split.
-        // In full Ghidra, this removes the PIECE and links the inputs
-        // directly. For now, just mark the Varnode.
-        vn_arc.write().unwrap().set_mark();
-        vn_arc.write().unwrap().clear_mark();
-    }
-
-    /// Split additional temporaries. Faithful to `splitAdditional`.
-    ///
-    /// This partial implementation scans for dead COPY ops that might need
-    /// further splitting after the main split pass.
-    pub fn split_additional(&mut self, fd: &mut crate::funcdata::Funcdata) {
-        use crate::opcodes::OpCode;
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_SUBPIECE {
-                // SUBPIECE ops created by the main split might need
-                // further processing. Full algorithm requires tracking
-                // which temporaries were split.
+        for op in defops {
+            if op.0.read().unwrap().is_dead() {
+                continue;
+            }
+            let code = op.0.read().unwrap().opcode;
+            if code == OpCode::CPUI_PIECE {
+                let (vn, splitoff) = {
+                    let op_rg = op.0.read().unwrap();
+                    let outvn = match op_rg.get_out() {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    };
+                    let bigendian = outvn.read().unwrap().space().is_big_endian();
+                    let splitoff = if bigendian {
+                        op_rg
+                            .get_in(0)
+                            .map(|v| v.read().unwrap().get_size() as i32)
+                            .unwrap_or(0)
+                    } else {
+                        op_rg
+                            .get_in(1)
+                            .map(|v| v.read().unwrap().get_size() as i32)
+                            .unwrap_or(0)
+                    };
+                    (outvn, splitoff)
+                };
+                let mut inst = SplitInstance::new(vn, splitoff);
+                if self.test_temporary(&inst) {
+                    self.split_temporary(&mut inst);
+                }
+            } else if code == OpCode::CPUI_SUBPIECE {
+                let (vn, splitoff) = {
+                    let op_rg = op.0.read().unwrap();
+                    let invn = match op_rg.get_in(0) {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    };
+                    let suboff = op_rg
+                        .get_in(1)
+                        .map(|c| c.read().unwrap().get_offset() as i32)
+                        .unwrap_or(0);
+                    let bigendian = invn.read().unwrap().space().is_big_endian();
+                    let vn_size = invn.read().unwrap().get_size() as i32;
+                    let outsize = op_rg
+                        .get_out()
+                        .map(|v| v.read().unwrap().get_size() as i32)
+                        .unwrap_or(0);
+                    let splitoff = if bigendian {
+                        if suboff == 0 {
+                            vn_size - outsize
+                        } else {
+                            vn_size - suboff
+                        }
+                    } else if suboff == 0 {
+                        outsize
+                    } else {
+                        suboff
+                    };
+                    (invn, splitoff)
+                };
+                let mut inst = SplitInstance::new(vn, splitoff);
+                if self.test_temporary(&inst) {
+                    self.split_temporary(&mut inst);
+                }
             }
         }
+    }
+}
+
+/// Helper that re-creates a pointer varnode if it is free, mirroring Ghidra's
+/// `if (ptrvn->isFree()) ptrvn = data->newVarnode(...)` in splitLoad/splitStore.
+/// Rugra's `VarnodeBank::create_with_space` produces a fresh varnode at the
+/// same (space, offset, size); for non-free varnodes the original is returned.
+fn recreate_if_free(
+    fd: &mut Funcdata,
+    ptrvn: &Arc<RwLock<Varnode>>,
+) -> Arc<RwLock<Varnode>> {
+    let (is_free, size, space, offset) = {
+        let r = ptrvn.read().unwrap();
+        (r.is_free(), r.get_size(), r.space(), r.get_offset())
+    };
+    if is_free {
+        fd.vbank.create_with_space(size, space, offset)
+    } else {
+        ptrvn.clone()
     }
 }
 
@@ -395,66 +1168,42 @@ mod tests {
     }
 
     #[test]
-    fn test_split_instance_fillin_little_endian() {
-        // 4-byte varnode at 0x100, split at 2 bytes → lo=0x100 (2 bytes),
-        // hi=0x102 (2 bytes).
-        let mut inst = SplitInstance::new(0x100, 4, 2);
-        inst.fillin(false, true, true);
-        assert_eq!(inst.lo_offset, Some(0x100));
-        assert_eq!(inst.hi_offset, Some(0x102));
-        assert_eq!(inst.lo_size(false), 2);
-        assert_eq!(inst.hi_size(false), 2);
-    }
-
-    #[test]
-    fn test_split_instance_fillin_big_endian() {
-        // 4-byte varnode at 0x100, split at 2 bytes → lo is the last 2 bytes.
-        let mut inst = SplitInstance::new(0x100, 4, 2);
-        inst.fillin(true, true, true);
-        assert_eq!(inst.lo_size(true), 2); // 4 - 2 = 2
-        assert_eq!(inst.hi_size(true), 2);
-    }
-
-    #[test]
-    fn test_split_instance_fillin_uneven() {
-        // 8-byte varnode at 0x200, split at 3 bytes → lo=3 bytes, hi=5 bytes.
-        let mut inst = SplitInstance::new(0x200, 8, 3);
-        inst.fillin(false, true, true);
-        assert_eq!(inst.lo_size(false), 3);
-        assert_eq!(inst.hi_size(false), 5);
-        assert_eq!(inst.lo_offset, Some(0x200));
-        assert_eq!(inst.hi_offset, Some(0x203));
-    }
-
-    #[test]
-    fn test_manager_init_and_find() {
+    fn test_find_record_exact() {
         let mut mgr = PreferSplitManager::new();
-        let records = vec![
+        mgr.set_records(vec![
             make_record(0x100, AddressSpace::Register, 8, 4),
             make_record(0x200, AddressSpace::Register, 4, 2),
-            make_record(0x300, AddressSpace::Register, 4, 1),
-        ];
-        mgr.init(records);
-        assert_eq!(mgr.num_records(), 3);
-        // Find the 8-byte at 0x100.
-        let rec = mgr.find_record(AddressSpace::Register, 8, 0x100);
+        ]);
+        let rec = mgr.find_record(AddressSpace::Register, 4, 0x200);
         assert!(rec.is_some());
-        assert_eq!(rec.unwrap().splitoffset, 4);
+        assert_eq!(rec.unwrap().splitoffset, 2);
     }
 
     #[test]
-    fn test_manager_find_not_found() {
+    fn test_find_record_miss() {
         let mut mgr = PreferSplitManager::new();
-        mgr.init(vec![make_record(0x100, AddressSpace::Register, 4, 2)]);
-        assert!(mgr.find_record(AddressSpace::Register, 4, 0x999).is_none());
-        assert!(mgr.find_record(AddressSpace::Register, 8, 0x100).is_none()); // wrong size
-        assert!(mgr.find_record(AddressSpace::Ram, 4, 0x100).is_none()); // wrong space
+        mgr.set_records(vec![make_record(0x100, AddressSpace::Register, 8, 4)]);
+        let rec = mgr.find_record(AddressSpace::Register, 4, 0x200);
+        assert!(rec.is_none());
     }
 
     #[test]
-    fn test_manager_empty() {
-        let mgr = PreferSplitManager::new();
-        assert_eq!(mgr.num_records(), 0);
-        assert!(mgr.find_record(AddressSpace::Register, 4, 0x100).is_none());
+    fn test_find_record_wrong_space() {
+        let mut mgr = PreferSplitManager::new();
+        mgr.set_records(vec![make_record(0x100, AddressSpace::Register, 8, 4)]);
+        let rec = mgr.find_record(AddressSpace::Ram, 8, 0x100);
+        assert!(rec.is_none());
+    }
+
+    #[test]
+    fn test_set_records_sorts() {
+        let mut mgr = PreferSplitManager::new();
+        mgr.set_records(vec![
+            make_record(0x300, AddressSpace::Register, 4, 2),
+            make_record(0x100, AddressSpace::Register, 8, 4),
+        ]);
+        assert_eq!(mgr.records()[0].storage_size, 8);
+        assert_eq!(mgr.records()[1].storage_size, 4);
+        assert_eq!(mgr.num_records(), 2);
     }
 }

@@ -717,6 +717,17 @@ impl Funcdata {
         }
     }
 
+    /// Insert `op` immediately after `follow` in the alive list. Faithful to
+    /// `Funcdata::opInsertAfter` (funcdata.hh:456). Used by split transforms
+    /// (prefersplit.cc) that create new ops adjacent to the original.
+    pub fn op_insert_after(&mut self, op: &crate::op::PcodeOpRef, follow: &crate::op::PcodeOpRef) {
+        let pos = self.obank.alivelist.iter().position(|r| std::sync::Arc::ptr_eq(&r.0, &follow.0));
+        match pos {
+            Some(idx) => self.obank.alivelist.insert(idx + 1, op.clone()),
+            None => self.obank.alivelist.push(op.clone()),
+        }
+    }
+
     /// Inject raw P-code operations into this Funcdata
     ///
     /// This is the bridge between raw P-code translation output (e.g., from

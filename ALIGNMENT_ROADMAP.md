@@ -243,7 +243,7 @@
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | ✅ L3 | **完整实现**：StringManager + StringManagerUnicode + 完整 UTF8/UTF16/UTF32 解码 + XML encode/decode。所有 L3 缺口已关闭 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | `crc32.rs` + `compression.rs` | ✅ L3 | **完整实现**：crc32 完整（CRC32 表 + crc_update）+ compression 完整（flate2 ZlibEncoder/ZlibDecoder 实际 deflate/inflate + compress_all/decompress_all）。所有 L3 缺口已关闭 | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
-| 57 | `prefersplit.cc` | `prefersplit.rs` | 🔧 L2 | **骨架已移植**：PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序。L3 缺完整分裂算法（testX/splitX 需 Funcdata op 编辑） | `prefersplit.cc` |
+| 57 | `prefersplit.cc` | `prefersplit.rs` | ✅ L3 | **完整实现**：PreferSplitRecord（storage + splitoffset + less_than 排序）+ PreferSplitManager + SplitInstance。全部 18 个私有分裂辅助函数已移植（fillin_instance/create_copy_ops/test+split_defining_copy/reading_copy/zext/piece/subpiece/load/store）+ split_varnode/split_record/test_temporary/split_temporary 驱动 + split/split_additional 公共入口。使用 Funcdata op-editing API（new_op/op_set_opcode/op_set_input/op_set_output/op_insert_after/op_destroy）。新增 Funcdata::op_insert_after | `prefersplit.cc` |
 | 58 | `paramid.cc` | `paramid.rs` | 🔧 L2 | **骨架已移植**：ParamMeasure（walk_forward/walk_backward 数据流分类，使用 descend_iter/get_def）+ ParamRank（i32 常量，允许重复值）+ ParamIDAnalysis + WalkState + calculate_rank。L3 缺 Funcdata 集成 + isLoopIn + XML encode | `paramid.cc` |
 | 59 | `unionresolve.cc` | `unionresolve.rs` | 🔧 L2 | **骨架已移植**：ResolvedUnion + ResolveEdge（指针编码）+ DirType + Trial + VisitMark + ScoreUnionFields（评分框架 + compute_best_index + run stub + MAX_PASSES/THRESHOLD/MAX_TRIALS 常量）。L3 缺完整评分算法（scoreTrialDown/Up 需 TypeFactory + PcodeOp） | `unionresolve.cc` |
 | 60 | `flow.cc` | — | 📋 L1 | **完全缺失**：流分析 | `flow.cc` |
@@ -259,8 +259,8 @@
 
 | 级别 | 数量 | 说明 |
 |---|---|---|
-| ✅ **L3（已完成）** | **16** | 核心 IR/数据模型，基础 Action/Rule |
-| 🔧 **L2（实现中）** | **16** | 核心算法部分实现，关键功能缺失 |
+| ✅ **L3（已完成）** | **17** | 核心 IR/数据模型，基础 Action/Rule |
+| 🔧 **L2（实现中）** | **15** | 核心算法部分实现，关键功能缺失 |
 | 📋 **L1（计划中）** | **33+** | 完全缺失的模块，需要从零实现 |
 | **总计** | **65+** | Ghidra 114 个源文件中已覆盖/已识别 |
 
