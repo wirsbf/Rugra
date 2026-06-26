@@ -239,7 +239,7 @@
 |---|---|---|---|---|---|
 | 51 | `callgraph.cc` | — | 📋 L1 | **完全缺失**：调用图构建 | `callgraph.cc` |
 | 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | 🔧 L2 | **骨架已移植**：SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database 全部数据结构 + in-memory 查询/插入算法（find_addr/find_container/find_overlap/add_symbol/remove_symbol/attach_scope/delete_scope 等）。L3 缺 XML encode/decode + rangemap/partmap | `database.cc`, `database_ghidra.cc` |
-| 53 | `xml.cc` + `marshal.cc` | — | 📋 L1 | **完全缺失**：XML 序列化 | `xml.cc`, `marshal.cc` |
+| 53 | `xml.cc` + `marshal.cc` | `marshal.rs` | 🔧 L2 | **骨架已移植**：AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database/override/arch 的 XML encode/decode。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析 | `xml.cc`, `marshal.cc` |
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | Rust 原生 | 🔧 L2 | 基础 rodata 扫描；缺少完整字符串管理 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | — | 📋 L1 | **完全缺失**：CRC32/压缩 | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | 🔧 L2 | **完整 in-memory 实现**：Override + FlowOverride（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride 全部 insert/query/apply 方法）。L3 缺 XML encode/decode | `override.cc` |

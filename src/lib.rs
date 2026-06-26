@@ -62,6 +62,7 @@ pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
 pub mod jumptable; // ← jumptable.hh
 pub mod expression; // ← expression.hh
+pub mod marshal; // ← marshal.hh + xml.hh (serialization)
 pub mod emulate; // ← emulate.hh
 pub mod float_emulate; // ← float.hh
 pub mod merge; // ← merge.hh

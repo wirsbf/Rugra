@@ -485,3 +485,7 @@
 
 - **`rangeutil.rs`**：CircleRange 新增 `complement`/`convert_to_boolean`/`set_nz_mask`/`pull_back_unary`/`pull_back_binary`（rangeutil.cc:38-1003）。自由函数 `bit_transitions`/`sign_extend_size`。
 - **`jumptable.rs`**：`pull_back_through_op` 自由函数（rangeutil.cc:1022）；JumpBasic 的 `analyze_guards` 现执行 pullBack 扩展循环；`backup2_switch` 反向模拟；`find_unnormalized` 完整链遍历；`flows_only_to_model`；`build_labels` 使用 backup2_switch。11 个新测试。
+
+## 2026-06-27（续 3）：新增 marshal 模块（XML 序列化基础设施）
+
+- `pub mod marshal;` — 对应 `marshal.hh` + `xml.hh`，序列化基础设施。AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database.rs/override.rs/arch.rs 的 XML encode/decode L3 缺口。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析。
