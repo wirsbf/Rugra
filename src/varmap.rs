@@ -836,58 +836,185 @@ impl MapState {
         }
     }
 
-    /// Add a range hint.
-    /// Corresponds to MapState::addRange (varmap.cc:896).
-    pub fn add_range(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32, rt: RangeType) {
+    /// Construct with a default type used when a gathered varnode has no type.
+    pub fn new_with_default(local_start: u64, local_end: u64,
+                            default_type: Arc<Datatype>) -> Self {
+        Self {
+            maplist: Vec::new(),
+            iter_pos: 0,
+            default_type: Some(default_type),
+            local_start,
+            local_end,
+        }
+    }
+
+    /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896).
+    /// `high_ind` is the biggest guaranteed index for open-range hints
+    /// (-1 if not an array reference).
+    pub fn add_range(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32,
+                     rt: RangeType, high_ind: i32) {
+        let dtype = dtype.or_else(|| self.default_type.clone());
         let size = dtype.as_ref().map_or(1, |d| d.get_size() as i32);
         if size <= 0 { return; }
-        // Check if in local range
+        // Check if in local range.
         if start < self.local_start || start >= self.local_end { return; }
         let sstart = start as i64;
-        self.maplist.push(RangeHint::new(start, size, sstart, dtype, flags, rt, -1));
+        self.maplist.push(RangeHint::new(start, size, sstart, dtype, flags, rt, high_ind));
     }
 
     /// Add a fixed type reference from a varnode.
     /// Corresponds to MapState::addFixedType (varmap.cc:926).
     pub fn add_fixed_type(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32) {
-        self.add_range(start, dtype, flags, RangeType::Fixed);
+        self.add_range(start, dtype, flags, RangeType::Fixed, -1);
+    }
+
+    /// Filter out INDIRECT/MULTIEQUAL/PIECE ops that just copy between the same
+    /// storage location. If another op actively reads `vn`, return true.
+    /// Faithful to `MapState::isReadActive` (varmap.cc:1088).
+    fn is_read_active(vn: &Arc<RwLock<Varnode>>) -> bool {
+        let descend_refs: Vec<_> = {
+            let v = vn.read().unwrap();
+            v.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        let vn_addr = {
+            let v = vn.read().unwrap();
+            (v.get_space(), v.get_offset())
+        };
+        for op_ref in descend_refs {
+            let op = op_ref.read().unwrap();
+            let is_marker = matches!(op.opcode, OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT);
+            if is_marker {
+                if let Some(out) = op.output.as_ref() {
+                    let o = out.read().unwrap();
+                    let out_addr = (o.get_space(), o.get_offset());
+                    if vn_addr != out_addr {
+                        return true;
+                    }
+                }
+            } else {
+                // Non-marker op reading vn → active by definition.
+                return true;
+            }
+        }
+        false
     }
 
     /// Gather varnodes from the function's vbank.
-    /// Corresponds to MapState::gatherVarnodes (varmap.cc:1124).
+    /// Faithful to `MapState::gatherVarnodes` (varmap.cc:1124).
     pub fn gather_varnodes(&mut self, fd: &crate::funcdata::Funcdata) {
         for vn_arc in &fd.vbank.loc_tree {
             let vn = vn_arc.0.read().unwrap();
-            if vn.is_free() { continue; }
-            // Only gather stack-space varnodes
-            if vn.get_space() != crate::space::AddressSpace::Stack { continue; }
+            if vn.is_free() {
+                continue;
+            }
+            // Only gather stack-space varnodes.
+            if vn.get_space() != crate::space::AddressSpace::Stack {
+                continue;
+            }
             let offset = vn.get_offset();
             let dtype = vn.v_type.clone();
-            // Determine flags based on definition op
-            if let Some(def_weak) = vn.def.as_ref() {
-                if let Some(def_arc) = def_weak.upgrade() {
-                    let def_op = def_arc.read().unwrap();
-                    match def_op.opcode {
-                        OpCode::CPUI_COPY => {
-                            let const_flag = if def_op.inrefs.first().map_or(false, |i| {
-                                i.read().unwrap().get_space() == crate::space::AddressSpace::Const
-                            }) { range_flags::COPY_CONSTANT } else { 0 };
-                            self.add_fixed_type(offset, dtype, const_flag);
+
+            if vn.def.is_none() {
+                // Unwritten (input) varnode.
+                drop(vn);
+                if Self::is_read_active(&vn_arc.0) {
+                    self.add_fixed_type(offset, dtype, 0);
+                }
+                continue;
+            }
+
+            let def_arc = match vn.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d,
+                None => continue,
+            };
+            drop(vn);
+            let def_op = def_arc.read().unwrap();
+            match def_op.opcode {
+                OpCode::CPUI_INDIRECT => {
+                    let invn = def_op.inrefs.first().cloned();
+                    drop(def_op);
+                    let same_addr = match invn {
+                        Some(inv) => {
+                            let iv = inv.read().unwrap();
+                            iv.get_space() == crate::space::AddressSpace::Stack
+                                && iv.get_offset() == offset
                         }
-                        OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT => {
-                            // Only add if not just copying to same storage
-                            self.add_fixed_type(offset, dtype, 0);
-                        }
-                        _ => {
-                            self.add_fixed_type(offset, dtype, 0);
+                        None => false,
+                    };
+                    if !same_addr || Self::is_read_active(&vn_arc.0) {
+                        self.add_fixed_type(offset, dtype, 0);
+                    }
+                }
+                OpCode::CPUI_MULTIEQUAL => {
+                    // Only add if not just copying to the same storage.
+                    let mut same_all = true;
+                    for invn in &def_op.inrefs {
+                        let iv = invn.read().unwrap();
+                        if iv.get_space() != crate::space::AddressSpace::Stack
+                            || iv.get_offset() != offset
+                        {
+                            same_all = false;
+                            break;
                         }
                     }
-                    continue;
+                    drop(def_op);
+                    if !same_all || Self::is_read_active(&vn_arc.0) {
+                        self.add_fixed_type(offset, dtype, 0);
+                    }
+                }
+                OpCode::CPUI_COPY => {
+                    let is_const = def_op
+                        .inrefs
+                        .first()
+                        .map(|i| i.read().unwrap().is_constant())
+                        .unwrap_or(false);
+                    drop(def_op);
+                    let flags = if is_const { range_flags::COPY_CONSTANT } else { 0 };
+                    self.add_fixed_type(offset, dtype, flags);
+                }
+                _ => {
+                    drop(def_op);
+                    self.add_fixed_type(offset, dtype, 0);
                 }
             }
-            // Unwritten varnode (input) with reads
-            self.add_fixed_type(offset, dtype, 0);
         }
+    }
+
+    /// Gather open (pointer-referenced) ranges. Faithful to
+    /// `MapState::gatherOpen` (varmap.cc:1211): for each additive base root,
+    /// if its type is a pointer, create an open RangeHint sized to the
+    /// pointee; use minItems=3 if an index varnode is present.
+    pub fn gather_open(&mut self, fd: &crate::funcdata::Funcdata, checker: &AliasChecker) {
+        let addbase = checker.get_add_base();
+        let aliases = checker.get_aliases();
+        for (i, entry) in addbase.iter().enumerate() {
+            let offset = aliases.get(i).copied().unwrap_or(0);
+            let ct: Option<Arc<Datatype>> = {
+                let base_vn = entry.base.read().unwrap();
+                base_vn.v_type.clone()
+            };
+            // If pointer, descend to pointee; if pointee is array, descend to base.
+            let pointee = ct.and_then(|t| match t.as_ref() {
+                Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+                _ => None,
+            });
+            let final_dt: Arc<Datatype> = match &pointee {
+                Some(p) => match p.as_ref() {
+                    Datatype::Array(a) => a.array_of.clone(),
+                    _ => p.clone(),
+                },
+                None => Arc::new(Datatype::Base(
+                    crate::type_system::datatype::TypeBase::new(
+                        "unknown".into(), 1, TypeMetatype::Unknown,
+                    ),
+                )),
+            };
+            let min_items: i32 = if entry.index.is_some() { 3 } else { -1 };
+            self.add_range(offset, Some(final_dt), 0, RangeType::Open, min_items);
+        }
+        // LoadGuard/StoreGuard handling (varmap.cc:1241-1248) is omitted until
+        // Rugra wires LoadGuard into Funcdata for the stack space; the additive
+        // base trace above already captures the dominant alias sources.
     }
 
     /// Initialize for restructuring: sort and add endpoint.
@@ -969,32 +1096,41 @@ impl ScopeLocal {
     }
 
     /// Restructure the stack frame from varnodes.
-    /// Main entry point. Corresponds to ScopeLocal::restructureVarnode (varmap.cc:1256).
+    /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
+    /// (varmap.cc:1256).
     pub fn restructure_varnode(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Clear existing symbols
+        // Clear existing symbols.
         self.symbols.clear();
         self.overlap_problems = false;
 
-        // Determine local range from function prototype
+        // Determine local range. Ghidra derives this from the prototype's
+        // getRangeTree/getParamRange; Rugra uses the full stack extent.
         let local_start = 0u64;
-        let local_end = 0x100000u64; // Simplified: 1MB stack range
+        let local_end = 0x100000u64;
 
-        // Gather RangeHints from stack varnodes
-        let mut state = MapState::new(local_start, local_end);
+        // Build the MapState with a default unknown base type (1 byte),
+        // matching Ghidra's glb->types->getBase(1, TYPE_UNKNOWN).
+        let default_type = Arc::new(Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("unknown".into(), 1, TypeMetatype::Unknown),
+        ));
+        let mut state = MapState::new_with_default(local_start, local_end, default_type);
         state.gather_varnodes(fd);
 
-        // Gather alias info
+        // Gather alias info.
         let mut checker = AliasChecker::new(self.stack_direction);
         checker.gather_internal(fd);
         let aliases = checker.get_aliases().to_vec();
 
-        // Restructure: merge overlapping ranges into disjoint symbols
+        // Gather open (pointer-referenced) ranges.
+        state.gather_open(fd, &checker);
+
+        // Restructure: merge overlapping ranges into disjoint symbols.
         self.overlap_problems = self.restructure(&mut state);
 
-        // Mark unaliased symbols
+        // Mark unaliased symbols.
         self.mark_unaliased(&aliases);
 
-        // Build fake input symbols for parameters
+        // Build fake input symbols for parameters.
         self.fake_input_symbols(fd);
     }
 

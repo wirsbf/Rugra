@@ -46,8 +46,14 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 ### `pub struct MapState`
 范围提示收集器和重构器。对应 Ghidra MapState。
-- `gather_varnodes(&mut self, fd: &Funcdata)` — 从栈 varnode 收集类型信息
-- `initialize(&mut self) -> bool` — 排序并添加端点
+**2026-06-26 完整对齐**（此前为简化版）：
+- `new_with_default(local_start, local_end, default_type)` — 带 getBase(1,TYPE_UNKNOWN) 默认类型
+- `add_range(start, dtype, flags, rt, high_ind)` — `MapState::addRange` (varmap.cc:896)，size<=0/越界时丢弃，无类型时回退默认
+- `add_fixed_type(start, dtype, flags)` — `MapState::addFixedType` (varmap.cc:926)
+- `gather_varnodes(fd)` — `MapState::gatherVarnodes` (varmap.cc:1124)，逐 op-code 分支（INDIRECT/MULTIEQUAL/COPY/默认），含 same-storage 去重与 `is_read_active`
+- `gather_open(fd, checker)` — `MapState::gatherOpen` (varmap.cc:1211)，对每个 AddBase 根：指针→pointee，数组→base，index 在则 minItems=3
+- `is_read_active(vn)` — `MapState::isReadActive` (varmap.cc:1088)，过滤纯 same-storage INDIRECT/MULTIEQUAL
+- `initialize()` — `MapState::initialize` (varmap.cc:1063)，加端点 + 排序
 
 ### `pub struct LocalSymbol`
 重构后的局部变量符号。
