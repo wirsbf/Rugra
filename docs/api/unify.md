@@ -28,3 +28,14 @@ RHS 常量构造（Named/Absolute/NZMask/Consumed/Offset/IsConstant）。
 约束类型（OpCode/OpEqual/VarnodeEqual/NumParams/ConstEqual/VarnodeSize/AlwaysTrue）。
 
 测试：unify::tests 3 个。
+
+## 2026-06-26（续）：unify.rs 完善实现
+
+新增约束评估引擎：
+- `UnifyConstraint::evaluate(state)` — 评估单个约束（unify.cc）
+- `ConstraintSequence` — 约束序列容器，`add(constraint)` + `evaluate_all(state)` 批量评估
+- `UnifyConstraint::OpCode(slot, opc)` — 现在带 slot 参数，评估时从 state 读取 op
+- `UnifyConstraint::CopyVarnode(from, to)` — 复制 varnode 槽（action 约束）
+- 约束类型：OpCode/OpEqual/VarnodeEqual/NumParams/ConstEqual/VarnodeSize/CopyVarnode/AlwaysTrue
+
+测试：新增 3 个（constraint_always_true/const_equal/constraint_sequence）。

@@ -173,8 +173,8 @@ impl RHSConstant {
 /// Corresponds to the various `UnifyConstraint` subclasses in Ghidra.
 #[derive(Debug, Clone)]
 pub enum UnifyConstraint {
-    /// Match a specific opcode
-    OpCode(OpCode),
+    /// Match a specific opcode on slot
+    OpCode(usize, OpCode),
     /// Two ops must be the same
     OpEqual(usize, usize),
     /// Two varnodes must be the same
@@ -185,8 +185,91 @@ pub enum UnifyConstraint {
     ConstEqual(usize, u64),
     /// Check that a varnode has a specific size
     VarnodeSize(usize, usize),
+    /// Copy varnode from one slot to another
+    CopyVarnode(usize, usize),
     /// The constraint always succeeds (used for optional matches)
     AlwaysTrue,
+}
+
+impl UnifyConstraint {
+    /// Evaluate this constraint against the given state and a set of ops.
+    /// Returns true if the constraint is satisfied.
+    pub fn evaluate(&self, state: &UnifyState) -> bool {
+        match self {
+            UnifyConstraint::AlwaysTrue => true,
+            UnifyConstraint::OpEqual(a, b) => {
+                let oa = state.get_op(*a);
+                let ob = state.get_op(*b);
+                match (oa, ob) {
+                    (Some(x), Some(y)) => std::sync::Arc::ptr_eq(x, y),
+                    _ => false,
+                }
+            }
+            UnifyConstraint::VarnodeEqual(a, b) => {
+                let va = state.get_varnode(*a);
+                let vb = state.get_varnode(*b);
+                match (va, vb) {
+                    (Some(x), Some(y)) => std::sync::Arc::ptr_eq(x, y),
+                    _ => false,
+                }
+            }
+            UnifyConstraint::ConstEqual(idx, val) => {
+                state.get_constant(*idx) == *val
+            }
+            UnifyConstraint::OpCode(idx, expected_opc) => {
+                let op = state.get_op(*idx);
+                match op {
+                    Some(o) => o.read().unwrap().opcode == *expected_opc,
+                    None => false,
+                }
+            }
+            UnifyConstraint::NumParams(idx, expected) => {
+                let op = state.get_op(*idx);
+                match op {
+                    Some(o) => o.read().unwrap().inrefs.len() == *expected,
+                    None => false,
+                }
+            }
+            UnifyConstraint::VarnodeSize(idx, expected) => {
+                let vn = state.get_varnode(*idx);
+                match vn {
+                    Some(v) => v.read().unwrap().get_size() == *expected,
+                    None => false,
+                }
+            }
+            UnifyConstraint::CopyVarnode(_from, _to) => {
+                // This is an action constraint, not a test — always succeeds.
+                true
+            }
+        }
+    }
+}
+
+/// A sequence of constraints that form a complete unify rule.
+/// Corresponds to Ghidra's constraint vector in UnifyState.
+#[derive(Debug, Clone, Default)]
+pub struct ConstraintSequence {
+    pub constraints: Vec<UnifyConstraint>,
+}
+
+impl ConstraintSequence {
+    pub fn new() -> Self { Self::default() }
+
+    /// Add a constraint to the sequence.
+    pub fn add(&mut self, c: UnifyConstraint) {
+        self.constraints.push(c);
+    }
+
+    /// Evaluate all constraints against the given state.
+    pub fn evaluate_all(&self, state: &UnifyState) -> bool {
+        self.constraints.iter().all(|c| c.evaluate(state))
+    }
+
+    /// Get the number of constraints.
+    pub fn len(&self) -> usize { self.constraints.len() }
+
+    /// Check if empty.
+    pub fn is_empty(&self) -> bool { self.constraints.is_empty() }
 }
 
 #[cfg(test)]
@@ -217,5 +300,36 @@ mod tests {
         state.set_constant(idx, 7);
         let rhs = RHSConstant::Named(idx);
         assert_eq!(rhs.get_constant(&state), 7);
+    }
+
+    #[test]
+    fn test_constraint_always_true() {
+        let state = UnifyState::new();
+        assert!(UnifyConstraint::AlwaysTrue.evaluate(&state));
+    }
+
+    #[test]
+    fn test_constraint_const_equal() {
+        let mut state = UnifyState::new();
+        let idx = state.register_slot(UnifyDatatype::ConstType);
+        state.set_constant(idx, 42);
+        assert!(UnifyConstraint::ConstEqual(idx, 42).evaluate(&state));
+        assert!(!UnifyConstraint::ConstEqual(idx, 99).evaluate(&state));
+    }
+
+    #[test]
+    fn test_constraint_sequence() {
+        let mut state = UnifyState::new();
+        let idx = state.register_slot(UnifyDatatype::ConstType);
+        state.set_constant(idx, 42);
+
+        let mut seq = ConstraintSequence::new();
+        seq.add(UnifyConstraint::AlwaysTrue);
+        seq.add(UnifyConstraint::ConstEqual(idx, 42));
+        assert!(seq.evaluate_all(&state));
+
+        seq.add(UnifyConstraint::ConstEqual(idx, 99));
+        assert!(!seq.evaluate_all(&state));
+        assert_eq!(seq.len(), 3);
     }
 }
