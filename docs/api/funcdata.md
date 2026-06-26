@@ -609,3 +609,8 @@ PcodeOpRaw
 
 **已知限制**：新建 op 仅进 alivelist，未挂到 BlockBasic.get_ops()（块编辑
 infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅保证数据流正确。
+
+### 2026-06-26（续）：op_swap_input
+
+- `op_swap_input(op, slot1, slot2)` — `Funcdata::opSwapInput`：交换两输入操作数。
+  用于 RuleBoolNegate 翻转比较时的换序（如 `!(V < W) => W <= V`）。

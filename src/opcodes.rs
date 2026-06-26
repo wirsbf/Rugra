@@ -444,3 +444,61 @@ impl fmt::Display for OpCode {
         write!(f, "{}", self.name())
     }
 }
+
+/// Get the complementary OpCode for boolean-flip transformations.
+/// Faithful to Ghidra's `get_booleanflip` (opcodes.cc:94-135). For a comparison
+/// opcode, returns the negated opcode; `reorder` is set true when the operands
+/// must be swapped to preserve semantics (e.g. `!(V < W) => W <= V`).
+/// Returns `CPUI_MAX` if `opc` is not a flippable comparison.
+///
+/// Note: Rugra `CPUI_BOOL_NOT` == Ghidra `CPUI_BOOL_NEGATE`.
+pub fn get_booleanflip(opc: OpCode, reorder: &mut bool) -> OpCode {
+    match opc {
+        OpCode::CPUI_INT_EQUAL => {
+            *reorder = false;
+            OpCode::CPUI_INT_NOTEQUAL
+        }
+        OpCode::CPUI_INT_NOTEQUAL => {
+            *reorder = false;
+            OpCode::CPUI_INT_EQUAL
+        }
+        OpCode::CPUI_INT_SLESS => {
+            *reorder = true;
+            OpCode::CPUI_INT_SLESSEQUAL
+        }
+        OpCode::CPUI_INT_SLESSEQUAL => {
+            *reorder = true;
+            OpCode::CPUI_INT_SLESS
+        }
+        OpCode::CPUI_INT_LESS => {
+            *reorder = true;
+            OpCode::CPUI_INT_LESSEQUAL
+        }
+        OpCode::CPUI_INT_LESSEQUAL => {
+            *reorder = true;
+            OpCode::CPUI_INT_LESS
+        }
+        // Ghidra BOOL_NEGATE == Rugra BOOL_NOT.
+        OpCode::CPUI_BOOL_NOT => {
+            *reorder = false;
+            OpCode::CPUI_COPY
+        }
+        OpCode::CPUI_FLOAT_EQUAL => {
+            *reorder = false;
+            OpCode::CPUI_FLOAT_NOTEQUAL
+        }
+        OpCode::CPUI_FLOAT_NOTEQUAL => {
+            *reorder = false;
+            OpCode::CPUI_FLOAT_EQUAL
+        }
+        OpCode::CPUI_FLOAT_LESS => {
+            *reorder = true;
+            OpCode::CPUI_FLOAT_LESSEQUAL
+        }
+        OpCode::CPUI_FLOAT_LESSEQUAL => {
+            *reorder = true;
+            OpCode::CPUI_FLOAT_LESS
+        }
+        _ => OpCode::CPUI_MAX,
+    }
+}

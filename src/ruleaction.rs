@@ -1053,6 +1053,83 @@ impl Rule for RuleLessEqual2Zero {
     }
 }
 
+/// Push boolean negation through a comparison:
+///   `!!V  =>  V`
+///   `!(V == W)  =>  V != W`
+///   `!(V < W)   =>  W <= V`
+///   `!(V <= W)  =>  W < V`
+///   `!(V != W)  =>  V == W`
+///
+/// Faithful to Ghidra's `RuleBoolNegate` (ruleaction.cc:5516-5555). When a
+/// BOOL_NOT wraps a comparison whose output is consumed ONLY by BOOL_NOT ops,
+/// flip the comparison op to its complement (reordering operands if needed)
+/// and turn every descendant BOOL_NOT into a COPY (removing the negations).
+pub struct RuleBoolNegate;
+
+impl RuleBoolNegate {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleBoolNegate {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // op is BOOL_NOT(in0). in0 must be defined by a flippable comparison.
+        let (flipop_arc, descend_vn) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.first() {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in0r = in0.read().unwrap();
+            let flip = in0r.def.as_ref().and_then(|w| w.upgrade());
+            match flip {
+                Some(f) => (f, in0.clone()),
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        // ALL descendants of the comparison output must be BOOL_NOT.
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+            let dv = descend_vn.read().unwrap();
+            dv.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        if descendants.is_empty() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        for d in &descendants {
+            if d.read().unwrap().opcode != OpCode::CPUI_BOOL_NOT {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // Flip the comparison op.
+        let flip_code = flipop_arc.read().unwrap().opcode;
+        let mut reorder = false;
+        let new_code = crate::opcodes::get_booleanflip(flip_code, &mut reorder);
+        if new_code == OpCode::CPUI_MAX {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let flip_ref = crate::op::PcodeOpRef(flipop_arc.clone());
+        fd.op_set_opcode(&flip_ref, new_code);
+        if reorder {
+            fd.op_swap_input(&flip_ref, 0, 1);
+        }
+        // Turn every descendant BOOL_NOT into a COPY.
+        for d in descendants {
+            fd.op_set_opcode(&crate::op::PcodeOpRef(d), OpCode::CPUI_COPY);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "bool_negate"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // Ghidra BOOL_NEGATE == Rugra BOOL_NOT
+        vec![OpCode::CPUI_BOOL_NOT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1668,5 +1745,139 @@ mod tests {
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_EQUAL);
+    }
+
+    // --- RuleBoolNegate (ruleaction.cc:5516) ---
+
+    #[test]
+    fn test_bool_negate_double_negate() {
+        // BOOL_NOT(BOOL_NOT(INT_EQUAL(V,W))) → INT_EQUAL(V,W) (the outer NOT
+        // becomes COPY, the inner comparison stays). Actually the rule flips
+        // the comparison and removes ALL descendant negates. For !!V:
+        //   inner flip: INT_EQUAL → INT_NOTEQUAL, no reorder
+        //   then the outer BOOL_NOT (the only descendant) → COPY
+        // Result: INT_NOTEQUAL with a COPY wrapping. Let's test the !!V==W form:
+        //   BOOL_NOT(BOOL_NOT(EQ)) where EQ's only consumer is BOOL_NOT.
+        // flip EQ→NOTEQUAL, then the inner BOOL_NOT becomes COPY.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        {
+            let mut e = eq_op.write().unwrap();
+            e.inrefs = vec![v, w];
+            e.output = Some(eq_out.clone());
+        }
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq_op));
+        // inner_not = BOOL_NOT(eq_out) → inner_out
+        let inner_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let inner_not = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        {
+            let mut n = inner_not.write().unwrap();
+            n.inrefs = vec![eq_out.clone()];
+            n.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_not));
+        // outer_not = BOOL_NOT(inner_out) — this is the op the rule fires on.
+        let outer_not = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        outer_not.write().unwrap().inrefs = vec![inner_out.clone()];
+        // eq_out must have only BOOL_NOT descendants.
+        eq_out.write().unwrap().descend.push(Arc::downgrade(&inner_not));
+        // inner_out must have only BOOL_NOT descendants (the outer_not).
+        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer_not));
+
+        let rule = RuleBoolNegate::new();
+        let result = rule.apply_op(&outer_not, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // !!V==W: the inner BOOL_NOT (comparison's descendant) flips to COPY
+        // (get_booleanflip(BOOL_NOT)=COPY), and the outer BOOL_NOT (the op the
+        // rule fires on, which is inner_out's only descendant) also → COPY.
+        // Net: !!V==W collapses to V==W.
+        assert_eq!(inner_not.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(outer_not.read().unwrap().opcode, OpCode::CPUI_COPY);
+        // The underlying comparison is untouched.
+        assert_eq!(eq_op.read().unwrap().opcode, OpCode::CPUI_INT_EQUAL);
+    }
+
+    #[test]
+    fn test_bool_negate_less_reorders() {
+        // BOOL_NOT(INT_LESS(V,W)) where LESS's only consumer is this NOT.
+        // flip LESS → LESSEQUAL, reorder=true (swap operands).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        {
+            let mut l = less_op.write().unwrap();
+            l.inrefs = vec![v.clone(), w.clone()];
+            l.output = Some(less_out.clone());
+        }
+        less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
+        let not_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        not_op.write().unwrap().inrefs = vec![less_out.clone()];
+        less_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
+
+        let rule = RuleBoolNegate::new();
+        let result = rule.apply_op(&not_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let l = less_op.read().unwrap();
+        assert_eq!(l.opcode, OpCode::CPUI_INT_LESSEQUAL);
+        // operands swapped: slot 0 now W, slot 1 now V
+        assert!(Arc::ptr_eq(&l.inrefs[0], &w));
+        assert!(Arc::ptr_eq(&l.inrefs[1], &v));
+        // the NOT becomes COPY
+        assert_eq!(not_op.read().unwrap().opcode, OpCode::CPUI_COPY);
+    }
+
+    #[test]
+    fn test_bool_negate_non_bool_descendant_no_change() {
+        // If the comparison output has a non-BOOL_NOT descendant → no change.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        {
+            let mut e = eq_op.write().unwrap();
+            e.inrefs = vec![v, fd.vbank.create_constant(4, 0)];
+            e.output = Some(eq_out.clone());
+        }
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq_op));
+        // A non-BOOL_NOT consumer (e.g. COPY) reads eq_out.
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        copy_op.write().unwrap().inrefs = vec![eq_out.clone()];
+        eq_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        let not_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_NOT,
+        )));
+        not_op.write().unwrap().inrefs = vec![eq_out.clone()];
+        eq_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
+
+        let rule = RuleBoolNegate::new();
+        let result = rule.apply_op(&not_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

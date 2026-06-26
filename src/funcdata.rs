@@ -222,6 +222,16 @@ impl Funcdata {
         }
     }
 
+    /// Swap two input operands. Faithful to `Funcdata::opSwapInput`
+    /// (funcdata.hh). Used by RuleBoolNegate to reorder operands when flipping
+    /// a comparison (e.g. `!(V < W) => W <= V`).
+    pub fn op_swap_input(&self, op: &crate::op::PcodeOpRef, slot1: usize, slot2: usize) {
+        let mut o = op.0.write().unwrap();
+        if slot1 < o.inrefs.len() && slot2 < o.inrefs.len() {
+            o.inrefs.swap(slot1, slot2);
+        }
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve

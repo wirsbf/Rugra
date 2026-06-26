@@ -47,3 +47,12 @@ Excludes LOAD/STORE (memory side-effects), branches, calls, and
 SSA-internal ops (MULTIEQUAL, INDIRECT).
 
  
+## 2026-06-26：get_booleanflip（opcodes.cc:94-135）
+
+### `pub fn get_booleanflip(opc: OpCode, reorder: &mut bool) -> OpCode`
+比较 op 的互补翻转表（Ghidra opcodes.cc:94-135）：
+- `INT_EQUAL ↔ INT_NOTEQUAL`（reorder=false）
+- `INT_LESS ↔ INT_LESSEQUAL`、`INT_SLESS ↔ INT_SLESSEQUAL`（reorder=true，需换序）
+- `BOOL_NOT → COPY`（reorder=false）。注：Rugra `CPUI_BOOL_NOT` == Ghidra `BOOL_NEGATE`。
+- `FLOAT_EQUAL ↔ FLOAT_NOTEQUAL`、`FLOAT_LESS ↔ FLOAT_LESSEQUAL`
+非可翻 op 返回 `CPUI_MAX`。用于 RuleBoolNegate。

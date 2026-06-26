@@ -149,3 +149,19 @@ INT_LESSEQUAL 与极值常量的简化：
 辅助：`fn calc_mask(size)` 对应 Ghidra calc_mask。
 
 测试：ruleaction::tests +4（Less2Zero 两态、LessEqual2Zero 两态）。
+
+### 2026-06-26（续）：RuleBoolNegate + get_booleanflip + op_swap_input
+
+#### `pub fn get_booleanflip(opc, &mut reorder) -> OpCode`（opcodes.cc:94-135）
+比较 op 的互补翻转表。EQUAL↔NOTEQUAL（不换序）；LESS↔LESSEQUAL、SLESS↔SLESSEQUAL（换序）；BOOL_NOT→COPY；FLOAT_* 同理。非可翻 op 返回 CPUI_MAX。
+
+#### `Funcdata::op_swap_input(op, slot1, slot2)`（funcdata.hh）
+交换两输入操作数（用于 RuleBoolNegate 翻转比较时的换序）。
+
+#### `pub struct RuleBoolNegate`（ruleaction.cc:5516-5555）
+将 BOOL_NOT 推过比较 op：
+- `!!V => V`（内层 BOOL_NOT → COPY，外层也 → COPY）
+- `!(V == W) => V != W`；`!(V < W) => W <= V`（换序）；`!(V <= W) => W < V`；`!(V != W) => V == W`
+要求比较输出仅被 BOOL_NOT 消费（ALL descendants must be negates）。
+
+测试：ruleaction::tests +3（双否定塌缩、LESS→LESSEQUAL 换序、非 BOOL 后代 NO_CHANGE）。
