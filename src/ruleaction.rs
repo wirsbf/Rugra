@@ -2281,6 +2281,94 @@ impl Rule for RuleSubZext {
     }
 }
 
+/// Transform shift of concatenation: `(concat(main, least) >> sa) => zext(main) >> (sa - leastbits)`.
+///
+/// Faithful to Ghidra's `RuleConcatShift` (ruleaction.cc:1969-2014). When a
+/// right/left-shift of a PIECE throws away the entire least-significant piece,
+/// the shift applies to the main piece (extended) with a reduced shift amount.
+pub struct RuleConcatShift;
+
+impl RuleConcatShift {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleConcatShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (sa, shiftin, concat_arc, opc, pc) = {
+            let op = op_arc.read().unwrap();
+            let sa_vn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let sa = sa_vn.read().unwrap().get_offset() as i32;
+            let shiftin = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let concat_arc = {
+                let s = shiftin.read().unwrap();
+                s.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let concat_arc = match concat_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if concat_arc.read().unwrap().opcode != OpCode::CPUI_PIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (sa, shiftin, concat_arc, op.opcode, op.start.get_addr())
+        };
+        let (leastsz, mainin) = {
+            let c = concat_arc.read().unwrap();
+            let leastsz = c.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0) as i32 * 8;
+            let mainin = match c.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (leastsz, mainin)
+        };
+        if sa < leastsz {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if mainin.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let sa2 = sa - leastsz;
+        let extcode = if opc == OpCode::CPUI_INT_RIGHT {
+            OpCode::CPUI_INT_ZEXT
+        } else {
+            OpCode::CPUI_INT_SEXT
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if sa2 == 0 {
+            fd.op_remove_input(&follow, 1);
+            fd.op_set_opcode(&follow, extcode);
+            fd.op_set_input(&follow, mainin, 0);
+        } else {
+            let shiftin_size = shiftin.read().unwrap().get_size();
+            let extop = fd.new_op(1, pc);
+            fd.op_set_opcode(&extop, extcode);
+            let newvn = fd.new_unique_out(shiftin_size, &extop);
+            fd.op_set_input(&extop, mainin, 0);
+            fd.op_insert_before(&extop, &follow);
+            let new_sa = fd.new_constant(4, sa2 as u64);
+            fd.op_set_input(&follow, newvn, 0);
+            fd.op_set_input(&follow, new_sa, 1);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "concat_shift"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3851,5 +3939,77 @@ mod tests {
         let s = sub_op.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_INT_RIGHT);
         assert_eq!(s.inrefs[1].read().unwrap().get_val(), 32);
+    }
+
+    // --- RuleConcatShift (ruleaction.cc:1969) ---
+
+    #[test]
+    fn test_concat_shift_exact_cancel() {
+        // (concat(main[1], least[1]) >> 8) [out size 2] → zext(main)
+        // sa=8, leastsz=1*8=8, sa2=0 → exact cancel → ZEXT(main)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let main = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        main.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let least = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let concat_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let concat_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut c = concat_op.write().unwrap();
+            c.inrefs = vec![main.clone(), least];
+            c.output = Some(concat_out.clone());
+        }
+        concat_out.write().unwrap().def = Some(Arc::downgrade(&concat_op));
+        let shift_const = fd.vbank.create_constant(4, 8);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![concat_out, shift_const];
+            s.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleConcatShift::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let s = shift_op.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_ZEXT);
+        assert_eq!(s.inrefs.len(), 1);
+        assert!(Arc::ptr_eq(&s.inrefs[0], &main));
+    }
+
+    #[test]
+    fn test_concat_shift_partial_no_change() {
+        // (concat(main[1], least[1]) >> 4) — sa=4 < leastsz=8 → no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let main = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let least = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let concat_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let concat_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut c = concat_op.write().unwrap();
+            c.inrefs = vec![main, least];
+            c.output = Some(concat_out.clone());
+        }
+        concat_out.write().unwrap().def = Some(Arc::downgrade(&concat_op));
+        let shift_const = fd.vbank.create_constant(4, 4);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![concat_out, shift_const];
+            s.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleConcatShift::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

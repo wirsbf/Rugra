@@ -281,3 +281,12 @@ INT_LESSEQUAL 与极值常量的简化：
 - `zext(sub(V, c)) => (V >> c*8) & mask`（中间偏移，需 sub 输出为 lone descend）
 
 测试：ruleaction::tests +2（偏移0 绕过→AND；中间偏移→SUBPIECE 改 RIGHT(32)）。
+
+### 2026-06-26（续）：RuleConcatShift
+
+#### `pub struct RuleConcatShift`（ruleaction.cc:1969-2014）
+移位连接的变换：当右/左移位把 PIECE 的最低有效片段整体移走时，
+`(concat(main, least) >> sa) => zext(main) >> (sa - leastbits)`。
+精确抵消时退化为 zext/sext(main)。
+
+测试：ruleaction::tests +2（精确抵消→ZEXT；部分不移完→NO_CHANGE）。
