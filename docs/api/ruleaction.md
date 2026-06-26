@@ -349,3 +349,14 @@ AND-比较变换，把 AND 推到更大的定义域：
 - `V < W || V != W => COPY(NOTEQUAL 输出)`（NOTEQUAL 占优）
 
 测试：ruleaction::tests +1（LESS+EQUAL 同操作数→LESSEQUAL）。
+
+### 2026-06-26（续）：RuleRightShiftAnd + RuleHighOrderAnd
+
+#### `pub struct RuleRightShiftAnd`（ruleaction.cc:575-600）
+`(V & mask) >> sa` 当 mask==full>>sa 时绕过 AND：`(V & full) >> sa => V >> sa`。
+
+#### `pub struct RuleHighOrderAnd`（ruleaction.cc:1185-1250）
+对齐 INT_ADD 的 INT_AND 简化（mask 形如 11110000）：
+`(V + c) & 0xfff0 => V + (c & 0xfff0)`，要求 addend 的 NZM 高位为零。移植了常量 addend 主分支。
+
+测试：ruleaction::tests +2（RightShiftAnd 绕过；HighOrderAnd 寄存器 NZM=full→正确 NO_CHANGE）。

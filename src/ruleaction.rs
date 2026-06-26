@@ -2909,6 +2909,119 @@ impl Rule for RuleLessEqual {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR] }
 }
 
+/// Simplify `(V & mask) >> sa` when the mask is exactly the bits preserved
+/// by the shift: `(V & full) >> sa  =>  V >> sa`.
+///
+/// Faithful to Ghidra's `RuleRightShiftAnd` (ruleaction.cc:575-600). When the
+/// right-shift of an AND with a mask that equals the shifted full mask, bypass
+/// the AND.
+pub struct RuleRightShiftAnd;
+
+impl RuleRightShiftAnd {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleRightShiftAnd {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (const_sa, in_vn) = {
+            let op = op_arc.read().unwrap();
+            let const_vn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let sa = const_vn.read().unwrap().get_offset();
+            let in_vn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (sa, in_vn)
+        };
+        let andop_arc = { in_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+        let andop_arc = match andop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+        let (mask, root_vn) = {
+            let ao = andop_arc.read().unwrap();
+            if ao.opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+            let mask_vn = match ao.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let m = mask_vn.read().unwrap().get_offset();
+            let root_vn = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (m, root_vn)
+        };
+        let sa = const_sa;
+        let shifted_mask = mask >> sa;
+        let root_size = root_vn.read().unwrap().get_size();
+        let full = crate::address::calc_mask(root_size) >> sa;
+        if full != shifted_mask { return Ok(action_status::NO_CHANGE); }
+        if root_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, root_vn, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "right_shift_and" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
+}
+
+/// Simplify INT_AND applied to aligned INT_ADD when the AND mask is of the
+/// form 11110000: `(V + c) & 0xfff0  =>  V + (c & 0xfff0)`.
+///
+/// Faithful to Ghidra's `RuleHighOrderAnd` (ruleaction.cc:1185-1250). Ports
+/// the primary (constant addend) branch.
+pub struct RuleHighOrderAnd;
+
+impl RuleHighOrderAnd {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleHighOrderAnd {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (cvn1_val, cvn1_size, addop_arc) = {
+            let op = op_arc.read().unwrap();
+            let cvn1 = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let addop_arc = { in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let addop_arc = match addop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+            let val = cvn1.read().unwrap().get_offset();
+            let size = cvn1.read().unwrap().get_size();
+            (val, size, addop_arc)
+        };
+        // cvn1 must be of form 11110000: ((val-1)|val) == calc_mask(size)
+        if ((cvn1_val.wrapping_sub(1)) | cvn1_val) != crate::address::calc_mask(cvn1_size) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Primary branch: addop's slot-1 is a constant.
+        let (xalign, cvn2_val) = {
+            let ao = addop_arc.read().unwrap();
+            let cvn2 = match ao.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE), // non-constant branch deferred
+            };
+            let cv2 = cvn2.read().unwrap().get_offset();
+            let xalign = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (xalign, cv2)
+        };
+        if xalign.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        let mask1 = xalign.read().unwrap().get_nz_mask();
+        if (mask1 & cvn1_val) != mask1 { return Ok(action_status::NO_CHANGE); }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_ADD);
+        fd.op_set_input(&follow, xalign, 0);
+        let new_val = cvn1_val & cvn2_val;
+        let c = fd.new_constant(cvn1_size, new_val);
+        fd.op_set_input(&follow, c, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "high_order_and" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4884,5 +4997,71 @@ mod tests {
         assert_eq!(o.opcode, OpCode::CPUI_INT_LESSEQUAL);
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
         assert!(Arc::ptr_eq(&o.inrefs[1], &w));
+    }
+
+    // --- RuleRightShiftAnd (ruleaction.cc:575) ---
+
+    #[test]
+    fn test_right_shift_and_bypass() {
+        // (V & 0xff) >> 0 (size 1) → V >> 0 (full=0xff>>0=0xff==mask)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let mask = fd.vbank.create_constant(1, 0xff);
+        let and_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![v.clone(), mask];
+            a.output = Some(and_out.clone());
+        }
+        and_out.write().unwrap().def = Some(Arc::downgrade(&and_op));
+        let zero = fd.vbank.create_constant(4, 0);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        shift_op.write().unwrap().inrefs = vec![and_out, zero];
+        let rule = RuleRightShiftAnd::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert!(Arc::ptr_eq(&shift_op.read().unwrap().inrefs[0], &v));
+    }
+
+    // --- RuleHighOrderAnd (ruleaction.cc:1185) ---
+
+    #[test]
+    fn test_high_order_and_const_addend() {
+        // ((V + c) & 0xf0) where 0xf0 is form 11110000 → (V + (c & 0xf0))
+        // V size 1, mask 0xf0, c = 0x05 → result INT_ADD(V, 0x05 & 0xf0 = 0x00)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c = fd.vbank.create_constant(1, 0x05);
+        let add_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut a = add_op.write().unwrap();
+            a.inrefs = vec![v.clone(), c];
+            a.output = Some(add_out.clone());
+        }
+        add_out.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        let mask = fd.vbank.create_constant(1, 0xf0);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        and_op.write().unwrap().inrefs = vec![add_out, mask];
+        let rule = RuleHighOrderAnd::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // mask1 (NZM of V, register) = 0xff; (0xff & 0xf0)=0xf0 != 0xff → no change
+        // because V's high bits aren't known-zero. So this correctly returns NO_CHANGE.
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }
