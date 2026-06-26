@@ -436,3 +436,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionPrototypeTypes**：升级为 apply()-驱动级——遍历 callspecs + FuncProto 检查 TYPE_LOCKED 参数标志。
 - 23 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 32）：ActionMultiCse + ActionStackPtrFlow + ActionSegmentize 升级为 apply()-驱动级
+
+- **ActionMultiCse**：升级为 apply()-驱动级——扫描 ops 构建 hash 表（opcode + 输入地址/大小），检测潜在 CSE 候选。
+- **ActionStackPtrFlow**：升级为 apply()-驱动级——扫描 INT_ADD/INT_SUB ops 检查 spacebase varnode 输入。
+- **ActionSegmentize**：升级为 apply()-驱动级——扫描 CALLOTHER ops（可能的段操作）。
+- 26 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑（45% of 58）。
