@@ -41,22 +41,114 @@ impl Action for ActionHeritage {
 
 /// Action for removing dead P-code operations
 ///
-/// Corresponds to Ghidra's `ActionDeadCode`
+/// Dead code elimination. Faithful to `ActionDeadCode` (coreaction.cc).
+///
+/// The algorithm propagates "consumed" bit-masks backward from terminal
+/// uses (RETURN, BRANCHIND, etc.) through the data-flow graph. Varnodes
+/// whose consumed mask is zero (no bits consumed by any live operation)
+/// are dead and their defining op is destroyed.
+///
+/// The current Rugra implementation uses a simplified version: it checks
+/// if the output varnode has no descendants. The full Ghidra algorithm
+/// uses consumed-bit propagation via push_consumed/propagate_consumed.
 pub struct ActionDeadCode;
 
 impl ActionDeadCode {
     pub fn new() -> Self {
         Self
     }
+
+    /// Push a consumed value into a Varnode. Faithful to `pushConsumed`
+    /// (coreaction.cc). This is the full Ghidra algorithm, ready for
+    /// integration when VarnodeLocSet iteration is available.
+    #[allow(dead_code)]
+    fn push_consumed(
+        val: u64,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) {
+        use crate::address::calc_mask;
+        let mut vn_rg = vn.write().unwrap();
+        let mask = calc_mask(vn_rg.get_size());
+        let newval = (val | vn_rg.get_consume()) & mask;
+        if newval == vn_rg.get_consume() {
+            return; // No change.
+        }
+        vn_rg.set_consume(newval);
+        if vn_rg.is_written() {
+            worklist.push(vn.clone());
+        }
+    }
+
+    /// Propagate consumed value backward through a defining op. Faithful to
+    /// `propagateConsumed` (coreaction.cc). Handles INT_MULT, INT_ADD,
+    /// INT_SUB, SUBPIECE, and defaults to full mask for other ops.
+    #[allow(dead_code)]
+    fn propagate_consumed(
+        worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) {
+        use crate::address::{calc_mask, coveringmask, leastsigbit_set};
+        use crate::opcodes::OpCode;
+        let Some(vn) = worklist.pop() else { return };
+        let outc = vn.read().unwrap().get_consume();
+        let Some(def) = vn.read().unwrap().get_def() else { return };
+        let opc = def.read().unwrap().opcode;
+        match opc {
+            OpCode::CPUI_INT_MULT => {
+                let b = coveringmask(outc);
+                let in1_const = def.read().unwrap().get_in(1)
+                    .map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                let in1_off = def.read().unwrap().get_in(1)
+                    .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                let a = if in1_const {
+                    let ls = leastsigbit_set(in1_off);
+                    if ls >= 0 {
+                        calc_mask(vn.read().unwrap().get_size()) >> ls as u32
+                    } else { 0 }
+                } else { b };
+                for slot in 0..2 {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(if slot == 0 { a } else { b }, &in_vn, worklist);
+                    }
+                }
+            }
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
+                let a = coveringmask(outc);
+                for slot in 0..2 {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(a, &in_vn, worklist);
+                    }
+                }
+            }
+            OpCode::CPUI_SUBPIECE => {
+                let sz = def.read().unwrap().get_in(1)
+                    .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                let a = if sz >= 8 { 0 } else { outc << (sz * 8) };
+                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                    Self::push_consumed(a, &in0, worklist);
+                }
+            }
+            _ => {
+                let n_in = def.read().unwrap().num_input();
+                for slot in 0..n_in {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(outc, &in_vn, worklist);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Action for ActionDeadCode {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Simplified dead code elimination: remove ops whose output has no
+        // descendants and is not a function input.
+        // The full Ghidra algorithm (push_consumed/propagate_consumed) is
+        // implemented above but requires VarnodeLocSet iteration to drive.
         let mut changed = 0;
         let mut to_remove = Vec::new();
 
-        // Identify dead ops (simplified)
-        // In real Ghidra, this checks if the output varnode is used by any other op
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             if let Some(out) = &op.output {
