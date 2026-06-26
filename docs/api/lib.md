@@ -497,3 +497,7 @@
 ## 2026-06-27（续 5）：新增 options 模块
 
 - `pub mod options;` — 对应 `options.hh`，架构配置选项系统。ArchOption trait + OptionDatabase 分发器 + 37 个注册选项。9 个选项完全功能化（直接修改 Architecture 字段：inferconstptr/analyzeforloops/readonly/jumptablemax/maxinstruction/aliasblock/nanignore/splitdatatype/defaultprototype），其余为 stub（待 PrintLanguage/ActionDatabase 集成）。
+
+## 2026-06-27（续 6）：新增 loadimage 模块
+
+- `pub mod loadimage;` — 对应 `loadimage.hh`，二进制加载镜像。LoadImage trait（load_fill/load/load_value/get_arch_type/adjust_vma + symbols/sections/readonly）+ RawLoadImage（从文件读取）+ MemoryLoadImage（内存缓冲）。解锁 EmulateFunction::getLoadImageValue、JumpBasic::sanityCheck、Architecture::loader。

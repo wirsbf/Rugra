@@ -250,7 +250,7 @@
 | 61 | `codedata.cc` | — | 📋 L1 | **完全缺失**：代码数据分析 | `codedata.cc` |
 | 62 | `capability.cc` | — | 📋 L1 | **完全缺失**：能力系统 | `capability.cc` |
 | 63 | `dynamic.cc` | — | 📋 L1 | **完全缺失**：动态分析 | `dynamic.cc` |
-| 64 | `loadimage*.cc` (4文件) | Rust 文件 I/O | 🔧 L2 | 不同的加载方式 | `loadimage.cc` 等 |
+| 64 | `loadimage*.cc` (4文件) | `loadimage.rs` | 🔧 L2 | **骨架已移植**：LoadImage trait（load_fill/load/load_value/get_arch_type/adjust_vma + symbols/sections/readonly）+ RawLoadImage（从文件读取，vma 偏移）+ MemoryLoadImage（内存缓冲）。解锁 EmulateFunction/JumpBasic/Architecture 的 LoadImage 依赖 | `loadimage.cc` 等 |
 | 65 | `cpool.cc` + `cpool_ghidra.cc` | — | 📋 L1 | **完全缺失**：常量池 | `cpool.cc` |
 
 ---
