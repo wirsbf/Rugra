@@ -2029,6 +2029,158 @@ impl Rule for RuleDoubleShift {
     }
 }
 
+/// Remove identity elements: `V + 0 => V`, `V & 0 => 0`, `V * 1 => V`, etc.
+///
+/// Faithful to Ghidra's `RuleIdentityEl` (ruleaction.cc:3696-3722). For
+/// INT_ADD/INT_SUB/INT_AND/INT_OR/INT_XOR with a constant 0 in slot 1, the
+/// op collapses to COPY(in0). For INT_MULT with 1, same; with 0, COPY(0).
+pub struct RuleIdentityEl;
+
+impl RuleIdentityEl {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleIdentityEl {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (val, opc) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let v = constvn.read().unwrap().get_offset();
+            (v, op.opcode)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if val == 0 && opc != OpCode::CPUI_INT_MULT {
+            // +0, -0, &0, |0, ^0 → COPY(in0)
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            return Ok(action_status::CHANGE);
+        }
+        if opc != OpCode::CPUI_INT_MULT {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if val == 1 {
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            return Ok(action_status::CHANGE);
+        }
+        if val == 0 {
+            // V * 0 → COPY(0) (replace in0 with 0)
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 0);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "identity_el"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![
+            OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB,
+            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
+            OpCode::CPUI_INT_MULT,
+        ]
+    }
+}
+
+/// Normalize sign-bit extraction: `V >> 0x1f => (V s>> 0x1f) * -1`.
+///
+/// Faithful to Ghidra's `RuleSignShift` (ruleaction.cc:3544-3600). A logical
+/// right-shift of the sign-bit, when involved in arithmetic/comparison, is
+/// converted to an arithmetic shift times all-ones (sign extension).
+pub struct RuleSignShift;
+
+impl RuleSignShift {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleSignShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (in_vn, const_vn, size, pc) = {
+            let op = op_arc.read().unwrap();
+            let const_vn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = const_vn.read().unwrap().get_offset();
+            let in_vn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let size = in_vn.read().unwrap().get_size();
+            if val != 8 * size as u64 - 1 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if in_vn.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (in_vn, const_vn, size, op.start.get_addr())
+        };
+        // Check descendants for arithmetic/comparison involvement.
+        let out_vn = op_arc.read().unwrap().output.as_ref().map(|o| o.clone());
+        let out_vn = match out_vn {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let descend_refs: Vec<_> = {
+            let ov = out_vn.read().unwrap();
+            ov.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        let mut do_conversion = false;
+        for d in &descend_refs {
+            let dop = d.read().unwrap();
+            match dop.opcode {
+                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                    if dop.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                        do_conversion = true;
+                    }
+                }
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_MULT => {
+                    do_conversion = true;
+                }
+                _ => {}
+            }
+            if do_conversion {
+                break;
+            }
+        }
+        if !do_conversion {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // shiftOp = INT_SRIGHT(in_vn, const_vn) → uniqueVn
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let shift_op = fd.new_op(2, pc);
+        fd.op_set_opcode(&shift_op, OpCode::CPUI_INT_SRIGHT);
+        let unique_vn = fd.new_unique_out(size, &shift_op);
+        fd.op_set_input(&shift_op, in_vn, 0);
+        fd.op_set_input(&shift_op, const_vn, 1);
+        fd.op_insert_before(&shift_op, &follow);
+        // Rewrite op: INT_MULT(unique_vn, all-ones)
+        let all_ones = fd.new_constant(size, crate::address::calc_mask(size));
+        fd.op_set_input(&follow, unique_vn, 0);
+        fd.op_set_input(&follow, all_ones, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_MULT);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "sign_shift"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_RIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3401,5 +3553,124 @@ mod tests {
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
         // mask = (calc_mask(4) >> 4) & calc_mask(4) = 0x0fffffff
         assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0x0fffffff);
+    }
+
+    // --- RuleIdentityEl (ruleaction.cc:3696) ---
+
+    #[test]
+    fn test_identity_el_add_zero() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        op.write().unwrap().inrefs = vec![v.clone(), zero];
+        let rule = RuleIdentityEl::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert!(Arc::ptr_eq(&op.read().unwrap().inrefs[0], &v));
+    }
+
+    #[test]
+    fn test_identity_el_mult_by_one() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let one = fd.vbank.create_constant(4, 1);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_MULT,
+        )));
+        op.write().unwrap().inrefs = vec![v.clone(), one];
+        let rule = RuleIdentityEl::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert!(Arc::ptr_eq(&op.read().unwrap().inrefs[0], &v));
+    }
+
+    #[test]
+    fn test_identity_el_mult_by_zero() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_MULT,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero.clone()];
+        let rule = RuleIdentityEl::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        // V*0 → COPY(0) (in0 removed, in1=0 remains as slot 0)
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    // --- RuleSignShift (ruleaction.cc:3544) ---
+
+    #[test]
+    fn test_sign_shift_converts_when_arith() {
+        // V (size 1) >> 7, feeding INT_ADD → convert to (V s>> 7) * 0xff
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let shift_const = fd.vbank.create_constant(4, 7);
+        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        // add_op = INT_ADD(shift_out, W) — sign shift feeds an ADD.
+        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        add_op.write().unwrap().inrefs = vec![shift_out.clone(), w];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&add_op));
+
+        let rule = RuleSignShift::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let s = shift_op.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_MULT);
+        // in1 should be all-ones (0xff for size 1)
+        assert_eq!(s.inrefs[1].read().unwrap().get_val(), 0xff);
+    }
+
+    #[test]
+    fn test_sign_shift_no_arith_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let shift_const = fd.vbank.create_constant(4, 7);
+        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, shift_const];
+            s.output = Some(shift_out.clone());
+        }
+        // A COPY consumer (non-arith).
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        copy_op.write().unwrap().inrefs = vec![shift_out.clone()];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+
+        let rule = RuleSignShift::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

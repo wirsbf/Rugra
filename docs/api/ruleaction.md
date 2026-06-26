@@ -257,3 +257,15 @@ INT_LESSEQUAL 与极值常量的简化：
 - 移位 ≥ size 时归零为 COPY(0)
 
 测试：ruleaction::tests +2（同向合并 2+3=5；反向抵消 LEFT4/RIGHT4 → AND 0x0fffffff）。
+
+### 2026-06-26（续）：RuleIdentityEl + RuleSignShift
+
+#### `pub struct RuleIdentityEl`（ruleaction.cc:3696-3722）
+移除单位元：
+- `V + 0 / - 0 / & 0 / | 0 / ^ 0 => COPY(V)`
+- `V * 1 => COPY(V)`；`V * 0 => COPY(0)`
+
+#### `pub struct RuleSignShift`（ruleaction.cc:3544-3600）
+符号位提取规范化：`V >> 0x1f => (V s>> 0x1f) * -1`。当逻辑右移符号位参与算术（INT_ADD/MULT）或常量比较时，转为算术右移乘全1。
+
+测试：ruleaction::tests +5（IdentityEl 加0/乘1/乘0；SignShift 算术触发/COPY不变）。
