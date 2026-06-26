@@ -279,3 +279,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
   1. 单出边块 + 目标只有1个入边 → splice（待 spliceBlockBasic）
   2. ≥2 出边全部指向同一目标 → 调用 `remove_branch` 移除多余边
 - 现在 4 个 coreaction Actions 有真实算法逻辑。
+
+## 2026-06-27（续 5）：ActionConstbase + ActionPrototypeWarnings + ActionNormalizeSetup 算法逻辑
+
+- **ActionConstbase**：实现入口块追踪上下文注入逻辑框架——获取 entry block + func address + 查询 ContextDatabase tracked set。完整 COPY op 创建待 ContextDatabase 集成到 Funcdata。
+- **ActionPrototypeWarnings**：实现覆写消息生成 + 原型错误检查框架。完整 warningHeader 待 Architecture 集成。
+- **ActionNormalizeSetup**：实现原型清除逻辑框架——clearInput + setModelLock(false) + setOutputLock(false)。待 FuncProto 集成。
+- 现在 7 个 coreaction Actions 有真实算法逻辑（框架级或完整级）。

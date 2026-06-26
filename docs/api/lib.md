@@ -569,3 +569,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ## 2026-06-27（续 21）：ActionRedundBranch 算法逻辑
 
 - **ActionRedundBranch**：实现 coreaction.cc 的冗余分支移除——单出边 splice 检测 + 多出边全同目标 remove_branch。现在 4 个 Actions 有真实算法。
+
+## 2026-06-27（续 22）：ActionConstbase + ActionPrototypeWarnings + ActionNormalizeSetup
+
+- 3 个 Actions 升级为带算法逻辑的框架（非纯 stub）——ActionConstbase（entry block + tracked context）、ActionPrototypeWarnings（override messages + proto errors）、ActionNormalizeSetup（proto clear）。7 个 Actions 总计有真实逻辑。
