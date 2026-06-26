@@ -2602,6 +2602,111 @@ impl Rule for RuleAndCompare {
     }
 }
 
+/// Convert sign-bit test to signed comparison:
+///   `(V s>> 0x1f) != 0  =>  V s< 0`
+///   `(V s>> 0x1f) == 0  =>  V s<= 0`
+///   `(V s>> 0x1f) == -1 =>  V s< 0` (complemented)
+///
+/// Faithful to Ghidra's `RuleTestSign` (ruleaction.cc:3602-3677). Finds the
+/// INT_EQUAL/INT_NOTEQUAL comparisons that consume the output of an arithmetic
+/// sign-bit shift and rewrites them into INT_SLESS/INT_SLESSEQUAL against 0.
+pub struct RuleTestSign;
+
+impl RuleTestSign {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleTestSign {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // op is INT_SRIGHT(in_vn, const_vn). const must be 8*size-1.
+        let (in_vn, out_vn) = {
+            let op = op_arc.read().unwrap();
+            let const_vn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let in_vn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let val = const_vn.read().unwrap().get_offset();
+            let sz = in_vn.read().unwrap().get_size();
+            if val != 8 * sz as u64 - 1 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if in_vn.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_vn = match op.output.as_ref() {
+                Some(o) => o.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (in_vn, out_vn)
+        };
+        // Find comparison descendants with a constant operand.
+        let compare_ops: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+            let ov = out_vn.read().unwrap();
+            ov.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        let mut changed = false;
+        let in_size = in_vn.read().unwrap().get_size();
+        for comp_arc in compare_ops {
+            let (is_cmp, offset, comp_opc) = {
+                let c = comp_arc.read().unwrap();
+                if c.opcode != OpCode::CPUI_INT_EQUAL && c.opcode != OpCode::CPUI_INT_NOTEQUAL {
+                    continue;
+                }
+                let off = match c.inrefs.get(1) {
+                    Some(v) if v.read().unwrap().is_constant() => v.read().unwrap().get_offset(),
+                    _ => continue,
+                };
+                (true, off, c.opcode)
+            };
+            if !is_cmp {
+                continue;
+            }
+            let comp_size = 1usize; // comparison output is 1 byte
+            let sgn = if offset == 0 {
+                1
+            } else if offset == crate::address::calc_mask(comp_size) {
+                -1
+            } else {
+                continue;
+            };
+            let mut sgn = if comp_opc == OpCode::CPUI_INT_NOTEQUAL { -sgn } else { sgn };
+            // Rewrite the comparison.
+            let comp_ref = crate::op::PcodeOpRef(comp_arc.clone());
+            let zero_vn = fd.new_constant(in_size, 0);
+            if sgn == 1 {
+                fd.op_set_input(&comp_ref, in_vn.clone(), 1);
+                fd.op_set_input(&comp_ref, zero_vn, 0);
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESSEQUAL);
+            } else {
+                fd.op_set_input(&comp_ref, in_vn.clone(), 0);
+                fd.op_set_input(&comp_ref, zero_vn, 1);
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESS);
+            }
+            changed = true;
+            let _ = &mut sgn;
+        }
+        if changed {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
+    }
+
+    fn get_name(&self) -> &str {
+        "test_sign"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_SRIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4353,5 +4458,76 @@ mod tests {
         let e = eq_op.read().unwrap();
         // in1 should be 0 of base size (1).
         assert_eq!(e.inrefs[1].read().unwrap().get_val(), 0);
+    }
+
+    // --- RuleTestSign (ruleaction.cc:3602) ---
+
+    #[test]
+    fn test_test_sign_notequal_zero_to_sless() {
+        // (V s>> 7) != 0  =>  V s< 0   (size 1, sign bit at bit 7)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 7);
+        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SRIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v.clone(), sa];
+            s.output = Some(shift_out.clone());
+        }
+        let zero = fd.vbank.create_constant(1, 0);
+        let neq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_NOTEQUAL,
+        )));
+        {
+            let mut n = neq_op.write().unwrap();
+            n.inrefs = vec![shift_out.clone(), zero];
+            n.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+        }
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&neq_op));
+        let rule = RuleTestSign::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // NOTEQUAL with sgn=1 → sgn=-1 → INT_SLESS(in_vn, 0)
+        let n = neq_op.read().unwrap();
+        assert_eq!(n.opcode, OpCode::CPUI_INT_SLESS);
+        assert!(Arc::ptr_eq(&n.inrefs[0], &v));
+        assert_eq!(n.inrefs[1].read().unwrap().get_val(), 0);
+    }
+
+    #[test]
+    fn test_test_sign_equal_zero_to_slessequal() {
+        // (V s>> 7) == 0  =>  V s<= 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 7);
+        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SRIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v.clone(), sa];
+            s.output = Some(shift_out.clone());
+        }
+        let zero = fd.vbank.create_constant(1, 0);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        eq_op.write().unwrap().inrefs = vec![shift_out.clone(), zero];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        let rule = RuleTestSign::new();
+        let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let e = eq_op.read().unwrap();
+        assert_eq!(e.opcode, OpCode::CPUI_INT_SLESSEQUAL);
     }
 }

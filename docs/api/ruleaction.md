@@ -311,3 +311,14 @@ AND-比较变换，把 AND 推到更大的定义域：
 当 AND 常量 != calc_mask（非退化）且 basevn 非 free 时，创建新的 INT_AND(basevn, adjusted_mask) 并改写比较。
 
 测试：ruleaction::tests +1（zext 推送：in1 归零到 base size）。
+
+### 2026-06-26（续）：RuleTestSign
+
+#### `pub struct RuleTestSign`（ruleaction.cc:3602-3677）
+符号位测试转有符号比较：
+- `(V s>> 0x1f) != 0 => V s< 0`
+- `(V s>> 0x1f) == 0 => V s<= 0`
+- `(V s>> 0x1f) == -1 => V s< 0`（互补域）
+遍历 SRIGHT 输出的后代比较，改写为 INT_SLESS/INT_SLESSEQUAL vs 0。
+
+测试：ruleaction::tests +2（NOTEQUAL→SLESS；EQUAL→SLESSEQUAL）。
