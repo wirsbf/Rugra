@@ -18,6 +18,18 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 - `flags: u32` — 标志（TYPE_LOCK, COPY_CONSTANT, UNALIASED, MAPPED）
 - `range_type: RangeType` — Fixed/Open/Endpoint
 
+#### RangeHint 方法（2026-06-26 完整对齐 Ghidra varmap.cc）
+以下方法现已 **1:1 对齐 Ghidra**（此前为简化版，已替换）：
+
+- `is_const_absorbable(&self, b)` — `RangeHint::isConstAbsorbable` (varmap.cc:30)
+- `reconcile(&self, b)` — `RangeHint::reconcile` (varmap.cc:62)，含 `get_sub_type` 对齐遍历
+- `contain(&self, b)` — `RangeHint::contain` (varmap.cc:109)
+- `preferred(&self, b, reconcile)` — `RangeHint::preferred` (varmap.cc:126)
+- `absorb(&mut self, b)` — `RangeHint::absorb` (varmap.cc:217)
+- `merge_with(&mut self, b)` — `RangeHint::merge` (varmap.cc:259)，三态 resType（0/1/2）
+- `compare(a, b)` — `RangeHint::compare` (varmap.cc:321)，排序：offset→size小优先→rangeType→flags→highind
+- `attempt_join(&mut self, b)` — `RangeHint::attemptJoin` (varmap.cc:170)，数组元素吸收
+
 ### `pub struct AliasChecker`
 栈指针别名分析器。对应 Ghidra AliasChecker。
 - `gather(&mut self, fd: &Funcdata)` — 从函数收集别名信息

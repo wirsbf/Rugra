@@ -95,5 +95,5 @@ fix: emit_block_structured preserves while loops after return
 
 - **curl**: 24/24 函数通过 gcc 语法审计，16 个 while 循环
 - **httpd**: 29/29 函数通过 gcc 语法审计，39 个 while 循环，0 goto
-- **测试**: 176/176 通过
-- **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, varmap.rs 骨架
+- **测试**: 193/193 通过
+- **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, **Datatype get_align_size/get_sub_type/type_order**, **varmap RangeHint reconcile/merge/attemptJoin/preferred 1:1 对齐**

@@ -36,7 +36,7 @@
 | 12 | `heritage.cc` | `heritage.rs` | 🔧 L2 | SSA Phi 放置基本对齐；缺少工作量列表驱动的迭代式 Heritage | `heritage.cc` |
 | 13 | `merge.cc` | `merge.rs` | 🔧 L2 | Cover-based merge 已实现；缺少与 varmap 集成的完整 HighVariable 合并 | `merge.cc` |
 | 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 框架存在；缺少完整的变量映射和命名 | `variable.cc` |
-| 15 | **`varmap.cc`** | — | 📋 L1 | **完全缺失（最高优先级）**：HighVariable → C 变量映射，导致 uVar 碎片 | `varmap.cc` |
+| 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | RangeHint 算法（reconcile/merge/attemptJoin/preferred/absorb/compare）**已 1:1 对齐 Ghidra**；AliasChecker/MapState/ScopeLocal 仍为骨架，未集成 printc | `varmap.cc` |
 | 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
 
 ---

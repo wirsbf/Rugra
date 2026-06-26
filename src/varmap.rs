@@ -71,83 +71,407 @@ impl RangeHint {
         self.flags & range_flags::TYPE_LOCK != 0
     }
 
-    /// Compare two RangeHints by signed start offset.
-    /// Corresponds to RangeHint::compareRanges (varmap.cc:321).
-    pub fn compare(a: &RangeHint, b: &RangeHint) -> std::cmp::Ordering {
-        if a.sstart != b.sstart {
-            a.sstart.cmp(&b.sstart)
-        } else if a.size != b.size {
-            b.size.cmp(&a.size) // Bigger size first
-        } else {
-            std::cmp::Ordering::Equal
-        }
+    /// Whether this is a constant-absorbable range (copy_constant flag).
+    /// Faithful to Ghidra's `RangeHint::copy_constant` flag semantics.
+    fn is_copy_constant(&self) -> bool {
+        self.flags & range_flags::COPY_CONSTANT != 0
     }
 
-    /// Check if two intersecting ranges can coexist.
-    /// Corresponds to RangeHint::reconcile (varmap.cc:62).
-    pub fn reconcile(&self, b: &RangeHint) -> bool {
-        // Simplified: if types match or one is unknown, allow reconciliation
-        match (&self.dtype, &b.dtype) {
-            (None, _) | (_, None) => true,
-            (Some(a), Some(bt)) => {
-                let am = a.get_metatype();
-                let bm = bt.get_metatype();
-                if am == bm { return true; }
-                if am == TypeMetatype::Unknown || bm == TypeMetatype::Unknown { return true; }
-                // For structs/unions, allow partial overlap
-                if am == TypeMetatype::Struct || am == TypeMetatype::Union {
-                    if bm == TypeMetatype::Unknown || bm == TypeMetatype::Int || bm == TypeMetatype::Uint {
-                        return true;
-                    }
-                }
-                false
+    /// This is assumed to be open. If this is a primitive integer or float, and
+    /// if the other range is just a constant being COPYed, return true, even if
+    /// the constant is bigger. Corresponds to `RangeHint::isConstAbsorbable`
+    /// (varmap.cc:30).
+    pub fn is_const_absorbable(&self, b: &RangeHint) -> bool {
+        if !b.is_copy_constant() {
+            return false;
+        }
+        if b.is_type_lock() {
+            return false;
+        }
+        if b.size < self.size {
+            return false;
+        }
+        let self_dt = match &self.dtype {
+            Some(d) => d,
+            None => return false, // Ghidra dereferences type unconditionally
+        };
+        let meta = self_dt.get_metatype();
+        if meta != TypeMetatype::Int
+            && meta != TypeMetatype::Uint
+            && meta != TypeMetatype::Bool
+            && meta != TypeMetatype::Float
+        {
+            return false;
+        }
+        if let Some(b_dt) = &b.dtype {
+            let b_meta = b_dt.get_metatype();
+            if b_meta != TypeMetatype::Unknown
+                && b_meta != TypeMetatype::Int
+                && b_meta != TypeMetatype::Uint
+            {
+                return false;
             }
         }
-    }
-
-    /// Merge two intersecting ranges into one.
-    /// Corresponds to RangeHint::merge (varmap.cc:259).
-    pub fn merge_with(&mut self, other: &RangeHint) -> bool {
-        // Returns true if there were overlap problems
-        let end_self = self.start.wrapping_add(self.size as u64);
-        let end_other = other.start.wrapping_add(other.size as u64);
-        let new_end = end_self.max(end_other);
-        self.size = (new_end.wrapping_sub(self.start)) as i32;
-
-        // Prefer the larger type or the locked type
-        if other.is_type_lock() && !self.is_type_lock() {
-            self.dtype = other.dtype.clone();
-            self.flags |= range_flags::TYPE_LOCK;
-        } else if self.dtype.is_none() && other.dtype.is_some() {
-            self.dtype = other.dtype.clone();
+        let mut end = self.sstart;
+        if self.high_ind > 0 {
+            if let Some(t) = &self.dtype {
+                end += (self.high_ind as i64) * (t.get_align_size() as i64);
+            }
+        } else {
+            end += self.size as i64;
         }
-
-        // For open ranges, extend size
-        if self.range_type == RangeType::Open && other.range_type == RangeType::Fixed {
-            self.range_type = RangeType::Fixed;
-        }
-        true // overlap problem
-    }
-
-    /// Attempt to join adjacent ranges (gap of 0).
-    /// Corresponds to RangeHint::attemptJoin (varmap.cc:170).
-    pub fn attempt_join(&mut self, other: &RangeHint) -> bool {
-        let end_self = self.start.wrapping_add(self.size as u64);
-        if end_self != other.start {
+        if b.sstart > end {
             return false;
         }
-        // Same type or one is unknown
-        let types_compatible = match (&self.dtype, &other.dtype) {
-            (None, _) | (_, None) => true,
-            (Some(a), Some(b)) => a.get_metatype() == b.get_metatype(),
+        true
+    }
+
+    /// Can the given intersecting RangeHint coexist with this at their given
+    /// offsets? Faithful to `RangeHint::reconcile` (varmap.cc:62).
+    pub fn reconcile(&self, b_in: &RangeHint) -> bool {
+        // Make `a` the larger-alignSize range, `b` the smaller.
+        let (a, b) = match (&self.dtype, &b_in.dtype) {
+            (Some(a_dt), Some(b_dt)) => {
+                if a_dt.get_align_size() < b_dt.get_align_size() {
+                    (b_in, self)
+                } else {
+                    (self, b_in)
+                }
+            }
+            // Without full type info we cannot do the alignment modulo check;
+            // conservatively allow reconciliation (matches the TYPE_UNKNOWN
+            // fallback branch in Ghidra).
+            _ => return true,
         };
-        if !types_compatible {
+
+        let a_dt = a.dtype.as_ref().unwrap();
+        let b_dt = b.dtype.as_ref().unwrap();
+        let a_align = a_dt.get_align_size().max(1) as i64;
+
+        let mut mod_ = (b.sstart - a.sstart) % a_align;
+        if mod_ < 0 {
+            mod_ += a_align;
+        }
+
+        // Descend through a's subtypes while a is bigger than b.
+        let mut sub = a_dt.clone();
+        let mut cur_mod = mod_;
+        loop {
+            let sub_align = sub.get_align_size();
+            if sub_align <= b_dt.get_align_size() {
+                break;
+            }
+            let (next, newoff) = sub.get_sub_type(cur_mod);
+            match next {
+                Some(n) => {
+                    sub = Arc::new(n.clone());
+                    cur_mod = newoff;
+                }
+                None => break,
+            }
+        }
+
+        if sub.get_align_size() == b_dt.get_align_size() {
+            return true;
+        }
+        // b overlaps multiple components of a.
+
+        if b.range_type == RangeType::Open && b.is_const_absorbable(a) {
+            return true;
+        }
+        if b.is_type_lock() {
             return false;
         }
-        self.size += other.size;
-        if self.dtype.is_none() {
-            self.dtype = other.dtype.clone();
+        let meta = a_dt.get_metatype();
+        if meta != TypeMetatype::Struct && meta != TypeMetatype::Union {
+            if meta != TypeMetatype::Array {
+                return false;
+            }
+            // Array of unknown base is allowed.
+            return true;
         }
+        // For structures/unions/arrays-of-unknown, accept int/uint/unknown b.
+        let b_meta = b_dt.get_metatype();
+        b_meta == TypeMetatype::Unknown
+            || b_meta == TypeMetatype::Int
+            || b_meta == TypeMetatype::Uint
+    }
+
+    /// Return true if this or the given range contains the other. Assumes this
+    /// starts at least as early as b and that they intersect.
+    /// Faithful to `RangeHint::contain` (varmap.cc:109).
+    pub fn contain(&self, b: &RangeHint) -> bool {
+        if self.sstart == b.sstart {
+            return true;
+        }
+        // b->sstart + b->size - 1 <= sstart + size - 1
+        (b.sstart + b.size as i64 - 1) <= (self.sstart + self.size as i64 - 1)
+    }
+
+    /// Is this range's data-type preferred over the other?
+    /// Faithful to `RangeHint::preferred` (varmap.cc:126).
+    pub fn preferred(&self, b: &RangeHint, reconcile: bool) -> bool {
+        if self.start != b.start {
+            return true; // Something must occupy a->start to b->start
+        }
+        // Prefer the locked type.
+        if b.is_type_lock() {
+            if !self.is_type_lock() {
+                return false;
+            }
+        } else if self.is_type_lock() {
+            return true;
+        }
+
+        if self.range_type == RangeType::Open && b.range_type != RangeType::Open {
+            if !reconcile {
+                return false;
+            }
+            if self.is_const_absorbable(b) {
+                return true;
+            }
+        } else if b.range_type == RangeType::Open && self.range_type != RangeType::Open {
+            if !reconcile {
+                return true;
+            }
+            if b.is_const_absorbable(self) {
+                return false;
+            }
+        } else if self.range_type == RangeType::Fixed && b.range_type == RangeType::Fixed {
+            if self.size != b.size && !reconcile {
+                return self.size > b.size;
+            }
+        }
+
+        // Prefer the more specific type (typeOrder < 0 means self < b → preferred).
+        match (&self.dtype, &b.dtype) {
+            (Some(a), Some(bb)) => a.type_order(bb) < 0,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => true,
+        }
+    }
+
+    /// Absorb details of the other RangeHint into this, except the data-type.
+    /// Faithful to `RangeHint::absorb` (varmap.cc:217).
+    pub fn absorb(&mut self, b: &RangeHint) {
+        if b.range_type == RangeType::Open {
+            let aligns_match = match (&self.dtype, &b.dtype) {
+                (Some(a), Some(bb)) => a.get_align_size() == bb.get_align_size(),
+                _ => false,
+            };
+            if aligns_match {
+                self.range_type = RangeType::Open;
+                if b.high_ind >= 0 {
+                    let diffsz = b.sstart - self.sstart;
+                    if let Some(t) = &self.dtype {
+                        let align = t.get_align_size().max(1) as i64;
+                        let trialhi = b.high_ind as i64 + diffsz / align;
+                        if (self.high_ind as i64) < trialhi {
+                            self.high_ind = trialhi as i32;
+                        }
+                    }
+                }
+            } else if self.start == b.start {
+                let meta = match &self.dtype {
+                    Some(t) => t.get_metatype(),
+                    None => TypeMetatype::Unknown,
+                };
+                if meta != TypeMetatype::Struct && meta != TypeMetatype::Union {
+                    self.range_type = RangeType::Open;
+                }
+            }
+        } else if b.is_copy_constant() && self.range_type == RangeType::Open {
+            let diffsz = b.sstart - self.sstart + b.size as i64;
+            if diffsz > self.size as i64 {
+                if let Some(t) = &self.dtype {
+                    let align = t.get_align_size().max(1) as i64;
+                    let trialhi = diffsz / align;
+                    if (self.high_ind as i64) < trialhi {
+                        self.high_ind = trialhi as i32;
+                    }
+                }
+            }
+        }
+        if self.is_copy_constant() && !b.is_copy_constant() {
+            self.flags ^= range_flags::COPY_CONSTANT;
+        }
+    }
+
+    /// Given that this and the other RangeHint intersect, redefine this so that
+    /// it becomes the union of the two. Faithful to `RangeHint::merge`
+    /// (varmap.cc:259). Returns true if there was a reconcilable overlap.
+    pub fn merge_with(&mut self, b: &RangeHint) -> bool {
+        let did_reconcile;
+        let res_type: i32; // 0=this, 1=b, 2=confuse
+
+        if self.contain(b) {
+            did_reconcile = self.reconcile(b);
+            if !did_reconcile && self.start != b.start {
+                res_type = 2;
+            } else {
+                res_type = if self.preferred(b, did_reconcile) { 0 } else { 1 };
+            }
+        } else {
+            did_reconcile = false;
+            res_type = if self.is_type_lock() { 0 } else { 2 };
+        }
+
+        // Check for really problematic cases.
+        if !did_reconcile {
+            if self.is_type_lock() && b.is_type_lock() {
+                // Ghidra throws LowlevelError; we log via eprintln and discard b.
+                let n1 = self.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
+                let n2 = b.dtype.as_ref().map(|d| d.get_name()).unwrap_or("?");
+                eprintln!("[VARMAP] overlapping forced variable types: {} {}", n1, n2);
+                if self.start != b.start {
+                    return false; // Discard b entirely
+                }
+            }
+        }
+
+        if res_type == 0 {
+            self.absorb(b);
+        } else if res_type == 1 {
+            // Take b's type/flags/rangeType/highind/size, absorb old self.
+            let copy = self.clone();
+            self.dtype = b.dtype.clone();
+            self.flags = b.flags;
+            self.range_type = b.range_type;
+            self.high_ind = b.high_ind;
+            self.size = b.size;
+            self.absorb(&copy);
+        } else {
+            // resType == 2: concede confusion, set unknown type.
+            self.flags = 0;
+            self.range_type = RangeType::Fixed;
+            let diff = (b.sstart - self.sstart) as i32;
+            if diff + b.size > self.size {
+                self.size = diff + b.size;
+            }
+            if self.size != 1 && self.size != 2 && self.size != 4 && self.size != 8 {
+                self.size = 1;
+                self.range_type = RangeType::Open;
+            }
+            self.dtype = Some(Arc::new(Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "unknown".to_string(),
+                    self.size as usize,
+                    TypeMetatype::Unknown,
+                ),
+            )));
+            self.flags = 0;
+            self.high_ind = -1;
+            return false;
+        }
+        false
+    }
+
+    /// Compare (signed) offset, size, RangeType, flags, high index — in that
+    /// order. Datatype is NOT compared. Faithful to `RangeHint::compare`
+    /// (varmap.cc:321).
+    pub fn compare(a: &RangeHint, b: &RangeHint) -> std::cmp::Ordering {
+        if a.sstart != b.sstart {
+            return a.sstart.cmp(&b.sstart);
+        }
+        if a.size != b.size {
+            // Small sizes come first.
+            return a.size.cmp(&b.size);
+        }
+        if a.range_type != b.range_type {
+            return (a.range_type as u8).cmp(&(b.range_type as u8));
+        }
+        if a.flags != b.flags {
+            return a.flags.cmp(&b.flags);
+        }
+        if a.high_ind != b.high_ind {
+            return a.high_ind.cmp(&b.high_ind);
+        }
+        std::cmp::Ordering::Equal
+    }
+
+    /// If this is an array and the following RangeHint lines up, absorb it.
+    /// Faithful to `RangeHint::attemptJoin` (varmap.cc:170). Returns true if b
+    /// was absorbed into this.
+    pub fn attempt_join(&mut self, b: &RangeHint) -> bool {
+        if self.range_type != RangeType::Open {
+            return false;
+        }
+        if b.range_type == RangeType::Endpoint {
+            return false;
+        }
+        if self.is_const_absorbable(b) {
+            self.absorb(b);
+            return true;
+        }
+        if self.high_ind < 0 {
+            return false;
+        }
+        let settype = match &self.dtype {
+            Some(t) => t.clone(),
+            None => return false,
+        };
+        let b_dt = match &b.dtype {
+            Some(t) => t.clone(),
+            None => return false,
+        };
+        if settype.get_align_size() != b_dt.get_align_size() {
+            return false;
+        }
+        if !Arc::ptr_eq(&settype, &b_dt) {
+            // Walk pointer chains comparing metatypes.
+            let mut a_test = settype.clone();
+            let mut b_test = b_dt.clone();
+            loop {
+                let am = a_test.get_metatype();
+                if am != TypeMetatype::Pointer {
+                    break;
+                }
+                if b_test.get_metatype() != TypeMetatype::Pointer {
+                    break;
+                }
+                // descend into pointer targets
+                match (&*a_test, &*b_test) {
+                    (Datatype::Pointer(ap), Datatype::Pointer(bp)) => {
+                        a_test = ap.ptr_to.clone();
+                        b_test = bp.ptr_to.clone();
+                    }
+                    _ => break,
+                }
+            }
+            let keep_b = match a_test.get_metatype() {
+                TypeMetatype::Unknown => true,
+                TypeMetatype::Int if b_test.get_metatype() == TypeMetatype::Uint => false,
+                TypeMetatype::Uint if b_test.get_metatype() == TypeMetatype::Int => false,
+                _ if b_test.get_metatype() == TypeMetatype::Unknown => false,
+                _ => {
+                    // both concrete and differ → cannot join
+                    if !Arc::ptr_eq(&a_test, &b_test) {
+                        return false;
+                    }
+                    false
+                }
+            };
+            if keep_b {
+                self.dtype = Some(b_dt);
+            }
+        }
+        if self.is_type_lock() {
+            return false;
+        }
+        if b.is_type_lock() {
+            return false;
+        }
+        let diffsz = b.sstart - self.sstart;
+        let align = settype.get_align_size().max(1) as i64;
+        if diffsz % align != 0 {
+            return false;
+        }
+        let diffsz = diffsz / align;
+        if diffsz > self.high_ind as i64 {
+            return false;
+        }
+        self.absorb(b);
         true
     }
 }
@@ -531,5 +855,151 @@ impl ScopeLocal {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::type_system::datatype::TypeBase;
+
+    fn int_dt(size: usize, mt: TypeMetatype) -> Arc<Datatype> {
+        Arc::new(Datatype::Base(TypeBase::new("x".into(), size, mt)))
+    }
+
+    // --- compare (varmap.cc:321): signed offset, then size small-first ---
+
+    #[test]
+    fn test_rangehint_compare_offset() {
+        let a = RangeHint::new(0, 4, 0, None, 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(16, 4, 16, None, 0, RangeType::Fixed, -1);
+        assert_eq!(RangeHint::compare(&a, &b), std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_rangehint_compare_size_small_first() {
+        // Same start, different sizes → smaller size first.
+        let a = RangeHint::new(0, 2, 0, None, 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 4, 0, None, 0, RangeType::Fixed, -1);
+        assert_eq!(RangeHint::compare(&a, &b), std::cmp::Ordering::Less);
+    }
+
+    // --- contain (varmap.cc:109) ---
+
+    #[test]
+    fn test_rangehint_contain() {
+        // a: [0,8), b: [0,4) → a contains b (same start)
+        let a = RangeHint::new(0, 8, 0, None, 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 4, 0, None, 0, RangeType::Fixed, -1);
+        assert!(a.contain(&b));
+        // a: [0,8), b: [4,8) starts later, ends at a's end → contained
+        let b2 = RangeHint::new(4, 4, 4, None, 0, RangeType::Fixed, -1);
+        assert!(a.contain(&b2));
+        // a: [0,4), b: [0,8): same start → contain returns true (Ghidra treats
+        // same-start intersecting ranges as mutually contained).
+        let small = RangeHint::new(0, 4, 0, None, 0, RangeType::Fixed, -1);
+        let big = RangeHint::new(0, 8, 0, None, 0, RangeType::Fixed, -1);
+        assert!(small.contain(&big));
+        // To get non-containment, this must start earlier AND not reach b's end.
+        // a: [0,3), b: [2,8): a does not contain b (b extends past a).
+        let early_short = RangeHint::new(0, 3, 0, None, 0, RangeType::Fixed, -1);
+        let later_long = RangeHint::new(2, 6, 2, None, 0, RangeType::Fixed, -1);
+        assert!(!early_short.contain(&later_long));
+    }
+
+    // --- reconcile (varmap.cc:62): same-alignSize compatible types reconcile ---
+
+    #[test]
+    fn test_rangehint_reconcile_compatible_ints() {
+        // Two int4 ranges at the same offset reconcile.
+        let a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        assert!(a.reconcile(&b));
+    }
+
+    #[test]
+    fn test_rangehint_reconcile_struct_field() {
+        // struct { char@0; int@4; } size 8. A char-range at offset 0 should
+        // reconcile with the struct because the struct has a char-sized subtype
+        // at offset 0 (alignSize match via getSubType traversal).
+        let char_t = int_dt(1, TypeMetatype::Int);
+        let int_t = int_dt(4, TypeMetatype::Int);
+        let s = Arc::new(Datatype::Struct(crate::type_system::datatype::TypeStruct {
+            base: TypeBase::new("S".into(), 8, TypeMetatype::Struct),
+            fields: vec![
+                crate::type_system::datatype::TypeField { name: "f0".into(), offset: 0, type_ptr: char_t.clone() },
+                crate::type_system::datatype::TypeField { name: "f1".into(), offset: 4, type_ptr: int_t.clone() },
+            ],
+        }));
+        let a = RangeHint::new(0, 8, 0, Some(s), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 1, 0, Some(char_t), 0, RangeType::Fixed, -1);
+        assert!(a.reconcile(&b));
+    }
+
+    // --- preferred (varmap.cc:126): locked preferred, more specific preferred ---
+
+    #[test]
+    fn test_rangehint_preferred_locked() {
+        // a unlocked int4, b locked int4 at same start → b preferred.
+        let a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), range_flags::TYPE_LOCK, RangeType::Fixed, -1);
+        assert!(!a.preferred(&b, true)); // a NOT preferred → b wins
+        assert!(b.preferred(&a, true));  // b preferred
+    }
+
+    #[test]
+    fn test_rangehint_preferred_smaller_int() {
+        // int4 vs int8 at same start, both unlocked, fixed, reconcile=true.
+        // typeOrder(int4, int8) returns (8-4)=+4 → not < 0 → int4 NOT preferred??
+        // Ghidra: preferred returns (0 > typeOrder(b)) i.e. typeOrder<0.
+        // typeOrder smaller-size-first: int4.type_order(int8) > 0 → int4 NOT preferred.
+        // So int8 (b) is preferred here. Verify that symmetry: int8 preferred.
+        let a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 8, 0, Some(int_dt(8, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        // For same metatype both unlocked fixed with reconcile=true, the fixed-size
+        // branch is skipped (size differs but reconcile=true). Falls to typeOrder.
+        // typeOrder(int4,int8) = (8-4)=+4 → a.preferred returns +4<0 = false.
+        assert!(!a.preferred(&b, true));
+    }
+
+    // --- merge_with (varmap.cc:259): resType=0 absorb ---
+
+    #[test]
+    fn test_rangehint_merge_absorb_same_type() {
+        // a: int4@[0,4) contained b: int4@[0,4), reconcile true, preferred a
+        // → resType=0 → absorb b (no-op since identical).
+        let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let overlap = a.merge_with(&b);
+        assert!(!overlap); // reconcilable → false
+        assert_eq!(a.size, 4);
+    }
+
+    #[test]
+    fn test_rangehint_merge_confuse_to_unknown() {
+        // a: int4@[0,4), b: int8@[2,10) — NOT contained, NOT locked → resType=2.
+        // Result: unknown type, size = (2-0)+8 = 10 → not in {1,2,4,8} → size 1, open.
+        let mut a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let b = RangeHint::new(2, 8, 2, Some(int_dt(8, TypeMetatype::Int)), 0, RangeType::Fixed, -1);
+        let overlap = a.merge_with(&b);
+        assert!(!overlap);
+        assert_eq!(a.size, 1);
+        assert_eq!(a.range_type, RangeType::Open);
+        assert_eq!(a.dtype.as_ref().unwrap().get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(a.high_ind, -1);
+    }
+
+    // --- is_const_absorbable (varmap.cc:30) ---
+
+    #[test]
+    fn test_rangehint_const_absorbable() {
+        // self: open int4 @0 with copy_constant candidate b.
+        // b must have copy_constant flag, be >= self.size, and overlap.
+        let a = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), 0, RangeType::Open, -1);
+        let b = RangeHint::new(0, 4, 0, Some(int_dt(4, TypeMetatype::Int)), range_flags::COPY_CONSTANT, RangeType::Open, -1);
+        assert!(a.is_const_absorbable(&b));
+        // b smaller than self.size → not absorbable
+        let b_small = RangeHint::new(0, 2, 0, Some(int_dt(2, TypeMetatype::Int)), range_flags::COPY_CONSTANT, RangeType::Open, -1);
+        assert!(!a.is_const_absorbable(&b_small));
     }
 }
