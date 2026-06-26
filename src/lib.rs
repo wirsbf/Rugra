@@ -55,6 +55,7 @@ pub mod cover; // ← cover.hh
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
+pub mod expression; // ← expression.hh
 pub mod merge; // ← merge.hh
 pub mod op; // ← op.hh
 pub mod opcodes; // ← opcodes.hh

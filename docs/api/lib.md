@@ -403,3 +403,7 @@
 - 添加 `pub mod varmap;` — Ghidra varmap.cc (1620行) 的 Rust 移植。
 - RangeHint + AliasChecker + MapState + ScopeLocal 骨架已实现。
 - 尚未集成到 codegen/printc.rs。
+
+## 2026-06-26：新增 expression 模块
+
+- `pub mod expression;` — 对应 `expression.hh`，TermOrder/AdditiveEdge/AddExpression。

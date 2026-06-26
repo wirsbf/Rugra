@@ -471,3 +471,15 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 委托 replace_lessequal。将 INT_LESSEQUAL/INT_SLESSEQUAL 转为 INT_LESS/INT_SLESS。
 
 测试：ruleaction::tests +2（V<=5→V<6；V<=0xffffffff 不变）。
+
+### 2026-06-26（续）：expression.rs — TermOrder/AdditiveEdge/AddExpression
+
+新增 `src/expression.rs` 模块（对应 `expression.hh`/`expression.cc`）：
+
+- `AdditiveEdge`：加法表达式中的项（op + slot + vn + 可选 mult op）
+- `TermOrder`：从 INT_ADD 树收集所有项，按项排序。`collect()` 遍历 ADD/MULT 链收集项；`sort_terms()` 排序。
+- `AddExpression`：轻量级加法表达式匹配（最多 2 项 + 常量）。`gather_two_terms_subtract/add/root` + `is_equivalent`。
+
+解锁：RuleCollectTerms、RuleScarry/RuleSborrow 深层形式。
+
+测试：expression::tests 2 个（常量折叠、等价匹配）。
