@@ -3137,6 +3137,77 @@ impl Rule for RuleZextSless {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL] }
 }
 
+/// Simplify signed comparisons using INT_SCARRY:
+///   `scarry(V, 0)  =>  false`
+///
+/// Faithful to Ghidra's `RuleScarry` (ruleaction.cc:3434-3510). This ports
+/// the trivial branch (3460-3466): a SCARRY with a zero operand always yields
+/// false (no signed overflow when adding zero). The deeper AddExpression-based
+/// forms (3475-3510) require that infrastructure and are deferred.
+pub struct RuleScarry;
+
+impl RuleScarry {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleScarry {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let has_zero = {
+            let op = op_arc.read().unwrap();
+            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let a_zero = avn.read().unwrap().is_constant() && avn.read().unwrap().get_offset() == 0;
+            let b_zero = bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0;
+            a_zero || b_zero
+        };
+        if !has_zero {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        let c = fd.new_constant(1, 0);
+        fd.op_set_input(&follow, c, 0);
+        fd.op_remove_input(&follow, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "scarry" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SCARRY] }
+}
+
+/// Simplify signed comparisons using INT_SBORROW:
+///   `sborrow(V, 0)  =>  false`
+///
+/// Faithful to Ghidra's `RuleSborrow` (ruleaction.cc:3381-3432). Ports the
+/// trivial branch (3390-3395). The AddExpression-based forms are deferred.
+pub struct RuleSborrow;
+
+impl RuleSborrow {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSborrow {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let b_zero = {
+            let op = op_arc.read().unwrap();
+            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0
+        };
+        if !b_zero {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        let c = fd.new_constant(1, 0);
+        fd.op_set_input(&follow, c, 0);
+        fd.op_remove_input(&follow, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sborrow" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SBORROW] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5274,6 +5345,61 @@ mod tests {
         sless_op.write().unwrap().inrefs = vec![zext_out, c];
         let rule = RuleZextSless::new();
         let result = rule.apply_op(&sless_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleScarry (ruleaction.cc:3434) trivial branch ---
+
+    #[test]
+    fn test_scarry_zero_is_false() {
+        // scarry(V, 0) => COPY(0)  (no signed overflow adding zero)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SCARRY,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleScarry::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    // --- RuleSborrow (ruleaction.cc:3381) trivial branch ---
+
+    #[test]
+    fn test_sborrow_zero_is_false() {
+        // sborrow(V, 0) => COPY(0)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SBORROW,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleSborrow::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    #[test]
+    fn test_sborrow_nonzero_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(4, 5);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SBORROW,
+        )));
+        op.write().unwrap().inrefs = vec![v, c];
+        let rule = RuleSborrow::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 }

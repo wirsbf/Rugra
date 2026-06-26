@@ -374,3 +374,13 @@ AND-比较变换，把 AND 推到更大的定义域：
 `zext(V) s< c => V < c` 当 c 足够小（高位全0，V 的符号位必为 0）时，去掉零扩展，转为无符号比较。常量缩减到 small size。
 
 测试：ruleaction::tests +2（小常量→LESS；大常量符号位风险→NO_CHANGE）。
+
+### 2026-06-26（续）：RuleScarry + RuleSborrow（trivial 分支）
+
+#### `pub struct RuleScarry`（ruleaction.cc:3434-3510，trivial 分支 3460-3466）
+`scarry(V, 0) => false`（加 0 无有符号溢出）。AddExpression 形式（3475-3510）待补。
+
+#### `pub struct RuleSborrow`（ruleaction.cc:3381-3432，trivial 分支 3390-3395）
+`sborrow(V, 0) => false`。AddExpression 形式待补。
+
+测试：ruleaction::tests +3（Scarry 零→COPY(0)；Sborrow 零→COPY(0)；Sborrow 非零不变）。
