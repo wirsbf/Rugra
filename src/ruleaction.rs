@@ -2827,6 +2827,88 @@ impl Rule for RuleLessNotEqual {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND] }
 }
 
+/// Simplify `(s)less OR equal` to `(s)lessequal`:
+///   `V < W || V == W  =>  V <= W`
+///   `V < W || V != W  =>  COPY(NOTEQUAL output)` (NOTEQUAL dominates)
+///
+/// Faithful to Ghidra's `RuleLessEqual` (ruleaction.cc:2247-2308). A BOOL_OR
+/// of an INT_(S)LESS and an INT_EQUAL/INT_NOTEQUAL over the same operand pair
+/// collapses to INT_(S)LESSEQUAL (for EQUAL) or a COPY of the NOTEQUAL output.
+pub struct RuleLessEqual;
+
+impl RuleLessEqual {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleLessEqual {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (vnout1, vnout2) = {
+            let op = op_arc.read().unwrap();
+            let v1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let v2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (v1, v2)
+        };
+        let op1_arc = { vnout1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+        let op2_arc = { vnout2.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+        let (op1_arc, op2_arc) = match (op1_arc, op2_arc) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let (op_less_arc, opc, op_equal_arc, equalopc) = {
+            let o1 = op1_arc.read().unwrap();
+            let o2 = op2_arc.read().unwrap();
+            let is_less1 = matches!(o1.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS);
+            let is_cmp2 = matches!(o2.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL);
+            if is_less1 && is_cmp2 {
+                (op1_arc.clone(), o1.opcode, op2_arc.clone(), o2.opcode)
+            } else {
+                let is_less2 = matches!(o2.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS);
+                let is_cmp1 = matches!(o1.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL);
+                if is_less2 && is_cmp1 {
+                    (op2_arc.clone(), o2.opcode, op1_arc.clone(), o1.opcode)
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+        };
+        let (compvn1, compvn2, e0, e1) = {
+            let ol = op_less_arc.read().unwrap();
+            let oe = op_equal_arc.read().unwrap();
+            (ol.inrefs.get(0).cloned(), ol.inrefs.get(1).cloned(),
+             oe.inrefs.get(0).cloned(), oe.inrefs.get(1).cloned())
+        };
+        let (compvn1, compvn2) = match (compvn1, compvn2, e0, e1) {
+            (Some(c1), Some(c2), Some(a), Some(b)) => {
+                let md = crate::address::functional_equality(&c1, &a) && crate::address::functional_equality(&c2, &b);
+                let ms = crate::address::functional_equality(&c1, &b) && crate::address::functional_equality(&c2, &a);
+                if !md && !ms { return Ok(action_status::NO_CHANGE); }
+                (c1, c2)
+            }
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if equalopc == OpCode::CPUI_INT_NOTEQUAL {
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            let neq_out = op_equal_arc.read().unwrap().output.as_ref().map(|o| o.clone());
+            if let Some(o) = neq_out {
+                fd.op_set_input(&follow, o, 0);
+            }
+        } else {
+            fd.op_set_input(&follow, compvn1, 0);
+            fd.op_set_input(&follow, compvn2, 1);
+            let new_code = if opc == OpCode::CPUI_INT_SLESS { OpCode::CPUI_INT_SLESSEQUAL } else { OpCode::CPUI_INT_LESSEQUAL };
+            fd.op_set_opcode(&follow, new_code);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "less_equal" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4754,5 +4836,53 @@ mod tests {
         assert_eq!(a.opcode, OpCode::CPUI_INT_LESS);
         assert!(Arc::ptr_eq(&a.inrefs[0], &v));
         assert!(Arc::ptr_eq(&a.inrefs[1], &w));
+    }
+
+    // --- RuleLessEqual (ruleaction.cc:2247) ---
+
+    #[test]
+    fn test_less_equal_collapse() {
+        // BOOL_OR(LESS(V,W), EQUAL(V,W)) => LESSEQUAL(V,W)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        {
+            let mut l = less_op.write().unwrap();
+            l.inrefs = vec![v.clone(), w.clone()];
+            l.output = Some(less_out.clone());
+        }
+        less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
+        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        {
+            let mut e = eq_op.write().unwrap();
+            e.inrefs = vec![v.clone(), w.clone()];
+            e.output = Some(eq_out.clone());
+        }
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq_op));
+        let or_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        {
+            let mut o = or_op.write().unwrap();
+            o.inrefs = vec![less_out, eq_out];
+            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleLessEqual::new();
+        let result = rule.apply_op(&or_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = or_op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_LESSEQUAL);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        assert!(Arc::ptr_eq(&o.inrefs[1], &w));
     }
 }

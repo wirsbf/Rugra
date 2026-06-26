@@ -340,3 +340,12 @@ AND-比较变换，把 AND 推到更大的定义域：
 `V <= W && V != W => V < W`。用 functional_equality 验操作数匹配。
 
 测试：ruleaction::tests +1（LE+NE 同操作数→LESS）。
+
+### 2026-06-26（续）：RuleLessEqual
+
+#### `pub struct RuleLessEqual`（ruleaction.cc:2247-2308）
+`(s)less OR equal`（同操作数对）折叠为 `(s)lessequal`：
+- `V < W || V == W => V <= W`
+- `V < W || V != W => COPY(NOTEQUAL 输出)`（NOTEQUAL 占优）
+
+测试：ruleaction::tests +1（LESS+EQUAL 同操作数→LESSEQUAL）。
