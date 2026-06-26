@@ -88,6 +88,7 @@ pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh
 pub mod pcodeinject; // ← pcodeinject.hh
 pub mod rangeutil; // ← rangeutil.hh
+pub mod rangemap; // ← rangemap.hh + partmap.hh
 pub mod ruleaction; // ← ruleaction.hh
 pub mod signature; // ← signature.hh
 pub mod space; // ← space.hh

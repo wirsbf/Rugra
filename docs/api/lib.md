@@ -538,3 +538,7 @@
 ## 2026-06-27（续 15）：新增 grammar 模块
 
 - `pub mod grammar;` — 对应 `grammar.hh`，C 语法解析器。GrammarToken + GrammarLexer（状态机词法分析：标点/标识符/整数 dec-hex-oct/字符串/字符常量/`//`和`/* */`注释/`...`）+ TypeModifier（Pointer/Array/Function）+ TypeDeclarator AST + parse_type/parse_to_separator 入口函数。L3 缺完整 CParse 递归下降解析器 + TypeFactory 集成。
+
+## 2026-06-27（续 16）：新增 rangemap 模块（RangeMap + PartMap — L3）
+
+- `pub mod rangemap;` — 对应 `rangemap.hh` + `partmap.hh`。RangeMap（区间映射：find_overlap/find_at_point/find_container + sorted insert）+ PartMap（分区映射：get_value/split/clear_range/bounds）。关闭 database.rs 的 rangemap/partmap L3 缺口。
