@@ -559,3 +559,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **Funcdata 新增**：`remove_branch(bb, num)`（funcdata_block.cc branchRemoveInternal）：销毁 CBRANCH op + 移除非选中 out-edge + 更新目标块 incoming edge。
 - **ActionDeterminedBranch**：完整算法实现（coreaction.cc）——遍历所有基本块，找到以 CBRANCH（常量布尔输入 slot 1）结尾的块，计算实际分支（`((val!=0)!=isBooleanFlip) ? 0 : 1`），调用 `remove_branch` 移除另一条边。不再是 stub。
+
+## 2026-06-27（续 20）：ActionUnreachable + ActionDoNothing 算法逻辑
+
+- **ActionUnreachable**：实现不可达块检测——遍历块检查 immed_dom，快速返回。完整移除待 collectReachable。
+- **ActionDoNothing**：实现 do-nothing 检测——size_out==1 + size_in>0 + 只有 marker/branch op + 非自循环。完整移除待 spliceBlockBasic。
+- 现在 3 个 coreaction Actions 有真实算法逻辑（ActionDeterminedBranch + ActionUnreachable + ActionDoNothing）。

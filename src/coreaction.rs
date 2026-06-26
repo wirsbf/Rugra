@@ -1662,14 +1662,41 @@ fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<
 
 /// Detect unreachable blocks and remove them. Faithful to
 /// `ActionUnreachable` (coreaction.cc).
+///
+/// An unreachable block is one that has no immediate dominator (other than
+/// entry-point blocks). This is because the dominator tree only covers
+/// reachable blocks.
 pub struct ActionUnreachable { pub count: i32 }
 impl ActionUnreachable {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionUnreachable {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        // removeUnreachableBlocks requires Funcdata block-editing.
-        // Stub: return no change.
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Quick check: if no block has a missing dominator, skip.
+        let n = fd.bblocks.get_size();
+        let mut has_unreachable = false;
+        for i in 0..n {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let flags = bl.read().unwrap().get_flags();
+            if (flags & crate::block::block_flags::ENTRY_POINT) != 0 {
+                continue; // Entry points are never unreachable.
+            }
+            let has_dom = bl.read().unwrap().get_immed_dom().is_some();
+            if !has_dom {
+                has_unreachable = true;
+                break;
+            }
+        }
+        if !has_unreachable {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // In a full implementation, we'd mark unreachable blocks as dead and
+        // remove them from the CFG. This requires removeUnreachableBlocks
+        // which needs collectReachable. Stub for now.
+        // TODO: implement full unreachable removal.
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "unreachable" }
@@ -1677,12 +1704,78 @@ impl Action for ActionUnreachable {
 
 /// Remove blocks that do nothing. Faithful to `ActionDoNothing`
 /// (coreaction.cc).
+///
+/// A "do nothing" block has exactly 1 out-edge, at least 1 in-edge, no
+/// BRANCHIND, and contains only marker/branch ops (no substantive ops).
 pub struct ActionDoNothing { pub count: i32 }
 impl ActionDoNothing {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDoNothing {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        use crate::opcodes::OpCode;
+        let n = fd.bblocks.get_size();
+        for i in 0..n {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            // Check isDoNothing conditions.
+            let is_do_nothing = {
+                let bl_rg = bl.read().unwrap();
+                // Must have exactly 1 out-edge.
+                if bl_rg.size_out() != 1 { false }
+                // Must have at least 1 in-edge.
+                else if bl_rg.size_in() == 0 { false }
+                else {
+                    // Check ops: only markers + branches allowed.
+                    if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                        let mut ok = true;
+                        for op_ref in &any.ops {
+                            let op_rg = op_ref.0.read().unwrap();
+                            // Skip markers (MULTIEQUAL/INDIRECT).
+                            let is_marker = (op_rg.flags & crate::op::pcodeop_flags::MARKER) != 0;
+                            // Skip branches.
+                            let is_branch = matches!(
+                                op_rg.opcode,
+                                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHIND
+                            );
+                            if !is_marker && !is_branch {
+                                ok = false;
+                                break;
+                            }
+                            // Don't remove if last op is BRANCHIND.
+                            if op_rg.opcode == OpCode::CPUI_BRANCHIND {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        ok
+                    } else {
+                        false
+                    }
+                }
+            };
+            if !is_do_nothing {
+                continue;
+            }
+            // Check for infinite loop (out → self).
+            let is_self_loop = {
+                let bl_rg = bl.read().unwrap();
+                if let Some(edge) = bl_rg.get_out(0) {
+                    Arc::ptr_eq(&edge.point, &bl)
+                } else {
+                    false
+                }
+            };
+            if is_self_loop {
+                // Don't remove infinite do-nothing loops, just warn.
+                continue;
+            }
+            // Full implementation would call removeDoNothingBlock which splices
+            // the block out of the CFG. This requires spliceBlockBasic.
+            // TODO: implement spliceBlockBasic for full do-nothing removal.
+        }
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "donothing" }
