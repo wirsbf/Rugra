@@ -509,3 +509,7 @@
 ## 2026-06-27（续 8）：新增 stringmanage 模块
 
 - `pub mod stringmanage;` — 对应 `stringmanage.hh`，字符串解码管理。StringManager + StringManagerUnicode（LoadImage 集成）+ 完整 UTF8/UTF16/UTF32 解码（write_utf8/read_utf16/get_codepoint/check_characters/has_char_terminator/write_unicode/assign_string_data）。解锁 Architecture::stringManager。L3 缺 XML encode/decode。
+
+## 2026-06-27（续 9）：新增 cpool 模块
+
+- `pub mod cpool;` — 对应 `cpool.hh`，常量池（Java 字节码）。CPoolRecord（tag/token/value/type/byte_data + constructor/destructor 标志）+ ConstantPool trait（get_record/create_record/put_record）+ ConstantPoolInternal（BTreeMap 存储）+ CheapSorter（2整数引用键）。解锁 Architecture::cpool。L3 缺 XML encode/decode（需 TypeFactory）。
