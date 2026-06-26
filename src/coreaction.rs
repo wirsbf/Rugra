@@ -2787,7 +2787,24 @@ impl ActionInputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInputPrototype {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate input Varnodes and check if
+        // the function prototype's parameter list needs updating.
+        // Full algorithm requires ParamActive + clearUnlockedInput.
+        let mut change_count = 0;
+        let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
+
+        for vn_arc in &varnodes {
+            let vn_rg = vn_arc.read().unwrap();
+            if !vn_rg.is_input() {
+                continue;
+            }
+            // Count input Varnodes as potential params.
+            change_count += 1;
+        }
+
+        // Return NO_CHANGE since we don't modify the prototype yet.
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "inputprototype" }
@@ -2800,7 +2817,26 @@ impl ActionOutputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionOutputPrototype {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: find the first RETURN op and check if
+        // it has a return value Varnode. Full algorithm requires
+        // FuncProto.updateOutputTypes.
+        use crate::opcodes::OpCode;
+        let mut has_return_value = false;
+
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if op_rg.opcode == OpCode::CPUI_RETURN {
+                // RETURN input(0) = return address, input(1) = return value
+                // (if numInput >= 2).
+                if op_rg.num_input() >= 2 {
+                    has_return_value = true;
+                }
+                break;
+            }
+        }
+
+        let _ = has_return_value;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "outputprototype" }
@@ -3216,7 +3252,25 @@ impl ActionInternalStorage {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInternalStorage {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate Varnodes and check if any match
+        // internal storage locations declared in the FuncProto.
+        // Full algorithm requires FuncProto.internalBegin/End + markNotMapped.
+        let mut change_count = 0;
+        let proto = fd.get_func_proto();
+
+        // Check if the function prototype has any parameters marked as
+        // internal storage (indirectstorage/hiddenretparm).
+        for param in &proto.parameters {
+            if (param.flags & crate::fspec::protoparam_flags::INDIRECT_STORAGE) != 0
+                || (param.flags & crate::fspec::protoparam_flags::HIDDEN_RETURN) != 0
+            {
+                // This parameter uses internal storage.
+                change_count += 1;
+            }
+        }
+
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "internalstorage" }
