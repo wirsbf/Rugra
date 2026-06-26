@@ -72,6 +72,77 @@ impl ArraySequence {
     pub fn is_valid(&self) -> bool {
         self.num_elements != 0
     }
+
+    /// Construct from a root op.
+    pub fn new(root_op: Arc<RwLock<PcodeOp>>) -> Self {
+        Self {
+            fd: std::ptr::null_mut(),
+            root_op,
+            char_type: None,
+            num_elements: 0,
+            move_ops: Vec::new(),
+            byte_array: Vec::new(),
+        }
+    }
+
+    /// Sort move_ops by their op's sequence order.
+    pub fn sort_ops(&mut self) {
+        self.move_ops.sort_by(|a, b| {
+            let a_order = a.op.read().unwrap().start.get_order() as u64;
+            let b_order = b.op.read().unwrap().start.get_order() as u64;
+            a_order.cmp(&b_order)
+        });
+    }
+
+    /// Form a byte array from constant COPYs in move_ops.
+    /// Corresponds to `ArraySequence::formByteArray` (constseq.cc).
+    pub fn form_byte_array(&mut self) -> i32 {
+        self.byte_array.clear();
+        for node in &self.move_ops {
+            let op = node.op.read().unwrap();
+            // COPY of a constant into the array region
+            if op.opcode == OpCode::CPUI_COPY {
+                if let Some(in0) = op.inrefs.first() {
+                    let vn = in0.read().unwrap();
+                    if vn.is_constant() {
+                        let val = vn.get_offset();
+                        // Only take the low byte (char type)
+                        self.byte_array.push((val & 0xff) as u8);
+                    } else {
+                        return 0; // Non-constant, can't form byte array
+                    }
+                }
+            } else {
+                return 0; // Non-COPY op, can't form byte array
+            }
+        }
+        self.byte_array.len() as i32
+    }
+
+    /// Check if the byte array represents a valid string (null-terminated).
+    pub fn is_valid_string(&self) -> bool {
+        if self.byte_array.is_empty() { return false; }
+        if self.byte_array.len() < MINIMUM_SEQUENCE_LENGTH as usize { return false; }
+        // Must have at least one null terminator
+        self.byte_array.contains(&0)
+    }
+
+    /// Get the string content (up to first null).
+    pub fn get_string(&self) -> Option<&[u8]> {
+        let pos = self.byte_array.iter().position(|&b| b == 0)?;
+        Some(&self.byte_array[..pos])
+    }
+
+    /// Select the appropriate string copy function based on element size.
+    /// Corresponds to `ArraySequence::selectStringCopyFunction` (constseq.cc).
+    pub fn select_string_copy_function(&self) -> &'static str {
+        let char_size = self.char_type.as_ref().map(|t| t.get_size()).unwrap_or(1);
+        match char_size {
+            1 => "strncpy",
+            2 => "wcsncpy",
+            _ => "memcpy",
+        }
+    }
 }
 
 /// A class for collecting sequences of COPY ops writing characters to a string.
@@ -143,5 +214,35 @@ mod tests {
     fn test_rule_names() {
         assert_eq!(RuleStringCopy::new().get_name(), "string_copy");
         assert_eq!(RuleStringStore::new().get_name(), "string_store");
+    }
+
+    #[test]
+    fn test_array_sequence_byte_array() {
+        use crate::address::{Address, SeqNum};
+        let mut seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_COPY,
+        ))));
+        // Add 5 COPY ops with constant inputs "Hello"
+        for (i, &ch) in b"Hello\0".iter().enumerate() {
+            let op = Arc::new(RwLock::new(PcodeOp::new(
+                SeqNum::new(Address::new(0x1000 + i as u64), 0), OpCode::CPUI_COPY,
+            )));
+            let const_vn = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(ch as u64, 1)));
+            op.write().unwrap().inrefs.push(const_vn);
+            seq.move_ops.push(WriteNode::new(i as u64, op, 0));
+        }
+        let count = seq.form_byte_array();
+        assert_eq!(count, 6);
+        assert!(seq.is_valid_string());
+        assert_eq!(seq.get_string().unwrap(), b"Hello");
+    }
+
+    #[test]
+    fn test_select_string_copy_function() {
+        let seq = ArraySequence::new(Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        ))));
+        assert_eq!(seq.select_string_copy_function(), "strncpy"); // default char size = 1
     }
 }
