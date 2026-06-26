@@ -459,3 +459,7 @@
 ## 2026-06-26（续）：新增 callgraph 模块
 
 - `pub mod callgraph;` — 对应 `callgraph.hh`，调用图。CallGraphEdge/CallGraphNode/CallGraph 完整实现（add_node/add_edge/find_node/init_leaf_walk）。
+
+## 2026-06-26（续）：新增 signature 模块
+
+- `pub mod signature;` — 对应 `signature.hh`，函数签名匹配。Signature/SignatureEntry/SignatureDB 骨架已实现。
