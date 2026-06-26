@@ -360,3 +360,10 @@ AND-比较变换，把 AND 推到更大的定义域：
 `(V + c) & 0xfff0 => V + (c & 0xfff0)`，要求 addend 的 NZM 高位为零。移植了常量 addend 主分支。
 
 测试：ruleaction::tests +2（RightShiftAnd 绕过；HighOrderAnd 寄存器 NZM=full→正确 NO_CHANGE）。
+
+### 2026-06-26（续）：RuleAndZext
+
+#### `pub struct RuleAndZext`（ruleaction.cc:1697-1732）
+`sext(V) & mask => zext(V)` 与 `concat(a, V) & mask => zext(V)`，当 mask 恰为根值的 full mask 时。AND 冗余等价于零扩展。
+
+测试：ruleaction::tests +1（sext 全掩码→zext）。

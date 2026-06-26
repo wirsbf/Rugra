@@ -3022,6 +3022,58 @@ impl Rule for RuleHighOrderAnd {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Simplify INT_AND of an extension: `sext(V) & mask => zext(V)` when mask
+/// equals the full mask of the root value. Also `concat(a, V) & mask => zext(V)`.
+///
+/// Faithful to Ghidra's `RuleAndZext` (ruleaction.cc:1697-1732). When the AND
+/// constant is exactly the root value's full mask, the AND is redundant with a
+/// zero-extension of the root.
+pub struct RuleAndZext;
+
+impl RuleAndZext {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAndZext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (cvn1_val, otherop_arc) = {
+            let op = op_arc.read().unwrap();
+            let cvn1 = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = cvn1.read().unwrap().get_offset();
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let otherop_arc = { in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let otherop_arc = match otherop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            (val, otherop_arc)
+        };
+        // otherop must be INT_SEXT (in0 is root) or PIECE (in1 is root).
+        let rootvn = {
+            let oo = otherop_arc.read().unwrap();
+            match oo.opcode {
+                OpCode::CPUI_INT_SEXT => oo.inrefs.get(0).cloned(),
+                OpCode::CPUI_PIECE => oo.inrefs.get(1).cloned(),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let rootvn = match rootvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let root_size = rootvn.read().unwrap().get_size();
+        if root_size > 8 { return Ok(action_status::NO_CHANGE); }
+        let mask = crate::address::calc_mask(root_size);
+        if mask != cvn1_val { return Ok(action_status::NO_CHANGE); }
+        if rootvn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_ZEXT);
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_input(&follow, rootvn, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "and_zext" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5063,5 +5115,39 @@ mod tests {
         // mask1 (NZM of V, register) = 0xff; (0xff & 0xf0)=0xf0 != 0xff → no change
         // because V's high bits aren't known-zero. So this correctly returns NO_CHANGE.
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleAndZext (ruleaction.cc:1697) ---
+
+    #[test]
+    fn test_and_zext_sext_full_mask() {
+        // (sext(V[1]) & 0xff) => zext(V)  (mask 0xff == full mask of V size 1)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let sext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SEXT,
+        )));
+        {
+            let mut s = sext_op.write().unwrap();
+            s.inrefs = vec![v.clone()];
+            s.output = Some(sext_out.clone());
+        }
+        sext_out.write().unwrap().def = Some(Arc::downgrade(&sext_op));
+        let mask = fd.vbank.create_constant(2, 0xff);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        and_op.write().unwrap().inrefs = vec![sext_out, mask];
+        let rule = RuleAndZext::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_ZEXT);
+        assert_eq!(a.inrefs.len(), 1);
+        assert!(Arc::ptr_eq(&a.inrefs[0], &v));
     }
 }
