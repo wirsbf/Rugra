@@ -451,3 +451,7 @@
 ## 2026-06-26（续）：新增 pcodeinject 模块
 
 - `pub mod pcodeinject;` — 对应 `pcodeinject.hh`，P-code 注入引擎。InjectParameter/InjectPayload/PcodeInjectLibrary 已实现。
+
+## 2026-06-26（续）：新增 emulate 模块
+
+- `pub mod emulate;` — 对应 `emulate.hh`，P-code 模拟执行。Emulate 骨架 + execute_op 使用 opbehavior。

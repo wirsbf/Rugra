@@ -58,6 +58,7 @@ pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
 pub mod expression; // ← expression.hh
+pub mod emulate; // ← emulate.hh
 pub mod float_emulate; // ← float.hh
 pub mod merge; // ← merge.hh
 pub mod memstate; // ← memstate.hh
