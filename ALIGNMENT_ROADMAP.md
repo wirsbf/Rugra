@@ -36,7 +36,7 @@
 | 12 | `heritage.cc` | `heritage.rs` | 🔧 L2 | SSA Phi 放置基本对齐；缺少工作量列表驱动的迭代式 Heritage | `heritage.cc` |
 | 13 | `merge.cc` | `merge.rs` | 🔧 L2 | Cover-based merge 已实现；缺少与 varmap 集成的完整 HighVariable 合并 | `merge.cc` |
 | 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 框架存在；缺少完整的变量映射和命名 | `variable.cc` |
-| 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | RangeHint 算法（reconcile/merge/attemptJoin/preferred/absorb/compare）**已 1:1 对齐 Ghidra**；AliasChecker/MapState/ScopeLocal 仍为骨架，未集成 printc | `varmap.cc` |
+| 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | **RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐**；已接入 printc（graceful fallback）。**剩余**：RSP→Stack spacebase 提升（Rugra lift 不产 Stack varnode，导致 gather_varnodes 几乎空）、alias_block_level、LoadGuard addGuard | `varmap.cc` |
 | 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
 
 ---
@@ -234,7 +234,7 @@
 
 ### P0（最高优先级，直接影响输出质量）
 
-1. **`varmap.cc`** (L1→L3) — 变量映射，消除 uVar 碎片
+1. **`varmap.cc`** (L2→L3) — 算法层已 1:1 对齐并接入 printc；**剩余阻碍**：RSP→Stack spacebase 提升通道（Rugra x86 lift 不产 Stack-space varnode，导致 gather_varnodes 基本为空，uVar 碎片未消除）
 2. **`blockaction.cc` orderLoopBodies 嵌套循环** (L2→L3) — 循环/if 结构化
 3. **TraceDAG 完整评分** (L2→L3) — 多入边 CBR goto 标记
 4. **`coreaction.cc` 缺失 30 Actions** (L1→L3) — P-code 优化

@@ -493,3 +493,11 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - 2d 遍历：用 fresh emitted set 强制 emit 所有 WhileDo/DoWhile 块，绕过 stale emitted 条目。
 - 大幅增加循环恢复：curl 15 while（从 5），httpd 40 while（从 20）。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
+
+### 2026-06-26（varmap 集成）：ScopeLocal 接入 get_stack_variable_name
+
+- `PrintC` 新增字段 `scope: Option<crate::varmap::ScopeLocal>`，在 `doc_function` 开头构建一次。
+- `get_stack_variable_name` 的 Case 1（INT_ADD(RSP, const)）在 struct 检测之后、启发式 local_XX 之前，查询 `scope.find_symbol(offset)`，命中则返回符号名。
+- **Graceful fallback**：当 scope 无符号覆盖该偏移时，回退到现有启发式，保证不破坏输出。
+- **已知阻碍**：Rugra 的 x86 lift 将 RSP 相对访问留在 Register space，不产生 Stack-space varnode，因此 `ScopeLocal::restructure_varnode` 的 `gather_varnodes` 几乎找不到符号。要真正消除 uVar 碎片，需先实现 RSP→Stack spacebase 提升通道（ALIGNMENT_ROADMAP P0 #1 剩余项）。
+- 验证：curl 24/24 gcc，httpd 29/29 gcc，200/200 测试。

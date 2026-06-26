@@ -135,6 +135,11 @@ pub struct PrintC {
     /// Set of block addresses that are targets of BRANCH/CBRANCH goto statements.
     /// Used to emit LAB_XXXX: labels at the start of target blocks.
     goto_targets: HashSet<u64>,
+    /// Restructured local-variable scope (faithful port of varmap.cc). Built
+    /// once per doc_function from the function's stack varnodes. When a symbol
+    /// covers a stack offset, get_stack_variable_name prefers its name over the
+    /// frame-relative heuristic.
+    scope: Option<crate::varmap::ScopeLocal>,
 }
 
 impl PrintC {
@@ -171,6 +176,7 @@ impl PrintC {
             block_local_reg_defs: HashMap::new(),
             loop_depth: 0,
             goto_targets: HashSet::new(),
+            scope: None,
 
         }
     }
@@ -1445,6 +1451,14 @@ impl PrintC {
                     }
                 }
             }
+
+            // Prefer a restructured ScopeLocal symbol (faithful varmap.cc) when
+            // one covers this raw stack offset. Falls through to the heuristic
+            // when the scope has no symbol here (common, since Rugra's lift does
+            // not yet produce Stack-space varnodes for RSP-relative accesses).
+            if let Some(sym) = self.scope.as_ref().and_then(|s| s.find_symbol(offset)) {
+                return Some(sym.name.clone());
+            }
             
             // Ghidra convention: local_XX where XX = frame_size - offset
             if offset < self.stack_frame_size {
@@ -2409,6 +2423,16 @@ impl PrintLanguage for PrintC {
             .map(|(k, v)| (*k, sanitize_c_ident(v)))
             .collect();
         self.string_table = fd.string_table.clone();
+
+        // Restructure the local-variable scope (faithful varmap.cc port).
+        // Built once per function; queried by get_stack_variable_name.
+        // NOTE: Rugra's x86 lift keeps RSP-relative accesses in Register space
+        // rather than producing Stack-space varnodes, so gather_varnodes finds
+        // few symbols today. Full integration requires a RSP-relative→Stack
+        // spacebase lift pass (see ALIGNMENT_ROADMAP P0 follow-up).
+        let mut scope = crate::varmap::ScopeLocal::new();
+        scope.restructure_varnode(fd);
+        self.scope = Some(scope);
 
         // Populate parameter name mapping from function prototype
         self.param_names.clear();
