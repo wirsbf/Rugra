@@ -70,6 +70,46 @@ impl SignatureEntry {
 
     /// Mark that this node has been visited.
     pub fn set_visited(&mut self) { self.flags.visited = true; }
+
+    /// Set the current hash.
+    pub fn set_hash(&mut self, h: u32) {
+        self.hash[1] = self.hash[0];
+        self.hash[0] = h;
+    }
+
+    /// Get the current hash.
+    pub fn get_current_hash(&self) -> u32 { self.hash[0] }
+
+    /// Get the previous hash.
+    pub fn get_previous_hash(&self) -> u32 { self.hash[1] }
+
+    /// Check if the hash changed in the last iteration.
+    pub fn hash_changed(&self) -> bool { self.hash[0] != self.hash[1] }
+}
+
+/// Hash a single opcode for feature generation.
+/// Corresponds to Ghidra's `SignatureEntry::getOpHash`.
+pub fn hash_opcode(opc: crate::opcodes::OpCode, modifiers: u32) -> u32 {
+    let base = opc as u32;
+    base.wrapping_mul(0x01000193).wrapping_add(modifiers)
+}
+
+/// Combine two hashes using Ghidra's mixing function.
+pub fn combine_hashes(a: u32, b: u32) -> u32 {
+    a.rotate_left(5) ^ b.wrapping_mul(31)
+}
+
+/// Generate a feature signature from a simple opcode sequence.
+/// This is a simplified version of Ghidra's iterative feature generation.
+pub fn generate_features(opcodes: &[crate::opcodes::OpCode]) -> Vec<Signature> {
+    if opcodes.is_empty() { return Vec::new(); }
+    let mut result = Vec::new();
+    let mut current_hash = 0u32;
+    for &opc in opcodes {
+        current_hash = combine_hashes(current_hash, hash_opcode(opc, 0));
+        result.push(Signature::new(current_hash));
+    }
+    result
 }
 
 /// A database of known function signatures.
@@ -128,5 +168,42 @@ mod tests {
         assert_eq!(db.num_functions(), 1);
         let names = db.lookup_hash(0x12345678);
         assert_eq!(names, &["memcpy".to_string()]);
+    }
+
+    #[test]
+    fn test_hash_opcode() {
+        let h1 = hash_opcode(crate::opcodes::OpCode::CPUI_INT_ADD, 0);
+        let h2 = hash_opcode(crate::opcodes::OpCode::CPUI_INT_SUB, 0);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_combine_hashes() {
+        let a = 0x12345u32;
+        let b = 0x67890u32;
+        let combined = combine_hashes(a, b);
+        assert_ne!(combined, a);
+        assert_ne!(combined, b);
+    }
+
+    #[test]
+    fn test_generate_features() {
+        use crate::opcodes::OpCode;
+        let ops = vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_MULT, OpCode::CPUI_COPY];
+        let sigs = generate_features(&ops);
+        assert_eq!(sigs.len(), 3);
+        // Each successive hash should be different.
+        assert_ne!(sigs[0].get_hash(), sigs[1].get_hash());
+        assert_ne!(sigs[1].get_hash(), sigs[2].get_hash());
+    }
+
+    #[test]
+    fn test_signature_entry_hash() {
+        let mut e = SignatureEntry::new();
+        e.set_hash(42);
+        assert_eq!(e.get_current_hash(), 42);
+        assert!(e.hash_changed());
+        e.set_hash(42); // Same hash again
+        assert!(!e.hash_changed());
     }
 }

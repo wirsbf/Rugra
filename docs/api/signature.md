@@ -24,3 +24,13 @@
 - `num_functions()` — 已注册函数数
 
 测试：signature::tests 3 个。
+
+## 2026-06-26（续）：signature.rs 完善实现
+
+新增特征生成基础设施：
+- `hash_opcode(opc, modifiers)` — opcode 哈希（signature.cc getOpHash）
+- `combine_hashes(a, b)` — 哈希混合函数
+- `generate_features(opcodes)` — 从 opcode 序列生成特征签名
+- `SignatureEntry::set_hash/get_current_hash/get_previous_hash/hash_changed` — 迭代哈希追踪
+
+测试：新增 4 个（hash_opcode/combine_hashes/generate_features/signature_entry_hash）。
