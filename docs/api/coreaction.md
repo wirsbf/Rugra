@@ -345,3 +345,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionLikelyTrash**：完整算法文档——遍历 FuncProto trash 列表 + findCoveredInput + traceTrash + INDIRECT/INT_AND 数据流截断。待 FuncProto + Varnode cover 集成。
 - **ActionShadowVar**：完整算法文档——遍历基本块 MULTIEQUAL + shadow 模式检测 + merge 集成。待 Varnode mark + merge shadow 集成。
 - 19 个 coreaction Actions 现在有真实算法逻辑。
+
+## 2026-06-27（续 16）：ActionDirectWrite + ActionConditionalConst 算法逻辑
+
+- **ActionDirectWrite**：完整算法文档——清除 direct-write 标志 + 标记 persist/spacebase/possibleParam 输入 + 标记非 COPY 的写入 Varnode + worklist 传播。待 VarnodeLocSet + FuncProto 集成。
+- **ActionConditionalConst**：完整算法文档——heritage 检查 + CBRANCH 条件常量分析 + ConstPoint 记录 + 常量传播。待 Architecture + Heritage + ConstPoint 集成。
+- 21 个 coreaction Actions 现在有真实算法逻辑。

@@ -2457,12 +2457,30 @@ impl Action for ActionMultiCse {
 
 /// Direct write analysis. Faithful to `ActionDirectWrite`
 /// (coreaction.cc).
+///
+/// Marks Varnodes that are "directly written" — i.e. their value is
+/// determined by a legitimate function input or a real computation, not
+/// just flowing through markers or copies. This is used by later passes
+/// to determine which variables should be treated as real parameters.
+///
+/// Algorithm:
+/// 1. Clear direct-write flags on all Varnodes
+/// 2. Mark inputs that are persist/spacebase or possible params
+/// 3. Mark written Varnodes that:
+///    - Are persistent (global writes)
+///    - Are stack stores from INDIRECT ops
+///    - Are defined by non-COPY/non-PIECE/non-SUBPIECE ops
+/// 4. Propagate direct-write through the worklist
 pub struct ActionDirectWrite;
 impl ActionDirectWrite {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDirectWrite {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Requires: VarnodeLocSet iteration + FuncProto.possibleInputParam +
+        // Varnode flags (isPersist, isSpacebase, isStackStore, setDirectWrite)
+        // L3 gap: requires VarnodeLocSet + FuncProto integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "directwrite" }
@@ -2758,12 +2776,28 @@ impl Action for ActionExtraPopSetup {
 
 /// Conditional const analysis. Faithful to `ActionConditionalConst`
 /// (coreaction.cc).
-pub struct ActionConditionalConst;
+///
+/// Propagates constants through conditional branches (CBRANCH) where a
+/// Varnode is known to be constant on one path. Uses ConstPoint records
+/// at CBRANCH ops to track which paths have constant values.
+///
+/// Algorithm:
+/// 1. Check if stack space has been heritaged (controls MULTIEQUAL propagation)
+/// 2. For each basic block with a CBRANCH:
+///    - Check if condition is a constant comparison
+///    - Create ConstPoint records for the determined paths
+/// 3. Propagate constants through the block graph
+/// 4. Replace conditional-constant Varnodes with their values
+pub struct ActionConditionalConst { pub count: i32 }
 impl ActionConditionalConst {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionConditionalConst {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Requires: BlockGraph iteration + CBRANCH condition analysis +
+        // ConstPoint records + Heritage pass counting + Architecture stack space
+        // L3 gap: requires Architecture + Heritage + ConstPoint integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "conditionalconst" }
