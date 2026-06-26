@@ -521,3 +521,8 @@
 ## 2026-06-27（续 11）：新增 prefersplit 模块
 
 - `pub mod prefersplit;` — 对应 `prefersplit.hh`，偏好分裂记录。PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split/split_additional stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序函数。解锁 Architecture::splitrecords。L3 缺完整分裂算法（需 Funcdata op 编辑）。
+
+## 2026-06-27（续 12）：新增 crc32 + compression 模块
+
+- `pub mod crc32;` — 对应 `crc32.hh`，CRC32 表 + crc_update + crc32/crc32_with_init。完全自包含（L3）。解锁 stringmanage::calcInternalHash + marshal Packed 格式。
+- `pub mod compression;` — 对应 `compression.hh`，Compress + Decompress deflate/inflate 包装器。L3 缺 flate2 集成（当前为 pass-through stub）。

@@ -56,10 +56,12 @@ pub mod capability; // ← capability.hh
 pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
 pub mod comment; // ← comment.hh
+pub mod compression; // ← compression.hh
 pub mod constseq; // ← constseq.hh
 pub mod context; // ← globalcontext.hh
 pub mod cpool; // ← cpool.hh
 pub mod cover; // ← cover.hh
+pub mod crc32; // ← crc32.hh
 pub mod database; // ← database.hh (Symbol/Scope/Database)
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
