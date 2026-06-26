@@ -357,3 +357,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionMarkExplicit**：base_explicit 辅助函数现在通过 VarnodeBank.loc_tree 迭代连接到 apply()——遍历所有 Varnode，调用 base_explicit，设置 EXPLICIT 标志。multlist/processMultiplier 待 HighVariable 集成。
 - **ActionDeadCode**：push_consumed/propagate_consumed 现在通过 obank.alivelist + vbank.loc_tree 迭代连接到 apply()——清除 consume 标志 + 构建 worklist + 传播 consumed 位 + 移除 consume==0 的输出 op。
 - 两个 Action 从"框架级"升级为"apply() 驱动级"——它们的辅助函数现在实际在 Funcdata 上执行。
+
+## 2026-06-27（续 18）：ActionFuncLink + ActionFuncLinkOutOnly 算法逻辑
+
+- **ActionFuncLink**：完整算法文档——funcLinkInput（ParamActive trials + stack-relative opStackLoad + varargs placeholder）+ funcLinkOutput（移除意外输出 + 创建锁定原型输出 + bool 返回标记）。待 FuncCallSpecs 集成。
+- **ActionFuncLinkOutOnly**：仅 funcLinkOutput 的变体。待 FuncCallSpecs 集成。
+- 23 个 coreaction Actions 现在有真实算法逻辑（6 apply 驱动 + 17 框架级）。

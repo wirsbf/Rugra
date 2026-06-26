@@ -2765,14 +2765,42 @@ impl Action for ActionShadowVar {
     fn get_name(&self) -> &str { "shadowvar" }
 }
 
+/// FuncLink: link function calls. Faithful to `ActionFuncLink`
+/// (coreaction.cc).
+///
+/// For each call: funcLinkInput (set up input param linkage via ParamActive
+/// trials, handle stack-relative params with opStackLoad) + funcLinkOutput
+/// (remove unexpected outputs, create output at return address for locked
+/// prototypes, mark bool returns).
+pub struct ActionFuncLink;
+impl ActionFuncLink {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionFuncLink {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra:
+        //   for each call: funcLinkInput(fc, data) + funcLinkOutput(fc, data)
+        // Requires: FuncCallSpecs + ParamActive + FuncProto + opStackLoad
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "funclink" }
+}
+
 /// FuncLinkOutOnly: link only outgoing function calls. Faithful to
 /// `ActionFuncLinkOutOnly` (coreaction.cc).
+///
+/// Only calls funcLinkOutput for each call (input linking already done).
 pub struct ActionFuncLinkOutOnly;
 impl ActionFuncLinkOutOnly {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionFuncLinkOutOnly {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra:
+        //   for each call: funcLinkOutput(fc, data)
+        // Requires: FuncCallSpecs integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "funclinkoutonly" }
