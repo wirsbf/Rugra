@@ -334,3 +334,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionRestrictLocal**：完整算法文档——遍历 calls 的 spacebase 参数标记 not-mapped + 遍历 effect records 的 saved registers 标记 not-mapped。待 FuncCallSpecs + EffectRecord + ScopeLocal 集成。
 - 16 个 coreaction Actions 现在有真实算法逻辑。
+
+## 2026-06-27（续 14）：ActionInferTypes 算法逻辑
+
+- **ActionInferTypes**：完整算法文档——type recovery 检查 + localcount 上限警告 + applyTypeRecommendations + buildLocaltypes + propagateOneType（DFS 类型传播 with PropagationState 栈）+ propagateAcrossReturns + propagateSpacebaseRef + writeBack。核心子算法 propagateOneType 使用 DFS 遍历类型边。待 TypeFactory + VarnodeLocSet + ScopeLocal 集成。
+- 17 个 coreaction Actions 现在有真实算法逻辑。

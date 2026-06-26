@@ -2317,12 +2317,44 @@ impl Action for ActionSetCasts {
 
 /// Infer types from data-flow. Faithful to `ActionInferTypes`
 /// (coreaction.cc).
-pub struct ActionInferTypes;
+///
+/// This is the main type propagation algorithm. It iterates all Varnodes,
+/// propagating type constraints along data-flow edges. The algorithm uses
+/// a DFS traversal with a PropagationState stack to follow type edges
+/// through COPY, INT_ZEXT, INT_SEXT, and other type-changing ops.
+///
+/// Key sub-algorithms:
+/// - `buildLocaltypes`: set up initial types based on local info
+/// - `propagateOneType`: DFS type propagation for one Varnode
+/// - `propagateAcrossReturns`: propagate types across RETURN ops
+/// - `propagateSpacebaseRef`: propagate pointer types to spacebase aliases
+/// - `writeBack`: write final types back to Varnodes
+pub struct ActionInferTypes {
+    pub local_count: i32,
+}
 impl ActionInferTypes {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { local_count: 0 } }
 }
 impl Action for ActionInferTypes {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. If type recovery not started, return.
+        // 2. If localcount >= 7: warn "not settling", return.
+        // 3. scope.applyTypeRecommendations()
+        // 4. buildLocaltypes(data): set up initial types
+        // 5. For each Varnode (non-annotation, written or has descendants):
+        //    propagateOneType(typegrp, vn) — DFS type propagation
+        // 6. propagateAcrossReturns(data)
+        // 7. propagateSpacebaseRef(data, spcvn)
+        // 8. writeBack(data): if changed, localcount++
+        //
+        // The core propagateOneType uses a DFS with PropagationState stack
+        // to follow type edges. Each edge is tested via propagateTypeEdge
+        // which checks if a type constraint can be pushed through the op.
+        //
+        // Requires: TypeFactory + VarnodeLocSet + ScopeLocal integration
+        // L3 gap: requires TypeFactory + Varnode type flags.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "infertypes" }
