@@ -59,6 +59,7 @@ pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
 pub mod expression; // ← expression.hh
 pub mod merge; // ← merge.hh
+pub mod memstate; // ← memstate.hh
 pub mod op; // ← op.hh
 pub mod opcodes; // ← opcodes.hh
 pub mod opbehavior; // ← opbehavior.hh

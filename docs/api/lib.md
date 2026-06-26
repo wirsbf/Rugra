@@ -439,3 +439,7 @@
 ## 2026-06-26（续）：新增 userop 模块
 
 - `pub mod userop;` — 对应 `userop.hh`，CALLOTHER 用户操作管理。UserPcodeOp/UserOpType/UserOpManage 已实现。
+
+## 2026-06-26（续）：新增 memstate 模块
+
+- `pub mod memstate;` — 对应 `memstate.hh`，内存状态。MemoryBank/MemState 已实现（set/get value/chunk + construct/deconstruct）。
