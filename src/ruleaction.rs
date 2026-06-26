@@ -3074,6 +3074,69 @@ impl Rule for RuleAndZext {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Transform INT_ZEXT and INT_SLESS: `zext(V) s< c  =>  V < c` when c is
+/// small enough that the zero-extension is unnecessary (sign bit of V is 0).
+///
+/// Faithful to Ghidra's `RuleZextSless` (ruleaction.cc:2575-2618). When a
+/// signed comparison involves a zero-extended value and a small constant
+/// (whose high bits beyond the small value's size are 0), drop the extension.
+pub struct RuleZextSless;
+
+impl RuleZextSless {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleZextSless {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (zextslot, otherslot, zext_arc, val, is_sless) = {
+            let op = op_arc.read().unwrap();
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let is_sless = op.opcode == OpCode::CPUI_INT_SLESS;
+            // Find which input is the ZEXT and which is the constant.
+            let vn1_def = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let vn2_def = vn2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let (zextslot, otherslot, zext_arc, constvn) = if let Some(d) = &vn2_def {
+                if d.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT {
+                    (1, 0, d.clone(), vn1)
+                } else if let Some(d1) = &vn1_def {
+                    if d1.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT {
+                        (0, 1, d1.clone(), vn2)
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                } else { return Ok(action_status::NO_CHANGE); }
+            } else if let Some(d1) = &vn1_def {
+                if d1.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT {
+                    (0, 1, d1.clone(), vn2)
+                } else { return Ok(action_status::NO_CHANGE); }
+            } else { return Ok(action_status::NO_CHANGE); };
+            if !constvn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let val = constvn.read().unwrap().get_offset();
+            (zextslot, otherslot, zext_arc, val, is_sless)
+        };
+        let smallsize = {
+            let z = zext_arc.read().unwrap();
+            match z.inrefs.get(0) { Some(v) => v.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        // Sign bit of the small value must be 0 (val's high bits beyond smallsize are 0).
+        if val >> (8 * smallsize - 1) != 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let rootvn = match zext_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let newconst = fd.new_constant(smallsize, val);
+        fd.op_set_input(&follow, rootvn, zextslot);
+        fd.op_set_input(&follow, newconst, otherslot);
+        let new_code = if is_sless { OpCode::CPUI_INT_LESS } else { OpCode::CPUI_INT_LESSEQUAL };
+        fd.op_set_opcode(&follow, new_code);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "zext_sless" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5149,5 +5212,68 @@ mod tests {
         assert_eq!(a.opcode, OpCode::CPUI_INT_ZEXT);
         assert_eq!(a.inrefs.len(), 1);
         assert!(Arc::ptr_eq(&a.inrefs[0], &v));
+    }
+
+    // --- RuleZextSless (ruleaction.cc:2575) ---
+
+    #[test]
+    fn test_zext_sless_small_const() {
+        // zext(V[1]) s< 0x05 (size 1) → V < 0x05  (0x05 < 0x80, sign bit ok)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![v.clone()];
+            z.output = Some(zext_out.clone());
+        }
+        zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
+        let c = fd.vbank.create_constant(2, 0x05);
+        let sless_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        sless_op.write().unwrap().inrefs = vec![zext_out, c];
+        let rule = RuleZextSless::new();
+        let result = rule.apply_op(&sless_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let s = sless_op.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_LESS);
+        assert!(Arc::ptr_eq(&s.inrefs[0], &v));
+        // constant reduced to small size
+        assert_eq!(s.inrefs[1].read().unwrap().get_val(), 0x05);
+    }
+
+    #[test]
+    fn test_zext_sless_large_const_no_change() {
+        // zext(V[1]) s< 0x80 → sign bit of V could be 1 → no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![v];
+            z.output = Some(zext_out.clone());
+        }
+        zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
+        let c = fd.vbank.create_constant(2, 0x80);
+        let sless_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        sless_op.write().unwrap().inrefs = vec![zext_out, c];
+        let rule = RuleZextSless::new();
+        let result = rule.apply_op(&sless_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

@@ -367,3 +367,10 @@ AND-比较变换，把 AND 推到更大的定义域：
 `sext(V) & mask => zext(V)` 与 `concat(a, V) & mask => zext(V)`，当 mask 恰为根值的 full mask 时。AND 冗余等价于零扩展。
 
 测试：ruleaction::tests +1（sext 全掩码→zext）。
+
+### 2026-06-26（续）：RuleZextSless
+
+#### `pub struct RuleZextSless`（ruleaction.cc:2575-2618）
+`zext(V) s< c => V < c` 当 c 足够小（高位全0，V 的符号位必为 0）时，去掉零扩展，转为无符号比较。常量缩减到 small size。
+
+测试：ruleaction::tests +2（小常量→LESS；大常量符号位风险→NO_CHANGE）。
