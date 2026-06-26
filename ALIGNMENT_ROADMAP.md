@@ -227,7 +227,7 @@
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 47 | Sleigh (20+ 文件) | `iced-x86` (仅 x86-64) | 🔧 L2 | **仅支持 x86-64**；不支持 ARM/MIPS/RISC-V/PowerPC | `sleigh*.cc`, `slgh*.cc` |
-| 48 | `architecture.cc` | Rust 原生 | 🔧 L2 | 不同架构管理方式 | `architecture.cc` |
+| 48 | `architecture.cc` | `arch.rs` | 🔧 L2 | **骨架已移植**：Ghidra Architecture 配置容器（全部字段 + 默认值 + resetDefaultsInternal）+ ArchitectureCapability trait + CapabilityRegistry + ProtoModelEntry。L3 缺虚拟工厂钩子（buildTranslator/buildLoader 等）+ XML decode | `architecture.cc` |
 | 49 | `translate.cc` | `disasm/x86_lift.rs` | 🔧 L2 | 仅 x86-64 提升 | `translate.cc` |
 | 50 | `grammar.cc` + `expression.cc` | — | 📋 L1 | **完全缺失**：语法/表达式解析 | `grammar.cc`, `expression.cc` |
 
@@ -238,11 +238,11 @@
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 51 | `callgraph.cc` | — | 📋 L1 | **完全缺失**：调用图构建 | `callgraph.cc` |
-| 52 | `database.cc` + `database_ghidra.cc` | — | 📋 L1 | **完全缺失**：数据库持久化 | `database.cc`, `database_ghidra.cc` |
+| 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | 🔧 L2 | **骨架已移植**：SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database 全部数据结构 + in-memory 查询/插入算法（find_addr/find_container/find_overlap/add_symbol/remove_symbol/attach_scope/delete_scope 等）。L3 缺 XML encode/decode + rangemap/partmap | `database.cc`, `database_ghidra.cc` |
 | 53 | `xml.cc` + `marshal.cc` | — | 📋 L1 | **完全缺失**：XML 序列化 | `xml.cc`, `marshal.cc` |
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | Rust 原生 | 🔧 L2 | 基础 rodata 扫描；缺少完整字符串管理 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | — | 📋 L1 | **完全缺失**：CRC32/压缩 | `crc32.cc`, `compression.cc` |
-| 56 | `override.cc` | — | 📋 L1 | **完全缺失**：用户覆盖系统 | `override.cc` |
+| 56 | `override.cc` | `override_rs.rs` | 🔧 L2 | **完整 in-memory 实现**：Override + FlowOverride（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride 全部 insert/query/apply 方法）。L3 缺 XML encode/decode | `override.cc` |
 | 57 | `prefersplit.cc` | — | 📋 L1 | **完全缺失**：偏好分裂分析 | `prefersplit.cc` |
 | 58 | `paramid.cc` | — | 📋 L1 | **完全缺失**：参数 ID 分析 | `paramid.cc` |
 | 59 | `unionresolve.cc` | — | 📋 L1 | **完全缺失**：联合体解析 | `unionresolve.cc` |

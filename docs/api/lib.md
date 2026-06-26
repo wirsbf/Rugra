@@ -467,3 +467,10 @@
 ## 2026-06-26（续）：新增 jumptable 模块
 
 - `pub mod jumptable;` — 对应 `jumptable.hh`，跳转表恢复。LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction 全部数据结构 + 守卫分析 + 最小规范化变量查找。L3 缺 Varnode::def 深度遍历、emulate_path 地址计算、pullBack、CFG 重写。
+
+## 2026-06-27：新增 override_rs / arch / database 模块
+
+- `pub mod override_rs;` — 对应 `override.hh`，覆写命令容器。Override + FlowOverride 完整 in-memory 实现（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）。L3 缺 XML encode/decode。
+- `pub mod arch;` — 对应 `architecture.hh`，Ghidra Architecture 配置容器 + ArchitectureCapability trait + CapabilityRegistry。所有配置字段 + 默认值完整。L3 缺虚拟工厂钩子（buildTranslator/buildLoader 等）+ XML decode。
+- `pub mod database;` — 对应 `database.hh`，符号表。SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database 全部数据结构 + in-memory 查询/插入算法。L3 缺 XML encode/decode + rangemap/partmap。
+

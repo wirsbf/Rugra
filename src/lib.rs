@@ -48,6 +48,7 @@
 pub mod action; // ← action.hh
 pub mod address; // ← address.hh
 pub mod analysis; // ← type propagation
+pub mod arch; // ← architecture.hh (Ghidra Architecture config container)
 pub mod block; // ← block.hh
 pub mod blockaction;
 pub mod callgraph; // ← callgraph.hh
@@ -55,6 +56,7 @@ pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
 pub mod constseq; // ← constseq.hh
 pub mod cover; // ← cover.hh
+pub mod database; // ← database.hh (Symbol/Scope/Database)
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
@@ -67,6 +69,7 @@ pub mod memstate; // ← memstate.hh
 pub mod op; // ← op.hh
 pub mod opcodes; // ← opcodes.hh
 pub mod opbehavior; // ← opbehavior.hh
+pub mod override_rs; // ← override.hh (Override commands)
 pub mod pcoderaw; // ← pcoderaw.hh
 pub mod prettyprint; // ← prettyprint.hh
 pub mod printc; // ← printc.hh
