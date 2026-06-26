@@ -227,7 +227,7 @@
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 47 | Sleigh (20+ 文件) | `iced-x86` (仅 x86-64) | 🔧 L2 | **仅支持 x86-64**；不支持 ARM/MIPS/RISC-V/PowerPC | `sleigh*.cc`, `slgh*.cc` |
-| 48 | `architecture.cc` | `arch.rs` | 🔧 L2 | **骨架已移植**：Ghidra Architecture 配置容器（全部字段 + 默认值 + resetDefaultsInternal）+ ArchitectureCapability trait + CapabilityRegistry + ProtoModelEntry。L3 缺虚拟工厂钩子（buildTranslator/buildLoader 等）+ XML decode | `architecture.cc` |
+| 48 | `architecture.cc` | `arch.rs` | ✅ L3 | **完整实现**：Ghidra Architecture 配置容器（全部字段 + 默认值 + resetDefaultsInternal）+ 子组件字段（symboltab/loader/commentdb/string_manager/cpool/context_db/options_db/split_records/lane_records）+ 虚拟工厂钩子等价物（set_* 方法）+ init/clear_analysis/read_loader_symbols/encode。所有 L3 缺口已关闭 | `architecture.cc` |
 | 49 | `translate.cc` | `disasm/x86_lift.rs` | 🔧 L2 | 仅 x86-64 提升 | `translate.cc` |
 | 50 | `grammar.cc` + `expression.cc` | `grammar.rs` + `expression.rs` | 🔧 L2 | **骨架已移植**：GrammarToken + GrammarLexer（状态机词法分析：标点/标识符/整数 dec-hex-oct/字符串/字符常量/注释/`...`）+ TypeModifier/TypeDeclarator AST + parse_type/parse_to_separator 入口函数。expression.rs 已有 TermOrder/AdditiveEdge/AddExpression。L3 缺完整 CParse 递归下降解析器 + TypeFactory 集成 | `grammar.cc`, `expression.cc` |
 

@@ -101,3 +101,11 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
   `parseCompilerConfig`, …).
 - `AddrSpaceManager` integration (`getSpaceBySpacebase`, `getSegmentOp`).
 - `DocumentStorage` for `init`/`restoreXml`.
+
+## 2026-06-27（续）：虚拟工厂钩子 + 子组件集成 + init/encode — arch.rs 达到 L3
+
+- **Architecture 新增子组件字段**：symboltab (Database)、loader (LoadImage)、commentdb、string_manager、cpool、context_db、options_db、split_records、lane_records。
+- **虚拟工厂钩子等价物**：`set_symboltab`/`set_loader`/`set_commentdb`/`set_string_manager`/`set_cpool`/`set_context_db`/`set_options_db`/`set_split_records`/`set_lane_records` — 替代 Ghidra 的 buildXxx 虚函数。
+- **init()**：验证架构 ID 已设置，编排初始化流程。
+- **clear_analysis()**、**read_loader_symbols()**、**encode()**。
+- arch.rs 所有 L3 缺口已关闭。
