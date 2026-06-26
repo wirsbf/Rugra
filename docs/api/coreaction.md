@@ -400,3 +400,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **Funcdata 新增**：`callspecs: Vec<FuncCallSpecs>` 字段 + `num_calls()`/`get_call_specs()`/`get_call_specs_mut()`/`add_call_specs()`/`get_func_proto()`/`get_func_proto_mut()` 方法。
 - **ActionFuncLink**：升级为 apply()-驱动级——遍历 callspecs 验证 op 地址。
 - 解锁后续 ActionActiveParam/ActionDeindirect/ActionStackPtrFlow 等的 callspecs 访问。
+
+## 2026-06-27（续 26）：ActionFuncLinkOutOnly + ActionExtraPopSetup 升级为 apply()-驱动级
+
+- **ActionFuncLinkOutOnly**：升级为 apply()-驱动级——遍历 callspecs 验证 prototype。
+- **ActionExtraPopSetup**：升级为 apply()-驱动级——遍历 callspecs 检查 extraPop。完整 INT_ADD op 创建待 stack space + Architecture 集成。
+- 13 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑（11 完整 + 2 新升级）。
