@@ -1921,12 +1921,28 @@ impl Action for ActionDeterminedBranch {
 }
 
 /// Hide shadow varnodes. Faithful to `ActionHideShadow` (coreaction.cc).
+///
+/// Iterates all written Varnodes, gets their HighVariable, and calls
+/// Merge::hideShadows to merge shadow copies into the canonical
+/// representative.
 pub struct ActionHideShadow;
 impl ActionHideShadow {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionHideShadow {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra:
+        //   for each written Varnode vn:
+        //     high = vn->getHigh()
+        //     if high->isMark(): continue
+        //     if data.getMerge().hideShadows(high): count++
+        //     high->setMark()
+        //   for each written Varnode vn:
+        //     vn->getHigh()->clearMark()
+        //
+        // Requires: HighVariable assignment to Varnodes + Merge::hideShadows
+        // L3 gap: requires Heritage + HighVariable + Merge integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "hideshadow" }

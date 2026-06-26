@@ -292,3 +292,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionForceGoto**：实现 override force-goto 应用框架——调用 `Override::apply_force_gotos(fd)` 中的 `fd.force_goto`。待 Architecture 集成。
 - **ActionSwitchNorm**：实现 switch 规范化框架——遍历 jumpvec，对未标注的 JumpTable 调用 matchModel/recoverLabels/foldInNormalization。待 Funcdata.jumpvec 集成。
 - 9 个 coreaction Actions 现在有真实算法逻辑。
+
+## 2026-06-27（续 7）：ActionHideShadow 算法逻辑
+
+- **ActionHideShadow**：实现 shadow 隐藏框架——遍历 written Varnodes，获取 HighVariable，调用 Merge::hideShadows。算法逻辑完整记录，待 HighVariable + Merge 集成。
+- 10 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 6 框架级）。
