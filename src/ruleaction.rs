@@ -896,6 +896,163 @@ impl Rule for RuleAddMultCollapse {
     }
 }
 
+/// All-ones mask for a given byte size (Ghidra's `calc_mask`).
+fn calc_mask(size: usize) -> u64 {
+    if size >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (size * 8)) - 1
+    }
+}
+
+/// Simplify INT_LESS applied to extremal constants (0 or all-ones).
+/// Faithful to Ghidra's `RuleLess2Zero` (ruleaction.cc:5557-5603).
+///
+/// Forms:
+///   `0 < V   => 0 != V`
+///   `V < 0   => false`
+///   `ffff < V => false`
+///   `V < ffff => V != ffff`
+pub struct RuleLess2Zero;
+
+impl RuleLess2Zero {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleLess2Zero {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (lvn, rvn) = {
+            let op = op_arc.read().unwrap();
+            let l = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let r = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (l, r)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if lvn.read().unwrap().is_constant() {
+            let lsize = lvn.read().unwrap().get_size();
+            let loff = lvn.read().unwrap().get_offset();
+            if loff == 0 {
+                // 0 < V  =>  0 != V  (all values except 0 are true)
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_NOTEQUAL);
+                return Ok(action_status::CHANGE);
+            } else if loff == calc_mask(lsize) {
+                // ffff < V  =>  false
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_remove_input(&follow, 1);
+                let c = fd.new_constant(1, 0);
+                fd.op_set_input(&follow, c, 0);
+                return Ok(action_status::CHANGE);
+            }
+        } else if rvn.read().unwrap().is_constant() {
+            let rsize = rvn.read().unwrap().get_size();
+            let roff = rvn.read().unwrap().get_offset();
+            if roff == 0 {
+                // V < 0  =>  false
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_remove_input(&follow, 1);
+                let c = fd.new_constant(1, 0);
+                fd.op_set_input(&follow, c, 0);
+                return Ok(action_status::CHANGE);
+            } else if roff == calc_mask(rsize) {
+                // V < ffff  =>  V != ffff
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_NOTEQUAL);
+                return Ok(action_status::CHANGE);
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "less2_zero"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LESS]
+    }
+}
+
+/// Simplify INT_LESSEQUAL applied to extremal constants.
+/// Faithful to Ghidra's `RuleLessEqual2Zero` (ruleaction.cc:5605-5651).
+///
+/// Forms:
+///   `0 <= V   => true`
+///   `V <= 0   => V == 0`
+///   `ffff <= V => ffff == V`
+///   `V <= ffff => true`
+pub struct RuleLessEqual2Zero;
+
+impl RuleLessEqual2Zero {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleLessEqual2Zero {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (lvn, rvn) = {
+            let op = op_arc.read().unwrap();
+            let l = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let r = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (l, r)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if lvn.read().unwrap().is_constant() {
+            let lsize = lvn.read().unwrap().get_size();
+            let loff = lvn.read().unwrap().get_offset();
+            if loff == 0 {
+                // 0 <= V  =>  true
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_remove_input(&follow, 1);
+                let c = fd.new_constant(1, 1);
+                fd.op_set_input(&follow, c, 0);
+                return Ok(action_status::CHANGE);
+            } else if loff == calc_mask(lsize) {
+                // ffff <= V  =>  ffff == V
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_EQUAL);
+                return Ok(action_status::CHANGE);
+            }
+        } else if rvn.read().unwrap().is_constant() {
+            let rsize = rvn.read().unwrap().get_size();
+            let roff = rvn.read().unwrap().get_offset();
+            if roff == 0 {
+                // V <= 0  =>  V == 0
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_EQUAL);
+                return Ok(action_status::CHANGE);
+            } else if roff == calc_mask(rsize) {
+                // V <= ffff  =>  true
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_remove_input(&follow, 1);
+                let c = fd.new_constant(1, 1);
+                fd.op_set_input(&follow, c, 0);
+                return Ok(action_status::CHANGE);
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "lessequal2_zero"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LESSEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1437,5 +1594,79 @@ mod tests {
         let a = outer_mul.read().unwrap();
         assert!(Arc::ptr_eq(&a.inrefs[0], &v));
         assert_eq!(a.inrefs[1].read().unwrap().get_val(), 6);
+    }
+
+    // --- RuleLess2Zero (ruleaction.cc:5557) ---
+
+    #[test]
+    fn test_less2_zero_left_zero() {
+        // 0 < V  =>  0 != V
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        op.write().unwrap().inrefs = vec![zero, v];
+        let rule = RuleLess2Zero::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
+    }
+
+    #[test]
+    fn test_less2_zero_right_zero_false() {
+        // V < 0  =>  false (COPY 0)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleLess2Zero::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    // --- RuleLessEqual2Zero (ruleaction.cc:5605) ---
+
+    #[test]
+    fn test_lessequal2_zero_left_zero_true() {
+        // 0 <= V  =>  true (COPY 1)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![zero, v];
+        let rule = RuleLessEqual2Zero::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.read().unwrap().inrefs[0].read().unwrap().get_val(), 1);
+    }
+
+    #[test]
+    fn test_lessequal2_zero_right_zero_equal() {
+        // V <= 0  =>  V == 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleLessEqual2Zero::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_EQUAL);
     }
 }

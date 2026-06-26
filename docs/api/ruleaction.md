@@ -135,3 +135,17 @@ Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
 折叠两常量。spacebase 子情形（4131-4169）待 isSpacebase/isInput 跟踪后补。
 
 测试：ruleaction::tests +2（双加折叠、双乘折叠）。
+
+### 2026-06-26（续）：RuleLess2Zero + RuleLessEqual2Zero
+
+#### `pub struct RuleLess2Zero`（ruleaction.cc:5557-5603）
+INT_LESS 与极值常量（0 或全1）的简化：
+- `0 < V  => 0 != V`；`V < 0 => false`；`ffff < V => false`；`V < ffff => V != ffff`
+
+#### `pub struct RuleLessEqual2Zero`（ruleaction.cc:5605-5651）
+INT_LESSEQUAL 与极值常量的简化：
+- `0 <= V => true`；`V <= 0 => V == 0`；`ffff <= V => ffff == V`；`V <= ffff => true`
+
+辅助：`fn calc_mask(size)` 对应 Ghidra calc_mask。
+
+测试：ruleaction::tests +4（Less2Zero 两态、LessEqual2Zero 两态）。
