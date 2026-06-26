@@ -599,3 +599,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 收集与给定 op 相同 opcode 且 CSE hash 非零的后代 ops
   - 调用 `Funcdata::cse_eliminate_list` 进行排序+匹配+消除
   - 依赖：get_cse_hash ✅、is_cse_match ✅、cse_eliminate_list ✅、cse_elimination ✅
+
+## 2026-06-27（续 9）：清理规则移植
+
+- **RuleMultNegOne**：完整移植 ruleaction.cc:7171-7190。`V * -1 => -V`（INT_MULT + all-ones → INT_NEG）。
+- **RuleSub2Add**：完整移植 ruleaction.cc:4030-4056。`V - W => V + (W * -1)`（INT_SUB → INT_ADD + INT_MULT(*-1)）。使加法项重排规则能匹配。
+- **RuleSubExtComm**：完整移植 ruleaction.cc:4410-4461。SUBPIECE 穿过 INT_ZEXT/INT_SEXT：
+  - SUBPIECE 不触及扩展位 → COPY/直接替换
+  - 否则创建中间 SUBPIECE + 重写为 zext/sext

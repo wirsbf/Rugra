@@ -4813,6 +4813,152 @@ impl Rule for RuleSelectCse {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_SRIGHT] }
 }
 
+/// Cleanup: Convert INT_2COMP from INT_MULT: `V * -1 => -V`. Faithful to
+/// Ghidra's `RuleMultNegOne` (ruleaction.cc:7171-7190).
+pub struct RuleMultNegOne;
+
+impl RuleMultNegOne {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleMultNegOne {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleMultNegOne::applyOp (ruleaction.cc:7179-7190).
+        // a * -1 -> -a
+        let constvn = {
+            let op = op_arc.read().unwrap();
+            match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let const_size = constvn.read().unwrap().get_size();
+        let const_val = constvn.read().unwrap().get_offset();
+        if const_val != calc_mask(const_size) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_NEG);
+        fd.op_remove_input(&follow, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "mult_neg_one" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
+}
+
+/// Convert INT_SUB to INT_ADD + INT_MULT(-1): `V - W => V + (W * -1)`.
+/// Faithful to Ghidra's `RuleSub2Add` (ruleaction.cc:4030-4056).
+///
+/// This normalization enables additive-term reordering and other rules that
+/// only match INT_ADD.
+pub struct RuleSub2Add;
+
+impl RuleSub2Add {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSub2Add {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSub2Add::applyOp (ruleaction.cc:4040-4056).
+        let vn = {
+            let op = op_arc.read().unwrap();
+            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let vn_size = vn.read().unwrap().get_size();
+        let addr = op_arc.read().unwrap().get_addr();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Create INT_MULT(vn, -1).
+        let newop = fd.new_op(2, addr);
+        fd.op_set_opcode(&newop, OpCode::CPUI_INT_MULT);
+        let newvn = fd.new_unique_out(vn_size, &newop);
+        // Replace vn's reference in the original op first.
+        fd.op_set_input(&follow, newvn.clone(), 1);
+        fd.op_set_input(&newop, vn.clone(), 0);
+        let neg_const = fd.new_constant(vn_size, calc_mask(vn_size));
+        fd.op_set_input(&newop, neg_const, 1);
+        // Rewrite original op as INT_ADD.
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_ADD);
+        fd.op_insert_before(&newop, &follow);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub2_add" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SUB] }
+}
+
+/// Commute SUBPIECE through INT_ZEXT/INT_SEXT. Faithful to Ghidra's
+/// `RuleSubExtComm` (ruleaction.cc:4410-4461).
+///
+/// If `SUBPIECE(zext(V))` doesn't touch the extended bits, replace with
+/// `zext(SUBPIECE(V))` or just `COPY(V)` if sizes match.
+pub struct RuleSubExtComm;
+
+impl RuleSubExtComm {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSubExtComm {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSubExtComm::applyOp (ruleaction.cc:4422-4461).
+        let (base, ext_code, in_vn, subcut, out_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let ext_code = extop.read().unwrap().opcode;
+            if ext_code != OpCode::CPUI_INT_ZEXT && ext_code != OpCode::CPUI_INT_SEXT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let in_vn = match extop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if in_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let subcut = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            (base, ext_code, in_vn, subcut, out_size)
+        };
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let in_size = in_vn.read().unwrap().get_size() as i64;
+
+        if out_size + subcut <= in_size {
+            // SUBPIECE doesn't hit the extended bits at all.
+            fd.op_set_input(&follow, in_vn.clone(), 0);
+            if in_size == out_size {
+                fd.op_remove_input(&follow, 1);
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        if subcut >= in_size {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Create intermediate SUBPIECE if needed.
+        let new_vn = if subcut != 0 {
+            let addr = op_arc.read().unwrap().get_addr();
+            let newop = fd.new_op(2, addr);
+            fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+            let nv = fd.new_unique_out((in_size - subcut) as usize, &newop);
+            let c = fd.new_constant(4, subcut as u64);
+            fd.op_set_input(&newop, c, 1);
+            fd.op_set_input(&newop, in_vn.clone(), 0);
+            fd.op_insert_before(&newop, &follow);
+            nv
+        } else {
+            in_vn.clone()
+        };
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_opcode(&follow, ext_code);
+        fd.op_set_input(&follow, new_vn, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub_ext_comm" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
