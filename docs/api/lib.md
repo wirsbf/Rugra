@@ -513,3 +513,7 @@
 ## 2026-06-27（续 9）：新增 cpool 模块
 
 - `pub mod cpool;` — 对应 `cpool.hh`，常量池（Java 字节码）。CPoolRecord（tag/token/value/type/byte_data + constructor/destructor 标志）+ ConstantPool trait（get_record/create_record/put_record）+ ConstantPoolInternal（BTreeMap 存储）+ CheapSorter（2整数引用键）。解锁 Architecture::cpool。L3 缺 XML encode/decode（需 TypeFactory）。
+
+## 2026-06-27（续 10）：新增 context 模块
+
+- `pub mod context;` — 对应 `globalcontext.hh`，上下文数据库。ContextBitRange（位范围编码/解码）+ TrackedContext/TrackedSet（跟踪寄存器值）+ ContextBlob（上下文字数组）+ ContextDatabase trait（get_context/get_tracked_set/create_set/register_variable/get_tracked_value）+ ContextInternal（内存实现，分区映射）+ ContextCache（缓存）。解锁 Architecture::context + SegmentedResolver + 多个 coreaction Actions。L3 缺 XML encode/decode + partmap + ParserContext（SLEIGH）。
