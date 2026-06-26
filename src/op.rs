@@ -130,6 +130,18 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::CALL) != 0
     }
 
+    /// Is this a marker op (MULTIEQUAL/INDIRECT)? Faithful to
+    /// `PcodeOp::isMarker` (op.hh:185).
+    pub fn is_marker(&self) -> bool {
+        (self.flags & pcodeop_flags::MARKER) != 0
+    }
+
+    /// Is this op's output a boolean? Faithful to `PcodeOp::isBoolOutput`
+    /// (op.hh:190).
+    pub fn is_bool_output(&self) -> bool {
+        (self.flags & pcodeop_flags::BOOLOUTPUT) != 0
+    }
+
     pub fn is_branch(&self) -> bool {
         (self.flags & pcodeop_flags::BRANCH) != 0
     }

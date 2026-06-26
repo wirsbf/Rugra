@@ -825,3 +825,8 @@ PcodeOpRaw
 ## 2026-06-26：is_calculated_bool
 
 - `is_calculated_bool()` — `PcodeOp::isCalculatedBool`（op.hh:211）：检查 CALCULATED_BOOL|BOOLOUTPUT 标志。解锁 RuleBooleanNegate/RuleLogic2Bool。
+
+## 2026-06-27：is_marker / is_bool_output
+
+- `is_marker() -> bool`（op.hh:185）：检查 MARKER 标志（MULTIEQUAL/INDIRECT）。解锁 JumpBasic::is_prune。
+- `is_bool_output() -> bool`（op.hh:190）：检查 BOOLOUTPUT 标志。解锁 Varnode::is_bool_output_def。

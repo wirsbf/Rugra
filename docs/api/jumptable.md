@@ -169,9 +169,10 @@ Light-weight emulator for switch targets (jumptable.hh:110).
   `get_varnode_value(vn)`, `set_varnode_value(vn, val)`.
 
 ## L3 gaps (documented in source)
-- `Varnode::def` traversal — blocks: `find_determining_varnodes` deep walk,
-  `quasi_copy` chain, `findUnnormalized` chain walk, `getMaxValue` INT_AND /
-  MULTIEQUAL inspection, `isLoadInPath` LOAD detection.
+- ~~`Varnode::def` traversal~~ — **DONE**: `find_determining_varnodes` now does
+  full def-chain DFS; `quasi_copy` walks COPY/INT_AND/INT_OR/SEXT/ZEXT/PIECE/
+  SUBPIECE chains; `get_max_value` inspects INT_AND/MULTIEQUAL; `isLoadInPath`
+  detects LOAD via `get_def()`.
 - `EmulateFunction::emulate_path` per-value address computation.
 - `CircleRange::pullBack` integration for guard expansion.
 - CFG-rewriting (`foldInOneGuard`, `switchOver`, branch editing via

@@ -650,3 +650,17 @@
 ## 2026-06-26（续）：is_boolean_value
 
 - `is_boolean_value(use_annotation) -> bool`（varnode.cc:942）：判断 varnode 是否为已知布尔值（由 calculated_bool 标志的 op 定义）。解锁 RuleBooleanNegate/RuleLogic2Bool。
+
+## 2026-06-27：def / descend / flag 访问器（L3 基础设施）
+
+新增 def-chain 遍历所需访问器，解锁 jumptable/ruleaction/condexe 等模块的深度遍历：
+
+- `get_def() -> Option<Arc<RwLock<PcodeOp>>>`（varnode.hh:213）：升级内部 Weak→Arc，返回定义此 varnode 的 PcodeOp。
+- `is_read_only() -> bool`（varnode.hh:243）：是否来自只读内存空间。
+- `is_annotation() -> bool`（varnode.hh:237）：是否为反编译器插入的注解 varnode。
+- `is_spacebase() -> bool`：是否为 spacebase 指针 varnode。
+- `is_persist_global() -> bool`：是否为持久化（全局）varnode。
+- `descend_iter() -> impl Iterator<Item = Arc<RwLock<PcodeOp>>>`（varnode.hh:219-220）：遍历活跃的后继 op（beginDescend/endDescend）。
+- `count_descends() -> usize`：活跃后继计数。
+- `add_descend(&Arc<RwLock<PcodeOp>>)`（varnode.hh:295）：添加后继引用。
+- `is_bool_output_def() -> bool`：定义 op 是否有布尔输出（getDef()->isBoolOutput）。

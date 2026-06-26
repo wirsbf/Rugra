@@ -251,3 +251,8 @@ Encode to string format (comma-separated ranges)
 ## 2026-06-26（续）：functional_equality
 
 - `functional_equality(vn1, vn2) -> bool`（expression.cc:520, level-0:404）：判断两 varnode 是否持相同值（同指针或同常量）。深层 functionalEqualityLevel 待补。解锁 RuleEquality。
+
+## 2026-06-27：coveringmask / minimalmask
+
+- `coveringmask(val: u64) -> u64`（address.cc:760）：返回覆盖 val 所有置位位的掩码 = `(1 << (msb+1)) - 1`。val==0 返回 0。解锁 JumpBasic::get_max_value（INT_AND 掩码分析）。
+- `minimalmask(val: u64) -> u64`：coveringmask 别名，匹配 jumptable.cc 的 minimalmask 用法。

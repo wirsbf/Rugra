@@ -207,12 +207,11 @@ impl PathMeld {
             if !vn_rg.is_written() {
                 continue;
             }
-            // We do not have direct def() access here; if the varnode has a
-            // defining op whose opcode is LOAD, return true. The def lookup
-            // requires going through the op-bank; this is conservatively
-            // implemented via the addlflags/parent tracking elsewhere.
-            // (L3 gap: link Varnode::def -> PcodeOp to detect LOAD.)
-            drop(vn_rg);
+            if let Some(def) = vn_rg.get_def() {
+                if def.read().unwrap().opcode == OpCode::CPUI_LOAD {
+                    return true;
+                }
+            }
         }
         false
     }
@@ -554,12 +553,97 @@ pub fn quasi_copy(vn: &Arc<RwLock<Varnode>>) -> (Option<Arc<RwLock<Varnode>>>, i
     }
     let mask = (1u64 << (bits_preserved - 1)).wrapping_sub(1).wrapping_add(1 << (bits_preserved - 1));
     let mut cur_vn = vn.clone();
-    // We follow COPY/INT_AND/INT_OR/INT_SEXT/INT_ZEXT/PIECE/SUBPIECE chains.
-    // Without a Varnode::def pointer we can only do a single level; this is
-    // an L3 gap that will be filled when the def() accessor lands.
-    let _ = mask;
-    let _ = &mut cur_vn;
-    (Some(vn.clone()), bits_preserved)
+    // Follow the quasi-copy chain through COPY/INT_AND/INT_OR/INT_SEXT/
+    // INT_ZEXT/PIECE/SUBPIECE ops, mirroring Ghidra's switch in quasiCopy.
+    loop {
+        let def_op = {
+            let cur_rg = cur_vn.read().unwrap();
+            cur_rg.get_def()
+        };
+        let Some(def_op) = def_op else { break };
+        let (next_vn, cont) = {
+            let op_rg = def_op.read().unwrap();
+            match op_rg.opcode {
+                OpCode::CPUI_COPY => {
+                    (op_rg.get_in(0).cloned(), true)
+                }
+                OpCode::CPUI_INT_AND => {
+                    let const_vn = op_rg.get_in(1);
+                    let matches = const_vn
+                        .map(|c| {
+                            let c_rg = c.read().unwrap();
+                            c_rg.is_constant() && c_rg.get_offset() == mask
+                        })
+                        .unwrap_or(false);
+                    if matches {
+                        (op_rg.get_in(0).cloned(), true)
+                    } else {
+                        (None, false)
+                    }
+                }
+                OpCode::CPUI_INT_OR => {
+                    let const_vn = op_rg.get_in(1);
+                    let matches = const_vn
+                        .map(|c| {
+                            let c_rg = c.read().unwrap();
+                            let off = c_rg.get_offset();
+                            c_rg.is_constant() && ((off | mask) == (off ^ mask))
+                        })
+                        .unwrap_or(false);
+                    if matches {
+                        (op_rg.get_in(0).cloned(), true)
+                    } else {
+                        (None, false)
+                    }
+                }
+                OpCode::CPUI_INT_SEXT | OpCode::CPUI_INT_ZEXT => {
+                    let in0_size_bits = op_rg
+                        .get_in(0)
+                        .map(|v| v.read().unwrap().get_size() * 8)
+                        .unwrap_or(0);
+                    if in0_size_bits >= bits_preserved as usize {
+                        (op_rg.get_in(0).cloned(), true)
+                    } else {
+                        (None, false)
+                    }
+                }
+                OpCode::CPUI_PIECE => {
+                    let in1_size_bits = op_rg
+                        .get_in(1)
+                        .map(|v| v.read().unwrap().get_size() * 8)
+                        .unwrap_or(0);
+                    if in1_size_bits >= bits_preserved as usize {
+                        (op_rg.get_in(1).cloned(), true)
+                    } else {
+                        (None, false)
+                    }
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    let const_vn = op_rg.get_in(1);
+                    let matches = const_vn
+                        .map(|c| {
+                            let c_rg = c.read().unwrap();
+                            c_rg.is_constant() && c_rg.get_offset() == 0
+                        })
+                        .unwrap_or(false);
+                    if matches {
+                        (op_rg.get_in(0).cloned(), true)
+                    } else {
+                        (None, false)
+                    }
+                }
+                _ => (None, false),
+            }
+        };
+        if !cont {
+            break;
+        }
+        match next_vn {
+            Some(n) => cur_vn = n,
+            None => break,
+        }
+    }
+    (Some(cur_vn), bits_preserved)
 }
 
 /// Return 1 if the two given pcode ops produce exactly the same value, 0
@@ -1128,13 +1212,22 @@ impl JumpBasic {
 
     /// Do we prune here in our depth-first search for the normalized switch
     /// variable? Faithful to `isprune` (jumptable.cc:426).
+    ///
+    /// Prune if: not written; the defining op is a call or marker; or the
+    /// defining op has zero inputs.
     pub fn is_prune(vn: &Varnode) -> bool {
         if !vn.is_written() {
             return true;
         }
-        // Without def() we cannot check isCall/isMarker here. The pruning
-        // decisions for call/marker ops are deferred to the def()-aware
-        // traversal (L3 gap once Varnode::def lands).
+        if let Some(def) = vn.get_def() {
+            let op_rg = def.read().unwrap();
+            if op_rg.is_call() || op_rg.is_marker() {
+                return true;
+            }
+            if op_rg.num_input() == 0 {
+                return true;
+            }
+        }
         false
     }
 
@@ -1144,9 +1237,12 @@ impl JumpBasic {
         if vn.is_constant() {
             return false;
         }
-        // isAnnotation / isReadOnly accessors are not yet exposed; both default
-        // to false in the current Varnode flag set, matching the Ghidra
-        // semantics for the common case.
+        if vn.is_annotation() {
+            return false;
+        }
+        if vn.is_read_only() {
+            return false;
+        }
         true
     }
 
@@ -1167,14 +1263,66 @@ impl JumpBasic {
     }
 
     /// Get maximum value associated with the given varnode. Faithful to
-    /// `getMaxValue` (jumptable.cc:514).
+    /// `getMaxValue` (jumptable.cc:514). If the varnode has a restricted range
+    /// due to masking via INT_AND, the maximum value of this range is
+    /// returned. Otherwise, 0 is returned, indicating that the varnode can
+    /// take all possible values.
     pub fn get_max_value(vn: &Varnode) -> u64 {
         let mut max_value = 0u64; // 0 indicates maximum possible value
         if !vn.is_written() {
             return max_value;
         }
-        // The INT_AND / MULTIEQUAL inspection requires Varnode::def access.
-        // Until def() is available, return 0 (unrestricted).
+        let Some(def) = vn.get_def() else {
+            return max_value;
+        };
+        let op_rg = def.read().unwrap();
+        if op_rg.opcode == OpCode::CPUI_INT_AND {
+            if let Some(const_vn) = op_rg.get_in(1) {
+                let const_rg = const_vn.read().unwrap();
+                if const_rg.is_constant() {
+                    max_value = crate::address::coveringmask(const_rg.get_offset());
+                    max_value = (max_value + 1) & crate::address::calc_mask(vn.get_size());
+                }
+            }
+        } else if op_rg.opcode == OpCode::CPUI_MULTIEQUAL {
+            // Its possible the AND is duplicated across multiple blocks.
+            let mut all_and = true;
+            let mut max_const = 0u64;
+            for i in 0..op_rg.num_input() {
+                let Some(sub_vn) = op_rg.get_in(i) else {
+                    all_and = false;
+                    break;
+                };
+                let sub_rg = sub_vn.read().unwrap();
+                let Some(and_def) = sub_rg.get_def() else {
+                    all_and = false;
+                    break;
+                };
+                let and_op = and_def.read().unwrap();
+                if and_op.opcode != OpCode::CPUI_INT_AND {
+                    all_and = false;
+                    break;
+                }
+                let Some(const_vn) = and_op.get_in(1) else {
+                    all_and = false;
+                    break;
+                };
+                let const_rg = const_vn.read().unwrap();
+                if !const_rg.is_constant() {
+                    all_and = false;
+                    break;
+                }
+                if max_const < const_rg.get_offset() {
+                    max_const = const_rg.get_offset();
+                }
+            }
+            if all_and {
+                max_value = crate::address::coveringmask(max_const);
+                max_value = (max_value + 1) & crate::address::calc_mask(vn.get_size());
+            } else {
+                max_value = 0;
+            }
+        }
         max_value
     }
 
@@ -1192,22 +1340,23 @@ impl JumpBasic {
     /// Paths that terminate at the given pcode op are calculated and organized
     /// in a `PathMeld` object that determines varnodes common to all the paths.
     /// Faithful to `findDeterminingVarnodes` (jumptable.cc:556).
+    ///
+    /// This is a depth-first traversal through the def chain. At each varnode
+    /// we either prune (leaf: a candidate switch variable) or descend into the
+    /// defining op's first input.
     pub fn find_determining_varnodes(&mut self, op: Arc<RwLock<PcodeOp>>, slot: i32) {
         let mut path: Vec<PcodeOpNode> = Vec::new();
         let mut first_point = false;
         path.push(PcodeOpNode { op, slot });
 
         loop {
-            // Read current path back node.
-            let cur_node_slot;
-            let cur_input_arc;
-            {
+            // Read the current varnode at the back of the path.
+            let cur_vn_arc = {
                 let last = path.last().unwrap();
-                cur_node_slot = last.slot;
                 let op_rg = last.op.read().unwrap();
-                cur_input_arc = op_rg.get_in(last.slot as usize).cloned();
-            }
-            let Some(cur_vn_arc) = cur_input_arc else {
+                op_rg.get_in(last.slot as usize).cloned()
+            };
+            let Some(cur_vn_arc) = cur_vn_arc else {
                 break;
             };
             let is_prune = {
@@ -1215,6 +1364,7 @@ impl JumpBasic {
                 Self::is_prune(&vn_rg)
             };
             if is_prune {
+                // Leaf node: is it a possible switch variable?
                 let is_point = {
                     let vn_rg = cur_vn_arc.read().unwrap();
                     Self::is_point(&vn_rg)
@@ -1227,29 +1377,35 @@ impl JumpBasic {
                         self.path_meld.meld(&mut path);
                     }
                 }
-                // Advance the slot of the back node.
+                // Advance the slot of the back node; pop exhausted nodes.
                 if let Some(last) = path.last_mut() {
                     last.slot += 1;
-                    while let Some(node) = path.last() {
-                        let n_input = node.op.read().unwrap().num_input() as i32;
-                        if node.slot >= n_input {
-                            path.pop();
-                            if path.is_empty() {
-                                break;
-                            }
-                            path.last_mut().unwrap().slot += 1;
-                        } else {
+                    loop {
+                        let exhausted = {
+                            let node = path.last().unwrap();
+                            let n_input = node.op.read().unwrap().num_input() as i32;
+                            node.slot >= n_input
+                        };
+                        if !exhausted {
                             break;
                         }
+                        path.pop();
+                        if path.is_empty() {
+                            break;
+                        }
+                        path.last_mut().unwrap().slot += 1;
                     }
                 }
             } else {
-                // Push the defining op (slot 0). Requires Varnode::def — we
-                // cannot currently follow it, so stop the traversal. This is
-                // an L3 gap.
-                break;
+                // Not pruned: descend into the defining op (slot 0).
+                let def_op = cur_vn_arc.read().unwrap().get_def();
+                if let Some(def_op) = def_op {
+                    path.push(PcodeOpNode { op: def_op, slot: 0 });
+                } else {
+                    // Def unresolved (dropped) — treat as prune leaf.
+                    break;
+                }
             }
-            let _ = cur_node_slot;
             if path.len() <= 1 {
                 break;
             }
@@ -2246,6 +2402,111 @@ mod tests {
         let vn3 = Arc::new(RwLock::new(Varnode::new_unique(1, 4)));
         assert!(JumpBasic::duplicate_varnodes(&[vn1.clone(), vn2]));
         assert!(!JumpBasic::duplicate_varnodes(&[vn1, vn3]));
+    }
+
+    #[test]
+    fn test_get_max_value_int_and() {
+        use crate::address::SeqNum;
+        use crate::varnode::Varnode;
+        // Build: out = INT_AND(switchvn, 0xFF)
+        let switchvn = Arc::new(RwLock::new(Varnode::new_unique(0, 4)));
+        let constvn = Arc::new(RwLock::new(Varnode::new_constant(0xFF, 4)));
+        let mut and_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_AND,
+        );
+        and_op.inrefs.push(switchvn.clone());
+        and_op.inrefs.push(constvn);
+        let outvn = Varnode::new_unique(1, 4);
+        let mut outvn = outvn;
+        outvn.flags |= crate::varnode::varnode_flags::WRITTEN;
+        let and_arc = Arc::new(RwLock::new(and_op));
+        outvn.def = Some(std::sync::Arc::downgrade(&and_arc));
+        let outvn_arc = Arc::new(RwLock::new(outvn));
+        // getMaxValue should return (coveringmask(0xFF)+1) & calc_mask(4) = 0x100.
+        let mv = JumpBasic::get_max_value(&outvn_arc.read().unwrap());
+        assert_eq!(mv, 0x100);
+    }
+
+    #[test]
+    fn test_get_max_value_unrestricted() {
+        use crate::varnode::Varnode;
+        // An unwritten varnode returns 0 (unrestricted).
+        let vn = Varnode::new_unique(0, 4);
+        assert_eq!(JumpBasic::get_max_value(&vn), 0);
+    }
+
+    #[test]
+    fn test_quasi_copy_copy_chain() {
+        use crate::address::SeqNum;
+        use crate::varnode::{Varnode, varnode_flags};
+        // Build: out = COPY(in); in = COPY(src)
+        // The quasi-copy chain should walk back to src.
+        let src = Arc::new(RwLock::new(Varnode::new_register(0, 4)));
+        let mut mid_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        );
+        mid_op.inrefs.push(src.clone());
+        let mid = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(1, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let mid_op_arc = Arc::new(RwLock::new(mid_op));
+        mid.write().unwrap().def = Some(std::sync::Arc::downgrade(&mid_op_arc));
+
+        let mut out_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 0),
+            OpCode::CPUI_COPY,
+        );
+        out_op.inrefs.push(mid.clone());
+        let out = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(2, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let out_op_arc = Arc::new(RwLock::new(out_op));
+        out.write().unwrap().def = Some(std::sync::Arc::downgrade(&out_op_arc));
+
+        let (ancestor, bits) = quasi_copy(&out);
+        assert!(ancestor.is_some());
+        // Should walk back through both COPYs to src.
+        assert!(Arc::ptr_eq(&ancestor.unwrap(), &src));
+        // bits_preserved = mostsigbit_set(nz_mask) + 1 = 32 for a 4-byte reg.
+        assert_eq!(bits, 32);
+    }
+
+    #[test]
+    fn test_is_load_in_path_with_def() {
+        use crate::address::SeqNum;
+        use crate::varnode::{Varnode, varnode_flags};
+        // Build a LOAD op producing a varnode.
+        let spc_vn = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+        let ptr_vn = Arc::new(RwLock::new(Varnode::new_unique(0, 8)));
+        let mut load_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_LOAD,
+        );
+        load_op.inrefs.push(spc_vn);
+        load_op.inrefs.push(ptr_vn);
+        let loaded = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(1, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let load_arc = Arc::new(RwLock::new(load_op));
+        loaded.write().unwrap().def = Some(std::sync::Arc::downgrade(&load_arc));
+
+        let mut pm = PathMeld::default();
+        // Pretend the LOAD result is the first common varnode.
+        let br_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1008), 0),
+            OpCode::CPUI_BRANCHIND,
+        )));
+        pm.set_single(br_op, loaded);
+        // i=1 → checks common_vn[0] (the loaded varnode).
+        assert!(pm.is_load_in_path(1));
     }
 
     fn _silence_unused() {

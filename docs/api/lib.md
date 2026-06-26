@@ -474,3 +474,9 @@
 - `pub mod arch;` — 对应 `architecture.hh`，Ghidra Architecture 配置容器 + ArchitectureCapability trait + CapabilityRegistry。所有配置字段 + 默认值完整。L3 缺虚拟工厂钩子（buildTranslator/buildLoader 等）+ XML decode。
 - `pub mod database;` — 对应 `database.hh`，符号表。SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database 全部数据结构 + in-memory 查询/插入算法。L3 缺 XML encode/decode + rangemap/partmap。
 
+## 2026-06-27（续）：Varnode::def 深度遍历基础设施 + jumptable L3 推进
+
+- **`varnode.rs` 新增 def/descend/flag 访问器**：`get_def()`（升级 Weak→Arc，对应 varnode.hh:213）、`is_read_only()`（varnode.hh:243）、`is_annotation()`（varnode.hh:237）、`is_spacebase()`、`is_persist_global()`、`descend_iter()`（beginDescend/endDescend，varnode.hh:219-220）、`count_descends()`、`add_descend()`（varnode.hh:295）、`is_bool_output_def()`（getDef()->isBoolOutput）。
+- **`op.rs` 新增**：`is_marker()`（op.hh:185）、`is_bool_output()`（op.hh:190）。
+- **`address.rs` 新增**：`coveringmask(val)`（address.cc:760）、`minimalmask(val)`。
+- **`jumptable.rs` L3 推进**：`find_determining_varnodes` 现在执行完整的 def-chain DFS 深度遍历（不再 break）；`is_prune` 检查 def 的 isCall/isMarker/numInput==0；`is_point` 检查 isAnnotation/isReadOnly；`quasi_copy` 完整遍历 COPY/INT_AND/INT_OR/INT_SEXT/INT_ZEXT/PIECE/SUBPIECE 链；`get_max_value` 检查 INT_AND/MULTIEQUAL 的常量掩码；`is_load_in_path` 通过 get_def() 检测 LOAD。剩余 L3 缺：emulate_path、pullBack、CFG 重写。

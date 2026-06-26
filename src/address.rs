@@ -512,6 +512,28 @@ pub fn mostsigbit_set(val: u64) -> i32 {
     }
 }
 
+/// Return the mask covering all set bits of `val`. Faithful to
+/// `coveringmask` (address.cc:760). For val==0 returns 0; otherwise returns
+/// `(1 << (msb+1)) - 1`, i.e. all bits from the least significant up to and
+/// including the most-significant set bit.
+pub fn coveringmask(val: u64) -> u64 {
+    if val == 0 {
+        return 0;
+    }
+    let msb = mostsigbit_set(val);
+    if msb >= 63 {
+        u64::MAX
+    } else {
+        (1u64 << (msb + 1)) - 1
+    }
+}
+
+/// Return the minimal mask covering the set bits of `val` (alias for
+/// `coveringmask`, matching Ghidra's `minimalmask` in jumptable.cc).
+pub fn minimalmask(val: u64) -> u64 {
+    coveringmask(val)
+}
+
 /// Determine if two Varnodes hold the same value (immediate level).
 /// Faithful to Ghidra's `functionalEquality` (expression.cc:520-526), using
 /// only the level-0 test (expression.cc:404-417): identical varnode pointer,
@@ -541,6 +563,23 @@ pub fn functional_equality(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_coveringmask() {
+        assert_eq!(coveringmask(0), 0);
+        assert_eq!(coveringmask(1), 1);
+        assert_eq!(coveringmask(0xFF), 0xFF);
+        assert_eq!(coveringmask(0x100), 0x1FF);
+        assert_eq!(coveringmask(0x80), 0xFF);
+        assert_eq!(coveringmask(0x8000_0000_0000_0000), u64::MAX);
+    }
+
+    #[test]
+    fn test_minimalmask() {
+        assert_eq!(minimalmask(0), 0);
+        assert_eq!(minimalmask(0xF), 0xF);
+        assert_eq!(minimalmask(0x10), 0x1F);
+    }
 
     #[test]
     fn test_address_creation() {

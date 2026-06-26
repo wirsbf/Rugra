@@ -403,6 +403,73 @@ impl Varnode {
         }
         false
     }
+
+    // --- Ghidra-faithful def / descend / flag accessors (varnode.hh:213-330) ---
+
+    /// Get the PcodeOp that defines this Varnode, or None if not written.
+    /// Faithful to `Varnode::getDef` (varnode.hh:213). Upgrades the internal
+    /// Weak to an Arc; returns None if the def has been dropped or was never
+    /// set.
+    pub fn get_def(&self) -> Option<Arc<RwLock<PcodeOp>>> {
+        self.def.as_ref().and_then(|w| w.upgrade())
+    }
+
+    /// Is this Varnode's value read-only (from a read-only memory space)?
+    /// Faithful to `Varnode::isReadOnly` (varnode.hh:243).
+    pub fn is_read_only(&self) -> bool {
+        (self.flags & varnode_flags::READONLY) != 0
+    }
+
+    /// Is this an annotation varnode (inserted by the decompiler, not real
+    /// code)? Faithful to `Varnode::isAnnotation` (varnode.hh:237).
+    pub fn is_annotation(&self) -> bool {
+        (self.flags & varnode_flags::ANNOTATION) != 0
+    }
+
+    /// Is this a spacebase pointer varnode? Faithful to
+    /// `Varnode::isSpacebase` (varnode.hh, referenced by varmap/heritage).
+    pub fn is_spacebase(&self) -> bool {
+        (self.flags & varnode_flags::SPACEBASE) != 0
+    }
+
+    /// Is this a persistent (global) varnode? Faithful to `isPersist`.
+    pub fn is_persist_global(&self) -> bool {
+        (self.flags & varnode_flags::PERSIST) != 0
+    }
+
+    /// Return an iterator over the live descendant ops (ops that read this
+    /// Varnode). Faithful to `Varnode::beginDescend`/`endDescend`
+    /// (varnode.hh:219-220). Filters out Weak refs whose target has been
+    /// dropped.
+    pub fn descend_iter(&self) -> impl Iterator<Item = Arc<RwLock<PcodeOp>>> + '_ {
+        self.descend.iter().filter_map(|w| w.upgrade())
+    }
+
+    /// Count the live descendant ops. Useful for Rules that need the descend
+    /// count without collecting into a Vec.
+    pub fn count_descends(&self) -> usize {
+        self.descend.iter().filter(|w| w.strong_count() > 0).count()
+    }
+
+    /// Add a descendant op reference. Faithful to `Varnode::addDescend`
+    /// (varnode.hh:295).
+    pub fn add_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
+        self.descend.push(std::sync::Arc::downgrade(op));
+    }
+
+    /// Does the defining op of this Varnode have a boolean output? Faithful to
+    /// checking `getDef()->isBoolOutput()` (used by JumpBasic::calcRange,
+    /// jumptable.cc:1144). Returns false if not written or the def can't be
+    /// resolved.
+    pub fn is_bool_output_def(&self) -> bool {
+        if !self.is_written() {
+            return false;
+        }
+        if let Some(def) = self.get_def() {
+            return (def.read().unwrap().flags & crate::op::pcodeop_flags::BOOLOUTPUT) != 0;
+        }
+        false
+    }
 }
 
 impl PartialEq for Varnode {
