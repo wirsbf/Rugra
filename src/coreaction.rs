@@ -2325,24 +2325,72 @@ impl ActionMarkImplied {
 }
 impl Action for ActionMarkImplied {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. For each Varnode in the location set:
-        //    - Skip free, explicit, or already-implied varnodes
-        //    - Do a DFS through descendants using a DescTreeElement stack
-        //    - When all descendants traced, check checkImpliedCover:
-        //      - If cover allows: markImplied(vn)
-        //      - If not: setExplicit(vn)
-        // 2. checkImpliedCover checks LOAD/STORE aliasing and call crossing
-        //
-        // The isPossibleAliasStep helper is implemented above.
-        // Full implementation requires:
-        // - VarnodeLocSet iteration (beginLoc/endLoc)
-        // - Cover objects on Varnodes
-        // - DescTreeElement stack
-        // - Merge::markImplied
-        // L3 gap: requires VarnodeLocSet + Cover + Merge integration.
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        // Partial Ghidra algorithm: iterate Varnodes, skip explicit/implied,
+        // and for non-explicit Varnodes with exactly one descendant that is
+        // not already explicit/implied, mark as implied (simplified — full
+        // DFS + checkImpliedCover requires Cover objects).
+        let mut change_count = 0;
+
+        let varnodes: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .collect();
+
+        for vn_arc in &varnodes {
+            let vn_rg = vn_arc.read().unwrap();
+            // Skip free, explicit, or already implied.
+            if !vn_rg.is_written() && !vn_rg.is_input() {
+                continue;
+            }
+            if vn_rg.is_explicit() || vn_rg.is_implied() {
+                continue;
+            }
+
+            // Count descendants.
+            let desc_count = vn_rg.descend_iter().count();
+
+            if desc_count == 0 {
+                // No descendants — not used, mark explicit (will be dead-coded).
+                drop(vn_rg);
+                vn_arc.write().unwrap().set_explicit();
+                change_count += 1;
+            } else if desc_count == 1 {
+                // Single descendant — candidate for implied.
+                // Full Ghidra checks checkImpliedCover (LOAD/STORE/call crossing).
+                // Without Cover objects, we conservatively mark as implied
+                // only if the descendant op is not a call or marker.
+                let desc: Vec<_> = vn_arc.read().unwrap().descend_iter().collect();
+                if let Some(desc_op) = desc.first() {
+                    let op_rg = desc_op.read().unwrap();
+                    let is_call = op_rg.is_call();
+                    let is_marker = op_rg.is_marker();
+                    drop(op_rg);
+                    if !is_call && !is_marker {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_implied();
+                        change_count += 1;
+                    } else {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_explicit();
+                        change_count += 1;
+                    }
+                }
+            } else {
+                // Multiple descendants — needs multipleInteraction analysis
+                // (requires HighVariable). Mark explicit for now.
+                drop(vn_rg);
+                vn_arc.write().unwrap().set_explicit();
+                change_count += 1;
+            }
+        }
+
+        if change_count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "markimplied" }
 }
