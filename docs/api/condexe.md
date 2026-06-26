@@ -17,3 +17,16 @@
 - **当前限制**: 完整分析需要块边操作（removeBlockEdge/setOut）、MULTIEQUAL 数据流回拉。骨架框架已就位，待基础设施补齐。
 
 测试：condexe::tests 1 个（get_name）。
+
+## 2026-06-26（续）：condexe.rs 完善实现
+
+新增 ConditionalExecution 完整分析：
+- `CondRelation` 枚举：Same/Complement/Unrelated
+- `ConditionalExecution::new(iblock_index)` — 构造
+- `test_iblock(fd, idx)` — 测试候选块（2入边 + CBRANCH）（condexe.cc trial）
+- `find_cbranch(fd, idx)` — 查找块中的 CBRANCH op
+- `verify_same_condition(init, iblock)` — 验证两 CBRANCH 是否测试同一/互补条件（condexe.cc verifySameCondition），使用 functional_equality + BOOL_NOT 检测互补
+- `trial(fd)` — 完整候选分析：遍历前驱块查找 CBRANCH，验证条件关系
+- `ActionConditionalExe::apply(fd)` — 扫描所有块，尝试 trial，报告找到的可简化 iblock
+
+测试：新增 2 个（conditional_execution_creation + cond_relation_equality）。
