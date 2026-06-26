@@ -142,6 +142,77 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::BOOLOUTPUT) != 0
     }
 
+    /// Get the evaluation type flags (unary/binary/special/ternary). Faithful
+    /// to `PcodeOp::getEvalType` (op.hh:169).
+    pub fn get_eval_type(&self) -> u32 {
+        self.flags
+            & (pcodeop_flags::UNARY | pcodeop_flags::BINARY | pcodeop_flags::SPECIAL | pcodeop_flags::TERNARY)
+    }
+
+    /// Compute a hash for common-subexpression detection. Faithful to
+    /// `PcodeOp::getCseHash` (op.cc:130-147). Returns 0 for non-unary/binary
+    /// ops or COPY ops.
+    pub fn get_cse_hash(&self) -> u64 {
+        if (self.get_eval_type() & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) == 0 {
+            return 0;
+        }
+        if self.opcode == OpCode::CPUI_COPY {
+            return 0; // Let copy propagation deal with this.
+        }
+        let mut hash: u64 = ((self.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0) as u64) << 8)
+            | self.opcode as u64;
+        for i in 0..self.inrefs.len() {
+            hash = (hash << 8) | (hash >> (std::mem::size_of::<u64>() * 8 - 8));
+            let vn = &self.inrefs[i];
+            let vn_rg = vn.read().unwrap();
+            if vn_rg.is_constant() {
+                hash ^= vn_rg.get_offset();
+            } else {
+                hash ^= vn_rg.create_index as u64;
+            }
+        }
+        hash
+    }
+
+    /// Do these two ops represent a common subexpression? Faithful to
+    /// `PcodeOp::isCseMatch` (op.cc:153-171).
+    pub fn is_cse_match(&self, other: &PcodeOp) -> bool {
+        if (self.get_eval_type() & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) == 0 {
+            return false;
+        }
+        if (other.get_eval_type() & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) == 0 {
+            return false;
+        }
+        let self_out_size = self.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let other_out_size = other.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        if self_out_size != other_out_size {
+            return false;
+        }
+        if self.opcode != other.opcode {
+            return false;
+        }
+        if self.opcode == OpCode::CPUI_COPY {
+            return false; // Let copy propagation deal with this.
+        }
+        if self.inrefs.len() != other.inrefs.len() {
+            return false;
+        }
+        for i in 0..self.inrefs.len() {
+            let vn1 = &self.inrefs[i];
+            let vn2 = &other.inrefs[i];
+            if std::sync::Arc::ptr_eq(vn1, vn2) {
+                continue;
+            }
+            let r1 = vn1.read().unwrap();
+            let r2 = vn2.read().unwrap();
+            if r1.is_constant() && r2.is_constant() && r1.get_offset() == r2.get_offset() {
+                continue;
+            }
+            return false;
+        }
+        true
+    }
+
     pub fn is_branch(&self) -> bool {
         (self.flags & pcodeop_flags::BRANCH) != 0
     }

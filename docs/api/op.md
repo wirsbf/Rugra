@@ -830,3 +830,9 @@ PcodeOpRaw
 
 - `is_marker() -> bool`（op.hh:185）：检查 MARKER 标志（MULTIEQUAL/INDIRECT）。解锁 JumpBasic::is_prune。
 - `is_bool_output() -> bool`（op.hh:190）：检查 BOOLOUTPUT 标志。解锁 Varnode::is_bool_output_def。
+
+## 2026-06-27（续）：CSE 方法
+
+- `get_eval_type() -> u32` — `PcodeOp::getEvalType`（op.hh:169）：返回 unary/binary/special/ternary 标志位。
+- `get_cse_hash() -> u64` — `PcodeOp::getCseHash`（op.cc:130-147）：计算公共子表达式检测哈希。非 unary/binary 或 COPY 返回 0。
+- `is_cse_match(other) -> bool` — `PcodeOp::isCseMatch`（op.cc:153-171）：完整 CSE 匹配测试（相同 opcode + 大小 + 输入）。

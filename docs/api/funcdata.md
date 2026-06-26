@@ -686,3 +686,8 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `op_uninsert(op)` — `Funcdata::opUninsert`（funcdata.hh）：从 alivelist 移除 op 但不销毁（用于重新插入）。
 - `op_insert_begin(op, bb)` — `Funcdata::opInsertBegin`（funcdata.hh:457）：在块开头插入 op。
 - `op_get_slot(op, vn) -> i32` — `PcodeOp::getSlot`：返回 vn 在 op 中的输入槽位（-1 未找到）。
+
+### 2026-06-27（续 5）：CSE 基础设施
+
+- `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1358）：消除两个公共子表达式 op 之一（保留序列号较小的），total_replace 输出后销毁重复 op。
+- `cse_eliminate_list(list) -> Vec<Varnode>` — `Funcdata::cseEliminateList`（funcdata_op.cc:1420）：对 (hash, op) 列表排序，查找匹配对，消除冗余。解锁 RuleSelectCse + ActionCse。

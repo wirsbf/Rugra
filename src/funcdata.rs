@@ -863,6 +863,77 @@ impl Funcdata {
         -1
     }
 
+    /// Eliminate a common subexpression between two ops. Faithful to
+    /// `Funcdata::cseElimination` (funcdata_op.cc:1358-1398). Keeps the
+    /// earlier-ordered op (by sequence number), total_replaces the other's
+    /// output, and destroys the duplicate.
+    pub fn cse_elimination(
+        &mut self,
+        op1: &crate::op::PcodeOpRef,
+        op2: &crate::op::PcodeOpRef,
+    ) -> crate::op::PcodeOpRef {
+        // Determine which op to keep (earlier sequence order).
+        let order1 = op1.0.read().unwrap().start.get_order();
+        let order2 = op2.0.read().unwrap().start.get_order();
+        let (replace, dup) = if order1 <= order2 {
+            (op1.clone(), op2.clone())
+        } else {
+            (op2.clone(), op1.clone())
+        };
+        let replace_out = replace.0.read().unwrap().output.clone();
+        let dup_out = dup.0.read().unwrap().output.clone();
+        if let (Some(rep_out), Some(dup_o)) = (replace_out, dup_out) {
+            self.total_replace(&dup_o, rep_out);
+        }
+        self.op_destroy(&dup);
+        replace
+    }
+
+    /// Perform CSE on a list of (hash, PcodeOp) pairs. Faithful to
+    /// `Funcdata::cseEliminateList` (funcdata_op.cc:1420-1449). Sorts by hash,
+    /// finds matching pairs via `is_cse_match`, eliminates duplicates.
+    /// Returns the list of surviving output Varnodes.
+    pub fn cse_eliminate_list(
+        &mut self,
+        list: &mut Vec<(u64, crate::op::PcodeOpRef)>,
+    ) -> Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let mut outlist = Vec::new();
+        if list.is_empty() {
+            return outlist;
+        }
+        // Sort by hash.
+        list.sort_by_key(|(h, _)| *h);
+        let mut i = 0;
+        while i + 1 < list.len() {
+            let h1 = list[i].0;
+            let h2 = list[i + 1].0;
+            if h1 == h2 {
+                let op1 = list[i].1.clone();
+                let op2 = list[i + 1].1.clone();
+                let (is_dead1, is_dead2) = {
+                    let r1 = op1.0.read().unwrap();
+                    let r2 = op2.0.read().unwrap();
+                    (r1.is_dead(), r2.is_dead())
+                };
+                if !is_dead1 && !is_dead2 {
+                    let is_match = op1.0.read().unwrap().is_cse_match(&op2.0.read().unwrap());
+                    if is_match {
+                        let res_op = self.cse_elimination(&op1, &op2);
+                        let out_opt = {
+                            let r = res_op.0.read().unwrap();
+                            r.output.clone()
+                        };
+                        if let Some(out) = out_opt {
+                            outlist.push(out);
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        outlist
+    }
+
     /// Insert a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra) of `vn`, returning the
     /// new output Varnode. Faithful to `Funcdata::opBoolNegate`
     /// (funcdata_op.cc:560-572). If `insert_after` is true, the negate op is

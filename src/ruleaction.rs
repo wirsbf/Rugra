@@ -4761,6 +4761,58 @@ impl Rule for RulePushMulti {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
+/// Look for common sub-expressions built from a restricted set of ops.
+/// Faithful to Ghidra's `RuleSelectCse` (ruleaction.cc:178-209).
+///
+/// Given a SUBPIECE or INT_SRIGHT op, examine the descendants of its input(0)
+/// for ops with the same opcode (and non-zero CSE hash), then eliminate
+/// duplicate calculations via `cseEliminateList`.
+pub struct RuleSelectCse;
+
+impl RuleSelectCse {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSelectCse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSelectCse::applyOp (ruleaction.cc:187-209).
+        let (opc, vn) = {
+            let op = op_arc.read().unwrap();
+            let opc = op.opcode;
+            if opc != OpCode::CPUI_SUBPIECE && opc != OpCode::CPUI_INT_SRIGHT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (opc, vn)
+        };
+        // Collect descendants of vn with the same opcode and non-zero hash.
+        let mut list: Vec<(u64, crate::op::PcodeOpRef)> = Vec::new();
+        let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
+        for other_arc in descends {
+            let other_opc = other_arc.read().unwrap().opcode;
+            if other_opc != opc {
+                continue;
+            }
+            let hash = other_arc.read().unwrap().get_cse_hash();
+            if hash == 0 {
+                continue;
+            }
+            list.push((hash, crate::op::PcodeOpRef(other_arc)));
+        }
+        if list.len() <= 1 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let outlist = fd.cse_eliminate_list(&mut list);
+        if outlist.is_empty() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "select_cse" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_SRIGHT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

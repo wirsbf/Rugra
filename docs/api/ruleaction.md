@@ -592,3 +592,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 通用情况：验证 loneDescend，移动 op1 的输出到 MULTIEQUAL 输出（unify），op_uninsert + op_insert_before 重新定位
   - `find_substitute(in1, in2)` — 搜索已存在的 MULTIEQUAL[in1,in2] 或 CSE
   - 依赖：functional_equality_level ✅、total_replace ✅、op_destroy ✅、op_uninsert ✅、op_insert_before ✅
+
+## 2026-06-27（续 8）：RuleSelectCse 完整移植
+
+- **RuleSelectCse**：完整忠实移植 ruleaction.cc:178-209。在 SUBPIECE/INT_SRIGHT 的 input(0) 后代中查找公共子表达式：
+  - 收集与给定 op 相同 opcode 且 CSE hash 非零的后代 ops
+  - 调用 `Funcdata::cse_eliminate_list` 进行排序+匹配+消除
+  - 依赖：get_cse_hash ✅、is_cse_match ✅、cse_eliminate_list ✅、cse_elimination ✅
