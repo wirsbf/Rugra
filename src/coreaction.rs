@@ -1703,12 +1703,60 @@ impl Action for ActionRedundBranch {
 
 /// Remove determined conditional branches (constant condition). Faithful to
 /// `ActionDeterminedBranch` (coreaction.cc).
+///
+/// For each basic block whose last op is a CBRANCH with a constant boolean
+/// input, determine which branch is actually taken (considering boolean flip)
+/// and remove the other branch.
 pub struct ActionDeterminedBranch { pub count: i32 }
 impl ActionDeterminedBranch {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeterminedBranch {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        use crate::opcodes::OpCode;
+        let n_blocks = fd.bblocks.get_size();
+        for i in 0..n_blocks {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            // Get the last op of this block.
+            let last_op = {
+                let bl_rg = bl.read().unwrap();
+                if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    any.last_op()
+                } else {
+                    None
+                }
+            };
+            let Some(cbranch) = last_op else { continue };
+
+            // Check it's a CBRANCH with constant boolean input (slot 1).
+            let (is_cbranch, is_const, val, is_flip) = {
+                let cb_rg = cbranch.0.read().unwrap();
+                if cb_rg.opcode != OpCode::CPUI_CBRANCH {
+                    (false, false, 0u64, false)
+                } else {
+                    let bool_vn = cb_rg.get_in(1);
+                    let is_const = bool_vn.map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                    let val = bool_vn.map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let is_flip = (cb_rg.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+                    (true, is_const, val, is_flip)
+                }
+            };
+            if !is_cbranch || !is_const {
+                continue;
+            }
+
+            // Determine which branch is taken.
+            // num = ((val != 0) != isBooleanFlip) ? 0 : 1
+            // Faithful to Ghidra: if val!=0 XOR is_flip → take edge 0 (fallthrough).
+            // Otherwise → take edge 1 (branch target).
+            let num = if (val != 0) != is_flip { 0 } else { 1 };
+
+            // Remove the other branch edge.
+            fd.remove_branch(&bl, num);
+        }
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "determinedbranch" }

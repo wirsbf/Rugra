@@ -505,6 +505,65 @@ impl Funcdata {
         }
     }
 
+    /// Remove a branch edge from a basic block. Faithful to
+    /// `Funcdata::removeBranch` / `branchRemoveInternal`
+    /// (funcdata_block.cc). If the block has 2 out-edges (CBRANCH), the
+    /// branch op is destroyed. The edge to the un-selected out-block is
+    /// severed.
+    ///
+    /// `bb` is the block with the branch; `num` is the out-edge index to
+    /// KEEP (0 or 1). The OTHER edge is removed.
+    pub fn remove_branch(
+        &mut self,
+        bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        num: usize,
+    ) {
+        // If 2 out-edges, destroy the CBRANCH op.
+        let n_out = bb.read().unwrap().size_out();
+        if n_out == 2 {
+            let last_op = {
+                let bb_rg = bb.read().unwrap();
+                if let Some(any) = bb_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    any.last_op()
+                } else {
+                    None
+                }
+            };
+            if let Some(cbranch) = last_op {
+                self.op_destroy(&cbranch);
+            }
+        }
+
+        // The out-edge to REMOVE is (1 - num) if num is the kept one.
+        let remove_edge = if n_out == 2 { 1 - num } else { return };
+
+        // Get the target block of the edge to remove.
+        let target = bb.read().unwrap().get_out(remove_edge).map(|e| e.point);
+        let Some(target) = target else { return };
+
+        // Remove the edge from bb to target.
+        // In our simplified model, we remove the outgoing edge from bb and
+        // the incoming edge from target.
+        {
+            let mut bb_rg = bb.write().unwrap();
+            if let Some(any) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if remove_edge < any.outgoing.len() {
+                    any.outgoing.remove(remove_edge);
+                }
+            }
+        }
+        {
+            let mut target_rg = target.write().unwrap();
+            if let Some(any) = target_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                // Find and remove the incoming edge from bb.
+                let bb_ptr = Arc::as_ptr(bb) as *const () as usize;
+                any.incoming.retain(|e| {
+                    Arc::as_ptr(&e.point) as *const () as usize != bb_ptr
+                });
+            }
+        }
+    }
+
     /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
     /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
     /// (funcdata_op.cc:1029-1065).

@@ -554,3 +554,8 @@
 ActionUnreachable, ActionDoNothing, ActionRedundBranch, ActionDeterminedBranch, ActionHideShadow, ActionSwitchNorm, ActionNormalizeSetup, ActionPrototypeWarnings, ActionMarkExplicit, ActionMarkImplied, ActionSetCasts, ActionInferTypes, ActionNameVars, ActionVarnodeProps, ActionRestrictLocal, ActionMultiCse, ActionShadowVar, ActionDirectWrite, ActionConstbase, ActionInputPrototype, ActionOutputPrototype, ActionPrototypeTypes, ActionActiveParam, ActionActiveReturn, ActionDefaultParams, ActionParamDouble, ActionUnjustifiedParams, ActionLikelyTrash, ActionFuncLink, ActionFuncLinkOutOnly, ActionDeindirect, ActionStackPtrFlow, ActionSegmentize, ActionInternalStorage, ActionExtraPopSetup, ActionConditionalConst, ActionDynamicMapping, ActionDynamicSymbols, ActionMappedLocalSync, ActionLaneDivide, ActionReturnRecovery, ActionForceGoto。
 
 coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::apply 方法）。Actions 的实际算法逻辑是后续 L3 工作的核心。
+
+## 2026-06-27（续 19）：ActionDeterminedBranch 完整算法 + Funcdata::remove_branch
+
+- **Funcdata 新增**：`remove_branch(bb, num)`（funcdata_block.cc branchRemoveInternal）：销毁 CBRANCH op + 移除非选中 out-edge + 更新目标块 incoming edge。
+- **ActionDeterminedBranch**：完整算法实现（coreaction.cc）——遍历所有基本块，找到以 CBRANCH（常量布尔输入 slot 1）结尾的块，计算实际分支（`((val!=0)!=isBooleanFlip) ? 0 : 1`），调用 `remove_branch` 移除另一条边。不再是 stub。

@@ -650,3 +650,7 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `force_goto(pcop, pcdest) -> bool`（funcdata_block.cc:752）：遍历所有基本块，找到地址为 pcop 的最后 op，标记其指向 pcdest 的 out-edge 为非结构化 goto。
 - `set_goto_branch(bl, j)`：标记 out-edge j 为 goto（设置 GOTO_EDGE_0/1 标志）。
 - `move_out_edge(bb, slot, bbnew)`：重定向 out-edge（BlockGraph::moveOutEdge 等价），更新源/旧目标/新目标的 edge 列表 + reverse_index。
+
+## 2026-06-27（续 2）：remove_branch
+
+- `remove_branch(bb, num)`（funcdata_block.cc branchRemoveInternal）：销毁 CBRANCH op（如果 2 out-edges）+ 移除非选中 out-edge + 更新目标块 incoming。解锁 ActionDeterminedBranch。

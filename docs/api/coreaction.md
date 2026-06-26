@@ -262,3 +262,8 @@ Corresponds to Ghidra's `ActionInferTypes` iterative type recovery pass.
 ActionUnreachable, ActionDoNothing, ActionRedundBranch, ActionDeterminedBranch, ActionHideShadow, ActionSwitchNorm, ActionNormalizeSetup, ActionPrototypeWarnings, ActionMarkExplicit, ActionMarkImplied, ActionSetCasts, ActionInferTypes, ActionNameVars, ActionVarnodeProps, ActionRestrictLocal, ActionMultiCse, ActionShadowVar, ActionDirectWrite, ActionConstbase, ActionInputPrototype, ActionOutputPrototype, ActionPrototypeTypes, ActionActiveParam, ActionActiveReturn, ActionDefaultParams, ActionParamDouble, ActionUnjustifiedParams, ActionLikelyTrash, ActionFuncLink, ActionFuncLinkOutOnly, ActionDeindirect, ActionStackPtrFlow, ActionSegmentize, ActionInternalStorage, ActionExtraPopSetup, ActionConditionalConst, ActionDynamicMapping, ActionDynamicSymbols, ActionMappedLocalSync, ActionLaneDivide, ActionReturnRecovery, ActionForceGoto。
 
 coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::apply 方法）。Actions 的实际算法逻辑是后续 L3 工作的核心。
+
+## 2026-06-27（续 2）：ActionDeterminedBranch 完整算法
+
+- **ActionDeterminedBranch**：不再是 stub。完整实现 coreaction.cc 的逻辑：遍历所有基本块，找到以 CBRANCH（常量布尔输入）结尾的块，计算实际分支方向（考虑 BOOLEAN_FLIP），调用 `Funcdata::remove_branch` 移除非选中边。
+- **Funcdata::remove_branch**：新增 CFG 编辑方法（funcdata_block.cc branchRemoveInternal）——销毁 CBRANCH op + 移除 out-edge + 更新目标 incoming。
