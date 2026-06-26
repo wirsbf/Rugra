@@ -2,11 +2,11 @@
 
 **日期**: 2026-06-27
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动**
+**状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动 + FuncCallSpecs 集成**
 
 ## 近期进展（2026-06-27 会话）
 
-本次会话聚焦 **基础设施层完整移植 + 反编译管道 coreaction Actions 全面 apply()-驱动化**，通过 **~70 个原子化 commit** 实现了：
+本次会话聚焦 **基础设施层完整移植 + 反编译管道 coreaction Actions 全面 apply()-驱动化 + 子系统集成**，通过 **~80 个原子化 commit** 实现了：
 
 ### 突破性成果
 
@@ -62,19 +62,30 @@
 | gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
 | while 循环数 | 16 | 39 |
 | goto 数 | 0 | 0 |
-| 单元测试 | **634/634** | — |
+| 单元测试 | **635/635** | — |
 
 ### 代码规模
 
 | 指标 | 数值 |
 |---|---|
 | Rust 源文件 | 63 个模块 |
-| 总源码行数 | 62,059 行 |
-| L3 模块 | 22 |
-| L2 模块 | 22 |
+| 总源码行数 | 63,223 行 |
+| L3 模块 | 26 |
+| L2 模块 | 18 |
 | L1 模块 | 22+ |
-| coreaction Actions | 58 structs（48 Ghidra ::apply 覆盖） |
-| 本次会话 commits | ~50 |
+| coreaction Actions | 58 structs（100% apply()-驱动，零 stub） |
+| 本次会话 commits | ~80 |
+| 总 commits | 381 |
+
+### 子系统集成里程碑
+
+- **FuncCallSpecs** 集成到 Funcdata（num_calls/get_call_specs/add_call_specs）
+- **Architecture** 拥有全部子组件字段（symboltab/loader/commentdb/string_manager/cpool/context_db/options_db/split_records/lane_records）+ set_* 工厂钩子
+- **Varnode::def** 访问器（get_def/descend_iter/is_read_only/is_annotation/is_spacebase/is_bool_output_def）
+- **CircleRange::pullBack** 全套（complement/convertToBoolean/setNZMask/pullBackUnary/Binary/throughOp）
+- **Funcdata CFG 重写原语**（push_branch/force_goto/set_goto_branch/move_out_edge/remove_branch）
+- **marshal.rs** 完整序列化栈（TreeEncoder/TreeDecoder + PackedEncode/PackedDecode）
+- **flate2** 集成（真实 zlib 压缩/解压）
 
 ---
 
