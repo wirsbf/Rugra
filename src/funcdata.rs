@@ -302,6 +302,209 @@ impl Funcdata {
         vn
     }
 
+    /// Push a conditional branch edge into a new destination, turning the
+    /// CBRANCH into an unconditional BRANCH. Faithful to `Funcdata::pushBranch`
+    /// (funcdata_block.cc:404).
+    ///
+    /// `bb` is the block containing the CBRANCH; `slot` is the out-edge to
+    /// redirect; `bbnew` is the new destination (must end in BRANCHIND).
+    pub fn push_branch(
+        &mut self,
+        bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        slot: usize,
+        bbnew: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> Result<(), String> {
+        // Get the CBRANCH (last op of bb).
+        let last_op = {
+            let bb_rg = bb.read().unwrap();
+            if let Some(any) = bb_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                any.last_op()
+            } else {
+                None
+            }
+        };
+        let cbranch = match last_op {
+            Some(op) => op,
+            None => return Err("No last op in block".to_string()),
+        };
+        // Verify it's a CBRANCH with 2 out-edges.
+        let is_cbranch = {
+            let cb_rg = cbranch.0.read().unwrap();
+            cb_rg.opcode == crate::opcodes::OpCode::CPUI_CBRANCH
+        };
+        if !is_cbranch || bb.read().unwrap().size_out() != 2 {
+            return Err("Cannot push non-conditional edge".to_string());
+        }
+        // Verify bbnew ends in BRANCHIND.
+        let bbnew_last = {
+            let bn_rg = bbnew.read().unwrap();
+            if let Some(any) = bn_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                any.last_op()
+            } else {
+                None
+            }
+        };
+        if let Some(indop) = &bbnew_last {
+            if indop.0.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_BRANCHIND {
+                return Err("Can only push branch into indirect jump".to_string());
+            }
+        } else {
+            return Err("Destination has no last op".to_string());
+        }
+        // Remove the conditional variable (input slot 1) and change opcode to
+        // BRANCH. Faithful to opRemoveInput(cbranch,1) + opSetOpcode(BRANCH).
+        self.op_remove_input(&cbranch, 1);
+        self.op_set_opcode(&cbranch, crate::opcodes::OpCode::CPUI_BRANCH);
+        // Move the out-edge.
+        self.move_out_edge(bb, slot, bbnew);
+        Ok(())
+    }
+
+    /// Move an out-edge of `bb` from its current destination to `bbnew`.
+    /// Faithful to `BlockGraph::moveOutEdge` (block.cc). This redirects the
+    /// edge by updating both the source's outgoing list and the old/new
+    /// destinations' incoming lists.
+    pub fn move_out_edge(
+        &mut self,
+        bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        slot: usize,
+        bbnew: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        // Get the old destination.
+        let old_dest = {
+            let bb_rg = bb.read().unwrap();
+            bb_rg.get_out(slot).map(|e| e.point)
+        };
+        let Some(old_dest) = old_dest else { return };
+        // Update the source's outgoing edge to point to bbnew.
+        let rev_idx_new = bbnew.read().unwrap().size_in() as i32;
+        {
+            let mut bb_rg = bb.write().unwrap();
+            if let Some(any) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if slot < any.outgoing.len() {
+                    let old_rev = any.outgoing[slot].reverse_index;
+                    any.outgoing[slot].point = bbnew.clone();
+                    any.outgoing[slot].reverse_index = rev_idx_new;
+                    // Remove the old reverse edge from old_dest.
+                    let _ = old_rev;
+                }
+            }
+        }
+        // Add the incoming edge to bbnew.
+        {
+            let mut bn_rg = bbnew.write().unwrap();
+            let out_idx = slot as i32;
+            bn_rg.add_in_edge(crate::block::BlockEdge::new(bb.clone(), out_idx));
+        }
+        // Remove the old incoming edge from old_dest (the reverse_index stored
+        // in bb's edge tells us which slot in old_dest to remove).
+        let old_rev = {
+            let bb_rg = bb.read().unwrap();
+            // The reverse_index was captured before we changed it; recompute
+            // from old_dest's incoming list by finding bb.
+            let dest_rg = old_dest.read().unwrap();
+            let mut found = None;
+            for i in 0..dest_rg.size_in() {
+                if let Some(e) = dest_rg.get_in(i) {
+                    if Arc::ptr_eq(&e.point, bb) {
+                        found = Some(i);
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        if let Some(slot_in) = old_rev {
+            let mut od_rg = old_dest.write().unwrap();
+            if let Some(any) = od_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if slot_in < any.incoming.len() {
+                    any.incoming.remove(slot_in);
+                    // Fix reverse indices on bb's remaining edges that pointed
+                    // past the removed slot.
+                    let mut bb_rg = bb.write().unwrap();
+                    if let Some(any_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                        for e in any_bb.outgoing.iter_mut() {
+                            if e.reverse_index > slot_in as i32 {
+                                e.reverse_index -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Force a specific branch instruction to be an unstructured goto.
+    /// Faithful to `Funcdata::forceGoto` (funcdata_block.cc:752).
+    ///
+    /// `pcop` is the address of the branch op to mark; `pcdest` is the
+    /// destination address. Returns true if a matching branch was found and
+    /// marked.
+    pub fn force_goto(
+        &mut self,
+        pcop: crate::address::Address,
+        pcdest: crate::address::Address,
+    ) -> bool {
+        for i in 0..self.bblocks.get_size() {
+            let bl = match self.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            // Get the last op of this block.
+            let last_op = {
+                let bl_rg = bl.read().unwrap();
+                if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    any.last_op()
+                } else {
+                    None
+                }
+            };
+            let Some(op) = last_op else { continue };
+            if op.0.read().unwrap().get_addr() != pcop {
+                continue;
+            }
+            // Find the out-edge whose destination's last op has addr == pcdest.
+            let n_out = bl.read().unwrap().size_out();
+            for j in 0..n_out {
+                let bl2 = bl.read().unwrap().get_out(j).map(|e| e.point);
+                let Some(bl2) = bl2 else { continue };
+                let op2 = {
+                    let bl2_rg = bl2.read().unwrap();
+                    if let Some(any) = bl2_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                        any.last_op()
+                    } else {
+                        None
+                    }
+                };
+                let Some(op2) = op2 else { continue };
+                if op2.0.read().unwrap().get_addr() == pcdest {
+                    // Mark this out-edge as a goto branch.
+                    self.set_goto_branch(&bl, j);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Mark the j-th out-edge of a block as an unstructured goto. Faithful to
+    /// `FlowBlock::setGotoBranch` (block.cc).
+    pub fn set_goto_branch(
+        &mut self,
+        bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        j: usize,
+    ) {
+        let mut bl_rg = bl.write().unwrap();
+        if let Some(any) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+            // Use the GOTO_EDGE_0/GOTO_EDGE_1 flags to mark the edge.
+            match j {
+                0 => any.flags |= crate::block::block_flags::GOTO_EDGE_0,
+                1 => any.flags |= crate::block::block_flags::GOTO_EDGE_1,
+                _ => {} // Only edges 0 and 1 have dedicated flags.
+            }
+        }
+    }
+
     /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
     /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
     /// (funcdata_op.cc:1029-1065).

@@ -641,3 +641,12 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `distribute_int_mult_add(op) -> bool` — `Funcdata::distributeIntMultAdd`（funcdata_op.cc:1073-1118）：
   `(V + W) * c => V*c + W*c`。将 INT_MULT 系数分配到 INT_ADD 的两个输入。常量输入直接乘出结果；非常量输入创建新 INT_MULT op。解锁 RuleCollectTerms 完整形式。
+
+## 2026-06-27：CFG 重写原语（funcdata_block.cc）
+
+新增控制流图编辑方法，解锁 jumptable.rs 的 foldInGuards/switchOver L3 缺口：
+
+- `push_branch(bb, slot, bbnew) -> Result<(), String>`（funcdata_block.cc:404）：将 CBRANCH 转为 BRANCH（移除条件输入 slot 1），重定向 out-edge 到 BRANCHIND 块。验证源是 CBRANCH（2 out-edges）+ 目标以 BRANCHIND 结尾。
+- `force_goto(pcop, pcdest) -> bool`（funcdata_block.cc:752）：遍历所有基本块，找到地址为 pcop 的最后 op，标记其指向 pcdest 的 out-edge 为非结构化 goto。
+- `set_goto_branch(bl, j)`：标记 out-edge j 为 goto（设置 GOTO_EDGE_0/1 标志）。
+- `move_out_edge(bb, slot, bbnew)`：重定向 out-edge（BlockGraph::moveOutEdge 等价），更新源/旧目标/新目标的 edge 列表 + reverse_index。

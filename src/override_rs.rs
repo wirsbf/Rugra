@@ -168,6 +168,19 @@ impl Override {
         self.forcegoto.iter()
     }
 
+    /// Push all the force-goto overrides into the function. Faithful to
+    /// `applyForceGoto` (override.cc:204). Calls `fd.force_goto` for each
+    /// stored (targetpc, destpc) pair. Returns the number of overrides applied.
+    pub fn apply_force_gotos(&self, fd: &mut crate::funcdata::Funcdata) -> usize {
+        let mut count = 0;
+        for (&targetpc, &destpc) in &self.forcegoto {
+            if fd.force_goto(targetpc, destpc) {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Apply destination overrides of indirect calls. Returns the overriding
     /// direct-call address for the given callpoint, if any. Faithful to
     /// `applyIndirect` (override.cc:177).

@@ -52,3 +52,7 @@ single function. Faithful to `Override` (override.hh:50).
 - XML `encode`/`decode` of the `<override>` element (override.cc:294, 356) —
   pending Encoder/Decoder infrastructure.
 - FuncProto ownership in `insertProtoOverride` — pending fspec integration.
+
+## 2026-06-27（续）：apply_force_gotos CFG 集成
+
+- `apply_force_gotos(fd: &mut Funcdata) -> usize`（override.cc:204）：将所有 force-goto 覆写推入函数，调用 `fd.force_goto`。返回成功应用的覆写数。解锁 jumptable.rs 的 CFG 重写 L3 缺口。

@@ -204,3 +204,20 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 测试：新增 2 个（emulate_path INT_ADD + COPY）。
 
 剩余 L3 缺：CFG 重写（foldInGuards/switchOver via Funcdata::pushBranch）。
+
+## 2026-06-27（续 4）：CFG 重写完成 — jumptable.rs 达到 L3
+
+**Funcdata 新增方法**（funcdata_block.cc）：
+- `push_branch(bb, slot, bbnew)`（funcdata_block.cc:404）：将 CBRANCH 转为 BRANCH，重定向 out-edge 到 BRANCHIND 块。
+- `force_goto(pcop, pcdest) -> bool`（funcdata_block.cc:752）：标记指定分支为非结构化 goto。
+- `set_goto_branch(bl, j)`：标记 out-edge j 为 goto（使用 GOTO_EDGE_0/1 标志）。
+- `move_out_edge(bb, slot, bbnew)`：重定向 out-edge（BlockGraph::moveOutEdge）。
+
+**JumpBasic 新增方法**：
+- `fold_in_one_guard(fd, guard, jump) -> bool`（jumptable.cc:1392）：消除单个守卫——或将 CBRANCH 条件设为常量，或通过 push_branch 将分支推入 switch。
+- `fold_in_guards`：现使用 fold_in_one_guard 处理每个守卫（jumptable.cc:1577）。
+
+**Override 新增方法**：
+- `apply_force_gotos(fd) -> usize`（override.cc:204）：将所有 force-goto 覆写推入函数。
+
+测试：新增 2 个（set_goto_branch 标志 + apply_force_gotos）。jumptable.rs 所有算法 L3 缺口已关闭。

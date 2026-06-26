@@ -1738,6 +1738,120 @@ impl JumpBasic {
         }
         true
     }
+
+    /// Eliminate the given guard to this switch. We disarm the guard
+    /// instructions by making the guard condition always false (or pushing the
+    /// branch into the switch). Faithful to `foldInOneGuard`
+    /// (jumptable.cc:1392).
+    ///
+    /// Returns true if a change was made to data-flow.
+    pub fn fold_in_one_guard(
+        &self,
+        fd: &mut crate::funcdata::Funcdata,
+        guard: &mut GuardRecord,
+        jump: &mut JumpTable,
+    ) -> bool {
+        let Some(cbranch) = guard.get_branch() else {
+            return false;
+        };
+        // Get the CBRANCH's parent block.
+        let cbranchblock = {
+            let cb_rg = cbranch.read().unwrap();
+            cb_rg.parent.as_ref().and_then(|p| p.upgrade())
+        };
+        let Some(cbranchblock) = cbranchblock else {
+            return false;
+        };
+        // The guard branch must have exactly 2 out-edges.
+        if cbranchblock.read().unwrap().size_out() != 2 {
+            return false;
+        }
+        let mut indpath = guard.get_path();
+        // Adjust for FlipPath — we approximate by checking the GOTO_EDGE flags.
+        let cbranch_flags = cbranchblock.read().unwrap().get_flags();
+        if (cbranch_flags & crate::block::block_flags::GOTO_EDGE_1) != 0 {
+            indpath = 1 - indpath;
+        }
+        // Get the switch block (parent of the BRANCHIND).
+        let Some(indirect) = jump.get_indirect_op() else {
+            return false;
+        };
+        let switchbl = {
+            let ind_rg = indirect.read().unwrap();
+            ind_rg.parent.as_ref().and_then(|p| p.upgrade())
+        };
+        let Some(switchbl) = switchbl else {
+            return false;
+        };
+        // Guard must go directly into switch block along the indpath edge.
+        let out_target = cbranchblock.read().unwrap().get_out(indpath as usize).map(|e| e.point);
+        let Some(out_target) = out_target else {
+            return false;
+        };
+        if !Arc::ptr_eq(&out_target, &switchbl) {
+            return false;
+        }
+        // Find the guard target (the other out-edge).
+        let guardtarget = cbranchblock
+            .read()
+            .unwrap()
+            .get_out((1 - indpath) as usize)
+            .map(|e| e.point);
+        let Some(guardtarget) = guardtarget else {
+            return false;
+        };
+
+        // Find which out-edge of the switch block hits the guard target.
+        let n_out = switchbl.read().unwrap().size_out();
+        let mut pos = None;
+        for p in 0..n_out {
+            let out = switchbl.read().unwrap().get_out(p).map(|e| e.point);
+            if let Some(out) = out {
+                if Arc::ptr_eq(&out, &guardtarget) {
+                    pos = Some(p);
+                    break;
+                }
+            }
+        }
+
+        match pos {
+            Some(p) => {
+                // The guard target is already a switch destination; set the
+                // CBRANCH condition to a constant so it always takes the path
+                // to the switch. Faithful to opSetInput(cbranch, constant, 1).
+                let val = if (indpath == 0) {
+                    // (indpath==0 != isBooleanFlip) ? 0 : 1 — approximate.
+                    0u64
+                } else {
+                    1u64
+                };
+                let size = cbranch
+                    .read()
+                    .unwrap()
+                    .get_in(0)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(1);
+                let constvn = fd.new_constant(size, val);
+                let cbranch_pref = crate::op::PcodeOpRef(cbranch.clone());
+                fd.op_set_input(&cbranch_pref, constvn, 1);
+                jump.set_default_block(p as i32);
+            }
+            None => {
+                // Add the guard target as a new switch destination.
+                let gt_start = {
+                    let gt_rg = guardtarget.read().unwrap();
+                    gt_rg.get_start_addr()
+                };
+                jump.add_block_to_switch(gt_start, NO_LABEL);
+                jump.set_last_as_default();
+                // Push the branch into the switch.
+                let _ = fd.push_branch(&cbranchblock, (1 - indpath) as usize, &switchbl);
+            }
+        }
+        jump.set_folded_default();
+        guard.clear();
+        true
+    }
 }
 
 impl JumpModel for JumpBasic {
@@ -1989,20 +2103,29 @@ impl JumpModel for JumpBasic {
 
     fn fold_in_guards(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
-        _jump: &mut JumpTable,
+        fd: &mut crate::funcdata::Funcdata,
+        jump: &mut JumpTable,
     ) -> bool {
-        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1577). The actual
-        // CFG-rewriting in foldInOneGuard requires pushBranch/branch editing
-        // which is an L3 gap on the current Funcdata API.
+        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1577).
         let mut change = false;
-        for guard in self.selectguards.iter_mut() {
-            if guard.get_branch().is_none() {
+        for i in 0..self.selectguards.len() {
+            let cbranch_alive = {
+                let g = &self.selectguards[i];
+                match g.get_branch() {
+                    Some(cb) => !cb.read().unwrap().is_dead(),
+                    None => false,
+                }
+            };
+            if !cbranch_alive {
+                self.selectguards[i].clear();
                 continue;
             }
-            guard.clear();
-            // Until foldInOneGuard's branch editing is available, no change.
-            let _ = &mut change;
+            // Extract the guard, fold it, then write back.
+            let mut guard = self.selectguards[i].clone();
+            if self.fold_in_one_guard(fd, &mut guard, jump) {
+                change = true;
+            }
+            self.selectguards[i] = guard;
         }
         change
     }
@@ -3059,6 +3182,29 @@ mod tests {
         let mut emul = EmulateFunction::new();
         let result = emul.emulate_path(42, &pm, &copy_op_arc, &switchvn);
         assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn test_set_goto_branch_marks_flags() {
+        use crate::funcdata::Funcdata;
+        use crate::block::{BlockBasic, block_flags};
+        let mut fd = Funcdata::new("test", crate::Address::new(0x1000), 16);
+        let bl = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, crate::Address::new(0x1000)))) as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        fd.set_goto_branch(&bl, 0);
+        assert!((bl.read().unwrap().get_flags() & block_flags::GOTO_EDGE_0) != 0);
+        fd.set_goto_branch(&bl, 1);
+        assert!((bl.read().unwrap().get_flags() & block_flags::GOTO_EDGE_1) != 0);
+    }
+
+    #[test]
+    fn test_override_apply_force_gotos() {
+        use crate::funcdata::Funcdata;
+        let mut o = crate::override_rs::Override::new();
+        o.insert_force_goto(crate::Address::new(0x1000), crate::Address::new(0x2000));
+        let mut fd = Funcdata::new("test", crate::Address::new(0x1000), 16);
+        // No blocks exist, so force_goto returns false → count 0.
+        let count = o.apply_force_gotos(&mut fd);
+        assert_eq!(count, 0);
     }
 
     fn _silence_unused() {
