@@ -738,6 +738,103 @@ fn find_spacebase_input(fd: &crate::funcdata::Funcdata) -> Option<Arc<RwLock<Var
     None
 }
 
+/// RSP register identity: Register space, offset 0x20, size 8.
+const RSP_SPACE: crate::space::AddressSpace = crate::space::AddressSpace::Register;
+const RSP_OFFSET: u64 = 0x20;
+const RSP_SIZE: usize = 8;
+
+/// Resolve whether an address varnode is RSP-derived, returning the raw stack
+/// offset (relative to RSP) and whether the pointer was writable.
+///
+/// Handles additive chains rooted at RSP, which is how Rugra's lift encodes
+/// stack accesses — including the common frame-base pattern:
+///   - `INT_ADD(frame_base, const)` where `frame_base = INT_SUB(RSP, frame_size)`
+///     → offset = const - frame_size (relative to RSP)
+///   - `INT_ADD(RSP, const)`  → +const
+///   - `INT_SUB(RSP, const)`  → -const (two's complement as u64)
+///   - `RSP` directly         → 0
+///
+/// This mirrors Ghidra's Stack-spacebase address resolution: the offset is
+/// relative to the spacebase (RSP), which is what `get_stack_variable_name`
+/// in printc also queries.
+fn resolve_rsp_offset(addr: &Arc<RwLock<Varnode>>) -> Option<(u64, bool)> {
+    resolve_rsp_offset_signed(addr).map(|(off, w)| (off as u64, w))
+}
+
+/// Signed-offset variant: returns the offset relative to RSP as i64, then the
+/// caller masks to u64. This lets additive chains compose correctly.
+fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)> {
+    let a = addr.read().unwrap();
+    // Direct RSP reference.
+    if a.get_space() == RSP_SPACE && a.get_offset() == RSP_OFFSET && a.get_size() == RSP_SIZE {
+        return Some((0, true));
+    }
+    let def = match a.def.as_ref().and_then(|w| w.upgrade()) {
+        Some(d) => d,
+        None => return None,
+    };
+    drop(a);
+    let op = def.read().unwrap();
+    match op.opcode {
+        OpCode::CPUI_INT_ADD => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            // Try: this = base + term, where base is RSP-derived and term is const.
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term_const = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some(i1.get_offset() as i64)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term_const) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_add(tc), w)),
+                _ => None,
+            }
+        }
+        OpCode::CPUI_INT_SUB => {
+            let in0 = op.inrefs.first()?;
+            let in1 = op.inrefs.get(1)?;
+            let base_off = resolve_rsp_offset_signed(in0);
+            let term_const = {
+                let i1 = in1.read().unwrap();
+                if i1.is_constant() {
+                    Some(i1.get_offset() as i64)
+                } else {
+                    None
+                }
+            };
+            drop(op);
+            match (base_off, term_const) {
+                (Some((bo, w)), Some(tc)) => Some((bo.wrapping_sub(tc), w)),
+                _ => None,
+            }
+        }
+        // COPY chains may carry an RSP-derived pointer.
+        OpCode::CPUI_COPY => {
+            let in0 = op.inrefs.first()?.clone();
+            drop(op);
+            resolve_rsp_offset_signed(&in0)
+        }
+        _ => None,
+    }
+}
+
+/// Build a small unsigned int Datatype of the given size for RangeHint typing.
+/// Ghidra uses the TypeFactory to getBase(size, TYPE_UNKNOWN); we approximate
+/// with an Unknown-metatype base type so the size is preserved and varmap can
+/// reconcile it with real types later.
+fn make_int_type(size: usize) -> Arc<Datatype> {
+    Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
+        "unknown".to_string(),
+        size,
+        TypeMetatype::Unknown,
+    )))
+}
+
 /// If the given Varnode is a sum result, return the constant portion of the sum.
 /// Faithful to `AliasChecker::gatherOffset` (varmap.cc:817).
 ///
@@ -980,6 +1077,54 @@ impl MapState {
         }
     }
 
+    /// Gather stack-space references by promoting the stack spacebase.
+    ///
+    /// Rugra's x86 lift does not produce Stack-space varnodes: RSP-relative
+    /// memory accesses are emitted as `INT_ADD(RSP, off) → LOAD/STORE`. Ghidra,
+    /// by contrast, resolves these through its Stack address space (whose
+    /// spacebase is the stack pointer), so `MapState::gatherVarnodes` naturally
+    /// sees Stack-space varnodes. This method is the faithful equivalent: it
+    /// scans every LOAD/STORE whose address is RSP-derived and synthesizes a
+    /// fixed RangeHint at the (raw) stack offset, sized to the access.
+    ///
+    /// Corresponds to the Stack-spacebase resolution Ghidra performs via
+    /// `ActionSpacebase` + the spacebase input varnode.
+    pub fn gather_spacebase(&mut self, fd: &crate::funcdata::Funcdata) {
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            match op.opcode {
+                OpCode::CPUI_LOAD => {
+                    // LOAD(space_id, addr) -> out. Resolve addr to a stack offset.
+                    if op.inrefs.len() < 2 {
+                        continue;
+                    }
+                    let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size());
+                    if let Some((off, _writable)) = resolve_rsp_offset(&op.inrefs[1]) {
+                        let size = out_size.unwrap_or(1);
+                        let dtype = make_int_type(size);
+                        self.add_fixed_type(off, Some(dtype), 0);
+                    }
+                }
+                OpCode::CPUI_STORE => {
+                    // STORE(space_id, addr, value). Resolve addr to a stack offset.
+                    if op.inrefs.len() < 3 {
+                        continue;
+                    }
+                    let val_size = op.inrefs[2].read().unwrap().get_size();
+                    if let Some((off, _writable)) = resolve_rsp_offset(&op.inrefs[1]) {
+                        let dtype = make_int_type(val_size);
+                        // A STORE writes the location → copy_constant if the
+                        // stored value is a constant, else a plain fixed write.
+                        let is_const = op.inrefs[2].read().unwrap().is_constant();
+                        let flags = if is_const { range_flags::COPY_CONSTANT } else { 0 };
+                        self.add_fixed_type(off, Some(dtype), flags);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Gather open (pointer-referenced) ranges. Faithful to
     /// `MapState::gatherOpen` (varmap.cc:1211): for each additive base root,
     /// if its type is a pointer, create an open RangeHint sized to the
@@ -1115,6 +1260,11 @@ impl ScopeLocal {
         ));
         let mut state = MapState::new_with_default(local_start, local_end, default_type);
         state.gather_varnodes(fd);
+
+        // Promote RSP-relative LOAD/STORE into stack offsets (faithful
+        // Stack-spacebase resolution). This is the dominant source of stack
+        // references in Rugra, whose x86 lift does not emit Stack varnodes.
+        state.gather_spacebase(fd);
 
         // Gather alias info.
         let mut checker = AliasChecker::new(self.stack_direction);
@@ -1605,5 +1755,106 @@ mod tests {
         assert_eq!(scope.symbols.len(), 1);
         assert_eq!(scope.symbols[0].start, 0);
         assert_eq!(scope.symbols[0].size, 4);
+    }
+
+    // --- resolve_rsp_offset (Stack-spacebase resolution) ---
+
+    /// Build a minimal varnode/op graph for spacebase tests. Returns the
+    /// address varnode plus the ops that must be kept alive (so the Weak def
+    /// links resolve) for the duration of the test.
+    fn build_rsp_chain() -> (
+        Arc<RwLock<Varnode>>,
+        Vec<std::sync::Arc<RwLock<PcodeOp>>>,
+    ) {
+        use crate::address::SeqNum;
+        let mkseq = || SeqNum::new(crate::address::Address::new(0x1000), 0);
+        // RSP input varnode: Register@0x20 size 8.
+        let rsp = Arc::new(RwLock::new(
+            Varnode::new_with_space(8, crate::space::AddressSpace::Register, 0x20),
+        ));
+        // frame_size const = 0x40
+        let fs = Arc::new(RwLock::new(Varnode::new_constant(0x40, 8)));
+        // INT_SUB(RSP, 0x40) → frame_base (Unique tmp)
+        let frame_base = Arc::new(RwLock::new(
+            Varnode::new_unique(0x1000, 8),
+        ));
+        let sub_op = Arc::new(RwLock::new(PcodeOp::new(mkseq(), OpCode::CPUI_INT_SUB)));
+        {
+            let mut so = sub_op.write().unwrap();
+            so.inrefs.push(rsp.clone());
+            so.inrefs.push(fs.clone());
+            so.output = Some(frame_base.clone());
+        }
+        frame_base.write().unwrap().def = Some(Arc::downgrade(&sub_op));
+
+        // INT_ADD(frame_base, 0x18) → addr
+        let disp = Arc::new(RwLock::new(Varnode::new_constant(0x18, 8)));
+        let addr = Arc::new(RwLock::new(Varnode::new_unique(0x2000, 8)));
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(mkseq(), OpCode::CPUI_INT_ADD)));
+        {
+            let mut ao = add_op.write().unwrap();
+            ao.inrefs.push(frame_base.clone());
+            ao.inrefs.push(disp.clone());
+            ao.output = Some(addr.clone());
+        }
+        addr.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        (addr, vec![sub_op, add_op])
+    }
+
+    #[test]
+    fn test_resolve_rsp_offset_frame_base_chain() {
+        // addr = INT_ADD(INT_SUB(RSP, 0x40), 0x18) → offset = 0x18 - 0x40 = -0x28
+        let (addr, _ops) = build_rsp_chain();
+        let off = resolve_rsp_offset_signed(&addr);
+        assert!(off.is_some(), "should resolve RSP-derived chain");
+        let (signed_off, _writable) = off.unwrap();
+        assert_eq!(signed_off, -0x28i64);
+    }
+
+    #[test]
+    fn test_resolve_rsp_offset_direct_add() {
+        use crate::address::SeqNum;
+        // INT_ADD(RSP, 0x10) → +0x10
+        let rsp = Arc::new(RwLock::new(
+            Varnode::new_with_space(8, crate::space::AddressSpace::Register, 0x20),
+        ));
+        let disp = Arc::new(RwLock::new(Varnode::new_constant(0x10, 8)));
+        let addr = Arc::new(RwLock::new(Varnode::new_unique(0x3000, 8)));
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut ao = add_op.write().unwrap();
+            ao.inrefs.push(rsp.clone());
+            ao.inrefs.push(disp.clone());
+            ao.output = Some(addr.clone());
+        }
+        addr.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        let (signed_off, _w) = resolve_rsp_offset_signed(&addr).unwrap();
+        assert_eq!(signed_off, 0x10);
+    }
+
+    #[test]
+    fn test_resolve_rsp_offset_non_rsp_returns_none() {
+        use crate::address::SeqNum;
+        // INT_ADD(RIP@0x200, 0x10) → NOT stack-relative → None
+        let rip = Arc::new(RwLock::new(
+            Varnode::new_with_space(8, crate::space::AddressSpace::Register, 0x200),
+        ));
+        let disp = Arc::new(RwLock::new(Varnode::new_constant(0x10, 8)));
+        let addr = Arc::new(RwLock::new(Varnode::new_unique(0x4000, 8)));
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(crate::address::Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut ao = add_op.write().unwrap();
+            ao.inrefs.push(rip.clone());
+            ao.inrefs.push(disp.clone());
+            ao.output = Some(addr.clone());
+        }
+        addr.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        assert!(resolve_rsp_offset_signed(&addr).is_none());
     }
 }

@@ -54,6 +54,7 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 - `gather_open(fd, checker)` — `MapState::gatherOpen` (varmap.cc:1211)，对每个 AddBase 根：指针→pointee，数组→base，index 在则 minItems=3
 - `is_read_active(vn)` — `MapState::isReadActive` (varmap.cc:1088)，过滤纯 same-storage INDIRECT/MULTIEQUAL
 - `initialize()` — `MapState::initialize` (varmap.cc:1063)，加端点 + 排序
+- `gather_spacebase(fd)` — **Rugra 专有**：Rugra 的 x86 lift 不产 Stack varnode，故扫描 LOAD/STORE 的地址，若为 RSP 派生（含 frame_base 链 `INT_ADD(INT_SUB(RSP,fs),off)`），则在对应栈偏移合成 fixed RangeHint。对应 Ghidra 的 Stack-spacebase 解析（`ActionSpacebase`）。
 
 ### `pub struct LocalSymbol`
 重构后的局部变量符号。
