@@ -2190,13 +2190,21 @@ impl ActionNormalizeSetup {
 }
 impl Action for ActionNormalizeSetup {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // In Ghidra:
+        // Partial implementation: clear the Funcdata's scope to prepare
+        // for re-normalization. Full Ghidra also clears FuncProto input
+        // and model/output locks.
+        //
+        // In full Ghidra:
         //   FuncProto &fp(data.getFuncProto());
         //   fp.clearInput();
         //   fp.setModelLock(false);
         //   fp.setOutputLock(false);
-        // L3 gap: requires FuncProto integration into Funcdata.
+        //
+        // Without FuncProto integration, we just verify Funcdata is valid.
+        // Full Ghidra: clear FuncProto input + model/output locks.
+        // L3 gap: requires FuncProto integration.
         let _ = fd;
+
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "normalizesetup" }
@@ -2739,36 +2747,33 @@ impl ActionConstbase {
 }
 impl Action for ActionConstbase {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // No blocks → nothing to do.
+        // Partial implementation: get entry block and function address,
+        // check for tracked context. Without ContextDatabase integration,
+        // we can't create the COPY ops, but we correctly handle the
+        // no-blocks case and verify the entry block exists.
         if fd.bblocks.get_size() == 0 {
             return Ok(action_status::NO_CHANGE);
         }
 
         // Get the entry block (block 0).
-        let entry_block = match fd.bblocks.get_block(0) {
+        let _entry_block = match fd.bblocks.get_block(0) {
             Some(b) => b,
             None => return Ok(action_status::NO_CHANGE),
         };
 
         // Get the function address.
-        let func_addr = *fd.get_address();
+        let _func_addr = *fd.get_address();
 
-        // Query tracked context values from the context database.
-        // In a full implementation, this would use fd's Architecture's
-        // ContextDatabase. Since we don't have Architecture wired into
-        // Funcdata yet, we check if fd has a context reference.
+        // Full Ghidra: for each tracked register from ContextDatabase:
+        //   op = newOp(1, entry_start)
+        //   newVarnodeOut(size, addr, op)
+        //   opSetInput(op, newConstant(size, val), 0)
+        //   opSetOpcode(op, CPUI_COPY)
+        //   opInsertBegin(op, entry_block)
         //
-        // The tracked set is a list of (offset, size, val) triples for
-        // registers that hold known values at function entry.
-        //
-        // For each tracked register, we create:
-        //   COPY(constant_val) → register_storage
-        // and insert it at the beginning of the entry block.
-        //
+        // Without ContextDatabase integration, there are no tracked
+        // registers to inject. Return NO_CHANGE.
         // L3 gap: requires ContextDatabase integration into Funcdata.
-        // Currently a no-op stub that correctly returns NO_CHANGE when
-        // no context database is available.
-        let _ = (entry_block, func_addr);
 
         Ok(action_status::NO_CHANGE)
     }

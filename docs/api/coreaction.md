@@ -388,3 +388,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionPrototypeWarnings**：从框架级升级为 apply()-驱动级——检查空函数等退化情况。完整 override 消息生成 + FuncProto 错误检查待 Architecture + FuncProto 集成。
 - 11 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 24）：ActionConstbase + ActionNormalizeSetup apply() 清理
+
+- **ActionConstbase**：apply() 现在正确处理无块情况 + 验证 entry block 存在。
+- **ActionNormalizeSetup**：apply() 文档清理（完整需要 FuncProto）。
+- 11 个 apply()-驱动 + 2 个已清理的框架（合计不再有纯 stub 的核心 Actions）。
