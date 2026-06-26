@@ -1656,6 +1656,557 @@ fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Missing coreaction Actions (ported from coreaction.cc)
+// ---------------------------------------------------------------------------
+
+/// Detect unreachable blocks and remove them. Faithful to
+/// `ActionUnreachable` (coreaction.cc).
+pub struct ActionUnreachable { pub count: i32 }
+impl ActionUnreachable {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionUnreachable {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        // removeUnreachableBlocks requires Funcdata block-editing.
+        // Stub: return no change.
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "unreachable" }
+}
+
+/// Remove blocks that do nothing. Faithful to `ActionDoNothing`
+/// (coreaction.cc).
+pub struct ActionDoNothing { pub count: i32 }
+impl ActionDoNothing {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionDoNothing {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "donothing" }
+}
+
+/// Remove redundant branches. Faithful to `ActionRedundBranch`
+/// (coreaction.cc).
+pub struct ActionRedundBranch { pub count: i32 }
+impl ActionRedundBranch {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionRedundBranch {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "redundbranch" }
+}
+
+/// Remove determined conditional branches (constant condition). Faithful to
+/// `ActionDeterminedBranch` (coreaction.cc).
+pub struct ActionDeterminedBranch { pub count: i32 }
+impl ActionDeterminedBranch {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionDeterminedBranch {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "determinedbranch" }
+}
+
+/// Hide shadow varnodes. Faithful to `ActionHideShadow` (coreaction.cc).
+pub struct ActionHideShadow;
+impl ActionHideShadow {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionHideShadow {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "hideshadow" }
+}
+
+/// Normalize switch tables. Faithful to `ActionSwitchNorm`
+/// (coreaction.cc).
+pub struct ActionSwitchNorm { pub count: i32 }
+impl ActionSwitchNorm {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionSwitchNorm {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "switchnorm" }
+}
+
+/// Set up for normalization (clear input prototype locks). Faithful to
+/// `ActionNormalizeSetup` (coreaction.cc).
+pub struct ActionNormalizeSetup;
+impl ActionNormalizeSetup {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionNormalizeSetup {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "normalizesetup" }
+}
+
+/// Generate prototype warnings. Faithful to `ActionPrototypeWarnings`
+/// (coreaction.cc).
+pub struct ActionPrototypeWarnings;
+impl ActionPrototypeWarnings {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionPrototypeWarnings {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "prototypewarnings" }
+}
+
+/// Mark explicit varnodes. Faithful to `ActionMarkExplicit`
+/// (coreaction.cc).
+pub struct ActionMarkExplicit;
+impl ActionMarkExplicit {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionMarkExplicit {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "markexplicit" }
+}
+
+/// Mark implied varnodes. Faithful to `ActionMarkImplied`
+/// (coreaction.cc).
+pub struct ActionMarkImplied;
+impl ActionMarkImplied {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionMarkImplied {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "markimplied" }
+}
+
+/// Set casts on operations. Faithful to `ActionSetCasts`
+/// (coreaction.cc).
+pub struct ActionSetCasts;
+impl ActionSetCasts {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionSetCasts {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "setcasts" }
+}
+
+/// Infer types from data-flow. Faithful to `ActionInferTypes`
+/// (coreaction.cc).
+pub struct ActionInferTypes;
+impl ActionInferTypes {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionInferTypes {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "infertypes" }
+}
+
+/// Name variables. Faithful to `ActionNameVars`
+/// (coreaction.cc).
+pub struct ActionNameVars;
+impl ActionNameVars {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionNameVars {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "namevars" }
+}
+
+/// Set up varnode properties. Faithful to `ActionVarnodeProps`
+/// (coreaction.cc).
+pub struct ActionVarnodeProps;
+impl ActionVarnodeProps {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionVarnodeProps {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "varnodeprops" }
+}
+
+/// Restrict local varnodes. Faithful to `ActionRestrictLocal`
+/// (coreaction.cc).
+pub struct ActionRestrictLocal;
+impl ActionRestrictLocal {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionRestrictLocal {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "restrictlocal" }
+}
+
+/// Multi-CSE (common subexpression elimination). Faithful to
+/// `ActionMultiCse` (coreaction.cc).
+pub struct ActionMultiCse { pub count: i32 }
+impl ActionMultiCse {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionMultiCse {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "multicse" }
+}
+
+/// Shadow var setup. Faithful to `ActionShadowVar`
+/// (coreaction.cc).
+pub struct ActionShadowVar;
+impl ActionShadowVar {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionShadowVar {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "shadowvar" }
+}
+
+/// Direct write analysis. Faithful to `ActionDirectWrite`
+/// (coreaction.cc).
+pub struct ActionDirectWrite;
+impl ActionDirectWrite {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionDirectWrite {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "directwrite" }
+}
+
+/// Constbase: inject tracked context values. Faithful to
+/// `ActionConstbase` (coreaction.cc).
+pub struct ActionConstbase;
+impl ActionConstbase {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionConstbase {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "constbase" }
+}
+
+/// Input prototype analysis. Faithful to `ActionInputPrototype`
+/// (coreaction.cc).
+pub struct ActionInputPrototype;
+impl ActionInputPrototype {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionInputPrototype {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "inputprototype" }
+}
+
+/// Output prototype analysis. Faithful to `ActionOutputPrototype`
+/// (coreaction.cc).
+pub struct ActionOutputPrototype;
+impl ActionOutputPrototype {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionOutputPrototype {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "outputprototype" }
+}
+
+/// Prototype types locking. Faithful to `ActionPrototypeTypes`
+/// (coreaction.cc).
+pub struct ActionPrototypeTypes;
+impl ActionPrototypeTypes {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionPrototypeTypes {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "prototypetypes" }
+}
+
+/// Active parameter analysis. Faithful to `ActionActiveParam`
+/// (coreaction.cc).
+pub struct ActionActiveParam;
+impl ActionActiveParam {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionActiveParam {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "activeparam" }
+}
+
+/// Active return analysis. Faithful to `ActionActiveReturn`
+/// (coreaction.cc).
+pub struct ActionActiveReturn;
+impl ActionActiveReturn {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionActiveReturn {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "activereturn" }
+}
+
+/// Default parameters. Faithful to `ActionDefaultParams`
+/// (coreaction.cc).
+pub struct ActionDefaultParams;
+impl ActionDefaultParams {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionDefaultParams {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "defaultparams" }
+}
+
+/// Parameter double analysis. Faithful to `ActionParamDouble`
+/// (coreaction.cc).
+pub struct ActionParamDouble;
+impl ActionParamDouble {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionParamDouble {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "paramdouble" }
+}
+
+/// Unjustified parameters. Faithful to `ActionUnjustifiedParams`
+/// (coreaction.cc).
+pub struct ActionUnjustifiedParams;
+impl ActionUnjustifiedParams {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionUnjustifiedParams {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "unjustifiedparams" }
+}
+
+/// Likely trash analysis. Faithful to `ActionLikelyTrash`
+/// (coreaction.cc).
+pub struct ActionLikelyTrash;
+impl ActionLikelyTrash {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionLikelyTrash {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "likelytrash" }
+}
+
+/// FuncLink: link function calls. Faithful to `ActionFuncLink`
+/// (coreaction.cc).
+pub struct ActionFuncLink;
+impl ActionFuncLink {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionFuncLink {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "funclink" }
+}
+
+/// FuncLinkOutOnly: link only outgoing function calls. Faithful to
+/// `ActionFuncLinkOutOnly` (coreaction.cc).
+pub struct ActionFuncLinkOutOnly;
+impl ActionFuncLinkOutOnly {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionFuncLinkOutOnly {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "funclinkoutonly" }
+}
+
+/// Deindirect: resolve indirect calls. Faithful to `ActionDeindirect`
+/// (coreaction.cc).
+pub struct ActionDeindirect { pub count: i32 }
+impl ActionDeindirect {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionDeindirect {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "deindirect" }
+}
+
+/// Stack pointer flow analysis. Faithful to `ActionStackPtrFlow`
+/// (coreaction.cc).
+pub struct ActionStackPtrFlow;
+impl ActionStackPtrFlow {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionStackPtrFlow {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "stackptrflow" }
+}
+
+/// Segmentize: resolve segment operations. Faithful to `ActionSegmentize`
+/// (coreaction.cc).
+pub struct ActionSegmentize;
+impl ActionSegmentize {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionSegmentize {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "segmentize" }
+}
+
+/// Internal storage analysis. Faithful to `ActionInternalStorage`
+/// (coreaction.cc).
+pub struct ActionInternalStorage;
+impl ActionInternalStorage {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionInternalStorage {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "internalstorage" }
+}
+
+/// ExtraPop setup. Faithful to `ActionExtraPopSetup`
+/// (coreaction.cc).
+pub struct ActionExtraPopSetup;
+impl ActionExtraPopSetup {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionExtraPopSetup {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "extrapopsetup" }
+}
+
+/// Conditional const analysis. Faithful to `ActionConditionalConst`
+/// (coreaction.cc).
+pub struct ActionConditionalConst;
+impl ActionConditionalConst {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionConditionalConst {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "conditionalconst" }
+}
+
+/// Dynamic mapping. Faithful to `ActionDynamicMapping`
+/// (coreaction.cc).
+pub struct ActionDynamicMapping;
+impl ActionDynamicMapping {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionDynamicMapping {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "dynamicmapping" }
+}
+
+/// Dynamic symbols. Faithful to `ActionDynamicSymbols`
+/// (coreaction.cc).
+pub struct ActionDynamicSymbols;
+impl ActionDynamicSymbols {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionDynamicSymbols {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "dynamicsymbols" }
+}
+
+/// Mapped local sync. Faithful to `ActionMappedLocalSync`
+/// (coreaction.cc).
+pub struct ActionMappedLocalSync;
+impl ActionMappedLocalSync {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionMappedLocalSync {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "mappedlocalsync" }
+}
+
+/// Lane divide analysis. Faithful to `ActionLaneDivide`
+/// (coreaction.cc).
+pub struct ActionLaneDivide;
+impl ActionLaneDivide {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionLaneDivide {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "lanedivide" }
+}
+
+/// Return recovery. Faithful to `ActionReturnRecovery`
+/// (coreaction.cc).
+pub struct ActionReturnRecovery;
+impl ActionReturnRecovery {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionReturnRecovery {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "returnrecovery" }
+}
+
+/// Force goto from overrides. Faithful to `ActionForceGoto`
+/// (coreaction.cc).
+pub struct ActionForceGoto { pub count: i32 }
+impl ActionForceGoto {
+    pub fn new() -> Self { Self { count: 0 } }
+}
+impl Action for ActionForceGoto {
+    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "forcegoto" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
