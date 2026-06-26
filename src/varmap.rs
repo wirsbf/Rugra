@@ -1159,19 +1159,50 @@ impl ScopeLocal {
                     overlap_problems = true;
                 }
             } else {
-                // No intersection — finalize current range
+                // No intersection — finalize current range.
                 if !current.attempt_join(&next) {
-                    // Adjust and create entry
+                    // Adjust open ranges to span up to the next hint.
                     if current.range_type == RangeType::Open {
                         current.size = (next.start.wrapping_sub(current.start)) as i32;
                     }
-                    self.create_entry(&current);
+                    // Faithful to ScopeLocal::restructure (varmap.cc:1316):
+                    // only create an entry if the range fits.
+                    if self.adjust_fit(&mut current) {
+                        self.create_entry(&current);
+                    }
                     current = next;
                 }
             }
         }
 
         overlap_problems
+    }
+
+    /// Shrink the RangeHint as necessary so it fits in the mapped region and
+    /// does not overlap an existing Symbol. Faithful to
+    /// `ScopeLocal::adjustFit` (varmap.cc:587). Returns true if a valid
+    /// adjustment was made.
+    fn adjust_fit(&self, a: &mut RangeHint) -> bool {
+        if a.size == 0 {
+            return false;
+        }
+        if a.is_type_lock() {
+            return false; // Already entered.
+        }
+        // Check for overlap with an existing symbol. Rugra does not model
+        // getRangeTree/longestFit, so we only guard against symbol overlaps.
+        if let Some(existing) = self.find_symbol(a.start) {
+            if existing.start <= a.start {
+                return false;
+            }
+            let maxsize = existing.start - a.start;
+            let type_size = a.dtype.as_ref().map(|d| d.get_size()).unwrap_or(1) as i64;
+            if (maxsize as i64) < type_size {
+                return false; // Can't shrink for this type.
+            }
+            a.size = maxsize as i32;
+        }
+        true
     }
 
     /// Create a symbol entry from a RangeHint.
@@ -1192,54 +1223,128 @@ impl ScopeLocal {
         });
     }
 
-    /// Build a variable name from stack offset.
-    /// Corresponds to ScopeLocal::buildVariableName (varmap.cc:548).
+    /// Build a variable name from stack offset. Faithful to
+    /// `ScopeLocal::buildVariableName` (varmap.cc:548).
+    ///
+    /// Ghidra produces names of the form `<SpaceName>[X|Y]_<hex>` where:
+    ///   - the space name is capitalised ("Stack")
+    ///   - 'X' marks local stack space allocated by the caller (start <= 0
+    ///     after sign-extension and negation for negative-growing stacks)
+    ///   - otherwise a plain hex offset follows '_'
     fn build_variable_name(&self, offset: u64) -> String {
-        // Ghidra convention: Stack_offset (signed hex)
-        let signed = offset as i64;
+        // Sign-extend the offset to the address size, then for a negative-growing
+        // stack negate it (varmap.cc:558).
+        let mut start = offset as i64;
+        // Treat as signed within 64 bits; for negative growth, locals live at
+        // high (unsigned) offsets which become small negatives.
         if self.stack_direction == -1 {
-            // Stack grows down: negative offsets are locals
-            let neg = -signed;
-            format!("Stack_{:x}", neg)
-        } else {
-            format!("Stack_{:x}", signed)
+            // stackGrowsNegative → start = -start
+            start = -start;
         }
+        let mut name = String::from("Stack");
+        if start <= 0 {
+            name.push('X'); // Local stack space allocated by caller.
+            start = -start;
+        }
+        name.push('_');
+        name.push_str(&format!("{:x}", start as u64));
+        name
     }
 
-    /// Mark symbols as unaliased based on alias boundaries.
-    /// Corresponds to ScopeLocal::markUnaliased (varmap.cc:1332).
+    /// Mark symbols as unaliased based on alias starting offsets.
+    /// Faithful to `ScopeLocal::markUnaliased` (varmap.cc:1332).
+    ///
+    /// For each symbol, walk the sorted alias offsets: once an alias offset
+    /// reaches or passes the symbol's end, aliasing is "on" for that symbol.
+    /// A symbol far enough (0xffff bytes) past the last alias boundary is
+    /// considered unaliased (varmap.cc:1374). Locked struct/array types can
+    /// block aliasing, but Rugra does not yet model `alias_block_level`, so
+    /// only the distance heuristic is applied here.
     fn mark_unaliased(&mut self, aliases: &[u64]) {
         if aliases.is_empty() {
-            // No aliases → all unaliased
+            // No aliases → all unaliased.
             for sym in &mut self.symbols {
                 sym.unaliased = true;
             }
             return;
         }
 
-        // Symbols before the first alias boundary are unaliased
-        let first_alias = aliases[0];
         for sym in &mut self.symbols {
-            let sym_end = sym.start.wrapping_add(sym.size as u64);
-            if sym_end <= first_alias {
-                sym.unaliased = true;
+            let curoff = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+            // Find the largest alias offset <= curoff.
+            let mut aliason = false;
+            let mut curalias = 0u64;
+            for &a in aliases {
+                if a <= curoff {
+                    aliason = true;
+                    curalias = a;
+                }
             }
+            // Distance heuristic: far enough past the last alias → unaliased.
+            if aliason && curoff.saturating_sub(curalias) > 0xffff {
+                aliason = false;
+            }
+            sym.unaliased = !aliason;
         }
     }
 
-    /// Create fake input symbols for function parameters.
-    /// Corresponds to ScopeLocal::fakeInputSymbols (varmap.cc:1392).
+    /// Create fake input symbols for stack-space input Varnodes that are not
+    /// part of the formal prototype. Faithful to
+    /// `ScopeLocal::fakeInputSymbols` (varmap.cc:1392).
+    ///
+    /// Ghidra scans `fd->beginDef(input)` for stack-space inputs, coalesces
+    /// adjacent ones, and creates a fake-input symbol of unknown type. Rugra
+    /// approximates this by scanning stack-space input varnodes (no defining
+    /// op) in the vbank.
     fn fake_input_symbols(&mut self, fd: &crate::funcdata::Funcdata) {
-        // Add parameter symbols from function prototype
-        for (i, param) in fd.funcp.parameters.iter().enumerate() {
+        // Collect (offset, size) of stack-space input varnodes, sorted by offset.
+        let mut inputs: Vec<(u64, i32)> = Vec::new();
+        for vn_arc in &fd.vbank.loc_tree {
+            let vn = vn_arc.0.read().unwrap();
+            if vn.is_free() {
+                continue;
+            }
+            if vn.get_space() != crate::space::AddressSpace::Stack {
+                continue;
+            }
+            if vn.def.is_some() {
+                continue; // Only inputs (no defining op).
+            }
+            inputs.push((vn.get_offset(), vn.get_size() as i32));
+        }
+        inputs.sort();
+
+        // Coalesce adjacent/overlapping inputs (varmap.cc:1408-1419).
+        let mut i = 0;
+        while i < inputs.len() {
+            let (addr, sz) = inputs[i];
+            let mut endpoint = addr + sz as u64 - 1;
+            let mut j = i + 1;
+            while j < inputs.len() {
+                let (off2, sz2) = inputs[j];
+                if endpoint < off2 {
+                    break;
+                }
+                let new_endpoint = off2 + sz2 as u64 - 1;
+                if endpoint < new_endpoint {
+                    endpoint = new_endpoint;
+                }
+                j += 1;
+            }
+            let size = (endpoint - addr + 1) as i32;
             self.symbols.push(LocalSymbol {
-                name: format!("param_{}", i),
-                start: param.address.as_u64(),
-                size: 8, // Default size for register-stored params
-                dtype: None,
+                name: format!("param_{:x}", addr),
+                start: addr,
+                size,
+                dtype: Some(Arc::new(Datatype::Base(
+                    crate::type_system::datatype::TypeBase::new(
+                        "unknown".into(), size as usize, TypeMetatype::Unknown,
+                    ),
+                ))),
                 unaliased: true,
                 is_param: true,
             });
+            i = j;
         }
     }
 
@@ -1398,5 +1503,107 @@ mod tests {
         // b smaller than self.size → not absorbable
         let b_small = RangeHint::new(0, 2, 0, Some(int_dt(2, TypeMetatype::Int)), range_flags::COPY_CONSTANT, RangeType::Open, -1);
         assert!(!a.is_const_absorbable(&b_small));
+    }
+
+    // --- ScopeLocal.build_variable_name (varmap.cc:548) ---
+
+    #[test]
+    fn test_build_variable_name_negative_stack() {
+        let scope = ScopeLocal::new(); // stack_direction == -1
+        // For a negative-growing stack, a high unsigned offset (a local) maps
+        // to a negative signed value, which is negated to positive magnitude.
+        // offset = 0xfffffffffffffff0 → sign-extended -16 → negated +16 → "Stack_10".
+        let name = scope.build_variable_name(0xfffffffffffffff0);
+        assert_eq!(name, "Stack_10");
+        // A small positive offset (parameter region) → negated to negative → 'X'.
+        let name2 = scope.build_variable_name(0x10);
+        assert!(name2.starts_with("StackX_"), "got {}", name2);
+    }
+
+    #[test]
+    fn test_build_variable_name_positive() {
+        let mut scope = ScopeLocal::new();
+        scope.stack_direction = 1; // positive growth → no negation
+        // offset 0x10 → start = 0x10 > 0 → plain "Stack_10".
+        let name = scope.build_variable_name(0x10);
+        assert_eq!(name, "Stack_10");
+    }
+
+    // --- ScopeLocal.mark_unaliased (varmap.cc:1332) distance heuristic ---
+
+    #[test]
+    fn test_mark_unaliased_no_aliases() {
+        let mut scope = ScopeLocal::new();
+        scope.symbols.push(LocalSymbol {
+            name: "a".into(), start: 0, size: 4,
+            dtype: None, unaliased: false, is_param: false,
+        });
+        scope.mark_unaliased(&[]);
+        assert!(scope.symbols[0].unaliased);
+    }
+
+    #[test]
+    fn test_mark_unaliased_near_boundary_aliased() {
+        let mut scope = ScopeLocal::new();
+        // Symbol [0,8), alias at offset 4 → curoff=7, alias<=7 → aliased,
+        // and distance (7-4)=3 <= 0xffff → stays aliased.
+        scope.symbols.push(LocalSymbol {
+            name: "a".into(), start: 0, size: 8,
+            dtype: None, unaliased: false, is_param: false,
+        });
+        scope.mark_unaliased(&[4]);
+        assert!(!scope.symbols[0].unaliased);
+    }
+
+    #[test]
+    fn test_mark_unaliased_far_past_boundary_unaliased() {
+        let mut scope = ScopeLocal::new();
+        // Symbol [0x20000, 4), alias at offset 4 → curoff=0x20003,
+        // distance = 0x20003-4 > 0xffff → unaliased (distance heuristic).
+        scope.symbols.push(LocalSymbol {
+            name: "a".into(), start: 0x20000, size: 4,
+            dtype: None, unaliased: false, is_param: false,
+        });
+        scope.mark_unaliased(&[4]);
+        assert!(scope.symbols[0].unaliased);
+    }
+
+    // --- ScopeLocal.restructure via adjust_fit (varmap.cc:1294, 587) ---
+
+    #[test]
+    fn test_restructure_two_disjoint_ranges() {
+        // Build a MapState manually with two non-overlapping fixed int4 ranges.
+        let mut state = MapState::new(0, 0x100000);
+        let int_t = int_dt(4, TypeMetatype::Int);
+        state.add_range(0, Some(int_t.clone()), 0, RangeType::Fixed, -1);
+        state.add_range(16, Some(int_t), 0, RangeType::Fixed, -1);
+
+        let mut scope = ScopeLocal::new();
+        let overlap = scope.restructure(&mut state);
+        assert!(!overlap);
+        // Two disjoint symbols created.
+        assert_eq!(scope.symbols.len(), 2);
+        assert_eq!(scope.symbols[0].start, 0);
+        assert_eq!(scope.symbols[0].size, 4);
+        assert_eq!(scope.symbols[1].start, 16);
+        assert_eq!(scope.symbols[1].size, 4);
+    }
+
+    #[test]
+    fn test_restructure_overlapping_same_type_merges() {
+        // Two int4 ranges at the same offset → contained, reconcile true,
+        // preferred → absorb (no new symbol, size stays 4).
+        let mut state = MapState::new(0, 0x100000);
+        let int_t = int_dt(4, TypeMetatype::Int);
+        state.add_range(0, Some(int_t.clone()), 0, RangeType::Fixed, -1);
+        state.add_range(0, Some(int_t), 0, RangeType::Fixed, -1);
+
+        let mut scope = ScopeLocal::new();
+        let _overlap = scope.restructure(&mut state);
+        // The merged range is emitted once at the finalization step; with the
+        // endpoint added by initialize(), the single merged int4 is emitted.
+        assert_eq!(scope.symbols.len(), 1);
+        assert_eq!(scope.symbols[0].start, 0);
+        assert_eq!(scope.symbols[0].size, 4);
     }
 }

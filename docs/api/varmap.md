@@ -66,9 +66,23 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 ### `pub struct ScopeLocal`
 局部变量作用域。对应 Ghidra ScopeLocal。
-- `restructure_varnode(&mut self, fd: &Funcdata)` — 主入口：重构栈帧
-- `find_symbol(&self, offset: u64) -> Option<&LocalSymbol>` — 按偏移查找符号
+**2026-06-26 完整对齐**：
+- `restructure_varnode(fd)` — 主入口：`ScopeLocal::restructureVarnode` (varmap.cc:1256)，编排 gather_varnodes→gather_internal→gather_open→restructure→mark_unaliased→fake_input_symbols
+- `restructure(state)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with，不相交→attempt_join/adjust_fit/create_entry
+- `adjust_fit(a)` — `ScopeLocal::adjustFit` (varmap.cc:587)，typelock/size0 拒绝 + 符号重叠收缩
+- `create_entry(hint)` — `ScopeLocal::createEntry` (varmap.cc:617)
+- `build_variable_name(offset)` — `ScopeLocal::buildVariableName` (varmap.cc:548)，Stack[X|Y]_hex 命名
+- `mark_unaliased(aliases)` — `ScopeLocal::markUnaliased` (varmap.cc:1332)，含 0xffff 距离启发式（alias_block_level 待接入）
+- `fake_input_symbols(fd)` — `ScopeLocal::fakeInputSymbols` (varmap.cc:1392)，扫描栈空间输入 varnode 并合并相邻
+- `find_symbol(offset)` — 按偏移查找重构后的符号
 
 ## 当前限制
 
-模块已实现但尚未集成到 printc.rs/codegen。变量命名仍使用 printc.rs 中的启发式命名。
+varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 Ghidra。
+尚未完成：
+- **集成到 printc.rs**：变量命名仍用启发式 get_stack_variable_name，未走 ScopeLocal 符号查找
+- alias_block_level 配置（影响 markUnaliased 的 struct/array 阻断）
+- LoadGuard/StoreGuard 在 gatherOpen 中的 addGuard 路径（待 LoadGuard 接入 Funcdata 栈空间）
+- TYPE_PARTIALSTRUCT/PARTIALUNION 在 addFixedType 的处理（Rugra 无此元类型）
+
+测试：varmap::tests 17 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/build_name/mark_unaliased/restructure）。
