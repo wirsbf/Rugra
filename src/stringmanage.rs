@@ -313,6 +313,97 @@ impl StringManager {
     pub fn num_strings(&self) -> usize {
         self.string_map.len()
     }
+
+    /// Encode cached strings to a stream. Faithful to `StringManager::encode`
+    /// (stringmanage.cc:203). Emits `<stringmanage>` with `<string>` children.
+    pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
+        use crate::marshal::{AttributeId, ElementId};
+        let sm_elem = ElementId::new("stringmanage", 0);
+        let str_elem = ElementId::new("string", 0);
+        let bytes_elem = ElementId::new("bytes", 0);
+        let addr_elem = ElementId::new("addr", 0);
+        encoder.open_element(&sm_elem);
+        for (&addr_u64, data) in &self.string_map {
+            encoder.open_element(&str_elem);
+            // Address.
+            encoder.open_element(&addr_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), addr_u64);
+            encoder.close_element(&addr_elem);
+            // Bytes with truncation flag.
+            encoder.open_element(&bytes_elem);
+            encoder.write_bool(&AttributeId::new("trunc", 0), data.is_truncated);
+            // Hex-encode the byte data.
+            let hex: String = data.byte_data.iter().map(|b| format!("{b:02x} ")).collect();
+            encoder.write_string(&AttributeId::new("content", 1), hex.trim());
+            encoder.close_element(&bytes_elem);
+            encoder.close_element(&str_elem);
+        }
+        encoder.close_element(&sm_elem);
+    }
+
+    /// Restore string cache from a stream. Faithful to `StringManager::decode`
+    /// (stringmanage.cc:230).
+    pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
+        use crate::marshal::{AttributeId, ElementId};
+        let sm_id = decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            if elem_name != "string" {
+                decoder.open_element();
+                decoder.close_element_skipping(sub_id);
+                continue;
+            }
+            decoder.open_element();
+            // Read addr child.
+            let addr_id = decoder.peek_element();
+            let mut addr_u64 = 0u64;
+            if addr_id != 0 {
+                decoder.open_element();
+                loop {
+                    let aid = decoder.next_attribute_id();
+                    if aid == 0 { break; }
+                    if decoder.attribute_name(aid).as_deref() == Some("space") {
+                        addr_u64 = decoder.read_unsigned_integer();
+                    } else { let _ = decoder.read_string(); }
+                }
+                decoder.close_element(addr_id);
+            }
+            // Read bytes child.
+            let bytes_id = decoder.peek_element();
+            let mut is_truncated = false;
+            let mut byte_data = Vec::new();
+            if bytes_id != 0 {
+                decoder.open_element();
+                loop {
+                    let aid = decoder.next_attribute_id();
+                    if aid == 0 { break; }
+                    match decoder.attribute_name(aid).as_deref() {
+                        Some("trunc") => is_truncated = decoder.read_bool(),
+                        Some("content") => {
+                            let hex_str = decoder.read_string();
+                            for chunk in hex_str.split_whitespace() {
+                                if let Ok(b) = u8::from_str_radix(chunk, 16) {
+                                    byte_data.push(b);
+                                }
+                            }
+                        }
+                        _ => { let _ = decoder.read_string(); }
+                    }
+                }
+                decoder.close_element(bytes_id);
+            }
+            decoder.close_element(sub_id);
+            self.string_map.insert(addr_u64, StringData {
+                is_truncated,
+                byte_data,
+            });
+        }
+        decoder.close_element(sm_id);
+    }
 }
 
 /// An implementation of StringManager that understands terminated unicode

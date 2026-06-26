@@ -241,6 +241,98 @@ impl ConstantPoolInternal {
     pub fn records(&self) -> impl Iterator<Item = (&CheapSorter, &CPoolRecord)> {
         self.cpool_map.iter()
     }
+
+    /// Encode all records to a stream. Faithful to `ConstantPoolInternal::encode`
+    /// (cpool.cc:218). Emits `<constantpool>` with `<ref>` + `<cpoolrec>` children.
+    pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
+        use crate::marshal::{AttributeId, ElementId};
+        let cp_elem = ElementId::new("constantpool", 0);
+        let ref_elem = ElementId::new("ref", 0);
+        let rec_elem = ElementId::new("cpoolrec", 0);
+        let token_elem = ElementId::new("token", 0);
+        encoder.open_element(&cp_elem);
+        for (sorter, rec) in &self.cpool_map {
+            // <ref a=".." b=".."/>
+            encoder.open_element(&ref_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("a", 0), sorter.a);
+            encoder.write_unsigned_integer(&AttributeId::new("b", 0), sorter.b);
+            encoder.close_element(&ref_elem);
+            // <cpoolrec tag=".." [constructor] [destructor]> <token>..</token> </cpoolrec>
+            encoder.open_element(&rec_elem);
+            encoder.write_string(&AttributeId::new("tag", 0), CPoolRecord::tag_to_string(rec.tag));
+            encoder.open_element(&token_elem);
+            encoder.write_string(&AttributeId::new("content", 1), &rec.token);
+            encoder.close_element(&token_elem);
+            encoder.close_element(&rec_elem);
+        }
+        encoder.close_element(&cp_elem);
+    }
+
+    /// Restore records from a stream. Faithful to `ConstantPoolInternal::decode`
+    /// (cpool.cc:230).
+    pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
+        use crate::marshal::{AttributeId, ElementId};
+        let cp_id = decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 { break; }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            if elem_name != "ref" {
+                decoder.open_element();
+                decoder.close_element_skipping(sub_id);
+                continue;
+            }
+            // Read <ref>.
+            decoder.open_element();
+            let mut a = 0u64;
+            let mut b = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 { break; }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("a") => a = decoder.read_unsigned_integer(),
+                    Some("b") => b = decoder.read_unsigned_integer(),
+                    _ => { let _ = decoder.read_string(); }
+                }
+            }
+            decoder.close_element(sub_id);
+            // Read <cpoolrec>.
+            let rec_id = decoder.peek_element();
+            if rec_id != 0 {
+                decoder.open_element();
+                let mut tag = 0u32;
+                let mut token = String::new();
+                loop {
+                    let aid = decoder.next_attribute_id();
+                    if aid == 0 { break; }
+                    if decoder.attribute_name(aid).as_deref() == Some("tag") {
+                        tag = CPoolRecord::string_to_tag(&decoder.read_string());
+                    } else { let _ = decoder.read_string(); }
+                }
+                // Read <token> child.
+                let tok_id = decoder.peek_element();
+                if tok_id != 0 {
+                    decoder.open_element();
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 { break; }
+                        if decoder.attribute_name(aid).as_deref() == Some("content") {
+                            token = decoder.read_string();
+                        } else { let _ = decoder.read_string(); }
+                    }
+                    decoder.close_element(tok_id);
+                }
+                decoder.close_element(rec_id);
+                // Store the record.
+                let sorter = CheapSorter { a, b };
+                let mut rec = CPoolRecord::new();
+                rec.tag = tag;
+                rec.token = token;
+                self.cpool_map.insert(sorter, rec);
+            }
+        }
+        decoder.close_element(cp_id);
+    }
 }
 
 impl ConstantPool for ConstantPoolInternal {

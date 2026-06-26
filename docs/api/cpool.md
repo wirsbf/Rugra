@@ -44,3 +44,9 @@ Interface to the constant pool (cpool.hh:104).
 In-memory implementation (cpool.hh:165).
 - `new()`, `num_records()`, `records()`.
 - Implements `ConstantPool`.
+
+## 2026-06-27（续）：XML encode/decode
+
+**ConstantPoolInternal 新增方法**：
+- `encode(encoder)`（cpool.cc:218）：编码 `<constantpool>` + `<ref>` + `<cpoolrec>` 子元素。
+- `decode(decoder)`（cpool.cc:230）：解码恢复常量池记录。

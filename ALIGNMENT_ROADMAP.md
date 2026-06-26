@@ -240,7 +240,7 @@
 | 51 | `callgraph.cc` | — | 📋 L1 | **完全缺失**：调用图构建 | `callgraph.cc` |
 | 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | ✅ L3 | **完整实现**：SymbolEntry/Symbol（encode_header/decode_header/encode_body/decode_body/encode/decode）/Scope（encode_recursive/decode）/Database（encode/decode）全部使用 marshal.rs 的 Encoder/Decoder trait。ID_BASE 修正为 0x4000...。rangemap.rs 提供 RangeMap + PartMap。所有 L3 缺口已关闭 | `database.cc`, `database_ghidra.cc` |
 | 53 | `xml.cc` + `marshal.cc` | `marshal.rs` | 🔧 L2 | **骨架已移植**：AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database/override/arch 的 XML encode/decode。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析 | `xml.cc`, `marshal.cc` |
-| 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | 🔧 L2 | **完整 UTF 解码已移植**：StringManager + StringManagerUnicode（LoadImage 集成）+ write_utf8/read_utf16/get_codepoint（UTF8/UTF16/UTF32 + 代理对）/check_characters/has_char_terminator/write_unicode/assign_string_data。L3 缺 XML encode/decode | `stringmanage.cc` |
+| 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | ✅ L3 | **完整实现**：StringManager + StringManagerUnicode + 完整 UTF8/UTF16/UTF32 解码 + XML encode/decode。所有 L3 缺口已关闭 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | `crc32.rs` + `compression.rs` | 🔧 L2 | **crc32 完整（L3）**：CRC32 表 + crc_update + crc32/crc32_with_init。**compression 骨架**：Compress + Decompress 结构完整，L3 缺 flate2 实际 deflate/inflate | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
 | 57 | `prefersplit.cc` | `prefersplit.rs` | 🔧 L2 | **骨架已移植**：PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序。L3 缺完整分裂算法（testX/splitX 需 Funcdata op 编辑） | `prefersplit.cc` |
@@ -251,7 +251,7 @@
 | 62 | `capability.cc` | `capability.rs` | ✅ L3 | **完整实现**：CapabilityPoint trait（initialize）+ CapabilityRegistry（register/initialize_all/num_points）+ global_registry 全局单例。是 ArchitectureCapability/PrintLanguageCapability 等扩展点的基础 | `capability.cc` |
 | 63 | `dynamic.cc` | — | 📋 L1 | **完全缺失**：动态分析 | `dynamic.cc` |
 | 64 | `loadimage*.cc` (4文件) | `loadimage.rs` | 🔧 L2 | **骨架已移植**：LoadImage trait（load_fill/load/load_value/get_arch_type/adjust_vma + symbols/sections/readonly）+ RawLoadImage（从文件读取，vma 偏移）+ MemoryLoadImage（内存缓冲）。解锁 EmulateFunction/JumpBasic/Architecture 的 LoadImage 依赖 | `loadimage.cc` 等 |
-| 65 | `cpool.cc` + `cpool_ghidra.cc` | `cpool.rs` | 🔧 L2 | **骨架已移植**：CPoolRecord（tag/token/value/type/byte_data + 标志）+ ConstantPool trait（get/create/put_record）+ ConstantPoolInternal（BTreeMap）+ CheapSorter（2整数引用键）。L3 缺 XML encode/decode（需 TypeFactory） | `cpool.cc` |
+| 65 | `cpool.cc` + `cpool_ghidra.cc` | `cpool.rs` | ✅ L3 | **完整实现**：CPoolRecord + ConstantPool trait + ConstantPoolInternal + CheapSorter + XML encode/decode。所有 L3 缺口已关闭 | `cpool.cc` |
 
 ---
 

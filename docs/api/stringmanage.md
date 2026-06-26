@@ -44,3 +44,9 @@ Implementation understanding terminated unicode strings (stringmanage.hh:86).
 - XML encode/decode (`<stringmanage>`/`<string>`/`<bytes>` elements).
 - Datatype-based charsize inference (currently passed explicitly).
 - `registerInternalStringData` with hash-based constant address.
+
+## 2026-06-27（续）：XML encode/decode
+
+**StringManager 新增方法**：
+- `encode(encoder)`（stringmanage.cc:203）：编码 `<stringmanage>` + `<string>` 子元素（addr + bytes + trunc + hex 内容）。
+- `decode(decoder)`（stringmanage.cc:230）：解码恢复字符串缓存。
