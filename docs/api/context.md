@@ -58,3 +58,10 @@ Helper caching the active blob (globalcontext.hh:317).
 - `getRegionForSet`/`getRegionToChangePoint` for multi-region context setting.
 - `ParserContext`/`ParserWalker` (context.hh — SLEIGH-specific, needs
   Constructor/TripleSymbol).
+
+## 2026-06-27（续）：XML encode/decode — context.rs 达到 L3
+
+- **ContextInternal::encode**：编码 `<context_points>` + `<context_pointset>`（每个 changepoint 的变量值）+ `<tracked_pointset>`（tracked 寄存器）。
+- **ContextInternal::decode**：解码 `<context_points>` 恢复 context blob + tracked set。
+- **get_or_create_blob_at_mut**：辅助方法用于 decode 时获取或创建 mutable blob。
+- context.rs XML encode/decode L3 缺口已关闭。

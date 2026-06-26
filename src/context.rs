@@ -354,6 +354,179 @@ impl ContextDatabase for ContextInternal {
     }
 }
 
+impl ContextInternal {
+    /// Get or create a context blob at the given address (mutable).
+    fn get_or_create_blob_at_mut(&mut self, addr: Address) -> &mut ContextBlob {
+        let existing = self.database.iter().position(|(a, _)| a.as_u64() == addr.as_u64());
+        if let Some(idx) = existing {
+            &mut self.database[idx].1
+        } else {
+            let prev: Vec<ContextWord> = {
+                let prev_ref = self.find_blob(addr);
+                prev_ref.to_vec()
+            };
+            let blob = ContextBlob {
+                array: prev,
+                mask: vec![0; self.size],
+            };
+            self.database.push((addr, blob));
+            self.database.sort_by_key(|(a, _)| a.as_u64());
+            let idx = self.database.iter().position(|(a, _)| a.as_u64() == addr.as_u64()).unwrap();
+            &mut self.database[idx].1
+        }
+    }
+
+    /// Encode all context and tracked data to a stream. Faithful to
+    /// `ContextInternal::encode` (globalcontext.cc).
+    pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
+        use crate::marshal::{AttributeId, ElementId};
+
+        if self.database.is_empty() && self.trackbase.is_empty() {
+            return;
+        }
+
+        let points_elem = ElementId::new("context_points", 0);
+        let pointset_elem = ElementId::new("context_pointset", 0);
+        let set_elem = ElementId::new("set", 0);
+        let tracked_elem = ElementId::new("tracked_pointset", 0);
+        let tracked_set_elem = ElementId::new("tracked_set", 0);
+
+        encoder.open_element(&points_elem);
+
+        // Encode context blobs at each changepoint.
+        for (addr, blob) in &self.database {
+            encoder.open_element(&pointset_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), addr.as_u64());
+            for (name, bitrange) in &self.variables {
+                let val = bitrange.get_value(&blob.array);
+                encoder.open_element(&set_elem);
+                encoder.write_string(&AttributeId::new("name", 0), name);
+                encoder.write_unsigned_integer(&AttributeId::new("val", 0), val as u64);
+                encoder.close_element(&set_elem);
+            }
+            encoder.close_element(&pointset_elem);
+        }
+
+        // Encode tracked sets.
+        for (addr, ts) in &self.trackbase {
+            if ts.is_empty() {
+                continue;
+            }
+            encoder.open_element(&tracked_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), addr.as_u64());
+            for tc in ts {
+                encoder.open_element(&tracked_set_elem);
+                encoder.write_unsigned_integer(&AttributeId::new("space", 0), tc.offset);
+                encoder.write_unsigned_integer(&AttributeId::new("size", 0), tc.size as u64);
+                encoder.write_unsigned_integer(&AttributeId::new("val", 0), tc.val);
+                encoder.close_element(&tracked_set_elem);
+            }
+            encoder.close_element(&tracked_elem);
+        }
+
+        encoder.close_element(&points_elem);
+    }
+
+    /// Restore context and tracked data from a stream. Faithful to
+    /// `ContextInternal::decode` (globalcontext.cc).
+    pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
+        use crate::marshal::{AttributeId, ElementId};
+
+        let points_id = decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            decoder.open_element();
+
+            // Read address from attributes.
+            let mut addr = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("space") {
+                    addr = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+
+            if sub_name == "context_pointset" {
+                // Read context variable values.
+                loop {
+                    let set_id = decoder.peek_element();
+                    if set_id == 0 {
+                        break;
+                    }
+                    let set_name = decoder.element_name(set_id).unwrap_or_default();
+                    decoder.open_element();
+                    let mut var_name = String::new();
+                    let mut var_val = 0u64;
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 {
+                        break;
+                    }
+                        match decoder.attribute_name(aid).as_deref() {
+                            Some("name") => var_name = decoder.read_string(),
+                            Some("val") => var_val = decoder.read_unsigned_integer(),
+                            _ => { let _ = decoder.read_string(); }
+                        }
+                    }
+                    decoder.close_element(set_id);
+                    // Apply the value.
+                    if let Some(bitrange) = self.variables.get(&var_name) {
+                        let bitrange = bitrange.clone();
+                        let blob = self.get_or_create_blob_at_mut(Address::new(addr));
+                        bitrange.set_value(&mut blob.array, var_val as ContextWord);
+                    }
+                }
+            } else if sub_name == "tracked_pointset" {
+                // Read tracked register values.
+                let mut tracked_set: TrackedSet = Vec::new();
+                loop {
+                    let ts_id = decoder.peek_element();
+                    if ts_id == 0 {
+                        break;
+                    }
+                    decoder.open_element();
+                    let mut tc = TrackedContext { offset: 0, size: 0, val: 0 };
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 {
+                            break;
+                        }
+                        match decoder.attribute_name(aid).as_deref() {
+                            Some("space") => tc.offset = decoder.read_unsigned_integer(),
+                            Some("size") => tc.size = decoder.read_unsigned_integer() as u32,
+                            Some("val") => tc.val = decoder.read_unsigned_integer(),
+                            _ => { let _ = decoder.read_string(); }
+                        }
+                    }
+                    decoder.close_element(ts_id);
+                    tracked_set.push(tc);
+                }
+                // Store the tracked set.
+                let addr_obj = Address::new(addr);
+                let existing = self.trackbase.iter().position(|(a, _)| a.as_u64() == addr);
+                if let Some(idx) = existing {
+                    self.trackbase[idx].1 = tracked_set;
+                } else {
+                    self.trackbase.push((addr_obj, tracked_set));
+                    self.trackbase.sort_by_key(|(a, _)| a.as_u64());
+                }
+            }
+
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(points_id);
+    }
+}
+
 /// A helper class for caching the active context blob to minimize database
 /// lookups. Faithful to `ContextCache` (globalcontext.hh:317).
 pub struct ContextCache {

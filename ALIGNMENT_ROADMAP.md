@@ -209,7 +209,7 @@
 | 41 | `float.cc` + `double.cc` + `multiprecision.cc` | — | 📋 L1 | **完全缺失**：浮点/多精度运算模拟 | `float.cc`, `double.cc`, `multiprecision.cc` |
 | 42 | `opbehavior.cc` | — | 📋 L1 | **完全缺失**：操作行为模拟 | `opbehavior.cc` |
 | 43 | `memstate.cc` | — | 📋 L1 | **完全缺失**：内存状态模拟 | `memstate.cc` |
-| 44 | `context.cc` + `globalcontext.cc` | `context.rs` | 🔧 L2 | **骨架已移植**：ContextBitRange（位范围编码/解码）+ TrackedContext/TrackedSet + ContextBlob + ContextDatabase trait + ContextInternal（内存分区映射）+ ContextCache。解锁 Architecture::context + SegmentedResolver。L3 缺 XML encode/decode + ParserContext（SLEIGH）。partmap 已由 rangemap.rs 提供 | `context.cc`, `globalcontext.cc` |
+| 44 | `context.cc` + `globalcontext.cc` | `context.rs` | ✅ L3 | **完整实现**：ContextBitRange + TrackedContext/TrackedSet + ContextBlob + ContextDatabase trait + ContextInternal（内存分区映射 + XML encode/decode）+ ContextCache。所有 L3 缺口已关闭 | `context.cc`, `globalcontext.cc` |
 
 ---
 
