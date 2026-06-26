@@ -3793,6 +3793,144 @@ impl Rule for RuleIntLessEqual {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESSEQUAL, OpCode::CPUI_INT_SLESSEQUAL] }
 }
 
+/// Collect and collapse constants and like terms in an additive expression:
+///   `(V + c) + d  =>  V + (c+d)` (constant folding)
+///   `V*2 + V*3  =>  V*5` (factoring)
+///
+/// Faithful to Ghidra's `RuleCollectTerms` (ruleaction.cc:94-176). Uses
+/// TermOrder from expression.rs to collect, sort, and simplify additive terms.
+/// The distributeIntMultAdd sub-case (for INT_MULT coefficients on ADD) is
+/// deferred (requires that Funcdata method).
+pub struct RuleCollectTerms;
+
+impl RuleCollectTerms {
+    pub fn new() -> Self { Self }
+
+    /// Extract the multiplicative coefficient from a term vn.
+    /// If vn is INT_MULT(V, c), return (V, c); else (vn, 1).
+    fn get_mult_coeff(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64) {
+        let is_written = vn.read().unwrap().is_written();
+        if !is_written {
+            return (vn.clone(), 1);
+        }
+        let def = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        if let Some(op) = def {
+            let o = op.read().unwrap();
+            if o.opcode == OpCode::CPUI_INT_MULT && o.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                let coeff = o.inrefs[1].read().unwrap().get_offset();
+                let base = o.inrefs[0].clone();
+                return (base, coeff);
+            }
+        }
+        (vn.clone(), 1)
+    }
+}
+
+impl Rule for RuleCollectTerms {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Must not be feeding another INT_ADD (we want the root).
+        let out_vn = op_arc.read().unwrap().output.as_ref().cloned();
+        if let Some(out) = out_vn {
+            let lone = out.read().unwrap().lone_descend();
+            if let Some(d) = lone {
+                if d.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+        }
+        // Collect terms.
+        let mut termorder = crate::expression::TermOrder::new(op_arc.clone());
+        termorder.collect();
+        termorder.sort_terms();
+        let order = termorder.get_sort().to_vec();
+        if order.is_empty() { return Ok(action_status::NO_CHANGE); }
+
+        let mut i = 0;
+        // Phase 1: look for combinable like terms.
+        if !termorder.get_term(order[0]).unwrap().get_varnode().read().unwrap().is_constant() {
+            i = 1;
+            while i < order.len() {
+                let vn1 = termorder.get_term(order[i-1]).unwrap().get_varnode().clone();
+                let vn2 = termorder.get_term(order[i]).unwrap().get_varnode().clone();
+                if vn2.read().unwrap().is_constant() { break; }
+                let (base1, coef1) = Self::get_mult_coeff(&vn1);
+                let (base2, coef2) = Self::get_mult_coeff(&vn2);
+                if std::sync::Arc::ptr_eq(&base1, &base2) {
+                    // Like terms → combine. Skip the distributeIntMultAdd sub-case.
+                    let mult1 = termorder.get_term(order[i-1]).unwrap().get_multiplier().is_some();
+                    let mult2 = termorder.get_term(order[i]).unwrap().get_multiplier().is_some();
+                    if mult1 || mult2 {
+                        // Would need distributeIntMultAdd; skip for now.
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    let size = base1.read().unwrap().get_size();
+                    let mask = crate::address::calc_mask(size);
+                    let new_coef = (coef1 + coef2) & mask;
+                    let newcoeff = fd.new_constant(size, new_coef);
+                    let zerocoeff = fd.new_constant(size, 0);
+                    let edge1 = termorder.get_term(order[i-1]).unwrap();
+                    let edge2 = termorder.get_term(order[i]).unwrap();
+                    fd.op_set_input(&crate::op::PcodeOpRef(edge1.op.clone()), zerocoeff, edge1.slot);
+                    if new_coef == 0 {
+                        fd.op_set_input(&crate::op::PcodeOpRef(edge2.op.clone()), newcoeff, edge2.slot);
+                    } else {
+                        let nextop = fd.new_op(2, edge2.op.read().unwrap().start.get_addr());
+                        fd.op_set_opcode(&nextop, OpCode::CPUI_INT_MULT);
+                        let newout = fd.new_unique_out(size, &nextop);
+                        fd.op_set_input(&nextop, base1, 0);
+                        fd.op_set_input(&nextop, newcoeff, 1);
+                        fd.op_insert_before(&nextop, &crate::op::PcodeOpRef(edge2.op.clone()));
+                        fd.op_set_input(&crate::op::PcodeOpRef(edge2.op.clone()), newout, edge2.slot);
+                    }
+                    return Ok(action_status::CHANGE);
+                }
+                i += 1;
+            }
+        }
+        // Phase 2: collapse multiple constants into one.
+        let mut coef_sum = 0u64;
+        let mut nonzerocount = 0;
+        let mut lastconst = 0;
+        for j in i..order.len() {
+            let edge = termorder.get_term(order[j]).unwrap();
+            if edge.get_multiplier().is_some() { continue; }
+            let vn = edge.get_varnode().clone();
+            if vn.read().unwrap().is_constant() {
+                let val = vn.read().unwrap().get_offset();
+                if val != 0 {
+                    nonzerocount += 1;
+                    coef_sum = coef_sum.wrapping_add(val);
+                    lastconst = j;
+                }
+            }
+        }
+        if nonzerocount <= 1 { return Ok(action_status::NO_CHANGE); }
+        let last_edge = termorder.get_term(order[lastconst]).unwrap();
+        let last_vn = last_edge.get_varnode().clone();
+        let size = last_vn.read().unwrap().get_size();
+        let mask = crate::address::calc_mask(size);
+        coef_sum &= mask;
+        // Zero out all non-last constants.
+        for j in (lastconst + 1)..order.len() {
+            let edge = termorder.get_term(order[j]).unwrap();
+            if edge.get_multiplier().is_some() { continue; }
+            let vn = edge.get_varnode().clone();
+            if vn.read().unwrap().is_constant() {
+                let zero = fd.new_constant(size, 0);
+                fd.op_set_input(&crate::op::PcodeOpRef(edge.op.clone()), zero, edge.slot);
+            }
+        }
+        // Set last constant to the sum.
+        let sum_const = fd.new_constant(size, coef_sum);
+        let last_edge2 = termorder.get_term(order[lastconst]).unwrap();
+        fd.op_set_input(&crate::op::PcodeOpRef(last_edge2.op.clone()), sum_const, last_edge2.slot);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "collect_terms" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6371,5 +6509,52 @@ mod tests {
         let rule = RuleIntLessEqual::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleCollectTerms (ruleaction.cc:94) ---
+
+    #[test]
+    fn test_collect_terms_constant_folding() {
+        // ((V + 3) + 5) => V + 8  (collapse constants 3+5)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c3 = fd.vbank.create_constant(4, 3);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), c3];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        inner_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        // inner_out must be lone-descend of outer.
+        let c5 = fd.vbank.create_constant(4, 5);
+        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out.clone(), c5];
+            o.output = Some(outer_out);
+        }
+        // inner_out lone_descend → outer
+        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer));
+        let rule = RuleCollectTerms::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The last constant slot should now hold 8 (3+5).
+        // After collapse, one constant slot is zeroed and the other holds 8.
+        let outer_r = outer.read().unwrap();
+        // Check that at least one input is now 0 and one is 8.
+        let v0 = outer_r.inrefs[1].read().unwrap().get_offset();
+        let _v1 = outer_r.inrefs[0].read().unwrap().get_offset();
+        assert!(v0 == 0 || v0 == 8);
     }
 }

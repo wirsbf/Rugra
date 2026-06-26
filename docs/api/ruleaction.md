@@ -483,3 +483,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 解锁：RuleCollectTerms、RuleScarry/RuleSborrow 深层形式。
 
 测试：expression::tests 2 个（常量折叠、等价匹配）。
+
+### 2026-06-26（续）：RuleCollectTerms
+
+#### `pub struct RuleCollectTerms`（ruleaction.cc:94-176）
+在加法表达式中折叠常量与合并同类项：
+- `(V + 3) + 5 => V + 8`（常量折叠）
+- `V*2 + V*3 => V*5`（合并同类项，非乘法系数场景）
+使用 `expression.rs` 的 `TermOrder` 收集/排序所有项。`distributeIntMultAdd` 子情形（INT_MULT 系数加法展开）待补。
+
+测试：ruleaction::tests +1（常量折叠 3+5→8）。
