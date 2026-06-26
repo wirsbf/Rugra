@@ -332,3 +332,11 @@ AND-比较变换，把 AND 推到更大的定义域：
 `f(V,W) == f(V,W) => true`，`f(V,W) != f(V,W) => false`。两输入功能相等时塌缩为 COPY(1/0)。
 
 测试：ruleaction::tests +3（同 varnode→COPY(1)；同常量 NOTEQUAL→COPY(0)；异常量不变）。
+
+### 2026-06-26（续）：RuleLessNotEqual
+
+#### `pub struct RuleLessNotEqual`（ruleaction.cc:2310-2357）
+`(s)lessequal AND notequal`（同操作数对）折叠为 `(s)less`：
+`V <= W && V != W => V < W`。用 functional_equality 验操作数匹配。
+
+测试：ruleaction::tests +1（LE+NE 同操作数→LESS）。
