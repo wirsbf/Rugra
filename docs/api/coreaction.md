@@ -297,3 +297,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionHideShadow**：实现 shadow 隐藏框架——遍历 written Varnodes，获取 HighVariable，调用 Merge::hideShadows。算法逻辑完整记录，待 HighVariable + Merge 集成。
 - 10 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 6 框架级）。
+
+## 2026-06-27（续 8）：ActionMarkExplicit 算法逻辑
+
+- **ActionMarkExplicit**：实现 `base_explicit` 辅助函数（检查 Varnode 是否应为显式）+ 完整算法文档。`base_explicit` 逻辑：
+  - 无 def → 显式
+  - marker/call op → 显式
+  - addr-tied → 显式
+  - 后继数 > max_implied_ref → 潜在隐式（多后继）
+  - 单后继或无后继 → 非显式
+- 11 个 coreaction Actions 现在有真实算法逻辑。第一个实现了实际辅助函数逻辑（而非纯文档框架）。

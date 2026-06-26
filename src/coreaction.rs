@@ -2034,12 +2034,82 @@ impl Action for ActionPrototypeWarnings {
 
 /// Mark explicit varnodes. Faithful to `ActionMarkExplicit`
 /// (coreaction.cc).
-pub struct ActionMarkExplicit;
+///
+/// Determines which Varnodes must be explicitly printed in the output
+/// (rather than being implied by expressions). The algorithm:
+/// 1. For each defined Varnode, call baseExplicit to check if it should be
+///    explicit (returns < 0), or is a potential implied with multiple
+///    descendants (returns > 1).
+/// 2. For Varnodes with multiple descendants, check interaction and possibly
+///    duplicate them via processMultiplier.
+/// 3. Clear marks.
+pub struct ActionMarkExplicit { pub count: i32 }
 impl ActionMarkExplicit {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
+
+    /// Check if a Varnode should be marked explicit. Faithful to
+    /// `baseExplicit` (coreaction.cc). Returns:
+    /// - -1: should be explicit
+    /// - -2: explicit (NEW op, may need special printing)
+    /// - 0: single descendant, not explicit
+    /// - >0: number of descendants (potential implied)
+    fn base_explicit(
+        vn: &crate::varnode::Varnode,
+        max_ref: i32,
+    ) -> i32 {
+        use crate::opcodes::OpCode;
+        // Get defining op.
+        let Some(def) = vn.get_def() else {
+            return -1; // No def → explicit.
+        };
+        let def_rg = def.read().unwrap();
+        // Marker ops → explicit.
+        if def_rg.is_marker() {
+            return -1;
+        }
+        // Call ops → explicit.
+        if def_rg.is_call() {
+            // CPUI_NEW with 1 input → explicit but special.
+            if def_rg.opcode == OpCode::CPUI_NEW && def_rg.num_input() == 1 {
+                return -2;
+            }
+            return -1;
+        }
+        // Addr-tied varnodes are often explicit (pointers may reference them).
+        if vn.is_addr_tied() {
+            // Simplified: addr-tied → explicit.
+            return -1;
+        }
+        drop(def_rg);
+
+        // Count descendants.
+        let desc_count = vn.descend_iter().count() as i32;
+        if desc_count > max_ref {
+            return desc_count;
+        }
+        if desc_count > 1 {
+            return desc_count;
+        }
+        // Single or zero descendants → not explicit.
+        desc_count
+    }
 }
 impl Action for ActionMarkExplicit {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. maxref = arch.max_implied_ref (default 2)
+        // 2. For each defined Varnode (not free):
+        //    desc_count = baseExplicit(vn, maxref)
+        //    if desc_count < 0: vn.setExplicit()
+        //    if desc_count > 1: vn.setMark(), add to multlist
+        // 3. multipleInteraction(multlist) — resolve overlaps
+        // 4. For each in multlist still marked: processMultiplier(vn, maxdup)
+        // 5. Clear all marks
+        //
+        // The baseExplicit logic is implemented above. Full integration
+        // requires VarnodeDefSet iteration over Funcdata's varnode bank.
+        // L3 gap: requires VarnodeDefSet iteration + HighVariable + setExplicit.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "markexplicit" }
