@@ -2306,12 +2306,35 @@ impl Action for ActionInferTypes {
 
 /// Name variables. Faithful to `ActionNameVars`
 /// (coreaction.cc).
+///
+/// Assigns names to unnamed variables based on:
+/// 1. Symbol linkage (equates, spacebase registers)
+/// 2. Function parameter names from callees
+/// 3. Default name generation (buildDefaultName)
+/// 4. Scope default name assignment
 pub struct ActionNameVars;
 impl ActionNameVars {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNameVars {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. linkSymbols(data, namerec):
+        //    - Iterate constant-space Varnodes with SymbolEntry → linkSymbol
+        //    - Iterate all-space Varnodes → linkSpacebaseSymbol for spacebase
+        //    - For each HighVariable name representative → add to namerec
+        // 2. scope.recoverNameRecommendationsForSymbols()
+        // 3. lookForBadJumpTables(data)
+        // 4. lookForFuncParamNames(data, namerec):
+        //    - For each call, check if callee has named params
+        //    - Propagate parameter names to the calling function's inputs
+        // 5. For each Varnode in namerec:
+        //    - If symbol name is undefined: scope.buildDefaultName + renameSymbol
+        // 6. scope.assignDefaultNames(base)
+        //
+        // Requires: VarnodeLocSet iteration + HighVariable + Scope + FuncCallSpecs
+        // L3 gap: requires all of the above subsystems integrated into Funcdata.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "namevars" }

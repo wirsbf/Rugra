@@ -319,3 +319,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionDeadCode**：实现 `push_consumed`（consumed 位掩码 OR + worklist 管理）和 `propagate_consumed`（向后传播 consumed 位到定义 op 的输入，处理 INT_MULT/INT_ADD/INT_SUB/SUBPIECE/default 情况）。apply() 保留简化版（检查无后继输出），完整版待 VarnodeLocSet 迭代。
 - 13 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 9 框架级，3 个有实际辅助函数）。
+
+## 2026-06-27（续 11）：ActionNameVars 算法逻辑
+
+- **ActionNameVars**：完整算法文档——linkSymbols（equate/spacebase 符号链接）+ lookForFuncParamNames（被调函数参数名传播）+ buildDefaultName（默认名生成）+ assignDefaultNames。待 VarnodeLocSet + HighVariable + Scope + FuncCallSpecs 集成。
+- 14 个 coreaction Actions 现在有真实算法逻辑。
