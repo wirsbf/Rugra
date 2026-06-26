@@ -631,3 +631,14 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RuleDumptyHump**：完整移植 ruleaction.cc:5283-5337。简化连接+拆分：
   - `sub(concat(V,W), 0) => W`（完整消除）
   - `sub(concat(V,W), c) => sub(W,c)` 或 `sub(V,c-k)`（部分消除）
+
+## 2026-06-27（续 13）：SUBPIECE 消除 + OR 重组规则
+
+- **RuleSubCancel**：完整移植 ruleaction.cc:5115-5199。SUBPIECE 应用于扩展运算的消除：
+  - INT_AND + 掩码：`sub(V & mask, 0) => V`（当 mask == calc_mask(outsize)）
+  - INT_ZEXT/INT_SEXT：`sub(zext(V), 0)` → COPY（完全消除）或 SUBPIECE（部分）
+  - INT_ZEXT + 高偏移：`sub(zext(V), c)` 当 c >= insize → COPY(#0)
+- **RuleHumptyOr**：完整移植 ruleaction.cc:5339-5420。简化掩码 OR 重组：
+  - `(V & ff00) | (V & 00ff) => V`（所有位覆盖 → COPY）
+  - `(V & W) | (V & X) => V & (W|X)`（部分覆盖 → AND）
+  - 非常量掩码：创建 INT_OR(b,c) + INT_AND(a,result)，检查 NZMask 防止 RuleAndDistribute 反转

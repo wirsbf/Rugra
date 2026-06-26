@@ -5405,6 +5405,184 @@ impl Rule for RuleDumptyHump {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
+/// Simplify SUBPIECE applied to INT_ZEXT/INT_SEXT/INT_AND.
+/// Faithful to Ghidra's `RuleSubCancel` (ruleaction.cc:5115-5199).
+///
+/// If a SUBPIECE eliminates an extension entirely (offset+outsize <= insize),
+/// replace with COPY. Handles INT_AND with mask, INT_ZEXT/INT_SEXT truncation.
+pub struct RuleSubCancel;
+
+impl RuleSubCancel {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSubCancel {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSubCancel::applyOp (ruleaction.cc:5137-5199).
+        let (ext_code, thru_vn, offset, out_size, in_size, far_in_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let ext_code = extop.read().unwrap().opcode;
+            if ext_code != OpCode::CPUI_INT_ZEXT && ext_code != OpCode::CPUI_INT_SEXT && ext_code != OpCode::CPUI_INT_AND {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let offset = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let in_size = base.read().unwrap().get_size() as i64;
+            let far_in_size = extop.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            // For INT_AND, check if it's a mask that SUBPIECE cancels.
+            if ext_code == OpCode::CPUI_INT_AND {
+                let cvn = match extop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                if offset == 0 && cvn.read().unwrap().is_constant() && cvn.read().unwrap().get_offset() == calc_mask(out_size as usize) {
+                    let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    if !thru_vn.read().unwrap().is_free() {
+                        let follow = crate::op::PcodeOpRef(op_arc.clone());
+                        fd.op_set_input(&follow, thru_vn, 0);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+                return Ok(action_status::NO_CHANGE);
+            }
+            let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            (ext_code, thru_vn, offset, out_size, in_size, far_in_size)
+        };
+        // Determine the new opcode.
+        let new_opc = if offset == 0 {
+            let thru_free = thru_vn.read().unwrap().is_free();
+            let thru_const = thru_vn.read().unwrap().is_constant();
+            if thru_free {
+                if thru_const && in_size > 8 && out_size == far_in_size {
+                    OpCode::CPUI_COPY
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else if out_size == far_in_size {
+                OpCode::CPUI_COPY
+            } else if out_size < far_in_size {
+                OpCode::CPUI_SUBPIECE
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        } else {
+            if ext_code == OpCode::CPUI_INT_ZEXT && far_in_size <= offset {
+                // Output contains nothing of original input.
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                let zero = fd.new_constant(out_size as usize, 0);
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_set_input(&follow, zero, 0);
+                fd.op_remove_input(&follow, 1);
+                return Ok(action_status::CHANGE);
+            } else {
+                return Ok(action_status::NO_CHANGE); // Missing one case.
+            }
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, new_opc);
+        fd.op_set_input(&follow, thru_vn, 0);
+        if new_opc != OpCode::CPUI_SUBPIECE {
+            fd.op_remove_input(&follow, 1);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub_cancel" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
+/// Simplify masked pieces INT_ORed together: `(V & ff00) | (V & 00ff) => V`.
+/// Faithful to Ghidra's `RuleHumptyOr` (ruleaction.cc:5339-5420).
+///
+/// Also handles the general form: `(V & W) | (V & X) => V & (W|X)`.
+pub struct RuleHumptyOr;
+
+impl RuleHumptyOr {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleHumptyOr {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleHumptyOr::applyOp (ruleaction.cc:5350-5420).
+        let (a, b, c) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let and1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if and1.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+            let and2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if and2.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+            let a1 = match and1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let b1 = match and1.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let c1 = match and2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let d1 = match and2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            // Find the common varnode.
+            let (a, b, c) = if std::sync::Arc::ptr_eq(&a1, &c1) {
+                (a1, b1, d1)
+            } else if std::sync::Arc::ptr_eq(&a1, &d1) {
+                (a1, b1, c1)
+            } else if std::sync::Arc::ptr_eq(&b1, &c1) {
+                (b1, a1, d1)
+            } else if std::sync::Arc::ptr_eq(&b1, &d1) {
+                (b1, a1, c1)
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            };
+            (a, b, c)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let b_is_const = b.read().unwrap().is_constant();
+        let c_is_const = c.read().unwrap().is_constant();
+        let a_size = a.read().unwrap().get_size();
+        if b_is_const && c_is_const {
+            let total_bits = b.read().unwrap().get_offset() | c.read().unwrap().get_offset();
+            if total_bits == calc_mask(a_size) {
+                // All bits covered -> COPY.
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_remove_input(&follow, 1);
+                fd.op_set_input(&follow, a, 0);
+            } else {
+                // Some bits -> AND.
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_AND);
+                fd.op_set_input(&follow, a, 0);
+                let new_const = fd.new_constant(a_size, total_bits);
+                fd.op_set_input(&follow, new_const, 1);
+            }
+        } else {
+            // Non-constant masks: create INT_OR(b, c) then INT_AND(a, result).
+            let a_mask = a.read().unwrap().get_nz_mask();
+            if (b.read().unwrap().get_nz_mask() & a_mask) == 0 {
+                return Ok(action_status::NO_CHANGE); // RuleAndDistribute would reverse.
+            }
+            if (c.read().unwrap().get_nz_mask() & a_mask) == 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let addr = op_arc.read().unwrap().get_addr();
+            let new_or = fd.new_op(2, addr);
+            fd.op_set_opcode(&new_or, OpCode::CPUI_INT_OR);
+            let or_vn = fd.new_unique_out(a_size, &new_or);
+            fd.op_set_input(&new_or, b, 0);
+            fd.op_set_input(&new_or, c, 1);
+            fd.op_insert_before(&new_or, &follow);
+            fd.op_set_input(&follow, a, 0);
+            fd.op_set_input(&follow, or_vn, 1);
+            fd.op_set_opcode(&follow, OpCode::CPUI_INT_AND);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "humpty_or" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
