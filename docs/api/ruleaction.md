@@ -243,3 +243,17 @@ INT_LESSEQUAL 与极值常量的简化：
 `concat(V, zext(W) << c) => concat(concat(V, W), 0)`。当 PIECE 低位是 zext(W) 的对齐左移（c 为 8 倍数且移到最高有效边界）时，重构为两级 PIECE。用 op-edit API 创建新 PIECE op。
 
 测试：ruleaction::tests +3（OrCollapse 覆盖/部分不变；ConcatLeftShift 重构）。
+
+### 2026-06-26（续）：RuleDoubleShift + lone_descend/has_no_descend
+
+#### `Varnode::lone_descend()` / `has_no_descend()`（varnode.hh）
+单后代 / 无后代查询，解锁 RuleDoubleShift/RuleSubZext 等需独占使用检查的 Rule。
+
+#### `pub struct RuleDoubleShift`（ruleaction.cc:1825-1941）
+链式移位简化：
+- 同向：`(V<<c)<<d => V<<(c+d)`；`(V>>c)>>d => V>>(c+d)`
+- 反向（等量）：`(V<<c)>>c => V & mask`；`(V>>c)<<c => V & mask`
+- INT_MULT 乘 2 的幂视为左移（leastsigbit_set）
+- 移位 ≥ size 时归零为 COPY(0)
+
+测试：ruleaction::tests +2（同向合并 2+3=5；反向抵消 LEFT4/RIGHT4 → AND 0x0fffffff）。

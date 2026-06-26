@@ -336,6 +336,24 @@ impl Varnode {
             }
         }
     }
+
+    /// Return true if no live op reads this varnode. Faithful to
+    /// `Varnode::hasNoDescend`. Used by several Rules (RuleXorCollapse,
+    /// RuleSubZext) to check exclusive use.
+    pub fn has_no_descend(&self) -> bool {
+        self.descend.iter().all(|w| w.upgrade().is_none())
+    }
+
+    /// Return the single descendant op of this varnode, or None if there are
+    /// zero or more than one. Faithful to `Varnode::loneDescend`.
+    pub fn lone_descend(&self) -> Option<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> {
+        let live: Vec<_> = self.descend.iter().filter_map(|w| w.upgrade()).collect();
+        if live.len() == 1 {
+            Some(live.into_iter().next().unwrap())
+        } else {
+            None
+        }
+    }
 }
 
 impl PartialEq for Varnode {

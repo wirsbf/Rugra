@@ -634,3 +634,9 @@
 
 - `get_nz_mask(&self) -> u64`（varnode.hh:231）：非零掩码。Ghidra 由 Heritage/Cover 维护；
   Rugra 当前保守近似（常量=值，其他=calc_mask(size)）。解锁 RuleSlessToLess 等 NZM 相关 Rule。
+
+## 2026-06-26（续）：lone_descend / has_no_descend
+
+- `lone_descend(&self) -> Option<Arc<RwLock<PcodeOp>>>` — `Varnode::loneDescend`：返回唯一后代 op（无或多个则 None）。
+- `has_no_descend(&self) -> bool` — `Varnode::hasNoDescend`：无后代读取。
+解锁 RuleDoubleShift/RuleSubZext/RuleXorCollapse 等独占使用检查。

@@ -1903,6 +1903,132 @@ impl Rule for RuleConcatLeftShift {
     }
 }
 
+/// Simplify chained shifts: `(V << c) << d => V << (c+d)`,
+/// `(V << c) >> c => V & mask`, etc.
+///
+/// Faithful to Ghidra's `RuleDoubleShift` (ruleaction.cc:1825-1941). Handles
+/// INT_MULT-as-left-shift via leastsigbit_set. Same-direction shifts combine;
+/// opposite-direction shifts cancel (producing an AND with a mask).
+pub struct RuleDoubleShift;
+
+impl RuleDoubleShift {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleDoubleShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // in1 must be constant; in0 (secvn) must be defined by a shift/mult.
+        let (opc1, sa1, secop_arc, size) = {
+            let op = op_arc.read().unwrap();
+            if !op.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let opc1 = op.opcode;
+            let secvn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let secop_arc = {
+                let s = secvn.read().unwrap();
+                s.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let secop_arc = match secop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let opc2 = secop_arc.read().unwrap().opcode;
+            if !matches!(opc2, OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_MULT) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if !secop_arc.read().unwrap().inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let size = secvn.read().unwrap().get_size();
+            let (opc1n, sa1) = if opc1 == OpCode::CPUI_INT_MULT {
+                let val = op.inrefs[1].read().unwrap().get_offset();
+                let sa = crate::address::leastsigbit_set(val);
+                if sa < 0 || (val >> sa) != 1 {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                (OpCode::CPUI_INT_LEFT, sa)
+            } else {
+                (opc1, op.inrefs[1].read().unwrap().get_offset() as i32)
+            };
+            (opc1n, sa1, secop_arc, size)
+        };
+        let (opc2, sa2, base_vn) = {
+            let so = secop_arc.read().unwrap();
+            let val = so.inrefs[1].read().unwrap().get_offset();
+            let (opc2n, sa2) = if so.opcode == OpCode::CPUI_INT_MULT {
+                let sa = crate::address::leastsigbit_set(val);
+                if sa < 0 || (val >> sa) != 1 {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                (OpCode::CPUI_INT_LEFT, sa)
+            } else {
+                (so.opcode, val as i32)
+            };
+            let base_vn = match so.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (opc2n, sa2, base_vn)
+        };
+        if base_vn.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if opc1 == opc2 {
+            if (sa1 + sa2) < (8 * size as i32) {
+                let newconst = fd.new_constant(4, (sa1 + sa2) as u64);
+                fd.op_set_opcode(&follow, opc1);
+                fd.op_set_input(&follow, base_vn, 0);
+                fd.op_set_input(&follow, newconst, 1);
+            } else {
+                let zero = fd.new_constant(size, 0);
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                fd.op_set_input(&follow, zero, 0);
+                fd.op_remove_input(&follow, 1);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        if size > 8 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let mask = crate::address::calc_mask(size);
+        let (mask_eff, diffsa) = if opc1 == OpCode::CPUI_INT_LEFT {
+            let sec_out = secop_arc.read().unwrap().output.as_ref().map(|o| o.clone());
+            if let Some(out) = sec_out {
+                if out.read().unwrap().lone_descend().is_none() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+            ((mask << sa2) & mask, sa1 - sa2)
+        } else {
+            ((mask >> sa2) & mask, sa2 - sa1)
+        };
+        if diffsa != 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let mask_const = fd.new_constant(size, mask_eff);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_AND);
+        fd.op_set_input(&follow, base_vn, 0);
+        fd.op_set_input(&follow, mask_const, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "double_shift"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_MULT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3195,5 +3321,85 @@ mod tests {
         assert_eq!(p.inrefs.len(), 2);
         // in1 should be a zero constant (pad of size out(2) - newout(2) = 0... actually newout=v+w=2, out=2, pad=0)
         // pad size = out_size - newout_size = 2 - 2 = 0. The constant is size 0 value 0.
+    }
+
+    // --- RuleDoubleShift (ruleaction.cc:1825) ---
+
+    #[test]
+    fn test_double_shift_same_direction_combine() {
+        // (V << 2) << 3 => V << 5
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 2);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), c1];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        let c2 = fd.vbank.create_constant(4, 3);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out, c2];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleDoubleShift::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_LEFT);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 5); // 2+3
+    }
+
+    #[test]
+    fn test_double_shift_opposite_cancel() {
+        // (V << 4) >> 4 => V & 0xffffffff (size 4, mask cancels to full)
+        // Requires inner output to be lone-descend of outer.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 4);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), c1];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        let c2 = fd.vbank.create_constant(4, 4);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out.clone(), c2];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+        }
+        // inner_out must have lone descend (outer).
+        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer));
+        let rule = RuleDoubleShift::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_AND);
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        // mask = (calc_mask(4) >> 4) & calc_mask(4) = 0x0fffffff
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0x0fffffff);
     }
 }
