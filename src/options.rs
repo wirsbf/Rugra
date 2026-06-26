@@ -385,6 +385,96 @@ impl OptionDatabase {
     pub fn option_names(&self) -> Vec<&str> {
         self.optionmap.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Parse and execute a single option element from an `<optionslist>`.
+    /// Faithful to `OptionDatabase::decodeOne` (options.cc:163).
+    ///
+    /// The element name matches the registered option name. Up to three
+    /// `<param1>`, `<param2>`, `<param3>` children provide the parameters.
+    /// If there are no children, the element's text content is param1.
+    pub fn decode_one(
+        &mut self,
+        arch: &mut Architecture,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> String {
+        use crate::marshal::{AttributeId, ElementId};
+
+        // Open the option element.
+        let elem_id = decoder.open_element();
+        // Get the element name from the registry.
+        let elem_name = decoder
+            .element_name(elem_id)
+            .unwrap_or_default();
+
+        // Read up to 3 param children.
+        let mut params = [String::new(), String::new(), String::new()];
+        let mut param_idx = 0;
+
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            decoder.open_element();
+
+            if sub_name.starts_with("param") && param_idx < 3 {
+                // Read the content attribute.
+                loop {
+                    let aid = decoder.next_attribute_id();
+                    if aid == 0 {
+                        break;
+                    }
+                    if decoder.attribute_name(aid).as_deref() == Some("content") {
+                        params[param_idx] = decoder.read_string();
+                    } else {
+                        let _ = decoder.read_string();
+                    }
+                }
+                param_idx += 1;
+            } else {
+                // Unknown child — read its content as param1 if no params yet.
+                if param_idx == 0 {
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 {
+                            break;
+                        }
+                        if decoder.attribute_name(aid).as_deref() == Some("content") {
+                            params[0] = decoder.read_string();
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                }
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(elem_id);
+
+        // Execute the option.
+        self.set(arch, &elem_name, &params[0], &params[1], &params[2])
+    }
+
+    /// Parse an `<optionslist>` element, executing each child as an option
+    /// command. Faithful to `OptionDatabase::decode` (options.cc:192).
+    pub fn decode(
+        &mut self,
+        arch: &mut Architecture,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) {
+        use crate::marshal::ElementId;
+
+        let list_id = decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            self.decode_one(arch, decoder);
+        }
+        decoder.close_element(list_id);
+    }
 }
 
 #[cfg(test)]

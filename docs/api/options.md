@@ -60,3 +60,9 @@ namespacestrategy.
   ActionDatabase integration.
 - ContextDatabase options (allowcontextset) require context integration.
 - XML decode of `<optionslist>` (decodeOne/decode).
+
+## 2026-06-27（续）：XML decode — options.rs 达到 L3
+
+- **OptionDatabase::decode_one**（options.cc:163）：解析单个选项元素，读取最多 3 个 `<param1>/<param2>/<param3>` 子元素或元素内容作为参数，调用 `set()` 执行选项。
+- **OptionDatabase::decode**（options.cc:192）：解析 `<optionslist>` 元素，对每个子元素调用 `decode_one`。
+- options.rs L3 缺口（XML decode）已关闭。
