@@ -81,7 +81,7 @@
 | `ActionSetCasts` | 2722 | P-code 级 Cast 插入（castInput/castOutput/resolveUnion/checkPointerIssues） | CastStrategyC 已移植 ✅；printc 发射期处理 casts |
 | `ActionRestrictLocal` | 1957 | 标记局部变量限制 | ScopeLocal 已移植 ✅ |
 | `ActionLikelyTrash` | 2140 | 识别可能垃圾变量 | HighVariable 部分 |
-| `ActionMultiCse` | 879 | MULTIEQUAL(phi) 冗余消除 | partial（total_replace ✅、op_destroy_recursive ✅ 已补；缺 functionalEqualityLevel） |
+| `ActionMultiCse` | 879 | MULTIEQUAL(phi) 冗余消除 | partial（total_replace ✅、op_destroy_recursive ✅、functional_equality_level ✅ 已补；待移植 processBlock/findMatch 完整算法） |
 | `ActionShadowVar` | 892 | 影子变量 | ✅ **完整算法** — 逐块 MULTIEQUAL shadow 检测 + 重写为 COPY（coreaction.cc:892-946） |
 | `ActionConstbase` | 678 | 入口注入常量基 | 缺 pcodeinjectlib/context |
 | `ActionStackPtrFlow` | 481 | 栈指针流分析 | AliasChecker 已移植 ✅ |

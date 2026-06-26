@@ -243,6 +243,197 @@ impl AddExpression {
     }
 }
 
+// ===========================================================================
+// functionalEqualityLevel — expression.cc:404-512
+// ===========================================================================
+
+/// Level-0 functional equality test. Faithful to `functionalEqualityLevel0`
+/// (expression.cc:404-417). Returns:
+/// - 0 if vn1 and vn2 definitely hold the same value
+/// - -1 if they do not (or cannot be immediately verified)
+/// - 1 if the same value depends on ops writing to vn1 and vn2
+fn functional_equality_level0(
+    vn1: &Arc<RwLock<Varnode>>,
+    vn2: &Arc<RwLock<Varnode>>,
+) -> i32 {
+    if Arc::ptr_eq(vn1, vn2) {
+        return 0;
+    }
+    let v1 = vn1.read().unwrap();
+    let v2 = vn2.read().unwrap();
+    if v1.get_size() != v2.get_size() {
+        return -1;
+    }
+    if v1.is_constant() {
+        if v2.is_constant() {
+            return if v1.get_offset() == v2.get_offset() { 0 } else { -1 };
+        }
+        return -1;
+    }
+    if v1.is_free() || v2.is_free() {
+        return -1;
+    }
+    1
+}
+
+/// Result of `functional_equality_level`: the equality code plus up to two
+/// Varnode pairs that must match for equality to hold.
+#[derive(Debug, Clone)]
+pub struct FunctionalEqualityResult {
+    /// -1 = not equal, 0 = equal, >0 = contingent on `pairs`.
+    pub code: i32,
+    /// Pairs (vn1, vn2) that must hold the same value for equality.
+    pub pairs: Vec<(Arc<RwLock<Varnode>>, Arc<RwLock<Varnode>>)>,
+}
+
+/// Try to determine if vn1 and vn2 contain the same value. Faithful to
+/// `functionalEqualityLevel` (expression.cc:432-512).
+///
+/// Returns a `FunctionalEqualityResult` with:
+/// - `code == -1`: not equal / cannot verify
+/// - `code == 0`: definitely equal
+/// - `code > 0`: contingent on `pairs` (code = number of pairs)
+pub fn functional_equality_level(
+    vn1: &Arc<RwLock<Varnode>>,
+    vn2: &Arc<RwLock<Varnode>>,
+) -> FunctionalEqualityResult {
+    let testval = functional_equality_level0(vn1, vn2);
+    if testval != 1 {
+        return FunctionalEqualityResult { code: testval, pairs: Vec::new() };
+    }
+    // Both must be written for a deeper comparison.
+    let (is_written1, is_written2, def1, def2) = {
+        let v1 = vn1.read().unwrap();
+        let v2 = vn2.read().unwrap();
+        (v1.is_written(), v2.is_written(), v1.get_def(), v2.get_def())
+    };
+    if !is_written1 || !is_written2 {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    }
+    let Some(op1_arc) = def1 else {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    };
+    let Some(op2_arc) = def2 else {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    };
+    let op1 = op1_arc.read().unwrap();
+    let op2 = op2_arc.read().unwrap();
+    let opc = op1.opcode;
+    if opc != op2.opcode {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    }
+    let mut num = op1.inrefs.len();
+    if num != op2.inrefs.len() {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    }
+    if op1.is_marker() || op2.is_call() {
+        return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+    }
+    if opc == OpCode::CPUI_LOAD {
+        // Two loads produce the same result if same address and same instruction.
+        if op1.get_addr() != op2.get_addr() {
+            return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+        }
+    }
+    if num >= 3 {
+        if opc != OpCode::CPUI_PTRADD {
+            return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+        }
+        // Check element-size constant (slot 2) is equal.
+        let off1 = op1.get_in(2).map(|v| v.read().unwrap().get_offset());
+        let off2 = op2.get_in(2).map(|v| v.read().unwrap().get_offset());
+        if off1 != off2 {
+            return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+        }
+        num = 2;
+    }
+    // Gather the input pairs.
+    let mut res1: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
+    let mut res2: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
+    for i in 0..num {
+        res1.push(op1.inrefs[i].clone());
+        res2.push(op2.inrefs[i].clone());
+    }
+    // Drop the op read guards before further reads.
+    drop(op1);
+    drop(op2);
+
+    let testval = functional_equality_level0(&res1[0], &res2[0]);
+    if testval == 0 {
+        if num == 1 {
+            return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+        }
+        let testval2 = functional_equality_level0(&res1[1], &res2[1]);
+        if testval2 == 0 {
+            return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+        }
+        if testval2 < 0 {
+            return FunctionalEqualityResult { code: -1, pairs: Vec::new() };
+        }
+        // Match is contingent on the second pair.
+        return FunctionalEqualityResult {
+            code: 1,
+            pairs: vec![(res1[1].clone(), res2[1].clone())],
+        };
+    }
+    if num == 1 {
+        return FunctionalEqualityResult { code: testval, pairs: Vec::new() };
+    }
+    let testval2 = functional_equality_level0(&res1[1], &res2[1]);
+    if testval2 == 0 {
+        return FunctionalEqualityResult { code: testval, pairs: Vec::new() };
+    }
+    let unmatchsize = if testval == 1 && testval2 == 1 { 2 } else { -1 };
+
+    // Check commutativity.
+    let is_commutative = opc.is_commutative();
+    if !is_commutative {
+        return FunctionalEqualityResult { code: unmatchsize, pairs: Vec::new() };
+    }
+    // Try flipping for commutative operators.
+    let comm1 = functional_equality_level0(&res1[0], &res2[1]);
+    let comm2 = functional_equality_level0(&res1[1], &res2[0]);
+    if comm1 == 0 && comm2 == 0 {
+        return FunctionalEqualityResult { code: 0, pairs: Vec::new() };
+    }
+    if comm1 < 0 || comm2 < 0 {
+        return FunctionalEqualityResult { code: unmatchsize, pairs: Vec::new() };
+    }
+    if comm1 == 0 {
+        // Left-over unmatch is res1[1] and res2[0].
+        return FunctionalEqualityResult {
+            code: 1,
+            pairs: vec![(res1[1].clone(), res2[0].clone())],
+        };
+    }
+    if comm2 == 0 {
+        // Left-over unmatch is res1[0] and res2[1].
+        return FunctionalEqualityResult {
+            code: 1,
+            pairs: vec![(res1[0].clone(), res2[1].clone())],
+        };
+    }
+    // comm1==1 AND comm2==1.
+    if unmatchsize == 2 {
+        // Prefer the original ordering.
+        return FunctionalEqualityResult {
+            code: 2,
+            pairs: vec![
+                (res1[0].clone(), res2[0].clone()),
+                (res1[1].clone(), res2[1].clone()),
+            ],
+        };
+    }
+    // Swap the ordering.
+    FunctionalEqualityResult {
+        code: 2,
+        pairs: vec![
+            (res1[0].clone(), res2[1].clone()),
+            (res1[1].clone(), res2[0].clone()),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +461,47 @@ mod tests {
         let mut expr2 = AddExpression::new();
         expr2.gather_two_terms_add(&v, &c3);
         assert!(expr1.is_equivalent(&expr2));
+    }
+
+    #[test]
+    fn test_functional_equality_level_same_pointer() {
+        let v = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        let r = functional_equality_level(&v, &v);
+        assert_eq!(r.code, 0);
+    }
+
+    #[test]
+    fn test_functional_equality_level_constants_equal() {
+        let c1 = Arc::new(RwLock::new(Varnode::new_constant(4, 42)));
+        let c2 = Arc::new(RwLock::new(Varnode::new_constant(4, 42)));
+        let r = functional_equality_level(&c1, &c2);
+        assert_eq!(r.code, 0);
+    }
+
+    #[test]
+    fn test_functional_equality_level_constants_unequal() {
+        let c1 = Arc::new(RwLock::new(Varnode::new_constant(4, 42)));
+        let c2 = Arc::new(RwLock::new(Varnode::new_constant(4, 99)));
+        let r = functional_equality_level(&c1, &c2);
+        assert_eq!(r.code, -1);
+    }
+
+    #[test]
+    fn test_functional_equality_level_different_sizes() {
+        let c1 = Arc::new(RwLock::new(Varnode::new_constant(4, 42)));
+        let c2 = Arc::new(RwLock::new(Varnode::new_constant(8, 42)));
+        let r = functional_equality_level(&c1, &c2);
+        assert_eq!(r.code, -1);
+    }
+
+    #[test]
+    fn test_functional_equality_level_free_varnodes() {
+        // Two distinct free (unwritten) register varnodes → code 1 (might be
+        // equal, depends on ops). But since they're not written, the deeper
+        // check returns -1.
+        let v1 = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        let v2 = Arc::new(RwLock::new(Varnode::new_register(0x20, 4)));
+        let r = functional_equality_level(&v1, &v2);
+        assert_eq!(r.code, -1); // Not written → -1.
     }
 }

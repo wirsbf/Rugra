@@ -33,3 +33,25 @@
 - `is_equivalent(other)` — 判断两表达式是否等价（expression.cc:309）
 
 测试：expression::tests 2 个（常量折叠、等价匹配）。
+
+## 2026-06-27（续）：functional_equality_level — expression.cc:404-512
+
+完整移植 Ghidra 的 `functionalEqualityLevel`（值相等性分析）。
+
+### `pub fn functional_equality_level(vn1, vn2) -> FunctionalEqualityResult`
+尝试判断两个 Varnode 是否持有相同值。忠实移植 expression.cc:432-512。
+- 返回 `code == -1`：不相等 / 无法立即验证
+- 返回 `code == 0`：确定相等
+- 返回 `code > 0`： contingent（取决于 `pairs` 中的 varnode 对是否相等）
+
+### `pub struct FunctionalEqualityResult`
+- `code: i32` — 相等性代码
+- `pairs: Vec<(vn1, vn2)>` — 需要匹配的 varnode 对
+
+### 算法细节
+- **Level 0**（`functional_equality_level0`）：相同指针→0；不同大小→-1；都是常量→比较 offset；free→-1；其他→1。
+- **深层比较**：两者都必须 written，定义 op 必须相同 opcode、相同输入数、非 marker、非 call。LOAD 需要相同指令地址。PTRADD 检查 slot 2（元素大小）。
+- **交换律**：对可交换运算符（INT_ADD/INT_MULT/INT_XOR/INT_AND/INT_OR），尝试翻转输入对匹配。
+- 用于 `ActionMultiCse::findMatch`（coreaction.cc:807）和 `ActionBlockStructure` 的 CSE 检测（blockaction.cc:1936）。
+
+测试：expression::tests 新增 5 个（same_pointer/constants_equal/constants_unequal/different_sizes/free_varnodes）。
