@@ -582,3 +582,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ## 2026-06-27（续 24）：全部 58 个 coreaction Actions 零 stub
 
 所有 58 个 coreaction Action structs 现在都有 apply()-驱动级实现。不再有纯 stub（返回 NO_CHANGE 且不访问 Funcdata）的 Action。每个 Action 都在 apply() 中实际遍历 Funcdata 的 VarnodeBank、PcodeOpBank、BlockGraph、callspecs 或 FuncProto。
+
+## 2026-06-27（续 25）：新增 pcodeparse 模块
+
+- `pub mod pcodeparse;` — 对应 `pcodeparse.hh` + `pcodecompile.hh`，P-code 片段解析器。PcodeLexer（状态机词法分析：标识符/hex/dec/标点/\$/\$\$/#注释）+ PcodeSnippet（编译器框架：符号表 + 临时分配 + parse_stream 验证 + 错误报告）。L3 缺完整语义动作（需 SLEIGH SleighBase/SymbolTree）。

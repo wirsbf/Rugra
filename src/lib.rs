@@ -87,6 +87,7 @@ pub mod prettyprint; // ← prettyprint.hh
 pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh
 pub mod pcodeinject; // ← pcodeinject.hh
+pub mod pcodeparse; // ← pcodeparse.hh + pcodecompile.hh
 pub mod rangeutil; // ← rangeutil.hh
 pub mod rangemap; // ← rangemap.hh + partmap.hh
 pub mod ruleaction; // ← ruleaction.hh
