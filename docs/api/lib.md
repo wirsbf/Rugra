@@ -423,3 +423,7 @@
 ## 2026-06-26（续）：新增 unify 模块
 
 - `pub mod unify;` — 对应 `unify.hh`，统一化模式匹配。UnifyState/RHSConstant/UnifyConstraint 骨架已实现。
+
+## 2026-06-26（续）：新增 constseq 模块
+
+- `pub mod constseq;` — 对应 `constseq.hh`，常量序列分析。WriteNode/ArraySequence/StringSequence/HeapSequence/RuleStringCopy/RuleStringStore 骨架已实现。

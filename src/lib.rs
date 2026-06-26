@@ -52,6 +52,7 @@ pub mod block; // ← block.hh
 pub mod blockaction;
 pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
+pub mod constseq; // ← constseq.hh
 pub mod cover; // ← cover.hh
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
