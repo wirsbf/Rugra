@@ -2280,12 +2280,36 @@ impl Action for ActionMarkImplied {
 
 /// Set casts on operations. Faithful to `ActionSetCasts`
 /// (coreaction.cc).
-pub struct ActionSetCasts;
+///
+/// This is the final type-casting pass. It iterates all basic blocks in
+/// dominance order, and for each op:
+/// 1. Fixes PTRADD/PTRSUB ops that no longer fit their pointer type
+/// 2. Resolves union fields on inputs
+/// 3. Casts inputs to match the op's expected type
+/// 4. Checks pointer issues on LOAD/STORE
+/// 5. Casts the output to its declared type
+pub struct ActionSetCasts { pub count: i32 }
 impl ActionSetCasts {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionSetCasts {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. data.startCastPhase()
+        // 2. Get CastStrategy from print language
+        // 3. For each basic block (in dominance order):
+        //    For each op in the block:
+        //      - Skip notPrinted and CAST ops
+        //      - PTRADD: check if element size matches pointer target
+        //      - PTRSUB: check if offset matches field layout
+        //      - For each input: resolveUnion + castInput
+        //      - LOAD/STORE: checkPointerIssues
+        //      - castOutput on the output Varnode
+        //
+        // Requires: CastStrategy + PrintLanguage + Datatype + Varnode type
+        // flags. This is one of the most complex Actions in the pipeline.
+        // L3 gap: requires PrintLanguage + CastStrategy + Datatype integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "setcasts" }

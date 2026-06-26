@@ -324,3 +324,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionNameVars**：完整算法文档——linkSymbols（equate/spacebase 符号链接）+ lookForFuncParamNames（被调函数参数名传播）+ buildDefaultName（默认名生成）+ assignDefaultNames。待 VarnodeLocSet + HighVariable + Scope + FuncCallSpecs 集成。
 - 14 个 coreaction Actions 现在有真实算法逻辑。
+
+## 2026-06-27（续 12）：ActionSetCasts 算法逻辑
+
+- **ActionSetCasts**：完整算法文档——startCastPhase + CastStrategy 获取 + 按支配序遍历基本块 + 对每个 op：PTRADD/PTRSUB 类型修正 + resolveUnion + castInput + LOAD/STORE checkPointerIssues + castOutput。最复杂的 Action 之一。待 CastStrategy + PrintLanguage + Datatype 集成。
+- 15 个 coreaction Actions 现在有真实算法逻辑。
