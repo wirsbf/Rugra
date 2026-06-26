@@ -505,3 +505,7 @@
 ## 2026-06-27（续 7）：新增 capability 模块
 
 - `pub mod capability;` — 对应 `capability.hh`，扩展点注册系统。CapabilityPoint trait（initialize）+ CapabilityRegistry（register/initialize_all/num_points）+ global_registry 单例。是 ArchitectureCapability/PrintLanguageCapability 等扩展点的基础。
+
+## 2026-06-27（续 8）：新增 stringmanage 模块
+
+- `pub mod stringmanage;` — 对应 `stringmanage.hh`，字符串解码管理。StringManager + StringManagerUnicode（LoadImage 集成）+ 完整 UTF8/UTF16/UTF32 解码（write_utf8/read_utf16/get_codepoint/check_characters/has_char_terminator/write_unicode/assign_string_data）。解锁 Architecture::stringManager。L3 缺 XML encode/decode。

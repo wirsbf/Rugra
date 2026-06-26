@@ -84,6 +84,7 @@ pub mod rangeutil; // ← rangeutil.hh
 pub mod ruleaction; // ← ruleaction.hh
 pub mod signature; // ← signature.hh
 pub mod space; // ← space.hh
+pub mod stringmanage; // ← stringmanage.hh
 pub mod subflow; // ← subflow.hh
 pub mod transform; // ← transform.hh
 pub mod type_system; // ← type.hh

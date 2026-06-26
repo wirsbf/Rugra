@@ -240,7 +240,7 @@
 | 51 | `callgraph.cc` | — | 📋 L1 | **完全缺失**：调用图构建 | `callgraph.cc` |
 | 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | 🔧 L2 | **XML encode/decode 已实现**：SymbolEntry/Symbol（encode_header/decode_header/encode_body/decode_body/encode/decode）/Scope（encode_recursive/decode）/Database（encode/decode）全部使用 marshal.rs 的 Encoder/Decoder trait。ID_BASE 修正为 0x4000...。L3 仅缺 rangemap/partmap（目前用线性搜索/Vec 替代） | `database.cc`, `database_ghidra.cc` |
 | 53 | `xml.cc` + `marshal.cc` | `marshal.rs` | 🔧 L2 | **骨架已移植**：AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database/override/arch 的 XML encode/decode。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析 | `xml.cc`, `marshal.cc` |
-| 54 | `stringmanage.cc` + `string_ghidra.cc` | Rust 原生 | 🔧 L2 | 基础 rodata 扫描；缺少完整字符串管理 | `stringmanage.cc` |
+| 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | 🔧 L2 | **完整 UTF 解码已移植**：StringManager + StringManagerUnicode（LoadImage 集成）+ write_utf8/read_utf16/get_codepoint（UTF8/UTF16/UTF32 + 代理对）/check_characters/has_char_terminator/write_unicode/assign_string_data。L3 缺 XML encode/decode | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | — | 📋 L1 | **完全缺失**：CRC32/压缩 | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
 | 57 | `prefersplit.cc` | — | 📋 L1 | **完全缺失**：偏好分裂分析 | `prefersplit.cc` |
