@@ -248,7 +248,7 @@
 | 59 | `unionresolve.cc` | — | 📋 L1 | **完全缺失**：联合体解析 | `unionresolve.cc` |
 | 60 | `flow.cc` | — | 📋 L1 | **完全缺失**：流分析 | `flow.cc` |
 | 61 | `codedata.cc` | — | 📋 L1 | **完全缺失**：代码数据分析 | `codedata.cc` |
-| 62 | `capability.cc` | — | 📋 L1 | **完全缺失**：能力系统 | `capability.cc` |
+| 62 | `capability.cc` | `capability.rs` | ✅ L3 | **完整实现**：CapabilityPoint trait（initialize）+ CapabilityRegistry（register/initialize_all/num_points）+ global_registry 全局单例。是 ArchitectureCapability/PrintLanguageCapability 等扩展点的基础 | `capability.cc` |
 | 63 | `dynamic.cc` | — | 📋 L1 | **完全缺失**：动态分析 | `dynamic.cc` |
 | 64 | `loadimage*.cc` (4文件) | `loadimage.rs` | 🔧 L2 | **骨架已移植**：LoadImage trait（load_fill/load/load_value/get_arch_type/adjust_vma + symbols/sections/readonly）+ RawLoadImage（从文件读取，vma 偏移）+ MemoryLoadImage（内存缓冲）。解锁 EmulateFunction/JumpBasic/Architecture 的 LoadImage 依赖 | `loadimage.cc` 等 |
 | 65 | `cpool.cc` + `cpool_ghidra.cc` | — | 📋 L1 | **完全缺失**：常量池 | `cpool.cc` |

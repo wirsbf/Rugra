@@ -52,6 +52,7 @@ pub mod arch; // ← architecture.hh (Ghidra Architecture config container)
 pub mod block; // ← block.hh
 pub mod blockaction;
 pub mod callgraph; // ← callgraph.hh
+pub mod capability; // ← capability.hh
 pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
 pub mod comment; // ← comment.hh

@@ -501,3 +501,7 @@
 ## 2026-06-27（续 6）：新增 loadimage 模块
 
 - `pub mod loadimage;` — 对应 `loadimage.hh`，二进制加载镜像。LoadImage trait（load_fill/load/load_value/get_arch_type/adjust_vma + symbols/sections/readonly）+ RawLoadImage（从文件读取）+ MemoryLoadImage（内存缓冲）。解锁 EmulateFunction::getLoadImageValue、JumpBasic::sanityCheck、Architecture::loader。
+
+## 2026-06-27（续 7）：新增 capability 模块
+
+- `pub mod capability;` — 对应 `capability.hh`，扩展点注册系统。CapabilityPoint trait（initialize）+ CapabilityRegistry（register/initialize_all/num_points）+ global_registry 单例。是 ArchitectureCapability/PrintLanguageCapability 等扩展点的基础。
