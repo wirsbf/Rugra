@@ -654,3 +654,12 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 ## 2026-06-27（续 2）：remove_branch
 
 - `remove_branch(bb, num)`（funcdata_block.cc branchRemoveInternal）：销毁 CBRANCH op（如果 2 out-edges）+ 移除非选中 out-edge + 更新目标块 incoming。解锁 ActionDeterminedBranch。
+
+## 2026-06-27（续 3）：FuncCallSpecs 集成
+
+- `callspecs: Vec<FuncCallSpecs>` — 函数调用规格向量（Ghidra breefcall）。
+- `num_calls() -> usize` — 调用点数（funcdata.hh numCalls）。
+- `get_call_specs(i) -> Option<&FuncCallSpecs>` — 按索引获取（funcdata.hh getCallSpecs）。
+- `get_call_specs_mut(i) -> Option<&mut FuncCallSpecs>` — 可变访问。
+- `add_call_specs(fc) -> usize` — 添加调用规格。
+- `get_func_proto() -> &FuncProto` / `get_func_proto_mut() -> &mut FuncProto` — 函数原型访问。

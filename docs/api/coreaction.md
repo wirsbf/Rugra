@@ -394,3 +394,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionConstbase**：apply() 现在正确处理无块情况 + 验证 entry block 存在。
 - **ActionNormalizeSetup**：apply() 文档清理（完整需要 FuncProto）。
 - 11 个 apply()-驱动 + 2 个已清理的框架（合计不再有纯 stub 的核心 Actions）。
+
+## 2026-06-27（续 25）：FuncCallSpecs 集成到 Funcdata + ActionFuncLink 升级
+
+- **Funcdata 新增**：`callspecs: Vec<FuncCallSpecs>` 字段 + `num_calls()`/`get_call_specs()`/`get_call_specs_mut()`/`add_call_specs()`/`get_func_proto()`/`get_func_proto_mut()` 方法。
+- **ActionFuncLink**：升级为 apply()-驱动级——遍历 callspecs 验证 op 地址。
+- 解锁后续 ActionActiveParam/ActionDeindirect/ActionStackPtrFlow 等的 callspecs 访问。

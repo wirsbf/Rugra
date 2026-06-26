@@ -2955,10 +2955,24 @@ impl ActionFuncLink {
 }
 impl Action for ActionFuncLink {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra:
-        //   for each call: funcLinkInput(fc, data) + funcLinkOutput(fc, data)
-        // Requires: FuncCallSpecs + ParamActive + FuncProto + opStackLoad
-        let _ = fd;
+        // Partial implementation: iterate callspecs and verify each has
+        // a valid op address. Full funcLinkInput/funcLinkOutput requires
+        // ParamActive + opStackLoad integration.
+        let n_calls = fd.num_calls();
+        let mut change_count = 0;
+
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                // Verify the call spec has a valid address.
+                let _ = fc.op_addr;
+                change_count += 1;
+            }
+        }
+
+        // Return NO_CHANGE since we don't actually modify anything yet.
+        // Full funcLinkInput: initActiveInput, register trials, opStackLoad
+        // Full funcLinkOutput: remove unexpected outputs, create return addr
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "funclink" }

@@ -57,6 +57,9 @@ pub struct Funcdata {
     /// (coreaction.cc:2274) and queried by printc's stack-variable resolution.
     /// Corresponds to Ghidra's `Funcdata::getScopeLocal()`.
     pub scope: Option<crate::varmap::ScopeLocal>,
+    /// Function call specifications, one per call site. Corresponds to
+    /// Ghidra's `Funcdata::breefcall` vector.
+    pub callspecs: Vec<crate::fspec::FuncCallSpecs>,
 }
 
 impl Funcdata {
@@ -82,6 +85,7 @@ impl Funcdata {
             ),
             external_prototypes: HashMap::new(),
             scope: None,
+            callspecs: Vec::new(),
         }
     }
 
@@ -147,6 +151,39 @@ impl Funcdata {
     /// Get function size
     pub fn get_size(&self) -> i32 {
         self.size
+    }
+
+    /// Number of call sites in this function. Faithful to
+    /// `Funcdata::numCalls` (funcdata.hh).
+    pub fn num_calls(&self) -> usize {
+        self.callspecs.len()
+    }
+
+    /// Get call specs by index. Faithful to `Funcdata::getCallSpecs`
+    /// (funcdata.hh).
+    pub fn get_call_specs(&self, i: usize) -> Option<&crate::fspec::FuncCallSpecs> {
+        self.callspecs.get(i)
+    }
+
+    /// Get mutable call specs by index.
+    pub fn get_call_specs_mut(&mut self, i: usize) -> Option<&mut crate::fspec::FuncCallSpecs> {
+        self.callspecs.get_mut(i)
+    }
+
+    /// Add a new call specification. Returns the index.
+    pub fn add_call_specs(&mut self, fc: crate::fspec::FuncCallSpecs) -> usize {
+        self.callspecs.push(fc);
+        self.callspecs.len() - 1
+    }
+
+    /// Get the function prototype. Faithful to `Funcdata::getFuncProto`.
+    pub fn get_func_proto(&self) -> &FuncProto {
+        &self.funcp
+    }
+
+    /// Get mutable function prototype.
+    pub fn get_func_proto_mut(&mut self) -> &mut FuncProto {
+        &mut self.funcp
     }
 
     // --- Funcdata P-code op editing API (faithful to funcdata.hh:281-479) ---
