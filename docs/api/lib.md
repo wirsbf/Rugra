@@ -534,3 +534,7 @@
 ## 2026-06-27（续 14）：新增 unionresolve 模块
 
 - `pub mod unionresolve;` — 对应 `unionresolve.hh`，联合体字段解析。ResolvedUnion（resolve/base/field_num/lock）+ ResolveEdge（type_id/op_time/encoding + 指针编码）+ DirType（FitDown/FitUp）+ Trial（向下/向上试验）+ VisitMark（已访问标记）+ ScoreUnionFields（评分框架 + compute_best_index + run stub）。解锁 ActionUnionStats。L3 缺完整评分算法（需 TypeFactory + PcodeOp）。
+
+## 2026-06-27（续 15）：新增 grammar 模块
+
+- `pub mod grammar;` — 对应 `grammar.hh`，C 语法解析器。GrammarToken + GrammarLexer（状态机词法分析：标点/标识符/整数 dec-hex-oct/字符串/字符常量/`//`和`/* */`注释/`...`）+ TypeModifier（Pointer/Array/Function）+ TypeDeclarator AST + parse_type/parse_to_separator 入口函数。L3 缺完整 CParse 递归下降解析器 + TypeFactory 集成。

@@ -65,6 +65,7 @@ pub mod crc32; // ← crc32.hh
 pub mod database; // ← database.hh (Symbol/Scope/Database)
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
+pub mod grammar; // ← grammar.hh
 pub mod heritage; // ← heritage.hh
 pub mod jumptable; // ← jumptable.hh
 pub mod expression; // ← expression.hh
