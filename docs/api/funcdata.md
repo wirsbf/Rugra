@@ -636,3 +636,8 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `replace_lessequal(op) -> bool` — `Funcdata::replaceLessequal`（funcdata_op.cc:1029）：
   `V <= c => V < c+1`，调整常量±1并改 opcode，带溢出保护。解锁 RuleIntLessEqual。
+
+### 2026-06-26（续）：distribute_int_mult_add
+
+- `distribute_int_mult_add(op) -> bool` — `Funcdata::distributeIntMultAdd`（funcdata_op.cc:1073-1118）：
+  `(V + W) * c => V*c + W*c`。将 INT_MULT 系数分配到 INT_ADD 的两个输入。常量输入直接乘出结果；非常量输入创建新 INT_MULT op。解锁 RuleCollectTerms 完整形式。

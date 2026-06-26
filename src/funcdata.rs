@@ -338,6 +338,74 @@ impl Funcdata {
         true
     }
 
+    /// Distribute INT_MULT coefficient through INT_ADD:
+    /// `(V + W) * c => V*c + W*c`.
+    /// Faithful to `Funcdata::distributeIntMultAdd` (funcdata_op.cc:1073-1118).
+    /// The given op is INT_MULT(in0=INT_ADD(...), in1=constant coeff).
+    pub fn distribute_int_mult_add(&mut self, op: &crate::op::PcodeOpRef) -> bool {
+        let (vn0, vn1, coeff, sz, pc) = {
+            let o = op.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_INT_MULT { return false; }
+            let in0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+            let in1 = match o.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return false,
+            };
+            let addop_arc = {
+                let i0 = in0.read().unwrap();
+                i0.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let addop_arc = match addop_arc { Some(a) => a, None => return false };
+            if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return false; }
+            let (vn0, vn1) = {
+                let ao = addop_arc.read().unwrap();
+                (ao.inrefs.get(0).cloned(), ao.inrefs.get(1).cloned())
+            };
+            let (vn0, vn1) = match (vn0, vn1) { (Some(a), Some(b)) => (a, b), _ => return false };
+            let coeff = in1.read().unwrap().get_offset();
+            let sz = o.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            (vn0, vn1, coeff, sz, o.start.get_addr())
+        };
+        if sz == 0 { return false; }
+        let mask = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
+        let follow = crate::op::PcodeOpRef(op.0.clone());
+        // Distribute vn0 * coeff
+        let newvn0 = if vn0.read().unwrap().is_constant() {
+            let val = coeff.wrapping_mul(vn0.read().unwrap().get_offset()) & mask;
+            self.new_constant(sz, val)
+        } else {
+            if vn0.read().unwrap().is_free() && !vn0.read().unwrap().is_constant() { return false; }
+            let newop0 = self.new_op(2, pc);
+            self.op_set_opcode(&newop0, OpCode::CPUI_INT_MULT);
+            let newout0 = self.new_unique_out(sz, &newop0);
+            self.op_set_input(&newop0, vn0, 0);
+            let c0 = self.new_constant(sz, coeff);
+            self.op_set_input(&newop0, c0, 1);
+            self.op_insert_before(&newop0, &follow);
+            newout0
+        };
+        // Distribute vn1 * coeff
+        let newvn1 = if vn1.read().unwrap().is_constant() {
+            let val = coeff.wrapping_mul(vn1.read().unwrap().get_offset()) & mask;
+            self.new_constant(sz, val)
+        } else {
+            if vn1.read().unwrap().is_free() && !vn1.read().unwrap().is_constant() { return false; }
+            let newop1 = self.new_op(2, pc);
+            self.op_set_opcode(&newop1, OpCode::CPUI_INT_MULT);
+            let newout1 = self.new_unique_out(sz, &newop1);
+            self.op_set_input(&newop1, vn1, 0);
+            let c1 = self.new_constant(sz, coeff);
+            self.op_set_input(&newop1, c1, 1);
+            self.op_insert_before(&newop1, &follow);
+            newout1
+        };
+        // Rewrite op to INT_ADD(newvn0, newvn1)
+        self.op_set_input(&follow, newvn0, 0);
+        self.op_set_input(&follow, newvn1, 1);
+        self.op_set_opcode(&follow, OpCode::CPUI_INT_ADD);
+        true
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve
