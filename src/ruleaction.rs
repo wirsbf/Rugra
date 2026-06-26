@@ -2707,6 +2707,56 @@ impl Rule for RuleTestSign {
     }
 }
 
+/// Collapse INT_EQUAL/INT_NOTEQUAL when both inputs are functionally equal:
+///   `f(V,W) == f(V,W)  =>  true`, `f(V,W) != f(V,W)  =>  false`
+///
+/// Faithful to Ghidra's `RuleEquality` (ruleaction.cc:619-643). If both inputs
+/// to an INT_EQUAL/INT_NOTEQUAL are provably the same value, the comparison
+/// collapses to a COPY of a constant (1 for EQUAL, 0 for NOTEQUAL).
+pub struct RuleEquality;
+
+impl RuleEquality {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleEquality {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (equal, is_notequal) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in1 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (crate::address::functional_equality(&in0, &in1), op.opcode == OpCode::CPUI_INT_NOTEQUAL)
+        };
+        if !equal {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Collapse to COPY(1) for EQUAL, COPY(0) for NOTEQUAL.
+        let val = if is_notequal { 0 } else { 1 };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        fd.op_remove_input(&follow, 1);
+        let c = fd.new_constant(1, val);
+        fd.op_set_input(&follow, c, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "equality"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4529,5 +4579,59 @@ mod tests {
         assert_eq!(result, action_status::CHANGE);
         let e = eq_op.read().unwrap();
         assert_eq!(e.opcode, OpCode::CPUI_INT_SLESSEQUAL);
+    }
+
+    // --- RuleEquality (ruleaction.cc:619) ---
+
+    #[test]
+    fn test_equality_same_varnode_collapse() {
+        // V == V (same varnode both inputs) => COPY(1)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![v.clone(), v.clone()];
+        let rule = RuleEquality::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs[0].read().unwrap().get_val(), 1);
+    }
+
+    #[test]
+    fn test_equality_same_constant_collapse() {
+        // 5 != 5 (two distinct constant varnodes with same value) => COPY(0)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let c1 = fd.vbank.create_constant(4, 5);
+        let c2 = fd.vbank.create_constant(4, 5);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_NOTEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![c1, c2];
+        let rule = RuleEquality::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs[0].read().unwrap().get_val(), 0); // NOTEQUAL → 0
+    }
+
+    #[test]
+    fn test_equality_different_constants_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let c1 = fd.vbank.create_constant(4, 5);
+        let c2 = fd.vbank.create_constant(4, 6);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![c1, c2];
+        let rule = RuleEquality::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

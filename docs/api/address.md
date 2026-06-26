@@ -247,3 +247,7 @@ Encode to string format (comma-separated ranges)
 - `mostsigbit_set(val)` — address.cc:735，最高有效位置位索引
 
 测试：address::tests +4。
+
+## 2026-06-26（续）：functional_equality
+
+- `functional_equality(vn1, vn2) -> bool`（expression.cc:520, level-0:404）：判断两 varnode 是否持相同值（同指针或同常量）。深层 functionalEqualityLevel 待补。解锁 RuleEquality。

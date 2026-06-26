@@ -512,6 +512,32 @@ pub fn mostsigbit_set(val: u64) -> i32 {
     }
 }
 
+/// Determine if two Varnodes hold the same value (immediate level).
+/// Faithful to Ghidra's `functionalEquality` (expression.cc:520-526), using
+/// only the level-0 test (expression.cc:404-417): identical varnode pointer,
+/// or identical constants. The deeper structural comparison
+/// (functionalEqualityLevel) is deferred. Returns true if provably equal.
+pub fn functional_equality(
+    vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> bool {
+    // level-0: same pointer → 0
+    if std::sync::Arc::ptr_eq(vn1, vn2) {
+        return true;
+    }
+    let v1 = vn1.read().unwrap();
+    let v2 = vn2.read().unwrap();
+    if v1.get_size() != v2.get_size() {
+        return false;
+    }
+    // both constants → equal?
+    if v1.is_constant() && v2.is_constant() {
+        return v1.get_offset() == v2.get_offset();
+    }
+    // otherwise cannot immediately prove equality
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

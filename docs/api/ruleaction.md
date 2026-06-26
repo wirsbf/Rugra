@@ -322,3 +322,13 @@ AND-比较变换，把 AND 推到更大的定义域：
 遍历 SRIGHT 输出的后代比较，改写为 INT_SLESS/INT_SLESSEQUAL vs 0。
 
 测试：ruleaction::tests +2（NOTEQUAL→SLESS；EQUAL→SLESSEQUAL）。
+
+### 2026-06-26（续）：RuleEquality + functional_equality
+
+#### `fn functional_equality(vn1, vn2) -> bool`（expression.cc:520, level-0:404）
+判断两 varnode 是否持有相同值（立即层）：同指针或同常量。深层 functionalEqualityLevel 待补。
+
+#### `pub struct RuleEquality`（ruleaction.cc:619-643）
+`f(V,W) == f(V,W) => true`，`f(V,W) != f(V,W) => false`。两输入功能相等时塌缩为 COPY(1/0)。
+
+测试：ruleaction::tests +3（同 varnode→COPY(1)；同常量 NOTEQUAL→COPY(0)；异常量不变）。
