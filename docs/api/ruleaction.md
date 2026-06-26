@@ -290,3 +290,14 @@ INT_LESSEQUAL 与极值常量的简化：
 精确抵消时退化为 zext/sext(main)。
 
 测试：ruleaction::tests +2（精确抵消→ZEXT；部分不移完→NO_CHANGE）。
+
+### 2026-06-26（续）：RuleShiftCompare
+
+#### `pub struct RuleShiftCompare`（ruleaction.cc:2064-2168）
+移位比较变换：将比较一侧的常量移位移到另一侧。
+- `V >> c == d => V == (d << c)`（右移需 loneDescend）
+- `V << c == d => V == (d >> c)`
+- INT_MULT/INT_DIV 乘除 2 的幂视为移位（leastsigbit_set）
+当 NZM 表明移位丢信息时不转换（AND-mask 子形式暂缓）。
+
+测试：ruleaction::tests +2（左移丢高位不变；右移寄存器丢低位不变——记录保守 NZM 行为，待 Heritage 提供 NZM 后可触发）。

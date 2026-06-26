@@ -2369,6 +2369,124 @@ impl Rule for RuleConcatShift {
     }
 }
 
+/// Transform shifts in comparisons:
+///   `V >> c == d  =>  V == (d << c)`
+///   `V << c == d  =>  V == (d >> c)`
+///
+/// Faithful to Ghidra's `RuleShiftCompare` (ruleaction.cc:2064-2168). Moves
+/// a constant shift on one side of a comparison to the other side, when the
+/// shifted value is known not to lose information. INT_MULT/INT_DIV by a
+/// power of 2 are treated as shifts via leastsigbit_set.
+pub struct RuleShiftCompare;
+
+impl RuleShiftCompare {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleShiftCompare {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (shiftvn, constval, shiftop_arc) = {
+            let op = op_arc.read().unwrap();
+            let shiftvn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let shiftop_arc = {
+                let s = shiftvn.read().unwrap();
+                s.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let shiftop_arc = match shiftop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let cv = constvn.read().unwrap().get_offset();
+            (shiftvn, cv, shiftop_arc)
+        };
+        let (isleft, sa, mainvn) = {
+            let so = shiftop_arc.read().unwrap();
+            let savn = match so.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = savn.read().unwrap().get_offset();
+            let mainvn = match so.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            match so.opcode {
+                OpCode::CPUI_INT_LEFT => (true, val as i32, mainvn),
+                OpCode::CPUI_INT_RIGHT => {
+                    if !shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    (false, val as i32, mainvn)
+                }
+                OpCode::CPUI_INT_MULT => {
+                    let sa = crate::address::leastsigbit_set(val);
+                    if sa < 0 || (val >> sa) != 1 {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    (true, sa, mainvn)
+                }
+                OpCode::CPUI_INT_DIV => {
+                    if !shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    let sa = crate::address::leastsigbit_set(val);
+                    if sa < 0 || (val >> sa) != 1 {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    (false, sa, mainvn)
+                }
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        if sa == 0 || mainvn.read().unwrap().is_free() || mainvn.read().unwrap().get_size() > 8 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let shiftvn_size = shiftvn.read().unwrap().get_size();
+        let nzmask = mainvn.read().unwrap().get_nz_mask();
+        let newconst;
+        if isleft {
+            newconst = constval >> sa;
+            if (newconst << sa) != constval {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let tmp = (nzmask << sa) & crate::address::calc_mask(shiftvn_size);
+            if (tmp >> sa) != nzmask {
+                return Ok(action_status::NO_CHANGE); // info lost in main (AND-mask form deferred)
+            }
+        } else {
+            if ((nzmask >> sa) << sa) != nzmask {
+                return Ok(action_status::NO_CHANGE);
+            }
+            newconst = (constval << sa) & crate::address::calc_mask(shiftvn_size);
+            if (newconst >> sa) != constval {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let newconst_vn = fd.new_constant(4, newconst);
+        fd.op_set_input(&follow, mainvn, 0);
+        fd.op_set_input(&follow, newconst_vn, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "shift_compare"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4010,6 +4128,70 @@ mod tests {
         }
         let rule = RuleConcatShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleShiftCompare (ruleaction.cc:2064) ---
+
+    #[test]
+    fn test_shift_compare_left_no_info_loss_no_change() {
+        // (V << 4) == 0x20 — mainvn is a register (NZM=0xffffffff), so
+        // left-shift loses high bits and the rule correctly does NOT convert.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 4);
+        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, sa];
+            s.output = Some(shift_out.clone());
+        }
+        let d = fd.vbank.create_constant(4, 0x20);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        eq_op.write().unwrap().inrefs = vec![shift_out, d];
+        let rule = RuleShiftCompare::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        // NZM=0xffffffff, left-shift loses high bits → no conversion.
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_shift_compare_right_register_no_change() {
+        // (V >> 4) == 0x02, V is a register. NZM=0xffffffff (conservative),
+        // so right-shift by 4 loses low bits → no conversion until Heritage
+        // provides a real NZM. This documents the current (correct) behavior.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 4);
+        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, sa];
+            s.output = Some(shift_out.clone());
+        }
+        let d = fd.vbank.create_constant(4, 0x02);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        eq_op.write().unwrap().inrefs = vec![shift_out.clone(), d];
+        shift_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        let rule = RuleShiftCompare::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        // NZM=0xffffffff loses low bits → no conversion (until Heritage wires NZM).
         assert_eq!(result, action_status::NO_CHANGE);
     }
 }
