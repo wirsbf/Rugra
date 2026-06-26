@@ -407,3 +407,7 @@
 ## 2026-06-26：新增 expression 模块
 
 - `pub mod expression;` — 对应 `expression.hh`，TermOrder/AdditiveEdge/AddExpression。
+
+## 2026-06-26（续）：新增 condexe 模块
+
+- `pub mod condexe;` — 对应 `condexe.hh`，条件执行简化。ActionConditionalExe 骨架已实现。
