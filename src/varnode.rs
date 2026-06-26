@@ -22,6 +22,7 @@ use crate::variable::HighVariable;
 use crate::cover::Cover;
 use crate::op::PcodeOp;
 use crate::type_system::Datatype;
+use crate::type_system::TypeMetatype;
 
 /// Flags for Varnode properties (varnode_flags in Ghidra)
 pub mod varnode_flags {
@@ -377,6 +378,30 @@ impl Varnode {
     /// Set the stored non-zero mask.
     pub fn set_nzm(&mut self, val: u64) {
         self.nzm = val;
+    }
+
+    /// Is this varnode known to hold a boolean (0 or 1) value? Faithful to
+    /// `Varnode::isBooleanValue` (varnode.cc:942-953). If written, checks the
+    /// defining op's isCalculatedBool flag. If an input, checks type annotation
+    /// (only when use_annotation is true).
+    pub fn is_boolean_value(&self, use_annotation: bool) -> bool {
+        if self.is_written() {
+            if let Some(def) = self.def.as_ref().and_then(|w| w.upgrade()) {
+                return def.read().unwrap().is_calculated_bool();
+            }
+        }
+        if !use_annotation {
+            return false;
+        }
+        // Check typelocked input of TYPE_BOOL.
+        if self.is_input() && (self.flags & varnode_flags::TYPELOCK) != 0 {
+            if self.size == 1 {
+                if let Some(t) = &self.v_type {
+                    return t.get_metatype() == TypeMetatype::Bool;
+                }
+            }
+        }
+        false
     }
 }
 

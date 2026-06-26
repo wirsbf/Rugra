@@ -133,6 +133,12 @@ impl PcodeOp {
     pub fn is_branch(&self) -> bool {
         (self.flags & pcodeop_flags::BRANCH) != 0
     }
+
+    /// Is this op's output a calculated boolean value? Faithful to
+    /// `PcodeOp::isCalculatedBool` (op.hh:211).
+    pub fn is_calculated_bool(&self) -> bool {
+        (self.flags & (pcodeop_flags::CALCULATED_BOOL | pcodeop_flags::BOOLOUTPUT)) != 0
+    }
 }
 
 /// Comparison for sorting PcodeOps in the bank

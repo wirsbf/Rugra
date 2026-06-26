@@ -822,3 +822,6 @@ PcodeOpRaw
 ## 11. 一句话总结
 
 `op.rs` 是 Rugra 当前 P-code 操作层的核心建模模块：它定义了**操作节点是什么、如何被标记、如何被引用、如何被统一管理**，并为后续的 SSA、规则重写、控制流分析和打印输出提供操作级基础设施。
+## 2026-06-26：is_calculated_bool
+
+- `is_calculated_bool()` — `PcodeOp::isCalculatedBool`（op.hh:211）：检查 CALCULATED_BOOL|BOOLOUTPUT 标志。解锁 RuleBooleanNegate/RuleLogic2Bool。

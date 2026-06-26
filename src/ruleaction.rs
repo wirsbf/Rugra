@@ -3597,6 +3597,104 @@ impl Rule for RuleEarlyRemoval {
     }
 }
 
+/// Simplify boolean comparisons with constants 0 and 1:
+///   `boolval != 0  =>  boolval`
+///   `boolval != 1  =>  !boolval`
+///   `boolval == 0  =>  !boolval`
+///   `boolval == 1  =>  boolval`
+///
+/// Faithful to Ghidra's `RuleBooleanNegate` (ruleaction.cc:2969-2999). When
+/// one input is a boolean value and the other is constant 0 or 1, the
+/// INT_EQUAL/INT_NOTEQUAL collapses to COPY or BOOL_NEGATE.
+pub struct RuleBooleanNegate;
+
+impl RuleBooleanNegate {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleBooleanNegate {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (opc, constval, subbool) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = constvn.read().unwrap().get_offset();
+            if val != 0 && val != 1 { return Ok(action_status::NO_CHANGE); }
+            let subbool = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (op.opcode, val, subbool)
+        };
+        // subbool must be a boolean value.
+        if !subbool.read().unwrap().is_boolean_value(false) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let is_notequal = opc == OpCode::CPUI_INT_NOTEQUAL;
+        // negate = (is_notequal XOR (val==0))
+        let negate = is_notequal ^ (constval == 0);
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_input(&follow, subbool, 0);
+        if negate {
+            fd.op_set_opcode(&follow, OpCode::CPUI_BOOL_NOT);
+        } else {
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "boolean_negate" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
+}
+
+/// Convert INT_AND/INT_OR/INT_XOR to BOOL_AND/BOOL_OR/BOOL_XOR when both
+/// inputs are boolean values.
+///
+/// Faithful to Ghidra's `RuleLogic2Bool` (ruleaction.cc:3128-3167).
+pub struct RuleLogic2Bool;
+
+impl RuleLogic2Bool {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleLogic2Bool {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (opc, in0, in1) = {
+            let op = op_arc.read().unwrap();
+            if !matches!(op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (op.opcode, in0, in1)
+        };
+        // in0 must be boolean.
+        if !in0.read().unwrap().is_boolean_value(false) { return Ok(action_status::NO_CHANGE); }
+        // in1 must be boolean or constant 0/1.
+        let in1_is_bool = {
+            let i1 = in1.read().unwrap();
+            if i1.is_constant() {
+                i1.get_offset() <= 1
+            } else {
+                i1.is_boolean_value(false)
+            }
+        };
+        if !in1_is_bool { return Ok(action_status::NO_CHANGE); }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let new_opc = match opc {
+            OpCode::CPUI_INT_AND => OpCode::CPUI_BOOL_AND,
+            OpCode::CPUI_INT_OR => OpCode::CPUI_BOOL_OR,
+            OpCode::CPUI_INT_XOR => OpCode::CPUI_BOOL_XOR,
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        fd.op_set_opcode(&follow, new_opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "logic2bool" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6025,5 +6123,76 @@ mod tests {
         let rule = RuleEarlyRemoval::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
+    }
+
+    // --- RuleBooleanNegate (ruleaction.cc:2969) ---
+
+    #[test]
+    fn test_boolean_negate_eq_zero() {
+        // boolval == 0 => !boolval (COPY + negate)
+        // subbool must be is_boolean_value: defined by INT_LESS (calculated_bool).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        {
+            let mut l = less_op.write().unwrap();
+            l.inrefs = vec![a, b];
+            l.output = Some(less_out.clone());
+            l.flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
+        }
+        less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
+        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let zero = fd.vbank.create_constant(1, 0);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        eq_op.write().unwrap().inrefs = vec![less_out, zero];
+        let rule = RuleBooleanNegate::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // boolval == 0 => negate=true → BOOL_NOT
+        assert_eq!(eq_op.read().unwrap().opcode, OpCode::CPUI_BOOL_NOT);
+    }
+
+    // --- RuleLogic2Bool (ruleaction.cc:3128) ---
+
+    #[test]
+    fn test_logic2bool_and_to_bool_and() {
+        // (INT_LESS(a,b)) & (INT_LESS(c,d)) → BOOL_AND
+        // Both inputs are calculated_bool → is_boolean_value true.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let c = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let d = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x13);
+        let l1_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let l1 = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS)));
+        l1.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
+        l1.write().unwrap().inrefs = vec![a, b];
+        l1.write().unwrap().output = Some(l1_out.clone());
+        l1_out.write().unwrap().def = Some(Arc::downgrade(&l1));
+        l1_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let l2_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let l2 = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_LESS)));
+        l2.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
+        l2.write().unwrap().inrefs = vec![c, d];
+        l2.write().unwrap().output = Some(l2_out.clone());
+        l2_out.write().unwrap().def = Some(Arc::downgrade(&l2));
+        l2_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        and_op.write().unwrap().inrefs = vec![l1_out, l2_out];
+        let rule = RuleLogic2Bool::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(and_op.read().unwrap().opcode, OpCode::CPUI_BOOL_AND);
     }
 }

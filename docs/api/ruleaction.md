@@ -438,3 +438,16 @@ opDestroy 销毁未用 op（清输出 def、断输入 descend 链、markDead）�
 删除输出无后代的 op（非 CALL/INDIRECT）。doesDeadcode/autoLive 检查保守跳过。
 
 测试：ruleaction::tests +1（INT_ADD 无后代→destroy）。
+
+### 2026-06-26（续）：RuleBooleanNegate + RuleLogic2Bool + is_boolean_value/is_calculated_bool
+
+#### Varnode::is_boolean_value(use_annotation) / PcodeOp::is_calculated_bool（varnode.cc:942, op.hh:211）
+判断 varnode 是否为布尔值（由 calculated_bool 标志的 op 定义），解锁 RuleBooleanNegate/RuleLogic2Bool。
+
+#### `pub struct RuleBooleanNegate`（ruleaction.cc:2969-2999）
+布尔值与常量 0/1 比较：`boolval != 0 => boolval`、`boolval == 0 => !boolval` 等，塌缩为 COPY/BOOL_NOT。
+
+#### `pub struct RuleLogic2Bool`（ruleaction.cc:3128-3167）
+当两输入均为布尔值时，INT_AND→BOOL_AND、INT_OR→BOOL_OR、INT_XOR→BOOL_XOR。
+
+测试：ruleaction::tests +2（布尔 == 0→BOOL_NOT；INT_AND(less,less)→BOOL_AND）。

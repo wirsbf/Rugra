@@ -646,3 +646,7 @@
 - `get_consume() -> u64` / `set_consume(val)`（varnode.hh:205-206）：dead-code 维护的 consumed 位掩码。
 - `get_nzm() -> u64` / `set_nzm(val)`：Heritage 维护的 nzm 字段原始访问。
 解锁 RuleOrConsume/RuleAndMask 等依赖 consume 的 Rule。
+
+## 2026-06-26（续）：is_boolean_value
+
+- `is_boolean_value(use_annotation) -> bool`（varnode.cc:942）：判断 varnode 是否为已知布尔值（由 calculated_bool 标志的 op 定义）。解锁 RuleBooleanNegate/RuleLogic2Bool。
