@@ -3208,6 +3208,92 @@ impl Rule for RuleSborrow {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SBORROW] }
 }
 
+/// Distribute INT_AND through INT_OR when the distribution simplifies:
+///   `(A | B) & C  =>  (A & C) | (B & C)`  when one operand's NZM doesn't
+///   overlap C's mask (the AND cancels that branch) or is fully covered.
+///
+/// Faithful to Ghidra's `RuleAndDistribute` (ruleaction.cc:1252-1314). Uses
+/// get_nz_mask to decide whether distribution is beneficial.
+pub struct RuleAndDistribute;
+
+impl RuleAndDistribute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAndDistribute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (size, pc, distribute_slot) = {
+            let op = op_arc.read().unwrap();
+            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
+            let fullmask = crate::address::calc_mask(size);
+            let mut found: i32 = -1;
+            for i in 0..2 {
+                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue };
+                let orvn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+                let orop_arc = match orop_arc { Some(a) => a, None => continue };
+                if orop_arc.read().unwrap().opcode != OpCode::CPUI_INT_OR { continue; }
+                let othermask = othervn.read().unwrap().get_nz_mask();
+                if othermask == 0 || othermask == fullmask { continue; }
+                let (ormask1, ormask2) = {
+                    let oo = orop_arc.read().unwrap();
+                    (oo.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0),
+                     oo.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0))
+                };
+                if ormask1 & othermask == 0 { found = i as i32; break; }
+                if ormask2 & othermask == 0 { found = i as i32; break; }
+                let othervn_is_const = othervn.read().unwrap().is_constant();
+                if othervn_is_const {
+                    if ormask1 & othermask == ormask1 { found = i as i32; break; }
+                    if ormask2 & othermask == ormask2 { found = i as i32; break; }
+                }
+            }
+            if found < 0 { return Ok(action_status::NO_CHANGE); }
+            (size, op.start.get_addr(), found as usize)
+        };
+        // Capture the OR operands and the other operand.
+        let (or_in0, or_in1, othervn) = {
+            let op = op_arc.read().unwrap();
+            let orvn = op.inrefs.get(distribute_slot).cloned();
+            let othervn = op.inrefs.get(1 - distribute_slot).cloned();
+            let orvn = match orvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let othervn = match othervn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let orop_arc = match orop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            let oo = orop_arc.read().unwrap();
+            (oo.inrefs.get(0).cloned(), oo.inrefs.get(1).cloned(), othervn)
+        };
+        let (or_in0, or_in1) = match (or_in0, or_in1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        // newop1 = AND(or_in0, othervn)
+        let newop1 = fd.new_op(2, pc);
+        fd.op_set_opcode(&newop1, OpCode::CPUI_INT_AND);
+        let newvn1 = fd.new_unique_out(size, &newop1);
+        fd.op_set_input(&newop1, or_in0, 0);
+        fd.op_set_input(&newop1, othervn.clone(), 1);
+        fd.op_insert_before(&newop1, &crate::op::PcodeOpRef(op_arc.clone()));
+        // newop2 = AND(or_in1, othervn)
+        let newop2 = fd.new_op(2, pc);
+        fd.op_set_opcode(&newop2, OpCode::CPUI_INT_AND);
+        let newvn2 = fd.new_unique_out(size, &newop2);
+        fd.op_set_input(&newop2, or_in1, 0);
+        fd.op_set_input(&newop2, othervn, 1);
+        fd.op_insert_before(&newop2, &crate::op::PcodeOpRef(op_arc.clone()));
+        // Rewrite op: OR(newvn1, newvn2)
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, newvn1, 0);
+        fd.op_set_input(&follow, newvn2, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_OR);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "and_distribute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5401,5 +5487,45 @@ mod tests {
         let rule = RuleSborrow::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleAndDistribute (ruleaction.cc:1252) ---
+
+    #[test]
+    fn test_and_distribute_cancel_branch() {
+        // ((A | B) & C) where A's NZM (0xf0) & C's NZM (0x0f) == 0 → distribute
+        // For test purposes A,B are constants so NZM = their values.
+        // A=0xf0, B=0xff, C=0x0f. othermask(C)=0x0f. ormask1(A)=0xf0. 0xf0 & 0x0f = 0 → distribute.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_constant(1, 0xf0);
+        let b = fd.vbank.create_constant(1, 0xff);
+        let or_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let or_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = or_op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(or_out.clone());
+        }
+        or_out.write().unwrap().def = Some(Arc::downgrade(&or_op));
+        let c = fd.vbank.create_constant(1, 0x0f);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a2 = and_op.write().unwrap();
+            a2.inrefs = vec![or_out, c];
+            a2.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleAndDistribute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // op should now be INT_OR with 2 inputs (the distributed AND outputs).
+        let a2 = and_op.read().unwrap();
+        assert_eq!(a2.opcode, OpCode::CPUI_INT_OR);
+        assert_eq!(a2.inrefs.len(), 2);
     }
 }

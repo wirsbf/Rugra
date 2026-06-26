@@ -384,3 +384,11 @@ AND-比较变换，把 AND 推到更大的定义域：
 `sborrow(V, 0) => false`。AddExpression 形式待补。
 
 测试：ruleaction::tests +3（Scarry 零→COPY(0)；Sborrow 零→COPY(0)；Sborrow 非零不变）。
+
+### 2026-06-26（续）：RuleAndDistribute
+
+#### `pub struct RuleAndDistribute`（ruleaction.cc:1252-1314）
+当分配 INT_AND 过 INT_OR 能简化时执行：
+`(A | B) & C => (A & C) | (B & C)`，当某 OR 分支的 NZM 与 C 的 mask 无重叠（分配后该分支被取消）或（常量 C 时）被完全覆盖。用 get_nz_mask 判断，op-edit API 创建两个新 AND。
+
+测试：ruleaction::tests +1（A=0xf0/B=0xff/C=0x0f，NZM 无重叠→分配→OR）。
