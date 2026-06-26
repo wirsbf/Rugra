@@ -123,39 +123,55 @@
 **最易移植（依赖已就绪）**：`ActionRestructureVarnode`(2274)、`ActionSetCasts`(2722)、`ActionRestrictLocal`(1957)、`ActionStackPtrFlow`(481)。
 
 
-### ruleaction.cc 缺失 Rule 列表（L1 → L2 → L3）
+### ruleaction.cc Rule 列表（L1 → L2 → L3）— 2026-06-26 更新
 
-**已实现（L3）：**
-- `RuleCollapseConstants`, `RuleTransformCpool`, `RulePropagateCopy`, `RulePropagateCopy2`,
-  `RuleSub2Sext`, `RuleSubNormal`, `RuleShiftBitops`, `RuleShiftCompare`,
-  `RuleDivOpt`, `RuleSignDiv2`, `RuleSignShift`, `RuleLessEqual`,
-  `RuleEquality`, `RuleLess2Zero`, `RulePtrArith`, `RuleStructPath`
+**已实现（✅ L3，Rugra ruleaction.rs 中已有，37 个 2026-06-26 新移植 + 原有）：**
 
-**缺失（L1，约 60+ 个）：**
-- `RuleMultiCollapse`, `RuleIndirectCollapse`, `RuleLoadVarnode`, `RuleStoreVarnode`,
-- `RuleStoreCpool`, `RuleSubfloatCpool`, `RuleFloatCpool`, `RuleIntLessEqual`,
-- `RuleTrivialArith`, `RuleTrivialBool`, `RuleZext`, `RuleSext`,
-- `RuleShiftRemain`, `RuleRightShiftAlgebraic`, `RuleLeftShiftAlgebraic`,
-- `RuleNotDistribute`, `RuleHighOrderSign`, `RuleSignForm`,
-- `RuleSubPieceShift`, `RuleOrMultiMask`, `RuleAndMultiMask`,
-- `RuleAndOr`, `RuleAndDistribute`, `RuleOrDistribute`,
-- `RuleLessNotEqual`, `RuleLessAnd`, `RuleLessOr`,
-- `RuleNegateIdentity`, `RuleSubRight`, `RuleAddMultCommutative`,
-- `RuleAddCommutative`, `RuleAddZero`, `RuleSubZero`,
-- `RuleMultZero`, `RuleMultOne`, `RuleAddUnsigned`,
-- `RuleBoolNegate`, `RuleBoolZext`, `RuleBoolPiece`,
-- `RuleConcatZero`, `RuleConcatLeft`, `RuleConcatRight`,
-- `RuleConcatSigned`, `RuleConcatSign`,
-- `RuleSubfloatCpool`, `RuleFloatRange`, `RuleFloatSign`,
-- `RuleFloatZero`, `RuleFloatNan`,
-- `RulePtrsubUndo`, `RulePtraddShift`, `RulePtraddPiece`,
-- `RulePiece2Zext`, `RulePiece2Sext`, `RulePiece2Merged`,
-- `RuleSubpieceCpool`, `RuleSubpieceShift`, `RuleSubpieceExtend`,
-- `RuleShiftPiece`, `RuleShiftCpool`,
-- `RuleXorCollapse`, `RuleAndMask`, `RuleOrMask`,
-- `RuleFlowCollapse`, `RuleFlowFlip`, `RuleFlowNegate`,
-- `Rule flowRewrite`, `Rule flowSplit`,
-- ...更多见 `ruleaction.cc` 中的 Rule 注册列表
+原有（pre-session）：`RuleCollapseConstants`, `RulePropagateCopy`, `RuleSub2Sext`, `RuleSubNormal`,
+`RuleShiftBitops`, `RuleDivOpt`, `RuleSignDiv2`, `RuleSignShift`, `RuleLessEqual`(struct),
+`RulePtrArith`, `RuleStructPath`, `RuleTrivialArith`, `RuleTrivialBool`, `RuleZextEliminate`, `RuleSextEliminate`
+
+2026-06-26 新移植（37 个，含 op-edit API/位助手/functional_equality 基础设施解锁）：
+`RuleNegateIdentity`, `RuleNotDistribute`, `RuleConcatZero`, `RuleXorCollapse`, `RuleAddMultCollapse`,
+`RuleLess2Zero`, `RuleLessEqual2Zero`, `RuleBoolNegate`, `RuleOrMask`, `RuleAndOrLump`,
+`RulePiece2Zext`, `RulePiece2Sext`, `RuleBxor2NotEqual`, `RuleTermOrder`, `RuleShift2Mult`,
+`RuleDoubleSub`, `RuleTrivialShift`, `RuleSlessToLess`, `RuleOrCollapse`, `RuleConcatLeftShift`,
+`RuleDoubleShift`, `RuleIdentityEl`, `RuleSignShift`, `RuleSubZext`, `RuleConcatShift`,
+`RuleShiftCompare`, `RuleAndCompare`, `RuleTestSign`, `RuleEquality`, `RuleLessNotEqual`,
+`RuleLessEqual`(apply), `RuleRightShiftAnd`, `RuleHighOrderAnd`, `RuleAndZext`, `RuleZextSless`,
+`RuleScarry`(trivial), `RuleSborrow`(trivial)
+
+**剩余缺失（📋 L1，约 22 个）— 按 Ghidra ruleaction.cc 真实 `::applyOp` 名 + 依赖标注：**
+
+| Rule | 行号 | 依赖（Rugra 现状） |
+|---|---|---|
+| `RuleLeftRight` | 2030 | opUnsetInput/opUnsetOutput/newVarnodeOut/Address endian |
+| `RuleAndCommute` | 1532 | getNZMask(部分)/loneDescend ✅ |
+| `RuleAndPiece` | 1640 | getNZMask ✅ / isHeritageKnown |
+| `RuleAndDistribute` | 1260 | getNZMask ✅ |
+| `RuleOrConsume` | 353 | getConsume |
+| `RuleCollectTerms` | 107 | TermOrder/AdditiveEdge |
+| `RuleSelectCse` | 187 | CSE 基础设施 |
+| `RulePushMulti` | 1074 | functionalEqualityLevel/opDestroy |
+| `RulePullsubMulti` | 880 | minMaxUse/replaceDescendants |
+| `RulePullsubIndirect` | 962 | INDIRECT 处理 |
+| `RuleBooleanNegate` | 2969 | isBooleanValue/isTypeRecoveryOn |
+| `RuleBoolZext` | 3015 | 后代追踪 |
+| `RuleLogic2Bool` | 3138 | isBooleanValue |
+| `RuleIndirectCollapse` | 3177 | INDIRECT |
+| `RuleMultiCollapse` | 3254 | functionalEqualityLevel |
+| `RuleEarlyRemoval` | 25 | opDestroy/doesDeadcode/isAutoLive |
+| `RuleRangeMeld` | 1357 | RangeList |
+| `RuleFloatRange` | 1450 | float 类型 |
+| `RuleBitUndistribute` | 2634 | zext/sext 后代追踪 |
+| `RuleBooleanUndistribute` | 2731 | 后代追踪 |
+| `RuleBooleanDedup` | 2852 | 后代追踪 |
+| `RuleScarry`/`RuleSborrow` 深层 | 3475+/3475+ | AddExpression/constantMatch |
+| `RuleSubfloatCpool`/`RuleFloatCpool` 等 | — | float/cpool |
+| `RuleLoadVarnode`/`RuleStoreVarnode` | — | LoadGuard/StoreGuard |
+| `RulePtrsubUndo`/`RulePtraddShift`/`RulePtraddPiece` | — | 指针类型 |
+
+**最易移植（依赖大部分就绪）**：`RuleAndDistribute`、`RuleAndPiece`、`RuleAndCommute`（均用 getNZMask+loneDescend，已就绪）。
 
 ---
 
