@@ -393,6 +393,66 @@ impl ParamIdAnalysis {
         }
         s
     }
+
+    /// Analyze a function's parameters using data-flow classification.
+    /// Faithful to `ParamIDAnalysis` constructor (paramid.cc:186).
+    ///
+    /// Iterates input Varnodes, creates ParamMeasure for each, and calls
+    /// `calculate_rank` to classify usage. Also checks RETURN ops for
+    /// output parameters.
+    pub fn analyze(&mut self, fd: &crate::funcdata::Funcdata) {
+        use crate::opcodes::OpCode;
+
+        // Analyze input parameters.
+        let varnodes: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .collect();
+
+        for vn_arc in &varnodes {
+            let vn_rg = vn_arc.read().unwrap();
+            if !vn_rg.is_input() {
+                continue;
+            }
+            // Create a ParamMeasure for this input.
+            let mut pm = ParamMeasure::new(
+                crate::address::Address::new(vn_rg.get_offset()),
+                vn_rg.get_space(),
+                vn_rg.get_size() as u32,
+                "unknown",
+                ParamIdIo::Input,
+            );
+            // Calculate rank by walking forward through descendants.
+            pm.calculate_rank(true, vn_arc, None);
+            self.add_input(pm);
+        }
+
+        // Analyze output (return value) from RETURN ops.
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if op_rg.opcode != OpCode::CPUI_RETURN {
+                continue;
+            }
+            // RETURN input(1) = return value (if numInput >= 2).
+            if op_rg.num_input() >= 2 {
+                if let Some(ret_vn) = op_rg.get_in(1) {
+                    let vn_rg = ret_vn.read().unwrap();
+                    let mut pm = ParamMeasure::new(
+                        crate::address::Address::new(vn_rg.get_offset()),
+                        vn_rg.get_space(),
+                        vn_rg.get_size() as u32,
+                        "unknown",
+                        ParamIdIo::Output,
+                    );
+                    pm.calculate_rank(true, ret_vn, Some(&op_ref.0));
+                    self.add_output(pm);
+                }
+            }
+            break; // Only use the first RETURN op.
+        }
+    }
 }
 
 #[cfg(test)]
