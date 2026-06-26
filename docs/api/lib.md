@@ -415,3 +415,7 @@
 ## 2026-06-26（续）：新增 transform 模块
 
 - `pub mod transform;` — 对应 `transform.hh`，大规模数据流变换。LanedRegister/LaneDescription/TransformVar/TransformOp 已实现。
+
+## 2026-06-26（续）：新增 subflow 模块
+
+- `pub mod subflow;` — 对应 `subflow.hh`，子流分析。ReplaceVarnode/ReplaceOp/PatchRecord/SubvariableFlow 骨架已实现。

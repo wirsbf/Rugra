@@ -66,6 +66,7 @@ pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh
 pub mod ruleaction; // ← ruleaction.hh
 pub mod space; // ← space.hh
+pub mod subflow; // ← subflow.hh
 pub mod transform; // ← transform.hh
 pub mod type_system; // ← type.hh
 pub mod typeop; // ← typeop.hh
