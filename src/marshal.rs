@@ -721,6 +721,542 @@ impl Decoder for TreeDecoder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PackedEncode — binary marshaling format (marshal.hh:579)
+// ---------------------------------------------------------------------------
+
+/// Protocol format constants. Faithful to `PackedFormat` (marshal.hh:480).
+pub mod packed_format {
+    pub const HEADER_MASK: u8 = 0xc0;
+    pub const ELEMENT_START: u8 = 0x40;
+    pub const ELEMENT_END: u8 = 0x80;
+    pub const ATTRIBUTE: u8 = 0xc0;
+    pub const HEADEREXTEND_MASK: u8 = 0x20;
+    pub const ELEMENTID_MASK: u8 = 0x1f;
+    pub const RAWDATA_MASK: u8 = 0x7f;
+    pub const RAWDATA_BITSPERBYTE: u32 = 7;
+    pub const RAWDATA_MARKER: u8 = 0x80;
+    pub const TYPECODE_SHIFT: u32 = 4;
+    pub const LENGTHCODE_MASK: u8 = 0xf;
+    pub const TYPECODE_BOOLEAN: u8 = 1;
+    pub const TYPECODE_SIGNEDINT_POSITIVE: u8 = 2;
+    pub const TYPECODE_SIGNEDINT_NEGATIVE: u8 = 3;
+    pub const TYPECODE_UNSIGNEDINT: u8 = 4;
+    pub const TYPECODE_ADDRESSSPACE: u8 = 5;
+    pub const TYPECODE_SPECIALSPACE: u8 = 6;
+    pub const TYPECODE_STRING: u8 = 7;
+}
+
+/// A byte-based encoder for the packed binary format. Faithful to
+/// `PackedEncode` (marshal.hh:579).
+pub struct PackedEncode {
+    out: Vec<u8>,
+}
+
+impl PackedEncode {
+    /// Construct an empty encoder.
+    pub fn new() -> Self {
+        Self { out: Vec::new() }
+    }
+
+    /// Consume and return the encoded bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.out
+    }
+
+    /// Write a header byte (element start/end or attribute) with an id.
+    /// Faithful to `writeHeader` (marshal.hh inline).
+    fn write_header(&mut self, header: u8, id: u32) {
+        use packed_format::*;
+        if id > 0x1f {
+            let h = header | HEADEREXTEND_MASK | ((id >> RAWDATA_BITSPERBYTE) as u8);
+            let extend = ((id & RAWDATA_MASK as u32) as u8) | RAWDATA_MARKER;
+            self.out.push(h);
+            self.out.push(extend);
+        } else {
+            self.out.push(header | (id as u8));
+        }
+    }
+
+    /// Write an integer value with the given type byte. Faithful to
+    /// `writeInteger` (marshal.cc:1065).
+    fn write_integer(&mut self, type_byte: u8, val: u64) {
+        use packed_format::*;
+        let (len_code, sa) = if val == 0 {
+            (0u8, -1i32)
+        } else if val < 0x800000000 {
+            if val < 0x200000 {
+                if val < 0x80 {
+                    (1, 0)
+                } else if val < 0x4000 {
+                    (2, RAWDATA_BITSPERBYTE as i32)
+                } else {
+                    (3, 2 * RAWDATA_BITSPERBYTE as i32)
+                }
+            } else if val < 0x10000000 {
+                (4, 3 * RAWDATA_BITSPERBYTE as i32)
+            } else {
+                (5, 4 * RAWDATA_BITSPERBYTE as i32)
+            }
+        } else if val < 0x2000000000000 {
+            if val < 0x40000000000 {
+                (6, 5 * RAWDATA_BITSPERBYTE as i32)
+            } else {
+                (7, 6 * RAWDATA_BITSPERBYTE as i32)
+            }
+        } else if val < 0x100000000000000 {
+            (8, 7 * RAWDATA_BITSPERBYTE as i32)
+        } else if val < 0x8000000000000000 {
+            (9, 8 * RAWDATA_BITSPERBYTE as i32)
+        } else {
+            (10, 9 * RAWDATA_BITSPERBYTE as i32)
+        };
+        self.out.push(type_byte | len_code);
+        let mut shift = sa;
+        while shift >= 0 {
+            let piece = ((val >> shift) & RAWDATA_MASK as u64) as u8;
+            self.out.push(piece | RAWDATA_MARKER);
+            shift -= RAWDATA_BITSPERBYTE as i32;
+        }
+    }
+}
+
+impl Default for PackedEncode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Encoder for PackedEncode {
+    fn open_element(&mut self, elem_id: &ElementId) {
+        self.write_header(packed_format::ELEMENT_START, elem_id.id);
+    }
+
+    fn close_element(&mut self, elem_id: &ElementId) {
+        self.write_header(packed_format::ELEMENT_END, elem_id.id);
+    }
+
+    fn write_bool(&mut self, attrib_id: &AttributeId, val: bool) {
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id);
+        let type_byte = if val {
+            (TYPECODE_BOOLEAN << TYPECODE_SHIFT) | 1
+        } else {
+            TYPECODE_BOOLEAN << TYPECODE_SHIFT
+        };
+        self.out.push(type_byte);
+    }
+
+    fn write_signed_integer(&mut self, attrib_id: &AttributeId, val: i64) {
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id);
+        if val < 0 {
+            let type_byte = TYPECODE_SIGNEDINT_NEGATIVE << TYPECODE_SHIFT;
+            self.write_integer(type_byte, (-val) as u64);
+        } else {
+            let type_byte = TYPECODE_SIGNEDINT_POSITIVE << TYPECODE_SHIFT;
+            self.write_integer(type_byte, val as u64);
+        }
+    }
+
+    fn write_unsigned_integer(&mut self, attrib_id: &AttributeId, val: u64) {
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id);
+        self.write_integer(TYPECODE_UNSIGNEDINT << TYPECODE_SHIFT, val);
+    }
+
+    fn write_string(&mut self, attrib_id: &AttributeId, val: &str) {
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id);
+        self.write_integer(TYPECODE_STRING << TYPECODE_SHIFT, val.len() as u64);
+        self.out.extend_from_slice(val.as_bytes());
+    }
+
+    fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str) {
+        use packed_format::*;
+        self.write_header(ATTRIBUTE, attrib_id.id + index);
+        self.write_integer(TYPECODE_STRING << TYPECODE_SHIFT, val.len() as u64);
+        self.out.extend_from_slice(val.as_bytes());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PackedDecode — binary marshaling format reader (marshal.hh:512)
+// ---------------------------------------------------------------------------
+
+/// A byte-based decoder for the packed binary format. Faithful to
+/// `PackedDecode` (marshal.hh:512).
+pub struct PackedDecode {
+    /// The raw input bytes.
+    input: Vec<u8>,
+    /// Current position in the input.
+    pos: usize,
+    /// Stack of open elements: (element_id, attribute_start_pos, attribute_cursor_pos).
+    stack: Vec<(u32, usize, usize)>,
+    /// The registry for name lookup.
+    registry: Arc<RwLock<IdRegistry>>,
+    /// Pending type byte from the last attribute header.
+    pending_type: Option<u8>,
+    /// Pending integer length code.
+    pending_int_len: Option<usize>,
+    /// Pending string byte length.
+    pending_string_len: Option<usize>,
+}
+
+impl PackedDecode {
+    /// Construct from a byte vector and registry.
+    pub fn new(input: Vec<u8>, registry: Arc<RwLock<IdRegistry>>) -> Self {
+        Self {
+            input,
+            pos: 0,
+            stack: Vec::new(),
+            registry,
+            pending_type: None,
+            pending_int_len: None,
+            pending_string_len: None,
+        }
+    }
+
+    /// Read the next byte.
+    fn read_byte(&mut self) -> Option<u8> {
+        let b = self.input.get(self.pos).copied()?;
+        self.pos += 1;
+        Some(b)
+    }
+
+    /// Read a header byte and extract the (record_type, id). Returns None at
+    /// EOF.
+    fn read_header(&mut self) -> Option<(u8, u32)> {
+        use packed_format::*;
+        let b = self.read_byte()?;
+        let header_type = b & HEADER_MASK;
+        let mut id = (b & ELEMENTID_MASK) as u32;
+        if (b & HEADEREXTEND_MASK) != 0 {
+            // Extended id: next byte has 7 more bits.
+            let ext = self.read_byte()?;
+            id = (id << RAWDATA_BITSPERBYTE) | ((ext & RAWDATA_MASK) as u32);
+        }
+        Some((header_type, id))
+    }
+
+    /// Read an encoded integer given its length in bytes.
+    fn read_integer(&mut self, len: usize) -> u64 {
+        let mut val = 0u64;
+        for _ in 0..len {
+            if let Some(b) = self.read_byte() {
+                val = (val << packed_format::RAWDATA_BITSPERBYTE) | (b & packed_format::RAWDATA_MASK) as u64;
+            }
+        }
+        val
+    }
+
+    /// Determine the length code from a type byte.
+    fn length_code(type_byte: u8) -> u8 {
+        type_byte & packed_format::LENGTHCODE_MASK
+    }
+
+    /// Determine the type code from a type byte.
+    fn type_code(type_byte: u8) -> u8 {
+        (type_byte >> packed_format::TYPECODE_SHIFT) & 0xf
+    }
+}
+
+impl Decoder for PackedDecode {
+    fn peek_element(&self) -> u32 {
+        use packed_format::*;
+        // Scan forward from current pos to find the next ELEMENT_START header.
+        let mut scan = self.pos;
+        // Skip any attributes that belong to the current element.
+        let attr_skip = self.stack.last().map(|(_, _, cur)| *cur).unwrap_or(self.pos);
+        scan = scan.max(attr_skip);
+        while scan < self.input.len() {
+            let b = self.input[scan];
+            let ht = b & HEADER_MASK;
+            if ht == ELEMENT_START {
+                // Decode the id.
+                let mut id = (b & ELEMENTID_MASK) as u32;
+                if (b & HEADEREXTEND_MASK) != 0 && scan + 1 < self.input.len() {
+                    let ext = self.input[scan + 1];
+                    id = (id << RAWDATA_BITSPERBYTE) | ((ext & RAWDATA_MASK) as u32);
+                }
+                return id;
+            }
+            if ht == ATTRIBUTE {
+                // Skip this attribute to continue scanning.
+                scan += 1;
+                if (b & HEADEREXTEND_MASK) != 0 {
+                    scan += 1;
+                }
+                // Read type byte.
+                if scan >= self.input.len() {
+                    break;
+                }
+                let tb = self.input[scan];
+                scan += 1;
+                let tc = Self::type_code(tb);
+                let lc = Self::length_code(tb);
+                // Skip the data based on type.
+                match tc {
+                    TYPECODE_BOOLEAN => {} // No data bytes.
+                    TYPECODE_SIGNEDINT_POSITIVE | TYPECODE_SIGNEDINT_NEGATIVE | TYPECODE_UNSIGNEDINT | TYPECODE_ADDRESSSPACE => {
+                        scan += lc as usize;
+                    }
+                    TYPECODE_SPECIALSPACE => {} // No data bytes.
+                    TYPECODE_STRING => {
+                        // lc = length of the length encoding; read the actual string length.
+                        let mut str_len = 0u64;
+                        for _ in 0..lc {
+                            if scan >= self.input.len() { break; }
+                            str_len = (str_len << RAWDATA_BITSPERBYTE) | (self.input[scan] & RAWDATA_MASK) as u64;
+                            scan += 1;
+                        }
+                        scan += str_len as usize;
+                    }
+                    _ => break,
+                }
+            } else if ht == ELEMENT_END {
+                return 0; // No more children.
+            } else {
+                break;
+            }
+        }
+        0
+    }
+
+    fn open_element(&mut self) -> u32 {
+        use packed_format::*;
+        loop {
+            let (ht, id) = match self.read_header() {
+                Some(h) => h,
+                None => return 0,
+            };
+            if ht == ELEMENT_START {
+                let attr_start = self.pos;
+                self.stack.push((id, attr_start, attr_start));
+                return id;
+            }
+            // Skip non-element-start headers (shouldn't happen at this level).
+        }
+    }
+
+    fn open_element_matching(&mut self, elem_id: &ElementId) -> u32 {
+        let id = self.open_element();
+        if id != elem_id.id {
+            return 0;
+        }
+        id
+    }
+
+    fn close_element(&mut self, _id: u32) {
+        // Read until we find the matching ELEMENT_END.
+        use packed_format::*;
+        loop {
+            let (ht, _) = match self.read_header() {
+                Some(h) => h,
+                None => break,
+            };
+            if ht == ELEMENT_END {
+                break;
+            }
+            // Skip attributes.
+            if ht == ATTRIBUTE {
+                if let Some(tb) = self.read_byte() {
+                    let tc = Self::type_code(tb);
+                    let lc = Self::length_code(tb);
+                    match tc {
+                        TYPECODE_BOOLEAN | TYPECODE_SPECIALSPACE => {}
+                        TYPECODE_STRING => {
+                            let str_len = self.read_integer(lc as usize);
+                            for _ in 0..str_len {
+                                let _ = self.read_byte();
+                            }
+                        }
+                        _ => {
+                            for _ in 0..lc {
+                                let _ = self.read_byte();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.stack.pop();
+    }
+
+    fn close_element_skipping(&mut self, id: u32) {
+        self.close_element(id);
+    }
+
+    fn next_attribute_id(&mut self) -> u32 {
+        use packed_format::*;
+        if self.pos >= self.input.len() {
+            return 0;
+        }
+        let b = self.input[self.pos];
+        let ht = b & HEADER_MASK;
+        if ht != ATTRIBUTE {
+            return 0; // No more attributes.
+        }
+        // Decode the attribute id.
+        let mut id = (b & ELEMENTID_MASK) as u32;
+        self.pos += 1;
+        if (b & HEADEREXTEND_MASK) != 0 {
+            if let Some(ext) = self.read_byte() {
+                id = (id << RAWDATA_BITSPERBYTE) | ((ext & RAWDATA_MASK) as u32);
+            }
+        }
+        // Read the type byte to know how to handle the value.
+        let type_byte = self.read_byte().unwrap_or(0);
+        let tc = Self::type_code(type_byte);
+        let lc = Self::length_code(type_byte);
+        match tc {
+            TYPECODE_BOOLEAN | TYPECODE_SPECIALSPACE => {
+                // No data bytes. Store the type_byte for the read_* call.
+                self.stack.last_mut().map(|(_, _, cur)| *cur = self.pos);
+                // Save type info for subsequent read.
+                self.pending_type = Some(type_byte);
+            }
+            TYPECODE_STRING => {
+                let str_len = self.read_integer(lc as usize);
+                self.pending_string_len = Some(str_len as usize);
+                self.pending_type = Some(type_byte);
+                self.stack.last_mut().map(|(_, _, cur)| *cur = self.pos);
+            }
+            _ => {
+                self.pending_int_len = Some(lc as usize);
+                self.pending_type = Some(type_byte);
+                self.stack.last_mut().map(|(_, _, cur)| *cur = self.pos);
+            }
+        }
+        id
+    }
+
+    fn attribute_name(&self, id: u32) -> Option<String> {
+        self.registry
+            .read()
+            .unwrap()
+            .attribute_name(id)
+            .map(|s| s.to_string())
+    }
+
+    fn element_name(&self, id: u32) -> Option<String> {
+        self.registry
+            .read()
+            .unwrap()
+            .element_name(id)
+            .map(|s| s.to_string())
+    }
+
+    fn rewind_attributes(&mut self) {
+        if let Some((_, start, _)) = self.stack.last_mut() {
+            self.pos = *start;
+        }
+    }
+
+    fn read_bool(&mut self) -> bool {
+        if let Some(tb) = self.pending_type.take() {
+            (tb & packed_format::LENGTHCODE_MASK) != 0
+        } else {
+            false
+        }
+    }
+
+    fn read_bool_attr(&mut self, attrib_id: &AttributeId) -> bool {
+        // Rewind and find the attribute.
+        self.rewind_attributes();
+        loop {
+            let aid = self.next_attribute_id();
+            if aid == 0 || aid == attrib_id.id {
+                return self.read_bool();
+            }
+            // Skip the current value.
+            let _ = self.read_string();
+        }
+    }
+
+    fn read_signed_integer(&mut self) -> i64 {
+        let len = self.pending_int_len.take().unwrap_or(0);
+        let val = self.read_integer(len);
+        let is_neg = self
+            .pending_type
+            .take()
+            .map(|tb| Self::type_code(tb) == packed_format::TYPECODE_SIGNEDINT_NEGATIVE)
+            .unwrap_or(false);
+        if is_neg {
+            -(val as i64)
+        } else {
+            val as i64
+        }
+    }
+
+    fn read_signed_integer_attr(&mut self, attrib_id: &AttributeId) -> i64 {
+        self.rewind_attributes();
+        loop {
+            let aid = self.next_attribute_id();
+            if aid == 0 || aid == attrib_id.id {
+                return self.read_signed_integer();
+            }
+            let _ = self.read_string();
+        }
+    }
+
+    fn read_unsigned_integer(&mut self) -> u64 {
+        let len = self.pending_int_len.take().unwrap_or(0);
+        let _ = self.pending_type.take();
+        self.read_integer(len)
+    }
+
+    fn read_unsigned_integer_attr(&mut self, attrib_id: &AttributeId) -> u64 {
+        self.rewind_attributes();
+        loop {
+            let aid = self.next_attribute_id();
+            if aid == 0 || aid == attrib_id.id {
+                return self.read_unsigned_integer();
+            }
+            let _ = self.read_string();
+        }
+    }
+
+    fn read_string(&mut self) -> String {
+        if let Some(len) = self.pending_string_len.take() {
+            let bytes = &self.input[self.pos..self.pos + len.min(self.input.len() - self.pos)];
+            self.pos += len.min(self.input.len() - self.pos);
+            let _ = self.pending_type.take();
+            String::from_utf8_lossy(bytes).to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    fn read_string_attr(&mut self, attrib_id: &AttributeId) -> String {
+        self.rewind_attributes();
+        loop {
+            let aid = self.next_attribute_id();
+            if aid == 0 || aid == attrib_id.id {
+                return self.read_string();
+            }
+            let _ = self.read_string();
+        }
+    }
+}
+
+/// Pending decode state for PackedDecode. These fields store the type info
+/// from the attribute header, consumed by the corresponding read_* method.
+impl PackedDecode {
+    // Fields are stored in the struct definition; these are accessed via the
+    // struct's fields. We use a separate impl block to avoid duplicating the
+    // struct definition.
+}
+
+// Add pending fields to PackedDecode via a separate implementation.
+// We need to add the fields to the struct. Let's use a workaround:
+// The struct already exists above; we add the fields by using a thread-local
+// or by modifying the struct definition. Since we can't modify it after
+// definition, let's add the fields directly in the struct.
+
+// Actually, the struct was already defined above without these fields.
+// We need to add them. Let's redefine with the fields.
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,5 +1371,114 @@ mod tests {
     fn test_reserved_ids() {
         assert_eq!(ATTRIB_UNKNOWN, 0);
         assert_eq!(ATTRIB_CONTENT, 1);
+    }
+
+    // ----- PackedEncode / PackedDecode tests -----
+
+    #[test]
+    fn test_packed_encode_element_roundtrip() {
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry.write().unwrap().register_element_with_id("root", 10);
+        registry.write().unwrap().register_attribute_with_id("num", 20);
+
+        // Encode.
+        let mut enc = PackedEncode::new();
+        let root = ElementId::new("root", 10);
+        let num = AttributeId::new("num", 20);
+        enc.open_element(&root);
+        enc.write_unsigned_integer(&num, 42);
+        enc.write_bool(&AttributeId::new("flag", registry.write().unwrap().register_attribute("flag")), true);
+        enc.write_string(&AttributeId::new("name", registry.write().unwrap().register_attribute("name")), "hello");
+        enc.close_element(&root);
+        let bytes = enc.into_bytes();
+        assert!(!bytes.is_empty());
+
+        // Decode.
+        let mut dec = PackedDecode::new(bytes, registry.clone());
+        let eid = dec.open_element();
+        assert_eq!(eid, 10);
+
+        // Read attributes in order: num, flag, name.
+        let aid1 = dec.next_attribute_id();
+        let val1 = dec.read_unsigned_integer();
+        assert_eq!(aid1, 20);
+        assert_eq!(val1, 42);
+
+        let aid2 = dec.next_attribute_id();
+        let val2 = dec.read_bool();
+        // flag id should be non-zero (registered).
+        assert_ne!(aid2, 0);
+        assert!(val2);
+
+        let _aid3 = dec.next_attribute_id();
+        let val3 = dec.read_string();
+        assert_eq!(val3, "hello");
+
+        dec.close_element(eid);
+    }
+
+    #[test]
+    fn test_packed_encode_signed_integer() {
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry.write().unwrap().register_attribute_with_id("val", 5);
+
+        let mut enc = PackedEncode::new();
+        let attr = AttributeId::new("val", 5);
+        enc.write_signed_integer(&attr, -100);
+        let bytes = enc.into_bytes();
+
+        let mut dec = PackedDecode::new(bytes, registry);
+        dec.next_attribute_id();
+        let val = dec.read_signed_integer();
+        assert_eq!(val, -100);
+    }
+
+    #[test]
+    fn test_packed_encode_large_unsigned() {
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry.write().unwrap().register_attribute_with_id("big", 7);
+
+        let mut enc = PackedEncode::new();
+        let attr = AttributeId::new("big", 7);
+        enc.write_unsigned_integer(&attr, 0x123456789A);
+        let bytes = enc.into_bytes();
+
+        let mut dec = PackedDecode::new(bytes, registry);
+        dec.next_attribute_id();
+        let val = dec.read_unsigned_integer();
+        assert_eq!(val, 0x123456789A);
+    }
+
+    #[test]
+    fn test_packed_encode_zero() {
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry.write().unwrap().register_attribute_with_id("z", 3);
+
+        let mut enc = PackedEncode::new();
+        let attr = AttributeId::new("z", 3);
+        enc.write_unsigned_integer(&attr, 0);
+        let bytes = enc.into_bytes();
+
+        let mut dec = PackedDecode::new(bytes, registry);
+        dec.next_attribute_id();
+        let val = dec.read_unsigned_integer();
+        assert_eq!(val, 0);
+    }
+
+    #[test]
+    fn test_packed_encode_extended_id() {
+        let registry = Arc::new(RwLock::new(IdRegistry::new()));
+        registry.write().unwrap().register_element_with_id("big", 100); // > 0x1f → extended.
+
+        let mut enc = PackedEncode::new();
+        let elem = ElementId::new("big", 100);
+        enc.open_element(&elem);
+        enc.close_element(&elem);
+        let bytes = enc.into_bytes();
+
+        let mut dec = PackedDecode::new(bytes, registry);
+        let eid = dec.open_element();
+        assert_eq!(eid, 100);
+        dec.close_element(eid);
     }
 }

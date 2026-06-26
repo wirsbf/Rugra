@@ -99,3 +99,19 @@ XmlDecode).
 - `Decoder::attribute_name(id: u32) -> Option<String>`：按 id 查找属性名（通过 registry），支持按名称分发的解码（database.rs 的 decode_header 使用）。
 - `Decoder::element_name(id: u32) -> Option<String>`：按 id 查找元素名，支持按名称匹配的元素解码。
 - TreeDecoder 实现两者（通过内部 registry 的 read lock）。
+
+## 2026-06-27（续）：PackedEncode + PackedDecode（二进制格式）
+
+**packed_format 模块**（marshal.hh:480）：HEADER_MASK/ELEMENT_START/ELEMENT_END/ATTRIBUTE/HEADEREXTEND_MASK/ELEMENTID_MASK/RAWDATA_MASK/RAWDATA_MARKER/TYPECODE_* 常量。
+
+### `PackedEncode`
+二进制编码器，实现 Encoder trait（marshal.hh:579）。
+- `new()`，`into_bytes() -> Vec<u8>`。
+- open_element/close_element/write_bool/write_signed_integer/write_unsigned_integer/write_string/write_string_indexed。
+- write_header（短/扩展 ID 编码）+ write_integer（长度编码变长整数）。
+
+### `PackedDecode`
+二进制解码器，实现 Decoder trait（marshal.hh:512）。
+- `new(input, registry)`。
+- open_element/close_element/peek_element/next_attribute_id/read_*/rewind_attributes。
+- 支持 BOOLEAN/SIGNEDINT_POSITIVE/NEGATIVE/UNSIGNEDINT/STRING 类型解码。

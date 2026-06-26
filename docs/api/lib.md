@@ -542,3 +542,7 @@
 ## 2026-06-27（续 16）：新增 rangemap 模块（RangeMap + PartMap — L3）
 
 - `pub mod rangemap;` — 对应 `rangemap.hh` + `partmap.hh`。RangeMap（区间映射：find_overlap/find_at_point/find_container + sorted insert）+ PartMap（分区映射：get_value/split/clear_range/bounds）。关闭 database.rs 的 rangemap/partmap L3 缺口。
+
+## 2026-06-27（续 17）：marshal.rs PackedEncode + PackedDecode（二进制格式）
+
+- **marshal.rs 新增**：PackedEncode（二进制编码器，实现 Encoder trait：write_header/write_integer 变长整数编码 + open/close_element/write_bool/write_signed/unsigned_integer/write_string）+ PackedDecode（二进制解码器，实现 Decoder trait：read_header + 变长整数解码 + BOOLEAN/SIGNEDINT/UNSIGNEDINT/STRING 类型支持）+ packed_format 常量模块。5 个新测试（element roundtrip + signed integer + large unsigned + zero + extended id）。marshal.rs L3 缺口从 PackedEncode/PackedDecode 缩减为仅缺 XML 文本解析。
