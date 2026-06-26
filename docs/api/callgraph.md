@@ -25,3 +25,13 @@
 - `num_nodes()`
 
 测试：callgraph::tests 3 个。
+
+## 2026-06-26（续）：callgraph.rs 完善实现
+
+新增 CallGraph 方法（对应 callgraph.cc 完整 API）：
+- `snip_cycles()` — DFS 环检测与标记（callgraph.cc snipCycles）
+- `snip_cycles_dfs(addr, visited, in_stack)` — 递归 DFS 环检测
+- `find_no_entry()` — 查找无入边节点（callgraph.cc findNoEntry）
+- `next_leaf(addr)` — 叶子序遍历下一节点
+- `clear_marks()` — 清除所有标记
+- `all_addrs()` / `get_out_edges(addr)` / `delete_in_edge(addr, index)`

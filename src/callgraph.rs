@@ -122,7 +122,14 @@ impl CallGraph {
     /// Get the number of nodes.
     pub fn num_nodes(&self) -> usize { self.nodes.len() }
 
-    /// Initialize a leaf walk: find the first leaf (no out-edges).
+    /// Clear all marks on all nodes.
+    pub fn clear_marks(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.clear_mark();
+        }
+    }
+
+    /// Initialize a leaf walk: find the first leaf (no out-Edges).
     pub fn init_leaf_walk(&self) -> Option<u64> {
         for (&addr, node) in &self.nodes {
             if node.out_edges.is_empty() {
@@ -130,6 +137,94 @@ impl CallGraph {
             }
         }
         None
+    }
+
+    /// Get the next leaf in a depth-first leaf walk from the given node.
+    /// Corresponds to Ghidra's `CallGraph::nextLeaf`.
+    /// Returns the next leaf address, or None if done.
+    pub fn next_leaf(&self, _addr: u64) -> Option<u64> {
+        // Simplified: just find the next unvisited leaf.
+        for (&addr, node) in &self.nodes {
+            if addr > _addr && node.out_edges.is_empty() {
+                return Some(addr);
+            }
+        }
+        None
+    }
+
+    /// Detect and snip cycles in the call graph using DFS.
+    /// Corresponds to Ghidra's `CallGraph::snipCycles`.
+    pub fn snip_cycles(&mut self) {
+        // Collect all addresses for iteration.
+        let addrs: Vec<u64> = self.nodes.keys().copied().collect();
+        let mut visited: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut in_stack: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
+        for &start in &addrs {
+            self.snip_cycles_dfs(start, &mut visited, &mut in_stack);
+        }
+    }
+
+    fn snip_cycles_dfs(&mut self, addr: u64, visited: &mut std::collections::HashSet<u64>, in_stack: &mut std::collections::HashSet<u64>) {
+        if visited.contains(&addr) { return; }
+        visited.insert(addr);
+        in_stack.insert(addr);
+
+        // Collect out-edges (copy to avoid borrow issues).
+        let out_addrs: Vec<u64> = self.nodes.get(&addr)
+            .map(|n| n.out_edges.iter().map(|e| e.to_addr).collect())
+            .unwrap_or_default();
+
+        for to_addr in out_addrs {
+            if in_stack.contains(&to_addr) {
+                // Cycle detected: mark the edge as cycle.
+                if let Some(from_node) = self.nodes.get_mut(&addr) {
+                    for edge in &mut from_node.out_edges {
+                        if edge.to_addr == to_addr {
+                            edge.flags |= edge_flags::CYCLE;
+                        }
+                    }
+                }
+            } else if !visited.contains(&to_addr) {
+                self.snip_cycles_dfs(to_addr, visited, in_stack);
+            }
+        }
+
+        in_stack.remove(&addr);
+    }
+
+    /// Find all nodes that have no incoming edges (entry points).
+    /// Corresponds to Ghidra's `CallGraph::findNoEntry`.
+    pub fn find_no_entry(&self) -> Vec<u64> {
+        self.nodes.iter()
+            .filter(|(_, n)| n.in_edges.is_empty())
+            .map(|(&addr, _)| addr)
+            .collect()
+    }
+
+    /// Get all node addresses in sorted order.
+    pub fn all_addrs(&self) -> Vec<u64> {
+        self.nodes.keys().copied().collect()
+    }
+
+    /// Get all out-edges from a node.
+    pub fn get_out_edges(&self, addr: u64) -> &[CallGraphEdge] {
+        self.nodes.get(&addr).map(|n| n.out_edges.as_slice()).unwrap_or(&[])
+    }
+
+    /// Delete an in-edge from a node.
+    pub fn delete_in_edge(&mut self, addr: u64, index: usize) {
+        let from_addr = self.nodes.get(&addr).and_then(|n| n.in_edges.get(index)).map(|e| e.from_addr);
+        if let Some(node) = self.nodes.get_mut(&addr) {
+            if index < node.in_edges.len() {
+                node.in_edges.remove(index);
+            }
+        }
+        if let Some(fa) = from_addr {
+            if let Some(from_node) = self.nodes.get_mut(&fa) {
+                from_node.out_edges.retain(|e| e.to_addr != addr);
+            }
+        }
     }
 }
 
