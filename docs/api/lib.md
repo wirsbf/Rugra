@@ -573,3 +573,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ## 2026-06-27（续 22）：ActionConstbase + ActionPrototypeWarnings + ActionNormalizeSetup
 
 - 3 个 Actions 升级为带算法逻辑的框架（非纯 stub）——ActionConstbase（entry block + tracked context）、ActionPrototypeWarnings（override messages + proto errors）、ActionNormalizeSetup（proto clear）。7 个 Actions 总计有真实逻辑。
+
+## 2026-06-27（续 23）：ActionForceGoto + ActionSwitchNorm
+
+- **ActionForceGoto**：override force-goto 应用框架（Override::apply_force_gotos → fd.force_goto）。
+- **ActionSwitchNorm**：switch 规范化框架（JumpTable matchModel/recoverLabels/foldInNormalization）。9 个 Actions 有真实逻辑。

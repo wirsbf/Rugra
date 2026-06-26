@@ -1934,12 +1934,33 @@ impl Action for ActionHideShadow {
 
 /// Normalize switch tables. Faithful to `ActionSwitchNorm`
 /// (coreaction.cc).
+///
+/// For each jump table that hasn't been labelled yet, match the model,
+/// recover case labels, and fold in normalization code.
 pub struct ActionSwitchNorm { pub count: i32 }
 impl ActionSwitchNorm {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionSwitchNorm {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra:
+        //   for(i=0;i<data.numJumpTables();++i) {
+        //     JumpTable *jt = data.getJumpTable(i);
+        //     if (!jt->isLabelled()) {
+        //       jt->matchModel(&data);
+        //       jt->recoverLabels(&data);
+        //       jt->foldInNormalization(&data);
+        //       count += 1;
+        //     }
+        //   }
+        //
+        // JumpTable methods (matchModel/recoverLabels/foldInNormalization)
+        // are implemented in jumptable.rs. However, Funcdata doesn't yet
+        // have a jumpvec field to hold JumpTable objects. This is a
+        // framework implementation documenting the exact algorithm.
+        //
+        // L3 gap: requires Funcdata.jumpvec integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "switchnorm" }
@@ -2461,12 +2482,28 @@ impl Action for ActionReturnRecovery {
 
 /// Force goto from overrides. Faithful to `ActionForceGoto`
 /// (coreaction.cc).
+///
+/// Applies all force-goto overrides from the function's Override object.
+/// Each override marks a specific branch as an unstructured goto.
 pub struct ActionForceGoto { pub count: i32 }
 impl ActionForceGoto {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionForceGoto {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.getOverride().applyForceGoto(data);
+        // Our Override::apply_force_gotos calls fd.force_goto for each
+        // stored (targetpc, destpc) pair.
+        //
+        // The Override is owned by the Architecture, not Funcdata.
+        // In a full implementation, we'd access fd's Architecture's override.
+        // Since Architecture isn't wired into Funcdata yet, this is a
+        // framework stub that documents the exact algorithm.
+        //
+        // When Architecture is integrated:
+        //   let count = fd.arch.overrides.apply_force_gotos(fd);
+        //   if count > 0 { return Ok(action_status::CHANGE); }
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "forcegoto" }
