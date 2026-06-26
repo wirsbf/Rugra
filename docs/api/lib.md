@@ -447,3 +447,7 @@
 ## 2026-06-26（续）：新增 float_emulate 模块
 
 - `pub mod float_emulate;` — 对应 `float.hh`，浮点格式编解码。FloatFormat IEEE754 单/双精度 + 15 个 op 操作已实现。
+
+## 2026-06-26（续）：新增 pcodeinject 模块
+
+- `pub mod pcodeinject;` — 对应 `pcodeinject.hh`，P-code 注入引擎。InjectParameter/InjectPayload/PcodeInjectLibrary 已实现。
