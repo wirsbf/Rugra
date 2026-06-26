@@ -619,3 +619,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `op_set_output(op, vn)` — `Funcdata::opSetOutput`：设置/替换 op 输出 varnode。
   标记 WRITTEN、设 def 链、清旧输出 def。解锁 RuleSubZext 等。
+
+### 2026-06-26（续）：op_destroy / op_unset_input
+
+- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：销毁未用 op（清输出 def、断所有输入 descend 链、markDead）。
+- `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
+解锁 RuleEarlyRemoval。

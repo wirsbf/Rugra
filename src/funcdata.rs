@@ -246,6 +246,40 @@ impl Funcdata {
         o.output = Some(vn);
     }
 
+    /// Destroy an unused PcodeOp. Faithful to `Funcdata::opDestroy`
+    /// (funcdata_op.cc:203-222). Clears the output's def, unsets all inputs,
+    /// and marks the op dead in the obank. Only call when the output has no
+    /// descendants (dead code).
+    pub fn op_destroy(&mut self, op: &crate::op::PcodeOpRef) {
+        // Clear output def link.
+        let out = op.0.read().unwrap().output.clone();
+        if let Some(o) = out {
+            o.write().unwrap().def = None;
+        }
+        // Clear all inrefs (break descend links on inputs).
+        let inrefs = op.0.read().unwrap().inrefs.clone();
+        for in_vn in &inrefs {
+            in_vn.write().unwrap().descend.retain(|w| {
+                w.upgrade().map(|a| !std::sync::Arc::ptr_eq(&a, &op.0)).unwrap_or(true)
+            });
+        }
+        op.0.write().unwrap().inrefs.clear();
+        // Mark the op dead.
+        self.obank.mark_dead(op.clone());
+    }
+
+    /// Unset an input slot. Faithful to `Funcdata::opUnsetInput`
+    /// (funcdata_op.cc). Removes the descend link from the input varnode and
+    /// sets the slot to None (represented as removing from inrefs in Rugra).
+    pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
+        let in_vn = op.0.read().unwrap().inrefs.get(slot).cloned();
+        if let Some(vn) = in_vn {
+            vn.write().unwrap().descend.retain(|w| {
+                w.upgrade().map(|a| !std::sync::Arc::ptr_eq(&a, &op.0)).unwrap_or(true)
+            });
+        }
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve

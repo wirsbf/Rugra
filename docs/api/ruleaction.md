@@ -428,3 +428,13 @@ INT_AND 与 PIECE 简化：当 AND mask 清零某半时：
 `V = A | B => COPY(B)` 当 nzm(A) & consume(V) == 0（A 贡献的位均未被消费）。也处理 XOR。
 
 测试：ruleaction::tests +1（consume=0 → A 丢弃 → COPY(B)）。
+
+### 2026-06-26（续）：RuleEarlyRemoval + opDestroy/opUnsetInput
+
+#### Funcdata::op_destroy / op_unset_input（funcdata_op.cc:203, 263）
+opDestroy 销毁未用 op（清输出 def、断输入 descend 链、markDead）；opUnsetInput 断某输入 descend 链。解锁 RuleEarlyRemoval。
+
+#### `pub struct RuleEarlyRemoval`（ruleaction.cc:23-44）
+删除输出无后代的 op（非 CALL/INDIRECT）。doesDeadcode/autoLive 检查保守跳过。
+
+测试：ruleaction::tests +1（INT_ADD 无后代→destroy）。

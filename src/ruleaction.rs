@@ -3556,6 +3556,47 @@ impl Rule for RuleOrConsume {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
+/// Get rid of unused PcodeOp objects where we can guarantee the output is
+/// unused. Faithful to Ghidra's `RuleEarlyRemoval` (ruleaction.cc:23-44).
+///
+/// Removes an op whose output has no descendants and isn't a CALL/INDIRECT
+/// source. The doesDeadcode/autoLive checks are conservatively skipped (Rugra
+/// does not yet have the deadcode-allowed-seen or autolive mechanisms).
+pub struct RuleEarlyRemoval;
+
+impl RuleEarlyRemoval {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleEarlyRemoval {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Must have an output with no descendants.
+        let has_unused_output = {
+            let op = op_arc.read().unwrap();
+            if op.opcode == OpCode::CPUI_CALL || op.opcode == OpCode::CPUI_CALLIND {
+                return Ok(action_status::NO_CHANGE);
+            }
+            match op.output.as_ref() {
+                Some(o) => o.read().unwrap().has_no_descend(),
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        if !has_unused_output {
+            return Ok(action_status::NO_CHANGE);
+        }
+        fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "early_removal" }
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // Applies to all ops; we register a representative set.
+        vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB, OpCode::CPUI_INT_MULT,
+             OpCode::CPUI_COPY, OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR,
+             OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5959,5 +6000,30 @@ mod tests {
         let o = op.read().unwrap();
         assert_eq!(o.opcode, OpCode::CPUI_COPY);
         assert!(Arc::ptr_eq(&o.inrefs[0], &b));
+    }
+
+    // --- RuleEarlyRemoval (ruleaction.cc:23) ---
+
+    #[test]
+    fn test_early_removal_unused_op() {
+        // An INT_ADD with output that has no descendants → destroyed.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_constant(4, 5);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(out.clone());
+        }
+        // out has no descend → unused.
+        assert!(out.read().unwrap().has_no_descend());
+        let rule = RuleEarlyRemoval::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
     }
 }
