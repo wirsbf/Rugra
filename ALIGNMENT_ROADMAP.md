@@ -244,7 +244,7 @@
 | 55 | `crc32.cc` + `compression.cc` | `crc32.rs` + `compression.rs` | 🔧 L2 | **crc32 完整（L3）**：CRC32 表 + crc_update + crc32/crc32_with_init。**compression 骨架**：Compress + Decompress 结构完整，L3 缺 flate2 实际 deflate/inflate | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
 | 57 | `prefersplit.cc` | `prefersplit.rs` | 🔧 L2 | **骨架已移植**：PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序。L3 缺完整分裂算法（testX/splitX 需 Funcdata op 编辑） | `prefersplit.cc` |
-| 58 | `paramid.cc` | — | 📋 L1 | **完全缺失**：参数 ID 分析 | `paramid.cc` |
+| 58 | `paramid.cc` | `paramid.rs` | 🔧 L2 | **骨架已移植**：ParamMeasure（walk_forward/walk_backward 数据流分类，使用 descend_iter/get_def）+ ParamRank（i32 常量，允许重复值）+ ParamIDAnalysis + WalkState + calculate_rank。L3 缺 Funcdata 集成 + isLoopIn + XML encode | `paramid.cc` |
 | 59 | `unionresolve.cc` | — | 📋 L1 | **完全缺失**：联合体解析 | `unionresolve.cc` |
 | 60 | `flow.cc` | — | 📋 L1 | **完全缺失**：流分析 | `flow.cc` |
 | 61 | `codedata.cc` | — | 📋 L1 | **完全缺失**：代码数据分析 | `codedata.cc` |

@@ -526,3 +526,7 @@
 
 - `pub mod crc32;` — 对应 `crc32.hh`，CRC32 表 + crc_update + crc32/crc32_with_init。完全自包含（L3）。解锁 stringmanage::calcInternalHash + marshal Packed 格式。
 - `pub mod compression;` — 对应 `compression.hh`，Compress + Decompress deflate/inflate 包装器。L3 缺 flate2 集成（当前为 pass-through stub）。
+
+## 2026-06-27（续 13）：新增 paramid 模块
+
+- `pub mod paramid;` — 对应 `paramid.hh`，参数识别分析。ParamMeasure（walk_forward/walk_backward 数据流分类）+ ParamRank（i32 常量，允许重复值如 Ghidra）+ ParamIDAnalysis + WalkState。calculate_rank 主入口。L3 缺 Funcdata 集成 + isLoopIn + XML encode。
