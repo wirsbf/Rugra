@@ -50,6 +50,7 @@ pub mod address; // ← address.hh
 pub mod analysis; // ← type propagation
 pub mod block; // ← block.hh
 pub mod blockaction;
+pub mod callgraph; // ← callgraph.hh
 pub mod coreaction; // ← coreaction.hh
 pub mod condexe; // ← condexe.hh
 pub mod constseq; // ← constseq.hh

@@ -455,3 +455,7 @@
 ## 2026-06-26（续）：新增 emulate 模块
 
 - `pub mod emulate;` — 对应 `emulate.hh`，P-code 模拟执行。Emulate 骨架 + execute_op 使用 opbehavior。
+
+## 2026-06-26（续）：新增 callgraph 模块
+
+- `pub mod callgraph;` — 对应 `callgraph.hh`，调用图。CallGraphEdge/CallGraphNode/CallGraph 完整实现（add_node/add_edge/find_node/init_leaf_walk）。
