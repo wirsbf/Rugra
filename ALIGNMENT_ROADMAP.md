@@ -49,7 +49,7 @@
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🔧 L2 | BranchPoint/BlockTrace/BadEdgeScore 骨架已移植；**check_open 精度不足，未完整启用** | `blockaction.cc:499-1014` |
 | 19 | `condexe.cc` | — | 📋 L1 | **完全缺失**：ConditionalExecution + RuleOrPredicate 条件折叠 | `condexe.cc` |
 | 20 | `subflow.cc` | — | 📋 L1 | **完全缺失**：子流分析（代码可达性、不可达代码消除） | `subflow.cc` |
-| 21 | **`jumptable.cc`** | — | 🔧 L2 | **接近 L3**：全部数据结构 + 守卫分析 + 最小规范化变量查找 + **Varnode::def 深度遍历**（find_determining_varnodes DFS、quasi_copy 链、get_max_value、isLoadInPath）+ **CircleRange::pullBack 全套**（complement/convertToBoolean/setNZMask/pullBackUnary/pullBackBinary/pull_back_through_op）+ **analyze_guards pullBack 扩展循环** + **backup2_switch 反向模拟** + **find_unnormalized 完整链遍历** + **flows_only_to_model** + **build_labels 使用 backup2_switch**。L3 缺：emulate_path 地址计算、CFG 重写（foldInGuards/switchOver） | `jumptable.cc` |
+| 21 | **`jumptable.cc`** | — | 🔧 L2 | **接近 L3**：全部数据结构 + 守卫分析 + 最小规范化变量查找 + Varnode::def 深度遍历 + CircleRange::pullBack 全套 + analyze_guards pullBack 扩展循环 + backup2_switch 反向模拟 + find_unnormalized 完整链遍历 + flows_only_to_model + build_labels 使用 backup2_switch + **emulate_path 地址计算**（execute_op + emulate_path + build_addresses 使用真实模拟）。L3 仅缺：CFG 重写（foldInGuards/switchOver via Funcdata::pushBranch） | `jumptable.cc` |
 
 ---
 

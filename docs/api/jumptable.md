@@ -192,3 +192,15 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 - `build_labels`：现使用 backup2_switch 恢复 case 标签（jumptable.cc:1528），不再全部发 NO_LABEL。
 
 剩余 L3 缺：emulate_path 地址计算、CFG 重写（foldInGuards/switchOver）。
+
+## 2026-06-27（续 3）：emulate_path 地址计算完成
+
+**EmulateFunction 新增方法**：
+- `execute_op(op) -> bool`：执行单个 pcode op，使用 opbehavior::evaluate_unary/binary/ternary 计算结果并存储。LOAD 时收集 loadpoint。
+- `emulate_path(val, path_meld, startop, startvn) -> Option<u64>`（jumptable.cc:218）：从起始值流过 pathMeld 的所有路径到 BRANCHIND，返回计算的目标地址。处理 MULTIEQUAL 起始特殊情况。
+
+**JumpBasic::build_addresses**：现使用 emulate_path 计算每个 switch 值的目标地址（jumptable.cc:1453），不再放置占位符。
+
+测试：新增 2 个（emulate_path INT_ADD + COPY）。
+
+剩余 L3 缺：CFG 重写（foldInGuards/switchOver via Funcdata::pushBranch）。

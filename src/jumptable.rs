@@ -1795,31 +1795,55 @@ impl JumpModel for JumpBasic {
         let Some(jrange) = &self.jrange else {
             return;
         };
-        // The emulation-driven address computation requires EmulateFunction,
-        // which in turn requires Varnode::def traversal. We implement the
-        // iteration skeleton here; the per-value emulation is an L3 gap until
-        // EmulateFunction lands.
+        let mut emul = EmulateFunction::new();
+        // Set up LOAD collection.
+        let mut lp_vec: Vec<LoadTable> = Vec::new();
+        let collect_loads = loadpoints.is_some();
+        if collect_loads {
+            emul.set_load_collect(Some(Vec::new()));
+        }
+
+        // Function-pointer alignment mask (Ghidra: funcptr_align).
+        // We default to 0 (no alignment) since Architecture isn't wired here.
+        let mask = u64::MAX;
+
         let mut iter = jrange.clone();
-        let mut loadcount_local: Vec<i32> = Vec::new();
-        let loadcounts_ref: &mut Vec<i32> = if let Some(lc) = loadcounts {
-            lc
-        } else {
-            &mut loadcount_local
-        };
-        let mut loadpoints_local: Vec<LoadTable> = Vec::new();
-        let loadpoints_ref: &mut Vec<LoadTable> = if let Some(lp) = loadpoints {
-            lp
-        } else {
-            &mut loadpoints_local
-        };
+        // Collect load counts into a local Vec, then merge at the end to avoid
+        // moving the Option<&mut> in the loop.
+        let mut local_loadcounts: Vec<i32> = Vec::new();
         if iter.initialize_for_reading() {
-            // Place a sentinel; emulation is pending EmulateFunction.
-            addresstable.push(Address::new(0));
-            loadcounts_ref.push(loadpoints_ref.len() as i32);
-            while iter.next() {
-                addresstable.push(Address::new(0));
-                loadcounts_ref.push(loadpoints_ref.len() as i32);
+            iter.curval = jrange.range.get_left();
+            loop {
+                let val = iter.get_value();
+                let start_op = iter.get_start_op();
+                let start_vn = iter.get_start_varnode();
+                let addr = if let (Some(startop), Some(startvn)) = (start_op, start_vn) {
+                    match emul.emulate_path(val, &self.path_meld, &startop, &startvn) {
+                        Some(a) => a & mask,
+                        None => 0,
+                    }
+                } else {
+                    0
+                };
+                addresstable.push(Address::new(addr));
+                if collect_loads {
+                    let n = emul.loadpoints.as_ref().map_or(0, |lp| lp.len());
+                    local_loadcounts.push(n as i32);
+                    // Drain the collected loadpoints into the output.
+                    if let Some(emul_lp) = emul.loadpoints.as_mut() {
+                        lp_vec.append(emul_lp);
+                    }
+                }
+                if !iter.next() {
+                    break;
+                }
             }
+        }
+        if let Some(lc) = loadcounts {
+            *lc = local_loadcounts;
+        }
+        if let Some(out_lp) = loadpoints {
+            *out_lp = lp_vec;
         }
         let _ = fd;
         let _ = indop;
@@ -2510,6 +2534,155 @@ impl EmulateFunction {
         let key = Arc::as_ptr(vn) as *const () as usize;
         self.varnode_map.insert(key, val);
     }
+
+    /// Execute a single pcode op, storing its result. Returns false if the op
+    /// cannot be evaluated (e.g. LOAD without a loader, or unsupported opcode).
+    /// Faithful to `EmulatePcodeOp::executeCurrentOp` for the subset of opcodes
+    /// that appear in jumptable address calculations.
+    fn execute_op(&mut self, op: &Arc<RwLock<PcodeOp>>) -> bool {
+        let (opc, n_in, out_size) = {
+            let op_rg = op.read().unwrap();
+            (
+                op_rg.opcode,
+                op_rg.num_input(),
+                op_rg.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(0),
+            )
+        };
+        // Gather input values.
+        let op_rg = op.read().unwrap();
+        let in_vals: Vec<u64> = (0..n_in)
+            .map(|s| {
+                op_rg.get_in(s).map(|v| self.get_varnode_value(v)).unwrap_or(0)
+            })
+            .collect();
+        let in_size = op_rg
+            .get_in(0)
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0);
+        let out_arc = op_rg.get_out().cloned();
+        drop(op_rg);
+
+        let Some(out_vn) = out_arc else {
+            return false;
+        };
+
+        let result = match n_in {
+            1 => crate::opbehavior::evaluate_unary(opc, out_size, in_size, in_vals[0]),
+            2 => {
+                let in1_size = in_size;
+                crate::opbehavior::evaluate_binary(opc, out_size, in1_size, in_vals[0], in_vals[1])
+            }
+            3 => crate::opbehavior::evaluate_ternary(
+                opc,
+                out_size,
+                in_size,
+                in_vals[0],
+                in_vals[1],
+                in_vals[2],
+            ),
+            _ => None,
+        };
+
+        match result {
+            Some(r) => {
+                self.set_varnode_value(&out_vn, r);
+                // If this is a LOAD, record the loadpoint.
+                if opc == OpCode::CPUI_LOAD {
+                    if let Some(lp) = &mut self.loadpoints {
+                        // The address comes from input(1); approximate with the value.
+                        lp.push(LoadTable::single(Address::new(in_vals[1]), out_size as i32));
+                    }
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Execute from a given starting point and value to the common end-point of
+    /// the path set. Flow the given value through all paths in the path
+    /// container to produce the single output value. Faithful to `emulatePath`
+    /// (jumptable.cc:218).
+    ///
+    /// Returns the calculated value at the common end-point (the BRANCHIND
+    /// input), or None if emulation failed.
+    pub fn emulate_path(
+        &mut self,
+        val: u64,
+        path_meld: &PathMeld,
+        startop: &Arc<RwLock<PcodeOp>>,
+        startvn: &Arc<RwLock<Varnode>>,
+    ) -> Option<u64> {
+        if path_meld.num_ops() == 0 {
+            return None;
+        }
+        // Find the startop index in the pathMeld.
+        let mut i = path_meld.num_ops();
+        for idx in 0..path_meld.num_ops() {
+            if Arc::ptr_eq(&path_meld.get_op(idx), startop) {
+                i = idx;
+                break;
+            }
+        }
+        if i == path_meld.num_ops() {
+            return None; // startop not found
+        }
+
+        // Handle MULTIEQUAL start: if startvn is one of the inputs, use the
+        // output as the new startvn (as if COPY from old startvn).
+        let mut cur_startvn = startvn.clone();
+        let mut cur_i = i;
+        let is_multiequal = path_meld.get_op(i).read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL;
+        if is_multiequal {
+            let me_op = path_meld.get_op(i);
+            let me_rg = me_op.read().unwrap();
+            let mut found_j = None;
+            for j in 0..me_rg.num_input() {
+                if let Some(v) = me_rg.get_in(j) {
+                    if Arc::ptr_eq(v, &cur_startvn.clone()) {
+                        found_j = Some(j);
+                        break;
+                    }
+                }
+            }
+            drop(me_rg);
+            match found_j {
+                Some(_) if i > 0 => {
+                    // Use the MULTIEQUAL output as the new startvn.
+                    let out = path_meld.get_op(i).read().unwrap().get_out().cloned();
+                    if let Some(o) = out {
+                        cur_startvn = o;
+                        cur_i = i - 1;
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+
+        // Set the starting value (if not constant).
+        if !cur_startvn.read().unwrap().is_constant() {
+            self.set_varnode_value(&cur_startvn, val);
+        }
+
+        // Execute ops from cur_i down to 0 (BRANCHIND is op 0).
+        while cur_i > 0 {
+            let curop = path_meld.get_op(cur_i);
+            if !self.execute_op(&curop) {
+                return None;
+            }
+            cur_i -= 1;
+        }
+
+        // The result is the value of op(0)->getIn(0) (the BRANCHIND target).
+        let first_op = path_meld.get_op(0);
+        let in0 = first_op.read().unwrap().get_in(0).cloned();
+        match in0 {
+            Some(vn) => Some(self.get_varnode_value(&vn)),
+            None => None,
+        }
+    }
 }
 
 impl Default for EmulateFunction {
@@ -2800,6 +2973,92 @@ mod tests {
         pm.set_single(br_op, loaded);
         // i=1 → checks common_vn[0] (the loaded varnode).
         assert!(pm.is_load_in_path(1));
+    }
+
+    #[test]
+    fn test_emulate_path_int_add() {
+        use crate::address::SeqNum;
+        use crate::varnode::{Varnode, varnode_flags};
+        // Build: branchind_input = INT_ADD(switchvn, const=0x1000)
+        //        BRANCHIND(branchind_input)
+        // emulate_path(switchvn=5) should produce 5 + 0x1000 = 0x1005.
+        let switchvn = Arc::new(RwLock::new(Varnode::new_unique(0, 4)));
+        let constvn = Arc::new(RwLock::new(Varnode::new_constant(0x1000, 4)));
+
+        // INT_ADD op with output set.
+        let add_out = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(1, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let mut add_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        );
+        add_op.inrefs.push(switchvn.clone());
+        add_op.inrefs.push(constvn);
+        add_op.output = Some(add_out.clone());
+        let add_op_arc = Arc::new(RwLock::new(add_op));
+        add_out.write().unwrap().def = Some(std::sync::Arc::downgrade(&add_op_arc));
+
+        // BRANCHIND op (the common end-point).
+        let mut br_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 0),
+            OpCode::CPUI_BRANCHIND,
+        );
+        br_op.inrefs.push(add_out.clone());
+        let br_op_arc = Arc::new(RwLock::new(br_op));
+
+        // Build a PathMeld with one path: [BRANCHIND(slot=0), INT_ADD(slot=0)].
+        let mut pm = PathMeld::default();
+        pm.set_path(&[
+            PcodeOpNode { op: br_op_arc.clone(), slot: 0 },
+            PcodeOpNode { op: add_op_arc.clone(), slot: 0 },
+        ]);
+
+        let mut emul = EmulateFunction::new();
+        // startop = the ADD op (op index 1 in the path), startvn = switchvn.
+        let result = emul.emulate_path(5, &pm, &add_op_arc, &switchvn);
+        assert_eq!(result, Some(0x1005));
+    }
+
+    #[test]
+    fn test_emulate_path_copy() {
+        use crate::address::SeqNum;
+        use crate::varnode::{Varnode, varnode_flags};
+        // Build: branchind_input = COPY(switchvn)
+        // emulate_path(switchvn=42) should produce 42.
+        let switchvn = Arc::new(RwLock::new(Varnode::new_unique(0, 4)));
+        let copy_out = Arc::new(RwLock::new({
+            let mut v = Varnode::new_unique(1, 4);
+            v.flags |= varnode_flags::WRITTEN;
+            v
+        }));
+        let mut copy_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        );
+        copy_op.inrefs.push(switchvn.clone());
+        copy_op.output = Some(copy_out.clone());
+        let copy_op_arc = Arc::new(RwLock::new(copy_op));
+        copy_out.write().unwrap().def = Some(std::sync::Arc::downgrade(&copy_op_arc));
+
+        let mut br_op = PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 0),
+            OpCode::CPUI_BRANCHIND,
+        );
+        br_op.inrefs.push(copy_out.clone());
+        let br_op_arc = Arc::new(RwLock::new(br_op));
+
+        let mut pm = PathMeld::default();
+        pm.set_path(&[
+            PcodeOpNode { op: br_op_arc.clone(), slot: 0 },
+            PcodeOpNode { op: copy_op_arc.clone(), slot: 0 },
+        ]);
+
+        let mut emul = EmulateFunction::new();
+        let result = emul.emulate_path(42, &pm, &copy_op_arc, &switchvn);
+        assert_eq!(result, Some(42));
     }
 
     fn _silence_unused() {
