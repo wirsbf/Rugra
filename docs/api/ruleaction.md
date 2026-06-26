@@ -493,3 +493,7 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 使用 `expression.rs` 的 `TermOrder` 收集/排序所有项。`distributeIntMultAdd` 子情形（INT_MULT 系数加法展开）待补。
 
 测试：ruleaction::tests +1（常量折叠 3+5→8）。
+
+### 2026-06-26（续）：RuleCollectTerms 完整形式
+
+更新 RuleCollectTerms 使用 `distribute_int_mult_add` 处理 INT_MULT 系数场景（ruleaction.cc:130-133），完成完整移植。

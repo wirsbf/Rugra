@@ -3856,11 +3856,21 @@ impl Rule for RuleCollectTerms {
                 let (base1, coef1) = Self::get_mult_coeff(&vn1);
                 let (base2, coef2) = Self::get_mult_coeff(&vn2);
                 if std::sync::Arc::ptr_eq(&base1, &base2) {
-                    // Like terms → combine. Skip the distributeIntMultAdd sub-case.
+                    // Like terms → combine. Handle multiplier sub-case.
                     let mult1 = termorder.get_term(order[i-1]).unwrap().get_multiplier().is_some();
                     let mult2 = termorder.get_term(order[i]).unwrap().get_multiplier().is_some();
-                    if mult1 || mult2 {
-                        // Would need distributeIntMultAdd; skip for now.
+                    if mult1 {
+                        let mult_op = termorder.get_term(order[i-1]).unwrap().get_multiplier().as_ref().unwrap().clone();
+                        if fd.distribute_int_mult_add(&crate::op::PcodeOpRef(mult_op)) {
+                            return Ok(action_status::CHANGE);
+                        }
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                    if mult2 {
+                        let mult_op = termorder.get_term(order[i]).unwrap().get_multiplier().as_ref().unwrap().clone();
+                        if fd.distribute_int_mult_add(&crate::op::PcodeOpRef(mult_op)) {
+                            return Ok(action_status::CHANGE);
+                        }
                         return Ok(action_status::NO_CHANGE);
                     }
                     let size = base1.read().unwrap().get_size();
