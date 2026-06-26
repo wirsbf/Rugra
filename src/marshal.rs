@@ -368,6 +368,14 @@ pub trait Decoder {
     /// Get the next attribute id for the current element. Returns 0 when done.
     fn next_attribute_id(&mut self) -> u32;
 
+    /// Look up the name of an attribute id. Returns None if the id is not
+    /// registered. This allows decode implementations to dispatch on attribute
+    /// names without holding a separate registry reference.
+    fn attribute_name(&self, id: u32) -> Option<String>;
+
+    /// Look up the name of an element id. Returns None if not registered.
+    fn element_name(&self, id: u32) -> Option<String>;
+
     /// Reset attribute traversal. Faithful to `rewindAttributes`.
     fn rewind_attributes(&mut self);
 
@@ -609,6 +617,22 @@ impl Decoder for TreeDecoder {
         if let Some(last) = self.stack.last_mut() {
             last.2 = 0;
         }
+    }
+
+    fn attribute_name(&self, id: u32) -> Option<String> {
+        self.registry
+            .read()
+            .unwrap()
+            .attribute_name(id)
+            .map(|s| s.to_string())
+    }
+
+    fn element_name(&self, id: u32) -> Option<String> {
+        self.registry
+            .read()
+            .unwrap()
+            .element_name(id)
+            .map(|s| s.to_string())
     }
 
     fn read_bool(&mut self) -> bool {

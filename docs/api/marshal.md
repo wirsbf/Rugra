@@ -93,3 +93,9 @@ XmlDecode).
 - `readSpace`/`writeSpace`/`readOpcode`/`writeOpcode` (require AddressSpace/
   OpCode integration).
 - `readSignedIntegerExpectString`.
+
+## 2026-06-27（续）：Decoder trait 新增 attribute_name/element_name
+
+- `Decoder::attribute_name(id: u32) -> Option<String>`：按 id 查找属性名（通过 registry），支持按名称分发的解码（database.rs 的 decode_header 使用）。
+- `Decoder::element_name(id: u32) -> Option<String>`：按 id 查找元素名，支持按名称匹配的元素解码。
+- TreeDecoder 实现两者（通过内部 registry 的 read lock）。

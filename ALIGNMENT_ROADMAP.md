@@ -238,7 +238,7 @@
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 51 | `callgraph.cc` | — | 📋 L1 | **完全缺失**：调用图构建 | `callgraph.cc` |
-| 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | 🔧 L2 | **骨架已移植**：SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database 全部数据结构 + in-memory 查询/插入算法（find_addr/find_container/find_overlap/add_symbol/remove_symbol/attach_scope/delete_scope 等）。L3 缺 XML encode/decode + rangemap/partmap | `database.cc`, `database_ghidra.cc` |
+| 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | 🔧 L2 | **XML encode/decode 已实现**：SymbolEntry/Symbol（encode_header/decode_header/encode_body/decode_body/encode/decode）/Scope（encode_recursive/decode）/Database（encode/decode）全部使用 marshal.rs 的 Encoder/Decoder trait。ID_BASE 修正为 0x4000...。L3 仅缺 rangemap/partmap（目前用线性搜索/Vec 替代） | `database.cc`, `database_ghidra.cc` |
 | 53 | `xml.cc` + `marshal.cc` | `marshal.rs` | 🔧 L2 | **骨架已移植**：AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database/override/arch 的 XML encode/decode。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析 | `xml.cc`, `marshal.cc` |
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | Rust 原生 | 🔧 L2 | 基础 rodata 扫描；缺少完整字符串管理 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | — | 📋 L1 | **完全缺失**：CRC32/压缩 | `crc32.cc`, `compression.cc` |

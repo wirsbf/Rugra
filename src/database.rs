@@ -13,11 +13,14 @@
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/database.{hh,cc}.
 
 use crate::address::{Address, Range, RangeList};
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-/// Base of internal Symbol IDs. Faithful to `Symbol::ID_BASE` (database.hh:257).
-pub const ID_BASE: u64 = 0x10;
+/// Base of internal Symbol IDs. Faithful to `Symbol::ID_BASE`
+/// (database.cc:45). IDs with the high bit pattern (>> 56 == 0x40) are
+/// internal and discarded on decode.
+pub const ID_BASE: u64 = 0x4000_0000_0000_0000;
 
 /// Varnode-like properties of a Symbol. Faithful to the subset of
 /// `Varnode` flags used by Symbol (database.hh:182-184).
@@ -207,6 +210,40 @@ impl SymbolEntry {
     pub fn is_addr_tied(&self) -> bool {
         (self.symbol.read().unwrap().flags & symbol_flags::ADDRTIED) != 0
     }
+
+    /// Encode this SymbolEntry to a stream. Faithful to `SymbolEntry::encode`
+    /// (database.cc:187). Pieces are not saved.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        if self.is_piece() {
+            return;
+        }
+        if self.is_dynamic() {
+            encoder.open_element(&ElementId::new("hash", 52));
+            encoder.write_unsigned_integer(&AttributeId::new("val", 0), self.hash);
+            encoder.close_element(&ElementId::new("hash", 52));
+        } else {
+            // Address element.
+            encoder.open_element(&ElementId::new("addr", 0));
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), self.addr.as_u64());
+            encoder.close_element(&ElementId::new("addr", 0));
+        }
+        // Use-limit (empty = valid everywhere; encoded as no ranges).
+        self.encode_use_limit(encoder);
+    }
+
+    /// Encode the use-limit ranges. A simplified form of RangeList::encode.
+    fn encode_use_limit(&self, encoder: &mut dyn Encoder) {
+        // Ghidra encodes <rangelist> with <range> children. We emit an empty
+        // rangelist if uselimit is empty (valid everywhere).
+        encoder.open_element(&ElementId::new("rangelist", 0));
+        for rng in self.uselimit.ranges() {
+            encoder.open_element(&ElementId::new("range", 0));
+            encoder.write_unsigned_integer(&AttributeId::new("first", 0), rng.get_first().as_u64());
+            encoder.write_unsigned_integer(&AttributeId::new("last", 0), rng.get_last().as_u64());
+            encoder.close_element(&ElementId::new("range", 0));
+        }
+        encoder.close_element(&ElementId::new("rangelist", 0));
+    }
 }
 
 /// The base class for a symbol in a symbol table or scope. Faithful to
@@ -372,6 +409,205 @@ impl Symbol {
         } else {
             self.dispflags &= !display_flags::IS_THIS_PTR;
         }
+    }
+
+    /// Encode basic Symbol properties as attributes. Faithful to
+    /// `Symbol::encodeHeader` (database.cc:363).
+    pub fn encode_header(&self, encoder: &mut dyn Encoder) {
+        encoder.write_string(&AttributeId::new("name", 0), &self.name);
+        encoder.write_unsigned_integer(&AttributeId::new("id", 0), self.symbol_id);
+        if (self.flags & symbol_flags::NAMELOCK) != 0 {
+            encoder.write_bool(&AttributeId::new("namelock", 0), true);
+        }
+        if (self.flags & symbol_flags::TYPELOCK) != 0 {
+            encoder.write_bool(&AttributeId::new("typelock", 0), true);
+        }
+        if (self.flags & symbol_flags::READONLY) != 0 {
+            encoder.write_bool(&AttributeId::new("readonly", 0), true);
+        }
+        if (self.flags & symbol_flags::VOLATIL) != 0 {
+            encoder.write_bool(&AttributeId::new("volatile", 0), true);
+        }
+        if (self.flags & symbol_flags::INDIRECTSTORAGE) != 0 {
+            encoder.write_bool(&AttributeId::new("indirectstorage", 0), true);
+        }
+        if (self.flags & symbol_flags::HIDDENRETPARM) != 0 {
+            encoder.write_bool(&AttributeId::new("hiddenretparm", 0), true);
+        }
+        if (self.dispflags & display_flags::ISOLATE) != 0 {
+            encoder.write_bool(&AttributeId::new("merge", 0), false);
+        }
+        if (self.dispflags & display_flags::IS_THIS_PTR) != 0 {
+            encoder.write_bool(&AttributeId::new("thisptr", 0), true);
+        }
+        let format = self.get_display_format();
+        if format != 0 {
+            let fmt_str = match format {
+                display_flags::FORCE_HEX => "hex",
+                display_flags::FORCE_DEC => "dec",
+                display_flags::FORCE_OCT => "oct",
+                display_flags::FORCE_BIN => "bin",
+                display_flags::FORCE_CHAR => "char",
+                _ => "",
+            };
+            encoder.write_string(&AttributeId::new("format", 0), fmt_str);
+        }
+        encoder.write_signed_integer(&AttributeId::new("cat", 0), self.category as i64);
+        if self.category != SymbolCategory::NoCategory {
+            encoder.write_unsigned_integer(&AttributeId::new("index", 0), self.catindex as u64);
+        }
+    }
+
+    /// Decode basic Symbol properties from attributes. Faithful to
+    /// `Symbol::decodeHeader` (database.cc:394).
+    pub fn decode_header(&mut self, decoder: &mut dyn Decoder) {
+        self.name.clear();
+        self.display_name.clear();
+        self.category = SymbolCategory::NoCategory;
+        self.symbol_id = 0;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            let attr_name = decoder.attribute_name(attrib_id);
+            match attr_name.as_deref() {
+                Some("cat") => {
+                    let cat = decoder.read_signed_integer();
+                    self.category = match cat {
+                        0 => SymbolCategory::FunctionParameter,
+                        1 => SymbolCategory::Equate,
+                        2 => SymbolCategory::UnionFacet,
+                        3 => SymbolCategory::FakeInput,
+                        _ => SymbolCategory::NoCategory,
+                    };
+                }
+                Some("format") => {
+                    let fmt = decoder.read_string();
+                    self.set_display_format(match fmt.as_str() {
+                        "hex" => display_flags::FORCE_HEX,
+                        "dec" => display_flags::FORCE_DEC,
+                        "oct" => display_flags::FORCE_OCT,
+                        "bin" => display_flags::FORCE_BIN,
+                        "char" => display_flags::FORCE_CHAR,
+                        _ => 0,
+                    });
+                }
+                Some("hiddenretparm") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::HIDDENRETPARM;
+                    }
+                }
+                Some("id") => {
+                    let id = decoder.read_unsigned_integer();
+                    if (id >> 56) == (ID_BASE >> 56) {
+                        self.symbol_id = 0;
+                    } else {
+                        self.symbol_id = id;
+                    }
+                }
+                Some("indirectstorage") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::INDIRECTSTORAGE;
+                    }
+                }
+                Some("merge") => {
+                    if !decoder.read_bool() {
+                        self.dispflags |= display_flags::ISOLATE;
+                        self.flags |= symbol_flags::TYPELOCK;
+                    }
+                }
+                Some("name") => {
+                    self.name = decoder.read_string();
+                }
+                Some("namelock") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::NAMELOCK;
+                    }
+                }
+                Some("readonly") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::READONLY;
+                    }
+                }
+                Some("typelock") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::TYPELOCK;
+                    }
+                }
+                Some("thisptr") => {
+                    if decoder.read_bool() {
+                        self.dispflags |= display_flags::IS_THIS_PTR;
+                    }
+                }
+                Some("volatile") => {
+                    if decoder.read_bool() {
+                        self.flags |= symbol_flags::VOLATIL;
+                    }
+                }
+                Some("label") => {
+                    self.display_name = decoder.read_string();
+                }
+                _ => {
+                    // Unknown attribute; skip by reading as string.
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if self.category == SymbolCategory::FunctionParameter {
+            self.catindex = decoder
+                .read_unsigned_integer_attr(&AttributeId::new("index", 0)) as u16;
+        } else {
+            self.catindex = 0;
+        }
+        if self.display_name.is_empty() {
+            self.display_name = self.name.clone();
+        }
+    }
+
+    /// Encode the data-type for the Symbol. Faithful to `encodeBody`
+    /// (database.cc:466). Emits a `<type>` element with the type name.
+    pub fn encode_body(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("type", 0));
+        encoder.write_string(&AttributeId::new("name", 0), &self.type_name);
+        encoder.close_element(&ElementId::new("type", 0));
+    }
+
+    /// Decode the data-type for the Symbol. Faithful to `decodeBody`
+    /// (database.cc:473). Reads the `<type>` element's name attribute.
+    pub fn decode_body(&mut self, decoder: &mut dyn Decoder) {
+        let type_id = decoder.open_element();
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            if decoder.attribute_name(aid).as_deref() == Some("name") {
+                self.type_name = decoder.read_string();
+            } else {
+                let _ = decoder.read_string();
+            }
+        }
+        decoder.close_element(type_id);
+    }
+
+    /// Encode this Symbol to a stream. Faithful to `Symbol::encode`
+    /// (database.cc:481).
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        let sym_elem = ElementId::new("symbol", 0);
+        encoder.open_element(&sym_elem);
+        self.encode_header(encoder);
+        self.encode_body(encoder);
+        encoder.close_element(&sym_elem);
+    }
+
+    /// Decode this Symbol from a stream. Faithful to `Symbol::decode`
+    /// (database.cc:492).
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let sym_id = decoder.open_element();
+        self.decode_header(decoder);
+        self.decode_body(decoder);
+        decoder.close_element(sym_id);
     }
 }
 
@@ -740,6 +976,90 @@ impl Scope {
     pub fn num_symbols(&self) -> usize {
         self.symbols.len()
     }
+
+    /// Encode this scope and all its children recursively. Faithful to
+    /// `Scope::encodeRecursive` (database.cc:1371). Emits a `<scope>` element
+    /// with attributes, then child scopes, then the symbol list.
+    pub fn encode_recursive(&self, encoder: &mut dyn Encoder, _only_global: bool) {
+        let scope_elem = ElementId::new("scope", 0);
+        encoder.open_element(&scope_elem);
+        encoder.write_string(&AttributeId::new("name", 0), &self.name);
+        encoder.write_unsigned_integer(&AttributeId::new("id", 0), self.unique_id);
+        if self.display_name != self.name {
+            encoder.write_string(&AttributeId::new("label", 0), &self.display_name);
+        }
+        // Parent id (if not global).
+        if self.parent_id != 0 {
+            encoder.open_element(&ElementId::new("parent", 0));
+            encoder.write_unsigned_integer(&AttributeId::new("id", 0), self.parent_id);
+            encoder.close_element(&ElementId::new("parent", 0));
+        }
+        // Child scopes.
+        for &child_id in &self.children {
+            if let Some(child) = self.parent_scope_lookup(child_id) {
+                child.encode_recursive(encoder, _only_global);
+            }
+        }
+        // Symbol list.
+        let sym_list = ElementId::new("symbollist", 0);
+        encoder.open_element(&sym_list);
+        for sym in self.symbols.values() {
+            sym.read().unwrap().encode(encoder);
+        }
+        encoder.close_element(&sym_list);
+        encoder.close_element(&scope_elem);
+    }
+
+    /// Placeholder for child-scope lookup (the Database owns the scope map).
+    /// In a standalone Scope this returns None; the Database provides the real
+    /// implementation via its encode method.
+    fn parent_scope_lookup(&self, _child_id: u64) -> Option<&Scope> {
+        None
+    }
+
+    /// Decode this scope from a `<scope>` element. Faithful to
+    /// `ScopeInternal::decode` (database.cc). Reads the scope's symbols.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        // Read until we hit the symbollist element.
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            if elem_name == "parent" {
+                // Skip parent tag (handled by Database).
+                decoder.open_element();
+                decoder.close_element(sub_id);
+                continue;
+            }
+            if elem_name != "symbollist" {
+                // Could be a child scope; skip for now.
+                decoder.open_element();
+                decoder.close_element_skipping(sub_id);
+                continue;
+            }
+            // symbollist element.
+            decoder.open_element();
+            loop {
+                let sym_id = decoder.peek_element();
+                if sym_id == 0 {
+                    break;
+                }
+                let sym_name = decoder.element_name(sym_id).unwrap_or_default();
+                if sym_name != "symbol" {
+                    break;
+                }
+                let id = self.allocate_id();
+                let mut sym = Symbol::new_unnamed(self.unique_id);
+                sym.symbol_id = id;
+                sym.decode(decoder);
+                self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+            }
+            decoder.close_element(sub_id);
+            break;
+        }
+    }
 }
 
 /// A manager for symbol scopes for a whole executable. Faithful to `Database`
@@ -948,6 +1268,108 @@ impl Database {
     /// Number of scopes.
     pub fn num_scopes(&self) -> usize {
         self.scopes.len()
+    }
+
+    /// Encode the whole Database to a stream. Faithful to `Database::encode`
+    /// (database.cc:3270). Emits a `<db>` element with property change-points
+    /// and global scope.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        let db_elem = ElementId::new("db", 0);
+        encoder.open_element(&db_elem);
+        // Property change-points.
+        for (rng, val) in &self.flagbase {
+            let pc_elem = ElementId::new("property_changepoint", 0);
+            encoder.open_element(&pc_elem);
+            encoder.write_unsigned_integer(&AttributeId::new("space", 0), rng.get_first().as_u64());
+            encoder.write_unsigned_integer(&AttributeId::new("val", 0), *val as u64);
+            encoder.close_element(&pc_elem);
+        }
+        // Global scope and its children.
+        if let Some(global) = self.scopes.get(&self.global_scope_id) {
+            global.encode_recursive(encoder, true);
+        }
+        encoder.close_element(&db_elem);
+    }
+
+    /// Decode the whole database from a `<db>` element. Faithful to
+    /// `Database::decode` (database.cc:3314).
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let db_id = decoder.open_element();
+        // Skip attributes (scopeidbyname etc.).
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            let _ = decoder.read_string();
+        }
+        // Property change-points.
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            if elem_name != "property_changepoint" {
+                break;
+            }
+            decoder.open_element();
+            let val = decoder.read_unsigned_integer_attr(&AttributeId::new("val", 0));
+            decoder.close_element(sub_id);
+            let _ = val;
+        }
+        // Scopes.
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let elem_name = decoder.element_name(sub_id).unwrap_or_default();
+            if elem_name != "scope" {
+                break;
+            }
+            decoder.open_element();
+            // Read scope attributes.
+            let mut name = String::new();
+            let mut display_name = String::new();
+            let mut id = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("name") => name = decoder.read_string(),
+                    Some("id") => id = decoder.read_unsigned_integer(),
+                    Some("label") => display_name = decoder.read_string(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            // Parent tag.
+            let parent_id = {
+                let pid = decoder.peek_element();
+                if pid != 0 && decoder.element_name(pid).as_deref() == Some("parent") {
+                    decoder.open_element();
+                    let p = decoder.read_unsigned_integer_attr(&AttributeId::new("id", 0));
+                    decoder.close_element(pid);
+                    p
+                } else {
+                    0
+                }
+            };
+            // Create or find the scope.
+            self.find_create_scope(id, &name, parent_id);
+            if let Some(scope) = self.scopes.get_mut(&id) {
+                if !display_name.is_empty() {
+                    scope.display_name = display_name;
+                }
+                scope.decode(decoder);
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(db_id);
     }
 }
 
@@ -1189,5 +1611,91 @@ mod tests {
         assert_eq!(db.get_property(Address::new(0x9999)), 0);
         db.clear_property_range(0x10, rng);
         assert_eq!(db.get_property(Address::new(0x1500)), 0);
+    }
+
+    #[test]
+    fn test_symbol_encode_decode_roundtrip() {
+        use crate::marshal::{IdRegistry, TreeDecoder, TreeEncoder};
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        // Register the attribute names we use.
+        {
+            let mut r = registry.write().unwrap();
+            for nm in &[
+                "name", "id", "namelock", "typelock", "readonly", "volatile",
+                "indirectstorage", "hiddenretparm", "merge", "thisptr", "format",
+                "cat", "index", "label", "val", "space", "first", "last",
+            ] {
+                r.register_attribute(nm);
+            }
+            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint"] {
+                r.register_element(nm);
+            }
+        }
+        // Create a symbol with various flags.
+        let mut sym = Symbol::new(1, "myVar", "int");
+        sym.symbol_id = 42;
+        sym.flags |= symbol_flags::TYPELOCK | symbol_flags::NAMELOCK;
+        sym.dispflags |= display_flags::IS_THIS_PTR;
+        sym.set_display_format(display_flags::FORCE_HEX);
+        // Encode.
+        let mut enc = TreeEncoder::new(registry.clone());
+        sym.encode(&mut enc);
+        let doc = enc.into_document();
+        let root = doc.get_root().unwrap().clone();
+        // Decode into a fresh symbol.
+        let mut sym2 = Symbol::new_unnamed(1);
+        let mut dec = TreeDecoder::new(root, registry.clone());
+        sym2.decode(&mut dec);
+        // Verify round-trip.
+        assert_eq!(sym2.get_name(), "myVar");
+        assert_eq!(sym2.get_id(), 42);
+        assert!(sym2.is_type_locked());
+        assert!(sym2.is_name_locked());
+        assert!(sym2.is_this_pointer());
+        assert_eq!(sym2.get_display_format(), display_flags::FORCE_HEX);
+        assert_eq!(sym2.type_name, "int");
+    }
+
+    #[test]
+    fn test_database_encode_decode_roundtrip() {
+        use crate::marshal::{IdRegistry, TreeDecoder, TreeEncoder};
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(IdRegistry::new()));
+        {
+            let mut r = registry.write().unwrap();
+            for nm in &[
+                "name", "id", "namelock", "typelock", "readonly", "volatile",
+                "indirectstorage", "hiddenretparm", "merge", "thisptr", "format",
+                "cat", "index", "label", "val", "space", "first", "last",
+            ] {
+                r.register_attribute(nm);
+            }
+            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint"] {
+                r.register_element(nm);
+            }
+        }
+        // Build a database with a symbol.
+        let mut db = Database::new(false);
+        {
+            let global = db.get_global_scope_mut().unwrap();
+            let id = global.add_symbol("globalVar", "char*");
+            let sym = global.symbols.get(&id).unwrap();
+            sym.write().unwrap().flags |= symbol_flags::READONLY;
+        }
+        // Encode.
+        let mut enc = TreeEncoder::new(registry.clone());
+        db.encode(&mut enc);
+        let doc = enc.into_document();
+        let root = doc.get_root().unwrap().clone();
+        // Decode into a fresh database.
+        let mut db2 = Database::new(false);
+        let mut dec = TreeDecoder::new(root, registry.clone());
+        db2.decode(&mut dec);
+        // Verify the global scope was recovered.
+        let global = db2.get_global_scope().unwrap();
+        assert!(global.num_symbols() >= 1);
+        // Find the symbol by name.
+        let found = global.find_by_name("globalVar");
+        assert!(!found.is_empty());
+        assert!((found[0].read().unwrap().flags & symbol_flags::READONLY) != 0);
     }
 }

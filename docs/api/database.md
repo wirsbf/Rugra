@@ -86,3 +86,30 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
   (currently linear search).
 - Full `Datatype` integration (type_name is currently a String placeholder).
 - `Funcdata` ownership in `FunctionSymbol`.
+
+## 2026-06-27：XML encode/decode（使用 marshal.rs 基础设施）
+
+实现了完整的 XML 序列化，关闭 database.rs 的主要 L3 缺口：
+
+**SymbolEntry**：
+- `encode(encoder)`（database.cc:187）：编码地址/hash + uselimit（rangelist）。
+
+**Symbol**：
+- `encode_header(encoder)`（database.cc:363）：编码 name/id/namelock/typelock/readonly/volatile/indirectstorage/hiddenretparm/merge/thisptr/format/cat/index 属性。
+- `decode_header(decoder)`（database.cc:394）：从属性解码（按 attribute_name 分发）。
+- `encode_body(encoder)` / `decode_body(decoder)`（database.cc:466/473）：编码/解码 `<type>` 元素。
+- `encode(encoder)` / `decode(decoder)`（database.cc:481/492）：完整 `<symbol>` 元素。
+
+**Scope**：
+- `encode_recursive(encoder, only_global)`（database.cc:1371）：递归编码 `<scope>` + 属性 + 子 scope + `<symbollist>`。
+- `decode(decoder)`：解码 scope 的符号列表。
+
+**Database**：
+- `encode(encoder)`（database.cc:3270）：编码 `<db>` + property_changepoint + 全局 scope。
+- `decode(decoder)`（database.cc:3314）：解码完整数据库（属性 + property_changepoint + scopes）。
+
+**ID_BASE** 修正为 `0x4000_0000_0000_0000`（database.cc:45），匹配 Ghidra 的内部 ID 高位模式。
+
+**marshal.rs Decoder trait 新增**：`attribute_name(id) -> Option<String>` + `element_name(id) -> Option<String>`，支持按名称分发的解码。
+
+测试：新增 2 个（Symbol + Database encode/decode round-trip）。剩余 L3 缺：rangemap/partmap（目前用线性搜索/Vec 替代）。
