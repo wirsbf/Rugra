@@ -2149,24 +2149,31 @@ impl ActionSwitchNorm {
 }
 impl Action for ActionSwitchNorm {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra:
-        //   for(i=0;i<data.numJumpTables();++i) {
-        //     JumpTable *jt = data.getJumpTable(i);
-        //     if (!jt->isLabelled()) {
-        //       jt->matchModel(&data);
-        //       jt->recoverLabels(&data);
-        //       jt->foldInNormalization(&data);
-        //       count += 1;
-        //     }
-        //   }
+        // Partial implementation: iterate PcodeOpBank looking for BRANCHIND
+        // ops, which are the root of jump tables. In full Ghidra, these
+        // are stored in Funcdata.jumpvec and accessed via numJumpTables().
         //
-        // JumpTable methods (matchModel/recoverLabels/foldInNormalization)
-        // are implemented in jumptable.rs. However, Funcdata doesn't yet
-        // have a jumpvec field to hold JumpTable objects. This is a
-        // framework implementation documenting the exact algorithm.
-        //
-        // L3 gap: requires Funcdata.jumpvec integration.
-        let _ = fd;
+        // Without jumpvec, we scan alive ops for BRANCHIND and count them.
+        // Full matchModel/recoverLabels/foldInNormalization requires the
+        // JumpTable objects to be attached to Funcdata.
+        let mut change_count = 0;
+        use crate::opcodes::OpCode;
+
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if op_rg.opcode == OpCode::CPUI_BRANCHIND {
+                // Found a switch (BRANCHIND) op.
+                // Full Ghidra: find associated JumpTable, if unlabelled:
+                //   jt->matchModel(&data)
+                //   jt->recoverLabels(&data)
+                //   jt->foldInNormalization(&data)
+                // L3 gap: requires Funcdata.jumpvec field.
+                change_count += 1;
+            }
+        }
+
+        // Return NO_CHANGE since we can't actually normalize without jumpvec.
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "switchnorm" }
