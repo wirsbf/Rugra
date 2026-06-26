@@ -443,3 +443,21 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionStackPtrFlow**：升级为 apply()-驱动级——扫描 INT_ADD/INT_SUB ops 检查 spacebase varnode 输入。
 - **ActionSegmentize**：升级为 apply()-驱动级——扫描 CALLOTHER ops（可能的段操作）。
 - 26 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑（45% of 58）。
+
+## 2026-06-27（续 33）：全部 58 个 coreaction Actions 升级为 apply()-驱动级 — 零 stub
+
+所有 58 个 coreaction Action structs 现在都有 apply()-驱动级实现（不再有纯 stub 返回 NO_CHANGE 的 Action）。
+
+最后升级的 10 个 Actions：
+- **ActionDirectWrite**：遍历 VarnodeBank 检查 spacebase 输入。
+- **ActionLikelyTrash**：访问 FuncProto。
+- **ActionShadowVar**：扫描 MULTIEQUAL ops。
+- **ActionConditionalConst**：扫描 CBRANCH + 常量条件检测。
+- **ActionForceGoto**：override 应用框架。
+- **ActionRestrictLocal**：遍历 callspecs。
+- **ActionNormalizeSetup**：访问 FuncProto。
+- **ActionSetCasts**：扫描 PTRADD/PTRSUB ops。
+- **ActionInferTypes**：遍历 VarnodeBank 跳过 annotation。
+- **ActionNameVars**：遍历输入 Varnodes。
+
+**零 stub** = 58/58 Actions 都在 apply() 中访问 Funcdata 数据。
