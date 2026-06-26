@@ -399,3 +399,13 @@ AND-比较变换，把 AND 推到更大的定义域：
 `V < 1 => V == 0`，`V <= 0 => V == 0`。极值比较转等式。
 
 测试：ruleaction::tests +3（V<1→EQUAL 0；V<=0→EQUAL；V<5 不变）。
+
+### 2026-06-26（续）：RuleAndPiece
+
+#### `pub struct RuleAndPiece`（ruleaction.cc:1630-1694）
+INT_AND 与 PIECE 简化：当 AND mask 清零某半时：
+- `concat(H, L) & C`（C 清零 H）→ `zext(L)`
+- `concat(H, L) & C`（C 清零 L）→ `concat(H, 0)`
+用 get_nz_mask 判断哪半被清零，op-edit 创建 ZEXT/PIECE 替换。
+
+测试：ruleaction::tests +1（H 被清零→ZEXT(L)）。

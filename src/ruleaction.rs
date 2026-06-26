@@ -3335,6 +3335,84 @@ impl Rule for RuleLessOne {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESS, OpCode::CPUI_INT_LESSEQUAL] }
 }
 
+/// Simplify INT_AND of a PIECE when the AND mask zeros out one piece:
+///   `concat(H, L) & C` where C zeros H → `zext(L)`; where C zeros L → `concat(H, 0)`.
+///
+/// Faithful to Ghidra's `RuleAndPiece` (ruleaction.cc:1630-1694). Uses
+/// get_nz_mask on each piece to determine which half the AND eliminates.
+pub struct RuleAndPiece;
+
+impl RuleAndPiece {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAndPiece {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (size, pc) = {
+            let op = op_arc.read().unwrap();
+            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
+            (size, op.start.get_addr())
+        };
+        let fullmask = crate::address::calc_mask(size);
+        // Find a PIECE input whose other-operand mask zeros one piece.
+        let mut found: Option<(usize, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+        for i in 0..2 {
+            let piecevn = { let op = op_arc.read().unwrap(); op.inrefs.get(i).cloned() };
+            let piecevn = match piecevn { Some(v) => v, None => continue };
+            let pieceop_arc = { piecevn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let pieceop_arc = match pieceop_arc { Some(a) => a, None => continue };
+            if pieceop_arc.read().unwrap().opcode != OpCode::CPUI_PIECE { continue; }
+            let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
+            let othervn = match othervn { Some(v) => v, None => continue };
+            let othermask = othervn.read().unwrap().get_nz_mask();
+            if othermask == fullmask || othermask == 0 { continue; }
+            let (highvn, lowvn) = {
+                let po = pieceop_arc.read().unwrap();
+                (po.inrefs.get(0).cloned(), po.inrefs.get(1).cloned())
+            };
+            let (highvn, lowvn) = match (highvn, lowvn) { (Some(h), Some(l)) => (h, l), _ => continue };
+            let maskhigh = highvn.read().unwrap().get_nz_mask();
+            let masklow = lowvn.read().unwrap().get_nz_mask();
+            let lowsize = lowvn.read().unwrap().get_size();
+            if maskhigh & (othermask >> (lowsize * 8)) == 0 {
+                if maskhigh == 0 && highvn.read().unwrap().is_constant() { continue; } // piece2zext
+                found = Some((i, OpCode::CPUI_INT_ZEXT, lowvn));
+                break;
+            } else if masklow & othermask == 0 {
+                if lowvn.read().unwrap().is_constant() { continue; }
+                found = Some((i, OpCode::CPUI_PIECE, highvn));
+                break;
+            }
+        }
+        let (i, opc, keepvn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) };
+        // Build the replacement op.
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if opc == OpCode::CPUI_INT_ZEXT {
+            let newop = fd.new_op(1, pc);
+            fd.op_set_opcode(&newop, OpCode::CPUI_INT_ZEXT);
+            fd.op_set_input(&newop, keepvn, 0);
+            let newout = fd.new_unique_out(size, &newop);
+            fd.op_insert_before(&newop, &follow);
+            fd.op_set_input(&follow, newout, i);
+        } else {
+            // PIECE(highvn, 0)
+            let newvn2 = fd.new_constant(keepvn.read().unwrap().get_size(), 0);
+            let newop = fd.new_op(2, pc);
+            fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+            fd.op_set_input(&newop, keepvn, 0);
+            fd.op_set_input(&newop, newvn2, 1);
+            let newout = fd.new_unique_out(size, &newop);
+            fd.op_insert_before(&newop, &follow);
+            fd.op_set_input(&follow, newout, i);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "and_piece" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5622,5 +5700,47 @@ mod tests {
         let rule = RuleLessOne::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleAndPiece (ruleaction.cc:1630) ---
+
+    #[test]
+    fn test_and_piece_high_zeroed_to_zext() {
+        // concat(H[1], L[1]) & 0x00ff (size 2) → zext(L)
+        // othermask (mask operand NZM) = 0xff. low size=1, othermask>>(1*8)=0.
+        // maskhigh(H) & 0 == 0, H not const-zero → opc=ZEXT, keep low.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let h = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let l = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        h.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        l.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let piece_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let piece_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut p = piece_op.write().unwrap();
+            p.inrefs = vec![h, l.clone()];
+            p.output = Some(piece_out.clone());
+        }
+        piece_out.write().unwrap().def = Some(Arc::downgrade(&piece_op));
+        // AND mask = 0xff (size 2). As a register varnode NZM = 0xffff, so use a const.
+        let mask = fd.vbank.create_constant(2, 0x00ff);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![piece_out, mask];
+            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleAndPiece::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The new input[0] should be the output of a ZEXT(L) op.
+        let a2 = and_op.read().unwrap();
+        assert_eq!(a2.inrefs.len(), 2);
     }
 }
