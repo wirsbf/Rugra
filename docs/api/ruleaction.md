@@ -613,3 +613,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **Rule2Comp2Mult**：完整移植 ruleaction.cc:3980-3995。`-V => V * -1`（INT_NEG → INT_MULT + 插入 -1 输入）。
 - **Rule2Comp2Sub**：完整移植 ruleaction.cc:7236-7256。`-V => 0 - V`（INT_NEG → INT_SUB + 插入 0 输入）。
 - **RuleCarryElim**：完整移植 ruleaction.cc:3997-4030。`carry(V,c) => -c <= V`（INT_CARRY + 常量 → INT_LESSEQUAL）；`carry(V,0) => false`。
+
+## 2026-06-27（续 11）：Zext 交换/简化规则
+
+- **RuleConcatZext**：完整移植 ruleaction.cc:4806-4842。`concat(zext(V), W) => zext(concat(V, W))`（PIECE + ZEXT → 新 PIECE + ZEXT）。
+- **RuleZextCommute**：完整移植 ruleaction.cc:4844-4875。`zext(V) >> W => zext(V >> W)`（INT_RIGHT + ZEXT → 新 INT_RIGHT + ZEXT）。
+- **RuleZextShiftZext**：完整移植 ruleaction.cc:4877-4919。简化多重 ZEXT：
+  - `zext(zext(V)) => zext(V)`（loneDescend 验证）
+  - `zext(zext(V) << c) => zext(V) << c`（检查 shift 不丢失扩展位）

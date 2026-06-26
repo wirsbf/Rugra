@@ -5067,6 +5067,176 @@ impl Rule for RuleCarryElim {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_CARRY] }
 }
 
+/// Commute INT_ZEXT with PIECE: `concat(zext(V), W) => zext(concat(V, W))`.
+/// Faithful to Ghidra's `RuleConcatZext` (ruleaction.cc:4806-4842).
+pub struct RuleConcatZext;
+
+impl RuleConcatZext {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleConcatZext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleConcatZext::applyOp (ruleaction.cc:4814-4842).
+        let (hi, lo, addr) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_PIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let hi_in = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !hi_in.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let zextop = match hi_in.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+            let hi = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if hi.read().unwrap().is_free() || lo.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            (hi, lo, op.get_addr())
+        };
+        let hi_size = hi.read().unwrap().get_size();
+        let lo_size = lo.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Create new PIECE(hi, lo).
+        let new_concat = fd.new_op(2, addr);
+        fd.op_set_opcode(&new_concat, OpCode::CPUI_PIECE);
+        let new_vn = fd.new_unique_out(hi_size + lo_size, &new_concat);
+        fd.op_set_input(&new_concat, hi, 0);
+        fd.op_set_input(&new_concat, lo, 1);
+        fd.op_insert_before(&new_concat, &follow);
+        // Change original op into a ZEXT.
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_input(&follow, new_vn, 0);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_ZEXT);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "concat_zext" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
+}
+
+/// Commute INT_ZEXT with INT_RIGHT: `zext(V) >> W => zext(V >> W)`.
+/// Faithful to Ghidra's `RuleZextCommute` (ruleaction.cc:4844-4875).
+pub struct RuleZextCommute;
+
+impl RuleZextCommute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleZextCommute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleZextCommute::applyOp (ruleaction.cc:4852-4875).
+        let (zext_in, sa_vn, addr) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_RIGHT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let zext_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !zext_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let zextop = match zext_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+            let zext_in = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if zext_in.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sa_vn.read().unwrap().is_constant() && sa_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            (zext_in, sa_vn, op.get_addr())
+        };
+        let zext_in_size = zext_in.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Create INT_RIGHT(zext_in, sa).
+        let new_op = fd.new_op(2, addr);
+        fd.op_set_opcode(&new_op, OpCode::CPUI_INT_RIGHT);
+        let new_out = fd.new_unique_out(zext_in_size, &new_op);
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_input(&follow, new_out, 0);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_ZEXT);
+        fd.op_set_input(&new_op, zext_in, 0);
+        fd.op_set_input(&new_op, sa_vn, 1);
+        fd.op_insert_before(&new_op, &follow);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "zext_commute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
+}
+
+/// Simplify multiple INT_ZEXT operations. Faithful to Ghidra's
+/// `RuleZextShiftZext` (ruleaction.cc:4877-4919).
+///
+/// `zext(zext(V)) => zext(V)` and `zext(zext(V) << c) => zext(V) << c`.
+pub struct RuleZextShiftZext;
+
+impl RuleZextShiftZext {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleZextShiftZext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleZextShiftZext::applyOp (ruleaction.cc:4885-4919).
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let (in_vn, shiftop_code) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_ZEXT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !in_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let shiftop_code = {
+                let in_rg = in_vn.read().unwrap();
+                match in_rg.get_def() {
+                    Some(d) => d.read().unwrap().opcode,
+                    None => return Ok(action_status::NO_CHANGE),
+                }
+            };
+            (in_vn, shiftop_code)
+        };
+        let shiftop = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+
+        if shiftop_code == OpCode::CPUI_INT_ZEXT {
+            // Check for ZEXT(ZEXT(a)).
+            let vn = match shiftop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let lone = in_vn.read().unwrap().lone_descend();
+            if !lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            fd.op_set_input(&follow, vn, 0);
+            return Ok(action_status::CHANGE);
+        }
+        if shiftop_code != OpCode::CPUI_INT_LEFT {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Check for ZEXT(ZEXT(V) << c).
+        let shift_in1_const = shiftop.read().unwrap().get_in(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if !shift_in1_const { return Ok(action_status::NO_CHANGE); }
+        let shift_in0 = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        if !shift_in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let zext2op = match shift_in0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        if zext2op.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+        let root_vn = match zext2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        if root_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        let sa = shiftop.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+        let zext2_out_size = zext2op.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let root_size = root_vn.read().unwrap().get_size();
+        if sa > 8 * (zext2_out_size - root_size) as u64 {
+            return Ok(action_status::NO_CHANGE); // Shift might lose bits.
+        }
+        let out_size = op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let addr = op_arc.read().unwrap().get_addr();
+        let new_op = fd.new_op(1, addr);
+        fd.op_set_opcode(&new_op, OpCode::CPUI_INT_ZEXT);
+        let out_vn = fd.new_unique_out(out_size, &new_op);
+        fd.op_set_input(&new_op, root_vn, 0);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_LEFT);
+        fd.op_set_input(&follow, out_vn, 0);
+        let c = fd.new_constant(4, sa);
+        fd.op_insert_input(&follow, c, 1);
+        fd.op_insert_before(&new_op, &follow);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "zext_shift_zext" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
