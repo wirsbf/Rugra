@@ -2181,6 +2181,106 @@ impl Rule for RuleSignShift {
     }
 }
 
+/// Simplify INT_ZEXT applied to SUBPIECE:
+///   `zext(sub(V, 0))  =>  V & mask`
+///   `zext(sub(V, c))  =>  (V >> c*8) & mask`
+///
+/// Faithful to Ghidra's `RuleSubZext` (ruleaction.cc:5044-5115). This ports
+/// the primary SUBPIECE branch (5067-5089): when a ZEXT wraps a SUBPIECE that
+/// truncates then re-extends to the same size, replace with AND-mask (for
+/// offset 0) or a right-shift of the base plus AND-mask (for middle offsets).
+pub struct RuleSubZext;
+
+impl RuleSubZext {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleSubZext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // in0 must be defined by a SUBPIECE; base size == op output size.
+        let (basevn, trunc_offset, sub_size, subop_arc) = {
+            let op = op_arc.read().unwrap();
+            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let subvn = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let subop_arc = {
+                let s = subvn.read().unwrap();
+                s.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let subop_arc = match subop_arc {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if subop_arc.read().unwrap().opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let (basevn, trunc_offset) = {
+                let so = subop_arc.read().unwrap();
+                let basevn = match so.inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let trunc_offset = so.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                (basevn, trunc_offset)
+            };
+            if basevn.read().unwrap().is_free() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if basevn.read().unwrap().get_size() != out_size {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if basevn.read().unwrap().get_size() > 8 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (basevn, trunc_offset, {
+                let s = subvn.read().unwrap();
+                s.get_size()
+            }, subop_arc)
+        };
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if trunc_offset != 0 {
+            // Middle truncation: subvn must be a lone descendant (exclusive use).
+            let subvn_vn = op_arc.read().unwrap().inrefs[0].clone();
+            let lone = subvn_vn.read().unwrap().lone_descend();
+            let is_lone = lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false);
+            if !is_lone {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // Convert the SUBPIECE into INT_RIGHT(base, trunc_offset*8) → newvn
+            let newvn = fd.new_unique(basevn.read().unwrap().get_size());
+            let sub_ref = crate::op::PcodeOpRef(subop_arc.clone());
+            fd.op_set_input(&follow, newvn.clone(), 0);
+            fd.op_set_opcode(&sub_ref, OpCode::CPUI_INT_RIGHT);
+            let right_val = trunc_offset * 8;
+            let right_const = fd.new_constant(4, right_val);
+            fd.op_set_input(&sub_ref, right_const, 1);
+            fd.op_set_output(&sub_ref, newvn);
+        } else {
+            // Offset 0: bypass the truncation entirely.
+            fd.op_set_input(&follow, basevn.clone(), 0);
+        }
+        // Rewrite op as INT_AND(in0, calc_mask(sub_size)).
+        let mask = crate::address::calc_mask(sub_size);
+        let mask_const = fd.new_constant(basevn.read().unwrap().get_size(), mask);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_AND);
+        fd.op_insert_input(&follow, mask_const, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "sub_zext"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_ZEXT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3672,5 +3772,84 @@ mod tests {
         let rule = RuleSignShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleSubZext (ruleaction.cc:5044) ---
+
+    #[test]
+    fn test_sub_zext_offset_zero() {
+        // zext(sub(V[8], 0)) [out size 8] => V & 0xffffffff (sub size 4)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let off_const = fd.vbank.create_constant(4, 0);
+        let sub_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let sub_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        {
+            let mut s = sub_op.write().unwrap();
+            s.inrefs = vec![v.clone(), off_const];
+            s.output = Some(sub_out.clone());
+        }
+        sub_out.write().unwrap().def = Some(Arc::downgrade(&sub_op));
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![sub_out];
+            z.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleSubZext::new();
+        let result = rule.apply_op(&zext_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let z = zext_op.read().unwrap();
+        assert_eq!(z.opcode, OpCode::CPUI_INT_AND);
+        // in0 = base V, in1 = calc_mask(4) = 0xffffffff
+        assert!(Arc::ptr_eq(&z.inrefs[0], &v));
+        assert_eq!(z.inrefs[1].read().unwrap().get_val(), 0xffffffff);
+    }
+
+    #[test]
+    fn test_sub_zext_middle_offset() {
+        // zext(sub(V[8], 4)) [out size 8] => (V >> 32) & 0xffffffff
+        // Requires sub_out to be lone-descend of zext_op.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let off_const = fd.vbank.create_constant(4, 4);
+        let sub_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let sub_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        {
+            let mut s = sub_op.write().unwrap();
+            s.inrefs = vec![v.clone(), off_const];
+            s.output = Some(sub_out.clone());
+        }
+        sub_out.write().unwrap().def = Some(Arc::downgrade(&sub_op));
+        let zext_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ZEXT,
+        )));
+        {
+            let mut z = zext_op.write().unwrap();
+            z.inrefs = vec![sub_out.clone()];
+            z.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30));
+        }
+        sub_out.write().unwrap().descend.push(Arc::downgrade(&zext_op));
+        let rule = RuleSubZext::new();
+        let result = rule.apply_op(&zext_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let z = zext_op.read().unwrap();
+        assert_eq!(z.opcode, OpCode::CPUI_INT_AND);
+        // The SUBPIECE should now be INT_RIGHT with shift 32.
+        let s = sub_op.read().unwrap();
+        assert_eq!(s.opcode, OpCode::CPUI_INT_RIGHT);
+        assert_eq!(s.inrefs[1].read().unwrap().get_val(), 32);
     }
 }

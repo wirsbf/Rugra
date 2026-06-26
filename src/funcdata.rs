@@ -232,6 +232,20 @@ impl Funcdata {
         }
     }
 
+    /// Set the output varnode for an op (replacing any existing output).
+    /// Faithful to `Funcdata::opSetOutput`. Marks the varnode WRITTEN and sets
+    /// its def link to this op; clears the old output's def if present.
+    pub fn op_set_output(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        let mut o = op.0.write().unwrap();
+        if let Some(old) = o.output.take() {
+            // Clear the old output's def (best-effort).
+            old.write().unwrap().def = None;
+        }
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
+        o.output = Some(vn);
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve

@@ -269,3 +269,15 @@ INT_LESSEQUAL 与极值常量的简化：
 符号位提取规范化：`V >> 0x1f => (V s>> 0x1f) * -1`。当逻辑右移符号位参与算术（INT_ADD/MULT）或常量比较时，转为算术右移乘全1。
 
 测试：ruleaction::tests +5（IdentityEl 加0/乘1/乘0；SignShift 算术触发/COPY不变）。
+
+### 2026-06-26（续）：RuleSubZext + op_set_output
+
+#### `Funcdata::op_set_output(op, vn)`（funcdata.hh）
+设置/替换 op 的输出 varnode（标记 WRITTEN、设 def 链）。
+
+#### `pub struct RuleSubZext`（ruleaction.cc:5044-5089）
+简化 ZEXT(SUBPIECE)：
+- `zext(sub(V, 0)) => V & mask`（偏移0，绕过截断）
+- `zext(sub(V, c)) => (V >> c*8) & mask`（中间偏移，需 sub 输出为 lone descend）
+
+测试：ruleaction::tests +2（偏移0 绕过→AND；中间偏移→SUBPIECE 改 RIGHT(32)）。

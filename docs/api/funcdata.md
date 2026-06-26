@@ -614,3 +614,8 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `op_swap_input(op, slot1, slot2)` — `Funcdata::opSwapInput`：交换两输入操作数。
   用于 RuleBoolNegate 翻转比较时的换序（如 `!(V < W) => W <= V`）。
+
+### 2026-06-26（续）：op_set_output
+
+- `op_set_output(op, vn)` — `Funcdata::opSetOutput`：设置/替换 op 输出 varnode。
+  标记 WRITTEN、设 def 链、清旧输出 def。解锁 RuleSubZext 等。
