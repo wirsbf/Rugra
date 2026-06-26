@@ -87,3 +87,13 @@ Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
 *暂无代码注释*
 
  
+## 2026-06-26：新增 RuleNegateIdentity（ruleaction.cc:444-474）
+
+### `pub struct RuleNegateIdentity`
+应用 INT_NEGATE 恒等式：`V & ~V => #0`，`V | ~V => #-1`，`V ^ ~V => #-1`。
+忠实移植 Ghidra `RuleNegateIdentity`。
+
+- `apply_op`：当 `INT_NOT(V)` 的输出被一个 `INT_AND`/`INT_OR`/`INT_XOR` 读取，且该逻辑 op 的另一输入正是 V 时，将该逻辑 op 折叠为 `COPY(0)`（AND）或 `COPY(all-ones)`（OR/XOR）。
+- `get_opcodes`：`[CPUI_INT_NOT]`（注意：Rugra `CPUI_INT_NOT` == Ghidra `INT_NEGATE`；Rugra `CPUI_INT_NEG` == Ghidra `INT_2COMP`）。
+
+测试：ruleaction::tests 3 个新增（AND→0、OR→全1、无匹配→NO_CHANGE）。

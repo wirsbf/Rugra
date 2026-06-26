@@ -443,6 +443,110 @@ impl Rule for RuleShiftBitops {
     }
 }
 
+/// Apply INT_NEGATE identities: `V & ~V => #0`, `V | ~V => #-1`, `V ^ ~V => #-1`.
+///
+/// Faithful to Ghidra's `RuleNegateIdentity` (ruleaction.cc:444-474). When an
+/// `INT_NEGATE(V)` output feeds an `INT_AND`/`INT_OR`/`INT_XOR` whose other
+/// operand is the original `V`, the logic op collapses to a `COPY` of the
+/// all-zero (for AND) or all-ones (for OR/XOR) constant.
+///
+/// Note: Rugra names the bitwise-not opcode `CPUI_INT_NOT` (Ghidra's
+/// `INT_NEGATE`); Ghidra's `INT_2COMP` (arithmetic negate) is `CPUI_INT_NEG`.
+pub struct RuleNegateIdentity;
+
+impl RuleNegateIdentity {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleNegateIdentity {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // op is INT_NOT(V) -> outVn (~V). Walk outVn's descendants looking
+        // for a logic op whose other input is V.
+        let out_vn = {
+            let op = op_arc.read().unwrap();
+            match op.output.clone() {
+                Some(o) => o,
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let negated_vn = {
+            let op = op_arc.read().unwrap();
+            op.inrefs.first().cloned()
+        };
+        let negated_vn = match negated_vn {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // Collect descendant ops (ops that read out_vn).
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+            let ov = out_vn.read().unwrap();
+            ov.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+
+        for logic_arc in descendants {
+            let mut logic = logic_arc.write().unwrap();
+            let opc = logic.opcode;
+            if opc != OpCode::CPUI_INT_AND
+                && opc != OpCode::CPUI_INT_OR
+                && opc != OpCode::CPUI_INT_XOR
+            {
+                continue;
+            }
+            // Find the slot of out_vn; the other slot must equal negated_vn.
+            let mut slot = -1i32;
+            for (i, in_vn) in logic.inrefs.iter().enumerate() {
+                if std::sync::Arc::ptr_eq(in_vn, &out_vn) {
+                    slot = i as i32;
+                    break;
+                }
+            }
+            if slot < 0 {
+                continue;
+            }
+            let other_slot = (1 - slot) as usize;
+            let other_is_negated = logic
+                .inrefs
+                .get(other_slot)
+                .map(|v| std::sync::Arc::ptr_eq(v, &negated_vn))
+                .unwrap_or(false);
+            if !other_is_negated {
+                continue;
+            }
+            // Collapse: AND -> 0, OR/XOR -> all-ones.
+            let size = {
+                let nv = negated_vn.read().unwrap();
+                nv.get_size()
+            };
+            let value = if opc == OpCode::CPUI_INT_AND {
+                0u64
+            } else {
+                let mask = if size >= 64 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
+                mask
+            };
+            let const_vn = fd.vbank.create_constant(size, value);
+            // Ghidra: opSetInput(logicOp, const, 0); opRemoveInput(logicOp, 1);
+            //         opSetOpcode(logicOp, COPY);
+            logic.opcode = OpCode::CPUI_COPY;
+            logic.inrefs = vec![const_vn];
+            drop(logic);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "negate_identity"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // Ghidra INT_NEGATE == Rugra CPUI_INT_NOT
+        vec![OpCode::CPUI_INT_NOT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +668,120 @@ mod tests {
             8,
         );
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleNegateIdentity (ruleaction.cc:444-474) ---
+
+    /// Build INT_NEGATE(V) → tmp, then INT_AND(tmp, V) → out. The rule should
+    /// collapse the AND into COPY(0).
+    #[test]
+    fn test_negate_identity_and_collapses_to_zero() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // V = a register varnode
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        // tmp = INT_NEGATE(V)
+        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let neg_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_NOT,
+        )));
+        {
+            let mut o = neg_op.write().unwrap();
+            o.inrefs = vec![v.clone()];
+            o.output = Some(tmp.clone());
+        }
+        // out = INT_AND(tmp, V)
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut o = and_op.write().unwrap();
+            o.inrefs = vec![tmp.clone(), v.clone()];
+            o.output = Some(out);
+        }
+        // Wire descend: tmp is read by and_op.
+        tmp.write().unwrap().descend.push(Arc::downgrade(&and_op));
+
+        let rule = RuleNegateIdentity::new();
+        let result = rule.apply_op(&neg_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The AND op should now be COPY(0).
+        let and = and_op.read().unwrap();
+        assert_eq!(and.opcode, OpCode::CPUI_COPY);
+        assert_eq!(and.inrefs.len(), 1);
+        assert!(and.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(and.inrefs[0].read().unwrap().get_val(), 0);
+    }
+
+    #[test]
+    fn test_negate_identity_or_collapses_to_ones() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let neg_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_NOT,
+        )));
+        {
+            let mut o = neg_op.write().unwrap();
+            o.inrefs = vec![v.clone()];
+            o.output = Some(tmp.clone());
+        }
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        // INT_OR(tmp, V) — order reversed to exercise the slot logic.
+        let or_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = or_op.write().unwrap();
+            o.inrefs = vec![v.clone(), tmp.clone()];
+            o.output = Some(out);
+        }
+        tmp.write().unwrap().descend.push(Arc::downgrade(&or_op));
+
+        let rule = RuleNegateIdentity::new();
+        let result = rule.apply_op(&neg_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let or = or_op.read().unwrap();
+        assert_eq!(or.opcode, OpCode::CPUI_COPY);
+        // 4-byte all-ones = 0xffffffff
+        assert_eq!(or.inrefs[0].read().unwrap().get_val(), 0xffffffff);
+    }
+
+    #[test]
+    fn test_negate_identity_no_match() {
+        // INT_NEGATE(V) feeding INT_AND(~V, W) where W != V → no change.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x50);
+        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let neg_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_NOT,
+        )));
+        {
+            let mut o = neg_op.write().unwrap();
+            o.inrefs = vec![v.clone()];
+            o.output = Some(tmp.clone());
+        }
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut o = and_op.write().unwrap();
+            o.inrefs = vec![tmp.clone(), w.clone()];
+            o.output = Some(out);
+        }
+        tmp.write().unwrap().descend.push(Arc::downgrade(&and_op));
+
+        let rule = RuleNegateIdentity::new();
+        let result = rule.apply_op(&neg_op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
     }
 }
