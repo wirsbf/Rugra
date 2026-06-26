@@ -799,6 +799,103 @@ impl Rule for RuleXorCollapse {
     }
 }
 
+/// Collapse constants in an additive/multiplicative expression:
+///   `((V + c) + d)  =>  V + (c+d)`
+///   `((V * c) * d)  =>  V * (c*d)`
+///
+/// Faithful to Ghidra's `RuleAddMultCollapse` (ruleaction.cc:4099-4183). This
+/// ports the primary form: when an INT_ADD/INT_MULT has a constant in slot 1
+/// and its slot-0 input is defined by the same op-code with another constant,
+/// fold the two constants together. The spacebase sub-case (4131-4169) is
+/// deferred (requires isSpacebase/isInput tracking).
+pub struct RuleAddMultCollapse;
+
+impl RuleAddMultCollapse {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleAddMultCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // c[0] = in1 (must be constant), sub = in0.
+        let (sub_arc, c0, opc) = {
+            let op = op_arc.read().unwrap();
+            let sub = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let c0 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !c0.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (sub, c0, op.opcode)
+        };
+        if opc != OpCode::CPUI_INT_ADD && opc != OpCode::CPUI_INT_MULT {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // sub must be defined by the same op-code.
+        let subop_arc = {
+            let sr = sub_arc.read().unwrap();
+            sr.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let subop_arc = match subop_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if subop_arc.read().unwrap().opcode != opc {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // c[1] = subop->getIn(1) (must be constant).
+        let (sub2, c1) = {
+            let so = subop_arc.read().unwrap();
+            let sub2 = match so.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let c1 = match so.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !c1.read().unwrap().is_constant() {
+                // The spacebase sub-case is deferred; no change here.
+                return Ok(action_status::NO_CHANGE);
+            }
+            (sub2, c1)
+        };
+        if sub2.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Fold: val = c[0] <opc> c[1].
+        let size = c0.read().unwrap().get_size();
+        let v0 = c0.read().unwrap().get_offset();
+        let v1 = c1.read().unwrap().get_offset();
+        let val = match opc {
+            OpCode::CPUI_INT_ADD => v0.wrapping_add(v1),
+            OpCode::CPUI_INT_MULT => v0.wrapping_mul(v1),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let new_const = fd.new_constant(size, val);
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, new_const, 1); // replace c[0] with folded constant
+        fd.op_set_input(&follow, sub2, 0);      // replace sub with sub2
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "add_mult_collapse"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_MULT]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1260,5 +1357,85 @@ mod tests {
         let e = eq_op.read().unwrap();
         // slot 0 should be V, slot 1 should be W
         assert!(Arc::ptr_eq(&e.inrefs[0], &v) || Arc::ptr_eq(&e.inrefs[0], &xor_op.read().unwrap().inrefs[0]));
+    }
+
+    // --- RuleAddMultCollapse (ruleaction.cc:4099) ---
+
+    #[test]
+    fn test_add_mult_collapse_double_add() {
+        // ((V + 3) + 5)  =>  V + 8
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        // Mark V as an input (not free), as Ghidra would for a function input.
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 3);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_add = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut a = inner_add.write().unwrap();
+            a.inrefs = vec![v.clone(), c1];
+            a.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_add));
+        let c0 = fd.vbank.create_constant(4, 5);
+        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_add = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut a = outer_add.write().unwrap();
+            a.inrefs = vec![inner_out.clone(), c0];
+            a.output = Some(outer_out);
+        }
+
+        let rule = RuleAddMultCollapse::new();
+        let result = rule.apply_op(&outer_add, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let a = outer_add.read().unwrap();
+        // slot 0 should now be V (sub2), slot 1 should be 3+5=8
+        assert!(Arc::ptr_eq(&a.inrefs[0], &v));
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 8);
+    }
+
+    #[test]
+    fn test_add_mult_collapse_double_mult() {
+        // ((V * 2) * 3)  =>  V * 6
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 2);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_mul = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut a = inner_mul.write().unwrap();
+            a.inrefs = vec![v.clone(), c1];
+            a.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_mul));
+        let c0 = fd.vbank.create_constant(4, 3);
+        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_mul = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut a = outer_mul.write().unwrap();
+            a.inrefs = vec![inner_out, c0];
+            a.output = Some(outer_out);
+        }
+
+        let rule = RuleAddMultCollapse::new();
+        let result = rule.apply_op(&outer_mul, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let a = outer_mul.read().unwrap();
+        assert!(Arc::ptr_eq(&a.inrefs[0], &v));
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 6);
     }
 }

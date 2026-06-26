@@ -124,3 +124,14 @@ Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
 - 要求 xor 输出为 lone descend（loneDescend）。
 
 测试：ruleaction::tests +4（ConcatZero 折叠/非零不变；XorCollapse 常量折叠/移项）。
+
+### 2026-06-26（续）：RuleAddMultCollapse
+
+#### `pub struct RuleAddMultCollapse`（ruleaction.cc:4099-4183）
+折叠加法/乘法中的常量：
+- `((V + c) + d)  =>  V + (c+d)`
+- `((V * c) * d)  =>  V * (c*d)`
+主形式：当 op(in0=sub, in1=const) 且 sub 由同 op-code 定义且其 in1 也是常量时，
+折叠两常量。spacebase 子情形（4131-4169）待 isSpacebase/isInput 跟踪后补。
+
+测试：ruleaction::tests +2（双加折叠、双乘折叠）。
