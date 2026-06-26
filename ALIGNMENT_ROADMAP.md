@@ -243,7 +243,7 @@
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | 🔧 L2 | **完整 UTF 解码已移植**：StringManager + StringManagerUnicode（LoadImage 集成）+ write_utf8/read_utf16/get_codepoint（UTF8/UTF16/UTF32 + 代理对）/check_characters/has_char_terminator/write_unicode/assign_string_data。L3 缺 XML encode/decode | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | — | 📋 L1 | **完全缺失**：CRC32/压缩 | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
-| 57 | `prefersplit.cc` | — | 📋 L1 | **完全缺失**：偏好分裂分析 | `prefersplit.cc` |
+| 57 | `prefersplit.cc` | `prefersplit.rs` | 🔧 L2 | **骨架已移植**：PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序。L3 缺完整分裂算法（testX/splitX 需 Funcdata op 编辑） | `prefersplit.cc` |
 | 58 | `paramid.cc` | — | 📋 L1 | **完全缺失**：参数 ID 分析 | `paramid.cc` |
 | 59 | `unionresolve.cc` | — | 📋 L1 | **完全缺失**：联合体解析 | `unionresolve.cc` |
 | 60 | `flow.cc` | — | 📋 L1 | **完全缺失**：流分析 | `flow.cc` |

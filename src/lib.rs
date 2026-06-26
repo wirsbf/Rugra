@@ -78,6 +78,7 @@ pub mod opbehavior; // ← opbehavior.hh
 pub mod options; // ← options.hh
 pub mod override_rs; // ← override.hh (Override commands)
 pub mod pcoderaw; // ← pcoderaw.hh
+pub mod prefersplit; // ← prefersplit.hh
 pub mod prettyprint; // ← prettyprint.hh
 pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh

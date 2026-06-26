@@ -517,3 +517,7 @@
 ## 2026-06-27（续 10）：新增 context 模块
 
 - `pub mod context;` — 对应 `globalcontext.hh`，上下文数据库。ContextBitRange（位范围编码/解码）+ TrackedContext/TrackedSet（跟踪寄存器值）+ ContextBlob（上下文字数组）+ ContextDatabase trait（get_context/get_tracked_set/create_set/register_variable/get_tracked_value）+ ContextInternal（内存实现，分区映射）+ ContextCache（缓存）。解锁 Architecture::context + SegmentedResolver + 多个 coreaction Actions。L3 缺 XML encode/decode + partmap + ParserContext（SLEIGH）。
+
+## 2026-06-27（续 11）：新增 prefersplit 模块
+
+- `pub mod prefersplit;` — 对应 `prefersplit.hh`，偏好分裂记录。PreferSplitRecord（storage + splitoffset + 排序）+ PreferSplitManager（init/find_record/records + split/split_additional stub）+ SplitInstance（fillin/lo_size/hi_size 端序计算）+ initialize 排序函数。解锁 Architecture::splitrecords。L3 缺完整分裂算法（需 Funcdata op 编辑）。
