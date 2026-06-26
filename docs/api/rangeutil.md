@@ -32,3 +32,20 @@
 - `translate_to_op()` — 范围→比较操作转换（rangeutil.hh:99）
 
 测试：新增 4 个（invert/push_forward_add/push_forward_copy/translate_to_op）。
+
+## 2026-06-27：CircleRange 守卫扩展（pullBack）基础设施
+
+新增 `CircleRange::pullBack` 所需全套方法，解锁 JumpBasic::analyzeGuards 的守卫范围扩展：
+
+**CircleRange 方法**：
+- `complement()`（rangeutil.cc:38）：取补集（仅 step==1）。
+- `convert_to_boolean() -> bool`（rangeutil.cc:63）：转为布尔范围 [0,2)/[0,1)/[1,2)/空，返回是否含 0 和 1。
+- `set_nz_mask(nzmask, size) -> Option<CircleRange>`（rangeutil.cc:672）：从 NZ 掩码构建范围，bit_transitions>2 返回 None。
+- `pull_back_unary(opc, in_size, out_size) -> bool`（rangeutil.cc:728）：通过一元操作（COPY/INT_NEG/INT_NOT/INT_ZEXT/INT_SEXT/BOOL_NOT）反向。
+- `pull_back_binary(opc, val, slot, in_size, out_size) -> bool`（rangeutil.cc:807）：通过二元操作（INT_EQUAL/NOTEQUAL/LESS/LESSEQUAL/ADD/SUB/RIGHT）反向。
+
+**自由函数**：
+- `bit_transitions(val, size) -> i32`（address.cc:818）：计算位转换次数。
+- `sign_extend_size(in_val, size_in, size_out) -> u64`（address.cc:666）：字节间符号扩展。
+
+测试：新增 11 个（complement/convert_to_boolean/set_nz_mask/pull_back_unary/pull_back_binary_add/pull_back_binary_less/bit_transitions/sign_extend_size）。

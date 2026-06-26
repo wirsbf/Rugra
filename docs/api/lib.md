@@ -480,3 +480,8 @@
 - **`op.rs` 新增**：`is_marker()`（op.hh:185）、`is_bool_output()`（op.hh:190）。
 - **`address.rs` 新增**：`coveringmask(val)`（address.cc:760）、`minimalmask(val)`。
 - **`jumptable.rs` L3 推进**：`find_determining_varnodes` 现在执行完整的 def-chain DFS 深度遍历（不再 break）；`is_prune` 检查 def 的 isCall/isMarker/numInput==0；`is_point` 检查 isAnnotation/isReadOnly；`quasi_copy` 完整遍历 COPY/INT_AND/INT_OR/INT_SEXT/INT_ZEXT/PIECE/SUBPIECE 链；`get_max_value` 检查 INT_AND/MULTIEQUAL 的常量掩码；`is_load_in_path` 通过 get_def() 检测 LOAD。剩余 L3 缺：emulate_path、pullBack、CFG 重写。
+
+## 2026-06-27（续 2）：CircleRange pullBack 全套 + jumptable 守卫扩展/backup2Switch/findUnnormalized
+
+- **`rangeutil.rs`**：CircleRange 新增 `complement`/`convert_to_boolean`/`set_nz_mask`/`pull_back_unary`/`pull_back_binary`（rangeutil.cc:38-1003）。自由函数 `bit_transitions`/`sign_extend_size`。
+- **`jumptable.rs`**：`pull_back_through_op` 自由函数（rangeutil.cc:1022）；JumpBasic 的 `analyze_guards` 现执行 pullBack 扩展循环；`backup2_switch` 反向模拟；`find_unnormalized` 完整链遍历；`flows_only_to_model`；`build_labels` 使用 backup2_switch。11 个新测试。

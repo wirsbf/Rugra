@@ -178,3 +178,17 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 - CFG-rewriting (`foldInOneGuard`, `switchOver`, branch editing via
   `Funcdata::pushBranch`).
 - `backup2Switch` reverse emulation for case-label recovery.
+
+## 2026-06-27（续）：pullBack 守卫扩展 + backup2Switch + findUnnormalized
+
+**新增自由函数**：
+- `pull_back_through_op(rng, op, usenzmask) -> Option<Varnode>`（rangeutil.cc:1022）：通过 PcodeOp 反向范围，返回未知输入 varnode。处理一元/二元操作 + NZ 掩码交集。
+
+**JumpBasic 新增/升级方法**：
+- `analyze_guards`：现执行完整 pullBack 扩展循环（jumptable.cc:1119），从布尔 varnode 反向最多 2 步，每步创建新 GuardRecord。
+- `backup2_switch(output, outvn, invn) -> Option<u64>`（jumptable.cc:474）：从规范化值反向模拟到未规范化值，使用 opbehavior::recover_input_unary/binary。
+- `find_unnormalized`：现执行完整 ADD/SUB/ZEXT/SEXT 链遍历（jumptable.cc:1484），计数 addsub/ext 限制。
+- `flows_only_to_model(vn, trail_op) -> bool`（jumptable.cc:1293）：检查 varnode 是否仅流向模型。
+- `build_labels`：现使用 backup2_switch 恢复 case 标签（jumptable.cc:1528），不再全部发 NO_LABEL。
+
+剩余 L3 缺：emulate_path 地址计算、CFG 重写（foldInGuards/switchOver）。

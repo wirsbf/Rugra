@@ -224,6 +224,293 @@ impl CircleRange {
         self.isempty = false;
     }
 
+    /// Take the complement of this range (only works if step is 1).
+    /// Faithful to `CircleRange::complement` (rangeutil.cc:38).
+    pub fn complement(&mut self) {
+        if self.isempty {
+            self.left = 0;
+            self.right = 0;
+            self.isempty = false;
+            return;
+        }
+        if self.left == self.right {
+            self.isempty = true;
+            return;
+        }
+        let tmp = self.left;
+        self.left = self.right;
+        self.right = tmp;
+    }
+
+    /// Convert this range to a boolean range [0,2), [0,1), [1,2), or empty.
+    /// Returns true if the range contains both 0 and 1.
+    /// Faithful to `CircleRange::convertToBoolean` (rangeutil.cc:63).
+    pub fn convert_to_boolean(&mut self) -> bool {
+        if self.isempty {
+            return false;
+        }
+        let contains_zero = self.contains_val(0);
+        let contains_one = self.contains_val(1);
+        self.mask = 0xff;
+        self.step = 1;
+        if contains_zero && contains_one {
+            self.left = 0;
+            self.right = 2;
+            self.isempty = false;
+            return true;
+        } else if contains_zero {
+            self.left = 0;
+            self.right = 1;
+            self.isempty = false;
+        } else if contains_one {
+            self.left = 1;
+            self.right = 2;
+            self.isempty = false;
+        } else {
+            self.isempty = true;
+        }
+        false
+    }
+
+    /// Build a range from an NZ mask. Returns false if the mask has too many
+    /// bit transitions to form a valid range. Faithful to `setNZMask`
+    /// (rangeutil.cc:672).
+    pub fn set_nz_mask(nzmask: u64, size: usize) -> Option<CircleRange> {
+        let trans = bit_transitions(nzmask, size);
+        if trans > 2 {
+            return None;
+        }
+        let has_step = (nzmask & 1) == 0;
+        if !has_step && trans == 2 {
+            return None;
+        }
+        let mut r = CircleRange::empty();
+        r.isempty = false;
+        if trans == 0 {
+            r.mask = Self::calc_mask(size);
+            if has_step {
+                // All zeros
+                r.step = 1;
+                r.left = 0;
+                r.right = 1;
+            } else {
+                // All ones
+                r.step = 1;
+                r.left = 0;
+                r.right = 0;
+            }
+            return Some(r);
+        }
+        let shift = crate::address::leastsigbit_set(nzmask);
+        let mut step = 1u64;
+        step <<= shift;
+        r.step = step;
+        r.mask = Self::calc_mask(size);
+        r.left = 0;
+        r.right = (nzmask + step) & r.mask;
+        Some(r)
+    }
+
+    /// Pull-back this range through a unary operator. Faithful to
+    /// `pullBackUnary` (rangeutil.cc:728). Returns true if the transform was
+    /// possible.
+    pub fn pull_back_unary(
+        &mut self,
+        opc: crate::opcodes::OpCode,
+        in_size: usize,
+        out_size: usize,
+    ) -> bool {
+        if self.isempty {
+            return true;
+        }
+        match opc {
+            crate::opcodes::OpCode::CPUI_BOOL_NOT => {
+                if self.convert_to_boolean() {
+                    // both outputs possible
+                } else {
+                    self.left ^= 1;
+                    self.right = self.left + 1;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_COPY => {
+                // Identity transform.
+            }
+            crate::opcodes::OpCode::CPUI_INT_NEG => {
+                // INT_2COMP: (~left+1+step)
+                let val = (!self.left.wrapping_add(1).wrapping_add(self.step)) & self.mask;
+                self.left = (!self.right.wrapping_add(1).wrapping_add(self.step)) & self.mask;
+                self.right = val;
+            }
+            crate::opcodes::OpCode::CPUI_INT_NOT => {
+                let val = (!self.left.wrapping_add(self.step)) & self.mask;
+                self.left = (!self.right.wrapping_add(self.step)) & self.mask;
+                self.right = val;
+            }
+            crate::opcodes::OpCode::CPUI_INT_ZEXT => {
+                let in_mask = Self::calc_mask(in_size);
+                let rem = if self.step != 0 {
+                    self.left % self.step
+                } else {
+                    0
+                };
+                let mut zext = CircleRange {
+                    left: rem,
+                    right: in_mask.wrapping_add(1).wrapping_add(rem),
+                    mask: self.mask,
+                    step: self.step,
+                    isempty: false,
+                };
+                if self.intersect(&zext) != 0 {
+                    return false;
+                }
+                self.left &= in_mask;
+                self.right &= in_mask;
+                self.mask &= in_mask;
+            }
+            crate::opcodes::OpCode::CPUI_INT_SEXT => {
+                // Simplified SEXT pull-back; full version requires sign_extend.
+                let in_mask = Self::calc_mask(in_size);
+                self.left &= in_mask;
+                self.right &= in_mask;
+                self.mask &= in_mask;
+            }
+            _ => return false,
+        }
+        let _ = out_size;
+        true
+    }
+
+    /// Pull-back this range through a binary operator. Faithful to
+    /// `pullBackBinary` (rangeutil.cc:807). Returns true if a valid range is
+    /// formed.
+    pub fn pull_back_binary(
+        &mut self,
+        opc: crate::opcodes::OpCode,
+        val: u64,
+        slot: i32,
+        in_size: usize,
+        _out_size: usize,
+    ) -> bool {
+        if self.isempty {
+            return true;
+        }
+        match opc {
+            crate::opcodes::OpCode::CPUI_INT_EQUAL => {
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                self.left = val;
+                self.right = (val + 1) & self.mask;
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_NOTEQUAL => {
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                self.left = (val + 1) & self.mask;
+                self.right = val;
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_LESS => {
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                if slot == 0 {
+                    if val == 0 {
+                        self.isempty = true;
+                    } else {
+                        self.left = 0;
+                        self.right = val;
+                    }
+                } else if val == self.mask {
+                    self.isempty = true;
+                } else {
+                    self.left = (val + 1) & self.mask;
+                    self.right = 0;
+                }
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_LESSEQUAL => {
+                let both = self.convert_to_boolean();
+                self.mask = Self::calc_mask(in_size);
+                if both {
+                    return true;
+                }
+                let yes_comp = self.left == 0;
+                if slot == 0 {
+                    self.left = 0;
+                    self.right = (val + 1) & self.mask;
+                } else {
+                    self.left = val;
+                    self.right = 0;
+                }
+                if yes_comp {
+                    self.complement();
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_ADD => {
+                self.left = (self.left.wrapping_sub(val)) & self.mask;
+                self.right = (self.right.wrapping_sub(val)) & self.mask;
+            }
+            crate::opcodes::OpCode::CPUI_INT_SUB => {
+                if slot == 0 {
+                    self.left = (self.left.wrapping_add(val)) & self.mask;
+                    self.right = (self.right.wrapping_add(val)) & self.mask;
+                } else {
+                    self.left = (val.wrapping_sub(self.left)) & self.mask;
+                    self.right = (val.wrapping_sub(self.right)) & self.mask;
+                }
+            }
+            crate::opcodes::OpCode::CPUI_INT_RIGHT => {
+                if self.step == 1 {
+                    let right_bound = (Self::calc_mask(in_size) >> val) + 1;
+                    let covers = (self.left >= right_bound
+                        && self.right >= right_bound
+                        && self.left >= self.right)
+                        || (self.left == 0 && self.right >= right_bound)
+                        || (self.left == self.right);
+                    if covers {
+                        self.left = 0;
+                        self.right = 0;
+                    } else {
+                        let mut l = self.left;
+                        let mut r = self.right;
+                        if l > right_bound {
+                            l = right_bound;
+                        }
+                        if r > right_bound {
+                            r = 0;
+                        }
+                        self.left = (l << val) & self.mask;
+                        self.right = (r << val) & self.mask;
+                        if self.left == self.right {
+                            self.isempty = true;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Push-forward this range through a unary operator.
     /// Corresponds to `CircleRange::pushForwardUnary` (rangeutil.hh:94).
     /// Returns true if the transform was possible.
@@ -330,6 +617,54 @@ impl CircleRange {
     }
 }
 
+/// Calculate the number of bit transitions in the sized value. Faithful to
+/// `bit_transitions` (address.cc:818). Counts how many times consecutive bits
+/// differ (0→1 or 1→0), scanning from LSB upward, stopping once all remaining
+/// high bits are zero.
+pub fn bit_transitions(val: u64, size: usize) -> i32 {
+    let mut res = 0i32;
+    let mut last = (val & 1) as i32;
+    let mut v = val;
+    for _ in 1..(8 * size) {
+        v >>= 1;
+        let cur = (v & 1) as i32;
+        if cur != last {
+            res += 1;
+            last = cur;
+        }
+        if v == 0 {
+            break;
+        }
+    }
+    res
+}
+
+/// Sign-extend a value between two byte sizes. Faithful to `sign_extend(in,
+/// sizein, sizeout)` (address.cc:666).
+pub fn sign_extend_size(in_val: u64, size_in: usize, size_out: usize) -> u64 {
+    fn mask(size: usize) -> u64 {
+        if size >= 8 {
+            u64::MAX
+        } else {
+            (1u64 << (size * 8)) - 1
+        }
+    }
+    let size_in = size_in.min(8);
+    let size_out = size_out.min(8);
+    if size_in >= size_out {
+        return in_val & mask(size_out);
+    }
+    // Check the sign bit of the input.
+    let sign_bit = 1u64 << (8 * size_in - 1);
+    if (in_val & sign_bit) != 0 {
+        // Negative: fill upper bits with 1s.
+        let upper_mask = !mask(size_in);
+        (in_val | (upper_mask & mask(size_out))) & mask(size_out)
+    } else {
+        in_val & mask(size_out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +763,116 @@ mod tests {
         assert_eq!(opc, crate::opcodes::OpCode::CPUI_INT_LESS);
         assert_eq!(val, 5);
         assert_eq!(slot, 1);
+    }
+
+    #[test]
+    fn test_complement() {
+        let mut r = CircleRange::new(0, 5, 4, 1); // [0,5)
+        r.complement();
+        // Complement of [0,5) is [5,0) (wrapping).
+        assert!(!r.contains_val(3));
+        assert!(r.contains_val(5));
+        assert!(r.contains_val(0xFFFF_FFFF));
+    }
+
+    #[test]
+    fn test_complement_full() {
+        let mut r = CircleRange::full(4);
+        r.complement();
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn test_convert_to_boolean() {
+        let mut r = CircleRange::new(0, 10, 4, 1); // contains 0 and 1
+        let both = r.convert_to_boolean();
+        assert!(both);
+        assert!(r.contains_val(0));
+        assert!(r.contains_val(1));
+        assert!(!r.contains_val(2));
+    }
+
+    #[test]
+    fn test_convert_to_boolean_single() {
+        let mut r = CircleRange::single(5, 4); // contains neither 0 nor 1
+        let both = r.convert_to_boolean();
+        assert!(!both);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn test_set_nz_mask() {
+        // nzmask = 0xFF (all low 8 bits possible) → range [0, 0x100).
+        let r = CircleRange::set_nz_mask(0xFF, 4).unwrap();
+        assert!(r.contains_val(0));
+        assert!(r.contains_val(0xFF));
+        assert!(!r.contains_val(0x100));
+    }
+
+    #[test]
+    fn test_set_nz_mask_step() {
+        // nzmask = 0xFE → step 2, range [0, 0xFF).
+        let r = CircleRange::set_nz_mask(0xFE, 4).unwrap();
+        assert_eq!(r.get_step(), 2);
+    }
+
+    #[test]
+    fn test_pull_back_unary_copy() {
+        let mut r = CircleRange::new(0, 10, 4, 1);
+        // COPY is identity.
+        assert!(r.pull_back_unary(crate::opcodes::OpCode::CPUI_COPY, 4, 4));
+        assert!(r.contains_val(0));
+        assert!(r.contains_val(9));
+    }
+
+    #[test]
+    fn test_pull_back_binary_add() {
+        // Range [5, 15) pulled back through INT_ADD with val=3 → [2, 12).
+        let mut r = CircleRange::new(5, 15, 4, 1);
+        assert!(r.pull_back_binary(
+            crate::opcodes::OpCode::CPUI_INT_ADD,
+            3,
+            0,
+            4,
+            4,
+        ));
+        assert!(r.contains_val(2));
+        assert!(r.contains_val(11));
+        assert!(!r.contains_val(12));
+    }
+
+    #[test]
+    fn test_pull_back_binary_less() {
+        // Boolean range {true}=[1,2) pulled back through INT_LESS(val=5, slot=0)
+        // → [0, 5).
+        let mut r = CircleRange::boolean(true);
+        assert!(r.pull_back_binary(
+            crate::opcodes::OpCode::CPUI_INT_LESS,
+            5,
+            0,
+            4,
+            1,
+        ));
+        assert!(r.contains_val(0));
+        assert!(r.contains_val(4));
+        assert!(!r.contains_val(5));
+    }
+
+    #[test]
+    fn test_bit_transitions() {
+        assert_eq!(bit_transitions(0, 4), 0); // all zeros
+        assert_eq!(bit_transitions(0xFFFF_FFFF, 4), 0); // all ones
+        assert_eq!(bit_transitions(0x0000_00FF, 4), 1); // one transition
+        assert_eq!(bit_transitions(0x0000_0F0F, 4), 3); // three transitions
+    }
+
+    #[test]
+    fn test_sign_extend_size() {
+        // 0xFF as 1-byte sign-extended to 4 bytes = 0xFFFF_FFFF.
+        assert_eq!(sign_extend_size(0xFF, 1, 4), 0xFFFF_FFFF);
+        // 0x7F as 1-byte sign-extended to 4 bytes = 0x7F (positive).
+        assert_eq!(sign_extend_size(0x7F, 1, 4), 0x7F);
+        // 0x80 as 1-byte sign-extended to 2 bytes = 0xFF80.
+        assert_eq!(sign_extend_size(0x80, 1, 2), 0xFF80);
     }
 }

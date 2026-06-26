@@ -703,6 +703,89 @@ fn matching_constants(
     a_rg.get_offset() == b_rg.get_offset()
 }
 
+/// Pull-back this range through a given PcodeOp, returning the unknown input
+/// varnode whose range we now know. Faithful to `CircleRange::pullBack`
+/// (rangeutil.cc:1022).
+///
+/// If there is a single unknown input, and the set of values for this input
+/// that cause the output of `op` to fall into `rng` form a range, then set
+/// `rng` to that range and return the unknown varnode. Return None otherwise.
+///
+/// `usenzmask`: if true, intersect the result with the input varnode's NZMASK
+/// range.
+pub fn pull_back_through_op(
+    rng: &mut CircleRange,
+    op: &Arc<RwLock<PcodeOp>>,
+    usenzmask: bool,
+) -> Option<Arc<RwLock<Varnode>>> {
+    let op_rg = op.read().unwrap();
+    let n_in = op_rg.num_input();
+    if n_in == 1 {
+        let res = op_rg.get_in(0)?;
+        let res_arc = res.clone();
+        let res_rg = res.read().unwrap();
+        if res_rg.is_constant() {
+            return None;
+        }
+        let in_size = res_rg.get_size();
+        let out_size = op_rg.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(in_size);
+        drop(res_rg);
+        if !rng.pull_back_unary(op_rg.opcode, in_size, out_size) {
+            return None;
+        }
+        if usenzmask {
+            let nz = res_arc.read().unwrap().get_nz_mask();
+            if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
+                rng.intersect(&nzrange);
+            }
+        }
+        return Some(res_arc);
+    }
+    if n_in == 2 {
+        // Find the non-constant input and the constant.
+        let in0 = op_rg.get_in(0);
+        let in1 = op_rg.get_in(1);
+        let (res, const_vn, slot) = match (in0, in1) {
+            (Some(a), Some(b)) => {
+                let a_const = a.read().unwrap().is_constant();
+                let b_const = b.read().unwrap().is_constant();
+                if a_const && !b_const {
+                    (b.clone(), a.clone(), 1)
+                } else if !a_const && b_const {
+                    (a.clone(), b.clone(), 0)
+                } else if a_const && b_const {
+                    return None;
+                } else {
+                    // Neither constant.
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        let res_arc = res.clone();
+        let val = const_vn.read().unwrap().get_offset();
+        let in_size = res.read().unwrap().get_size();
+        let out_size = op_rg
+            .get_out()
+            .map(|o| o.read().unwrap().get_size())
+            .unwrap_or(in_size);
+        let opc = op_rg.opcode;
+        drop(op_rg);
+        if !rng.pull_back_binary(opc, val, slot, in_size, out_size) {
+            // SUBPIECE special case handled in Ghidra; conservatively fail.
+            return None;
+        }
+        if usenzmask {
+            let nz = res_arc.read().unwrap().get_nz_mask();
+            if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
+                rng.intersect(&nzrange);
+            }
+        }
+        return Some(res_arc);
+    }
+    None
+}
+
 /// An iterator over values a switch variable can take.
 ///
 /// This iterator provides the start value for emulation of a jump-table model
@@ -1326,6 +1409,100 @@ impl JumpBasic {
         max_value
     }
 
+    /// Back up the constant value in the output Varnode to the value in the
+    /// input Varnode. This does the work of going from a normalized switch
+    /// value to the unnormalized value. PcodeOps between the output and input
+    /// Varnodes must be reversible or None is returned. Faithful to
+    /// `backup2Switch` (jumptable.cc:474).
+    pub fn backup2_switch(
+        output: u64,
+        outvn: &Arc<RwLock<Varnode>>,
+        invn: &Arc<RwLock<Varnode>>,
+    ) -> Option<u64> {
+        let mut cur_vn = outvn.clone();
+        let mut result = output;
+        while !Arc::ptr_eq(&cur_vn, invn) {
+            let def_op = cur_vn.read().unwrap().get_def()?;
+            let op_rg = def_op.read().unwrap();
+            // Find first non-constant input.
+            let mut slot = 0usize;
+            let mut found = false;
+            for s in 0..op_rg.num_input() {
+                if let Some(v) = op_rg.get_in(s) {
+                    if !v.read().unwrap().is_constant() {
+                        slot = s;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                return None;
+            }
+            let out_size = op_rg.get_out()?.read().unwrap().get_size();
+            let in_size = op_rg.get_in(slot)?.read().unwrap().get_size();
+            let next_vn = op_rg.get_in(slot)?.clone();
+            let opc = op_rg.opcode;
+            drop(op_rg);
+            // Determine if binary or unary.
+            let n_in_with_const = {
+                // Ghidra checks getEvalType == binary/unary. We approximate:
+                // if there's a constant in the other slot, treat as binary.
+                let def_rg = def_op.read().unwrap();
+                let mut has_const_other = false;
+                for s in 0..def_rg.num_input() {
+                    if s != slot {
+                        if let Some(v) = def_rg.get_in(s) {
+                            if v.read().unwrap().is_constant() {
+                                has_const_other = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                has_const_other
+            };
+            if n_in_with_const {
+                // Binary: get the constant value from the other slot.
+                let other_val = {
+                    let def_rg = def_op.read().unwrap();
+                    let mut ov = 0u64;
+                    for s in 0..def_rg.num_input() {
+                        if s != slot {
+                            if let Some(v) = def_rg.get_in(s) {
+                                let v_rg = v.read().unwrap();
+                                if v_rg.is_constant() {
+                                    ov = v_rg.get_offset();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ov
+                };
+                match crate::opbehavior::recover_input_binary(
+                    opc,
+                    slot,
+                    out_size,
+                    result,
+                    in_size,
+                    other_val,
+                ) {
+                    Some(r) => result = r,
+                    None => return None,
+                }
+            } else {
+                // Unary.
+                match crate::opbehavior::recover_input_unary(opc, out_size, result, in_size) {
+                    Some(r) => result = r,
+                    None => return None,
+                }
+            }
+            cur_vn = next_vn;
+        }
+        Some(result)
+    }
+
     /// Return true if all array elements are the same varnode. Faithful to
     /// `duplicateVarnodes` (jumptable.cc:1308).
     pub fn duplicate_varnodes(arr: &[Arc<RwLock<Varnode>>]) -> bool {
@@ -1539,6 +1716,28 @@ impl JumpBasic {
             }
         }
     }
+
+    /// Check if the given Varnode flows to anything other than this model.
+    /// The PcodeOps in this model must have been previously marked with
+    /// `mark_model(true)`. Faithful to `flowsOnlyToModel` (jumptable.cc:1293).
+    pub fn flows_only_to_model(
+        &self,
+        vn: &Arc<RwLock<Varnode>>,
+        trail_op: Option<Arc<RwLock<PcodeOp>>>,
+    ) -> bool {
+        let vn_rg = vn.read().unwrap();
+        for desc in vn_rg.descend_iter() {
+            if let Some(trail) = &trail_op {
+                if Arc::ptr_eq(&desc, trail) {
+                    continue;
+                }
+            }
+            if (desc.read().unwrap().addlflags & MARK_FLAG) == 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl JumpModel for JumpBasic {
@@ -1632,10 +1831,8 @@ impl JumpModel for JumpBasic {
         if i >= self.path_meld.num_common_varnode() {
             return;
         }
+        let normalvn = self.path_meld.get_varnode(i);
         i += 1;
-        let Some(normalvn) = self.path_meld.get_varnode((i - 1)).into() else {
-            return;
-        };
         let mut switchvn = normalvn.clone();
         self.normalvn = Some(normalvn);
         self.switchvn = Some(switchvn.clone());
@@ -1643,18 +1840,59 @@ impl JumpModel for JumpBasic {
 
         let mut count_addsub = 0u32;
         let mut count_ext = 0u32;
-        // Without Varnode::def we cannot walk the normalization chain; we keep
-        // the switch variable equal to the normalized variable. The bookkeeping
-        // loop below mirrors Ghidra's structure for when def() is available.
-        let _ = switchvn;
-        let _ = maxaddsub;
-        let _ = maxext;
-        let _ = &mut count_addsub;
-        let _ = &mut count_ext;
+        let mut normop_def: Option<Arc<RwLock<PcodeOp>>> = None;
         while i < self.path_meld.num_common_varnode() {
-            // The full chain walk requires Varnode::def; this is an L3 gap.
-            break;
+            // Check that switchvn flows only to the model.
+            if !self.flows_only_to_model(&switchvn, normop_def.clone()) {
+                break;
+            }
+            let testvn = self.path_meld.get_varnode(i);
+            let def_op = switchvn.read().unwrap().get_def();
+            let Some(def) = def_op else { break };
+            // Find which input slot matches testvn.
+            let (j, op_code) = {
+                let op_rg = def.read().unwrap();
+                let mut found_slot = None;
+                for s in 0..op_rg.num_input() {
+                    if let Some(v) = op_rg.get_in(s) {
+                        if Arc::ptr_eq(v, &testvn) {
+                            found_slot = Some(s);
+                            break;
+                        }
+                    }
+                }
+                (found_slot, op_rg.opcode)
+            };
+            let Some(one_j) = j else { break };
+            match op_code {
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
+                    count_addsub += 1;
+                    if count_addsub > maxaddsub {
+                        break;
+                    }
+                    // The other input must be constant.
+                    let other_const = {
+                        let op_rg = def.read().unwrap();
+                        op_rg.get_in(1 - one_j).map(|v| v.read().unwrap().is_constant()).unwrap_or(false)
+                    };
+                    if !other_const {
+                        break;
+                    }
+                    switchvn = testvn;
+                }
+                OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
+                    count_ext += 1;
+                    if count_ext > maxext {
+                        break;
+                    }
+                    switchvn = testvn;
+                }
+                _ => break,
+            }
+            normop_def = Some(def);
+            i += 1;
         }
+        self.switchvn = Some(switchvn);
         self.mark_model(false);
     }
 
@@ -1667,8 +1905,39 @@ impl JumpModel for JumpBasic {
     ) {
         // Faithful to JumpBasic::buildLabels (jumptable.cc:1528): the label
         // is the value of the unnormalized switch variable, recovered by
-        // reverse emulation. Without backup2Switch we emit NO_LABEL.
-        let _ = addresstable.len();
+        // reverse emulation via backup2Switch.
+        let Some(jrange) = &self.jrange else {
+            while label.len() < addresstable.len() {
+                label.push(NO_LABEL);
+            }
+            return;
+        };
+        let (Some(normalvn), Some(switchvn)) = (self.normalvn.clone(), self.switchvn.clone())
+        else {
+            while label.len() < addresstable.len() {
+                label.push(NO_LABEL);
+            }
+            return;
+        };
+        let mut iter = jrange.clone();
+        if iter.initialize_for_reading() {
+            iter.curval = jrange.range.get_left();
+            loop {
+                let val = iter.get_value();
+                let switchval = if iter.is_reversible() {
+                    Self::backup2_switch(val, &normalvn, &switchvn).unwrap_or(NO_LABEL)
+                } else {
+                    NO_LABEL
+                };
+                label.push(switchval);
+                if label.len() >= addresstable.len() {
+                    break;
+                }
+                if !iter.next() {
+                    break;
+                }
+            }
+        }
         while label.len() < addresstable.len() {
             label.push(NO_LABEL);
         }
@@ -1886,19 +2155,43 @@ impl JumpBasic {
                 toswitchval = !toswitchval;
             }
             let bool_vn = cbranch.read().unwrap().get_in(1).cloned();
-            let rng = CircleRange::boolean(toswitchval);
+            let mut rng = CircleRange::boolean(toswitchval);
+            let usenzmask = !self.jumptable.read().unwrap().is_partial();
+            let max_pullback = 2i32;
+            let indpath_store = indpath;
+            let mut cur_vn = bool_vn.clone();
             if let Some(vn) = bool_vn {
                 self.selectguards.push(GuardRecord::new(
                     cbranch.clone(),
                     cbranch.clone(),
-                    indpath,
-                    rng,
+                    indpath_store,
+                    rng.clone(),
                     vn,
                     false,
                 ));
             }
-            // The pullBack expansion loop is an L3 gap; we keep only the
-            // initial boolean guard.
+            // pullBack expansion: walk back through the defining ops of the
+            // boolean varnode, restricting the range at each step. Faithful
+            // to the j=0..maxpullback loop in analyzeGuards (jumptable.cc:1119).
+            for _ in 0..max_pullback {
+                let Some(ref cv) = cur_vn else { break };
+                let def_op = cv.read().unwrap().get_def();
+                let Some(read_op) = def_op else { break };
+                let next = pull_back_through_op(&mut rng, &read_op, usenzmask);
+                let Some(next_vn) = next else { break };
+                if rng.is_empty() {
+                    break;
+                }
+                self.selectguards.push(GuardRecord::new(
+                    cbranch.clone(),
+                    read_op,
+                    indpath_store,
+                    rng.clone(),
+                    next_vn.clone(),
+                    false,
+                ));
+                cur_vn = Some(next_vn);
+            }
             let _ = i;
         }
     }
