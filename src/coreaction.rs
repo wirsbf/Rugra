@@ -2706,34 +2706,228 @@ impl Action for ActionRestrictLocal {
 pub struct ActionMultiCse { pub count: i32 }
 impl ActionMultiCse {
     pub fn new() -> Self { Self { count: 0 } }
+
+    /// Resolve a COPY chain: if `vn` is defined by a COPY, return its input.
+    /// Otherwise return `vn` itself. Used to allow copy-propagation differences.
+    fn resolve_copy(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let (is_written, is_copy, in0) = {
+            let r = vn.read().unwrap();
+            if !r.is_written() {
+                return vn.clone();
+            }
+            let def = r.get_def();
+            match def {
+                Some(d) => {
+                    let dr = d.read().unwrap();
+                    (true, dr.opcode == crate::opcodes::OpCode::CPUI_COPY, dr.get_in(0).cloned())
+                }
+                None => (false, false, None),
+            }
+        };
+        if is_written && is_copy {
+            if let Some(in0) = in0 {
+                return in0;
+            }
+        }
+        vn.clone()
+    }
+
+    /// Prefer which of two outputs to keep. Faithful to `preferredOutput`
+    /// (coreaction.cc:741-770). Returns true if out2 should be preferred over
+    /// out1.
+    fn preferred_output(
+        out1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        out2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        // Prefer the output used in a RETURN.
+        let out1_descends: Vec<_> = out1.read().unwrap().descend_iter().collect();
+        for op_arc in &out1_descends {
+            if op_arc.read().unwrap().opcode == OpCode::CPUI_RETURN {
+                return false; // out1 is preferred.
+            }
+        }
+        let out2_descends: Vec<_> = out2.read().unwrap().descend_iter().collect();
+        for op_arc in &out2_descends {
+            if op_arc.read().unwrap().opcode == OpCode::CPUI_RETURN {
+                return true; // out2 is preferred.
+            }
+        }
+        // Prefer addrtied over register over unique (internal).
+        let (o1_addrtied, o1_internal) = {
+            let r = out1.read().unwrap();
+            (r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique)
+        };
+        let (o2_addrtied, o2_internal) = {
+            let r = out2.read().unwrap();
+            (r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique)
+        };
+        if !o1_addrtied {
+            if o2_addrtied {
+                return true;
+            } else if o1_internal && !o2_internal {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Find a matching MULTIEQUAL before `target` that has `in_vn` as an input,
+    /// and is functionally equivalent to `target`. Faithful to `findMatch`
+    /// (coreaction.cc:777-815). Returns the matching op index in `block_ops`,
+    /// or None.
+    fn find_match(
+        block_ops: &[crate::op::PcodeOpRef],
+        target_idx: usize,
+        in_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<usize> {
+        use crate::expression::functional_equality_level;
+        let in_resolved = Self::resolve_copy(in_vn);
+        // Walk block_ops from the beginning up to target.
+        for idx in 0..target_idx {
+            let op = &block_ops[idx];
+            let op_rg = op.0.read().unwrap();
+            let num_input = op_rg.inrefs.len();
+            // Check if any input matches in_vn (allowing COPY resolution).
+            let mut found_match = false;
+            for i in 0..num_input {
+                let vn = Self::resolve_copy(&op_rg.inrefs[i]);
+                if std::sync::Arc::ptr_eq(&vn, &in_resolved) {
+                    found_match = true;
+                    break;
+                }
+            }
+            if !found_match {
+                continue;
+            }
+            // Test functional equivalence with target.
+            let target_rg = block_ops[target_idx].0.read().unwrap();
+            let target_num = target_rg.inrefs.len();
+            if num_input != target_num {
+                continue;
+            }
+            let mut all_eq = true;
+            for j in 0..num_input {
+                let in1 = Self::resolve_copy(&op_rg.inrefs[j]);
+                let in2 = Self::resolve_copy(&target_rg.inrefs[j]);
+                if std::sync::Arc::ptr_eq(&in1, &in2) {
+                    continue;
+                }
+                let result = functional_equality_level(&in1, &in2);
+                if result.code != 0 {
+                    all_eq = false;
+                    break;
+                }
+            }
+            drop(op_rg);
+            drop(target_rg);
+            if all_eq {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Process one basic block. Faithful to `processBlock`
+    /// (coreaction.cc:822-877). Returns true if a MULTIEQUAL was deleted.
+    fn process_block(fd: &mut Funcdata, block_ops: &[crate::op::PcodeOpRef]) -> bool {
+        use crate::opcodes::OpCode;
+        use std::sync::Arc;
+
+        let mut vnlist: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        let mut target_idx: Option<usize> = None;
+        let mut pair_idx: Option<usize> = None;
+
+        // Walk ops until we leave the MULTIEQUAL group or find a shadow.
+        'outer: for (idx, op) in block_ops.iter().enumerate() {
+            let op_rg = op.0.read().unwrap();
+            let opc = op_rg.opcode;
+            if opc == OpCode::CPUI_COPY {
+                continue;
+            }
+            if opc != OpCode::CPUI_MULTIEQUAL {
+                break;
+            }
+            let vnpos = vnlist.len();
+            let num_input = op_rg.inrefs.len();
+            for i in 0..num_input {
+                let vn = Self::resolve_copy(&op_rg.inrefs[i]);
+                vnlist.push(vn.clone());
+                if vn.read().unwrap().is_mark() {
+                    // Seen this varnode before — try findMatch.
+                    drop(op_rg);
+                    if let Some(pi) = Self::find_match(block_ops, idx, &vn) {
+                        target_idx = Some(idx);
+                        pair_idx = Some(pi);
+                    }
+                    break 'outer;
+                }
+            }
+            drop(op_rg);
+            // Mark all newly seen varnodes.
+            for i in vnpos..vnlist.len() {
+                vnlist[i].write().unwrap().set_mark();
+            }
+        }
+
+        // Clear marks.
+        for vn in &vnlist {
+            vn.write().unwrap().clear_mark();
+        }
+
+        if let (Some(ti), Some(pi)) = (target_idx, pair_idx) {
+            let target = &block_ops[ti];
+            let pair = &block_ops[pi];
+            let out1 = pair.0.read().unwrap().output.clone();
+            let out2 = target.0.read().unwrap().output.clone();
+            if let (Some(out1), Some(out2)) = (out1, out2) {
+                if Self::preferred_output(&out1, &out2) {
+                    // Prefer target/out2: replace pair/out1.
+                    fd.total_replace(&out1, out2.clone());
+                    fd.op_destroy(pair);
+                } else {
+                    // Prefer pair/out1: replace target/out2.
+                    fd.total_replace(&out2, out1.clone());
+                    fd.op_destroy(target);
+                }
+                return true;
+            }
+        }
+        false
+    }
 }
 impl Action for ActionMultiCse {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: scan ops for duplicate outputs (same
-        // opcode + same inputs = common subexpression). Full algorithm
-        // requires hash-based CSE lookup.
-        use crate::opcodes::OpCode;
-        let mut change_count = 0;
-        let mut seen: std::collections::HashMap<(u32, u64, u64), usize> = std::collections::HashMap::new();
-
-        for (i, op_ref) in fd.obank.alivelist.iter().enumerate() {
-            let op_rg = op_ref.0.read().unwrap();
-            // Skip non-computational ops.
-            if matches!(op_rg.opcode, OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT | OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHIND | OpCode::CPUI_RETURN | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
-                continue;
+        // Faithful to ActionMultiCse::apply (coreaction.cc:879-890).
+        use crate::block::BlockBasic;
+        let mut local_count = 0i32;
+        loop {
+            let mut any_change = false;
+            for i in 0..fd.bblocks.get_size() {
+                let bl = match fd.bblocks.get_block(i) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let block_ops = {
+                    let bl_rg = bl.read().unwrap();
+                    if let Some(bb) = bl_rg.as_any().downcast_ref::<BlockBasic>() {
+                        bb.ops.clone()
+                    } else {
+                        continue;
+                    }
+                };
+                if Self::process_block(fd, &block_ops) {
+                    local_count += 1;
+                    any_change = true;
+                }
             }
-            let n_in = op_rg.num_input();
-            if n_in < 1 { continue; }
-            let in0 = op_rg.get_in(0).map(|v| { let r = v.read().unwrap(); r.get_addr().as_u64() * 1000 + r.get_size() as u64 }).unwrap_or(0);
-            let in1 = if n_in >= 2 { op_rg.get_in(1).map(|v| { let r = v.read().unwrap(); r.get_addr().as_u64() * 1000 + r.get_size() as u64 }).unwrap_or(0) } else { 0 };
-            let key = (op_rg.opcode as u32, in0, in1);
-            if seen.contains_key(&key) {
-                change_count += 1; // Potential CSE candidate.
+            if !any_change {
+                break;
             }
-            seen.insert(key, i);
         }
-
-        let _ = change_count;
+        if local_count > 0 {
+            return Ok(action_status::CHANGE);
+        }
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "multicse" }

@@ -474,3 +474,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **Funcdata::op_destroy_recursive(op)** — faithful to funcdata_op.cc:228-247。递归销毁 op 及其变为死代码的定义 op（跳过 call/indirect-source/auto-live）。用于 ActionMultiCse/constseq 等需要递归清理的变换。
 - **Funcdata::total_replace(vn, newvn)** — faithful to funcdata_varnode.cc:1474-1487。将 vn 的所有读取引用替换为 newvn。用于 ActionMultiCse 的 totalReplace 和 constseq 的 totalReplace。
+
+## 2026-06-27（续 17）：ActionMultiCse 完整算法实现
+
+- **ActionMultiCse**：完整忠实移植 coreaction.cc:741-890。三方法实现：
+  1. **preferred_output(out1, out2)**（coreaction.cc:741-770）：偏好 RETURN 使用的输出；其次偏好 addrtied > register > unique。
+  2. **find_match(block_ops, target_idx, in_vn)**（coreaction.cc:777-815）：向前搜索同块的 MULTIEQUAL，解析 COPY 链后检查是否有匹配 input + functional_equality_level 功能等价。
+  3. **process_block(fd, block_ops)**（coreaction.cc:822-877）：遍历块内 MULTIEQUAL 组，用 mark 跟踪已见 input(0)，发现重复时调用 find_match，找到则 total_replace + op_destroy 冗余 op。
+  4. **apply(fd)**（coreaction.cc:879-890）：外层循环重复处理所有基本块直到无变化。
+  - 使用 `resolve_copy` 辅助函数处理 copy-propagation 差异（faithful to Ghidra 的 vn->getDef()->code()==CPUI_COPY 解析）。
+  - 依赖：total_replace ✅、op_destroy ✅、functional_equality_level ✅。
