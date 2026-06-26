@@ -116,6 +116,78 @@ impl UserOpManage {
 
     /// Get the number of registered ops.
     pub fn num_ops(&self) -> usize { self.ops.len() }
+
+    /// Register a built-in op if not already present.
+    pub fn register_builtin(&mut self, name: &str, builtin_id: u32) {
+        if self.get_index_by_name(name).is_none() {
+            self.register_op(name.to_string(), UserOpType::Unspecialized);
+        }
+    }
+
+    /// Initialize all built-in CALLOTHER ids.
+    pub fn initialize_builtins(&mut self) {
+        self.register_builtin("string_data", BUILTIN_STRINGDATA);
+        self.register_builtin("volatile_read", BUILTIN_VOLATILE_READ);
+        self.register_builtin("volatile_write", BUILTIN_VOLATILE_WRITE);
+        self.register_builtin("memcpy", BUILTIN_MEMCPY);
+        self.register_builtin("strcpy", BUILTIN_STRNCPY);
+        self.register_builtin("wcsncpy", BUILTIN_WCSNCPY);
+    }
+
+    /// Get a mutable user op by its CALLOTHER index.
+    pub fn get_op_mut(&mut self, index: i32) -> Option<&mut UserPcodeOp> {
+        if index >= 0 && (index as usize) < self.ops.len() {
+            Some(&mut self.ops[index as usize])
+        } else {
+            None
+        }
+    }
+
+    /// Check if an index corresponds to a volatile read.
+    pub fn is_volatile_read(&self, index: i32) -> bool {
+        self.get_op(index).map(|op| op.op_type == UserOpType::VolatileRead).unwrap_or(false)
+    }
+
+    /// Check if an index corresponds to a volatile write.
+    pub fn is_volatile_write(&self, index: i32) -> bool {
+        self.get_op(index).map(|op| op.op_type == UserOpType::VolatileWrite).unwrap_or(false)
+    }
+}
+
+/// A user defined p-code op with no specialization.
+/// Corresponds to Ghidra's `UnspecializedPcodeOp` (userop.hh:130).
+pub fn create_unspecialized(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::Unspecialized, index)
+}
+
+/// Create an injected user op placeholder.
+/// Corresponds to Ghidra's `InjectedUserOp`.
+pub fn create_injected(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::Injected, index)
+}
+
+/// Create a volatile read user op.
+/// Corresponds to Ghidra's `VolatileReadOp`.
+pub fn create_volatile_read(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::VolatileRead, index)
+}
+
+/// Create a volatile write user op.
+/// Corresponds to Ghidra's `VolatileWriteOp`.
+pub fn create_volatile_write(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::VolatileWrite, index)
+}
+
+/// Create a segment op user op.
+/// Corresponds to Ghidra's `SegmentOp`.
+pub fn create_segment(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::Segment, index)
+}
+
+/// Create a jump-table assist user op.
+/// Corresponds to Ghidra's `JumpAssistOp`.
+pub fn create_jump_assist(name: String, index: i32) -> UserPcodeOp {
+    UserPcodeOp::new(name, UserOpType::JumpAssist, index)
 }
 
 #[cfg(test)]
@@ -145,5 +217,26 @@ mod tests {
     fn test_builtin_ids() {
         assert_eq!(BUILTIN_MEMCPY, 4);
         assert_eq!(BUILTIN_VOLATILE_READ, 2);
+    }
+
+    #[test]
+    fn test_initialize_builtins() {
+        let mut mgr = UserOpManage::new();
+        mgr.initialize_builtins();
+        assert!(mgr.get_index_by_name("memcpy").is_some());
+        assert!(mgr.get_index_by_name("volatile_read").is_some());
+        assert_eq!(mgr.num_ops(), 6);
+    }
+
+    #[test]
+    fn test_create_specialized() {
+        let vr = create_volatile_read("volread".into(), 0);
+        assert_eq!(vr.get_type(), UserOpType::VolatileRead);
+        let vw = create_volatile_write("volwrite".into(), 1);
+        assert_eq!(vw.get_type(), UserOpType::VolatileWrite);
+        let seg = create_segment("seg".into(), 2);
+        assert_eq!(seg.get_type(), UserOpType::Segment);
+        let ja = create_jump_assist("jump".into(), 3);
+        assert_eq!(ja.get_type(), UserOpType::JumpAssist);
     }
 }

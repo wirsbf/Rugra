@@ -25,3 +25,14 @@
 `BUILTIN_STRINGDATA/VOLATILE_READ/VOLATILE_WRITE/MEMCPY/STRNCPY/WCSNCPY`
 
 测试：userop::tests 3 个。
+
+## 2026-06-26（续）：userop.rs 完善实现
+
+新增完整 UserOpManage 和专用子类构造函数：
+- `initialize_builtins()` — 初始化所有内置 CALLOTHER ID
+- `register_builtin(name, id)` — 注册内置操作
+- `get_op_mut(index)` — 可变访问
+- `is_volatile_read/write(index)` — 检查类型
+- `create_unspecialized/injected/volatile_read/volatile_write/segment/jump_assist` — 专用子类构造函数
+
+测试：新增 2 个（initialize_builtins + create_specialized）。
