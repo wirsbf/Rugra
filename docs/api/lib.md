@@ -411,3 +411,7 @@
 ## 2026-06-26（续）：新增 condexe 模块
 
 - `pub mod condexe;` — 对应 `condexe.hh`，条件执行简化。ActionConditionalExe 骨架已实现。
+
+## 2026-06-26（续）：新增 transform 模块
+
+- `pub mod transform;` — 对应 `transform.hh`，大规模数据流变换。LanedRegister/LaneDescription/TransformVar/TransformOp 已实现。
