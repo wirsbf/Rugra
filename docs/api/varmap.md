@@ -66,7 +66,8 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 - `is_param: bool` — 是否为函数参数
 
 ### `pub struct ScopeLocal`
-局部变量作用域。对应 Ghidra ScopeLocal。
+局部变量作用域。对应 Ghidra ScopeLocal。`#[derive(Debug, Clone)]`（2026-06-26：
+Clone 用于 printc 从 `fd.scope` 复用）。
 **2026-06-26 完整对齐**：
 - `restructure_varnode(fd)` — 主入口：`ScopeLocal::restructureVarnode` (varmap.cc:1256)，编排 gather_varnodes→gather_internal→gather_open→restructure→mark_unaliased→fake_input_symbols
 - `restructure(state)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with，不相交→attempt_join/adjust_fit/create_entry

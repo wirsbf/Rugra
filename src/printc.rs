@@ -2425,14 +2425,21 @@ impl PrintLanguage for PrintC {
         self.string_table = fd.string_table.clone();
 
         // Restructure the local-variable scope (faithful varmap.cc port).
+        // If ActionRestructureVarnode already built it on fd.scope, reuse it
+        // (cloned, since doc_function takes &Funcdata); otherwise build here.
         // Built once per function; queried by get_stack_variable_name.
         // NOTE: Rugra's x86 lift keeps RSP-relative accesses in Register space
         // rather than producing Stack-space varnodes, so gather_varnodes finds
-        // few symbols today. Full integration requires a RSP-relative→Stack
-        // spacebase lift pass (see ALIGNMENT_ROADMAP P0 follow-up).
-        let mut scope = crate::varmap::ScopeLocal::new();
-        scope.restructure_varnode(fd);
-        self.scope = Some(scope);
+        // few symbols today. gather_spacebase compensates for RSP-derived
+        // LOAD/STORE. Full coverage needs type propagation.
+        self.scope = match &fd.scope {
+            Some(s) => Some(s.clone()),
+            None => {
+                let mut scope = crate::varmap::ScopeLocal::new();
+                scope.restructure_varnode(fd);
+                Some(scope)
+            }
+        };
 
         // Populate parameter name mapping from function prototype
         self.param_names.clear();

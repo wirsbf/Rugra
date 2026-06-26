@@ -53,6 +53,10 @@ pub struct Funcdata {
     /// ActionActiveParam runs across all functions to build a prototype
     /// database before final decompilation.
     pub external_prototypes: HashMap<u64, usize>,
+    /// Restructured local-variable scope. Built by ActionRestructureVarnode
+    /// (coreaction.cc:2274) and queried by printc's stack-variable resolution.
+    /// Corresponds to Ghidra's `Funcdata::getScopeLocal()`.
+    pub scope: Option<crate::varmap::ScopeLocal>,
 }
 
 impl Funcdata {
@@ -77,6 +81,7 @@ impl Funcdata {
                 )),
             ),
             external_prototypes: HashMap::new(),
+            scope: None,
         }
     }
 

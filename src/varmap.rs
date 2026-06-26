@@ -1222,6 +1222,7 @@ pub struct LocalSymbol {
 
 /// ScopeLocal: the local variable scope for a function.
 /// Corresponds to Ghidra's ScopeLocal (varmap.hh:212).
+#[derive(Debug, Clone)]
 pub struct ScopeLocal {
     /// The restructured local symbols
     pub symbols: Vec<LocalSymbol>,

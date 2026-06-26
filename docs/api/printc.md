@@ -501,3 +501,9 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - **Graceful fallback**：当 scope 无符号覆盖该偏移时，回退到现有启发式，保证不破坏输出。
 - **已知阻碍**：Rugra 的 x86 lift 将 RSP 相对访问留在 Register space，不产生 Stack-space varnode，因此 `ScopeLocal::restructure_varnode` 的 `gather_varnodes` 几乎找不到符号。要真正消除 uVar 碎片，需先实现 RSP→Stack spacebase 提升通道（ALIGNMENT_ROADMAP P0 #1 剩余项）。
 - 验证：curl 24/24 gcc，httpd 29/29 gcc，200/200 测试。
+
+### 2026-06-26（varmap 集成续）：复用 ActionRestructureVarnode 构建的 fd.scope
+
+- `PrintC.scope` 现优先从 `fd.scope`（由 `ActionRestructureVarnode` coreaction.cc:2274 构建）克隆复用，仅在缺失时本地构建（clone 因 doc_function 取 `&Funcdata`）。
+- 这样 coreaction 流水线（`&mut Funcdata`）构建的 ScopeLocal 可被 printc 查询，避免重复构建，集成进 Action 流水线。
+- 验证：curl 24/24 gcc，httpd 29/29 gcc，205/205 测试。

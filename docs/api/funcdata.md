@@ -91,6 +91,9 @@ binary / disasm
 - 字符串字面量映射
 - heritage / SSA 阶段统计信息
 - 与后续输出或恢复有关的中间状态
+- **`scope: Option<crate::varmap::ScopeLocal>`**（2026-06-26 新增）：由
+  `ActionRestructureVarnode` (coreaction.cc:2274) 构建的局部变量作用域，
+  对应 Ghidra `Funcdata::getScopeLocal()`，供 printc 查询栈变量名。
 
 ### 4. 规则系统操作对象
 `Funcdata` 是 `ActionDatabase` 等分析动作的主要输入对象。  

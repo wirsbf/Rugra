@@ -51,6 +51,21 @@ Corresponds to Ghidra's `ActionCse`
 
 *暂无代码注释*
 
+### `pub struct ActionRestructureVarnode` (2026-06-26 新增)
+
+Restructure the local-variable scope from stack varnodes. Faithful to
+`ActionRestructureVarnode` (coreaction.cc:2274).
+
+- `apply(&mut fd)`: 构建 `crate::varmap::ScopeLocal`（调用
+  `restructure_varnode`）并存入 `fd.scope`，供 printc 的
+  `get_stack_variable_name` 查询。Ghidra 的 `syncVarnodesWithSymbols`
+  已折进 ScopeLocal 构建（待 HighVariable↔Symbol 链接后可拆出独立 pass）。
+- Ghidra 的 `aliasyes`（首遍跳过别名计算）当前在 Rugra 全量执行
+  `mark_unaliased`；多遍驱动可后续门控。
+
+测试：`coreaction::tests`（2 个）验证 scope 被构建、get_name 正确。
+
+
 ### `pub struct ActionStart`
 
 Start of the analysis process

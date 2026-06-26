@@ -224,6 +224,42 @@ impl Action for ActionCse {
     }
 }
 
+/// Restructure the local-variable scope from stack varnodes.
+///
+/// Faithful to `ActionRestructureVarnode` (coreaction.cc:2274). In Ghidra this
+/// builds the `ScopeLocal` (via `ScopeLocal::restructureVarnode`) and syncs
+/// varnodes with the resulting symbols. In Rugra we build the `ScopeLocal` and
+/// store it on `Funcdata::scope` so the printc emitter can query it for
+/// stack-variable names. The `aliasyes` flag (skip alias calculations on the
+/// first pass) maps to `ScopeLocal` running a full `mark_unaliased` pass here;
+/// a multi-pass driver can gate that later.
+pub struct ActionRestructureVarnode {
+    /// Pass counter; alias calculations are skipped on the first pass in Ghidra.
+    numpass: i32,
+}
+
+impl ActionRestructureVarnode {
+    pub fn new() -> Self {
+        Self { numpass: 0 }
+    }
+}
+
+impl Action for ActionRestructureVarnode {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        let mut scope = crate::varmap::ScopeLocal::new();
+        scope.restructure_varnode(fd);
+        fd.scope = Some(scope);
+        // syncVarnodesWithSymbols (coreaction.cc:2281) is folded into the
+        // ScopeLocal build above for Rugra; a separate pass can be added when
+        // HighVariable↔Symbol linking is wired.
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "restructureVarnode"
+    }
+}
+
 /// Start of the analysis process
 pub struct ActionStart;
 
@@ -1618,5 +1654,31 @@ fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<
         ptr_to: base.clone(),
         wordsize: 1,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_action_restructure_varnode_builds_scope() {
+        // ActionRestructureVarnode must build a ScopeLocal on Funcdata.scope
+        // even for an empty function (no varnodes), matching Ghidra's
+        // behaviour of always populating the local scope.
+        let mut fd = Funcdata::new("empty", crate::address::Address::new(0x1000), 0x10);
+        assert!(fd.scope.is_none(), "fresh Funcdata has no scope");
+        let action = ActionRestructureVarnode::new();
+        let status = action.apply(&mut fd).unwrap();
+        // restructure_varnode always returns CHANGE in our port (it rebuilds
+        // the scope unconditionally), matching Ghidra's always-rebuild design.
+        assert_eq!(status, action_status::CHANGE);
+        assert!(fd.scope.is_some(), "scope must be built after the action");
+    }
+
+    #[test]
+    fn test_action_restructure_varnode_get_name() {
+        let action = ActionRestructureVarnode::new();
+        assert_eq!(action.get_name(), "restructureVarnode");
+    }
 }
 

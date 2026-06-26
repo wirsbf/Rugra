@@ -64,44 +64,64 @@
 | 26 | `userop.cc` | — | 📋 L1 | **完全缺失**：用户自定义操作（call其他、宏展开） | `userop.cc` |
 | 27 | `unify.cc` | — | 📋 L1 | **完全缺失**：统一模式匹配（规则基础设施） | `unify.cc` |
 
-### coreaction.cc 缺失 Action 列表（L1 → L2 → L3）
+### coreaction.cc Action 列表（L1 → L2 → L3）— 2026-06-26 按 Ghidra 源码核对
 
-| Ghidra Action | 状态 | 功能 |
-|---|---|---|
-| `ActionStart` | ✅ L3 | 初始化 |
-| `ActionHeritage` | ✅ L3 | SSA 构建 |
-| `ActionInferParams` | ✅ L3 | 参数推断 |
-| `ActionCopyPropagate` | ✅ L3 | COPY 传播 |
-| `ActionDeadCode` | ✅ L3 | 死代码消除 |
-| `ActionBlockStructure` | ✅ L3 | 块结构化 |
-| `ActionMergeType` | ✅ L3 | 类型合并 |
-| `ActionTypeInfer` | ✅ L3 | 类型推断 |
-| `ActionTypePropagate` | ✅ L3 | 类型传播 |
-| `ActionCallParams` | ✅ L3 | CALL 参数处理 |
-| `ActionConstantPtr` | ✅ L3 | 常量指针 |
-| `ActionCse` | ✅ L3 | 公共子表达式消除 |
-| `ActionSimplify` | ✅ L3 | P-code 简化 |
-| `ActionNormalizeBranches` | ✅ L3 | 分支规范化 |
-| `ActionFinalStructure` | ✅ L3 | 最终结构化 |
-| `ActionRestrictLocal` | 📋 L1 | 限制局部变量 |
-| `ActionRestrictGlobal` | 📋 L1 | 限制全局变量 |
-| `ActionPrototypeTypes` | 📋 L1 | 原型类型 |
-| `ActionPrototypeComments` | 📋 L1 | 原型注释 |
-| `ActionDynamicTokens` | 📋 L1 | 动态令牌 |
-| `ActionCast` | 📋 L1 | Cast 插入 |
-| `ActionReturnRegression` | 📋 L1 | 返回值回归分析 |
-| `Actionnodethunk` | 📋 L1 | Thunk 消除 |
-| `ActionFuncbinding` | 📋 L1 | 函数绑定 |
-| `ActionVmeven` | 📋 L1 | VM 事件 |
-| `ActionMultiCse` | 📋 L1 | 多重 CSE |
-| `ActionShadowVar` | 📋 L1 | 影子变量 |
-| `ActionPreferCombine` | 📋 L1 | 优先合并 |
-| `ActionBitAnalysis` | 📋 L1 | 位分析 |
-| `ActionSlice` | 📋 L1 | 切片分析 |
-| `ActionHhrlLocal` | 📋 L1 | 局部变量恢复 |
-| `ActionLikelyTypedef` | 📋 L1 | 类型定义推断 |
-| `ActionSwitch` | 📋 L1 | Switch 分析 |
-| `ActionConditionalExe` | 📋 L1 | 条件执行消除 |
+> **重要更正**：原列表中的 `ActionCast`/`ActionFuncbinding`/`ActionVmeven`/`ActionHhrlLocal`/`ActionBitAnalysis`/`ActionSlice`/`ActionConditionalExe`/`ActionPrototypeComments` 等名在 Ghidra coreaction.cc 中**不存在**（凭记忆臆造）。下表为逐行核对 coreaction.cc 实际 `::apply` 方法后的真实清单，并标注 Rugra 现有基础设施依赖。
+
+**已实现（✅ L3，Rugra coreaction.rs 中已有）：**
+`ActionStart`, `ActionHeritage`, `ActionInferParams`, `ActionCopyPropagate`,
+`ActionDeadCode`, `ActionMergeType`, `ActionTypeInfer`, `ActionCallParams`,
+`ActionConstantPtr`, `ActionCse`, `ActionSimplify`
+
+**真实缺失（📋 L1）— 按 Ghidra coreaction.cc 行号 + 依赖标注：**
+
+| Ghidra Action | coreaction.cc | 功能 | 依赖（Rugra 现状） |
+|---|---|---|---|
+| `ActionRestructureVarnode` | 2274 | 调用 ScopeLocal::restructureVarnode + syncVarnodesWithSymbols | ScopeLocal 已移植 ✅；缺 syncVarnodesWithSymbols |
+| `ActionSetCasts` | 2722 | P-code 级 Cast 插入（castInput/castOutput/resolveUnion/checkPointerIssues） | CastStrategyC 已移植 ✅；printc 发射期处理 casts |
+| `ActionRestrictLocal` | 1957 | 标记局部变量限制 | ScopeLocal 已移植 ✅ |
+| `ActionLikelyTrash` | 2140 | 识别可能垃圾变量 | HighVariable 部分 |
+| `ActionMultiCse` | 879 | MULTIEQUAL(phi) 冗余消除 | 缺 functionalEqualityLevel |
+| `ActionShadowVar` | 892 | 影子变量 | INDIRECT 处理 |
+| `ActionConstbase` | 678 | 入口注入常量基 | 缺 pcodeinjectlib/context |
+| `ActionStackPtrFlow` | 481 | 栈指针流分析 | AliasChecker 已移植 ✅ |
+| `ActionDeindirect` | 1219 | 去间接调用 | FuncCallSpecs |
+| `ActionVarnodeProps` | 1282 | varnode 属性传播 | HighVariable |
+| `ActionDirectWrite` | 1350 | 直接写分析 | varnode 写追踪 |
+| `ActionDefaultParams` | 2311 | 默认参数 | FuncProto ✅ |
+| `ActionActiveParam` | 1725 | 活跃参数 | FuncProto ✅ |
+| `ActionActiveReturn` | 1773 | 活跃返回 | FuncProto ✅ |
+| `ActionReturnRecovery` | 1908 | 返回值恢复 | FuncProto ✅ |
+| `ActionNameVars` | 2978 | 变量命名 | ScopeLocal ✅ |
+| `ActionMarkExplicit` | 3237 | 标记显式使用 | varnode descend ✅ |
+| `ActionMarkImplied` | 3416 | 标记隐含使用 | HighVariable |
+| `ActionUnreachable` | 3457 | 删不可达块 | 缺 removeUnreachableBlocks |
+| `ActionDoNothing` | 3466 | 删空块 | 缺 removeDoNothingBlock |
+| `ActionRedundBranch` | 3492 | 删冗余分支 | 缺 spliceBlockBasic/removeBranch |
+| `ActionDeterminedBranch` | 3530 | 常量条件→无条件 | 缺 removeBranch/isBooleanFlip |
+| `ActionConditionalConst` | 4514 | 条件常量 | INDIRECT |
+| `ActionSwitchNorm` | 4548 | switch 规范化 | jumptable.cc |
+| `ActionNormalizeSetup` | 4567 | 分支规范化准备 | block 编辑 |
+| `ActionPrototypeTypes` | 4609 | 原型类型 | FuncProto ✅ |
+| `ActionInputPrototype` | 4707 | 输入原型 | FuncProto ✅ |
+| `ActionOutputPrototype` | 4765 | 输出原型 | FuncProto ✅ |
+| `ActionUnjustifiedParams` | 4784 | 不合理参数 | FuncProto ✅ |
+| `ActionHideShadow` | 4831 | 隐藏影子 | INDIRECT |
+| `ActionDynamicMapping` | 4852 | 动态映射 | dynamic.cc |
+| `ActionDynamicSymbols` | 4869 | 动态符号 | dynamic.cc |
+| `ActionPrototypeWarnings` | 4886 | 原型警告 | FuncProto ✅ |
+| `ActionInternalStorage` | 4938 | 内部存储 | ScopeLocal ✅ |
+| `ActionInferTypes` | 5374 | 类型推断 | typeop ✅ |
+| `ActionLaneDivide` | 585 | 通道分割 | 缺 lane 基础设施 |
+| `ActionSegmentize` | 624 | 段化 | 缺 segment 基础设施 |
+| `ActionForceGoto` | 671 | 强制 goto | block 编辑 |
+| `ActionExtraPopSetup` | 1436 | 额外 pop 设置 | FuncProto ✅ |
+| `ActionFuncLink`/`OutOnly` | 1575/1588 | 函数链接 | FuncCallSpecs |
+| `ActionParamDouble` | 1597 | 参数 double | FuncProto ✅ |
+| `ActionMappedLocalSync` | 2297 | 映射局部同步 | ScopeLocal ✅ |
+
+**最易移植（依赖已就绪）**：`ActionRestructureVarnode`(2274)、`ActionSetCasts`(2722)、`ActionRestrictLocal`(1957)、`ActionStackPtrFlow`(481)。
+
 
 ### ruleaction.cc 缺失 Rule 列表（L1 → L2 → L3）
 
