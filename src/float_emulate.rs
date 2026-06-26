@@ -136,13 +136,13 @@ impl FloatFormat {
         ((x >> self.exp_pos) & ((1u64 << self.exp_size) - 1)) as u32
     }
 
-    /// Equality comparison (==)
-    pub fn op_equal(&self, a: u64, b: u64) -> u64 {
+    /// Inequality comparison (!=)
+    pub fn op_not_equal(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
         let mut tb = FloatClass::Zero;
         let va = self.get_host_float(a, &mut ta);
         let vb = self.get_host_float(b, &mut tb);
-        if va == vb { 1 } else { 0 }
+        if va != vb { 1 } else { 0 }
     }
 
     /// Less-than comparison (<)
@@ -152,6 +152,45 @@ impl FloatFormat {
         let va = self.get_host_float(a, &mut ta);
         let vb = self.get_host_float(b, &mut tb);
         if va < vb { 1 } else { 0 }
+    }
+
+    /// Less-than-or-equal comparison (<=)
+    pub fn op_less_equal(&self, a: u64, b: u64) -> u64 {
+        let mut ta = FloatClass::Zero;
+        let mut tb = FloatClass::Zero;
+        let va = self.get_host_float(a, &mut ta);
+        let vb = self.get_host_float(b, &mut tb);
+        if va <= vb { 1 } else { 0 }
+    }
+
+    /// Convert floating-point to integer (truncate toward zero)
+    pub fn op_trunc(&self, a: u64, _size_out: usize) -> u64 {
+        let mut ta = FloatClass::Zero;
+        let va = self.get_host_float(a, &mut ta);
+        va.trunc() as i64 as u64
+    }
+
+    /// Round to nearest integer
+    pub fn op_round(&self, a: u64) -> u64 {
+        let mut ta = FloatClass::Zero;
+        let va = self.get_host_float(a, &mut ta);
+        self.get_encoding(va.round())
+    }
+
+    /// Convert between floating-point precisions
+    pub fn op_float2_float(&self, a: u64, outformat: &FloatFormat) -> u64 {
+        let mut ta = FloatClass::Zero;
+        let va = self.get_host_float(a, &mut ta);
+        outformat.get_encoding(va)
+    }
+
+    /// Equality comparison (==)
+    pub fn op_equal(&self, a: u64, b: u64) -> u64 {
+        let mut ta = FloatClass::Zero;
+        let mut tb = FloatClass::Zero;
+        let va = self.get_host_float(a, &mut ta);
+        let vb = self.get_host_float(b, &mut tb);
+        if va == vb { 1 } else { 0 }
     }
 
     /// Addition (+)
@@ -289,5 +328,52 @@ mod tests {
         let result = fmt.op_mult(a, b);
         let mut fc = FloatClass::Zero;
         assert!((fmt.get_host_float(result, &mut fc) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_float_div() {
+        let fmt = FloatFormat::new(8);
+        let a = fmt.get_encoding(6.0);
+        let b = fmt.get_encoding(3.0);
+        let result = fmt.op_div(a, b);
+        let mut fc = FloatClass::Zero;
+        assert!((fmt.get_host_float(result, &mut fc) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_float_not_equal() {
+        let fmt = FloatFormat::new(8);
+        let a = fmt.get_encoding(1.0);
+        let b = fmt.get_encoding(2.0);
+        assert_eq!(fmt.op_not_equal(a, b), 1);
+        assert_eq!(fmt.op_not_equal(a, a), 0);
+    }
+
+    #[test]
+    fn test_float_less_equal() {
+        let fmt = FloatFormat::new(8);
+        let a = fmt.get_encoding(1.0);
+        let b = fmt.get_encoding(2.0);
+        assert_eq!(fmt.op_less_equal(a, b), 1);
+        assert_eq!(fmt.op_less_equal(a, a), 1);
+        assert_eq!(fmt.op_less_equal(b, a), 0);
+    }
+
+    #[test]
+    fn test_float_trunc() {
+        let fmt = FloatFormat::new(8);
+        let a = fmt.get_encoding(3.7);
+        let result = fmt.op_trunc(a, 4);
+        assert_eq!(result & 0xffffffff, 3);
+    }
+
+    #[test]
+    fn test_float2float() {
+        let fmt8 = FloatFormat::new(8);
+        let fmt4 = FloatFormat::new(4);
+        let a = fmt8.get_encoding(1.5);
+        let result = fmt8.op_float2_float(a, &fmt4);
+        let mut fc = FloatClass::Zero;
+        assert!((fmt4.get_host_float(result, &mut fc) - 1.5).abs() < 1e-6);
     }
 }
