@@ -5237,6 +5237,174 @@ impl Rule for RuleZextShiftZext {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
+/// Simplify SUBPIECE applied to INT_LEFT: `sub(V << 8*k, c) => sub(V, c-k)`.
+/// Faithful to Ghidra's `RuleShiftSub` (ruleaction.cc:5201-5230).
+pub struct RuleShiftSub;
+
+impl RuleShiftSub {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleShiftSub {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleShiftSub::applyOp (ruleaction.cc:5209-5230).
+        let (shiftop_arc, vn, n, c, out_size, in1_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let shiftop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
+            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let n = sa_vn.read().unwrap().get_offset() as i64;
+            if (n & 7) != 0 { return Ok(action_status::NO_CHANGE); }
+            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let c = c_vn.read().unwrap().get_offset() as i64;
+            let vn = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let in1_size = c_vn.read().unwrap().get_size();
+            (shiftop, vn, n, c, out_size, in1_size)
+        };
+        let in_size = vn.read().unwrap().get_size() as i64;
+        let new_c = c - n / 8;
+        if new_c < 0 || new_c + out_size > in_size {
+            return Ok(action_status::NO_CHANGE); // Not a natural truncation.
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, vn, 0);
+        let c_const = fd.new_constant(in1_size, new_c as u64);
+        fd.op_set_input(&follow, c_const, 1);
+        let _ = shiftop_arc;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "shift_sub" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
+/// Simplify break and rejoin: `concat(sub(V,c), sub(V,0)) => V`.
+/// Faithful to Ghidra's `RuleHumptyDumpty` (ruleaction.cc:5232-5281).
+pub struct RuleHumptyDumpty;
+
+impl RuleHumptyDumpty {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleHumptyDumpty {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleHumptyDumpty::applyOp (ruleaction.cc:5243-5281).
+        let (vn1, vn2, pos1, pos2, size1, size2, root) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_PIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let sub1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if sub1.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let sub2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if sub2.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let root = match sub1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let root2 = match sub2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if !std::sync::Arc::ptr_eq(&root, &root2) { return Ok(action_status::NO_CHANGE); }
+            let pos1 = sub1.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+            let pos2 = sub2.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+            let size1 = vn1.read().unwrap().get_size();
+            let size2 = vn2.read().unwrap().get_size();
+            (vn1, vn2, pos1, pos2, size1, size2, root)
+        };
+        if pos1 != pos2 + size2 as u64 {
+            return Ok(action_status::NO_CHANGE); // Pieces don't match up.
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let root_size = root.read().unwrap().get_size();
+        if pos2 == 0 && size1 + size2 == root_size {
+            // Pieced together the whole thing.
+            fd.op_remove_input(&follow, 1);
+            fd.op_set_input(&follow, root, 0);
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        } else {
+            // Pieced together a larger part.
+            fd.op_set_input(&follow, root, 0);
+            let c = fd.new_constant(4, pos2);
+            fd.op_set_input(&follow, c, 1);
+            fd.op_set_opcode(&follow, OpCode::CPUI_SUBPIECE);
+        }
+        let _ = (vn1, vn2);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "humpty_dumpty" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
+}
+
+/// Simplify join and break apart: `sub(concat(V,W), c) => sub(W,c)`.
+/// Faithful to Ghidra's `RuleDumptyHump` (ruleaction.cc:5283-5337).
+pub struct RuleDumptyHump;
+
+impl RuleDumptyHump {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleDumptyHump {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDumptyHump::applyOp (ruleaction.cc:5296-5337).
+        let (vn1, vn2, offset, out_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let pieceop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if pieceop.read().unwrap().opcode != OpCode::CPUI_PIECE { return Ok(action_status::NO_CHANGE); }
+            let offset = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let vn1 = match pieceop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match pieceop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            (vn1, vn2, offset, out_size)
+        };
+        let vn2_size = vn2.read().unwrap().get_size() as i64;
+        let (vn, mut new_offset) = if offset < vn2_size {
+            if offset + out_size > vn2_size {
+                return Ok(action_status::NO_CHANGE); // Draws from both vn1 and vn2.
+            }
+            (vn2, offset)
+        } else {
+            (vn1, offset - vn2_size)
+        };
+        let vn_is_free = vn.read().unwrap().is_free();
+        let vn_is_const = vn.read().unwrap().is_constant();
+        if vn_is_free && !vn_is_const {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let vn_size = vn.read().unwrap().get_size() as i64;
+        if new_offset == 0 && out_size == vn_size {
+            // Eliminate SUB and CONCAT altogether.
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            fd.op_set_input(&follow, vn, 0);
+        } else {
+            // Eliminate CONCAT and adjust SUB.
+            fd.op_set_input(&follow, vn, 0);
+            let c = fd.new_constant(4, new_offset as u64);
+            fd.op_set_input(&follow, c, 1);
+        }
+        let _ = &mut new_offset;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "dumpty_hump" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

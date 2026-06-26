@@ -621,3 +621,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RuleZextShiftZext**：完整移植 ruleaction.cc:4877-4919。简化多重 ZEXT：
   - `zext(zext(V)) => zext(V)`（loneDescend 验证）
   - `zext(zext(V) << c) => zext(V) << c`（检查 shift 不丢失扩展位）
+
+## 2026-06-27（续 12）：SUBPIECE/PIECE 简化规则
+
+- **RuleShiftSub**：完整移植 ruleaction.cc:5201-5230。`sub(V << 8*k, c) => sub(V, c-k)`（SUBPIECE + INT_LEFT → 调整截断偏移）。
+- **RuleHumptyDumpty**：完整移植 ruleaction.cc:5232-5281。合并拆分+重组：
+  - `concat(sub(V,c), sub(V,0)) => V`（完整重组）
+  - `concat(sub(V,c), sub(V,d)) => sub(V,d)`（部分重组）
+- **RuleDumptyHump**：完整移植 ruleaction.cc:5283-5337。简化连接+拆分：
+  - `sub(concat(V,W), 0) => W`（完整消除）
+  - `sub(concat(V,W), c) => sub(W,c)` 或 `sub(V,c-k)`（部分消除）
