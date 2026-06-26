@@ -427,3 +427,7 @@
 ## 2026-06-26（续）：新增 constseq 模块
 
 - `pub mod constseq;` — 对应 `constseq.hh`，常量序列分析。WriteNode/ArraySequence/StringSequence/HeapSequence/RuleStringCopy/RuleStringStore 骨架已实现。
+
+## 2026-06-26（续）：新增 opbehavior 模块
+
+- `pub mod opbehavior;` — 对应 `opbehavior.hh`，P-code 操作行为模拟。evaluate_unary/evaluate_binary 覆盖 25+ opcode。

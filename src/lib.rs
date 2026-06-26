@@ -61,6 +61,7 @@ pub mod expression; // ← expression.hh
 pub mod merge; // ← merge.hh
 pub mod op; // ← op.hh
 pub mod opcodes; // ← opcodes.hh
+pub mod opbehavior; // ← opbehavior.hh
 pub mod pcoderaw; // ← pcoderaw.hh
 pub mod prettyprint; // ← prettyprint.hh
 pub mod printc; // ← printc.hh
