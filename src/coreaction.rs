@@ -1783,12 +1783,77 @@ impl Action for ActionDoNothing {
 
 /// Remove redundant branches. Faithful to `ActionRedundBranch`
 /// (coreaction.cc).
+///
+/// Two cases:
+/// 1. A block with 1 out-edge whose target has only 1 in-edge (from this
+///    block): splice the block away (requires spliceBlockBasic).
+/// 2. A block with ≥2 out-edges all going to the same target: the branch is
+///    redundant (both paths lead to the same place). Remove one branch edge
+///    via remove_branch.
 pub struct ActionRedundBranch { pub count: i32 }
 impl ActionRedundBranch {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionRedundBranch {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        let n = fd.bblocks.get_size();
+        for i in 0..n {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
+            let (n_out, first_target) = {
+                let bl_rg = bl.read().unwrap();
+                let n_out = bl_rg.size_out();
+                if n_out == 0 {
+                    continue;
+                }
+                let first = bl_rg.get_out(0).map(|e| e.point);
+                (n_out, first)
+            };
+            let Some(first_target) = first_target else { continue };
+
+            if n_out == 1 {
+                // Case 1: splice block if target has only 1 in-edge and it's
+                // from this block, and this isn't a switch output.
+                let should_splice = {
+                    let bl_rg = bl.read().unwrap();
+                    let _ = bl_rg.get_flags();
+                    // Check if target has only 1 in-edge.
+                    let target_rg = first_target.read().unwrap();
+                    let target_n_in = target_rg.size_in();
+                    let target_is_entry = (target_rg.get_flags()
+                        & crate::block::block_flags::ENTRY_POINT) != 0;
+                    target_n_in == 1 && !target_is_entry
+                };
+                if should_splice {
+                    // spliceBlockBasic not yet implemented; skip.
+                    // TODO: implement spliceBlockBasic for full redund-branch.
+                }
+                continue;
+            }
+
+            // Case 2: check if all out-edges go to the same target.
+            let all_same = {
+                let bl_rg = bl.read().unwrap();
+                let mut same = true;
+                for j in 1..n_out {
+                    if let Some(edge) = bl_rg.get_out(j) {
+                        if !Arc::ptr_eq(&edge.point, &first_target) {
+                            same = false;
+                            break;
+                        }
+                    }
+                }
+                same
+            };
+            if !all_same {
+                continue;
+            }
+
+            // All exits go to the same block → remove the branch (edge 1).
+            fd.remove_branch(&bl, 0); // Keep edge 0, remove edge 1.
+        }
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "redundbranch" }

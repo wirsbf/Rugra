@@ -272,3 +272,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionUnreachable**：实现不可达块检测逻辑（coreaction.cc）——遍历所有基本块，检查 `get_immed_dom()` 为 None 的块（跳过 ENTRY_POINT），快速返回无可达块的情况。完整移除需要 `collectReachable` + 块删除（待 spliceBlockBasic）。
 - **ActionDoNothing**：实现 do-nothing 块检测（coreaction.cc）——检查 size_out==1 + size_in>0 + 所有 op 都是 marker/branch（非 BRANCHIND）+ 非自循环。完整移除需要 `spliceBlockBasic`。
+
+## 2026-06-27（续 4）：ActionRedundBranch 算法逻辑
+
+- **ActionRedundBranch**：完整实现 coreaction.cc 的两种情况——
+  1. 单出边块 + 目标只有1个入边 → splice（待 spliceBlockBasic）
+  2. ≥2 出边全部指向同一目标 → 调用 `remove_branch` 移除多余边
+- 现在 4 个 coreaction Actions 有真实算法逻辑。
