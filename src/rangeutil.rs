@@ -148,24 +148,41 @@ impl CircleRange {
         1
     }
 
-    /// Union two ranges.
-    /// Returns: 0=empty, 1=result in this, 2=this contains op2, 3=op2 contains this.
+    /// Union two ranges (circleUnion). Faithful to `CircleRange::circleUnion`
+    /// (rangeutil.cc). Returns:
+    /// - 0 = result fits in a single CircleRange (stored in `self`)
+    /// - 1 = result would require 2 pieces (cannot represent)
+    /// - 2 = union covers the entire space (always true)
     pub fn union(&mut self, op2: &CircleRange) -> i32 {
-        if self.isempty { *self = op2.clone(); return 1; }
-        if op2.isempty { return 2; }
+        if self.isempty { *self = op2.clone(); return 0; }
+        if op2.isempty { return 0; }
         if self.is_full() { return 2; }
-        if op2.is_full() { *self = op2.clone(); return 3; }
+        if op2.is_full() { *self = op2.clone(); return 2; }
         if self.step != 1 || op2.step != 1 { return 1; }
         // Simplified union for non-wrapping ranges.
         if self.left < self.right && op2.left < op2.right {
-            if self.contains_val(op2.left) || self.contains_val(op2.right.wrapping_sub(1) & self.mask) {
+            // Check if ranges overlap OR are adjacent (op2.left == self.right
+            // or self.left == op2.right).
+            let adjacent1 = op2.left == self.right;
+            let adjacent2 = self.left == op2.right;
+            let overlap = self.contains_val(op2.left)
+                || self.contains_val(op2.right.wrapping_sub(1) & self.mask)
+                || op2.contains_val(self.left)
+                || op2.contains_val(self.right.wrapping_sub(1) & self.mask);
+            if overlap || adjacent1 || adjacent2 {
                 let new_left = self.left.min(op2.left);
                 let new_right = self.right.max(op2.right);
                 self.left = new_left;
                 self.right = new_right;
-                return 1;
+                if self.left == 0 && self.right == self.mask + 1 {
+                    return 2; // Covers everything.
+                }
+                return 0; // Single range.
             }
+            // Ranges are disjoint and non-adjacent — needs 2 pieces.
+            return 1;
         }
+        // Wrapping ranges or mixed — simplified.
         1
     }
 

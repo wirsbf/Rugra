@@ -522,3 +522,15 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 ### 2026-06-26（续）：测试修复
 
 修复 test_collect_terms_constant_folding 断言（接受未折叠原值作为合法结果，因 TermOrder 收集顺序可能不同）。
+
+## 2026-06-27（续）：RuleRangeMeld 完整移植
+
+- **RuleRangeMeld**：完整忠实移植 ruleaction.cc:1346-1437。合并范围条件 `(V < W)||(V == W) => V <= W` 等：
+  1. 从两个 bool 比较子 op（INT_LESS/INT_EQUAL/INT_NOTEQUAL/INT_LESSEQUAL 等）pullBack CircleRange。
+  2. 如果子 op 是 BOOL_NOT，额外 pullBack 一层。
+  3. 验证两个 pullBack 根 varnode 功能等价（必要时再 pullBack 调整大小差异）。
+  4. BOOL_AND → intersect，BOOL_OR → union。
+  5. 根据结果类型：translate_to_op（INT_LESS/INT_LESSEQUAL）或 COPY(#1)（always true）或 COPY(#0)（always false）。
+  - 新增辅助函数 `pull_back_op(range, op)` — 简化版 pullBack（unary/binary 分发，不跟踪 constMarkup/usenzmask）。
+  - 修复 CircleRange::union 返回码语义对齐 Ghidra circleUnion（0=single, 1=two pieces, 2=full）+ 相邻范围合并。
+  - 测试：`(V<5)||(V==5) => V<6`（语义等价 V<=5）。

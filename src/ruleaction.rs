@@ -4132,6 +4132,225 @@ fn functional_equality_eq(
     std::sync::Arc::ptr_eq(a, b)
 }
 
+/// Merge range conditions of the form: `V < c, c < V, V == c` etc.
+///
+/// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
+///
+/// Convert `(V < W)||(V == W)   =>   V <= W` (and similar variants) by pulling
+/// back two CircleRanges from the boolean comparison ops and intersecting (for
+/// BOOL_AND) or unioning (for BOOL_OR) them, then translating back to a single
+/// comparison op.
+pub struct RuleRangeMeld;
+
+impl RuleRangeMeld {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleRangeMeld {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        use crate::rangeutil::CircleRange;
+
+        // Extract the two boolean comparison sub-ops.
+        let (central_opc, sub1_arc, sub2_arc) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_BOOL_AND && op.opcode != OpCode::CPUI_BOOL_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let sub1 = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let sub2 = vn2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let (sub1, sub2) = match (sub1, sub2) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            if !sub1.read().unwrap().is_bool_output() { return Ok(action_status::NO_CHANGE); }
+            if !sub2.read().unwrap().is_bool_output() { return Ok(action_status::NO_CHANGE); }
+            (op.opcode, sub1, sub2)
+        };
+
+        // Pull back range1 from sub1.
+        let mut range1 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
+        let a1 = pull_back_op(&mut range1, &sub1_arc);
+        let a1 = match a1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+
+        // Pull back range2 from sub2.
+        let mut range2 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
+        let a2 = pull_back_op(&mut range2, &sub2_arc);
+        let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+
+        // If either sub is a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra), do an extra pull back.
+        let sub1_code = sub1_arc.read().unwrap().opcode;
+        let a1 = if sub1_code == OpCode::CPUI_BOOL_NOT {
+            if !a1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            match pull_back_op(&mut range1, &a1_def) {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        } else {
+            a1
+        };
+        let sub2_code = sub2_arc.read().unwrap().opcode;
+        let a2 = if sub2_code == OpCode::CPUI_BOOL_NOT {
+            if !a2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            match pull_back_op(&mut range2, &a2_def) {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        } else {
+            a2
+        };
+
+        // A1 and A2 must be functionally equal (same root varnode).
+        if !functional_equality_eq(&a1, &a2) {
+            // Try pulling back the larger-size one to match.
+            let (s1, s2) = (a1.read().unwrap().get_size(), a2.read().unwrap().get_size());
+            if s1 == s2 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if s1 < s2 && a2.read().unwrap().is_written() {
+                let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+                if let Some(d) = a2_def {
+                    match pull_back_op(&mut range2, &d) {
+                        Some(v) if functional_equality_eq(&a1, &v) => { /* ok */ }
+                        _ => return Ok(action_status::NO_CHANGE),
+                    }
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else if a1.read().unwrap().is_written() {
+                let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+                if let Some(d) = a1_def {
+                    match pull_back_op(&mut range1, &d) {
+                        Some(v) if functional_equality_eq(&v, &a2) => { /* ok */ }
+                        _ => return Ok(action_status::NO_CHANGE),
+                    }
+                } else {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+
+        // isHeritageKnown — Rugra has no explicit flag; conservatively assume true
+        // for non-free varnodes.
+        if a1.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Intersect (BOOL_AND) or union (BOOL_OR) the ranges.
+        // Rugra's CircleRange::intersect returns: 0=empty, 1=non-empty single.
+        // Rugra's CircleRange::union returns: 0=single, 1=two pieces, 2=full.
+        // We normalize to Ghidra's restype: 0=try translate, 1=always true,
+        // 2=cannot represent, 3=always false.
+        let a1_size = a1.read().unwrap().get_size();
+        let restype = if central_opc == OpCode::CPUI_BOOL_AND {
+            match range1.intersect(&range2) {
+                0 => 3, // Empty intersection → always false.
+                _ => 0, // Non-empty → try translate.
+            }
+        } else {
+            match range1.union(&range2) {
+                0 => 0, // Single range → try translate.
+                1 => 2, // Two pieces → cannot represent.
+                2 => 1, // Full → always true.
+                _ => 0,
+            }
+        };
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+
+        if restype == 0 {
+            // Try to translate the merged range back to a single comparison op.
+            if let Some((opc, resc, resslot)) = range1.translate_to_op() {
+                let new_const = fd.new_constant(a1_size, resc);
+                fd.op_set_opcode(&follow, opc);
+                fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
+                fd.op_set_input(&follow, new_const, resslot as usize);
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE); // Cannot translate.
+        }
+
+        if restype == 2 {
+            return Ok(action_status::NO_CHANGE); // Cannot represent.
+        }
+        if restype == 1 {
+            // Pieces cover everything → condition always true.
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            let true_const = fd.new_constant(1, 1);
+            fd.op_set_input(&follow, true_const, 0);
+        } else if restype == 3 {
+            // Nothing left in intersection → condition always false.
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            fd.op_remove_input(&follow, 1);
+            let false_const = fd.new_constant(1, 0);
+            fd.op_set_input(&follow, false_const, 0);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "range_meld" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
+}
+
+/// Pull back a CircleRange through a comparison op. Faithful to
+/// `CircleRange::pullBack` (rangeutil.cc:1022-1073) simplified: returns the
+/// non-constant input Varnode that the range now applies to, or None if the
+/// op cannot be pulled back through. Does not track constMarkup or useNZMask.
+fn pull_back_op(
+    range: &mut crate::rangeutil::CircleRange,
+    op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    let op_rg = op.read().unwrap();
+    let num_input = op_rg.inrefs.len();
+    let opc = op_rg.opcode;
+    let out_size = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(1);
+    if num_input == 1 {
+        let res = op_rg.inrefs.get(0)?.clone();
+        if res.read().unwrap().is_constant() {
+            return None;
+        }
+        let in_size = res.read().unwrap().get_size();
+        if !range.pull_back_unary(opc, in_size, out_size) {
+            return None;
+        }
+        Some(res)
+    } else if num_input == 2 {
+        // Find the non-constant input and slot.
+        let in0 = op_rg.inrefs.get(0)?;
+        let in1 = op_rg.inrefs.get(1)?;
+        let (res, val, slot) = if in0.read().unwrap().is_constant() {
+            if in1.read().unwrap().is_constant() {
+                return None;
+            }
+            let val = in0.read().unwrap().get_offset();
+            (in1.clone(), val, 1)
+        } else if in1.read().unwrap().is_constant() {
+            let val = in1.read().unwrap().get_offset();
+            (in0.clone(), val, 0)
+        } else {
+            return None;
+        };
+        let in_size = res.read().unwrap().get_size();
+        if !range.pull_back_binary(opc, val, slot, in_size, out_size) {
+            return None;
+        }
+        Some(res)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6841,5 +7060,52 @@ mod tests {
         // Should be BOOL_AND(A, newop)
         assert_eq!(o.opcode, OpCode::CPUI_BOOL_AND);
         assert!(Arc::ptr_eq(&o.inrefs[0], &a));
+    }
+
+    #[test]
+    fn test_rule_range_meld_less_or_equal() {
+        // (V < 5) || (V == 5)  =>  V <= 5
+        // Build: BOOL_OR(INT_LESS(V, 5), INT_EQUAL(V, 5))
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
+        c5.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        // INT_LESS(V, 5) — bool output
+        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS)));
+        less.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        less.write().unwrap().output = Some(less_out.clone());
+        less.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        less_out.write().unwrap().def = Some(Arc::downgrade(&less));
+        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // INT_EQUAL(V, 5) — bool output
+        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_EQUAL)));
+        eq.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        eq.write().unwrap().output = Some(eq_out.clone());
+        eq.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq));
+        eq_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // BOOL_OR(less_out, eq_out)
+        let outer = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR)));
+        outer.write().unwrap().inrefs = vec![less_out, eq_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // After transform: the merged range [0,6) is expressed as INT_LESS(V, 6),
+        // which is semantically V <= 5. (Ghidra's translate2Op picks INT_LESS
+        // form.)
+        let o = outer.read().unwrap();
+        assert!(
+            o.opcode == OpCode::CPUI_INT_LESS || o.opcode == OpCode::CPUI_INT_LESSEQUAL,
+            "expected INT_LESS or INT_LESSEQUAL, got {:?}",
+            o.opcode
+        );
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
     }
 }

@@ -49,3 +49,8 @@
 - `sign_extend_size(in_val, size_in, size_out) -> u64`（address.cc:666）：字节间符号扩展。
 
 测试：新增 11 个（complement/convert_to_boolean/set_nz_mask/pull_back_unary/pull_back_binary_add/pull_back_binary_less/bit_transitions/sign_extend_size）。
+
+## 2026-06-27（续）：union 返回码修复
+
+- **CircleRange::union** 返回码对齐 Ghidra circleUnion 语义：0=single range（在 self 中），1=two pieces（无法表示），2=full（覆盖全部）。
+- 新增相邻范围合并逻辑：`op2.left == self.right` 或 `self.left == op2.right` 时合并为单一范围。
