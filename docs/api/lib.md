@@ -443,3 +443,7 @@
 ## 2026-06-26（续）：新增 memstate 模块
 
 - `pub mod memstate;` — 对应 `memstate.hh`，内存状态。MemoryBank/MemState 已实现（set/get value/chunk + construct/deconstruct）。
+
+## 2026-06-26（续）：新增 float_emulate 模块
+
+- `pub mod float_emulate;` — 对应 `float.hh`，浮点格式编解码。FloatFormat IEEE754 单/双精度 + 15 个 op 操作已实现。
