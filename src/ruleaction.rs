@@ -1130,6 +1130,140 @@ impl Rule for RuleBoolNegate {
     }
 }
 
+/// Simplify INT_OR with a full mask: `V = W | 0xffff  =>  V = #0xffff`.
+///
+/// Faithful to Ghidra's `RuleOrMask` (ruleaction.cc:276-300). When the OR
+/// constant sets every bit of the output size, the result is just that
+/// constant — rewrite as COPY(constant).
+pub struct RuleOrMask;
+
+impl RuleOrMask {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleOrMask {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (const_vn, size) = {
+            let op = op_arc.read().unwrap();
+            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let const_vn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            (const_vn, out_size)
+        };
+        if size == 0 || size > 8 {
+            return Ok(action_status::NO_CHANGE); // no output or uintb precision limit
+        }
+        let val = const_vn.read().unwrap().get_offset();
+        let mask = calc_mask(size);
+        if val & mask != mask {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        fd.op_set_input(&follow, const_vn, 0);
+        fd.op_remove_input(&follow, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "or_mask"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_OR]
+    }
+}
+
+/// Collapse constants in logical expressions:
+///   `(V & c) & d  =>  V & (c & d)`
+///   `(V | c) | d  =>  V | (c | d)`
+///   `(V ^ c) ^ d  =>  V ^ (c ^ d)`
+///
+/// Faithful to Ghidra's `RuleAndOrLump` (ruleaction.cc:403-442). When a
+/// bitwise op has a constant in slot 1 and its slot-0 input is defined by the
+/// same op-code with another constant, fold the two constants.
+pub struct RuleAndOrLump;
+
+impl RuleAndOrLump {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleAndOrLump {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (base_vn, opc) = {
+            let op = op_arc.read().unwrap();
+            let in1 = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            // in1 const captured above; re-check in0 written by same opc.
+            let _ = in1;
+            if !matches!(op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (in0, op.opcode)
+        };
+        let op2_arc = {
+            let b = base_vn.read().unwrap();
+            b.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let op2_arc = match op2_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if op2_arc.read().unwrap().opcode != opc {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let (basevn, c1, c2_val) = {
+            let o2 = op2_arc.read().unwrap();
+            let basevn = match o2.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let c1 = match o2.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let c2 = op_arc.read().unwrap().inrefs[1].read().unwrap().get_offset();
+            (basevn, c1, c2)
+        };
+        if basevn.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let c1_val = c1.read().unwrap().get_offset();
+        let val = match opc {
+            OpCode::CPUI_INT_AND => c1_val & c2_val,
+            OpCode::CPUI_INT_OR => c1_val | c2_val,
+            OpCode::CPUI_INT_XOR => c1_val ^ c2_val,
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let size = basevn.read().unwrap().get_size();
+        let new_const = fd.new_constant(size, val);
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, basevn, 0);
+        fd.op_set_input(&follow, new_const, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "and_or_lump"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1879,5 +2013,124 @@ mod tests {
         let rule = RuleBoolNegate::new();
         let result = rule.apply_op(&not_op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleOrMask (ruleaction.cc:276) ---
+
+    #[test]
+    fn test_or_mask_full_mask() {
+        // V | 0xffffffff (size 4) => COPY(0xffffffff)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let full = fd.vbank.create_constant(4, 0xffffffff);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, full.clone()];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+        }
+        let rule = RuleOrMask::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs[0].read().unwrap().get_val(), 0xffffffff);
+    }
+
+    #[test]
+    fn test_or_mask_partial_no_change() {
+        // V | 0xf0 (not full mask) => no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let partial = fd.vbank.create_constant(4, 0xf0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, partial];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+        }
+        let rule = RuleOrMask::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleAndOrLump (ruleaction.cc:403) ---
+
+    #[test]
+    fn test_and_or_lump_double_and() {
+        // ((V & 0xf0) & 0x0f) => V & (0xf0 & 0x0f) = V & 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 0xf0);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), c1];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        let c0 = fd.vbank.create_constant(4, 0x0f);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out, c0];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleAndOrLump::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0xf0 & 0x0f); // = 0
+    }
+
+    #[test]
+    fn test_and_or_lump_double_or() {
+        // ((V | 0x01) | 0x02) => V | 0x03
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c1 = fd.vbank.create_constant(4, 0x01);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut i = inner.write().unwrap();
+            i.inrefs = vec![v.clone(), c1];
+            i.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner));
+        let c0 = fd.vbank.create_constant(4, 0x02);
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = outer.write().unwrap();
+            o.inrefs = vec![inner_out, c0];
+            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+        }
+        let rule = RuleAndOrLump::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0x01 | 0x02); // = 3
     }
 }

@@ -165,3 +165,18 @@ INT_LESSEQUAL 与极值常量的简化：
 要求比较输出仅被 BOOL_NOT 消费（ALL descendants must be negates）。
 
 测试：ruleaction::tests +3（双否定塌缩、LESS→LESSEQUAL 换序、非 BOOL 后代 NO_CHANGE）。
+
+### 2026-06-26（续）：RuleOrMask + RuleAndOrLump
+
+#### `pub struct RuleOrMask`（ruleaction.cc:276-300）
+`V | 0xffff => COPY(0xffff)`。当 OR 的常量覆盖输出 size 的所有位时，
+结果就是该常量 → COPY。size=0 或 >8 时跳过（uintb 精度）。
+
+#### `pub struct RuleAndOrLump`（ruleaction.cc:403-442）
+折叠逻辑表达式的常量：
+- `(V & c) & d => V & (c & d)`
+- `(V | c) | d => V | (c | d)`
+- `(V ^ c) ^ d => V ^ (c ^ d)`
+模式同 AddMultCollapse，但用于 AND/OR/XOR。
+
+测试：ruleaction::tests +4（OrMask 全掩码/部分不变；AndOrLump 双 AND/双 OR）。
