@@ -3294,6 +3294,47 @@ impl Rule for RuleAndDistribute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Transform INT_LESS/INT_LESSEQUAL of 0 or 1:
+///   `V < 1  =>  V == 0`
+///   `V <= 0  =>  V == 0`
+///
+/// Faithful to Ghidra's `RuleLessOne` (ruleaction.cc:1316-1339).
+pub struct RuleLessOne;
+
+impl RuleLessOne {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleLessOne {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (val, opc, const_size) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let val = constvn.read().unwrap().get_offset();
+            let sz = constvn.read().unwrap().get_size();
+            if op.opcode == OpCode::CPUI_INT_LESS && val != 1 { return Ok(action_status::NO_CHANGE); }
+            if op.opcode == OpCode::CPUI_INT_LESSEQUAL && val != 0 { return Ok(action_status::NO_CHANGE); }
+            if !matches!(op.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (val, op.opcode, sz)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_EQUAL);
+        if val != 0 {
+            let c = fd.new_constant(const_size, 0);
+            fd.op_set_input(&follow, c, 1);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "less_one" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESS, OpCode::CPUI_INT_LESSEQUAL] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5527,5 +5568,59 @@ mod tests {
         let a2 = and_op.read().unwrap();
         assert_eq!(a2.opcode, OpCode::CPUI_INT_OR);
         assert_eq!(a2.inrefs.len(), 2);
+    }
+
+    // --- RuleLessOne (ruleaction.cc:1316) ---
+
+    #[test]
+    fn test_less_one_less_than_one() {
+        // V < 1 => V == 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let one = fd.vbank.create_constant(4, 1);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        op.write().unwrap().inrefs = vec![v, one];
+        let rule = RuleLessOne::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_EQUAL);
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 0);
+    }
+
+    #[test]
+    fn test_less_one_lessequal_zero() {
+        // V <= 0 => V == 0
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let zero = fd.vbank.create_constant(4, 0);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![v, zero];
+        let rule = RuleLessOne::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_EQUAL);
+    }
+
+    #[test]
+    fn test_less_one_other_const_no_change() {
+        // V < 5 => no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let five = fd.vbank.create_constant(4, 5);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        op.write().unwrap().inrefs = vec![v, five];
+        let rule = RuleLessOne::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

@@ -392,3 +392,10 @@ AND-比较变换，把 AND 推到更大的定义域：
 `(A | B) & C => (A & C) | (B & C)`，当某 OR 分支的 NZM 与 C 的 mask 无重叠（分配后该分支被取消）或（常量 C 时）被完全覆盖。用 get_nz_mask 判断，op-edit API 创建两个新 AND。
 
 测试：ruleaction::tests +1（A=0xf0/B=0xff/C=0x0f，NZM 无重叠→分配→OR）。
+
+### 2026-06-26（续）：RuleLessOne
+
+#### `pub struct RuleLessOne`（ruleaction.cc:1316-1339）
+`V < 1 => V == 0`，`V <= 0 => V == 0`。极值比较转等式。
+
+测试：ruleaction::tests +3（V<1→EQUAL 0；V<=0→EQUAL；V<5 不变）。
