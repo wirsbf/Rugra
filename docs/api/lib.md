@@ -431,3 +431,7 @@
 ## 2026-06-26（续）：新增 opbehavior 模块
 
 - `pub mod opbehavior;` — 对应 `opbehavior.hh`，P-code 操作行为模拟。evaluate_unary/evaluate_binary 覆盖 25+ opcode。
+
+## 2026-06-26（续）：新增 rangeutil 模块
+
+- `pub mod rangeutil;` — 对应 `rangeutil.hh`，CircleRange 整数值范围分析。核心构造/包含/交集/并集/迭代已实现。

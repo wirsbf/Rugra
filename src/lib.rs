@@ -66,6 +66,7 @@ pub mod pcoderaw; // ← pcoderaw.hh
 pub mod prettyprint; // ← prettyprint.hh
 pub mod printc; // ← printc.hh
 pub mod printlanguage; // ← printlanguage.hh
+pub mod rangeutil; // ← rangeutil.hh
 pub mod ruleaction; // ← ruleaction.hh
 pub mod space; // ← space.hh
 pub mod subflow; // ← subflow.hh
