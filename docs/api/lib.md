@@ -463,3 +463,7 @@
 ## 2026-06-26（续）：新增 signature 模块
 
 - `pub mod signature;` — 对应 `signature.hh`，函数签名匹配。Signature/SignatureEntry/SignatureDB 骨架已实现。
+
+## 2026-06-26（续）：新增 jumptable 模块
+
+- `pub mod jumptable;` — 对应 `jumptable.hh`，跳转表恢复。LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction 全部数据结构 + 守卫分析 + 最小规范化变量查找。L3 缺 Varnode::def 深度遍历、emulate_path 地址计算、pullBack、CFG 重写。

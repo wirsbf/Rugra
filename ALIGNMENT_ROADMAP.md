@@ -49,7 +49,7 @@
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🔧 L2 | BranchPoint/BlockTrace/BadEdgeScore 骨架已移植；**check_open 精度不足，未完整启用** | `blockaction.cc:499-1014` |
 | 19 | `condexe.cc` | — | 📋 L1 | **完全缺失**：ConditionalExecution + RuleOrPredicate 条件折叠 | `condexe.cc` |
 | 20 | `subflow.cc` | — | 📋 L1 | **完全缺失**：子流分析（代码可达性、不可达代码消除） | `subflow.cc` |
-| 21 | **`jumptable.cc`** | — | 📋 L1 | **完全缺失**：间接跳转表分析（switch 跳转表目标恢复） | `jumptable.cc` |
+| 21 | **`jumptable.cc`** | — | 🔧 L2 | **骨架已移植**：LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction 全部数据结构 + 守卫分析 + 最小规范化变量查找。L3 缺：Varnode::def 深度遍历、emulate_path 地址计算、pullBack、CFG 重写（foldInGuards/switchOver） | `jumptable.cc` |
 
 ---
 

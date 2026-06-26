@@ -58,6 +58,7 @@ pub mod cover; // ← cover.hh
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
 pub mod heritage; // ← heritage.hh
+pub mod jumptable; // ← jumptable.hh
 pub mod expression; // ← expression.hh
 pub mod emulate; // ← emulate.hh
 pub mod float_emulate; // ← float.hh
