@@ -435,3 +435,7 @@
 ## 2026-06-26（续）：新增 rangeutil 模块
 
 - `pub mod rangeutil;` — 对应 `rangeutil.hh`，CircleRange 整数值范围分析。核心构造/包含/交集/并集/迭代已实现。
+
+## 2026-06-26（续）：新增 userop 模块
+
+- `pub mod userop;` — 对应 `userop.hh`，CALLOTHER 用户操作管理。UserPcodeOp/UserOpType/UserOpManage 已实现。
