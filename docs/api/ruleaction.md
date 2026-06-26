@@ -110,3 +110,17 @@ Collapses `x << 0 → x`, `x >> 0 → x`, `x >>> 0 → x`.
 - `get_opcodes`：`[CPUI_BOOL_NOT]`（Rugra CPUI_BOOL_NOT == Ghidra BOOL_NEGATE）。
 
 测试：ruleaction::tests +2（AND→OR、非 bool 内层 NO_CHANGE）+ Funcdata API +3。
+
+### 2026-06-26（续）：RuleConcatZero + RuleXorCollapse
+
+#### `pub struct RuleConcatZero`（ruleaction.cc:4977）
+`concat(V, 0) => zext(V) << c`。当 PIECE 的低位(in1)是全 0 常量时，
+改写为 INT_LEFT(INT_ZEXT(V), 8*low_size)。用 Funcdata op-edit API 创建 ZEXT op。
+
+#### `pub struct RuleXorCollapse`（ruleaction.cc:4058）
+消除比较中的 XOR：
+- `(V ^ c) == d => V == (c^d)`（常量项折叠）
+- `(V ^ W) == 0 => V == W`（移项）
+- 要求 xor 输出为 lone descend（loneDescend）。
+
+测试：ruleaction::tests +4（ConcatZero 折叠/非零不变；XorCollapse 常量折叠/移项）。

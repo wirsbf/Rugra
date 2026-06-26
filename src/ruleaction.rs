@@ -632,6 +632,173 @@ impl Rule for RuleNotDistribute {
     }
 }
 
+/// Simplify concatenation with zero: `concat(V, 0) => zext(V) << c`.
+///
+/// Faithful to Ghidra's `RuleConcatZero` (ruleaction.cc:4977-5002). When the
+/// low (input 1) piece of a PIECE is an all-zero constant, the PIECE becomes
+/// a left-shift of a zero-extension of the high piece.
+pub struct RuleConcatZero;
+
+impl RuleConcatZero {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleConcatZero {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // in1 must be a constant == 0.
+        let (in0, in1, out_size, pc) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in1 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            (in0, in1, out_size, op.start.get_addr())
+        };
+        {
+            let i1 = in1.read().unwrap();
+            if !i1.is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if i1.get_offset() != 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        if out_size == 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let low_size = in1.read().unwrap().get_size();
+        let sa = 8 * low_size; // shift amount in bits
+
+        // newop = INT_ZEXT(in0) → outvn (full output size)
+        let newop = fd.new_op(1, pc);
+        fd.op_set_opcode(&newop, OpCode::CPUI_INT_ZEXT);
+        let outvn = fd.new_unique_out(out_size, &newop);
+        fd.op_set_input(&newop, in0, 0);
+        fd.op_insert_before(&newop, &crate::op::PcodeOpRef(op_arc.clone()));
+
+        // Rewrite the original PIECE op into INT_LEFT(zext, sa).
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_LEFT);
+        fd.op_set_input(&follow, outvn, 0);
+        let shift_const = fd.new_constant(4, sa as u64);
+        fd.op_set_input(&follow, shift_const, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "concat_zero"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_PIECE]
+    }
+}
+
+/// Eliminate INT_XOR in comparisons: `(V ^ W) == 0 => V == W`,
+/// `(V ^ c) == d => V == (c^d)`.
+///
+/// Faithful to Ghidra's `RuleXorCollapse` (ruleaction.cc:4058-4097).
+pub struct RuleXorCollapse;
+
+impl RuleXorCollapse {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleXorCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // in1 must be a constant.
+        let (in0, coeff1) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in1 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let i1 = in1.read().unwrap();
+            if !i1.is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (in0, i1.get_offset())
+        };
+        // in0 must be defined by an INT_XOR.
+        let xorop_arc = {
+            let in0r = in0.read().unwrap();
+            in0r.def.as_ref().and_then(|w| w.upgrade())
+        };
+        let xorop_arc = match xorop_arc {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let is_xor = xorop_arc.read().unwrap().opcode == OpCode::CPUI_INT_XOR;
+        if !is_xor {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // The xor output must have a lone descend (this op) for safe rewrite.
+        let descend_count = {
+            let xorout = xorop_arc.read().unwrap().output.as_ref().map(|o| o.clone());
+            match xorout {
+                Some(o) => o.read().unwrap().descend.iter().filter(|w| w.upgrade().is_some()).count(),
+                None => 0,
+            }
+        };
+        if descend_count != 1 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let (xor_in0, xor_in1) = {
+            let x = xorop_arc.read().unwrap();
+            (
+                x.inrefs.get(0).cloned(),
+                x.inrefs.get(1).cloned(),
+            )
+        };
+        let (xor_in0, xor_in1) = match (xor_in0, xor_in1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        if !xor_in1.read().unwrap().is_constant() {
+            // (V ^ W) == c : only valid when c == 0 → move W to other side.
+            if coeff1 != 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+            fd.op_set_input(&follow, xor_in1, 1);
+            fd.op_set_input(&follow, xor_in0, 0);
+            return Ok(action_status::CHANGE);
+        }
+        // (V ^ c) == d → V == (c^d)
+        let coeff2 = xor_in1.read().unwrap().get_offset();
+        if coeff2 == 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let size = in0.read().unwrap().get_size();
+        let constvn = fd.new_constant(size, coeff1 ^ coeff2);
+        fd.op_set_input(&follow, constvn, 1);
+        fd.op_set_input(&follow, xor_in0, 0);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "xor_collapse"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,5 +1136,129 @@ mod tests {
         let rule = RuleNotDistribute::new();
         let result = rule.apply_op(&not_op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleConcatZero (ruleaction.cc:4977) ---
+
+    #[test]
+    fn test_concat_zero_collapses_to_shift() {
+        // PIECE(V_high, 0) → INT_LEFT(INT_ZEXT(V_high), sa)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let high = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let low_zero = fd.vbank.create_constant(2, 0);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let piece_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut p = piece_op.write().unwrap();
+            p.inrefs = vec![high, low_zero];
+            p.output = Some(out);
+        }
+
+        let rule = RuleConcatZero::new();
+        let result = rule.apply_op(&piece_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let p = piece_op.read().unwrap();
+        assert_eq!(p.opcode, OpCode::CPUI_INT_LEFT);
+        assert_eq!(p.inrefs.len(), 2);
+        // shift amount = 8 * low_size = 8 * 2 = 16
+        assert_eq!(p.inrefs[1].read().unwrap().get_val(), 16);
+    }
+
+    #[test]
+    fn test_concat_nonzero_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let high = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let low_nz = fd.vbank.create_constant(2, 5);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let piece_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_PIECE,
+        )));
+        {
+            let mut p = piece_op.write().unwrap();
+            p.inrefs = vec![high, low_nz];
+            p.output = Some(out);
+        }
+        let rule = RuleConcatZero::new();
+        let result = rule.apply_op(&piece_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleXorCollapse (ruleaction.cc:4058) ---
+
+    #[test]
+    fn test_xor_collapse_var_xor_const_eq_const() {
+        // (V ^ 0x3) == 0x1  →  V == (0x3 ^ 0x1) == 0x2
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(4, 3);
+        let xor_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let xor_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_XOR,
+        )));
+        {
+            let mut x = xor_op.write().unwrap();
+            x.inrefs = vec![v, c];
+            x.output = Some(xor_out.clone());
+        }
+        xor_out.write().unwrap().def = Some(Arc::downgrade(&xor_op));
+        let d = fd.vbank.create_constant(4, 1);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        {
+            let mut e = eq_op.write().unwrap();
+            e.inrefs = vec![xor_out.clone(), d];
+        }
+        // xor_out has a lone descend (eq_op).
+        xor_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+
+        let rule = RuleXorCollapse::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let e = eq_op.read().unwrap();
+        // slot 1 should now be constant 0x3 ^ 0x1 = 2
+        assert_eq!(e.inrefs[1].read().unwrap().get_val(), 2);
+    }
+
+    #[test]
+    fn test_xor_collapse_var_xor_var_eq_zero() {
+        // (V ^ W) == 0 → V == W  (move W to other side)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let xor_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let xor_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_XOR,
+        )));
+        {
+            let mut x = xor_op.write().unwrap();
+            x.inrefs = vec![v.clone(), w.clone()];
+            x.output = Some(xor_out.clone());
+        }
+        xor_out.write().unwrap().def = Some(Arc::downgrade(&xor_op));
+        let zero = fd.vbank.create_constant(4, 0);
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_EQUAL,
+        )));
+        {
+            let mut e = eq_op.write().unwrap();
+            e.inrefs = vec![xor_out.clone(), zero];
+        }
+        xor_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+
+        let rule = RuleXorCollapse::new();
+        let result = rule.apply_op(&eq_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let e = eq_op.read().unwrap();
+        // slot 0 should be V, slot 1 should be W
+        assert!(Arc::ptr_eq(&e.inrefs[0], &v) || Arc::ptr_eq(&e.inrefs[0], &xor_op.read().unwrap().inrefs[0]));
     }
 }
