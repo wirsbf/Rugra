@@ -24,7 +24,35 @@
 | gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
 | while 循环数 | 16 | 39 |
 | goto 数 | 0 | 0 |
-| 单元测试 | 176/176 | — |
+| 单元测试 | **205/205** | — |
+
+## varmap/coreaction 对齐会话（2026-06-26 续）
+
+聚焦 **P0 #1 varmap.cc 算法层完整移植** + 首个 coreaction Action，通过 **9 个原子化 commit**：
+
+### 完成的忠实移植
+
+| 模块 | Ghidra 源 | 里程碑 |
+|---|---|---|
+| Datatype 原语 | type.cc:174,212,3312,4649 | get_align_size/get_sub_type/get_hole_size/type_order（解锁 varmap） |
+| RangeHint 全算法 | varmap.cc:30-335 | reconcile(getSubType遍历)/contain/preferred/absorb/merge(三态)/compare/attemptJoin |
+| AliasChecker | varmap.cc:660-904 | gatherAdditiveBase 递归 BFS/gatherOffset 常量和/hasLocalAlias/find_spacebase_input |
+| MapState | varmap.cc:896-1290 | gatherVarnodes(is_read_active)/gatherOpen/add_range/gather_spacebase |
+| ScopeLocal | varmap.cc:1256-1448 | restructure/adjust_fit/buildVariableName/markUnaliased(0xffff)/fakeInputSymbols |
+| printc 集成 | — | ScopeLocal 接入 get_stack_variable_name + 复用 fd.scope |
+| Stack-spacebase | — | gather_spacebase：递归解析 RSP/frame_base 链合成 RangeHint |
+| ActionRestructureVarnode | coreaction.cc:2274 | 首个真实缺失 Action，构建 fd.scope |
+
+### 关键发现
+
+1. **ROADMAP 修正**：coreaction Action 列表原为臆造名（ActionCast 等不存在），已逐行核对 coreaction.cc 重写为真实 45 个 `::apply` 名 + 依赖标注。
+2. **uVar 碎片阻塞**：Rugra x86 lift 不产 Stack varnode；curl 多数 LOAD/STORE 为 RIP-relative 全局或 def=None 指针解引用。gather_spacebase 已覆盖 RSP 派生链，但完整消除仍需类型传播。
+3. **Action 依赖基础设施**：多数 coreaction Action 依赖 FuncCallSpecs/effect records/块编辑/varnode 标志（setExplicit 等），Rugra 尚未具备，需先补基础设施。
+
+### 当前验证指标（续）
+
+- 单元测试 **205/205**（+29：type 7 + RangeHint 10 + ScopeLocal 7 + spacebase 3 + coreaction 2）
+- curl 24/24 gcc，httpd 29/29 gcc，0 goto
 
 ### 本次会话提交的关键模块
 
