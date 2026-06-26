@@ -46,3 +46,9 @@ Manages splitting based on records (prefersplit.hh:33).
 
 - **split(fd)**：现接受 Funcdata 参数——遍历 VarnodeBank 查找匹配 split record 的 Varnodes，标记后清除。完整 SUBPIECE/PIECE 创建待更深层 op-editing。
 - **split_additional(fd)**：现接受 Funcdata——扫描 SUBPIECE ops 检测需要进一步分裂的临时变量。
+
+## 2026-06-27（续 2）：完整 SUBPIECE 分裂算法
+
+- **split(fd)**：现执行完整分裂——遍历 VarnodeBank 查找匹配的 Varnode，检测 COPY/PIECE 定义，调用 split_copy 创建 SUBPIECE ops。
+- **split_copy**：创建两个 SUBPIECE op 从 COPY 输入提取 hi/lo 半部。使用 Funcdata op-editing API（new_op/new_unique_out/op_set_opcode/op_set_input）。
+- **split_piece_op**：处理 PIECE 定义的 Varnode（输入已是 hi/lo 半部）。
