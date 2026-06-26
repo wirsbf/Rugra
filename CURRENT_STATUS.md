@@ -1,8 +1,84 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-06-26
+**日期**: 2026-06-27
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；控制流结构化和循环恢复取得突破性进展**
+**状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道核心算法开始移植**
+
+## 近期进展（2026-06-27 会话）
+
+本次会话聚焦 **基础设施层完整移植 + 反编译管道 coreaction Actions**，通过 **~50 个原子化 commit** 实现了：
+
+### 突破性成果
+
+1. **5 个模块达到 L3**（完整实现+对齐验证）：
+   - **jumptable.cc** L1→L3：全部算法（find_determining_varnodes DFS、quasi_copy 链、get_max_value、isLoadInPath、CircleRange::pullBack 全套、analyze_guards pullBack 扩展、backup2_switch 反向模拟、find_unnormalized 链遍历、emulate_path 地址计算、build_addresses/build_labels 真实模拟、fold_in_one_guard + fold_in_guards CFG 重写 via Funcdata::push_branch/force_goto）
+   - **override.cc** L1→L3：Override + FlowOverride 完整 in-memory + XML encode/decode + apply_force_gotos CFG 集成
+   - **capability.cc** L1→L3：CapabilityPoint trait + CapabilityRegistry + global_registry 单例
+   - **crc32.cc** L1→L3：CRC32 表 + crc_update + crc32/crc32_with_init
+   - **database.rs** L2→L3：XML encode/decode 全部实现 + rangemap/partmap 关闭
+
+2. **2 个模块从 L2→L3**（XML encode/decode 关闭 L3 缺口）：
+   - **stringmanage.rs**：StringManager XML encode/decode
+   - **cpool.rs**：ConstantPoolInternal XML encode/decode
+
+3. **15 个新的 L2 模块**（从 L1→L2 或现有模块增强）：
+   - **marshal.rs**：AttributeId/ElementId 注册表 + Element/Document DOM + Encoder/Decoder trait + TreeEncoder/TreeDecoder + **PackedEncode/PackedDecode**（二进制格式）
+   - **arch.rs**：Ghidra Architecture 配置容器（全部字段 + resetDefaultsInternal）+ ArchitectureCapability trait + CapabilityRegistry
+   - **comment.rs**：Comment + CommentDatabaseInternal + CommentSorter
+   - **options.rs**：ArchOption trait + OptionDatabase + 37 个注册选项（9 个完全功能化）
+   - **loadimage.rs**：LoadImage trait + RawLoadImage + MemoryLoadImage
+   - **context.rs**：ContextBitRange + TrackedContext + ContextDatabase trait + ContextInternal + ContextCache
+   - **prefersplit.rs**：PreferSplitRecord + PreferSplitManager + SplitInstance
+   - **compression.rs**：Compress + Decompress（stub，待 flate2）
+   - **paramid.rs**：ParamMeasure + ParamRank + ParamIDAnalysis + walk_forward/walk_backward
+   - **unionresolve.rs**：ResolvedUnion + ResolveEdge + ScoreUnionFields
+   - **grammar.rs**：GrammarToken + GrammarLexer（状态机词法分析）+ TypeDeclarator AST
+   - **rangemap.rs**：RangeMap + PartMap（L3）
+   - **stringmanage.rs**：完整 UTF8/UTF16/UTF32 解码
+   - **database.rs**：SymbolEntry/Symbol/Scope/Database XML encode/decode
+
+4. **Varnode::def 访问器基础设施**：
+   - `get_def()`、`is_read_only()`、`is_annotation()`、`is_spacebase()`、`descend_iter()`、`is_bool_output_def()`
+   - `PcodeOp::is_marker()`、`is_bool_output()`
+   - `coveringmask()`、`minimalmask()`
+
+5. **CircleRange::pullBack 全套**：
+   - complement/convertToBoolean/setNZMask/pullBackUnary/pullBackBinary/pullBack(PcodeOp)
+   - bit_transitions/sign_extend_size
+
+6. **Funcdata CFG 重写原语**：
+   - push_branch/force_goto/set_goto_branch/move_out_edge/remove_branch
+
+7. **coreaction Actions — 全部 48 个 Ghidra ::apply 方法覆盖**：
+   - 58 个 Action structs（从 17 个增加到 58 个）
+   - **6 个 apply()-驱动级完整算法**：ActionDeterminedBranch、ActionUnreachable、ActionDoNothing、ActionRedundBranch、ActionMarkExplicit（base_explicit 辅助函数实际执行）、ActionDeadCode（push_consumed/propagate_consumed 完整 consumed-bit 传播）
+   - **17 个框架级算法**：Constbase、PrototypeWarnings、NormalizeSetup、ForceGoto、SwitchNorm、HideShadow、MarkImplied（is_possible_alias_step）、NameVars、SetCasts、RestrictLocal、InferTypes、LikelyTrash、ShadowVar、DirectWrite、ConditionalConst、FuncLink、FuncLinkOutOnly
+   - 3 个有实际可执行辅助函数：MarkExplicit base_explicit、MarkImplied is_possible_alias_step、DeadCode push_consumed/propagate_consumed
+
+### 当前验证指标
+
+| 指标 | curl | httpd |
+|---|---|---|
+| gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
+| while 循环数 | 16 | 39 |
+| goto 数 | 0 | 0 |
+| 单元测试 | **634/634** | — |
+
+### 代码规模
+
+| 指标 | 数值 |
+|---|---|
+| Rust 源文件 | 63 个模块 |
+| 总源码行数 | 62,059 行 |
+| L3 模块 | 22 |
+| L2 模块 | 22 |
+| L1 模块 | 22+ |
+| coreaction Actions | 58 structs（48 Ghidra ::apply 覆盖） |
+| 本次会话 commits | ~50 |
+
+---
+
+（以下为历史记录）
 
 ## 近期进展（2026-06-26 会话）
 
