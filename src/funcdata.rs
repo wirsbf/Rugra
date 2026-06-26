@@ -10,6 +10,13 @@ use crate::op::{PcodeOpBank, PcodeOpRef};
 use crate::opcodes::OpCode;
 use crate::pcoderaw::PcodeOpRaw;
 use crate::space::AddressSpace;
+
+/// Funcdata flags (funcdata.hh:highlevel_flags).
+pub mod funcdata_flags {
+    /// Data-type analysis is being performed.
+    pub const TYPE_RECOVERY_ON: u32 = 1 << 0;
+}
+
 use crate::varnode::VarnodeBank;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
@@ -26,6 +33,9 @@ pub struct Funcdata {
     pub baseaddr: Address,
     /// Size of the function in bytes
     pub size: i32,
+
+    /// Bit-set of Funcdata flags (mirrors Ghidra's `flags` field).
+    pub flags: u32,
 
     /// Bank of all varnodes in this function
     pub vbank: VarnodeBank,
@@ -69,6 +79,7 @@ impl Funcdata {
             name: name.to_string(),
             baseaddr: addr,
             size,
+            flags: 0,
             vbank: VarnodeBank::new(),
             obank: PcodeOpBank::new(),
             bblocks: BlockGraph::new(),
@@ -86,6 +97,21 @@ impl Funcdata {
             external_prototypes: HashMap::new(),
             scope: None,
             callspecs: Vec::new(),
+        }
+    }
+
+    /// Is data-type analysis being performed? Faithful to
+    /// `Funcdata::isTypeRecoveryOn` (funcdata.hh:150).
+    pub fn is_type_recovery_on(&self) -> bool {
+        (self.flags & funcdata_flags::TYPE_RECOVERY_ON) != 0
+    }
+
+    /// Enable/disable type recovery. Faithful to `Funcdata::setTypeRecoveryOn`.
+    pub fn set_type_recovery_on(&mut self, on: bool) {
+        if on {
+            self.flags |= funcdata_flags::TYPE_RECOVERY_ON;
+        } else {
+            self.flags &= !funcdata_flags::TYPE_RECOVERY_ON;
         }
     }
 

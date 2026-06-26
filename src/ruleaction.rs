@@ -4368,6 +4368,181 @@ impl Rule for RuleBooleanUndistribute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
+/// Convert operations on zero-extended booleans to boolean operations.
+/// Faithful to Ghidra's `RuleBoolZext` (ruleaction.cc:3000-3124).
+///
+/// Detects patterns where a boolean value is zero-extended, multiplied by -1
+/// (all-ones mask), and then used in a comparison/logical op. Rewrites to use
+/// the original boolean directly with BOOL_AND/OR/XOR or BOOL_NEGATE.
+pub struct RuleBoolZext;
+
+impl RuleBoolZext {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleBoolZext {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleBoolZext::applyOp (ruleaction.cc:3015-3124).
+        let (bool_vn1, multop1_arc) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_ZEXT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let bool_vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !bool_vn1.read().unwrap().is_boolean_value(fd.is_type_recovery_on()) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let multop1 = out_vn.read().unwrap().lone_descend();
+            let multop1 = match multop1 { Some(m) => m, None => return Ok(action_status::NO_CHANGE) };
+            if multop1.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (bool_vn1, multop1)
+        };
+        // Check multop1's constant input == all-ones mask.
+        let (coeff, size) = {
+            let m1 = multop1_arc.read().unwrap();
+            let const_vn = match m1.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !const_vn.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let coeff = const_vn.read().unwrap().get_offset();
+            let const_size = const_vn.read().unwrap().get_size();
+            if coeff != calc_mask(const_size) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_size = m1.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            (coeff, out_size)
+        };
+        // Get the action op (loneDescend of multop1's output).
+        let out_arc = {
+            let m1 = multop1_arc.read().unwrap();
+            match m1.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let actionop_arc = {
+            let out_rg = out_arc.read().unwrap();
+            out_rg.lone_descend()
+        };
+        let actionop_arc = match actionop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+        let actionopc = actionop_arc.read().unwrap().opcode;
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let action_ref = crate::op::PcodeOpRef(actionop_arc.clone());
+
+        match actionopc {
+            OpCode::CPUI_INT_ADD => {
+                let (is_const_1, const_val) = {
+                    let a = actionop_arc.read().unwrap();
+                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let r = in1.read().unwrap();
+                    (r.is_constant(), r.get_offset())
+                };
+                if !is_const_1 || const_val != 1 {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                // Negate the boolean, rewrite op as COPY of negated, action as COPY.
+                let neg_vn = fd.op_bool_negate(bool_vn1.clone(), &follow, false);
+                fd.op_set_input(&follow, neg_vn, 0);
+                fd.op_remove_input(&action_ref, 1);
+                fd.op_set_opcode(&action_ref, OpCode::CPUI_COPY);
+                let zext_out = op_arc.read().unwrap().output.clone();
+                if let Some(zo) = zext_out {
+                    fd.op_set_input(&action_ref, zo, 0);
+                }
+                Ok(action_status::CHANGE)
+            }
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                let val = {
+                    let a = actionop_arc.read().unwrap();
+                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let r = in1.read().unwrap();
+                    if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                    r.get_offset()
+                };
+                let new_val = if val == coeff { 1 } else if val != 0 { return Ok(action_status::NO_CHANGE); } else { 0 };
+                fd.op_set_input(&action_ref, bool_vn1.clone(), 0);
+                let c = fd.new_constant(1, new_val);
+                fd.op_set_input(&action_ref, c, 1);
+                Ok(action_status::CHANGE)
+            }
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR => {
+                let opc = match actionopc {
+                    OpCode::CPUI_INT_AND => OpCode::CPUI_BOOL_AND,
+                    OpCode::CPUI_INT_OR => OpCode::CPUI_BOOL_OR,
+                    _ => OpCode::CPUI_BOOL_XOR,
+                };
+                // Find the other side's multop2.
+                let multop2_arc = {
+                    let a = actionop_arc.read().unwrap();
+                    let in0 = a.inrefs.get(0).cloned();
+                    let in1 = a.inrefs.get(1).cloned();
+                    // multop1 is on one side; find the other.
+                    let m1_out = multop1_arc.read().unwrap().output.as_ref().and_then(|o| {
+                        // Check if in0's def is multop1
+                        if let Some(i0) = &in0 {
+                            let i0_def = i0.read().unwrap().get_def();
+                            if let Some(d) = i0_def {
+                                if std::sync::Arc::ptr_eq(&d, &multop1_arc) {
+                                    return in1.as_ref().and_then(|v| v.read().unwrap().get_def());
+                                }
+                            }
+                        }
+                        in0.as_ref().and_then(|v| v.read().unwrap().get_def())
+                    });
+                    m1_out
+                };
+                let multop2_arc = match multop2_arc { Some(m) => m, None => return Ok(action_status::NO_CHANGE) };
+                if multop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let (coeff2, multop2_in0_def) = {
+                    let m2 = multop2_arc.read().unwrap();
+                    let in1 = match m2.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+                    let c2 = in1.read().unwrap().get_offset();
+                    if c2 != calc_mask(size) { return Ok(action_status::NO_CHANGE); }
+                    let in0_def = m2.inrefs.get(0).and_then(|v| v.read().unwrap().get_def());
+                    (c2, in0_def)
+                };
+                let _ = coeff2;
+                let zextop2_arc = match multop2_in0_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+                if zextop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let bool_vn2 = match zextop2_arc.read().unwrap().inrefs.get(0).cloned() {
+                    Some(v) => v,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                if !bool_vn2.read().unwrap().is_boolean_value(fd.is_type_recovery_on()) {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                // Build BOOL op on unextended booleans, then ZEXT the result.
+                let action_addr = actionop_arc.read().unwrap().get_addr();
+                let new_op = fd.new_op(2, action_addr);
+                let new_res = fd.new_unique_out(1, &new_op);
+                fd.op_set_opcode(&new_op, opc);
+                fd.op_set_input(&new_op, bool_vn1.clone(), 0);
+                fd.op_set_input(&new_op, bool_vn2.clone(), 1);
+                fd.op_insert_before(&new_op, &action_ref);
+                let new_zext = fd.new_op(1, action_addr);
+                let new_zout = fd.new_unique_out(size, &new_zext);
+                fd.op_set_opcode(&new_zext, OpCode::CPUI_INT_ZEXT);
+                fd.op_set_input(&new_zext, new_res, 0);
+                fd.op_insert_before(&new_zext, &action_ref);
+                fd.op_set_opcode(&action_ref, OpCode::CPUI_INT_MULT);
+                fd.op_set_input(&action_ref, new_zout, 0);
+                let c = fd.new_constant(size, calc_mask(size));
+                fd.op_set_input(&action_ref, c, 1);
+                Ok(action_status::CHANGE)
+            }
+            _ => Ok(action_status::NO_CHANGE),
+        }
+    }
+
+    fn get_name(&self) -> &str { "bool_zext" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

@@ -574,3 +574,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `is_match(left, right)` — 包装 BooleanMatch::evaluate，返回 `Some(is_flip)`
   - 算法：收集 4 个输入，用 isMatch 查找匹配对，处理 BOOL_OR flip（De Morgan），构建新比较 op + combine op
   - 依赖：BooleanMatch::evaluate ✅、op_bool_negate ✅
+
+## 2026-06-27（续 6）：RuleBoolZext 完整移植
+
+- **RuleBoolZext**：完整忠实移植 ruleaction.cc:3000-3124。将零扩展布尔值上的操作转换为布尔操作：
+  - 检测 INT_ZEXT(bool) → INT_MULT(*-1) → actionop 链
+  - INT_ADD(#1)：`zext(b) * -1 + 1` → `zext(!b)`（BOOL_NEGATE + COPY 传播）
+  - INT_EQUAL/INT_NOTEQUAL：将扩展布尔与 0/-1 比较改为未扩展布尔与 0/1 比较
+  - INT_AND/OR/XOR：两侧都是扩展布尔时，先做布尔运算再扩展
+  - 依赖：is_boolean_value ✅、is_type_recovery_on ✅、op_bool_negate ✅、lone_descend ✅

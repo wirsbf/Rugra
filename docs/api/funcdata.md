@@ -674,3 +674,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 ### 2026-06-27（续 2）：op_bool_negate
 
 - `op_bool_negate(vn, op, insert_after)` — `Funcdata::opBoolNegate`（funcdata_op.cc:560）：插入 BOOL_NOT（CPUI_BOOL_NEGATE）op 取反 vn，返回输出 varnode。insert_after 控制插入位置。解锁 RuleBooleanUndistribute/RuleBoolZext 等。
+
+### 2026-06-27（续 3）：is_type_recovery_on + flags
+
+- `is_type_recovery_on()` — `Funcdata::isTypeRecoveryOn`（funcdata.hh:150）：检查 TYPE_RECOVERY_ON 标志。
+- `set_type_recovery_on(on)` — 启用/禁用类型恢复。
+- 新增 `flags: u32` 字段 + `funcdata_flags::TYPE_RECOVERY_ON` 常量。解锁 RuleBoolZext。

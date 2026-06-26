@@ -156,7 +156,7 @@
 | `RulePullsubMulti` | 880 | ✅ **完整算法** — minMaxUse/replaceDescendants/findSubpiece/buildSubpiece/applyOp（ruleaction.cc:678-952）；hasLoopIn/isPrecisLo/Hi/isJoin 用保守默认 |
 | `RulePullsubIndirect` | 962 | INDIRECT 处理 |
 | `RuleBooleanNegate` | 2969 | isBooleanValue/isTypeRecoveryOn |
-| `RuleBoolZext` | 3015 | 后代追踪 |
+| `RuleBoolZext` | 3015 | ✅ **完整算法** — zext(bool)*-1 模式检测 + BOOL_NEGATE/比较/逻辑重写（ruleaction.cc:3000-3124）；is_type_recovery_on 已补 |
 | `RuleLogic2Bool` | 3138 | isBooleanValue |
 | `RuleIndirectCollapse` | 3177 | INDIRECT |
 | `RuleMultiCollapse` | 3254 | functionalEqualityLevel |
