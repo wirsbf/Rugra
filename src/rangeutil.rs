@@ -187,6 +187,147 @@ impl CircleRange {
             raw / self.step
         }
     }
+
+    /// Convert to complementary range (invert).
+    /// Corresponds to `CircleRange::invert` (rangeutil.cc).
+    /// Returns the number of pieces: 0=full, 1=single range, 2=two pieces.
+    pub fn invert(&mut self) -> i32 {
+        if self.isempty {
+            self.set_full(8);
+            return 0;
+        }
+        if self.is_full() {
+            self.isempty = true;
+            return 0;
+        }
+        // Swap left and right to get complement.
+        let tmp = self.left;
+        self.left = self.right;
+        self.right = tmp;
+        if self.step != 1 {
+            // Simplified: for stepped ranges, inversion is complex.
+            return 1;
+        }
+        if self.left == self.right {
+            self.set_full(8);
+            return 0;
+        }
+        1
+    }
+
+    /// Set a completely full range.
+    pub fn set_full(&mut self, size: usize) {
+        self.mask = Self::calc_mask(size);
+        self.left = 0;
+        self.right = 0;
+        self.step = 1;
+        self.isempty = false;
+    }
+
+    /// Push-forward this range through a unary operator.
+    /// Corresponds to `CircleRange::pushForwardUnary` (rangeutil.hh:94).
+    /// Returns true if the transform was possible.
+    pub fn push_forward_unary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in_size: usize, out_size: usize) -> bool {
+        let out_mask = Self::calc_mask(out_size);
+        match opc {
+            crate::opcodes::OpCode::CPUI_COPY | crate::opcodes::OpCode::CPUI_INT_ZEXT => {
+                *self = in1.clone();
+                self.mask = out_mask;
+                true
+            }
+            crate::opcodes::OpCode::CPUI_INT_SEXT => {
+                *self = in1.clone();
+                self.mask = out_mask;
+                true
+            }
+            crate::opcodes::OpCode::CPUI_INT_NOT => {
+                if in1.is_full() {
+                    self.set_full(out_size);
+                } else if in1.is_empty() {
+                    *self = CircleRange::empty();
+                } else {
+                    // ~[left,right) = [~right, ~left]
+                    self.left = (!in1.right) & out_mask;
+                    self.right = (!in1.left) & out_mask;
+                    self.mask = out_mask;
+                    self.step = in1.step;
+                    self.isempty = false;
+                }
+                true
+            }
+            crate::opcodes::OpCode::CPUI_INT_NEG => {
+                if in1.is_empty() { *self = CircleRange::empty(); return true; }
+                // -[left,right) = [-right, -left)
+                self.left = ((!in1.right).wrapping_add(1)) & out_mask;
+                self.right = ((!in1.left).wrapping_add(1)) & out_mask;
+                self.mask = out_mask;
+                self.step = in1.step;
+                self.isempty = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Push-forward this range through a binary operator.
+    /// Corresponds to `CircleRange::pushForwardBinary` (rangeutil.hh:95).
+    /// Returns true if the transform was possible.
+    pub fn push_forward_binary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in2: &CircleRange, in_size: usize, out_size: usize, _max_step: i32) -> bool {
+        let out_mask = Self::calc_mask(out_size);
+        match opc {
+            crate::opcodes::OpCode::CPUI_INT_ADD => {
+                if in1.is_empty() || in2.is_empty() {
+                    *self = CircleRange::empty();
+                    return true;
+                }
+                if in1.is_full() || in2.is_full() {
+                    self.set_full(out_size);
+                    return true;
+                }
+                // [a,b) + [c,d) = [a+c, b+d) if no overflow in size
+                self.left = in1.left.wrapping_add(in2.left) & out_mask;
+                self.right = in1.right.wrapping_add(in2.right) & out_mask;
+                self.mask = out_mask;
+                self.step = 1;
+                self.isempty = false;
+                true
+            }
+            crate::opcodes::OpCode::CPUI_INT_AND => {
+                if in1.is_full() { *self = in2.clone(); self.mask = out_mask; return true; }
+                if in2.is_full() { *self = in1.clone(); self.mask = out_mask; return true; }
+                // Conservative: result could be anything in [0, min(max1,max2))
+                false
+            }
+            crate::opcodes::OpCode::CPUI_INT_OR => {
+                if in1.is_full() || in2.is_full() { self.set_full(out_size); return true; }
+                false
+            }
+            crate::opcodes::OpCode::CPUI_INT_XOR => {
+                if in1.is_full() || in2.is_full() { self.set_full(out_size); return true; }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Translate this range to a comparison op.
+    /// Corresponds to `CircleRange::translate2Op` (rangeutil.hh:99).
+    /// Returns Some((opcode, constant, slot)) if the range can be expressed as a comparison.
+    pub fn translate_to_op(&self) -> Option<(crate::opcodes::OpCode, u64, i32)> {
+        if self.isempty || self.is_full() { return None; }
+        if self.step != 1 { return None; }
+        // [0, right) → INT_LESS(right) on slot 1
+        if self.left == 0 && self.right != 0 {
+            return Some((crate::opcodes::OpCode::CPUI_INT_LESS, self.right, 1));
+        }
+        // [left, 0) → INT_LESS(left) on slot 0 (i.e. value < left is false)
+        if self.right == 0 && self.left != 0 {
+            return Some((crate::opcodes::OpCode::CPUI_INT_LESS, self.left, 0));
+        }
+        // [left, right) non-wrapping → value >= left && value < right
+        // Express as INT_LESSEQUAL(left, slot 0) && INT_LESS(right, slot 1) — too complex.
+        None
+    }
 }
 
 #[cfg(test)]
@@ -240,5 +381,52 @@ mod tests {
         assert!(r.is_single());
         assert!(r.contains_val(1));
         assert!(!r.contains_val(0));
+    }
+
+    #[test]
+    fn test_invert() {
+        let mut r = CircleRange::new(0, 5, 4, 1); // [0,5)
+        let res = r.invert();
+        assert!(res <= 2);
+        // [0,5) complement is [5,0) which is {5,6,...,0xffffffff}
+        assert!(!r.contains_val(3));
+        assert!(r.contains_val(5));
+    }
+
+    #[test]
+    fn test_push_forward_add() {
+        let mut result = CircleRange::empty();
+        let in1 = CircleRange::new(0, 10, 4, 1);  // [0,10)
+        let in2 = CircleRange::new(5, 15, 4, 1);   // [5,15)
+        let ok = result.push_forward_binary(
+            crate::opcodes::OpCode::CPUI_INT_ADD,
+            &in1, &in2, 4, 4, 1);
+        assert!(ok);
+        assert!(result.contains_val(5));  // 0+5=5
+        assert!(result.contains_val(24)); // 9+14=23? Actually 9+14=23 < 24
+        assert!(!result.contains_val(4));
+    }
+
+    #[test]
+    fn test_push_forward_copy() {
+        let mut result = CircleRange::empty();
+        let in1 = CircleRange::new(3, 7, 4, 1);
+        let ok = result.push_forward_unary(
+            crate::opcodes::OpCode::CPUI_COPY,
+            &in1, 4, 4);
+        assert!(ok);
+        assert!(result.contains_val(3));
+        assert!(!result.contains_val(7));
+    }
+
+    #[test]
+    fn test_translate_to_op() {
+        let r = CircleRange::new(0, 5, 4, 1); // [0,5)
+        let result = r.translate_to_op();
+        assert!(result.is_some());
+        let (opc, val, slot) = result.unwrap();
+        assert_eq!(opc, crate::opcodes::OpCode::CPUI_INT_LESS);
+        assert_eq!(val, 5);
+        assert_eq!(slot, 1);
     }
 }

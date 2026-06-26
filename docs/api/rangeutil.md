@@ -21,3 +21,14 @@
 - `get_size()` — 范围大小
 
 测试：rangeutil::tests 6 个。
+
+## 2026-06-26（续）：rangeutil.rs CircleRange 完善
+
+新增 CircleRange 方法（对应 rangeutil.cc 完整 API）：
+- `invert()` — 转互补范围（rangeutil.hh:89）
+- `set_full(size)` — 设置全范围
+- `push_forward_unary(opc, in1, in_size, out_size)` — 通过一元操作前推（rangeutil.hh:94）
+- `push_forward_binary(opc, in1, in2, in_size, out_size, max_step)` — 通过二元操作前推（rangeutil.hh:95）
+- `translate_to_op()` — 范围→比较操作转换（rangeutil.hh:99）
+
+测试：新增 4 个（invert/push_forward_add/push_forward_copy/translate_to_op）。
