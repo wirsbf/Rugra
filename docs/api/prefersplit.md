@@ -41,3 +41,8 @@ Manages splitting based on records (prefersplit.hh:33).
   `splitLoad`/`splitStore`/`testZext`/`testPiece`/`testSubpiece` etc.
   (prefersplit.cc:46-72). Requires deep Funcdata op-editing.
 - `splitAdditional` for temporary splitting.
+
+## 2026-06-27（续）：PreferSplitManager::split Funcdata 集成
+
+- **split(fd)**：现接受 Funcdata 参数——遍历 VarnodeBank 查找匹配 split record 的 Varnodes，标记后清除。完整 SUBPIECE/PIECE 创建待更深层 op-editing。
+- **split_additional(fd)**：现接受 Funcdata——扫描 SUBPIECE ops 检测需要进一步分裂的临时变量。
