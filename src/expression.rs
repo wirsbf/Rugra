@@ -244,6 +244,278 @@ impl AddExpression {
 }
 
 // ===========================================================================
+// BooleanMatch — expression.cc:57-216
+// ===========================================================================
+
+/// Boolean value correlation codes. Faithful to the enum in
+/// `BooleanMatch` (expression.hh:84-88).
+pub mod boolean_match {
+    /// Pair always holds the same value.
+    pub const SAME: i32 = 1;
+    /// Pair always holds complementary values.
+    pub const COMPLEMENTARY: i32 = 2;
+    /// Pair values are uncorrelated.
+    pub const UNCORRELATED: i32 = 3;
+}
+
+/// Check if two comparison ops are complements via the `x < n, n-1 < x`
+/// pattern. Faithful to `BooleanMatch::sameOpComplement`
+/// (expression.cc:57-86).
+fn same_op_complement(
+    bin1op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    bin2op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+) -> bool {
+    use crate::address::signbit_negative;
+    let op1 = bin1op.read().unwrap();
+    let op2 = bin2op.read().unwrap();
+    let opcode = op1.opcode;
+    if opcode == OpCode::CPUI_INT_SLESS || opcode == OpCode::CPUI_INT_LESS {
+        // Find constant slot in op1.
+        let constslot = if op1.inrefs.get(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+            1
+        } else {
+            0
+        };
+        // op1.inrefs[constslot] must be constant.
+        if !op1.inrefs.get(constslot).map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+            return false;
+        }
+        // op2.inrefs[1-constslot] must be constant.
+        if !op2.inrefs.get(1 - constslot).map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+            return false;
+        }
+        // The non-constant inputs must match.
+        let vn1 = &op1.inrefs[1 - constslot];
+        let vn2 = &op2.inrefs[constslot];
+        if !varnode_same(vn1, vn2) {
+            return false;
+        }
+        let mut val1 = op1.inrefs[constslot].read().unwrap().get_offset();
+        let mut val2 = op2.inrefs[1 - constslot].read().unwrap().get_offset();
+        if constslot != 0 {
+            std::mem::swap(&mut val2, &mut val1);
+        }
+        if val1.wrapping_add(1) != val2 {
+            return false;
+        }
+        if val2 == 0 && opcode == OpCode::CPUI_INT_LESS {
+            return false; // Corner case for unsigned.
+        }
+        if opcode == OpCode::CPUI_INT_SLESS {
+            let sz = op1.inrefs[constslot].read().unwrap().get_size();
+            if signbit_negative(val2, sz) && !signbit_negative(val1, sz) {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// Check if two Varnodes hold the same value. Faithful to
+/// `BooleanMatch::varnodeSame` (expression.cc:93-100).
+fn varnode_same(
+    a: &std::sync::Arc<std::sync::RwLock<Varnode>>,
+    b: &std::sync::Arc<std::sync::RwLock<Varnode>>,
+) -> bool {
+    if std::sync::Arc::ptr_eq(a, b) {
+        return true;
+    }
+    let ra = a.read().unwrap();
+    let rb = b.read().unwrap();
+    if ra.is_constant() && rb.is_constant() {
+        return ra.get_offset() == rb.get_offset();
+    }
+    false
+}
+
+/// Determine if two boolean Varnodes hold related values. Faithful to
+/// `BooleanMatch::evaluate` (expression.cc:111-216).
+///
+/// Returns `boolean_match::SAME`, `boolean_match::COMPLEMENTARY`, or
+/// `boolean_match::UNCORRELATED`. Trees constructing each Varnode are
+/// examined up to `depth` levels.
+pub fn boolean_match_evaluate(
+    vn1: &std::sync::Arc<std::sync::RwLock<Varnode>>,
+    vn2: &std::sync::Arc<std::sync::RwLock<Varnode>>,
+    depth: i32,
+) -> i32 {
+    use crate::opcodes::get_booleanflip;
+    if std::sync::Arc::ptr_eq(vn1, vn2) {
+        return boolean_match::SAME;
+    }
+    // Handle BOOL_NEGATE on vn1.
+    let (op1, opc1) = {
+        let r = vn1.read().unwrap();
+        if r.is_written() {
+            let (def, opc) = match r.get_def() {
+                Some(d) => {
+                    let opc = d.read().unwrap().opcode;
+                    (d, opc)
+                }
+                None => return boolean_match::UNCORRELATED,
+            };
+            if opc == OpCode::CPUI_BOOL_NOT {
+                // Recurse with flipped result.
+                let in0 = def.read().unwrap().inrefs.get(0).cloned();
+                drop(r);
+                if let Some(in0) = in0 {
+                    let res = boolean_match_evaluate(&in0, vn2, depth);
+                    return if res == boolean_match::SAME {
+                        boolean_match::COMPLEMENTARY
+                    } else if res == boolean_match::COMPLEMENTARY {
+                        boolean_match::SAME
+                    } else {
+                        res
+                    };
+                }
+                return boolean_match::UNCORRELATED;
+            }
+            (Some(def), opc)
+        } else {
+            drop(r);
+            (None, OpCode::CPUI_MAX)
+        }
+    };
+    // Handle BOOL_NEGATE on vn2.
+    let op2 = {
+        let r = vn2.read().unwrap();
+        if r.is_written() {
+            let (def, opc) = match r.get_def() {
+                Some(d) => {
+                    let opc = d.read().unwrap().opcode;
+                    (d, opc)
+                }
+                None => return boolean_match::UNCORRELATED,
+            };
+            if opc == OpCode::CPUI_BOOL_NOT {
+                let in0 = def.read().unwrap().inrefs.get(0).cloned();
+                drop(r);
+                if let Some(in0) = in0 {
+                    let res = boolean_match_evaluate(vn1, &in0, depth);
+                    return if res == boolean_match::SAME {
+                        boolean_match::COMPLEMENTARY
+                    } else if res == boolean_match::COMPLEMENTARY {
+                        boolean_match::SAME
+                    } else {
+                        res
+                    };
+                }
+                return boolean_match::UNCORRELATED;
+            }
+            Some(def)
+        } else {
+            drop(r);
+            return boolean_match::UNCORRELATED;
+        }
+    };
+    let op1 = match op1 { Some(o) => o, None => return boolean_match::UNCORRELATED };
+    let op2 = match op2 { Some(o) => o, None => return boolean_match::UNCORRELATED };
+    let opc2 = op2.read().unwrap().opcode;
+
+    // Both must be bool-output ops.
+    if !op1.read().unwrap().is_bool_output() || !op2.read().unwrap().is_bool_output() {
+        return boolean_match::UNCORRELATED;
+    }
+
+    // Check BOOL_AND/OR/XOR recursion.
+    if depth != 0 && matches!(opc1, OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR) {
+        if matches!(opc2, OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR) {
+            if opc1 == opc2
+                || (opc1 == OpCode::CPUI_BOOL_AND && opc2 == OpCode::CPUI_BOOL_OR)
+                || (opc1 == OpCode::CPUI_BOOL_OR && opc2 == OpCode::CPUI_BOOL_AND)
+            {
+                let op1_in0 = op1.read().unwrap().inrefs.get(0).cloned();
+                let op1_in1 = op1.read().unwrap().inrefs.get(1).cloned();
+                let op2_in0 = op2.read().unwrap().inrefs.get(0).cloned();
+                let op2_in1 = op2.read().unwrap().inrefs.get(1).cloned();
+                let (Some(op1_in0), Some(op1_in1), Some(op2_in0), Some(op2_in1)) =
+                    (op1_in0, op1_in1, op2_in0, op2_in1)
+                else {
+                    return boolean_match::UNCORRELATED;
+                };
+                let mut pair1 = boolean_match_evaluate(&op1_in0, &op2_in0, depth - 1);
+                let pair2;
+                if pair1 == boolean_match::UNCORRELATED {
+                    pair1 = boolean_match_evaluate(&op1_in0, &op2_in1, depth - 1);
+                    if pair1 == boolean_match::UNCORRELATED {
+                        return boolean_match::UNCORRELATED;
+                    }
+                    pair2 = boolean_match_evaluate(&op1_in1, &op2_in0, depth - 1);
+                } else {
+                    let p2 = boolean_match_evaluate(&op1_in1, &op2_in1, depth - 1);
+                    pair2 = p2;
+                }
+                if pair2 == boolean_match::UNCORRELATED {
+                    return boolean_match::UNCORRELATED;
+                }
+                if opc1 == opc2 {
+                    if pair1 == boolean_match::SAME && pair2 == boolean_match::SAME {
+                        return boolean_match::SAME;
+                    } else if opc1 == OpCode::CPUI_BOOL_XOR {
+                        if pair1 == boolean_match::COMPLEMENTARY && pair2 == boolean_match::COMPLEMENTARY {
+                            return boolean_match::SAME;
+                        }
+                        return boolean_match::COMPLEMENTARY;
+                    }
+                } else {
+                    // Must be BOOL_AND and BOOL_OR.
+                    if pair1 == boolean_match::COMPLEMENTARY && pair2 == boolean_match::COMPLEMENTARY {
+                        return boolean_match::COMPLEMENTARY; // De Morgan's Law.
+                    }
+                }
+            }
+        }
+    } else {
+        // Two boolean output ops, compare directly.
+        if opc1 == opc2 {
+            let num_inputs = op1.read().unwrap().inrefs.len();
+            let mut same_op = true;
+            for i in 0..num_inputs {
+                let in1 = &op1.read().unwrap().inrefs[i];
+                let in2 = &op2.read().unwrap().inrefs[i];
+                if !varnode_same(in1, in2) {
+                    same_op = false;
+                    break;
+                }
+            }
+            if same_op {
+                return boolean_match::SAME;
+            }
+            if same_op_complement(&op1, &op2) {
+                return boolean_match::COMPLEMENTARY;
+            }
+            return boolean_match::UNCORRELATED;
+        }
+        // Check if binary ops are complements.
+        let mut reorder = false;
+        let flip_opc = get_booleanflip(opc2, &mut reorder);
+        if opc1 != flip_opc {
+            return boolean_match::UNCORRELATED;
+        }
+        let slot1 = 0;
+        let slot2 = if reorder { 1 } else { 0 };
+        let in1_0 = op1.read().unwrap().inrefs.get(slot1).cloned();
+        let in2_slot2 = op2.read().unwrap().inrefs.get(slot2).cloned();
+        let in1_1 = op1.read().unwrap().inrefs.get(1 - slot1).cloned();
+        let in2_1ms = op2.read().unwrap().inrefs.get(1 - slot2).cloned();
+        match (in1_0, in2_slot2, in1_1, in2_1ms) {
+            (Some(a), Some(b), Some(c), Some(d)) => {
+                if !varnode_same(&a, &b) {
+                    return boolean_match::UNCORRELATED;
+                }
+                if !varnode_same(&c, &d) {
+                    return boolean_match::UNCORRELATED;
+                }
+                return boolean_match::COMPLEMENTARY;
+            }
+            _ => return boolean_match::UNCORRELATED,
+        }
+    }
+    boolean_match::UNCORRELATED
+}
+
+// ===========================================================================
 // functionalEqualityLevel — expression.cc:404-512
 // ===========================================================================
 
@@ -468,6 +740,45 @@ mod tests {
         let v = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
         let r = functional_equality_level(&v, &v);
         assert_eq!(r.code, 0);
+    }
+
+    #[test]
+    fn test_boolean_match_same_pointer() {
+        let v = Arc::new(RwLock::new(Varnode::new_register(0x10, 1)));
+        assert_eq!(boolean_match_evaluate(&v, &v, 1), boolean_match::SAME);
+    }
+
+    #[test]
+    fn test_boolean_match_uncorrelated_constants() {
+        let c1 = Arc::new(RwLock::new(Varnode::new_constant(1, 1)));
+        let c2 = Arc::new(RwLock::new(Varnode::new_constant(0, 1)));
+        // Two different constants, neither written → uncorrelated.
+        assert_eq!(boolean_match_evaluate(&c1, &c2, 1), boolean_match::UNCORRELATED);
+    }
+
+    #[test]
+    fn test_boolean_match_complement_via_flip() {
+        // V == 5  and  V != 5  are complementary.
+        use crate::address::SeqNum;
+        let v = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        let c5 = Arc::new(RwLock::new(Varnode::new_constant(5, 4)));
+        let eq_op = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_EQUAL)));
+        eq_op.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        eq_op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        let eq_out = Arc::new(RwLock::new(Varnode::new_register(0x20, 1)));
+        eq_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        eq_op.write().unwrap().output = Some(eq_out.clone());
+        eq_out.write().unwrap().def = Some(Arc::downgrade(&eq_op));
+
+        let ne_op = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_NOTEQUAL)));
+        ne_op.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+        ne_op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        let ne_out = Arc::new(RwLock::new(Varnode::new_register(0x21, 1)));
+        ne_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        ne_op.write().unwrap().output = Some(ne_out.clone());
+        ne_out.write().unwrap().def = Some(Arc::downgrade(&ne_op));
+
+        assert_eq!(boolean_match_evaluate(&eq_out, &ne_out, 1), boolean_match::COMPLEMENTARY);
     }
 
     #[test]

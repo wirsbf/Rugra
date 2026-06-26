@@ -55,3 +55,27 @@
 - 用于 `ActionMultiCse::findMatch`（coreaction.cc:807）和 `ActionBlockStructure` 的 CSE 检测（blockaction.cc:1936）。
 
 测试：expression::tests 新增 5 个（same_pointer/constants_equal/constants_unequal/different_sizes/free_varnodes）。
+
+## 2026-06-27（续 2）：BooleanMatch — expression.cc:57-216
+
+完整移植 Ghidra 的 `BooleanMatch`（布尔值相关性分析）。
+
+### `pub fn boolean_match_evaluate(vn1, vn2, depth) -> i32`
+判断两个布尔 Varnode 是否持有相关值。忠实移植 expression.cc:111-216。
+返回 `boolean_match::SAME`(1) / `COMPLEMENTARY`(2) / `UNCORRELATED`(3)。
+
+### `pub mod boolean_match`
+常量：`SAME = 1`, `COMPLEMENTARY = 2`, `UNCORRELATED = 3`。
+
+### 算法细节
+- **BOOL_NEGATE 递归**：如果任一 vn 由 BOOL_NOT 定义，递归评估并翻转结果（same↔complementary）。
+- **BOOL_AND/OR/XOR 递归**：对深度 > 0，递归评估输入对，应用德摩根律。
+- **直接比较**：相同 opcode → varnodeSame 检查所有输入 → same；sameOpComplement 检查 x<n, n-1<x 模式 → complementary。
+- **翻转比较**：get_booleanflip 检查互补运算符对（INT_EQUAL/INT_NOTEQUAL, INT_LESS/INT_LESSEQUAL 等）。
+
+### 辅助函数
+- `varnode_same(a, b)` — expression.cc:93-100：相同指针或相同常量值。
+- `same_op_complement(bin1op, bin2op)` — expression.cc:57-86：检查 INT_LESS/INT_SLESS 的 x<n, n-1<x 互补模式。
+
+测试：expression::tests 新增 3 个（same_pointer/uncorrelated_constants/complement_via_flip）。
+解锁 RuleBooleanUndistribute/RuleBooleanDedup 的完整 De Morgan 定律实现。
