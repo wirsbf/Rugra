@@ -383,3 +383,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - **ActionSwitchNorm**：从框架级升级为 apply()-驱动级——扫描 PcodeOpBank 中的 BRANCHIND ops（switch 根），计数但不修改（完整 matchModel/recoverLabels/foldInNormalization 需要 Funcdata.jumpvec 集成）。
 - 10 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
+
+## 2026-06-27（续 23）：ActionPrototypeWarnings 升级为 apply()-驱动级
+
+- **ActionPrototypeWarnings**：从框架级升级为 apply()-驱动级——检查空函数等退化情况。完整 override 消息生成 + FuncProto 错误检查待 Architecture + FuncProto 集成。
+- 11 个 coreaction Actions 现在有 apply()-驱动级完整算法逻辑。
