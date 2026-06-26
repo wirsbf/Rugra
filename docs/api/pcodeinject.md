@@ -25,3 +25,13 @@ P-code 注入引擎。对应 Ghidra 的 `pcodeinject.hh`。
 - `register_payload(payload) -> id` / `get_payload(name)` / `get_id(name)` / `num_payloads()`
 
 测试：pcodeinject::tests 3 个。
+
+## 2026-06-26（续）：pcodeinject.rs 完善实现
+
+新增完整注入基础设施：
+- `InjectPayload::add_input/add_output/get_input/get_output` — 参数管理
+- `InjectContext` — 注入上下文（base_addr/next_addr/call_addr/input_list/output）（pcodeinject.hh:79）
+- `PcodeEmit` trait — 注入操作发射回调
+- `PcodeEmitArray` — 内存收集发射器（dump + ops 数组）
+
+测试：新增 3 个（inject_context + pcode_emit_array + payload_add_params）。
