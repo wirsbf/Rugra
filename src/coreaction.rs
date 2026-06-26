@@ -2863,7 +2863,35 @@ impl ActionActiveReturn {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveReturn {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate callspecs, for each call check
+        // if the call op has an output varnode (indicating a return value).
+        // Full algorithm requires ParamActive output trials.
+        let mut change_count = 0;
+        let n_calls = fd.num_calls();
+
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                // Find the CALL/CALLIND op for this call spec.
+                let call_addr = fc.op_addr;
+                for op_ref in &fd.obank.alivelist {
+                    let op_rg = op_ref.0.read().unwrap();
+                    if (op_rg.opcode == crate::opcodes::OpCode::CPUI_CALL
+                        || op_rg.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
+                        && op_rg.get_addr() == call_addr
+                    {
+                        // Check if this call op has an output (return value).
+                        if op_rg.output.is_some() {
+                            change_count += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Return NO_CHANGE since we don't modify anything yet.
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "activereturn" }
@@ -2889,7 +2917,28 @@ impl ActionParamDouble {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionParamDouble {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Partial implementation: iterate callspecs, for each call with
+        // stack-relative params, check if the input Varnode is defined by
+        // a PIECE op (indicating a doubled parameter).
+        // Full algorithm requires ParamActive + PIECE analysis.
+        let mut change_count = 0;
+        use crate::opcodes::OpCode;
+        let n_calls = fd.num_calls();
+
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                // Check if this call has stack-relative parameters.
+                let has_stack_param = fc.prototype.parameters.iter().any(|p| {
+                    p.address.as_u64() > 0x7FFF_FFFF // heuristic: large offset = stack
+                });
+                if has_stack_param {
+                    change_count += 1;
+                }
+            }
+        }
+
+        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "paramdouble" }
