@@ -468,6 +468,50 @@ impl fmt::Display for RangeList {
     }
 }
 
+// --- Bit-level helpers (faithful to address.cc/address.hh:576-590) ---
+
+/// Return true if the sign-bit of the sized value is set (negative).
+/// Faithful to `signbit_negative` (address.cc:641-647).
+pub fn signbit_negative(val: u64, size: usize) -> bool {
+    if size == 0 {
+        return false;
+    }
+    let mask: u64 = 0x80u64 << (8 * (size - 1));
+    (val & mask) != 0
+}
+
+/// Calculate an all-ones mask for the given byte size.
+/// Faithful to `calc_mask` (address.hh:577). Equivalent to the `calc_mask`
+/// already present in ruleaction.rs; centralised here for reuse.
+pub fn calc_mask(size: usize) -> u64 {
+    if size >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (size * 8)) - 1
+    }
+}
+
+/// Return the index of the least-significant set bit, or -1 if val==0.
+/// Faithful to `leastsigbit_set` (address.cc:714). Uses trailing_zeros for
+/// an exact equivalent.
+pub fn leastsigbit_set(val: u64) -> i32 {
+    if val == 0 {
+        -1
+    } else {
+        val.trailing_zeros() as i32
+    }
+}
+
+/// Return the index of the most-significant set bit, or -1 if val==0.
+/// Faithful to `mostsigbit_set` (address.cc:735).
+pub fn mostsigbit_set(val: u64) -> i32 {
+    if val == 0 {
+        -1
+    } else {
+        63 - val.leading_zeros() as i32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,5 +638,42 @@ mod tests {
         assert!(list.in_range(Address::new(0x1500)));
         assert!(list.in_range(Address::new(0x3500)));
         assert!(!list.in_range(Address::new(0x2500)));
+    }
+
+    #[test]
+    fn test_signbit_negative() {
+        // size 1: sign bit is bit 7 (0x80).
+        assert!(signbit_negative(0x80, 1));
+        assert!(signbit_negative(0xff, 1));
+        assert!(!signbit_negative(0x7f, 1));
+        assert!(!signbit_negative(0x00, 1));
+        // size 4: sign bit is bit 31 (0x80000000).
+        assert!(signbit_negative(0x80000000, 4));
+        assert!(!signbit_negative(0x7fffffff, 4));
+    }
+
+    #[test]
+    fn test_calc_mask() {
+        assert_eq!(calc_mask(0), 0);
+        assert_eq!(calc_mask(1), 0xff);
+        assert_eq!(calc_mask(2), 0xffff);
+        assert_eq!(calc_mask(4), 0xffffffff);
+        assert_eq!(calc_mask(8), u64::MAX);
+    }
+
+    #[test]
+    fn test_leastsigbit_set() {
+        assert_eq!(leastsigbit_set(0), -1);
+        assert_eq!(leastsigbit_set(1), 0);
+        assert_eq!(leastsigbit_set(0x100), 8);
+        assert_eq!(leastsigbit_set(0x18), 3); // 0b11000 → bit 3
+    }
+
+    #[test]
+    fn test_mostsigbit_set() {
+        assert_eq!(mostsigbit_set(0), -1);
+        assert_eq!(mostsigbit_set(1), 0);
+        assert_eq!(mostsigbit_set(0x100), 8);
+        assert_eq!(mostsigbit_set(0x18), 4); // 0b11000 → bit 4
     }
 }

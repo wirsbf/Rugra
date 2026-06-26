@@ -1670,6 +1670,72 @@ impl Rule for RuleTrivialShift {
     }
 }
 
+/// Convert INT_SLESS to INT_LESS when comparing known-positive values.
+///
+/// Faithful to Ghidra's `RuleSlessToLess` (ruleaction.cc:2548-2573). If the
+/// non-zero masks of both operands indicate their sign-bits are zero (i.e.
+/// both are known non-negative), the signed comparison is equivalent to the
+/// unsigned one. Also handles SLESSEQUAL → LESSEQUAL.
+pub struct RuleSlessToLess;
+
+impl RuleSlessToLess {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Rule for RuleSlessToLess {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let (in0_nzm, in1_nzm, in0_size, is_sless) = {
+            let op = op_arc.read().unwrap();
+            let in0 = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let in1 = match op.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let sz;
+            let n0;
+            let n1;
+            {
+                let i0 = in0.read().unwrap();
+                sz = i0.get_size();
+                n0 = i0.get_nz_mask();
+            }
+            {
+                let i1 = in1.read().unwrap();
+                n1 = i1.get_nz_mask();
+            }
+            (n0, n1, sz, op.opcode == OpCode::CPUI_INT_SLESS)
+        };
+        // If either operand's sign-bit could be set, we cannot convert.
+        if crate::address::signbit_negative(in0_nzm, in0_size) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if crate::address::signbit_negative(in1_nzm, in0_size) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let new_code = if is_sless {
+            OpCode::CPUI_INT_LESS
+        } else {
+            OpCode::CPUI_INT_LESSEQUAL
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&follow, new_code);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "sless_to_less"
+    }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2809,5 +2875,57 @@ mod tests {
         let rule = RuleTrivialShift::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleSlessToLess (ruleaction.cc:2548) ---
+
+    #[test]
+    fn test_sless_to_less_positive_constants() {
+        // INT_SLESS(5, 10) — both positive constants → INT_LESS
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_constant(4, 5);
+        let b = fd.vbank.create_constant(4, 10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        op.write().unwrap().inrefs = vec![a, b];
+        let rule = RuleSlessToLess::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_LESS);
+    }
+
+    #[test]
+    fn test_sless_to_less_negative_constant_no_change() {
+        // INT_SLESS(0xffffffff, 10) — first operand negative → no change
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_constant(4, 0xffffffff);
+        let b = fd.vbank.create_constant(4, 10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        op.write().unwrap().inrefs = vec![a, b];
+        let rule = RuleSlessToLess::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_slessequal_to_lessequal_positive() {
+        // INT_SLESSEQUAL(5, 10) — both positive → INT_LESSEQUAL
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_constant(4, 5);
+        let b = fd.vbank.create_constant(4, 10);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SLESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![a, b];
+        let rule = RuleSlessToLess::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_INT_LESSEQUAL);
     }
 }

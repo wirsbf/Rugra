@@ -217,3 +217,19 @@ INT_LESSEQUAL 与极值常量的简化：
 - INT_SRIGHT 超 size 不变（无法预测符号位）
 
 测试：ruleaction::tests +4（DoubleSub 折叠；TrivialShift 移0/超size归零/sright超size不变）。
+
+### 2026-06-26（续）：bit helpers + get_nz_mask + RuleSlessToLess
+
+#### Bit 助手（address.rs，对应 address.cc:641-745）
+- `signbit_negative(val, size)` — address.cc:641，符号位是否为负
+- `calc_mask(size)` — address.hh:577，全1掩码
+- `leastsigbit_set(val)` — address.cc:714，最低有效位索引（-1 若 0）
+- `mostsigbit_set(val)` — address.cc:735，最高有效位索引
+
+#### `Varnode::get_nz_mask()`（varnode.hh:231）
+非零掩码。Ghidra 由 Heritage/Cover 维护；Rugra 当前保守近似（常量=值，其他=calc_mask(size)）。
+
+#### `pub struct RuleSlessToLess`（ruleaction.cc:2548-2573）
+当两操作数的 NZMask 表明符号位为 0（均为已知非负）时，将 INT_SLESS→INT_LESS、INT_SLESSEQUAL→INT_LESSEQUAL。
+
+测试：address.rs +4（signbit_negative/calc_mask/leastsigbit/mostsigbit）；ruleaction::tests +3（SlessToLess 正常/负不变/Slessequal）。

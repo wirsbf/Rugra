@@ -629,3 +629,8 @@
 - `is_illegal_input`（input 置而 directwrite 清，varnode.hh:240）
 
 测试：varnode::tests 4 个新增（mark、explicit/implied、addr_tied 双标志、illegal_input）。
+
+## 2026-06-26（续）：get_nz_mask
+
+- `get_nz_mask(&self) -> u64`（varnode.hh:231）：非零掩码。Ghidra 由 Heritage/Cover 维护；
+  Rugra 当前保守近似（常量=值，其他=calc_mask(size)）。解锁 RuleSlessToLess 等 NZM 相关 Rule。

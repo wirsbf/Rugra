@@ -317,6 +317,25 @@ impl Varnode {
         (self.flags & (varnode_flags::INPUT | varnode_flags::DIRECTWRITE))
             == varnode_flags::INPUT
     }
+
+    /// Get the mask of bits known to be zero (non-zero mask).
+    /// Faithful to Ghidra's `Varnode::getNZMask` (varnode.hh:231). In Ghidra
+    /// this field (`nzm`) is maintained by Heritage/Cover. Until Rugra wires
+    /// that, we return a conservative approximation:
+    ///   - constants: the constant value (bits that are zero)
+    ///   - others:    calc_mask(size) (assume all bits could be non-zero)
+    pub fn get_nz_mask(&self) -> u64 {
+        if self.is_constant() {
+            self.get_offset()
+        } else {
+            let size = self.get_size();
+            if size >= 8 {
+                u64::MAX
+            } else {
+                (1u64 << (size * 8)) - 1
+            }
+        }
+    }
 }
 
 impl PartialEq for Varnode {

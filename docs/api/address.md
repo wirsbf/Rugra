@@ -237,3 +237,13 @@ Decode from string format (comma-separated ranges)
 
 Encode to string format (comma-separated ranges)
 
+
+## 2026-06-26：bit 助手（address.cc:641-745）
+
+新增与 Ghidra 一致的位级自由函数（解锁 RuleSlessToLess/RuleDoubleShift 等）：
+- `signbit_negative(val, size)` — address.cc:641，符号位是否置位（负）
+- `calc_mask(size)` — address.hh:577，给定字节数的全1掩码
+- `leastsigbit_set(val)` — address.cc:714，最低有效位置位索引（-1 若 0）
+- `mostsigbit_set(val)` — address.cc:735，最高有效位置位索引
+
+测试：address::tests +4。
