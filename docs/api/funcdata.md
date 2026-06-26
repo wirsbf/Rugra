@@ -631,3 +631,8 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `op_unset_output(op)` — `Funcdata::opUnsetOutput`：断开 op 输出 def 链。
 - `new_varnode_out(size, addr, op)` — `Funcdata::newVarnodeOut`：创建新输出 varnode 并关联 op。
 解锁 RuleLeftRight。
+
+### 2026-06-26（续）：replace_lessequal
+
+- `replace_lessequal(op) -> bool` — `Funcdata::replaceLessequal`（funcdata_op.cc:1029）：
+  `V <= c => V < c+1`，调整常量±1并改 opcode，带溢出保护。解锁 RuleIntLessEqual。

@@ -3769,6 +3769,30 @@ impl Rule for RuleLeftRight {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT] }
 }
 
+/// Convert INT_LESSEQUAL to INT_LESS: `V <= c  =>  V < c+1`.
+///
+/// Faithful to Ghidra's `RuleIntLessEqual` (ruleaction.cc:611-617). Delegates
+/// to Funcdata::replace_lessequal which adjusts the constant and changes the
+/// opcode, guarding against overflow edge cases.
+pub struct RuleIntLessEqual;
+
+impl RuleIntLessEqual {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleIntLessEqual {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        if fd.replace_lessequal(&crate::op::PcodeOpRef(op_arc.clone())) {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
+    }
+
+    fn get_name(&self) -> &str { "int_lessequal" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESSEQUAL, OpCode::CPUI_INT_SLESSEQUAL] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6310,5 +6334,42 @@ mod tests {
         assert_eq!(right_op.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT);
         // left_op should now be SUBPIECE.
         assert_eq!(left_op.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
+    }
+
+    // --- RuleIntLessEqual (ruleaction.cc:611) ---
+
+    #[test]
+    fn test_int_lessequal_to_less() {
+        // V <= 5 => V < 6
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(4, 5);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![v, c];
+        let rule = RuleIntLessEqual::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_LESS);
+        assert_eq!(o.inrefs[1].read().unwrap().get_val(), 6);
+    }
+
+    #[test]
+    fn test_int_lessequal_overflow_guard() {
+        // V <= 0xffffffff (size 4, unsigned max) => no change (c+1 overflows)
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let c = fd.vbank.create_constant(4, 0xffffffff);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESSEQUAL,
+        )));
+        op.write().unwrap().inrefs = vec![v, c];
+        let rule = RuleIntLessEqual::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

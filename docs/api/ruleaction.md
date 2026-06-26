@@ -461,3 +461,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 `(V << c) >> c => zext(sub(V, 0))`，`(V << c) s>> c => sext(sub(V, 0))`。当右移恰好抵消左移（同字节对齐量），pair 塌缩为零/符号扩展的 SUBPIECE。要求 shiftin 为 loneDescend。
 
 测试：ruleaction::tests +1（<<8 >>8 cancel → ZEXT + SUBPIECE）。
+
+### 2026-06-26（续）：RuleIntLessEqual + Funcdata::replace_lessequal
+
+#### Funcdata::replace_lessequal (funcdata_op.cc:1029)
+`V <= c => V < c+1`：调整常量并改 opcode，带溢出保护。
+
+#### `pub struct RuleIntLessEqual`（ruleaction.cc:611-617）
+委托 replace_lessequal。将 INT_LESSEQUAL/INT_SLESSEQUAL 转为 INT_LESS/INT_SLESS。
+
+测试：ruleaction::tests +2（V<=5→V<6；V<=0xffffffff 不变）。

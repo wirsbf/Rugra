@@ -302,6 +302,42 @@ impl Funcdata {
         vn
     }
 
+    /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
+    /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
+    /// (funcdata_op.cc:1029-1065).
+    pub fn replace_lessequal(&mut self, op: &crate::op::PcodeOpRef) -> bool {
+        let (i, diff, val, size, is_signed) = {
+            let o = op.0.read().unwrap();
+            let (vn_idx, diff) = if o.inrefs.get(0).map_or(false, |v| v.read().unwrap().is_constant()) {
+                (0, -1i64)
+            } else if o.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                (1, 1i64)
+            } else {
+                return false;
+            };
+            let vn = o.inrefs[vn_idx].clone();
+            let val = vn.read().unwrap().get_offset();
+            let size = vn.read().unwrap().get_size();
+            (vn_idx, diff, val, size, o.opcode == OpCode::CPUI_INT_SLESSEQUAL)
+        };
+        let mask = if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
+        if is_signed {
+            let int_min = if size >= 8 { i64::MIN as u64 } else { (1u64 << (size * 8 - 1)) };
+            let int_max = if size >= 8 { i64::MAX as u64 } else { mask >> 1 };
+            if diff == -1 && val == int_min { return false; }
+            if diff == 1 && val == int_max { return false; }
+            self.op_set_opcode(op, OpCode::CPUI_INT_SLESS);
+        } else {
+            if diff == -1 && val == 0 { return false; }
+            if diff == 1 && val == mask { return false; }
+            self.op_set_opcode(op, OpCode::CPUI_INT_LESS);
+        }
+        let res = (val as i64 + diff) as u64 & mask;
+        let newconst = self.new_constant(size, res);
+        self.op_set_input(op, newconst, i);
+        true
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve
