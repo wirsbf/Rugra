@@ -103,6 +103,124 @@ impl MemoryBank {
         }
         result
     }
+
+    /// Insert a word at an aligned location.
+    pub fn insert_word(&mut self, addr: u64, val: u64) {
+        self.words.insert(addr, val);
+    }
+
+    /// Find a word at an aligned location.
+    pub fn find_word(&self, addr: u64) -> Option<u64> {
+        self.words.get(&addr).copied()
+    }
+
+    /// Clear all stored values.
+    pub fn clear(&mut self) {
+        self.words.clear();
+        self.bytes.clear();
+    }
+}
+
+/// A read-only MemoryBank backed by a byte buffer (simulates LoadImage).
+/// Corresponds to Ghidra's `MemoryImage` (memstate.hh:90).
+pub struct MemoryImage {
+    /// The backing byte array
+    pub data: Vec<u8>,
+    /// Base address of the image
+    pub base_addr: u64,
+}
+
+impl MemoryImage {
+    pub fn new(base_addr: u64, data: Vec<u8>) -> Self {
+        Self { data, base_addr }
+    }
+
+    /// Read bytes from the image at the given offset.
+    pub fn read(&self, offset: u64, size: usize) -> Vec<u8> {
+        let start = (offset.saturating_sub(self.base_addr)) as usize;
+        if start >= self.data.len() {
+            return vec![0u8; size];
+        }
+        let end = (start + size).min(self.data.len());
+        let mut result = self.data[start..end].to_vec();
+        result.resize(size, 0);
+        result
+    }
+
+    /// Read a value from the image.
+    pub fn get_value(&self, offset: u64, size: usize) -> u64 {
+        let bytes = self.read(offset, size);
+        MemoryBank::construct_value(&bytes)
+    }
+
+    /// Get the size of the image.
+    pub fn len(&self) -> usize { self.data.len() }
+
+    /// Check if the image is empty.
+    pub fn is_empty(&self) -> bool { self.data.is_empty() }
+}
+
+/// A copy-on-write overlay memory bank.
+/// Corresponds to Ghidra's `MemoryPageOverlay` (memstate.hh:106).
+pub struct MemoryPageOverlay {
+    /// The underlying bank (or None for zero-initialized)
+    pub underlie: Option<Box<MemoryBank>>,
+    /// Overlayed pages: page_number → page data
+    pub pages: BTreeMap<u64, Vec<u8>>,
+    /// Page size
+    pub page_size: usize,
+}
+
+impl MemoryPageOverlay {
+    pub fn new(page_size: usize, underlie: Option<Box<MemoryBank>>) -> Self {
+        Self { underlie, pages: BTreeMap::new(), page_size }
+    }
+
+    /// Write bytes to the overlay.
+    pub fn write(&mut self, offset: u64, data: &[u8]) {
+        let page_num = offset / self.page_size as u64;
+        let page_off = (offset % self.page_size as u64) as usize;
+        let page = self.pages.entry(page_num).or_insert_with(|| vec![0u8; self.page_size]);
+        for (i, &b) in data.iter().enumerate() {
+            if page_off + i < page.len() {
+                page[page_off + i] = b;
+            }
+        }
+    }
+
+    /// Read bytes from the overlay.
+    pub fn read(&self, offset: u64, size: usize) -> Vec<u8> {
+        let page_num = offset / self.page_size as u64;
+        let page_off = (offset % self.page_size as u64) as usize;
+        let mut result = vec![0u8; size];
+        if let Some(page) = self.pages.get(&page_num) {
+            for i in 0..size {
+                if page_off + i < page.len() {
+                    result[i] = page[page_off + i];
+                }
+            }
+        } else if let Some(ref under) = self.underlie {
+            // Fall through to underlying bank.
+            for i in 0..size {
+                result[i] = under.get_chunk(offset + i as u64, 1)[0];
+            }
+        }
+        result
+    }
+
+    /// Read a value from the overlay.
+    pub fn get_value(&self, offset: u64, size: usize) -> u64 {
+        let bytes = self.read(offset, size);
+        MemoryBank::construct_value(&bytes)
+    }
+
+    /// Check if a page is overlayed.
+    pub fn is_page_overlayed(&self, page_num: u64) -> bool {
+        self.pages.contains_key(&page_num)
+    }
+
+    /// Get the number of overlayed pages.
+    pub fn num_pages(&self) -> usize { self.pages.len() }
 }
 
 /// Manages memory banks across address spaces.
@@ -168,5 +286,36 @@ mod tests {
         state.set_bank("ram".into(), bank);
         assert!(state.get_bank("ram").is_some());
         assert!(state.get_bank("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_memory_image() {
+        let img = MemoryImage::new(0x1000, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
+        assert_eq!(img.get_value(0x1000, 4), 0x04030201);
+        assert_eq!(img.get_value(0x1004, 1), 0x05);
+        // Out of bounds returns zero
+        assert_eq!(img.get_value(0x2000, 2), 0);
+    }
+
+    #[test]
+    fn test_page_overlay_write_read() {
+        let mut overlay = MemoryPageOverlay::new(16, None);
+        overlay.write(0, &[0xaa, 0xbb]);
+        assert_eq!(overlay.read(0, 2), vec![0xaa, 0xbb]);
+        assert!(overlay.is_page_overlayed(0));
+        // Unwritten page returns zero.
+        assert_eq!(overlay.read(100, 2), vec![0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_page_overlay_with_underlie() {
+        let mut bank = MemoryBank::new(AddressSpace::Ram, 1, 16);
+        bank.set_value(0, 4, 0xdeadbeef);
+        let mut overlay = MemoryPageOverlay::new(16, Some(Box::new(bank)));
+        // Read from underlie when not overlayed.
+        assert_eq!(overlay.get_value(0, 4), 0xdeadbeef);
+        // Overlay a write.
+        overlay.write(0, &[0x11]);
+        assert_eq!(overlay.read(0, 1), vec![0x11]);
     }
 }

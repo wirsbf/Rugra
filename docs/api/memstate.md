@@ -23,3 +23,12 @@
 - `set_bank(name, bank)` / `get_bank(name)` / `get_bank_mut(name)`
 
 测试：memstate::tests 4 个。
+
+## 2026-06-26（续）：memstate.rs 完善实现
+
+新增完整内存银行子类：
+- `MemoryImage` — 只读 LoadImage 后端银行（memstate.hh:90）：read/get_value/len/is_empty
+- `MemoryPageOverlay` — 写时复制覆盖银行（memstate.hh:106）：write/read/get_value/is_page_overlayed/num_pages
+- `MemoryBank::insert_word/find_word/clear` — 字对齐访问 + 清空
+
+测试：新增 3 个（memory_image + page_overlay_write_read + page_overlay_with_underlie）。
