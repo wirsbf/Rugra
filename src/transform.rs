@@ -1,67 +1,102 @@
 //! Large-scale data-flow transforms: lane splitting and Dolphin transforms.
 //!
-//! Corresponds to Ghidra's `transform.hh` / `transform.cc` (1023 lines).
+//! Faithful port of Ghidra's `transform.hh` / `transform.cc` (767 lines).
 //!
 //! This module provides the infrastructure for building large-scale transforms
 //! of function data-flow. The main use case is lane splitting — decomposing
 //! large register operations into smaller logical "lanes".
 //!
-//! Key classes:
-//! - `LanedRegister`: describes how a register can be split into lane sizes
-//! - `LaneDescription`: specific lane layout within a varnode
-//! - `TransformVar`: placeholder for a varnode that will exist after transform
-//! - `TransformOp`: placeholder for a pcode op that will exist after transform
-//! - `TransformManager`: orchestrates the transform lifecycle
+//! # Design (Rust adaptation)
 //!
-//! # Status
-//! Skeleton with `LanedRegister`, `LaneDescription`, and basic data structures.
-//! The full `TransformManager` (createOps/createVarnodes/apply) requires
-//! Funcdata op-edit integration which is now available.
+//! Ghidra uses raw `TransformVar*` / `TransformOp*` pointers into
+//! `list<TransformVar>` / `list<TransformOp>` owned by `TransformManager`.
+//! Rugra mirrors this with arena-style ID indexing: `TransformManager` owns
+//! `Vec<TransformVar>` and `Vec<TransformOp>`, and references are stable
+//! `usize` indices. Split arrays (Ghidra's `new TransformVar[n]`) are stored
+//! as contiguous runs whose start index is recorded in `piece_map`.
+//!
+//! Ghidra reference:
+//! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/transform.{hh,cc}.
 
+use crate::address::{calc_mask, Address};
+use crate::funcdata::Funcdata;
+use crate::op::PcodeOpRef;
+use crate::opcodes::OpCode;
+use crate::space::AddressSpace;
+use crate::varnode::Varnode;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
-use crate::varnode::Varnode;
-use crate::op::PcodeOp;
-use crate::opcodes::OpCode;
-use crate::funcdata::Funcdata;
-use crate::address::Address;
 
-/// Describes a register storage location and the ways it might be split into lanes.
-/// Corresponds to Ghidra's `LanedRegister` (transform.hh:94).
-#[derive(Debug, Clone)]
+// ===========================================================================
+// LanedRegister — transform.hh:93-125
+// ===========================================================================
+
+/// Describes a (register) storage location and the ways it might be split into
+/// lanes. Faithful to `LanedRegister` (transform.hh:93).
+///
+/// A 1-bit at position N in `size_bit_mask` means lane size N (in bytes) is
+/// allowed.
+#[derive(Debug, Clone, Default)]
 pub struct LanedRegister {
-    /// Size of the whole register in bytes
+    /// Size of the whole register in bytes.
     pub whole_size: i32,
-    /// Bit mask: bit N set means size N is an allowed lane size
+    /// Bit mask: bit N set means size N is an allowed lane size.
     pub size_bit_mask: u32,
 }
 
 impl LanedRegister {
-    pub fn new() -> Self {
-        Self { whole_size: 0, size_bit_mask: 0 }
-    }
-
+    /// Construct with a whole size and an initial mask.
     pub fn with_sizes(sz: i32, mask: u32) -> Self {
-        Self { whole_size: sz, size_bit_mask: mask }
+        Self {
+            whole_size: sz,
+            size_bit_mask: mask,
+        }
     }
 
-    /// Add a new lane size to the allowed list.
+    /// Add a new lane size to the allowed list. Faithful to `addLaneSize`
+    /// (transform.hh:121).
     pub fn add_lane_size(&mut self, size: i32) {
         self.size_bit_mask |= 1u32 << size;
     }
 
-    /// Is `size` among the allowed lane sizes?
+    /// Is `size` among the allowed lane sizes? Faithful to `allowedLane`
+    /// (transform.hh:122).
     pub fn allowed_lane(&self, size: i32) -> bool {
-        (self.size_bit_mask >> size) & 1 != 0
+        ((self.size_bit_mask >> size) & 1) != 0
     }
 
     /// Get the whole register size.
-    pub fn get_whole_size(&self) -> i32 { self.whole_size }
+    pub fn get_whole_size(&self) -> i32 {
+        self.whole_size
+    }
 
     /// Get the bit mask of possible lane sizes.
-    pub fn get_size_bit_mask(&self) -> u32 { self.size_bit_mask }
+    pub fn get_size_bit_mask(&self) -> u32 {
+        self.size_bit_mask
+    }
 
-    /// Iterate over all allowed lane sizes.
+    /// Collect specific lane sizes from a comma-separated string. Faithful to
+    /// `parseSizes` (transform.cc:300-327).
+    pub fn parse_sizes(&mut self, register_size: i32, lane_sizes: &str) {
+        self.whole_size = register_size;
+        self.size_bit_mask = 0;
+        for tok in lane_sizes.split(',') {
+            let tok = tok.trim();
+            if tok.is_empty() {
+                continue;
+            }
+            let sz: i32 = tok.parse().unwrap_or(-1);
+            if sz < 0 || sz > 16 {
+                // Ghidra throws LowlevelError; Rugra logs and skips.
+                eprintln!("[TRANSFORM] Bad lane size: {}", tok);
+                continue;
+            }
+            self.add_lane_size(sz);
+        }
+    }
+
+    /// Iterate over all allowed lane sizes, smallest first. Mirrors
+    /// `LanedIterator` (transform.hh:98-110 / transform.cc:284-295).
     pub fn lane_sizes(&self) -> Vec<i32> {
         let mut result = Vec::new();
         let mut mask = self.size_bit_mask;
@@ -77,34 +112,45 @@ impl LanedRegister {
     }
 }
 
-/// Description of logical lanes within a big Varnode.
-/// Corresponds to Ghidra's `LaneDescription` (transform.hh:132).
+// ===========================================================================
+// LaneDescription — transform.hh:127-148
+// ===========================================================================
+
+/// Description of logical lanes within a big Varnode. Faithful to
+/// `LaneDescription` (transform.hh:132). Lanes are disjoint byte ranges; in
+/// general all lanes are the same size, but the API allows non-uniform lanes.
 #[derive(Debug, Clone)]
 pub struct LaneDescription {
-    /// Size of the region being split in bytes
+    /// Size of the region being split in bytes.
     pub whole_size: i32,
-    /// Size of each lane in bytes
+    /// Size of each lane in bytes.
     pub lane_size: Vec<i32>,
-    /// Byte position of each lane
+    /// Significance position (byte offset) of each lane.
     pub lane_position: Vec<i32>,
 }
 
 impl LaneDescription {
     /// Construct uniform lanes: split `orig_size` into lanes of size `sz`.
+    /// Faithful to the constructor (transform.cc:35-48).
     pub fn uniform(orig_size: i32, sz: i32) -> Self {
         let num = orig_size / sz;
-        let mut positions = Vec::with_capacity(num as usize);
-        for i in 0..num {
-            positions.push(i * sz);
+        let mut lane_size = Vec::with_capacity(num as usize);
+        let mut lane_position = Vec::with_capacity(num as usize);
+        let mut pos = 0;
+        for _ in 0..num {
+            lane_size.push(sz);
+            lane_position.push(pos);
+            pos += sz;
         }
         Self {
             whole_size: orig_size,
-            lane_size: vec![sz; num as usize],
-            lane_position: positions,
+            lane_size,
+            lane_position,
         }
     }
 
-    /// Construct two lanes of arbitrary sizes (lo and hi).
+    /// Construct two lanes of arbitrary sizes (lo then hi). Faithful to the
+    /// constructor (transform.cc:53-63).
     pub fn two_lane(orig_size: i32, lo: i32, hi: i32) -> Self {
         Self {
             whole_size: orig_size,
@@ -113,257 +159,979 @@ impl LaneDescription {
         }
     }
 
-    /// Get the total number of lanes.
-    pub fn get_num_lanes(&self) -> usize { self.lane_size.len() }
+    /// Trim this description to a subrange. Faithful to `subset`
+    /// (transform.cc:72-93). Returns false if the subrange splits any lane.
+    pub fn subset(&mut self, lsb_offset: i32, size: i32) -> bool {
+        if lsb_offset == 0 && size == self.whole_size {
+            return true;
+        }
+        let first_lane = self.get_boundary(lsb_offset);
+        if first_lane < 0 {
+            return false;
+        }
+        let last_lane = self.get_boundary(lsb_offset + size);
+        if last_lane < 0 {
+            return false;
+        }
+        let mut new_lane_size = Vec::new();
+        self.lane_position.clear();
+        let mut new_position = 0;
+        for i in first_lane..last_lane {
+            let sz = self.lane_size[i as usize];
+            self.lane_position.push(new_position);
+            new_lane_size.push(sz);
+            new_position += sz;
+        }
+        self.whole_size = size;
+        self.lane_size = new_lane_size;
+        true
+    }
+
+    /// Get the number of lanes.
+    pub fn get_num_lanes(&self) -> usize {
+        self.lane_size.len()
+    }
 
     /// Get the size of the i-th lane.
-    pub fn get_size(&self, i: usize) -> i32 { self.lane_size[i] }
+    pub fn get_size(&self, i: usize) -> i32 {
+        self.lane_size[i]
+    }
 
     /// Get the position of the i-th lane.
-    pub fn get_position(&self, i: usize) -> i32 { self.lane_position[i] }
+    pub fn get_position(&self, i: usize) -> i32 {
+        self.lane_position[i]
+    }
 
-    /// Get the size of the whole region.
-    pub fn get_whole_size(&self) -> i32 { self.whole_size }
+    /// Get the whole region size.
+    pub fn get_whole_size(&self) -> i32 {
+        self.whole_size
+    }
+
+    /// Map a byte position to the index of the lane starting there.
+    /// Faithful to `getBoundary` (transform.cc:100-119). Returns -1 if the
+    /// position is out of bounds or not on a lane boundary. Position equal to
+    /// whole size returns the lane count.
+    pub fn get_boundary(&self, byte_pos: i32) -> i32 {
+        if byte_pos < 0 || byte_pos > self.whole_size {
+            return -1;
+        }
+        if byte_pos == self.whole_size {
+            return self.lane_position.len() as i32;
+        }
+        // Binary search for the position.
+        let mut min = 0i32;
+        let mut max = self.lane_position.len() as i32 - 1;
+        while min <= max {
+            let index = (min + max) / 2;
+            let pos = self.lane_position[index as usize];
+            if pos == byte_pos {
+                return index;
+            }
+            if pos < byte_pos {
+                min = index + 1;
+            } else {
+                max = index - 1;
+            }
+        }
+        -1
+    }
+
+    /// Decide if a given truncation is natural for this description. Faithful
+    /// to `restriction` (transform.cc:133-143). On success, returns
+    /// `(num_lanes, skip_lanes)`; on failure, returns None.
+    pub fn restriction(
+        &self,
+        _num_lanes: i32,
+        skip_lanes: i32,
+        byte_pos: i32,
+        size: i32,
+    ) -> Option<(i32, i32)> {
+        let res_skip_lanes = self.get_boundary(self.lane_position[skip_lanes as usize] + byte_pos);
+        if res_skip_lanes < 0 {
+            return None;
+        }
+        let final_index =
+            self.get_boundary(self.lane_position[skip_lanes as usize] + byte_pos + size);
+        if final_index < 0 {
+            return None;
+        }
+        let res_num_lanes = final_index - res_skip_lanes;
+        if res_num_lanes == 0 {
+            None
+        } else {
+            Some((res_num_lanes, res_skip_lanes))
+        }
+    }
+
+    /// Decide if a given subset of lanes can be extended naturally. Faithful
+    /// to `extension` (transform.cc:158-168). On success, returns
+    /// `(num_lanes, skip_lanes)`; on failure, returns None.
+    pub fn extension(
+        &self,
+        _num_lanes: i32,
+        skip_lanes: i32,
+        byte_pos: i32,
+        size: i32,
+    ) -> Option<(i32, i32)> {
+        let res_skip_lanes = self.get_boundary(self.lane_position[skip_lanes as usize] - byte_pos);
+        if res_skip_lanes < 0 {
+            return None;
+        }
+        let final_index =
+            self.get_boundary(self.lane_position[skip_lanes as usize] - byte_pos + size);
+        if final_index < 0 {
+            return None;
+        }
+        let res_num_lanes = final_index - res_skip_lanes;
+        if res_num_lanes == 0 {
+            None
+        } else {
+            Some((res_num_lanes, res_skip_lanes))
+        }
+    }
 }
 
-/// Types of replacement Varnodes (transform.hh:36-43).
-#[derive(Debug, Clone, Copy, PartialEq)]
+// ===========================================================================
+// TransformVar — transform.hh:34-47
+// ===========================================================================
+
+/// Types of replacement Varnodes. Faithful to the enum in transform.hh:36-43.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformVarType {
-    /// New Varnode is a piece of an original Varnode
-    Piece,
-    /// Varnode preexisted in the original data-flow
-    Preexisting,
-    /// A new temporary (unique space) Varnode
-    NormalTemp,
-    /// A temporary representing a piece of an original Varnode
-    PieceTemp,
-    /// A new constant Varnode
-    Constant,
-    /// Special iop constant encoding a PcodeOp reference
-    ConstantIop,
+    /// New Varnode is a piece of an original Varnode.
+    Piece = 1,
+    /// Varnode preexisted in the original data-flow.
+    Preexisting = 2,
+    /// A new temporary (unique space) Varnode.
+    NormalTemp = 3,
+    /// A temporary representing a piece of an original Varnode.
+    PieceTemp = 4,
+    /// A new constant Varnode.
+    Constant = 5,
+    /// Special iop constant encoding a PcodeOp reference.
+    ConstantIop = 6,
 }
 
-/// Placeholder for a Varnode that will exist after a transform is applied.
-/// Corresponds to Ghidra's `TransformVar`.
-#[derive(Debug)]
+/// Flags for a TransformVar. Faithful to the enum in transform.hh:45-47.
+pub mod transform_var_flags {
+    /// The last (most significant piece) of a split array.
+    pub const SPLIT_TERMINATOR: u32 = 1;
+    /// This is a piece of an input that has already been visited.
+    pub const INPUT_DUPLICATE: u32 = 2;
+}
+
+/// Placeholder node for a Varnode that will exist after a transform. Faithful
+/// to `TransformVar` (transform.hh:34).
+#[derive(Debug, Clone)]
 pub struct TransformVar {
-    /// Original big Varnode of which this is a component
-    pub original: Option<Arc<RwLock<Varnode>>>,
-    /// The new replacement Varnode
+    /// Original big Varnode of which this is a component (None for new temps).
+    pub vn: Option<Arc<RwLock<Varnode>>>,
+    /// The new explicit lane Varnode (set by `create_replacement`).
     pub replacement: Option<Arc<RwLock<Varnode>>>,
-    /// Type of new Varnode
+    /// Type of new Varnode.
     pub var_type: TransformVarType,
-    /// Byte size of the lane Varnode
+    /// Boolean properties (transform_var_flags).
+    pub flags: u32,
+    /// Size of the lane Varnode in bytes.
     pub byte_size: i32,
-    /// Bit position within the original big Varnode
+    /// Size of the logical value in bits.
+    pub bit_size: i32,
+    /// Value of constant or (bit) position within the original big Varnode.
     pub val: u64,
-    /// Byte offset within the original Varnode
-    pub lsb_offset: i32,
+    /// Index of the defining TransformOp (None if not an output).
+    pub def: Option<usize>,
 }
 
 impl TransformVar {
-    pub fn new_preexisting(vn: Arc<RwLock<Varnode>>) -> Self {
+    /// Initialize from raw data. Faithful to `initialize` (transform.hh:203-214).
+    pub fn initialize(
+        tp: TransformVarType,
+        v: Option<Arc<RwLock<Varnode>>>,
+        bits: i32,
+        bytes: i32,
+        value: u64,
+    ) -> Self {
         Self {
-            original: Some(vn),
+            var_type: tp,
+            vn: v,
+            val: value,
+            bit_size: bits,
+            byte_size: bytes,
+            flags: 0,
+            def: None,
             replacement: None,
-            var_type: TransformVarType::Preexisting,
-            byte_size: 0,
-            val: 0,
-            lsb_offset: 0,
         }
     }
 
-    pub fn new_unique(size: i32) -> Self {
-        Self {
-            original: None,
-            replacement: None,
-            var_type: TransformVarType::NormalTemp,
-            byte_size: size,
-            val: 0,
-            lsb_offset: 0,
+    /// Create the Varnode object described by this placeholder. Faithful to
+    /// `createReplacement` (transform.cc:175-220).
+    pub fn create_replacement(&mut self, fd: &mut Funcdata, def_op: Option<&PcodeOpRef>) {
+        if self.replacement.is_some() {
+            return; // Already created.
         }
-    }
-
-    pub fn new_constant(size: i32, lsb_offset: i32, val: u64) -> Self {
-        Self {
-            original: None,
-            replacement: None,
-            var_type: TransformVarType::Constant,
-            byte_size: size,
-            val,
-            lsb_offset,
-        }
-    }
-
-    pub fn new_piece(vn: Arc<RwLock<Varnode>>, byte_size: i32, lsb_offset: i32) -> Self {
-        Self {
-            original: Some(vn),
-            replacement: None,
-            var_type: TransformVarType::Piece,
-            byte_size,
-            val: 0,
-            lsb_offset,
+        match self.var_type {
+            TransformVarType::Preexisting => {
+                self.replacement = self.vn.clone();
+            }
+            TransformVarType::Constant => {
+                self.replacement = Some(fd.new_constant(self.byte_size as usize, self.val));
+            }
+            TransformVarType::NormalTemp | TransformVarType::PieceTemp => {
+                if let Some(def) = def_op {
+                    self.replacement = Some(fd.new_unique_out(self.byte_size as usize, def));
+                } else {
+                    self.replacement = Some(fd.new_unique(self.byte_size as usize));
+                }
+            }
+            TransformVarType::Piece => {
+                let mut byte_pos = self.val as i32;
+                if (byte_pos & 7) != 0 {
+                    eprintln!("[TRANSFORM] Varnode piece is not byte aligned");
+                    return;
+                }
+                byte_pos >>= 3;
+                let (vn_size, vn_space, vn_offset, is_big_endian) = {
+                    let vn_rg = self.vn.as_ref().unwrap().read().unwrap();
+                    (
+                        vn_rg.get_size() as i32,
+                        vn_rg.space(),
+                        vn_rg.get_offset(),
+                        vn_rg.space().is_big_endian(),
+                    )
+                };
+                if is_big_endian {
+                    byte_pos = vn_size - byte_pos - self.byte_size;
+                }
+                let addr = Address::new(vn_offset + byte_pos as u64);
+                // renormal(byteSize) is a no-op for Rugra's Address (no sub-byte
+                // alignment tracking); the address is already byte-aligned.
+                if let Some(def) = def_op {
+                    self.replacement = Some(fd.new_varnode_out(self.byte_size as usize, addr, def));
+                } else {
+                    // Create a free varnode at the piece address.
+                    self.replacement = Some(
+                        fd.vbank
+                            .create_with_space(self.byte_size as usize, vn_space, addr.as_u64()),
+                    );
+                }
+                // transferVarnodeProperties (transform.cc:208) copies
+                // type/flags from the original to the piece. Rugra's Varnode
+                // does not yet expose a full property-transfer API; we skip
+                // this best-effort.
+                let _ = (vn_size, vn_offset);
+            }
+            TransformVarType::ConstantIop => {
+                // Ghidra creates a Varnode in the iop space encoding a PcodeOp
+                // reference. Rugra has no iop space yet; fall back to a
+                // constant holding the offset.
+                self.replacement = Some(fd.new_constant(self.byte_size as usize, self.val));
+            }
         }
     }
 }
 
-/// Placeholder for a PcodeOp that will exist after a transform.
-/// Corresponds to Ghidra's `TransformOp`.
-#[derive(Debug)]
+// ===========================================================================
+// TransformOp — transform.hh:63-91
+// ===========================================================================
+
+/// Special annotations on new pcode ops. Faithful to the enum in
+/// transform.hh:70-74.
+pub mod transform_op_special {
+    /// Op replaces an existing op.
+    pub const OP_REPLACEMENT: u32 = 1;
+    /// Op already exists (but will be transformed).
+    pub const OP_PREEXISTING: u32 = 2;
+    /// Mark op as indirect creation.
+    pub const INDIRECT_CREATION: u32 = 4;
+    /// Mark op as indirect creation and possible call output.
+    pub const INDIRECT_CREATION_POSSIBLE_OUT: u32 = 8;
+}
+
+/// Placeholder node for a PcodeOp that will exist after a transform. Faithful
+/// to `TransformOp` (transform.hh:63).
+#[derive(Debug, Clone)]
 pub struct TransformOp {
-    /// Original op which this is splitting (or None)
-    pub original: Option<Arc<RwLock<PcodeOp>>>,
-    /// Opcode of the new op
+    /// Original op which this is splitting (or None).
+    pub op: Option<PcodeOpRef>,
+    /// The new replacement op (set by `create_replacement`).
+    pub replacement: Option<PcodeOpRef>,
+    /// Opcode of the new op.
     pub opc: OpCode,
-    /// Output placeholder variable
-    pub output: Option<Box<TransformVar>>,
-    /// Input placeholder variables
-    pub inputs: Vec<TransformVar>,
-    /// The following op (for insertion ordering)
-    pub follow: Option<Arc<RwLock<PcodeOp>>>,
+    /// Special handling code (transform_op_special).
+    pub special: u32,
+    /// Output placeholder variable index.
+    pub output: Option<usize>,
+    /// Input placeholder variable indices.
+    pub input: Vec<Option<usize>>,
+    /// The following op index after this (None if inserted immediately).
+    pub follow: Option<usize>,
 }
 
 impl TransformOp {
-    pub fn new(num_params: usize, opc: OpCode) -> Self {
+    /// Create an empty placeholder.
+    fn empty() -> Self {
         Self {
-            original: None,
-            opc,
+            op: None,
+            replacement: None,
+            opc: OpCode::CPUI_COPY,
+            special: 0,
             output: None,
-            inputs: Vec::with_capacity(num_params),
+            input: Vec::new(),
             follow: None,
         }
     }
 
-    pub fn new_replace(num_params: usize, opc: OpCode, replace: Arc<RwLock<PcodeOp>>) -> Self {
-        Self {
-            original: Some(replace),
-            opc,
-            output: None,
-            inputs: Vec::with_capacity(num_params),
-            follow: None,
+    /// Try to put the new PcodeOp into its basic block. Faithful to
+    /// `attemptInsertion` (transform.cc:254-269). Returns true if inserted or
+    /// already inserted.
+    pub fn attempt_insertion(&mut self, fd: &mut Funcdata, ops: &[TransformOp]) -> bool {
+        if let Some(follow_idx) = self.follow {
+            let follow_follows = ops[follow_idx].follow.is_some();
+            if !follow_follows {
+                // The follow is inserted; insert this before it.
+                let follow_rep = ops[follow_idx].replacement.clone();
+                if let Some(follow_rep) = follow_rep {
+                    let my_rep = self.replacement.clone().unwrap();
+                    if self.opc == OpCode::CPUI_MULTIEQUAL {
+                        fd.op_insert_before(&my_rep, &follow_rep);
+                    } else {
+                        fd.op_insert_before(&my_rep, &follow_rep);
+                    }
+                    self.follow = None;
+                    return true;
+                }
+            }
+            false
+        } else {
+            true // Already inserted.
         }
     }
 
-    pub fn new_preexisting(num_params: usize, opc: OpCode, original: Arc<RwLock<PcodeOp>>) -> Self {
-        Self {
-            original: Some(original),
-            opc,
-            output: None,
-            inputs: Vec::with_capacity(num_params),
-            follow: None,
+    /// Set indirect-creation flags based on the given INDIRECT op. Faithful to
+    /// `inheritIndirect` (transform.cc:273-282).
+    pub fn inherit_indirect(&mut self, ind_op: &PcodeOpRef) {
+        let is_indirect_creation = {
+            let r = ind_op.0.read().unwrap();
+            (r.flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0
+        };
+        if is_indirect_creation {
+            // Check input(0) for indirect-zero. Rugra has no INDIRECT_ZERO flag
+            // on Varnode; we conservatively assume possible-out.
+            self.special |= transform_op_special::INDIRECT_CREATION_POSSIBLE_OUT;
         }
-    }
-
-    /// Set an input placeholder variable.
-    pub fn set_input(&mut self, rvn: TransformVar, slot: usize) {
-        while self.inputs.len() <= slot {
-            self.inputs.push(TransformVar::new_unique(0));
-        }
-        self.inputs[slot] = rvn;
-    }
-
-    /// Set the output placeholder variable.
-    pub fn set_output(&mut self, rvn: TransformVar) {
-        self.output = Some(Box::new(rvn));
     }
 }
 
-/// Class for splitting larger registers holding smaller logical lanes.
-/// Orchestrates the transform lifecycle.
-/// Corresponds to Ghidra's `TransformManager` (transform.hh:156).
+// ===========================================================================
+// TransformManager — transform.hh:150-194
+// ===========================================================================
+
+/// Class for splitting larger registers holding smaller logical lanes. Faithful
+/// to `TransformManager` (transform.hh:156). Given a starting Varnode, looks
+/// for evidence of the Varnode being interpreted as disjoint logical values
+/// concatenated (lanes), and splits Varnode and data-flow into explicit
+/// operations on the lanes.
 pub struct TransformManager {
-    /// Storage for new varnode placeholders
+    /// Function being operated on.
+    fd: Option<*mut Funcdata>,
+    /// Map from a big Varnode's create-index to the start index of its split
+    /// array in `new_varnodes`. Mirrors Ghidra's `map<int4,TransformVar*>`.
+    piece_map: BTreeMap<u32, usize>,
+    /// Storage for Varnode placeholder nodes (the "arena").
     pub new_varnodes: Vec<TransformVar>,
-    /// Storage for new op placeholders
+    /// Storage for PcodeOp placeholder nodes.
     pub new_ops: Vec<TransformOp>,
 }
 
+// SAFETY: `*mut Funcdata` is only dereferenced within `&mut self` methods while
+// the transform pass holds a unique borrow. Mirrors Ghidra's `Funcdata* fd`.
+unsafe impl Send for TransformManager {}
+
+impl Default for TransformManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransformManager {
+    /// Construct an empty manager (no Funcdata binding yet).
     pub fn new() -> Self {
         Self {
+            fd: None,
+            piece_map: BTreeMap::new(),
             new_varnodes: Vec::new(),
             new_ops: Vec::new(),
         }
     }
 
-    /// Make a placeholder for a preexisting varnode.
-    pub fn new_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
-        let idx = self.new_varnodes.len();
-        self.new_varnodes.push(TransformVar::new_preexisting(vn));
-        idx
-    }
-
-    /// Make a placeholder for a new unique-space varnode.
-    pub fn new_unique(&mut self, size: i32) -> usize {
-        let idx = self.new_varnodes.len();
-        self.new_varnodes.push(TransformVar::new_unique(size));
-        idx
-    }
-
-    /// Make a placeholder for a constant varnode.
-    pub fn new_constant(&mut self, size: i32, lsb_offset: i32, val: u64) -> usize {
-        let idx = self.new_varnodes.len();
-        self.new_varnodes.push(TransformVar::new_constant(size, lsb_offset, val));
-        idx
-    }
-
-    /// Make a placeholder for a piece of a varnode.
-    pub fn new_piece(&mut self, vn: Arc<RwLock<Varnode>>, byte_size: i32, lsb_offset: i32) -> usize {
-        let idx = self.new_varnodes.len();
-        self.new_varnodes.push(TransformVar::new_piece(vn, byte_size, lsb_offset));
-        idx
-    }
-
-    /// Create a new replacement op placeholder.
-    pub fn new_op_replace(&mut self, num_params: usize, opc: OpCode, replace: Arc<RwLock<PcodeOp>>) -> usize {
-        let idx = self.new_ops.len();
-        self.new_ops.push(TransformOp::new_replace(num_params, opc, replace));
-        idx
-    }
-
-    /// Create a new op placeholder.
-    pub fn new_op(&mut self, num_params: usize, opc: OpCode) -> usize {
-        let idx = self.new_ops.len();
-        self.new_ops.push(TransformOp::new(num_params, opc));
-        idx
-    }
-
-    /// Set input on an op.
-    pub fn op_set_input(&mut self, op_idx: usize, var_idx: usize, slot: usize) {
-        let rvn = self.new_varnodes[var_idx].clone_shallow();
-        self.new_ops[op_idx].set_input(rvn, slot);
-    }
-
-    /// Set output on an op.
-    pub fn op_set_output(&mut self, op_idx: usize, var_idx: usize) {
-        let rvn = self.new_varnodes[var_idx].clone_shallow();
-        self.new_ops[op_idx].set_output(rvn);
-    }
-
-    /// Get the number of new varnodes.
-    pub fn num_new_varnodes(&self) -> usize { self.new_varnodes.len() }
-
-    /// Get the number of new ops.
-    pub fn num_new_ops(&self) -> usize { self.new_ops.len() }
-
-    /// Clear all placeholders.
-    pub fn clear(&mut self) {
+    /// Bind to a Funcdata. Faithful to the constructor (transform.hh:169).
+    pub fn init(&mut self, fd: &mut Funcdata) {
+        self.fd = Some(fd as *mut Funcdata);
+        self.piece_map.clear();
         self.new_varnodes.clear();
         self.new_ops.clear();
     }
-}
 
-impl TransformVar {
-    /// Shallow clone for use in TransformManager.
-    fn clone_shallow(&self) -> Self {
-        Self {
-            original: self.original.clone(),
-            replacement: None,
-            var_type: self.var_type,
-            byte_size: self.byte_size,
-            val: self.val,
-            lsb_offset: self.lsb_offset,
+    /// Should the address of the given Varnode be preserved when constructing
+    /// a piece? Faithful to `preserveAddress` (transform.cc:348-354). Returns
+    /// false if the logical value is not byte-aligned or the Varnode is in the
+    /// internal (unique) space.
+    pub fn preserve_address(&self, vn: &Arc<RwLock<Varnode>>, _bit_size: i32, lsb_offset: i32) -> bool {
+        if (lsb_offset & 7) != 0 {
+            return false; // Logical value not aligned.
         }
+        let vn_rg = vn.read().unwrap();
+        vn_rg.space() != AddressSpace::Unique
+    }
+
+    /// Clear the mark for all Varnodes referenced by placeholders. Faithful to
+    /// `clearVarnodeMarks` (transform.cc:356-366).
+    pub fn clear_varnode_marks(&mut self) {
+        let targets: Vec<Arc<RwLock<Varnode>>> = self
+            .piece_map
+            .values()
+            .filter_map(|&start| {
+                let v = &self.new_varnodes[start];
+                v.vn.clone()
+            })
+            .collect();
+        for vn in targets {
+            vn.write().unwrap().clear_mark();
+        }
+    }
+
+    // ---- Placeholder creation (transform.cc:370-575) ----
+
+    /// Make a placeholder for a preexisting Varnode. Faithful to
+    /// `newPreexistingVarnode` (transform.cc:370-380). Returns the arena index.
+    pub fn new_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        let (bit_size, byte_size) = {
+            let r = vn.read().unwrap();
+            ((r.get_size() * 8) as i32, r.get_size() as i32)
+        };
+        let mut res = TransformVar::initialize(TransformVarType::Preexisting, Some(vn), bit_size, byte_size, 0);
+        res.flags = transform_var_flags::SPLIT_TERMINATOR;
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(res);
+        self.piece_map.insert(create_index, idx);
+        idx
+    }
+
+    /// Make a placeholder for a new unique-space Varnode. Faithful to
+    /// `newUnique` (transform.cc:384-391).
+    pub fn new_unique(&mut self, size: i32) -> usize {
+        let res = TransformVar::initialize(TransformVarType::NormalTemp, None, size * 8, size, 0);
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(res);
+        idx
+    }
+
+    /// Make a placeholder for a constant Varnode. Faithful to `newConstant`
+    /// (transform.cc:399-406). `lsb_offset` strips bits off the existing value.
+    pub fn new_constant(&mut self, size: i32, lsb_offset: i32, val: u64) -> usize {
+        let shifted = (val >> lsb_offset) & calc_mask(size as usize);
+        let res = TransformVar::initialize(TransformVarType::Constant, None, size * 8, size, shifted);
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(res);
+        idx
+    }
+
+    /// Make a placeholder for a special iop constant. Faithful to `newIop`
+    /// (transform.cc:411-418).
+    pub fn new_iop(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
+        let (byte_size, val) = {
+            let r = vn.read().unwrap();
+            (r.get_size() as i32, r.get_offset())
+        };
+        let res = TransformVar::initialize(TransformVarType::ConstantIop, None, byte_size * 8, byte_size, val);
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(res);
+        idx
+    }
+
+    /// Make a placeholder for a piece of a Varnode. Faithful to `newPiece`
+    /// (transform.cc:426-436).
+    pub fn new_piece(&mut self, vn: Arc<RwLock<Varnode>>, bit_size: i32, lsb_offset: i32) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        let byte_size = (bit_size + 7) / 8;
+        let var_type = if self.preserve_address(&vn, bit_size, lsb_offset) {
+            TransformVarType::Piece
+        } else {
+            TransformVarType::PieceTemp
+        };
+        let mut res = TransformVar::initialize(var_type, Some(vn), bit_size, byte_size, lsb_offset as u64);
+        res.flags = transform_var_flags::SPLIT_TERMINATOR;
+        let idx = self.new_varnodes.len();
+        self.new_varnodes.push(res);
+        self.piece_map.insert(create_index, idx);
+        idx
+    }
+
+    /// Make placeholders splitting a Varnode into all its lanes. Faithful to
+    /// `newSplit` (transform.cc:445-470). Returns the start index of the lane
+    /// array.
+    pub fn new_split(&mut self, vn: Arc<RwLock<Varnode>>, description: &LaneDescription) -> usize {
+        let num = description.get_num_lanes();
+        let create_index = vn.read().unwrap().create_index;
+        let is_const = vn.read().unwrap().is_constant();
+        let vn_offset = vn.read().unwrap().get_offset();
+        let start = self.new_varnodes.len();
+        for i in 0..num {
+            let bitpos = description.get_position(i) * 8;
+            let byte_size = description.get_size(i);
+            let new_var = if is_const {
+                let val = if bitpos < 64 {
+                    (vn_offset >> bitpos as u64) & calc_mask(byte_size as usize)
+                } else {
+                    0
+                };
+                TransformVar::initialize(
+                    TransformVarType::Constant,
+                    Some(vn.clone()),
+                    byte_size * 8,
+                    byte_size,
+                    val,
+                )
+            } else {
+                let var_type = if self.preserve_address(&vn, byte_size * 8, bitpos) {
+                    TransformVarType::Piece
+                } else {
+                    TransformVarType::PieceTemp
+                };
+                TransformVar::initialize(var_type, Some(vn.clone()), byte_size * 8, byte_size, bitpos as u64)
+            };
+            self.new_varnodes.push(new_var);
+        }
+        // Mark the most-significant piece as the split terminator.
+        self.new_varnodes[start + num - 1].flags |= transform_var_flags::SPLIT_TERMINATOR;
+        self.piece_map.insert(create_index, start);
+        start
+    }
+
+    /// Make placeholders splitting a Varnode into a subset of lanes. Faithful
+    /// to `newSplit` (transform.cc:481-506). Returns the start index.
+    pub fn new_split_subset(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+        description: &LaneDescription,
+        num_lanes: usize,
+        start_lane: usize,
+    ) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        let is_const = vn.read().unwrap().is_constant();
+        let vn_offset = vn.read().unwrap().get_offset();
+        let base_bit_pos = description.get_position(start_lane) * 8;
+        let start = self.new_varnodes.len();
+        for i in 0..num_lanes {
+            let bitpos = description.get_position(start_lane + i) * 8 - base_bit_pos;
+            let byte_size = description.get_size(start_lane + i);
+            let new_var = if is_const {
+                let val = if bitpos < 64 {
+                    (vn_offset >> bitpos as u64) & calc_mask(byte_size as usize)
+                } else {
+                    0
+                };
+                TransformVar::initialize(
+                    TransformVarType::Constant,
+                    Some(vn.clone()),
+                    byte_size * 8,
+                    byte_size,
+                    val,
+                )
+            } else {
+                let var_type = if self.preserve_address(&vn, byte_size * 8, bitpos) {
+                    TransformVarType::Piece
+                } else {
+                    TransformVarType::PieceTemp
+                };
+                TransformVar::initialize(var_type, Some(vn.clone()), byte_size * 8, byte_size, bitpos as u64)
+            };
+            self.new_varnodes.push(new_var);
+        }
+        self.new_varnodes[start + num_lanes - 1].flags |= transform_var_flags::SPLIT_TERMINATOR;
+        self.piece_map.insert(create_index, start);
+        start
+    }
+
+    /// Create a new placeholder op intended to replace an existing op. Faithful
+    /// to `newOpReplace` (transform.cc:515-528).
+    pub fn new_op_replace(&mut self, num_params: usize, opc: OpCode, replace: PcodeOpRef) -> usize {
+        let mut rop = TransformOp::empty();
+        rop.op = Some(replace);
+        rop.opc = opc;
+        rop.special = transform_op_special::OP_REPLACEMENT;
+        rop.input = vec![None; num_params];
+        let idx = self.new_ops.len();
+        self.new_ops.push(rop);
+        idx
+    }
+
+    /// Create a new placeholder op that will not replace an existing op.
+    /// Faithful to `newOp` (transform.cc:538-551). `follow` is the placeholder
+    /// for the op that follows the new op when it is created.
+    pub fn new_op(&mut self, num_params: usize, opc: OpCode, follow: usize) -> usize {
+        let follow_op = self.new_ops[follow].op.clone();
+        let mut rop = TransformOp::empty();
+        rop.op = follow_op;
+        rop.opc = opc;
+        rop.follow = Some(follow);
+        rop.input = vec![None; num_params];
+        let idx = self.new_ops.len();
+        self.new_ops.push(rop);
+        idx
+    }
+
+    /// Create a new placeholder op for an existing PcodeOp. Faithful to
+    /// `newPreexistingOp` (transform.cc:562-575).
+    pub fn new_preexisting_op(&mut self, num_params: usize, opc: OpCode, original: PcodeOpRef) -> usize {
+        let mut rop = TransformOp::empty();
+        rop.op = Some(original);
+        rop.opc = opc;
+        rop.special = transform_op_special::OP_PREEXISTING;
+        rop.input = vec![None; num_params];
+        let idx = self.new_ops.len();
+        self.new_ops.push(rop);
+        idx
+    }
+
+    // ---- Placeholder lookup (transform.cc:581-649) ----
+
+    /// Get (or create) a placeholder for a preexisting Varnode. Faithful to
+    /// `getPreexistingVarnode` (transform.cc:581-591).
+    pub fn get_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
+        if vn.read().unwrap().is_constant() {
+            let (sz, off) = {
+                let r = vn.read().unwrap();
+                (r.get_size() as i32, r.get_offset())
+            };
+            return self.new_constant(sz, 0, off);
+        }
+        let create_index = vn.read().unwrap().create_index;
+        if let Some(&idx) = self.piece_map.get(&create_index) {
+            return idx;
+        }
+        self.new_preexisting_varnode(vn)
+    }
+
+    /// Find (or create) the placeholder for a logical piece of a Varnode.
+    /// Faithful to `getPiece` (transform.cc:599-611).
+    pub fn get_piece(&mut self, vn: Arc<RwLock<Varnode>>, bit_size: i32, lsb_offset: i32) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        if let Some(&idx) = self.piece_map.get(&create_index) {
+            let res = &self.new_varnodes[idx];
+            if res.bit_size != bit_size || res.val != lsb_offset as u64 {
+                eprintln!(
+                    "[TRANSFORM] Cannot create multiple pieces for one Varnode through getPiece"
+                );
+            }
+            return idx;
+        }
+        self.new_piece(vn, bit_size, lsb_offset)
+    }
+
+    /// Find (or create) placeholders splitting a Varnode into its lanes.
+    /// Faithful to `getSplit` (transform.cc:620-629).
+    pub fn get_split(&mut self, vn: Arc<RwLock<Varnode>>, description: &LaneDescription) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        if let Some(&idx) = self.piece_map.get(&create_index) {
+            return idx;
+        }
+        self.new_split(vn, description)
+    }
+
+    /// Find (or create) placeholders splitting a Varnode into a subset of
+    /// lanes. Faithful to `getSplit` (transform.cc:640-649).
+    pub fn get_split_subset(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+        description: &LaneDescription,
+        num_lanes: usize,
+        start_lane: usize,
+    ) -> usize {
+        let create_index = vn.read().unwrap().create_index;
+        if let Some(&idx) = self.piece_map.get(&create_index) {
+            return idx;
+        }
+        self.new_split_subset(vn, description, num_lanes, start_lane)
+    }
+
+    /// Mark the given variable as input to the given op. Faithful to
+    /// `opSetInput` (transform.hh:219-223).
+    pub fn op_set_input(&mut self, rop_idx: usize, rvn_idx: usize, slot: usize) {
+        let rop = &mut self.new_ops[rop_idx];
+        while rop.input.len() <= slot {
+            rop.input.push(None);
+        }
+        rop.input[slot] = Some(rvn_idx);
+    }
+
+    /// Mark the given variable as output of the given op. Faithful to
+    /// `opSetOutput` (transform.hh:229-234).
+    pub fn op_set_output(&mut self, rop_idx: usize, rvn_idx: usize) {
+        self.new_ops[rop_idx].output = Some(rvn_idx);
+        self.new_varnodes[rvn_idx].def = Some(rop_idx);
+    }
+
+    /// Should `newPreexistingOp` be called? Faithful to `preexistingGuard`
+    /// (transform.hh:246-253).
+    pub fn preexisting_guard(slot: usize, rvn: &TransformVar) -> bool {
+        if slot == 0 {
+            return true;
+        }
+        if rvn.var_type == TransformVarType::Piece || rvn.var_type == TransformVarType::PieceTemp {
+            return false;
+        }
+        true
+    }
+
+    // ---- Apply lifecycle (transform.cc:651-766) ----
+
+    /// Handle special PcodeOp marking. Faithful to `specialHandling`
+    /// (transform.cc:654-660).
+    fn special_handling(&self, rop: &TransformOp) {
+        // Ghidra calls fd->markIndirectCreation on the replacement op.
+        // Rugra does not yet expose markIndirectCreation; this is a no-op.
+        let _ = rop;
+    }
+
+    /// Create a new PcodeOp or modify an existing one to match the placeholder
+    /// at `op_idx`. Faithful to `TransformOp::createReplacement`
+    /// (transform.cc:225-250). Handles output Varnode creation via the arena.
+    fn create_op_replacement(&mut self, op_idx: usize) {
+        let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+        let is_preexisting = (self.new_ops[op_idx].special & transform_op_special::OP_PREEXISTING) != 0;
+        if is_preexisting {
+            let op = self.new_ops[op_idx].op.clone().unwrap();
+            fd.op_set_opcode(&op, self.new_ops[op_idx].opc);
+            // Trim/extend inputs to match placeholder count.
+            let target_len = self.new_ops[op_idx].input.len();
+            loop {
+                let cur = op.0.read().unwrap().inrefs.len();
+                if cur <= target_len {
+                    break;
+                }
+                fd.op_remove_input(&op, cur - 1);
+            }
+            // Clear any remaining inputs.
+            let cur = op.0.read().unwrap().inrefs.len();
+            for i in 0..cur {
+                if i < op.0.read().unwrap().inrefs.len() {
+                    fd.op_unset_input(&op, i);
+                }
+            }
+            // Extend with null inputs up to placeholder size.
+            while op.0.read().unwrap().inrefs.len() < target_len {
+                let insert_slot = op.0.read().unwrap().inrefs.len();
+                let placeholder = fd.new_constant(0, 0);
+                fd.op_insert_input(&op, placeholder, insert_slot);
+            }
+            self.new_ops[op_idx].replacement = Some(op);
+        } else {
+            let op_ref = self.new_ops[op_idx].op.clone().unwrap();
+            let addr = op_ref.0.read().unwrap().get_addr();
+            let input_len = self.new_ops[op_idx].input.len();
+            let newop = fd.new_op(input_len, addr);
+            let opc = self.new_ops[op_idx].opc;
+            fd.op_set_opcode(&newop, opc);
+            // Create the output Varnode now that the op exists.
+            if let Some(out_idx) = self.new_ops[op_idx].output {
+                self.new_varnodes[out_idx].create_replacement(fd, Some(&newop));
+                if let Some(out_vn) = self.new_varnodes[out_idx].replacement.clone() {
+                    fd.op_set_output(&newop, out_vn);
+                }
+            }
+            if self.new_ops[op_idx].follow.is_none() {
+                // Can be inserted immediately.
+                fd.op_insert_before(&newop, &op_ref);
+            }
+            self.new_ops[op_idx].replacement = Some(newop);
+        }
+    }
+
+    /// Create the actual PcodeOps from placeholders. Faithful to `createOps`
+    /// (transform.cc:665-680).
+    fn create_ops(&mut self) {
+        // First pass: create all op replacements.
+        let n_ops = self.new_ops.len();
+        for i in 0..n_ops {
+            self.create_op_replacement(i);
+        }
+        // Second pass: insert ops that follow another op, iterating until all
+        // are inserted.
+        loop {
+            let mut follow_count = 0;
+            let n = self.new_ops.len();
+            for i in 0..n {
+                let needs_insert = self.new_ops[i].follow.is_some();
+                if !needs_insert {
+                    continue;
+                }
+                // Snapshot the follow index before the call.
+                let _ = i;
+                let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+                // We must borrow new_ops immutably for attempt_insertion's
+                // lookup while mutating new_ops[i]. Clone the slice view.
+                let ops_snapshot: Vec<TransformOp> = self.new_ops.clone();
+                let mut tmp = self.new_ops[i].clone();
+                let inserted = tmp.attempt_insertion(fd, &ops_snapshot);
+                self.new_ops[i] = tmp;
+                if !inserted {
+                    follow_count += 1;
+                }
+            }
+            if follow_count == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Create the actual Varnodes from placeholders. Faithful to
+    /// `createVarnodes` (transform.cc:684-711). Collects input varnodes into
+    /// `input_list`.
+    fn create_varnodes(&mut self, input_list: &mut Vec<(usize, bool)>) {
+        let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+        // Iterate over all split arrays (referenced by piece_map) and create
+        // replacements, collecting input pieces.
+        let entries: Vec<(u32, usize)> = self.piece_map.iter().map(|(&k, &v)| (k, v)).collect();
+        for (_create_index, start) in entries {
+            let mut i = start;
+            loop {
+                let is_piece = self.new_varnodes[i].var_type == TransformVarType::Piece;
+                let is_input = self.new_varnodes[i]
+                    .vn
+                    .as_ref()
+                    .map(|v| v.read().unwrap().is_input())
+                    .unwrap_or(false);
+                if is_piece && is_input {
+                    let already_marked = self.new_varnodes[i]
+                        .vn
+                        .as_ref()
+                        .map(|v| v.read().unwrap().is_mark())
+                        .unwrap_or(false);
+                    if already_marked {
+                        self.new_varnodes[i].flags |= transform_var_flags::INPUT_DUPLICATE;
+                        input_list.push((i, true));
+                    } else {
+                        self.new_varnodes[i]
+                            .vn
+                            .as_ref()
+                            .unwrap()
+                            .write()
+                            .unwrap()
+                            .set_mark();
+                        input_list.push((i, false));
+                    }
+                }
+                // Create the replacement Varnode.
+                let def_op = self.new_varnodes[i]
+                    .def
+                    .and_then(|di| self.new_ops[di].replacement.clone());
+                let mut tmp = self.new_varnodes[i].clone();
+                tmp.create_replacement(fd, def_op.as_ref());
+                self.new_varnodes[i] = tmp;
+                if (self.new_varnodes[i].flags & transform_var_flags::SPLIT_TERMINATOR) != 0 {
+                    break;
+                }
+                i += 1;
+            }
+        }
+        // Create standalone (non-piece-map) varnodes.
+        // Ghidra iterates newVarnodes (the list of non-piece-map vars). Rugra
+        // stores everything in one arena; standalone vars are those not in any
+        // piece_map range. For simplicity, create all uncreated non-piece vars.
+        let standalone_indices: Vec<usize> = (0..self.new_varnodes.len())
+            .filter(|&i| {
+                self.new_varnodes[i].replacement.is_none()
+                    && self.new_varnodes[i].var_type != TransformVarType::Piece
+                    && self.new_varnodes[i].var_type != TransformVarType::PieceTemp
+            })
+            .collect();
+        for i in standalone_indices {
+            let def_op = self.new_varnodes[i]
+                .def
+                .and_then(|di| self.new_ops[di].replacement.clone());
+            let mut tmp = self.new_varnodes[i].clone();
+            tmp.create_replacement(fd, def_op.as_ref());
+            self.new_varnodes[i] = tmp;
+        }
+    }
+
+    /// Remove old preexisting PcodeOps that are now obsolete. Faithful to
+    /// `removeOld` (transform.cc:713-724).
+    fn remove_old(&mut self) {
+        let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+        let to_destroy: Vec<PcodeOpRef> = self
+            .new_ops
+            .iter()
+            .filter(|rop| {
+                (rop.special & transform_op_special::OP_REPLACEMENT) != 0
+            })
+            .filter_map(|rop| rop.op.clone())
+            .filter(|op| !op.0.read().unwrap().is_dead())
+            .collect();
+        for op in to_destroy {
+            fd.op_destroy(&op);
+        }
+    }
+
+    /// Remove old input Varnodes and mark new ones as inputs. Faithful to
+    /// `transformInputVarnodes` (transform.cc:729-738).
+    fn transform_input_varnodes(&mut self, input_list: &[(usize, bool)]) {
+        let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+        for &(rvn_idx, is_duplicate) in input_list {
+            if !is_duplicate {
+                // Ghidra calls fd->deleteVarnode(rvn->vn). Rugra's VarnodeBank
+                // does not yet expose deleteVarnode; we skip removal.
+            }
+            if let Some(rep) = self.new_varnodes[rvn_idx].replacement.clone() {
+                // Ghidra calls fd->setInputVarnode(rep). Rugra marks input.
+                rep.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+            }
+        }
+    }
+
+    /// Set input Varnodes for all new ops. Faithful to `placeInputs`
+    /// (transform.cc:740-754).
+    fn place_inputs(&mut self) {
+        let fd = unsafe { &mut *self.fd.expect("TransformManager not initialized") };
+        // Snapshot the replacement varnodes to avoid borrow conflicts.
+        let replacements: Vec<Option<Arc<RwLock<Varnode>>>> = self
+            .new_varnodes
+            .iter()
+            .map(|v| v.replacement.clone())
+            .collect();
+        let n_ops = self.new_ops.len();
+        for i in 0..n_ops {
+            let op_rep = self.new_ops[i].replacement.clone();
+            let input_indices: Vec<Option<usize>> = self.new_ops[i].input.clone();
+            let special = self.new_ops[i].special;
+            if let Some(op) = op_rep {
+                for (slot, rvn_idx) in input_indices.iter().enumerate() {
+                    if let Some(&Some(idx)) = Some(rvn_idx) {
+                        if let Some(vn) = &replacements[idx] {
+                            fd.op_set_input(&op, vn.clone(), slot);
+                        }
+                    }
+                }
+                // special_handling needs &rop; we have the index.
+                let rop = &self.new_ops[i];
+                let _ = special;
+                self.special_handling(rop);
+            }
+        }
+    }
+
+    /// Apply the full transform to the function. Faithful to `apply`
+    /// (transform.cc:756-765).
+    pub fn apply(&mut self, fd: &mut Funcdata) {
+        self.fd = Some(fd as *mut Funcdata);
+        let mut input_list: Vec<(usize, bool)> = Vec::new();
+        self.create_ops();
+        self.create_varnodes(&mut input_list);
+        self.remove_old();
+        self.transform_input_varnodes(&input_list);
+        self.place_inputs();
     }
 }
 
@@ -372,7 +1140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_laned_register() {
+    fn test_laned_register_basic() {
         let lr = LanedRegister::with_sizes(16, 0b1010); // sizes 1 and 3
         assert!(lr.allowed_lane(1));
         assert!(lr.allowed_lane(3));
@@ -381,11 +1149,24 @@ mod tests {
     }
 
     #[test]
+    fn test_laned_register_parse_sizes() {
+        let mut lr = LanedRegister::default();
+        lr.parse_sizes(16, "1, 2, 4, 8");
+        assert!(lr.allowed_lane(1));
+        assert!(lr.allowed_lane(2));
+        assert!(lr.allowed_lane(4));
+        assert!(lr.allowed_lane(8));
+        assert!(!lr.allowed_lane(3));
+        assert_eq!(lr.get_whole_size(), 16);
+    }
+
+    #[test]
     fn test_lane_description_uniform() {
         let ld = LaneDescription::uniform(8, 2);
         assert_eq!(ld.get_num_lanes(), 4);
         assert_eq!(ld.get_size(0), 2);
         assert_eq!(ld.get_position(2), 4);
+        assert_eq!(ld.get_whole_size(), 8);
     }
 
     #[test]
@@ -398,25 +1179,182 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_manager() {
-        let mut mgr = TransformManager::new();
-        let v_idx = mgr.new_unique(4);
-        let op_idx = mgr.new_op(2, OpCode::CPUI_INT_ADD);
-        mgr.op_set_output(op_idx, v_idx);
-        mgr.op_set_input(op_idx, v_idx, 0);
-        assert_eq!(mgr.num_new_varnodes(), 1);
-        assert_eq!(mgr.num_new_ops(), 1);
-        assert!(mgr.new_ops[0].output.is_some());
+    fn test_lane_description_get_boundary() {
+        let ld = LaneDescription::uniform(8, 2);
+        assert_eq!(ld.get_boundary(0), 0);
+        assert_eq!(ld.get_boundary(2), 1);
+        assert_eq!(ld.get_boundary(4), 2);
+        assert_eq!(ld.get_boundary(6), 3);
+        assert_eq!(ld.get_boundary(8), 4); // whole size -> lane count
+        assert_eq!(ld.get_boundary(1), -1); // not on boundary
+        assert_eq!(ld.get_boundary(-1), -1); // out of bounds
+        assert_eq!(ld.get_boundary(9), -1); // out of bounds
     }
 
     #[test]
-    fn test_transform_op_replace() {
-        use crate::address::{Address, SeqNum};
+    fn test_lane_description_subset() {
+        let mut ld = LaneDescription::uniform(8, 2);
+        assert!(ld.subset(2, 4));
+        assert_eq!(ld.get_whole_size(), 4);
+        assert_eq!(ld.get_num_lanes(), 2);
+        assert_eq!(ld.get_position(0), 0);
+        assert_eq!(ld.get_position(1), 2);
+    }
+
+    #[test]
+    fn test_lane_description_subset_whole() {
+        let mut ld = LaneDescription::uniform(8, 2);
+        assert!(ld.subset(0, 8));
+        assert_eq!(ld.get_num_lanes(), 4);
+    }
+
+    #[test]
+    fn test_lane_description_subset_splits_lane() {
+        let mut ld = LaneDescription::uniform(8, 2);
+        assert!(!ld.subset(1, 4)); // 1 is not on a boundary
+    }
+
+    #[test]
+    fn test_lane_description_restriction() {
+        let ld = LaneDescription::uniform(8, 2);
+        let r = ld.restriction(4, 0, 2, 4);
+        assert!(r.is_some());
+        let (num, skip) = r.unwrap();
+        assert_eq!(num, 2);
+        assert_eq!(skip, 1);
+    }
+
+    #[test]
+    fn test_lane_description_extension() {
+        let ld = LaneDescription::uniform(8, 2);
+        let r = ld.extension(2, 1, 2, 4);
+        assert!(r.is_some());
+    }
+
+    #[test]
+    fn test_transform_var_initialize() {
+        let v = TransformVar::initialize(TransformVarType::Constant, None, 32, 4, 0xff);
+        assert_eq!(v.var_type, TransformVarType::Constant);
+        assert_eq!(v.byte_size, 4);
+        assert_eq!(v.bit_size, 32);
+        assert_eq!(v.val, 0xff);
+        assert_eq!(v.flags, 0);
+        assert!(v.def.is_none());
+        assert!(v.replacement.is_none());
+    }
+
+    #[test]
+    fn test_transform_manager_preexisting_varnode() {
+        let mut mgr = TransformManager::new();
+        let vn = Arc::new(RwLock::new(Varnode::new(4, Address::new(0x100))));
+        let idx = mgr.new_preexisting_varnode(vn);
+        assert_eq!(mgr.new_varnodes[idx].var_type, TransformVarType::Preexisting);
+        assert!(mgr.new_varnodes[idx].vn.is_some());
+        assert_eq!(mgr.piece_map.len(), 1);
+    }
+
+    #[test]
+    fn test_transform_manager_unique_and_constant() {
+        let mut mgr = TransformManager::new();
+        let u = mgr.new_unique(4);
+        let c = mgr.new_constant(4, 0, 0xff);
+        assert_eq!(mgr.new_varnodes[u].var_type, TransformVarType::NormalTemp);
+        assert_eq!(mgr.new_varnodes[u].byte_size, 4);
+        assert_eq!(mgr.new_varnodes[c].var_type, TransformVarType::Constant);
+        assert_eq!(mgr.new_varnodes[c].val, 0xff);
+    }
+
+    #[test]
+    fn test_transform_manager_new_constant_shift() {
+        let mut mgr = TransformManager::new();
+        // val = 0xABCD, lsb_offset = 8 -> (0xABCD >> 8) & calc_mask(1) = 0xAB
+        let c = mgr.new_constant(1, 8, 0xABCD);
+        assert_eq!(mgr.new_varnodes[c].val, 0xAB);
+    }
+
+    #[test]
+    fn test_transform_manager_split() {
+        let mut mgr = TransformManager::new();
+        let vn = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x100))));
+        let ld = LaneDescription::uniform(8, 2);
+        let start = mgr.new_split(vn, &ld);
+        assert_eq!(mgr.new_varnodes.len(), 4);
+        // Most-significant piece is the terminator.
+        assert_ne!(
+            mgr.new_varnodes[start + 3].flags & transform_var_flags::SPLIT_TERMINATOR,
+            0
+        );
+        assert_eq!(mgr.new_varnodes[start].val, 0); // bitpos 0
+        assert_eq!(mgr.new_varnodes[start + 1].val, 16); // bitpos 16 (position 2 * 8)
+    }
+
+    #[test]
+    fn test_transform_manager_op_replace() {
+        use crate::address::SeqNum;
+        use crate::op::PcodeOp;
         let dummy_op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_COPY,
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
         )));
         let mut mgr = TransformManager::new();
-        let op_idx = mgr.new_op_replace(1, OpCode::CPUI_INT_ZEXT, dummy_op);
-        assert!(mgr.new_ops[op_idx].original.is_some());
+        let op_ref = crate::op::PcodeOpRef(dummy_op);
+        let idx = mgr.new_op_replace(2, OpCode::CPUI_INT_ADD, op_ref);
+        assert!(mgr.new_ops[idx].op.is_some());
+        assert_eq!(mgr.new_ops[idx].opc, OpCode::CPUI_INT_ADD);
+        assert_ne!(mgr.new_ops[idx].special & transform_op_special::OP_REPLACEMENT, 0);
+        assert_eq!(mgr.new_ops[idx].input.len(), 2);
+    }
+
+    #[test]
+    fn test_transform_manager_op_set_input_output() {
+        let mut mgr = TransformManager::new();
+        let out_vn = mgr.new_unique(4);
+        let in_vn = mgr.new_unique(4);
+        let dummy_follow_op = mgr.new_preexisting_op(
+            1,
+            OpCode::CPUI_COPY,
+            crate::op::PcodeOpRef(Arc::new(RwLock::new(crate::op::PcodeOp::new(
+                crate::address::SeqNum::new(Address::new(0x1000), 0),
+                OpCode::CPUI_COPY,
+            )))),
+        );
+        let op_idx = mgr.new_op(2, OpCode::CPUI_INT_ADD, dummy_follow_op);
+        mgr.op_set_output(op_idx, out_vn);
+        mgr.op_set_input(op_idx, in_vn, 0);
+        assert_eq!(mgr.new_ops[op_idx].output, Some(out_vn));
+        assert_eq!(mgr.new_ops[op_idx].input[0], Some(in_vn));
+        assert_eq!(mgr.new_varnodes[out_vn].def, Some(op_idx));
+    }
+
+    #[test]
+    fn test_preexisting_guard() {
+        let piece_var = TransformVar::initialize(
+            TransformVarType::Piece,
+            None,
+            16,
+            2,
+            0,
+        );
+        let normal_var = TransformVar::initialize(
+            TransformVarType::NormalTemp,
+            None,
+            16,
+            2,
+            0,
+        );
+        assert!(TransformManager::preexisting_guard(0, &piece_var));
+        assert!(!TransformManager::preexisting_guard(1, &piece_var));
+        assert!(TransformManager::preexisting_guard(1, &normal_var));
+    }
+
+    #[test]
+    fn test_get_preexisting_varnode_constant() {
+        let mut mgr = TransformManager::new();
+        let vn = Arc::new(RwLock::new(Varnode::new(4, Address::new(0xff))));
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        vn.write().unwrap().address_space = AddressSpace::Const;
+        let idx = mgr.get_preexisting_varnode(vn);
+        assert_eq!(mgr.new_varnodes[idx].var_type, TransformVarType::Constant);
+        assert_eq!(mgr.new_varnodes[idx].val, 0xff);
     }
 }

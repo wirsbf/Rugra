@@ -60,7 +60,7 @@
 | 22 | `coreaction.cc` (~2000行) | `coreaction.rs` (~800行) | 🔧 L2 | 已实现 ~10 个 Action；**缺少约 30+ 个优化 Action**（见下方详细列表） | `coreaction.cc` |
 | 23 | `ruleaction.cc` (~3000行) | `ruleaction.rs` (~1200行) | 🔧 L2 | 已实现 ~15 个 Rule；**缺少约 60+ 个简化规则**（见下方详细列表） | `ruleaction.cc` |
 | 24 | `constseq.cc` | — | 📋 L1 | **完全缺失**：常量序列分析 | `constseq.cc` |
-| 25 | `transform.cc` | — | 📋 L1 | **完全缺失**：P-code 变换基础设施（Dolphin 重写） | `transform.cc` |
+| 25 | `transform.cc` | `transform.rs` | ✅ L3 | **完整实现**：LanedRegister（lane 尺寸位掩码 + parse_sizes）+ LaneDescription（uniform/two_lane/subset/get_boundary/restriction/extension）+ TransformVar（6 类型 + create_replacement）+ TransformOp（createReplacement/attemptInsertion/inheritIndirect）+ TransformManager 完整 apply 生命周期（createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs）。Arena 风格 ID 索引替代 Ghidra 原始指针。19 个单元测试。已知限制：transferVarnodeProperties/deleteVarnode/setInputVarnode/markIndirectCreation 用 best-effort 替代 | `transform.cc` |
 | 26 | `userop.cc` | — | 📋 L1 | **完全缺失**：用户自定义操作（call其他、宏展开） | `userop.cc` |
 | 27 | `unify.cc` | — | 📋 L1 | **完全缺失**：统一模式匹配（规则基础设施） | `unify.cc` |
 
@@ -259,9 +259,9 @@
 
 | 级别 | 数量 | 说明 |
 |---|---|---|
-| ✅ **L3（已完成）** | **17** | 核心 IR/数据模型，基础 Action/Rule |
+| ✅ **L3（已完成）** | **18** | 核心 IR/数据模型，基础 Action/Rule |
 | 🔧 **L2（实现中）** | **15** | 核心算法部分实现，关键功能缺失 |
-| 📋 **L1（计划中）** | **33+** | 完全缺失的模块，需要从零实现 |
+| 📋 **L1（计划中）** | **32+** | 完全缺失的模块，需要从零实现 |
 | **总计** | **65+** | Ghidra 114 个源文件中已覆盖/已识别 |
 
 ---
