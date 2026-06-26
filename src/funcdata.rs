@@ -280,6 +280,28 @@ impl Funcdata {
         }
     }
 
+    /// Unset the output of an op. Faithful to `Funcdata::opUnsetOutput`
+    /// (funcdata_op.cc). Clears the output's def link and removes the output
+    /// from the op, making the old output a free varnode.
+    pub fn op_unset_output(&self, op: &crate::op::PcodeOpRef) {
+        let old = op.0.write().unwrap().output.take();
+        if let Some(o) = old {
+            o.write().unwrap().def = None;
+        }
+    }
+
+    /// Create a new output varnode for an op at a given address+size.
+    /// Faithful to `Funcdata::newVarnodeOut` (funcdata.hh). Creates a varnode
+    /// in the register space at the given address and wires it as the op's
+    /// output.
+    pub fn new_varnode_out(&mut self, size: usize, addr: crate::address::Address, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create_with_space(size, crate::space::AddressSpace::Register, addr.as_u64());
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
+        op.0.write().unwrap().output = Some(vn.clone());
+        vn
+    }
+
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve

@@ -3695,6 +3695,80 @@ impl Rule for RuleLogic2Bool {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
+/// Transform canceling INT_RIGHT/INT_SRIGHT of INT_LEFT:
+///   `(V << c) >> c  =>  zext(sub(V, 0))`  (unsigned right)
+///   `(V << c) s>> c  =>  sext(sub(V, 0))` (signed right)
+///
+/// Faithful to Ghidra's `RuleLeftRight` (ruleaction.cc:2016-2062). When a
+/// right-shift exactly cancels a preceding left-shift (same byte-aligned
+/// amount), the pair collapses to a zero/sign extension of a SUBPIECE.
+pub struct RuleLeftRight;
+
+impl RuleLeftRight {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleLeftRight {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Phase 1: validate and extract raw values.
+        let (sa, leftshift_arc, is_sright, shiftin_size, tsz) = {
+            let op = op_arc.read().unwrap();
+            let constvn = match op.inrefs.get(1) {
+                Some(v) if v.read().unwrap().is_constant() => v.clone(),
+                _ => return Ok(action_status::NO_CHANGE),
+            };
+            let sa = constvn.read().unwrap().get_offset();
+            let shiftin = match op.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let shiftin_size;
+            let leftshift_arc;
+            {
+                let s = shiftin.read().unwrap();
+                shiftin_size = s.get_size();
+                leftshift_arc = match s.def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+            }
+            if leftshift_arc.read().unwrap().opcode != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
+            if !leftshift_arc.read().unwrap().inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let left_sa = leftshift_arc.read().unwrap().inrefs[1].read().unwrap().get_offset();
+            if left_sa != sa { return Ok(action_status::NO_CHANGE); }
+            if sa & 7 != 0 { return Ok(action_status::NO_CHANGE); }
+            let isa = (sa >> 3) as usize;
+            let tsz = shiftin_size - isa;
+            if !matches!(tsz, 1 | 2 | 4 | 8) { return Ok(action_status::NO_CHANGE); }
+            // shiftin must be lone descendant of this op.
+            let lone = shiftin.read().unwrap().lone_descend();
+            if !lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (sa, leftshift_arc, op.opcode == OpCode::CPUI_INT_SRIGHT, shiftin_size, tsz)
+        };
+        // Phase 2: transform.
+        let leftshift_ref = crate::op::PcodeOpRef(leftshift_arc.clone());
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_unset_input(&follow, 0);
+        fd.op_unset_output(&leftshift_ref);
+        let newvn = fd.new_varnode_out(tsz, crate::address::Address::new(0x1000), &leftshift_ref);
+        fd.op_set_opcode(&leftshift_ref, OpCode::CPUI_SUBPIECE);
+        let zero_const = fd.new_constant(4, 0);
+        fd.op_set_input(&leftshift_ref, zero_const, 1);
+        fd.op_set_input(&follow, newvn, 0);
+        fd.op_remove_input(&follow, 1);
+        let ext_opc = if is_sright { OpCode::CPUI_INT_SEXT } else { OpCode::CPUI_INT_ZEXT };
+        fd.op_set_opcode(&follow, ext_opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "left_right" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT] }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6194,5 +6268,47 @@ mod tests {
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         assert_eq!(and_op.read().unwrap().opcode, OpCode::CPUI_BOOL_AND);
+    }
+
+    // --- RuleLeftRight (ruleaction.cc:2016) ---
+
+    #[test]
+    fn test_left_right_cancel() {
+        // (V << 8) >> 8 (size 2) → zext(sub(V, 0))
+        // isa=1, tsz=2-1=1 (valid).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let sa = fd.vbank.create_constant(4, 8);
+        let left_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let left_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut l = left_op.write().unwrap();
+            l.inrefs = vec![v.clone(), sa.clone()];
+            l.output = Some(left_out.clone());
+        }
+        left_out.write().unwrap().def = Some(Arc::downgrade(&left_op));
+        left_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let right_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut r = right_op.write().unwrap();
+            r.inrefs = vec![left_out.clone(), sa.clone()];
+            r.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+        }
+        // left_out must have lone_descend pointing to right_op.
+        left_out.write().unwrap().descend.push(Arc::downgrade(&right_op));
+        let rule = RuleLeftRight::new();
+        let result = rule.apply_op(&right_op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // right_op should now be INT_ZEXT.
+        assert_eq!(right_op.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT);
+        // left_op should now be SUBPIECE.
+        assert_eq!(left_op.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
     }
 }

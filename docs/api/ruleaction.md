@@ -451,3 +451,13 @@ opDestroy 销毁未用 op（清输出 def、断输入 descend 链、markDead）�
 当两输入均为布尔值时，INT_AND→BOOL_AND、INT_OR→BOOL_OR、INT_XOR→BOOL_XOR。
 
 测试：ruleaction::tests +2（布尔 == 0→BOOL_NOT；INT_AND(less,less)→BOOL_AND）。
+
+### 2026-06-26（续）：RuleLeftRight + op_unset_output/new_varnode_out
+
+#### Funcdata::op_unset_output / new_varnode_out（funcdata_op.cc/funcdata.hh）
+opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联。解锁 RuleLeftRight。
+
+#### `pub struct RuleLeftRight`（ruleaction.cc:2016-2062）
+`(V << c) >> c => zext(sub(V, 0))`，`(V << c) s>> c => sext(sub(V, 0))`。当右移恰好抵消左移（同字节对齐量），pair 塌缩为零/符号扩展的 SUBPIECE。要求 shiftin 为 loneDescend。
+
+测试：ruleaction::tests +1（<<8 >>8 cancel → ZEXT + SUBPIECE）。

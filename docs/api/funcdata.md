@@ -625,3 +625,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 - `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：销毁未用 op（清输出 def、断所有输入 descend 链、markDead）。
 - `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
 解锁 RuleEarlyRemoval。
+
+### 2026-06-26（续）：op_unset_output / new_varnode_out
+
+- `op_unset_output(op)` — `Funcdata::opUnsetOutput`：断开 op 输出 def 链。
+- `new_varnode_out(size, addr, op)` — `Funcdata::newVarnodeOut`：创建新输出 varnode 并关联 op。
+解锁 RuleLeftRight。
