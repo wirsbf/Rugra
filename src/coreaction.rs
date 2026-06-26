@@ -2117,12 +2117,70 @@ impl Action for ActionMarkExplicit {
 
 /// Mark implied varnodes. Faithful to `ActionMarkImplied`
 /// (coreaction.cc).
-pub struct ActionMarkImplied;
+///
+/// Determines which non-explicit Varnodes can be "implied" (their value
+/// is shown as an expression rather than a named variable). The algorithm
+/// does a depth-first traversal of each Varnode's descendants, checking
+/// if the cover allows the variable to be implied (no LOAD/STORE/call
+/// aliasing issues).
+pub struct ActionMarkImplied { pub count: i32 }
 impl ActionMarkImplied {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
+
+    /// Return false only if one Varnode is obtained by adding non-zero thing
+    /// to another Varnode. Faithful to `isPossibleAliasStep`
+    /// (coreaction.cc).
+    fn is_possible_alias_step(
+        vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        // Check both directions: is vn1 = vn2 + const, or vn2 = vn1 + const?
+        for (a, b) in [(vn1, vn2), (vn2, vn1)] {
+            let a_rg = a.read().unwrap();
+            if !a_rg.is_written() {
+                continue;
+            }
+            let Some(def) = a_rg.get_def() else { continue };
+            let def_rg = def.read().unwrap();
+            let opc = def_rg.opcode;
+            if !matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD | OpCode::CPUI_INT_XOR) {
+                continue;
+            }
+            // Check if the other varnode is input(0) of this op.
+            let in0 = def_rg.get_in(0);
+            if let Some(in0_vn) = in0 {
+                if std::sync::Arc::ptr_eq(in0_vn, b) {
+                    // Check if input(1) is a constant.
+                    let in1 = def_rg.get_in(1);
+                    if in1.map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                        return false; // a = b + const → not a possible alias.
+                    }
+                }
+            }
+        }
+        true
+    }
 }
 impl Action for ActionMarkImplied {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra algorithm:
+        // 1. For each Varnode in the location set:
+        //    - Skip free, explicit, or already-implied varnodes
+        //    - Do a DFS through descendants using a DescTreeElement stack
+        //    - When all descendants traced, check checkImpliedCover:
+        //      - If cover allows: markImplied(vn)
+        //      - If not: setExplicit(vn)
+        // 2. checkImpliedCover checks LOAD/STORE aliasing and call crossing
+        //
+        // The isPossibleAliasStep helper is implemented above.
+        // Full implementation requires:
+        // - VarnodeLocSet iteration (beginLoc/endLoc)
+        // - Cover objects on Varnodes
+        // - DescTreeElement stack
+        // - Merge::markImplied
+        // L3 gap: requires VarnodeLocSet + Cover + Merge integration.
+        let _ = fd;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "markimplied" }

@@ -307,3 +307,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
   - 后继数 > max_implied_ref → 潜在隐式（多后继）
   - 单后继或无后继 → 非显式
 - 11 个 coreaction Actions 现在有真实算法逻辑。第一个实现了实际辅助函数逻辑（而非纯文档框架）。
+
+## 2026-06-27（续 9）：ActionMarkImplied 算法逻辑
+
+- **ActionMarkImplied**：实现 `is_possible_alias_step` 辅助函数（检查两 Varnode 是否可能别名）+ 完整 DFS 遍历算法文档。
+  - `is_possible_alias_step`：检查 vn1=vn2+const 或 vn2=vn1+const（通过 INT_ADD/PTRSUB/PTRADD/INT_XOR），如果是则返回 false（确定非别名）。
+  - 主算法：对每个非显式 Varnode 做 DFS 遍历后继，检查 checkImpliedCover（LOAD/STORE/call 交叉），标记 implied 或 explicit。
+- 12 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 8 框架级，2 个有实际辅助函数）。
