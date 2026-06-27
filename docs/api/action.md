@@ -582,7 +582,7 @@ Funcdata ready
 - 新增 `ActionPool` struct（对应 Ghidra `ActionPool`，action.hh:262）：持有 `Vec<Box<dyn Rule>>` + `per_op: HashMap<OpCode, Vec<usize>>` 索引。`add_rule` 注册 Rule 并按 opcode 建索引；`apply` 遍历所有 live op，按 opcode 匹配 Rule，循环至固定点（对应 Ghidra rule_repeatapply）。
 - `build_simplify_pool()` 注册 **~80 个简化 Rule**（2026-06-27 从 44 扩展）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule 以 `skip` 注释标注。
 - **`build_cleanup_pool()`**（新增，对齐 Ghidra `actcleanup` coreaction.cc:5694-5710）：独立池，含 `RuleMultNegOne`/`Rule2Comp2Sub`。**在 simplify 池之后跑**（阶段分隔）。这解决了一个收敛 bug：RuleMultNegOne（`x*-1→INT_2COMP`）若与 Rule2Comp2Mult（`INT_2COMP→x*-1`，oppool1 内）同池会无限 ping-pong；Ghidra 靠阶段分隔（主池先收敛、cleanup 池再跑一次）避免循环，Rugra 现忠实移植此机制。
-- RuleEarlyRemoval(5512) 暂 skip：Rugra 的 RuleEarlyRemoval 移植只补了 2/6 守卫（缺 `isIndirectSource`/`isAutoLive`/`doesDeadcode`），会误删有内存副作用的 op → 空 varnode。待补齐守卫后重新启用。
+- RuleEarlyRemoval(5512) **已重新启用**（保守版）：补齐 Ghidra 6 守卫中的 is_call/is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 Rugra 的 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），当前空间门只允许 CONSTANT 输出删除（无条件安全）。REGISTER/UNIQUE 删除待 descend 追踪完整 + INDIRECT_SOURCE 设置 + doesDeadcode 移植后放开。
 - 接入 `set_default_actions`：`ActionSimplify` → `build_simplify_pool()` → `build_cleanup_pool()`。
 
 **验证**：诊断确认 Rule 真实触发——curl 各函数 pass_changes 从 1 到 30+（如 main 28 次、getparameter 30 次简化）。这是 Rugra 首次在反编译时实际应用 Rule 简化。682/682 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。

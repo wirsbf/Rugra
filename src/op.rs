@@ -130,6 +130,14 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::CALL) != 0
     }
 
+    /// Is this op a source of a CPUI_INDIRECT (its output feeds an INDIRECT
+    /// that tracks a memory side-effect)? Faithful to `PcodeOp::isIndirectSource`
+    /// (op.hh:180). RuleEarlyRemoval must not remove such ops, or the INDIRECT
+    /// is left referencing a dead varnode.
+    pub fn is_indirect_source(&self) -> bool {
+        (self.flags & pcodeop_flags::INDIRECT_SOURCE) != 0
+    }
+
     /// Is this a marker op (MULTIEQUAL/INDIRECT)? Faithful to
     /// `PcodeOp::isMarker` (op.hh:185).
     pub fn is_marker(&self) -> bool {

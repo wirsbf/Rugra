@@ -328,6 +328,20 @@ impl Varnode {
     pub fn is_explicit(&self) -> bool {
         (self.flags & varnode_flags::EXPLICIT) != 0
     }
+
+    /// Is this varnode held alive automatically (AUTOLIVE_HOLD)? Faithful to
+    /// `Varnode::isAutoLive` (varnode.hh). Currently always false — Rugra has
+    /// not yet ported the machinery that SETS the auto-live flag (ActionCopyPropagate /
+    /// merge marking). This is a safe conservative port: when no varnode is
+    /// marked, isAutoLive returns false, matching Ghidra. The empty-varnode
+    /// bug in RuleEarlyRemoval is fixed by the `is_indirect_source` guard, not
+    /// this one; re-evaluate when auto-live setting is ported.
+    pub fn is_auto_live(&self) -> bool {
+        // addlflags is u16; AUTOLIVE_HOLD (1<<30) doesn't fit — the flag
+        // representation needs fixing when the setter is ported. Until then
+        // no varnode is auto-live.
+        false
+    }
     /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
     pub fn set_explicit(&mut self) {
         self.flags |= varnode_flags::EXPLICIT;

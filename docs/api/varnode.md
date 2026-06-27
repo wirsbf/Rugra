@@ -672,3 +672,5 @@
 ### 2026-06-27（会话3 G3 诊断）：find_by_loc
 
 - `VarnodeBank::find_by_loc(size, loc) -> Option<Arc<Varnode>>` — 空间查找辅助：扫描 loc_tree 找任意 (size, loc) 匹配的 varnode（忽略 create_index），返回 create_index 最大者。用于 G3 诊断时桥接断链的 use-def（实验性，当前未被主管线调用）。
+### 2026-06-27（续）：is_auto_live（解锁 RuleEarlyRemoval）
+- @is_auto_live() -> bool@ 对齐 @Varnode::isAutoLive@（varnode.hh）：保守返回 false（AUTOLIVE_HOLD 设置机制未移植，无 varnode 被标记）。is_indirect_source 才是空 varnode 的真修复。

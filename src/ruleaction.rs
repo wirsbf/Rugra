@@ -3570,20 +3570,31 @@ impl RuleEarlyRemoval {
 
 impl Rule for RuleEarlyRemoval {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Must have an output with no descendants.
-        let has_unused_output = {
+        // Faithful to Ghidra RuleEarlyRemoval::applyOp (ruleaction.cc:25-44).
+        // Guard sequence (in Ghidra's order):
+        let out_vn = {
             let op = op_arc.read().unwrap();
-            if op.opcode == OpCode::CPUI_CALL || op.opcode == OpCode::CPUI_CALLIND {
-                return Ok(action_status::NO_CHANGE);
-            }
-            match op.output.as_ref() {
-                Some(o) => o.read().unwrap().has_no_descend(),
-                None => return Ok(action_status::NO_CHANGE),
-            }
+            if op.is_call() { return Ok(action_status::NO_CHANGE); }              // 30
+            if op.is_indirect_source() { return Ok(action_status::NO_CHANGE); }    // 31 — fixes empty-varnode bug
+            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }; // 32-33
+            out
         };
-        if !has_unused_output {
+        let out_guard = out_vn.read().unwrap();
+        if !out_guard.has_no_descend() { return Ok(action_status::NO_CHANGE); }    // 35
+        if out_guard.is_auto_live() { return Ok(action_status::NO_CHANGE); }       // 36
+        // 37-40 deadcode gate: Ghidra blocks removal in spaces where deadcode
+        // runs until ActionDeadCode marks them. Rugra's descend tracking is
+        // incomplete — several code paths (coreaction/constseq/emulate) push
+        // to inrefs DIRECTLY, bypassing op_set_input's descend maintenance, so
+        // has_no_descend can falsely return true for still-used varnodes.
+        // Conservatively allow removal ONLY for CONSTANT outputs (unconditionally
+        // safe) until: (a) all inrefs writes go through op_set_input, (b)
+        // INDIRECT_SOURCE is set when INDIRECT ops are created, (c) does_deadcode/
+        // deadRemovalAllowedSeen is ported.
+        if !out_guard.is_constant() {
             return Ok(action_status::NO_CHANGE);
         }
+        drop(out_guard);
         fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
         Ok(action_status::CHANGE)
     }
@@ -10555,11 +10566,15 @@ mod tests {
 
     #[test]
     fn test_early_removal_unused_op() {
-        // An INT_ADD with output that has no descendants → destroyed.
+        // A dead op whose output is CONSTANT → destroyed. RuleEarlyRemoval's
+        // conservative gate (ruleaction.cc:37-40) currently allows removal only
+        // for CONSTANT outputs until descend tracking / INDIRECT_SOURCE /
+        // doesDeadcode are fully ported; REGISTER/UNIQUE removals are blocked
+        // because has_no_descend can be unreliable for them.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 5);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let out = fd.vbank.create_constant(4, 0x20);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,

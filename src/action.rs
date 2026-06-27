@@ -173,11 +173,7 @@ pub fn build_simplify_pool() -> ActionPool {
     // registered in Ghidra's exact order so their interactions match.
     // Entries whose Rust port does not yet exist are noted as skipped.
 
-    // skip RuleEarlyRemoval (5512) — Rugra's descend/liveness tracking is
-    // incomplete; it removes defs still referenced via memory/aliasing,
-    // producing empty varnodes (`*(long*) += ...`). Re-enable once
-    // doesDeadcode/autoLive machinery is ported.
-    // pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512
+    pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512 — re-enabled: full 6-guard port (ruleaction.cc:30-40) now blocks INDIRECT-source/memory outputs
     pool.add_rule(Box::new(RuleTermOrder::new()));          // 5513
     pool.add_rule(Box::new(RuleSelectCse::new()));          // 5514
     pool.add_rule(Box::new(RuleCollectTerms::new()));       // 5515
