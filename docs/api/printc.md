@@ -518,3 +518,20 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 ### 2026-06-27（会话3 G3 续2）：switch 表达式 (long) cast
 
 - switch 控制表达式包裹 `switch ((long)(...))`。C 要求 switch 量为整数；当 varmap/typeop 把 switch index 推断为指针类型（_struct*），gcc 报 "switch quantity not an integer"。(long) cast 保证整数性——这镜像 Ghidra（将 switch 控制规范化为整数类型），且语义安全（switch index 按定义是整数）。
+
+### 2026-06-27（会话3 uVar 调查）：uVar_N 碎片根因深度诊断
+
+**目标**：减少 curl 反编译输出中 uVar_N 碎片（149，main 占 69）。
+
+**诊断方法**：实证追踪 main 的 7 个 uVar（uVar_0/18/28/a0/a8/b0/b8）。
+- **全部 7 个 uVar 都无赋值定义（NODEF）**：它们在表达式中被使用（如 `strequal("--", uVar_18)`），但在输出中从未出现 `uVar_X = <expr>` 赋值语句。
+- 这些 uVar 是**未初始化变量**——其定义 op 未被输出。
+
+**输出路径分析**：printc 有 6+ 条独立的 varnode 解析路径（push_varnode Priority 0/1/1.5、op_call 参数解析、op_binary、emit_inline_expr、resolve_varnode）。诊断确认 Priority 1.5（push_varnode 行 4022，针对 uVar 的 def-map 内联）**对这些 uVar 0 次命中**——说明它们走了其他路径（很可能是 op_call 的 Register 参数解析，3753+），绕过了 Priority 1.5 的内联。
+
+**正确修复方向**（需专门会话）：
+1. 统一 varnode 解析路径——所有路径都应经过 push_varnode 的统一内联逻辑
+2. 或在 op_call/op_binary 路径中复用 Priority 1.5 的 def-map 内联（当前仅 Register 空间走内联，Unique 空间 fallthrough 到 push_varnode 但未触发）
+3. 关键：uVar 的定义 op（CALL 输出/INT_ADD）应在使用点内联为表达式，而非声明独立变量
+
+**此问题与 G3 spacebase 正交**：spacebase 修复的是*栈变量*（StackX_*），uVar 是*中间临时*。两者独立。
