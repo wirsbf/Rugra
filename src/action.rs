@@ -79,7 +79,144 @@ impl Action for ActionGroup {
     }
 }
 
-/// Database for managing all registered actions
+/// A pool of Rules applied to every matching P-code op.
+///
+/// Corresponds to Ghidra's `ActionPool` (action.hh:262). It holds a set of
+/// `Rule`s and, on `apply`, iterates over all live ops, dispatching each op
+/// to the Rules whose `get_opcodes()` include the op's opcode. Repeats until
+/// a full pass makes no change (mirrors Ghidra's `rule_repeatapply` group
+/// semantics — the universal-action main loop reruns the pool until stable).
+pub struct ActionPool {
+    name: String,
+    rules: Vec<Box<dyn Rule>>,
+    /// Opcode → indices into `rules`, built on add_rule for O(1) dispatch.
+    per_op: std::collections::HashMap<crate::opcodes::OpCode, Vec<usize>>,
+}
+
+impl ActionPool {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            rules: Vec::new(),
+            per_op: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register a Rule. Faithful to `ActionPool::addRule` — the rule's
+    /// opcodes are indexed for fast per-op dispatch.
+    pub fn add_rule(&mut self, rule: Box<dyn Rule>) {
+        let idx = self.rules.len();
+        let opcodes = rule.get_opcodes();
+        self.rules.push(rule);
+        for opc in opcodes {
+            self.per_op.entry(opc).or_default().push(idx);
+        }
+    }
+}
+
+impl Action for ActionPool {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionPool::apply + the universal main loop's
+        // repeat-until-stable behaviour. We snapshot the live op list per
+        // pass because applyOp may destroy/insert ops.
+        let mut total = 0;
+        loop {
+            let mut pass_changes = 0;
+            // Snapshot indices; the bank's alivelist may shift, so re-fetch
+            // each op by current position defensively.
+            let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+            for op_ref in ops {
+                // Skip dead ops (Ghidra's processOp checks isDead).
+                let (is_dead, opc) = {
+                    let o = op_ref.0.read().unwrap();
+                    (o.is_dead(), o.opcode)
+                };
+                if is_dead {
+                    continue;
+                }
+                if let Some(rule_idxs) = self.per_op.get(&opc) {
+                    for &ridx in rule_idxs {
+                        // Re-check dead after each rule (a prior rule may
+                        // have destroyed this op).
+                        let dead = op_ref.0.read().unwrap().is_dead();
+                        if dead { break; }
+                        let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
+                        if res > 0 {
+                            pass_changes += res;
+                        }
+                    }
+                }
+            }
+            total += pass_changes;
+            if pass_changes == 0 { break; }
+        }
+        Ok(total)
+    }
+
+    fn get_name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Build an `ActionPool` holding the core algebraic-simplification Rules.
+///
+/// Mirrors Ghidra's `oppool1` / `oppool2` rule groups (coreaction.cc:5511+)
+/// that are part of the universal `actprop` simplifier. These Rules fold
+/// redundant P-code (constant collapses, trivial identities, sign/zero
+/// extension elimination, etc.) without altering control flow, so they are
+/// safe to run repeatedly to a fixed point.
+pub fn build_simplify_pool() -> ActionPool {
+    use crate::ruleaction::*;
+    let mut pool = ActionPool::new("simplifypool");
+    // Pure algebraic identities & trivial foldings.
+    pool.add_rule(Box::new(RuleCollapseConstants::new()));
+    pool.add_rule(Box::new(RuleTrivialArith::new()));
+    pool.add_rule(Box::new(RuleTrivialBool::new()));
+    pool.add_rule(Box::new(RuleTrivialShift::new()));
+    pool.add_rule(Box::new(RuleNegateIdentity::new()));
+    pool.add_rule(Box::new(RuleAddMultCollapse::new()));
+    pool.add_rule(Box::new(RuleXorCollapse::new()));
+    pool.add_rule(Box::new(RuleOrCollapse::new()));
+    pool.add_rule(Box::new(RuleIdentityEl::new()));
+    pool.add_rule(Box::new(RuleDoubleSub::new()));
+    pool.add_rule(Box::new(RuleDoubleShift::new()));
+    // Zero/sign extension elimination.
+    pool.add_rule(Box::new(RuleZextEliminate::new()));
+    pool.add_rule(Box::new(RuleSextEliminate::new()));
+    pool.add_rule(Box::new(RuleSubZext::new()));
+    pool.add_rule(Box::new(RulePiece2Zext::new()));
+    pool.add_rule(Box::new(RulePiece2Sext::new()));
+    pool.add_rule(Box::new(RuleSignShift::new()));
+    pool.add_rule(Box::new(RuleConcatZero::new()));
+    pool.add_rule(Box::new(RuleAndZext::new()));
+    // Boolean / comparison simplification.
+    pool.add_rule(Box::new(RuleBoolNegate::new()));
+    pool.add_rule(Box::new(RuleNotDistribute::new()));
+    pool.add_rule(Box::new(RuleBxor2NotEqual::new()));
+    pool.add_rule(Box::new(RuleLess2Zero::new()));
+    pool.add_rule(Box::new(RuleLessEqual2Zero::new()));
+    pool.add_rule(Box::new(RuleLessNotEqual::new()));
+    pool.add_rule(Box::new(RuleEquality::new()));
+    pool.add_rule(Box::new(RuleSlessToLess::new()));
+    pool.add_rule(Box::new(RuleLessOne::new()));
+    pool.add_rule(Box::new(RuleTestSign::new()));
+    pool.add_rule(Box::new(RuleShiftCompare::new()));
+    pool.add_rule(Box::new(RuleAndCompare::new()));
+    // Bit manipulation.
+    pool.add_rule(Box::new(RuleOrMask::new()));
+    pool.add_rule(Box::new(RuleAndOrLump::new()));
+    pool.add_rule(Box::new(RuleAndDistribute::new()));
+    pool.add_rule(Box::new(RuleAndPiece::new()));
+    pool.add_rule(Box::new(RuleAndCommute::new()));
+    pool.add_rule(Box::new(RuleRightShiftAnd::new()));
+    pool.add_rule(Box::new(RuleHighOrderAnd::new()));
+    pool.add_rule(Box::new(RuleConcatLeftShift::new()));
+    pool.add_rule(Box::new(RuleConcatShift::new()));
+    pool.add_rule(Box::new(RuleShift2Mult::new()));
+    pool.add_rule(Box::new(RuleOrConsume::new()));
+    pool
+}
+
 ///
 /// Corresponds to Ghidra's `ActionDatabase` class
 pub struct ActionDatabase {
@@ -124,6 +261,11 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionConstantPtr::new()));
         decompile_group.add_action(Box::new(ActionCse::new()));
         decompile_group.add_action(Box::new(ActionSimplify::new()));
+        // Rule-driven algebraic simplification pool (Ghidra oppool1/oppool2).
+        // Runs the registered Rules to a fixed point, folding redundant
+        // P-code. This is the first time Rugra actually dispatches its ~90
+        // implemented Rules; previously none were wired into the pipeline.
+        decompile_group.add_action(Box::new(build_simplify_pool()));
         // Merge BEFORE copy propagation: copy-merge needs the COPY ops to
         // still be alive, and DeadCode would otherwise remove them.
         decompile_group.add_action(Box::new(ActionMergeType::new()));

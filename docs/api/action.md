@@ -574,3 +574,15 @@ Funcdata ready
 ### 2026-06-27（会话3 续）：ActionRestructureVarnode 接入主管线
 
 - `ActionRestructureVarnode`（coreaction.cc:5505 "localrecovery"）现注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionConditionalExe` 之前。此前它**未接入**，导致 `fd.scope` 永远为 None，printc 的 `get_stack_variable_name` 永远找不到栈变量名 → uVar 碎片。接入后 scope 被构建，local_ 统计从 81→78（curl）。**G3 剩余**：多数函数 gather_spacebase 收集到 0 hints，根因是栈访问用 RBP/param 指针而非 RSP 直派，需扩展 spacebase 基址识别 + 修复 SSA def 断链。
+
+### 2026-06-27（会话3 续）：ActionPool — Rule 调度器接入主管线（G6 核心补全）
+
+**系统性架构补全**：Rugra 此前 ~90 个 Rule 全部实现了 `apply_op` 但**均未接入主管线**——无 Ghidra ActionPool 式的 Rule 遍历调度。本次补全：
+
+- 新增 `ActionPool` struct（对应 Ghidra `ActionPool`，action.hh:262）：持有 `Vec<Box<dyn Rule>>` + `per_op: HashMap<OpCode, Vec<usize>>` 索引。`add_rule` 注册 Rule 并按 opcode 建索引；`apply` 遍历所有 live op，按 opcode 匹配 Rule，循环至固定点（对应 Ghidra rule_repeatapply）。
+- `build_simplify_pool()` 注册 44 个纯代数简化 Rule（恒等折叠/zext-sext 消除/布尔比较简化/位操作）。
+- 接入 `set_default_actions`：在 `ActionSimplify` 之后跑 simplify pool。
+
+**验证**：诊断确认 Rule 真实触发——curl 各函数 pass_changes 从 1 到 30+（如 main 28 次、getparameter 30 次简化）。这是 Rugra 首次在反编译时实际应用 Rule 简化。682/682 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。
+
+**注意**：uVar 碎片数未变（149），因为简化的是中间 P-code IR，而 printc 的碎片源于变量恢复层的 def 断链（G3 深水区）。但 Rule 调度器本身是正确的架构补全。
