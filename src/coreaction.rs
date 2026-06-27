@@ -3133,19 +3133,20 @@ impl Action for ActionActiveParam {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveParam::apply (coreaction.cc:1725-1771).
         // For each call spec with active input recovery:
-        // 1. checkInputTrialUse — mark trials as active/inactive (simplified)
+        // 1. checkInputTrialUse — mark trials active/inactive via ProtoModel
         // 2. finishPass — increment pass counter
-        // 3. If fully checked (max passes exceeded), finalize: clear active input
-        // Full Ghidra also calls resolveModel (needs ProtoModel), deriveInputMap,
-        // buildInputFromTrials (needs ProtoStore/ParamList) — deferred.
+        // 3. If fully checked (max passes exceeded):
+        //    resolveModel + deriveInputMap (ProtoModel.fillinMap) + clear
         let mut change = 0;
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
             let needs_work = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
             if !needs_work { continue; }
+            // 1. checkInputTrialUse (ProtoModel-driven when model present)
             if let Some(fc) = fd.get_call_specs_mut(i) {
                 fc.check_input_trial_use();
             }
+            // 2. finishPass + check maxpass
             let fully_done = {
                 if let Some(fc) = fd.get_call_specs_mut(i) {
                     if let Some(active) = fc.active_input.as_mut() {
@@ -3155,10 +3156,13 @@ impl Action for ActionActiveParam {
                 } else { false }
             };
             if fully_done {
+                // 3. Finalize: resolveModel → deriveInputMap → clear
                 if let Some(fc) = fd.get_call_specs_mut(i) {
                     if let Some(active) = fc.active_input.as_mut() {
                         active.mark_fully_checked();
                     }
+                    fc.resolve_model();
+                    fc.derive_input_map();
                     fc.clear_active_input();
                 }
             }

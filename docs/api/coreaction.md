@@ -556,3 +556,7 @@ ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_v
 这是解锁 checkInputTrialUse/resolveModel/deriveInputMap/buildInputFromTrials 完整实现的 ProtoModel 基础设施。5 个单元测试验证。
 
 **剩余**：ParamListRegister/ParamListMerged 变体、XML decode、JoinRecord。
+
+### 2026-06-27（会话3 G5接入）：ActionActiveParam 升级为 ProtoModel 驱动
+
+ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.derive_input_map()`（ProtoModel.fillinMap），checkInputTrialUse 使用 ProtoModel.possible_input_param 做参数匹配，不再是纯简化版。

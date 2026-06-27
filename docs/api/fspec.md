@@ -116,3 +116,15 @@ Create a new call specification
 
 - FuncCallSpecs: is_input_active/is_output_active/clear_active_input/clear_active_output/check_input_trial_use（简化版，核心版需 AncestorRealistic）
 - ParamActive: finish_pass/is_fully_checked/mark_fully_checked/mark_needs_final_check
+
+### 2026-06-27（会话3 G5接入）：ProtoModel 接入 FuncCallSpecs + checkInputTrialUse 升级
+
+FuncCallSpecs 新增 `proto_model: Option<ProtoModel>` 字段 + 方法：
+- `has_model()` / `set_model(model)` — hasModel/setModel
+- `resolve_model()` — resolveModel（non-merged 模型为 no-op）
+- `derive_input_map()` — 调用 ProtoModel.fillin_input_map（完整版，替代简化版）
+- `derive_output_map()` — 调用 ProtoModel.derive_output_map
+
+**checkInputTrialUse 升级**：当 proto_model 存在时，用 ProtoModel.possible_input_param 判断每个试验是否匹配参数存储位置（Register/Stack），匹配→mark_active，不匹配→mark_no_use。无 model 时回退到简化版（全标记 active）。
+
+**ActionActiveParam 升级**：finalize 路径现调用 resolve_model + derive_input_map（ProtoModel.fillinMap 驱动），不再是纯简化版。

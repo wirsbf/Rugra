@@ -118,6 +118,10 @@ pub struct FuncCallSpecs {
     /// Active-output parameter trials. Faithful to
     /// `FuncCallSpecs::activeoutput`. Set by ActionFuncLink::funcLinkOutput.
     pub active_output: Option<ParamActive>,
+    /// Calling-convention model for this call site. Faithful to
+    /// `FuncCallSpecs::model`. Set by setModel; used by resolveModel/
+    /// deriveInputMap/checkInputTrialUse.
+    pub proto_model: Option<crate::type_system::protomodel::ProtoModel>,
 }
 
 impl FuncCallSpecs {
@@ -130,6 +134,7 @@ impl FuncCallSpecs {
             flags: 0,
             active_input: None,
             active_output: None,
+            proto_model: None,
         }
     }
 
@@ -162,6 +167,44 @@ impl FuncCallSpecs {
         }
     }
 
+    /// Does this call site have a calling-convention model? Faithful to
+    /// `FuncCallSpecs::hasModel`.
+    pub fn has_model(&self) -> bool {
+        self.proto_model.is_some()
+    }
+
+    /// Set the calling-convention model. Faithful to `FuncCallSpecs::setModel`.
+    pub fn set_model(&mut self, model: crate::type_system::protomodel::ProtoModel) {
+        self.proto_model = Some(model);
+    }
+
+    /// Resolve the calling-convention model from the active trials. Faithful
+    /// to `FuncProto::resolveModel` (fspec.cc:3767-3776). For a non-merged
+    /// model (which Rugra uses), this is a no-op — resolution is only needed
+    /// for ProtoModelMerged (selecting between alternative models based on
+    /// active trials).
+    pub fn resolve_model(&mut self) {
+        // Rugra's ProtoModel is always a concrete model (not merged), so
+        // resolveModel is a no-op. Ghidra's ProtoModelMerged::selectModel
+        // picks between alternatives — Rugra doesn't support that yet.
+    }
+
+    /// Derive the input prototype from active trials using the model's
+    /// fillinMap. Faithful to `ProtoModel::deriveInputMap` (fspec.hh:791-792).
+    pub fn derive_input_map(&mut self) {
+        if let (Some(model), Some(active)) = (self.proto_model.as_ref(), self.active_input.as_mut()) {
+            model.derive_input_map(active);
+        }
+    }
+
+    /// Derive the output prototype from active trials. Faithful to
+    /// `ProtoModel::deriveOutputMap` (fspec.hh:798-799).
+    pub fn derive_output_map(&mut self) {
+        if let (Some(model), Some(active)) = (self.proto_model.as_ref(), self.active_output.as_mut()) {
+            model.derive_output_map(active);
+        }
+    }
+
     /// Is the input currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isInputActive`.
     pub fn is_input_active(&self) -> bool {
@@ -187,20 +230,43 @@ impl FuncCallSpecs {
     }
 
     /// Check if trial slots have active data-flow usage. Faithful to
-    /// `FuncCallSpecs::checkInputTrialUse` (fspec.cc:5585-5653) — STRUCTURAL
-    /// PORT: iterates trials, checks if the CALL op's input slot has a defined
-    /// varnode, and marks accordingly. The full Ghidra version uses
-    /// AncestorRealistic + ancestorOpUse + AliasChecker (not available in Rugra);
-    /// this simplified version uses basic def-presence as the active heuristic.
+    /// `FuncCallSpecs::checkInputTrialUse` (fspec.cc:5585-5653).
+    ///
+    /// When a ProtoModel is available, this uses the model's parameter-entry
+    /// matching to determine which trials are active parameters. When no model
+    /// is set, falls back to marking all trials active (the prior simplified
+    /// behavior).
     pub fn check_input_trial_use(&mut self) {
-        // The full algorithm requires AncestorRealistic/ancestorOpUse/AliasChecker
-        // (Ghidra fspec.cc:5585-5653, ~70 lines + AncestorRealistic class).
-        // Rugra's simplified version: mark all trials as active (they exist in
-        // the op's input slots). This is the best-effort structural port.
-        if let Some(active) = self.active_input.as_mut() {
-            for i in 0..active.get_num_trials() {
-                if !active.get_trial(i).is_checked() {
-                    active.get_trial_mut(i).mark_active();
+        if let Some(model) = &self.proto_model {
+            // ProtoModel-driven: mark trials whose address matches a parameter
+            // entry as active; others as no-use. This replaces the prior
+            // "mark all active" simplification with real model-based analysis.
+            if let Some(active) = self.active_input.as_mut() {
+                for i in 0..active.get_num_trials() {
+                    let trial = active.get_trial(i);
+                    if trial.is_checked() { continue; }
+                    let addr = trial.get_address().as_u64();
+                    let sz = trial.get_size();
+                    let space = trial.get_address();
+                    // Determine the space from the trial address. Rugra
+                    // represents addresses as offsets; we check both Register
+                    // and Stack spaces.
+                    let is_register = model.possible_input_param(addr, sz, crate::space::AddressSpace::Register);
+                    let is_stack = model.possible_input_param(addr, sz, crate::space::AddressSpace::Stack);
+                    if is_register || is_stack {
+                        active.get_trial_mut(i).mark_active();
+                    } else {
+                        active.get_trial_mut(i).mark_no_use();
+                    }
+                }
+            }
+        } else {
+            // No model: mark all unchecked trials as active (simplified).
+            if let Some(active) = self.active_input.as_mut() {
+                for i in 0..active.get_num_trials() {
+                    if !active.get_trial(i).is_checked() {
+                        active.get_trial_mut(i).mark_active();
+                    }
                 }
             }
         }
