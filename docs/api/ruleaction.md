@@ -711,3 +711,8 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `(x / c1) / c2 => x / (c1*c2)`（相同符号 INT_DIV/INT_SDIV）
   - `(x >> c1) / c2 => x / (2^c1 * c2)`（无符号 INT_RIGHT + INT_DIV）
   - 中间结果必须 loneDescend（仅在此处使用）
+
+## 2026-06-27（续 22）：符号提取归一化规则
+
+- **RuleSignForm**：完整移植 ruleaction.cc:8449-8492。`sub(sext(V), c) s>> n => V s>> (8*|V|-1)`（归一化符号位提取）。
+- **RuleSignForm2**：完整移植 ruleaction.cc:8494-8570。`sub(sext(V) * small, c) s>> 31 => V s>> 31`（当 small 是小的正整数且不溢出到符号位时）。

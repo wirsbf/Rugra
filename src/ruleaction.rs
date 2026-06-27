@@ -6631,6 +6631,110 @@ impl Rule for RuleDivChain {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
 }
 
+/// Normalize sign extraction: `sub(sext(V), c) s>> n => V s>> (8*|V|-1)`.
+/// Faithful to Ghidra's `RuleSignForm` (ruleaction.cc:8449-8492).
+pub struct RuleSignForm;
+
+impl RuleSignForm {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignForm {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignForm::applyOp (ruleaction.cc:8471-8492).
+        let (a, a_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let sextout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sextout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let sextop = match sextout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if sextop.read().unwrap().opcode != OpCode::CPUI_INT_SEXT { return Ok(action_status::NO_CHANGE); }
+            let a = match sextop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let c = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+            let a_size = a.read().unwrap().get_size();
+            if c < a_size as i64 { return Ok(action_status::NO_CHANGE); }
+            if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            (a, a_size)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, a, 0);
+        let n = 8 * a_size - 1;
+        let c = fd.new_constant(4, n as u64);
+        fd.op_set_input(&follow, c, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_SRIGHT);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_form" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
+}
+
+/// Normalize sign extraction: `sub(sext(V) * small, c) s>> 31 => V s>> 31`.
+/// Faithful to Ghidra's `RuleSignForm2` (ruleaction.cc:8494-8570).
+pub struct RuleSignForm2;
+
+impl RuleSignForm2 {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignForm2 {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignForm2::applyOp (ruleaction.cc:8505-8570).
+        let (a, other_vn) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sizeout = in_vn.read().unwrap().get_size() as i64;
+            if const_vn.read().unwrap().get_offset() as i64 != sizeout * 8 - 1 { return Ok(action_status::NO_CHANGE); }
+            if !in_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let sub_op = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if sub_op.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let c = sub_op.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+            let mult_out = match sub_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let mult_size = mult_out.read().unwrap().get_size() as i64;
+            if c + sizeout != mult_size { return Ok(action_status::NO_CHANGE); }
+            if !mult_out.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let mult_op = match mult_out.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
+            // Search for INT_SEXT in mult_op's inputs.
+            let mut found_a: Option<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+            for slot in 0..2 {
+                let vn = match mult_op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue };
+                if !vn.read().unwrap().is_written() { continue; }
+                let sext_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if sext_op.read().unwrap().opcode != OpCode::CPUI_INT_SEXT { continue; }
+                let a = match sext_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                if a.read().unwrap().is_free() || a.read().unwrap().get_size() as i64 != sizeout { continue; }
+                let other_vn = match mult_op.read().unwrap().get_in(1 - slot).cloned() { Some(v) => v, None => continue };
+                found_a = Some((a, other_vn));
+                break;
+            }
+            match found_a { Some(x) => x, None => return Ok(action_status::NO_CHANGE) }
+        };
+        // other_vn must be a small positive constant (no overflow into sign bit).
+        if !other_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        let val = other_vn.read().unwrap().get_offset();
+        let val_size = other_vn.read().unwrap().get_size();
+        // Check no overflow: a * val must not overflow into sign bit of mult.
+        let sign_bit = 1u64 << (8 * a.read().unwrap().get_size() - 1);
+        if val >= sign_bit { return Ok(action_status::NO_CHANGE); }
+        let _ = val_size;
+        let a_size = a.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, a, 0);
+        let n = 8 * a_size - 1;
+        let c = fd.new_constant(4, n as u64);
+        fd.op_set_input(&follow, c, 1);
+        // opcode stays INT_SRIGHT
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_form2" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
