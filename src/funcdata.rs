@@ -957,6 +957,22 @@ impl Funcdata {
         res_vn
     }
 
+    /// Flip the condition of a CBRANCH/comparison op. Faithful to
+    /// `Funcdata::opFlipCondition` (funcdata_op.cc). Changes the comparison
+    /// opcode to its flipped variant (INT_LESS <-> INT_LESSEQUAL,
+    /// INT_EQUAL <-> INT_NOTEQUAL) and clears the BOOLEAN_FLIP flag.
+    pub fn op_flip_condition(&mut self, op: &crate::op::PcodeOpRef) {
+        use crate::opcodes::get_booleanflip;
+        let opc = op.0.read().unwrap().opcode;
+        let mut reorder = false;
+        let new_opc = get_booleanflip(opc, &mut reorder);
+        op.0.write().unwrap().opcode = new_opc;
+        if reorder {
+            self.op_swap_input(op, 0, 1);
+        }
+        op.0.write().unwrap().flags &= !crate::op::pcodeop_flags::BOOLEAN_FLIP;
+    }
+
     /// Inject raw P-code operations into this Funcdata
     ///
     /// This is the bridge between raw P-code translation output (e.g., from

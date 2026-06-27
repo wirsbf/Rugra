@@ -649,3 +649,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `0 == V + W * -1 => V == W`（乘以 -1 的形式）
   - `0 == V + c => V == -c`（常量偏移形式）
   - 验证 addvn 的所有后代都是布尔比较（isBoolOutput）
+
+## 2026-06-27（续 15）：移位消除 + 条件翻转规则
+
+- **RuleShiftAnd**：完整移植 ruleaction.cc:4921-4975。消除被移位丢弃的 INT_AND：
+  - `(V & mask) >> sa => V >> sa`（当移位后的 mask 覆盖所有 NZM 位）
+  - 支持 INT_RIGHT/INT_LEFT/INT_MULT（2 的幂）
+- **RuleCondNegate**：完整移植 ruleaction.cc:5478-5510。翻转带 boolean_flip 标志的 CBRANCH：
+  - 插入 BOOL_NOT 取反条件，调用 op_flip_condition 清除标志
+  - 依赖：is_boolean_flip ✅、op_bool_negate ✅、op_flip_condition ✅（新增）

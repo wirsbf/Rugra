@@ -691,3 +691,7 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1358）：消除两个公共子表达式 op 之一（保留序列号较小的），total_replace 输出后销毁重复 op。
 - `cse_eliminate_list(list) -> Vec<Varnode>` — `Funcdata::cseEliminateList`（funcdata_op.cc:1420）：对 (hash, op) 列表排序，查找匹配对，消除冗余。解锁 RuleSelectCse + ActionCse。
+
+### 2026-06-27（续 6）：op_flip_condition
+
+- `op_flip_condition(op)` — `Funcdata::opFlipCondition`（funcdata_op.cc）：翻转比较 op 的条件（INT_LESS↔INT_LESSEQUAL 等 via get_booleanflip），交换输入如需，清除 BOOLEAN_FLIP 标志。解锁 RuleCondNegate。

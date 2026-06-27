@@ -5689,6 +5689,123 @@ impl Rule for RuleEqual2Zero {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
+/// Eliminate INT_AND when the bits it zeroes out are discarded by a shift.
+/// Faithful to Ghidra's `RuleShiftAnd` (ruleaction.cc:4921-4975).
+///
+/// `(V & mask) >> sa => V >> sa` when the shifted mask covers all NZM bits.
+/// Also handles INT_LEFT and INT_MULT (power-of-2).
+pub struct RuleShiftAnd;
+
+impl RuleShiftAnd {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleShiftAnd {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleShiftAnd::applyOp (ruleaction.cc:4933-4975).
+        use crate::address::leastsigbit_set;
+        let (opc, cvn_val, shiftin, mask, invn, in_size) = {
+            let op = op_arc.read().unwrap();
+            let opc = op.opcode;
+            if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_LEFT && opc != OpCode::CPUI_INT_MULT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let cvn_val = {
+                let r = cvn.read().unwrap();
+                if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                r.get_offset()
+            };
+            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let andop = {
+                let r = shiftin.read().unwrap();
+                if !r.is_written() { return Ok(action_status::NO_CHANGE); }
+                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) }
+            };
+            if andop.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+            let maskvn = match andop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let mask = {
+                let r = maskvn.read().unwrap();
+                if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                r.get_offset()
+            };
+            let invn = match andop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let in_size = {
+                let r = invn.read().unwrap();
+                if r.is_free() { return Ok(action_status::NO_CHANGE); }
+                r.get_size()
+            };
+            (opc, cvn_val, shiftin, mask, invn, in_size)
+        };
+        let (sa, effective_opc) = if opc == OpCode::CPUI_INT_RIGHT || opc == OpCode::CPUI_INT_LEFT {
+            (cvn_val as i64, opc)
+        } else {
+            // INT_MULT: check it's a power-of-2 shift.
+            let sa = leastsigbit_set(cvn_val);
+            if sa <= 0 { return Ok(action_status::NO_CHANGE); }
+            let testval = 1u64 << sa;
+            if testval != cvn_val { return Ok(action_status::NO_CHANGE); }
+            (sa as i64, OpCode::CPUI_INT_LEFT) // Treat as INT_LEFT.
+        };
+        let nzm = invn.read().unwrap().get_nz_mask();
+        let full_mask = calc_mask(in_size);
+        let (shifted_nzm, shifted_mask) = if effective_opc == OpCode::CPUI_INT_RIGHT {
+            (nzm >> sa, mask >> sa)
+        } else {
+            ((nzm << sa) & full_mask, (mask << sa) & full_mask)
+        };
+        if (shifted_mask & shifted_nzm) != shifted_nzm {
+            return Ok(action_status::NO_CHANGE); // AND bits still matter.
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, invn, 0); // Bypass the INT_AND.
+        let _ = (shiftin, cvn_val);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "shift_and" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT] }
+}
+
+/// Flip a CBRANCH with a boolean-flip flag. Faithful to Ghidra's
+/// `RuleCondNegate` (ruleaction.cc:5478-5510).
+///
+/// When a CBRANCH has the `boolean_flip` flag set, insert a BOOL_NOT to
+/// negate the condition and clear the flag.
+pub struct RuleCondNegate;
+
+impl RuleCondNegate {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleCondNegate {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleCondNegate::applyOp (ruleaction.cc:5492-5510).
+        let is_flip = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_CBRANCH {
+                return Ok(action_status::NO_CHANGE);
+            }
+            (op.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0
+        };
+        if !is_flip {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let vn = match op_arc.read().unwrap().inrefs.get(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let out_vn = fd.op_bool_negate(vn, &follow, false);
+        fd.op_set_input(&follow, out_vn, 1);
+        fd.op_flip_condition(&follow);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "cond_negate" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CBRANCH] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
