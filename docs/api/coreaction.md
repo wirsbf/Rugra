@@ -560,3 +560,13 @@ ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_v
 ### 2026-06-27（会话3 G5接入）：ActionActiveParam 升级为 ProtoModel 驱动
 
 ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.derive_input_map()`（ProtoModel.fillinMap），checkInputTrialUse 使用 ProtoModel.possible_input_param 做参数匹配，不再是纯简化版。
+
+### 2026-06-27（会话3 G5闭环）：ActionActiveReturn apply() 完整移植
+
+完整移植 ActionActiveReturn::apply（coreaction.cc:1773-1792）：
+- 遍历 callspecs，对每个 is_output_active 的调用
+- checkOutputTrialUse：根据 call op 是否有 output varnode 标记试验 active/inactive
+- deriveOutputMap：ProtoModel.derive_output_map 解析哪个试验为 USED
+- clearActiveOutput：终结输出恢复
+
+与 ActionActiveParam（input 恢复）对称，完成参数恢复的 input+output 双路径。

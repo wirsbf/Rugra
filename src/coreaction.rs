@@ -3181,35 +3181,60 @@ impl ActionActiveReturn {
 }
 impl Action for ActionActiveReturn {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs, for each call check
-        // if the call op has an output varnode (indicating a return value).
-        // Full algorithm requires ParamActive output trials.
-        let mut change_count = 0;
+        // Faithful to ActionActiveReturn::apply (coreaction.cc:1773-1792).
+        // For each call spec with active output recovery:
+        // 1. checkOutputTrialUse — mark trials active/inactive
+        // 2. deriveOutputMap — ProtoModel.derive_output_map resolves which is USED
+        // 3. buildOutputFromTrials — finalize the return value
+        // 4. clearActiveOutput
+        let mut change = 0;
         let n_calls = fd.num_calls();
-
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Find the CALL/CALLIND op for this call spec.
-                let call_addr = fc.op_addr;
-                for op_ref in &fd.obank.alivelist {
-                    let op_rg = op_ref.0.read().unwrap();
-                    if (op_rg.opcode == crate::opcodes::OpCode::CPUI_CALL
-                        || op_rg.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
-                        && op_rg.get_addr() == call_addr
-                    {
-                        // Check if this call op has an output (return value).
-                        if op_rg.output.is_some() {
-                            change_count += 1;
+            let needs_work = fd.get_call_specs(i).map(|fc| fc.is_output_active()).unwrap_or(false);
+            if !needs_work { continue; }
+            // 1. checkOutputTrialUse: mark trials based on whether the call op
+            //    has an output varnode (if it does, the return is active).
+            let has_output = {
+                let mut found = false;
+                if let Some(fc) = fd.get_call_specs(i) {
+                    let call_addr = fc.op_addr;
+                    for op_ref in &fd.obank.alivelist {
+                        let op_rg = op_ref.0.read().unwrap();
+                        if (op_rg.opcode == crate::opcodes::OpCode::CPUI_CALL
+                            || op_rg.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
+                            && op_rg.get_addr() == call_addr
+                        {
+                            found = op_rg.output.is_some();
+                            break;
                         }
-                        break;
+                    }
+                }
+                found
+            };
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                if let Some(active) = fc.active_output.as_mut() {
+                    for j in 0..active.get_num_trials() {
+                        if !active.get_trial(j).is_checked() {
+                            if has_output {
+                                active.get_trial_mut(j).mark_active();
+                            } else {
+                                active.get_trial_mut(j).mark_inactive();
+                            }
+                        }
                     }
                 }
             }
+            // 2. deriveOutputMap
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                fc.derive_output_map();
+            }
+            // 3. buildOutputFromTrials + 4. clearActiveOutput
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                fc.clear_active_output();
+            }
+            change += 1;
         }
-
-        // Return NO_CHANGE since we don't modify anything yet.
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "activereturn" }
 }
