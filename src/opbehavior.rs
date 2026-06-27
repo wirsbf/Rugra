@@ -44,12 +44,12 @@ pub fn evaluate_unary(opc: OpCode, size_out: usize, size_in: usize, in1: u64) ->
         OpCode::CPUI_COPY => in1 & out_mask,
         OpCode::CPUI_INT_ZEXT => in1 & out_mask,
         OpCode::CPUI_INT_SEXT => (sign_extend(in1 & in_mask, size_in) as u64) & out_mask,
-        OpCode::CPUI_INT_NOT => (!in1) & out_mask,
-        OpCode::CPUI_INT_NEG => {
+        OpCode::CPUI_INT_NEGATE => (!in1) & out_mask,
+        OpCode::CPUI_INT_2COMP => {
             let m = in1 & in_mask;
             ((!m).wrapping_add(1)) & out_mask
         }
-        OpCode::CPUI_BOOL_NOT => if in1 != 0 { 0 } else { 1 },
+        OpCode::CPUI_BOOL_NEGATE => if in1 != 0 { 0 } else { 1 },
         OpCode::CPUI_SUBPIECE => in1 & out_mask,
         OpCode::CPUI_POPCOUNT => (in1 & in_mask).count_ones() as u64 & out_mask,
         OpCode::CPUI_LZCOUNT => {
@@ -162,11 +162,11 @@ pub fn recover_input_unary(opc: OpCode, size_out: usize, out: u64, size_in: usiz
         OpCode::CPUI_COPY => out & in_mask,
         OpCode::CPUI_INT_ZEXT => out & in_mask,
         OpCode::CPUI_INT_SEXT => out & in_mask,
-        OpCode::CPUI_INT_NOT => (!out) & in_mask,
-        OpCode::CPUI_INT_NEG => {
+        OpCode::CPUI_INT_NEGATE => (!out) & in_mask,
+        OpCode::CPUI_INT_2COMP => {
             ((!out).wrapping_add(1)) & in_mask
         }
-        OpCode::CPUI_BOOL_NOT => if out != 0 { 0 } else { 1 },
+        OpCode::CPUI_BOOL_NEGATE => if out != 0 { 0 } else { 1 },
         _ => return None,
     };
     Some(result)
@@ -241,8 +241,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_unary() {
-        assert_eq!(evaluate_unary(OpCode::CPUI_INT_NOT, 4, 4, 0), Some(0xffffffff));
-        assert_eq!(evaluate_unary(OpCode::CPUI_INT_NEG, 4, 4, 5), Some(0xfffffffb));
+        assert_eq!(evaluate_unary(OpCode::CPUI_INT_NEGATE, 4, 4, 0), Some(0xffffffff));
+        assert_eq!(evaluate_unary(OpCode::CPUI_INT_2COMP, 4, 4, 5), Some(0xfffffffb));
         assert_eq!(evaluate_unary(OpCode::CPUI_INT_SEXT, 2, 1, 0xff), Some(0xffff));
     }
 }

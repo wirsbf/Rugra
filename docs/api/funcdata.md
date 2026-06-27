@@ -720,3 +720,4 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 ### 2026-06-27（会话3 G5续）：sync_varnodes_with_symbols
 
 - `sync_varnodes_with_symbols(update_datatypes, unmapped_alias_check) -> bool` — `Funcdata::syncVarnodesWithSymbols`（funcdata_varnode.cc:938-989）的忠实适配：遍历 Stack-space varnodes，匹配 ScopeLocal 符号，标记为 mapped（set_direct_write）。ActionRestructureVarnode 现调用它（coreaction.cc:2281）。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

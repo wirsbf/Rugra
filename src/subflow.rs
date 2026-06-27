@@ -427,7 +427,7 @@ impl SubvariableFlow {
             let slot = match slot { Some(s) => s, None => continue };
             match opcode {
                 // Simple pass-through ops: create a parallel op in subgraph.
-                OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_XOR => {
+                OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_XOR => {
                     if let Some(out) = &op.output {
                         let new_idx = self.set_replacement(out.clone(), mask);
                         worklist.push(new_idx);
@@ -533,7 +533,7 @@ impl SubvariableFlow {
                     self.pull_count += 1;
                 }
                 // Boolean ops (for 1-bit sub-variables).
-                OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                 | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR | OpCode::CPUI_CBRANCH => {
                     if self.bit_size != 1 { return false; }
                     self.pull_count += 1;
@@ -568,7 +568,7 @@ impl SubvariableFlow {
         let op = def_op.read().unwrap();
         match op.opcode {
             OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL
-            | OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_XOR => {
+            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_XOR => {
                 // Inputs flow through with same mask.
                 for i in 0..op.num_input() {
                     if let Some(inv) = op.get_in(i) {

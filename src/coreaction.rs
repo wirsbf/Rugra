@@ -632,13 +632,13 @@ impl Action for ActionSimplify {
                         }
                     }
                 }
-                OpCode::CPUI_BOOL_NOT => {
+                OpCode::CPUI_BOOL_NEGATE => {
                     if op.inrefs.len() == 1 {
                         let inner = op.inrefs[0].read().unwrap();
                         if let Some(ref def_weak) = inner.def {
                             if let Some(def_arc) = def_weak.upgrade() {
                                 let def_op = def_arc.read().unwrap();
-                                if def_op.opcode == OpCode::CPUI_BOOL_NOT && def_op.inrefs.len() == 1 {
+                                if def_op.opcode == OpCode::CPUI_BOOL_NEGATE && def_op.inrefs.len() == 1 {
                                     transforms.push((idx, Transform::DoubleNeg(def_op.inrefs[0].clone())));
                                 }
                             }
@@ -1553,7 +1553,7 @@ impl Action for ActionTypeInfer {
                             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                             | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                             | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                            | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                            | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                             | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => {
                                 Some(bool_type.clone())
                             }

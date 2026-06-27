@@ -419,7 +419,7 @@ impl X86Lifter {
                             "je" | "jz" => zf,
                             "jne" | "jnz" => {
                                 let tmp = self.alloc_tmp(1);
-                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32); // Or we can use INT_EQUAL zf, 0
+                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32); // Or we can use INT_EQUAL zf, 0
                                 op_not.add_input(zf);
                                 op_not.set_output(tmp.clone());
                                 ops.push(op_not);
@@ -442,13 +442,13 @@ impl X86Lifter {
                             "jg" => {
                                 // !ZF && SF == OF. Simplified to !ZF && !SF
                                 let tmp1 = self.alloc_tmp(1);
-                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not_z.add_input(zf);
                                 op_not_z.set_output(tmp1.clone());
                                 ops.push(op_not_z);
 
                                 let tmp2 = self.alloc_tmp(1);
-                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not_s.add_input(sf);
                                 op_not_s.set_output(tmp2.clone());
                                 ops.push(op_not_s);
@@ -464,7 +464,7 @@ impl X86Lifter {
                             "jge" => {
                                 // SF == OF. Simplified to !SF
                                 let tmp = self.alloc_tmp(1);
-                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not_s.add_input(sf);
                                 op_not_s.set_output(tmp.clone());
                                 ops.push(op_not_s);
@@ -474,13 +474,13 @@ impl X86Lifter {
                             "ja" => {
                                 // !CF && !ZF
                                 let tmp1 = self.alloc_tmp(1);
-                                let mut op_not_c = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not_c = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not_c.add_input(cf);
                                 op_not_c.set_output(tmp1.clone());
                                 ops.push(op_not_c);
 
                                 let tmp2 = self.alloc_tmp(1);
-                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not_z.add_input(zf);
                                 op_not_z.set_output(tmp2.clone());
                                 ops.push(op_not_z);
@@ -506,7 +506,7 @@ impl X86Lifter {
                             "jae" => {
                                 // !CF
                                 let tmp = self.alloc_tmp(1);
-                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NOT as i32);
+                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
                                 op_not.add_input(cf);
                                 op_not.set_output(tmp.clone());
                                 ops.push(op_not);

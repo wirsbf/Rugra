@@ -560,3 +560,4 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 - 682/682 测试 + curl 24/24 + httpd 29/29 全绿，0 goto，无回退
 
 此修复是单点正确的——之前 emit_inline_expr 的 6+ 分支处理了所有算术/比较 op，但遗漏了最基本的 COPY。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

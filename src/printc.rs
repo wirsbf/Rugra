@@ -288,7 +288,7 @@ impl PrintC {
                         OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                         | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                         | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                        | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                        | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                         | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR
                         // Arithmetic ops
                         | OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB
@@ -297,8 +297,8 @@ impl PrintC {
                         | OpCode::CPUI_INT_SREM
                         // Bitwise ops
                         | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
-                        | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NOT
-                        | OpCode::CPUI_INT_NEG
+                        | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
+                        | OpCode::CPUI_INT_2COMP
                         // Shift ops
                         | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
                         | OpCode::CPUI_INT_SRIGHT
@@ -361,12 +361,12 @@ impl PrintC {
                         OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                         | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                         | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                        | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                        | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                         | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR
                         | OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB
                         | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV
                         | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
-                        | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NOT
+                        | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
                         | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
                         | OpCode::CPUI_INT_SRIGHT
                         | OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT
@@ -1904,9 +1904,9 @@ impl PrintC {
                 self.emit.print(op_sym);
                 self.push_input(def_op, 1);
             }
-            OpCode::CPUI_INT_NOT => { self.emit.print("~"); self.push_input(def_op, 0); }
-            OpCode::CPUI_INT_NEG => { self.emit.print("-"); self.push_input(def_op, 0); }
-            OpCode::CPUI_BOOL_NOT => {
+            OpCode::CPUI_INT_NEGATE => { self.emit.print("~"); self.push_input(def_op, 0); }
+            OpCode::CPUI_INT_2COMP => { self.emit.print("-"); self.push_input(def_op, 0); }
+            OpCode::CPUI_BOOL_NEGATE => {
                 // Try to negate textually: emit inner to temp buffer
                 let orig_emit = std::mem::replace(&mut self.emit,
                     Box::new(crate::prettyprint::EmitNoMarkup::new()));
@@ -2166,7 +2166,7 @@ impl PrintC {
                                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                                 | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                                 | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                                | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                                | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                                 | OpCode::CPUI_BOOL_OR => {
                                     let cond_ptr = Arc::as_ptr(&cond_vn) as usize;
                                     drop(out_vn);
@@ -2214,7 +2214,7 @@ impl PrintC {
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                 | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                 | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                 | OpCode::CPUI_BOOL_OR | OpCode::CPUI_MULTIEQUAL => {
                     // Good — it's a comparison/boolean/phi, keep it
                 }
@@ -2308,7 +2308,7 @@ impl PrintC {
             }
 
             // Case 1: BOOL_NOT(x) — negate the inner comparison
-            if def_op.opcode == OpCode::CPUI_BOOL_NOT && def_op.inrefs.len() == 1 {
+            if def_op.opcode == OpCode::CPUI_BOOL_NEGATE && def_op.inrefs.len() == 1 {
                 let inner_arc = def_op.inrefs[0].clone();
                 let inner_resolved = self.resolve_varnode(&inner_arc).unwrap_or_else(|| inner_arc.clone());
                 let inner_key = {
@@ -2716,7 +2716,7 @@ impl PrintLanguage for PrintC {
                         OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                         | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                         | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
-                        | OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                        | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
                         | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => {
                             if let Some(ref out_arc) = op.output {
                                 let out_vn = out_arc.read().unwrap();
@@ -3657,9 +3657,9 @@ impl PrintLanguage for PrintC {
             self.emit.tag_op(" = ");
 
             let op_sym = match op.opcode {
-                OpCode::CPUI_INT_NOT => "~",
-                OpCode::CPUI_INT_NEG => "-",
-                OpCode::CPUI_BOOL_NOT => "!",
+                OpCode::CPUI_INT_NEGATE => "~",
+                OpCode::CPUI_INT_2COMP => "-",
+                OpCode::CPUI_BOOL_NEGATE => "!",
                 OpCode::CPUI_FLOAT_NEG => "-",
                 OpCode::CPUI_INT_ZEXT => {
                     // Use output type if available for more precise cast

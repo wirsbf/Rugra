@@ -37,7 +37,7 @@ pub enum OpCode {
     /// Signed integer remainder/modulo
     CPUI_INT_SREM = 10,
     /// Integer negation
-    CPUI_INT_NEG = 11,
+    CPUI_INT_2COMP = 11,
     /// Unsigned integer carry
     CPUI_INT_CARRY = 12,
     /// Signed integer carry
@@ -53,7 +53,7 @@ pub enum OpCode {
     /// Bitwise XOR
     CPUI_INT_XOR = 17,
     /// Bitwise NOT
-    CPUI_INT_NOT = 18,
+    CPUI_INT_NEGATE = 18,
     /// Left shift
     CPUI_INT_LEFT = 19,
     /// Logical right shift (zero-fill)
@@ -147,7 +147,7 @@ pub enum OpCode {
     /// Boolean XOR
     CPUI_BOOL_XOR = 59,
     /// Boolean NOT
-    CPUI_BOOL_NOT = 60,
+    CPUI_BOOL_NEGATE = 60,
     /// Population count (count set bits)
     CPUI_POPCOUNT = 61,
     /// Count leading zeros
@@ -198,14 +198,14 @@ impl OpCode {
             OpCode::CPUI_INT_SDIV => "INT_SDIV",
             OpCode::CPUI_INT_REM => "INT_REM",
             OpCode::CPUI_INT_SREM => "INT_SREM",
-            OpCode::CPUI_INT_NEG => "INT_NEG",
+            OpCode::CPUI_INT_2COMP => "INT_2COMP",
             OpCode::CPUI_INT_CARRY => "INT_CARRY",
             OpCode::CPUI_INT_SCARRY => "INT_SCARRY",
             OpCode::CPUI_INT_SBORROW => "INT_SBORROW",
             OpCode::CPUI_INT_AND => "INT_AND",
             OpCode::CPUI_INT_OR => "INT_OR",
             OpCode::CPUI_INT_XOR => "INT_XOR",
-            OpCode::CPUI_INT_NOT => "INT_NOT",
+            OpCode::CPUI_INT_NEGATE => "INT_NEGATE",
             OpCode::CPUI_INT_LEFT => "INT_LEFT",
             OpCode::CPUI_INT_RIGHT => "INT_RIGHT",
             OpCode::CPUI_INT_SRIGHT => "INT_SRIGHT",
@@ -247,7 +247,7 @@ impl OpCode {
             OpCode::CPUI_BOOL_AND => "BOOL_AND",
             OpCode::CPUI_BOOL_OR => "BOOL_OR",
             OpCode::CPUI_BOOL_XOR => "BOOL_XOR",
-            OpCode::CPUI_BOOL_NOT => "BOOL_NOT",
+            OpCode::CPUI_BOOL_NEGATE => "BOOL_NEGATE",
             OpCode::CPUI_POPCOUNT => "POPCOUNT",
             OpCode::CPUI_LZCOUNT => "LZCOUNT",
             OpCode::CPUI_CALLOTHER => "CALLOTHER",
@@ -281,14 +281,14 @@ impl OpCode {
             8 => Some(OpCode::CPUI_INT_SDIV),
             9 => Some(OpCode::CPUI_INT_REM),
             10 => Some(OpCode::CPUI_INT_SREM),
-            11 => Some(OpCode::CPUI_INT_NEG),
+            11 => Some(OpCode::CPUI_INT_2COMP),
             12 => Some(OpCode::CPUI_INT_CARRY),
             13 => Some(OpCode::CPUI_INT_SCARRY),
             14 => Some(OpCode::CPUI_INT_SBORROW),
             15 => Some(OpCode::CPUI_INT_AND),
             16 => Some(OpCode::CPUI_INT_OR),
             17 => Some(OpCode::CPUI_INT_XOR),
-            18 => Some(OpCode::CPUI_INT_NOT),
+            18 => Some(OpCode::CPUI_INT_NEGATE),
             19 => Some(OpCode::CPUI_INT_LEFT),
             20 => Some(OpCode::CPUI_INT_RIGHT),
             21 => Some(OpCode::CPUI_INT_SRIGHT),
@@ -330,7 +330,7 @@ impl OpCode {
             57 => Some(OpCode::CPUI_BOOL_AND),
             58 => Some(OpCode::CPUI_BOOL_OR),
             59 => Some(OpCode::CPUI_BOOL_XOR),
-            60 => Some(OpCode::CPUI_BOOL_NOT),
+            60 => Some(OpCode::CPUI_BOOL_NEGATE),
             61 => Some(OpCode::CPUI_POPCOUNT),
             62 => Some(OpCode::CPUI_LZCOUNT),
             63 => Some(OpCode::CPUI_CALLOTHER),
@@ -397,7 +397,7 @@ impl OpCode {
                 | OpCode::CPUI_INT_SDIV
                 | OpCode::CPUI_INT_REM
                 | OpCode::CPUI_INT_SREM
-                | OpCode::CPUI_INT_NEG
+                | OpCode::CPUI_INT_2COMP
                 | OpCode::CPUI_INT_CARRY
                 | OpCode::CPUI_INT_SCARRY
                 | OpCode::CPUI_INT_SBORROW
@@ -405,7 +405,7 @@ impl OpCode {
                 | OpCode::CPUI_INT_AND
                 | OpCode::CPUI_INT_OR
                 | OpCode::CPUI_INT_XOR
-                | OpCode::CPUI_INT_NOT
+                | OpCode::CPUI_INT_NEGATE
                 | OpCode::CPUI_INT_LEFT
                 | OpCode::CPUI_INT_RIGHT
                 | OpCode::CPUI_INT_SRIGHT
@@ -437,7 +437,7 @@ impl OpCode {
                 | OpCode::CPUI_BOOL_AND
                 | OpCode::CPUI_BOOL_OR
                 | OpCode::CPUI_BOOL_XOR
-                | OpCode::CPUI_BOOL_NOT
+                | OpCode::CPUI_BOOL_NEGATE
                 // Misc pure
                 | OpCode::CPUI_POPCOUNT
                 | OpCode::CPUI_LZCOUNT
@@ -459,7 +459,7 @@ impl fmt::Display for OpCode {
 /// must be swapped to preserve semantics (e.g. `!(V < W) => W <= V`).
 /// Returns `CPUI_MAX` if `opc` is not a flippable comparison.
 ///
-/// Note: Rugra `CPUI_BOOL_NOT` == Ghidra `CPUI_BOOL_NEGATE`.
+/// Note: Rugra `CPUI_BOOL_NEGATE` == Ghidra `CPUI_BOOL_NEGATE`.
 pub fn get_booleanflip(opc: OpCode, reorder: &mut bool) -> OpCode {
     match opc {
         OpCode::CPUI_INT_EQUAL => {
@@ -487,7 +487,7 @@ pub fn get_booleanflip(opc: OpCode, reorder: &mut bool) -> OpCode {
             OpCode::CPUI_INT_LESS
         }
         // Ghidra BOOL_NEGATE == Rugra BOOL_NOT.
-        OpCode::CPUI_BOOL_NOT => {
+        OpCode::CPUI_BOOL_NEGATE => {
             *reorder = false;
             OpCode::CPUI_COPY
         }

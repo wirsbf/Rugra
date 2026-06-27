@@ -91,4 +91,4 @@ Intercept and compare Transformation Actions
 (`opcodes.hh`). **2026-06-27**：新增 `CPUI_CAST => Some(64)`，填补
 `SUBPIECE(63)` 与 `PTRADD(65)` 之间的空缺。
 
- 
+ 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

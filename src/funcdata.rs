@@ -1190,7 +1190,7 @@ impl Funcdata {
         outlist
     }
 
-    /// Insert a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra) of `vn`, returning the
+    /// Insert a BOOL_NEGATE (CPUI_BOOL_NEGATE in Rugra) of `vn`, returning the
     /// new output Varnode. Faithful to `Funcdata::opBoolNegate`
     /// (funcdata_op.cc:560-572). If `insert_after` is true, the negate op is
     /// inserted after `op`; otherwise before.
@@ -1202,7 +1202,7 @@ impl Funcdata {
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let addr = op.0.read().unwrap().get_addr();
         let negate_op = self.new_op(1, addr);
-        self.op_set_opcode(&negate_op, crate::opcodes::OpCode::CPUI_BOOL_NOT);
+        self.op_set_opcode(&negate_op, crate::opcodes::OpCode::CPUI_BOOL_NEGATE);
         let res_vn = self.new_unique_out(1, &negate_op);
         self.op_set_input(&negate_op, vn, 0);
         if insert_after {

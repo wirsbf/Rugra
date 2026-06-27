@@ -578,3 +578,4 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 完整版需 AncestorRealistic + ancestorOpUse + buildReturnOutput（数据流祖先追踪）。
 ### 2026-06-27（续）：ActionStackPtrFlow L2->L3（coreaction.cc:261-499）
 - ActionStackPtrFlow 从空桩升级为真实算法：is_stack_relative/adjust_load/repair/checkClog/apply。修栈指针 clog（INT_ADD(spacebase, LOAD) 链到匹配 STORE 转 COPY）。analyzeExtraPop 未移植（需 StackSolver）。接入 set_default_actions 在 Heritage 后。注：不直接修 ap_pregsub RSP 泄漏（那是 varmap ScopeLocal 栈符号映射问题）。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

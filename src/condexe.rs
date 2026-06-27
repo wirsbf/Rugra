@@ -773,7 +773,7 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
             if let Some(def) = def {
                 let (is_bool_not, inner_vn, opcode) = {
                     let d = def.read().unwrap();
-                    (d.opcode == OpCode::CPUI_BOOL_NOT, d.get_in(0).cloned(), d.opcode)
+                    (d.opcode == OpCode::CPUI_BOOL_NEGATE, d.get_in(0).cloned(), d.opcode)
                 };
                 if is_bool_not {
                     if let Some(inner) = inner_vn {
@@ -797,7 +797,7 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
             if let Some(def) = def {
                 let (is_bool_not, inner_vn) = {
                     let d = def.read().unwrap();
-                    (d.opcode == OpCode::CPUI_BOOL_NOT, d.get_in(0).cloned())
+                    (d.opcode == OpCode::CPUI_BOOL_NEGATE, d.get_in(0).cloned())
                 };
                 if is_bool_not {
                     if let Some(inner) = inner_vn {

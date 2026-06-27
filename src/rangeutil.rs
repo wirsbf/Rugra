@@ -341,7 +341,7 @@ impl CircleRange {
             return true;
         }
         match opc {
-            crate::opcodes::OpCode::CPUI_BOOL_NOT => {
+            crate::opcodes::OpCode::CPUI_BOOL_NEGATE => {
                 if self.convert_to_boolean() {
                     // both outputs possible
                 } else {
@@ -352,13 +352,13 @@ impl CircleRange {
             crate::opcodes::OpCode::CPUI_COPY => {
                 // Identity transform.
             }
-            crate::opcodes::OpCode::CPUI_INT_NEG => {
+            crate::opcodes::OpCode::CPUI_INT_2COMP => {
                 // INT_2COMP: (~left+1+step)
                 let val = (!self.left.wrapping_add(1).wrapping_add(self.step)) & self.mask;
                 self.left = (!self.right.wrapping_add(1).wrapping_add(self.step)) & self.mask;
                 self.right = val;
             }
-            crate::opcodes::OpCode::CPUI_INT_NOT => {
+            crate::opcodes::OpCode::CPUI_INT_NEGATE => {
                 let val = (!self.left.wrapping_add(self.step)) & self.mask;
                 self.left = (!self.right.wrapping_add(self.step)) & self.mask;
                 self.right = val;
@@ -544,7 +544,7 @@ impl CircleRange {
                 self.mask = out_mask;
                 true
             }
-            crate::opcodes::OpCode::CPUI_INT_NOT => {
+            crate::opcodes::OpCode::CPUI_INT_NEGATE => {
                 if in1.is_full() {
                     self.set_full(out_size);
                 } else if in1.is_empty() {
@@ -559,7 +559,7 @@ impl CircleRange {
                 }
                 true
             }
-            crate::opcodes::OpCode::CPUI_INT_NEG => {
+            crate::opcodes::OpCode::CPUI_INT_2COMP => {
                 if in1.is_empty() { *self = CircleRange::empty(); return true; }
                 // -[left,right) = [-right, -left)
                 self.left = ((!in1.right).wrapping_add(1)) & out_mask;

@@ -505,8 +505,8 @@ binary_op!(
 );
 unary_op!(
     TypeOpIntNeg,
-    CPUI_INT_NEG,
-    "INT_NEG",
+    CPUI_INT_2COMP,
+    "INT_2COMP",
     typeop_flags::ARITHMETIC_OP,
     "-"
 );
@@ -544,8 +544,8 @@ binary_op!(
 );
 unary_op!(
     TypeOpIntNot,
-    CPUI_INT_NOT,
-    "INT_NOT",
+    CPUI_INT_NEGATE,
+    "INT_NEGATE",
     typeop_flags::LOGICAL_OP,
     "~"
 );
@@ -752,7 +752,7 @@ functional_unary_op!(
 binary_op!(TypeOpBoolAnd, CPUI_BOOL_AND, "BOOL_AND", 0, "&&");
 binary_op!(TypeOpBoolOr, CPUI_BOOL_OR, "BOOL_OR", 0, "||");
 binary_op!(TypeOpBoolXor, CPUI_BOOL_XOR, "BOOL_XOR", 0, "^^");
-unary_op!(TypeOpBoolNot, CPUI_BOOL_NOT, "BOOL_NOT", 0, "!");
+unary_op!(TypeOpBoolNot, CPUI_BOOL_NEGATE, "BOOL_NEGATE", 0, "!");
 
 // Special Operations
 functional_binary_op!(TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat");
@@ -1196,7 +1196,7 @@ impl TypeOpManager {
         ops[OpCode::CPUI_INT_SDIV as usize] = Some(Box::new(TypeOpIntSdiv));
         ops[OpCode::CPUI_INT_REM as usize] = Some(Box::new(TypeOpIntRem));
         ops[OpCode::CPUI_INT_SREM as usize] = Some(Box::new(TypeOpIntSrem));
-        ops[OpCode::CPUI_INT_NEG as usize] = Some(Box::new(TypeOpIntNeg));
+        ops[OpCode::CPUI_INT_2COMP as usize] = Some(Box::new(TypeOpIntNeg));
         ops[OpCode::CPUI_INT_CARRY as usize] = Some(Box::new(TypeOpIntCarry));
         ops[OpCode::CPUI_INT_SCARRY as usize] = Some(Box::new(TypeOpIntScarry));
         ops[OpCode::CPUI_INT_SBORROW as usize] = Some(Box::new(TypeOpIntSborrow));
@@ -1205,7 +1205,7 @@ impl TypeOpManager {
         ops[OpCode::CPUI_INT_AND as usize] = Some(Box::new(TypeOpIntAnd));
         ops[OpCode::CPUI_INT_OR as usize] = Some(Box::new(TypeOpIntOr));
         ops[OpCode::CPUI_INT_XOR as usize] = Some(Box::new(TypeOpIntXor));
-        ops[OpCode::CPUI_INT_NOT as usize] = Some(Box::new(TypeOpIntNot));
+        ops[OpCode::CPUI_INT_NEGATE as usize] = Some(Box::new(TypeOpIntNot));
         ops[OpCode::CPUI_INT_LEFT as usize] = Some(Box::new(TypeOpIntLeft));
         ops[OpCode::CPUI_INT_RIGHT as usize] = Some(Box::new(TypeOpIntRight));
         ops[OpCode::CPUI_INT_SRIGHT as usize] = Some(Box::new(TypeOpIntSright));
@@ -1247,7 +1247,7 @@ impl TypeOpManager {
         ops[OpCode::CPUI_BOOL_AND as usize] = Some(Box::new(TypeOpBoolAnd));
         ops[OpCode::CPUI_BOOL_OR as usize] = Some(Box::new(TypeOpBoolOr));
         ops[OpCode::CPUI_BOOL_XOR as usize] = Some(Box::new(TypeOpBoolXor));
-        ops[OpCode::CPUI_BOOL_NOT as usize] = Some(Box::new(TypeOpBoolNot));
+        ops[OpCode::CPUI_BOOL_NEGATE as usize] = Some(Box::new(TypeOpBoolNot));
 
         // Special
         ops[OpCode::CPUI_PIECE as usize] = Some(Box::new(TypeOpPiece));
@@ -1297,9 +1297,9 @@ impl crate::op::PcodeOp {
             OpCode::CPUI_CBRANCH => lng.op_cbranch(self),
             OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND => lng.op_branch(self),
             // Unary ops
-            OpCode::CPUI_INT_NEG
-            | OpCode::CPUI_INT_NOT
-            | OpCode::CPUI_BOOL_NOT
+            OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_BOOL_NEGATE
             | OpCode::CPUI_FLOAT_NEG
             | OpCode::CPUI_FLOAT_ABS
             | OpCode::CPUI_FLOAT_SQRT

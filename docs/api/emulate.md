@@ -46,3 +46,4 @@ P-code 模拟执行引擎。对应 Ghidra 的 `emulate.hh`。
 - `execute(ops)` — 主循环：按序步进 ops，Continue 推进，Branch/Return/Error 终止。
 
 4 单元测试：COPY 常量、INT_ADD、链式执行（COPY→INT_ADD 结果传递）、RETURN 终止。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

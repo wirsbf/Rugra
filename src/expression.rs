@@ -355,7 +355,7 @@ pub fn boolean_match_evaluate(
                 }
                 None => return boolean_match::UNCORRELATED,
             };
-            if opc == OpCode::CPUI_BOOL_NOT {
+            if opc == OpCode::CPUI_BOOL_NEGATE {
                 // Recurse with flipped result.
                 let in0 = def.read().unwrap().inrefs.get(0).cloned();
                 drop(r);
@@ -388,7 +388,7 @@ pub fn boolean_match_evaluate(
                 }
                 None => return boolean_match::UNCORRELATED,
             };
-            if opc == OpCode::CPUI_BOOL_NOT {
+            if opc == OpCode::CPUI_BOOL_NEGATE {
                 let in0 = def.read().unwrap().inrefs.get(0).cloned();
                 drop(r);
                 if let Some(in0) = in0 {

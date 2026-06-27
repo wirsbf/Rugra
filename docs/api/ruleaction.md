@@ -757,3 +757,4 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 **注**：此前误记"缺第二变体 ruleaction.cc:8010-8046"——核实后确认该段是**独立的 RuleDivTermAdd2**（另一个 Rule），非 RuleDivOpt 的一部分。RuleDivOpt 本身完整对应 8295-8355。
 ### 2026-06-27（续）：RuleEarlyRemoval 补齐 Ghidra 6 守卫
 - RuleEarlyRemoval::apply_op 补 is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），空间门保守只允许 CONSTANT 输出删除。REGISTER/UNIQUE 待 descend 追踪完整后放开。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

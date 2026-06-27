@@ -450,8 +450,8 @@ impl Rule for RuleShiftBitops {
 /// operand is the original `V`, the logic op collapses to a `COPY` of the
 /// all-zero (for AND) or all-ones (for OR/XOR) constant.
 ///
-/// Note: Rugra names the bitwise-not opcode `CPUI_INT_NOT` (Ghidra's
-/// `INT_NEGATE`); Ghidra's `INT_2COMP` (arithmetic negate) is `CPUI_INT_NEG`.
+/// Note: Rugra names the bitwise-not opcode `CPUI_INT_NEGATE` (Ghidra's
+/// `INT_NEGATE`); Ghidra's `INT_2COMP` (arithmetic negate) is `CPUI_INT_2COMP`.
 pub struct RuleNegateIdentity;
 
 impl RuleNegateIdentity {
@@ -542,8 +542,8 @@ impl Rule for RuleNegateIdentity {
     }
 
     fn get_opcodes(&self) -> Vec<OpCode> {
-        // Ghidra INT_NEGATE == Rugra CPUI_INT_NOT
-        vec![OpCode::CPUI_INT_NOT]
+        // Ghidra INT_NEGATE == Rugra CPUI_INT_NEGATE
+        vec![OpCode::CPUI_INT_NEGATE]
     }
 }
 
@@ -602,14 +602,14 @@ impl Rule for RuleNotDistribute {
 
         // newneg1 = BOOL_NEGATE(in_v1) → newout1
         let newneg1 = fd.new_op(1, pc);
-        fd.op_set_opcode(&newneg1, OpCode::CPUI_BOOL_NOT);
+        fd.op_set_opcode(&newneg1, OpCode::CPUI_BOOL_NEGATE);
         let newout1 = fd.new_unique_out(1, &newneg1);
         fd.op_set_input(&newneg1, in_v1, 0);
         fd.op_insert_before(&newneg1, &follow);
 
         // newneg2 = BOOL_NEGATE(in_v2) → newout2
         let newneg2 = fd.new_op(1, pc);
-        fd.op_set_opcode(&newneg2, OpCode::CPUI_BOOL_NOT);
+        fd.op_set_opcode(&newneg2, OpCode::CPUI_BOOL_NEGATE);
         let newout2 = fd.new_unique_out(1, &newneg2);
         fd.op_set_input(&newneg2, in_v2, 0);
         fd.op_insert_before(&newneg2, &follow);
@@ -628,7 +628,7 @@ impl Rule for RuleNotDistribute {
     }
 
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_BOOL_NOT]
+        vec![OpCode::CPUI_BOOL_NEGATE]
     }
 }
 
@@ -1097,7 +1097,7 @@ impl Rule for RuleBoolNegate {
             return Ok(action_status::NO_CHANGE);
         }
         for d in &descendants {
-            if d.read().unwrap().opcode != OpCode::CPUI_BOOL_NOT {
+            if d.read().unwrap().opcode != OpCode::CPUI_BOOL_NEGATE {
                 return Ok(action_status::NO_CHANGE);
             }
         }
@@ -1126,7 +1126,7 @@ impl Rule for RuleBoolNegate {
 
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Ghidra BOOL_NEGATE == Rugra BOOL_NOT
-        vec![OpCode::CPUI_BOOL_NOT]
+        vec![OpCode::CPUI_BOOL_NEGATE]
     }
 }
 
@@ -3647,7 +3647,7 @@ impl Rule for RuleBooleanNegate {
         fd.op_remove_input(&follow, 1);
         fd.op_set_input(&follow, subbool, 0);
         if negate {
-            fd.op_set_opcode(&follow, OpCode::CPUI_BOOL_NOT);
+            fd.op_set_opcode(&follow, OpCode::CPUI_BOOL_NEGATE);
         } else {
             fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
         }
@@ -4849,7 +4849,7 @@ impl Rule for RuleMultNegOne {
             return Ok(action_status::NO_CHANGE);
         }
         let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_INT_NEG);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_2COMP);
         fd.op_remove_input(&follow, 1);
         Ok(action_status::CHANGE)
     }
@@ -4984,7 +4984,7 @@ impl Rule for Rule2Comp2Mult {
         // Ghidra INT_2COMP maps to Rugra INT_NEG (two's complement).
         let in0 = {
             let op = op_arc.read().unwrap();
-            if op.opcode != OpCode::CPUI_INT_NEG {
+            if op.opcode != OpCode::CPUI_INT_2COMP {
                 return Ok(action_status::NO_CHANGE);
             }
             match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
@@ -4998,7 +4998,7 @@ impl Rule for Rule2Comp2Mult {
     }
 
     fn get_name(&self) -> &str { "2comp2mult" }
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEG] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
 /// Cleanup: Convert INT_2COMP to INT_SUB: `-V => 0 - V`. Faithful to
@@ -5014,7 +5014,7 @@ impl Rule for Rule2Comp2Sub {
         // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7242-7256).
         let in0 = {
             let op = op_arc.read().unwrap();
-            if op.opcode != OpCode::CPUI_INT_NEG {
+            if op.opcode != OpCode::CPUI_INT_2COMP {
                 return Ok(action_status::NO_CHANGE);
             }
             match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
@@ -5029,7 +5029,7 @@ impl Rule for Rule2Comp2Sub {
     }
 
     fn get_name(&self) -> &str { "2comp2sub" }
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEG] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
 /// Transform INT_CARRY using a constant: `carry(V,c) => -c <= V`. Faithful to
@@ -7567,9 +7567,9 @@ impl Rule for RuleRangeMeld {
         let a2 = pull_back_op(&mut range2, &sub2_arc);
         let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
 
-        // If either sub is a BOOL_NEGATE (CPUI_BOOL_NOT in Rugra), do an extra pull back.
+        // If either sub is a BOOL_NEGATE (CPUI_BOOL_NEGATE in Rugra), do an extra pull back.
         let sub1_code = sub1_arc.read().unwrap().opcode;
-        let a1 = if sub1_code == OpCode::CPUI_BOOL_NOT {
+        let a1 = if sub1_code == OpCode::CPUI_BOOL_NEGATE {
             if !a1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
@@ -7581,7 +7581,7 @@ impl Rule for RuleRangeMeld {
             a1
         };
         let sub2_code = sub2_arc.read().unwrap().opcode;
-        let a2 = if sub2_code == OpCode::CPUI_BOOL_NOT {
+        let a2 = if sub2_code == OpCode::CPUI_BOOL_NEGATE {
             if !a2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
@@ -8294,7 +8294,7 @@ mod tests {
         let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_NOT,
+            OpCode::CPUI_INT_NEGATE,
         )));
         {
             let mut o = neg_op.write().unwrap();
@@ -8333,7 +8333,7 @@ mod tests {
         let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_NOT,
+            OpCode::CPUI_INT_NEGATE,
         )));
         {
             let mut o = neg_op.write().unwrap();
@@ -8371,7 +8371,7 @@ mod tests {
         let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
-            OpCode::CPUI_INT_NOT,
+            OpCode::CPUI_INT_NEGATE,
         )));
         {
             let mut o = neg_op.write().unwrap();
@@ -8455,7 +8455,7 @@ mod tests {
         and_out.write().unwrap().def = Some(Arc::downgrade(&and_op));
         let not_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![and_out];
 
@@ -8487,7 +8487,7 @@ mod tests {
         add_out.write().unwrap().def = Some(Arc::downgrade(&add_op));
         let not_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![add_out];
 
@@ -8804,7 +8804,7 @@ mod tests {
         let inner_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
         let inner_not = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         {
             let mut n = inner_not.write().unwrap();
@@ -8815,7 +8815,7 @@ mod tests {
         // outer_not = BOOL_NOT(inner_out) — this is the op the rule fires on.
         let outer_not = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         outer_not.write().unwrap().inrefs = vec![inner_out.clone()];
         // eq_out must have only BOOL_NOT descendants.
@@ -8856,7 +8856,7 @@ mod tests {
         less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
         let not_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![less_out.clone()];
         less_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
@@ -8898,7 +8898,7 @@ mod tests {
         eq_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
         let not_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
-            OpCode::CPUI_BOOL_NOT,
+            OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![eq_out.clone()];
         eq_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
@@ -10623,7 +10623,7 @@ mod tests {
         let result = rule.apply_op(&eq_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         // boolval == 0 => negate=true → BOOL_NOT
-        assert_eq!(eq_op.read().unwrap().opcode, OpCode::CPUI_BOOL_NOT);
+        assert_eq!(eq_op.read().unwrap().opcode, OpCode::CPUI_BOOL_NEGATE);
     }
 
     // --- RuleLogic2Bool (ruleaction.cc:3128) ---

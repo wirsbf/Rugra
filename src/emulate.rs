@@ -171,11 +171,11 @@ impl Emulate {
             // Ghidra BOOL_NEGATE == Rugra BOOL_NOT; INT_2COMP == INT_NEG;
             // INT_NEGATE == INT_NOT. COPY is also unary (1 input).
             OpCode::CPUI_COPY
-            | OpCode::CPUI_BOOL_NOT
+            | OpCode::CPUI_BOOL_NEGATE
             | OpCode::CPUI_INT_ZEXT
             | OpCode::CPUI_INT_SEXT
-            | OpCode::CPUI_INT_NEG
-            | OpCode::CPUI_INT_NOT
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_NEGATE
             | OpCode::CPUI_SUBPIECE => {
                 self.execute_unary(op);
                 EmulateOpBehavior::Continue

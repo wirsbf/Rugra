@@ -72,8 +72,8 @@ pub fn map_ghidra_opcode(opcode: i32) -> Option<OpCode> {
         21 => Some(OpCode::CPUI_INT_CARRY), // Ghidra: INT_CARRY, NOT INT_MULT!
         22 => Some(OpCode::CPUI_INT_SCARRY), // Ghidra: INT_SCARRY, NOT INT_DIV!
         23 => Some(OpCode::CPUI_INT_SBORROW), // Ghidra: INT_SBORROW, NOT INT_SDIV!
-        24 => Some(OpCode::CPUI_INT_NEG),   // Ghidra: INT_2COMP (twos complement)
-        25 => Some(OpCode::CPUI_INT_NOT),   // Ghidra: INT_NEGATE (bitwise ~)
+        24 => Some(OpCode::CPUI_INT_2COMP),   // Ghidra: INT_2COMP (twos complement)
+        25 => Some(OpCode::CPUI_INT_NEGATE),   // Ghidra: INT_NEGATE (bitwise ~)
 
         // === Bitwise ===
         26 => Some(OpCode::CPUI_INT_XOR),
@@ -91,7 +91,7 @@ pub fn map_ghidra_opcode(opcode: i32) -> Option<OpCode> {
         36 => Some(OpCode::CPUI_INT_SREM),
 
         // === Boolean ===
-        37 => Some(OpCode::CPUI_BOOL_NOT), // Ghidra: BOOL_NEGATE
+        37 => Some(OpCode::CPUI_BOOL_NEGATE), // Ghidra: BOOL_NEGATE
         38 => Some(OpCode::CPUI_BOOL_XOR),
         39 => Some(OpCode::CPUI_BOOL_AND),
         40 => Some(OpCode::CPUI_BOOL_OR),
@@ -171,8 +171,8 @@ pub fn to_ghidra_opcode(op: OpCode) -> Option<i32> {
         OpCode::CPUI_INT_CARRY => Some(21),
         OpCode::CPUI_INT_SCARRY => Some(22),
         OpCode::CPUI_INT_SBORROW => Some(23),
-        OpCode::CPUI_INT_NEG => Some(24),
-        OpCode::CPUI_INT_NOT => Some(25),
+        OpCode::CPUI_INT_2COMP => Some(24),
+        OpCode::CPUI_INT_NEGATE => Some(25),
         OpCode::CPUI_INT_XOR => Some(26),
         OpCode::CPUI_INT_AND => Some(27),
         OpCode::CPUI_INT_OR => Some(28),
@@ -184,7 +184,7 @@ pub fn to_ghidra_opcode(op: OpCode) -> Option<i32> {
         OpCode::CPUI_INT_SDIV => Some(34),
         OpCode::CPUI_INT_REM => Some(35),
         OpCode::CPUI_INT_SREM => Some(36),
-        OpCode::CPUI_BOOL_NOT => Some(37),
+        OpCode::CPUI_BOOL_NEGATE => Some(37),
         OpCode::CPUI_BOOL_XOR => Some(38),
         OpCode::CPUI_BOOL_AND => Some(39),
         OpCode::CPUI_BOOL_OR => Some(40),
@@ -287,8 +287,8 @@ pub extern "C" fn rugra_evaluate_constant(
                 0
             }
         }
-        OpCode::CPUI_INT_NEG => val1.wrapping_neg(),
-        OpCode::CPUI_INT_NOT => !val1,
+        OpCode::CPUI_INT_2COMP => val1.wrapping_neg(),
+        OpCode::CPUI_INT_NEGATE => !val1,
         OpCode::CPUI_INT_LEFT => val1.wrapping_shl((val2 as u32) & 0x3f),
         OpCode::CPUI_INT_RIGHT => val1.wrapping_shr((val2 as u32) & 0x3f),
         OpCode::CPUI_INT_SRIGHT => {

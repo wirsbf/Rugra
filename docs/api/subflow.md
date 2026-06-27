@@ -80,3 +80,4 @@ do_trace 现使用 worklist 驱动 trace_forward_single，再调用 trace_backwa
 3. 处理 copy/compare/parameter/extension patches：修改现有 op 的输入/opcode
 
 完整 SubvariableFlow 三段式现已就位：doTrace → traceForward/traceBackward → doReplacement。
+2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
