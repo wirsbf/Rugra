@@ -387,12 +387,13 @@ impl ActionRestructureVarnode {
 
 impl Action for ActionRestructureVarnode {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2295).
         let mut scope = crate::varmap::ScopeLocal::new();
         scope.restructure_varnode(fd);
         fd.scope = Some(scope);
-        // syncVarnodesWithSymbols (coreaction.cc:2281) is folded into the
-        // ScopeLocal build above for Rugra; a separate pass can be added when
-        // HighVariable↔Symbol linking is wired.
+        // syncVarnodesWithSymbols (coreaction.cc:2281): mark Stack-space
+        // varnodes overlapping scope symbols as mapped.
+        let _ = fd.sync_varnodes_with_symbols(false, false);
         Ok(action_status::CHANGE)
     }
 
@@ -4187,3 +4188,15 @@ mod tests {
         assert!(fc.is_input_locked());
     }
 }
+
+    /// ActionRestructureVarnode now calls sync_varnodes_with_symbols.
+    /// Verify the name is unchanged and it still builds scope.
+    #[test]
+    fn test_action_restructure_calls_sync() {
+        use crate::address::Address;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let action = ActionRestructureVarnode::new();
+        let status = action.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::CHANGE);
+        assert!(fd.scope.is_some(), "scope must be built");
+    }

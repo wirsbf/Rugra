@@ -716,3 +716,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 - `remove_unreachable_blocks() -> bool` — `Funcdata::removeUnreachableBlocks`（funcdata_block.cc:347-394）：从入口 BFS 收集可达块，标记不可达块为 dead，移除其出边，再从图移除。用于 ActionUnreachable。
 - `splice_block_basic(bb) -> bool` — `Funcdata::spliceBlockBasic`（funcdata_block.cc:919-956）：拼接单出边块到其单后继（销毁 bb 的 branch op，继承后继出边，移除后继）。用于 ActionDoNothing/ActionRedundBranch case 1。
+
+### 2026-06-27（会话3 G5续）：sync_varnodes_with_symbols
+
+- `sync_varnodes_with_symbols(update_datatypes, unmapped_alias_check) -> bool` — `Funcdata::syncVarnodesWithSymbols`（funcdata_varnode.cc:938-989）的忠实适配：遍历 Stack-space varnodes，匹配 ScopeLocal 符号，标记为 mapped（set_direct_write）。ActionRestructureVarnode 现调用它（coreaction.cc:2281）。

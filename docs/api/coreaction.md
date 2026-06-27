@@ -526,3 +526,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
 - func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
 - ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output
+
+### 2026-06-27（会话3 G5续）：ActionRestructureVarnode 接入 sync_varnodes_with_symbols
+
+ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_varnodes_with_symbols(false, false)`，关闭路线图中"缺 syncVarnodesWithSymbols"的缺口。

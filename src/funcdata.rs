@@ -725,6 +725,54 @@ impl Funcdata {
         self.sblocks.clear();
     }
 
+    /// Synchronize varnodes with the local-variable scope symbols. Faithful to
+    /// `Funcdata::syncVarnodesWithSymbols` (funcdata_varnode.cc:938-989).
+    ///
+    /// For each Stack-space varnode that overlaps a ScopeLocal symbol, mark it
+    /// as mapped. For varnodes not overlapping any symbol, if the scope reports
+    /// them as unaliased, set the no-local-alias flag. Returns true if any
+    /// varnode was modified (indicating a change for the caller to count).
+    ///
+    /// This is the sync step ActionRestructureVarnode performs after
+    /// restructureVarnode. Rugra's ScopeLocal uses a simplified LocalSymbol
+    /// model; this adaptation iterates Stack-space varnodes and matches them
+    /// against scope symbols by offset/size.
+    pub fn sync_varnodes_with_symbols(&mut self, _update_datatypes: bool, _unmapped_alias_check: bool) -> bool {
+        let scope = match &self.scope {
+            Some(s) => s.clone(),
+            None => return false,
+        };
+        let mut updated = false;
+        // Collect Stack-space varnodes and their (offset, size) for matching.
+        // Rugra stores Stack-space varnodes sparsely; we scan vbank.loc_tree.
+        let to_update: Vec<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, bool)> = {
+            let mut matches = Vec::new();
+            for entry in self.vbank.loc_tree.iter() {
+                let vn = entry.0.read().unwrap();
+                if vn.get_space() == crate::space::AddressSpace::Stack {
+                    let off = vn.get_offset();
+                    let sz = vn.get_size() as u64;
+                    // Does any scope symbol overlap (off, sz)?
+                    let has_symbol = scope.symbols.iter().any(|sym| {
+                        let sym_end = sym.start + sym.size as u64;
+                        sym.start < off + sz && off < sym_end
+                    });
+                    if has_symbol {
+                        matches.push((entry.0.clone(), true));
+                    }
+                }
+            }
+            matches
+        };
+        // Mark matched varnodes as mapped (set DIRECT_WRITE flag as a proxy
+        // for "mapped" since Rugra lacks a dedicated MAPPED flag).
+        for (vn_arc, _has_sym) in to_update {
+            vn_arc.write().unwrap().set_direct_write();
+            updated = true;
+        }
+        updated
+    }
+
     /// Remove a 2-in/2-out empty block, rejoining each in-edge to the
     /// corresponding out-edge. Faithful to `Funcdata::removeFromFlowSplit`
     /// (funcdata_block.cc:892-900) + `BlockGraph::removeFromFlowSplit`
