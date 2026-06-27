@@ -3583,38 +3583,60 @@ impl ActionDeindirect {
 }
 impl Action for ActionDeindirect {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs, find CALLIND ops,
-        // trace the indirect target through COPY chains. Full deindirect
-        // requires Scope queryExternalRefFunction + Architecture funcptr_align.
+        // Faithful to ActionDeindirect::apply (coreaction.cc:1219-1280).
+        // For each CALLIND call site, trace the indirect target through COPY
+        // chains; if the resolved target is a constant address that names a
+        // known function (in the symbol table / external_prototypes), resolve
+        // it: set the callspec's entry_addr and convert CALLIND to CALL.
+        //
+        // Ghidra also handles external-ref + typed-function-pointer paths; those
+        // need Scope::queryExternalRefFunction and TypeCode prototypes, which
+        // Rugra does not yet model. The constant-address path (the common case
+        // for direct calls that the lifter emitted as CALLIND) is implemented.
         let mut change_count = 0;
         use crate::opcodes::OpCode;
 
+        // Snapshot the CALLIND ops + their callspec indices, since we mutate fd
+        // (op_set_opcode) during the loop.
         let n_calls = fd.num_calls();
+        let mut callind_updates: Vec<(usize, Arc<std::sync::RwLock<crate::op::PcodeOp>>, crate::address::Address)> = Vec::new();
         for i in 0..n_calls {
-            let fc_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
-            if let Some(addr) = fc_addr {
-                // Find the CALLIND op at this address in the op bank.
-                for op_ref in &fd.obank.alivelist {
-                    let op_rg = op_ref.0.read().unwrap();
-                    if op_rg.opcode == OpCode::CPUI_CALLIND && op_rg.get_addr() == addr {
-                        // Found the indirect call op.
-                        // Trace input(0) through COPY chain to find the
-                        // actual call target.
-                        if let Some(target_vn) = op_rg.get_in(0) {
-                            let target_rg = target_vn.read().unwrap();
-                            // Check if target is constant (direct address).
-                            if target_rg.is_constant() {
-                                // Full Ghidra: resolve constant to function
-                                // address, convert CALLIND to CALL.
-                                change_count += 1;
-                            }
-                            // Check if target is persistent + external ref.
-                            // Full Ghidra: queryExternalRefFunction.
-                        }
-                        break;
+            let fc_addr = match fd.get_call_specs(i).map(|fc| fc.op_addr) {
+                Some(a) => a,
+                None => continue,
+            };
+            // Find the CALLIND op at this callspec's address.
+            let mut found: Option<(Arc<std::sync::RwLock<crate::op::PcodeOp>>, Option<crate::address::Address>)> = None;
+            for op_ref in &fd.obank.alivelist {
+                let op_rg = op_ref.0.read().unwrap();
+                if op_rg.opcode == OpCode::CPUI_CALLIND && op_rg.get_addr() == fc_addr {
+                    // Trace input(0) through COPY chains to the resolved target.
+                    let resolved = Self::trace_indirect_target(&op_ref.0);
+                    found = Some((op_ref.0.clone(), resolved));
+                    break;
+                }
+            }
+            if let Some((op_arc, resolved)) = found {
+                if let Some(target_addr) = resolved {
+                    // Ghidra: queryFunction(codeaddr) — does a function exist at
+                    // this address? Rugra checks the symbol_table (populated from
+                    // the ELF symtab) and external_prototypes.
+                    let is_function = fd.symbol_table.contains_key(&target_addr.as_u64())
+                        || fd.external_prototypes.contains_key(&target_addr.as_u64());
+                    if is_function {
+                        callind_updates.push((i, op_arc, target_addr));
                     }
                 }
             }
+        }
+        // Apply updates: set entry_addr on the callspec, convert CALLIND->CALL.
+        for (i, op_arc, target_addr) in callind_updates {
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                fc.entry_addr = Some(target_addr);
+            }
+            let op_ref = crate::op::PcodeOpRef(op_arc);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_CALL);
+            change_count += 1;
         }
 
         if change_count > 0 {
@@ -3624,6 +3646,53 @@ impl Action for ActionDeindirect {
         }
     }
     fn get_name(&self) -> &str { "deindirect" }
+}
+
+impl ActionDeindirect {
+    /// Trace a CALLIND's input(0) through COPY chains to the resolved target
+    /// address. Faithful to the while-loop in ActionDeindirect::apply
+    /// (coreaction.cc:1231-1232). Returns the constant target address if the
+    /// chain ends at a constant varnode, else None.
+    fn trace_indirect_target(op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>) -> Option<crate::address::Address> {
+        let vn = {
+            let op = op_arc.read().unwrap();
+            op.get_in(0).cloned()
+        };
+        let vn = vn?;
+        // If direct constant, return immediately.
+        {
+            let v = vn.read().unwrap();
+            if v.is_constant() {
+                return Some(crate::address::Address::new(v.get_offset()));
+            }
+        }
+        // Otherwise chase through COPY chains.
+        Self::chase_copy_to_const(&vn)
+    }
+
+    /// Helper: chase a COPY chain from `vn` to a constant, returning its
+    /// address. Used by trace_indirect_target.
+    fn chase_copy_to_const(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::address::Address> {
+        let mut cur = vn.clone();
+        for _ in 0..20 {
+            let v = cur.read().unwrap();
+            if v.is_constant() {
+                return Some(crate::address::Address::new(v.get_offset()));
+            }
+            if !v.is_written() {
+                return None;
+            }
+            let def = v.def.as_ref().and_then(|w| w.upgrade());
+            drop(v);
+            let def = match def { Some(d) => d, None => return None };
+            let d_rg = def.read().unwrap();
+            if d_rg.opcode != crate::opcodes::OpCode::CPUI_COPY {
+                return None;
+            }
+            cur = d_rg.get_in(0).cloned()?;
+        }
+        None
+    }
 }
 
 /// Stack pointer flow analysis. Faithful to `ActionStackPtrFlow`
@@ -3998,5 +4067,35 @@ mod tests {
         let spliced = fd.splice_block_basic(&b1_dyn);
         assert!(spliced, "should splice block 1");
         assert_eq!(fd.bblocks.get_size(), 2, "block 1 should be merged out");
+    }
+
+    /// ActionDeindirect: empty Funcdata → NO_CHANGE.
+    #[test]
+    fn test_action_deindirect_empty_fd() {
+        use crate::address::Address;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = ActionDeindirect::new();
+        assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_action_deindirect_name() {
+        let a = ActionDeindirect::new();
+        assert_eq!(a.get_name(), "deindirect");
+    }
+
+    /// trace_indirect_target resolves a direct constant input.
+    #[test]
+    fn test_deindirect_trace_constant() {
+        use crate::address::{Address, SeqNum};
+        // CALLIND(const 0x500) — direct constant target.
+        let const_vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x500, 8)));
+        let mut callind = crate::op::PcodeOp::new(SeqNum::new(Address::new(0x20), 0),
+            crate::opcodes::OpCode::CPUI_CALLIND);
+        callind.inrefs = vec![const_vn];
+        let op_arc = std::sync::Arc::new(std::sync::RwLock::new(callind));
+        let resolved = ActionDeindirect::trace_indirect_target(&op_arc);
+        assert_eq!(resolved, Some(Address::new(0x500)));
     }
 }

@@ -505,3 +505,17 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 **架构说明 — 为何未接入主管线**：这些 Action 的 apply() 逻辑完整且通过 9 个单元测试（remove_unreachable_blocks、splice_block_basic 端到端验证），但**未接入 set_default_actions**。原因：Ghidra 在其 selectGoto→collapseInternal 迭代循环内运行这些清理 Action，structurer 围绕块删除设计；Rugra 的 staged-phase structurer（collapse_loops/collapse_conditions）依赖这些 Action 会删除的块，接入导致回归（curl 24→11, goto 0→2）。完整接入需 staged→collapseInternal 架构迁移（G4 可选优化）。apply() 逻辑已就绪供该迁移使用。
 
 9 单元测试验证 apply() 正确性。702/702 测试，curl 24/24 + httpd 29/29，0 goto。
+
+### 2026-06-27（会话3 G5 续）：ActionDeindirect apply() 完整移植
+
+完整移植 `ActionDeindirect::apply`（coreaction.cc:1219-1280）的常量目标解析路径：
+
+- 遍历所有 callspecs，找到 CALLIND op
+- 通过 COPY 链追踪间接目标（`trace_indirect_target` + `chase_copy_to_const`，coreaction.cc:1231-1232）
+- 若解析为常量地址且该地址在 symbol_table 或 external_prototypes 中（`queryFunction` 等价），设置 callspec 的 entry_addr 并将 CALLIND 转为 CALL（`deindirect` 等价，fspec.cc:5443-5472）
+
+**新增 helper**：`ActionDeindirect::trace_indirect_target` / `chase_copy_to_const`——忠实于 Ghidra 的 COPY 链追踪 while 循环。
+
+**未覆盖路径**（需 Scope/TypeCode 基础设施）：external-ref 持久 varnode（`queryExternalRefFunction`）、typed function pointer（TypeCode prototype）。常量地址路径是二进制中最常见的情况。
+
+3 单元测试：空 Funcdata、get_name、trace_indirect_target 常量解析。705/705 测试，curl 24/24 + httpd 29/29。
