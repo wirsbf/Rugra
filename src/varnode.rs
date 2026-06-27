@@ -806,6 +806,29 @@ impl VarnodeBank {
         let search_vn = Arc::new(RwLock::new(Varnode::new(size, loc)));
         self.loc_tree.get(&VarnodeLocRef(search_vn)).map(|v| v.0.clone())
     }
+
+    /// Find any varnode at (size, loc), regardless of create_index.
+    ///
+    /// `find_free` requires an exact (loc, size, create_index) match, so it
+    /// only finds a varnode whose create_index is 0. This helper instead
+    /// scans the loc_tree for any varnode with matching (loc, size),
+    /// returning the most recently created (highest create_index), which is
+    /// the one most likely to carry a current def link. Used by inject to
+    /// reuse a prior op's output varnode when linking use-def chains.
+    pub fn find_by_loc(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+        let mut best: Option<Arc<RwLock<Varnode>>> = None;
+        let mut best_idx = 0u32;
+        for entry in self.loc_tree.iter() {
+            let v = entry.0.read().unwrap();
+            if v.loc == loc && v.size == size {
+                if v.create_index >= best_idx {
+                    best_idx = v.create_index;
+                    best = Some(entry.0.clone());
+                }
+            }
+        }
+        best
+    }
 }
 
 impl fmt::Display for Varnode {

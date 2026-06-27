@@ -761,6 +761,17 @@ fn resolve_rsp_offset(addr: &Arc<RwLock<Varnode>>) -> Option<(u64, bool)> {
     resolve_rsp_offset_signed(addr).map(|(off, w)| (off as u64, w))
 }
 
+// NOTE (G3 deep-water, 2026-06-27): A `resolve_rsp_offset_via_bank` variant
+// that bridged broken def chains via a spatial vbank lookup was prototyped.
+// It improved my_fwrite's hint count but caused a regression in helpf
+// (printc emitted `StackX_8` uses without declarations — the scope's new
+// offset recognition outran the printc declaration logic). Reverted until
+// printc's symbol-declaration path is synchronized with varmap's scope.
+// The diagnosis (see docs/api/varmap.md + examples/diag_stack.rs) stands:
+// the root cause is inject creating fresh def-less input varnodes, and a
+// correct fix requires re-establishing use-def links post-heritage without
+// collapsing SSA identity.
+
 /// Signed-offset variant: returns the offset relative to RSP as i64, then the
 /// caller masks to u64. This lets additive chains compose correctly.
 fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)> {

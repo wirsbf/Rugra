@@ -92,3 +92,21 @@ varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 G
 ### 2026-06-27（会话3 续）：MapState::hint_count（诊断）
 
 - `MapState::hint_count() -> usize` — 诊断辅助：返回已收集的 RangeHint 数量。用于核实 gather_spacebase 的实际产出（发现多数函数返回 0，定位 G3 阻塞根因）。
+
+### 2026-06-27（会话3 G3 深水区诊断）：uVar 碎片根因实证定位
+
+通过 `examples/diag_stack.rs` 实证诊断 curl 函数的 P-code，确认 uVar 碎片的**两个根因**：
+
+**根因 A：def 链断链（主要）**
+`inject_raw_ops` 为每个 op 的 input 创建**全新的** varnode（`create_with_space`），而非复用产出该地址的 op 的 output varnode。例如 myprogress 的 `STORE@0x34f0` 地址是 `INT_ADD(COPY(INT_SUB(RSP,0x258)), 0x248)`，但 STORE 的 input varnode 是新对象（`Unique:0x1018`），其 def=None——与产出它的 INT_ADD 的 output 是不同 Arc。
+
+`resolve_rsp_offset` 已正确处理 COPY/INT_ADD/INT_SUB 递归，但因 def 链断裂，递归到 def=None 就终止。
+
+**根因 B：参数指针基址（次要）**
+my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数指针解引用，正确地**不应**被当作栈访问。这类"碎片"其实是参数访问。
+
+**为何不能简单复用 varnode**：尝试在 inject 里 `find_by_loc` 复用同 (size,offset) 的 varnode，导致 7 个 SSA 测试失败——Rugra 的 SSA 基于 Arc identity 区分定义点，合并对象破坏了 SSA 语义。正确方案需重新设计 def 链建立（heritage 后统一），非 inject 时合并。
+
+**剩余工作**：重新设计 inject/heritage 的 def 链建立，使 LOAD/STORE 的地址 varnode 能追溯到产出它的 op（保留 SSA 独立性的同时建立 use-def）。这是 G3 的核心阻塞。
+
+诊断工具 `examples/diag_stack.rs` 保留，可打印任意函数的 LOAD/STORE def 链 + scope symbol 数。
