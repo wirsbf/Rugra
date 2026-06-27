@@ -4,6 +4,39 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动 + FuncCallSpecs 集成**
 
+## 近期进展（2026-06-27 会话 3 续3：uVar 碎片 149→0！）
+
+**重大输出质量突破**：curl/httpd 反编译输出的 uVar 碎片**完全消除**。
+
+### 根因定位（实证诊断）
+
+通过在 printc 所有 uVar 命名点加诊断，确认 uVar_N 全部来自 `emit_inline_expr`
+的 `_ =>` fallback，且 def_op 全是 **CPUI_COPY**（142 次命中）。`emit_inline_expr`
+的 match 处理了所有算术/比较 op，但**遗漏了最基本的 COPY**，导致 COPY 落入 fallback
+输出未初始化的 uVar_N 碎片。
+
+### 修复
+
+在 emit_inline_expr match 开头添加 CPUI_COPY 分支：COPY(x) → 内联 x（push_input slot 0）。
+COPY 是语义 no-op，内联源始终正确。
+
+### 效果
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| curl uVar 碎片 | 149 | **0** |
+| httpd uVar 碎片 | 126 | **0** |
+| 单元测试 | 682/682 | **682/682** |
+| curl gcc | 24/24 | **24/24** |
+| httpd gcc | 29/29 | **29/29** |
+| goto | 0 | **0** |
+
+例：`strequal("--", uVar_18)` → `strequal("--", lVar_0)`（COPY 源正确内联）。
+
+---
+
+（以下为历史记录）
+
 ## 近期进展（2026-06-27 会话 3：condexe.cc 全部移植 + RuleDivOpt 核实 + Rule 调度器）
 
 本次会话**关闭 G1/G2/G3部分/G6核心**，共 5 个 commit：

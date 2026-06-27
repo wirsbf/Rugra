@@ -535,3 +535,28 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 3. 关键：uVar 的定义 op（CALL 输出/INT_ADD）应在使用点内联为表达式，而非声明独立变量
 
 **此问题与 G3 spacebase 正交**：spacebase 修复的是*栈变量*（StackX_*），uVar 是*中间临时*。两者独立。
+
+### 2026-06-27（会话3 uVar 修复）：emit_inline_expr 处理 COPY — uVar 碎片 149→0
+
+**根因定位**（实证诊断）：通过在所有 uVar 命名点加诊断，确认 uVar_N 全部来自 `emit_inline_expr` 的 `_ =>` fallback（行 2048），且 def_op 全是 **CPUI_COPY**（142 次命中：uVar_28×61, uVar_0×29, uVar_a0×22, uVar_18×10...）。
+
+`emit_inline_expr` 的 match 未处理 CPUI_COPY，导致 COPY 操作落入 fallback，输出 `uVar_N`（未初始化变量碎片）而非内联 COPY 源表达式。
+
+**修复**：在 emit_inline_expr 的 match 开头添加 CPUI_COPY 分支：
+```rust
+OpCode::CPUI_COPY => {
+    if !def_op.inrefs.is_empty() {
+        self.push_input(def_op, 0);  // COPY(x) → 内联 x
+        return;
+    }
+}
+```
+COPY 是语义上的 no-op 赋值，内联其源始终正确。
+
+**效果**：
+- curl uVar: **149 → 0**
+- httpd uVar: **126 → 0**
+- 例：`strequal("--", uVar_18)` → `strequal("--", lVar_0)`（COPY 源 lVar_0 正确内联）
+- 682/682 测试 + curl 24/24 + httpd 29/29 全绿，0 goto，无回退
+
+此修复是单点正确的——之前 emit_inline_expr 的 6+ 分支处理了所有算术/比较 op，但遗漏了最基本的 COPY。

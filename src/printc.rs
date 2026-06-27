@@ -1211,6 +1211,9 @@ impl PrintC {
 
     /// Get the display name for a varnode without emitting it
     fn get_varnode_display_name(&self, vn: &Varnode) -> String {
+        self.get_varnode_display_name_inner(vn)
+    }
+    fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
 
         let addr = vn.get_offset();
@@ -1834,6 +1837,17 @@ impl PrintC {
     /// Emits the operation without the `output = ` prefix.
     fn emit_inline_expr(&mut self, def_op: &PcodeOp) {
         match def_op.opcode {
+            // COPY(x) inlines to just x — the source expression. Without this
+            // branch, COPY fell through to the `_ =>` fallback and emitted the
+            // output as `uVar_N`, creating uninitialized-variable fragments
+            // (the dominant source of uVar noise). Inlining the COPY source is
+            // always correct: COPY is semantically a no-op assignment.
+            OpCode::CPUI_COPY => {
+                if !def_op.inrefs.is_empty() {
+                    self.push_input(def_op, 0);
+                    return;
+                }
+            }
             OpCode::CPUI_INT_ADD | OpCode::CPUI_FLOAT_ADD
             | OpCode::CPUI_INT_SUB | OpCode::CPUI_FLOAT_SUB
             | OpCode::CPUI_INT_MULT | OpCode::CPUI_FLOAT_MULT
