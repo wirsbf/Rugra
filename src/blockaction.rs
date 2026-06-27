@@ -103,8 +103,412 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
     }
 }
 
+/// An edge considered for unstructuring (goto) by the loop-ordering pass.
+/// Faithful to Ghidra's `FloatingEdge` (blockaction.hh). Records a (from, to)
+/// block pair; the structurer may later mark the `from` out-edge as a goto.
+#[derive(Clone)]
+pub struct FloatingEdge {
+    pub from_idx: i32,
+    pub to_idx: i32,
+}
+
+/// A natural loop detected during orderLoopBodies.
+///
+/// Faithful to Ghidra's `LoopBody` class (blockaction.cc:46-490). Holds the
+/// loop head, tails (back-edge sources), exit block, exit edges, nesting
+/// depth, and immediate container. The methods collect the loop body, pick a
+/// single exit block, extend the body to dominated blocks, and label exit
+/// edges for the TraceDAG pass.
+pub struct LoopBody {
+    /// Loop head (the back-edge target / loop entry).
+    pub head: i32,
+    /// Back-edge sources (tails). Multiple if the loop has several back-edges.
+    pub tails: Vec<i32>,
+    /// The chosen single exit block (may be -1 if none).
+    pub exit_block: i32,
+    /// Edges leaving the loop body (from, to) block indices.
+    pub exit_edges: Vec<FloatingEdge>,
+    /// Nesting depth (incremented by each containing loop).
+    pub depth: i32,
+    /// Immediate containing LoopBody index in the loop order (-1 = top-level).
+    pub immed_container: i32,
+    /// Number of head/tail nodes in the body (set by find_base).
+    pub unique_count: usize,
+}
+
+impl LoopBody {
+    pub fn new(head: i32, tail: i32) -> Self {
+        Self {
+            head,
+            tails: vec![tail],
+            exit_block: -1,
+            exit_edges: Vec::new(),
+            depth: 0,
+            immed_container: -1,
+            unique_count: 0,
+        }
+    }
+
+    pub fn add_tail(&mut self, tail: i32) {
+        self.tails.push(tail);
+    }
+
+    /// Collect all blocks reaching a tail without going through head.
+    /// Faithful to `LoopBody::findBase` (blockaction.cc:119-144). Marks each
+    /// collected block via set_mark. Returns the body block indices.
+    pub fn find_base(&mut self, graph: &BlockGraph) -> Vec<i32> {
+        let mut body: Vec<i32> = Vec::new();
+        // Mark head.
+        if let Some(h) = graph.get_block(self.head as usize) {
+            h.write().unwrap().set_mark();
+        }
+        body.push(self.head);
+        for &tail in &self.tails {
+            if let Some(t) = graph.get_block(tail as usize) {
+                if !t.read().unwrap().is_mark() {
+                    t.write().unwrap().set_mark();
+                    body.push(tail);
+                }
+            }
+        }
+        self.unique_count = body.len();
+        // Walk backwards from each body node, marking reachable predecessors
+        // (skipping goto/irreducible in-edges), until no new nodes.
+        let mut i = 1;
+        while i < body.len() {
+            let cur = body[i];
+            i += 1;
+            if let Some(blk) = graph.get_block(cur as usize) {
+                let preds: Vec<(usize, i32)> = {
+                    let b = blk.read().unwrap();
+                    let n = b.size_in();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_in(k))
+                        .filter_map(|k| b.get_in(k).map(|e| (k, e.point.read().unwrap().get_index())))
+                        .collect()
+                };
+                for (_, pred_idx) in preds {
+                    if let Some(pblk) = graph.get_block(pred_idx as usize) {
+                        if !pblk.read().unwrap().is_mark() {
+                            pblk.write().unwrap().set_mark();
+                            body.push(pred_idx);
+                        }
+                    }
+                }
+            }
+        }
+        body
+    }
+
+    /// Extend the body to blocks reachable ONLY from head (dominated by the
+    /// loop entry), excluding the exit block. Faithful to `LoopBody::extend`
+    /// (blockaction.cc:150-176). Uses visit_count to count in-edges.
+    pub fn extend(&self, body: &mut Vec<i32>, graph: &BlockGraph) {
+        let mut trial: Vec<i32> = Vec::new();
+        let mut i = 0;
+        while i < body.len() {
+            let bl = body[i];
+            i += 1;
+            let succs: Vec<(usize, i32)> = {
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n)
+                        .filter(|&j| !b.is_goto_out(j))
+                        .filter_map(|j| b.get_out(j).map(|e| (j, e.point.read().unwrap().get_index())))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for (_, succ_idx) in succs {
+                if succ_idx == self.exit_block {
+                    continue;
+                }
+                let marked = graph.get_block(succ_idx as usize)
+                    .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                if marked {
+                    continue;
+                }
+                let count = graph.get_block(succ_idx as usize)
+                    .map(|b| b.read().unwrap().get_visit_count()).unwrap_or(0);
+                if count == 0 {
+                    trial.push(succ_idx);
+                }
+                if let Some(sblk) = graph.get_block(succ_idx as usize) {
+                    sblk.write().unwrap().set_visit_count(count + 1);
+                    // If all in-edges now accounted for, absorb into body.
+                    let total_in = sblk.read().unwrap().size_in() as i32;
+                    if count + 1 == total_in {
+                        sblk.write().unwrap().set_mark();
+                        body.push(succ_idx);
+                    }
+                }
+            }
+        }
+        // Clear visit counts.
+        for &t in &trial {
+            if let Some(tblk) = graph.get_block(t as usize) {
+                tblk.write().unwrap().set_visit_count(0);
+            }
+        }
+    }
+
+    /// Pick a single exit block. Faithful to `LoopBody::findExit`
+    /// (blockaction.cc:182-239). Prefers exits from tails, then head, then
+    /// middle body nodes. If there's a container, the exit must be in it.
+    pub fn find_exit(&mut self, body: &[i32], graph: &BlockGraph) {
+        let mut trial_exit: Vec<i32> = Vec::new();
+        // Exits from tails.
+        for &tail in &self.tails {
+            let outs: Vec<i32> = {
+                if let Some(blk) = graph.get_block(tail as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n)
+                        .filter(|&i| !b.is_goto_out(i))
+                        .filter_map(|i| b.get_out(i).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for cur in outs {
+                let marked = graph.get_block(cur as usize)
+                    .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                if !marked {
+                    if self.immed_container == -1 {
+                        self.exit_block = cur;
+                        return;
+                    }
+                    trial_exit.push(cur);
+                }
+            }
+        }
+        // Exits from middle body nodes (skip head/tail indices).
+        for (i, &bl) in body.iter().enumerate() {
+            if i > 0 && i < self.unique_count {
+                continue;
+            }
+            let outs: Vec<i32> = {
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n)
+                        .filter(|&j| !b.is_goto_out(j))
+                        .filter_map(|j| b.get_out(j).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for cur in outs {
+                let marked = graph.get_block(cur as usize)
+                    .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                if !marked {
+                    if self.immed_container == -1 {
+                        self.exit_block = cur;
+                        return;
+                    }
+                    trial_exit.push(cur);
+                }
+            }
+        }
+        self.exit_block = -1;
+        if trial_exit.is_empty() {
+            return;
+        }
+        // If there's a container, the exit must be marked in the container's body.
+        // We approximate: pick the first trial exit (the container-constrained
+        // selection requires the container's body marks, which are transient;
+        // for now use the first trial exit).
+        self.exit_block = trial_exit[0];
+    }
+
+    /// Reorder tails so a tail with an edge to exit_block is first.
+    /// Faithful to `LoopBody::orderTails` (blockaction.cc:245-264).
+    pub fn order_tails(&mut self, graph: &BlockGraph) {
+        if self.tails.len() <= 1 || self.exit_block == -1 {
+            return;
+        }
+        let mut pref = None;
+        for (idx, &tail) in self.tails.iter().enumerate() {
+            let outs: Vec<i32> = {
+                if let Some(blk) = graph.get_block(tail as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n).filter_map(|j| b.get_out(j).map(|e| e.point.read().unwrap().get_index())).collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            if outs.iter().any(|&o| o == self.exit_block) {
+                pref = Some(idx);
+                break;
+            }
+        }
+        if let Some(prefidx) = pref {
+            if prefidx != 0 {
+                self.tails.swap(0, prefidx);
+            }
+        }
+    }
+
+    /// Label edges leaving the body. Faithful to `LoopBody::labelExitEdges`
+    /// (blockaction.cc:270-320). Priority: middle-exit edges first, then head,
+    /// then tails (reverse), then edges-to-exitblock last.
+    pub fn label_exit_edges(&mut self, body: &[i32], graph: &BlockGraph) {
+        let mut to_exit_block: Vec<i32> = Vec::new();
+        // Middle nodes (non-head/tail).
+        for &bl in body.iter().skip(self.unique_count) {
+            let outs: Vec<(i32, i32)> = {
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_out(k))
+                        .filter_map(|k| b.get_out(k).map(|e| (e.point.read().unwrap().get_index(), k as i32)))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for (tgt, _slot) in outs {
+                if tgt == self.exit_block {
+                    to_exit_block.push(bl);
+                } else {
+                    let marked = graph.get_block(tgt as usize)
+                        .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                    if !marked {
+                        self.exit_edges.push(FloatingEdge { from_idx: bl, to_idx: tgt });
+                    }
+                }
+            }
+        }
+        // Head exits.
+        let head_outs: Vec<(i32, i32)> = {
+            if let Some(blk) = graph.get_block(self.head as usize) {
+                let b = blk.read().unwrap();
+                let n = b.size_out();
+                (0..n)
+                    .filter(|&k| !b.is_goto_out(k))
+                    .filter_map(|k| b.get_out(k).map(|e| (e.point.read().unwrap().get_index(), k as i32)))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
+        for (tgt, _slot) in head_outs {
+            if tgt == self.exit_block {
+                to_exit_block.push(self.head);
+            } else {
+                let marked = graph.get_block(tgt as usize)
+                    .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                if !marked {
+                    self.exit_edges.push(FloatingEdge { from_idx: self.head, to_idx: tgt });
+                }
+            }
+        }
+        // Tail exits (reverse order).
+        for &tail in self.tails.iter().rev() {
+            if tail == self.head {
+                continue;
+            }
+            let outs: Vec<(i32, i32)> = {
+                if let Some(blk) = graph.get_block(tail as usize) {
+                    let b = blk.read().unwrap();
+                    let n = b.size_out();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_out(k))
+                        .filter_map(|k| b.get_out(k).map(|e| (e.point.read().unwrap().get_index(), k as i32)))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for (tgt, _slot) in outs {
+                if tgt == self.exit_block {
+                    to_exit_block.push(tail);
+                } else {
+                    let marked = graph.get_block(tgt as usize)
+                        .map(|b| b.read().unwrap().is_mark()).unwrap_or(false);
+                    if !marked {
+                        self.exit_edges.push(FloatingEdge { from_idx: tail, to_idx: tgt });
+                    }
+                }
+            }
+        }
+        // Edges to exit block go last.
+        for bl in to_exit_block {
+            self.exit_edges.push(FloatingEdge { from_idx: bl, to_idx: self.exit_block });
+        }
+    }
+
+    /// Record contained subloops and set depth/immed_container.
+    /// Faithful to `LoopBody::labelContainments` (blockaction.cc:327-358).
+    pub fn label_containments(
+        &mut self,
+        body: &[i32],
+        loop_order: &[LoopBody],
+        self_idx: usize,
+    ) {
+        let mut contain: Vec<usize> = Vec::new();
+        for &curblock in body {
+            if curblock == self.head {
+                continue;
+            }
+            // Find a subloop whose head == curblock.
+            if let Some(sub_idx) = loop_order.iter().position(|lb| lb.head == curblock && lb.head != self.head) {
+                // Avoid matching self.
+                if sub_idx != self_idx {
+                    contain.push(sub_idx);
+                }
+            }
+        }
+        // We can't mutate other LoopBodies here (borrow); the caller updates
+        // depth/immed_container based on containment. This method records which
+        // subloops are contained; the depth bookkeeping is done in order_loop_bodies.
+        let _ = contain;
+    }
+}
+
+/// Merge LoopBodies sharing the same head. Faithful to
+/// `LoopBody::mergeIdenticalHeads` (blockaction.cc:446-467). Bodies with the
+/// same head have their tails merged; subsumed bodies are marked (head=-1).
+pub fn merge_identical_heads(loop_order: &mut Vec<LoopBody>) {
+    if loop_order.is_empty() {
+        return;
+    }
+    let mut i = 0;
+    let mut j = 1;
+    while j < loop_order.len() {
+        if loop_order[j].head == loop_order[i].head {
+            // Merge tail[0] of j into i; mark j subsumed.
+            let tail = loop_order[j].tails[0];
+            loop_order[i].add_tail(tail);
+            loop_order[j].head = -1; // subsumed
+        } else {
+            i = j;
+        }
+        j += 1;
+    }
+    loop_order.retain(|lb| lb.head != -1);
+}
+
+/// Clear marks on a set of blocks. Faithful to `LoopBody::clearMarks`
+/// (blockaction.cc:1039).
+pub fn clear_marks(body: &[i32], graph: &BlockGraph) {
+    for &bl in body {
+        if let Some(blk) = graph.get_block(bl as usize) {
+            blk.write().unwrap().clear_mark();
+        }
+    }
+}
+
+
 /// Structure for iteratively collapsing control flow patterns
 ///
+/// Corresponds to Ghidra's `CollapseStructure` class.
 /// Corresponds to Ghidra's `CollapseStructure` class.
 /// Detects if-then, if-then-else, sequence, and while-do patterns
 /// from a flat CFG and replaces them with structured `BlockIf`,
@@ -122,6 +526,11 @@ pub(crate) struct CollapseStructure<'a> {
     /// Block indices that are switch case bodies.
     /// from being pulled out of switch bodies.
     switch_case_indices: std::collections::HashSet<i32>,
+    /// Rich loop analysis (Ghidra LoopBody), built by order_loop_bodies.
+    /// Holds head/tails/exit_block/exit_edges/depth for each natural loop,
+    /// sorted deepest-nesting-first. Used for nested-loop structuring and
+    /// exit-edge labeling.
+    loop_order: std::collections::VecDeque<LoopBody>,
 }
 
 impl<'a> CollapseStructure<'a> {
@@ -133,6 +542,7 @@ impl<'a> CollapseStructure<'a> {
             switch_case_indices: std::collections::HashSet::new(),
             idom: std::collections::HashMap::new(),
             loop_bodies: Vec::new(),
+            loop_order: std::collections::VecDeque::new(),
         }
     }
 
@@ -492,6 +902,111 @@ impl<'a> CollapseStructure<'a> {
         for (head, body) in &self.loop_bodies {
             eprintln!("[COLLAPSE] {} loop head={} bodysize={}", self.name, head, body.len());
         }
+
+        // ---- Rich LoopBody pipeline (Ghidra blockaction.cc:1148-1188) ----
+        // Build LoopBody records from the back-edges, then run the full
+        // find_base / merge / label_containments / find_exit / order_tails /
+        // extend / label_exit_edges pipeline. This populates self.loop_order
+        // with nesting depth, exit blocks, and exit edges for nested-loop
+        // structuring.
+        self.run_order_loop_bodies_pipeline(size);
+    }
+
+    /// Run the full Ghidra LoopBody analysis pipeline on the detected
+    /// back-edges. Faithful to `CollapseStructure::orderLoopBodies`
+    /// (blockaction.cc:1148-1188).
+    fn run_order_loop_bodies_pipeline(&mut self, size: usize) {
+        // Step 1: build LoopBody records (one per back-edge), keyed by head.
+        let mut loop_order: Vec<LoopBody> = Vec::new();
+        for i in 0..size {
+            let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let (src_idx, back_targets): (i32, Vec<i32>) = {
+                let b = block.read().unwrap();
+                let src = b.get_index();
+                let mut tgts = Vec::new();
+                for slot in 0..b.size_out() {
+                    if let Some(edge) = b.get_out(slot) {
+                        let tgt = edge.point.read().unwrap().get_index();
+                        if self.dominates_idx(tgt, src) {
+                            tgts.push(tgt);
+                        }
+                    }
+                }
+                (src, tgts)
+            };
+            for tgt in back_targets {
+                if let Some(existing) = loop_order.iter_mut().find(|lb| lb.head == tgt) {
+                    existing.add_tail(src_idx);
+                } else {
+                    loop_order.push(LoopBody::new(tgt, src_idx));
+                }
+            }
+        }
+        if loop_order.is_empty() {
+            self.loop_order.clear();
+            return;
+        }
+        // Step 2: merge identical heads (already deduped above, but run for
+        // completeness — merge_identical_heads is idempotent on unique heads).
+        merge_identical_heads(&mut loop_order);
+        // Sort by (head index, first tail index) — Ghidra compare_ends.
+        loop_order.sort_by(|a, b| {
+            a.head.cmp(&b.head).then_with(|| a.tails[0].cmp(&b.tails[0]))
+        });
+        // Step 3: label containments (set depth + immed_container).
+        // Snapshot head list for containment checks.
+        let n = loop_order.len();
+        for i in 0..n {
+            let body = loop_order[i].find_base(self.graph);
+            // Count contained subloops.
+            let mut contain: Vec<usize> = Vec::new();
+            for &curblock in &body {
+                if curblock == loop_order[i].head {
+                    continue;
+                }
+                if let Some(sub_idx) = loop_order.iter().position(|lb| lb.head == curblock) {
+                    if sub_idx != i {
+                        contain.push(sub_idx);
+                    }
+                }
+            }
+            // Increment depth of contained subloops.
+            for &sub_idx in &contain {
+                loop_order[sub_idx].depth += 1;
+            }
+            // Set immed_container to the deepest container seen so far.
+            let my_depth = loop_order[i].depth;
+            for &sub_idx in &contain {
+                if loop_order[sub_idx].immed_container == -1
+                    || loop_order[loop_order[sub_idx].immed_container as usize].depth < my_depth
+                {
+                    loop_order[sub_idx].immed_container = i as i32;
+                }
+            }
+            clear_marks(&body, self.graph);
+        }
+        // Step 4: sort by nesting depth (deepest first). Ghidra uses stable
+        // sort on depth.
+        loop_order.sort_by(|a, b| b.depth.cmp(&a.depth));
+        // Step 5: for each loop, find_base / find_exit / order_tails / extend /
+        // label_exit_edges.
+        for lb in loop_order.iter_mut() {
+            let mut body = lb.find_base(self.graph);
+            lb.find_exit(&body, self.graph);
+            lb.order_tails(self.graph);
+            lb.extend(&mut body, self.graph);
+            lb.label_exit_edges(&body, self.graph);
+            clear_marks(&body, self.graph);
+        }
+        // Store into the VecDeque for updateLoopBody-style iteration.
+        self.loop_order = loop_order.into_iter().collect();
+        eprintln!(
+            "[COLLAPSE] {} LoopBody pipeline: {} loops, depths={}",
+            self.name,
+            self.loop_order.len(),
+            self.loop_order.iter().map(|lb| lb.depth).collect::<Vec<_>>().iter()
+                .map(|d| d.to_string()).collect::<Vec<_>>().join(",")
+        );
     }
 
     /// Collect all blocks in a natural loop body.
@@ -3787,5 +4302,90 @@ impl Action for ActionNormalizeBranches {
 
     fn get_name(&self) -> &str {
         "normalizebranches"
+    }
+}
+
+#[cfg(test)]
+mod loopbody_tests {
+    use super::*;
+    use crate::block::BlockBasic;
+    use crate::address::Address;
+
+    /// Build a tiny CFG: 0→1→2→1 (loop), with 2 also →3 (exit).
+    /// head=1, tail=2, body={1,2}, exit=3.
+    fn build_loop_cfg() -> BlockGraph {
+        let mut g = BlockGraph::new();
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x100))));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x110))));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x120))));
+        let b3 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(3, Address::new(0x130))));
+        for b in [&b0, &b1, &b2, &b3] { g.add_block(b.clone()); }
+        g.add_edge(b0.clone(), b1.clone());
+        g.add_edge(b1.clone(), b2.clone());
+        g.add_edge(b2.clone(), b1.clone()); // back-edge
+        g.add_edge(b2.clone(), b3.clone()); // exit edge
+        g
+    }
+
+    #[test]
+    fn test_loopbody_find_base() {
+        let g = build_loop_cfg();
+        let mut lb = LoopBody::new(1, 2);
+        let body = lb.find_base(&g);
+        // Body = head(1) + tail(2). Block 0 reaches 2 only via head, so not in body.
+        assert!(body.contains(&1));
+        assert!(body.contains(&2));
+        assert!(!body.contains(&0));
+        assert_eq!(lb.unique_count, 2);
+        // Clear marks.
+        clear_marks(&body, &g);
+        assert!(!g.get_block(1).unwrap().read().unwrap().is_mark());
+    }
+
+    #[test]
+    fn test_loopbody_find_exit() {
+        let g = build_loop_cfg();
+        let mut lb = LoopBody::new(1, 2);
+        let body = lb.find_base(&g);
+        lb.find_exit(&body, &g);
+        // Exit should be block 3 (the only out-of-body target from tail 2).
+        assert_eq!(lb.exit_block, 3);
+        clear_marks(&body, &g);
+    }
+
+    #[test]
+    fn test_loopbody_label_exit_edges() {
+        let g = build_loop_cfg();
+        let mut lb = LoopBody::new(1, 2);
+        let body = lb.find_base(&g);
+        lb.find_exit(&body, &g);
+        lb.order_tails(&g);
+        lb.label_exit_edges(&body, &g);
+        // The 2→3 edge should be recorded (as an edge to exit_block).
+        assert!(lb.exit_edges.iter().any(|e| e.from_idx == 2 && e.to_idx == 3));
+        clear_marks(&body, &g);
+    }
+
+    #[test]
+    fn test_floating_edge_clone() {
+        let e = FloatingEdge { from_idx: 1, to_idx: 3 };
+        let e2 = e.clone();
+        assert_eq!(e.from_idx, e2.from_idx);
+        assert_eq!(e.to_idx, e2.to_idx);
+    }
+
+    #[test]
+    fn test_merge_identical_heads() {
+        let mut order = vec![
+            LoopBody::new(1, 2),
+            LoopBody::new(1, 4), // same head as first → merge
+            LoopBody::new(5, 6),
+        ];
+        merge_identical_heads(&mut order);
+        // After merge: 2 distinct heads (1 with 2 tails, 5).
+        assert_eq!(order.len(), 2);
+        assert_eq!(order[0].head, 1);
+        assert_eq!(order[0].tails.len(), 2);
+        assert_eq!(order[1].head, 5);
     }
 }

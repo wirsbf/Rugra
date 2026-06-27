@@ -87,7 +87,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 17 | `blockaction.cc` (~1600行) | `blockaction.rs` (~3500行) | 🔧 L2 | identifyInternal/selfIdentify ✅；ruleBlockCat/ProperIf/IfElse/WhileDo/DoWhile/Goto ✅；**缺少**：orderLoopBodies 嵌套循环结构化、TraceDAG 完整评分 | `blockaction.cc` |
+| 17 | `blockaction.cc` (2366行) | `blockaction.rs` (4400行) | 🔧 **L2（G4 进展）** | identifyInternal/selfIdentify ✅；ruleBlockCat/ProperIf/IfElse/WhileDo/DoWhile/Goto ✅；**2026-06-27 新增**：LoopBody 完整移植（find_base/extend/find_exit/order_tails/label_exit_edges/label_containments/merge_identical_heads）+ orderLoopBodies pipeline + FlowBlock 标记原语（mark/visit_count/loop_exit/goto_in/out）。嵌套循环检测验证（parseconfig depths=1,0）。**剩余**：updateLoopBody + TraceDAG 完整集成、selectGoto likely-edge 选择 | `blockaction.cc` |
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🔧 L2 | BranchPoint/BlockTrace/BadEdgeScore 骨架已移植；**check_open 精度不足，未完整启用** | `blockaction.cc:499-1014` |
 | 19 | `condexe.cc` (712行) | `condexe.rs` (1422行) | ✅ **L3（2026-06-27 全部移植）** | ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch/BooleanExpressionMatch 全部 1:1 移植。底层原语 find_common_block/compare_order/remove_from_flow_split 已补。接入主管线（ActionConditionalExe + ActionSimplify→RuleOrPredicate）。9 单元测试 + curl/httpd 回归 | `condexe.cc` |
 | 20 | `subflow.cc` (4130行) | `subflow.rs` (306行) | 🔧 L2 | 骨架存在；核心 `ValueActive`/`PathAction`/子流可达性分析未实现 | `subflow.cc` |

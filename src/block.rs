@@ -59,6 +59,15 @@ pub mod edge_flags {
     /// Blocks reached via this edge must not be structurally extracted by
     /// interleaved rules, or their `case` label ends up outside the switch.
     pub const F_SWITCH_DISPATCH: u32 = 1 << 3;
+    /// Edge exits the body of a loop (Ghidra `f_loop_exit_edge`). Set by
+    /// LoopBody::setExitMarks so TraceDAG knows where the loop ends.
+    pub const F_LOOP_EXIT_EDGE: u32 = 1 << 4;
+    /// Within a (reducible) graph, a back edge defining a loop (Ghidra
+    /// `f_back_edge`).
+    pub const F_BACK_EDGE: u32 = 1 << 5;
+    /// Irreducible edge introduced by the structurer (Ghidra `f_irreducible`).
+    /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
+    pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
 }
 
 /// Common interface for all types of blocks (Basic, Graph, Condition, etc.)
@@ -139,6 +148,34 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     }
     fn add_to_dom_frontier(&mut self, _idx: i32) {}
     fn clear_dom_frontier(&mut self) {}
+
+    // ---- Mark / visit-count / edge-flag accessors (Ghidra block.hh:286-347) ----
+    // These underpin LoopBody's body collection, exit detection, and TraceDAG
+    // bounds. Defaults are no-ops; BlockBasic overrides them.
+    /// Generic block mark (Ghidra `isMark`). Used by LoopBody::findBase etc.
+    fn is_mark(&self) -> bool {
+        false
+    }
+    fn set_mark(&mut self) {}
+    fn clear_mark(&mut self) {}
+    /// Scratch visit count (Ghidra `getVisitCount`/`setVisitCount`). Used by
+    /// LoopBody::extend to count how many in-edges reach a candidate block.
+    fn get_visit_count(&self) -> i32 {
+        0
+    }
+    fn set_visit_count(&mut self, _c: i32) {}
+    /// Is the i-th incoming edge a goto/irreducible edge? (Ghidra `isGotoIn`.)
+    fn is_goto_in(&self, _i: usize) -> bool {
+        false
+    }
+    /// Is the i-th outgoing edge a goto/irreducible edge? (Ghidra `isGotoOut`.)
+    fn is_goto_out(&self, _i: usize) -> bool {
+        false
+    }
+    /// Label the i-th out edge as a loop-exit edge (Ghidra `setLoopExit`).
+    fn set_loop_exit(&mut self, _i: usize) {}
+    /// Clear the loop-exit label on the i-th out edge (Ghidra `clearLoopExit`).
+    fn clear_loop_exit(&mut self, _i: usize) {}
 }
 
 /// Represents a basic block of P-code operations
@@ -169,6 +206,9 @@ pub struct BlockBasic {
     pub dom_children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Dominance frontier of this block (indices of blocks)
     pub dom_frontier: std::collections::HashSet<i32>,
+    /// Scratch visit-count for LoopBody::extend (Ghidra getVisitCount/
+    /// setVisitCount). Reset to 0 after each use.
+    pub visit_count: i32,
 }
 
 impl BlockBasic {
@@ -185,6 +225,7 @@ impl BlockBasic {
             dom_depth: -1,
             dom_children: Vec::new(),
             dom_frontier: std::collections::HashSet::new(),
+            visit_count: 0,
         }
     }
 
@@ -299,6 +340,44 @@ impl FlowBlock for BlockBasic {
     }
     fn clear_dom_frontier(&mut self) {
         self.dom_frontier.clear();
+    }
+
+    // ---- LoopBody mark / visit-count / edge-flag overrides ----
+    fn is_mark(&self) -> bool {
+        (self.flags & block_flags::MARK) != 0
+    }
+    fn set_mark(&mut self) {
+        self.flags |= block_flags::MARK;
+    }
+    fn clear_mark(&mut self) {
+        self.flags &= !block_flags::MARK;
+    }
+    fn get_visit_count(&self) -> i32 {
+        self.visit_count
+    }
+    fn set_visit_count(&mut self, c: i32) {
+        self.visit_count = c;
+    }
+    fn is_goto_in(&self, i: usize) -> bool {
+        // Goto-in: the i-th incoming edge is goto or irreducible (block.hh:346).
+        self.incoming.get(i).map(|e| {
+            (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
+        }).unwrap_or(false)
+    }
+    fn is_goto_out(&self, i: usize) -> bool {
+        self.outgoing.get(i).map(|e| {
+            (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
+        }).unwrap_or(false)
+    }
+    fn set_loop_exit(&mut self, i: usize) {
+        if let Some(e) = self.outgoing.get_mut(i) {
+            e.flags |= edge_flags::F_LOOP_EXIT_EDGE;
+        }
+    }
+    fn clear_loop_exit(&mut self, i: usize) {
+        if let Some(e) = self.outgoing.get_mut(i) {
+            e.flags &= !edge_flags::F_LOOP_EXIT_EDGE;
+        }
     }
 }
 

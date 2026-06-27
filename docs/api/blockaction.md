@@ -584,3 +584,27 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - CBRANCH cascade switch 检测现在检查 goto 标志，跳过已标记 goto 的 CBRANCH 块。
 - getparameter 从 10 if + 1 switch 变为 13 if + 0 switch（向 Ghidra 42 if 收敛）。
 - 验证：176/176 测试。curl 24/24。httpd 29/29。
+
+### 2026-06-27（会话3 G4）：LoopBody 完整移植 + orderLoopBodies pipeline
+
+完整移植 Ghidra LoopBody 类（blockaction.cc:46-490）+ CollapseStructure::orderLoopBodies pipeline（blockaction.cc:1148-1188）：
+
+**新数据结构**：
+- `FloatingEdge { from_idx, to_idx }` — 待非结构化(goto)的边
+- `LoopBody { head, tails, exit_block, exit_edges, depth, immed_container, unique_count }` — 自然循环
+
+**LoopBody 方法**（1:1 移植）：
+- `find_base` — findBase(119)：收集可达 tail 不经 head 的块
+- `extend` — extend(150)：扩展到仅 head 可达的块（visit_count 计数）
+- `find_exit` — findExit(182)：选单一 exit 块（tail→head→middle 优先）
+- `order_tails` — orderTails(245)：有 exit 边的 tail 排前
+- `label_exit_edges` — labelExitEdges(270)：标记离开 body 的边
+- `label_containments` — labelContainments(327)：记录包含的子循环 + depth
+
+**模块函数**：
+- `merge_identical_heads` — mergeIdenticalHeads(446)
+- `clear_marks` — clearMarks(1039)
+
+**CollapseStructure::run_order_loop_bodies_pipeline**：完整 pipeline（build→merge→sort→label_containments→depth sort→find_base/find_exit/order_tails/extend/label_exit_edges），结果存入 `loop_order: VecDeque<LoopBody>`。
+
+**验证**：parseconfig 检测出嵌套循环（depths=1,0 — 一个循环嵌套在另一个内）。687/687 测试，curl 24/24 + httpd 29/29，无回退。

@@ -842,3 +842,22 @@ BlockGraph 新增：
 ### 2026-06-27（会话2 续）：find_common_block（解锁 RuleOrPredicate）
 
 - `BlockGraph::find_common_block(bl1, bl2) -> Option<BlockArc>` — `FlowBlock::findCommonBlock`（block.cc:736-795）：支配者树最近公共祖先（标准等深上溯算法，等价 Ghidra mark 版）。被 `PcodeOp::compareOrder` 用于判定不同块内两 op 的控制流顺序。
+
+### 2026-06-27（会话3 G4）：FlowBlock 标记原语 + edge flags（解锁 LoopBody）
+
+为支撑 Ghidra LoopBody 算法（blockaction.cc:46-490），新增忠实于 Ghidra block.hh 的标记原语：
+
+**block_flags**：复用现有 `MARK`（f_mark）。
+**edge_flags 新增**：
+- `F_LOOP_EXIT_EDGE`（Ghidra f_loop_exit_edge）— LoopBody::setExitMarks 标记
+- `F_BACK_EDGE`（Ghidra f_back_edge）— 可归约图的回边
+- `F_IRREDUCIBLE_EDGE`（Ghidra f_irreducible）— 结构化器引入的不可归约边
+- **修正 bug**：`F_GOTO_EDGE` 原为 1<<1（与 F_CONTINUE_EDGE 重复），改为 1<<2
+
+**BlockBasic 新字段**：`visit_count: i32`（Ghidra getVisitCount/setVisitCount）。
+
+**FlowBlock trait 新增方法**（默认 no-op，BlockBasic 覆盖）：
+- `is_mark`/`set_mark`/`clear_mark`（block.hh:286-288）
+- `get_visit_count`/`set_visit_count`（block.hh visit count）
+- `is_goto_in(i)`/`is_goto_out(i)`（block.hh:346-347）
+- `set_loop_exit(i)`/`clear_loop_exit(i)`（block.hh:294-295）
