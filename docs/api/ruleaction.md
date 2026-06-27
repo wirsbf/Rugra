@@ -670,3 +670,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RuleOrCompare**：完整移植 ruleaction.cc:10808-10872。分配 INT_OR 到比较：
   - `(V | W) == 0 => V == 0 && W == 0`（INT_EQUAL → BOOL_AND）
   - `(V | W) != 0 => V != 0 || W != 0`（INT_NOTEQUAL → BOOL_OR）
+
+## 2026-06-27（续 17）：ConcatCommute 规则
+
+- **RuleConcatCommute**：完整移植 ruleaction.cc:4675-4748。逻辑运算与拼接的交换：
+  - `concat(V, W) | c => concat(V | c_hi, W) | c_lo`（INT_OR/INT_XOR 交换进 PIECE）
+  - `concat(V, W) & c => concat(V & c_hi, W & c_lo)`（INT_AND 交换进 PIECE）
+  - 常量值根据高低位偏移调整

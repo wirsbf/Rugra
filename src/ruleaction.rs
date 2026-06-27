@@ -5993,6 +5993,85 @@ impl Rule for RuleOrCompare {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
+/// Commute logical ops with concatenation. Faithful to Ghidra's
+/// `RuleConcatCommute` (ruleaction.cc:4675-4748).
+///
+/// `concat(V, W) | c => concat(V | c_hi, W | c_lo)` — pushes the logical
+/// operation inside the concatenation so it operates on each piece separately.
+pub struct RuleConcatCommute;
+
+impl RuleConcatCommute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleConcatCommute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleConcatCommute::applyOp (ruleaction.cc:4687-4748).
+        let (opc, hi, lo, val, out_size) = {
+            let op = op_arc.read().unwrap();
+            let out_size = match op.output.as_ref() { Some(o) => o.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) };
+            if out_size > 8 { return Ok(action_status::NO_CHANGE); }
+            if op.opcode != OpCode::CPUI_PIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let mut found: Option<(OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64)> = None;
+            for i in 0..2 {
+                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                if !vn.read().unwrap().is_written() { continue; }
+                let logicop = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let opc = logicop.read().unwrap().opcode;
+                if opc != OpCode::CPUI_INT_OR && opc != OpCode::CPUI_INT_XOR && opc != OpCode::CPUI_INT_AND {
+                    continue;
+                }
+                let constvn = match logicop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                if !constvn.read().unwrap().is_constant() { continue; }
+                let mut val = constvn.read().unwrap().get_offset();
+                let (hi, lo) = if i == 0 {
+                    let hi = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                    let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                    val <<= 8 * lo.read().unwrap().get_size();
+                    if opc == OpCode::CPUI_INT_AND {
+                        val |= calc_mask(lo.read().unwrap().get_size());
+                    }
+                    (hi, lo)
+                } else {
+                    let hi = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue };
+                    let lo = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                    if opc == OpCode::CPUI_INT_AND {
+                        val |= calc_mask(hi.read().unwrap().get_size()) << (8 * lo.read().unwrap().get_size());
+                    }
+                    (hi, lo)
+                };
+                if hi.read().unwrap().is_free() || lo.read().unwrap().is_free() { continue; }
+                found = Some((opc, hi, lo, val));
+                break;
+            }
+            match found {
+                Some((opc, hi, lo, val)) => (opc, hi, lo, val, out_size),
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let addr = op_arc.read().unwrap().get_addr();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Create new PIECE(hi, lo).
+        let new_concat = fd.new_op(2, addr);
+        fd.op_set_opcode(&new_concat, OpCode::CPUI_PIECE);
+        let new_vn = fd.new_unique_out(out_size, &new_concat);
+        fd.op_set_input(&new_concat, hi, 0);
+        fd.op_set_input(&new_concat, lo, 1);
+        fd.op_insert_before(&new_concat, &follow);
+        // Rewrite original op as the logical op.
+        fd.op_set_opcode(&follow, opc);
+        fd.op_set_input(&follow, new_vn.clone(), 0);
+        let c = fd.new_constant(out_size, val);
+        fd.op_set_input(&follow, c, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "concat_commute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
