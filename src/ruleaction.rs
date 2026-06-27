@@ -7098,6 +7098,157 @@ impl Rule for RuleSubNormal {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
+/// Verify that a Varnode is a sign extraction `V s>> (size*8-1)`.
+/// Returns the base Varnode, or None. Faithful to `checkSignExtraction`
+/// (ruleaction.cc:8776-8792).
+fn check_sign_extraction(
+    out_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    if !out_vn.read().unwrap().is_written() { return None; }
+    let sign_op = out_vn.read().unwrap().get_def()?;
+    if sign_op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { return None; }
+    let const_vn = sign_op.read().unwrap().get_in(1)?.clone();
+    if !const_vn.read().unwrap().is_constant() { return None; }
+    let val = const_vn.read().unwrap().get_offset();
+    let res_vn = sign_op.read().unwrap().get_in(0)?.clone();
+    let in_size = res_vn.read().unwrap().get_size() as u64;
+    if val != in_size * 8 - 1 { return None; }
+    Some(res_vn)
+}
+
+/// Convert INT_SREM form: `(V + (sign >> (64-n)) & (2^n-1)) - (sign >> (64-n)) => V s% 2^n`.
+/// Faithful to Ghidra's `RuleSignMod2nOpt` (ruleaction.cc:8650-8769).
+pub struct RuleSignMod2nOpt;
+
+impl RuleSignMod2nOpt {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignMod2nOpt {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignMod2nOpt::applyOp (ruleaction.cc:8683-8769).
+        let (shift_amt, a, correct_vn, n, mask) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_RIGHT { return Ok(action_status::NO_CHANGE); }
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let shift_amt = sa_vn.read().unwrap().get_offset();
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let a = match check_sign_extraction(&in0) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let correct_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let a_size = a.read().unwrap().get_size() as u64;
+            let n = a_size * 8 - shift_amt;
+            let mask = (1u64 << n) - 1;
+            (shift_amt, a, correct_vn, n, mask)
+        };
+        // Search descendants of correct_vn for the full pattern.
+        let descends: Vec<_> = correct_vn.read().unwrap().descend_iter().collect();
+        for multop_arc in descends {
+            if multop_arc.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
+            let negone = match multop_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            if !negone.read().unwrap().is_constant() { continue; }
+            if negone.read().unwrap().get_offset() != calc_mask(correct_vn.read().unwrap().get_size()) { continue; }
+            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue };
+            let baseop_arc = match mult_out.read().unwrap().lone_descend() { Some(o) => o, None => continue };
+            if baseop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+            let mult_out_clone = mult_out.clone();
+            let mult_slot = fd.op_get_slot(&crate::op::PcodeOpRef(baseop_arc.clone()), &mult_out_clone);
+            if mult_slot < 0 { continue; }
+            let slot = (1 - mult_slot) as usize;
+            let and_out = match baseop_arc.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue };
+            if !and_out.read().unwrap().is_written() { continue; }
+            let andop_arc = match and_out.read().unwrap().get_def() { Some(d) => d, None => continue };
+            let mut trunc_size: i64 = -1;
+            let mut actual_and = andop_arc.clone();
+            let actual_and_code = andop_arc.read().unwrap().opcode;
+            let actual_and_out;
+            if actual_and_code == OpCode::CPUI_INT_ZEXT {
+                let inner = match andop_arc.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                if !inner.read().unwrap().is_written() { continue; }
+                let inner_def = match inner.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if inner_def.read().unwrap().opcode != OpCode::CPUI_INT_AND { continue; }
+                trunc_size = inner.read().unwrap().get_size() as i64;
+                actual_and = inner_def;
+                actual_and_out = inner;
+            } else {
+                if actual_and_code != OpCode::CPUI_INT_AND { continue; }
+                actual_and_out = and_out.clone();
+            }
+            let _ = actual_and_out;
+            let const_vn = match actual_and.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            if !const_vn.read().unwrap().is_constant() { continue; }
+            if const_vn.read().unwrap().get_offset() != mask { continue; }
+            let add_out_vn = match actual_and.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
+            if !add_out_vn.read().unwrap().is_written() { continue; }
+            let add_op = match add_out_vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            if add_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+            // Search for 'a' in add_op's inputs.
+            let mut found_slot: i32 = -1;
+            for a_slot in 0..2 {
+                let vn = match add_op.read().unwrap().get_in(a_slot) { Some(v) => v.clone(), None => continue };
+                let check_vn = if trunc_size >= 0 {
+                    if !vn.read().unwrap().is_written() { continue; }
+                    let sub_op_arc = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                    let sub_data = {
+                        let r = sub_op_arc.read().unwrap();
+                        if r.opcode != OpCode::CPUI_SUBPIECE { continue; }
+                        let sub_c = r.get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
+                        let in0 = r.get_in(0).cloned();
+                        (sub_c, in0)
+                    };
+                    if sub_data.0 != 0 { continue; }
+                    match sub_data.1 { Some(v) => v, None => continue }
+                } else { vn };
+                if std::sync::Arc::ptr_eq(&check_vn, &a) { found_slot = a_slot as i32; break; }
+            }
+            if found_slot < 0 { continue; }
+            let a_slot = found_slot as usize;
+            // Verify the other input is INT_RIGHT by shiftAmt of sign-extraction of a.
+            let ext_vn = match add_op.read().unwrap().get_in(1 - a_slot) { Some(v) => v.clone(), None => continue };
+            if !ext_vn.read().unwrap().is_written() { continue; }
+            let shift_op = match ext_vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            if shift_op.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT { continue; }
+            let shift_const = match shift_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            if !shift_const.read().unwrap().is_constant() { continue; }
+            let mut shift_val = shift_const.read().unwrap().get_offset();
+            if trunc_size >= 0 {
+                shift_val += (a.read().unwrap().get_size() as u64 - trunc_size as u64) * 8;
+            }
+            if shift_val != shift_amt { continue; }
+            let shift_in0 = match shift_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+            let ext_a = match check_sign_extraction(&shift_in0) { Some(v) => v, None => continue };
+            let final_a = if trunc_size >= 0 {
+                if !ext_a.read().unwrap().is_written() { continue; }
+                let sub_op2_arc = match ext_a.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let sub2_data = {
+                    let r = sub_op2_arc.read().unwrap();
+                    if r.opcode != OpCode::CPUI_SUBPIECE { continue; }
+                    let sub_c2 = r.get_in(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(-1);
+                    let in0 = r.get_in(0).cloned();
+                    (sub_c2, in0)
+                };
+                if sub2_data.0 != trunc_size { continue; }
+                match sub2_data.1 { Some(v) => v, None => continue }
+            } else { ext_a };
+            if !std::sync::Arc::ptr_eq(&final_a, &a) { continue; }
+            // Found the full pattern: rewrite baseop as INT_SREM.
+            let base_ref = crate::op::PcodeOpRef(baseop_arc.clone());
+            fd.op_set_opcode(&base_ref, OpCode::CPUI_INT_SREM);
+            fd.op_set_input(&base_ref, a.clone(), 0);
+            let a_size = a.read().unwrap().get_size();
+            let c = fd.new_constant(a_size, mask + 1);
+            fd.op_set_input(&base_ref, c, 1);
+            return Ok(action_status::CHANGE);
+        }
+        let _ = n;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_mod2n_opt" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

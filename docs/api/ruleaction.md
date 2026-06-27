@@ -736,3 +736,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `sub(V >> n, c) => V >> n'`（合并移位+截断，字节对齐时消除多余移位）
   - 处理溢出情况：当截断超出输入大小时，创建额外扩展（ZEXT/SEXT）
   - 饱和移位：当剩余移位超过输出大小时，饱和到最大值
+
+## 2026-06-27（续 26）：有符号模运算优化
+
+- **RuleSignMod2nOpt**：完整移植 ruleaction.cc:8650-8769。将有符号模运算惯用法转换为 INT_SREM：
+  - `(V + (sign >> (64-n)) & (2^n-1)) - (sign >> (64-n)) => V s% 2^n`
+  - `sign = V s>> (size*8-1)`（符号提取）
+  - 支持截断形式（INT_ZEXT 介入 INT_AND 后）
+  - 辅助函数 `check_sign_extraction(out_vn)` — 验证 `V s>> (size*8-1)` 模式，返回 V
+  - 遍历 correct_vn 的后代，检测完整的 mult(-1) → add → and(mask) → add(V, shift(sign)) 链
