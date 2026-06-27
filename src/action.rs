@@ -168,52 +168,129 @@ impl Action for ActionPool {
 pub fn build_simplify_pool() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("simplifypool");
-    // Pure algebraic identities & trivial foldings.
-    pool.add_rule(Box::new(RuleCollapseConstants::new()));
-    pool.add_rule(Box::new(RuleTrivialArith::new()));
-    pool.add_rule(Box::new(RuleTrivialBool::new()));
-    pool.add_rule(Box::new(RuleTrivialShift::new()));
-    pool.add_rule(Box::new(RuleNegateIdentity::new()));
-    pool.add_rule(Box::new(RuleAddMultCollapse::new()));
-    pool.add_rule(Box::new(RuleXorCollapse::new()));
-    pool.add_rule(Box::new(RuleOrCollapse::new()));
-    pool.add_rule(Box::new(RuleIdentityEl::new()));
-    pool.add_rule(Box::new(RuleDoubleSub::new()));
-    pool.add_rule(Box::new(RuleDoubleShift::new()));
-    // Zero/sign extension elimination.
-    pool.add_rule(Box::new(RuleZextEliminate::new()));
+    // Mirrors Ghidra's oppool1 (coreaction.cc:5511-5649) — the universal
+    // simplification pool applied repeatedly to a fixed point. Rules are
+    // registered in Ghidra's exact order so their interactions match.
+    // Entries whose Rust port does not yet exist are noted as skipped.
+
+    pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512
+    pool.add_rule(Box::new(RuleTermOrder::new()));          // 5513
+    pool.add_rule(Box::new(RuleSelectCse::new()));          // 5514
+    pool.add_rule(Box::new(RuleCollectTerms::new()));       // 5515
+    pool.add_rule(Box::new(RulePullsubMulti::new()));       // 5516
+    // skip 5517 RulePullsubIndirect — not yet ported
+    pool.add_rule(Box::new(RulePushMulti::new()));          // 5518
+    pool.add_rule(Box::new(RuleSborrow::new()));            // 5519
+    pool.add_rule(Box::new(RuleScarry::new()));             // 5520
+    pool.add_rule(Box::new(RuleIntLessEqual::new()));       // 5521
+    pool.add_rule(Box::new(RuleTrivialArith::new()));       // 5522
+    pool.add_rule(Box::new(RuleTrivialBool::new()));        // 5523
+    pool.add_rule(Box::new(RuleTrivialShift::new()));       // 5524
+    pool.add_rule(Box::new(RuleSignShift::new()));          // 5525
+    pool.add_rule(Box::new(RuleTestSign::new()));           // 5526
+    pool.add_rule(Box::new(RuleIdentityEl::new()));         // 5527
+    pool.add_rule(Box::new(RuleOrMask::new()));             // 5528
+    pool.add_rule(Box::new(RuleAndMask::new()));            // 5529
+    pool.add_rule(Box::new(RuleOrConsume::new()));          // 5530
+    pool.add_rule(Box::new(RuleOrCollapse::new()));         // 5531
+    pool.add_rule(Box::new(RuleAndOrLump::new()));          // 5532
+    pool.add_rule(Box::new(RuleShiftBitops::new()));        // 5533
+    pool.add_rule(Box::new(RuleRightShiftAnd::new()));      // 5534
+    pool.add_rule(Box::new(RuleNotDistribute::new()));      // 5535
+    pool.add_rule(Box::new(RuleHighOrderAnd::new()));       // 5536
+    pool.add_rule(Box::new(RuleAndDistribute::new()));      // 5537
+    pool.add_rule(Box::new(RuleAndCommute::new()));         // 5538
+    pool.add_rule(Box::new(RuleAndPiece::new()));           // 5539
+    pool.add_rule(Box::new(RuleAndZext::new()));            // 5540
+    pool.add_rule(Box::new(RuleAndCompare::new()));         // 5541
+    pool.add_rule(Box::new(RuleDoubleSub::new()));          // 5542
+    pool.add_rule(Box::new(RuleDoubleShift::new()));        // 5543
+    pool.add_rule(Box::new(RuleDoubleArithShift::new()));   // 5544
+    pool.add_rule(Box::new(RuleConcatShift::new()));        // 5545
+    pool.add_rule(Box::new(RuleLeftRight::new()));          // 5546
+    pool.add_rule(Box::new(RuleShiftCompare::new()));       // 5547
+    pool.add_rule(Box::new(RuleShift2Mult::new()));         // 5548
+    // skip 5549 RuleShiftPiece — not yet ported
+    pool.add_rule(Box::new(RuleMultiCollapse::new()));      // 5550
+    // skip 5551 RuleIndirectCollapse — not yet ported
+    pool.add_rule(Box::new(Rule2Comp2Mult::new()));         // 5552
+    pool.add_rule(Box::new(RuleSub2Add::new()));            // 5553
+    pool.add_rule(Box::new(RuleCarryElim::new()));          // 5554
+    pool.add_rule(Box::new(RuleBxor2NotEqual::new()));      // 5555
+    pool.add_rule(Box::new(RuleLess2Zero::new()));          // 5556
+    pool.add_rule(Box::new(RuleLessEqual2Zero::new()));     // 5557
+    // skip 5558 RuleSLess2Zero — not yet ported
+    pool.add_rule(Box::new(RuleEqual2Zero::new()));         // 5559
+    pool.add_rule(Box::new(RuleEqual2Constant::new()));     // 5560
+    pool.add_rule(Box::new(RuleThreeWayCompare::new()));    // 5561
+    pool.add_rule(Box::new(RuleXorCollapse::new()));        // 5562
+    pool.add_rule(Box::new(RuleAddMultCollapse::new()));    // 5563
+    pool.add_rule(Box::new(RuleCollapseConstants::new()));  // 5564
+    // skip 5565 RuleTransformCpool — not yet ported
+    pool.add_rule(Box::new(RulePropagateCopy::new()));      // 5566
+    pool.add_rule(Box::new(RuleZextEliminate::new()));      // 5567
+    pool.add_rule(Box::new(RuleSlessToLess::new()));        // 5568
+    pool.add_rule(Box::new(RuleZextSless::new()));          // 5569
+    pool.add_rule(Box::new(RuleBitUndistribute::new()));    // 5570
+    pool.add_rule(Box::new(RuleBooleanUndistribute::new()));// 5571
+    pool.add_rule(Box::new(RuleBooleanDedup::new()));       // 5572
+    pool.add_rule(Box::new(RuleBoolZext::new()));           // 5573
+    pool.add_rule(Box::new(RuleBooleanNegate::new()));      // 5574
+    pool.add_rule(Box::new(RuleLogic2Bool::new()));         // 5575
+    pool.add_rule(Box::new(RuleSubExtComm::new()));         // 5576
+    // skip 5577 RuleSubCommute — not yet ported
+    pool.add_rule(Box::new(RuleConcatCommute::new()));      // 5578
+    pool.add_rule(Box::new(RuleConcatZext::new()));         // 5579
+    pool.add_rule(Box::new(RuleZextCommute::new()));        // 5580
+    pool.add_rule(Box::new(RuleZextShiftZext::new()));      // 5581
+    pool.add_rule(Box::new(RuleShiftAnd::new()));           // 5582
+    pool.add_rule(Box::new(RuleConcatZero::new()));         // 5583
+    pool.add_rule(Box::new(RuleConcatLeftShift::new()));    // 5584
+    pool.add_rule(Box::new(RuleSubZext::new()));            // 5585
+    pool.add_rule(Box::new(RuleSubCancel::new()));          // 5586
+    pool.add_rule(Box::new(RuleShiftSub::new()));           // 5587
+    pool.add_rule(Box::new(RuleHumptyDumpty::new()));       // 5588
+    pool.add_rule(Box::new(RuleDumptyHump::new()));         // 5589
+    pool.add_rule(Box::new(RuleHumptyOr::new()));           // 5590
+    pool.add_rule(Box::new(RuleNegateIdentity::new()));     // 5591
+    pool.add_rule(Box::new(RuleSubNormal::new()));          // 5592
+    pool.add_rule(Box::new(RulePositiveDiv::new()));        // 5593
+    // skip 5594-5595 RuleDivTermAdd/2 — not yet ported
+    pool.add_rule(Box::new(RuleDivOpt::new()));             // 5596
+    pool.add_rule(Box::new(RuleSignForm::new()));           // 5597
+    pool.add_rule(Box::new(RuleSignForm2::new()));          // 5598
+    pool.add_rule(Box::new(RuleSignDiv2::new()));           // 5599
+    pool.add_rule(Box::new(RuleDivChain::new()));           // 5600
+    pool.add_rule(Box::new(RuleSignNearMult::new()));       // 5601
+    // skip 5602 RuleModOpt — not yet ported
+    pool.add_rule(Box::new(RuleSignMod2nOpt::new()));       // 5603
+    // skip 5604-5605 RuleSignMod2nOpt2/SignMod2Opt — not yet ported
+    // skip 5606 RuleSwitchSingle — not yet ported
+    pool.add_rule(Box::new(RuleCondNegate::new()));         // 5607
+    pool.add_rule(Box::new(RuleBoolNegate::new()));         // 5608
+    pool.add_rule(Box::new(RuleLessEqual::new()));          // 5609
+    pool.add_rule(Box::new(RuleLessNotEqual::new()));       // 5610
+    pool.add_rule(Box::new(RuleLessOne::new()));            // 5611
+    pool.add_rule(Box::new(RuleRangeMeld::new()));          // 5612
+    pool.add_rule(Box::new(RuleFloatRange::new()));         // 5613
+    pool.add_rule(Box::new(RulePiece2Zext::new()));         // 5614
+    pool.add_rule(Box::new(RulePiece2Sext::new()));         // 5615
+    // skip 5616 RulePopcountBoolXor — not yet ported
+    pool.add_rule(Box::new(RuleXorSwap::new()));            // 5617
+    pool.add_rule(Box::new(RuleLzcountShiftBool::new()));   // 5618
+    // skip 5619 RuleFloatSign — not yet ported
+    pool.add_rule(Box::new(RuleOrCompare::new()));          // 5620
+    // Rules 5621-5648 (subvar/float/segment/ptr/double-load) not yet ported.
+
+    // Rugra-local companions that complete RuleSub2Add (5553): it emits
+    // x + (y * -1), RuleMultNegOne collapses y*-1 to INT_NEG(y), Rule2Comp2Sub
+    // handles the 2's-complement form. Grouped after their parent so the pool
+    // converges. RuleSextEliminate/Equality/FloatCast are Rugra-local extras.
+    pool.add_rule(Box::new(RuleMultNegOne::new()));
+    pool.add_rule(Box::new(Rule2Comp2Sub::new()));
     pool.add_rule(Box::new(RuleSextEliminate::new()));
-    pool.add_rule(Box::new(RuleSubZext::new()));
-    pool.add_rule(Box::new(RulePiece2Zext::new()));
-    pool.add_rule(Box::new(RulePiece2Sext::new()));
-    pool.add_rule(Box::new(RuleSignShift::new()));
-    pool.add_rule(Box::new(RuleConcatZero::new()));
-    pool.add_rule(Box::new(RuleAndZext::new()));
-    // Boolean / comparison simplification.
-    pool.add_rule(Box::new(RuleBoolNegate::new()));
-    pool.add_rule(Box::new(RuleNotDistribute::new()));
-    pool.add_rule(Box::new(RuleBxor2NotEqual::new()));
-    pool.add_rule(Box::new(RuleLess2Zero::new()));
-    pool.add_rule(Box::new(RuleLessEqual2Zero::new()));
-    pool.add_rule(Box::new(RuleLessNotEqual::new()));
     pool.add_rule(Box::new(RuleEquality::new()));
-    pool.add_rule(Box::new(RuleSlessToLess::new()));
-    pool.add_rule(Box::new(RuleLessOne::new()));
-    pool.add_rule(Box::new(RuleTestSign::new()));
-    pool.add_rule(Box::new(RuleShiftCompare::new()));
-    pool.add_rule(Box::new(RuleAndCompare::new()));
-    // Bit manipulation.
-    pool.add_rule(Box::new(RuleOrMask::new()));
-    pool.add_rule(Box::new(RuleAndOrLump::new()));
-    pool.add_rule(Box::new(RuleAndDistribute::new()));
-    pool.add_rule(Box::new(RuleAndPiece::new()));
-    pool.add_rule(Box::new(RuleAndCommute::new()));
-    pool.add_rule(Box::new(RuleRightShiftAnd::new()));
-    pool.add_rule(Box::new(RuleHighOrderAnd::new()));
-    pool.add_rule(Box::new(RuleConcatLeftShift::new()));
-    pool.add_rule(Box::new(RuleConcatShift::new()));
-    pool.add_rule(Box::new(RuleShift2Mult::new()));
-    pool.add_rule(Box::new(RuleOrConsume::new()));
+    pool.add_rule(Box::new(RuleFloatCast::new()));
     pool
 }
 
