@@ -6735,6 +6735,186 @@ impl Rule for RuleSignForm2 {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
+/// Convert signed division/remainder to unsigned when both inputs are
+/// guaranteed non-negative. Faithful to Ghidra's `RulePositiveDiv`
+/// (ruleaction.cc:7803-7830).
+pub struct RulePositiveDiv;
+
+impl RulePositiveDiv {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RulePositiveDiv {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePositiveDiv::applyOp (ruleaction.cc:7817-7830).
+        let (op_code, in0_nzm, in1_nzm, out_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_SDIV && op.opcode != OpCode::CPUI_INT_SREM {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            if out_size > 8 { return Ok(action_status::NO_CHANGE); }
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let nzm0 = in0.read().unwrap().get_nz_mask();
+            let nzm1 = in1.read().unwrap().get_nz_mask();
+            (op.opcode, nzm0, nzm1, out_size)
+        };
+        let sa = out_size * 8 - 1;
+        if (in0_nzm >> sa) & 1 != 0 { return Ok(action_status::NO_CHANGE); } // Input 0 may be negative.
+        if (in1_nzm >> sa) & 1 != 0 { return Ok(action_status::NO_CHANGE); } // Input 1 may be negative.
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let new_opc = if op_code == OpCode::CPUI_INT_SDIV { OpCode::CPUI_INT_DIV } else { OpCode::CPUI_INT_REM };
+        fd.op_set_opcode(&follow, new_opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "positive_div" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SDIV, OpCode::CPUI_INT_SREM] }
+}
+
+/// Combine two consecutive signed right shifts: `(V s>> c) s>> d => V s>> (c+d)`.
+/// Faithful to Ghidra's `RuleDoubleArithShift` (ruleaction.cc:1930-1964).
+pub struct RuleDoubleArithShift;
+
+impl RuleDoubleArithShift {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleDoubleArithShift {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDoubleArithShift::applyOp (ruleaction.cc:1943-1964).
+        let (const_d, const_c, in_vn, out_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let const_d_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_d_val = {
+                let r = const_d_vn.read().unwrap();
+                if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                r.get_offset()
+            };
+            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let shift2op = {
+                let r = shiftin.read().unwrap();
+                if !r.is_written() { return Ok(action_status::NO_CHANGE); }
+                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) }
+            };
+            if shift2op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let const_c_vn = match shift2op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_c_val = {
+                let r = const_c_vn.read().unwrap();
+                if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                r.get_offset()
+            };
+            let in_vn = match shift2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if in_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            (const_d_val, const_c_val, in_vn, out_size)
+        };
+        let max_shift = out_size * 8 - 1;
+        let mut sa = const_c as i64 + const_d as i64;
+        if sa <= 0 { return Ok(action_status::NO_CHANGE); }
+        if sa > max_shift as i64 { sa = max_shift as i64; }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, in_vn, 0);
+        let c = fd.new_constant(4, sa as u64);
+        fd.op_set_input(&follow, c, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "double_arith_shift" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
+}
+
+/// Convert near-multiply form into signed division.
+/// Faithful to Ghidra's `RuleSignNearMult` (ruleaction.cc:8543-8610).
+///
+/// `(X + ((X s>> (n-1)) >> k)) * c => (X s/ 2^n) * 2^n` where c = 2^n.
+pub struct RuleSignNearMult;
+
+impl RuleSignNearMult {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignNearMult {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignNearMult::applyOp (ruleaction.cc:8559-8610).
+        let (x, const_val, x_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
+            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let const_val = const_vn.read().unwrap().get_offset();
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let addop = match in0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+            // Search for INT_RIGHT in addop's inputs.
+            let mut found_x: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+            let mut found_n: i64 = 0;
+            for i in 0..2 {
+                let shiftvn = match addop.read().unwrap().get_in(i) { Some(v) => v.clone(), None => continue };
+                if !shiftvn.read().unwrap().is_written() { continue; }
+                let unshiftop = match shiftvn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if unshiftop.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT { continue; }
+                let sa_vn = match unshiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                if !sa_vn.read().unwrap().is_constant() { continue; }
+                let x_candidate = match addop.read().unwrap().get_in(1 - i) { Some(v) => v.clone(), None => continue };
+                if x_candidate.read().unwrap().is_free() { continue; }
+                let n_val = sa_vn.read().unwrap().get_offset() as i64;
+                if n_val <= 0 { continue; }
+                let shift_size = shiftvn.read().unwrap().get_size() as i64;
+                let n = shift_size * 8 - n_val;
+                if n <= 0 { continue; }
+                let mask = calc_mask(shiftvn.read().unwrap().get_size());
+                let expected = (mask << n) & mask;
+                if expected != const_val { continue; }
+                // Check sign extraction.
+                let sgnvn = match unshiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                if !sgnvn.read().unwrap().is_written() { continue; }
+                let sshiftop = match sgnvn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if sshiftop.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
+                let ssh_sa = match sshiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                if !ssh_sa.read().unwrap().is_constant() { continue; }
+                let ssh_in0 = match sshiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                if !std::sync::Arc::ptr_eq(&ssh_in0, &x_candidate) { continue; }
+                let ssh_val = ssh_sa.read().unwrap().get_offset() as i64;
+                if ssh_val != 8 * x_candidate.read().unwrap().get_size() as i64 - 1 { continue; }
+                found_x = Some(x_candidate);
+                found_n = n;
+                break;
+            }
+            match found_x {
+                Some(x) => {
+                    let xs = x.read().unwrap().get_size();
+                    (x, found_n, xs)
+                }
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        let pow = 1u64 << const_val;
+        let addr = op_arc.read().unwrap().get_addr();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Create INT_SDIV(x, pow).
+        let new_div = fd.new_op(2, addr);
+        fd.op_set_opcode(&new_div, OpCode::CPUI_INT_SDIV);
+        let div_vn = fd.new_unique_out(x_size, &new_div);
+        fd.op_set_input(&new_div, x, 0);
+        let c = fd.new_constant(x_size, pow);
+        fd.op_set_input(&new_div, c, 1);
+        fd.op_insert_before(&new_div, &follow);
+        // Rewrite original op as INT_MULT(div_vn, pow).
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_MULT);
+        fd.op_set_input(&follow, div_vn, 0);
+        let c2 = fd.new_constant(x_size, pow);
+        fd.op_set_input(&follow, c2, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_near_mult" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

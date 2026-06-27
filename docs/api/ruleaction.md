@@ -716,3 +716,9 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 - **RuleSignForm**：完整移植 ruleaction.cc:8449-8492。`sub(sext(V), c) s>> n => V s>> (8*|V|-1)`（归一化符号位提取）。
 - **RuleSignForm2**：完整移植 ruleaction.cc:8494-8570。`sub(sext(V) * small, c) s>> 31 => V s>> 31`（当 small 是小的正整数且不溢出到符号位时）。
+
+## 2026-06-27（续 23）：除法/移位优化规则
+
+- **RulePositiveDiv**：完整移植 ruleaction.cc:7803-7830。当两个输入保证非负时，将 INT_SDIV→INT_DIV / INT_SREM→INT_REM（检查 NZMask 符号位）。
+- **RuleDoubleArithShift**：完整移植 ruleaction.cc:1930-1964。`(V s>> c) s>> d => V s>> (c+d)`（合并连续有符号右移，饱和到最大移位）。
+- **RuleSignNearMult**：完整移植 ruleaction.cc:8543-8610。将近乘法形式转换为有符号除法：`(X + ((X s>> n-1) >> k)) * c => (X s/ 2^n) * 2^n`，其中 c = 2^n。
