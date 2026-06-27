@@ -40,3 +40,11 @@
 - `select_string_copy_function()` — 根据 char 类型大小选择 strncpy/wcsncpy/memcpy（constseq.cc selectStringCopyFunction）
 
 测试：新增 2 个（form_byte_array "Hello\0" + select_string_copy_function）。
+
+### 2026-06-27（会话3 L1）：constseq.cc 核心算法移植
+
+移植 ArraySequence 的干扰检测和序列收集算法：
+
+- **interfere_between(fd, start, end)** — interfereBetween(constseq.cc:42-58)：检查两个 op 之间是否有干扰 op（call/branch/STORE）
+- **check_interference(fd, root_offset, element_size)** — checkInterference(constseq.cc:62-103)：从 root 开始收集同块 COPY 常量到连续偏移的 op，找无干扰的最大连续集
+- **RuleStringCopy::apply_op** — RuleStringCopy::applyOp(constseq.cc:954-1002)：检测 COPY 常量字符序列，形成字节数组，验证字符串有效性。transform（替换为 strncpy CALLOTHER）需要 userop 基础设施。

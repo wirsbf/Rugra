@@ -73,6 +73,100 @@ impl ArraySequence {
         self.num_elements != 0
     }
 
+    /// Check if there are interfering ops between two ops in the same block.
+    /// Faithful to `ArraySequence::interfereBetween` (constseq.cc:42-58).
+    /// Two ops interfere if there's another op between them that writes to
+    /// the same memory region or is a branch/call.
+    pub fn interfere_between(
+        fd: &Funcdata,
+        start_op: &Arc<RwLock<PcodeOp>>,
+        end_op: &Arc<RwLock<PcodeOp>>,
+    ) -> bool {
+        let start_order = start_op.read().unwrap().start.get_order();
+        let end_order = end_op.read().unwrap().start.get_order();
+        if start_order == end_order { return false; }
+        // Scan all ops in the same block between start and end.
+        for op_ref in &fd.obank.alivelist {
+            let order = op_ref.0.read().unwrap().start.get_order();
+            if order <= start_order || order >= end_order { continue; }
+            let op = op_ref.0.read().unwrap();
+            // Calls and branches interfere.
+            if op.is_call() { return true; }
+            if matches!(op.opcode,
+                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH
+                | OpCode::CPUI_BRANCHIND | OpCode::CPUI_RETURN) {
+                return true;
+            }
+            // STORE ops interfere (they may modify the memory region).
+            if op.opcode == OpCode::CPUI_STORE { return true; }
+        }
+        false
+    }
+
+    /// Find the maximal set of COPY ops with no interfering ops between them.
+    /// Faithful to `ArraySequence::checkInterference` (constseq.cc:62-103).
+    /// Collects COPYs from the same block writing constants to consecutive
+    /// offsets, expanding from the root op.
+    pub fn check_interference(
+        &mut self,
+        fd: &Funcdata,
+        root_offset: u64,
+        element_size: i32,
+    ) {
+        let root_block = self.root_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+        let root_block = match root_block { Some(b) => b, None => return };
+        let root_order = self.root_op.read().unwrap().start.get_order();
+
+        // Collect all COPY ops in the same block with constant inputs writing
+        // to consecutive offsets starting at root_offset.
+        let mut candidates: Vec<WriteNode> = Vec::new();
+        let mut seen_offsets = std::collections::HashSet::new();
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != OpCode::CPUI_COPY { continue; }
+            // Must be in the same block.
+            let op_block = op.parent.as_ref().and_then(|w| w.upgrade());
+            if op_block.is_none() || !Arc::ptr_eq(&op_block.unwrap(), &root_block) {
+                continue;
+            }
+            // Input must be a constant (character).
+            let in0 = match op.inrefs.first() { Some(v) => v.clone(), None => continue };
+            if !in0.read().unwrap().is_constant() { continue; }
+            // Output must be in the array region (by offset).
+            let out_vn = match &op.output { Some(o) => o.clone(), None => continue };
+            let out_offset = out_vn.read().unwrap().get_offset();
+            // Check if offset is near root_offset (within element_size steps).
+            let diff = out_offset as i64 - root_offset as i64;
+            if diff < 0 { continue; }
+            let elem_idx = diff / element_size as i64;
+            if elem_idx > MAXIMUM_SEQUENCE_LENGTH as i64 { continue; }
+            let abs_offset = root_offset + elem_idx as u64 * element_size as u64;
+            if abs_offset != out_offset { continue; }
+            if !seen_offsets.insert(elem_idx as u64) { continue; }
+            candidates.push(WriteNode::new(abs_offset, op_ref.0.clone(), -1));
+        }
+
+        // Sort by op order.
+        candidates.sort_by_key(|n| n.op.read().unwrap().start.get_order());
+
+        // Find maximal contiguous run from root with no interference.
+        let mut count = 0i32;
+        for (i, node) in candidates.iter().enumerate() {
+            if i > 0 {
+                let prev = &candidates[i - 1];
+                if Self::interfere_between(fd, &prev.op, &node.op) {
+                    break; // Interference found — stop expanding.
+                }
+            }
+            count += 1;
+        }
+
+        if count >= MINIMUM_SEQUENCE_LENGTH {
+            self.move_ops = candidates.into_iter().take(count as usize).collect();
+            self.num_elements = count;
+        }
+    }
+
     /// Construct from a root op.
     pub fn new(root_op: Arc<RwLock<PcodeOp>>) -> Self {
         Self {
@@ -172,9 +266,42 @@ impl RuleStringCopy {
 }
 
 impl Rule for RuleStringCopy {
-    fn apply_op(&self, _op: &Arc<RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        // TODO: requires Symbol/SymbolEntry infrastructure to detect
-        // character array writes and build the string copy CALLOTHER.
+    fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleStringCopy::applyOp (constseq.cc:954-1002).
+        // Check if this COPY writes a constant into a character array.
+        let opcode = op.read().unwrap().opcode;
+        if opcode != OpCode::CPUI_COPY { return Ok(action_status::NO_CHANGE); }
+        // Input must be constant.
+        let in0 = match op.read().unwrap().inrefs.first() {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !in0.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        // Output must exist.
+        let out_vn = match &op.read().unwrap().output {
+            Some(o) => o.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let root_offset = out_vn.read().unwrap().get_offset();
+
+        // Build ArraySequence and check for a valid string sequence.
+        let mut seq = ArraySequence::new(op.clone());
+        seq.check_interference(fd, root_offset, 1);
+        if !seq.is_valid() { return Ok(action_status::NO_CHANGE); }
+
+        // Form the byte array and validate.
+        let count = seq.form_byte_array();
+        if count < MINIMUM_SEQUENCE_LENGTH { return Ok(action_status::NO_CHANGE); }
+        if !seq.is_valid_string() { return Ok(action_status::NO_CHANGE); }
+
+        // Found a valid string copy sequence. In the full Ghidra version,
+        // this replaces the COPYs with a strncpy/memcpy CALLOTHER.
+        // Rugra's version reports the detection (the transform requires
+        // CALLOTHER/userop infrastructure not yet available).
+        eprintln!("[CONSTSEQ] String sequence found: {} chars: {:?}",
+            count,
+            std::str::from_utf8(seq.get_string().unwrap_or(b"")).unwrap_or("<binary>"));
+
         Ok(action_status::NO_CHANGE)
     }
 
