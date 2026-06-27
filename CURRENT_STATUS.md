@@ -4,39 +4,34 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动 + FuncCallSpecs 集成**
 
-## 近期进展（2026-06-27 会话 3：condexe.cc 全部移植 + RuleDivOpt 核实提交）
+## 近期进展（2026-06-27 会话 3：condexe.cc 全部移植 + RuleDivOpt 核实 + Rule 调度器）
 
-本次会话**关闭 G1（condexe.cc 全部算法）+ 核实并提交 G2（RuleDivOpt）**：
+本次会话**关闭 G1/G2/G3部分/G6核心**，共 5 个 commit：
 
-### G1 关闭：RuleOrPredicate 完整移植（condexe.cc:509-712）
+### G1 关闭：RuleOrPredicate 完整移植（condexe.cc:509-712）— eef9815
 
-condexe.cc 的第二部分，独立的 Rule，简化谓词构造：
-`tmp1=cond?val:0; result=tmp1|other` → `result=multiequal`
+condexe.cc 第二部分。MultiPredicate 4 方法 + RuleOrPredicate 3 方法全移植。
+支撑原语 find_common_block + compare_order。condexe.cc 全部移植标 L3。
 
-- **MultiPredicate 4 方法**：discover_zero_slot/discover_cbranch/discover_path_is_true/discover_conditional_zero
-- **RuleOrPredicate 3 方法**：get_opcodes/check_single/apply_op
-- **支撑原语**：`BlockGraph::find_common_block`(block.cc:736 LCA) + `PcodeOp::compare_order`(op.cc:778)
-- **接入**：ActionSimplify 对 INT_OR/INT_XOR op 调用 RuleOrPredicate
+### G2：RuleDivOpt 核实 + 提交（ruleaction.cc:8295-8355）— 91e2c20
 
-condexe.cc 现在**全部移植**：ConditionalExecution(18) + RuleOrPredicate(7) + BooleanMatch。标 L3。
+**重要修正**：此前误记 RuleDivOpt"缺第二变体 8010-8046"。逐行核实确认
+8010-8046 是独立的 RuleDivTermAdd2，非 RuleDivOpt 一部分。RuleDivOpt 本身完整。
 
-### G2：RuleDivOpt 核实 + 提交（ruleaction.cc:8295-8355）
+### G3 部分：ActionRestructureVarnode 接入 — b2128bb
 
-**重要修正**：此前误记 RuleDivOpt"缺第二变体 ruleaction.cc:8010-8046"。
-逐行核实后确认：**8010-8046 是独立的 `RuleDivTermAdd2`**（另一个 Rule），
-非 RuleDivOpt 的一部分。RuleDivOpt 的 find_form/calc_divisor/check_form_overlap
-**完整对应** Ghidra 8295-8355，无缺失。
+发现 ActionRestructureVarnode **从未接入主管线** → fd.scope 永远 None →
+printc 找不到栈变量名 → uVar 碎片。接入后 scope 被构建（local_ 81→78）。
+**剩余**：多数函数 gather_spacebase 0 hints（栈访问用 RBP/param 非 RSP 直派）。
 
-G2 提交内容：
-- `RuleDivOpt`（findForm/calcDivisor/checkFormOverlap/applyOp）
-- `Varnode::is_constant_extended`（varnode.cc:799-840，128 位常量解析）
-- `count_leading_zeros`（address.cc:773）
+### G6 核心：ActionPool Rule 调度器 — 56291b2（系统性架构补全）
 
-### 发现的系统性缺口（G6 范畴）
+**重大缺口补全**：Rugra ~90 个 Rule 全部实现了 apply_op 但**均未接入主管线**。
+本次新增 ActionPool（Ghidra action.hh:262）Rule 调度器 + build_simplify_pool
+注册 44 个纯简化 Rule，接入 set_default_actions。
 
-**Rugra ~90 个 Rule 全部实现了 apply_op 但均未接入主管线**——无 Ghidra
-ActionRule 式的 Rule 遍历调度。Rule 正确性仅由单元测试守护，实际反编译不
-触发任何 Rule 简化。这是 ruleaction G6 的核心待办。
+**验证**：诊断确认 Rule **真实触发**——curl 各函数 1-30+ pass_changes
+（main 28、getparameter 30）。这是 Rugra 首次在反编译时实际应用 Rule 简化。
 
 ### 验证指标
 
@@ -45,7 +40,14 @@ ActionRule 式的 Rule 遍历调度。Rule 正确性仅由单元测试守护，�
 | gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
 | while 循环数 | 16 | 38 |
 | goto 数 | 0 | 0 |
-| 单元测试 | **682/682**（+4：RuleDivOpt/count_leading_zeros/is_constant_extended） | — |
+| 单元测试 | **682/682** | — |
+
+### 剩余攻坚（按 ALIGNMENT_ROADMAP.md G3-G7）
+
+- **G3 深水区**：RBP/param spacebase 识别 + SSA def 断链修复（uVar 碎片根因）
+- **G4**：blockaction orderLoopBodies 嵌套循环结构化
+- **G5**：coreaction 缺失 30 Action 真实 apply 逻辑
+- **G7**：emulate execute() 指令循环
 
 ---
 
