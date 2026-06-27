@@ -5806,6 +5806,193 @@ impl Rule for RuleCondNegate {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CBRANCH] }
 }
 
+/// Simplify limited chains of XOR operations: `(V ^ W) ^ V => W`.
+/// Faithful to Ghidra's `RuleXorSwap` (ruleaction.cc:10614-10650).
+pub struct RuleXorSwap;
+
+impl RuleXorSwap {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleXorSwap {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleXorSwap::applyOp (ruleaction.cc:10625-10650).
+        let (othervn, match_vn) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_XOR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let mut result: Option<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+            for i in 0..2 {
+                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                if !vn.read().unwrap().is_written() { continue; }
+                let op2 = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if op2.read().unwrap().opcode != OpCode::CPUI_INT_XOR { continue; }
+                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue };
+                let vn0 = match op2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                let vn1 = match op2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => continue };
+                if std::sync::Arc::ptr_eq(&othervn, &vn0) && !vn1.read().unwrap().is_free() {
+                    result = Some((othervn, vn1));
+                    break;
+                } else if std::sync::Arc::ptr_eq(&othervn, &vn1) && !vn0.read().unwrap().is_free() {
+                    result = Some((othervn, vn0));
+                    break;
+                }
+            }
+            match result { Some((o, m)) => (o, m), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&follow, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+        fd.op_set_input(&follow, match_vn, 0);
+        let _ = othervn;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "xor_swap" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_XOR] }
+}
+
+/// Simplify INT_EQUAL applied to arithmetic expressions with constants.
+/// Faithful to Ghidra's `RuleEqual2Constant` (ruleaction.cc:5926-5990).
+///
+/// `(V + c) == d => V == (d - c)` and `(V * -1) == d => V == -d`.
+/// Skips the INT_NEGATE case (Rugra lacks INT_NEGATE opcode).
+pub struct RuleEqual2Constant;
+
+impl RuleEqual2Constant {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleEqual2Constant {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleEqual2Constant::applyOp (ruleaction.cc:5940-5990).
+        let (cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !cvn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let cvn_val = cvn.read().unwrap().get_offset();
+            let lhs = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !lhs.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let leftop = match lhs.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let leftop_code = leftop.read().unwrap().opcode;
+            if leftop_code != OpCode::CPUI_INT_ADD && leftop_code != OpCode::CPUI_INT_MULT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let otherconst = match leftop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if !otherconst.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let otherconst_val = otherconst.read().unwrap().get_offset();
+            let otherconst_size = otherconst.read().unwrap().get_size();
+            let a = match leftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            (cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a)
+        };
+        let new_const = if leftop_code == OpCode::CPUI_INT_ADD {
+            (cvn_val.wrapping_sub(otherconst_val)) & calc_mask(otherconst_size)
+        } else {
+            // INT_MULT: only by -1.
+            if otherconst_val != calc_mask(otherconst_size) { return Ok(action_status::NO_CHANGE); }
+            (0i64.wrapping_sub(cvn_val as i64) as u64) & calc_mask(otherconst_size)
+        };
+        // Make sure all descendants of lhs are comparisons.
+        let descends: Vec<_> = lhs.read().unwrap().descend_iter().collect();
+        for dop in &descends {
+            let dop_code = dop.read().unwrap().opcode;
+            if dop_code != OpCode::CPUI_INT_EQUAL && dop_code != OpCode::CPUI_INT_NOTEQUAL {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let a_size = a.read().unwrap().get_size();
+        fd.op_set_input(&follow, a, 0);
+        let c = fd.new_constant(a_size, new_const);
+        fd.op_set_input(&follow, c, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "equal2constant" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
+}
+
+/// Distribute INT_OR across INT_EQUAL comparisons.
+/// Faithful to Ghidra's `RuleOrCompare` (ruleaction.cc:10808-10872).
+///
+/// When `(V | W) == 0`, split into `V == 0 && W == 0` (BOOL_AND).
+/// When `(V | W) != 0`, split into `V != 0 || W != 0` (BOOL_OR).
+pub struct RuleOrCompare;
+
+impl RuleOrCompare {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleOrCompare {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleOrCompare::applyOp (ruleaction.cc:10814-10872).
+        let (central_opc, v, w, out_vn) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_OR {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            // Check all descendants are comparisons against 0.
+            let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
+            if descends.is_empty() { return Ok(action_status::NO_CHANGE); }
+            let mut central_opc = None;
+            for comp_op in &descends {
+                let comp_code = comp_op.read().unwrap().opcode;
+                if comp_code != OpCode::CPUI_INT_EQUAL && comp_code != OpCode::CPUI_INT_NOTEQUAL {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let comp_in1 = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                if !comp_in1.read().unwrap().is_constant() || comp_in1.read().unwrap().get_offset() != 0 {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                central_opc = Some(comp_code);
+            }
+            let v = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let w = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if v.read().unwrap().is_free() || w.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            (central_opc.unwrap(), v, w, out_vn)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // For each descendant comparison, split into per-input comparisons.
+        let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
+        for equal_op_arc in descends {
+            let equal_ref = crate::op::PcodeOpRef(equal_op_arc.clone());
+            let addr = equal_op_arc.read().unwrap().get_addr();
+            let combine_opc = if central_opc == OpCode::CPUI_INT_EQUAL { OpCode::CPUI_BOOL_AND } else { OpCode::CPUI_BOOL_OR };
+            // Create eq_V(v, 0).
+            let eq_v = fd.new_op(2, addr);
+            fd.op_set_opcode(&eq_v, central_opc);
+            let eq_v_out = fd.new_unique_out(1, &eq_v);
+            let zero_v = fd.new_constant(v.read().unwrap().get_size(), 0);
+            fd.op_set_input(&eq_v, v.clone(), 0);
+            fd.op_set_input(&eq_v, zero_v, 1);
+            fd.op_insert_before(&eq_v, &equal_ref);
+            // Create eq_W(w, 0).
+            let eq_w = fd.new_op(2, addr);
+            fd.op_set_opcode(&eq_w, central_opc);
+            let eq_w_out = fd.new_unique_out(1, &eq_w);
+            let zero_w = fd.new_constant(w.read().unwrap().get_size(), 0);
+            fd.op_set_input(&eq_w, w.clone(), 0);
+            fd.op_set_input(&eq_w, zero_w, 1);
+            fd.op_insert_before(&eq_w, &equal_ref);
+            // Rewrite the comparison as BOOL_AND/BOOL_OR.
+            fd.op_set_opcode(&equal_ref, combine_opc);
+            fd.op_set_input(&equal_ref, eq_v_out, 0);
+            fd.op_set_input(&equal_ref, eq_w_out, 1);
+        }
+        let _ = follow;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "or_compare" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

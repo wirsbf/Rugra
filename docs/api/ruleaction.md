@@ -658,3 +658,15 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RuleCondNegate**：完整移植 ruleaction.cc:5478-5510。翻转带 boolean_flip 标志的 CBRANCH：
   - 插入 BOOL_NOT 取反条件，调用 op_flip_condition 清除标志
   - 依赖：is_boolean_flip ✅、op_bool_negate ✅、op_flip_condition ✅（新增）
+
+## 2026-06-27（续 16）：XOR/比较简化规则
+
+- **RuleXorSwap**：完整移植 ruleaction.cc:10614-10650。`(V ^ W) ^ V => W`（XOR 链简化）。
+- **RuleEqual2Constant**：完整移植 ruleaction.cc:5926-5990。简化算术表达式与常量的比较：
+  - `(V + c) == d => V == (d - c)`（加法常量偏移）
+  - `(V * -1) == d => V == -d`（乘 -1）
+  - 验证 lhs 的所有后代都是比较
+  - 跳过 INT_NEGATE 情况（Rugra 缺少此 opcode）
+- **RuleOrCompare**：完整移植 ruleaction.cc:10808-10872。分配 INT_OR 到比较：
+  - `(V | W) == 0 => V == 0 && W == 0`（INT_EQUAL → BOOL_AND）
+  - `(V | W) != 0 => V != 0 || W != 0`（INT_NOTEQUAL → BOOL_OR）
