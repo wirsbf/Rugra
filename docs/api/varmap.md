@@ -110,3 +110,13 @@ my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数�
 **剩余工作**：重新设计 inject/heritage 的 def 链建立，使 LOAD/STORE 的地址 varnode 能追溯到产出它的 op（保留 SSA 独立性的同时建立 use-def）。这是 G3 的核心阻塞。
 
 诊断工具 `examples/diag_stack.rs` 保留，可打印任意函数的 LOAD/STORE def 链 + scope symbol 数。
+
+### 2026-06-27（会话3 G3 续2）：resolve_rsp_offset_via_bank 重新启用 — spacebase 解析恢复
+
+- `resolve_rsp_offset_via_bank(addr, fd)` — 只读空间回查：当 addr varnode 的 def 链断裂（inject 创建独立 def-less 输入 varnode），在 vbank 中查找同 (space, offset) 且有 def 的 varnode，通过它解析到 RSP 派生偏移。**不修改任何 varnode**（保持 SSA identity），作用域仅限 varmap 的 gather_spacebase。
+
+**关键决策**：此前全局 def-linking（inject Phase 4）虽正确解析栈符号（helpf 10 个），但扰动 typeop 推断（struct 指针类型泄漏到 switch/算术上下文）。via_bank 只读法**不扰动 typeop/copyprop**，避免回归。
+
+**验证效果**：helpf 的栈符号解析 StackX 使用 5→9（scope 10 符号中 9 个被引用）。配合 printc scope 声明增强（声明所有 scope 符号），输出 24/24 + 29/29 全绿。
+
+**uVar 碎片**：spacebase 修复的是*栈变量*恢复，而 uVar_N 是 SSA 中间临时碎片（main 69 个），属 printc 表达式内联问题（独立子系统）。

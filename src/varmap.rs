@@ -761,16 +761,38 @@ fn resolve_rsp_offset(addr: &Arc<RwLock<Varnode>>) -> Option<(u64, bool)> {
     resolve_rsp_offset_signed(addr).map(|(off, w)| (off as u64, w))
 }
 
-// NOTE (G3 deep-water, 2026-06-27): A `resolve_rsp_offset_via_bank` variant
-// that bridged broken def chains via a spatial vbank lookup was prototyped.
-// It improved my_fwrite's hint count but caused a regression in helpf
-// (printc emitted `StackX_8` uses without declarations — the scope's new
-// offset recognition outran the printc declaration logic). Reverted until
-// printc's symbol-declaration path is synchronized with varmap's scope.
-// The diagnosis (see docs/api/varmap.md + examples/diag_stack.rs) stands:
-// the root cause is inject creating fresh def-less input varnodes, and a
-// correct fix requires re-establishing use-def links post-heritage without
-// collapsing SSA identity.
+/// Like `resolve_rsp_offset`, but when the addr varnode's def chain is broken
+/// (def=None — inject creates fresh def-less input varnodes), fall back to a
+/// spatial lookup: find a def-carrying varnode at the same (space, offset) and
+/// resolve through that. This bridges the SSA-def gap for spacebase resolution
+/// WITHOUT mutating any varnode (preserving SSA identity that global
+/// def-linking perturbed). Scoped to varmap only — typeop/copyprop are
+/// unaffected, avoiding the struct-pointer regressions global linking caused.
+fn resolve_rsp_offset_via_bank(
+    addr: &Arc<RwLock<Varnode>>,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<(u64, bool)> {
+    if let Some(r) = resolve_rsp_offset(addr) {
+        return Some(r);
+    }
+    let (size, loc, space) = {
+        let a = addr.read().unwrap();
+        (a.get_size(), a.loc, a.get_space())
+    };
+    if !matches!(space, crate::space::AddressSpace::Unique | crate::space::AddressSpace::Register) {
+        return None;
+    }
+    for entry in fd.vbank.loc_tree.iter() {
+        let v = entry.0.read().unwrap();
+        if v.get_size() == size && v.loc == loc && v.get_space() == space && v.is_written() {
+            drop(v);
+            if let Some(r) = resolve_rsp_offset(&entry.0) {
+                return Some(r);
+            }
+        }
+    }
+    None
+}
 
 /// Signed-offset variant: returns the offset relative to RSP as i64, then the
 /// caller masks to u64. This lets additive chains compose correctly.
@@ -1115,7 +1137,8 @@ impl MapState {
                         continue;
                     }
                     let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size());
-                    if let Some((off, _writable)) = resolve_rsp_offset(&op.inrefs[1]) {
+                    let addr_vn = op.inrefs[1].clone();
+                    if let Some((off, _writable)) = resolve_rsp_offset_via_bank(&addr_vn, fd) {
                         let size = out_size.unwrap_or(1);
                         let dtype = make_int_type(size);
                         self.add_fixed_type(off, Some(dtype), 0);
@@ -1127,10 +1150,9 @@ impl MapState {
                         continue;
                     }
                     let val_size = op.inrefs[2].read().unwrap().get_size();
-                    if let Some((off, _writable)) = resolve_rsp_offset(&op.inrefs[1]) {
+                    let addr_vn = op.inrefs[1].clone();
+                    if let Some((off, _writable)) = resolve_rsp_offset_via_bank(&addr_vn, fd) {
                         let dtype = make_int_type(val_size);
-                        // A STORE writes the location → copy_constant if the
-                        // stored value is a constant, else a plain fixed write.
                         let is_const = op.inrefs[2].read().unwrap().is_constant();
                         let flags = if is_const { range_flags::COPY_CONSTANT } else { 0 };
                         self.add_fixed_type(off, Some(dtype), flags);

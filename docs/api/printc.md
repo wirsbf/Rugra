@@ -514,3 +514,7 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - `doc_variable_decls_from_funcdata` 安全网：保守声明所有 scope 符号（StackX_*）。scope 符号按定义是函数栈局部，声明它们只会产生 unused 警告而非编译错误——远比 undeclared 标识符安全。类型按 size 选 int/long。
 
 **背景**：G3 def-linking 原型验证有效（helpf 解析出 10 个栈符号 StackX_0..48），printc 此前无法声明这些符号导致 undeclared。此增强声明它们。但 def-linking 与 jumptable/switch 交互（switch 表本身是 LOAD）导致 main 等函数 "switch quantity not an integer" 回归，故 def-linking 暂回退，本声明增强保留（正确且无害）。def-linking 重启需 jumptable/typeop 协调。
+
+### 2026-06-27（会话3 G3 续2）：switch 表达式 (long) cast
+
+- switch 控制表达式包裹 `switch ((long)(...))`。C 要求 switch 量为整数；当 varmap/typeop 把 switch index 推断为指针类型（_struct*），gcc 报 "switch quantity not an integer"。(long) cast 保证整数性——这镜像 Ghidra（将 switch 控制规范化为整数类型），且语义安全（switch index 按定义是整数）。
