@@ -729,3 +729,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `float2float(float2float(V)) => float2float(V)`（当外层冗余时）
   - `float2float(int2float(V)) => int2float(V)`（整数直接转最终浮点大小）
   - `trunc(float2float(V)) => trunc(V)`（浮点直接转最终整数大小）
+
+## 2026-06-27（续 25）：SUBPIECE 归一化
+
+- **RuleSubNormal**：完整移植 ruleaction.cc:7700-7803。归一化 SUBPIECE 应用于移位结果：
+  - `sub(V >> n, c) => V >> n'`（合并移位+截断，字节对齐时消除多余移位）
+  - 处理溢出情况：当截断超出输入大小时，创建额外扩展（ZEXT/SEXT）
+  - 饱和移位：当剩余移位超过输出大小时，饱和到最大值

@@ -6987,6 +6987,117 @@ impl Rule for RuleFloatCast {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_TRUNC] }
 }
 
+/// Normalize SUBPIECE applied to a shift: `sub(V >> n, c) => V >> n'`
+/// Faithful to Ghidra's `RuleSubNormal` (ruleaction.cc:7700-7803).
+pub struct RuleSubNormal;
+
+impl RuleSubNormal {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSubNormal {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSubNormal::applyOp (ruleaction.cc:7732-7803).
+        use crate::utils::bits::popcount;
+        let (opc, a, n, c, in_size, out_size) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let shiftout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !shiftout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let opc = shiftop.read().unwrap().opcode;
+            if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let a = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            // Skip precis hi/lo (Rugra lacks these flags; always allow).
+            let n = sa_vn.read().unwrap().get_offset() as i64;
+            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let c = c_vn.read().unwrap().get_offset() as i64;
+            let in_size = a.read().unwrap().get_size() as i64;
+            let out_size = out_vn.read().unwrap().get_size() as i64;
+            (opc, a, n, c, in_size, out_size)
+        };
+        let k = n / 8;
+        // Total shift + outsize must be >= size of input, or n must not be byte-aligned.
+        if n + 8 * c + 8 * out_size < 8 * in_size && n != k * 8 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let addr = op_arc.read().unwrap().get_addr();
+
+        if k + c + out_size > in_size {
+            let trunc_size = in_size - c - k;
+            if n == k * 8 && trunc_size > 0 && popcount(trunc_size as u64) == 1 {
+                // Need an additional extension.
+                let new_c = c + k;
+                let new_op = fd.new_op(2, addr);
+                let ext_opc = if opc == OpCode::CPUI_INT_SRIGHT { OpCode::CPUI_INT_SEXT } else { OpCode::CPUI_INT_ZEXT };
+                fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
+                fd.new_unique_out(trunc_size as usize, &new_op);
+                fd.op_set_input(&new_op, a, 0);
+                let cc = fd.new_constant(4, new_c as u64);
+                fd.op_set_input(&new_op, cc, 1);
+                fd.op_insert_before(&new_op, &follow);
+                let new_out = new_op.0.read().unwrap().output.clone().unwrap();
+                fd.op_set_input(&follow, new_out, 0);
+                fd.op_remove_input(&follow, 1);
+                fd.op_set_opcode(&follow, ext_opc);
+                return Ok(action_status::CHANGE);
+            } else {
+                // Shrink the cut.
+                let _ = k; // Already used below.
+            }
+        }
+
+        let mut c_new = c + k;
+        let n_new = n - k * 8;
+        if n_new == 0 {
+            // Extra shift is unnecessary.
+            fd.op_set_input(&follow, a, 0);
+            let cc = fd.new_constant(4, c_new as u64);
+            fd.op_set_input(&follow, cc, 1);
+            return Ok(action_status::CHANGE);
+        } else if n_new >= out_size * 8 {
+            let mut sat = out_size * 8;
+            if opc == OpCode::CPUI_INT_SRIGHT { sat -= 1; }
+            // Create SUBPIECE + shift.
+            let new_op = fd.new_op(2, addr);
+            fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
+            fd.new_unique_out(out_size as usize, &new_op);
+            fd.op_set_input(&new_op, a, 0);
+            let cc = fd.new_constant(4, c_new as u64);
+            fd.op_set_input(&new_op, cc, 1);
+            fd.op_insert_before(&new_op, &follow);
+            let new_out = new_op.0.read().unwrap().output.clone().unwrap();
+            fd.op_set_input(&follow, new_out, 0);
+            let sc = fd.new_constant(4, sat as u64);
+            fd.op_set_input(&follow, sc, 1);
+            fd.op_set_opcode(&follow, opc);
+            return Ok(action_status::CHANGE);
+        }
+        // Normal case: create SUBPIECE + shift.
+        let new_op = fd.new_op(2, addr);
+        fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
+        fd.new_unique_out(out_size as usize, &new_op);
+        fd.op_set_input(&new_op, a, 0);
+        let cc = fd.new_constant(4, c_new as u64);
+        fd.op_set_input(&new_op, cc, 1);
+        fd.op_insert_before(&new_op, &follow);
+        let new_out = new_op.0.read().unwrap().output.clone().unwrap();
+        fd.op_set_input(&follow, new_out, 0);
+        let sc = fd.new_constant(4, n_new as u64);
+        fd.op_set_input(&follow, sc, 1);
+        fd.op_set_opcode(&follow, opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub_normal" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
