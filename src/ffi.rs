@@ -210,6 +210,7 @@ pub fn to_ghidra_opcode(op: OpCode) -> Option<i32> {
         OpCode::CPUI_INDIRECT => Some(61),
         OpCode::CPUI_PIECE => Some(62),
         OpCode::CPUI_SUBPIECE => Some(63),
+        OpCode::CPUI_CAST => Some(64),
         OpCode::CPUI_PTRADD => Some(65),
         OpCode::CPUI_PTRSUB => Some(66),
         OpCode::CPUI_SEGMENTOP => Some(67),

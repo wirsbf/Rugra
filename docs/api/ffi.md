@@ -84,4 +84,11 @@ Intercept and compare Control Flow Graph structure
 
 Intercept and compare Transformation Actions
 
+### OpCode → Ghidra numeric value mapping
+
+`fn opcode_to_ghidra_value(opc: OpCode) -> Option<u32>` maps Rugra's
+`OpCode` enum to the integer wire-value used by Ghidra's P-code format
+(`opcodes.hh`). **2026-06-27**：新增 `CPUI_CAST => Some(64)`，填补
+`SUBPIECE(63)` 与 `PTRADD(65)` 之间的空缺。
+
  

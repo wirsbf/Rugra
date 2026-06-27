@@ -19,6 +19,16 @@ This enum represents all possible P-code operations. Each operation
 has specific semantics for how it operates on its input and output varnodes.
 Prefixes match Ghidra's `CPUI_` naming convention.
 
+**2026-06-27 新增 `CPUI_CAST` (=73)**：对齐 Ghidra `opcodes.hh:119`。P-code
+annotation op — 保持 bit pattern，仅标注 metatype/size 变更。ActionSetCasts
+在 P-code 层插入，print 层渲染 cast 语法。`CPUI_MAX` 相应 73→74。
+
+**待对齐的命名缺口**（Rugra 改名 vs Ghidra 规范名，205 处引用待重命名）：
+- `CPUI_BOOL_NOT` ← Ghidra `CPUI_BOOL_NEGATE` (opcodes.hh:81)
+- `CPUI_INT_NEG` ← Ghidra `CPUI_INT_2COMP` (opcodes.hh:67)
+- `CPUI_INT_NOT` ← Ghidra `CPUI_INT_NEGATE` (opcodes.hh:68)
+- `CPUI_TRUNC`：Ghidra opcodes.hh 无此 op（Rugra 多出）
+
 ### `pub fn name(&self) -> &'static str`
 
 *暂无代码注释*

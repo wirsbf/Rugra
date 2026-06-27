@@ -175,8 +175,14 @@ pub enum OpCode {
     /// Bit field insertion
     CPUI_INSERT = 72,
 
+    /// Cast from one datatype to another (P-code annotation op).
+    /// Mirrors Ghidra opcodes.hh:119 CPUI_CAST. The bit pattern is preserved;
+    /// this op only annotates a metatype/size change. ActionSetCasts inserts
+    /// it at the P-code layer, the print layer renders the cast syntax.
+    CPUI_CAST = 73,
+
     /// No operation / placeholder
-    CPUI_MAX = 73,
+    CPUI_MAX = 74,
 }
 
 impl OpCode {
@@ -254,6 +260,7 @@ impl OpCode {
             OpCode::CPUI_PTRSUB => "PTRSUB",
             OpCode::CPUI_EXTRACT => "EXTRACT",
             OpCode::CPUI_INSERT => "INSERT",
+            OpCode::CPUI_CAST => "CAST",
             OpCode::CPUI_MAX => "MAX",
         }
     }
@@ -336,7 +343,8 @@ impl OpCode {
             70 => Some(OpCode::CPUI_PTRSUB),
             71 => Some(OpCode::CPUI_EXTRACT),
             72 => Some(OpCode::CPUI_INSERT),
-            73 => Some(OpCode::CPUI_MAX),
+            73 => Some(OpCode::CPUI_CAST),
+            74 => Some(OpCode::CPUI_MAX),
             _ => None,
         }
     }
