@@ -36,6 +36,46 @@ Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`（114
 - `src/*.rs` 改动 → 同 commit 更新 `docs/api/*.md`（pre-commit hook 强制）
 - 模块状态变更 → 同 commit 更新 `ALIGNMENT_ROADMAP.md`（L1→L2→L3）
 
+### 5. 🔴 禁止移除/禁用 Ghidra 有的东西 — 必须修复对齐
+
+**Ghidra 源码里存在的 Rule/Action/算法，Rugra 侧出现 bug 时，禁止用"禁用/移除/skip"绕过。必须读 Ghidra 源码搞清它的正确机制，移植那个机制来修复。**
+
+违反本条 = 简化 = 作弊，与"完整实现"目标直接冲突。
+
+**本轮实例（用户强制纠正）**：
+- ❌ 错误：RuleMultNegOne 与 Rule2Comp2Mult 循环 → 移除 RuleMultNegOne。声称"Ghidra 没有"（未核实）
+- ✅ 正确：核实发现 Ghidra **有** RuleMultNegOne（ruleaction.cc:7171），在独立 `actcleanup` 池（coreaction.cc:5694）。移植**阶段分隔**机制 → 循环消失，curl 0/24→24/24
+- ❌ 错误：RuleEarlyRemoval 产空 varnode → 禁用
+- ✅ 正确：移植 Ghidra 6 守卫（ruleaction.cc:30-40）+ 保守空间门 → 重新启用
+
+**判定准则**：如果一个 Rule/Action 在 Ghidra oppool1/actcleanup/actmainloop 里注册，Rugra 侧出 bug，默认假设是**移植缺陷**（守卫缺失/算法不完整/基础设施缺口），去读 Ghidra 源码修；只有核实 Ghidra 确实没有该机制时，才考虑保守降级（且必须注释说明降级理由 + 修复路径）。
+
+### 6. 🔴 遇 bug 先看 Ghidra 怎么做 — 禁止凭猜测修
+
+**任何 bug/失败/非收敛/输出错误，第一步是读 Ghidra 对应源码看它怎么处理，第二步才是改 Rugra。禁止凭记忆/猜测/经验直接改。**
+
+本轮实例：
+- Rule 池死循环 → 先读 `action.cc:298-362`（perform 循环）+ `coreaction.cc:5511-5649`（oppool1 注册）+ `:5694`（actcleanup）→ 发现是**阶段分隔**机制，而非猜测的"禁用某 Rule"
+- RSP 泄漏 → 先读 Ghidra `printc.cc`（几乎无栈指针处理）+ `coreaction.cc:481`（ActionStackPtrFlow）→ 发现 Ghidra 在**分析层**解析 RSP，Rugra 是空桩
+
+### 7. 🔴 P-code 必须完整实现 — 禁止绕过缺失的 P-code 基础设施
+
+**如果某个 Ghidra P-code op（如 CPUI_CAST）缺失，或 P-code 语义不完整，必须补齐 P-code 层，禁止让上层 Action/Rule "适配/绕过"缺失的 op。**
+
+P-code IR 是整个反编译器的基石。上层绕过 = 在地基缺口上盖楼。
+
+本轮实例：
+- ActionSetCasts 卡在 `CPUI_CAST` 不存在 → ❌ 让 agent 绕过 / ✅ 补齐 `opcodes.rs` 的 CPUI_CAST（opcodes.hh:119）+ ffi.rs 映射
+- 3 个 opcode 改名偏离 Ghidra 规范名（BOOL_NOT←BOOL_NEGATE 等）→ 改回规范名（118 处替换）
+
+### 8. 🔴 禁止随意回退已验证的工作
+
+**已通过 build + 测试 + curl/httpd 验证的改动，禁止因后续步骤受阻就 `git checkout`/回退。回退 = 白干。应当向前修剩余 bug。**
+
+违反本条的代价：本轮一次错误回退丢失了诊断 instrumentation + Rule 修复（未提交），被迫重做。**已验证的成果必须立即原子化提交锁定**（见规则 3），提交后任何 agent 的 git 操作都动不了。
+
+**并发 agent 协作警示**：后台 agent 可能跑 `git restore`/`checkout` 清工作区，回滚你的未提交编辑。策略：① 同一文件的 edit 必须串行（并发会互相覆盖）；② 关键编辑后立即 build + commit，别留在工作区给 agent 踩。
+
 ## 📋 L1/L2/L3 路线图
 
 详见 `ALIGNMENT_ROADMAP.md`。当前状态：
