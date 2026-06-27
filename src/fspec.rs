@@ -205,6 +205,33 @@ impl FuncCallSpecs {
         }
     }
 
+    /// Build the final input parameter list from the resolved trials. Faithful
+    /// to `FuncCallSpecs::buildInputFromTrials` (fspec.cc:5685-5741).
+    ///
+    /// Walks the active-input trials; for each USED trial, records its (space,
+    /// offset, size) as a formal parameter. Stack-space trials are translated
+    /// relative to the caller's spacebase. Unused trials are dropped.
+    ///
+    /// Returns the list of resolved parameters as (address, size) pairs. The
+    /// caller (ActionActiveParam) then updates the FuncProto.
+    pub fn build_input_from_trials(&mut self) -> Vec<(Address, i32)> {
+        let mut result = Vec::new();
+        if let Some(active) = &self.active_input {
+            for i in 0..active.get_num_trials() {
+                let trial = active.get_trial(i);
+                if !trial.is_used() { continue; }
+                let addr = trial.get_address();
+                let sz = trial.get_size();
+                result.push((addr, sz));
+            }
+        }
+        // Delete unused trials (renumber used ones).
+        if let Some(active) = self.active_input.as_mut() {
+            active.trial.retain(|t| t.is_used());
+        }
+        result
+    }
+
     /// Is the input currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isInputActive`.
     pub fn is_input_active(&self) -> bool {
