@@ -73,7 +73,7 @@ pub enum PatchType {
 
 /// Operation with a new logical value as input, but output is unchanged.
 /// Corresponds to Ghidra's `SubvariableFlow::PatchRecord`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PatchRecord {
     pub patch_type: PatchType,
     pub patch_op: Arc<RwLock<PcodeOp>>,
@@ -236,6 +236,96 @@ impl SubvariableFlow {
     /// Corresponds to the decision in `SubvariableFlow::doReplacement`.
     pub fn is_worthwhile(&self) -> bool {
         self.pull_count >= 2
+    }
+
+    /// Execute the replacement: create new ops for the logical subgraph and
+    /// patch existing ops. Faithful to `SubvariableFlow::doReplacement`
+    /// (subflow.cc:1435-1545).
+    pub fn do_replacement(&mut self, fd: &mut Funcdata) {
+        // 1. Process push patches: set push op's output to logical value.
+        let push_patches: Vec<_> = self.patch_list.iter()
+            .filter(|p| p.patch_type == PatchType::PushPatch)
+            .cloned()
+            .collect();
+        for patch in &push_patches {
+            let in1 = match &patch.in1 { Some(rv) => rv, None => continue };
+            let push_addr = patch.patch_op.read().unwrap().get_addr();
+            let zext_op = fd.new_op(1, push_addr);
+            fd.op_set_opcode(&zext_op, OpCode::CPUI_INT_ZEXT);
+            let _zext_out = fd.new_unique_out(self.flow_size as usize, &zext_op);
+            if let Some(ref vn) = in1.vn {
+                fd.op_set_input(&zext_op, vn.clone(), 0);
+            }
+            fd.op_insert_before(&zext_op, &crate::op::PcodeOpRef(patch.patch_op.clone()));
+        }
+
+        // 2. Create new ops for the subgraph.
+        for i in 0..self.new_ops.len() {
+            let (opc, num_params, has_op) = {
+                let rop = &self.new_ops[i];
+                (rop.opc, rop.num_params, rop.op.is_some())
+            };
+            if !has_op { continue; }
+            let orig_op = self.new_ops[i].op.clone().unwrap();
+            let addr = orig_op.read().unwrap().get_addr();
+            let new_op = fd.new_op(num_params, addr);
+            fd.op_set_opcode(&new_op, opc);
+            let _out = fd.new_unique_out(self.flow_size as usize, &new_op);
+            fd.op_insert_after(&new_op, &crate::op::PcodeOpRef(orig_op));
+            self.new_ops[i].replacement = Some(new_op.0);
+        }
+
+        // 3. Process copy/compare/parameter/extension patches.
+        let remaining: Vec<_> = self.patch_list.iter()
+            .filter(|p| p.patch_type != PatchType::PushPatch)
+            .cloned()
+            .collect();
+        for patch in &remaining {
+            let op_ref = crate::op::PcodeOpRef(patch.patch_op.clone());
+            match patch.patch_type {
+                PatchType::CopyPatch => {
+                    while op_ref.0.read().unwrap().num_input() > 1 {
+                        fd.op_remove_input(&op_ref, op_ref.0.read().unwrap().num_input() - 1);
+                    }
+                    if let Some(ref in1) = patch.in1 {
+                        if let Some(ref vn) = in1.vn {
+                            fd.op_set_input(&op_ref, vn.clone(), 0);
+                        }
+                    }
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                }
+                PatchType::ComparePatch => {
+                    if let Some(ref in1) = patch.in1 {
+                        if let Some(ref vn) = in1.vn {
+                            fd.op_set_input(&op_ref, vn.clone(), 0);
+                        }
+                    }
+                    if let Some(ref in2) = patch.in2 {
+                        if let Some(ref vn) = in2.vn {
+                            fd.op_set_input(&op_ref, vn.clone(), 1);
+                        }
+                    }
+                }
+                PatchType::ParameterPatch => {
+                    if let Some(ref in1) = patch.in1 {
+                        if let Some(ref vn) = in1.vn {
+                            fd.op_set_input(&op_ref, vn.clone(), patch.slot as usize);
+                        }
+                    }
+                }
+                PatchType::ExtensionPatch => {
+                    if let Some(ref in1) = patch.in1 {
+                        if let Some(ref vn) = in1.vn {
+                            if patch.slot == 0 {
+                                fd.op_set_input(&op_ref, vn.clone(), 0);
+                                fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ZEXT);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Check if a mask represents a valid sub-variable of the given size.

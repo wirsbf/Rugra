@@ -71,3 +71,12 @@
   从定义 op 反向追踪逻辑值：COPY/MULTIEQUAL/INT_NOT/INT_XOR/INT_AND/INT_OR/INT_ADD/SUBPIECE
 
 do_trace 现使用 worklist 驱动 trace_forward_single，再调用 trace_backward_single。
+
+### 2026-06-27（会话3 L1续）：doReplacement 替换执行引擎
+
+移植 `SubvariableFlow::doReplacement`（subflow.cc:1435-1545）：
+1. 处理 push patches：设置 push op 的 output 为逻辑值，创建 INT_ZEXT 占位
+2. 创建子图新 ops：newOp + opSetOpcode + newUniqueOut + opInsertAfter
+3. 处理 copy/compare/parameter/extension patches：修改现有 op 的输入/opcode
+
+完整 SubvariableFlow 三段式现已就位：doTrace → traceForward/traceBackward → doReplacement。
