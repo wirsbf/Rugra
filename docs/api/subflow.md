@@ -50,3 +50,24 @@
 - `do_trace(fd, seed, mask)` — doTrace(subflow.cc:1410-1434)：子变量流追踪入口（简化版：扫描引用种子的 op 计数 pull 点）
 
 3 个新单元测试：does_or_set、does_and_clear、do_trace 空 Funcdata。
+
+### 2026-06-27（会话3 L1续）：traceForward + traceBackward 完整移植
+
+移植 SubvariableFlow 的核心双向数据流追踪算法：
+
+- **trace_forward_single** — traceForward(subflow.cc:373-659, ~286行)：
+  对每个 ReplaceVarnode 的后代 op 进行模式匹配：
+  - COPY/MULTIEQUAL/INT_NOT/INT_XOR → 透传，创建平行 op
+  - INT_OR → doesOrSet 检查截断；否则透传
+  - INT_AND → 常量掩码提取 / doesAndClear 截断 / 否则透传
+  - INT_ZEXT/INT_SEXT → COPY 透传
+  - INT_ADD → 仅当掩码从 bit0 开始
+  - INT_LEFT/INT_RIGHT/INT_SRIGHT → 常量位移，计算新掩码
+  - SUBPIECE → 字节提取
+  - 比较类 / 布尔类 / CALL / RETURN → pull 点
+  - 未知 op → 中止该分支
+
+- **trace_backward_single** — traceBackward(subflow.cc:665-861, ~196行)：
+  从定义 op 反向追踪逻辑值：COPY/MULTIEQUAL/INT_NOT/INT_XOR/INT_AND/INT_OR/INT_ADD/SUBPIECE
+
+do_trace 现使用 worklist 驱动 trace_forward_single，再调用 trace_backward_single。

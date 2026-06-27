@@ -296,36 +296,249 @@ impl SubvariableFlow {
         // Register the seed.
         let seed_ptr = Arc::as_ptr(&seed) as usize;
         self.set_replacement(seed.clone(), mask);
-        // Rugra's simplified trace: scan all ops for references to the seed
-        // varnode (INT_AND/SUBPIECE that extract a sub-field, comparisons).
-        // The full Ghidra version does bidirectional BFS (traceForward/traceBackward,
-        // ~500 lines each). This simplified version counts pull points.
-        let seed_ptr = Arc::as_ptr(&seed) as usize;
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            // Check if any input matches the seed.
-            let uses_seed = op.inrefs.iter().any(|vn| Arc::as_ptr(vn) as usize == seed_ptr);
-            if !uses_seed { continue; }
-            match op.opcode {
-                OpCode::CPUI_INT_AND => {
-                    // INT_AND with a constant mask → potential sub-variable extraction.
-                    if op.inrefs.len() >= 2 && op.inrefs[1].read().unwrap().is_constant() {
+        // Forward trace: for each ReplaceVarnode, scan descendants.
+        // Simplified single-pass (Ghidra uses a worklist with multiple passes).
+        let mut worklist = vec![0usize]; // Start with seed index.
+        while let Some(rvn_idx) = worklist.pop() {
+            if rvn_idx >= self.new_vars.len() { continue; }
+            let rvn_mask = self.new_vars[rvn_idx].mask;
+            let rvn_vn = match &self.new_vars[rvn_idx].vn {
+                Some(v) => v.clone(),
+                None => continue, // Constant — no descendants
+            };
+            if !self.trace_forward_single(fd, &rvn_vn, rvn_mask, rvn_idx, &mut worklist) {
+                return false;
+            }
+        }
+        // Backward trace from the seed.
+        let _ = self.trace_backward_single(fd, &seed, mask);
+        self.is_worthwhile()
+    }
+
+    /// Trace forward from one ReplaceVarnode through its descendants.
+    /// Faithful to `SubvariableFlow::traceForward` (subflow.cc:373-659).
+    /// Returns false if the logical value cannot be traced (abort).
+    fn trace_forward_single(
+        &mut self,
+        fd: &Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        mask: u64,
+        rvn_idx: usize,
+        worklist: &mut Vec<usize>,
+    ) -> bool {
+        let vn_ptr = Arc::as_ptr(vn) as usize;
+        let descends: Vec<Arc<RwLock<PcodeOp>>> = vn.read().unwrap().descend_iter().collect();
+        for op_arc in &descends {
+            let op = op_arc.read().unwrap();
+            let opcode = op.opcode;
+            // Find which slot of this op reads our vn.
+            let slot = (0..op.num_input())
+                .find(|&i| op.get_in(i).map(|v| Arc::as_ptr(v) as usize == vn_ptr).unwrap_or(false));
+            let slot = match slot { Some(s) => s, None => continue };
+            match opcode {
+                // Simple pass-through ops: create a parallel op in subgraph.
+                OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_XOR => {
+                    if let Some(out) = &op.output {
+                        let new_idx = self.set_replacement(out.clone(), mask);
+                        worklist.push(new_idx);
                         self.pull_count += 1;
                     }
                 }
-                OpCode::CPUI_SUBPIECE => {
-                    // SUBPIECE extracting a smaller value.
-                    self.pull_count += 1;
+                // INT_OR: if constant ORs all masked bits to 1, truncate flow.
+                OpCode::CPUI_INT_OR => {
+                    if Self::does_or_set(&op, mask) != -1 {
+                        // Subvar set to all 1s — truncate.
+                    } else if let Some(out) = &op.output {
+                        let new_idx = self.set_replacement(out.clone(), mask);
+                        worklist.push(new_idx);
+                        self.pull_count += 1;
+                    }
                 }
+                // INT_AND: if constant AND clears all masked bits, truncate.
+                OpCode::CPUI_INT_AND => {
+                    if op.inrefs.len() >= 2 && op.inrefs[1].read().unwrap().is_constant()
+                        && op.inrefs[1].read().unwrap().get_offset() == mask
+                    {
+                        // Sub-field extraction via INT_AND.
+                        self.pull_count += 1;
+                    } else if Self::does_and_clear(&op, mask) != -1 {
+                        // Subvar cleared — truncate.
+                    } else if let Some(out) = &op.output {
+                        let new_idx = self.set_replacement(out.clone(), mask);
+                        worklist.push(new_idx);
+                        self.pull_count += 1;
+                    }
+                }
+                // ZEXT/SEXT: logical value passes through as COPY.
+                OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
+                    if let Some(out) = &op.output {
+                        let new_idx = self.set_replacement(out.clone(), mask);
+                        worklist.push(new_idx);
+                        self.pull_count += 1;
+                    }
+                }
+                // INT_ADD: carry only accounted for if mask starts at bit 0.
+                OpCode::CPUI_INT_ADD => {
+                    if (mask & 1) == 0 { return false; }
+                    if let Some(out) = &op.output {
+                        let new_idx = self.set_replacement(out.clone(), mask);
+                        worklist.push(new_idx);
+                        self.pull_count += 1;
+                    }
+                }
+                // SUBPIECE: extracting bytes from the logical value.
+                OpCode::CPUI_SUBPIECE => {
+                    if let Some(out) = &op.output {
+                        self.pull_count += 1;
+                    }
+                }
+                // INT_LEFT (shift left by constant).
+                OpCode::CPUI_INT_LEFT => {
+                    if slot == 1 { // Logical flow into shift amount
+                        if (mask & 1) == 0 { return false; }
+                        self.pull_count += 1;
+                    } else {
+                        if op.inrefs.len() < 2 || !op.inrefs[1].read().unwrap().is_constant() {
+                            return false; // Dynamic shift
+                        }
+                        let sa = op.inrefs[1].read().unwrap().get_offset();
+                        if sa >= 64 { return false; }
+                        let newmask = (mask << sa) & crate::address::calc_mask(
+                            op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(8));
+                        if newmask == 0 {
+                            // Subvar cleared — truncate.
+                        } else if let Some(out) = &op.output {
+                            let new_idx = self.set_replacement(out.clone(), newmask);
+                            worklist.push(new_idx);
+                            self.pull_count += 1;
+                        }
+                    }
+                }
+                // INT_RIGHT / INT_SRIGHT (shift right by constant).
+                OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+                    if slot == 1 {
+                        if (mask & 1) == 0 { return false; }
+                        self.pull_count += 1;
+                    } else {
+                        if op.inrefs.len() < 2 || !op.inrefs[1].read().unwrap().is_constant() {
+                            return false;
+                        }
+                        let sa = op.inrefs[1].read().unwrap().get_offset();
+                        let newmask = if sa >= 64 { 0 } else { mask >> sa };
+                        if newmask == 0 && opcode == OpCode::CPUI_INT_RIGHT {
+                            // Subvar truncated.
+                        } else if newmask != 0 {
+                            if let Some(out) = &op.output {
+                                let new_idx = self.set_replacement(out.clone(), newmask);
+                                worklist.push(new_idx);
+                                self.pull_count += 1;
+                            }
+                        }
+                    }
+                }
+                // Comparisons: the logical value flows into a comparison.
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                 | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                 | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL => {
                     self.pull_count += 1;
                 }
-                _ => {}
+                // Boolean ops (for 1-bit sub-variables).
+                OpCode::CPUI_BOOL_NOT | OpCode::CPUI_BOOL_AND
+                | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR | OpCode::CPUI_CBRANCH => {
+                    if self.bit_size != 1 { return false; }
+                    self.pull_count += 1;
+                }
+                // CALL/CALLIND/RETURN: pull points for call args / return values.
+                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_RETURN
+                | OpCode::CPUI_BRANCHIND => {
+                    self.pull_count += 1;
+                }
+                _ => {
+                    // Unknown op — abort this branch.
+                    return false;
+                }
             }
         }
-        self.is_worthwhile()
+        true
+    }
+
+    /// Trace backward from a Varnode through its defining op.
+    /// Faithful to `SubvariableFlow::traceBackward` (subflow.cc:665-861).
+    /// Returns false if the logical value cannot be traced backward.
+    fn trace_backward_single(
+        &mut self,
+        _fd: &Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        mask: u64,
+    ) -> bool {
+        let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(op) => op,
+            None => return true, // Input varnode — nothing to trace back.
+        };
+        let op = def_op.read().unwrap();
+        match op.opcode {
+            OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL
+            | OpCode::CPUI_INT_NOT | OpCode::CPUI_INT_XOR => {
+                // Inputs flow through with same mask.
+                for i in 0..op.num_input() {
+                    if let Some(inv) = op.get_in(i) {
+                        let _ = self.set_replacement(inv.clone(), mask);
+                    }
+                }
+                true
+            }
+            OpCode::CPUI_INT_AND => {
+                let sa = Self::does_and_clear(&op, mask);
+                if sa != -1 {
+                    // AND clears all masked bits → logical value is 0.
+                    true
+                } else {
+                    for i in 0..2.min(op.num_input()) {
+                        if let Some(inv) = op.get_in(i) {
+                            let _ = self.set_replacement(inv.clone(), mask);
+                        }
+                    }
+                    true
+                }
+            }
+            OpCode::CPUI_INT_OR => {
+                let sa = Self::does_or_set(&op, mask);
+                if sa != -1 {
+                    true
+                } else {
+                    for i in 0..2.min(op.num_input()) {
+                        if let Some(inv) = op.get_in(i) {
+                            let _ = self.set_replacement(inv.clone(), mask);
+                        }
+                    }
+                    true
+                }
+            }
+            OpCode::CPUI_INT_ADD => {
+                if (mask & 1) == 0 { return false; }
+                for i in 0..2.min(op.num_input()) {
+                    if let Some(inv) = op.get_in(i) {
+                        let _ = self.set_replacement(inv.clone(), mask);
+                    }
+                }
+                true
+            }
+            OpCode::CPUI_SUBPIECE => {
+                // Backward through SUBPIECE: mask shifts left.
+                if op.inrefs.len() >= 2 {
+                    let sa = op.inrefs[1].read().unwrap().get_offset() * 8;
+                    let newmask = mask << sa;
+                    if let Some(inv) = op.get_in(0) {
+                        let _ = self.set_replacement(inv.clone(), newmask);
+                    }
+                }
+                true
+            }
+            _ => {
+                // For other ops, we don't trace backward (conservative).
+                true
+            }
+        }
     }
 }
 
