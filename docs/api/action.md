@@ -592,3 +592,5 @@ Funcdata ready
 ### 2026-06-27（会话3 G5）：结构清理 Action 未接入说明
 
 ActionDeterminedBranch/ActionUnreachable/ActionDoNothing/ActionRedundBranch 的 apply() 已完整移植（coreaction.cc:3457-3528），但**未接入 set_default_actions**。set_default_actions 中有 NOTE 说明：Ghidra 在 selectGoto→collapseInternal 循环内运行这些清理 Action，structurer 围绕块删除设计；Rugra 的 staged-phase structurer 依赖这些块，接入导致回归。完整接入需 staged→collapseInternal 架构迁移（G4 可选优化）。apply() 逻辑已就绪。
+### 2026-06-27（续）：ActionStackPtrFlow 接入管线（Heritage 后）
+- set_default_actions 在 ActionHeritage 后接入 ActionStackPtrFlow（对齐 Ghidra actstackstall, coreaction.cc:5656）。

@@ -3776,33 +3776,211 @@ impl ActionDeindirect {
 }
 
 /// Stack pointer flow analysis. Faithful to `ActionStackPtrFlow`
-/// (coreaction.cc).
+/// (coreaction.cc:261-499). Repairs "stack pointer clogs": an INT_ADD on the
+/// spacebase (stack pointer input) whose constant offset comes from a stack
+/// LOAD. Such a LOAD is linked to its matching STORE (same stack-relative
+/// offset) and converted to a COPY of the stored value.
+///
+/// analyzeExtraPop (coreaction.cc:261-318) is NOT yet ported — it requires
+/// StackSolver + ProtoModel::extrapop infrastructure.
 pub struct ActionStackPtrFlow;
 impl ActionStackPtrFlow {
     pub fn new() -> Self { Self }
-}
-impl Action for ActionStackPtrFlow {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: scan for stack-pointer related ops
-        // (INT_ADD/SUB on spacebase varnodes). Full algorithm requires
-        // Spacebase tracking + stack space integration.
-        use crate::opcodes::OpCode;
-        let mut change_count = 0;
 
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if matches!(op_rg.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB) {
-                // Check if input(0) is a spacebase varnode.
-                if let Some(in0) = op_rg.get_in(0) {
-                    if in0.read().unwrap().is_spacebase() {
-                        change_count += 1;
+    /// Is `vn` defined as `spcbasein + constant`? Returns the constant offset.
+    /// Faithful to isStackRelative (coreaction.cc:329-344).
+    fn is_stack_relative(
+        spcbasein: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<u64> {
+        use crate::opcodes::OpCode;
+        if std::sync::Arc::ptr_eq(spcbasein, vn) {
+            return Some(0);
+        }
+        let vn_g = vn.read().unwrap();
+        if !vn_g.is_written() {
+            return None;
+        }
+        let addop_arc = vn_g.def.as_ref().and_then(|w| w.upgrade())?;
+        let addop = addop_arc.read().unwrap();
+        if addop.opcode != OpCode::CPUI_INT_ADD {
+            return None;
+        }
+        let in0 = addop.inrefs.get(0)?;
+        if !std::sync::Arc::ptr_eq(in0, spcbasein) {
+            return None;
+        }
+        let constvn = addop.inrefs.get(1)?;
+        let cv = constvn.read().unwrap();
+        if !cv.is_constant() {
+            return None;
+        }
+        Some(cv.get_offset())
+    }
+
+    /// Convert `loadop` into a COPY of the value stored by `storeop`.
+    /// Faithful to adjustLoad (coreaction.cc:353-366).
+    fn adjust_load(
+        fd: &mut Funcdata,
+        loadop: &crate::op::PcodeOpRef,
+        storeop: &crate::op::PcodeOpRef,
+    ) -> bool {
+        // STORE input(2) is the stored value.
+        let datavn = {
+            let s = storeop.0.read().unwrap();
+            match s.inrefs.get(2) {
+                Some(v) => v.clone(),
+                None => return false,
+            }
+        };
+        let dv = datavn.read().unwrap();
+        let newvn = if dv.is_constant() {
+            drop(dv);
+            fd.new_constant(datavn.read().unwrap().get_size(), datavn.read().unwrap().get_offset())
+        } else if dv.is_free() {
+            return false;
+        } else {
+            drop(dv);
+            datavn.clone()
+        };
+        fd.op_remove_input(loadop, 1);
+        fd.op_set_opcode(loadop, crate::opcodes::OpCode::CPUI_COPY);
+        fd.op_set_input(loadop, newvn, 0);
+        true
+    }
+
+    /// Find a STORE with a stack-relative pointer matching `constz` occurring
+    /// before `loadop` in program order, and convert `loadop` to a COPY.
+    /// Conservative port of repair (coreaction.cc:378-422): scans the whole
+    /// function's alivelist (respecting order) rather than walking back basic
+    /// blocks, and stops at any call (aliasing barrier).
+    fn repair(
+        fd: &mut Funcdata,
+        spcbasein: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        loadop: &crate::op::PcodeOpRef,
+        constz: u64,
+    ) -> i32 {
+        use crate::opcodes::OpCode;
+        let loadsize = match loadop.0.read().unwrap().output.as_ref() {
+            Some(o) => o.read().unwrap().get_size(),
+            None => return 0,
+        };
+        let mut reached_load = false;
+        for cur_ref in &fd.obank.alivelist {
+            // Only consider ops up to and including the load.
+            if std::sync::Arc::ptr_eq(&cur_ref.0, &loadop.0) {
+                reached_load = true;
+                break;
+            }
+            let curop = cur_ref.0.read().unwrap();
+            if curop.is_call() {
+                return 0; // coreaction.cc:397 — don't trace aliasing through a call
+            }
+            if curop.opcode == OpCode::CPUI_STORE {
+                let ptrvn = match curop.inrefs.get(1) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                let datavn_size = curop.inrefs.get(2).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                if let Some(constnew) = Self::is_stack_relative(spcbasein, &ptrvn) {
+                    if constnew == constz && loadsize == datavn_size {
+                        drop(curop);
+                        if Self::adjust_load(fd, loadop, &cur_ref.clone()) {
+                            return 1;
+                        }
+                        return 0;
                     }
+                    if constnew <= constz + (loadsize as u64 - 1)
+                        && constnew + (datavn_size as u64 - 1) >= constz
+                    {
+                        return 0; // overlapping store — can't solve
+                    }
+                } else {
+                    return 0; // any non-stack-relative STORE blocks aliasing
                 }
             }
         }
-
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        let _ = reached_load;
+        0
+    }
+}
+impl Action for ActionStackPtrFlow {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        use crate::opcodes::OpCode;
+        // Locate the spacebase (stack-pointer) INPUT varnode: an input varnode
+        // flagged is_spacebase. Faithful to checkClog's beginLoc lookup
+        // (coreaction.cc:440-447).
+        let spcbasein = {
+            let mut found: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+            for op_ref in &fd.obank.alivelist {
+                let o = op_ref.0.read().unwrap();
+                for in_vn in o.inrefs.iter() {
+                    let g = in_vn.read().unwrap();
+                    if g.is_spacebase() && g.is_input() {
+                        found = Some(in_vn.clone());
+                        break;
+                    }
+                }
+                if found.is_some() { break; }
+            }
+            match found {
+                Some(s) => s,
+                None => return Ok(action_status::NO_CHANGE), // no stack pointer input
+            }
+        };
+        // checkClog (coreaction.cc:448-480): find INT_ADD(spcbasein, y) where
+        // y is a non-constant (loaded) value — a "clog" — and repair it.
+        let mut clogcount = 0;
+        let add_ops: Vec<crate::op::PcodeOpRef> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|r| r.0.read().unwrap().opcode == OpCode::CPUI_INT_ADD)
+            .cloned()
+            .collect();
+        for add_ref in add_ops {
+            let (in0, in1) = {
+                let a = add_ref.0.read().unwrap();
+                (
+                    a.inrefs.get(0).cloned(),
+                    a.inrefs.get(1).cloned(),
+                )
+            };
+            let (in0, in1) = match (in0, in1) {
+                (Some(a), Some(b)) => (a, b),
+                _ => continue,
+            };
+            // x must be stack-relative, y must be a non-constant LOAD.
+            let (x, y) = if Self::is_stack_relative(&spcbasein, &in0).is_some() {
+                (in0.clone(), in1.clone())
+            } else if Self::is_stack_relative(&spcbasein, &in1).is_some() {
+                (in1.clone(), in0.clone())
+            } else {
+                continue;
+            };
+            let constx = match Self::is_stack_relative(&spcbasein, &x) {
+                Some(c) => c,
+                None => continue,
+            };
+            let y_g = y.read().unwrap();
+            if !y_g.is_written() {
+                continue; // y must not be a constant (coreaction.cc:455)
+            }
+            let loadop_arc = match y_g.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a,
+                None => continue,
+            };
+            drop(y_g);
+            let loadopc = loadop_arc.read().unwrap().opcode;
+            if loadopc == OpCode::CPUI_LOAD {
+                clogcount += Self::repair(fd, &spcbasein, &crate::op::PcodeOpRef(loadop_arc), constx);
+            }
+        }
+        if clogcount > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "stackptrflow" }
 }

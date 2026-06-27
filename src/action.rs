@@ -357,6 +357,11 @@ impl ActionDatabase {
 
         decompile_group.add_action(Box::new(ActionStart::new()));
         decompile_group.add_action(Box::new(ActionHeritage::new()));
+        // Stack pointer flow repair (Ghidra actstackstall, coreaction.cc:5656):
+        // resolve stack-pointer "clogs" (LOAD fed into INT_ADD on spacebase) by
+        // linking to the matching STORE. Must run after Heritage (needs the
+        // spacebase input varnode) and before simplification.
+        decompile_group.add_action(Box::new(ActionStackPtrFlow::new()));
         decompile_group.add_action(Box::new(ActionInferParams::new())); // Early: before copy propagation removes Register varnodes
         decompile_group.add_action(Box::new(ActionConstantPtr::new()));
         decompile_group.add_action(Box::new(ActionCse::new()));
