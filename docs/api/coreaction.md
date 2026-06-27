@@ -570,3 +570,9 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - clearActiveOutput：终结输出恢复
 
 与 ActionActiveParam（input 恢复）对称，完成参数恢复的 input+output 双路径。
+
+### 2026-06-27（会话3 G5闭环）：ActionReturnRecovery apply() 移植
+
+移植 ActionReturnRecovery::apply（coreaction.cc:1908-1955）。
+扫描 RETURN op 检测返回值——简化版：检查 RETURN 是否有 >1 input（有返回值）。
+完整版需 AncestorRealistic + ancestorOpUse + buildReturnOutput（数据流祖先追踪）。

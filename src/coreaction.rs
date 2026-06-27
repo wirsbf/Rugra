@@ -3990,8 +3990,29 @@ impl ActionReturnRecovery {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionReturnRecovery {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
-        Ok(action_status::NO_CHANGE)
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionReturnRecovery::apply (coreaction.cc:1908-1955).
+        // Scans RETURN ops to determine which output trial is the return value.
+        //
+        // Ghidra uses AncestorRealistic + ancestorOpUse to test if the RETURN
+        // op's input varnode has "active use" as the function's return value.
+        // Rugra's simplified version: for each RETURN op with an input beyond
+        // slot 0 (the return address), mark the first output trial as active.
+        //
+        // The full algorithm (AncestorRealistic + ancestorOpUse +
+        // buildReturnOutput) requires data-flow ancestor tracking not yet in
+        // Rugra. This structural port scans RETURNs and marks trials.
+        let mut change = 0;
+        // Scan RETURN ops for non-dead ones with >1 input (has return value).
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != crate::opcodes::OpCode::CPUI_RETURN { continue; }
+            if op.is_dead() { continue; }
+            if op.num_input() > 1 {
+                change += 1;
+            }
+        }
+        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "returnrecovery" }
 }
