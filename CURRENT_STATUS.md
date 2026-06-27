@@ -4,6 +4,53 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动 + FuncCallSpecs 集成**
 
+## 近期进展（2026-06-27 会话 3：condexe.cc 全部移植 + RuleDivOpt 核实提交）
+
+本次会话**关闭 G1（condexe.cc 全部算法）+ 核实并提交 G2（RuleDivOpt）**：
+
+### G1 关闭：RuleOrPredicate 完整移植（condexe.cc:509-712）
+
+condexe.cc 的第二部分，独立的 Rule，简化谓词构造：
+`tmp1=cond?val:0; result=tmp1|other` → `result=multiequal`
+
+- **MultiPredicate 4 方法**：discover_zero_slot/discover_cbranch/discover_path_is_true/discover_conditional_zero
+- **RuleOrPredicate 3 方法**：get_opcodes/check_single/apply_op
+- **支撑原语**：`BlockGraph::find_common_block`(block.cc:736 LCA) + `PcodeOp::compare_order`(op.cc:778)
+- **接入**：ActionSimplify 对 INT_OR/INT_XOR op 调用 RuleOrPredicate
+
+condexe.cc 现在**全部移植**：ConditionalExecution(18) + RuleOrPredicate(7) + BooleanMatch。标 L3。
+
+### G2：RuleDivOpt 核实 + 提交（ruleaction.cc:8295-8355）
+
+**重要修正**：此前误记 RuleDivOpt"缺第二变体 ruleaction.cc:8010-8046"。
+逐行核实后确认：**8010-8046 是独立的 `RuleDivTermAdd2`**（另一个 Rule），
+非 RuleDivOpt 的一部分。RuleDivOpt 的 find_form/calc_divisor/check_form_overlap
+**完整对应** Ghidra 8295-8355，无缺失。
+
+G2 提交内容：
+- `RuleDivOpt`（findForm/calcDivisor/checkFormOverlap/applyOp）
+- `Varnode::is_constant_extended`（varnode.cc:799-840，128 位常量解析）
+- `count_leading_zeros`（address.cc:773）
+
+### 发现的系统性缺口（G6 范畴）
+
+**Rugra ~90 个 Rule 全部实现了 apply_op 但均未接入主管线**——无 Ghidra
+ActionRule 式的 Rule 遍历调度。Rule 正确性仅由单元测试守护，实际反编译不
+触发任何 Rule 简化。这是 ruleaction G6 的核心待办。
+
+### 验证指标
+
+| 指标 | curl | httpd |
+|---|---|---|
+| gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
+| while 循环数 | 16 | 38 |
+| goto 数 | 0 | 0 |
+| 单元测试 | **682/682**（+4：RuleDivOpt/count_leading_zeros/is_constant_extended） | — |
+
+---
+
+（以下为历史记录）
+
 ## 近期进展（2026-06-27 会话 2：诚实审计 + condexe 完整移植）
 
 本次会话聚焦**核实路线图真实性 + 攻坚 condexe 核心图重写算法**：

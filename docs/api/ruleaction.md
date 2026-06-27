@@ -745,3 +745,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 支持截断形式（INT_ZEXT 介入 INT_AND 后）
   - 辅助函数 `check_sign_extraction(out_vn)` — 验证 `V s>> (size*8-1)` 模式，返回 V
   - 遍历 correct_vn 的后代，检测完整的 mult(-1) → add → and(mask) → add(V, shift(sign)) 链
+
+### 2026-06-27（会话2 续）：RuleDivOpt
+
+- `RuleDivOpt` — `RuleDivOpt`（ruleaction.cc:8069-8355）：除法乘法编码还原。`sub(ext(V)*c, d) >> e` / `sub(ext(V)*c) >> e` / `(ext(V)*c) >> n` → `V / divisor`。
+  - `find_form` — `findForm`（8069）：检测 shift→subpiece→mult→zext/sext 链，返回 (in_vn, n, y128, xsize, ext_opc)
+  - `calc_divisor` — `calcDivisor`（8157）：从乘法编码 c 反推除数（u128 运算）
+  - `check_form_overlap` — `checkFormOverlap`（8260）：检测 SUBPIECE 形式是否被上级 shift 形式包含
+  - `apply_op` — `applyOp`（8295）：三种尺寸分支（需扩展/需截断/同尺寸）转换
+
+**注**：此前误记"缺第二变体 ruleaction.cc:8010-8046"——核实后确认该段是**独立的 RuleDivTermAdd2**（另一个 Rule），非 RuleDivOpt 的一部分。RuleDivOpt 本身完整对应 8295-8355。

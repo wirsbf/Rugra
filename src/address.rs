@@ -491,6 +491,15 @@ pub fn calc_mask(size: usize) -> u64 {
     }
 }
 
+/// Count leading zero bits in a 64-bit value. Faithful to
+/// `count_leading_zeros` (address.cc:773).
+pub fn count_leading_zeros(val: u64) -> i32 {
+    if val == 0 {
+        return 64;
+    }
+    val.leading_zeros() as i32
+}
+
 /// Return the index of the least-significant set bit, or -1 if val==0.
 /// Faithful to `leastsigbit_set` (address.cc:714). Uses trailing_zeros for
 /// an exact equivalent.
@@ -740,5 +749,15 @@ mod tests {
         assert_eq!(mostsigbit_set(1), 0);
         assert_eq!(mostsigbit_set(0x100), 8);
         assert_eq!(mostsigbit_set(0x18), 4); // 0b11000 → bit 4
+    }
+
+    #[test]
+    fn test_count_leading_zeros() {
+        // Faithful to count_leading_zeros (address.cc:773).
+        assert_eq!(count_leading_zeros(0), 64);
+        assert_eq!(count_leading_zeros(1), 63);
+        assert_eq!(count_leading_zeros(0x100), 55);
+        assert_eq!(count_leading_zeros(1u64 << 63), 0);
+        assert_eq!(count_leading_zeros(u64::MAX), 0);
     }
 }

@@ -256,3 +256,7 @@ Encode to string format (comma-separated ranges)
 
 - `coveringmask(val: u64) -> u64`（address.cc:760）：返回覆盖 val 所有置位位的掩码 = `(1 << (msb+1)) - 1`。val==0 返回 0。解锁 JumpBasic::get_max_value（INT_AND 掩码分析）。
 - `minimalmask(val: u64) -> u64`：coveringmask 别名，匹配 jumptable.cc 的 minimalmask 用法。
+
+### 2026-06-27（会话2 续）：count_leading_zeros
+
+- `count_leading_zeros(val) -> i32` — `count_leading_zeros`（address.cc:773）：64 位前导零计数，val==0 返回 64。用 Rust `leading_zeros` 精确等价。被 RuleDivOpt::findForm 用于计算 numerand 的有效位数（xsize = 64 - clz(nz_mask)）。

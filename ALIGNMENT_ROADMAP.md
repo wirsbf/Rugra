@@ -21,8 +21,13 @@
 > **核实样本**：
 > - `condexe.rs`(238行) vs `condexe.cc`(712行)：Rugra 仅做 CBRANCH 检测 + eprintln 标记，
 >   Ghidra 的 `findInitPre`/`forceSpecific`/`removeBlockEdges`/`setOut` 图重写**全部缺失** → 实际 L1。
-> - `RuleDivOpt`(未提交)：`findForm`/`calcDivisor`/`checkFormOverlap` 忠实，但缺 Ghidra
->   ruleaction.cc:8010-8046 的 `zext(X)*c + 2^n >> (n+1)` 第二变体分支 → L2（部分忠实）。
+> - `RuleDivOpt`(未提交)：`findForm`/`calcDivisor`/`checkFormOverlap` 忠实对应
+>   ruleaction.cc:8295-8355。此前误标"缺第二变体"——核实后确认 8010-8046 是
+>   **独立的 RuleDivTermAdd2**(另一个 Rule)，非 RuleDivOpt 的一部分。RuleDivOpt 本身完整。
+
+> **系统性缺口（G6 范畴）**：Rugra ~90 个 Rule 全部实现了 `apply_op` 但**均未接入
+> 主管线**——无 Ghidra ActionRule 式的 Rule 遍历调度。Rule 正确性仅由单元测试守护，
+> 实际反编译不触发任何 Rule 简化。这是 ruleaction G6 的核心待办。
 
 ---
 

@@ -664,3 +664,7 @@
 - `count_descends() -> usize`：活跃后继计数。
 - `add_descend(&Arc<RwLock<PcodeOp>>)`（varnode.hh:295）：添加后继引用。
 - `is_bool_output_def() -> bool`：定义 op 是否有布尔输出（getDef()->isBoolOutput）。
+
+### 2026-06-27（会话2 续）：is_constant_extended（解锁 RuleDivOpt）
+
+- `is_constant_extended() -> Option<(u64, u64)>` — `Varnode::isConstantExtended`（varnode.cc:799-840）：检测扩展常量，返回 128 位值 (lo, hi)。普通常量返回 (offset, 0)；INT_ZEXT/INT_SEXT/PIECE 链递归解析。被 RuleDivOpt::findForm 用于处理超过 64 位的乘法常量（除法乘法编码 c 可能 > 2^64）。

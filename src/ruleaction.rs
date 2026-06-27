@@ -7249,6 +7249,263 @@ impl Rule for RuleSignMod2nOpt {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
+/// Convert INT_MULT and shift forms into INT_DIV or INT_SDIV. Faithful
+/// to Ghidra's `RuleDivOpt` (ruleaction.cc:8010-8355).
+///
+/// - `sub(zext(V) * c, d) >> e => V / (2^n / (c-1))` where n = d*8 + e
+/// - `sub(sext(V) * c, d) s>> e => V s/ (2^n / (c-1))` where n = d*8 + e
+pub struct RuleDivOpt;
+
+impl RuleDivOpt {
+    pub fn new() -> Self { Self }
+
+    /// Detect the division-by-multiplication form. Faithful to `findForm`
+    /// (ruleaction.cc:8069-8143). Returns (in_vn, n, y128, xsize, ext_opc).
+    fn find_form(
+        op: &crate::op::PcodeOpRef,
+    ) -> Option<(
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        u64,
+        u128,
+        i32,
+        OpCode,
+    )> {
+        use crate::address::count_leading_zeros;
+        let mut cur_op_arc = op.0.clone();
+        let shift_opc = cur_op_arc.read().unwrap().opcode;
+        let mut n: u64 = 0;
+        let mut shift_opc_var = shift_opc;
+        if shift_opc == OpCode::CPUI_INT_RIGHT || shift_opc == OpCode::CPUI_INT_SRIGHT {
+            let vn = cur_op_arc.read().unwrap().get_in(0)?.clone();
+            let cvn = cur_op_arc.read().unwrap().get_in(1)?.clone();
+            if !vn.read().unwrap().is_written() { return None; }
+            if !cvn.read().unwrap().is_constant() { return None; }
+            n = cvn.read().unwrap().get_offset();
+            cur_op_arc = vn.read().unwrap().get_def()?;
+        } else {
+            if shift_opc != OpCode::CPUI_SUBPIECE { return None; }
+            shift_opc_var = OpCode::CPUI_MAX;
+        }
+        // Optional SUBPIECE.
+        if cur_op_arc.read().unwrap().opcode == OpCode::CPUI_SUBPIECE {
+            let c = cur_op_arc.read().unwrap().get_in(1)?.read().unwrap().get_offset();
+            let in_vn = cur_op_arc.read().unwrap().get_in(0)?.clone();
+            if !in_vn.read().unwrap().is_written() { return None; }
+            let out_size = cur_op_arc.read().unwrap().output.as_ref()?.read().unwrap().get_size() as u64;
+            if out_size + c != in_vn.read().unwrap().get_size() as u64 { return None; }
+            n += 8 * c;
+            cur_op_arc = in_vn.read().unwrap().get_def()?;
+        }
+        // Must be INT_MULT.
+        if cur_op_arc.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return None; }
+        let in0 = cur_op_arc.read().unwrap().get_in(0)?.clone();
+        let in1 = cur_op_arc.read().unwrap().get_in(1)?.clone();
+        // Find which input is the constant (up to 128 bits) and which is written.
+        let in0_ext = in0.read().unwrap().is_constant_extended();
+        let in1_ext = in1.read().unwrap().is_constant_extended();
+        let (in_vn, y) = if let Some((lo, hi)) = in0_ext {
+            if !in1.read().unwrap().is_written() { return None; }
+            (in1, ((hi as u128) << 64) | (lo as u128))
+        } else if let Some((lo, hi)) = in1_ext {
+            if !in0.read().unwrap().is_written() { return None; }
+            (in0, ((hi as u128) << 64) | (lo as u128))
+        } else {
+            return None;
+        };
+
+        let ext_op = in_vn.read().unwrap().get_def()?;
+        let ext_opc = ext_op.read().unwrap().opcode;
+        let xsize;
+        if ext_opc != OpCode::CPUI_INT_SEXT {
+            let nz_mask = if ext_opc == OpCode::CPUI_INT_ZEXT {
+                ext_op.read().unwrap().get_in(0)?.read().unwrap().get_nz_mask()
+            } else {
+                in_vn.read().unwrap().get_nz_mask()
+            };
+            xsize = 64 - count_leading_zeros(nz_mask);
+            if xsize == 0 { return None; }
+            if xsize > 4 * in_vn.read().unwrap().get_size() as i32 { return None; }
+        } else {
+            xsize = ext_op.read().unwrap().get_in(0)?.read().unwrap().get_size() as i32 * 8;
+        }
+        let actual_ext_opc;
+        let res_vn;
+        if ext_opc == OpCode::CPUI_INT_ZEXT || ext_opc == OpCode::CPUI_INT_SEXT {
+            let ext_vn = ext_op.read().unwrap().get_in(0)?.clone();
+            if ext_vn.read().unwrap().is_free() { return None; }
+            if in_vn.read().unwrap().get_size() == op.0.read().unwrap().output.as_ref()?.read().unwrap().get_size() {
+                res_vn = in_vn;
+            } else {
+                res_vn = ext_vn;
+            }
+            actual_ext_opc = ext_opc;
+        } else {
+            actual_ext_opc = OpCode::CPUI_INT_ZEXT;
+            res_vn = in_vn;
+        }
+        // Check signed mismatch.
+        if (actual_ext_opc == OpCode::CPUI_INT_ZEXT && shift_opc_var == OpCode::CPUI_INT_SRIGHT)
+            || (actual_ext_opc == OpCode::CPUI_INT_SEXT && shift_opc_var == OpCode::CPUI_INT_RIGHT)
+        {
+            let out_size = op.0.read().unwrap().output.as_ref()?.read().unwrap().get_size() as i32;
+            if out_size * 8 - n as i32 != xsize {
+                return None;
+            }
+        }
+        Some((res_vn, n, y, xsize, actual_ext_opc))
+    }
+
+    /// Compute divisor from the multiplicative encoding. Faithful to
+    /// `calcDivisor` (ruleaction.cc:8157-8198). Uses Rust's native u128.
+    fn calc_divisor(n: u64, y: u128, xsize: i32) -> u64 {
+        if n > 127 || xsize > 64 { return 0; }
+        let power = 1u128 << n;
+        if y <= 1 { return 0; }
+        let y_m1 = y - 1; // y = y - 1
+        let q = power / y_m1;
+        let r = power % y_m1;
+        if q > u64::MAX as u128 { return 0; } // Result > 64 bits.
+        if y_m1 < q { return 0; } // if y < q
+        let mut diff: u128 = 0;
+        let q_final;
+        let r_final;
+        if r >= q {
+            // Adjust q up by 1.
+            let q2 = q + 1;
+            let r2 = r.wrapping_sub(y_m1).wrapping_add(q2);
+            if r2 >= q2 { return 0; }
+            diff = q2;
+            q_final = q2;
+            r_final = r2;
+        } else {
+            q_final = q;
+            r_final = r;
+        }
+        // Check: x * (q-r) < 2^n
+        let maxx = if xsize == 64 { 0u128 } else { 1u128 << xsize };
+        let maxx = maxx - 1; // Maximum possible x value.
+        diff += q_final - r_final;
+        if diff == 0 { return q_final as u64; }
+        let tmp = power / diff;
+        if tmp > maxx {
+            return q_final as u64;
+        }
+        0 // tmp <= maxx -> not valid.
+    }
+
+    /// Check if a SUBPIECE form is contained in a superseding form.
+    /// Faithful to `checkFormOverlap` (ruleaction.cc:8260-8279).
+    fn check_form_overlap(op: &crate::op::PcodeOpRef) -> bool {
+        if op.0.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return false; }
+        let vn = match op.0.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return false };
+        let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
+        for super_op in descends {
+            let opc = super_op.read().unwrap().opcode;
+            if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_SRIGHT { continue; }
+            let cvn = match super_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            if !cvn.read().unwrap().is_constant() { return true; }
+            let super_ref = crate::op::PcodeOpRef(super_op);
+            if Self::find_form(&super_ref).is_some() { return true; }
+        }
+        false
+    }
+}
+
+impl Rule for RuleDivOpt {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDivOpt::applyOp (ruleaction.cc:8295-8355).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let (mut in_vn, n, y, mut xsize, ext_opc) = match Self::find_form(&op_ref) {
+            Some(r) => r,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if Self::check_form_overlap(&op_ref) { return Ok(action_status::NO_CHANGE); }
+        if ext_opc == OpCode::CPUI_INT_SEXT { xsize -= 1; }
+        let divisor = Self::calc_divisor(n, y, xsize);
+        if divisor == 0 { return Ok(action_status::NO_CHANGE); }
+        let out_size = op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let addr = op_arc.read().unwrap().get_addr();
+
+        if in_vn.read().unwrap().get_size() < out_size {
+            // Need extension.
+            let in_ext = fd.new_op(1, addr);
+            fd.op_set_opcode(&in_ext, ext_opc);
+            let ext_out = fd.new_unique_out(out_size, &in_ext);
+            fd.op_set_input(&in_ext, in_vn, 0);
+            in_vn = ext_out;
+            fd.op_insert_before(&in_ext, &op_ref);
+        } else if in_vn.read().unwrap().get_size() > out_size {
+            // Need truncation.
+            let new_op = fd.new_op(2, addr);
+            fd.op_set_opcode(&new_op, OpCode::CPUI_INT_ADD);
+            let res_vn = fd.new_unique_out(in_vn.read().unwrap().get_size(), &new_op);
+            fd.op_insert_before(&new_op, &op_ref);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&op_ref, res_vn, 0);
+            let z = fd.new_constant(4, 0);
+            fd.op_set_input(&op_ref, z, 1);
+            // Main transform now changes new_op.
+            let div_vn = fd.new_constant(out_size, divisor);
+            if ext_opc == OpCode::CPUI_INT_ZEXT {
+                fd.op_set_opcode(&new_op, OpCode::CPUI_INT_DIV);
+                fd.op_set_input(&new_op, in_vn, 0);
+                fd.op_set_input(&new_op, div_vn, 1);
+            } else {
+                // Signed: INT_SDIV + sign correction.
+                let divop = fd.new_op(2, addr);
+                fd.op_set_opcode(&divop, OpCode::CPUI_INT_SDIV);
+                let new_out = fd.new_unique_out(out_size, &divop);
+                let in_vn_clone = in_vn.clone();
+                fd.op_set_input(&divop, in_vn_clone, 0);
+                fd.op_set_input(&divop, div_vn, 1);
+                fd.op_insert_before(&divop, &new_op);
+                let sgnop = fd.new_op(2, addr);
+                fd.op_set_opcode(&sgnop, OpCode::CPUI_INT_SRIGHT);
+                let sgnvn = fd.new_unique_out(out_size, &sgnop);
+                fd.op_set_input(&sgnop, in_vn, 0);
+                let sc = fd.new_constant(out_size, (out_size * 8 - 1) as u64);
+                fd.op_set_input(&sgnop, sc, 1);
+                fd.op_insert_before(&sgnop, &new_op);
+                fd.op_set_opcode(&new_op, OpCode::CPUI_INT_ADD);
+                fd.op_set_input(&new_op, new_out, 0);
+                fd.op_set_input(&new_op, sgnvn, 1);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        // Same size.
+        let div_vn = fd.new_constant(out_size, divisor);
+        if ext_opc == OpCode::CPUI_INT_ZEXT {
+            fd.op_set_input(&op_ref, in_vn, 0);
+            fd.op_set_input(&op_ref, div_vn, 1);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_DIV);
+        } else {
+            // Signed: INT_SDIV + sign correction.
+            let divop = fd.new_op(2, addr);
+            fd.op_set_opcode(&divop, OpCode::CPUI_INT_SDIV);
+            let new_out = fd.new_unique_out(out_size, &divop);
+            fd.op_set_input(&divop, in_vn.clone(), 0);
+            fd.op_set_input(&divop, div_vn, 1);
+            fd.op_insert_before(&divop, &op_ref);
+            let sgnop = fd.new_op(2, addr);
+            fd.op_set_opcode(&sgnop, OpCode::CPUI_INT_SRIGHT);
+            let sgnvn = fd.new_unique_out(out_size, &sgnop);
+            fd.op_set_input(&sgnop, in_vn, 0);
+            let sc = fd.new_constant(out_size, (out_size * 8 - 1) as u64);
+            fd.op_set_input(&sgnop, sc, 1);
+            fd.op_insert_before(&sgnop, &op_ref);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
+            fd.op_set_input(&op_ref, new_out, 0);
+            fd.op_set_input(&op_ref, sgnvn, 1);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "div_opt" }
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+    }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
@@ -10707,5 +10964,21 @@ mod tests {
         let o = outer.read().unwrap();
         assert_eq!(o.opcode, OpCode::CPUI_FLOAT_LESSEQUAL);
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    /// RuleDivOpt::find_form should reject a bare INT_RIGHT whose input is
+    /// not the expected mult/zext chain. Guards the early-out path without
+    /// needing to construct the full division-by-multiplication form.
+    #[test]
+    fn test_rule_div_opt_rejects_nonmatching_form() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_RIGHT,
+            crate::space::AddressSpace::Register, 0x10, 8, // dividend (not written)
+            crate::space::AddressSpace::Const, 3, 8,        // shift by 3
+            8,
+        );
+        let rule = RuleDivOpt::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }

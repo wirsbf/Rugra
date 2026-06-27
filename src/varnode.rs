@@ -215,6 +215,65 @@ impl Varnode {
         (self.flags & varnode_flags::CONSTANT) != 0
     }
 
+    /// Check if this Varnode holds an extended constant, returning the
+    /// 128-bit value. Faithful to `Varnode::isConstantExtended`
+    /// (varnode.cc:799-840). Returns Some((lo, hi)) or None.
+    pub fn is_constant_extended(&self) -> Option<(u64, u64)> {
+        if self.is_constant() {
+            return Some((self.get_offset(), 0));
+        }
+        if !self.is_written() || self.size <= 8 {
+            return None;
+        }
+        if self.size > 16 {
+            return None;
+        }
+        let def = self.get_def()?;
+        let def_rg = def.read().unwrap();
+        let opc = def_rg.opcode;
+        if opc == crate::opcodes::OpCode::CPUI_INT_ZEXT {
+            let vn0 = def_rg.get_in(0)?;
+            let r0 = vn0.read().unwrap();
+            if r0.is_constant() {
+                return Some((r0.get_offset(), 0));
+            }
+        } else if opc == crate::opcodes::OpCode::CPUI_INT_SEXT {
+            let vn0 = def_rg.get_in(0)?;
+            let r0 = vn0.read().unwrap();
+            if r0.is_constant() {
+                let val = r0.get_offset();
+                let val = if r0.get_size() < 8 {
+                    // Sign-extend from r0 size to self size.
+                    let signbit = 1u64 << (r0.get_size() * 8 - 1);
+                    if (val & signbit) != 0 {
+                        val | crate::address::calc_mask(self.size) & !crate::address::calc_mask(r0.get_size())
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
+                let hi = if (val & (1u64 << 63)) != 0 && self.size > 8 {
+                    u64::MAX
+                } else {
+                    0
+                };
+                return Some((val, hi));
+            }
+        } else if opc == crate::opcodes::OpCode::CPUI_PIECE {
+            let vn0 = def_rg.get_in(0)?;
+            let vn1 = def_rg.get_in(1)?;
+            let r0 = vn0.read().unwrap();
+            let r1 = vn1.read().unwrap();
+            if r0.is_constant() && r1.is_constant() {
+                let lo = r1.get_offset();
+                let hi = r0.get_offset();
+                return Some((lo, hi));
+            }
+        }
+        None
+    }
+
     pub fn is_input(&self) -> bool {
         (self.flags & varnode_flags::INPUT) != 0
     }
@@ -821,5 +880,19 @@ mod tests {
         assert!(v.is_illegal_input());
         v.set_direct_write();
         assert!(!v.is_illegal_input()); // input|directwrite → not illegal
+    }
+
+    #[test]
+    fn test_is_constant_extended_plain_constant() {
+        // A plain constant returns Some((offset, 0)) (varnode.cc:799-840).
+        let v = Varnode::new_constant(0x1234, 8);
+        assert_eq!(v.is_constant_extended(), Some((0x1234, 0)));
+    }
+
+    #[test]
+    fn test_is_constant_extended_small_nonconst() {
+        // A non-constant 8-byte varnode with no def returns None.
+        let v = Varnode::new(8, Address::new(0x100));
+        assert_eq!(v.is_constant_extended(), None);
     }
 }
