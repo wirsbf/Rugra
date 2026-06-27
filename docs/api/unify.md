@@ -39,3 +39,17 @@ RHS 常量构造（Named/Absolute/NZMask/Consumed/Offset/IsConstant）。
 - 约束类型：OpCode/OpEqual/VarnodeEqual/NumParams/ConstEqual/VarnodeSize/CopyVarnode/AlwaysTrue
 
 测试：新增 3 个（constraint_always_true/const_equal/constraint_sequence）。
+
+### 2026-06-27（会话3 L1）：unify.cc 约束系统扩展
+
+移植 8 个新约束类型（忠实于 Ghidra unify.hh/cc）：
+- **OpOutput(op_idx, vn_idx)** — ConstraintOpOutput (unify.hh:361)：从 op 获取输出 varnode，存入 state
+- **OpInput(op_idx, vn_idx, slot)** — ConstraintOpInput (unify.hh:335)：从 op 获取指定 slot 的输入 varnode
+- **OpNotEqual(a, b)** — ConstraintOpCompare 的不等变体
+- **VarnodeWritten(idx)** — 检查 varnode 是否有定义 op
+- **VarnodeConstant(idx)** / **VarnodeNotConstant(idx)** — 检查 varnode 是否为常量
+- **VarnodeFuncEqual(a, b)** — functional_equality 比较
+- **OpOutputNoDescend(op_idx)** — 检查 op 输出无后代
+
+新增 evaluate_mut() 方法用于动作约束（OpOutput/OpInput 需修改 state）。
+4 个新单元测试：OpOutput、OpInput、VarnodeWritten、VarnodeConstant。

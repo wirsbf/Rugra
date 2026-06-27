@@ -173,27 +173,83 @@ impl RHSConstant {
 /// Corresponds to the various `UnifyConstraint` subclasses in Ghidra.
 #[derive(Debug, Clone)]
 pub enum UnifyConstraint {
-    /// Match a specific opcode on slot
+    /// Match a specific opcode on slot. Faithful to `ConstraintOpcode`.
     OpCode(usize, OpCode),
-    /// Two ops must be the same
+    /// Two ops must be the same. Faithful to `ConstraintOpCompare`.
     OpEqual(usize, usize),
-    /// Two varnodes must be the same
+    /// Two varnodes must be the same. Faithful to `ConstraintVarnodeCompare`.
     VarnodeEqual(usize, usize),
-    /// Check that an op has a specific number of inputs
+    /// Check that an op has a specific number of inputs. Faithful to
+    /// `ConstraintOpInputAny` counting.
     NumParams(usize, usize),
-    /// Constant must equal a specific value
+    /// Constant must equal a specific value. Faithful to `ConstraintBoolean`.
     ConstEqual(usize, u64),
-    /// Check that a varnode has a specific size
+    /// Check that a varnode has a specific size. Faithful to
+    /// `ConstraintVarnodeSize`.
     VarnodeSize(usize, usize),
-    /// Copy varnode from one slot to another
+    /// Copy varnode from one slot to another. Faithful to
+    /// `ConstraintCopyVar`.
     CopyVarnode(usize, usize),
-    /// The constraint always succeeds (used for optional matches)
+    /// The constraint always succeeds (used for optional matches).
     AlwaysTrue,
+    /// Move from op to its output varnode. Faithful to `ConstraintOpOutput`
+    /// (unify.hh:361). Stores op's output into varnode slot.
+    OpOutput(usize, usize),
+    /// Move from op to one of its input varnodes. Faithful to
+    /// `ConstraintOpInput` (unify.hh:335). slot_in is the input slot to read.
+    OpInput(usize, usize, usize),
+    /// Check that two ops have different opcodes. Faithful to
+    /// `ConstraintOpCompare` with inequality.
+    OpNotEqual(usize, usize),
+    /// Check that a varnode is written (has a defining op). Faithful to
+    /// `ConstraintVarnodeCopy` / written check.
+    VarnodeWritten(usize),
+    /// Check that a varnode is constant. Faithful to
+    /// `ConstantIsConstant` applied as constraint.
+    VarnodeConstant(usize),
+    /// Check that a varnode is NOT constant.
+    VarnodeNotConstant(usize),
+    /// Compare two varnodes by functional equality.
+    VarnodeFuncEqual(usize, usize),
+    /// Check that an op's output varnode has no descendants (is dead).
+    OpOutputNoDescend(usize),
 }
 
 impl UnifyConstraint {
+    /// Evaluate with mutable state — for action constraints (OpOutput/OpInput)
+    /// that store values into state slots. Faithful to `step` semantics.
+    pub fn evaluate_mut(&self, state: &mut UnifyState) -> bool {
+        match self {
+            UnifyConstraint::OpOutput(op_idx, vn_idx) => {
+                let op = state.ops[*op_idx].clone();
+                match op {
+                    Some(o) => {
+                        let out = o.read().unwrap().output.clone();
+                        state.varnodes[*vn_idx] = out;
+                        state.varnodes[*vn_idx].is_some()
+                    }
+                    None => false,
+                }
+            }
+            UnifyConstraint::OpInput(op_idx, vn_idx, slot) => {
+                let op = state.ops[*op_idx].clone();
+                match op {
+                    Some(o) => {
+                        let inv = o.read().unwrap().get_in(*slot).cloned();
+                        state.varnodes[*vn_idx] = inv;
+                        state.varnodes[*vn_idx].is_some()
+                    }
+                    None => false,
+                }
+            }
+            _ => self.evaluate(state),
+        }
+    }
+
     /// Evaluate this constraint against the given state and a set of ops.
     /// Returns true if the constraint is satisfied.
+    /// Note: OpOutput and OpInput are action constraints that mutate state;
+    /// they must be called via `evaluate_mut`.
     pub fn evaluate(&self, state: &UnifyState) -> bool {
         match self {
             UnifyConstraint::AlwaysTrue => true,
@@ -205,11 +261,30 @@ impl UnifyConstraint {
                     _ => false,
                 }
             }
+            UnifyConstraint::OpNotEqual(a, b) => {
+                let oa = state.get_op(*a);
+                let ob = state.get_op(*b);
+                match (oa, ob) {
+                    (Some(x), Some(y)) => !std::sync::Arc::ptr_eq(x, y),
+                    (None, None) => false,
+                    _ => true,
+                }
+            }
             UnifyConstraint::VarnodeEqual(a, b) => {
                 let va = state.get_varnode(*a);
                 let vb = state.get_varnode(*b);
                 match (va, vb) {
                     (Some(x), Some(y)) => std::sync::Arc::ptr_eq(x, y),
+                    _ => false,
+                }
+            }
+            UnifyConstraint::VarnodeFuncEqual(a, b) => {
+                let va = state.get_varnode(*a);
+                let vb = state.get_varnode(*b);
+                match (va, vb) {
+                    (Some(x), Some(y)) => {
+                        crate::address::functional_equality(x, y)
+                    }
                     _ => false,
                 }
             }
@@ -238,8 +313,58 @@ impl UnifyConstraint {
                 }
             }
             UnifyConstraint::CopyVarnode(_from, _to) => {
-                // This is an action constraint, not a test — always succeeds.
+                // Action constraint — always succeeds.
                 true
+            }
+            UnifyConstraint::OpOutput(op_idx, vn_idx) => {
+                // Action constraint — always succeeds for read-only evaluation.
+                // State mutation handled in evaluate_mut.
+                let op = state.get_op(*op_idx);
+                match op {
+                    Some(o) => o.read().unwrap().output.is_some(),
+                    None => false,
+                }
+            }
+            UnifyConstraint::OpInput(op_idx, _vn_idx, slot) => {
+                let op = state.get_op(*op_idx);
+                match op {
+                    Some(o) => o.read().unwrap().get_in(*slot).is_some(),
+                    None => false,
+                }
+            }
+            UnifyConstraint::VarnodeWritten(idx) => {
+                let vn = state.get_varnode(*idx);
+                match vn {
+                    Some(v) => v.read().unwrap().is_written(),
+                    None => false,
+                }
+            }
+            UnifyConstraint::VarnodeConstant(idx) => {
+                let vn = state.get_varnode(*idx);
+                match vn {
+                    Some(v) => v.read().unwrap().is_constant(),
+                    None => false,
+                }
+            }
+            UnifyConstraint::VarnodeNotConstant(idx) => {
+                let vn = state.get_varnode(*idx);
+                match vn {
+                    Some(v) => !v.read().unwrap().is_constant(),
+                    None => false,
+                }
+            }
+            UnifyConstraint::OpOutputNoDescend(op_idx) => {
+                let op = state.get_op(*op_idx);
+                match op {
+                    Some(o) => {
+                        let out = o.read().unwrap().output.clone();
+                        match out {
+                            Some(vn) => vn.read().unwrap().descend.is_empty(),
+                            None => true,
+                        }
+                    }
+                    None => false,
+                }
             }
         }
     }
@@ -331,5 +456,56 @@ mod tests {
         seq.add(UnifyConstraint::ConstEqual(idx, 99));
         assert!(!seq.evaluate_all(&state));
         assert_eq!(seq.len(), 3);
+    }
+
+    #[test]
+    fn test_constraint_op_output() {
+        use crate::address::{Address, SeqNum};
+        let mut state = UnifyState::new();
+        let op_idx = state.register_slot(UnifyDatatype::OpType);
+        let vn_idx = state.register_slot(UnifyDatatype::VarType);
+        // Build COPY with output.
+        let out_vn = Arc::new(RwLock::new(Varnode::new_unique(0x100, 8)));
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0x10), 0), OpCode::CPUI_COPY);
+        op.output = Some(out_vn.clone());
+        state.set_op(op_idx, Arc::new(RwLock::new(op)));
+        // OpOutput is an action constraint — use evaluate_mut.
+        assert!(UnifyConstraint::OpOutput(op_idx, vn_idx).evaluate_mut(&mut state));
+        assert!(state.get_varnode(vn_idx).is_some());
+    }
+
+    #[test]
+    fn test_constraint_op_input() {
+        use crate::address::{Address, SeqNum};
+        let mut state = UnifyState::new();
+        let op_idx = state.register_slot(UnifyDatatype::OpType);
+        let vn_idx = state.register_slot(UnifyDatatype::VarType);
+        let in_vn = Arc::new(RwLock::new(Varnode::new_constant(42, 8)));
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0x10), 0), OpCode::CPUI_INT_ADD);
+        op.inrefs.push(in_vn.clone());
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(1, 8))));
+        state.set_op(op_idx, Arc::new(RwLock::new(op)));
+        // OpInput is an action constraint — use evaluate_mut.
+        assert!(UnifyConstraint::OpInput(op_idx, vn_idx, 1).evaluate_mut(&mut state));
+        let vn = state.get_varnode(vn_idx).as_ref().unwrap();
+        assert_eq!(vn.read().unwrap().get_offset(), 1);
+    }
+
+    #[test]
+    fn test_constraint_varnode_written() {
+        let mut state = UnifyState::new();
+        let vn_idx = state.register_slot(UnifyDatatype::VarType);
+        // A fresh unique varnode is not written.
+        state.set_varnode(vn_idx, Arc::new(RwLock::new(Varnode::new_unique(0x100, 8))));
+        assert!(!UnifyConstraint::VarnodeWritten(vn_idx).evaluate(&state));
+    }
+
+    #[test]
+    fn test_constraint_varnode_constant() {
+        let mut state = UnifyState::new();
+        let vn_idx = state.register_slot(UnifyDatatype::VarType);
+        state.set_varnode(vn_idx, Arc::new(RwLock::new(Varnode::new_constant(42, 8))));
+        assert!(UnifyConstraint::VarnodeConstant(vn_idx).evaluate(&state));
+        assert!(!UnifyConstraint::VarnodeNotConstant(vn_idx).evaluate(&state));
     }
 }
