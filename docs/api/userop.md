@@ -36,3 +36,15 @@
 - `create_unspecialized/injected/volatile_read/volatile_write/segment/jump_assist` — 专用子类构造函数
 
 测试：新增 2 个（initialize_builtins + create_specialized）。
+
+### 2026-06-27（会话3 L1）：userop.cc 专用子类移植
+
+移植 UserPcodeOp 的专用子类 + DatatypeUserOp：
+- **DatatypeUserOp** — 提供 CALLOTHER 的输入/输出数据类型（get_output_local/get_input_local）
+- **VolatileReadOp** — 易失性读操作（extract_annotation_size 返回 varnode size）
+- **VolatileWriteOp** — 易失性写操作
+- **SegmentOp** — 分段地址操作（x86 real mode far pointer）
+- **JumpAssistOp** — 跳转表辅助操作（index2case/index2addr/defaultaddr/calcsize 注入 ID）
+- **InternalStringOp** — 内部字符串操作
+
+UserPcodeOp 新增：get_operator_name/extract_annotation_size/is_volatile_read/is_volatile_write/is_segment/is_jump_assist/is_injected/is_string_data。

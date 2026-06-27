@@ -76,6 +76,185 @@ impl UserPcodeOp {
     pub fn get_display(&self) -> u32 {
         self.flags & (userop_flags::ANNOTATION_ASSIGNMENT | userop_flags::NO_OPERATOR | userop_flags::DISPLAY_STRING)
     }
+
+    /// Get the symbol representing this operation in decompiled code.
+    /// Faithful to `UserPcodeOp::getOperatorName` (userop.hh:94-95).
+    pub fn get_operator_name(&self, _op: &PcodeOp) -> String {
+        self.name.clone()
+    }
+
+    /// Assign a size to an annotation input. Faithful to
+    /// `UserPcodeOp::extractAnnotationSize` (userop.cc:37-41).
+    /// Base class throws; subclasses override.
+    pub fn extract_annotation_size(&self) -> i32 {
+        panic!("Unexpected annotation input for CALLOTHER {}", self.name);
+    }
+
+    /// Check if this is a volatile read op.
+    pub fn is_volatile_read(&self) -> bool {
+        self.op_type == UserOpType::VolatileRead
+    }
+
+    /// Check if this is a volatile write op.
+    pub fn is_volatile_write(&self) -> bool {
+        self.op_type == UserOpType::VolatileWrite
+    }
+
+    /// Check if this is a segment op.
+    pub fn is_segment(&self) -> bool {
+        self.op_type == UserOpType::Segment
+    }
+
+    /// Check if this is a jump-assist op.
+    pub fn is_jump_assist(&self) -> bool {
+        self.op_type == UserOpType::JumpAssist
+    }
+
+    /// Check if this is an injected op.
+    pub fn is_injected(&self) -> bool {
+        self.op_type == UserOpType::Injected
+    }
+
+    /// Check if this is a string-data op.
+    pub fn is_string_data(&self) -> bool {
+        self.op_type == UserOpType::StringData
+    }
+}
+
+/// A user defined p-code op with input/output data-types.
+/// Corresponds to Ghidra's `DatatypeUserOp` (userop.hh:140).
+#[derive(Debug, Clone)]
+pub struct DatatypeUserOp {
+    pub base: UserPcodeOp,
+    pub out_type: Option<Arc<Datatype>>,
+    pub in_types: Vec<Option<Arc<Datatype>>>,
+}
+
+impl DatatypeUserOp {
+    pub fn new(name: String, index: i32, out: Option<Arc<Datatype>>, ins: Vec<Option<Arc<Datatype>>>) -> Self {
+        Self {
+            base: UserPcodeOp::new(name, UserOpType::Datatype, index),
+            out_type: out,
+            in_types: ins,
+        }
+    }
+
+    /// Get the output data-type. Faithful to `DatatypeUserOp::getOutputLocal`.
+    pub fn get_output_local(&self) -> Option<&Arc<Datatype>> { self.out_type.as_ref() }
+
+    /// Get the input data-type at a given slot. Faithful to
+    /// `DatatypeUserOp::getInputLocal` (userop.cc:76-83).
+    pub fn get_input_local(&self, slot: i32) -> Option<&Arc<Datatype>> {
+        let s = slot - 1; // Skip the CALLOTHER id in slot 0
+        if s >= 0 && (s as usize) < self.in_types.len() {
+            self.in_types[s as usize].as_ref()
+        } else {
+            None
+        }
+    }
+}
+
+/// A volatile read user-op. Faithful to `VolatileReadOp` (userop.hh:188).
+/// Returns the size of the volatile varnode being read.
+#[derive(Debug, Clone)]
+pub struct VolatileReadOp {
+    pub base: UserPcodeOp,
+}
+
+impl VolatileReadOp {
+    pub fn new(name: String, index: i32) -> Self {
+        Self { base: UserPcodeOp::new(name, UserOpType::VolatileRead, index) }
+    }
+
+    /// Extract the annotation size for a volatile read. Faithful to
+    /// `VolatileReadOp::extractAnnotationSize` (userop.cc:143-170).
+    pub fn extract_annotation_size(vn: &crate::varnode::Varnode) -> i32 {
+        vn.get_size() as i32
+    }
+}
+
+/// A volatile write user-op. Faithful to `VolatileWriteOp` (userop.hh:203).
+#[derive(Debug, Clone)]
+pub struct VolatileWriteOp {
+    pub base: UserPcodeOp,
+}
+
+impl VolatileWriteOp {
+    pub fn new(name: String, index: i32) -> Self {
+        Self { base: UserPcodeOp::new(name, UserOpType::VolatileWrite, index) }
+    }
+
+    /// Extract the annotation size for a volatile write. Faithful to
+    /// `VolatileWriteOp::extractAnnotationSize` (userop.cc:174-186).
+    pub fn extract_annotation_size(vn: &crate::varnode::Varnode) -> i32 {
+        vn.get_size() as i32
+    }
+}
+
+/// A segment op. Faithful to `SegmentOp` (userop.hh:264).
+/// Handles segmented addressing (e.g., x86 real mode far pointers).
+#[derive(Debug, Clone)]
+pub struct SegmentOp {
+    pub base: UserPcodeOp,
+    /// The address space this segment op operates on.
+    pub space: u32,
+    /// Base resolution: how the segment base is computed.
+    pub supports_index: bool,
+}
+
+impl SegmentOp {
+    pub fn new(name: String, index: i32) -> Self {
+        Self {
+            base: UserPcodeOp::new(name, UserOpType::Segment, index),
+            space: 0,
+            supports_index: false,
+        }
+    }
+}
+
+/// Jump-table assist op. Faithful to `JumpAssistOp` (userop.hh:294).
+/// Stores injection ids for switch-table resolution scripts.
+#[derive(Debug, Clone)]
+pub struct JumpAssistOp {
+    pub base: UserPcodeOp,
+    /// Injection id for index2case script (-1 if none).
+    pub index2case: i32,
+    /// Injection id for index2addr script (must be present).
+    pub index2addr: i32,
+    /// Injection id for default-address script (must be present).
+    pub defaultaddr: i32,
+    /// Injection id for calcsize script (-1 if none).
+    pub calcsize: i32,
+}
+
+impl JumpAssistOp {
+    pub fn new(name: String, index: i32) -> Self {
+        Self {
+            base: UserPcodeOp::new(name, UserOpType::JumpAssist, index),
+            index2case: -1,
+            index2addr: -1,
+            defaultaddr: -1,
+            calcsize: -1,
+        }
+    }
+
+    pub fn get_index2case(&self) -> i32 { self.index2case }
+    pub fn get_index2addr(&self) -> i32 { self.index2addr }
+    pub fn get_default_addr(&self) -> i32 { self.defaultaddr }
+    pub fn get_calc_size(&self) -> i32 { self.calcsize }
+}
+
+/// Internal string op. Displays as a quoted string in decompiled output.
+/// Faithful to `InternalStringOp` (userop.hh:312).
+#[derive(Debug, Clone)]
+pub struct InternalStringOp {
+    pub base: UserPcodeOp,
+}
+
+impl InternalStringOp {
+    pub fn new(name: String, index: i32) -> Self {
+        Self { base: UserPcodeOp::new(name, UserOpType::StringData, index) }
+    }
 }
 
 /// Manager for all registered user-defined p-code operations.
