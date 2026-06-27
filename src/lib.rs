@@ -100,6 +100,7 @@ pub mod type_system; // ← type.hh
 pub mod typeop; // ← typeop.hh
 pub mod unionresolve; // ← unionresolve.hh
 pub mod unify; // ← unify.hh
+pub mod dynamic; // ← dynamic.hh
 pub mod userop; // ← userop.hh
 pub mod variable; // ← variable.hh
 pub mod varnode; // ← varnode.hh // ← blockaction.hh

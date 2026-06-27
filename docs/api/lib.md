@@ -586,3 +586,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ## 2026-06-27（续 25）：新增 pcodeparse 模块
 
 - `pub mod pcodeparse;` — 对应 `pcodeparse.hh` + `pcodecompile.hh`，P-code 片段解析器。PcodeLexer（状态机词法分析：标识符/hex/dec/标点/\$/\$\$/#注释）+ PcodeSnippet（编译器框架：符号表 + 临时分配 + parse_stream 验证 + 错误报告）。L3 缺完整语义动作（需 SLEIGH SleighBase/SymbolTree）。
+
+### 2026-06-27（会话3 L1）：dynamic 模块
+
+新增 `dynamic` 模块：动态哈希引擎（DynamicHash + ToOpEdge + translate_opcode）。
