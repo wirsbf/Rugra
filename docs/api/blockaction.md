@@ -615,3 +615,15 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - `collapse_all` 在 `order_loop_bodies` 后、`run_tracedag` 前调用它，使 TraceDAG 追踪被 LoopBody 约束。
 
 **意义**：这是 LoopBody 分析实际驱动结构化的接入点——LoopBody 的 exit 分析结果现在约束 TraceDAG 的 goto 候选边选择。
+
+### 2026-06-27（会话3 G4残余）：emit_likely_edges + selectGoto 集成
+
+- `LoopBody::emit_likely_edges(likely, graph)` — 忠实于 Ghidra `emitLikelyEdges`（blockaction.cc:364-412）：将 exit edges（官方 exit 边延后）+ back-edges（tails→head 逆序）按优先级追加到 likely-goto 列表。
+- `run_tracedag` 现合并每个 LoopBody 的 emit_likely_edges 结果（转换为 tracedag::FloatingEdge），使 goto-cascade（selectGoto 等价）使用 LoopBody 的边优先级。
+
+**架构说明**：Rugra 已有 `run_goto_cascade`（selectGoto→collapseInternal 等价的迭代循环：select_and_mark_goto → clip_extra_roots → run_tracedag → try_rule_*）。本次使 LoopBody 完全驱动它：
+1. apply_loop_exit_marks（setExitMarks）约束 TraceDAG 追踪范围
+2. emit_likely_edges 提供边优先级
+3. is_loop_dag_out（tracedag）跳过 loop-exit/goto 边
+
+689/689 测试，curl 24/24 + httpd 29/29，0 goto。

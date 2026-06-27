@@ -106,7 +106,7 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
 /// An edge considered for unstructuring (goto) by the loop-ordering pass.
 /// Faithful to Ghidra's `FloatingEdge` (blockaction.hh). Records a (from, to)
 /// block pair; the structurer may later mark the `from` out-edge as a goto.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FloatingEdge {
     pub from_idx: i32,
     pub to_idx: i32,
@@ -469,6 +469,49 @@ impl LoopBody {
         // depth/immed_container based on containment. This method records which
         // subloops are contained; the depth bookkeeping is done in order_loop_bodies.
         let _ = contain;
+    }
+
+    /// Emit edges that exit this loop body to a likely-goto list, with proper
+    /// priority: exit edges first (official exit edge held last among them),
+    /// then back-edges (tails→head) in reverse tail order. Faithful to
+    /// `LoopBody::emitLikelyEdges` (blockaction.cc:364-412). The resulting list
+    /// orders candidate goto edges so the structurer prefers keeping the
+    /// official loop exit structured and marks the others as goto.
+    pub fn emit_likely_edges(&self, likely: &mut Vec<FloatingEdge>, graph: &BlockGraph) {
+        // Exit edges, holding off the official exit-to-exitblock edge until the
+        // end (so it appears right before the final back-edge).
+        let mut hold: Option<FloatingEdge> = None;
+        let n = self.exit_edges.len();
+        for (i, fe) in self.exit_edges.iter().enumerate() {
+            if i == n.saturating_sub(1) && fe.to_idx == self.exit_block {
+                hold = Some(fe.clone());
+                continue;
+            }
+            likely.push(fe.clone());
+        }
+        // Back-edges in reverse tail order; the held exit edge goes right before
+        // the final (first-tail) back-edge.
+        let tails_len = self.tails.len();
+        for (rev_i, &tail) in self.tails.iter().rev().enumerate() {
+            if rev_i == tails_len - 1 {
+                if let Some(h) = hold.take() {
+                    likely.push(h);
+                }
+            }
+            // Any out-edge from this tail back to head is a back-edge.
+            if let Some(blk) = graph.get_block(tail as usize) {
+                let outs: Vec<i32> = {
+                    let b = blk.read().unwrap();
+                    let nn = b.size_out();
+                    (0..nn).filter_map(|j| b.get_out(j).map(|e| e.point.read().unwrap().get_index())).collect()
+                };
+                for tgt in outs {
+                    if tgt == self.head {
+                        likely.push(FloatingEdge { from_idx: tail, to_idx: self.head });
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1489,7 +1532,22 @@ impl<'a> CollapseStructure<'a> {
     /// block so try_rule_if_goto/try_rule_goto can consume them, allowing the
     /// remaining control flow to be structured as if/while.
     fn run_tracedag(&mut self) -> bool {
-        let edges = crate::tracedag::generate_likely_gotos(self.graph);
+        let mut edges = crate::tracedag::generate_likely_gotos(self.graph);
+        // Merge LoopBody-prioritized likely edges (emitLikelyEdges,
+        // blockaction.cc:364-412): for each LoopBody, append its exit edges
+        // and back-edges in priority order. This gives the structurer the
+        // LoopBody's view of which edges should be gotos — the official loop
+        // exit is held structured while the others are marked goto.
+        {
+            let mut lb_edges: Vec<FloatingEdge> = Vec::new();
+            for lb in &self.loop_order {
+                lb.emit_likely_edges(&mut lb_edges, self.graph);
+            }
+            // Convert blockaction::FloatingEdge -> tracedag::FloatingEdge.
+            for fe in lb_edges {
+                edges.push(crate::tracedag::FloatingEdge { top: fe.from_idx, bottom: fe.to_idx });
+            }
+        }
         if edges.is_empty() {
             return false;
         }
@@ -4417,5 +4475,49 @@ mod loopbody_tests {
         assert_eq!(order[0].head, 1);
         assert_eq!(order[0].tails.len(), 2);
         assert_eq!(order[1].head, 5);
+    }
+
+    /// emit_likely_edges appends exit edges and back-edges in priority order.
+    #[test]
+    fn test_emit_likely_edges() {
+        let g = build_loop_cfg();
+        let mut lb = LoopBody::new(1, 2);
+        let body = lb.find_base(&g);
+        lb.find_exit(&body, &g);
+        lb.order_tails(&g);
+        lb.label_exit_edges(&body, &g);
+        let mut likely: Vec<FloatingEdge> = Vec::new();
+        lb.emit_likely_edges(&mut likely, &g);
+        // The 2→3 exit edge and the 2→1 back-edge should both appear.
+        assert!(likely.iter().any(|e| e.from_idx == 2 && e.to_idx == 3),
+            "exit edge 2->3 missing: {:?}", likely);
+        assert!(likely.iter().any(|e| e.from_idx == 2 && e.to_idx == 1),
+            "back-edge 2->1 missing: {:?}", likely);
+        clear_marks(&body, &g);
+    }
+
+    /// FlowBlock loop-exit mark primitives work end to end.
+    #[test]
+    fn test_loop_exit_mark_primitives() {
+        let g = build_loop_cfg();
+        // Mark block 2's out-edge to 3 as loop-exit.
+        let blk2 = g.get_block(2).unwrap();
+        let slot = {
+            let b = blk2.read().unwrap();
+            (0..b.size_out()).find(|&k| {
+                b.get_out(k).map(|e| e.point.read().unwrap().get_index() == 3).unwrap_or(false)
+            }).unwrap()
+        };
+        blk2.write().unwrap().set_loop_exit(slot);
+        // is_goto_out should now be true (loop_exit is in the goto-class set).
+        // Note: is_goto_out checks F_GOTO|F_IRREDUCIBLE, NOT loop_exit;
+        // is_loop_dag_out (in tracedag) checks the full set. Here we verify
+        // the loop_exit flag persists on the edge.
+        let flags = blk2.read().unwrap().get_out(slot).unwrap().flags;
+        assert!(flags & crate::block::edge_flags::F_LOOP_EXIT_EDGE != 0);
+        // Clear it.
+        blk2.write().unwrap().clear_loop_exit(slot);
+        let flags2 = blk2.read().unwrap().get_out(slot).unwrap().flags;
+        assert!(flags2 & crate::block::edge_flags::F_LOOP_EXIT_EDGE == 0);
     }
 }
