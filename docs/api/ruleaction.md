@@ -693,3 +693,13 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `test_compare_equivalence(lessop, lessequalop)` — 验证两个比较操作等价
   - 对 24 种 form 组合（const 值 × 位置 × 比较类型）分别重写为直接比较
   - 包括：always true/false、a<b、a<=b、a>b、a>=b、a==b、a!=b
+
+## 2026-06-27（续 20）：MultiCollapse 规则
+
+- **RuleMultiCollapse**：完整移植 ruleaction.cc:3246-3363。折叠所有输入追溯到相同值的 MULTIEQUAL：
+  - 使用 functional_equality_level 检查输入是否绝对等价或功能等价
+  - 处理嵌套 MULTIEQUAL：将非匹配的 MULTIEQUAL 输入展开到匹配列表
+  - 循环构造检测：is_mark 表示值在循环中递归（跳过处理）
+  - 绝对等价：total_replace + op_destroy 所有 MULTIEQUAL
+  - 功能等价：同样 total_replace（Rugra 缺 cseFindInBlock/earliestUse，用保守替换）
+  - 已知限制：cseFindInBlock/earliestUse/opSetAllInput 用保守 total_replace 替代

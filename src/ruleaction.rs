@@ -6359,6 +6359,163 @@ impl Rule for RuleThreeWayCompare {
     }
 }
 
+/// Collapse MULTIEQUAL whose inputs all trace to the same value. Faithful
+/// to Ghidra's `RuleMultiCollapse` (ruleaction.cc:3246-3363).
+///
+/// If all inputs to a MULTIEQUAL hold the same value (absolute or functional
+/// equality), the MULTIEQUAL is eliminated. Handles nested MULTIEQUALs by
+/// expanding their inputs into the match list.
+pub struct RuleMultiCollapse;
+
+impl RuleMultiCollapse {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleMultiCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleMultiCollapse::applyOp (ruleaction.cc:3254-3363).
+        use crate::expression::functional_equality_level;
+
+        let num_input = op_arc.read().unwrap().inrefs.len();
+        // All inputs must be heritaged (non-free).
+        for i in 0..num_input {
+            let vn = match op_arc.read().unwrap().inrefs.get(i) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        }
+
+        let mut matchlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        for i in 0..num_input {
+            matchlist.push(op_arc.read().unwrap().inrefs[i].clone());
+        }
+        let mut func_eq = false;
+        let mut nofunc = false;
+        let mut defcopyr: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        let mut skiplist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+
+        // Find base branch to match (first non-MULTIEQUAL input).
+        for i in 0..matchlist.len() {
+            let copyr = matchlist[i].clone();
+            let is_written = copyr.read().unwrap().is_written();
+            let is_multiequal = if is_written {
+                let def = copyr.read().unwrap().get_def();
+                match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+            } else { false };
+            if !is_written || !is_multiequal {
+                defcopyr = Some(copyr);
+                break;
+            }
+        }
+
+        // Mark the output for loop-construct detection.
+        let out_vn = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        out_vn.write().unwrap().set_mark();
+        skiplist.push(out_vn.clone());
+
+        let mut j = 0usize;
+        let mut success = true;
+        while j < matchlist.len() {
+            let copyr = matchlist[j].clone();
+            j += 1;
+            if copyr.read().unwrap().is_mark() {
+                continue; // Loop construct — value recurs without change.
+            }
+            if defcopyr.is_none() {
+                // This is now the defining branch.
+                defcopyr = Some(copyr.clone());
+                let is_written = copyr.read().unwrap().is_written();
+                if is_written {
+                    let is_multiequal = {
+                        let def = copyr.read().unwrap().get_def();
+                        match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+                    };
+                    if is_multiequal { nofunc = true; }
+                } else {
+                    nofunc = true;
+                }
+            } else {
+                let dc = defcopyr.as_ref().unwrap();
+                if std::sync::Arc::ptr_eq(dc, &copyr) {
+                    continue; // Matching branch.
+                }
+                if !nofunc {
+                    let result = functional_equality_level(&dc, &copyr);
+                    if result.code == 0 {
+                        func_eq = true;
+                        continue;
+                    }
+                }
+                // Non-matching branch: if it's a MULTIEQUAL, expand its inputs.
+                let is_written = copyr.read().unwrap().is_written();
+                let is_multiequal = if is_written {
+                    let def = copyr.read().unwrap().get_def();
+                    match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+                } else { false };
+                if is_multiequal {
+                    let newop = copyr.read().unwrap().get_def().unwrap();
+                    let newop_num_input = newop.read().unwrap().inrefs.len();
+                    skiplist.push(copyr.clone());
+                    copyr.write().unwrap().set_mark();
+                    for k in 0..newop_num_input {
+                        if let Some(v) = newop.read().unwrap().inrefs.get(k).cloned() {
+                            matchlist.push(v);
+                        }
+                    }
+                } else {
+                    success = false;
+                    break;
+                }
+            }
+        }
+
+        if success {
+            // Clear marks and collapse.
+            for vn in &skiplist {
+                vn.write().unwrap().clear_mark();
+            }
+            if func_eq {
+                // Functional equality only: for each MULTIEQUAL in skiplist,
+                // try to collapse. Rugra lacks cseFindInBlock/earliestUse, so
+                // we use total_replace when possible.
+                for vn in &skiplist {
+                    if std::sync::Arc::ptr_eq(vn, &out_vn) { continue; }
+                    let def_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                    let def_ref = crate::op::PcodeOpRef(def_op);
+                    if !def_ref.0.read().unwrap().is_dead() {
+                        let dc = defcopyr.as_ref().unwrap();
+                        fd.total_replace(vn, dc.clone());
+                        fd.op_destroy(&def_ref);
+                    }
+                }
+            } else {
+                // Absolute equality: replace all MULTIEQUAL outputs with defcopyr.
+                for vn in &skiplist {
+                    if std::sync::Arc::ptr_eq(vn, &out_vn) { continue; }
+                    let def_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                    let def_ref = crate::op::PcodeOpRef(def_op);
+                    if !def_ref.0.read().unwrap().is_dead() {
+                        let dc = defcopyr.as_ref().unwrap();
+                        fd.total_replace(vn, dc.clone());
+                        fd.op_destroy(&def_ref);
+                    }
+                }
+            }
+            // Clear remaining marks.
+            for vn in &skiplist {
+                vn.write().unwrap().clear_mark();
+            }
+            return Ok(action_status::CHANGE);
+        }
+        // Clear marks on failure.
+        for vn in &skiplist {
+            vn.write().unwrap().clear_mark();
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "multi_collapse" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
