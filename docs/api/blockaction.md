@@ -608,3 +608,10 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **CollapseStructure::run_order_loop_bodies_pipeline**：完整 pipeline（build→merge→sort→label_containments→depth sort→find_base/find_exit/order_tails/extend/label_exit_edges），结果存入 `loop_order: VecDeque<LoopBody>`。
 
 **验证**：parseconfig 检测出嵌套循环（depths=1,0 — 一个循环嵌套在另一个内）。687/687 测试，curl 24/24 + httpd 29/29，无回退。
+
+### 2026-06-27（会话3 G4续）：apply_loop_exit_marks — LoopBody 驱动结构化
+
+- `CollapseStructure::apply_loop_exit_marks` — Ghidra `LoopBody::setExitMarks` + `updateLoopBody`（blockaction.cc:416-426, 1231）等价：将每个 LoopBody 的 exit_edges 标记为 `F_LOOP_EXIT_EDGE`，在 `order_loop_bodies` 后调用。
+- `collapse_all` 在 `order_loop_bodies` 后、`run_tracedag` 前调用它，使 TraceDAG 追踪被 LoopBody 约束。
+
+**意义**：这是 LoopBody 分析实际驱动结构化的接入点——LoopBody 的 exit 分析结果现在约束 TraceDAG 的 goto 候选边选择。

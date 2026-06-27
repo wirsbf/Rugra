@@ -119,6 +119,22 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    /// Is the i-th out-edge of `idx` NOT a loop-DAG edge? Faithful to Ghidra's
+    /// `isLoopDAGOut` (block.hh:342): returns false (skip) when the edge is
+    /// irreducible, a back-edge, a loop-exit edge, or a goto edge. TraceDAG must
+    /// not trace through these — they are bounded by LoopBody::setExitMarks and
+    /// selectGoto. Returns true (traceable) otherwise.
+    fn is_loop_dag_out(&self, idx: i32, slot: usize) -> bool {
+        if let Some(b) = self.graph.get_block(idx as usize) {
+            let r = b.read().unwrap();
+            let flags = r.get_out(slot).map(|e| e.flags).unwrap_or(0);
+            use crate::block::edge_flags::*;
+            (flags & (F_IRREDUCIBLE_EDGE | F_BACK_EDGE | F_LOOP_EXIT_EDGE | F_GOTO_EDGE)) == 0
+        } else {
+            false
+        }
+    }
+
     /// Initialize: create root BranchPoint and traces for each root.
     pub fn initialize(&mut self) {
         // Root BranchPoint (virtual, no real block)
@@ -257,6 +273,11 @@ impl<'a> TraceDAG<'a> {
                 if target <= dest { continue; }
                 // Skip edges to already-opened nodes (true cycles)
                 if self.opened.contains(&target) { continue; }
+                // Skip loop-exit and goto edges: Ghidra's isLoopDAGOut excludes
+                // f_irreducible|f_back_edge|f_loop_exit_edge|f_goto_edge. These
+                // edges are bound by LoopBody::setExitMarks / selectGoto and
+                // should not be traced through (they are candidate gotos).
+                if self.is_loop_dag_out(dest, eo) { continue; }
                 // Increment visit_count for target (this edge is now traced)
                 *self.visit_count.entry(target).or_insert(0) += 1;
                 let new_trace_idx = self.traces.len();

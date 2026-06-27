@@ -552,6 +552,10 @@ impl<'a> CollapseStructure<'a> {
     pub(crate) fn collapse_all(&mut self) {
         // Step 1: Order loop bodies (Ghidra's orderLoopBodies)
         self.order_loop_bodies();
+        // Step 1a: Apply LoopBody exit-edge marks (setExitMarks) so TraceDAG
+        // respects loop bounds — this is how LoopBody analysis drives structuring
+        // (Ghidra updateLoopBody blockaction.cc:1231).
+        self.apply_loop_exit_marks();
 
         // Step 1b: Structure WhileDo loops (innermost-first) before phase1, so
         // loop heads are preserved as BlockWhileDo instead of being consumed
@@ -1007,6 +1011,32 @@ impl<'a> CollapseStructure<'a> {
             self.loop_order.iter().map(|lb| lb.depth).collect::<Vec<_>>().iter()
                 .map(|d| d.to_string()).collect::<Vec<_>>().join(",")
         );
+    }
+
+    /// Apply each LoopBody's exit-edge labels as `F_LOOP_EXIT_EDGE` marks on
+    /// the graph. Faithful to Ghidra's `LoopBody::setExitMarks` /
+    /// `CollapseStructure::updateLoopBody` (blockaction.cc:416-426, 1231):
+    /// the exit edges bound where TraceDAG traces, so the structurer treats
+    /// edges leaving a loop body as candidate gotos rather than tracing
+    /// through them. This is how LoopBody analysis drives structuring.
+    fn apply_loop_exit_marks(&mut self) {
+        for lb in &self.loop_order {
+            for fe in &lb.exit_edges {
+                if let Some(blk) = self.graph.get_block(fe.from_idx as usize) {
+                    // Find the out-slot to fe.to_idx and mark it loop-exit.
+                    let slot = {
+                        let b = blk.read().unwrap();
+                        let n = b.size_out();
+                        (0..n).find(|&k| {
+                            b.get_out(k).map(|e| e.point.read().unwrap().get_index() == fe.to_idx).unwrap_or(false)
+                        })
+                    };
+                    if let Some(slot) = slot {
+                        blk.write().unwrap().set_loop_exit(slot);
+                    }
+                }
+            }
+        }
     }
 
     /// Collect all blocks in a natural loop body.

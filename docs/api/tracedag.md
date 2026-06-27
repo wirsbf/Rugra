@@ -61,3 +61,12 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - back-edge 过滤防止追踪进入循环（匹配 Ghidra isLoopDAGOut 语义）。
 - opened 集合防止重复打开已打开的节点。
 - getparameter: 13 ifs, 0 switch（从 10 ifs + 1 switch 改善）。
+
+### 2026-06-27（会话3 G4续）：isLoopDAGOut 集成 — LoopBody 驱动 TraceDAG
+
+- `TraceDAG::is_loop_dag_out(idx, slot) -> bool` — 忠实于 Ghidra `isLoopDAGOut`（block.hh:342）：当边的 flags 含 `F_IRREDUCIBLE_EDGE|F_BACK_EDGE|F_LOOP_EXIT_EDGE|F_GOTO_EDGE` 时返回 false（TraceDAG 不应追踪）。
+- TraceDAG 的 out-edge 遍历现在调用 is_loop_dag_out 跳过这些边。
+
+**关键集成**：`CollapseStructure::apply_loop_exit_marks`（blockaction.cc setExitMarks 等价）将每个 LoopBody 的 exit_edges 标记为 `F_LOOP_EXIT_EDGE`，在 `order_loop_bodies` 后、`run_tracedag` 前调用。这样 TraceDAG 的追踪范围被 LoopBody 分析约束——这是 Ghidra `updateLoopBody` 的核心目的：LoopBody 分析结果实际驱动结构化。
+
+**验证**：curl switch 4→5（循环退出标记改变了结构化路径，证明 LoopBody 分析生效）；687/687 测试 + curl 24/24 + httpd 29/29 + 0 goto。
