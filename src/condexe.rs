@@ -892,6 +892,7 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
 }
 
 /// `BooleanExpressionMatch::verifyCondition` (expression.cc:220-232).
+/// Returns SAME / COMPLEMENTARY / UNCORRELATED.
 fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<PcodeOp>>) -> i32 {
     let vn_op = op.read().unwrap().get_in(1).cloned();
     let vn_iop = iop.read().unwrap().get_in(1).cloned();
@@ -902,6 +903,346 @@ fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<Pc
             res
         }
         _ => UNCORRELATED,
+    }
+}
+
+/// Like `boolean_match_verify_condition` but also returns the flip flag,
+/// mirroring `BooleanExpressionMatch::getFlip()` (expression.hh:102) which
+/// RuleOrPredicate consults (condexe.cc:678).
+fn verify_condition_with_flip(
+    op: &Arc<RwLock<PcodeOp>>,
+    iop: &Arc<RwLock<PcodeOp>>,
+) -> (i32, bool) {
+    let vn_op = op.read().unwrap().get_in(1).cloned();
+    let vn_iop = iop.read().unwrap().get_in(1).cloned();
+    let (a, b) = match (vn_op, vn_iop) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return (UNCORRELATED, false),
+    };
+    let res = boolean_match_evaluate(&a, &b, 1);
+    if res == UNCORRELATED { return (UNCORRELATED, false); }
+    let mut flip = res == COMPLEMENTARY;
+    let ib_flip = (op.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+    let init_flip = (iop.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+    if ib_flip { flip = !flip; }
+    if init_flip { flip = !flip; }
+    (res, flip)
+}
+
+// ======================================================================
+// RuleOrPredicate (condexe.hh:172, condexe.cc:509-710)
+// ======================================================================
+
+/// A helper marking up a predicated INT_OR/INT_XOR expression.
+/// Faithful to `RuleOrPredicate::MultiPredicate` (condexe.hh:174).
+struct MultiPredicate {
+    /// Base MULTIEQUAL op.
+    op: Option<Arc<RwLock<PcodeOp>>>,
+    /// Input slot containing the path that sets zero.
+    zero_slot: usize,
+    /// Final block in path that sets zero.
+    zero_block: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Conditional block determining if zero is set.
+    cond_block: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// CBRANCH determining if zero is set.
+    cbranch: Option<Arc<RwLock<PcodeOp>>>,
+    /// Other (non-zero) Varnode set on the other path.
+    other_vn: Option<Arc<RwLock<Varnode>>>,
+    /// True if the path to the zero set is the TRUE path out of condBlock.
+    zero_path_is_true: bool,
+}
+
+impl MultiPredicate {
+    fn new() -> Self {
+        Self {
+            op: None,
+            zero_slot: 0,
+            zero_block: None,
+            cond_block: None,
+            cbranch: None,
+            other_vn: None,
+            zero_path_is_true: false,
+        }
+    }
+
+    /// `MultiPredicate::discoverZeroSlot` (condexe.cc:509-529). Detect a
+    /// 2-input MULTIEQUAL whose one input is COPY(#0) and store the other.
+    fn discover_zero_slot(&mut self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        if !vn.read().unwrap().is_written() { return false; }
+        let op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(o) => o, None => return false,
+        };
+        if op.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL { return false; }
+        if op.read().unwrap().num_input() != 2 { return false; }
+        self.op = Some(op.clone());
+        for zero_slot in 0..2 {
+            let tmpvn = match op.read().unwrap().get_in(zero_slot).cloned() {
+                Some(v) => v, None => continue,
+            };
+            if !tmpvn.read().unwrap().is_written() { continue; }
+            let copyop = match tmpvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(o) => o, None => continue,
+            };
+            if copyop.read().unwrap().opcode != OpCode::CPUI_COPY { continue; }
+            let zerovn = match copyop.read().unwrap().get_in(0).cloned() {
+                Some(v) => v, None => continue,
+            };
+            if !zerovn.read().unwrap().is_constant() { continue; }
+            if zerovn.read().unwrap().get_offset() != 0 { continue; }
+            let other = op.read().unwrap().get_in(1 - zero_slot).cloned();
+            let other = match other { Some(o) => o, None => continue };
+            if other.read().unwrap().is_free() { return false; }
+            self.zero_slot = zero_slot;
+            self.other_vn = Some(other);
+            return true;
+        }
+        false
+    }
+
+    /// `MultiPredicate::discoverCbranch` (condexe.cc:539-567). Find the single
+    /// CBRANCH controlling the MULTIEQUAL's two in-paths.
+    fn discover_cbranch(&mut self) -> bool {
+        let op = match &self.op { Some(o) => o.clone(), None => return false };
+        let base_block = match op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) {
+            Some(b) => b, None => return false,
+        };
+        let zero_block = base_block.read().unwrap().get_in(self.zero_slot).map(|e| e.point);
+        let other_block = base_block.read().unwrap().get_in(1 - self.zero_slot).map(|e| e.point);
+        let (zero_block, other_block) = match (zero_block, other_block) {
+            (Some(z), Some(o)) => (z, o),
+            _ => return false,
+        };
+        self.zero_block = Some(zero_block.clone());
+        let cond_block;
+        let zout = zero_block.read().unwrap().size_out();
+        if zout == 1 {
+            if zero_block.read().unwrap().size_in() != 1 { return false; }
+            cond_block = zero_block.read().unwrap().get_in(0).map(|e| e.point);
+        } else if zout == 2 {
+            cond_block = Some(zero_block.clone());
+        } else {
+            return false;
+        }
+        let cond_block = match cond_block { Some(c) => c, None => return false };
+        if cond_block.read().unwrap().size_out() != 2 { return false; }
+        // Verify the other path also routes through cond_block.
+        let oout = other_block.read().unwrap().size_out();
+        if oout == 1 {
+            if other_block.read().unwrap().size_in() != 1 { return false; }
+            let o_in0 = other_block.read().unwrap().get_in(0).map(|e| e.point);
+            if o_in0.map(|p| !Arc::ptr_eq(&p, &cond_block)).unwrap_or(true) { return false; }
+        } else if oout == 2 {
+            if !Arc::ptr_eq(&other_block, &cond_block) { return false; }
+        } else {
+            return false;
+        }
+        self.cond_block = Some(cond_block.clone());
+        // lastOp of cond_block must be a CBRANCH.
+        let last = match cond_block.read().unwrap().get_ops().last() {
+            Some(o) => o.0.clone(), None => return false,
+        };
+        if last.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return false; }
+        self.cbranch = Some(last);
+        true
+    }
+
+    /// `MultiPredicate::discoverPathIsTrue` (condexe.cc:572-582).
+    fn discover_path_is_true(&mut self) {
+        let cond_block = match &self.cond_block { Some(c) => c.clone(), None => return };
+        let zero_block = match &self.zero_block { Some(z) => z.clone(), None => return };
+        let op = match &self.op { Some(o) => o.clone(), None => return };
+        let parent = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+        // Determine TRUE/FALSE out edges via the CBRANCH boolean_flip flag.
+        let cb = self.cbranch.clone();
+        let flip = cb.map(|c| (c.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0).unwrap_or(false);
+        // Rugra out[0]=branch target (true unless flipped), out[1]=fallthru.
+        let true_out = {
+            let r = cond_block.read().unwrap();
+            r.get_out(if flip { 1 } else { 0 }).map(|e| e.point)
+        };
+        let false_out = {
+            let r = cond_block.read().unwrap();
+            r.get_out(if flip { 0 } else { 1 }).map(|e| e.point)
+        };
+        if true_out.as_ref().map(|t| Arc::ptr_eq(t, &zero_block)).unwrap_or(false) {
+            self.zero_path_is_true = true;
+        } else if false_out.as_ref().map(|f| Arc::ptr_eq(f, &zero_block)).unwrap_or(false) {
+            self.zero_path_is_true = false;
+        } else {
+            // condBlock must be zeroBlock: true if "true" path does not override zero set.
+            self.zero_path_is_true = match (true_out, parent) {
+                (Some(t), Some(p)) => Arc::ptr_eq(&t, &p),
+                _ => false,
+            };
+        }
+    }
+
+    /// `MultiPredicate::discoverConditionalZero` (condexe.cc:590-615). Verify
+    /// the CBRANCH boolean is (vn == 0) or (vn != 0), adjusting
+    /// zero_path_is_true.
+    fn discover_conditional_zero(&mut self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        let cbranch = match &self.cbranch { Some(c) => c.clone(), None => return false };
+        let boolvn = match cbranch.read().unwrap().get_in(1).cloned() {
+            Some(v) => v, None => return false,
+        };
+        if !boolvn.read().unwrap().is_written() { return false; }
+        let compareop = match boolvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(o) => o, None => return false,
+        };
+        let opc = compareop.read().unwrap().opcode;
+        if opc == OpCode::CPUI_INT_NOTEQUAL {
+            self.zero_path_is_true = !self.zero_path_is_true;
+        } else if opc != OpCode::CPUI_INT_EQUAL {
+            return false;
+        }
+        let a1 = compareop.read().unwrap().get_in(0).cloned();
+        let a2 = compareop.read().unwrap().get_in(1).cloned();
+        let zerovn = match (a1, a2) {
+            (Some(a1), Some(a2)) => {
+                if Arc::ptr_eq(&a1, vn) { a2 }
+                else if Arc::ptr_eq(&a2, vn) { a1 }
+                else { return false; }
+            }
+            _ => return false,
+        };
+        if !zerovn.read().unwrap().is_constant() { return false; }
+        if zerovn.read().unwrap().get_offset() != 0 { return false; }
+        if cbranch.read().unwrap().is_boolean_flip() {
+            self.zero_path_is_true = !self.zero_path_is_true;
+        }
+        true
+    }
+}
+
+/// Simplify predicated INT_OR / INT_XOR constructions.
+///
+/// Faithful to `RuleOrPredicate` (condexe.hh:172, condexe.cc:509-710).
+/// Transforms:
+/// ```text
+///     tmp1 = cond ? val1 : 0;
+///     tmp2 = cond ?  0 : val2;
+///     result = tmp1 | tmp2;       ==>   newtmp = val1 ? val2;  result = newtmp;
+/// ```
+pub struct RuleOrPredicate;
+
+impl RuleOrPredicate {
+    pub fn new() -> Self { Self }
+
+    pub fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
+    }
+
+    /// `RuleOrPredicate::checkSingle` (condexe.cc:638-652). The alternate form
+    /// `tmp1 = (val2 == 0) ? val1 : 0; result = tmp1 | other` where `other`
+    /// plays val2.
+    fn check_single(
+        &self,
+        vn: &Arc<RwLock<Varnode>>,
+        branch: &mut MultiPredicate,
+        op: &crate::op::PcodeOpRef,
+        fd: &mut Funcdata,
+    ) -> i32 {
+        if vn.read().unwrap().is_free() { return 0; }
+        if !branch.discover_cbranch() { return 0; }
+        // MULTIEQUAL output must have exactly one use (this INT_OR op).
+        let multi_out = match branch.op.as_ref().and_then(|o| o.read().unwrap().output.clone()) {
+            Some(o) => o, None => return 0,
+        };
+        let lone = multi_out.read().unwrap().lone_descend();
+        if lone.map(|l| !Arc::ptr_eq(&l, &op.0)).unwrap_or(true) { return 0; }
+        branch.discover_path_is_true();
+        if !branch.discover_conditional_zero(vn) { return 0; }
+        if branch.zero_path_is_true { return 0; }
+        // Rewrite: MULTIEQUAL input[zeroSlot] = vn; INT_OR -> COPY.
+        let multi = branch.op.clone().unwrap();
+        let multi_ref = crate::op::PcodeOpRef(multi.clone());
+        fd.op_set_input(&multi_ref, vn.clone(), branch.zero_slot);
+        fd.op_remove_input(op, 1);
+        fd.op_set_opcode(op, OpCode::CPUI_COPY);
+        let multi_out2 = multi.read().unwrap().output.clone();
+        if let Some(mo) = multi_out2 { fd.op_set_input(op, mo, 0); }
+        1
+    }
+
+    /// `RuleOrPredicate::applyOp` (condexe.cc:654-710).
+    pub fn apply_op(&self, op: &crate::op::PcodeOpRef, fd: &mut Funcdata) -> i32 {
+        let in0 = op.0.read().unwrap().get_in(0).cloned();
+        let in1 = op.0.read().unwrap().get_in(1).cloned();
+        let (in0, in1) = match (in0, in1) { (Some(a), Some(b)) => (a, b), _ => return 0 };
+        let mut branch0 = MultiPredicate::new();
+        let mut branch1 = MultiPredicate::new();
+        let test0 = branch0.discover_zero_slot(&in0);
+        let test1 = branch1.discover_zero_slot(&in1);
+        if !test0 && !test1 { return 0; }
+        if !test0 {
+            // branch1 has MULTIEQUAL form; check alternate with in0.
+            return self.check_single(&in0, &mut branch1, op, fd);
+        }
+        if !test1 {
+            return self.check_single(&in1, &mut branch0, op, fd);
+        }
+        if !branch0.discover_cbranch() { return 0; }
+        if !branch1.discover_cbranch() { return 0; }
+        let cb0 = branch0.cond_block.clone().unwrap();
+        let cb1 = branch1.cond_block.clone().unwrap();
+        if Arc::ptr_eq(&cb0, &cb1) {
+            // zero sets must be along different paths.
+            let zb0 = branch0.zero_block.clone().unwrap();
+            let zb1 = branch1.zero_block.clone().unwrap();
+            if Arc::ptr_eq(&zb0, &zb1) { return 0; }
+        } else {
+            // Cbranches must share a condition; the different zero sets must
+            // be on complementary paths.
+            let cb_0 = branch0.cbranch.clone().unwrap();
+            let cb_1 = branch1.cbranch.clone().unwrap();
+            let (res, flip) = verify_condition_with_flip(&cb_0, &cb_1);
+            if res == UNCORRELATED { return 0; }
+            // getMultiSlot() is always -1 in Ghidra (expression.hh:101), so no
+            // additional check needed here.
+            let _ = res;
+            branch0.discover_path_is_true();
+            branch1.discover_path_is_true();
+            let mut final_bool = branch0.zero_path_is_true == branch1.zero_path_is_true;
+            if flip { final_bool = !final_bool; }
+            if final_bool { return 0; } // One path hits both zero sets.
+        }
+        // Determine control-flow order of the two MULTIEQUALs.
+        let m0 = branch0.op.clone().unwrap();
+        let m1 = branch1.op.clone().unwrap();
+        let order = {
+            let (r0, r1) = (m0.read().unwrap(), m1.read().unwrap());
+            r0.compare_order(&r1)
+        };
+        if order == 0 { return 0; }
+        let (final_block, slot0_sets_branch0) = if order < 0 {
+            // branch1 happens after.
+            let fb = m1.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+            (fb, branch1.zero_slot == 0)
+        } else {
+            // branch0 happens after.
+            let fb = m0.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+            (fb, branch0.zero_slot == 1)
+        };
+        let final_block = match final_block { Some(b) => b, None => return 0 };
+        let start = final_block.read().unwrap().get_start_addr();
+        let new_multi = fd.new_op(2, start);
+        fd.op_set_opcode(&new_multi, OpCode::CPUI_MULTIEQUAL);
+        let b0_other = branch0.other_vn.clone().unwrap();
+        let b1_other = branch1.other_vn.clone().unwrap();
+        if slot0_sets_branch0 {
+            fd.op_set_input(&new_multi, b0_other, 0);
+            fd.op_set_input(&new_multi, b1_other, 1);
+        } else {
+            fd.op_set_input(&new_multi, b1_other, 0);
+            fd.op_set_input(&new_multi, b0_other, 1);
+        }
+        let size = branch0.other_vn.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let newvn = fd.new_unique_out(size, &new_multi);
+        fd.op_insert_begin(&new_multi, &final_block);
+        fd.op_remove_input(op, 1);
+        fd.op_set_input(op, newvn, 0);
+        fd.op_set_opcode(op, OpCode::CPUI_COPY);
+        1
     }
 }
 
@@ -1036,5 +1377,46 @@ mod tests {
         let r = a.apply(&mut fd).unwrap();
         // No removable iblock -> NO_CHANGE.
         assert_eq!(r, action_status::NO_CHANGE);
+    }
+
+    /// RuleOrPredicate should return 0 when given a non-MULTIEQUAL input
+    /// (discoverZeroSlot rejects it). Guards applyOp's early-out path.
+    #[test]
+    fn test_rule_or_predicate_rejects_plain_input() {
+        use crate::address::Address;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        // Construct a COPY op (no MULTIEQUAL inputs); applyOp must return 0.
+        let op = fd.new_op(2, Address::new(0x10));
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_OR);
+        let a = Varnode::new_constant(1, 1);
+        let b = Varnode::new_constant(2, 1);
+        let a = Arc::new(RwLock::new(a));
+        let b = Arc::new(RwLock::new(b));
+        fd.op_set_input(&op, a, 0);
+        fd.op_set_input(&op, b, 1);
+        let rule = RuleOrPredicate::new();
+        let res = rule.apply_op(&op, &mut fd);
+        assert_eq!(res, 0);
+    }
+
+    /// RuleOrPredicate opcodes are INT_OR and INT_XOR.
+    #[test]
+    fn test_rule_or_predicate_opcodes() {
+        let rule = RuleOrPredicate::new();
+        let ops = rule.get_opcodes();
+        assert!(ops.contains(&OpCode::CPUI_INT_OR));
+        assert!(ops.contains(&OpCode::CPUI_INT_XOR));
+        assert_eq!(ops.len(), 2);
+    }
+
+    /// compare_order: same op compares equal; the wiring runs end-to-end.
+    #[test]
+    fn test_compare_order_basic() {
+        use crate::address::{Address, SeqNum};
+        let mk = |addr: u64, ord: u32| PcodeOp::new(SeqNum::new(Address::new(addr), ord), OpCode::CPUI_COPY);
+        let a = mk(0x100, 0);
+        let b = mk(0x100, 1);
+        // Same block (no parent set): both None -> compare_order returns 0.
+        assert_eq!(a.compare_order(&b), 0);
     }
 }

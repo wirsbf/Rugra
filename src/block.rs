@@ -525,6 +525,45 @@ impl BlockGraph {
         self.blocks.retain(|b| !Arc::ptr_eq(b, bl));
     }
 
+    /// Find the nearest common ancestor (dominator) of two blocks in the
+    /// dominator tree. Faithful to `FlowBlock::findCommonBlock`
+    /// (block.cc:736-795). Used by `PcodeOp::compareOrder` (op.cc:778) to
+    /// determine control-flow ordering of two ops in different blocks.
+    ///
+    /// Returns None if either block has no dominator info (e.g. unreachable).
+    pub fn find_common_block(
+        bl1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        bl2: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // Standard dominator-tree LCA: walk both up to equal depth, then
+        // together until they meet. Equivalent to Ghidra's mark-based walk.
+        let mut b1 = bl1.clone();
+        let mut b2 = bl2.clone();
+        // Walk the deeper node up until depths match.
+        loop {
+            let d1 = b1.read().unwrap().get_dom_depth();
+            let d2 = b2.read().unwrap().get_dom_depth();
+            if d1 <= d2 { break; }
+            let up = b1.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            b1 = match up { Some(u) => u, None => return None };
+        }
+        loop {
+            let d1 = b1.read().unwrap().get_dom_depth();
+            let d2 = b2.read().unwrap().get_dom_depth();
+            if d2 <= d1 { break; }
+            let up = b2.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            b2 = match up { Some(u) => u, None => return None };
+        }
+        // Now equal depth; walk both up together.
+        while !Arc::ptr_eq(&b1, &b2) {
+            let up1 = b1.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            let up2 = b2.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            b1 = match up1 { Some(u) => u, None => return None };
+            b2 = match up2 { Some(u) => u, None => return None };
+        }
+        Some(b1)
+    }
+
     /// Remove the edge from `src` to `dst` by symmetrically deleting both
     /// halves. Faithful to `BlockGraph::removeEdge` (block.cc). Finds the
     /// matching slot on each side and removes it via the half-delete helpers.

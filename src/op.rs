@@ -149,6 +149,32 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::BOOLEAN_FLIP) != 0
     }
 
+    /// Compare the control-flow order of this op and `bop`. Returns -1 if
+    /// this op comes before bop, 1 if after, 0 if unordered. Faithful to
+    /// `PcodeOp::compareOrder` (op.cc:778-790).
+    pub fn compare_order(
+        &self,
+        bop: &PcodeOp,
+    ) -> i32 {
+        let p1 = self.parent.as_ref().and_then(|w| w.upgrade());
+        let p2 = bop.parent.as_ref().and_then(|w| w.upgrade());
+        match (p1, p2) {
+            (Some(a), Some(b)) if Arc::ptr_eq(&a, &b) => {
+                // Same block: compare SeqNum order.
+                if self.start.get_order() < bop.start.get_order() { -1 } else { 1 }
+            }
+            (Some(a), Some(b)) => {
+                let common = crate::block::BlockGraph::find_common_block(&a, &b);
+                match common {
+                    Some(c) if Arc::ptr_eq(&c, &a) => -1,
+                    Some(c) if Arc::ptr_eq(&c, &b) => 1,
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    }
+
     /// Get the evaluation type flags (unary/binary/special/ternary). Faithful
     /// to `PcodeOp::getEvalType` (op.hh:169).
     pub fn get_eval_type(&self) -> u32 {

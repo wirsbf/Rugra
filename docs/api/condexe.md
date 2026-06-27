@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
-**状态**: 🔧 L2（2026-06-27 完整移植核心图重写算法，尚未在真实二进制触发到候选——curl/httpd 无匹配模式）
+**状态**: ✅ **L3（2026-06-27 condexe.cc 全部算法移植完毕：ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch）**
 
 ## 模块说明
 
@@ -82,16 +82,44 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
 ## 已知限制
 
 1. **边顺序适配**：Rugra CBRANCH 出边为 `[branch_target, fallthru]`，Ghidra 为
-   `[falseOut, trueOut]`。`is_true_out_to` 通过 `BOOLEAN_FLIP` 标志适配，但若
-   lift 阶段边顺序未来改变需同步调整。
+   `[falseOut, trueOut]`。`is_true_out_to` / `discover_path_is_true` 通过 `BOOLEAN_FLIP`
+   标志适配，但若 lift 阶段边顺序未来改变需同步调整。
 2. **heritageyes 近似**：Rugra 全局跑一次 heritage，buildHeritageArray 近似为
    所有空间已 heritage（匹配 Ghidra post-heritage 行为）。
-3. **RuleOrPredicate**（condexe.cc:509+）尚未移植（MULTIEQUAL + zero 谓词模式）。
-4. **真实二进制未触发**：curl/httpd 的函数恰好无 `if(a){}if(a){}` 模式，故
-   apply 返回 NO_CHANGE（正确行为）。算法正确性由单元测试守护。
+3. **真实二进制未触发**：curl/httpd 的函数恰好无 `if(a){}if(a){}` 或
+   `cond ? val : 0` 谓词模式，故 apply 返回 NO_CHANGE（正确行为）。算法正确性由
+   单元测试守护。
+
+## 2026-06-27（续）：RuleOrPredicate 完整移植（condexe.cc:509-712）
+
+condexe.cc 的第二部分，一个独立的 Rule，处理谓词构造：
+```text
+    tmp1 = cond ? val1 : 0;
+    tmp2 = cond ?  0 : val2;
+    result = tmp1 | tmp2;   ==>   newtmp = val1 ? val2;  result = newtmp;
+```
+
+**MultiPredicate**（condexe.hh:174）全部 4 个方法移植：
+- `discover_zero_slot` — `discoverZeroSlot`（509）：检测 2 输入 MULTIEQUAL，一端为 COPY(#0)
+- `discover_cbranch` — `discoverCbranch`（539）：找控制 MULTIEQUAL 两入路径的单一 CBRANCH
+- `discover_path_is_true` — `discoverPathIsTrue`（572）：判定 condBlock 真出边是否流向 zero set
+- `discover_conditional_zero` — `discoverConditionalZero`（590）：验证 CBRANCH 布尔是 (vn==0)/(vn!=0)
+
+**RuleOrPredicate**（condexe.hh:172）：
+- `get_opcodes` — `getOpList`（617）：INT_OR + INT_XOR
+- `check_single` — `checkSingle`（638）：交替形式 `tmp1=(val2==0)?val1:0; result=tmp1|other`
+- `apply_op` — `applyOp`（654）：双 branch 模式 + 共享/独立条件 + finalBlock MULTIEQUAL 重写
+
+**支撑原语新增**：
+- `block.rs`: `BlockGraph::find_common_block`（block.cc:736 支配者树 LCA）
+- `op.rs`: `PcodeOp::compare_order`（op.cc:778 控制流顺序比较）
+- `condexe.rs`: `verify_condition_with_flip`（暴露 BooleanExpressionMatch::getFlip）
+
+**接入**：在 ActionSimplify 的硬编码简化之后，对 INT_OR/INT_XOR op 单独跑 RuleOrPredicate
+（Ghidra 里它在 actprop rule group，即简化阶段）。
 
 ## 测试
 
-`condexe::tests`（6 个）：action_name、correlation_constants、
-varnode_same_identity、apply_on_empty_fd、boolean_match_same_condition、
-trial_rejects_unrelated_conditions。
+`condexe::tests`（9 个）：action_name、correlation_constants、varnode_same_identity、
+apply_on_empty_fd、boolean_match_same_condition、trial_rejects_unrelated_conditions、
+rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_order_basic。

@@ -838,3 +838,7 @@ RPO 常用于：
 BlockGraph 新增：
 - `remove_block_arc(bl)` — `BlockGraph::removeBlock`（block.cc:1517）：先断开所有入/出边，再从 blocks 列表移除（不 drop Arc）。
 - `remove_edge_blocks(src, dst)` — `BlockGraph::removeEdge`：对称删除 src→dst 边的两端。
+
+### 2026-06-27（会话2 续）：find_common_block（解锁 RuleOrPredicate）
+
+- `BlockGraph::find_common_block(bl1, bl2) -> Option<BlockArc>` — `FlowBlock::findCommonBlock`（block.cc:736-795）：支配者树最近公共祖先（标准等深上溯算法，等价 Ghidra mark 版）。被 `PcodeOp::compareOrder` 用于判定不同块内两 op 的控制流顺序。

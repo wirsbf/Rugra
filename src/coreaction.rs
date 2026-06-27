@@ -676,6 +676,27 @@ impl Action for ActionSimplify {
             }
         }
 
+        // RuleOrPredicate (condexe.cc:509-710): simplify predicated
+        // INT_OR / INT_XOR constructions. Runs after the generic simplifiers
+        // above, in its own pass because it mutates ops directly. Mirrors
+        // Ghidra where RuleOrPredicate is part of the actprop rule group.
+        let rule = crate::condexe::RuleOrPredicate::new();
+        // Snapshot op list (the bank may change as we rewrite).
+        let or_xor_ops: Vec<crate::op::PcodeOpRef> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|o| {
+                let code = o.0.read().unwrap().opcode;
+                code == OpCode::CPUI_INT_OR || code == OpCode::CPUI_INT_XOR
+            })
+            .cloned()
+            .collect();
+        for op_ref in or_xor_ops {
+            let res = rule.apply_op(&op_ref, fd);
+            if res > 0 { changed += res; }
+        }
+
         if changed > 0 {
             Ok(action_status::CHANGE)
         } else {

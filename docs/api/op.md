@@ -840,3 +840,7 @@ PcodeOpRaw
 ### 2026-06-27（会话2）：is_boolean_flip（解锁 condexe）
 
 - `is_boolean_flip() -> bool` — `PcodeOp::isBooleanFlip`（op.hh:210）：CBRANCH 的布尔语义是否翻转。当为 true 时，CBRANCH 在输入为 TRUE 时走 fallthru 边（FALSE 时跳转）。condexe 的 verifySameCondition + is_true_out_to 用此适配 Rugra 边顺序。
+
+### 2026-06-27（会话2 续）：compare_order（解锁 RuleOrPredicate）
+
+- `compare_order(bop) -> i32` — `PcodeOp::compareOrder`（op.cc:778-790）：比较两个 op 的控制流顺序。同块比较 SeqNum.order；不同块用 find_common_block 找 LCA，LCA 是本块则在前（-1），是 bop 块则在后（1），否则无序（0）。RuleOrPredicate 用此决定 branch0/branch1 谁在后以定位 finalBlock。

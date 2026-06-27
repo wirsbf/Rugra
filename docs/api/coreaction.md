@@ -484,3 +484,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
   4. **apply(fd)**（coreaction.cc:879-890）：外层循环重复处理所有基本块直到无变化。
   - 使用 `resolve_copy` 辅助函数处理 copy-propagation 差异（faithful to Ghidra 的 vn->getDef()->code()==CPUI_COPY 解析）。
   - 依赖：total_replace ✅、op_destroy ✅、functional_equality_level ✅。
+
+### 2026-06-27（会话2 续）：ActionSimplify 接入 RuleOrPredicate
+
+- ActionSimplify 在硬编码简化（INT_XOR 自消、INT_AND/OR 自消、BOOL_NOT 双重否定）之后，对每个 INT_OR/INT_XOR op 单独运行 `crate::condexe::RuleOrPredicate::apply_op`。对应 Ghidra 中 RuleOrPredicate 属于 actprop rule group（简化阶段）。简化谓词构造 `tmp1=cond?val:0; result=tmp1|other` → `result=multiequal`。
