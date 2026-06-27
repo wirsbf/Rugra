@@ -53,3 +53,5 @@ RHS 常量构造（Named/Absolute/NZMask/Consumed/Offset/IsConstant）。
 
 新增 evaluate_mut() 方法用于动作约束（OpOutput/OpInput 需修改 state）。
 4 个新单元测试：OpOutput、OpInput、VarnodeWritten、VarnodeConstant。
+### 2026-06-27：unify.cc L2->L3 完整移植（unify.cc 全文）
+- 从 ~460 行骨架扩展到 2415 行完整实现：43 个 struct 含完整约束层级（ConstantAbsolute/Consumed/Expression/NZMask, ConstraintOpcode/OpInput/OpOutput/Group/Or/VarCompare, UnifyState, RuleMatcher, UnifyCPrinter, TraverseGroupState/DescendState/CountState）。106 处 @// unify.cc:@ 源码标注。仅 1 处非关键 unimplemented（CPrinter 常量运算边缘）。对齐 Ghidra P-code 模式匹配框架。
