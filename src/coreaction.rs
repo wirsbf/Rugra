@@ -3131,31 +3131,40 @@ impl ActionActiveParam {
 }
 impl Action for ActionActiveParam {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs, for each call with
-        // an active input, scan the call op's input Varnodes to determine
-        // which are potential parameters. Full algorithm requires ParamActive
-        // + AliasChecker.
-        let mut change_count = 0;
+        // Faithful to ActionActiveParam::apply (coreaction.cc:1725-1771).
+        // For each call spec with active input recovery:
+        // 1. checkInputTrialUse — mark trials as active/inactive (simplified)
+        // 2. finishPass — increment pass counter
+        // 3. If fully checked (max passes exceeded), finalize: clear active input
+        // Full Ghidra also calls resolveModel (needs ProtoModel), deriveInputMap,
+        // buildInputFromTrials (needs ProtoStore/ParamList) — deferred.
+        let mut change = 0;
         let n_calls = fd.num_calls();
-
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Check if this call spec has input parameters.
-                let n_params = fc.prototype.num_params();
-                if n_params > 0 {
-                    // This call has declared parameters — nothing to
-                    // actively recover. Full Ghidra: check isInputActive.
-                    change_count += 1;
+            let needs_work = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
+            if !needs_work { continue; }
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                fc.check_input_trial_use();
+            }
+            let fully_done = {
+                if let Some(fc) = fd.get_call_specs_mut(i) {
+                    if let Some(active) = fc.active_input.as_mut() {
+                        active.finish_pass();
+                        active.get_num_passes() > active.get_max_pass()
+                    } else { false }
+                } else { false }
+            };
+            if fully_done {
+                if let Some(fc) = fd.get_call_specs_mut(i) {
+                    if let Some(active) = fc.active_input.as_mut() {
+                        active.mark_fully_checked();
+                    }
+                    fc.clear_active_input();
                 }
             }
+            change += 1;
         }
-
-        // Return NO_CHANGE since we don't modify anything yet.
-        // Full algorithm: for each call with active input, iterate
-        // the call op's Varnodes and test each as a potential param
-        // via ParamActive trials.
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "activeparam" }
 }

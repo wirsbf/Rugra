@@ -530,3 +530,17 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ### 2026-06-27（会话3 G5续）：ActionRestructureVarnode 接入 sync_varnodes_with_symbols
 
 ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_varnodes_with_symbols(false, false)`，关闭路线图中"缺 syncVarnodesWithSymbols"的缺口。
+
+### 2026-06-27（会话3 G5续）：ActionActiveParam apply() + 参数恢复支撑方法
+
+完整移植 ActionActiveParam::apply（coreaction.cc:1725-1771）的结构：
+
+- 遍历 callspecs，对每个 is_input_active 的调用：
+  1. check_input_trial_use（简化版：标记试验为 active）
+  2. finish_pass（递增 pass 计数）
+  3. 若 get_num_passes > get_max_pass → mark_fully_checked + clear_active_input
+
+**新增 FuncCallSpecs 方法**（fspec.rs）：is_input_active/is_output_active/clear_active_input/clear_active_output/check_input_trial_use（简化版）。
+**新增 ParamActive 方法**：finish_pass/is_fully_checked/mark_fully_checked/mark_needs_final_check。
+
+**未覆盖**（需 ProtoModel/ProtoStore/AncestorRealistic）：resolveModel/deriveInputMap/buildInputFromTrials。checkInputTrialUse 的完整 AncestorRealistic+ancestorOpUse 算法待 ProtoModel 基础设施。

@@ -111,3 +111,8 @@ Create a new call specification
 - `ActionFuncLinkOutOnly::apply`：只调用 func_link_output
 
 3 单元测试：空 Funcdata、unlocked callspec 初始化 active_input/output、is_input_locked。712/712 测试。
+
+### 2026-06-27（会话3 G5续）：FuncCallSpecs 参数恢复支撑方法 + ParamActive pass控制
+
+- FuncCallSpecs: is_input_active/is_output_active/clear_active_input/clear_active_output/check_input_trial_use（简化版，核心版需 AncestorRealistic）
+- ParamActive: finish_pass/is_fully_checked/mark_fully_checked/mark_needs_final_check
