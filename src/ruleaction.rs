@@ -6072,6 +6072,76 @@ impl Rule for RuleConcatCommute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
+/// Simplify equality checks that use lzcount: `lzcount(X) >> c => X == 0`
+/// if X is 2^c bits wide. Faithful to Ghidra's `RuleLzcountShiftBool`
+/// (ruleaction.cc:10660-10712).
+pub struct RuleLzcountShiftBool;
+
+impl RuleLzcountShiftBool {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleLzcountShiftBool {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleLzcountShiftBool::applyOp (ruleaction.cc:10666-10712).
+        use crate::utils::bits::popcount;
+        let (out_vn, max_return, in0) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_LZCOUNT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let max_return = 8 * in0.read().unwrap().get_size() as u64;
+            (out_vn, max_return, in0)
+        };
+        // Only makes sense with power-of-2 sizes.
+        if popcount(max_return) != 1 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Search for a shift descendant that extracts the MSB.
+        let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
+        for base_op_arc in descends {
+            let base_code = base_op_arc.read().unwrap().opcode;
+            if base_code != OpCode::CPUI_INT_RIGHT && base_code != OpCode::CPUI_INT_SRIGHT {
+                continue;
+            }
+            let vn1 = match base_op_arc.read().unwrap().get_in(1).cloned() {
+                Some(v) => v,
+                None => continue,
+            };
+            if !vn1.read().unwrap().is_constant() { continue; }
+            let shift = vn1.read().unwrap().get_offset();
+            if (max_return >> shift) != 1 { continue; }
+            // Found the pattern: lzcount(X) >> c where 2^c == max_return.
+            // Replace with X == 0.
+            let base_ref = crate::op::PcodeOpRef(base_op_arc.clone());
+            let base_addr = base_op_arc.read().unwrap().get_addr();
+            let new_op = fd.new_op(2, base_addr);
+            fd.op_set_opcode(&new_op, OpCode::CPUI_INT_EQUAL);
+            let b = fd.new_constant(in0.read().unwrap().get_size(), 0);
+            fd.op_set_input(&new_op, in0.clone(), 0);
+            fd.op_set_input(&new_op, b, 1);
+            let eq_res = fd.new_unique_out(1, &new_op);
+            fd.op_insert_before(&new_op, &base_ref);
+            // Rewrite the shift op as COPY or ZEXT of the boolean result.
+            fd.op_remove_input(&base_ref, 1);
+            let base_out_size = base_op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(1);
+            if base_out_size == 1 {
+                fd.op_set_opcode(&base_ref, OpCode::CPUI_COPY);
+            } else {
+                fd.op_set_opcode(&base_ref, OpCode::CPUI_INT_ZEXT);
+            }
+            fd.op_set_input(&base_ref, eq_res, 0);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "lzcount_shift_bool" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LZCOUNT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

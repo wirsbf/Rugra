@@ -677,3 +677,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `concat(V, W) | c => concat(V | c_hi, W) | c_lo`（INT_OR/INT_XOR 交换进 PIECE）
   - `concat(V, W) & c => concat(V & c_hi, W & c_lo)`（INT_AND 交换进 PIECE）
   - 常量值根据高低位偏移调整
+
+## 2026-06-27（续 18）：LZCOUNT 简化规则
+
+- **RuleLzcountShiftBool**：完整移植 ruleaction.cc:10660-10712。简化使用 lzcount 的相等检查：
+  - `lzcount(X) >> c => X == 0`（当 X 大小为 2^c 字节时，lzcount 的最高位指示是否为 0）
+  - 仅对 2 的幂大小生效（popcount(max_return) == 1）
+  - 将移位后代替换为 INT_EQUAL + COPY/ZEXT
