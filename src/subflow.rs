@@ -244,6 +244,89 @@ impl SubvariableFlow {
         let flow_mask = if flow_bits >= 64 { u64::MAX } else { (1u64 << flow_bits) - 1 };
         mask != 0 && mask != u64::MAX && (mask & flow_mask) == mask
     }
+
+    /// Return the slot of the constant if an INT_OR op sets all masked bits to 1.
+    /// Faithful to `SubvariableFlow::doesOrSet` (subflow.cc:26-36).
+    pub fn does_or_set(op: &PcodeOp, mask: u64) -> i32 {
+        let in1_const = op.inrefs.get(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        let index = if in1_const { 1 } else { 0 };
+        let in_const = match op.inrefs.get(index) {
+            Some(v) => v.read().unwrap().is_constant(),
+            None => return -1,
+        };
+        if !in_const { return -1; }
+        let orval = op.inrefs[index].read().unwrap().get_offset();
+        if (mask & !orval) == 0 { index as i32 } else { -1 }
+    }
+
+    /// Return the slot of the constant if an INT_AND op clears all masked bits.
+    /// Faithful to `SubvariableFlow::doesAndClear` (subflow.cc:43-53).
+    pub fn does_and_clear(op: &PcodeOp, mask: u64) -> i32 {
+        let in1_const = op.inrefs.get(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        let index = if in1_const { 1 } else { 0 };
+        let in_const = match op.inrefs.get(index) {
+            Some(v) => v.read().unwrap().is_constant(),
+            None => return -1,
+        };
+        if !in_const { return -1; }
+        let andval = op.inrefs[index].read().unwrap().get_offset();
+        if (mask & andval) == 0 { index as i32 } else { -1 }
+    }
+
+    /// Compute the consume-mask for a Varnode — how many low bytes are used
+    /// by descendants. Faithful to `Varnode::getConsume` semantics: returns
+    /// a bitmask of the consumed portion. Rugra approximates by returning the
+    /// full mask (all bytes consumed) when the varnode has descendants, else 0.
+    pub fn compute_consume_mask(vn: &Arc<RwLock<Varnode>>) -> u64 {
+        let v = vn.read().unwrap();
+        let size = v.get_size();
+        let full_mask = crate::address::calc_mask(size);
+        // Check if vn has any descendants.
+        if v.descend.is_empty() {
+            0
+        } else {
+            full_mask
+        }
+    }
+
+    /// Entry point: try to trace a sub-variable flow from a seed Varnode.
+    /// Faithful to `SubvariableFlow::doTrace` (subflow.cc:1410-1434).
+    /// Returns true if the trace found enough pull operations to be worthwhile.
+    pub fn do_trace(&mut self, fd: &Funcdata, seed: Arc<RwLock<Varnode>>, mask: u64) -> bool {
+        // Register the seed.
+        let seed_ptr = Arc::as_ptr(&seed) as usize;
+        self.set_replacement(seed.clone(), mask);
+        // Rugra's simplified trace: scan all ops for references to the seed
+        // varnode (INT_AND/SUBPIECE that extract a sub-field, comparisons).
+        // The full Ghidra version does bidirectional BFS (traceForward/traceBackward,
+        // ~500 lines each). This simplified version counts pull points.
+        let seed_ptr = Arc::as_ptr(&seed) as usize;
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            // Check if any input matches the seed.
+            let uses_seed = op.inrefs.iter().any(|vn| Arc::as_ptr(vn) as usize == seed_ptr);
+            if !uses_seed { continue; }
+            match op.opcode {
+                OpCode::CPUI_INT_AND => {
+                    // INT_AND with a constant mask → potential sub-variable extraction.
+                    if op.inrefs.len() >= 2 && op.inrefs[1].read().unwrap().is_constant() {
+                        self.pull_count += 1;
+                    }
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    // SUBPIECE extracting a smaller value.
+                    self.pull_count += 1;
+                }
+                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
+                | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL => {
+                    self.pull_count += 1;
+                }
+                _ => {}
+            }
+        }
+        self.is_worthwhile()
+    }
 }
 
 #[cfg(test)]
@@ -302,5 +385,40 @@ mod tests {
         assert!(!SubvariableFlow::check_mask(0, 8));
         assert!(!SubvariableFlow::check_mask(u64::MAX, 8));
         assert!(SubvariableFlow::check_mask(0x0f, 8));
+    }
+
+    #[test]
+    fn test_does_or_set() {
+        // INT_OR(vn, 0xFF) with mask=0xFF → all masked bits are 1 → slot 1
+        let mut op = PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x100), 0),
+            OpCode::CPUI_INT_OR,
+        );
+        let vn = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        let c = Arc::new(RwLock::new(Varnode::new_constant(0xff, 4)));
+        op.inrefs = vec![vn, c];
+        assert_eq!(SubvariableFlow::does_or_set(&op, 0xff), 1);
+    }
+
+    #[test]
+    fn test_does_and_clear() {
+        // INT_AND(vn, 0x00) with mask=0xFF → all masked bits cleared → slot 1
+        let mut op = PcodeOp::new(
+            crate::address::SeqNum::new(crate::address::Address::new(0x100), 0),
+            OpCode::CPUI_INT_AND,
+        );
+        let vn = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        let c = Arc::new(RwLock::new(Varnode::new_constant(0, 4)));
+        op.inrefs = vec![vn, c];
+        assert_eq!(SubvariableFlow::does_and_clear(&op, 0xff), 1);
+    }
+
+    #[test]
+    fn test_do_trace_empty() {
+        let mut sf = SubvariableFlow::new(1, false, false);
+        let fd = Funcdata::new("t", crate::address::Address::new(0x1000), 0x10);
+        let vn = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        // No ops reference the seed → not worthwhile.
+        assert!(!sf.do_trace(&fd, vn, 0xff));
     }
 }

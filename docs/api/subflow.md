@@ -41,3 +41,12 @@
 - `check_mask(mask, flow_bits)` — 验证掩码是有效子变量
 
 测试：新增 4 个（set_replacement + create_op + patches_and_worthwhile + check_mask）。
+### 2026-06-27（会话3 L1）：subflow.cc 核心算法移植
+
+移植 SubvariableFlow 的核心原语和分析入口：
+- `does_or_set(op, mask)` — doesOrSet(subflow.cc:26-36)：INT_OR 是否设置掩码所有位为 1
+- `does_and_clear(op, mask)` — doesAndClear(subflow.cc:43-53)：INT_AND 是否清除掩码所有位
+- `compute_consume_mask(vn)` — Varnode getConsume 等价
+- `do_trace(fd, seed, mask)` — doTrace(subflow.cc:1410-1434)：子变量流追踪入口（简化版：扫描引用种子的 op 计数 pull 点）
+
+3 个新单元测试：does_or_set、does_and_clear、do_trace 空 Funcdata。
