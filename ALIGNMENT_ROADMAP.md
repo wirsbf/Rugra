@@ -99,7 +99,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 22 | `coreaction.cc` (5741行) | `coreaction.rs` (3895行) | 🔧 L2 | **核实修正**：已实现 58 个 Action struct（框架级），其中 ~6 个有完整 apply 算法；缺 ~30 个优化 Action 的真实 apply 逻辑（见下方详细列表） | `coreaction.cc` |
+| 22 | `coreaction.cc` (5741行) | `coreaction.rs` (4000行) | 🔧 **L2（G5 进展）** | **2026-06-27**：4 个结构清理 Action apply() 完整移植（Unreachable/DoNothing/RedundBranch/DeterminedBranch，coreaction.cc:3457-3528）+ remove_unreachable_blocks/splice_block_basic 原语。**未接入主管线**（staged structurer 依赖被删块，需 collapseInternal 迁移）。9 单元测试验证 apply() 正确。ActionMultiCse/ShadowVar 已完整。**剩余**：~20 个 Action（FuncCallSpecs/HighVariable 依赖型） | `coreaction.cc` |
 | 23 | `ruleaction.cc` (11016行) | `ruleaction.rs` (10968行) | 🔧 L2 | **核实修正**：已移植 ~90 个 Rule（含 RuleDivOpt 主算法），多数 apply 忠实；仍缺 ~30 个 Rule + 部分 Rule 的变体分支（如 RuleDivOpt 缺第二变体）。规模已接近 Ghidra | `ruleaction.cc` |
 | 24 | `constseq.cc` | `constseq.rs` (248行) | 🔧 L2 | **核实修正**：非完全缺失。ConstantRule 框架存在；缺与 Funcdata 集成的完整常量序列折叠 | `constseq.cc` |
 | 25 | `transform.cc` | `transform.rs` | ✅ L3 | **完整实现**：LanedRegister（lane 尺寸位掩码 + parse_sizes）+ LaneDescription（uniform/two_lane/subset/get_boundary/restriction/extension）+ TransformVar（6 类型 + create_replacement）+ TransformOp（createReplacement/attemptInsertion/inheritIndirect）+ TransformManager 完整 apply 生命周期（createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs）。Arena 风格 ID 索引替代 Ghidra 原始指针。19 个单元测试。已知限制：transferVarnodeProperties/deleteVarnode/setInputVarnode/markIndirectCreation 用 best-effort 替代 | `transform.cc` |
