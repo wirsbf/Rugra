@@ -6516,6 +6516,121 @@ impl Rule for RuleMultiCollapse {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
+/// Convert INT_SRIGHT form into INT_SDIV: `(V + -1*(V s>> 31)) s>> 1 => V s/ 2`.
+/// Faithful to Ghidra's `RuleSignDiv2` (ruleaction.cc:8357-8408).
+pub struct RuleSignDiv2;
+
+impl RuleSignDiv2 {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignDiv2 {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignDiv2::applyOp (ruleaction.cc:8365-8408).
+        let a = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sa_vn.read().unwrap().is_constant() || sa_vn.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
+            let addout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !addout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let addop = match addout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+            // Search for the mult+shift pattern in addop's inputs.
+            let mut found_a: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+            for i in 0..2 {
+                let multout = match addop.read().unwrap().get_in(i) { Some(v) => v.clone(), None => continue };
+                if !multout.read().unwrap().is_written() { continue; }
+                let multop = match multout.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if multop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
+                let mult_const = match multop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                if !mult_const.read().unwrap().is_constant() { continue; }
+                if mult_const.read().unwrap().get_offset() != calc_mask(mult_const.read().unwrap().get_size()) { continue; }
+                let shiftout = match multop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
+                if !shiftout.read().unwrap().is_written() { continue; }
+                let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => continue };
+                if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
+                let shift_sa = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                if !shift_sa.read().unwrap().is_constant() { continue; }
+                let n = shift_sa.read().unwrap().get_offset();
+                let candidate_a = match shiftop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
+                let other_input = match addop.read().unwrap().get_in(1 - i) { Some(v) => v.clone(), None => continue };
+                if !std::sync::Arc::ptr_eq(&candidate_a, &other_input) { continue; }
+                if n != 8 * candidate_a.read().unwrap().get_size() as u64 - 1 { continue; }
+                if candidate_a.read().unwrap().is_free() { continue; }
+                found_a = Some(candidate_a);
+                break;
+            }
+            match found_a { Some(a) => a, None => return Ok(action_status::NO_CHANGE) }
+        };
+        let a_size = a.read().unwrap().get_size();
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&follow, a, 0);
+        let c = fd.new_constant(a_size, 2);
+        fd.op_set_input(&follow, c, 1);
+        fd.op_set_opcode(&follow, OpCode::CPUI_INT_SDIV);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_div2" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
+}
+
+/// Collapse two consecutive divisions: `(x / c1) / c2 => x / (c1*c2)`.
+/// Faithful to Ghidra's `RuleDivChain` (ruleaction.cc:8410-8455).
+pub struct RuleDivChain;
+
+impl RuleDivChain {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleDivChain {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDivChain::applyOp (ruleaction.cc:8419-8455).
+        let (opc2, vn, const_vn2_val) = {
+            let op = op_arc.read().unwrap();
+            let opc2 = op.opcode;
+            if opc2 != OpCode::CPUI_INT_DIV && opc2 != OpCode::CPUI_INT_SDIV { return Ok(action_status::NO_CHANGE); }
+            let const_vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_vn2_val = {
+                let r = const_vn2.read().unwrap();
+                if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
+                r.get_offset()
+            };
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (opc2, vn, const_vn2_val)
+        };
+        if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let div_op = match vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let opc1 = div_op.read().unwrap().opcode;
+        if opc1 != opc2 && (opc2 != OpCode::CPUI_INT_DIV || opc1 != OpCode::CPUI_INT_RIGHT) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let const_vn1 = match div_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !const_vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        // Intermediate result must only be used here.
+        if vn.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
+        let val1 = if opc1 == opc2 {
+            const_vn1.read().unwrap().get_offset()
+        } else {
+            // Unsigned case with INT_RIGHT.
+            1u64 << const_vn1.read().unwrap().get_offset()
+        };
+        let full_mask = calc_mask(const_vn1.read().unwrap().get_size());
+        let new_val = (val1.wrapping_mul(const_vn2_val)) & full_mask;
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        let new_const = fd.new_constant(const_vn1.read().unwrap().get_size(), new_val);
+        fd.op_set_input(&follow, new_const, 1);
+        if opc1 == OpCode::CPUI_INT_RIGHT {
+            fd.op_set_opcode(&follow, OpCode::CPUI_INT_DIV);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "div_chain" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

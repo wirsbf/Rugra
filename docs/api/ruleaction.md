@@ -703,3 +703,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 绝对等价：total_replace + op_destroy 所有 MULTIEQUAL
   - 功能等价：同样 total_replace（Rugra 缺 cseFindInBlock/earliestUse，用保守替换）
   - 已知限制：cseFindInBlock/earliestUse/opSetAllInput 用保守 total_replace 替代
+
+## 2026-06-27（续 21）：除法优化规则
+
+- **RuleSignDiv2**：完整移植 ruleaction.cc:8357-8408。`(V + -1*(V s>> 31)) s>> 1 => V s/ 2`（有符号除以 2 的编译器惯用法简化）。
+- **RuleDivChain**：完整移植 ruleaction.cc:8410-8455。折叠连续除法：
+  - `(x / c1) / c2 => x / (c1*c2)`（相同符号 INT_DIV/INT_SDIV）
+  - `(x >> c1) / c2 => x / (2^c1 * c2)`（无符号 INT_RIGHT + INT_DIV）
+  - 中间结果必须 loneDescend（仅在此处使用）
