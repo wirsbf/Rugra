@@ -488,3 +488,20 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ### 2026-06-27（会话2 续）：ActionSimplify 接入 RuleOrPredicate
 
 - ActionSimplify 在硬编码简化（INT_XOR 自消、INT_AND/OR 自消、BOOL_NOT 双重否定）之后，对每个 INT_OR/INT_XOR op 单独运行 `crate::condexe::RuleOrPredicate::apply_op`。对应 Ghidra 中 RuleOrPredicate 属于 actprop rule group（简化阶段）。简化谓词构造 `tmp1=cond?val:0; result=tmp1|other` → `result=multiequal`。
+
+### 2026-06-27（会话3 G5）：结构清理 Action apply() 完整移植
+
+完整移植 4 个结构清理 Action 的 apply()（1:1 对应 Ghidra coreaction.cc）：
+
+- **ActionUnreachable**（coreaction.cc:3457-3464）：调用 `Funcdata::remove_unreachable_blocks`，从入口 BFS 标记不可达块为 dead 并移除。
+- **ActionDoNothing**（coreaction.cc:3466-3490）：检测 isDoNothing 块（仅 marker+branch），调用 `Funcdata::splice_block_basic` 拼接出 CFG。
+- **ActionRedundBranch**（coreaction.cc:3492-3528）：case 1 单出边目标单入边→splice；case 2 所有出边同目标→remove_branch。
+- **ActionDeterminedBranch**（已有完整 apply）。
+
+**新增 Funcdata 原语**（funcdata.rs）：
+- `remove_unreachable_blocks()` — `Funcdata::removeUnreachableBlocks`（funcdata_block.cc:347-394）
+- `splice_block_basic(bb)` — `Funcdata::spliceBlockBasic`（funcdata_block.cc:919-956）
+
+**架构说明 — 为何未接入主管线**：这些 Action 的 apply() 逻辑完整且通过 9 个单元测试（remove_unreachable_blocks、splice_block_basic 端到端验证），但**未接入 set_default_actions**。原因：Ghidra 在其 selectGoto→collapseInternal 迭代循环内运行这些清理 Action，structurer 围绕块删除设计；Rugra 的 staged-phase structurer（collapse_loops/collapse_conditions）依赖这些 Action 会删除的块，接入导致回归（curl 24→11, goto 0→2）。完整接入需 staged→collapseInternal 架构迁移（G4 可选优化）。apply() 逻辑已就绪供该迁移使用。
+
+9 单元测试验证 apply() 正确性。702/702 测试，curl 24/24 + httpd 29/29，0 goto。

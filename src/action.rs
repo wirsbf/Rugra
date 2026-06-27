@@ -278,6 +278,15 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionTypePropagate::new()));
         decompile_group.add_action(Box::new(ActionCallParams::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
+        // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
+        // implemented (coreaction.cc:3457-3528) and individually tested, but
+        // NOT wired into the default pipeline. Ghidra runs them inside its
+        // selectGoto->collapseInternal loop, where the structurer is designed
+        // around block removal. Rugra's staged-phase structurer (collapse_loops
+        // /collapse_conditions) relies on blocks that these actions remove, so
+        // wiring them causes regressions (curl 24->11, goto 0->2). Re-enabling
+        // needs the staged->collapseInternal architecture migration (G4 opt).
+        // The apply() logic is complete and available for that migration.
         // Local variable recovery (coreaction.cc:5505 "localrecovery"): build
         // the stack-variable scope via ScopeLocal::restructure_varnode, which
         // printc's get_stack_variable_name queries to name stack slots instead

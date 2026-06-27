@@ -711,3 +711,8 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 ### 2026-06-27（会话3 G3 续2）：inject Phase 4 确认禁用
 
 inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但扰动 typeop（struct 指针泄漏）。改用 varmap 的只读 `resolve_rsp_offset_via_bank`（作用域仅 spacebase），不扰动 typeop/copyprop。inject_raw_ops Phase 4 NOTE 已更新说明此决策。
+
+### 2026-06-27（会话3 G5）：remove_unreachable_blocks + splice_block_basic
+
+- `remove_unreachable_blocks() -> bool` — `Funcdata::removeUnreachableBlocks`（funcdata_block.cc:347-394）：从入口 BFS 收集可达块，标记不可达块为 dead，移除其出边，再从图移除。用于 ActionUnreachable。
+- `splice_block_basic(bb) -> bool` — `Funcdata::spliceBlockBasic`（funcdata_block.cc:919-956）：拼接单出边块到其单后继（销毁 bb 的 branch op，继承后继出边，移除后继）。用于 ActionDoNothing/ActionRedundBranch case 1。

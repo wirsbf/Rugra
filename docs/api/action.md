@@ -586,3 +586,7 @@ Funcdata ready
 **验证**：诊断确认 Rule 真实触发——curl 各函数 pass_changes 从 1 到 30+（如 main 28 次、getparameter 30 次简化）。这是 Rugra 首次在反编译时实际应用 Rule 简化。682/682 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。
 
 **注意**：uVar 碎片数未变（149），因为简化的是中间 P-code IR，而 printc 的碎片源于变量恢复层的 def 断链（G3 深水区）。但 Rule 调度器本身是正确的架构补全。
+
+### 2026-06-27（会话3 G5）：结构清理 Action 未接入说明
+
+ActionDeterminedBranch/ActionUnreachable/ActionDoNothing/ActionRedundBranch 的 apply() 已完整移植（coreaction.cc:3457-3528），但**未接入 set_default_actions**。set_default_actions 中有 NOTE 说明：Ghidra 在 selectGoto→collapseInternal 循环内运行这些清理 Action，structurer 围绕块删除设计；Rugra 的 staged-phase structurer 依赖这些块，接入导致回归。完整接入需 staged→collapseInternal 架构迁移（G4 可选优化）。apply() 逻辑已就绪。

@@ -785,6 +785,136 @@ impl Funcdata {
         Ok(())
     }
 
+    /// Remove any basic blocks not reachable from the entry point.
+    /// Faithful to `Funcdata::removeUnreachableBlocks` (funcdata_block.cc:347-394).
+    ///
+    /// Performs a forward BFS from the entry block, marks blocks NOT visited as
+    /// dead, removes their out-edges, then removes them from the graph. Returns
+    /// true if any unreachable block was removed.
+    pub fn remove_unreachable_blocks(&mut self) -> bool {
+        let n = self.bblocks.get_size();
+        if n == 0 {
+            return false;
+        }
+        // Find the entry point: a block flagged ENTRY_POINT, else block 0.
+        let entry = (0..n)
+            .find(|&i| {
+                self.bblocks.get_block(i).map(|b| {
+                    (b.read().unwrap().get_flags() & crate::block::block_flags::ENTRY_POINT) != 0
+                }).unwrap_or(false)
+            })
+            .unwrap_or(0);
+        // Forward BFS from entry to find reachable set.
+        let mut reachable = std::collections::HashSet::new();
+        let mut queue = vec![entry];
+        reachable.insert(entry);
+        while let Some(idx) = queue.pop() {
+            let outs: Vec<i32> = {
+                if let Some(blk) = self.bblocks.get_block(idx) {
+                    let b = blk.read().unwrap();
+                    let nn = b.size_out();
+                    (0..nn).filter_map(|j| b.get_out(j).map(|e| e.point.read().unwrap().get_index())).collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for o in outs {
+                if reachable.insert(o as usize) {
+                    queue.push(o as usize);
+                }
+            }
+        }
+        // Collect unreachable blocks.
+        let unreachable: Vec<usize> = (0..n).filter(|i| !reachable.contains(i)).collect();
+        if unreachable.is_empty() {
+            return false;
+        }
+        // Mark dead, remove their out-edges, then remove from the graph.
+        let dead_arcs: Vec<_> = unreachable.iter()
+            .filter_map(|&i| self.bblocks.get_block(i))
+            .collect();
+        for arc in &dead_arcs {
+            arc.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+        }
+        for arc in &dead_arcs {
+            // Detach all out-edges so block removal is clean.
+            while arc.read().unwrap().size_out() > 0 {
+                let dst = arc.read().unwrap().get_out(0).map(|e| e.point);
+                if let Some(dst) = dst {
+                    self.bblocks.remove_edge_blocks(arc, &dst);
+                } else {
+                    break;
+                }
+            }
+        }
+        for arc in &dead_arcs {
+            self.bblocks.remove_block_arc(arc);
+        }
+        self.structure_reset();
+        true
+    }
+
+    /// Splice a 1-out basic block into its single successor.
+    /// Faithful to `Funcdata::spliceBlockBasic` (funcdata_block.cc:919-956).
+    ///
+    /// The given block must have a single output block with a single input
+    /// (from this block). The output block's ops are conceptually merged; here
+    /// we splice the CFG: this block inherits the successor's out-edges and the
+    /// successor is removed. This is used by ActionRedundBranch (case 1) and
+    /// ActionDoNothing.
+    pub fn splice_block_basic(&mut self, bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
+        let (out_block, out_has_single_in) = {
+            let rg = bb.read().unwrap();
+            if rg.size_out() != 1 {
+                return false;
+            }
+            let ob = rg.get_out(0).map(|e| e.point);
+            let ob = match ob { Some(o) => o, None => return false };
+            let single_in = ob.read().unwrap().size_in() == 1;
+            (ob, single_in)
+        };
+        if !out_has_single_in {
+            return false;
+        }
+        // Destroy any branch op at the end of bb (it falls through).
+        let last_op = {
+            let rg = bb.read().unwrap();
+            if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                bb2.last_op()
+            } else {
+                None
+            }
+        };
+        if let Some(branch_op) = last_op {
+            let is_branch = {
+                let o = branch_op.0.read().unwrap();
+                o.opcode == crate::opcodes::OpCode::CPUI_BRANCH
+                    || o.opcode == crate::opcodes::OpCode::CPUI_CBRANCH
+                    || o.opcode == crate::opcodes::OpCode::CPUI_BRANCHIND
+            };
+            if is_branch {
+                self.op_destroy(&branch_op);
+            }
+        }
+        // Move out_block's out-edges to bb, then remove out_block.
+        // Collect out_block's out-edge targets.
+        let succ_targets: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+            let rg = out_block.read().unwrap();
+            let nn = rg.size_out();
+            (0..nn).filter_map(|j| rg.get_out(j).map(|e| e.point)).collect()
+        };
+        // Remove bb's single out-edge to out_block.
+        self.bblocks.remove_edge_blocks(bb, &out_block);
+        // Add edges from bb to each of out_block's successors.
+        for tgt in &succ_targets {
+            self.bblocks.add_edge(bb.clone(), tgt.clone());
+        }
+        // Remove out_block from the graph.
+        self.bblocks.remove_block_arc(&out_block);
+        self.structure_reset();
+        true
+    }
+
     /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
     /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
     /// (funcdata_op.cc:1029-1065).
