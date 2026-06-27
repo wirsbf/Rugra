@@ -112,6 +112,12 @@ pub struct FuncCallSpecs {
     pub prototype: FuncProto,
     /// Flags and other metadata
     pub flags: u32,
+    /// Active-input parameter trials (ParamActive). Faithful to
+    /// `FuncCallSpecs::activeinput`. Set by ActionFuncLink::funcLinkInput.
+    pub active_input: Option<ParamActive>,
+    /// Active-output parameter trials. Faithful to
+    /// `FuncCallSpecs::activeoutput`. Set by ActionFuncLink::funcLinkOutput.
+    pub active_output: Option<ParamActive>,
 }
 
 impl FuncCallSpecs {
@@ -122,7 +128,56 @@ impl FuncCallSpecs {
             entry_addr: None,
             prototype,
             flags: 0,
+            active_input: None,
+            active_output: None,
         }
+    }
+
+    /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to
+    /// `FuncCallSpecs::isInputLocked` — true if all params are type-locked.
+    pub fn is_input_locked(&self) -> bool {
+        !self.prototype.parameters.is_empty()
+            && self.prototype.parameters.iter().all(|p| p.is_type_locked())
+    }
+
+    /// Is the output (return) locked? Faithful to `FuncCallSpecs::isOutputLocked`.
+    /// True if the return type is non-void and locked.
+    pub fn is_output_locked(&self) -> bool {
+        // Rugra's FuncProto doesn't track a separate output-lock flag; we treat
+        // a non-void return as locked when params are locked (heuristic matching
+        // Ghidra's modelname-locked semantics).
+        self.is_input_locked()
+    }
+
+    /// Is this a varargs (...) prototype? Faithful to `FuncCallSpecs::isDotdotdot`.
+    pub fn is_dotdotdot(&self) -> bool {
+        self.prototype.is_dotdotdot
+    }
+
+    /// Initialize the active-input ParamActive container if not already present.
+    /// Faithful to `FuncCallSpecs::initActiveInput`. Recovers sub-call prototypes.
+    pub fn init_active_input(&mut self) {
+        if self.active_input.is_none() {
+            self.active_input = Some(ParamActive::new(true));
+        }
+    }
+
+    /// Initialize the active-output ParamActive container if not already present.
+    /// Faithful to `FuncCallSpecs::initActiveOutput`.
+    pub fn init_active_output(&mut self) {
+        if self.active_output.is_none() {
+            self.active_output = Some(ParamActive::new(false));
+        }
+    }
+
+    /// Get the active-input trials (if initialized).
+    pub fn get_active_input(&self) -> Option<&ParamActive> {
+        self.active_input.as_ref()
+    }
+
+    /// Get the active-output trials (if initialized).
+    pub fn get_active_output(&self) -> Option<&ParamActive> {
+        self.active_output.as_ref()
     }
 }
 

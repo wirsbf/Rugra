@@ -92,3 +92,22 @@ Create a new call specification
 **ParamActive**（15+ 方法）：试验容器，registerTrial/whichTrial/splitTrial/getNumUsed 等。
 
 **关键状态**：ParamTrial/ParamActive 数据结构 + 核心方法完整移植，4 单元测试验证（标志位、split、register/split、num_used）。但 FuncCallSpecs 尚未持有 `active_input`/`active_output` 字段——这是下一个接入点，接入后即可移植 ActionFuncLink 等 Action 的 apply()。
+
+### 2026-06-27（会话3 G5 接入）：FuncCallSpecs active_input/active_output 字段 + 访问器
+
+- `FuncCallSpecs.active_input: Option<ParamActive>` / `active_output: Option<ParamActive>` — 忠实于 Ghidra `activeinput`/`activeoutput`（fspec.hh）。
+- `is_input_locked()` / `is_output_locked()` — FuncCallSpecs::isInputLocked/isOutputLocked
+- `is_dotdotdot()` — isDotdotdot
+- `init_active_input()` / `init_active_output()` — initActiveInput/initActiveOutput
+- `get_active_input()` / `get_active_output()` — getActiveInput/getActiveOutput
+
+### 2026-06-27（会话3 G5 接入续）：ActionFuncLink apply() + funcLinkInput/funcLinkOutput
+
+完整移植 ActionFuncLink（coreaction.cc:1575-1586）+ funcLinkInput(1474-1513)/funcLinkOutput(1521-1572)：
+
+- `func_link_input(fc)`：unlocked/varargs → init_active_input；locked → 注册每个参数为 trial 并 mark_active（Ghidra 的 opStackLoad/opInsertInput pcode 注入需 Funcdata op-edit，暂缓）
+- `func_link_output(fc)`：unlocked → init_active_output；locked → 需 newVarnodeOut+assumedOutputExtension（暂缓）
+- `ActionFuncLink::apply`：遍历 callspecs 调用 func_link_input + func_link_output
+- `ActionFuncLinkOutOnly::apply`：只调用 func_link_output
+
+3 单元测试：空 Funcdata、unlocked callspec 初始化 active_input/output、is_input_locked。712/712 测试。

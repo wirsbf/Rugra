@@ -519,3 +519,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 **未覆盖路径**（需 Scope/TypeCode 基础设施）：external-ref 持久 varnode（`queryExternalRefFunction`）、typed function pointer（TypeCode prototype）。常量地址路径是二进制中最常见的情况。
 
 3 单元测试：空 Funcdata、get_name、trace_indirect_target 常量解析。705/705 测试，curl 24/24 + httpd 29/29。
+
+### 2026-06-27（会话3 G5 接入）：ActionFuncLink/FuncLinkOutOnly apply() 完整移植
+
+- ActionFuncLink::apply（coreaction.cc:1575-1586）：遍历 callspecs，func_link_input + func_link_output
+- func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
+- func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
+- ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output

@@ -3524,34 +3524,78 @@ fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::Pc
 pub struct ActionFuncLink;
 impl ActionFuncLink {
     pub fn new() -> Self { Self }
+
+    /// Set up input parameter recovery for a sub-function call. Faithful to
+    /// `ActionFuncLink::funcLinkInput` (coreaction.cc:1474-1513).
+    ///
+    /// If the prototype is unlocked (or varargs), initialize the active-input
+    /// ParamActive so ActionActiveParam can gather trials. If locked, register
+    /// each formal parameter as a trial and mark it active. The locked-stack-
+    /// param path (opStackLoad + spacebase placeholder) requires Funcdata
+    /// op-edit pcode injection; the register-param trial registration is
+    /// implemented here.
+    pub fn func_link_input(fc: &mut crate::fspec::FuncCallSpecs) {
+        let inputlocked = fc.is_input_locked();
+        let varargs = fc.is_dotdotdot();
+        if !inputlocked || varargs {
+            fc.init_active_input();
+        }
+        if inputlocked {
+            // Register each formal parameter as a trial, marked active.
+            // Ghidra also inserts pcode (opStackLoad for stack params,
+            // newVarnode for register params) — that requires Funcdata op-edit
+            // and is deferred. The trial registration is the data-model core.
+            if let Some(active) = fc.active_input.as_mut() {
+                let nump = fc.prototype.num_params();
+                for i in 0..nump {
+                    let (addr, sz) = {
+                        let p = match fc.prototype.get_param(i) { Some(p) => p, None => continue };
+                        (p.address, 8_i32) // size approximated; ProtoParameter lacks size
+                    };
+                    active.register_trial(addr, sz);
+                    active.get_trial_mut(i).mark_active();
+                    if varargs {
+                        active.get_trial_mut(i).set_fixed_position(i as i32);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set up return-value recovery for a sub-function call. Faithful to
+    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1521-1572).
+    ///
+    /// If the output prototype is unlocked, initialize the active-output
+    /// ParamActive so ActionActiveReturn can gather trials. The locked-output
+    /// path (newVarnodeOut + assumedOutputExtension) requires Funcdata op-edit
+    /// and is deferred.
+    pub fn func_link_output(fc: &mut crate::fspec::FuncCallSpecs) {
+        if fc.is_output_locked() {
+            // Locked output: Ghidra creates the output varnode + extension op.
+            // That requires Funcdata op-edit (newVarnodeOut/opInsertAfter) and
+            // is deferred. The active-output container stays None for locked.
+        } else {
+            fc.init_active_output();
+        }
+    }
 }
 impl Action for ActionFuncLink {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs and verify each has
-        // a valid op address. Full funcLinkInput/funcLinkOutput requires
-        // ParamActive + opStackLoad integration.
+        // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586).
         let n_calls = fd.num_calls();
-        let mut change_count = 0;
-
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Verify the call spec has a valid address.
-                let _ = fc.op_addr;
-                change_count += 1;
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                Self::func_link_input(fc);
+                Self::func_link_output(fc);
             }
         }
-
-        // Return NO_CHANGE since we don't actually modify anything yet.
-        // Full funcLinkInput: initActiveInput, register trials, opStackLoad
-        // Full funcLinkOutput: remove unexpected outputs, create return addr
-        let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "funclink" }
 }
 
 /// FuncLinkOutOnly: link only outgoing function calls. Faithful to
-/// `ActionFuncLinkOutOnly` (coreaction.cc).
+/// `ActionFuncLinkOutOnly` (coreaction.cc:1588-1595).
 ///
 /// Only calls funcLinkOutput for each call (input linking already done).
 pub struct ActionFuncLinkOutOnly;
@@ -3560,14 +3604,11 @@ impl ActionFuncLinkOutOnly {
 }
 impl Action for ActionFuncLinkOutOnly {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs and verify each has
-        // a valid prototype. Full funcLinkOutput requires opUnsetOutput
-        // + output-locked varnode creation.
+        // Faithful to ActionFuncLinkOutOnly::apply (coreaction.cc:1588-1595).
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Verify the call spec's prototype exists.
-                let _ = &fc.prototype;
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                ActionFuncLink::func_link_output(fc);
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -4097,5 +4138,52 @@ mod tests {
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(callind));
         let resolved = ActionDeindirect::trace_indirect_target(&op_arc);
         assert_eq!(resolved, Some(Address::new(0x500)));
+    }
+
+    /// ActionFuncLink: empty Funcdata (no calls) → NO_CHANGE.
+    #[test]
+    fn test_action_funclink_empty_fd() {
+        use crate::address::Address;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = ActionFuncLink::new();
+        assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// ActionFuncLink with an unlocked callspec initializes active_input/output.
+    #[test]
+    fn test_action_funclink_initializes_active() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto};
+        let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
+            crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
+        let proto = FuncProto::new("callee".into(), void_t);
+        let fc = FuncCallSpecs::new(Address::new(0x2000), proto);
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        fd.add_call_specs(fc);
+        assert_eq!(fd.num_calls(), 1);
+        // Before: no active input/output.
+        assert!(fd.get_call_specs(0).unwrap().active_input.is_none());
+        let a = ActionFuncLink::new();
+        a.apply(&mut fd).unwrap();
+        // After: unlocked proto → active_input + active_output initialized.
+        assert!(fd.get_call_specs(0).unwrap().active_input.is_some());
+        assert!(fd.get_call_specs(0).unwrap().active_output.is_some());
+    }
+
+    /// FuncCallSpecs.is_input_locked: true when all params type-locked.
+    #[test]
+    fn test_funcspecs_is_input_locked() {
+        use crate::address::Address;
+        use crate::fspec::{FuncCallSpecs, FuncProto, ProtoParameter, protoparam_flags};
+        let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
+            crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
+        let int_t = std::sync::Arc::new(crate::type_system::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+        let mut proto = FuncProto::new("f".into(), void_t);
+        let mut p = ProtoParameter::new("a".into(), int_t, Address::new(0));
+        p.flags |= protoparam_flags::TYPE_LOCKED;
+        proto.add_parameter(p);
+        let fc = FuncCallSpecs::new(Address::new(0x1000), proto);
+        assert!(fc.is_input_locked());
     }
 }
