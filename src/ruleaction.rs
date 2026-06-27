@@ -6142,6 +6142,223 @@ impl Rule for RuleLzcountShiftBool {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LZCOUNT] }
 }
 
+/// Simplify expressions involving three-way comparisons. Faithful to
+/// Ghidra's `RuleThreeWayCompare` (ruleaction.cc:9949-10263).
+///
+/// A three-way comparison is `X = zext(V < W) + zext(V <= W) - 1`, giving
+/// -1/0/1. This Rule looks for secondary comparisons of the three-way result
+/// and replaces them with the corresponding direct comparison.
+pub struct RuleThreeWayCompare;
+
+impl RuleThreeWayCompare {
+    pub fn new() -> Self { Self }
+
+    /// Check if two comparison ops are equivalent. Returns 0=correct, 1=swap,
+    /// -1=not equivalent. Faithful to `testCompareEquivalence`
+    /// (ruleaction.cc:9960-10034).
+    fn test_compare_equivalence(
+        lessop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        lessequalop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> i32 {
+        let less_code = lessop.read().unwrap().opcode;
+        let le_code = lessequalop.read().unwrap().opcode;
+        let two_less = if less_code == OpCode::CPUI_INT_LESS {
+            if le_code == OpCode::CPUI_INT_LESSEQUAL { false }
+            else if le_code == OpCode::CPUI_INT_LESS { true }
+            else { return -1; }
+        } else if less_code == OpCode::CPUI_INT_SLESS {
+            if le_code == OpCode::CPUI_INT_SLESSEQUAL { false }
+            else if le_code == OpCode::CPUI_INT_SLESS { true }
+            else { return -1; }
+        } else if less_code == OpCode::CPUI_FLOAT_LESS {
+            if le_code == OpCode::CPUI_FLOAT_LESSEQUAL { false }
+            else if le_code == OpCode::CPUI_FLOAT_LESS { true }
+            else { return -1; }
+        } else {
+            return -1;
+        };
+        let _ = two_less;
+        // Check inputs match: lessop input(0) == lessequalop input(0),
+        // lessop input(1) == lessequalop input(1).
+        let l0 = lessop.read().unwrap().get_in(0).cloned();
+        let l1 = lessop.read().unwrap().get_in(1).cloned();
+        let le0 = lessequalop.read().unwrap().get_in(0).cloned();
+        let le1 = lessequalop.read().unwrap().get_in(1).cloned();
+        if let (Some(l0), Some(l1), Some(le0), Some(le1)) = (l0, l1, le0, le1) {
+            if std::sync::Arc::ptr_eq(&l0, &le0) && std::sync::Arc::ptr_eq(&l1, &le1) {
+                return 0;
+            }
+            if std::sync::Arc::ptr_eq(&l0, &le1) && std::sync::Arc::ptr_eq(&l1, &le0) {
+                return 1;
+            }
+        }
+        -1
+    }
+
+    /// Detect a three-way comparison pattern rooted at `addop`. Returns the
+    /// less-than op, or None. Faithful to `detectThreeWay`
+    /// (ruleaction.cc:10035-10124).
+    fn detect_three_way(
+        addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, bool)> {
+        // addop is INT_ADD. Both inputs must be ZEXT of comparison ops.
+        let add0 = addop.read().unwrap().get_in(0).cloned()?;
+        let add1 = addop.read().unwrap().get_in(1).cloned()?;
+        if !add0.read().unwrap().is_written() || !add1.read().unwrap().is_written() {
+            return None;
+        }
+        let zext1 = add0.read().unwrap().get_def()?;
+        let zext2 = add1.read().unwrap().get_def()?;
+        if zext1.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return None; }
+        if zext2.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return None; }
+        let vn1 = zext1.read().unwrap().get_in(0).cloned()?;
+        let vn2 = zext2.read().unwrap().get_in(0).cloned()?;
+        if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
+            return None;
+        }
+        let lessop = vn1.read().unwrap().get_def()?;
+        let lessequalop = vn2.read().unwrap().get_def()?;
+        let less_code = lessop.read().unwrap().opcode;
+        let (lessop, lessequalop) = if less_code == OpCode::CPUI_INT_LESS
+            || less_code == OpCode::CPUI_INT_SLESS
+            || less_code == OpCode::CPUI_FLOAT_LESS
+        {
+            (lessop, lessequalop)
+        } else {
+            (lessequalop, lessop)
+        };
+        let form = Self::test_compare_equivalence(&lessop, &lessequalop);
+        if form < 0 { return None; }
+        let result_op = if form == 1 { lessequalop } else { lessop };
+        Some((result_op, false))
+    }
+}
+
+impl Rule for RuleThreeWayCompare {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleThreeWayCompare::applyOp (ruleaction.cc:10146-10263).
+        let (const_slot, val, tmp_vn, op_code) = {
+            let op = op_arc.read().unwrap();
+            let opc = op.opcode;
+            if opc != OpCode::CPUI_INT_SLESS && opc != OpCode::CPUI_INT_SLESSEQUAL
+                && opc != OpCode::CPUI_INT_EQUAL && opc != OpCode::CPUI_INT_NOTEQUAL
+            {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // Find constant input.
+            let mut const_slot = 0;
+            let mut tmp_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !tmp_vn.read().unwrap().is_constant() {
+                const_slot = 1;
+                tmp_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                if !tmp_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            }
+            let val = tmp_vn.read().unwrap().get_offset();
+            let const_size = tmp_vn.read().unwrap().get_size();
+            let form = if val <= 2 {
+                val as i32 + 1
+            } else if val == calc_mask(const_size) {
+                0
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            };
+            let tmp2 = match op.inrefs.get(1 - const_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (const_slot, form, tmp2, opc)
+        };
+        if !tmp_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let addop = match tmp_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+        let (lessop, is_partial) = match Self::detect_three_way(&addop) {
+            Some((l, p)) => (l, p),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let mut form = val;
+        if is_partial {
+            if form == 0 { return Ok(action_status::NO_CHANGE); }
+            form -= 1;
+        }
+        form <<= 1;
+        if const_slot == 1 { form += 1; }
+        let lessform = lessop.read().unwrap().opcode;
+        form <<= 2;
+        if op_code == OpCode::CPUI_INT_SLESSEQUAL { form += 1; }
+        else if op_code == OpCode::CPUI_INT_EQUAL { form += 2; }
+        else if op_code == OpCode::CPUI_INT_NOTEQUAL { form += 3; }
+        let b_vn = lessop.read().unwrap().get_in(0).cloned();
+        let a_vn = lessop.read().unwrap().get_in(1).cloned();
+        let (Some(a_vn), Some(b_vn)) = (a_vn, b_vn) else { return Ok(action_status::NO_CHANGE) };
+        if !a_vn.read().unwrap().is_constant() && a_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        if !b_vn.read().unwrap().is_constant() && b_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Encode lessform + 1 for LESSEQUAL.
+        let less_equal_form = match lessform {
+            OpCode::CPUI_INT_LESS => OpCode::CPUI_INT_LESSEQUAL,
+            OpCode::CPUI_INT_SLESS => OpCode::CPUI_INT_SLESSEQUAL,
+            _ => lessform, // FLOAT_LESS + 1 is not simply incrementing; skip for float.
+        };
+        let zero_const = fd.new_constant(1, 0);
+        match form {
+            1 | 21 => {
+                // Always true.
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_EQUAL);
+                fd.op_set_input(&follow, zero_const.clone(), 0);
+                fd.op_set_input(&follow, zero_const, 1);
+            }
+            4 | 16 => {
+                // Always false.
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_NOTEQUAL);
+                let z2 = fd.new_constant(1, 0);
+                fd.op_set_input(&follow, z2.clone(), 0);
+                fd.op_set_input(&follow, z2, 1);
+            }
+            2 | 5 | 6 | 12 => {
+                // a < b
+                fd.op_set_opcode(&follow, lessform);
+                fd.op_set_input(&follow, a_vn, 0);
+                fd.op_set_input(&follow, b_vn, 1);
+            }
+            13 | 19 | 20 | 23 => {
+                // a <= b
+                fd.op_set_opcode(&follow, less_equal_form);
+                fd.op_set_input(&follow, a_vn, 0);
+                fd.op_set_input(&follow, b_vn, 1);
+            }
+            8 | 17 | 18 | 22 => {
+                // a > b  (swap operands)
+                fd.op_set_opcode(&follow, lessform);
+                fd.op_set_input(&follow, b_vn, 0);
+                fd.op_set_input(&follow, a_vn, 1);
+            }
+            0 | 3 | 7 | 9 => {
+                // a >= b  (swap operands, LESSEQUAL)
+                fd.op_set_opcode(&follow, less_equal_form);
+                fd.op_set_input(&follow, b_vn, 0);
+                fd.op_set_input(&follow, a_vn, 1);
+            }
+            10 | 14 => {
+                // a == b
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_EQUAL);
+                fd.op_set_input(&follow, a_vn, 0);
+                fd.op_set_input(&follow, b_vn, 1);
+            }
+            11 | 15 => {
+                // a != b
+                fd.op_set_opcode(&follow, OpCode::CPUI_INT_NOTEQUAL);
+                fd.op_set_input(&follow, a_vn, 0);
+                fd.op_set_input(&follow, b_vn, 1);
+            }
+            _ => return Ok(action_status::NO_CHANGE),
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "three_way_compare" }
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+    }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

@@ -684,3 +684,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `lzcount(X) >> c => X == 0`（当 X 大小为 2^c 字节时，lzcount 的最高位指示是否为 0）
   - 仅对 2 的幂大小生效（popcount(max_return) == 1）
   - 将移位后代替换为 INT_EQUAL + COPY/ZEXT
+
+## 2026-06-27（续 19）：ThreeWayCompare 规则
+
+- **RuleThreeWayCompare**：完整移植 ruleaction.cc:9949-10263（~230 行）。简化三方比较表达式：
+  - 三方比较 = `zext(V < W) + zext(V <= W) - 1`，结果为 -1/0/1
+  - `detect_three_way(addop)` — 检测 INT_ADD(zext(cmp1), zext(cmp2)) 模式
+  - `test_compare_equivalence(lessop, lessequalop)` — 验证两个比较操作等价
+  - 对 24 种 form 组合（const 值 × 位置 × 比较类型）分别重写为直接比较
+  - 包括：always true/false、a<b、a<=b、a>b、a>=b、a==b、a!=b
