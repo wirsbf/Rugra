@@ -965,6 +965,11 @@ impl MapState {
         self.add_range(start, dtype, flags, RangeType::Fixed, -1);
     }
 
+    /// Number of RangeHints collected so far (diagnostic).
+    pub fn hint_count(&self) -> usize {
+        self.maplist.len()
+    }
+
     /// Filter out INDIRECT/MULTIEQUAL/PIECE ops that just copy between the same
     /// storage location. If another op actively reads `vn`, return true.
     /// Faithful to `MapState::isReadActive` (varmap.cc:1088).

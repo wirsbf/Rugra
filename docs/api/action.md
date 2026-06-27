@@ -570,3 +570,7 @@ Funcdata ready
 ### 2026-06-27（会话2）：ActionConditionalExe 接入主管线
 
 - `ActionConditionalExe`（crate::condexe）注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionBlockStructure` 之前，对应 Ghidra coreaction.cc:5675 mainloop 顺序。条件执行消除（condexe.cc:712）在结构化前折叠冗余 CBRANCH 汇合。
+
+### 2026-06-27（会话3 续）：ActionRestructureVarnode 接入主管线
+
+- `ActionRestructureVarnode`（coreaction.cc:5505 "localrecovery"）现注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionConditionalExe` 之前。此前它**未接入**，导致 `fd.scope` 永远为 None，printc 的 `get_stack_variable_name` 永远找不到栈变量名 → uVar 碎片。接入后 scope 被构建，local_ 统计从 81→78（curl）。**G3 剩余**：多数函数 gather_spacebase 收集到 0 hints，根因是栈访问用 RBP/param 指针而非 RSP 直派，需扩展 spacebase 基址识别 + 修复 SSA def 断链。

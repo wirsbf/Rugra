@@ -88,3 +88,7 @@ varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 G
 - TYPE_PARTIALSTRUCT/PARTIALUNION 在 addFixedType 的处理（Rugra 无此元类型）
 
 测试：varmap::tests 17 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/build_name/mark_unaliased/restructure）。
+
+### 2026-06-27（会话3 续）：MapState::hint_count（诊断）
+
+- `MapState::hint_count() -> usize` — 诊断辅助：返回已收集的 RangeHint 数量。用于核实 gather_spacebase 的实际产出（发现多数函数返回 0，定位 G3 阻塞根因）。

@@ -136,6 +136,12 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionTypePropagate::new()));
         decompile_group.add_action(Box::new(ActionCallParams::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
+        // Local variable recovery (coreaction.cc:5505 "localrecovery"): build
+        // the stack-variable scope via ScopeLocal::restructure_varnode, which
+        // printc's get_stack_variable_name queries to name stack slots instead
+        // of emitting uVar fragments. Must run after DeadCode (so the scope
+        // sees only live varnodes) and before block structuring.
+        decompile_group.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
         // Conditional-execution elimination (coreaction.cc:5675): collapse
         // redundant CBRANCH joins. Must run before block structuring.
         decompile_group.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
