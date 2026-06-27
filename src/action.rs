@@ -173,7 +173,11 @@ pub fn build_simplify_pool() -> ActionPool {
     // registered in Ghidra's exact order so their interactions match.
     // Entries whose Rust port does not yet exist are noted as skipped.
 
-    pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512
+    // skip RuleEarlyRemoval (5512) — Rugra's descend/liveness tracking is
+    // incomplete; it removes defs still referenced via memory/aliasing,
+    // producing empty varnodes (`*(long*) += ...`). Re-enable once
+    // doesDeadcode/autoLive machinery is ported.
+    // pool.add_rule(Box::new(RuleEarlyRemoval::new()));       // 5512
     pool.add_rule(Box::new(RuleTermOrder::new()));          // 5513
     pool.add_rule(Box::new(RuleSelectCse::new()));          // 5514
     pool.add_rule(Box::new(RuleCollectTerms::new()));       // 5515
@@ -286,11 +290,34 @@ pub fn build_simplify_pool() -> ActionPool {
     // x + (y * -1), RuleMultNegOne collapses y*-1 to INT_NEG(y), Rule2Comp2Sub
     // handles the 2's-complement form. Grouped after their parent so the pool
     // converges. RuleSextEliminate/Equality/FloatCast are Rugra-local extras.
-    pool.add_rule(Box::new(RuleMultNegOne::new()));
-    pool.add_rule(Box::new(Rule2Comp2Sub::new()));
+    // Other Rugra-local extras (NOT in Ghidra oppool1).
     pool.add_rule(Box::new(RuleSextEliminate::new()));
     pool.add_rule(Box::new(RuleEquality::new()));
     pool.add_rule(Box::new(RuleFloatCast::new()));
+    // NOTE: RuleMultNegOne (x*-1 -> INT_2COMP) and Rule2Comp2Sub are NOT here
+    // — they belong in the separate cleanup pool (see build_cleanup_pool) per
+    // Ghidra coreaction.cc:5694-5710. Putting them in oppool1 alongside
+    // Rule2Comp2Mult (which does the reverse) causes an infinite ping-pong;
+    // Ghidra avoids it by PHASE SEPARATION (main pool converges first, then
+    // cleanup pool runs once).
+    pool
+}
+
+/// Build the cleanup `ActionPool` mirroring Ghidra's `actcleanup`
+/// (coreaction.cc:5694-5710). Runs AFTER the main simplify pool so that
+/// canonical forms produced by oppool1 (e.g. INT_MULT(x,-1) from
+/// Rule2Comp2Mult) get cleaned up to their final form (INT_2COMP) without
+/// ping-ponging — the main pool has already converged, so the reverse
+/// transform here cannot re-trigger Rule2Comp2Mult.
+pub fn build_cleanup_pool() -> ActionPool {
+    use crate::ruleaction::*;
+    let mut pool = ActionPool::new("cleanup");
+    pool.add_rule(Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
+    pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // coreaction.cc:5698
+    // skip RuleAddUnsigned / RuleDumptyHumpLate / RuleSubRight /
+    // RuleFloatSignCleanup / RuleExpandLoad / RulePtrsubCharConstant /
+    // RuleExtensionPush / RulePieceStructure / RuleSplitCopy / RuleSplitLoad /
+    // RuleSplitStore / RuleStringCopy / RuleStringStore — not yet ported
     pool
 }
 
@@ -343,6 +370,12 @@ impl ActionDatabase {
         // P-code. This is the first time Rugra actually dispatches its ~90
         // implemented Rules; previously none were wired into the pipeline.
         decompile_group.add_action(Box::new(build_simplify_pool()));
+        // Cleanup pool (Ghidra coreaction.cc:5694 actcleanup) runs AFTER the
+        // main simplify pool converges. It holds reverse-canonicalization
+        // Rules (RuleMultNegOne x*-1->INT_2COMP, Rule2Comp2Sub) that would
+        // ping-pong if placed in oppool1 alongside Rule2Comp2Mult. Phase
+        // separation breaks the cycle: oppool1 finishes first.
+        decompile_group.add_action(Box::new(build_cleanup_pool()));
         // Merge BEFORE copy propagation: copy-merge needs the COPY ops to
         // still be alive, and DeadCode would otherwise remove them.
         decompile_group.add_action(Box::new(ActionMergeType::new()));

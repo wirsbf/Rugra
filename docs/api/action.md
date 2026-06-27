@@ -580,8 +580,10 @@ Funcdata ready
 **系统性架构补全**：Rugra 此前 ~90 个 Rule 全部实现了 `apply_op` 但**均未接入主管线**——无 Ghidra ActionPool 式的 Rule 遍历调度。本次补全：
 
 - 新增 `ActionPool` struct（对应 Ghidra `ActionPool`，action.hh:262）：持有 `Vec<Box<dyn Rule>>` + `per_op: HashMap<OpCode, Vec<usize>>` 索引。`add_rule` 注册 Rule 并按 opcode 建索引；`apply` 遍历所有 live op，按 opcode 匹配 Rule，循环至固定点（对应 Ghidra rule_repeatapply）。
-- `build_simplify_pool()` 注册 **~80 个简化 Rule**（2026-06-27 从 44 扩展）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule（RulePullsubIndirect/RuleShiftPiece/RuleIndirectCollapse/RuleSLess2Zero/RuleTransformCpool/RuleSubCommute/RuleDivTermAdd*/RuleModOpt*/RuleSwitchSingle/RulePopcountBoolXor/RuleFloatSign + 5621-5648 的 subvar/float/segment/ptr 族）以 `skip` 注释标注。另含 Rugra-local 配套（RuleMultNegOne/Rule2Comp2Sub 完成 RuleSub2Add 的 -1 折叠收敛）。
-- 接入 `set_default_actions`：在 `ActionSimplify` 之后跑 simplify pool。
+- `build_simplify_pool()` 注册 **~80 个简化 Rule**（2026-06-27 从 44 扩展）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule 以 `skip` 注释标注。
+- **`build_cleanup_pool()`**（新增，对齐 Ghidra `actcleanup` coreaction.cc:5694-5710）：独立池，含 `RuleMultNegOne`/`Rule2Comp2Sub`。**在 simplify 池之后跑**（阶段分隔）。这解决了一个收敛 bug：RuleMultNegOne（`x*-1→INT_2COMP`）若与 Rule2Comp2Mult（`INT_2COMP→x*-1`，oppool1 内）同池会无限 ping-pong；Ghidra 靠阶段分隔（主池先收敛、cleanup 池再跑一次）避免循环，Rugra 现忠实移植此机制。
+- RuleEarlyRemoval(5512) 暂 skip：Rugra 的 RuleEarlyRemoval 移植只补了 2/6 守卫（缺 `isIndirectSource`/`isAutoLive`/`doesDeadcode`），会误删有内存副作用的 op → 空 varnode。待补齐守卫后重新启用。
+- 接入 `set_default_actions`：`ActionSimplify` → `build_simplify_pool()` → `build_cleanup_pool()`。
 
 **验证**：诊断确认 Rule 真实触发——curl 各函数 pass_changes 从 1 到 30+（如 main 28 次、getparameter 30 次简化）。这是 Rugra 首次在反编译时实际应用 Rule 简化。682/682 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。
 
