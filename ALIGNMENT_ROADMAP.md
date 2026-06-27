@@ -246,7 +246,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 39 | `emulate.cc` | `emulate.rs` (212行) | 🔧 L2 | **核实修正**：非完全缺失。Emulate 框架存在；**核心 execute() 指令循环未实现**（影响常量传播/符号执行） | `emulate.cc` |
+| 39 | `emulate.cc` | `emulate.rs` (480行) | 🔧 **L2（G7 核心完成）** | **2026-06-27**：完整移植 execute_current_op（emulate.cc:143-216 dispatch）+ execute() 主循环 + get_value/set_value（值解析，非仅常量）+ execute_unary/binary/load/store。4 个单元测试验证 COPY/INT_ADD/链式执行/RETURN 终止。**剩余**：BreakTable/BreakCallBack、EmulateFunction（函数级模拟）、与 jumptable 集成 | `emulate.cc` |
 | 40 | `emulateutil.cc` | `emulate.rs`（同上） | 🔧 L2 | 模拟工具与 emulate.rs 合并；EmulateFunction 部分 | `emulateutil.cc` |
 | 41 | `float.cc` + `double.cc` + `multiprecision.cc` | `float_emulate.rs` (379行) | 🔧 L2 | **核实修正**：非完全缺失。float_emulate 有 35 fn（2 todo）；缺完整 multiprecision 128位运算 | `float.cc`, `double.cc`, `multiprecision.cc` |
 | 42 | `opbehavior.cc` | `opbehavior.rs` (248行) | 🔧 L2 | **核实修正**：非完全缺失。OpBehavior 框架存在；缺完整 evaluateUnary/evaluateBinary 全 opcode 覆盖 | `opbehavior.cc` |

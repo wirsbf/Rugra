@@ -34,3 +34,15 @@ P-code 模拟执行引擎。对应 Ghidra 的 `emulate.hh`。
 - **结果存储**：算术/逻辑操作结果存入寄存器文件
 
 测试：新增 2 个（register_file + instruction_limit）。
+
+### 2026-06-27（会话3 G7）：execute_current_op + execute() 主循环完整移植
+
+完整移植 Ghidra `Emulate::executeCurrentOp`（emulate.cc:143-216）+ 主 execute 循环：
+
+- `get_value(vn)` / `set_value(vn, val)` — MemoryState::getValue/setValue 等价：常量返回 offset，其他 varnode 返回寄存器值（非仅常量）。
+- `execute_current_op(op)` — executeCurrentOp dispatch：LOAD/STORE→MemState，BRANCH/CBRANCH/BRANCHIND/CALL/CALLIND/RETURN 控制流，COPY/unary→execute_unary，binary→execute_binary。
+- `execute_unary` / `execute_binary` — EmulateMemory::executeUnary/Binary：opbehavior evaluate + set_value。
+- `execute_load` / `execute_store` — executeLoad/Store：MemState bank get/set。
+- `execute(ops)` — 主循环：按序步进 ops，Continue 推进，Branch/Return/Error 终止。
+
+4 单元测试：COPY 常量、INT_ADD、链式执行（COPY→INT_ADD 结果传递）、RETURN 终止。
