@@ -6915,6 +6915,78 @@ impl Rule for RuleSignNearMult {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 
+/// Simplify redundant float casts. Faithful to Ghidra's `RuleFloatCast`
+/// (ruleaction.cc:9545-9602).
+///
+/// Eliminates redundant FLOAT_FLOAT2FLOAT and FLOAT_TRUNC chains:
+/// - `float2float(float2float(V)) => float2float(V)` when redundant
+/// - `float2float(int2float(V)) => int2float(V)` (straight to final size)
+/// - `trunc(float2float(V)) => trunc(V)` (straight to final integer)
+pub struct RuleFloatCast;
+
+impl RuleFloatCast {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleFloatCast {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleFloatCast::applyOp (ruleaction.cc:9560-9602).
+        let (opc1, vn2, insize1, insize2, outsize) = {
+            let op = op_arc.read().unwrap();
+            let opc1 = op.opcode;
+            if opc1 != OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc1 != OpCode::CPUI_FLOAT_TRUNC {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let castop = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let opc2 = castop.read().unwrap().opcode;
+            if opc2 != OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc2 != OpCode::CPUI_FLOAT_INT2FLOAT {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let vn2 = match castop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            if vn2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            let insize1 = vn1.read().unwrap().get_size();
+            let insize2 = vn2.read().unwrap().get_size();
+            let outsize = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            (opc1, vn2, insize1, insize2, outsize)
+        };
+        let follow = crate::op::PcodeOpRef(op_arc.clone());
+        // Check opc2 from castop.
+        let in0 = op_arc.read().unwrap().inrefs[0].clone();
+        let castop = in0.read().unwrap().get_def().unwrap();
+        let opc2 = castop.read().unwrap().opcode;
+
+        if opc2 == OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc1 == OpCode::CPUI_FLOAT_FLOAT2FLOAT {
+            if insize1 > outsize {
+                // Op is superfluous.
+                fd.op_set_input(&follow, vn2, 0);
+                if outsize == insize2 {
+                    fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                }
+                return Ok(action_status::CHANGE);
+            } else if insize2 < insize1 {
+                // Two increases -> one combined increase.
+                fd.op_set_input(&follow, vn2, 0);
+                return Ok(action_status::CHANGE);
+            }
+        } else if opc2 == OpCode::CPUI_FLOAT_INT2FLOAT && opc1 == OpCode::CPUI_FLOAT_FLOAT2FLOAT {
+            // Convert integer straight into final float size.
+            fd.op_set_input(&follow, vn2, 0);
+            fd.op_set_opcode(&follow, OpCode::CPUI_FLOAT_INT2FLOAT);
+            return Ok(action_status::CHANGE);
+        } else if opc2 == OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc1 == OpCode::CPUI_FLOAT_TRUNC {
+            // Convert float straight into final integer.
+            fd.op_set_input(&follow, vn2, 0);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "float_cast" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_TRUNC] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

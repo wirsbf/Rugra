@@ -722,3 +722,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RulePositiveDiv**：完整移植 ruleaction.cc:7803-7830。当两个输入保证非负时，将 INT_SDIV→INT_DIV / INT_SREM→INT_REM（检查 NZMask 符号位）。
 - **RuleDoubleArithShift**：完整移植 ruleaction.cc:1930-1964。`(V s>> c) s>> d => V s>> (c+d)`（合并连续有符号右移，饱和到最大移位）。
 - **RuleSignNearMult**：完整移植 ruleaction.cc:8543-8610。将近乘法形式转换为有符号除法：`(X + ((X s>> n-1) >> k)) * c => (X s/ 2^n) * 2^n`，其中 c = 2^n。
+
+## 2026-06-27（续 24）：浮点转换简化
+
+- **RuleFloatCast**：完整移植 ruleaction.cc:9545-9602。简化冗余浮点转换链：
+  - `float2float(float2float(V)) => float2float(V)`（当外层冗余时）
+  - `float2float(int2float(V)) => int2float(V)`（整数直接转最终浮点大小）
+  - `trunc(float2float(V)) => trunc(V)`（浮点直接转最终整数大小）
