@@ -836,3 +836,7 @@ PcodeOpRaw
 - `get_eval_type() -> u32` — `PcodeOp::getEvalType`（op.hh:169）：返回 unary/binary/special/ternary 标志位。
 - `get_cse_hash() -> u64` — `PcodeOp::getCseHash`（op.cc:130-147）：计算公共子表达式检测哈希。非 unary/binary 或 COPY 返回 0。
 - `is_cse_match(other) -> bool` — `PcodeOp::isCseMatch`（op.cc:153-171）：完整 CSE 匹配测试（相同 opcode + 大小 + 输入）。
+
+### 2026-06-27（会话2）：is_boolean_flip（解锁 condexe）
+
+- `is_boolean_flip() -> bool` — `PcodeOp::isBooleanFlip`（op.hh:210）：CBRANCH 的布尔语义是否翻转。当为 true 时，CBRANCH 在输入为 TRUE 时走 fallthru 边（FALSE 时跳转）。condexe 的 verifySameCondition + is_true_out_to 用此适配 Rugra 边顺序。

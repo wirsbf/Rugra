@@ -566,3 +566,7 @@ Funcdata ready
 ### 2026-06-24：ActionTypePropagate 集成
 
 - ActionTypePropagate 在 ActionCopyPropagate 之后运行，保守标记 struct pointer varnode。
+
+### 2026-06-27（会话2）：ActionConditionalExe 接入主管线
+
+- `ActionConditionalExe`（crate::condexe）注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionBlockStructure` 之前，对应 Ghidra coreaction.cc:5675 mainloop 顺序。条件执行消除（condexe.cc:712）在结构化前折叠冗余 CBRANCH 汇合。

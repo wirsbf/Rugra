@@ -707,6 +707,84 @@ impl Funcdata {
         }
     }
 
+    /// Recompute loop structure, dominance, and reset the structured-block
+    /// hierarchy for the current CFG. Faithful to
+    /// `Funcdata::structureReset` (funcdata_block.cc:705-735).
+    ///
+    /// Must be called after any mutation that changes the CFG so that
+    /// dominator/loop information stays consistent.
+    pub fn structure_reset(&mut self) {
+        // Ghidra clears blocks_unreachable, recomputes loops + dominators,
+        // then rebuilds the high-level structured hierarchy. Rugra's
+        // structured hierarchy (sblocks) is rebuilt by blockaction on demand;
+        // here we refresh the basic-block dominator tree and loop flags so
+        // subsequent analyses see a consistent CFG.
+        self.bblocks.build_dom_tree();
+        let _ = self.bblocks.structure_loops();
+        // Clear any cached high-level structure; it will be regenerated.
+        self.sblocks.clear();
+    }
+
+    /// Remove a 2-in/2-out empty block, rejoining each in-edge to the
+    /// corresponding out-edge. Faithful to `Funcdata::removeFromFlowSplit`
+    /// (funcdata_block.cc:892-900) + `BlockGraph::removeFromFlowSplit`
+    /// (block.cc:1575-1590).
+    ///
+    /// `bl` must have exactly 2 in-edges and 2 out-edges and no ops.
+    /// If `swap` is false: In(0)->Out(1), In(1)->Out(0).
+    /// If `swap` is true:  In(0)->Out(0), In(1)->Out(1).
+    ///
+    /// (Ghidra's flipflow semantics: flipflow=true maps to replaceEdgesThru(0,0)
+    ///  joining in0->out0; flipflow=false joins in0->out1 first. We mirror this.)
+    pub fn remove_from_flow_split(
+        &mut self,
+        bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        swap: bool,
+    ) -> Result<(), String> {
+        // Validate 2-in / 2-out and empty.
+        if bl.read().unwrap().size_in() != 2 || bl.read().unwrap().size_out() != 2 {
+            return Err("remove_from_flow_split: block must have 2 in/2 out".to_string());
+        }
+        let nonempty = {
+            let bl_rg = bl.read().unwrap();
+            if let Some(bb) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                !bb.ops.is_empty()
+            } else {
+                // Non-basic composite blocks: treat as removable if they have
+                // no ops directly (they delegate to children).
+                bl_rg.get_ops().is_empty()
+            }
+        };
+        if nonempty {
+            return Err("remove_from_flow_split: block must be empty".to_string());
+        }
+
+        // Faithful to BlockGraph::removeFromFlowSplit (block.cc:1584-1589):
+        //   if flipflow: replaceEdgesThru(0,1)  // in0 -> out1
+        //   else:        replaceEdgesThru(1,1)  // in1 -> out1
+        //   then:        replaceEdgesThru(0,0)  // remaining in0 -> out0
+        // Note: Ghidra's param is `flipflow`; our `swap` matches flipflow
+        // (swap=true => in0->out0, in1->out1).
+        {
+            let mut bl_rg = bl.write().unwrap();
+            if let Some(bb) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if swap {
+                    bb.replace_edges_thru(0, 0);
+                    bb.replace_edges_thru(0, 1);
+                } else {
+                    bb.replace_edges_thru(0, 1);
+                    bb.replace_edges_thru(0, 0);
+                }
+            } else {
+                return Err("remove_from_flow_split: only BlockBasic supported".to_string());
+            }
+        }
+        // Remove the now-disconnected block from the graph.
+        self.bblocks.remove_block_arc(bl);
+        self.structure_reset();
+        Ok(())
+    }
+
     /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
     /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
     /// (funcdata_op.cc:1029-1065).

@@ -142,6 +142,13 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::BOOLOUTPUT) != 0
     }
 
+    /// Is the CBRANCH's boolean sense flipped? Faithful to
+    /// `PcodeOp::isBooleanFlip` (op.hh:210). When true, the CBRANCH takes
+    /// the fallthru edge on a TRUE input (and branches on FALSE).
+    pub fn is_boolean_flip(&self) -> bool {
+        (self.flags & pcodeop_flags::BOOLEAN_FLIP) != 0
+    }
+
     /// Get the evaluation type flags (unary/binary/special/ternary). Faithful
     /// to `PcodeOp::getEvalType` (op.hh:169).
     pub fn get_eval_type(&self) -> u32 {

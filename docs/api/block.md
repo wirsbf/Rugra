@@ -827,3 +827,14 @@ RPO 常用于：
 ### 2026-06-25：block.rs 恢复最佳状态
 
 ### 2026-06-25：FlowBlock as_any_mut + BlockBasic 边操作
+
+### 2026-06-27（会话2）：边操作原语（解锁 condexe）
+
+为支撑 condexe 核心图重写（condexe.cc:712），BlockBasic 新增忠实于 Ghidra block.cc 的边操作：
+- `get_out_rev_index(slot) -> i32` / `get_in_rev_index(slot) -> i32` — `FlowBlock::getOutRevIndex/getInRevIndex`（block.cc）：返回反向边索引。
+- `half_delete_in_edge(slot)` / `half_delete_out_edge(slot)` — `FlowBlock::halfDeleteInEdge/halfDeleteOutEdge`（block.cc:140/149）：只删除边的本端，并修正剩余边的反向索引。
+- `replace_edges_thru(in_slot, out_slot)` — `FlowBlock::replaceEdgesThru`（block.cc:198-216）：移除本块的入/出边，但在入块与出块间建立直连边，保留槽位。condexe 的 `removeFromFlowSplit` 核心。
+
+BlockGraph 新增：
+- `remove_block_arc(bl)` — `BlockGraph::removeBlock`（block.cc:1517）：先断开所有入/出边，再从 blocks 列表移除（不 drop Arc）。
+- `remove_edge_blocks(src, dst)` — `BlockGraph::removeEdge`：对称删除 src→dst 边的两端。

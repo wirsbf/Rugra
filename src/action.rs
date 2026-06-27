@@ -136,6 +136,9 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionTypePropagate::new()));
         decompile_group.add_action(Box::new(ActionCallParams::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
+        // Conditional-execution elimination (coreaction.cc:5675): collapse
+        // redundant CBRANCH joins. Must run before block structuring.
+        decompile_group.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
         decompile_group.add_action(Box::new(ActionBlockStructure::new()));
         decompile_group.add_action(Box::new(ActionNormalizeBranches::new()));
         decompile_group.add_action(Box::new(ActionFinalStructure::new()));

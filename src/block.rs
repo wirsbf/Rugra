@@ -316,6 +316,86 @@ impl BlockBasic {
         }
     }
 
+    /// Reverse-index of the given outgoing edge slot, i.e. the slot in
+    /// `out[slot].point`'s incoming list that points back at us.
+    /// Faithful to `FlowBlock::getOutRevIndex` (block.cc).
+    pub fn get_out_rev_index(&self, slot: usize) -> i32 {
+        self.outgoing[slot].reverse_index
+    }
+
+    /// Reverse-index of the given incoming edge slot. Faithful to
+    /// `FlowBlock::getInRevIndex` (block.cc).
+    pub fn get_in_rev_index(&self, slot: usize) -> i32 {
+        self.incoming[slot].reverse_index
+    }
+
+    /// Delete only the incoming half of an edge (our `intothis` entry),
+    /// leaving the matching outgoing entry on the source block stale.
+    /// Faithful to `FlowBlock::halfDeleteInEdge` (block.cc:140).
+    pub fn half_delete_in_edge(&mut self, slot: usize) {
+        self.incoming.remove(slot);
+        // Reverse-indices of our remaining incoming edges that pointed past
+        // `slot` on their source must be decremented.
+        for e in self.incoming.iter_mut() {
+            if e.reverse_index > slot as i32 {
+                e.reverse_index -= 1;
+            }
+        }
+    }
+
+    /// Delete only the outgoing half of an edge. Faithful to
+    /// `FlowBlock::halfDeleteOutEdge` (block.cc:149).
+    pub fn half_delete_out_edge(&mut self, slot: usize) {
+        self.outgoing.remove(slot);
+        for e in self.outgoing.iter_mut() {
+            if e.reverse_index > slot as i32 {
+                e.reverse_index -= 1;
+            }
+        }
+    }
+
+    /// Remove edge `in`/`out` from this block but create a new direct edge
+    /// between the in-block and the out-block, preserving slot positions.
+    /// Faithful to `FlowBlock::replaceEdgesThru` (block.cc:198-216).
+    ///
+    /// Caller must hold NO lock on `self` while mutating the two peers; this
+    /// method performs the writes directly on `self` then on the peers via
+    /// their `as_any_mut()` downcasts.
+    pub fn replace_edges_thru(
+        &mut self,
+        in_slot: usize,
+        out_slot: usize,
+    ) {
+        // Capture the four endpoints before mutation.
+        let inb = self.incoming[in_slot].point.clone();
+        let inblock_outslot = self.incoming[in_slot].reverse_index as usize;
+        let outb = self.outgoing[out_slot].point.clone();
+        let outblock_inslot = self.outgoing[out_slot].reverse_index as usize;
+
+        // Rewire inb.outofthis[inblock_outslot] -> outb.
+        {
+            let mut inb_rg = inb.write().unwrap();
+            if let Some(bb) = inb_rg.as_any_mut().downcast_mut::<BlockBasic>() {
+                bb.outgoing[inblock_outslot].point = outb.clone();
+                bb.outgoing[inblock_outslot].reverse_index = outblock_inslot as i32;
+            }
+        }
+        // Rewire outb.intothis[outblock_inslot] -> inb.
+        {
+            let mut outb_rg = outb.write().unwrap();
+            if let Some(bb) = outb_rg.as_any_mut().downcast_mut::<BlockBasic>() {
+                bb.incoming[outblock_inslot].point = inb;
+                bb.incoming[outblock_inslot].reverse_index = inblock_outslot as i32;
+            }
+        }
+        // Remove our half-edges (order matters: deleting the in-edge shifts
+        // reverse-indices; Ghidra deletes in then out on `this`).
+        self.half_delete_in_edge(in_slot);
+        // After deleting in_slot, out_slot may have shifted only if out_slot
+        // was an *out* edge (separate list), so out_slot is unaffected.
+        self.half_delete_out_edge(out_slot);
+    }
+
     pub fn clear_edges(&mut self) {
         self.incoming.clear();
         self.outgoing.clear();
@@ -410,6 +490,81 @@ impl BlockGraph {
 
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
+    }
+
+    /// Remove a block from the graph, first detaching all its in/out edges.
+    /// Faithful to `BlockGraph::removeBlock` (block.cc:1517-1536). The block
+    /// is removed from the `blocks` list but is NOT dropped (the caller may
+    /// still hold an `Arc`).
+    pub fn remove_block_arc(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        // Detach all incoming edges (rip each source's out-edge to us).
+        while bl.read().unwrap().size_in() > 0 {
+            let src = {
+                let bl_rg = bl.read().unwrap();
+                bl_rg.get_in(0).map(|e| e.point)
+            };
+            if let Some(src) = src {
+                self.remove_edge_blocks(&src, bl);
+            } else {
+                break;
+            }
+        }
+        // Detach all outgoing edges.
+        while bl.read().unwrap().size_out() > 0 {
+            let dst = {
+                let bl_rg = bl.read().unwrap();
+                bl_rg.get_out(0).map(|e| e.point)
+            };
+            if let Some(dst) = dst {
+                self.remove_edge_blocks(bl, &dst);
+            } else {
+                break;
+            }
+        }
+        // Remove from the block list (keep order, drop the Arc entry).
+        self.blocks.retain(|b| !Arc::ptr_eq(b, bl));
+    }
+
+    /// Remove the edge from `src` to `dst` by symmetrically deleting both
+    /// halves. Faithful to `BlockGraph::removeEdge` (block.cc). Finds the
+    /// matching slot on each side and removes it via the half-delete helpers.
+    pub fn remove_edge_blocks(
+        &mut self,
+        src: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        dst: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
+        // Find src's out-slot pointing to dst.
+        let out_slot = {
+            let src_rg = src.read().unwrap();
+            (0..src_rg.size_out())
+                .find(|&i| {
+                    src_rg.get_out(i)
+                        .map(|e| Arc::ptr_eq(&e.point, dst))
+                        .unwrap_or(false)
+                })
+        };
+        // Find dst's in-slot pointing to src.
+        let in_slot = {
+            let dst_rg = dst.read().unwrap();
+            (0..dst_rg.size_in())
+                .find(|&i| {
+                    dst_rg.get_in(i)
+                        .map(|e| Arc::ptr_eq(&e.point, src))
+                        .unwrap_or(false)
+                })
+        };
+        if let Some(os) = out_slot {
+            let mut src_rg = src.write().unwrap();
+            if let Some(bb) = src_rg.as_any_mut().downcast_mut::<BlockBasic>() {
+                bb.half_delete_out_edge(os);
+            }
+        }
+        if let Some(is_) = in_slot {
+            let mut dst_rg = dst.write().unwrap();
+            if let Some(bb) = dst_rg.as_any_mut().downcast_mut::<BlockBasic>() {
+                bb.half_delete_in_edge(is_);
+            }
+        }
     }
 
     pub fn clear(&mut self) {

@@ -4,6 +4,61 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；基础设施层大规模扩展 + 反编译管道全部 Actions apply()-驱动 + FuncCallSpecs 集成**
 
+## 近期进展（2026-06-27 会话 2：诚实审计 + condexe 完整移植）
+
+本次会话聚焦**核实路线图真实性 + 攻坚 condexe 核心图重写算法**：
+
+### 1. 路线图诚实审计（ALIGNMENT_ROADMAP.md 重写）
+
+**问题发现**：此前路线图存在过度自信声明——许多标"✅ L3 完整实现"的模块实际只有
+数据结构骨架，核心算法未实现。
+
+**核实样本**：
+- `condexe.rs`(238行) vs `condexe.cc`(712行)：仅检测 CBRANCH 不做图重写 → 实际 L1
+- `emulate.rs`(212行)：无 execute() 指令循环 → L2
+- RuleDivOpt：主算法忠实但缺第二变体分支(ruleaction.cc:8010-8046)
+
+**修正动作**：
+- 收紧 L3 标准：核心算法 1:1 移植 + 测试验证方可标 L3
+- 降级所有仅有骨架的模块（condexe/emulate/varmap 等从隐含 L1/L3 改为诚实 L2）
+- 补全 114 文件分类（〇节）：核心 80 + Sleigh 编译器(战略排除14) + GUI桥(排除7) + BFD加载器(替代5)
+- 新增 G1-G7 攻坚计划表 + 每目标验收标准
+
+### 2. condexe 核心图重写完整移植（G1）
+
+**此前**：仅检测候选 + eprintln 标记，核心图重写完全缺失。
+**本次**：完整 1:1 移植 Ghidra condexe.cc(712行) 全部算法：
+
+- **ConditionalExecution 18 个方法**：test_iblock/find_init_pre/verify_same_condition/
+  test_multi_read/test_op_read/test_removability/verify/find_pullback/pullback_op/
+  get_new_multi/resolve_read/resolve_iblock_read/get_multiequal_read/
+  get_replacement_read/do_replacement/trial/execute
+- **BooleanMatch/BooleanExpressionMatch**（expression.cc:57-232）：evaluate/
+  same_op_complement/varnode_same/verify_condition
+- **底层原语新增**：
+  - block.rs: get_out_rev_index/get_in_rev_index/half_delete_in_edge/
+    half_delete_out_edge/replace_edges_thru/remove_block_arc/remove_edge_blocks
+  - funcdata.rs: remove_from_flow_split/structure_reset
+  - op.rs: is_boolean_flip
+- **主管线接入**：ActionConditionalExe 注册在 DeadCode 后、BlockStructure 前
+  （对应 Ghidra coreaction.cc:5675）
+
+### 验证指标
+
+| 指标 | curl | httpd |
+|---|---|---|
+| gcc 语法通过 | 24/24 (100%) | 29/29 (100%) |
+| while 循环数 | 16 | 38 |
+| goto 数 | 0 | 0 |
+| 单元测试 | **675/675**（+3 condexe） | — |
+
+注：condexe 在 curl/httpd 未触发候选（这两个二进制恰好无 `if(a){}if(a){}` 模式），
+apply 正确返回 NO_CHANGE。算法正确性由 6 个单元测试守护。
+
+---
+
+（以下为历史记录）
+
 ## 近期进展（2026-06-27 会话）
 
 本次会话聚焦 **基础设施层完整移植 + 反编译管道 coreaction Actions 全面 apply()-驱动化 + 子系统集成**，通过 **~80 个原子化 commit** 实现了：

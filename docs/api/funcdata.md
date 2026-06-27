@@ -695,3 +695,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 ### 2026-06-27（续 6）：op_flip_condition
 
 - `op_flip_condition(op)` — `Funcdata::opFlipCondition`（funcdata_op.cc）：翻转比较 op 的条件（INT_LESS↔INT_LESSEQUAL 等 via get_booleanflip），交换输入如需，清除 BOOLEAN_FLIP 标志。解锁 RuleCondNegate。
+
+### 2026-06-27（会话2）：CFG 重写原语（解锁 condexe）
+
+为支撑 condexe 核心图重写（condexe.cc:712），Funcdata 新增忠实于 Ghidra funcdata_block.cc 的方法：
+- `remove_from_flow_split(bl, swap) -> Result<(), String>` — `Funcdata::removeFromFlowSplit`（funcdata_block.cc:892 + block.cc:1575）：移除一个 2 入/2 出的空块，将每条入边重连到对应的出边。swap=true 时 In(0)->Out(0)/In(1)->Out(1)；否则交叉连接。condexe execute() 用此消除冗余路径汇合。
+- `structure_reset()` — `Funcdata::structureReset`（funcdata_block.cc:705）：重算循环结构 + 支配者树 + 清空 sblocks。任何 CFG 变更后调用以保持一致性。
