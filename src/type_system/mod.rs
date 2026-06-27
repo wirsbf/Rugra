@@ -6,6 +6,7 @@
 pub mod datatype;
 pub mod typefactory;
 pub mod cast;
+pub mod protomodel;
 
 pub use datatype::{Datatype, TypeBase, TypeField, TypeMetatype, type_flags};
 pub use typefactory::TypeFactory;

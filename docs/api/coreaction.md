@@ -544,3 +544,15 @@ ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_v
 **新增 ParamActive 方法**：finish_pass/is_fully_checked/mark_fully_checked/mark_needs_final_check。
 
 **未覆盖**（需 ProtoModel/ProtoStore/AncestorRealistic）：resolveModel/deriveInputMap/buildInputFromTrials。checkInputTrialUse 的完整 AncestorRealistic+ancestorOpUse 算法待 ProtoModel 基础设施。
+
+### 2026-06-27（会话3 G5深层）：ProtoModel/ParamEntry 基础设施移植
+
+新建 `src/type_system/protomodel.rs`，完整移植 Ghidra ProtoModel/ParamEntry 数据结构（fspec.hh:84-1100）：
+
+- **ParamEntry**：参数存储位置（寄存器/栈），含 space/base/size/minsize/group/alignment/flags + contains/intersects/is_exclusion
+- **ProtoModel**：调用约定模型，含 x86-64 System V 默认配置（6 寄存器参数 RDI/RSI/RDX/RCX/R8/R9 + 栈参数 + RAX 返回）
+- **核心算法**：fillin_input_map（fillinMap，参数推导）、derive_input_map（deriveInputMap）、derive_output_map（deriveOutputMap）、possible_input_param、characterize_as_input_param、check_input_split
+
+这是解锁 checkInputTrialUse/resolveModel/deriveInputMap/buildInputFromTrials 完整实现的 ProtoModel 基础设施。5 个单元测试验证。
+
+**剩余**：ParamListRegister/ParamListMerged 变体、XML decode、JoinRecord。
