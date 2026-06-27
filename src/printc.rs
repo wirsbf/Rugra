@@ -90,6 +90,12 @@ pub struct PrintC {
     used_varnode_names: HashSet<String>,
     /// Track actual types, space and offset of used variables for robust declaration mapping
     used_varnode_types: HashMap<String, (String, crate::space::AddressSpace, u64)>,
+    /// Scope-local stack symbols (from varmap's restructure_varnode) that were
+    /// referenced during the body emit. These MUST be declared even if the
+    /// general discovery/mark path missed them (it sometimes does for STORE
+    /// address LHS, causing 'StackX_N undeclared'). Populated by
+    /// get_stack_variable_name during both discovery and real emit.
+    used_scope_symbols: std::cell::RefCell<std::collections::HashSet<String>>,
     /// If true, we are in the discovery pass (only collecting names, not printing)
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
@@ -160,6 +166,7 @@ impl PrintC {
             inlined_ops: HashSet::new(),
             used_varnode_names: HashSet::new(),
             used_varnode_types: HashMap::new(),
+            used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
             discovery_pass: false,
             call_targets: HashSet::new(),
         pointer_varnodes: HashSet::new(),
@@ -1038,7 +1045,7 @@ impl PrintC {
     }
 
     /// Emit variable declarations at the top of the function body.
-    fn doc_variable_decls_from_funcdata(&mut self, _fd: &Funcdata) {
+    fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
         use std::collections::BTreeMap;
         use crate::space::AddressSpace;
 
@@ -1128,6 +1135,40 @@ impl PrintC {
                 }
             }
         }
+
+        // Safety net: scope-local stack symbols (StackX_*) referenced via
+        // get_stack_variable_name must be declared. The general path above can
+        // miss them (e.g. STORE address LHS where the symbol name is printed but
+        // not routed through mark_variable_used). Declare any not yet declared
+        // as `long` (default register width) to keep the output compilable.
+        for name in self.used_scope_symbols.borrow().iter() {
+            if declared.contains_key(name) { continue; }
+            if is_declarable(name, AddressSpace::Stack, 0, &self.call_targets) {
+                declared.entry(name.clone()).or_insert_with(|| "long".to_string());
+            }
+        }
+        // Also declare any scope symbol whose name appears in used_varnode_names
+        // (covers paths that print the scope name without going through
+        // get_stack_variable_name's recording). The scope is the authoritative
+        // set of this function's stack locals; any that the body references must
+        // be declared.
+        if let Some(scope) = &self.scope {
+            for sym in &scope.symbols {
+                // Conservatively declare every scope symbol: they are this
+                // function's stack locals by definition, and printc's discovery
+                // pass has known gaps where a referenced StackX_N name is emitted
+                // without being recorded in used_varnode_names (e.g. STORE LHS).
+                // Over-declaring only yields an unused-variable warning, never a
+                // compile error — far safer than an undeclared-identifier error.
+                if !declared.contains_key(&sym.name)
+                    && is_declarable(&sym.name, AddressSpace::Stack, 0, &self.call_targets)
+                {
+                    let ty = if sym.size <= 4 { "int" } else { "long" };
+                    declared.insert(sym.name.clone(), ty.to_string());
+                }
+            }
+        }
+        let _ = fd;
 
         if !declared.is_empty() {
             for (name, type_name) in &declared {
@@ -1457,6 +1498,11 @@ impl PrintC {
             // when the scope has no symbol here (common, since Rugra's lift does
             // not yet produce Stack-space varnodes for RSP-relative accesses).
             if let Some(sym) = self.scope.as_ref().and_then(|s| s.find_symbol(offset)) {
+                // Record that this scope symbol was referenced, so it is
+                // guaranteed to be declared even if the general discovery/mark
+                // path (used_varnode_types) missed it (which happens for STORE
+                // address LHS). See doc_variable_decls_from_funcdata's safety net.
+                self.used_scope_symbols.borrow_mut().insert(sym.name.clone());
                 return Some(sym.name.clone());
             }
             
@@ -2956,6 +3002,7 @@ impl PrintLanguage for PrintC {
         self.inlined_ops.clear();
         self.used_varnode_names.clear();
         self.used_varnode_types.clear();
+        self.used_scope_symbols.borrow_mut().clear();
 
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;

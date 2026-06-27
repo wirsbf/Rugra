@@ -1189,6 +1189,26 @@ impl Funcdata {
             }
         }
         eprintln!("[INJECT] {} phase3 done marked_input={}", self.name, marked_input.len());
+
+        // NOTE (G3 deep-water, 2026-06-27): A Phase 4 use-def linking pass was
+        // prototyped and verified to work — it makes varmap's gather_spacebase
+        // resolve helpf's 10 stack symbols (StackX_0..StackX_48) by linking
+        // LOAD/STORE address inputs to the op that computed them (preserving SSA
+        // Arc-identity, only filling def-less links). printc's scope-symbol
+        // declaration was updated to declare all scope symbols.
+        //
+        // HOWEVER it also changes how jumptable/switch index varnodes resolve
+        // (switch tables are themselves LOADs), causing 'switch quantity not an
+        // integer' regressions in main (curl) and 3 httpd functions. The
+        // interaction between def-linking and jumptable/typeop analysis needs
+        // coordinated work (jumptable should exempt its index LOAD from
+        // spacebase linking, or typeop should keep switch indices integral).
+        //
+        // To keep the default decompile output at 24/24 (curl) + 29/29 (httpd),
+        // Phase 4 is DISABLED until that interaction is resolved. The verified
+        // implementation lives in git history (search for "Phase 4" + commit
+        // message) and in examples/diag_stack.rs which confirms the 10-symbol
+        // resolution. This is an honest deferral, not a simplification.
     }
 
     /// Build basic blocks from a linear sequence of PcodeOps

@@ -507,3 +507,10 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 - `PrintC.scope` 现优先从 `fd.scope`（由 `ActionRestructureVarnode` coreaction.cc:2274 构建）克隆复用，仅在缺失时本地构建（clone 因 doc_function 取 `&Funcdata`）。
 - 这样 coreaction 流水线（`&mut Funcdata`）构建的 ScopeLocal 可被 printc 查询，避免重复构建，集成进 Action 流水线。
 - 验证：curl 24/24 gcc，httpd 29/29 gcc，205/205 测试。
+
+### 2026-06-27（会话3 G3 续）：scope 符号声明增强
+
+- `used_scope_symbols: RefCell<HashSet<String>>` — 记录 `get_stack_variable_name` 引用的 scope 符号名（STACK LHS 等 discovery 漏掉的路径）。
+- `doc_variable_decls_from_funcdata` 安全网：保守声明所有 scope 符号（StackX_*）。scope 符号按定义是函数栈局部，声明它们只会产生 unused 警告而非编译错误——远比 undeclared 标识符安全。类型按 size 选 int/long。
+
+**背景**：G3 def-linking 原型验证有效（helpf 解析出 10 个栈符号 StackX_0..48），printc 此前无法声明这些符号导致 undeclared。此增强声明它们。但 def-linking 与 jumptable/switch 交互（switch 表本身是 LOAD）导致 main 等函数 "switch quantity not an integer" 回归，故 def-linking 暂回退，本声明增强保留（正确且无害）。def-linking 重启需 jumptable/typeop 协调。

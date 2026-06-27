@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let targets: &[(&str, u64, usize)] = &[
         ("my_fwrite", 0x3460, 98),
         ("myprogress", 0x34d0, 497),
+        ("helpf", 0x3980, 267),
     ];
 
     for &(name, vaddr, size) in targets {
@@ -96,6 +97,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut scope = rugra::varmap::ScopeLocal::new();
         scope.restructure_varnode(&fd);
         eprintln!("[{}] scope symbols: {}", name, scope.symbols.len());
+        for s in &scope.symbols {
+            eprintln!("    sym: name={} start={} size={}", s.name, s.start, s.size);
+        }
     }
     Ok(())
 }

@@ -701,3 +701,9 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 为支撑 condexe 核心图重写（condexe.cc:712），Funcdata 新增忠实于 Ghidra funcdata_block.cc 的方法：
 - `remove_from_flow_split(bl, swap) -> Result<(), String>` — `Funcdata::removeFromFlowSplit`（funcdata_block.cc:892 + block.cc:1575）：移除一个 2 入/2 出的空块，将每条入边重连到对应的出边。swap=true 时 In(0)->Out(0)/In(1)->Out(1)；否则交叉连接。condexe execute() 用此消除冗余路径汇合。
 - `structure_reset()` — `Funcdata::structureReset`（funcdata_block.cc:705）：重算循环结构 + 支配者树 + 清空 sblocks。任何 CFG 变更后调用以保持一致性。
+
+### 2026-06-27（会话3 G3 续）：inject Phase 4 use-def linking（验证有效，暂禁用）
+
+在 inject_raw_ops Phase 3 后验证了一个 Phase 4 use-def 链补全 pass：按线性指令序维护 (space_id, offset)→defining op 映射，为 LOAD/STORE 地址输入补上 def 弱引用（保持 SSA Arc-identity，只填 def-less 链）。**验证有效**：varmap gather_spacebase 解析出 helpf 的 10 个栈符号。
+
+**但与 jumptable/switch 交互**（switch 表本身是 LOAD）导致 main 等函数 switch quantity 回归。为保持默认 24/24+29/29，Phase 4 暂禁用（inject_raw_ops 内详细 NOTE 记录）。重启需 jumptable/typeop 协调。实现可从 git 历史恢复。
