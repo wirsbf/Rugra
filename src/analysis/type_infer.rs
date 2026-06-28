@@ -189,6 +189,61 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                         }
                     }
                 }
+                // INT_ADD: propagate pointer type from input to output.
+                // Faithful to TypeOpIntAdd::propagateAddPointer (typeop.cc:1268):
+                // ptr + const → output is same pointer type.
+                // ptr + non-const-int-mult → output is same pointer type (array index).
+                // ptr + ptr → don't propagate (pointer difference).
+                OpCode::CPUI_INT_ADD if op.inrefs.len() == 2 => {
+                    for slot in 0..2 {
+                        let in_vn = op.inrefs[slot].read().unwrap();
+                        if let Some(ref vt) = in_vn.v_type {
+                            if vt.get_metatype() == TypeMetatype::Pointer {
+                                // Check the OTHER operand (1-slot).
+                                let other_vn = op.inrefs[1 - slot].read().unwrap();
+                                // If other is also a pointer → pointer difference, don't propagate.
+                                let other_is_ptr = other_vn.v_type.as_ref()
+                                    .map(|t| t.get_metatype() == TypeMetatype::Pointer)
+                                    .unwrap_or(false);
+                                if other_is_ptr { continue; }
+                                // If other is constant → ptr + const, propagate pointer.
+                                // If other is INT_MULT(var, const) → array indexing, propagate.
+                                // If other is non-const and ptr_to size == 1 → byte pointer, propagate.
+                                let should_propagate = other_vn.get_space() == AddressSpace::Const
+                                    || {
+                                        // Check if other is INT_MULT result (array index * element_size)
+                                        if let Some(ref def_arc) = other_vn.def.as_ref().and_then(|d| d.upgrade()) {
+                                            let def_op = def_arc.read().unwrap();
+                                            def_op.opcode == OpCode::CPUI_INT_MULT
+                                        } else { false }
+                                    };
+                                if should_propagate {
+                                    if let Some(ref out_arc) = op.output {
+                                        type_updates.push((out_arc.clone(), vt.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // INT_SUB: propagate pointer type similarly (ptr - const → ptr).
+                OpCode::CPUI_INT_SUB if op.inrefs.len() == 2 => {
+                    // slot 0: ptr - const → ptr
+                    let in_vn = op.inrefs[0].read().unwrap();
+                    if let Some(ref vt) = in_vn.v_type {
+                        if vt.get_metatype() == TypeMetatype::Pointer {
+                            let other_vn = op.inrefs[1].read().unwrap();
+                            let other_is_ptr = other_vn.v_type.as_ref()
+                                .map(|t| t.get_metatype() == TypeMetatype::Pointer)
+                                .unwrap_or(false);
+                            if !other_is_ptr {
+                                if let Some(ref out_arc) = op.output {
+                                    type_updates.push((out_arc.clone(), vt.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
