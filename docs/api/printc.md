@@ -575,3 +575,6 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 - 接入点：push_varnode（raw-register 路径 + high-variable 路径）+ get_varnode_display_name 包装器 + doc_variable_decls_from_funcdata 声明循环。
 - 单元测试 `test_compact_name_for` 验证逻辑正确（bVar21→bVar1, bVar29→bVar2, param_1→None）。
 - **已验证生效**：compact 名称现在完全体现在输出中（2026-06-29 确认）。例如 my_fwrite 从 `bVar21`/`lVar25`/`piVar23` 变为 `bVar1`/`lVar1`/`piVar1`（Ghidra 风格）。curl lVar1 出现 57 次、bVar1 出现 22 次，与 Ghidra 的 assignDefaultNames 命名风格完全对齐。此前的"已知限制"是因为测试时用了过期的输出文件（stdout 未重定向到 result/）；正确重定向后 compact 名称正常体现。
+
+### 2026-06-29：BlockIf if-goto emit（goto_target.is_some()）
+- printc.rs BlockType::If emit 新增 if-goto 分支：当 `if_data.goto_target.is_some()` 时，emit condition block 的 ops（CBRANCH 处理分支），不 emit 占位 body。对应 Ghidra newBlockIfGoto 的 emit 语义。

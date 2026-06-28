@@ -826,12 +826,12 @@ impl<'a> CollapseStructure<'a> {
     // Ghidra-style selectGoto loop
     fn run_goto_cascade(&mut self) {
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
-        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut goto_rounds = 0;
         // Hard cap on rounds to prevent runaway loops when clip/goto structuring
         // doesn't fully converge (e.g. mutually-irreducible roots). Ghidra's
         // selectGoto throws LowlevelError in this case; we cap instead.
-        let max_goto_rounds = 40;
+        let max_goto_rounds = 20;
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
             if goto_rounds >= max_goto_rounds { break; }
@@ -847,7 +847,7 @@ impl<'a> CollapseStructure<'a> {
             } else { false };
             if !goto_marked && !clip_marked && !tdag_marked { break; }
             goto_rounds += 1;
-            let inner_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            let inner_deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
             loop {
                 if std::time::Instant::now() > inner_deadline { break; }
                 let pre_count = self.change_count;
@@ -2563,6 +2563,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
+                    goto_target: None,
                     flags: 0,
                 }));
             let clause_idx = clause.read().unwrap().get_index();
@@ -2667,6 +2668,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
+                    goto_target: None,
                     flags: 0,
                 }));
             // self_identify captures the clause's boundary edges onto the new BlockIf.
@@ -2726,6 +2728,7 @@ impl<'a> CollapseStructure<'a> {
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 parent: None,
+                goto_target: None,
                 flags: 0,
             }));
         // self_identify captures both clauses' boundary edges onto the new BlockIf.
@@ -2757,35 +2760,57 @@ impl<'a> CollapseStructure<'a> {
         if !has_cbranch { return false; }
 
         let cond_idx = b.get_index();
-        // The non-goto edge (out[0]) is the fallthrough = the "if body"
+        // The non-goto edge (out[0]) is the fallthrough = the "if body" (kept external)
         let body_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let body_block = body_edge.point.clone();
         let body_idx = body_block.read().unwrap().get_index();
+        // The goto edge (out[1]) is the break/continue target.
+        let goto_target = match b.get_out(1) { Some(e) => e.point.clone(), None => return false };
         drop(b);
 
         // Don't extract switch case bodies
         if self.switch_case_indices.contains(&body_idx) { return false; }
 
-        // Create BlockIf with negated condition.
-        // Note: Ghidra's newBlockIfGoto consumes only [cond] and keeps the body
-        // external via forceFalseEdge. Our BlockIf architecture embeds the body,
-        // so we consume it (identify_internal) to avoid a dangling visible node
-        // and mark DEAD, matching the "clause absorbed into BlockIf" semantics.
+        // Create BlockIf in newBlockIfGoto style (Ghidra block.cc:1799-1816):
+        // - Only [cond] is consumed (body stays external as an out-edge)
+        // - goto_target stores the unstructured goto edge target
+        // - if_body is a placeholder (condition) — the real body is the
+        //   external out[0] edge, preserved by identify_internal
         let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockIf {
                 index: cond_idx,
                 condition: block.clone(),
-                if_body: body_block.clone(),
+                if_body: block.clone(), // placeholder; real body is external out-edge
                 else_body: None,
                 negated: true,
+                goto_target: Some(goto_target.clone()),
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 parent: None,
                 flags: 0,
             }));
-        // self_identify captures the body's boundary edges onto the new BlockIf.
-        self.identify_internal(&if_block, &[body_idx], i);
+        // Only consume [cond] (at install_idx=i). The body_block stays external.
+        // identify_internal inherits cond's out-edges (body + goto_target) onto
+        // the new BlockIf, so it has 2 out-edges.
+        self.identify_internal(&if_block, &[], i);
         self.update_switch_case_reference(cond_idx, &if_block);
+        // Faithful to Ghidra newBlockIfGoto: removeEdge(ret, ret->getTrueOut()).
+        // Remove the goto_target's in-edge from the new BlockIf so the target's
+        // sizeIn no longer counts the goto source. This is the "consumption"
+        // that lets WhileDo see a reduced size_in on loop bodies with breaks.
+        {
+            let if_idx = if_block.read().unwrap().get_index();
+            goto_target.write().unwrap().remove_in_edge_from(&[if_idx, cond_idx]);
+            // Also remove the goto_target from the if_block's outgoing, so the
+            // goto edge is fully "consumed" (invisible to size_out and
+            // clip_extra_roots). Faithful to Ghidra removeEdge which treats the
+            // edge as non-existent. The body edge (out[0]) is preserved.
+            if let Some(bif) = if_block.write().unwrap().as_any_mut().downcast_mut::<BlockIf>() {
+                bif.outgoing.retain(|e| {
+                    e.point.read().map(|p| p.get_index() != goto_target.read().unwrap().get_index()).unwrap_or(true)
+                });
+            }
+        }
         self.change_count += 1;
         true
     }
@@ -3500,6 +3525,7 @@ impl<'a> CollapseStructure<'a> {
                                 incoming: Vec::new(),
                                 outgoing: merge_outs,
                                 parent: None,
+                                goto_target: None,
                                 flags: 0,
                             };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -3536,6 +3562,7 @@ impl<'a> CollapseStructure<'a> {
                                 incoming: Vec::new(),
                                 outgoing: merge_outs,
                                 parent: None,
+                                goto_target: None,
                                 flags: 0,
                             };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -3576,6 +3603,7 @@ impl<'a> CollapseStructure<'a> {
                                 incoming: Vec::new(),
                                 outgoing: merge_outs,
                                 parent: None,
+                                goto_target: None,
                                 flags: 0,
                             };
                             let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =

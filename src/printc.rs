@@ -459,6 +459,18 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let if_block = block.as_any().downcast_ref::<BlockIf>();
                 if let Some(if_data) = if_block {
+                    // If-goto (newBlockIfGoto style): emit `if (cond) goto target;`
+                    // The goto_target is set, body is external (not embedded).
+                    if if_data.goto_target.is_some() {
+                        // Emit the condition block's ops (including the CBRANCH
+                        // which becomes the if-condition), then a goto to the
+                        // target. The body (fallthrough) continues after.
+                        self.emit_block_ops(&if_data.condition, false);
+                        // The goto: emit as a labeled goto or just continue.
+                        // For now, the condition block's CBRANCH op handles the
+                        // branch; we just need to not emit the placeholder body.
+                        return;
+                    }
                     // Goto-cascade protection: if the condition block has
                     // GOTO_EDGE_1 flag (created by selectGoto), dry-run emit
                     // the if_body to check for case labels. If found, fall

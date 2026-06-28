@@ -1241,6 +1241,13 @@ pub struct BlockIf {
     /// When true, the CBRANCH condition should be negated before emitting.
     /// Set when the if_body comes from the false edge (Triangle-reverse pattern).
     pub negated: bool,
+    /// For if-goto blocks (Ghidra newBlockIfGoto style): the target of the
+    /// unstructured goto edge. When Some, this BlockIf represents
+    /// `if (cond) goto target;` — the body is NOT embedded (if_body is a
+    /// placeholder = condition), and the goto edge is consumed (removed from
+    /// the target's incoming). When None, this is a normal if-then/if-then-else
+    /// with embedded body. Faithful to Ghidra BlockIf::gototarget (block.hh:660).
+    pub goto_target: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     pub incoming: Vec<BlockEdge>,
     pub outgoing: Vec<BlockEdge>,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,

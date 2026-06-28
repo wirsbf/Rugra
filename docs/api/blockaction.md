@@ -699,3 +699,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - `try_rule_goto`（pure-goto, size_out==1）：创建 BlockGoto 后调用 `remove_in_edge_from` 从 goto target 的 incoming 移除 BlockGoto。忠实 Ghidra `newBlockGoto` 的 `removeEdge(ret, ret->getOut(0))`（block.cc:1711）。**安全**：BlockGoto 无结构化 fallthrough，移除 in-edge 不产生不对称。
 - `try_rule_if_goto`（CBRANCH, size_out==2）：**未实现** removeEdge。需 Ghidra `forceOutputNum(2)`+`forceFalseEdge` 保留条件边——Rugra 的 BlockIf 缺这些，尝试 removeEdge 导致图损坏（curl 28→26）。留作已记录缺口。
 - **验证**：780/780 测试，curl 24/24（while=28, goto=0），httpd 29/29（while=44, goto=0）。无回归。
+
+### 2026-06-29（续 3）：try_rule_if_goto newBlockIfGoto 风格 — curl while 28→34!
+- 重构 `try_rule_if_goto`：只消费 [cond]（body 保持外部 out-edge），设 goto_target。removeEdge 从 target incoming + if_block outgoing 双向移除 goto 边。
+- **结果**：curl while **28→34**（精确匹配 Ghidra 34！）。while 循环对齐缺口对 curl 已闭合。
+- httpd while 44→54 (+10)，但 3 个函数在 goto_cascade 中不收敛（ap_count_dirs 等）——收敛问题，待修复。
