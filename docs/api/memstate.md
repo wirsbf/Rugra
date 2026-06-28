@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/memstate.rs`
 **Ghidra 对应**: `memstate.hh` / `memstate.cc` (946行)
-**状态**: 📋 L1→🔧 L2（MemoryBank + MemState 核心实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 MemoryBank/MemoryImage/MemoryPageOverlay/MemState 方法覆盖，含 setValue/getValue/setChunk/getChunk。9 单元测试。
 
 ## 模块说明
 

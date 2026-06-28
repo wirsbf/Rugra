@@ -249,6 +249,36 @@ impl MemState {
     pub fn get_bank_mut(&mut self, space_name: &str) -> Option<&mut MemoryBank> {
         self.banks.get_mut(space_name)
     }
+
+    /// Set a value in a specific address space.
+    /// Faithful to Ghidra MemState::setValue (memstate.cc:652).
+    pub fn set_value(&mut self, space_name: &str, offset: u64, size: usize, val: u64) {
+        if let Some(bank) = self.banks.get_mut(space_name) {
+            bank.set_value(offset, size, val);
+        }
+    }
+
+    /// Get a value from a specific address space.
+    /// Faithful to Ghidra MemState::getValue (memstate.cc:668).
+    pub fn get_value(&self, space_name: &str, offset: u64, size: usize) -> Option<u64> {
+        self.banks.get(space_name).map(|bank| bank.get_value(offset, size))
+    }
+
+    /// Write a chunk of bytes to a specific address space.
+    /// Faithful to Ghidra MemState::setChunk (memstate.cc:729).
+    pub fn set_chunk(&mut self, space_name: &str, offset: u64, val: &[u8]) {
+        if let Some(bank) = self.banks.get_mut(space_name) {
+            bank.set_chunk(offset, val);
+        }
+    }
+
+    /// Read a chunk of bytes from a specific address space.
+    /// Faithful to Ghidra MemState::getChunk (memstate.cc:712).
+    pub fn get_chunk(&self, space_name: &str, offset: u64, size: usize) -> Vec<u8> {
+        self.banks.get(space_name)
+            .map(|bank| bank.get_chunk(offset, size))
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -317,5 +347,25 @@ mod tests {
         // Overlay a write.
         overlay.write(0, &[0x11]);
         assert_eq!(overlay.read(0, 1), vec![0x11]);
+    }
+
+    #[test]
+    fn test_mem_state_value_ops() {
+        let mut state = MemState::new();
+        let bank = MemoryBank::new(AddressSpace::Ram, 4, 4096);
+        state.set_bank("ram".into(), bank);
+        state.set_value("ram", 0x100, 4, 0x12345678);
+        assert_eq!(state.get_value("ram", 0x100, 4), Some(0x12345678));
+        assert_eq!(state.get_value("ram", 0x100, 2), Some(0x5678));
+    }
+
+    #[test]
+    fn test_mem_state_chunk_ops() {
+        let mut state = MemState::new();
+        let bank = MemoryBank::new(AddressSpace::Ram, 1, 4096);
+        state.set_bank("ram".into(), bank);
+        state.set_chunk("ram", 0x200, &[0xaa, 0xbb, 0xcc, 0xdd]);
+        let chunk = state.get_chunk("ram", 0x200, 4);
+        assert_eq!(chunk, vec![0xaa, 0xbb, 0xcc, 0xdd]);
     }
 }
