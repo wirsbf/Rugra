@@ -7,6 +7,7 @@
 
 - **L1** (📋 计划) — 已识别差距，尚未开始实现，或仅有数据结构骨架无核心算法
 - **L2** (🔧 实现中) — 核心代码已存在但**关键算法缺失/未对齐**，不能宣称完成
+- **L2.5** (🟢 代码完整未接入) — 核心算法 1:1 移植完成且有测试，但**尚未接入主管线**（缺 Rule 包装器 / 被 Sleigh 基础设施阻塞 / Ghidra 设计上不属于 universalAction）。差一步接入即 L3。
 - **L3** (✅ 已完成) — **完整实现 + 接入主管线 + 对齐验证**：核心算法 1:1 移植 + 有测试证据 + **实际在反编译流程中被调用** + 无已知行为偏离。代码完整但从未被调用的模块**不是 L3**。
 
 ## 核实标准（2026-06-27 收紧）
@@ -48,7 +49,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | Sleigh 编译器（slgh_*/sleigh*/slaformat/rulecompile/semantics） | ~14 | **战略排除**：Rugra 用 iced-x86 替代处理器规格语言编译，无需移植编译器本身 |
 | Ghidra GUI/进程桥（ghidra_process/ghidra_arch/ifacedecomp/ifaceterm/interface/consolemain/libdecomp） | ~7 | **战略排除**：IDE 集成层，不属于算法 |
 | BFD/原始加载器（bfd_arch/loadimage_bfd/raw_arch/loadimage_xml/loadimage_ghidra） | ~5 | **替代实现**：用 goblin/object 替代 |
-| 注入桥接（inject_ghidra/inject_sleigh/comment_ghidra/ghidra_context/ghidra_translate/string_ghidra） | ~6 | 🔧 L2（pcodeinject.rs 代码完整：InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**未接入主管线**：需 Sleigh 架构初始化 + .cspec 解码，见条目 #45） |
+| 注入桥接（inject_ghidra/inject_sleigh/comment_ghidra/ghidra_context/ghidra_translate/string_ghidra） | ~6 | 🟢 L2.5（pcodeinject.rs 代码完整：InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**未接入主管线**：需 Sleigh 架构初始化 + .cspec 解码，见条目 #45） |
 | 其他语言后端（printjava） | 1 | 远期目标（先完成 printc） |
 | 工具/测试（test/testfunction/filemanage/sleighexample/typegrp_ghidra/codedata/xml_arch/codedata） | ~7 | 按需 |
 
@@ -97,7 +98,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 17 | `blockaction.cc` (2366行) | `blockaction.rs` (4560行) | 🔧 **L2（G4 核心完成，循环检测+CFG已修复，identify_internal 死锁待修）** | identifyInternal/selfIdentify ✅；ruleBlockCat/ProperIf/IfElse/WhileDo/DoWhile/Goto ✅；**2026-06-28 重大修复链**：①移植 `findSpanningTree` DFS 边分类（回边检测 0→19）②保护回边不被 goto 切断 ③goto_cascade 补 WhileDo/DoWhile ④**CFG 基本块划分修复**（跳转目标分裂点）→ curl while **4→26** ⑤reconcile 类型修复链（int-ptr 减法/除法 + 死循环 + 指针类型匹配 cast）→ curl 审计 **23/23** ⑥discovery pass 遍历不可达块（glob_buffer extern）。**循环检测+CFG+输出层 L3**。**剩余 L2 缺口**：`identify_internal` 的 RwLock 死锁——httpd ap_fini_vhost_config 的 structure_loops_first 里，head=59 的 identify_internal 在边界边捕获阶段（`e.point.read()`）死锁。根因可能是 head=6 WhileDo 结构化后的边重写产生锁竞争。需深入 RwLock 使用分析或改用 try_read | `blockaction.cc` |
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🔧 L2 | BranchPoint/BlockTrace/BadEdgeScore 骨架已移植；**check_open 精度不足，未完整启用** | `blockaction.cc:499-1014` |
 | 19 | `condexe.cc` (712行) | `condexe.rs` (1422行) | ✅ **L3（2026-06-27 全部移植）** | ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch/BooleanExpressionMatch 全部 1:1 移植。底层原语 find_common_block/compare_order/remove_from_flow_split 已补。接入主管线（ActionConditionalExe + ActionSimplify→RuleOrPredicate）。9 单元测试 + curl/httpd 回归 | `condexe.cc` |
-| 20 | `subflow.cc` (4130行) | `subflow.rs` (745行) | 🔧 **L2（代码完整但未接入）** | SubvariableFlow 覆盖核心方法：ReplaceVarnode/ReplaceOp/PatchRecord 数据结构 + new/get_flow_size/get_bit_size/set_replacement/has_replacement/get_replacement_index/create_op/create_op_down/add_push/add_terminal_patch/add_compare_patch/num_new_vars/num_new_ops/num_patches/is_worthwhile/do_replacement（cc:1435）+ check_mask/does_or_set（cc:26）/does_and_clear（cc:43）/compute_consume_mask/do_trace（cc:1410）+ trace_forward_single/trace_backward_single。11 单元测试。**未接入主管线**：Ghidra 通过 9 个 Rule（RuleSubvarAnd/RuleSubvarSubpiece/RuleSplitFlow/RulePtrFlow/RuleSubvarCompZero/RuleSubvarShift/RuleSubvarZext/RuleSubvarSext/RuleSubfloatConvert，coreaction.cc:5621-5633）驱动 SubvariableFlow，Rugra 这 9 个 Rule 未移植。需先移植 Rule 包装器才能接入 | `subflow.cc` |
+| 20 | `subflow.cc` (4130行) | `subflow.rs` (745行) | 🟢 **L2.5（代码完整，缺 9 个 Rule 包装器）** | SubvariableFlow 覆盖核心方法：ReplaceVarnode/ReplaceOp/PatchRecord 数据结构 + new/get_flow_size/get_bit_size/set_replacement/has_replacement/get_replacement_index/create_op/create_op_down/add_push/add_terminal_patch/add_compare_patch/num_new_vars/num_new_ops/num_patches/is_worthwhile/do_replacement（cc:1435）+ check_mask/does_or_set（cc:26）/does_and_clear（cc:43）/compute_consume_mask/do_trace（cc:1410）+ trace_forward_single/trace_backward_single。11 单元测试。**接入阻塞**：Ghidra 通过 9 个 Rule（RuleSubvarAnd/RuleSubvarSubpiece/RuleSplitFlow/RulePtrFlow/RuleSubvarCompZero/RuleSubvarShift/RuleSubvarZext/RuleSubvarSext/RuleSubfloatConvert，coreaction.cc:5621-5633）驱动 SubvariableFlow，Rugra 这 9 个 Rule 未移植。**移植这 9 个 Rule → oppool1 → L3**（无需新基础设施） | `subflow.cc` |
 | 21 | **`jumptable.cc`** | `jumptable.rs` | ✅ L3 | **完整实现**：全部数据结构 + 全部算法（find_determining_varnodes DFS 深度遍历、quasi_copy 链、get_max_value、isLoadInPath、CircleRange::pullBack 全套、analyze_guards pullBack 扩展、backup2_switch 反向模拟、find_unnormalized 链遍历、flows_only_to_model、emulate_path 地址计算、build_addresses/build_labels 使用真实模拟、fold_in_one_guard + fold_in_guards CFG 重写 via Funcdata::push_branch/force_goto）。Funcdata 新增 push_branch/force_goto/set_goto_branch/move_out_edge。所有 L3 缺口已关闭 | `jumptable.cc` |
 
 ---
@@ -110,8 +111,8 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 23 | `ruleaction.cc` (11016行) | `ruleaction.rs` (10968行) | 🔧 L2 | **2026-06-28 实测**：~100 个 Rule struct（`grep -oE 'struct Rule[A-Z][A-Za-z0-9_]*' src/ruleaction.rs \| wc -l`），其中 **98 个已注册进 `build_simplify_pool`**（oppool1）+ cleanup 池（actcleanup），**接入主管线并实测生效**（curl 515 次触发/21 Rule）。**剩余 L3 差距**：① 仍缺 ~30 个 Ghidra Rule（如 RulePullsubIndirect/RuleShiftPiece/RuleIndirectCollapse/RuleSLess2Zero 等，见 action.rs skip 注释）；② 部分 Rule 的 `get_opcodes` 覆盖不全或 apply 分支不完整；③ 需逐 Rule 与 ruleaction.cc 比对确保 1:1。从 L2→L3 的关键是补齐缺失 Rule + 逐个对齐验证 | `ruleaction.cc` |
 | 24 | `constseq.cc` | `constseq.rs` (395行) | ✅ **L3（2026-06-29 接入主管线）** | WriteNode + ArraySequence（form_byte_array/select_string_copy_function/interfere_between/check_interference/is_valid_string/get_string）+ StringSequence（空壳，需 Funcdata op 集成）+ HeapSequence（空壳，需 heap pointer analysis）+ RuleStringCopy（COPY 检测 + select_string_copy_function 调用）+ RuleStringStore（STORE 检测，constseq.cc:974-1002 的检测阶段）。4 单元测试。**2026-06-29 接入 build_cleanup_pool（coreaction.cc:5709-5710）**——RuleStringCopy/RuleStringStore 现在实际跑在 cleanup 池。transform 阶段（替换为 CALLOTHER）待 userop 基础设施。验证：curl 24/24 + httpd 29/29 无回归 | `constseq.cc` |
 | 25 | `transform.cc` | `transform.rs` | ✅ L3 | **完整实现**：LanedRegister（lane 尺寸位掩码 + parse_sizes）+ LaneDescription（uniform/two_lane/subset/get_boundary/restriction/extension）+ TransformVar（6 类型 + create_replacement）+ TransformOp（createReplacement/attemptInsertion/inheritIndirect）+ TransformManager 完整 apply 生命周期（createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs）。Arena 风格 ID 索引替代 Ghidra 原始指针。19 个单元测试。已知限制：transferVarnodeProperties/deleteVarnode/setInputVarnode/markIndirectCreation 用 best-effort 替代 | `transform.cc` |
-| 26 | `userop.cc` | `userop.rs` (440行) | 🔧 **L2（代码完整但未接入）** | **全部 UserPcodeOp + UserOpManage 方法覆盖**：UserPcodeOp（new/get_name/get_type/get_index/get_display/get_operator_name/extract_annotation_size/is_volatile_read/write/is_segment/is_jump_assist/is_injected/is_string_data）+ DatatypeUserOp（get_output_local/get_input_local）+ VolatileReadOp/VolatileWriteOp（extract_annotation_size）+ SegmentOp + JumpAssistOp + UserOpManage（new/register_op/get_op/get_op_by_name/get_index_by_name/num_ops/register_builtin/initialize_builtins/get_op_mut/is_volatile_read/write/manual_call_other_fixup）+ 工厂函数（create_unspecialized/injected/volatile_read/volatile_write/segment/jump_assist）+ BUILTIN 常量（MEMCPY/STRNCPY/WCSNCPY/STRINGDATA/VOLATILE_READ/WOLATILE_WRITE）。7 单元测试。**未接入主管线**：Ghidra 在架构初始化（architecture.cc:635 `userops.initialize`）填充 UserOpManage，被 ActionSegmentize（coreaction.cc:624-649）消费。Rugra 缺 Sleigh 架构初始化 + .pspec CALLOTHER 注册 | `userop.cc` |
-| 27 | `unify.cc` | `unify.rs` (2595行) | 🔧 **L2（代码完整，设计上非主管线模块）** | **全部 unify 方法覆盖**：UnifyDatatype + RHSConstant 系列（ConstantNamed/Absolute/NZMask/Consumed/Offset/IsConstant/HeritageKnown/VarnodeSize/Expression）+ TraverseConstraint 系列（Descend/Count/Group）+ UnifyConstraint 系列（20 个 Constraint 类型：Boolean/VarConst/NamedExpression/OpCopy/Opcode/OpCompare/OpInput/OpInputAny/OpOutput/ParamConstVal/ParamConst/VarnodeCopy/VarCompare/Def/Descend/LoneDescend/OtherInput/ConstCompare/Group/Or）+ UnifyState（数据存储/op/vn 初始化/count/descend 管理）+ UnifyCPrinter（initialize_basic/add_names/print/print_get_op_list/print_rule_header/print_var_decls）。111 个 pub fn。16 单元测试。无 TODO。**设计上不属于主管线**：Ghidra 的 unify 引擎是**规则编译器代码生成工具**（rulecompile.cc/ruleparse.y）的一部分，用于在**构建时**生成自定义 Rule 的 C++ 代码，运行时不被 universalAction 调用。Rugra 的 Rule 全部手写（不经过 unify 引擎），与 Ghidra 的内置 Rule 一致 | `unify.cc` |
+| 26 | `userop.cc` | `userop.rs` (440行) | 🟢 **L2.5（代码完整，被 Sleigh 架构初始化阻塞）** | **全部 UserPcodeOp + UserOpManage 方法覆盖**：UserPcodeOp（new/get_name/get_type/get_index/get_display/get_operator_name/extract_annotation_size/is_volatile_read/write/is_segment/is_jump_assist/is_injected/is_string_data）+ DatatypeUserOp（get_output_local/get_input_local）+ VolatileReadOp/VolatileWriteOp（extract_annotation_size）+ SegmentOp + JumpAssistOp + UserOpManage（new/register_op/get_op/get_op_by_name/get_index_by_name/num_ops/register_builtin/initialize_builtins/get_op_mut/is_volatile_read/write/manual_call_other_fixup）+ 工厂函数（create_unspecialized/injected/volatile_read/volatile_write/segment/jump_assist）+ BUILTIN 常量（MEMCPY/STRNCPY/WCSNCPY/STRINGDATA/VOLATILE_READ/WOLATILE_WRITE）。7 单元测试。**接入阻塞**：Ghidra 在架构初始化（architecture.cc:635 `userops.initialize`）填充 UserOpManage，被 ActionSegmentize（coreaction.cc:624-649）消费。Rugra 缺 Sleigh 架构初始化 + .pspec CALLOTHER 注册 | `userop.cc` |
+| 27 | `unify.cc` | `unify.rs` (2595行) | 🟢 **L2.5（代码完整，Ghidra 设计上非主管线模块）** | **全部 unify 方法覆盖**：UnifyDatatype + RHSConstant 系列（ConstantNamed/Absolute/NZMask/Consumed/Offset/IsConstant/HeritageKnown/VarnodeSize/Expression）+ TraverseConstraint 系列（Descend/Count/Group）+ UnifyConstraint 系列（20 个 Constraint 类型：Boolean/VarConst/NamedExpression/OpCopy/Opcode/OpCompare/OpInput/OpInputAny/OpOutput/ParamConstVal/ParamConst/VarnodeCopy/VarCompare/Def/Descend/LoneDescend/OtherInput/ConstCompare/Group/Or）+ UnifyState（数据存储/op/vn 初始化/count/descend 管理）+ UnifyCPrinter（initialize_basic/add_names/print/print_get_op_list/print_rule_header/print_var_decls）。111 个 pub fn。16 单元测试。无 TODO。**设计上不属于主管线**：Ghidra 的 unify 引擎是**规则编译器代码生成工具**（rulecompile.cc/ruleparse.y）的一部分，用于在**构建时**生成自定义 Rule 的 C++ 代码，运行时不被 universalAction 调用。Rugra 的 Rule 全部手写（不经过 unify 引擎），与 Ghidra 的内置 Rule 一致 | `unify.cc` |
 
 ### coreaction.cc Action 列表（L1 → L2 → L3）— 2026-06-26 按 Ghidra 源码核对
 
@@ -253,9 +254,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 39 | `emulate.cc` | `emulate.rs` (480行) | 🔧 **L2（G7 核心完成）** | **2026-06-27**：完整移植 execute_current_op（emulate.cc:143-216 dispatch）+ execute() 主循环 + get_value/set_value（值解析，非仅常量）+ execute_unary/binary/load/store。4 个单元测试验证 COPY/INT_ADD/链式执行/RETURN 终止。**剩余**：BreakTable/BreakCallBack、EmulateFunction（函数级模拟）、与 jumptable 集成 | `emulate.cc` |
+| 39 | `emulate.cc` | `emulate.rs` (480行) | 🟢 **L2.5（核心引擎完整，缺集成包装器）** | **2026-06-27**：完整移植 execute_current_op（emulate.cc:143-216 dispatch）+ execute() 主循环 + get_value/set_value（值解析，非仅常量）+ execute_unary/binary/load/store。4 个单元测试验证 COPY/INT_ADD/链式执行/RETURN 终止。**接入缺口**：BreakTable/BreakCallBack、EmulateFunction（函数级模拟包装器）。注：jumptable.rs 已用 EmulateFunction（L3）；emulate.rs 核心引擎完整 | `emulate.cc` |
 | 40 | `emulateutil.cc` | `emulate.rs`（同上） | 🔧 L2 | 模拟工具与 emulate.rs 合并；EmulateFunction 部分 | `emulateutil.cc` |
-| 41 | `float.cc` + `double.cc` + `multiprecision.cc` | `float_emulate.rs` (440行) | 🔧 **L2（代码完整，设计上非主管线模块）** | **全部 FloatFormat 方法覆盖**：extract/set fractional_code/sign/exponent（对齐 float.cc:113-181）、getZeroEncoding/getInfinityEncoding/getNaNEncoding（对齐 cc:181-205）、所有 FLOAT_ op（op_add/sub/mult/div/neg/abs/sqrt/floor/ceil/nan/int2float/float2float/trunc/round/equal/notequal/less/lessequal）。用 host f64 替代 Ghidra multiprecision（语义等价，对反编译足够）。12 单元测试。**设计上不属于主管线**：Ghidra **没有** float emulation Action，float 语义由 Rule 处理（RuleFloatRange/RuleFloatSign/RuleFloatCast 等已在 oppool1/cleanup，coreaction.cc:5613-5637）。float_emulate.rs 作为这些 Rule 的底层求值库被间接使用 | `float.cc`, `double.cc`, `multiprecision.cc` |
+| 41 | `float.cc` + `double.cc` + `multiprecision.cc` | `float_emulate.rs` (440行) | 🟢 **L2.5（代码完整，Ghidra 设计上无 float emulation Action）** | **全部 FloatFormat 方法覆盖**：extract/set fractional_code/sign/exponent（对齐 float.cc:113-181）、getZeroEncoding/getInfinityEncoding/getNaNEncoding（对齐 cc:181-205）、所有 FLOAT_ op（op_add/sub/mult/div/neg/abs/sqrt/floor/ceil/nan/int2float/float2float/trunc/round/equal/notequal/less/lessequal）。用 host f64 替代 Ghidra multiprecision（语义等价，对反编译足够）。12 单元测试。**设计上不属于主管线**：Ghidra **没有** float emulation Action，float 语义由 Rule 处理（RuleFloatRange/RuleFloatSign/RuleFloatCast 等已在 oppool1/cleanup，coreaction.cc:5613-5637）。float_emulate.rs 作为这些 Rule 的底层求值库被间接使用 | `float.cc`, `double.cc`, `multiprecision.cc` |
 | 42 | `opbehavior.cc` | `opbehavior.rs` (280行) | ✅ **L3（2026-06-28 完整对齐）** | **全 opcode 覆盖**：evaluate_unary/binary/ternary 覆盖所有 INT_/BOOL_/COPY/PIECE/SUBPIECE/PTRADD/PTRSUB/LZCOUNT/POPCOUNT。recover_input_unary（COPY/INT_ZEXT/INT_SEXT/INT_NEGATE/INT_2COMP/BOOL_NEGATE）+ recover_input_binary（INT_ADD/INT_SUB/INT_MULT/INT_AND/INT_OR/INT_XOR/INT_LEFT）——**INT_LEFT recoverInputBinary 新增**（对齐 Ghidra OpBehaviorIntLeft::recoverInputBinary cc:443）。FLOAT_ 系列由 float_emulate.rs 单独处理。函数式 API（evaluate_*）替代 Ghidra OOP 类层次，语义等价。8 单元测试验证 | `opbehavior.cc` |
 | 43 | `memstate.cc` | `memstate.rs` (380行) | ✅ **L3（2026-06-28 完整对齐）** | **全部 MemoryBank/MemState 方法覆盖**：MemoryBank（set/get value/chunk、construct/deconstruct、insert/find word、page 管理）+ MemoryImage（read/get_value）+ MemoryPageOverlay（write/read/overlay 检测）+ MemState（set/get bank/value/chunk，对齐 memstate.cc:652-729）。9 单元测试 | `memstate.cc` |
 | 44 | `context.cc` + `globalcontext.cc` | `context.rs` | ✅ L3 | **完整实现**：ContextBitRange + TrackedContext/TrackedSet + ContextBlob + ContextDatabase trait + ContextInternal（内存分区映射 + XML encode/decode）+ ContextCache。所有 L3 缺口已关闭 | `context.cc`, `globalcontext.cc` |
@@ -266,8 +267,8 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 45 | `pcodeinject.cc` | `pcodeinject.rs` (272行) | 🔧 **L2（代码完整但未接入）** | InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**未接入主管线**：Ghidra 在架构初始化（architecture.cc:638 `buildPcodeInjectLibrary`）构建 inject 库，被 ActionConstbase（coreaction.cc:686-690 `getInjectUponEntry` + `doLiveInject`）消费。Rugra 缺 Sleigh 架构初始化 + .cspec 解析（decodeInject at architecture.cc:1287） | `pcodeinject.cc` |
-| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` (485行) | 🔧 **L2（代码完整，设计上非主管线模块）** | PcodeToken（12 token 类型）+ PcodeLexer（完整状态机：标识符/dec-hex 整数/标点/字符串/注释/EOF）+ PcodeSnippet（symbol 管理/allocate_temp/add_symbol/lookup_symbol/resolve_symbol/add_operand/lex/parse_stream/add_op_template/num_symbols/num_errors + error 报告）。15 单元测试。**设计上不属于主管线**：Ghidra 的 pcodeparse 是 p-code 片段解析器，在架构初始化时解析 .cspec/.pspec 的 inject payload（inject_sleigh.cc:373 `PcodeSnippet compiler`），非反编译运行时 Action。与 pcodeinject 同属 Sleigh 基础设施链 | `pcodecompile.cc`, `pcodeparse.cc` |
+| 45 | `pcodeinject.cc` | `pcodeinject.rs` (272行) | 🟢 **L2.5（代码完整，被 Sleigh 架构初始化阻塞）** | InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**接入阻塞**：Ghidra 在架构初始化（architecture.cc:638 `buildPcodeInjectLibrary`）构建 inject 库，被 ActionConstbase（coreaction.cc:686-690 `getInjectUponEntry` + `doLiveInject`）消费。Rugra 缺 Sleigh 架构初始化 + .cspec 解析（decodeInject at architecture.cc:1287） | `pcodeinject.cc` |
+| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` (485行) | 🟢 **L2.5（代码完整，Ghidra 设计上非主管线模块）** | PcodeToken（12 token 类型）+ PcodeLexer（完整状态机：标识符/dec-hex 整数/标点/字符串/注释/EOF）+ PcodeSnippet（symbol 管理/allocate_temp/add_symbol/lookup_symbol/resolve_symbol/add_operand/lex/parse_stream/add_op_template/num_symbols/num_errors + error 报告）。15 单元测试。**设计上不属于主管线**：Ghidra 的 pcodeparse 是 p-code 片段解析器，在架构初始化时解析 .cspec/.pspec 的 inject payload（inject_sleigh.cc:373 `PcodeSnippet compiler`），非反编译运行时 Action。与 pcodeinject 同属 Sleigh 基础设施链 | `pcodecompile.cc`, `pcodeparse.cc` |
 
 ---
 
@@ -278,7 +279,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 47 | Sleigh (20+ 文件) | `iced-x86` (仅 x86-64) | 🔧 L2 | **仅支持 x86-64**；不支持 ARM/MIPS/RISC-V/PowerPC | `sleigh*.cc`, `slgh*.cc` |
 | 48 | `architecture.cc` | `arch.rs` | ✅ L3 | **完整实现**：Ghidra Architecture 配置容器（全部字段 + 默认值 + resetDefaultsInternal）+ 子组件字段（symboltab/loader/commentdb/string_manager/cpool/context_db/options_db/split_records/lane_records）+ 虚拟工厂钩子等价物（set_* 方法）+ init/clear_analysis/read_loader_symbols/encode。所有 L3 缺口已关闭 | `architecture.cc` |
 | 49 | `translate.cc` | `disasm/x86_lift.rs` | 🔧 L2 | 仅 x86-64 提升 | `translate.cc` |
-| 50 | `grammar.cc` + `expression.cc` | `grammar.rs` (753行) + `expression.rs` (818行) | 🔧 **L2（grammar 代码完整，设计上非主管线模块）** | grammar.rs: GrammarToken（token 类型/位置/值）+ GrammarLexer（完整状态机词法分析：标点/标识符/dec-hex-oct 整数/字符串/字符/注释/EOF）+ TypeModifier/TypeDeclarator AST + parse_type/parse_to_separator。expression.rs: AdditiveEdge + TermOrder（collect/sort_terms/get_sort）+ AddExpression（gather_two_terms_add/subtract/root/is_equivalent）+ boolean_match_evaluate + functional_equality_level0/functional_equality_level。functional_equality 在 address.rs。28 单元测试。**grammar 设计上不属于主管线**：Ghidra 的 grammar 是 .cspec/.pspec 解析器，在架构初始化时解析编译器规范（非反编译运行时 Action）。expression.rs **已接入**主管线（printc 排序用 TermOrder）。注意：lib.rs:68 标注 grammar 已接入，但实际 parse_type/parse_to_separator 无外部调用方 | `grammar.cc`, `expression.cc` |
+| 50 | `grammar.cc` + `expression.cc` | `grammar.rs` (753行) + `expression.rs` (818行) | 🟢 **L2.5（grammar 代码完整，设计上非主管线模块）** | grammar.rs: GrammarToken（token 类型/位置/值）+ GrammarLexer（完整状态机词法分析：标点/标识符/dec-hex-oct 整数/字符串/字符/注释/EOF）+ TypeModifier/TypeDeclarator AST + parse_type/parse_to_separator。expression.rs: AdditiveEdge + TermOrder（collect/sort_terms/get_sort）+ AddExpression（gather_two_terms_add/subtract/root/is_equivalent）+ boolean_match_evaluate + functional_equality_level0/functional_equality_level。functional_equality 在 address.rs。28 单元测试。**grammar 设计上不属于主管线**：Ghidra 的 grammar 是 .cspec/.pspec 解析器，在架构初始化时解析编译器规范（非反编译运行时 Action）。expression.rs **已接入**主管线（printc 排序用 TermOrder）。注意：lib.rs:68 标注 grammar 已接入，但实际 parse_type/parse_to_separator 无外部调用方 | `grammar.cc`, `expression.cc` |
 
 ---
 
@@ -286,14 +287,14 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 51 | `callgraph.cc` | `callgraph.rs` (370行) | 🔧 **L2（代码完整，设计上非主管线模块）** | **全部方法覆盖**：CallGraph（add_node/find_node/add_edge/delete_in_edge/snip_edge/snip_cycles/snip_cycles_dfs/cycle_structure/find_no_entry/clear_marks/init_leaf_walk/next_leaf/build_edges/edges/all_addrs）+ CallGraphNode/CallGraphEdge + edge_flags/node_flags。**build_edges** 从 Funcdata callspecs 构建调用边（对齐 cc:406）。**snip_edge** 标记循环边（对齐 cc:164）。**cycle_structure** 分析循环结构（对齐 cc:352）。8 单元测试。**设计上不属于主管线**：Ghidra 的 CallGraph 是程序级全局对象，仅通过控制台命令（ifacedecomp.cc:2721 `IfcCallGraphBuild`）构建，非 universalAction 的一部分。Rugra 的主管线是 per-function 的，与 CallGraph 的全局粒度不匹配 | `callgraph.cc` |
+| 51 | `callgraph.cc` | `callgraph.rs` (370行) | 🟢 **L2.5（代码完整，Ghidra 设计上非主管线模块）** | **全部方法覆盖**：CallGraph（add_node/find_node/add_edge/delete_in_edge/snip_edge/snip_cycles/snip_cycles_dfs/cycle_structure/find_no_entry/clear_marks/init_leaf_walk/next_leaf/build_edges/edges/all_addrs）+ CallGraphNode/CallGraphEdge + edge_flags/node_flags。**build_edges** 从 Funcdata callspecs 构建调用边（对齐 cc:406）。**snip_edge** 标记循环边（对齐 cc:164）。**cycle_structure** 分析循环结构（对齐 cc:352）。8 单元测试。**设计上不属于主管线**：Ghidra 的 CallGraph 是程序级全局对象，仅通过控制台命令（ifacedecomp.cc:2721 `IfcCallGraphBuild`）构建，非 universalAction 的一部分。Rugra 的主管线是 per-function 的，与 CallGraph 的全局粒度不匹配 | `callgraph.cc` |
 | 52 | `database.cc` + `database_ghidra.cc` | `database.rs` | ✅ L3 | **完整实现**：SymbolEntry/Symbol（encode_header/decode_header/encode_body/decode_body/encode/decode）/Scope（encode_recursive/decode）/Database（encode/decode）全部使用 marshal.rs 的 Encoder/Decoder trait。ID_BASE 修正为 0x4000...。rangemap.rs 提供 RangeMap + PartMap。所有 L3 缺口已关闭 | `database.cc`, `database_ghidra.cc` |
 | 53 | `xml.cc` + `marshal.cc` | `marshal.rs` | 🔧 L2 | **骨架已移植**：AttributeId/ElementId 注册表 + Element/Document DOM 树 + Encoder/Decoder trait + TreeEncoder/TreeDecoder 内存实现（完整 round-trip）。解锁 database/override/arch 的 XML encode/decode。L3 缺 PackedEncode/PackedDecode 二进制格式 + XML 文本解析 | `xml.cc`, `marshal.cc` |
 | 54 | `stringmanage.cc` + `string_ghidra.cc` | `stringmanage.rs` | ✅ L3 | **完整实现**：StringManager + StringManagerUnicode + 完整 UTF8/UTF16/UTF32 解码 + XML encode/decode。所有 L3 缺口已关闭 | `stringmanage.cc` |
 | 55 | `crc32.cc` + `compression.cc` | `crc32.rs` + `compression.rs` | ✅ L3 | **完整实现**：crc32 完整（CRC32 表 + crc_update）+ compression 完整（flate2 ZlibEncoder/ZlibDecoder 实际 deflate/inflate + compress_all/decompress_all）。所有 L3 缺口已关闭 | `crc32.cc`, `compression.cc` |
 | 56 | `override.cc` | `override_rs.rs` | ✅ L3 | **完整实现**：Override + FlowOverride 完整 in-memory + XML encode/decode（使用 marshal.rs）。所有命令类型（forcegoto/deadcodedelay/indirectover/protoover/multistagejump/flowoverride）的 insert/query/apply/encode/decode 全部实现 | `override.cc` |
 | 57 | `prefersplit.cc` | `prefersplit.rs` | ✅ L3 | **完整实现**：PreferSplitRecord（storage + splitoffset + less_than 排序）+ PreferSplitManager + SplitInstance。全部 18 个私有分裂辅助函数已移植（fillin_instance/create_copy_ops/test+split_defining_copy/reading_copy/zext/piece/subpiece/load/store）+ split_varnode/split_record/test_temporary/split_temporary 驱动 + split/split_additional 公共入口。使用 Funcdata op-editing API（new_op/op_set_opcode/op_set_input/op_set_output/op_insert_after/op_destroy）。新增 Funcdata::op_insert_after | `prefersplit.cc` |
-| 58 | `paramid.cc` | `paramid.rs` | 🔧 L2 | **骨架已移植**：ParamMeasure（walk_forward/walk_backward 数据流分类，使用 descend_iter/get_def）+ ParamRank（i32 常量，允许重复值）+ ParamIDAnalysis + WalkState + calculate_rank。L3 缺 Funcdata 集成 + isLoopIn + XML encode | `paramid.cc` |
+| 58 | `paramid.cc` | `paramid.rs` | 🟢 **L2.5（算法完整，缺 Funcdata 集成）** | **核心算法完整移植**：ParamMeasure（walk_forward/walk_backward 数据流分类，含 descend_iter/get_def + 全 opcode dispatch：BRANCH/CBRANCH/CALL/CALLOTHER/RETURN/INDIRECT/MULTIEQUAL，使用 update_rank + ParamRank）+ calculate_rank（terminal_rank 选择 + walk 调度）+ ParamIdAnalysis::analyze（遍历 vbank.loc_tree 构建 ParamMeasure + 扫描 RETURN）。9 pub fn，0 stub。2 个轻微简化（MULTIEQUAL loop-avoidance 用递归 walk 无 isLoopIn；backward-walk default 用 DIRECT_WRITE_WITHOUT_READ）。**接入缺口**：缺 Funcdata 集成 + isLoopIn（需 BlockBasic）+ XML encode | `paramid.cc` |
 | 59 | `unionresolve.cc` | `unionresolve.rs` | 🔧 L2 | **骨架已移植**：ResolvedUnion + ResolveEdge（指针编码）+ DirType + Trial + VisitMark + ScoreUnionFields（评分框架 + compute_best_index + run stub + MAX_PASSES/THRESHOLD/MAX_TRIALS 常量）。L3 缺完整评分算法（scoreTrialDown/Up 需 TypeFactory + PcodeOp） | `unionresolve.cc` |
 | 60 | `flow.cc` | — | 📋 L1 | **完全缺失**：流分析 | `flow.cc` |
 | 61 | `codedata.cc` | — | 📋 L1 | **完全缺失**：代码数据分析 | `codedata.cc` |
@@ -304,21 +305,129 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 ---
 
-## 统计汇总（2026-06-29 接入审计后）
+## 统计汇总（2026-06-29 依赖分析 + L2.5 细分）
 
 | 级别 | 数量 | 说明 |
 |---|---|---|
 | ✅ **L3（已完成 + 接入主管线 + 验证）** | **~14** | 核心算法 1:1 移植 + **实际在反编译流程中被调用** + 测试/输出验证。底层 IR/数据模型（address/varnode/op/block/opcodes/space/rangeutil/transform）+ 主管线模块（heritage/opbehavior/expression/printc/prettyprint/constseq 等）。**2026-06-29 收紧**：代码完整但从未被调用的模块不再算 L3。|
-| 🔧 **L2（代码完整但未接入 / 算法不完整）** | **~38** | 两类：① 代码完整但从未被主管线调用（subflow/userop/pcodeinject/unify/callgraph/float_emulate/grammar/pcodeparse — 见 P2/P3/P4）；② 有骨架但核心算法缺失（condexe/varmap/blockaction 等）|
+| 🟢 **L2.5（代码完整未接入）** | **~9** | 核心算法 1:1 移植完成 + 有测试，但**尚未接入主管线**。详见下方"L2.5 模块接入阻塞分析"。|
+| 🔧 **L2（算法不完整）** | **~16** | 有骨架但核心算法缺失/未对齐。典型：condexe(只检测不重写)、unionresolve(scoreTrialDown/Up 缺失)、varmap(stack spacebase 未通)、blockaction(嵌套循环未完成) |
 | 📋 **L1（计划/仅骨架）** | **~30** | 仅有 struct 占位或完全缺失 |
 | **战略排除** | **~34** | Sleigh 编译器 + GUI 桥 + BFD 加载器（见〇节） |
 
 > ⚠️ **2026-06-29 接入审计发现**：此前标 L3 的 21 个模块中，**9 个代码完整但从未在反编译流程中被调用**（死代码）。
 > 经核实 Ghidra `coreaction.cc` 接入点后分类处理：
 > - **1 个（constseq）已接入** cleanup 池 → 真 L3。
-> - **4 个（callgraph/unify/float_emulate/grammar+expression）经核实 Ghidra 设计上不属于 universalAction**（控制台命令/规则编译器/底层库/规范解析器）→ 标 L2 并注明"设计如此"。
-> - **4 个（userop/pcodeinject/pcodeparse/subflow）被 Sleigh 基础设施或缺失 Rule 包装器阻塞** → 标 L2 并注明阻塞点。
+> - **9 个代码完整但未接入的 → 重新细分为 L2.5**（区分"算法未完成"的 L2 与"代码完成仅缺接入"的 L2.5）。
 > L3 标准现明确要求"实际接入主管线"。数字下降反映标准变严，非能力下降。
+
+---
+
+## L2.5 模块接入阻塞分析（2026-06-29 新增）
+
+> 这 9 个模块的**核心算法已 1:1 移植完成并通过测试**，但卡在"接入主管线"这一步。按阻塞原因分三类：
+
+### 类型 A：缺 Rule 包装器（1 个，最易解锁）
+
+| 模块 | 核心引擎 | 缺什么 | 解锁路径 |
+|---|---|---|---|
+| 🟢 **subflow** (#20) | SubvariableFlow（trace_forward/backward + do_replacement 完整，11 测试） | 9 个 Rule 包装器：RuleSubvarAnd/SubvarSubpiece/SplitFlow/PtrFlow/SubvarCompZero/SubvarShift/SubvarZext/SubvarSext/SubfloatConvert（coreaction.cc:5621-5633） | **移植这 9 个 Rule → 注册进 oppool1 → L3**。无需新基础设施，Rule 只需调用现有 SubvariableFlow API |
+
+### 类型 B：Ghidra 设计上不属于 universalAction（4 个，非 bug）
+
+| 模块 | Ghidra 真实定位 | 为什么不接入 |
+|---|---|---|
+| 🟢 **callgraph** (#51) | 程序级全局对象，仅控制台命令 `IfcCallGraphBuild`（ifacedecomp.cc:2721）构建 | universalAction 是 per-function 的，与 CallGraph 全局粒度不匹配 |
+| 🟢 **unify** (#27) | **规则编译器代码生成工具**（rulecompile.cc/ruleparse.y），构建时生成自定义 Rule 的 C++ | 运行时不被调用；Rugra 的 Rule 全部手写，与 Ghidra 内置 Rule 一致 |
+| 🟢 **float_emulate** (#41) | Ghidra **无** float emulation Action；float 语义由 Rule 处理 | RuleFloatRange/RuleFloatCast 等已在 oppool1/cleanup（L3）；float_emulate.rs 作为底层求值库被间接使用 |
+| 🟢 **grammar** (#50) | .cspec/.pspec 解析器，架构初始化时用 | 非反编译运行时 Action。注意：同条的 expression.rs **已接入**主管线（printc 用 TermOrder 排序） |
+
+### 类型 C：被 Sleigh 基础设施阻塞（3 个 + 1 个额外 L2.5）
+
+| 模块 | 阻塞点 | 依赖链 |
+|---|---|---|
+| 🟢 **userop** (#26) | 缺 `architecture.cc:635 userops.initialize` | 被 ActionSegmentize（coreaction.cc:624-649）消费 → 需 .pspec CALLOTHER 注册 |
+| 🟢 **pcodeinject** (#45) | 缺 `architecture.cc:638 buildPcodeInjectLibrary` | 被 ActionConstbase（coreaction.cc:686-690 `doLiveInject`）消费 → 需 .cspec decodeInject |
+| 🟢 **pcodeparse** (#46) | 同上 | inject_sleigh.cc:373 `PcodeSnippet` 解析 inject payload → 需 Sleigh 架构初始化 |
+| 🟢 **emulate** (#39) | 缺 BreakTable/EmulateFunction 集成包装器 | jumptable.rs 已用 EmulateFunction（L3）；emulate.rs 核心引擎（execute_current_op dispatch + execute 主循环 + LOAD/STORE）完整，4 测试 |
+
+> **类型 C 共同根因**：缺 Sleigh 架构初始化层（architecture.cc:635/638）。这是 userop/pcodeinject/pcodeparse 三个模块的共同阻塞点。Rugra 用 iced-x86 替代 Sleigh，需补一个轻量"架构初始化"阶段从 .cspec/.pspec 加载编译器规范。
+
+### 额外 L2.5（审计 paramid 时发现）
+
+| 模块 | 核心算法 | 缺什么 |
+|---|---|---|
+| 🟢 **paramid** (#58) | walk_forward/backward 数据流分类 + calculate_rank + analyze 全部真实实现（9 函数，0 stub） | 缺 Funcdata 集成 + isLoopIn（需 BlockBasic）+ XML encode。算法完整，仅集成层缺口 |
+
+### L2.5 接入优先级建议
+
+1. **🔥 最高 ROI：subflow（类型 A）** — 只需写 9 个 Rule 包装器，无需新基础设施，接入后能改善子变量识别（uVar 碎片减少）
+2. **emulate（类型 C）** — 核心引擎已就绪，补 BreakTable/EmulateFunction 包装器即可（jumptable 已用其 L3 部分）
+3. **Sleigh 架构初始化层（解锁类型 C 全部 3 个）** — 大工程，但一次解锁 userop + pcodeinject + pcodeparse
+4. **类型 B（4 个）** — Ghidra 设计如此，保持 L2.5 即可，不强行接入
+
+---
+
+## 模块依赖关系图（2026-06-29 新增）
+
+> 箭头表示"被依赖 ← 依赖者"。分层从底（基础设施）到顶（输出层）。
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ 输出层（L3）                                                          │
+│  printc ← prettyprint ← printlanguage ← expression(TermOrder)        │
+│    ↑                                                                 │
+│    └── varmap(L2, stack spacebase 缺口) ← variable(L3, HighVariable)  │
+└─────────────────────────────────────────────────────────────────────┘
+         ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│ 结构化 + 类型层                                                       │
+│  blockaction(L2, orderLoopBodies) ← TraceDAG(L2, check_open)          │
+│    ↑                                                                 │
+│  condexe(L3) → ActionConditionalExe                                  │
+│  cast(L3) ← datatype(L3) ← type_infer(分析层)                        │
+└─────────────────────────────────────────────────────────────────────┘
+         ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│ 优化/简化层（Rule 池，oppool1 + actcleanup）                          │
+│  ruleaction(L2, 缺~30 Rule) ←── subflow(🟢L2.5, 缺9个Rule包装器)       │
+│      ↑                            ↑                                  │
+│      ├── unify(🟢L2.5, 设计非管线)  transform(L3, TransformManager)    │
+│      ├── constseq(L3, 已接入)      float_emulate(🟢L2.5, 底层库)        │
+│      └── emulate(🟢L2.5) ←── opbehavior(L3) ←── memstate(L3)          │
+└─────────────────────────────────────────────────────────────────────┘
+         ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│ 分析层（SSA/Heritage/ParamID）                                        │
+│  heritage(L3) → ActionHeritage                                       │
+│    ↑                                                                 │
+│  funcdata(L2) ← merge(L2) ← paramid(🟢L2.5)                           │
+│         ↑                                                            │
+│    unionresolve(L2, scoreTrialDown/Up 缺失)                          │
+└─────────────────────────────────────────────────────────────────────┘
+         ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│ IR 基础设施层（全部 L3）                                               │
+│  address ← varnode ← op ← pcoderaw ← opcodes ← space ← typeop         │
+│  block ← cover ← rangeutil                                           │
+└─────────────────────────────────────────────────────────────────────┘
+         ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│ Sleigh 基础设施层（阻塞链根因）                                        │
+│  architecture.cc:635 userops.initialize ──→ 阻塞 userop(🟢L2.5)        │
+│  architecture.cc:638 buildPcodeInjectLibrary ──→ 阻塞:                │
+│         pcodeinject(🟢L2.5) ← pcodeparse(🟢L2.5)                       │
+│         ← grammar(🟢L2.5, .cspec 解析)                                 │
+│  Rugra 替代：iced-x86（仅 x86-64）                                    │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**关键依赖链（影响 curl/httpd 输出质量）**：
+
+1. **变量恢复链**：`varmap(L2) ← variable(L3) ← printc(L3)`。varmap 的 stack spacebase 缺口导致 uVar 碎片。这是**最高 ROI 的 L2→L3 目标**。
+2. **结构化链**：`blockaction(L2) ← TraceDAG(L2) ← jumptable(L3)`。orderLoopBodies 嵌套循环 + identify_internal 死锁。
+3. **Rule 补全链**：`ruleaction(L2, 缺~30 Rule) ← subflow(🟢L2.5, 缺9个Rule包装器)`。subflow 接入后子变量识别改善。
+4. **Sleigh 阻塞链**：`architecture 初始化 ← {userop, pcodeinject, pcodeparse}`。一次补 Sleigh 层可解锁 3 个 L2.5。
 
 ---
 
@@ -340,23 +449,25 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 9. **`type.cc` typegrp** (L2→L3) — 类型约束求解
 10. **`transform.cc`** (已 L3) — P-code 变换基础设施（已完成）
 
-### P2（中优先级 — 代码完整但需 Rule 包装器才能接入）
+### P2（🟢 L2.5 — 代码完整，最高 ROI 解锁路径）
 
-11. **`subflow.cc`** (代码完整→需接入) — SubvariableFlow 引擎完整（`subflow.rs`），但驱动它的 9 个 Rule（RuleSubvarAnd/RuleSubvarSubpiece/RuleSplitFlow/RulePtrFlow 等，coreaction.cc:5621-5633）未移植。需移植这 9 个 Rule 包装器才能接入 oppool1。
-12. **`constseq.cc`** (✅ 已接入, 2026-06-29) — RuleStringCopy/RuleStringStore 已接入 cleanup 池。transform 阶段（CALLOTHER 替换）待 userop 基础设施。
-13. **`rangeutil.cc`** (✅ 已 L3 并接入) — CircleRange 已被 jumptable 使用。
+11. **`subflow.cc`** (🟢 L2.5，类型 A) — SubvariableFlow 引擎完整（`subflow.rs`），但驱动它的 9 个 Rule（RuleSubvarAnd/RuleSubvarSubpiece/RuleSplitFlow/RulePtrFlow 等，coreaction.cc:5621-5633）未移植。**移植这 9 个 Rule → oppool1 → L3**。无需新基础设施。
+12. **`constseq.cc`** (✅ 已 L3, 2026-06-29) — RuleStringCopy/RuleStringStore 已接入 cleanup 池。transform 阶段（CALLOTHER 替换）待 userop 基础设施。
+13. **`rangeutil.cc`** (✅ 已 L3) — CircleRange 已被 jumptable 使用。
+14. **`emulate.cc`** (🟢 L2.5，类型 C) — 核心引擎（execute_current_op + execute 主循环 + LOAD/STORE）完整，4 测试。缺 BreakTable/EmulateFunction 集成包装器。补包装器即可接入。
+15. **`paramid.cc`** (🟢 L2.5，额外发现) — walk_forward/backward + calculate_rank + analyze 全部真实实现（9 函数，0 stub）。缺 Funcdata 集成 + isLoopIn + XML encode。
 
-### P3（设计上非主管线模块 — 代码完整，Ghidra 设计如此不接入 universalAction）
+### P3（🟢 L2.5 — 设计上非主管线模块，代码完整不强行接入）
 
-14. **`unify.cc`** (代码完整，设计如此) — Ghidra 的 unify 引擎是**规则编译器代码生成工具**（rulecompile.cc/ruleparse.y），构建时生成自定义 Rule 的 C++，运行时不被 universalAction 调用。Rugra 的 Rule 全部手写，与 Ghidra 内置 Rule 一致。
-15. **`float.cc` + `double.cc`** (代码完整，设计如此) — Ghidra **无** float emulation Action；float 语义由 Rule 处理（RuleFloatRange/RuleFloatCast 等已在 oppool1/cleanup）。float_emulate.rs 作为底层求值库。
-16. **`callgraph.cc`** (代码完整，设计如此) — 程序级全局对象，Ghidra 仅通过控制台命令（ifacedecomp.cc:2721）构建，非 universalAction。Rugra 主管线是 per-function，粒度不匹配。
-17. **`grammar.cc` + `pcodeparse.cc`** (代码完整，设计如此) — .cspec/.pspec 解析器，架构初始化时用（非反编译运行时）。被 Sleigh 基础设施链阻塞。
+16. **`unify.cc`** (🟢 L2.5，类型 B) — Ghidra 的 unify 引擎是**规则编译器代码生成工具**（rulecompile.cc/ruleparse.y），构建时生成自定义 Rule 的 C++，运行时不被 universalAction 调用。Rugra 的 Rule 全部手写，与 Ghidra 内置 Rule 一致。
+17. **`float.cc` + `double.cc`** (🟢 L2.5，类型 B) — Ghidra **无** float emulation Action；float 语义由 Rule 处理（RuleFloatRange/RuleFloatCast 等已在 oppool1/cleanup）。float_emulate.rs 作为底层求值库。
+18. **`callgraph.cc`** (🟢 L2.5，类型 B) — 程序级全局对象，Ghidra 仅通过控制台命令（ifacedecomp.cc:2721）构建，非 universalAction。Rugra 主管线是 per-function，粒度不匹配。
+19. **`grammar.cc`** (🟢 L2.5，类型 B) — .cspec/.pspec 解析器，架构初始化时用（非反编译运行时）。同条 expression.rs 已接入。
 
-### P4（被 Sleigh 基础设施阻塞 — 需架构初始化层）
+### P4（🟢 L2.5 — 被 Sleigh 基础设施阻塞）
 
-18. **`userop.cc`** + **`pcodeinject.cc`** (代码完整，被阻塞) — Ghidra 在 architecture.cc:635/638 初始化 UserOpManage 和 PcodeInjectLibrary，被 ActionSegmentize/ActionConstbase 消费。Rugra 缺 Sleigh 架构初始化 + .cspec/.pspec 解析。这是 4 个模块（userop/pcodeinject/grammar/pcodeparse）的共同阻塞点。
-19. **Sleigh 多架构** (战略排除) — ARM/MIPS/RISC-V 支持（需 Sleigh，见〇节）
+20. **`userop.cc`** + **`pcodeinject.cc`** + **`pcodeparse.cc`** (🟢 L2.5，类型 C) — Ghidra 在 architecture.cc:635/638 初始化 UserOpManage 和 PcodeInjectLibrary，被 ActionSegmentize/ActionConstbase 消费。Rugra 缺 Sleigh 架构初始化 + .cspec/.pspec 解析。**这是 3 个模块的共同阻塞点**——一次补 Sleigh 架构初始化层可全部解锁。
+21. **Sleigh 多架构** (战略排除) — ARM/MIPS/RISC-V 支持（需 Sleigh，见〇节）
 
 ---
 

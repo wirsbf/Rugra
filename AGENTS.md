@@ -83,11 +83,12 @@ P-code IR 是整个反编译器的基石。上层绕过 = 在地基缺口上盖�
 | 级别 | 含义 | 数量 |
 |---|---|---|
 | ✅ L3 | 已完整实现 + **接入主管线** + 对齐验证 | 14 |
-| 🔧 L2 | 代码完整但未接入 / 部分实现 | 38 |
+| 🟢 L2.5 | 核心算法 1:1 移植完成 + 有测试，但**未接入主管线**（缺 Rule 包装器/被 Sleigh 阻塞/Ghidra 设计如此） | 9 |
+| 🔧 L2 | 核心算法缺失/未对齐 | 16 |
 | 📋 L1 | 完全缺失，需从零实现 | 6 |
 | ⚪ 无标记 | 表格行未标状态（需补） | 4 |
 
-（2026-06-29 接入审计：核实 Ghidra `coreaction.cc` 后发现 9 个"L3"模块代码完整但从未被主管线调用。1 个（constseq）已接入；4 个经核实 Ghidra 设计上不属于 universalAction（callgraph/unify/float_emulate/grammar）；4 个被 Sleigh 基础设施/缺失 Rule 包装器阻塞（userop/pcodeinject/pcodeparse/subflow）。L3 现明确要求"实际接入主管线"。详见 `ALIGNMENT_ROADMAP.md`。）
+（2026-06-29 依赖分析：核实核心算法完整性后，将 9 个"代码完整但未接入"的模块从 L2 细分为 **L2.5**（区别于算法未完成的真 L2）。分三类：① 缺 Rule 包装器（subflow）；② Ghidra 设计上非 universalAction（callgraph/unify/float_emulate/grammar）；③ 被 Sleigh 架构初始化阻塞（userop/pcodeinject/pcodeparse/emulate/paramid）。最高 ROI 解锁路径：subflow 的 9 个 Rule 包装器。详见 `ALIGNMENT_ROADMAP.md` 依赖关系图。）
 
 状态变更必须当场更新路线图。
 
