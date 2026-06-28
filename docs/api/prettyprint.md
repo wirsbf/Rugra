@@ -38,6 +38,14 @@ Simple emitter that produces plain text with no markup
 - **孤立控制流清理**：如合并连续重复的 `goto`、移除空 `else` 代码块的空行、重写 `return void()` 表达式等。
 - **双括号规范化 (Pass 15)**：在最后一趟后处理中，将函数调用多余的括号（如 `puts());`）规范化为 C 语言的标准形式 `puts();`。
 
+### `pub fn debug_count_while(&self) -> (usize, usize)` （2026-06-28 新增，调试用）
+
+返回 `(while_count, do_count)`——原始 output 中 "while" 和 "\ndo " 的出现次数。用于 `RUGRA_LOOP_DEBUG` 诊断跟踪循环渲染。标注 `allow(dead_code)`，无副作用。
+
+### `pub fn debug_get_output_ref(&self) -> &str` （2026-06-28 新增，调试用）
+
+借用原始 output 字符串供诊断检查。标注 `allow(dead_code)`。
+
 ### `pub struct NullEmit`
 
 Emitter that discards all output (used for discovery pass)

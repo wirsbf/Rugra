@@ -75,6 +75,21 @@ impl EmitNoMarkup {
         }
     }
 
+    /// Debug helper: count "while" and "\ndo " occurrences in the raw output.
+    /// Used by RUGRA_LOOP_DEBUG diagnostics to track loop rendering.
+    #[allow(dead_code)]
+    pub fn debug_count_while(&self) -> (usize, usize) {
+        let w = self.output.matches("while").count();
+        let d = self.output.matches("\ndo ").count();
+        (w, d)
+    }
+
+    /// Debug helper: borrow the raw output string for diagnostics.
+    #[allow(dead_code)]
+    pub fn debug_get_output_ref(&self) -> &str {
+        &self.output
+    }
+
     pub fn get_output(mut self) -> String {
         // Always run post-processing so callers that forget to invoke
         // post_process() still get the normalized output (struct deref rewrite,
@@ -230,7 +245,7 @@ impl EmitNoMarkup {
         }
 
         // Fourth pass: detect backward goto patterns and convert to loops
-        // Pattern: LAB_X: ... goto LAB_X; → do { ... } while(true);  
+        // Pattern: LAB_X: ... goto LAB_X; → do { ... } while(true);
         // Pattern: LAB_X: ... if (cond) goto LAB_X; → do { ... } while(cond);
         let mut looped = collapsed;
         let max_loop_passes = 5;
