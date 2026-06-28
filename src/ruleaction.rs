@@ -8297,7 +8297,6 @@ impl Rule for RuleSignMod2nOpt2 {
     fn get_name(&self) -> &str { "sign_mod2n_opt2" }
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
-
 /// Simplify optimized division expressions. Faithful to `RuleDivTermAdd`
 /// (ruleaction.cc:7832-7915). Transforms:
 ///   `sub(ext(V)*c, b) >> d + V => sub((ext(V)*(c+2^n)) >> n, 0)`
