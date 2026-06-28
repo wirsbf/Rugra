@@ -426,6 +426,18 @@ disasm / lifting
 4. 识别基本块边界
 5. 为后续 block / CFG / heritage / ActionDatabase 提供初始结构
 
+#### 基本块划分（2026-06-28 重大修复）
+
+`build_blocks_from_ops` 现在按 Ghidra 式（BlockGraph::copyBlocks / Funcdata::structureReset）划分基本块，在**两种**点分裂：
+1. **terminator 之后**（BRANCH/CBRANCH/BRANCHIND/RETURN）—— 原有逻辑
+2. **跳转目标地址处** —— **新增**：收集所有 BRANCH/CBRANCH 的目标地址（input[0] offset），在对应 op 索引处也分裂
+
+此前只做 (1)，导致跳转目标落在块中间时无法解析（CBRANCH target 地址不等于任何块 start_addr），边被静默丢弃。实测 curl main 有 56 个 / 全局 182 个 CBRANCH 目标未匹配，丢失大量回边，while 循环恢复从 ~6 降到 1。
+
+修复后：curl main 块数 102→123，回边检测 3→8（3 个独立循环头：5/7/26，接近 Ghidra 的 6），全局结构化循环 8→17（10 whiledo + 7 dowhile）。736/736 测试通过，curl 24/24 gcc 审计。
+
+**已知影响**：httpd 大函数（如 main 12 循环）goto cascade 轮次增加（40 轮），整体变慢但无正确性回归。性能优化是后续工作。
+
 #### 为什么这个方法重要
 如果没有这一步：
 

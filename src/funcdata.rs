@@ -1383,16 +1383,74 @@ impl Funcdata {
             return;
         }
 
-        // Identify block start indices
-        // First op always starts a block
-        let mut block_starts: Vec<usize> = vec![0];
+        // Identify block start indices. Ghidra's basic-block partitioning
+        // (BlockGraph::copyBlocks / Funcdata::structureReset) splits at TWO
+        // kinds of points:
+        //   (1) after each block terminator (BRANCH/CBRANCH/BRANCHIND/RETURN)
+        //   (2) at every jump TARGET address — any address that a BRANCH/
+        //       CBRANCH points to must begin a new block, so the target edge
+        //       resolves to a block start.
+        // Rugra previously did only (1), which meant jump targets landing in
+        // the middle of a block were unresolvable — the CBRANCH edge was
+        // silently dropped (observed: curl main 56 / global 182 CBRANCH
+        // targets unmatched, losing back-edges and collapsing while-loop
+        // recovery from ~6 to 1).
+
+        // Build addr -> op-index map for target resolution.
+        let mut addr_to_idx: std::collections::HashMap<u64, usize> =
+            std::collections::HashMap::with_capacity(op_refs.len());
+        for (i, op_ref) in op_refs.iter().enumerate() {
+            let addr = op_ref.0.read().unwrap().get_addr().as_u64();
+            addr_to_idx.entry(addr).or_insert(i);
+        }
+
+        // Collect target op-indices from BRANCH/CBRANCH.
+        let mut target_starts: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        for (i, op_ref) in op_refs.iter().enumerate() {
+            let (opc, target_offset) = {
+                let op = op_ref.0.read().unwrap();
+                let tgt = match op.opcode {
+                    OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH => {
+                        op.get_in(0).map(|vn| vn.read().unwrap().get_offset())
+                    }
+                    _ => None,
+                };
+                (op.opcode, tgt)
+            };
+            if matches!(opc, OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH) {
+                if let Some(taddr) = target_offset {
+                    if let Some(&tidx) = addr_to_idx.get(&taddr) {
+                        // The op at the target address starts a new block.
+                        // Don't split at index 0 (it's already a start) and
+                        // don't split at i+1 if this branch falls through to
+                        // its target (handled by terminator rule below).
+                        if tidx != 0 {
+                            target_starts.insert(tidx);
+                        }
+                    }
+                    // If target not in addr_to_idx, the target is outside
+                    // this function (e.g. tail-call / external) — skip, the
+                    // edge will be dropped as before.
+                    let _ = i; // suppress unused warning
+                }
+            }
+        }
+
+        // Combine: block starts = {0} ∪ {terminator+1} ∪ {jump targets}.
+        let mut block_starts: std::collections::BTreeSet<usize> =
+            std::collections::BTreeSet::new();
+        block_starts.insert(0);
         for (i, op_ref) in op_refs.iter().enumerate() {
             let op = op_ref.0.read().unwrap();
             if op.opcode.is_block_terminator() && i + 1 < op_refs.len() {
-                // The op AFTER a terminator starts a new block
-                block_starts.push(i + 1);
+                block_starts.insert(i + 1);
             }
         }
+        for tidx in target_starts {
+            block_starts.insert(tidx);
+        }
+        let block_starts: Vec<usize> = block_starts.into_iter().collect();
 
         // Create basic blocks
         let mut blocks: Vec<Arc<RwLock<BlockBasic>>> = Vec::new();
@@ -1585,8 +1643,13 @@ mod tests {
 
         fd.inject_raw_ops(&[op1, op2, op3, op4]);
 
-        // CBRANCH terminates block 0, so we get 2 blocks
-        assert_eq!(fd.bblocks.get_size(), 2);
+        // Basic-block partitioning splits at terminators AND at jump targets
+        // (Ghidra-style). CBRANCH at op1 (addr 0x2010) targets 0x2010 — itself,
+        // a self-loop — so op1 is its own block boundary. This yields 3 blocks:
+        //   [op0(op1=INT_EQUAL), op1(CBRANCH)] | [op2(COPY), op3(RETURN)]
+        // becomes, with the self-loop target splitting at op1:
+        //   [op0] | [op1(CBRANCH, self-loop)] | [op2, op3]
+        assert_eq!(fd.bblocks.get_size(), 3);
     }
 
     #[test]
