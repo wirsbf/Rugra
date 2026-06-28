@@ -672,3 +672,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 3. cat 类型放宽**单独**无效（已验证），因为即使能吸收 BlockIf，循环体本身在 CFG 里就没回边。
 
 **教训**：忠实移植 Ghidra 架构 ≠ 直接替换。旧实现虽不忠实但有实际功能，替换前必须确保新实现**至少不退步**。应采用增量对齐策略。
+
+### 2026-06-28：identify_internal RwLock 死锁修复（httpd 性能突破）
+
+**根因**：identify_internal 的边界边捕获和边重写阶段，在持有某块的 **write guard** 时，对该块的出/入边的 `point` 调用 `read()`。如果 `point` 恰好是该块自己（自环边），`write + read` 同一个 RwLock = **死锁**。这导致 httpd ap_fini_vhost_config 在 structure_loops_first 的 head=59 identify_internal 卡死。
+
+**修复**：将 identify_internal 中 4 处 `e.point.read().unwrap()` 改为 `try_read()`，失败时 `continue` 跳过该边。try_read 不阻塞——如果锁被持有（包括自环的 write），立即返回 Err。
+
+**影响**：httpd 从"卡在第 8 个函数（ap_fini_vhost_config）"变成"完成全部 29 个函数"。httpd while 从 8 跃升到 **44**（goto=0）。curl 审计 **24/24 0 FAIL**（从 23/23 进一步改善）。736/736 测试通过。

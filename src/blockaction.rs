@@ -2073,7 +2073,14 @@ impl<'a> CollapseStructure<'a> {
                 let c = cb.read().unwrap();
                 for slot in 0..c.size_in() {
                     if let Some(e) = c.get_in(slot) {
-                        let src_idx = e.point.read().unwrap().get_index();
+                        // Use try_read to avoid RwLock deadlock when the source
+                        // block's lock is held (e.g. by a prior identify_internal
+                        // edge rewrite on the same thread). Skip the edge if
+                        // the lock can't be acquired.
+                        let src_idx = match e.point.try_read() {
+                            Ok(g) => g.get_index(),
+                            Err(_) => continue,
+                        };
                         // Exclude: consumed blocks, install_idx itself (self-loop),
                         // and the new_block (not yet installed, but guard anyway).
                         if !consumed_set.contains(&src_idx)
@@ -2097,7 +2104,10 @@ impl<'a> CollapseStructure<'a> {
                 let mut ob = Vec::new();
                 for slot in 0..c.size_in() {
                     if let Some(e) = c.get_in(slot) {
-                        let src_idx = e.point.read().unwrap().get_index();
+                        let src_idx = match e.point.try_read() {
+                            Ok(g) => g.get_index(),
+                            Err(_) => continue,
+                        };
                         if !consumed_set.contains(&src_idx) {
                             ib.push(e.point.clone());
                         }
@@ -2105,7 +2115,10 @@ impl<'a> CollapseStructure<'a> {
                 }
                 for slot in 0..c.size_out() {
                     if let Some(e) = c.get_out(slot) {
-                        let dst_idx = e.point.read().unwrap().get_index();
+                        let dst_idx = match e.point.try_read() {
+                            Ok(g) => g.get_index(),
+                            Err(_) => continue,
+                        };
                         if !consumed_set.contains(&dst_idx) {
                             ob.push(e.point.clone());
                         }
@@ -2134,7 +2147,13 @@ impl<'a> CollapseStructure<'a> {
                 let sref = sb.as_any_mut();
                 if let Some(bb) = sref.downcast_mut::<crate::block::BlockBasic>() {
                     for eslot in 0..bb.outgoing.len() {
-                        let t = bb.outgoing[eslot].point.read().unwrap().get_index();
+                        // Use try_read: we hold sb's write lock, and if
+                        // outgoing[eslot].point IS sb (self-loop edge),
+                        // read would deadlock. try_read returns Err, skip.
+                        let t = match bb.outgoing[eslot].point.try_read() {
+                            Ok(g) => g.get_index(),
+                            Err(_) => continue,
+                        };
                         if t == c_idx {
                             bb.outgoing[eslot].point = new_block.clone();
                         }
@@ -2148,7 +2167,12 @@ impl<'a> CollapseStructure<'a> {
                 let dref = db.as_any_mut();
                 if let Some(bb) = dref.downcast_mut::<crate::block::BlockBasic>() {
                     for dslot in 0..bb.incoming.len() {
-                        let s = bb.incoming[dslot].point.read().unwrap().get_index();
+                        // try_read: we hold db's write lock; if incoming[dslot].point
+                        // IS db (self-loop), read would deadlock.
+                        let s = match bb.incoming[dslot].point.try_read() {
+                            Ok(g) => g.get_index(),
+                            Err(_) => continue,
+                        };
                         if s == c_idx {
                             bb.incoming[dslot].point = new_block.clone();
                         }
