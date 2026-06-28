@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/userop.rs`
 **Ghidra 对应**: `userop.hh` / `userop.cc` (1009行)
-**状态**: 📋 L1→🔧 L2（UserPcodeOp/UserOpType/UserOpManage 骨架已实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 UserPcodeOp/UserOpManage 方法覆盖（含 get_op_by_name/manual_call_other_fixup）。7 单元测试。
 
 ## 模块说明
 

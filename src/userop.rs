@@ -331,6 +331,20 @@ impl UserOpManage {
     pub fn is_volatile_write(&self, index: i32) -> bool {
         self.get_op(index).map(|op| op.op_type == UserOpType::VolatileWrite).unwrap_or(false)
     }
+
+    /// Manually register a CALLOTHER fixup (replacement p-code for an
+    /// unspecialized user op). Faithful to Ghidra
+    /// UserOpManage::manualCallOtherFixup (userop.cc:628).
+    pub fn manual_call_other_fixup(&mut self, userop_name: &str, _outname: &str, _innames: &[String]) -> i32 {
+        self.register_op(userop_name.to_string(), UserOpType::Injected)
+    }
+
+    /// Get a UserPcodeOp by name. Faithful to Ghidra
+    /// UserOpManage::getOp(string) (userop.cc:419).
+    pub fn get_op_by_name(&self, name: &str) -> Option<&UserPcodeOp> {
+        let idx = self.get_index_by_name(name)?;
+        self.ops.get(idx as usize)
+    }
 }
 
 /// A user defined p-code op with no specialization.
@@ -417,5 +431,22 @@ mod tests {
         assert_eq!(seg.get_type(), UserOpType::Segment);
         let ja = create_jump_assist("jump".into(), 3);
         assert_eq!(ja.get_type(), UserOpType::JumpAssist);
+    }
+
+    #[test]
+    fn test_get_op_by_name() {
+        let mut mgr = UserOpManage::new();
+        mgr.register_op("memcpy".into(), UserOpType::Unspecialized);
+        assert!(mgr.get_op_by_name("memcpy").is_some());
+        assert_eq!(mgr.get_op_by_name("memcpy").unwrap().get_name(), "memcpy");
+        assert!(mgr.get_op_by_name("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_manual_call_other_fixup() {
+        let mut mgr = UserOpManage::new();
+        let idx = mgr.manual_call_other_fixup("my_fixup", "out", &["in1".into(), "in2".into()]);
+        assert!(mgr.get_op(idx).is_some());
+        assert_eq!(mgr.get_op(idx).unwrap().get_type(), UserOpType::Injected);
     }
 }
