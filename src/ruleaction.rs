@@ -8092,6 +8092,144 @@ impl Rule for RuleFloatRange {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
+/// Detect floating-point sign-bit manipulation (x & 0x7fffffff → FLOAT_ABS,
+/// x ^ 0x80000000 → FLOAT_NEG) and convert to proper float ops. Faithful to
+/// `RuleFloatSign` (ruleaction.cc:10714-10777) + `TypeOp::floatSignManipulation`
+/// (typeop.cc:153-176).
+pub struct RuleFloatSign;
+
+impl RuleFloatSign {
+    pub fn new() -> Self { Self }
+
+    /// Check if `op` is a sign-bit manipulation: INT_AND with clear-high-bit
+    /// mask → FLOAT_ABS, or INT_XOR with sign-bit-only mask → FLOAT_NEG.
+    /// Faithful to TypeOp::floatSignManipulation (typeop.cc:153-176).
+    fn float_sign_manipulation(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<OpCode> {
+        let o = op.read().unwrap();
+        match o.opcode {
+            OpCode::CPUI_INT_AND => {
+                if let Some(cvn) = o.inrefs.get(1) {
+                    let cv = cvn.read().unwrap();
+                    if cv.is_constant() {
+                        let size = cv.get_size();
+                        let mut val = crate::address::calc_mask(size);
+                        val >>= 1; // clear sign bit
+                        if val == cv.get_offset() {
+                            return Some(OpCode::CPUI_FLOAT_ABS);
+                        }
+                    }
+                }
+            }
+            OpCode::CPUI_INT_XOR => {
+                if let Some(cvn) = o.inrefs.get(1) {
+                    let cv = cvn.read().unwrap();
+                    if cv.is_constant() {
+                        let size = cv.get_size();
+                        let val = crate::address::calc_mask(size);
+                        let val = val ^ (val >> 1); // only sign bit set
+                        if val == cv.get_offset() {
+                            return Some(OpCode::CPUI_FLOAT_NEG);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+}
+
+impl Rule for RuleFloatSign {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleFloatSign::applyOp (ruleaction.cc:10733-10777).
+        // Check inputs of this float op: if an input is defined by a sign-bit
+        // manipulation, convert it to FLOAT_ABS/FLOAT_NEG.
+        let opc = op_arc.read().unwrap().opcode;
+        let mut res = 0;
+        if opc != OpCode::CPUI_FLOAT_INT2FLOAT {
+            // Check input 0
+            let in0_def = {
+                let op = op_arc.read().unwrap();
+                match op.inrefs.get(0) {
+                    Some(vn) => {
+                        let vg = vn.read().unwrap();
+                        if vg.is_written() {
+                            vg.def.as_ref().and_then(|w| w.upgrade())
+                        } else { None }
+                    }
+                    None => None,
+                }
+            };
+            if let Some(sign_op) = in0_def {
+                if let Some(res_code) = Self::float_sign_manipulation(&sign_op) {
+                    fd.op_remove_input(&crate::op::PcodeOpRef(sign_op.clone()), 1);
+                    fd.op_set_opcode(&crate::op::PcodeOpRef(sign_op.clone()), res_code);
+                    res = 1;
+                }
+            }
+            // Check input 1
+            let in1_def = {
+                let op = op_arc.read().unwrap();
+                match op.inrefs.get(1) {
+                    Some(vn) => {
+                        let vg = vn.read().unwrap();
+                        if vg.is_written() {
+                            vg.def.as_ref().and_then(|w| w.upgrade())
+                        } else { None }
+                    }
+                    None => None,
+                }
+            };
+            if let Some(sign_op) = in1_def {
+                if let Some(res_code) = Self::float_sign_manipulation(&sign_op) {
+                    fd.op_remove_input(&crate::op::PcodeOpRef(sign_op.clone()), 1);
+                    fd.op_set_opcode(&crate::op::PcodeOpRef(sign_op.clone()), res_code);
+                    res = 1;
+                }
+            }
+        }
+        // Check descendants of this op's output
+        let is_bool_output = matches!(opc,
+            OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+            | OpCode::CPUI_FLOAT_NAN
+        );
+        if is_bool_output || opc == OpCode::CPUI_FLOAT_TRUNC {
+            return Ok(res);
+        }
+        let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+            let op = op_arc.read().unwrap();
+            match op.output.as_ref() {
+                Some(out) => out.read().unwrap().descend_iter().collect(),
+                None => Vec::new(),
+            }
+        };
+        for read_op in descendents {
+            if let Some(res_code) = Self::float_sign_manipulation(&read_op) {
+                fd.op_remove_input(&crate::op::PcodeOpRef(read_op.clone()), 1);
+                fd.op_set_opcode(&crate::op::PcodeOpRef(read_op.clone()), res_code);
+                res = 1;
+            }
+        }
+        Ok(res)
+    }
+
+    fn get_name(&self) -> &str { "float_sign" }
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![
+            OpCode::CPUI_FLOAT_EQUAL, OpCode::CPUI_FLOAT_NOTEQUAL,
+            OpCode::CPUI_FLOAT_LESS, OpCode::CPUI_FLOAT_LESSEQUAL,
+            OpCode::CPUI_FLOAT_NAN, OpCode::CPUI_FLOAT_ADD,
+            OpCode::CPUI_FLOAT_DIV, OpCode::CPUI_FLOAT_MULT,
+            OpCode::CPUI_FLOAT_SUB, OpCode::CPUI_FLOAT_NEG,
+            OpCode::CPUI_FLOAT_ABS, OpCode::CPUI_FLOAT_SQRT,
+            OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_CEIL,
+            OpCode::CPUI_FLOAT_FLOOR, OpCode::CPUI_FLOAT_ROUND,
+            OpCode::CPUI_FLOAT_INT2FLOAT, OpCode::CPUI_FLOAT_TRUNC,
+        ]
+    }
+}
+
 /// Pull SUBPIECE back through MULTIEQUAL. Faithful to Ghidra's
 /// `RulePullsubMulti` (ruleaction.cc:678-952).
 ///

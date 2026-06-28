@@ -766,3 +766,8 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - 守卫：base 必须 loneDescend == op（cc:4641）；INT_LEFT 的 in(0) 必须是 ZEXT/PIECE；INT_DIV/INT_REM 的输入必须是 ZEXT。
 - 2 单元测试：test_rule_sub_commute_add（验证转换）+ test_rule_sub_commute_no_lone_descend（验证守卫）。注册进 oppool1（5577）。
 - 实测 curl/httpd 未触发（curl 的 P-code 已被前置简化），但模式匹配时正确生效。
+
+### 2026-06-29：RuleFloatSign（ruleaction.cc:10714 + typeop.cc:153）
+- `RuleFloatSign` — 检测浮点符号位操作并转换为 FLOAT_ABS/FLOAT_NEG：`x & 0x7fffffff => FLOAT_ABS(x)`，`x ^ 0x80000000 => FLOAT_NEG(x)`。辅助函数 `float_sign_manipulation` 对应 Ghidra `TypeOp::floatSignManipulation`（typeop.cc:153-176）。
+- 触发于所有 FLOAT_ opcodes（18 个）。注册进 oppool1（5619）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

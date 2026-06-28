@@ -299,7 +299,7 @@ pub fn build_simplify_pool() -> ActionPool {
     // skip 5616 RulePopcountBoolXor — not yet ported
     pool.add_rule(Box::new(RuleXorSwap::new()));            // 5617
     pool.add_rule(Box::new(RuleLzcountShiftBool::new()));   // 5618
-    // skip 5619 RuleFloatSign — not yet ported
+    pool.add_rule(Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)
     pool.add_rule(Box::new(RuleOrCompare::new()));          // 5620
     // Rules 5621-5648 (subvar/float/segment/ptr/double-load) not yet ported.
 
