@@ -151,10 +151,16 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
                 let sep_ok = num_start == 0 || matches!(bytes[num_start - 1],
                     b' ' | b'=' | b'(' | b',' | b'\t');
                 if is_int && sep_ok && num_start >= i {
-                    // Emit [i..num_start] unchanged, then the cast, then the number.
-                    // Then advance i past the number (forward only).
+                    // Determine the pointer type from the prefix so the cast
+                    // matches the pointer operand's declared type (avoids
+                    // 'char* - int*' mismatch). piVar=int*, pcVar=char*,
+                    // psVar=struct*, ppVar/pvVar=void*.
+                    let cast = if rest.starts_with("piVar") { "(int *)" }
+                        else if rest.starts_with("pcVar") { "(char *)" }
+                        else if rest.starts_with("psVar") { "(struct _struct *)" }
+                        else { "(void *)" };
                     result.push_str(&line[i..num_start]);
-                    result.push_str("(char *)");
+                    result.push_str(cast);
                     result.push_str(num_tok);
                     i = num_end; // forward: num_end > num_start >= i (num_tok non-empty)
                     continue;
