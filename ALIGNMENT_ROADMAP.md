@@ -25,9 +25,16 @@
 >   ruleaction.cc:8295-8355。此前误标"缺第二变体"——核实后确认 8010-8046 是
 >   **独立的 RuleDivTermAdd2**(另一个 Rule)，非 RuleDivOpt 的一部分。RuleDivOpt 本身完整。
 
-> **系统性缺口（G6 范畴）**：Rugra ~90 个 Rule 全部实现了 `apply_op` 但**均未接入
-> 主管线**——无 Ghidra ActionRule 式的 Rule 遍历调度。Rule 正确性仅由单元测试守护，
-> 实际反编译不触发任何 Rule 简化。这是 ruleaction G6 的核心待办。
+> **Rule 主管线接入状态（2026-06-28 实测核实，推翻此前"系统性缺口"声明）**：
+> Rugra 的 `ActionPool`（action.rs:89）忠实实现了 Ghidra 的 Rule 遍历调度——
+> `build_simplify_pool` 注册 **98 个 Rule**（对齐 oppool1, coreaction.cc:5511+），
+> `build_cleanup_pool` 对齐 actcleanup（阶段分隔），两者均接入 `decompile_group` 主管线。
+> `ActionPool::apply` 是 Ghidra 式 repeat-until-stable 遍历（action.rs:118）。
+> **实测证据**（`RUGRA_RULE_STATS=1 cargo run --example curl_decompile`）：
+> curl 24 函数反编译中 Rule 池触发 **515 次简化**，涉及 **21 个不同 Rule**
+> （propagate_copy 244 / and_mask 43 / sub2_add 40 / less2_zero 39 / ...）。
+> 此前声称"实际反编译不触发任何 Rule 简化"为**过期误判**，已作废。
+> Rule trait 的 `get_opcodes` 索引 + per-op dispatch 是真实生效的。
 
 ---
 
@@ -100,7 +107,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 22 | `coreaction.cc` (5741行) | `coreaction.rs` (4000行) | 🔧 **L2（G5 进展）** | **2026-06-27**：4 个结构清理 Action apply() 完整移植（Unreachable/DoNothing/RedundBranch/DeterminedBranch，coreaction.cc:3457-3528）+ remove_unreachable_blocks/splice_block_basic 原语。**未接入主管线**（staged structurer 依赖被删块，需 collapseInternal 迁移）。9 单元测试验证 apply() 正确。ActionMultiCse/ShadowVar 已完整。**剩余**：~20 个 Action（FuncCallSpecs/HighVariable 依赖型） | `coreaction.cc` |
-| 23 | `ruleaction.cc` (11016行) | `ruleaction.rs` (10968行) | 🔧 L2 | **核实修正**：已移植 ~90 个 Rule（含 RuleDivOpt 主算法），多数 apply 忠实；仍缺 ~30 个 Rule + 部分 Rule 的变体分支（如 RuleDivOpt 缺第二变体）。规模已接近 Ghidra | `ruleaction.cc` |
+| 23 | `ruleaction.cc` (11016行) | `ruleaction.rs` (10968行) | 🔧 L2 | **2026-06-28 实测**：~100 个 Rule struct（`grep -oE 'struct Rule[A-Z][A-Za-z0-9_]*' src/ruleaction.rs \| wc -l`），其中 **98 个已注册进 `build_simplify_pool`**（oppool1）+ cleanup 池（actcleanup），**接入主管线并实测生效**（curl 515 次触发/21 Rule）。**剩余 L3 差距**：① 仍缺 ~30 个 Ghidra Rule（如 RulePullsubIndirect/RuleShiftPiece/RuleIndirectCollapse/RuleSLess2Zero 等，见 action.rs skip 注释）；② 部分 Rule 的 `get_opcodes` 覆盖不全或 apply 分支不完整；③ 需逐 Rule 与 ruleaction.cc 比对确保 1:1。从 L2→L3 的关键是补齐缺失 Rule + 逐个对齐验证 | `ruleaction.cc` |
 | 24 | `constseq.cc` | `constseq.rs` (248行) | 🔧 L2 | **核实修正**：非完全缺失。ConstantRule 框架存在；缺与 Funcdata 集成的完整常量序列折叠 | `constseq.cc` |
 | 25 | `transform.cc` | `transform.rs` | ✅ L3 | **完整实现**：LanedRegister（lane 尺寸位掩码 + parse_sizes）+ LaneDescription（uniform/two_lane/subset/get_boundary/restriction/extension）+ TransformVar（6 类型 + create_replacement）+ TransformOp（createReplacement/attemptInsertion/inheritIndirect）+ TransformManager 完整 apply 生命周期（createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs）。Arena 风格 ID 索引替代 Ghidra 原始指针。19 个单元测试。已知限制：transferVarnodeProperties/deleteVarnode/setInputVarnode/markIndirectCreation 用 best-effort 替代 | `transform.cc` |
 | 26 | `userop.cc` | `userop.rs` (242行) | 🔧 L2 | **核实修正**：非完全缺失。UserPcodeOp/VolatileRead 框架存在；缺完整宏展开与 call 其他处理 | `userop.cc` |

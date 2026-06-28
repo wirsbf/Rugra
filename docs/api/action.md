@@ -580,12 +580,12 @@ Funcdata ready
 **系统性架构补全**：Rugra 此前 ~90 个 Rule 全部实现了 `apply_op` 但**均未接入主管线**——无 Ghidra ActionPool 式的 Rule 遍历调度。本次补全：
 
 - 新增 `ActionPool` struct（对应 Ghidra `ActionPool`，action.hh:262）：持有 `Vec<Box<dyn Rule>>` + `per_op: HashMap<OpCode, Vec<usize>>` 索引。`add_rule` 注册 Rule 并按 opcode 建索引；`apply` 遍历所有 live op，按 opcode 匹配 Rule，循环至固定点（对应 Ghidra rule_repeatapply）。
-- `build_simplify_pool()` 注册 **~80 个简化 Rule**（2026-06-27 从 44 扩展）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule 以 `skip` 注释标注。
-- **`build_cleanup_pool()`**（新增，对齐 Ghidra `actcleanup` coreaction.cc:5694-5710）：独立池，含 `RuleMultNegOne`/`Rule2Comp2Sub`。**在 simplify 池之后跑**（阶段分隔）。这解决了一个收敛 bug：RuleMultNegOne（`x*-1→INT_2COMP`）若与 Rule2Comp2Mult（`INT_2COMP→x*-1`，oppool1 内）同池会无限 ping-pong；Ghidra 靠阶段分隔（主池先收敛、cleanup 池再跑一次）避免循环，Rugra 现忠实移植此机制。
+- `build_simplify_pool()` 注册 **98 个简化 Rule**（2026-06-28 实测：`grep -cE 'pool\.add_rule'` over the function body）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule 以 `skip` 注释标注。
+- **`build_cleanup_pool()`**（对齐 Ghidra `actcleanup` coreaction.cc:5694-5710）：独立池，含 `RuleMultNegOne`/`Rule2Comp2Sub`。**在 simplify 池之后跑**（阶段分隔）。这解决了一个收敛 bug：RuleMultNegOne（`x*-1→INT_2COMP`）若与 Rule2Comp2Mult（`INT_2COMP→x*-1`，oppool1 内）同池会无限 ping-pong；Ghidra 靠阶段分隔（主池先收敛、cleanup 池再跑一次）避免循环，Rugra 现忠实移植此机制。
 - RuleEarlyRemoval(5512) **已重新启用**（保守版）：补齐 Ghidra 6 守卫中的 is_call/is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 Rugra 的 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），当前空间门只允许 CONSTANT 输出删除（无条件安全）。REGISTER/UNIQUE 删除待 descend 追踪完整 + INDIRECT_SOURCE 设置 + doesDeadcode 移植后放开。
 - 接入 `set_default_actions`：`ActionSimplify` → `build_simplify_pool()` → `build_cleanup_pool()`。
 
-**验证**：诊断确认 Rule 真实触发——curl 各函数 pass_changes 从 1 到 30+（如 main 28 次、getparameter 30 次简化）。这是 Rugra 首次在反编译时实际应用 Rule 简化。682/682 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。
+**验证（2026-06-28 量化核实）**：`ActionPool::apply` 增加可选 per-Rule 触发计数（环境变量 `RUGRA_RULE_STATS=1` 开启，默认关闭，不影响行为）。实测 `RUGRA_RULE_STATS=1 cargo run --example curl_decompile`：curl 24 函数反编译中 Rule 池触发 **515 次简化**，涉及 **21 个不同 Rule**（propagate_copy 244 / and_mask 43 / sub2_add 40 / less2_zero 39 / or_consume 29 / collapse_constants 23 / add_mult_collapse 20 / mult_neg_one 18 / 2comp2sub 18 / bool_negate 11 / ...）。**此前声称"实际反编译不触发任何 Rule 简化"为过期误判，已作废。** 736/736 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。
 
 **注意**：uVar 碎片数未变（149），因为简化的是中间 P-code IR，而 printc 的碎片源于变量恢复层的 def 断链（G3 深水区）。但 Rule 调度器本身是正确的架构补全。
 

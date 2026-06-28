@@ -120,6 +120,14 @@ impl Action for ActionPool {
         // repeat-until-stable behaviour. We snapshot the live op list per
         // pass because applyOp may destroy/insert ops.
         let mut total = 0;
+        // Diagnostic: per-Rule trigger counts, enabled via RUGRA_RULE_STATS=1.
+        // Mirrors how Ghidra developers inspect rule effectiveness; this is
+        // NOT a behavioural change — it only counts, gated behind an env var.
+        let want_stats = std::env::var("RUGRA_RULE_STATS")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let mut rule_hits: std::collections::HashMap<usize, i32> =
+            std::collections::HashMap::new();
         loop {
             let mut pass_changes = 0;
             // Snapshot indices; the bank's alivelist may shift, so re-fetch
@@ -143,12 +151,25 @@ impl Action for ActionPool {
                         let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
                         if res > 0 {
                             pass_changes += res;
+                            if want_stats {
+                                *rule_hits.entry(ridx).or_insert(0) += res;
+                            }
                         }
                     }
                 }
             }
             total += pass_changes;
             if pass_changes == 0 { break; }
+        }
+        if want_stats && !rule_hits.is_empty() {
+            let fn_name = fd.name.as_str();
+            eprintln!("[RULESTATS] {} pool={} total_changes={}", fn_name, self.name, total);
+            let mut hits: Vec<_> = rule_hits.into_iter().collect();
+            hits.sort_by(|a, b| b.1.cmp(&a.1));
+            for (ridx, n) in hits {
+                let rname = self.rules[ridx].get_name();
+                eprintln!("[RULESTATS]   {:>30} = {}", rname, n);
+            }
         }
         Ok(total)
     }
