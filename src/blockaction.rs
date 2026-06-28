@@ -633,7 +633,10 @@ impl<'a> CollapseStructure<'a> {
             let size_snapshot = self.graph.get_size();
             for wi in 0..size_snapshot {
                 if std::time::Instant::now() > deadline { break; }
-                self.rule_block_while_do(wi);
+                // Use try_rule_while_do (the interleaved-phase version that
+                // accepts BlockList clauses via count_non_structural_in_edges),
+                // not rule_block_while_do (which has stricter is_goto_out checks).
+                self.try_rule_while_do(wi);
             }
             if std::time::Instant::now() > deadline { break; }
             self.collapse_conditions();

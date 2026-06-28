@@ -667,6 +667,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 ### 2026-06-29（续）：try_rule_cat 放宽块类型限制（部分 collapseInternal 对齐）
 - 放宽 `try_rule_cat` 的块类型限制：此前只允许 Basic/Copy 进入 cat-chain，现允许任意块类型（BlockList/BlockIf/BlockCondition 等），只要 sizeIn==1、sizeOut==1、非 switch-out、非循环头。忠实 Ghidra ruleBlockCat（blockaction.cc:1296-1308 无块类型限制）。
 - **验证**：780/780 测试，curl 24/24（while=28, goto=0），无回归。while 数未提升——根因是循环头在 phase1 的 collapse_loops/collapse_conditions 中被消耗，在 interleaved 阶段的 try_rule_while_do 看到之前已被结构化。完整提升需重构 collapse_all 使 collapseInternal 成为主循环。
+- **2026-06-29 续**：phase1 循环改用 `try_rule_while_do`（接受 BlockList clause via count_non_structural_in_edges）替代 `rule_block_while_do`（更严格的 is_goto_out 检查）。诊断确认根因：多块循环体含 continue/break 边，clause 的 size_in > 1（多个前驱），try_rule_while_do 的 size_in==1 守卫失败。修复需完整 collapseInternal 的 selectGoto→ruleBlockGoto→while_do 迭代在每轮消费 continue/break 边。
 
 **关键根因发现**：curl `main` 只检测到 **3 个回边**（全指向 head=5，即 1 个循环），而 Ghidra `main`（684行起）有 **6 个 while**（6 个循环：1 do-while(argc) + 1 while(true) + 4 do-while(cVar1!=0)）。**while 缺口的根因不在 blockaction 结构化层，而在更底层的 CFG 构建层**（funcdata.rs:1427-1473 的基本块划分/边建立）——Rugra 的 main CFG 缺少回边，所以无论结构化多完善都检测不到那些循环。
 
