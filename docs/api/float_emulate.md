@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/float_emulate.rs`
 **Ghidra 对应**: `float.hh` / `float.cc` (773行)
-**状态**: 📋 L1→🔧 L2（FloatFormat IEEE754 单/双精度编解码 + 15 个 op 操作）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 FloatFormat 方法覆盖，含 set/get 编码操作 + zero/infinity/nan encoding。12 单元测试。
 
 ## 模块说明
 

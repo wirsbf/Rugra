@@ -136,6 +136,47 @@ impl FloatFormat {
         ((x >> self.exp_pos) & ((1u64 << self.exp_size) - 1)) as u32
     }
 
+    /// Set the fractional code bits in the encoding.
+    /// Faithful to Ghidra FloatFormat::setFractionalCode (float.cc:144).
+    pub fn set_fractional_code(&self, x: u64, code: u64) -> u64 {
+        let mask = ((1u64 << self.frac_size) - 1) << self.frac_pos;
+        (x & !mask) | ((code << self.frac_pos) & mask)
+    }
+
+    /// Set the sign bit in the encoding.
+    /// Faithful to Ghidra FloatFormat::setSign (float.cc:158).
+    pub fn set_sign(&self, x: u64, sign: bool) -> u64 {
+        if sign { x | (1u64 << self.signbit_pos) } else { x & !(1u64 << self.signbit_pos) }
+    }
+
+    /// Set the exponent bits in the encoding.
+    /// Faithful to Ghidra FloatFormat::setExponentCode (float.cc:171).
+    pub fn set_exponent_code(&self, x: u64, code: u32) -> u64 {
+        let mask = ((1u64 << self.exp_size) - 1) << self.exp_pos;
+        (x & !mask) | (((code as u64) << self.exp_pos) & mask)
+    }
+
+    /// Get the encoding for zero (positive or negative).
+    /// Faithful to Ghidra FloatFormat::getZeroEncoding (float.cc:181).
+    pub fn get_zero_encoding(&self, sgn: bool) -> u64 {
+        self.set_sign(0, sgn)
+    }
+
+    /// Get the encoding for infinity (positive or negative).
+    /// Faithful to Ghidra FloatFormat::getInfinityEncoding (float.cc:193).
+    pub fn get_infinity_encoding(&self, sgn: bool) -> u64 {
+        let inf_exp = (1u64 << self.exp_size) - 1; // All exponent bits set
+        self.set_sign(self.set_fractional_code(0, 0) | (inf_exp << self.exp_pos), sgn)
+    }
+
+    /// Get the encoding for NaN (positive or negative).
+    /// Faithful to Ghidra FloatFormat::getNaNEncoding (float.cc:205).
+    pub fn get_nan_encoding(&self, sgn: bool) -> u64 {
+        let inf_exp = (1u64 << self.exp_size) - 1;
+        let nan_frac = 1u64 << (self.frac_size - 1); // MSB of fraction
+        self.set_sign(self.set_fractional_code(0, nan_frac) | (inf_exp << self.exp_pos), sgn)
+    }
+
     /// Inequality comparison (!=)
     pub fn op_not_equal(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -375,5 +416,33 @@ mod tests {
         let result = fmt8.op_float2_float(a, &fmt4);
         let mut fc = FloatClass::Zero;
         assert!((fmt4.get_host_float(result, &mut fc) - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_set_get_encoding_ops() {
+        let fmt = FloatFormat::new(8);
+        let x = fmt.get_encoding(1.5);
+        let frac = fmt.extract_fractional_code(x);
+        let exp = fmt.extract_exponent_code(x);
+        let sign = fmt.extract_sign(x);
+        let y = fmt.set_fractional_code(0, frac);
+        let y = fmt.set_exponent_code(y, exp);
+        let y = fmt.set_sign(y, sign);
+        assert_eq!(x, y);
+    }
+
+    #[test]
+    fn test_zero_infinity_nan_encoding() {
+        let fmt = FloatFormat::new(8);
+        let pos_zero = fmt.get_zero_encoding(false);
+        let neg_zero = fmt.get_zero_encoding(true);
+        assert_eq!(pos_zero, 0);
+        assert_ne!(pos_zero, neg_zero);
+        let pos_inf = fmt.get_infinity_encoding(false);
+        assert_eq!(fmt.extract_exponent_code(pos_inf), (1 << fmt.exp_size) - 1);
+        assert_eq!(fmt.extract_fractional_code(pos_inf), 0);
+        let nan = fmt.get_nan_encoding(false);
+        assert_eq!(fmt.extract_exponent_code(nan), (1 << fmt.exp_size) - 1);
+        assert_ne!(fmt.extract_fractional_code(nan), 0);
     }
 }
