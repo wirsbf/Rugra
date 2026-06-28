@@ -12,10 +12,17 @@ use crate::opcodes::OpCode;
 use crate::space::AddressSpace;
 use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer, TypeStruct};
 
-/// Run conservative type propagation. Marks varnodes that are struct pointers.
+/// Run type propagation. Faithful to Ghidra ActionInferTypes::apply
+/// (coreaction.cc:5374-5416): multi-round iterative propagation until
+/// convergence (or max 7 rounds).
 pub fn propagate_types(fd: &mut Funcdata) {
-    // Always run LOAD output type inference first (Phase 5) — it's independent
-    // of the struct pointer detection below.
+    // Phase 0: Iterative type propagation (Ghidra ActionInferTypes core loop)
+    for _round in 0..7 {
+        let changed = propagate_one_round(fd);
+        if !changed { break; }
+    }
+
+    // Phase 1-4: Struct pointer detection (existing logic)
     propagate_load_output_types(fd);
 
     // Phase 1: Collect base_var → set of offsets used in *(base + offset) patterns
@@ -121,6 +128,91 @@ pub fn propagate_types(fd: &mut Funcdata) {
     // Ghidra's algorithm: if addr vn's type is Pointer(ptr_to=T), and T's size
     // matches the LOAD output size, set LOAD output type to T.
     propagate_load_output_types(fd);
+}
+
+/// One round of iterative type propagation. Returns true if any type changed.
+/// Faithful to Ghidra ActionInferTypes: buildLocaltypes + propagateOneType + writeBack.
+fn propagate_one_round(fd: &mut Funcdata) -> bool {
+    // Collect all (op_ref, opcode, in_types, out_type) for propagation decisions.
+    // We process COPY (direct transfer) and LOAD (element inference) edges,
+    // which are the most impactful for eliminating reconcile workarounds.
+    let mut type_updates: Vec<(Arc<std::sync::RwLock<crate::varnode::Varnode>>, Arc<Datatype>)> = Vec::new();
+
+    for blk_i in 0..fd.bblocks.get_size() {
+        let block_arc = match fd.bblocks.get_block(blk_i) { Some(b) => b, None => continue };
+        let block = block_arc.read().unwrap();
+        for op_ref in block.get_ops() {
+            let op = op_ref.0.read().unwrap();
+            match op.opcode {
+                // COPY: propagate input type to output (Ghidra TypeOpCopy::propagateType)
+                OpCode::CPUI_COPY if op.inrefs.len() == 1 => {
+                    let in_type = op.inrefs[0].read().unwrap().v_type.clone();
+                    if let Some(ref vt) = in_type {
+                        if vt.get_metatype() != TypeMetatype::Unknown {
+                            if let Some(ref out_arc) = op.output {
+                                let out_vn = out_arc.read().unwrap();
+                                let needs_update = match &out_vn.v_type {
+                                    None => true,
+                                    Some(ref cur) => cur.get_metatype() == TypeMetatype::Unknown
+                                        || &**cur as *const _ != &**vt as *const _,
+                                };
+                                if needs_update {
+                                    type_updates.push((out_arc.clone(), vt.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+                // LOAD: propagate element type from pointer address (Ghidra propagateFromPointer)
+                OpCode::CPUI_LOAD if op.inrefs.len() >= 2 => {
+                    let addr_vn = op.inrefs[1].read().unwrap();
+                    // Direct pointer on address
+                    if let Some(ref vt) = addr_vn.v_type {
+                        if let Datatype::Pointer(pt) = &**vt {
+                            if let Some(ref out_arc) = op.output {
+                                let out_size = out_arc.read().unwrap().get_size();
+                                if pt.ptr_to.get_size() == out_size {
+                                    type_updates.push((out_arc.clone(), pt.ptr_to.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+                // INT_ZEXT/INT_SEXT: propagate input type to output (like COPY but widening)
+                OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT if op.inrefs.len() == 1 => {
+                    let in_type = op.inrefs[0].read().unwrap().v_type.clone();
+                    if let Some(ref vt) = in_type {
+                        if vt.get_metatype() == TypeMetatype::Pointer {
+                            if let Some(ref out_arc) = op.output {
+                                type_updates.push((out_arc.clone(), vt.clone()));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Apply updates and check if anything changed
+    let mut changed = false;
+    for (vn_arc, new_type) in type_updates {
+        let mut vn = vn_arc.write().unwrap();
+        let old_meta = vn.v_type.as_ref().map(|t| t.get_metatype()).unwrap_or(TypeMetatype::Unknown);
+        let new_meta = new_type.get_metatype();
+        // Only update if new type is "better" (Unknown → known, or different)
+        if old_meta == TypeMetatype::Unknown || old_meta != new_meta {
+            // Don't downgrade from Pointer to non-pointer unless current is Unknown
+            if old_meta != TypeMetatype::Pointer || new_meta == TypeMetatype::Pointer {
+                vn.v_type = Some(new_type.clone());
+                if let Some(ref high_arc) = vn.high {
+                    high_arc.write().unwrap().v_type = new_type;
+                }
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// Propagate LOAD output types from pointer inputs.
