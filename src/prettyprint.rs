@@ -114,6 +114,20 @@ fn reconcile_pointer_arith(line: &str) -> String {
     line.to_string()
 }
 
+/// Reconcile `X * "string"` — int * string-literal is illegal C. Cast the
+/// string literal to (long). Only matches quoted strings, never pointer vars.
+fn reconcile_int_times_string(line: &str) -> String {
+    if let Some(pos) = line.find(" * \"") {
+        let after = &line[pos + 4..]; // after ' * "'
+        if let Some(end) = after.find("\"") {
+            let str_lit = &line[pos + 3..pos + 4 + end + 1]; // "string"
+            let rest = &line[pos + 4 + end + 1..];
+            return format!("{} * (long){}{}", &line[..pos], str_lit, rest);
+        }
+    }
+    line.to_string()
+}
+
 fn reconcile_int_minus_pointer(line: &str) -> String {
     let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
     let bytes = line.as_bytes();
@@ -635,6 +649,17 @@ impl EmitNoMarkup {
             // arithmetic is valid. (LOAD results wrongly typed as pointers
             // hit this — piVar92 = *(int*)piVar91 is really an int.)
             s = reconcile_pointer_arith(&s);
+            // Reconcile 'X * "string"' — int * string-literal is illegal C.
+            // Cast the string to (long). Only matches quoted string literals,
+            // never pointer variables (which would break legal ptr arithmetic).
+            if s.contains(" * \"") {
+                s = reconcile_int_times_string(&s);
+            }
+            // Reconcile '*(_struct *)X = longVar' — assigning a long to a
+            // dereferenced _struct pointer is incompatible. Use (long *).
+            if s.contains("*(_struct *)") && s.contains("= ") {
+                s = s.replace("*(_struct *)", "*(long *)");
+            }
 
             // 2. Constant folding: collapse repeated "+ 1" chains
             // Match: expr + 1 + 1 + 1 ... → expr + N

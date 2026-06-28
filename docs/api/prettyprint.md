@@ -56,6 +56,14 @@ post_process 第七 pass 调用。C 禁止 `int - pointer`。当行匹配 `<整�
 
 post_process 第七 pass 调用（在 reconcile_int_minus_pointer 之后）。C 禁止 `pointer / int` 和 `pointer % int`（指针只支持 +、-、比较）。当行匹配 `<指针前缀>Var / <int>` 或 `<指针前缀>Var % <int>` 时，把指针 cast 成 `(long)`。触发于 LOAD 结果被错误标记为指针的情况（如 `piVar92 = *(int*)piVar91` 实为 int）。前向扫描 + 递归处理多处出现。
 
+### `fn reconcile_int_times_string(line: &str) -> String` （2026-06-28）
+
+post_process 第七 pass 调用。C 禁止 `int * string-literal`。当行匹配 `X * "..."`（乘号后跟引号字符串）时，把字符串 cast 成 `(long)`。**只匹配引号字符串**，不匹配指针变量——避免破坏合法的 `ptr + N * element_size` 算术。触发于 copy propagation 把字符串地址错误内联到 MULT 操作数的情况。
+
+### `*(_struct *) → *(long *)` 替换 （2026-06-28）
+
+post_process 第七 pass。当行含 `*(_struct *)` 且是赋值语句时，替换为 `*(long *)`。修复 long 赋值给 _struct 解引用的类型不兼容。
+
 ### `pub struct NullEmit`
 
 Emitter that discards all output (used for discovery pass)
