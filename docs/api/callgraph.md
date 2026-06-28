@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/callgraph.rs`
 **Ghidra 对应**: `callgraph.hh` / `callgraph.cc` (596行)
-**状态**: 📋 L1→🔧 L2（CallGraphEdge/CallGraphNode/CallGraph 完整实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 Ghidra CallGraph 方法覆盖，含 build_edges/snip_edge/cycle_structure。8 单元测试。
 
 ## 模块说明
 

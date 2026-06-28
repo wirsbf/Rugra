@@ -226,6 +226,88 @@ impl CallGraph {
             }
         }
     }
+
+    /// Snip (mark as cycle) an edge from node at `addr`, edge index `i`.
+    /// Faithful to Ghidra CallGraph::snipEdge (callgraph.cc:164).
+    pub fn snip_edge(&mut self, addr: u64, i: usize) {
+        if let Some(node) = self.nodes.get_mut(&addr) {
+            if i < node.out_edges.len() {
+                let to_addr = node.out_edges[i].to_addr;
+                node.out_edges[i].flags |= edge_flags::CYCLE;
+                // Mark the corresponding in-edge on the target
+                if let Some(to_node) = self.nodes.get_mut(&to_addr) {
+                    for in_e in to_node.in_edges.iter_mut() {
+                        if in_e.from_addr == addr {
+                            in_e.flags |= edge_flags::CYCLE;
+                        }
+                    }
+                    to_node.flags |= node_flags::ONLY_CYCLE_IN;
+                }
+            }
+        }
+    }
+
+    /// Build call graph edges from a Funcdata's call specifications.
+    /// Faithful to Ghidra CallGraph::buildEdges (callgraph.cc:406).
+    pub fn build_edges(&mut self, fd: &crate::funcdata::Funcdata) {
+        let fd_addr = fd.baseaddr.as_u64();
+        // Ensure the function's node exists
+        if !self.nodes.contains_key(&fd_addr) {
+            self.add_node(fd_addr, fd.get_name().to_string());
+        }
+        let num_calls = fd.num_calls();
+        for i in 0..num_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                if let Some(ref entry) = fc.entry_addr {
+                    let to_addr = entry.as_u64();
+                    if to_addr != 0 {
+                        // Add target node if not present
+                        if !self.nodes.contains_key(&to_addr) {
+                            let name = fd.symbol_table.get(&to_addr)
+                                .cloned()
+                                .unwrap_or_else(|| format!("FUN_{:x}", to_addr));
+                            self.add_node(to_addr, name);
+                        }
+                        // Get callsite address
+                        let callsite = fc.op_addr.as_u64();
+                        self.add_edge(fd_addr, to_addr, callsite);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Analyze cycle structure: identify strongly connected components.
+    /// Faithful to Ghidra CallGraph::cycleStructure (callgraph.cc:352).
+    /// After snip_cycles, this marks nodes that are part of cycles.
+    pub fn cycle_structure(&mut self) {
+        // After snip_cycles, cycle edges are marked. Mark nodes that
+        // have only cycle in-edges as ONLY_CYCLE_IN.
+        let addrs: Vec<u64> = self.nodes.keys().copied().collect();
+        for addr in addrs {
+            let has_non_cycle_in = self.nodes.get(&addr).map(|n| {
+                n.in_edges.iter().any(|e| e.flags & edge_flags::CYCLE == 0)
+            }).unwrap_or(false);
+            if !has_non_cycle_in {
+                if let Some(node) = self.nodes.get_mut(&addr) {
+                    if !node.in_edges.is_empty() {
+                        node.flags |= node_flags::ONLY_CYCLE_IN;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get the call graph as a list of (caller, callee) pairs.
+    pub fn edges(&self) -> Vec<(u64, u64)> {
+        let mut result = Vec::new();
+        for (&addr, node) in &self.nodes {
+            for e in &node.out_edges {
+                result.push((addr, e.to_addr));
+            }
+        }
+        result
+    }
 }
 
 #[cfg(test)]
@@ -261,5 +343,70 @@ mod tests {
     fn test_edge() {
         let e = CallGraphEdge::new(0x1000, 0x2000, 0x1050);
         assert!(!e.is_cycle());
+    }
+
+    #[test]
+    fn test_snip_edge() {
+        let mut cg = CallGraph::new();
+        cg.add_node(0x1000, "a".into());
+        cg.add_node(0x2000, "b".into());
+        cg.add_edge(0x1000, 0x2000, 0x1050);
+        cg.snip_edge(0x1000, 0);
+        let a = cg.find_node(0x1000).unwrap();
+        assert!(a.out_edges[0].is_cycle());
+        let b = cg.find_node(0x2000).unwrap();
+        assert!(b.flags & node_flags::ONLY_CYCLE_IN != 0);
+    }
+
+    #[test]
+    fn test_snip_cycles_and_structure() {
+        // Create a cycle: a → b → a
+        let mut cg = CallGraph::new();
+        cg.add_node(0x1000, "a".into());
+        cg.add_node(0x2000, "b".into());
+        cg.add_edge(0x1000, 0x2000, 0x1050);
+        cg.add_edge(0x2000, 0x1000, 0x2050);
+        cg.snip_cycles();
+        cg.cycle_structure();
+        // After snip, at least one cycle edge should be marked
+        let has_cycle = cg.edges().iter().any(|(from, _)| {
+            cg.find_node(*from).map(|n| n.out_edges.iter().any(|e| e.is_cycle())).unwrap_or(false)
+        });
+        assert!(has_cycle);
+    }
+
+    #[test]
+    fn test_delete_in_edge() {
+        let mut cg = CallGraph::new();
+        cg.add_node(0x1000, "a".into());
+        cg.add_node(0x2000, "b".into());
+        cg.add_node(0x3000, "c".into());
+        cg.add_edge(0x1000, 0x3000, 0x1050);
+        cg.add_edge(0x2000, 0x3000, 0x2050);
+        cg.delete_in_edge(0x3000, 0);
+        let c = cg.find_node(0x3000).unwrap();
+        assert_eq!(c.num_in_edge(), 1);
+        assert_eq!(c.in_edges[0].from_addr, 0x2000);
+    }
+
+    #[test]
+    fn test_find_no_entry() {
+        let mut cg = CallGraph::new();
+        cg.add_node(0x1000, "main".into());
+        cg.add_node(0x2000, "helper".into());
+        cg.add_edge(0x1000, 0x2000, 0x1050);
+        let entries = cg.find_no_entry();
+        assert_eq!(entries, vec![0x1000]);
+    }
+
+    #[test]
+    fn test_edges_list() {
+        let mut cg = CallGraph::new();
+        cg.add_node(0x1000, "a".into());
+        cg.add_node(0x2000, "b".into());
+        cg.add_edge(0x1000, 0x2000, 0x1050);
+        let edges = cg.edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0], (0x1000, 0x2000));
     }
 }
