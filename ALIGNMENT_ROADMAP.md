@@ -84,7 +84,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 11 | `action.cc` | `action.rs` | ✅ L3 | Action/ActionGroup/ActionDatabase 框架对齐 | `action.cc` |
 | 12 | `heritage.cc` | `heritage.rs` | 🔧 L2 | SSA Phi 放置基本对齐；缺少工作量列表驱动的迭代式 Heritage | `heritage.cc` |
 | 13 | `merge.cc` | `merge.rs` | 🔧 L2 | Cover-based merge 已实现；缺少与 varmap 集成的完整 HighVariable 合并 | `merge.cc` |
-| 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 框架存在；缺少完整的变量映射和命名 | `variable.cc` |
+| 14 | `variable.cc` | `variable.rs` (175行) | ✅ **L3（2026-06-28 完整对齐）** | HighVariable 覆盖全部 Ghidra 方法：new/get/set name+type/add_instance/num_instances/get_instance + is_name_locked/is_type_locked/is_persist/is_addr_tied/is_constant/has_name（cc:718）/remove_instance（cc:515）/instance_index（cc:808）/merge_internal（cc:626）/get_type_representative（cc:377）/get_name_representative（cc:492）/strip_type（cc:302）+ high_flags（NAMELOCK/TYPELOCK/PERSIST/ADDRTIED/CONSTANT/EXTRA_FLAGS）。4 单元测试 | `variable.cc` |
 | 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | **RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐**；已接入 printc；**Stack-spacebase 解析**已实现（gather_spacebase 递归解析 RSP/frame_base 链）。**剩余**：curl 二进制多数 LOAD/STORE 为 RIP-relative 全局或 def=None 指针解引用（非栈），故 uVar 碎片仍需类型传播配合；alias_block_level、LoadGuard addGuard | `varmap.cc` |
 | 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
 

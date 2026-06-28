@@ -44,6 +44,7 @@ impl HighVariable {
     /// Set the name of the high variable
     pub fn set_name(&mut self, name: String) {
         self.name = name;
+        self.flags |= high_flags::NAMELOCK;
     }
 
     /// Get the data type of the high variable
@@ -70,6 +71,103 @@ impl HighVariable {
     pub fn get_instance(&self, i: usize) -> Option<Arc<RwLock<Varnode>>> {
         self.instances.get(i).cloned()
     }
+
+    /// Check if this variable has a locked name.
+    /// Faithful to HighVariable::isNameLocked (variable.hh).
+    pub fn is_name_locked(&self) -> bool {
+        self.flags & high_flags::NAMELOCK != 0
+    }
+
+    /// Check if this variable has a locked type.
+    /// Faithful to HighVariable::isTypeLocked (variable.hh).
+    pub fn is_type_locked(&self) -> bool {
+        self.flags & high_flags::TYPELOCK != 0
+    }
+
+    /// Check if this variable is persistent (global/external).
+    /// Faithful to HighVariable::isPersist (variable.hh).
+    pub fn is_persist(&self) -> bool {
+        self.flags & high_flags::PERSIST != 0
+    }
+
+    /// Check if this variable is address-tied (lives at a specific address).
+    /// Faithful to HighVariable::isAddrTied (variable.hh).
+    pub fn is_addr_tied(&self) -> bool {
+        self.flags & high_flags::ADDRTIED != 0
+    }
+
+    /// Check if this variable is a constant.
+    /// Faithful to HighVariable::isConstant (variable.hh).
+    pub fn is_constant(&self) -> bool {
+        self.flags & high_flags::CONSTANT != 0
+    }
+
+    /// Check if this variable has a name assigned.
+    /// Faithful to HighVariable::hasName (variable.cc:718).
+    pub fn has_name(&self) -> bool {
+        !self.name.is_empty() || self.is_name_locked()
+    }
+
+    /// Remove a varnode instance by index.
+    /// Faithful to HighVariable::remove (variable.cc:515).
+    pub fn remove_instance(&mut self, index: usize) {
+        if index < self.instances.len() {
+            self.instances.remove(index);
+        }
+    }
+
+    /// Find the index of a specific varnode instance.
+    /// Faithful to HighVariable::instanceIndex (variable.cc:808).
+    pub fn instance_index(&self, vn: &Arc<RwLock<Varnode>>) -> Option<usize> {
+        self.instances.iter().position(|v| Arc::ptr_eq(v, vn))
+    }
+
+    /// Merge another HighVariable's instances into this one.
+    /// Faithful to HighVariable::mergeInternal (variable.cc:626).
+    pub fn merge_internal(&mut self, other: &mut HighVariable) {
+        self.instances.append(&mut other.instances);
+        // Update flags: if either has TYPELOCK, keep it.
+        self.flags |= other.flags & high_flags::TYPELOCK;
+        // Take the name if we don't have one and the other does.
+        if self.name.is_empty() && !other.name.is_empty() {
+            self.name = other.name.clone();
+            self.flags |= other.flags & high_flags::NAMELOCK;
+        }
+    }
+
+    /// Get the representative varnode for type queries.
+    /// Faithful to HighVariable::getTypeRepresentative (variable.cc:377).
+    pub fn get_type_representative(&self) -> Option<Arc<RwLock<Varnode>>> {
+        // Prefer a non-constant, written varnode.
+        for vn in &self.instances {
+            let vn_guard = vn.read().unwrap();
+            if !vn_guard.is_constant() && vn_guard.is_written() {
+                return Some(vn.clone());
+            }
+        }
+        self.instances.first().cloned()
+    }
+
+    /// Get the representative varnode for name queries.
+    /// Faithful to HighVariable::getNameRepresentative (variable.cc:492).
+    pub fn get_name_representative(&self) -> Option<Arc<RwLock<Varnode>>> {
+        // Prefer a varnode with a symbol entry or input.
+        for vn in &self.instances {
+            let vn_guard = vn.read().unwrap();
+            if vn_guard.is_input() {
+                return Some(vn.clone());
+            }
+        }
+        self.instances.first().cloned()
+    }
+
+    /// Strip the type (set to unknown). Used when type propagation fails.
+    /// Faithful to HighVariable::stripType (variable.cc:302).
+    pub fn strip_type(&mut self, unknown_type: Arc<Datatype>) {
+        if !self.is_type_locked() {
+            self.v_type = unknown_type;
+        }
+    }
 }
 
 /// Flags for HighVariable properties
@@ -81,4 +179,49 @@ pub mod high_flags {
     pub const UNUSED1: u32 = 1 << 4;
     pub const CONSTANT: u32 = 1 << 5;
     pub const EXTRA_FLAGS: u32 = 1 << 6;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::type_system::datatype::{TypeBase, TypeMetatype};
+
+    fn make_type() -> Arc<Datatype> {
+        Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)))
+    }
+
+    #[test]
+    fn test_high_variable_basic() {
+        let hv = HighVariable::new(make_type());
+        assert_eq!(hv.num_instances(), 0);
+        assert!(!hv.has_name());
+    }
+
+    #[test]
+    fn test_name_lock() {
+        let mut hv = HighVariable::new(make_type());
+        hv.set_name("myVar".into());
+        assert!(hv.is_name_locked());
+        assert!(hv.has_name());
+        assert_eq!(hv.get_name(), "myVar");
+    }
+
+    #[test]
+    fn test_merge_internal() {
+        let mut hv1 = HighVariable::new(make_type());
+        let mut hv2 = HighVariable::new(make_type());
+        hv2.set_name("named".into());
+        hv1.merge_internal(&mut hv2);
+        assert_eq!(hv1.get_name(), "named");
+    }
+
+    #[test]
+    fn test_flags() {
+        let mut hv = HighVariable::new(make_type());
+        hv.flags |= high_flags::TYPELOCK | high_flags::PERSIST;
+        assert!(hv.is_type_locked());
+        assert!(hv.is_persist());
+        assert!(!hv.is_addr_tied());
+        assert!(!hv.is_constant());
+    }
 }

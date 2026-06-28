@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: 部分有效（需对照源码）
+- **状态**: ✅ **L3（2026-06-28 完整对齐）**——HighVariable 全部 Ghidra 方法覆盖（含 merge_internal/get_type_representative/strip_type）。4 单元测试。
 
 
 **源代码路径**: `src/variable.rs`
