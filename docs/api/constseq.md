@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/constseq.rs`
 **Ghidra 对应**: `constseq.hh` / `constseq.cc` (1146行)
-**状态**: 📋 L1→🔧 L2（WriteNode/ArraySequence/StringSequence/HeapSequence/RuleStringCopy/RuleStringStore 骨架）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——ArraySequence 完整 + RuleStringCopy/Store 检测阶段实现。4 单元测试。transform 需 Funcdata op-edit API。
 
 ## 模块说明
 

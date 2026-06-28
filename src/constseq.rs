@@ -318,8 +318,38 @@ impl RuleStringStore {
 }
 
 impl Rule for RuleStringStore {
-    fn apply_op(&self, _op: &Arc<RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        // TODO: requires heap pointer analysis + INDIRECT pair tracking.
+    fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra's RuleStringStore (constseq.cc:974-1002) checks if a STORE
+        // is writing a character array to heap memory, then replaces the
+        // sequence of stores with a single CALLOTHER (memcpy/strncpy).
+        // Full implementation requires HeapSequence (findBasePointer,
+        // findDuplicateBases, collectStoreOps, gatherIndirectPairs,
+        // deduplicatePairs, removeStoreOps, transform).
+        // Rugra's standalone approach: detect the pattern but don't transform.
+        let op_guard = op.read().unwrap();
+        if op_guard.opcode != OpCode::CPUI_STORE || op_guard.inrefs.len() < 3 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Check if the value being stored (input[2]) is a COPY from a
+        // character sequence. This is the detection phase only.
+        let val_vn = &op_guard.inrefs[2];
+        let val_guard = val_vn.read().unwrap();
+        if val_guard.is_written() {
+            if let Some(ref def_arc) = val_guard.def.as_ref().and_then(|d| d.upgrade()) {
+                let def_op = def_arc.read().unwrap();
+                if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
+                    let src_vn = def_op.inrefs[0].read().unwrap();
+                    if src_vn.get_space() == crate::space::AddressSpace::Const
+                        || src_vn.get_space() == crate::space::AddressSpace::Ram
+                    {
+                        // Potential string store: STORE(addr, COPY(const))
+                        // Full HeapSequence transform would replace with CALLOTHER.
+                        let _ = fd;
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                }
+            }
+        }
         Ok(action_status::NO_CHANGE)
     }
 
