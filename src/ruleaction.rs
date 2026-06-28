@@ -7793,6 +7793,151 @@ impl Rule for RuleSignMod2nOpt {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
+/// Convert INT_SREM form: `(V - sign) & 1 + sign => V s% 2`.
+/// Faithful to `RuleSignMod2Opt` (ruleaction.cc:8794-8865). Specialized
+/// mod-2 form of RuleSignMod2nOpt. Uses `check_sign_extraction` helper.
+pub struct RuleSignMod2Opt;
+
+impl RuleSignMod2Opt {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSignMod2Opt {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignMod2Opt::applyOp (ruleaction.cc:8805-8865).
+        let (add_out_vn, _) = {
+            let op = op_arc.read().unwrap();
+            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            if const_vn.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
+            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (ao, ())
+        };
+        if !add_out_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let add_op = match add_out_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if add_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+
+        // Find INT_MULT by -1 among add_op inputs
+        let (mult_slot, mult_op_arc, base_vn) = {
+            let a = add_op.read().unwrap();
+            let mut found = None;
+            for ms in 0..2 {
+                let vn = match a.inrefs.get(ms) { Some(v) => v.clone(), None => continue };
+                if !vn.read().unwrap().is_written() { continue; }
+                let mo = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(op) => op, None => continue,
+                };
+                if mo.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
+                let cv = match mo.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                if !cv.read().unwrap().is_constant() { continue; }
+                let mask = crate::address::calc_mask(cv.read().unwrap().get_size());
+                if cv.read().unwrap().get_offset() == mask {
+                    found = Some((ms, mo));
+                    break;
+                }
+            }
+            match found {
+                Some((ms, mo)) => {
+                    let mult_in0 = match mo.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let base = match check_sign_extraction(&mult_in0) {
+                        Some(v) => v, None => return Ok(action_status::NO_CHANGE),
+                    };
+                    (ms, mo, base)
+                }
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        };
+
+        // otherBase = add_op->getIn(1 - mult_slot)
+        let mut base = base_vn.clone();
+        let other_base = match add_op.read().unwrap().inrefs.get(1 - mult_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let mut trunc = false;
+        if !std::sync::Arc::ptr_eq(&base, &other_base) {
+            // Check for SUBPIECE truncation pattern
+            if !base.read().unwrap().is_written() || !other_base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let sub_op = match base.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            if sub_op.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let trunc_amt = match sub_op.read().unwrap().inrefs.get(1) {
+                Some(v) => v.read().unwrap().get_offset() as i32,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let sub_in0_size = match sub_op.read().unwrap().inrefs.get(0) {
+                Some(v) => v.read().unwrap().get_size() as i32,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let base_size = base.read().unwrap().get_size() as i32;
+            if trunc_amt + base_size != sub_in0_size { return Ok(action_status::NO_CHANGE); }
+            let new_base = match sub_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            // otherBase must also be SUBPIECE of new_base
+            let sub_op2 = match other_base.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            if sub_op2.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let sub2_const = match sub_op2.read().unwrap().inrefs.get(1) {
+                Some(v) => v.read().unwrap().get_offset(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if sub2_const != 0 { return Ok(action_status::NO_CHANGE); }
+            let other_root = match sub_op2.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !std::sync::Arc::ptr_eq(&other_root, &new_base) { return Ok(action_status::NO_CHANGE); }
+            base = new_base;
+            trunc = true;
+        }
+
+        if base.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+
+        // andOut = op->getOut(); if trunc, look for ZEXT
+        let mut and_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if trunc {
+            let ext_op = match and_out.read().unwrap().lone_descend() {
+                Some(o) => o, None => return Ok(action_status::NO_CHANGE),
+            };
+            if ext_op.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+            and_out = match ext_op.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        }
+
+        // Look for INT_ADD(and_out, sign) among descendants
+        let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = and_out.read().unwrap().descend_iter().collect();
+        for root_op_arc in descendents {
+            if root_op_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+            // slot = position of and_out in root_op
+            let slot = {
+                let r = root_op_arc.read().unwrap();
+                let mut s = -1i32;
+                for i in 0..r.inrefs.len() {
+                    if let Some(v) = r.inrefs.get(i) {
+                        if std::sync::Arc::ptr_eq(v, &and_out) { s = i as i32; break; }
+                    }
+                }
+                if s < 0 { continue; }
+                s
+            };
+            let other_in = match root_op_arc.read().unwrap().inrefs.get((1 - slot) as usize) { Some(v) => v.clone(), None => continue };
+            let other_base_check = match check_sign_extraction(&other_in) {
+                Some(v) => v, None => continue,
+            };
+            if !std::sync::Arc::ptr_eq(&other_base_check, &base) { continue; }
+
+            // Transform: root_op becomes INT_SREM(base, 2)
+            let root_ref = crate::op::PcodeOpRef(root_op_arc.clone());
+            fd.op_set_opcode(&root_ref, OpCode::CPUI_INT_SREM);
+            fd.op_set_input(&root_ref, base.clone(), 0);
+            let base_size = base.read().unwrap().get_size();
+            let two_const = fd.new_constant(base_size, 2);
+            fd.op_set_input(&root_ref, two_const, 1);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_mod2_opt" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
+}
+
 /// Convert INT_MULT and shift forms into INT_DIV or INT_SDIV. Faithful
 /// to Ghidra's `RuleDivOpt` (ruleaction.cc:8010-8355).
 ///

@@ -810,3 +810,9 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 ### 2026-06-29（续 7）：RuleSignMod2nOpt 去重确认
 - `RuleSignMod2nOpt`（ruleaction.cc:8673）此前已完整实现并注册（oppool1 5603）。本轮清理了意外添加的重复定义。现有实现含 `check_sign_extraction` 辅助函数 + 完整模式匹配（含 trunc_size/ZEXT/SUBPIECE 变体）。
+
+### 2026-06-29（续 8）：RuleSignMod2Opt（ruleaction.cc:8794）
+- `RuleSignMod2Opt` — 转换 INT_SREM 特殊形式：`(V-sign)&1+sign => V s% 2`（sign = V s>> 63）。是 RuleSignMod2nOpt 的 mod-2 特化。
+- 复用 `check_sign_extraction` 辅助函数。支持 SUBPIECE 截断变体。
+- 触发于 CPUI_INT_AND。注册进 oppool1（5605）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
