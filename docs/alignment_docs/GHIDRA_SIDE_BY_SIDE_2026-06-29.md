@@ -130,3 +130,25 @@ int my_fwrite(void * param_1, long param_2, long param_3, void * param_4) {
 | do-while 过度分裂 | collapse_loops 检测过度 | blockaction.rs | 低 |
 
 **最高 ROI 的下一步**: blockaction collapseInternal 迁移（解决 main/parseconfig/getparameter 的 while 缺失，约 +10 while）或 ActionNameVars（解决全部函数的变量命名差距）。
+
+## 六、collapseInternal while 循环对齐实验（2026-06-29 深度分析）
+
+### 根因（已精确定位）
+多块循环体含 continue/break 边，导致 clause（循环体首块）的 `size_in > 1`（多个前驱来自 continue 跳转）。`try_rule_while_do` 的 `count_non_structural_in_edges == 1` 守卫失败，无法匹配 WhileDo。
+
+Ghidra 的解法：`collapseAll`（blockaction.cc:1877-1893）主循环每轮调用 `selectGoto` 标记一条 continue/break 边为 goto，然后 `collapseInternal` 内循环的 `ruleBlockGoto` 将其包装为 BlockIfGoto/BlockGoto（从结构化视图中"消费"），降低 clause 有效 size_in。迭代至所有 goto 边消费完毕。
+
+### 实验记录（2 种方法均导致回归，已回退）
+
+**方法 1：全量 collapse_internal_loop 替换**
+- 实现 `collapse_internal_loop()`（selectGoto → apply_rules_to_block 迭代），插入 collapse_all 在 phase1 前。
+- **结果**：curl while 28→**21**（退步），5 个测试 FAILED。原因：per-block 规则（try_rule_*）与 phase scan 规则（collapse_*）交互不良，循环头被过早消耗。**已回退**。
+
+**方法 2：全局 goto-edge 计数排除**
+- 修改 `count_non_structural_in_edges`：排除 goto 标记的入边（使 continue 跳转不计入 clause size_in）。
+- **结果**：curl while 28→**30**（提升 +2！），但 httpd 严重回归（29→14 函数，while 44→28，部分函数超时）。原因：goto-edge 排除对 httpd 的 switch-heavy CFG 产生不同影响，某些匹配导致无限循环或无效结构。**已回退**。
+
+### 结论与后续路径
+- **变量命名已完全对齐**（compact 重编号 bVar1/lVar1，commit f98e615 确认）。
+- **while 循环对齐**（28 vs Ghidra 34）需要 collapseInternal 迁移，但这是高风险架构工作。两种增量方法均失败。
+- **后续路径**：需要逐函数测试驱动的 collapseInternal 实现——对每个函数独立验证 while 数不降，而非全局应用。或：接受 staged 架构的 82% while 恢复率，转向其他 L2 缺口（如 coreaction Actions、ruleaction Rules），这些不影响结构化稳定性。
