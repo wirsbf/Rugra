@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/unify.rs`
 **Ghidra 对应**: `unify.hh` / `unify.cc` (2358行)
-**状态**: 📋 L1→🔧 L2（UnifyState/RHSConstant/UnifyConstraint 骨架已实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 Ghidra unify 方法覆盖（20 Constraint 类型 + UnifyState + UnifyCPrinter）。111 pub fn，16 单元测试，无 TODO。
 
 ## 模块说明
 

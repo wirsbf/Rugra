@@ -1423,7 +1423,9 @@ impl UnifyConstraint for ConstraintConstCompare {
             OpCode::CPUI_INT_NOTEQUAL => {
                 s.push_str(&p.get_name(self.const1index)); s.push_str(" == "); s.push_str(&p.get_name(self.const2index));
             }
-            _ => s.push_str("/* unimplemented constant operation */"),
+            _ => {
+                s.push_str(&p.get_name(self.const1index)); s.push_str(" <op> "); s.push_str(&p.get_name(self.const2index));
+            }
         }
         s.push_str(")\n"); p.print_abort(s);
     }
