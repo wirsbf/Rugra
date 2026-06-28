@@ -277,7 +277,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleSubNormal::new()));          // 5592
     pool.add_rule(Box::new(RulePositiveDiv::new()));        // 5593
     pool.add_rule(Box::new(RuleDivTermAdd::new()));    // 5594 — optimized division term add (ruleaction.cc:7832)
-    // skip 5595 RuleDivTermAdd2 — not yet ported
+    pool.add_rule(Box::new(RuleDivTermAdd2::new()));   // 5595 — optimized division term add variant (ruleaction.cc:7955)
     pool.add_rule(Box::new(RuleDivOpt::new()));             // 5596
     pool.add_rule(Box::new(RuleSignForm::new()));           // 5597
     pool.add_rule(Box::new(RuleSignForm2::new()));          // 5598

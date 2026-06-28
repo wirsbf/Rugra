@@ -794,3 +794,9 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - 辅助函数 `find_subshift` 对应 Ghidra `findSubshift`（ruleaction.cc:7928-7953）。
 - 触发于 CPUI_SUBPIECE/INT_RIGHT/INT_SRIGHT。注册进 oppool1（5594）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 5）：RuleDivTermAdd2（ruleaction.cc:7955）
+- `RuleDivTermAdd2` — 简化优化的除法表达式变体：`W+((V-W)>>1) => sub((zext(V)*(c+2^n))>>(n+1), 0)`，其中 W=sub(zext(V)*c,d)，n=d*8。使用 Rust 原生 u128。
+- 指针守卫：若输入是指针类型则跳过。
+- 触发于 CPUI_INT_RIGHT（shift==1）。注册进 oppool1（5595）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

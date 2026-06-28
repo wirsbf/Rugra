@@ -8324,6 +8324,179 @@ impl Rule for RuleDivTermAdd {
     }
 }
 
+/// Simplify another optimized division expression. Faithful to
+/// `RuleDivTermAdd2` (ruleaction.cc:7955-8046). With W = sub(zext(V)*c, d):
+///   `W + ((V - W) >> 1) => sub((zext(V)*(c+2^n)) >> (n+1), 0)`
+/// where n = d*8. All extensions and shifts must be unsigned.
+pub struct RuleDivTermAdd2;
+
+impl RuleDivTermAdd2 {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleDivTermAdd2 {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDivTermAdd2::applyOp (ruleaction.cc:7969-8046).
+        // Guard: skip if input is a pointer type (prevents false-positive
+        // on pointer arithmetic lifted as INT_RIGHT).
+        let in0_check = match op_arc.read().unwrap().inrefs.get(0) {
+            Some(v) => v.read().unwrap().v_type.as_ref().map_or(false, |t| {
+                matches!(t.as_ref(), crate::type_system::Datatype::Pointer(_))
+            }),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if in0_check { return Ok(action_status::NO_CHANGE); }
+        // Trigger: INT_RIGHT with constant shift == 1.
+        let (in0_vn, shift_val) = {
+            let op = op_arc.read().unwrap();
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            if in1.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (in0, 1i32)
+        };
+        let _ = shift_val;
+        if !in0_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+
+        // subop = INT_ADD; find x via MULT(-1) pattern
+        let addop = match in0_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
+
+        // Find which input is INT_MULT by -1 (the "comp" part), the other is x
+        let (x_vn, compvn_vn) = {
+            let a = addop.read().unwrap();
+            let mut found = None;
+            for i in 0..2 {
+                let compvn = match a.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                if !compvn.read().unwrap().is_written() { continue; }
+                let compop = match compvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(op) => op, None => continue,
+                };
+                if compop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
+                let invn = match compop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                if !invn.read().unwrap().is_constant() { continue; }
+                let mask = crate::address::calc_mask(invn.read().unwrap().get_size());
+                if invn.read().unwrap().get_offset() == mask {
+                    let other = a.inrefs.get(1 - i).cloned();
+                    found = Some((other, compvn));
+                    break;
+                }
+            }
+            match found {
+                Some((Some(x), c)) => (x, c),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+
+        // z = compvn->def->getIn(0); must be SUBPIECE
+        let compvn_def = match compvn_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        let z_vn = match compvn_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !z_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let subpieceop = match z_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if subpieceop.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+
+        // n = subpiece truncation * 8
+        let n = {
+            let sp = subpieceop.read().unwrap();
+            let trunc = sp.inrefs.get(1).and_then(|v| {
+                let g = v.read().unwrap();
+                if g.is_constant() { Some(g.get_offset() as i32) } else { None }
+            }).unwrap_or(-1);
+            if trunc < 0 { return Ok(action_status::NO_CHANGE); }
+            let in0_size = sp.inrefs.get(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let z_size = z_vn.read().unwrap().get_size();
+            if trunc * 8 != 8 * (in0_size as i32 - z_size as i32) { return Ok(action_status::NO_CHANGE); }
+            trunc * 8
+        };
+
+        // multvn = subpieceop->getIn(0); must be INT_MULT
+        let multvn = match subpieceop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !multvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let multop = match multvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if multop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
+
+        // multConst from multop->getIn(1) (128-bit)
+        let cv_arc = {
+            let m = multop.read().unwrap();
+            match m.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        let (mult_lo, mult_hi) = match cv_arc.read().unwrap().is_constant_extended() {
+            Some(v) => v, None => return Ok(action_status::NO_CHANGE),
+        };
+        let mult_const: u128 = (mult_hi as u128) << 64 | (mult_lo as u128);
+
+        // zextvn = multop->getIn(0); must be INT_ZEXT of x
+        let zextvn = match multop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !zextvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let zextop = match zextvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+        let zext_in = match zextop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !std::sync::Arc::ptr_eq(&zext_in, &x_vn) { return Ok(action_status::NO_CHANGE); }
+        let ext_size = zextvn.read().unwrap().get_size();
+
+        // Look for INT_ADD(z, ...) among descendants of op output
+        let op_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = op_out.read().unwrap().descend_iter().collect();
+        for addop2_arc in descendents {
+            if addop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+            let (a0, a1) = {
+                let a = addop2_arc.read().unwrap();
+                (a.inrefs.get(0).cloned(), a.inrefs.get(1).cloned())
+            };
+            let has_z = a0.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &z_vn)).unwrap_or(false)
+                     || a1.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &z_vn)).unwrap_or(false);
+            if !has_z { continue; }
+
+            // pow = 2^n; multConst += pow
+            let power: u128 = if n < 128 { 1u128 << n } else { 0 };
+            let new_mult = mult_const.wrapping_add(power);
+            let new_lo = new_mult as u64;
+            let new_hi = (new_mult >> 64) as u64;
+
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            // new multiply: zextvn * newConst
+            let new_mult_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
+            fd.op_set_opcode(&new_mult_op, OpCode::CPUI_INT_MULT);
+            let new_mult_out = fd.new_unique_out(ext_size, &new_mult_op);
+            fd.op_set_input(&new_mult_op, zextvn.clone(), 0);
+            let new_const_vn = fd.new_extended_constant(ext_size, new_lo, new_hi, &op_ref);
+            fd.op_set_input(&new_mult_op, new_const_vn, 1);
+            fd.op_insert_before(&new_mult_op, &op_ref);
+
+            // new shift: new_mult_out >> (n+1)
+            let new_shift = fd.new_op(2, op_arc.read().unwrap().get_addr());
+            fd.op_set_opcode(&new_shift, OpCode::CPUI_INT_RIGHT);
+            let new_shift_out = fd.new_unique_out(ext_size, &new_shift);
+            fd.op_set_input(&new_shift, new_mult_out, 0);
+            let shift_const = fd.new_constant(4, (n + 1) as u64);
+            fd.op_set_input(&new_shift, shift_const, 1);
+            fd.op_insert_before(&new_shift, &op_ref);
+
+            // addop2 becomes SUBPIECE(new_shift_out, 0)
+            let add2_ref = crate::op::PcodeOpRef(addop2_arc.clone());
+            fd.op_set_opcode(&add2_ref, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&add2_ref, new_shift_out, 0);
+            let zero_c = fd.new_constant(4, 0);
+            fd.op_set_input(&add2_ref, zero_c, 1);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "div_term_add2" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).
