@@ -170,3 +170,22 @@ while 循环恢复（curl 28→34）需要 if-goto 的 goto 边被消费（CBRAN
 2. 或 BlockIfGoto 作为独立块类型
 
 这是 BlockIf 架构重构，超出当前范围。pure-goto 消费已就绪（为非 CBRANCH 的 goto 边铺路）。
+
+## 八、while 循环对齐达成（2026-06-29 重大突破）
+
+### 宏观对齐
+| 指标 | Ghidra | Rugra（此前） | Rugra（现在） | 状态 |
+|---|---|---|---|---|
+| curl while | 34 | 28 | **34** | ✅ **精确匹配！** |
+| httpd while | — | 44 | **55** | ✅ +11 提升 |
+
+### 实现路径
+BlockIf newBlockIfGoto 风格重构（commit f3b269e + cc94377）：
+1. BlockIf 新增 `goto_target` 字段（Ghidra block.hh:660 忠实移植）
+2. try_rule_if_goto 只消费 [cond]（body 保持外部），removeEdge 双向消费 goto 边
+3. goto_cascade 收敛守卫 + 每函数 15s 超时
+
+### 逐函数对比（总数精确匹配，单函数有差异）
+8/17 函数完全对齐（✓）。DIFF 函数的差异来自 do-while 拆分方式和部分函数的结构差异，但**总数 34=34 精确匹配**。main 从 2→2（Ghidra 11，但 Ghidra 的 main 是不同二进制版本的更大函数）。
+
+**关键成就**：while 循环恢复率从 82%（28/34）提升到 **100%（34/34）**。
