@@ -649,3 +649,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **修复**：当 out[1] 携带 `F_BACK_EDGE`（由 findSpanningTree 设置）时跳过 goto 标记。回边定义循环，必须保留给 WhileDo/DoWhile 识别。这镜像 Ghidra 的 TraceDAG——它在追踪结构化路径时跳过 loop edges。
 
 **验证**：736/736 测试，curl while=4 goto=0，httpd while=8 goto=0，curl 24/24 + httpd 29/29 gcc 审计，0 回归。回边保护是正确性改进（忠实 Ghidra）；while 数不变是因为上游的 loop-body collapse 仍留下多块 body，WhileDo 规则的单 clause 要求拒绝它们——这是下一层结构化工作。
+
+### 2026-06-28：goto_cascade 内层循环补齐 WhileDo/DoWhile（对齐 Ghidra collapseInternal）
+
+**根因**：goto_cascade 的内层结构化循环（run_goto_cascade 的 repeat-until-stable）只试 cat/proper_if/if_goto/if_else/goto，**遗漏 WhileDo/DoWhile**。Ghidra 的 `collapseInternal`（blockaction.cc:1813-1820）在**同一 pass** 试 Cat/ProperIf/IfElse/WhileDo/DoWhile。遗漏导致回边保护后保留的循环无法在 cascade 阶段被结构化。
+
+**修复**：在 goto_cascade 内层循环规则序列中插入 `try_rule_while_do`/`try_rule_do_while`（if_else 之后、goto 之前），对齐 Ghidra 的规则顺序。
+
+**验证**：736/736 测试，curl while=4 goto=0（审计 24/24），httpd while=8 goto=0（审计 29/29），0 回归。当前 while 数不变是因为循环体（多块）未被 cat-chain 折叠成 WhileDo 能识别的单 clause——需移植 Ghidra 完整 collapseInternal 两层 repeat-until-stable 主循环（替换 Rugra 自定义多阶段）。

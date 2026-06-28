@@ -841,6 +841,14 @@ impl<'a> CollapseStructure<'a> {
                     if self.try_rule_proper_if(i) { continue; }
                     if self.try_rule_if_goto(i) { continue; }
                     if self.try_rule_if_else(i) { continue; }
+                    // Try loop structuring rules here too (aligns Ghidra's
+                    // collapseInternal, which tries WhileDo/DoWhile in the SAME
+                    // pass as Cat/ProperIf/IfElse, blockaction.cc:1813-1820).
+                    // Without this, back-edges protected from goto never get
+                    // structured after the cascade, leaving loops as flat
+                    // if/break/return sequences.
+                    if self.try_rule_while_do(i) { continue; }
+                    if self.try_rule_do_while(i) { continue; }
                     if self.try_rule_goto(i) { continue; }
                 }
                 self.refresh_switch_cases();
