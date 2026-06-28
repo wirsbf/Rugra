@@ -46,9 +46,11 @@ Simple emitter that produces plain text with no markup
 
 借用原始 output 字符串供诊断检查。标注 `allow(dead_code)`。
 
-### `fn reconcile_int_minus_pointer(line: &str) -> String` （2026-06-28 新增）
+### `fn reconcile_int_minus_pointer(line: &str) -> String` （2026-06-28）
 
 post_process 第七 pass 调用。C 禁止 `int - pointer`（只允许 `pointer - pointer` 和 `pointer - int`）。当行匹配 `<整数常量> - <指针前缀>Var`（如 `0 - piVar50`）时，把整数常量 cast 成 `(char *)` 使其变成合法的 `pointer - pointer` 运算。这是 ActionTypePropagate 未移植前的打印层权宜修复。
+
+**实现**：前向扫描（`find(" - ")` 跳跃式），整数操作数回读（只读安全），i 只前进不回退。早期版本有 `i = num_end` 回退 bug 导致死循环（glob_set 等 7 函数超时），已修复为 forward-only。
 
 ### `pub struct NullEmit`
 

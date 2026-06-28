@@ -61,54 +61,62 @@ pub trait Emit {
 /// where <sep> is space/=/(/, and <pointer-prefix> is pi/pc/ps/pp/pv. This is
 /// a print-layer stopgap for missing type propagation (ActionTypePropagate).
 fn reconcile_int_minus_pointer(line: &str) -> String {
-    let bytes = line.as_bytes();
+    // C forbids `int - pointer`. Find "<int> - <ptrVar>" patterns and cast
+    // the int to (char *). Uses a forward-only scan with no index backtracking
+    // to avoid infinite loops.
     let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
-    // Find " - p" occurrences and validate.
-    let mut result = String::with_capacity(line.len());
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut result = String::with_capacity(n + 16);
     let mut i = 0;
-    while i < bytes.len() {
-        // Look for " - " followed by a pointer prefix.
-        if i + 4 <= bytes.len() && &bytes[i..i+3] == b" - " {
-            let after = &line[i+3..];
-            let starts_ptr = ptr_prefixes.iter().any(|p| after.starts_with(p));
+    while i < n {
+        // Try to match "<int> - <ptrprefix>" starting at some position <= i.
+        // We look for " - <ptrprefix>" at position i+? but scan forward only.
+        // Simpler: find the next " - " from i.
+        if let Some(rel) = line[i..].find(" - ") {
+            let dash_pos = i + rel;
+            // Check if what follows " - " is a pointer prefix.
+            let after_dash = dash_pos + 3;
+            let rest = if after_dash < n { &line[after_dash..] } else { "" };
+            let starts_ptr = ptr_prefixes.iter().any(|p| rest.starts_with(p));
             if starts_ptr {
-                // Scan backwards from i to find the integer literal operand.
-                // Skip the space before "-": operand ends at i-1 (after trimming).
-                let mut num_end = i;
-                while num_end > 0 && bytes[num_end-1] == b' ' { num_end -= 1; }
+                // Scan backwards from dash_pos to find the integer operand.
+                // (This is safe — we only READ backwards, we never move i back.)
+                let mut num_end = dash_pos;
+                while num_end > 0 && bytes[num_end - 1] == b' ' { num_end -= 1; }
                 let mut num_start = num_end;
-                // Accept hex digits
-                while num_start > 0 && bytes[num_start-1].is_ascii_hexdigit() {
+                while num_start > 0 && bytes[num_start - 1].is_ascii_hexdigit() {
                     num_start -= 1;
                 }
-                // Accept 0x prefix
-                if num_start >= 2 && &bytes[num_start-2..num_start] == b"0x" {
+                if num_start >= 2 && &bytes[num_start - 2..num_start] == b"0x" {
                     num_start -= 2;
                 }
                 let num_tok = &line[num_start..num_end];
-                // Validate: pure decimal or 0x-hex, non-empty.
                 let is_int = !num_tok.is_empty() && (
                     num_tok.chars().all(|c| c.is_ascii_digit())
                     || (num_tok.starts_with("0x") && num_tok.len() > 2
                         && num_tok[2..].chars().all(|c| c.is_ascii_hexdigit()))
                 );
-                // Only cast if the char before the number is a separator
-                // (space, =, (, comma) — ensures it's a standalone operand.
-                let sep_ok = num_start == 0 || matches!(bytes[num_start-1],
+                let sep_ok = num_start == 0 || matches!(bytes[num_start - 1],
                     b' ' | b'=' | b'(' | b',' | b'\t');
-                if is_int && sep_ok {
-                    // Emit everything up to and including the number unchanged,
-                    // then the cast form, then continue after the number.
-                    result.push_str(&line[..num_start]);
+                if is_int && sep_ok && num_start >= i {
+                    // Emit [i..num_start] unchanged, then the cast, then the number.
+                    // Then advance i past the number (forward only).
+                    result.push_str(&line[i..num_start]);
                     result.push_str("(char *)");
                     result.push_str(num_tok);
-                    i = num_end;
+                    i = num_end; // forward: num_end > num_start >= i (num_tok non-empty)
                     continue;
                 }
             }
+            // No match here — emit up to and including " - " and continue after it.
+            result.push_str(&line[i..after_dash]);
+            i = after_dash;
+        } else {
+            // No more " - " — emit the rest and done.
+            result.push_str(&line[i..]);
+            break;
         }
-        result.push(bytes[i] as char);
-        i += 1;
     }
     result
 }
