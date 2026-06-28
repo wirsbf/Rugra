@@ -473,6 +473,7 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 - **try_rule_cat loop-head guard**：cat-chain 扩展时不消费 loop_bodies 中的循环头，
   对齐 Ghidra isDecisionOut 语义（循环头必须留给 while_do/do_while）。
 - **try_rule_while_do** 放宽 clause 检查为 count_non_structural_in_edges（忽略 DEAD/goto 源）。
+- **2026-06-29 apply_rules_to_block goto-first**：规则顺序改为 Ghidra collapseInternal 顺序（blockaction.cc:1797-1828）——goto（if_goto + pure_goto）在 cat/proper_if/if_else/while_do/do_while 之前运行。这确保 continue/break 边在 WhileDo 匹配前被消费（包装为 BlockIfGoto/BlockGoto），降低 clause 有效 size_in。
 - 监控日志：TYPES（whiledo/dowhile/if/list/other 计数）+ loop head/bodysize。
 
 **验证**：curl 101 if，24/24 gcc；httpd 91 if，29/29 gcc。175/176 测试（预存失败不变）。

@@ -767,13 +767,18 @@ impl<'a> CollapseStructure<'a> {
                 return;
             }
         }
+        // Ghidra collapseInternal order (blockaction.cc:1797-1828): goto FIRST,
+        // then cat, proper_if, if_else, while_do, do_while, inf_loop, switch.
+        // Running goto first ensures continue/break edges are consumed (wrapped
+        // as BlockIfGoto/BlockGoto) BEFORE while_do tries to match the body,
+        // which reduces clause size_in so WhileDo can form.
+        if self.try_rule_if_goto(i) { return; }
+        if self.try_rule_goto(i) { return; }
         if self.try_rule_cat(i) { return; }
         if self.try_rule_proper_if(i) { return; }
         if self.try_rule_if_else(i) { return; }
         if self.try_rule_while_do(i) { return; }
         if self.try_rule_do_while(i) { return; }
-        if self.try_rule_if_goto(i) { return; }
-        if self.try_rule_goto(i) { return; }
     }
 
     /// Apply interleaved rules recursively to children of a structured block.
