@@ -240,7 +240,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleBxor2NotEqual::new()));      // 5555
     pool.add_rule(Box::new(RuleLess2Zero::new()));          // 5556
     pool.add_rule(Box::new(RuleLessEqual2Zero::new()));     // 5557
-    // skip 5558 RuleSLess2Zero — not yet ported
+    pool.add_rule(Box::new(RuleSLess2Zero::new()));     // 5558 — INT_SLESS with 0/-1 simplification (ruleaction.cc:5711)
     pool.add_rule(Box::new(RuleEqual2Zero::new()));         // 5559
     pool.add_rule(Box::new(RuleEqual2Constant::new()));     // 5560
     pool.add_rule(Box::new(RuleThreeWayCompare::new()));    // 5561

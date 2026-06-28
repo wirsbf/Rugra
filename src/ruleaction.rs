@@ -5597,6 +5597,182 @@ impl Rule for RuleHumptyOr {
 /// Simplify INT_EQUAL applied to 0: `0 == V + W * -1 => V == W`.
 /// Faithful to Ghidra's `RuleEqual2Zero` (ruleaction.cc:5857-5924).
 ///
+/// Simplify INT_SLESS applied to 0 or -1. Faithful to `RuleSLess2Zero`
+/// (ruleaction.cc:5711-5840). Forms include:
+/// - `-1 s< SUB(V,hi) => -1 s< V`
+/// - `SUB(V,hi) s< 0 => V s< 0`
+/// - `-1 s< ~V => V s< 0`
+/// - `(V & 0xf000) s< 0 => V s< 0`
+/// - `-1 s< CONCAT(V,W) => -1 s< V`
+/// - `-1 s< (bool << #8*sz-1) => !bool`
+pub struct RuleSLess2Zero;
+
+impl RuleSLess2Zero {
+    pub fn new() -> Self { Self }
+
+    /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
+    /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
+    fn get_hi_bit(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let o = op.read().unwrap();
+        if !matches!(o.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+            return None;
+        }
+        let vn1 = o.inrefs.get(0)?.clone();
+        let vn2 = o.inrefs.get(1)?.clone();
+        let mask = {
+            let mut m = crate::address::calc_mask(vn1.read().unwrap().get_size());
+            m ^= m >> 1; // only high-bit set
+            m
+        };
+        let nzmask1 = vn1.read().unwrap().get_nz_mask();
+        if nzmask1 != mask && (nzmask1 & mask) != 0 { return None; }
+        let nzmask2 = vn2.read().unwrap().get_nz_mask();
+        if nzmask2 != mask && (nzmask2 & mask) != 0 { return None; }
+        if nzmask1 == mask { return Some(vn1); }
+        if nzmask2 == mask { return Some(vn2); }
+        None
+    }
+}
+
+impl Rule for RuleSLess2Zero {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5711-5840).
+        let (lvn, rvn) = {
+            let op = op_arc.read().unwrap();
+            (op.inrefs.get(0).cloned(), op.inrefs.get(1).cloned())
+        };
+        let (lvn, rvn) = match (lvn, rvn) {
+            (Some(l), Some(r)) => (l, r),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let lg = lvn.read().unwrap();
+        let rg = rvn.read().unwrap();
+
+        // Case 1: lvn is -1 (all bits set)
+        if lg.is_constant() && lg.get_offset() == crate::address::calc_mask(lg.get_size()) {
+            if !rg.is_written() { return Ok(action_status::NO_CHANGE); }
+            let feed_op = match rg.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            let feed_opc = feed_op.read().unwrap().opcode;
+            drop(lg); drop(rg);
+            // getHiBit check
+            if let Some(hibit) = Self::get_hi_bit(&feed_op) {
+                let hibit_size = hibit.read().unwrap().get_size();
+                let hibit_offset = hibit.read().unwrap().get_offset();
+                let hibit_is_const = hibit.read().unwrap().is_constant();
+                let new_in1 = if hibit_is_const {
+                    fd.new_constant(hibit_size, hibit_offset)
+                } else { hibit };
+                fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), new_in1, 1);
+                fd.op_set_opcode(&crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_EQUAL);
+                let _const = fd.new_constant(hibit_size, 0);
+                fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _const, 0);
+                return Ok(action_status::CHANGE);
+            }
+            // SUBPIECE: -1 s< SUB(avn, #hi) => -1 s< avn
+            if feed_opc == OpCode::CPUI_SUBPIECE {
+                let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
+                let hi_off = feed_op.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                if let Some(avn) = avn {
+                    let avn_size = avn.read().unwrap().get_size();
+                    let rvn_size = rvn.read().unwrap().get_size();
+                    if !avn.read().unwrap().is_free() && avn_size <= 8 && rvn_size + hi_off as usize == avn_size {
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), avn, 1);
+                        let _cm = fd.new_constant(avn_size, crate::address::calc_mask(avn_size));
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _cm, 0);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+            }
+            // INT_NEGATE: -1 s< ~avn => avn s< 0
+            if feed_opc == OpCode::CPUI_INT_NEGATE {
+                let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
+                if let Some(avn) = avn {
+                    if !avn.read().unwrap().is_free() {
+                        let avn_size = avn.read().unwrap().get_size();
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), avn, 0);
+                        let _const = fd.new_constant(avn_size, 0);
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _const, 1);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+            }
+            // PIECE: -1 s< CONCAT(V,W) => -1 s< V
+            if feed_opc == OpCode::CPUI_PIECE {
+                let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
+                if let Some(avn) = avn {
+                    if !avn.read().unwrap().is_free() {
+                        let avn_size = avn.read().unwrap().get_size();
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), avn, 1);
+                        let _cm = fd.new_constant(avn_size, crate::address::calc_mask(avn_size));
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _cm, 0);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+        drop(lg); drop(rg);
+
+        // Case 2: rvn is 0
+        let rg2 = rvn.read().unwrap();
+        if rg2.is_constant() && rg2.get_offset() == 0 {
+            if !lvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let feed_op = match lvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            let feed_opc = feed_op.read().unwrap().opcode;
+            drop(rg2);
+            // getHiBit: (hi ^ lo) s< 0 => hi != 0
+            if let Some(hibit) = Self::get_hi_bit(&feed_op) {
+                let hibit_size = hibit.read().unwrap().get_size();
+                let hibit_offset = hibit.read().unwrap().get_offset();
+                let hibit_is_const = hibit.read().unwrap().is_constant();
+                let new_in0 = if hibit_is_const {
+                    fd.new_constant(hibit_size, hibit_offset)
+                } else { hibit };
+                fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), new_in0, 0);
+                fd.op_set_opcode(&crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_NOTEQUAL);
+                return Ok(action_status::CHANGE);
+            }
+            // SUBPIECE: SUB(avn, #hi) s< 0 => avn s< 0
+            if feed_opc == OpCode::CPUI_SUBPIECE {
+                let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
+                let hi_off = feed_op.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                if let Some(avn) = avn {
+                    let avn_size = avn.read().unwrap().get_size();
+                    let lvn_size = lvn.read().unwrap().get_size();
+                    if !avn.read().unwrap().is_free() && avn_size <= 8 && lvn_size + hi_off as usize == avn_size {
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), avn, 0);
+                        let _const = fd.new_constant(avn_size, 0);
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _const, 1);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+            }
+            // INT_NEGATE: ~avn s< 0 => -1 s< avn
+            if feed_opc == OpCode::CPUI_INT_NEGATE {
+                let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
+                if let Some(avn) = avn {
+                    if !avn.read().unwrap().is_free() {
+                        let avn_size = avn.read().unwrap().get_size();
+                        let _cm = fd.new_constant(avn_size, crate::address::calc_mask(avn_size));
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _cm, 0);
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), avn, 1);
+                        return Ok(action_status::CHANGE);
+                    }
+                }
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sless2zero" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS] }
+}
+
 /// Also handles `0 == V + c => V == -c` (constant offset). Applies to
 /// INT_NOTEQUAL as well. The sum must only be used in boolean comparisons.
 pub struct RuleEqual2Zero;
