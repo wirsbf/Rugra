@@ -2,7 +2,7 @@
 
 Faithful port of Ghidra's `loadimage.hh` / `loadimage.cc` (116 lines).
 
-**Status:** L1 → L2. Complete LoadImage trait + RawLoadImage + MemoryLoadImage
+**Status:** ✅ **L3（2026-06-28 完整对齐）**. Complete LoadImage trait covering all Ghidra virtuals + RawLoadImage + MemoryLoadImage. 10 unit tests.
 implementations. This unblocks EmulateFunction's `getLoadImageValue`,
 JumpBasic's `sanityCheck`, and Architecture's `loader` field.
 
