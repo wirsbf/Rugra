@@ -6083,6 +6083,211 @@ impl Rule for RuleConcatCommute {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
+/// Commute SUBPIECE with a binary op on its input. Faithful to Ghidra's
+/// `RuleSubCommute` (ruleaction.cc:4534-4673).
+///
+/// Transforms `SUBPIECE(INT_ADD(a,b), 0)` into `INT_ADD(SUBPIECE(a,0),
+/// SUBPIECE(b,0))` — pushing the truncation inside the arithmetic so the
+/// operands can be typed at the smaller width. Commutes for: INT_ADD,
+/// INT_MULT, INT_NEGATE, INT_XOR, INT_AND, INT_OR, INT_LEFT, INT_DIV,
+/// INT_REM (and INT_SDIV/INT_SREM with sign-extension, deferred).
+pub struct RuleSubCommute;
+
+impl RuleSubCommute {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSubCommute {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSubCommute::applyOp (ruleaction.cc:4534-4673).
+        // This rule triggers on CPUI_SUBPIECE.
+        let op_addr = { op_arc.read().unwrap().start.get_addr() };
+        let (base, offset, outvn_size, longform_arc) = {
+            let op = op_arc.read().unwrap();
+            if op.opcode != OpCode::CPUI_SUBPIECE {
+                return Ok(action_status::NO_CHANGE);
+            }
+            let outvn = match op.output.as_ref() {
+                Some(o) => o.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let outvn_size = outvn.read().unwrap().get_size();
+            if outvn_size > 8 { return Ok(action_status::NO_CHANGE); }
+            // isPrecisLo/Hi check omitted (Rugra has no precis flags; the
+            // check would return false anyway).
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let offset = match op.inrefs.get(1) {
+                Some(v) => {
+                    let g = v.read().unwrap();
+                    if !g.is_constant() { return Ok(action_status::NO_CHANGE); }
+                    g.get_offset() as i64
+                }
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let longform_arc = match base.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            (base, offset, outvn_size, longform_arc)
+        };
+        let _ = base;
+
+        // Determine if the longform op commutes with SUBPIECE (cc:4545-4638).
+        let longform_opc = longform_arc.read().unwrap().opcode;
+        let insize = longform_arc.read().unwrap().output.as_ref()
+            .map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+        let j: i32; // special input slot (-1 = none)
+        match longform_opc {
+            OpCode::CPUI_INT_LEFT => {
+                j = 1; // shift amount is special
+                if offset != 0 { return Ok(action_status::NO_CHANGE); }
+                // longform->getIn(0) must be written and be ZEXT or PIECE.
+                let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
+                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+                let in0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+                };
+                let in0_opc = in0_def.read().unwrap().opcode;
+                if in0_opc != OpCode::CPUI_INT_ZEXT && in0_opc != OpCode::CPUI_PIECE {
+                    return Ok(action_status::NO_CHANGE);
+                }
+            }
+            OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => {
+                j = -1;
+                if offset != 0 { return Ok(action_status::NO_CHANGE); }
+                // longform->getIn(0) must be INT_ZEXT.
+                let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
+                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+                let in0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+                };
+                if in0_def.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let zext0_in = in0_def.read().unwrap().inrefs.get(0).cloned();
+                let zext0_in = match zext0_in { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                if zext0_in.read().unwrap().get_size() > outvn_size {
+                    // Partial commute (cancelExtensions) — deferred for simplicity.
+                    return Ok(action_status::NO_CHANGE);
+                }
+                // Check input[1] similarly if written.
+                let in1 = longform_arc.read().unwrap().inrefs.get(1).cloned();
+                if let Some(in1v) = in1 {
+                    if in1v.read().unwrap().is_written() {
+                        let in1_def = match in1v.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+                        };
+                        if in1_def.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+                            return Ok(action_status::NO_CHANGE);
+                        }
+                        let zext1_in = in1_def.read().unwrap().inrefs.get(0).cloned();
+                        if let Some(z1) = zext1_in {
+                            if z1.read().unwrap().get_size() > outvn_size {
+                                return Ok(action_status::NO_CHANGE); // partial commute
+                            }
+                        }
+                    } else if in1v.read().unwrap().is_constant() {
+                        // Must fit in outvn_size mask.
+                        let val = in1v.read().unwrap().get_offset();
+                        let smallval = val & crate::address::calc_mask(outvn_size);
+                        if val != smallval { return Ok(action_status::NO_CHANGE); }
+                    } else {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                }
+            }
+            // INT_SDIV / INT_SREM deferred (need sign_extend helper).
+            OpCode::CPUI_INT_ADD => {
+                j = -1;
+                if offset != 0 { return Ok(action_status::NO_CHANGE); }
+                // Deconflict with RulePtrArith: longform->getIn(0) must not be spacebase.
+                let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
+                if let Some(in0v) = in0 {
+                    if in0v.read().unwrap().is_spacebase() { return Ok(action_status::NO_CHANGE); }
+                }
+            }
+            OpCode::CPUI_INT_MULT => {
+                j = -1;
+                if offset != 0 { return Ok(action_status::NO_CHANGE); }
+            }
+            // Bitwise ops commute regardless of offset.
+            OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR => {
+                j = -1;
+            }
+            _ => return Ok(action_status::NO_CHANGE), // Most ops don't commute
+        }
+
+        // Make sure no other piece of base is getting used (cc:4641).
+        // base->loneDescend() != op  =>  bail.
+        let lone = {
+            let out_vn = {
+                let base_g = longform_arc.read().unwrap();
+                match base_g.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }
+            };
+            let out_g = out_vn.read().unwrap();
+            out_g.lone_descend()
+        };
+        let is_lone = match lone {
+            Some(l) => std::sync::Arc::ptr_eq(&l, op_arc),
+            None => false,
+        };
+        if !is_lone { return Ok(action_status::NO_CHANGE); }
+
+        // For each input of longform (except the special j slot), push a
+        // SUBPIECE inside (cc:4651-4669).
+        let num_inputs = longform_arc.read().unwrap().inrefs.len();
+        let outvn = op_arc.read().unwrap().output.as_ref().unwrap().clone();
+        let mut new_vn_for: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> = Vec::with_capacity(num_inputs);
+        new_vn_for.resize(num_inputs, None);
+        let inputs_snapshot: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            longform_arc.read().unwrap().inrefs.clone();
+        let mut last_in: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        let mut new_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        for i in 0..num_inputs {
+            let vn = inputs_snapshot[i].clone();
+            if i as i32 != j {
+                let dup = last_in.as_ref().map(|p| std::sync::Arc::ptr_eq(p, &vn)).unwrap_or(false) && new_vn.is_some();
+                if !dup {
+                    // newsub = newOp(2); opSetOpcode(SUBPIECE); newUniqueOut(outvn_size)
+                    let newsub = fd.new_op(2, op_addr.clone());
+                    fd.op_set_opcode(&newsub, OpCode::CPUI_SUBPIECE);
+                    let newout = fd.new_unique_out(outvn_size, &newsub);
+                    let offset_const = fd.new_constant(4, offset as u64);
+                    fd.op_set_input(&newsub, vn.clone(), 0);
+                    fd.op_set_input(&newsub, offset_const, 1);
+                    fd.op_insert_before(&newsub, &crate::op::PcodeOpRef(longform_arc.clone()));
+                    new_vn = Some(newout);
+                    fd.op_set_input(&crate::op::PcodeOpRef(longform_arc.clone()), new_vn.clone().unwrap(), i);
+                } else if let Some(ref nv) = new_vn {
+                    fd.op_set_input(&crate::op::PcodeOpRef(longform_arc.clone()), nv.clone(), i);
+                }
+            }
+            last_in = Some(vn);
+        }
+        // opSetOutput(longform, outvn) — move the original SUBPIECE's output
+        // to longform, then destroy the SUBPIECE (cc:4670-4671).
+        {
+            // Unset longform's current output def link.
+            let mut lf = longform_arc.write().unwrap();
+            if let Some(ref old_out) = lf.output {
+                old_out.write().unwrap().def = None;
+            }
+            lf.output = Some(outvn.clone());
+            outvn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+            outvn.write().unwrap().def = Some(std::sync::Arc::downgrade(&longform_arc));
+        }
+        fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
+        let _ = insize;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub_commute" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 /// Simplify equality checks that use lzcount: `lzcount(X) >> c => X == 0`
 /// if X is 2^c bits wide. Faithful to Ghidra's `RuleLzcountShiftBool`
 /// (ruleaction.cc:10660-10712).
@@ -10995,5 +11200,77 @@ mod tests {
         let rule = RuleDivOpt::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// Verify RuleSubCommute transforms SUBPIECE(INT_ADD(a,b),0) into
+    /// INT_ADD(SUBPIECE(a,0), SUBPIECE(b,0)), pushing the truncation inside
+    /// the arithmetic. Faithful to Ghidra ruleaction.cc:4534-4673.
+    #[test]
+    fn test_rule_sub_commute_add() {
+        let mut fd = Funcdata::new("test_subcommute", Address::new(0x1000), 0x10);
+        // Two 8-byte registers a, b.
+        let a = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let b = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        // INT_ADD(a, b) -> long_out (8 bytes)
+        let add_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+        let long_out = fd.new_unique_out(8, &add_op);
+        fd.op_set_input(&add_op, a.clone(), 0);
+        fd.op_set_input(&add_op, b.clone(), 1);
+        fd.obank.alivelist.push(add_op.clone());
+        // SUBPIECE(long_out, 0) -> sub_out (4 bytes)
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        let _sub_out = fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(&sub_op, long_out.clone(), 0);
+        let off_const = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, off_const, 1); // offset 0
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubCommute::new();
+        let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE, "RuleSubCommute should transform SUBPIECE(INT_ADD)");
+
+        // After: the original SUBPIECE op should be destroyed, and the
+        // INT_ADD's output should be the 4-byte sub_out (moved).
+        // Verify two new SUBPIECE ops exist (for a and b).
+        let new_subpieces = fd.obank.alivelist.iter().filter(|r| {
+            r.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE
+        }).count();
+        assert!(new_subpieces >= 2, "should have at least 2 new SUBPIECE ops (for a and b)");
+    }
+
+    /// Verify RuleSubCommute does NOT fire when base has multiple descendants
+    /// (loneDescend check, cc:4641).
+    #[test]
+    fn test_rule_sub_commute_no_lone_descend() {
+        let mut fd = Funcdata::new("test_subcommute2", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let b = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        // INT_ADD(a, b) -> long_out
+        let add_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+        let long_out = fd.new_unique_out(8, &add_op);
+        fd.op_set_input(&add_op, a.clone(), 0);
+        fd.op_set_input(&add_op, b.clone(), 1);
+        fd.obank.alivelist.push(add_op.clone());
+        // SUBPIECE(long_out, 0)
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        let _sub_out = fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(&sub_op, long_out.clone(), 0);
+        let off_const = fd.new_constant(4, 0);
+        fd.op_set_input(&sub_op, off_const, 1);
+        fd.obank.alivelist.push(sub_op.clone());
+        // A SECOND reader of long_out (so loneDescend fails).
+        let reader2 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&reader2, OpCode::CPUI_COPY);
+        fd.op_set_input(&reader2, long_out.clone(), 0);
+        let _r2out = fd.new_unique_out(8, &reader2);
+        fd.obank.alivelist.push(reader2);
+
+        let rule = RuleSubCommute::new();
+        let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE, "RuleSubCommute must NOT fire when base has 2 descendants");
     }
 }

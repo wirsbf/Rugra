@@ -259,7 +259,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleBooleanNegate::new()));      // 5574
     pool.add_rule(Box::new(RuleLogic2Bool::new()));         // 5575
     pool.add_rule(Box::new(RuleSubExtComm::new()));         // 5576
-    // skip 5577 RuleSubCommute — not yet ported
+    pool.add_rule(Box::new(RuleSubCommute::new()));        // 5577 — SUBPIECE commute with binary ops (ruleaction.cc:4534)
     pool.add_rule(Box::new(RuleConcatCommute::new()));      // 5578
     pool.add_rule(Box::new(RuleConcatZext::new()));         // 5579
     pool.add_rule(Box::new(RuleZextCommute::new()));        // 5580

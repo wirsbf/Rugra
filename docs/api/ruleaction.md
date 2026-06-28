@@ -758,3 +758,11 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 ### 2026-06-27（续）：RuleEarlyRemoval 补齐 Ghidra 6 守卫
 - RuleEarlyRemoval::apply_op 补 is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），空间门保守只允许 CONSTANT 输出删除。REGISTER/UNIQUE 待 descend 追踪完整后放开。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+
+### 2026-06-29：RuleSubCommute（ruleaction.cc:4534-4673）
+
+- `RuleSubCommute` — SUBPIECE 与二元算术的 commute：`SUBPIECE(INT_ADD(a,b), 0) → INT_ADD(SUBPIECE(a,0), SUBPIECE(b,0))`。把截断推进算术内部，使操作数能用更小宽度类型化。
+- 触发于 CPUI_SUBPIECE；支持的 longform op：INT_ADD/INT_MULT/INT_NEGATE/INT_XOR/INT_AND/INT_OR（offset 任意）、INT_LEFT/INT_DIV/INT_REM（offset==0）、INT_SDIV/INT_SREM（需 sign_extend，deferred）。
+- 守卫：base 必须 loneDescend == op（cc:4641）；INT_LEFT 的 in(0) 必须是 ZEXT/PIECE；INT_DIV/INT_REM 的输入必须是 ZEXT。
+- 2 单元测试：test_rule_sub_commute_add（验证转换）+ test_rule_sub_commute_no_lone_descend（验证守卫）。注册进 oppool1（5577）。
+- 实测 curl/httpd 未触发（curl 的 P-code 已被前置简化），但模式匹配时正确生效。
