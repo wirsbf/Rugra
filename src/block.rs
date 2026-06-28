@@ -419,9 +419,20 @@ impl FlowBlock for BlockBasic {
         }).unwrap_or(false)
     }
     fn is_goto_out(&self, i: usize) -> bool {
-        self.outgoing.get(i).map(|e| {
+        // Goto-out: the i-th outgoing edge is goto or irreducible (block.hh:351).
+        // Rugra marks gotos via block-level GOTO_EDGE_0/GOTO_EDGE_1 flags
+        // (set by run_tracedag / goto_cascade), so we check both the edge flag
+        // AND the block-level flag for slot i.
+        let edge_goto = self.outgoing.get(i).map(|e| {
             (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
-        }).unwrap_or(false)
+        }).unwrap_or(false);
+        if edge_goto { return true; }
+        let block_goto = match i {
+            0 => (self.flags & block_flags::GOTO_EDGE_0) != 0,
+            1 => (self.flags & block_flags::GOTO_EDGE_1) != 0,
+            _ => false,
+        };
+        block_goto
     }
     fn set_loop_exit(&mut self, i: usize) {
         if let Some(e) = self.outgoing.get_mut(i) {

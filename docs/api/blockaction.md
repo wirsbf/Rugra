@@ -680,3 +680,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **修复**：将 identify_internal 中 4 处 `e.point.read().unwrap()` 改为 `try_read()`，失败时 `continue` 跳过该边。try_read 不阻塞——如果锁被持有（包括自环的 write），立即返回 Err。
 
 **影响**：httpd 从"卡在第 8 个函数（ap_fini_vhost_config）"变成"完成全部 29 个函数"。httpd while 从 8 跃升到 **44**（goto=0）。curl 审计 **24/24 0 FAIL**（从 23/23 进一步改善）。736/736 测试通过。
+
+### 2026-06-29：rule_block_while_do 1:1 移植 + is_goto_out 修复（blockaction.cc:1518-1549）
+
+- 新增 `rule_block_while_do(i)`（blockaction.rs）——忠实移植 Ghidra `CollapseStructure::ruleBlockWhileDo`：bl 必须有 2 条 out 边（二路条件）、非 switch-out、out(0/1)≠bl、非 is_goto_out(0/1)；对每条 out 边找 clause（sizeIn==1, sizeOut==1, 非 switch, 单 out 回到 bl）→ 构建 BlockWhileDo。接入 collapse_all phase 循环每轮迭代（对齐 Ghidra collapseInternal 中 ruleBlockWhileDo 与 cat/proper_if/if_else 交错）。
+- **关键修复**：`BlockBasic::is_goto_out` 此前只查边级 `F_GOTO_EDGE`，但 TraceDAG/run_tracedag 把 goto 标在 **block 级** `GOTO_EDGE_0/GOTO_EDGE_1` 上 → 查询不到。修复后 is_goto_out 同时查边级和 block 级标志。这是 break 边识别的基础——ruleBlockWhileDo 据此跳过 break 循环的非结构边。
+- **验证**：777/777 测试（含 test_is_goto_out_reads_block_flags）。curl 24/24（while=28, goto=0, uVar=0），httpd 29/29（while=44, goto=0, uVar=0）。无回归。
+- **剩余缺口**：staged→collapseInternal 架构迁移。Ghidra 的 ruleBlockGoto 在每轮 collapseInternal 中"消费"goto 边（实际重连，使 break 边从结构化视图消失），然后 ruleBlockWhileDo 看到 2 条非 goto 边。Rugra 目前只标记不重连，故带 break 的循环 WhileDo 形成受限（parseconfig 检测到 7 loops 但仅 1 WhileDo）。这是 G4 架构工作。
+

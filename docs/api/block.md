@@ -865,5 +865,5 @@ BlockGraph 新增：
 **FlowBlock trait 新增方法**（默认 no-op，BlockBasic 覆盖）：
 - `is_mark`/`set_mark`/`clear_mark`（block.hh:286-288）
 - `get_visit_count`/`set_visit_count`（block.hh visit count）
-- `is_goto_in(i)`/`is_goto_out(i)`（block.hh:346-347）
+- `is_goto_in(i)`/`is_goto_out(i)`（block.hh:346-347）——**2026-06-29 修复**：`BlockBasic::is_goto_out` 此前只查边级 `F_GOTO_EDGE`，但 TraceDAG 把 goto 标在 block 级 `GOTO_EDGE_0/1` 上。修复后同时查边级和 block 级标志，使 ruleBlockWhileDo 能正确识别 break 边。
 - `set_loop_exit(i)`/`clear_loop_exit(i)`（block.hh:294-295）

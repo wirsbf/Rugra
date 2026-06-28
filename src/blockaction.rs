@@ -627,6 +627,15 @@ impl<'a> CollapseStructure<'a> {
 
             self.collapse_loops();
             if std::time::Instant::now() > deadline { break; }
+            // Faithful WhileDo rule (blockaction.cc:1518-1549): runs every
+            // phase iteration like Ghidra's collapseInternal interleaves it.
+            // Picks up loops whose break-edges were marked goto by TraceDAG.
+            let size_snapshot = self.graph.get_size();
+            for wi in 0..size_snapshot {
+                if std::time::Instant::now() > deadline { break; }
+                self.rule_block_while_do(wi);
+            }
+            if std::time::Instant::now() > deadline { break; }
             self.collapse_conditions();
             if std::time::Instant::now() > deadline { break; }
             self.collapse_bool_conditions();
@@ -3303,7 +3312,96 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    /// Detect and collapse if-then (triangle) and if-then-else (diamond) patterns.
+    /// Try to structure a WhileDo loop at block index `i`. Faithful to
+    /// `CollapseStructure::ruleBlockWhileDo` (blockaction.cc:1518-1549).
+    ///
+    /// Ghidra's rule: bl has 2 out-edges (binary condition); for each out-edge
+    /// i, the clauseblock must (a) have sizeIn()==1, (b) have sizeOut()==1,
+    /// (c) not be a switch-out, and (d) its single out-edge must loop back to
+    /// bl. Crucially, bl must NOT be `isGotoOut` on either edge — but break
+    /// edges that were marked goto by selectGoto/TraceDAG are excluded, which
+    /// is exactly how loops WITH breaks get structured (the break edge is the
+    /// non-clause out-edge, marked goto so it's skipped here).
+    ///
+    /// Returns true if a WhileDo was created.
+    fn rule_block_while_do(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        // Collect candidate clause block without holding the read lock across
+        // mutations (identify_internal needs write access).
+        let candidate: Option<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, i32)> = {
+            let b = block.read().unwrap();
+            if b.get_type() != crate::block::BlockType::Basic
+               && b.get_type() != crate::block::BlockType::Copy
+            { return false; }
+            if b.size_out() != 2 { return false; }       // Must be binary condition
+            // No switch-out (blockaction.cc:1525): head must not end in a switch.
+            if b.get_ops().last().map_or(false, |o| {
+                o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_BRANCHIND
+            }) { return false; }
+            let cond_idx = b.get_index();
+            // No loop-at-this-point: out(i) != bl (blockaction.cc:1526-1527)
+            for slot in 0..2 {
+                if let Some(e) = b.get_out(slot) {
+                    if e.point.read().unwrap().get_index() == cond_idx { return false; }
+                }
+            }
+            // Faithful to blockaction.cc:1528-1530: skip if either edge is goto.
+            // This lets break-edges (marked goto) be skipped so the body edge
+            // is the one we structure. (isInteriorGotoTarget omitted — Rugra
+            // does not yet track interior-goto-target; the goto-out checks
+            // below cover the common case.)
+            if b.is_goto_out(0) { return false; }
+            if b.is_goto_out(1) { return false; }
+            // Find the clause: out-edge slot whose target has sizeIn==1,
+            // sizeOut==1, not switch-out, and loops back to bl (cc:1531-1547).
+            let mut found: Option<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, i32)> = None;
+            for slot in 0..2 {
+                let clause_edge = match b.get_out(slot) { Some(e) => e, None => continue };
+                let clauseblock = clause_edge.point.clone();
+                let loops_back = {
+                    let cb = clauseblock.read().unwrap();
+                    if cb.size_in() != 1 { continue; }        // Nothing else must hit clause
+                    if cb.size_out() != 1 { continue; }        // Only one way out of clause
+                    if cb.get_type() == crate::block::BlockType::Switch { continue; } // not switch-out
+                    match cb.get_out(0) {
+                        Some(e) => e.point.read().unwrap().get_index() == cond_idx,
+                        None => false,
+                    }
+                };
+                if loops_back {
+                    // Clause must loop back to bl — found a WhileDo.
+                    found = Some((clauseblock, cond_idx));
+                    break;
+                }
+            }
+            found
+        };
+
+        if let Some((clauseblock, cond_idx)) = candidate {
+            let body_idx = clauseblock.read().unwrap().get_index();
+            let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(crate::block::BlockWhileDo {
+                    index: cond_idx,
+                    condition: block.clone(),
+                    body: clauseblock,
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+            if i < self.graph.blocks.len() {
+                self.graph.blocks[i] = while_block.clone();
+            }
+            self.identify_internal(&while_block, &[body_idx], i);
+            self.change_count += 1;
+            eprintln!("[COLLAPSE] {} ruleBlockWhileDo head={} body={}", self.name, cond_idx, body_idx);
+            return true;
+        }
+        false
+    }
     ///
     /// **Triangle** (if-then, no else):
     /// ```text
@@ -4788,5 +4886,30 @@ mod loopbody_tests {
         blk2.write().unwrap().clear_loop_exit(slot);
         let flags2 = blk2.read().unwrap().get_out(slot).unwrap().flags;
         assert!(flags2 & crate::block::edge_flags::F_LOOP_EXIT_EDGE == 0);
+    }
+
+    /// Verify is_goto_out reads block-level GOTO_EDGE_0/GOTO_EDGE_1 flags.
+    /// This is the fix that connects TraceDAG's goto marking (which sets
+    /// block flags) to ruleBlockWhileDo's isGotoOut checks.
+    #[test]
+    fn test_is_goto_out_reads_block_flags() {
+        let mut g = BlockGraph::new();
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x100))));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x110))));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x120))));
+        for b in [&b0, &b1, &b2] { g.add_block(b.clone()); }
+        g.add_edge(b0.clone(), b1.clone());
+        g.add_edge(b0.clone(), b2.clone());
+
+        // Before marking: neither edge is goto.
+        assert!(!b0.read().unwrap().is_goto_out(0));
+        assert!(!b0.read().unwrap().is_goto_out(1));
+
+        // Mark out-edge 1 as goto (block-level flag, like run_tracedag does).
+        b0.write().unwrap().set_flags(crate::block::block_flags::GOTO_EDGE_1);
+
+        // Now is_goto_out(1) must return true; is_goto_out(0) stays false.
+        assert!(!b0.read().unwrap().is_goto_out(0), "edge 0 not goto");
+        assert!(b0.read().unwrap().is_goto_out(1), "edge 1 is goto via block flag");
     }
 }
