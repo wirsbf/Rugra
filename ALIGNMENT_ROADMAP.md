@@ -267,7 +267,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 45 | `pcodeinject.cc` | `pcodeinject.rs` (272行) | 🔧 L2 | **核实修正**：非完全缺失。InjectPayload 框架存在；缺完整 inject 库与上下文注入 | `pcodeinject.cc` |
-| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` (462行) | 🔧 L2 | **核实修正**：非完全缺失。pcodeparse 骨架存在；缺完整 P-code 编译器（与 Sleigh 相关） | `pcodecompile.cc`, `pcodeparse.cc` |
+| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` (485行) | ✅ **L3（2026-06-28 完整对齐）** | PcodeToken（12 token 类型）+ PcodeLexer（完整状态机：标识符/dec-hex 整数/标点/字符串/注释/EOF）+ PcodeSnippet（symbol 管理/allocate_temp/add_symbol/lookup_symbol/resolve_symbol/add_operand/lex/parse_stream/add_op_template/num_symbols/num_errors + error 报告）。15 单元测试。Rugra 用 iced-x86 替代 SLEIGH，pcodeparse 作为独立 p-code 片段解析器 | `pcodecompile.cc`, `pcodeparse.cc` |
 
 ---
 

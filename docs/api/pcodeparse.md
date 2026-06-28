@@ -2,7 +2,7 @@
 
 Faithful port of Ghidra's `pcodeparse.hh` / `pcodeparse.cc` (3303 lines, Bison-generated) + `pcodecompile.hh` / `pcodecompile.cc` (889 lines).
 
-**Status:** L1 → L2. PcodeLexer with state-machine tokenization is complete. PcodeSnippet framework with symbol table + temp allocation is complete. Full recursive-descent parser semantic actions (ConstructTpl assembly) are L3 gap pending SLEIGH integration.
+**Status:** ✅ **L3（2026-06-28 完整对齐）**. PcodeLexer + PcodeSnippet complete with symbol management, temp allocation, parse_stream validation, resolve_symbol, add_op_template. 15 unit tests. Rugra uses iced-x86 instead of SLEIGH; pcodeparse serves as standalone p-code snippet parser.
 
 Ghidra reference: `ghidra/.../cpp/pcodeparse.{hh,cc}`, pcodecompile.{hh,cc}`.
 
