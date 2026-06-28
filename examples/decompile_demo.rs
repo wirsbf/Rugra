@@ -139,8 +139,8 @@ fn decompile_conditional_function() {
     op2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
     ops.push(op2);
 
-    // Block 2 (branch target, x < 0): RAX = INT_NEG(RDI); RETURN(RAX)
-    let mut op3 = PcodeOpRaw::new(OpCode::CPUI_INT_NEG as i32);
+    // Block 2 (branch target, x < 0): RAX = INT_NEGATE(RDI); RETURN(RAX)
+    let mut op3 = PcodeOpRaw::new(OpCode::CPUI_INT_NEGATE as i32);
     op3.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
     op3.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));  // RDI
     ops.push(op3);
