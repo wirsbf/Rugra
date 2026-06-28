@@ -643,20 +643,18 @@ impl EmitNoMarkup {
             // standalone integer literal preceded by space/=/(.
             // (This is a print-layer stopgap; the real fix is type propagation
             // making the output varnode pointer-typed.)
+            // reconcile_int_minus_pointer still needed for non-LOAD pointers
+            // (e.g. function parameters typed as int* used in subtraction).
             s = reconcile_int_minus_pointer(&s);
-            // Also reconcile `ptrvar / int` and `ptrvar % int` — C forbids
-            // pointer division/modulo. Cast the pointer to (long) so the
-            // arithmetic is valid. (LOAD results wrongly typed as pointers
-            // hit this — piVar92 = *(int*)piVar91 is really an int.)
-            s = reconcile_pointer_arith(&s);
-            // Reconcile 'X * "string"' — int * string-literal is illegal C.
-            // Cast the string to (long). Only matches quoted string literals,
-            // never pointer variables (which would break legal ptr arithmetic).
+            // reconcile_pointer_arith no longer needed: LOAD results are now
+            // correctly typed as int/long (not pointer) via mark_varnode_used
+            // LOAD detection, so ptr/int division doesn't occur.
+            // s = reconcile_pointer_arith(&s);
+            // reconcile_int_times_string still needed for copy-propagation
+            // artifacts (string address inlined into MULT operand).
             if s.contains(" * \"") {
                 s = reconcile_int_times_string(&s);
             }
-            // Reconcile '*(_struct *)X = longVar' — assigning a long to a
-            // dereferenced _struct pointer is incompatible. Use (long *).
             if s.contains("*(_struct *)") && s.contains("= ") {
                 s = s.replace("*(_struct *)", "*(long *)");
             }

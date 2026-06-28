@@ -1203,9 +1203,29 @@ impl PrintC {
     /// Mark a varnode's display name as used, recording its space, offset, and type
     fn mark_varnode_used(&mut self, name: String, vn: &Varnode) {
         if name.is_empty() { return; }
-        let type_name = vn.v_type.as_ref()
-            .map(|dt| dt.get_name().to_string())
-            .unwrap_or_else(|| "int".to_string());
+        // If this varnode is the output of a LOAD, it holds a loaded VALUE
+        // (int/long), not a pointer. Use size-based type name so the
+        // declaration matches the variable prefix.
+        let type_name = if let Some(ref def_arc) = vn.def.as_ref().and_then(|d| d.upgrade()) {
+            let def_op = def_arc.read().unwrap();
+            if def_op.opcode == crate::opcodes::OpCode::CPUI_LOAD {
+                match vn.get_size() {
+                    4 => "int".to_string(),
+                    8 => "long".to_string(),
+                    1 => "byte".to_string(),
+                    _ => vn.v_type.as_ref().map(|dt| dt.get_name().to_string())
+                        .unwrap_or_else(|| "int".to_string()),
+                }
+            } else {
+                vn.v_type.as_ref()
+                    .map(|dt| dt.get_name().to_string())
+                    .unwrap_or_else(|| "int".to_string())
+            }
+        } else {
+            vn.v_type.as_ref()
+                .map(|dt| dt.get_name().to_string())
+                .unwrap_or_else(|| "int".to_string())
+        };
         self.mark_variable_used(name, vn.get_space(), vn.get_offset(), type_name);
     }
 

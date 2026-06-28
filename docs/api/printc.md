@@ -71,7 +71,10 @@ raw semantics / P-code-like IR
 - **Pass 2 (Final Emission - 正式发射阶段)**：在输出函数体（`{`）的开头，遍历探测到的 `used_varnode_types` 映射。通过 `is_declarable` 实施严格过滤，跳过非标识符表达式（如 `struct2->field_8` 等成员访问，只保留 `struct2` 基址本身）、已在签名中声明的入参、全局数据等，并在一行内合并声明。
 
 ### vn_type_if_meaningful（2026-06-28 增强）
-如果 varnode 是 LOAD op 的输出，返回基于 size 的类型（int/long/byte）而非指针。这是 LOAD 结果被错误命名为 piVar 的直接修复。同时调整了 var_prefix 优先级：vn_type_if_meaningful 优先于 find_typed_instance。
+如果 varnode 是 LOAD op 的输出，返回基于 size 的类型（int/long/byte）而非指针。
+
+### mark_varnode_used LOAD 检测（2026-06-28 新增）
+如果 varnode 是 LOAD op 的输出，type_name 用 size-based（int/long/byte）而非 vn.v_type 的指针类型。这让 LOAD 结果声明为 `int piVar92` 而非 `int * piVar92`，**消除了 reconcile_pointer_arith** 的需要。
 
 ---
 
