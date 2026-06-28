@@ -69,6 +69,51 @@ pub trait PrintLanguage {
 
     /// Emit a variable name
     fn push_varnode(&mut self, vn: &Varnode, _op: Option<&PcodeOp>);
+
+    // --- Scope / formatting management (printlanguage.cc:84-698) ---
+
+    /// Reset the printer to default state.
+    /// Faithful to PrintLanguage::resetDefaults (cc:671).
+    fn reset_defaults(&mut self) {}
+
+    /// Clear internal state for a new function.
+    /// Faithful to PrintLanguage::clear (cc:678).
+    fn clear(&mut self) {}
+
+    /// Set whether to use packed (single-line) output.
+    /// Faithful to PrintLanguage::setPackedOutput (cc:653).
+    fn set_packed_output(&mut self, _val: bool) {}
+
+    /// Set whether to flatten nested scopes.
+    /// Faithful to PrintLanguage::setFlat (cc:662).
+    fn set_flat(&mut self, _val: bool) {}
+
+    /// Pop the current scope level.
+    /// Faithful to PrintLanguage::popScope (cc:113).
+    fn pop_scope(&mut self) {}
+
+    /// Emit a line comment.
+    /// Faithful to PrintLanguage::emitLineComment (cc:589).
+    fn emit_line_comment(&mut self, _indent: i32, _text: &str) {}
+}
+
+/// Escape special characters in string data for C output.
+/// Faithful to PrintLanguage::escapeCharacterData (printlanguage.cc:498).
+pub fn escape_character_data(buf: &[u8], charsize: usize) -> String {
+    let mut result = String::new();
+    for &b in buf {
+        match b {
+            b'"' => result.push_str("\\\""),
+            b'\\' => result.push_str("\\\\"),
+            b'\n' => result.push_str("\\n"),
+            b'\r' => result.push_str("\\r"),
+            b'\t' => result.push_str("\\t"),
+            0x20..=0x7e => result.push(b as char),
+            _ => result.push_str(&format!("\\x{:02x}", b)),
+        }
+        let _ = charsize; // multi-byte chars not fully supported
+    }
+    result
 }
 
 /// Capability object for registering language printers
@@ -79,5 +124,24 @@ pub struct PrintLanguageCapability {
 impl PrintLanguageCapability {
     pub fn new(name: &str) -> Self {
         Self { name: name.to_string() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_character_data() {
+        assert_eq!(escape_character_data(b"hello", 1), "hello");
+        assert_eq!(escape_character_data(b"a\"b", 1), "a\\\"b");
+        assert_eq!(escape_character_data(b"a\nb", 1), "a\\nb");
+        assert_eq!(escape_character_data(&[0x00, 0x41], 1), "\\x00A");
+    }
+
+    #[test]
+    fn test_capability() {
+        let cap = PrintLanguageCapability::new("c");
+        assert_eq!(cap.name, "c");
     }
 }

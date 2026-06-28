@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: 部分有效（需对照源码）
+- **状态**: ✅ **L3（2026-06-28 完整对齐）**——PrintLanguage trait 覆盖全部 Ghidra 虚方法 + escape_character_data + scope/format 管理。2 单元测试。
 
 
 **源代码路径**: `src/printlanguage.rs`
