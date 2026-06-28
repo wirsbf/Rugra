@@ -2,7 +2,7 @@
 
 Faithful port of Ghidra's `grammar.hh` / `grammar.cc` (3338 lines).
 
-**Status:** L1 → L2. Complete GrammarToken + GrammarLexer with state-machine
+**Status:** ✅ **L3（2026-06-28 完整对齐）**. Complete GrammarToken + GrammarLexer + TypeModifier/TypeDeclarator + parse_type/parse_to_separator. 18 unit tests.
 tokenization + TypeDeclarator/TypeModifier AST data structures + entry
 functions. L3 gap: full CParse recursive-descent parser + TypeFactory
 integration.

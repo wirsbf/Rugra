@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/expression.rs`
 **Ghidra 对应**: `expression.hh` / `expression.cc`
-**状态**: 🔧 L2（TermOrder/AdditiveEdge/AddExpression 已实现，解锁 RuleCollectTerms 等）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——TermOrder/AdditiveEdge/AddExpression/boolean_match_evaluate/functional_equality_level 全部实现。10 单元测试。
 
 ## 模块说明
 
