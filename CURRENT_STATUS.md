@@ -10,7 +10,7 @@
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **736/736 通过** | 2026-06-28 实跑 |
 | curl gcc 审计 | **24/24 OK 0 FAIL** | `python tools/audit_syntax.py result/curl_cur.c` |
-| httpd gcc 审计 | **27/29**（2 类型错误） | 同上 |
+| httpd gcc 审计 | **29/29 OK 0 FAIL** | 同上 |
 | **curl while 循环** | **26**（从 4 跃升） | CFG 修复 + reconcile 类型修复 |
 | **httpd while 循环** | **44**（从 8 跃升！） | identify_internal 死锁修复 |
 | goto | **0**（curl + httpd） | 实测 |
