@@ -704,3 +704,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - 重构 `try_rule_if_goto`：只消费 [cond]（body 保持外部 out-edge），设 goto_target。removeEdge 从 target incoming + if_block outgoing 双向移除 goto 边。
 - **结果**：curl while **28→34**（精确匹配 Ghidra 34！）。while 循环对齐缺口对 curl 已闭合。
 - httpd while 44→54 (+10)，但 3 个函数在 goto_cascade 中不收敛（ap_count_dirs 等）——收敛问题，待修复。
+
+### 2026-06-29（续 4）：goto_cascade 收敛守卫 — httpd while 44→55
+- `run_goto_cascade` 新增收敛守卫：若 graph size 在 3 轮后未减少（规则震荡无进展），停止。防止病态 CFG（ap_count_dirs 等）无限循环。
+- httpd example 新增每函数 15s 超时（对齐 curl 模式），防止单函数挂起阻塞全局。
+- **最终结果**：curl while **34**（精确匹配 Ghidra！），httpd while **55**（从 44 提升 +11），29/29 函数完成（1 个 TIMEOUT 占位），0 goto。

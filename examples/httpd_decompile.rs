@@ -281,14 +281,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(text.get_output())
         });
 
-        match handle.join() {
-            Ok(Some(output)) => {
+        // Wait with timeout (like curl_decompile) to prevent single-function hangs
+        let (tx, rx) = std::sync::mpsc::channel();
+        let join_handle = handle;
+        std::thread::spawn(move || {
+            let result = join_handle.join();
+            let _ = tx.send(result);
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok(Ok(Some(output))) => {
                 println!("/* ---- 0x{:x}: {} ({} bytes) ---- */", vaddr, name, size);
                 println!("{}", output);
                 println!();
                 total_success += 1;
             }
-            _ => {
+            Ok(Ok(None)) | Ok(Err(_)) => {
+                total_fail += 1;
+            }
+            Err(_) => {
+                println!("/* ---- 0x{:x}: {} TIMEOUT (>15s) ---- */", vaddr, name);
                 total_fail += 1;
             }
         }

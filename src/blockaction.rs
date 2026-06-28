@@ -826,15 +826,25 @@ impl<'a> CollapseStructure<'a> {
     // Ghidra-style selectGoto loop
     fn run_goto_cascade(&mut self) {
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
-        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut goto_rounds = 0;
         // Hard cap on rounds to prevent runaway loops when clip/goto structuring
         // doesn't fully converge (e.g. mutually-irreducible roots). Ghidra's
         // selectGoto throws LowlevelError in this case; we cap instead.
-        let max_goto_rounds = 20;
+        let max_goto_rounds = 10;
+        let mut prev_graph_size = self.graph.get_size();
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
             if goto_rounds >= max_goto_rounds { break; }
+            // Convergence guard: if the graph size hasn't decreased in the last
+            // round (rules are oscillating without progress), stop to prevent
+            // infinite loops on pathological CFGs (e.g. httpd ap_count_dirs).
+            let cur_size = self.graph.get_size();
+            if goto_rounds >= 3 && cur_size >= prev_graph_size {
+                eprintln!("[COLLAPSE] {} goto cascade: no progress (size {}->{}), stopping", self.name, prev_graph_size, cur_size);
+                break;
+            }
+            prev_graph_size = cur_size;
             let goto_marked = self.select_and_mark_goto();
             // Fallback: clip_extra_roots marks irreducible cross-over edges as
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
