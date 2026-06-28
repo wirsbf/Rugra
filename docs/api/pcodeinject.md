@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/pcodeinject.rs`
 **Ghidra 对应**: `pcodeinject.hh` / `pcodeinject.cc` (638行)
-**状态**: 📋 L1→🔧 L2（InjectParameter/InjectPayload/PcodeInjectLibrary 已实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary 全部方法覆盖（含 register_call_fixup/call_other_fixup/call_mechanism/get_payload_id）。9 单元测试。
 
 ## 模块说明
 

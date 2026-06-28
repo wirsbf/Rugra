@@ -177,6 +177,12 @@ pub struct PcodeInjectLibrary {
     pub name_to_id: HashMap<String, i32>,
     /// Next available id
     next_id: i32,
+    /// Call fixup name → inject id (pcodeinject.cc:220)
+    pub call_fixups: HashMap<String, i32>,
+    /// CALLOTHER fixup name → inject id (pcodeinject.cc:236)
+    pub call_other_fixups: HashMap<String, i32>,
+    /// Call mechanism name → inject id (pcodeinject.cc:252)
+    pub call_mechanisms: HashMap<String, i32>,
 }
 
 impl PcodeInjectLibrary {
@@ -185,6 +191,9 @@ impl PcodeInjectLibrary {
             payloads: HashMap::new(),
             name_to_id: HashMap::new(),
             next_id: 0,
+            call_fixups: HashMap::new(),
+            call_other_fixups: HashMap::new(),
+            call_mechanisms: HashMap::new(),
         }
     }
 
@@ -209,6 +218,41 @@ impl PcodeInjectLibrary {
 
     /// Get the number of registered payloads.
     pub fn num_payloads(&self) -> usize { self.payloads.len() }
+
+    /// Register a call fixup payload and return its inject id.
+    /// Faithful to Ghidra PcodeInjectLibrary::registerCallFixup (pcodeinject.cc:220).
+    pub fn register_call_fixup(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
+        let id = self.register_payload(payload);
+        self.call_fixups.insert(fixup_name.to_string(), id);
+        id
+    }
+
+    /// Register a CALLOTHER fixup payload and return its inject id.
+    /// Faithful to Ghidra PcodeInjectLibrary::registerCallOtherFixup (pcodeinject.cc:236).
+    pub fn register_call_other_fixup(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
+        let id = self.register_payload(payload);
+        self.call_other_fixups.insert(fixup_name.to_string(), id);
+        id
+    }
+
+    /// Register a call mechanism payload and return its inject id.
+    /// Faithful to Ghidra PcodeInjectLibrary::registerCallMechanism (pcodeinject.cc:252).
+    pub fn register_call_mechanism(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
+        let id = self.register_payload(payload);
+        self.call_mechanisms.insert(fixup_name.to_string(), id);
+        id
+    }
+
+    /// Get the payload id for a given type and name.
+    /// Faithful to Ghidra PcodeInjectLibrary::getPayloadId (pcodeinject.cc:285).
+    pub fn get_payload_id(&self, inject_type: InjectPayloadType, nm: &str) -> Option<i32> {
+        match inject_type {
+            InjectPayloadType::CallFixup => self.call_fixups.get(nm).copied(),
+            InjectPayloadType::CallOtherFixup => self.call_other_fixups.get(nm).copied(),
+            InjectPayloadType::CallMechanism => self.call_mechanisms.get(nm).copied(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -268,5 +312,29 @@ mod tests {
         assert_eq!(p.size_input(), 1);
         assert_eq!(p.size_output(), 1);
         assert_eq!(p.get_input(0).unwrap().name, "in0");
+    }
+
+    #[test]
+    fn test_register_call_fixup() {
+        let mut lib = PcodeInjectLibrary::new();
+        let p = InjectPayload::new("memcpy_fixup".into(), InjectPayloadType::CallFixup);
+        let id = lib.register_call_fixup("memcpy", p);
+        assert_eq!(lib.get_payload_id(InjectPayloadType::CallFixup, "memcpy"), Some(id));
+    }
+
+    #[test]
+    fn test_register_call_other_fixup() {
+        let mut lib = PcodeInjectLibrary::new();
+        let p = InjectPayload::new("other_fixup".into(), InjectPayloadType::CallOtherFixup);
+        let id = lib.register_call_other_fixup("myop", p);
+        assert_eq!(lib.get_payload_id(InjectPayloadType::CallOtherFixup, "myop"), Some(id));
+    }
+
+    #[test]
+    fn test_register_call_mechanism() {
+        let mut lib = PcodeInjectLibrary::new();
+        let p = InjectPayload::new("callmech".into(), InjectPayloadType::CallMechanism);
+        let id = lib.register_call_mechanism("__thunk", p);
+        assert_eq!(lib.get_payload_id(InjectPayloadType::CallMechanism, "__thunk"), Some(id));
     }
 }
