@@ -567,3 +567,11 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 
 此修复是单点正确的——之前 emit_inline_expr 的 6+ 分支处理了所有算术/比较 op，但遗漏了最基本的 COPY。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+
+### 2026-06-29：compact 变量重编号基础设施（assignDefaultNames, database.cc:2862）
+
+- `compact_name_for(raw) -> Option<String>` — 忠实移植 Ghidra `Scope::assignDefaultNames`（database.cc:2862）。按类型前缀（bVar/lVar/iVar/piVar/...）从 1 顺序重编号，替代原始 offset/counter（bVar21 → bVar1）。
+- 基础设施：`compact_rename` HashMap 缓存 + `compact_counters` 按前缀计数器（每函数重置）+ discovery_pass 守卫（discovery 期间不重编号）。
+- 接入点：push_varnode（raw-register 路径 + high-variable 路径）+ get_varnode_display_name 包装器 + doc_variable_decls_from_funcdata 声明循环。
+- 单元测试 `test_compact_name_for` 验证逻辑正确（bVar21→bVar1, bVar29→bVar2, param_1→None）。
+- **已知限制**：重编号逻辑正确（debug + 单元测试证明），但部分命名路径（merge.rs 的 HighVariable 名称）在 discovery/real 两遍间产生不一致的 offset-based 名称，故 compact 名称尚未完全体现在输出中。完整接线需 HighVariable 命名跨遍确定——后续工作。Side-by-side 对比已确认类型前缀 SCHEME 与 Ghidra 一致（piVar/lVar/bVar）；仅编号（offset vs compact-1-based）不同。

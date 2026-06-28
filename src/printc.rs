@@ -96,6 +96,15 @@ pub struct PrintC {
     /// address LHS, causing 'StackX_N undeclared'). Populated by
     /// get_stack_variable_name during both discovery and real emit.
     used_scope_symbols: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// Compact variable renumbering map (raw name → compact name), built
+    /// lazily on first use. Faithful to Ghidra's assignDefaultNames
+    /// (database.cc:2862): variables are renumbered per type-prefix starting
+    /// from 1 (iVar1, iVar2, lVar1, ...) instead of using the raw register
+    /// offset (iVar23, lVar107). Built on-demand in push_varnode and
+    /// get_varnode_display_name during the REAL emit pass (not discovery).
+    compact_rename: HashMap<String, String>,
+    /// Per-prefix counter for compact renumbering. Reset at function start.
+    compact_counters: HashMap<&'static str, u32>,
     /// If true, we are in the discovery pass (only collecting names, not printing)
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
@@ -167,6 +176,8 @@ impl PrintC {
             used_varnode_names: HashSet::new(),
             used_varnode_types: HashMap::new(),
             used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
+            compact_rename: HashMap::new(),
+            compact_counters: HashMap::new(),
             discovery_pass: false,
             call_targets: HashSet::new(),
         pointer_varnodes: HashSet::new(),
@@ -1053,6 +1064,43 @@ impl PrintC {
         self.emit.tag_variable(&label, 0);
     }
 
+    /// Return the compact (renumbered) name for a raw variable name, or None
+    /// if the name is not an auto-local that should be renumbered. Faithful
+    /// to Ghidra's assignDefaultNames (database.cc:2862): variables are
+    /// renumbered per type-prefix starting from 1. Built lazily on first use
+    /// during the REAL emit pass so names are stable across body + declarations.
+    fn compact_name_for(&mut self, raw: &str) -> Option<String> {
+        // Only renumber during the real emit pass (not discovery), and only
+        // for auto-local names matching {prefix}{hexdigits} or {prefix}_{hexdigits}.
+        if self.discovery_pass { return None; }
+        const PREFIXES: &[&str] = &[
+            "piVar", "pcVar", "psVar", "ppVar", "pvVar",
+            "lVar", "uVar", "iVar", "bVar", "sVar", "fVar", "dVar",
+        ];
+        // Check if this is an auto-local name we should renumber.
+        let mut matched_prefix: Option<&'static str> = None;
+        for &prefix in PREFIXES {
+            if let Some(rest) = raw.strip_prefix(prefix) {
+                let digits = rest.strip_prefix('_').unwrap_or(rest);
+                if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit()) {
+                    matched_prefix = Some(prefix);
+                    break;
+                }
+            }
+        }
+        let prefix = matched_prefix?;
+        // If already renamed, return the cached compact name.
+        if let Some(compact) = self.compact_rename.get(raw) {
+            return Some(compact.clone());
+        }
+        // Assign next sequential number for this prefix.
+        let counter = self.compact_counters.entry(prefix).or_insert(0);
+        *counter += 1;
+        let compact = format!("{}{}", prefix, counter);
+        self.compact_rename.insert(raw.to_string(), compact.clone());
+        Some(compact)
+    }
+
     /// Emit variable declarations at the top of the function body.
     fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
         use std::collections::BTreeMap;
@@ -1136,9 +1184,18 @@ impl PrintC {
             true
         };
 
-        for (name, (type_name, space, offset)) in &self.used_varnode_types {
-            if is_declarable(name, *space, *offset, &self.call_targets) {
-                let entry = declared.entry(name.clone()).or_insert_with(|| type_name.clone());
+        // Snapshot used_varnode_types to avoid borrow conflict with
+        // compact_name_for (which needs &mut self).
+        let uv_snapshot: Vec<(String, String, crate::space::AddressSpace, u64)> =
+            self.used_varnode_types.iter()
+                .map(|(n, (t, s, o))| (n.clone(), t.clone(), *s, *o))
+                .collect();
+        for (name, type_name, space, offset) in &uv_snapshot {
+            // Apply compact renumbering (assignDefaultNames) so declarations
+            // match body references.
+            let decl_name = self.compact_name_for(name).unwrap_or_else(|| name.clone());
+            if is_declarable(&decl_name, *space, *offset, &self.call_targets) {
+                let entry = declared.entry(decl_name).or_insert_with(|| type_name.clone());
                 if type_name.contains('*') && !entry.contains('*') {
                     *entry = type_name.clone();
                 }
@@ -1230,8 +1287,10 @@ impl PrintC {
     }
 
     /// Get the display name for a varnode without emitting it
-    fn get_varnode_display_name(&self, vn: &Varnode) -> String {
-        self.get_varnode_display_name_inner(vn)
+    fn get_varnode_display_name(&mut self, vn: &Varnode) -> String {
+        let raw = self.get_varnode_display_name_inner(vn);
+        // Apply compact renumbering lazily (assignDefaultNames).
+        self.compact_name_for(&raw).unwrap_or(raw)
     }
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
@@ -3068,6 +3127,9 @@ impl PrintLanguage for PrintC {
         self.used_varnode_names.clear();
         self.used_varnode_types.clear();
         self.used_scope_symbols.borrow_mut().clear();
+        // Reset compact variable renumbering for this function.
+        self.compact_rename.clear();
+        self.compact_counters.clear();
 
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;
@@ -4091,10 +4153,12 @@ impl PrintLanguage for PrintC {
                         pname.clone()
                     } else {
                         let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
-                        format!("{}_{:x}", prefix, vn.get_offset())
+                        let raw = format!("{}_{:x}", prefix, vn.get_offset());
+                        self.compact_name_for(&raw).unwrap_or(raw)
                     }
                 } else {
-                    Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size())
+                    let raw = Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size());
+                    self.compact_name_for(&raw).unwrap_or(raw)
                 };
                 let name = &display_name;
 
@@ -4496,5 +4560,27 @@ mod tests {
         // Should use "param_1" instead of "RDI"
         assert!(text.contains("param_1"), "Expected 'param_1', got: {}", text);
         assert!(!text.contains("RDI"), "Should NOT contain 'RDI', got: {}", text);
+    }
+
+    /// Verify compact_name_for renumbers auto-local variable names.
+    #[test]
+    fn test_compact_name_for() {
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+        // bVar21 → bVar1 (first bVar)
+        let r1 = printer.compact_name_for("bVar21");
+        assert_eq!(r1, Some("bVar1".to_string()), "bVar21 -> bVar1");
+        // bVar29 → bVar2 (second bVar)
+        let r2 = printer.compact_name_for("bVar29");
+        assert_eq!(r2, Some("bVar2".to_string()), "bVar29 -> bVar2");
+        // lVar25 → lVar1 (first lVar)
+        let r3 = printer.compact_name_for("lVar25");
+        assert_eq!(r3, Some("lVar1".to_string()), "lVar25 -> lVar1");
+        // bVar21 again → bVar1 (cached)
+        let r4 = printer.compact_name_for("bVar21");
+        assert_eq!(r4, Some("bVar1".to_string()), "bVar21 cached -> bVar1");
+        // param_1 → None (not renumbered)
+        let r5 = printer.compact_name_for("param_1");
+        assert_eq!(r5, None, "param_1 not renumbered");
     }
 }
