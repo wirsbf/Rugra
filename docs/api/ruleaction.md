@@ -800,3 +800,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - 指针守卫：若输入是指针类型则跳过。
 - 触发于 CPUI_INT_RIGHT（shift==1）。注册进 oppool1（5595）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 6）：RuleSignMod2nOpt2（ruleaction.cc:8867）
+- `RuleSignMod2nOpt2` — 转换 INT_SREM 形式：`V - (Vadj & ~(2^n-1)) => V s% 2^n`。
+- 实现了 `check_sign_ext_form` 路径（INT_ADD，CDQ 风格符号扩展，ruleaction.cc:8928-8952）。
+- MULTIEQUAL 路径（`checkMultiequalForm`）需块结构访问（getParent/getIn/getTrueOut），deferred。
+- 触发于 CPUI_INT_MULT。注册进 oppool1（5604）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

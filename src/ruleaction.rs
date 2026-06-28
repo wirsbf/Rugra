@@ -8167,6 +8167,137 @@ impl Rule for RuleModOpt {
     }
 }
 
+/// Convert INT_SREM form: `V - (Vadj & ~(2^n-1)) => V s% 2^n`.
+/// Faithful to `RuleSignMod2nOpt2` (ruleaction.cc:8867-8922). Only the
+/// `checkSignExtForm` path (INT_ADD) is implemented; the MULTIEQUAL path
+/// (`checkMultiequalForm`) requires block-structure access and is deferred.
+pub struct RuleSignMod2nOpt2;
+
+impl RuleSignMod2nOpt2 {
+    pub fn new() -> Self { Self }
+
+    /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
+    /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
+    fn check_sign_ext_form(addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        for slot in 0..2 {
+            let minus_vn = {
+                let a = addop.read().unwrap();
+                match a.inrefs.get(slot) { Some(v) => v.clone(), None => continue }
+            };
+            if !minus_vn.read().unwrap().is_written() { continue; }
+            let mult_op = match minus_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => continue,
+            };
+            if mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
+            let const_vn = match mult_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            if !const_vn.read().unwrap().is_constant() { continue; }
+            let mask = crate::address::calc_mask(const_vn.read().unwrap().get_size());
+            if const_vn.read().unwrap().get_offset() != mask { continue; } // must be *(-1)
+            let base = {
+                let a = addop.read().unwrap();
+                match a.inrefs.get(1 - slot) { Some(v) => v.clone(), None => continue }
+            };
+            let sign_ext = match mult_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            if !sign_ext.read().unwrap().is_written() { continue; }
+            let shift_op = match sign_ext.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => continue,
+            };
+            if shift_op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
+            let shift_in0 = match shift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            if !std::sync::Arc::ptr_eq(&shift_in0, &base) { continue; }
+            let shift_const = match shift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            if !shift_const.read().unwrap().is_constant() { continue; }
+            let base_size = base.read().unwrap().get_size();
+            if shift_const.read().unwrap().get_offset() as usize != 8 * base_size - 1 { continue; }
+            return Some(base);
+        }
+        None
+    }
+}
+
+impl Rule for RuleSignMod2nOpt2 {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSignMod2nOpt2::applyOp (ruleaction.cc:8877-8922).
+        let (const_vn, and_out) = {
+            let op = op_arc.read().unwrap();
+            let cv = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !cv.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let mask = crate::address::calc_mask(cv.read().unwrap().get_size());
+            if cv.read().unwrap().get_offset() != mask { return Ok(action_status::NO_CHANGE); } // must be *(-1)
+            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (cv, ao)
+        };
+        if !and_out.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let and_op = match and_out.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        if and_op.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+        let and_const = match and_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !and_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        let mask = crate::address::calc_mask(and_const.read().unwrap().get_size());
+        let npow = (!and_const.read().unwrap().get_offset().wrapping_add(1)) & mask;
+        if npow.count_ones() != 1 { return Ok(action_status::NO_CHANGE); } // must be power of 2
+        if npow == 1 { return Ok(action_status::NO_CHANGE); }
+
+        let adj_vn = match and_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !adj_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let adj_op = match adj_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        let adj_opc = adj_op.read().unwrap().opcode;
+
+        // Only checkSignExtForm path (INT_ADD). MULTIEQUAL path deferred.
+        let base = if adj_opc == OpCode::CPUI_INT_ADD {
+            if npow != 2 { return Ok(action_status::NO_CHANGE); } // Special mod 2 form
+            match Self::check_sign_ext_form(&adj_op) {
+                Some(b) => b,
+                None => return Ok(action_status::NO_CHANGE),
+            }
+        } else {
+            // MULTIEQUAL path (checkMultiequalForm) requires block-structure
+            // access (getParent/getIn/getTrueOut). Deferred.
+            return Ok(action_status::NO_CHANGE);
+        };
+
+        if base.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+
+        // Look for INT_ADD(multOut, base) among descendants
+        let mult_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = mult_out.read().unwrap().descend_iter().collect();
+        for root_op_arc in descendents {
+            if root_op_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+            let slot = {
+                let r = root_op_arc.read().unwrap();
+                let mut found = -1i32;
+                for i in 0..r.inrefs.len() {
+                    if let Some(v) = r.inrefs.get(i) {
+                        if std::sync::Arc::ptr_eq(v, &mult_out) { found = i as i32; break; }
+                    }
+                }
+                if found < 0 { continue; }
+                let other = r.inrefs.get((1 - found) as usize).cloned();
+                match other {
+                    Some(v) if std::sync::Arc::ptr_eq(&v, &base) => found,
+                    _ => continue,
+                }
+            };
+            let base_size = base.read().unwrap().get_size();
+            let root_ref = crate::op::PcodeOpRef(root_op_arc.clone());
+            if slot == 0 {
+                fd.op_set_input(&root_ref, base.clone(), 0);
+            }
+            let npow_const = fd.new_constant(base_size, npow);
+            fd.op_set_input(&root_ref, npow_const, 1);
+            fd.op_set_opcode(&root_ref, OpCode::CPUI_INT_SREM);
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sign_mod2n_opt2" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
+}
+
 /// Simplify optimized division expressions. Faithful to `RuleDivTermAdd`
 /// (ruleaction.cc:7832-7915). Transforms:
 ///   `sub(ext(V)*c, b) >> d + V => sub((ext(V)*(c+2^n)) >> n, 0)`
