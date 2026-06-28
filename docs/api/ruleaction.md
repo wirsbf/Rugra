@@ -787,3 +787,10 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - 指针守卫：若任一输入是指针类型则跳过（防止指针算术被误匹配）。
 - 触发于 CPUI_INT_DIV/CPUI_INT_SDIV。注册进 oppool1（5602）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 4）：RuleDivTermAdd（ruleaction.cc:7832 + findSubshift 7928）
+- `RuleDivTermAdd` — 简化优化的除法表达式：`sub(ext(V)*c,b)>>d + V => sub((ext(V)*(c+2^n))>>n, 0)`，其中 n=d+b*8。
+- 使用 Rust 原生 `u128` 替代 Ghidra 的 128 位多精度算术（set_u128/leftshift128/add128）。`is_constant_extended` 已存在（varnode.rs），`new_extended_constant` 新增到 funcdata.rs（funcdata_varnode.cc:462 忠实移植）。
+- 辅助函数 `find_subshift` 对应 Ghidra `findSubshift`（ruleaction.cc:7928-7953）。
+- 触发于 CPUI_SUBPIECE/INT_RIGHT/INT_SRIGHT。注册进 oppool1（5594）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

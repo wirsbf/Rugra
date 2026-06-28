@@ -240,6 +240,37 @@ impl Funcdata {
         self.vbank.create_constant(s, val)
     }
 
+    /// Create a new (possibly extended) constant Varnode of size `s` from a
+    /// 128-bit value `(lo, hi)`. Faithful to `Funcdata::newExtendedConstant`
+    /// (funcdata_varnode.cc:462-484). For s≤8, creates a plain constant.
+    /// For s>8 with hi==0, creates INT_ZEXT(const). For s>8 with hi!=0,
+    /// creates PIECE(hi_const, lo_const).
+    pub fn new_extended_constant(&mut self, s: usize, lo: u64, hi: u64, before_op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        if s <= 8 {
+            return self.new_constant(s, lo);
+        }
+        let addr = before_op.0.read().unwrap().get_addr();
+        if hi == 0 {
+            let ext_op = self.new_op(1, addr);
+            self.op_set_opcode(&ext_op, crate::opcodes::OpCode::CPUI_INT_ZEXT);
+            let out = self.new_unique_out(s, &ext_op);
+            let lo_const = self.new_constant(8, lo);
+            self.op_set_input(&ext_op, lo_const, 0);
+            self.op_insert_before(&ext_op, before_op);
+            out
+        } else {
+            let piece_op = self.new_op(2, addr);
+            self.op_set_opcode(&piece_op, crate::opcodes::OpCode::CPUI_PIECE);
+            let out = self.new_unique_out(s, &piece_op);
+            let hi_const = self.new_constant(8, hi);
+            let lo_const = self.new_constant(8, lo);
+            self.op_set_input(&piece_op, hi_const, 0);
+            self.op_set_input(&piece_op, lo_const, 1);
+            self.op_insert_before(&piece_op, before_op);
+            out
+        }
+    }
+
     /// Create a new temporary Varnode (no defining op). Faithful to
     /// `Funcdata::newUnique` (funcdata.hh:288).
     pub fn new_unique(&mut self, s: usize) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {

@@ -276,7 +276,8 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleNegateIdentity::new()));     // 5591
     pool.add_rule(Box::new(RuleSubNormal::new()));          // 5592
     pool.add_rule(Box::new(RulePositiveDiv::new()));        // 5593
-    // skip 5594-5595 RuleDivTermAdd/2 — not yet ported
+    pool.add_rule(Box::new(RuleDivTermAdd::new()));    // 5594 — optimized division term add (ruleaction.cc:7832)
+    // skip 5595 RuleDivTermAdd2 — not yet ported
     pool.add_rule(Box::new(RuleDivOpt::new()));             // 5596
     pool.add_rule(Box::new(RuleSignForm::new()));           // 5597
     pool.add_rule(Box::new(RuleSignForm2::new()));          // 5598
