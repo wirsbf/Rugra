@@ -657,3 +657,18 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **修复**：在 goto_cascade 内层循环规则序列中插入 `try_rule_while_do`/`try_rule_do_while`（if_else 之后、goto 之前），对齐 Ghidra 的规则顺序。
 
 **验证**：736/736 测试，curl while=4 goto=0（审计 24/24），httpd while=8 goto=0（审计 29/29），0 回归。当前 while 数不变是因为循环体（多块）未被 cat-chain 折叠成 WhileDo 能识别的单 clause——需移植 Ghidra 完整 collapseInternal 两层 repeat-until-stable 主循环（替换 Rugra 自定义多阶段）。
+
+### 2026-06-28：collapseInternal 移植实验 + while 缺口根因转移（重要分析结论）
+
+**实验**：忠实移植 Ghidra `CollapseStructure::collapseInternal`（blockaction.cc:1768-1851）两层 repeat-until-stable 主循环，替换 Rugra 自定义多阶段（phase1/interleaved/goto_cascade）。同时放宽 try_rule_cat 的类型限制（Ghidra ruleBlockCat 只检查 sizeOut/sizeIn/isSwitchOut，不限制块类型；Rugra 错误地只允许 Basic/Copy）。
+
+**结果**：**退步**。新 collapseInternal 全局只产出 1 个循环（0 whiledo + 1 dowhile），旧自定义阶段产出 8 个循环（4 whiledo + 4 dowhile）。原因：旧实现的 `structure_loops_first()` + `collapse_loops()` 虽不忠实 Ghidra 架构，但实际工作。**已回退保留旧实现**（铁律 8：禁止随意回退已验证工作）。
+
+**关键根因发现**：curl `main` 只检测到 **3 个回边**（全指向 head=5，即 1 个循环），而 Ghidra `main`（684行起）有 **6 个 while**（6 个循环：1 do-while(argc) + 1 while(true) + 4 do-while(cVar1!=0)）。**while 缺口的根因不在 blockaction 结构化层，而在更底层的 CFG 构建层**（funcdata.rs:1427-1473 的基本块划分/边建立）——Rugra 的 main CFG 缺少回边，所以无论结构化多完善都检测不到那些循环。
+
+**下一步方向**（按优先级）：
+1. **CFG 构建层**（funcdata.rs）：对比 Rugra vs Ghidra 在 main 上的基本块数和边，定位缺失的回边。可能是 BRANCH/CBRANCH 目标地址计算错误，或基本块划分边界不对。
+2. **增量改进 blockaction**：在旧自定义阶段基础上，逐个对齐 Ghidra 规则（先放宽 cat 类型限制**配合**修复的 CFG，而非单独），而非整体替换。
+3. cat 类型放宽**单独**无效（已验证），因为即使能吸收 BlockIf，循环体本身在 CFG 里就没回边。
+
+**教训**：忠实移植 Ghidra 架构 ≠ 直接替换。旧实现虽不忠实但有实际功能，替换前必须确保新实现**至少不退步**。应采用增量对齐策略。
