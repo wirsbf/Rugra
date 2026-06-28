@@ -816,3 +816,8 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - 复用 `check_sign_extraction` 辅助函数。支持 SUBPIECE 截断变体。
 - 触发于 CPUI_INT_AND。注册进 oppool1（5605）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 9）：RuleShiftPiece（ruleaction.cc:3791）
+- `RuleShiftPiece` — 检测 `(zext(V) << #sa) | zext(V)` 并转换为 PIECE。也处理 CDQ 特殊情况（INT_SRIGHT 形成高位 → INT_SEXT）。两条路径均为纯数据流，无需块结构。
+- 触发于 CPUI_INT_OR/INT_XOR/INT_ADD。注册进 oppool1（5549）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

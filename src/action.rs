@@ -231,7 +231,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleLeftRight::new()));          // 5546
     pool.add_rule(Box::new(RuleShiftCompare::new()));       // 5547
     pool.add_rule(Box::new(RuleShift2Mult::new()));         // 5548
-    // skip 5549 RuleShiftPiece — not yet ported
+    pool.add_rule(Box::new(RuleShiftPiece::new()));     // 5549 — (zext(V)<<sa)|zext(V) => PIECE (ruleaction.cc:3791)
     pool.add_rule(Box::new(RuleMultiCollapse::new()));      // 5550
     // skip 5551 RuleIndirectCollapse — not yet ported
     pool.add_rule(Box::new(Rule2Comp2Mult::new()));         // 5552

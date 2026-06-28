@@ -7938,6 +7938,151 @@ impl Rule for RuleSignMod2Opt {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
+/// Detect `(zext(V) << #sa) | zext(V)` and convert to PIECE.
+/// Faithful to `RuleShiftPiece` (ruleaction.cc:3791-3870). Also handles
+/// the CDQ special case (INT_SRIGHT forming the high piece → INT_SEXT).
+pub struct RuleShiftPiece;
+
+impl RuleShiftPiece {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleShiftPiece {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleShiftPiece::applyOp (ruleaction.cc:3791-3870).
+        let (vn1_init, vn2_init) = {
+            let op = op_arc.read().unwrap();
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            (vn1, vn2)
+        };
+
+        // One input must be INT_LEFT; the other is "zextloop"
+        let vn1_def = match vn1_init.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        let vn2_def = match vn2_init.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        let (shiftop, zextloop) = if vn1_def.read().unwrap().opcode == OpCode::CPUI_INT_LEFT {
+            (vn1_def.clone(), vn2_def.clone())
+        } else if vn2_def.read().unwrap().opcode == OpCode::CPUI_INT_LEFT {
+            (vn2_def.clone(), vn1_def.clone())
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        };
+
+        // shiftop->getIn(1) must be constant
+        let shift_const_vn = shiftop.read().unwrap().inrefs.get(1).cloned();
+        let sa = match shift_const_vn {
+            Some(cv) => {
+                let cg = cv.read().unwrap();
+                if !cg.is_constant() { return Ok(action_status::NO_CHANGE); }
+                cg.get_offset() as i32
+            }
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // vn1 = shiftop->getIn(0); must be written; zexthiop = its def
+        let vn1 = match shiftop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let zexthiop = match vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+        };
+        let zexthiopc = zexthiop.read().unwrap().opcode;
+        if zexthiopc != OpCode::CPUI_INT_ZEXT && zexthiopc != OpCode::CPUI_INT_SEXT {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // vn1 = zexthiop->getIn(0) — the value being extended
+        let vn1_inner = match zexthiop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        // Constant check: if constant and size < 8, skip (let it collapse naturally)
+        if vn1_inner.read().unwrap().is_constant() {
+            if vn1_inner.read().unwrap().get_size() < 8 {
+                return Ok(action_status::NO_CHANGE);
+            }
+        } else if vn1_inner.read().unwrap().is_free() {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let vn1_size = vn1_inner.read().unwrap().get_size();
+        let concatsize = sa + 8 * vn1_size as i32;
+        let out_size = match op_arc.read().unwrap().output.as_ref() {
+            Some(o) => o.read().unwrap().get_size() as i32,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if out_size * 8 < concatsize { return Ok(action_status::NO_CHANGE); }
+
+        // Check zextloop: must be INT_ZEXT (or handle CDQ special case)
+        let zextloop_opc = zextloop.read().unwrap().opcode;
+        if zextloop_opc != OpCode::CPUI_INT_ZEXT {
+            // CDQ special case (ruleaction.cc:3827-3848)
+            if zextloop_opc != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
+            // Look for s<< #c forming the high piece
+            if !vn1_inner.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let rshift_op = match vn1_inner.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            if rshift_op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
+            let rsa_const = match rshift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !rsa_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let vn2_cdq = match rshift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !vn2_cdq.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let subop = match vn2_cdq.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return Ok(action_status::NO_CHANGE),
+            };
+            if subop.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let sub_const = match subop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !sub_const.read().unwrap().is_constant() || sub_const.read().unwrap().get_offset() != 0 { return Ok(action_status::NO_CHANGE); }
+            let big_vn = match zextloop.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sub_in0 = match subop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !std::sync::Arc::ptr_eq(&sub_in0, &big_vn) { return Ok(action_status::NO_CHANGE); }
+            let rsa = rsa_const.read().unwrap().get_offset() as i32;
+            let vn2_cdq_size = vn2_cdq.read().unwrap().get_size() as i32;
+            if rsa != vn2_cdq_size * 8 - 1 { return Ok(action_status::NO_CHANGE); }
+            let big_nzmask = big_vn.read().unwrap().get_nz_mask();
+            if (big_nzmask >> sa) != 0 { return Ok(action_status::NO_CHANGE); }
+            if sa != 8 * vn2_cdq_size { return Ok(action_status::NO_CHANGE); }
+            // Transform: op becomes INT_SEXT(vn2_cdq)
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SEXT);
+            fd.op_set_input(&op_ref, vn2_cdq.clone(), 0);
+            fd.op_remove_input(&op_ref, 1);
+            return Ok(action_status::CHANGE);
+        }
+
+        // Main path: zextloop is INT_ZEXT
+        let vn2 = match zextloop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        if vn2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        if sa != 8 * vn2.read().unwrap().get_size() as i32 { return Ok(action_status::NO_CHANGE); }
+
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        if concatsize == out_size * 8 {
+            // Exact fit: op becomes PIECE(vn1_inner, vn2)
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_PIECE);
+            fd.op_set_input(&op_ref, vn1_inner.clone(), 0);
+            fd.op_set_input(&op_ref, vn2.clone(), 1);
+        } else {
+            // Partial: create new PIECE, op becomes zext/extension of it
+            let newop = fd.new_op(2, op_arc.read().unwrap().get_addr());
+            let newout = fd.new_unique_out((concatsize / 8) as usize, &newop);
+            fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+            fd.op_set_input(&newop, vn1_inner.clone(), 0);
+            fd.op_set_input(&newop, vn2.clone(), 1);
+            fd.op_insert_before(&newop, &op_ref);
+            fd.op_set_opcode(&op_ref, zexthiopc);
+            fd.op_remove_input(&op_ref, 1);
+            fd.op_set_input(&op_ref, newout, 0);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "shift_piece" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD] }
+}
+
 /// Convert INT_MULT and shift forms into INT_DIV or INT_SDIV. Faithful
 /// to Ghidra's `RuleDivOpt` (ruleaction.cc:8010-8355).
 ///
