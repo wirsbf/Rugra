@@ -2374,13 +2374,14 @@ impl<'a> CollapseStructure<'a> {
             if n_in != 1 { break; }
             // outblock->isSwitchOut() → stop
             if n_flags & crate::block::block_flags::CASE_BODY != 0 { break; }
-            // Don't merge structured blocks (BlockIf, BlockCondition, etc.)
-            if n_type != crate::block::BlockType::Basic && n_type != crate::block::BlockType::Copy {
-                break;
-            }
+            // Faithful to Ghidra ruleBlockCat (blockaction.cc:1296-1308): merge
+            // ANY block type (Basic, BlockList, BlockIf, BlockCondition, etc.)
+            // as long as it has sizeIn==1, sizeOut==1, not switch-out. The
+            // earlier restriction to Basic/Copy prevented cat-chaining of
+            // partially-structured loop bodies (e.g. an if-inside-loop that
+            // became BlockIf), which blocked WhileDo formation.
             // Don't consume a loop head — it must remain available for
-            // try_rule_while_do/try_rule_do_while. Ghidra's isDecisionOut guard
-            // achieves this implicitly; we check loop_bodies explicitly.
+            // try_rule_while_do/try_rule_do_while.
             if self.loop_bodies.iter().any(|(h, _)| *h == next_idx) { break; }
             // Extend chain (Ghidra: nodes.push_back(outblock))
             nodes.push(next.clone());
