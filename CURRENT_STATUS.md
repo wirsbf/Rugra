@@ -9,12 +9,19 @@
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **736/736 通过** | 2026-06-28 实跑 |
-| curl gcc 审计 | **24/24** | `python tools/audit_syntax.py result/curl_cur.c` |
-| httpd gcc 审计 | **29/29** | 同上 |
-| curl while 循环 | **4**（3 do-while + 1 while） | `grep -E '\bwhile\s*\(' result/curl_cur.c`（注：旧文档误称 16） |
-| httpd while 循环 | **8** | 同上（旧文档误称 39） |
+| curl gcc 审计 | **22/24**（glob_set 类型错误，CFG 修复暴露） | `python tools/audit_syntax.py result/curl_cur.c` |
+| httpd gcc 审计 | 待重新核实（性能回归，需长超时） | 同上 |
+| **curl while 循环** | **26**（从 4 跃升！接近 Ghidra 34） | CFG 基本块划分修复后 |
 | goto | **0** | 实测 |
 | uVar 碎片 | **0** | 实测 |
+
+### 2026-06-28 重大突破：CFG 基本块划分修复 → curl while 4→26
+
+**根因**：`build_blocks_from_ops`（funcdata.rs）只在 terminator 后分裂块，**不收集跳转目标地址作为分裂点**。导致 CBRANCH 目标落在块中间时无法解析，边被静默丢弃。实测 curl main 56 个 / 全局 182 个 CBRANCH 目标未匹配，丢失大量回边。
+
+**修复**（commit 2bcfcde）：忠实移植 Ghidra 的块划分——在 terminator 后 + **跳转目标地址处**分裂。修复后 curl main 回边 3→8（3 个独立循环头），curl while **4→26**（接近 Ghidra 的 34）。
+
+**已知次要问题**：glob_set 的 `0 - piVar50`（int 减指针）类型错误，由改进的循环结构化暴露。需类型推断（ActionTypePropagate）修复 INT_SUB 指针操作数。
 
 > ⚠️ **历史声明校正**：AGENTS.md 此前声称"curl 16 while / httpd 39 while"，2026-06-28 实跑核实为 curl 4 / httpd 8。审计通过率（24/24、29/29）和 goto=0、uVar=0 属实。
 
