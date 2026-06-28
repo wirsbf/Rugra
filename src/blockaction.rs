@@ -1422,6 +1422,16 @@ impl<'a> CollapseStructure<'a> {
             // Skip if this block's GOTO_EDGE_1 is already set
             if b.get_flags() & crate::block::block_flags::GOTO_EDGE_1 != 0 { continue; }
 
+            // LOOP-BACK PROTECTION: do NOT mark a back edge as goto. A back
+            // edge (F_BACK_EDGE, set by findSpanningTree) defines a loop and
+            // must be preserved for ruleBlockWhileDo/ruleBlockDoWhile to
+            // recognise the loop. Goto-marking it severs the loop, leaving the
+            // body with no exit back to the header (observed: curl main loop
+            // bodies ended up with sizeOut()==0 because their sole back-edge
+            // was turned into a goto). This mirrors Ghidra's TraceDAG, which
+            // skips loop edges when tracing structured paths.
+            if b.is_back_edge_out(1) { continue; }
+
             // Skip if this block IS a switch case body (don't mark goto on case body blocks)
             let my_idx = b.get_index();
             if all_case_bodies.contains(&my_idx) { continue; }

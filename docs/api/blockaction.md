@@ -641,3 +641,11 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 **实测证据**（`RUGRA_LOOP_DEBUG=1`）：main 回边 0→3，my_get_line 1→2，next_url 2→3；curl 全局回边检测 0→19；idom_entries 恢复（main 21→86）。
 
 **剩余**：while 输出数未变（curl 4/httpd 8），因为下游循环结构化（把检测到的循环变成 while/do-while）是独立的下一层。736/736 测试，curl 24/24 + httpd 29/29，0 goto，0 回归。
+
+### 2026-06-28：循环回边保护 — 防止 goto cascade 切断循环（对齐 TraceDAG 跳过 loop edges）
+
+**根因**：`select_and_mark_goto` 无条件把 CBRANCH 的 taken 边（out[1]）标记为 goto，即使该边是循环回边。这切断了循环——循环体失去回到 header 的唯一出口（诊断显示 try_rule_while_do 候选 clause_out==0，body 无出边），导致 ruleBlockWhileDo 永远无法匹配。
+
+**修复**：当 out[1] 携带 `F_BACK_EDGE`（由 findSpanningTree 设置）时跳过 goto 标记。回边定义循环，必须保留给 WhileDo/DoWhile 识别。这镜像 Ghidra 的 TraceDAG——它在追踪结构化路径时跳过 loop edges。
+
+**验证**：736/736 测试，curl while=4 goto=0，httpd while=8 goto=0，curl 24/24 + httpd 29/29 gcc 审计，0 回归。回边保护是正确性改进（忠实 Ghidra）；while 数不变是因为上游的 loop-body collapse 仍留下多块 body，WhileDo 规则的单 clause 要求拒绝它们——这是下一层结构化工作。
