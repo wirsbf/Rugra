@@ -14,6 +14,10 @@ use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer
 
 /// Run conservative type propagation. Marks varnodes that are struct pointers.
 pub fn propagate_types(fd: &mut Funcdata) {
+    // Always run LOAD output type inference first (Phase 5) — it's independent
+    // of the struct pointer detection below.
+    propagate_load_output_types(fd);
+
     // Phase 1: Collect base_var → set of offsets used in *(base + offset) patterns
     // Pattern: LOAD/STORE addr = INT_ADD(base, const) where const < 256 and const % 8 == 0
     let mut base_offsets: HashMap<(AddressSpace, u64), HashSet<u64>> = HashMap::new();
@@ -58,7 +62,12 @@ pub fn propagate_types(fd: &mut Funcdata) {
         .map(|(key, _)| *key)
         .collect();
 
-    if struct_ptr_keys.is_empty() { return; }
+    if struct_ptr_keys.is_empty() {
+        // Even without struct pointers, run LOAD output type inference
+        // (Phase 5) — it propagates element types from pointer addresses.
+        propagate_load_output_types(fd);
+        return;
+    }
 
     // Phase 3: Propagate through COPY chains (Unique → Register)
     let mut all_keys: HashSet<(AddressSpace, u64)> = struct_ptr_keys.iter().cloned().collect();
@@ -101,6 +110,95 @@ pub fn propagate_types(fd: &mut Funcdata) {
         if all_keys.contains(&key) {
             drop(vn);
             vn_ref.0.write().unwrap().v_type = Some(ptr_type.clone());
+        }
+    }
+
+    // Phase 5: LOAD output type inference (faithful to Ghidra propagateFromPointer,
+    // typeop.cc:206). When a LOAD's address input is a pointer to T, the output
+    // should be T (the element type), NOT a pointer. This fixes the root cause of
+    // piVar92 = *(int*)piVar91 being typed as pointer — it should be int.
+    //
+    // Ghidra's algorithm: if addr vn's type is Pointer(ptr_to=T), and T's size
+    // matches the LOAD output size, set LOAD output type to T.
+    propagate_load_output_types(fd);
+}
+
+/// Propagate LOAD output types from pointer inputs.
+/// Faithful to Ghidra's TypeOp::propagateFromPointer (typeop.cc:206).
+fn propagate_load_output_types(fd: &mut Funcdata) {
+    // Collect (op_ref, ptr_to_type, out_size) for LOADs whose address is a pointer.
+    let mut load_fixups: Vec<(crate::op::PcodeOpRef, Arc<Datatype>)> = Vec::new();
+
+    for blk_i in 0..fd.bblocks.get_size() {
+        let block_arc = match fd.bblocks.get_block(blk_i) { Some(b) => b, None => continue };
+        let block = block_arc.read().unwrap();
+        for op_ref in block.get_ops() {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != OpCode::CPUI_LOAD || op.inrefs.len() < 2 { continue; }
+            // LOAD input[1] is the address varnode.
+            let addr_vn = op.inrefs[1].read().unwrap();
+            // Check if addr varnode has a pointer type.
+            if let Some(ref vt) = addr_vn.v_type {
+                if let Datatype::Pointer(pt) = &**vt {
+                    // ptr_to is the element type. Check size match with output.
+                    if let Some(ref out_arc) = op.output {
+                        let out_size = out_arc.read().unwrap().get_size();
+                        if pt.ptr_to.get_size() == out_size {
+                            // Output should be the element type, not pointer.
+                            load_fixups.push((op_ref.clone(), pt.ptr_to.clone()));
+                        }
+                    }
+                }
+            }
+            // Also check high-level type via def chain (COPY/ZEXT from pointer).
+            if load_fixups.iter().all(|(r, _)| !Arc::ptr_eq(&r.0, &op_ref.0)) {
+                if let Some(ref def_arc) = addr_vn.def.as_ref().and_then(|d| d.upgrade()) {
+                    let def_op = def_arc.read().unwrap();
+                    // Chase through COPY to find the original pointer type.
+                    if def_op.opcode == OpCode::CPUI_COPY && def_op.inrefs.len() >= 1 {
+                        let src_vn = def_op.inrefs[0].read().unwrap();
+                        if let Some(ref vt) = src_vn.v_type {
+                            if let Datatype::Pointer(pt) = &**vt {
+                                if let Some(ref out_arc) = op.output {
+                                    let out_size = out_arc.read().unwrap().get_size();
+                                    if pt.ptr_to.get_size() == out_size {
+                                        load_fixups.push((op_ref.clone(), pt.ptr_to.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply: set LOAD output varnode type to the element type.
+    for (op_ref, elem_type) in load_fixups {
+        let out_arc = {
+            let op = op_ref.0.read().unwrap();
+            op.output.clone()
+        };
+        if let Some(out_arc) = out_arc {
+            let should_update = {
+                let out_vn = out_arc.read().unwrap();
+                match &out_vn.v_type {
+                    None => true,
+                    Some(ref cur) => {
+                        matches!(&**cur, Datatype::Pointer(_))
+                            || cur.get_metatype() == TypeMetatype::Unknown
+                    }
+                }
+            };
+            if should_update {
+                let mut out_vn = out_arc.write().unwrap();
+                out_vn.v_type = Some(elem_type.clone());
+                // Also update the high-level variable's type so printc's
+                // find_typed_instance sees the element type, not a stale pointer.
+                if let Some(ref high_arc) = out_vn.high {
+                    high_arc.write().unwrap().v_type = elem_type;
+                }
+            }
         }
     }
 }
