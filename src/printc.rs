@@ -3071,6 +3071,18 @@ impl PrintLanguage for PrintC {
                 }
             }
         }
+        // Also discover symbols in unreachable subgraphs (mirrors Pass 2's 2c).
+        // Without this, globals referenced only in unreachable blocks (e.g.
+        // glob_buffer in glob_set's strdup call after a return) won't be
+        // collected in Pass 1, so their extern declarations are missing.
+        for i in 0..graph.get_size() {
+            if let Some(block_arc) = graph.get_block(i) {
+                let block_idx = block_arc.read().unwrap().get_index();
+                if !discovery_emitted.contains(&block_idx) {
+                    self.emit_block_structured(&block_arc, graph, &mut discovery_emitted);
+                }
+            }
+        }
         
         self.emit = old_emit;
         self.discovery_pass = false;
