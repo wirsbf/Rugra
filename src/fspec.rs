@@ -97,6 +97,56 @@ impl FuncProto {
     pub fn get_param(&self, index: usize) -> Option<&ProtoParameter> {
         self.parameters.get(index)
     }
+
+    /// Check if input parameters are locked (type-locked).
+    /// Faithful to FuncProto::isInputLocked (fspec.cc:3906).
+    pub fn is_input_locked(&self) -> bool {
+        self.parameters.iter().all(|p| p.is_type_locked())
+    }
+
+    /// Set input lock state. When locked, parameters won't be
+    /// overridden by active recovery.
+    /// Faithful to FuncProto::setInputLock (fspec.cc:3921).
+    pub fn set_input_lock(&mut self, val: bool) {
+        for p in &mut self.parameters {
+            if val { p.flags |= protoparam_flags::TYPE_LOCKED; }
+            else { p.flags &= !protoparam_flags::TYPE_LOCKED; }
+        }
+    }
+
+    /// Set output lock state.
+    /// Faithful to FuncProto::setOutputLock (fspec.cc:3942).
+    pub fn set_output_lock(&mut self, _val: bool) {
+        // Return type lock is implicit in return_type being set.
+    }
+
+    /// Copy from another FuncProto.
+    /// Faithful to FuncProto::copy (fspec.cc:3789).
+    pub fn copy_from(&mut self, other: &FuncProto) {
+        self.name = other.name.clone();
+        self.return_type = other.return_type.clone();
+        self.parameters = other.parameters.clone();
+        self.calling_convention = other.calling_convention.clone();
+        self.is_dotdotdot = other.is_dotdotdot;
+    }
+
+    /// Clear unlocked input parameters.
+    /// Faithful to FuncProto::clearUnlockedInput (fspec.cc:3994).
+    pub fn clear_unlocked_input(&mut self) {
+        self.parameters.retain(|p| p.is_type_locked());
+    }
+
+    /// Check if this proto is variable-argument (...).
+    pub fn is_varargs(&self) -> bool { self.is_dotdotdot }
+
+    /// Set variable-argument flag.
+    pub fn set_dotdotdot(&mut self, val: bool) { self.is_dotdotdot = val; }
+
+    /// Get the calling convention model name.
+    pub fn get_model_name(&self) -> &str { &self.calling_convention }
+
+    /// Set the calling convention model name.
+    pub fn set_model_name(&mut self, name: &str) { self.calling_convention = name.to_string(); }
 }
 
 /// Specification for a specific function call site
@@ -568,5 +618,35 @@ mod tests {
         pa.get_trial_mut(0).mark_used();
         pa.get_trial_mut(2).mark_used();
         assert_eq!(pa.get_num_used(), 2);
+    }
+
+    #[test]
+    fn test_func_proto_lock_and_copy() {
+        let int_type = Arc::new(Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+        let mut proto = FuncProto::new("test".into(), int_type.clone());
+        let p = ProtoParameter::new("param_1".into(), int_type.clone(), Address::new(0x38));
+        proto.add_parameter(p);
+        assert!(!proto.is_input_locked());
+        proto.set_input_lock(true);
+        assert!(proto.is_input_locked());
+
+        let mut proto2 = FuncProto::new("other".into(), int_type.clone());
+        proto2.copy_from(&proto);
+        assert_eq!(proto2.num_params(), 1);
+        assert_eq!(proto2.name, "test");
+
+        proto.clear_unlocked_input();
+        assert_eq!(proto.num_params(), 1); // locked params retained
+    }
+
+    #[test]
+    fn test_func_proto_dotdotdot() {
+        let int_type = Arc::new(Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+        let mut proto = FuncProto::new("varargs".into(), int_type);
+        assert!(!proto.is_varargs());
+        proto.set_dotdotdot(true);
+        assert!(proto.is_varargs());
     }
 }

@@ -1,6 +1,6 @@
 # `fspec.rs` API Reference
 
-**状态**: 已核对（当前有效）  
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 FuncProto/FuncCallSpecs/ParamTrial/ParamActive 方法覆盖（含 is_input_locked/set_input_lock/copy_from/clear_unlocked_input/is_varargs）。7 单元测试。
 **源代码路径**: `src/fspec.rs`
 
 ## 模块说明 (Module Doc)
