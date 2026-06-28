@@ -296,7 +296,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleFloatRange::new()));         // 5613
     pool.add_rule(Box::new(RulePiece2Zext::new()));         // 5614
     pool.add_rule(Box::new(RulePiece2Sext::new()));         // 5615
-    // skip 5616 RulePopcountBoolXor — not yet ported
+    pool.add_rule(Box::new(RulePopcountBoolXor::new())); // 5616 — popcount parity to XOR (ruleaction.cc:10265)
     pool.add_rule(Box::new(RuleXorSwap::new()));            // 5617
     pool.add_rule(Box::new(RuleLzcountShiftBool::new()));   // 5618
     pool.add_rule(Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)

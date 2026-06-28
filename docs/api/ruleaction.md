@@ -776,3 +776,8 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - `RuleSLess2Zero` — 简化 INT_SLESS 与 0/-1 的比较。形式包括：`-1 s< SUB(V,hi) => -1 s< V`、`~V s< 0 => -1 s< V`、`-1 s< CONCAT(V,W) => -1 s< V` 等。辅助函数 `get_hi_bit` 对应 Ghidra `getHiBit`（ruleaction.cc:5659-5682）。
 - 触发于 CPUI_INT_SLESS。注册进 oppool1（5558）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 2）：RulePopcountBoolXor（ruleaction.cc:10265 + getBooleanResult 10335）
+- `RulePopcountBoolXor` — 简化通过 POPCOUNT 组合的布尔表达式：`popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`。辅助函数 `get_boolean_result` 对应 Ghidra `getBooleanResult`（ruleaction.cc:10335-10419），追踪 INT_AND/XOR/OR/ZEXT/SEXT/LEFT 链提取布尔源。
+- 触发于 CPUI_POPCOUNT。注册进 oppool1（5616）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

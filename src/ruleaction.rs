@@ -5773,6 +5773,158 @@ impl Rule for RuleSLess2Zero {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS] }
 }
 
+/// Simplify boolean expressions combined through POPCOUNT. Faithful to
+/// `RulePopcountBoolXor` (ruleaction.cc:10265-10321). Transforms:
+///   `popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`
+pub struct RulePopcountBoolXor;
+
+impl RulePopcountBoolXor {
+    pub fn new() -> Self { Self }
+
+    /// Extract the boolean varnode producing a bit at the given position.
+    /// Faithful to `getBooleanResult` (ruleaction.cc:10335-10419).
+    /// Returns (Some(vn), const_res) if found, or (None, const_res) where
+    /// const_res is -1 (not found), 0, or 1 (constant result).
+    fn get_boolean_result(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        mut bit_pos: i32,
+    ) -> (Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>, i32) {
+        let mut mask: u64 = 1u64 << bit_pos;
+        let mut cur_vn = vn.clone();
+        loop {
+            let vg = cur_vn.read().unwrap();
+            if vg.is_constant() {
+                return (None, ((vg.get_offset() >> bit_pos) & 1) as i32);
+            }
+            if !vg.is_written() { return (None, -1); }
+            if bit_pos == 0 && vg.get_size() == 1 && vg.get_nz_mask() == mask {
+                return (Some(cur_vn.clone()), -1);
+            }
+            let def_arc = match vg.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a, None => return (None, -1),
+            };
+            let def_opc = def_arc.read().unwrap().opcode;
+            drop(vg);
+            match def_opc {
+                OpCode::CPUI_INT_AND => {
+                    let in1 = def_arc.read().unwrap().inrefs.get(1).cloned();
+                    match in1 {
+                        Some(v) if v.read().unwrap().is_constant() => {
+                            cur_vn = def_arc.read().unwrap().inrefs.get(0).cloned().unwrap();
+                        }
+                        _ => return (None, -1),
+                    }
+                }
+                OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                    let vn0 = def_arc.read().unwrap().inrefs.get(0).cloned();
+                    let vn1 = def_arc.read().unwrap().inrefs.get(1).cloned();
+                    match (vn0, vn1) {
+                        (Some(v0), Some(v1)) => {
+                            let nz0 = v0.read().unwrap().get_nz_mask();
+                            let nz1 = v1.read().unwrap().get_nz_mask();
+                            if (nz0 & mask) != 0 {
+                                if (nz1 & mask) != 0 { return (None, -1); }
+                                cur_vn = v0;
+                            } else if (nz1 & mask) != 0 {
+                                cur_vn = v1;
+                            } else { return (None, -1); }
+                        }
+                        _ => return (None, -1),
+                    }
+                }
+                OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
+                    let new_vn = def_arc.read().unwrap().inrefs.get(0).cloned();
+                    match new_vn {
+                        Some(v) => {
+                            let new_size = v.read().unwrap().get_size();
+                            if bit_pos >= new_size as i32 * 8 { return (None, -1); }
+                            cur_vn = v;
+                        }
+                        None => return (None, -1),
+                    }
+                }
+                OpCode::CPUI_INT_LEFT => {
+                    let vn1 = def_arc.read().unwrap().inrefs.get(1).cloned();
+                    match vn1 {
+                        Some(v) if v.read().unwrap().is_constant() => {
+                            let sa = v.read().unwrap().get_offset() as i32;
+                            if sa > bit_pos { return (None, -1); }
+                            bit_pos -= sa;
+                            mask >>= sa;
+                            cur_vn = def_arc.read().unwrap().inrefs.get(0).cloned().unwrap();
+                        }
+                        _ => return (None, -1),
+                    }
+                }
+                _ => return (None, -1),
+            }
+        }
+    }
+}
+
+impl Rule for RulePopcountBoolXor {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePopcountBoolXor::applyOp (ruleaction.cc:10276-10321).
+        // Find INT_AND(&1) descendants of the POPCOUNT output.
+        let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+            let op = op_arc.read().unwrap();
+            match op.output.as_ref() {
+                Some(out) => out.read().unwrap().descend_iter().collect(),
+                None => Vec::new(),
+            }
+        };
+        let in_vn = {
+            let op = op_arc.read().unwrap();
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        for base_op in descendents {
+            let base = base_op.read().unwrap();
+            if base.opcode != OpCode::CPUI_INT_AND { continue; }
+            let tmp_vn = match base.inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            let tmp = tmp_vn.read().unwrap();
+            if !tmp.is_constant() { continue; }
+            if tmp.get_offset() != 1 { continue; } // Masking 1 bit = parity check
+            if tmp.get_size() != 1 { continue; }   // Must be boolean-sized output
+            drop(tmp); drop(base);
+
+            if !in_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let nzmask = in_vn.read().unwrap().get_nz_mask();
+            let count = nzmask.count_ones() as i32;
+            if count == 1 {
+                let least_pos = crate::address::leastsigbit_set(nzmask);
+                let (b1_opt, _const_res) = Self::get_boolean_result(&in_vn, least_pos);
+                if let Some(b1) = b1_opt {
+                    let base_ref = crate::op::PcodeOpRef(base_op.clone());
+                    fd.op_set_opcode(&base_ref, OpCode::CPUI_COPY);
+                    fd.op_remove_input(&base_ref, 1);
+                    fd.op_set_input(&base_ref, b1, 0);
+                    return Ok(action_status::CHANGE);
+                }
+            }
+            if count == 2 {
+                let pos0 = crate::address::leastsigbit_set(nzmask);
+                let pos1 = crate::address::mostsigbit_set(nzmask);
+                let (b1_opt, const_res0) = Self::get_boolean_result(&in_vn, pos0);
+                if b1_opt.is_none() && const_res0 != 1 { continue; }
+                let (b2_opt, const_res1) = Self::get_boolean_result(&in_vn, pos1);
+                if b2_opt.is_none() && const_res1 != 1 { continue; }
+                if b1_opt.is_none() && b2_opt.is_none() { continue; }
+                let b1 = b1_opt.unwrap_or_else(|| fd.new_constant(1, 1));
+                let b2 = b2_opt.unwrap_or_else(|| fd.new_constant(1, 1));
+                let base_ref = crate::op::PcodeOpRef(base_op.clone());
+                fd.op_set_opcode(&base_ref, OpCode::CPUI_INT_XOR);
+                fd.op_set_input(&base_ref, b1, 0);
+                fd.op_set_input(&base_ref, b2, 1);
+                return Ok(action_status::CHANGE);
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "popcount_bool_xor" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_POPCOUNT] }
+}
+
 /// Also handles `0 == V + c => V == -c` (constant offset). Applies to
 /// INT_NOTEQUAL as well. The sum must only be used in boolean comparisons.
 pub struct RuleEqual2Zero;
