@@ -82,12 +82,12 @@ P-code IR 是整个反编译器的基石。上层绕过 = 在地基缺口上盖�
 
 | 级别 | 含义 | 数量 |
 |---|---|---|
-| ✅ L3 | 已完整实现并对齐验证 | 23 |
-| 🔧 L2 | 部分实现，关键功能缺失 | 32 |
+| ✅ L3 | 已完整实现 + **接入主管线** + 对齐验证 | 14 |
+| 🔧 L2 | 代码完整但未接入 / 部分实现 | 38 |
 | 📋 L1 | 完全缺失，需从零实现 | 6 |
 | ⚪ 无标记 | 表格行未标状态（需补） | 4 |
 
-（2026-06-28 核实：逐行统计 `ALIGNMENT_ROADMAP.md` 编号表格行。总数 65 个核心模块。）
+（2026-06-29 接入审计：核实 Ghidra `coreaction.cc` 后发现 9 个"L3"模块代码完整但从未被主管线调用。1 个（constseq）已接入；4 个经核实 Ghidra 设计上不属于 universalAction（callgraph/unify/float_emulate/grammar）；4 个被 Sleigh 基础设施/缺失 Rule 包装器阻塞（userop/pcodeinject/pcodeparse/subflow）。L3 现明确要求"实际接入主管线"。详见 `ALIGNMENT_ROADMAP.md`。）
 
 状态变更必须当场更新路线图。
 
