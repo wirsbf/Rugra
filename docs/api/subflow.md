@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/subflow.rs`
 **Ghidra 对应**: `subflow.hh` / `subflow.cc` (4589行)
-**状态**: 📋 L1→🔧 L2（ReplaceVarnode/ReplaceOp/PatchRecord/SubvariableFlow 骨架已实现）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——SubvariableFlow 核心方法覆盖（含 do_trace/do_replacement/trace_forward/backward）。11 单元测试。
 
 ## 模块说明
 

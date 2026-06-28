@@ -724,4 +724,24 @@ mod tests {
         // No ops reference the seed → not worthwhile.
         assert!(!sf.do_trace(&fd, vn, 0xff));
     }
+
+    #[test]
+    fn test_check_mask_valid() {
+        // 0xFF with 8 flow bits is valid
+        assert!(SubvariableFlow::check_mask(0xff, 8));
+        // 0x0 is not valid (no bits)
+        assert!(!SubvariableFlow::check_mask(0, 8));
+    }
+
+    #[test]
+    fn test_replace_varnode_lookup() {
+        let mut sf = SubvariableFlow::new(1, false, false);
+        let vn = Arc::new(RwLock::new(Varnode::new_register(0x10, 4)));
+        sf.set_replacement(vn.clone(), 0xff);
+        assert!(sf.has_replacement(&vn));
+        assert!(sf.get_replacement_index(&vn).is_some());
+        let other = Arc::new(RwLock::new(Varnode::new_register(0x20, 4)));
+        assert!(!sf.has_replacement(&other));
+        assert!(sf.get_replacement_index(&other).is_none());
+    }
 }
