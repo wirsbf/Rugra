@@ -307,6 +307,61 @@ impl Datatype {
         }
         self.type_order(other)
     }
+
+    /// Compare two datatypes for structural equality.
+    /// Faithful to Datatype::compare (type.cc:212).
+    pub fn compare(&self, other: &Datatype) -> i32 {
+        let self_meta = self.get_metatype() as i32;
+        let other_meta = other.get_metatype() as i32;
+        if self_meta != other_meta { return self_meta - other_meta; }
+        let self_size = self.get_size() as i32;
+        let other_size = other.get_size() as i32;
+        if self_size != other_size { return self_size - other_size; }
+        match self.get_name().cmp(other.get_name()) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Greater => 1,
+            std::cmp::Ordering::Equal => 0,
+        }
+    }
+
+    /// Compare datatypes by dependency order.
+    /// Faithful to Datatype::compareDependency (type.cc:227).
+    pub fn compare_dependency(&self, other: &Datatype) -> i32 {
+        self.compare(other)
+    }
+
+    /// Get the "stripped" version (removes typedef wrappers).
+    /// Faithful to Datatype::getStripped (type.cc:561).
+    pub fn get_stripped(&self) -> &Datatype { self }
+
+    /// Check if this type occupies a whole primitive value.
+    /// Faithful to Datatype::isPrimitiveWhole (type.cc:501).
+    pub fn is_primitive_whole(&self) -> bool {
+        matches!(self.get_metatype(),
+            TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool
+            | TypeMetatype::Float)
+    }
+
+    /// Print a raw representation for debugging.
+    /// Faithful to Datatype::printRaw (type.cc:139).
+    pub fn print_raw(&self) -> String {
+        match self {
+            Datatype::Void(_) => "void".into(),
+            Datatype::Base(b) => b.name.clone(),
+            Datatype::Pointer(p) => format!("{} *", p.ptr_to.print_raw()),
+            Datatype::Array(a) => format!("{}[{}]", a.array_of.print_raw(), a.num_elements),
+            Datatype::Struct(s) => {
+                let fields: Vec<String> = s.fields.iter()
+                    .map(|f| format!("{}+{}:{}", f.name, f.offset, f.type_ptr.print_raw()))
+                    .collect();
+                format!("struct{{{}}}", fields.join(","))
+            }
+            Datatype::Enum(e) => format!("enum {}", e.base.name),
+            Datatype::Union(u) => format!("union {}", u.base.name),
+            Datatype::Code(c) => format!("code {}", c.base.name),
+            Datatype::Spacebase(s) => format!("spacebase {}", s.base.name),
+        }
+    }
 }
 
 /// Round `sz` up to a multiple of `align`. Corresponds to Ghidra's

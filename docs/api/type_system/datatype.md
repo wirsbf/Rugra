@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
-**状态**: 🔧 L2 → 完整对齐中（2026-06-26 新增 alignment/subtype/order 原语）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 Datatype 方法覆盖（含 compare/compare_dependency/get_stripped/is_primitive_whole/print_raw）。9 单元测试。
 
 ## 模块说明
 
