@@ -60,10 +60,61 @@ pub trait Emit {
 ///   <sep><int-literal> - <pointer-prefix>Var...
 /// where <sep> is space/=/(/, and <pointer-prefix> is pi/pc/ps/pp/pv. This is
 /// a print-layer stopgap for missing type propagation (ActionTypePropagate).
+/// Reconcile illegal pointer arithmetic: `ptrvar / int` and `ptrvar % int`.
+/// C forbids pointer division/modulo (only +, -, and comparisons are legal
+/// on pointers). This casts the pointer operand to (long). Triggered by
+/// LOAD results wrongly typed as pointers (e.g. `*(int*)addr` typed as ptr).
+fn reconcile_pointer_arith(line: &str) -> String {
+    let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
+    // Find "<ptrvar> / <int>" or "<ptrvar> % <int>".
+    for op in ["/ ", "% "] {
+        let mut search_from = 0;
+        loop {
+            // Find " <op>" patterns.
+            let needle = format!(" {}{}", op.trim_end(), " ");
+            if let Some(rel) = line[search_from..].find(&needle) {
+                let op_pos = search_from + rel;
+                // The pointer var precedes the operator. Scan backwards.
+                let bytes = line.as_bytes();
+                let mut var_end = op_pos;
+                while var_end > 0 && bytes[var_end - 1] == b' ' { var_end -= 1; }
+                let mut var_start = var_end;
+                while var_end - var_start < 20 && var_start > 0
+                    && (bytes[var_start - 1].is_ascii_alphanumeric() || bytes[var_start - 1] == b'_') {
+                    var_start -= 1;
+                }
+                let var_name = &line[var_start..var_end];
+                let is_ptr = ptr_prefixes.iter().any(|p| var_name.starts_with(p));
+                // Verify the operand after the operator is an integer.
+                let after_op = op_pos + needle.len();
+                let rest = &line[after_op..];
+                let int_len = rest.bytes().take_while(|b| b.is_ascii_digit() || *b == b'x'
+                    || (*b >= b'a' && *b <= b'f') || *b == b' ').count();
+                let int_part = rest[..int_len].trim();
+                let is_int = !int_part.is_empty()
+                    && (int_part.chars().all(|c| c.is_ascii_digit())
+                        || (int_part.starts_with("0x") && int_part.len() > 2
+                            && int_part[2..].chars().all(|c| c.is_ascii_hexdigit())));
+                if is_ptr && is_int {
+                    // Check var_start is preceded by a separator (standalone operand).
+                    let sep_ok = var_start == 0 || matches!(bytes[var_start - 1],
+                        b' ' | b'=' | b'(' | b',' | b'\t');
+                    if sep_ok {
+                        // Insert (long) before var_name.
+                        let new_line = format!("{}(long){}{}", &line[..var_start], var_name, &line[var_end..]);
+                        return reconcile_pointer_arith(&new_line); // recurse for more
+                    }
+                }
+                search_from = op_pos + needle.len();
+            } else {
+                break;
+            }
+        }
+    }
+    line.to_string()
+}
+
 fn reconcile_int_minus_pointer(line: &str) -> String {
-    // C forbids `int - pointer`. Find "<int> - <ptrVar>" patterns and cast
-    // the int to (char *). Uses a forward-only scan with no index backtracking
-    // to avoid infinite loops.
     let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
     let bytes = line.as_bytes();
     let n = bytes.len();
@@ -573,6 +624,11 @@ impl EmitNoMarkup {
             // (This is a print-layer stopgap; the real fix is type propagation
             // making the output varnode pointer-typed.)
             s = reconcile_int_minus_pointer(&s);
+            // Also reconcile `ptrvar / int` and `ptrvar % int` — C forbids
+            // pointer division/modulo. Cast the pointer to (long) so the
+            // arithmetic is valid. (LOAD results wrongly typed as pointers
+            // hit this — piVar92 = *(int*)piVar91 is really an int.)
+            s = reconcile_pointer_arith(&s);
 
             // 2. Constant folding: collapse repeated "+ 1" chains
             // Match: expr + 1 + 1 + 1 ... → expr + N

@@ -52,6 +52,10 @@ post_process 第七 pass 调用。C 禁止 `int - pointer`（只允许 `pointer 
 
 **实现**：前向扫描（`find(" - ")` 跳跃式），整数操作数回读（只读安全），i 只前进不回退。早期版本有 `i = num_end` 回退 bug 导致死循环（glob_set 等 7 函数超时），已修复为 forward-only。
 
+### `fn reconcile_pointer_arith(line: &str) -> String` （2026-06-28）
+
+post_process 第七 pass 调用（在 reconcile_int_minus_pointer 之后）。C 禁止 `pointer / int` 和 `pointer % int`（指针只支持 +、-、比较）。当行匹配 `<指针前缀>Var / <int>` 或 `<指针前缀>Var % <int>` 时，把指针 cast 成 `(long)`。触发于 LOAD 结果被错误标记为指针的情况（如 `piVar92 = *(int*)piVar91` 实为 int）。前向扫描 + 递归处理多处出现。
+
 ### `pub struct NullEmit`
 
 Emitter that discards all output (used for discovery pass)
