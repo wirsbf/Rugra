@@ -82,9 +82,12 @@ P-code IR 是整个反编译器的基石。上层绕过 = 在地基缺口上盖�
 
 | 级别 | 含义 | 数量 |
 |---|---|---|
-| ✅ L3 | 已完整实现并对齐验证 | 26 |
-| 🔧 L2 | 部分实现，关键功能缺失 | 18 |
-| 📋 L1 | 完全缺失，需从零实现 | 22+ |
+| ✅ L3 | 已完整实现并对齐验证 | 23 |
+| 🔧 L2 | 部分实现，关键功能缺失 | 32 |
+| 📋 L1 | 完全缺失，需从零实现 | 6 |
+| ⚪ 无标记 | 表格行未标状态（需补） | 4 |
+
+（2026-06-28 核实：逐行统计 `ALIGNMENT_ROADMAP.md` 编号表格行。总数 65 个核心模块。）
 
 状态变更必须当场更新路线图。
 
@@ -104,7 +107,7 @@ P-code IR 是整个反编译器的基石。上层绕过 = 在地基缺口上盖�
 
 ```bash
 cargo build --release                              # 构建
-cargo test                                         # 单元测试（649 个）
+cargo test                                         # 单元测试（736 个，2026-06-28 核实）
 cargo run --release --example curl_decompile       # curl 反编译
 cargo run --release --example httpd_decompile      # httpd 反编译
 python tools/audit_syntax.py result/curl_cur.c     # gcc 语法审计
@@ -131,10 +134,9 @@ core: implement ActionCast in coreaction pipeline
 fix: emit_block_structured preserves while loops after return
 ```
 
-## 🎯 当前反编译质量（2026-06-26）
+## 🎯 当前反编译质量（2026-06-28 核实）
 
-- **curl**: 24/24 函数通过 gcc 语法审计，16 个 while 循环
-- **httpd**: 29/29 函数通过 gcc 语法审计，39 个 while 循环，0 goto
-- **测试**: 649/649 通过
-- **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, **Datatype get_align_size/get_sub_type/get_hole_size/type_order**, **varmap RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐 + printc 集成 + Stack-spacebase**, **Varnode flag 访问器 + get_nz_mask + lone_descend/has_no_descend + get_consume/set_consume/get_nzm/set_nzm + is_boolean_value (varnode.hh)**, **PcodeOp::is_calculated_bool (op.hh:211)**, **Funcdata op-edit API (funcdata.hh:281-479) + op_swap_input + op_set_output + op_destroy + op_unset_input + op_unset_output + new_varnode_out + replace_lessequal + distribute_int_mult_add**, **get_booleanflip (opcodes.cc:94)**, **bit helpers signbit_negative/calc_mask/leastsigbit_set/mostsigbit_set + functional_equality (address.cc/expression.cc)**, **expression.rs: TermOrder/AdditiveEdge/AddExpression**, **ActionRestructureVarnode (coreaction.cc:2274)**, **Rules (50): NegateIdentity/NotDistribute/ConcatZero/XorCollapse/AddMultCollapse/Less2Zero/LessEqual2Zero/BoolNegate/OrMask/AndOrLump/Piece2Zext/Piece2Sext/Bxor2NotEqual/TermOrder/Shift2Mult/DoubleSub/TrivialShift/SlessToLess/OrCollapse/ConcatLeftShift/DoubleShift/IdentityEl/SignShift/SubZext/ConcatShift/ShiftCompare/AndCompare/TestSign/Equality/LessNotEqual/LessEqual/RightShiftAnd/HighOrderAnd/AndZext/ZextSless/Scarry/Sborrow/AndDistribute/LessOne/AndPiece/AndCommute/OrConsume/EarlyRemoval/BooleanNegate/Logic2Bool/LeftRight/IntLessEqual/CollectTerms/BitUndistribute/BooleanDedup**, **L1模块骨架(14): condexe/transform/subflow/unify/constseq/opbehavior(完整)/rangeutil(完整)/userop/memstate/float_emulate(完整)/pcodeinject/emulate/callgraph(完整)/signature**, **jumptable.rs L1→L2 (LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction)**, **override_rs.rs L1→L2 (Override + FlowOverride 完整 in-memory)**, **arch.rs L1→L2 (Ghidra Architecture 配置容器 + ArchitectureCapability + CapabilityRegistry)**, **database.rs L1→L2 (SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database)**
-- **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, **Datatype get_align_size/get_sub_type/get_hole_size/type_order**, **varmap RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐 + printc 集成 + Stack-spacebase**, **Varnode flag 访问器 + get_nz_mask + lone_descend/has_no_descend + get_consume/set_consume/get_nzm/set_nzm + is_boolean_value (varnode.hh)**, **PcodeOp::is_calculated_bool (op.hh:211)**, **Funcdata op-edit API (funcdata.hh:281-479) + op_swap_input + op_set_output + op_destroy + op_unset_input + op_unset_output + new_varnode_out + replace_lessequal + distribute_int_mult_add**, **get_booleanflip (opcodes.cc:94)**, **bit helpers signbit_negative/calc_mask/leastsigbit_set/mostsigbit_set + functional_equality (address.cc/expression.cc)**, **expression.rs: TermOrder/AdditiveEdge/AddExpression**, **ActionRestructureVarnode (coreaction.cc:2274)**, **Rules (48): NegateIdentity/NotDistribute/ConcatZero/XorCollapse/AddMultCollapse/Less2Zero/LessEqual2Zero/BoolNegate/OrMask/AndOrLump/Piece2Zext/Piece2Sext/Bxor2NotEqual/TermOrder/Shift2Mult/DoubleSub/TrivialShift/SlessToLess/OrCollapse/ConcatLeftShift/DoubleShift/IdentityEl/SignShift/SubZext/ConcatShift/ShiftCompare/AndCompare/TestSign/Equality/LessNotEqual/LessEqual/RightShiftAnd/HighOrderAnd/AndZext/ZextSless/Scarry/Sborrow/AndDistribute/LessOne/AndPiece/AndCommute/OrConsume/EarlyRemoval/BooleanNegate/Logic2Bool/LeftRight/IntLessEqual/CollectTerms**
+- **curl**: 24/24 函数通过 gcc 语法审计，**4 个 while**（3 do-while + 1 while），0 goto，0 uVar
+- **httpd**: 29/29 函数通过 gcc 语法审计，**8 个 while**，0 goto，0 uVar
+- **测试**: 736/736 通过（`cargo test --lib`；`cargo test` 默认含 examples，需先 `cargo build --examples`）
+- **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, **Datatype get_align_size/get_sub_type/get_hole_size/type_order**, **varmap RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐 + printc 集成 + Stack-spacebase**, **Varnode flag 访问器 + get_nz_mask + lone_descend/has_no_descend + get_consume/set_consume/get_nzm/set_nzm + is_boolean_value (varnode.hh)**, **PcodeOp::is_calculated_bool (op.hh:211)**, **Funcdata op-edit API (funcdata.hh:281-479) + op_swap_input + op_set_output + op_destroy + op_unset_input + op_unset_output + new_varnode_out + replace_lessequal + distribute_int_mult_add**, **get_booleanflip (opcodes.cc:94)**, **bit helpers signbit_negative/calc_mask/leastsigbit_set/mostsigbit_set + functional_equality (address.cc/expression.cc)**, **expression.rs: TermOrder/AdditiveEdge/AddExpression**, **ActionRestructureVarnode (coreaction.cc:2274)**, **Rules: ~100 个 struct 定义于 ruleaction.rs（含 NegateIdentity/NotDistribute/ConcatZero/XorCollapse/AddMultCollapse/...；完整列表见 `grep -oE 'struct Rule[A-Z][A-Za-z0-9_]*' src/ruleaction.rs`）**, **L1模块骨架(14): condexe/transform/subflow/unify/constseq/opbehavior(完整)/rangeutil(完整)/userop/mem-state/float_emulate(完整)/pcodeinject/emulate/callgraph(完整)/signature**, **jumptable.rs L1→L2 (LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction)**, **override_rs.rs L1→L2 (Override + FlowOverride 完整 in-memory)**, **arch.rs L1→L2 (Ghidra Architecture 配置容器 + ArchitectureCapability + CapabilityRegistry)**, **database.rs L1→L2 (SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database)**
