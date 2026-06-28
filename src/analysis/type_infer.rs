@@ -176,8 +176,22 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                         if let Datatype::Pointer(pt) = &**vt {
                             if let Some(ref out_arc) = op.output {
                                 let out_size = out_arc.read().unwrap().get_size();
-                                if pt.ptr_to.get_size() == out_size {
+                                let ptr_to_size = pt.ptr_to.get_size();
+                                // Size match → propagate element type directly.
+                                // Size 0 (void/unknown struct) → infer element
+                                // type from output size (int for 4, long for 8).
+                                if ptr_to_size == out_size {
                                     type_updates.push((out_arc.clone(), pt.ptr_to.clone(), true));
+                                } else if ptr_to_size == 0 {
+                                    // Pointer to unknown-size type (e.g. _struct).
+                                    // Infer element type from LOAD output size.
+                                    let elem_type = match out_size {
+                                        4 => Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+                                        8 => Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int))),
+                                        1 => Arc::new(Datatype::Base(TypeBase::new("byte".into(), 1, TypeMetatype::Uint))),
+                                        _ => Arc::new(Datatype::Base(TypeBase::new("undefined".into(), out_size, TypeMetatype::Unknown))),
+                                    };
+                                    type_updates.push((out_arc.clone(), elem_type, true));
                                 }
                             }
                         }

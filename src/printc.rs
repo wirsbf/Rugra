@@ -1245,14 +1245,18 @@ impl PrintC {
                     if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                         return pname.clone();
                     }
-                    let effective_type = Self::find_typed_instance(&high)
-                        .or_else(|| Self::vn_type_if_meaningful(vn))
+                    // Priority: vn's own v_type (set by type_infer) first, then
+                    // high-level type, then pointer_type_for heuristic. This lets
+                    // type_infer's LOAD element inference override Phase 4's
+                    // erroneous pointer marks on the same high variable.
+                    let effective_type = Self::vn_type_if_meaningful(vn)
+                        .or_else(|| Self::find_typed_instance(&high))
                         .or_else(|| self.pointer_type_for(vn));
                     let prefix = Self::var_prefix(&effective_type, vn.get_size());
                     return format!("{}_{:x}", prefix, vn.get_offset());
                 }
-                let effective_type = Self::find_typed_instance(&high)
-                    .or_else(|| Self::vn_type_if_meaningful(vn))
+                let effective_type = Self::vn_type_if_meaningful(vn)
+                    .or_else(|| Self::find_typed_instance(&high))
                     .or_else(|| self.pointer_type_for(vn));
                 return Self::maybe_apply_type_prefix(name, &effective_type, vn.get_size());
             }
@@ -1305,6 +1309,24 @@ impl PrintC {
 
     fn vn_type_if_meaningful(vn: &crate::varnode::Varnode) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::TypeMetatype;
+        // If this varnode is the output of a LOAD, it holds a loaded VALUE
+        // (int/long), not a pointer. Override any pointer type with a
+        // size-based type. This is the root fix for piVar92=*(int*)piVar91
+        // being wrongly named piVar — it should be iVar/lVar.
+        if let Some(ref def_arc) = vn.def.as_ref().and_then(|d| d.upgrade()) {
+            let def_op = def_arc.read().unwrap();
+            if def_op.opcode == crate::opcodes::OpCode::CPUI_LOAD {
+                let sz = vn.get_size();
+                use crate::type_system::datatype::{Datatype, TypeBase};
+                let base_type = match sz {
+                    4 => Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
+                    8 => Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int))),
+                    1 => Arc::new(Datatype::Base(TypeBase::new("byte".into(), 1, TypeMetatype::Uint))),
+                    _ => Arc::new(Datatype::Base(TypeBase::new("undefined".into(), sz, TypeMetatype::Unknown))),
+                };
+                return Some(base_type);
+            }
+        }
         vn.v_type.as_ref()
             .filter(|t| t.get_metatype() != TypeMetatype::Unknown && t.get_name() != "undefined")
             .cloned()

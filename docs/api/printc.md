@@ -70,6 +70,9 @@ raw semantics / P-code-like IR
 - **Pass 1 (Discovery Pass - 探测阶段)**：通过绑定一个空输出发射器（`NullEmit`）静默执行一遍函数体发射。此阶段的打印动作（如 `push_varnode`）会调用 `mark_varnode_used`，真实收集所有会在 C 文本中呈现的变量名、作用域（Space）、偏移量（Offset）以及类型名称。这能够准确拾取由复制传播、DCE 优化消除定义后悬空使用的 Unique 临时变量（如 `uVar_a0`）和被重命名为 `lVar_XX` 的物理寄存器变量。**2026-06-28 修复**：Pass 1 现在也遍历不可达子图（mirrors Pass 2 的 2c 循环），确保不可达块里的全局符号（如 glob_set 的 glob_buffer）也被收集进 extern 声明。
 - **Pass 2 (Final Emission - 正式发射阶段)**：在输出函数体（`{`）的开头，遍历探测到的 `used_varnode_types` 映射。通过 `is_declarable` 实施严格过滤，跳过非标识符表达式（如 `struct2->field_8` 等成员访问，只保留 `struct2` 基址本身）、已在签名中声明的入参、全局数据等，并在一行内合并声明。
 
+### vn_type_if_meaningful（2026-06-28 增强）
+如果 varnode 是 LOAD op 的输出，返回基于 size 的类型（int/long/byte）而非指针。这是 LOAD 结果被错误命名为 piVar 的直接修复。同时调整了 var_prefix 优先级：vn_type_if_meaningful 优先于 find_typed_instance。
+
 ---
 
 ## 设计边界
