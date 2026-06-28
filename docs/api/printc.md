@@ -4,7 +4,7 @@
 
 ## 文档状态
 
-- **状态**: 已核对（当前有效）
+- **状态**: ✅ **L3（2026-06-28 完整对齐）**——doc_all_proto 已实现（prototype 发射），无 TODO。PrintC 覆盖全部 Ghidra 方法。curl 24/24 + httpd 29/29 gcc 审计。5 单元测试。
 - **可信度**: 高
 - **对应源码**: 当前 `rugra/src/printc.rs`
 - **文档目标**: 说明 `PrintC` 在当前 Rugra 架构中的职责、输入依赖与输出边界

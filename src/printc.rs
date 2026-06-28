@@ -3419,8 +3419,22 @@ impl PrintLanguage for PrintC {
     }
 
 
-    fn doc_all_proto(&mut self, _proto: &FuncProto) {
-        // TODO: Implement prototype emission
+    fn doc_all_proto(&mut self, proto: &FuncProto) {
+        // Emit a function prototype declaration.
+        // Faithful to PrintC::docAllProto (printc.cc).
+        let rt_name = proto.return_type.get_name();
+        self.emit.tag_line(0);
+        self.emit.print(&format!("{} {}(", rt_name, proto.name));
+        for (i, param) in proto.parameters.iter().enumerate() {
+            if i > 0 { self.emit.print(", "); }
+            let ptype = param.data_type.get_name();
+            self.emit.print(&format!("{} {}", ptype, param.name));
+        }
+        if proto.is_dotdotdot {
+            if !proto.parameters.is_empty() { self.emit.print(", "); }
+            self.emit.print("...");
+        }
+        self.emit.print(");");
     }
 
     fn doc_variable_decl(&mut self, vn: &Varnode) {
