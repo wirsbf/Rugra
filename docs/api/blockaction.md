@@ -709,3 +709,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - `run_goto_cascade` 新增收敛守卫：若 graph size 在 3 轮后未减少（规则震荡无进展），停止。防止病态 CFG（ap_count_dirs 等）无限循环。
 - httpd example 新增每函数 15s 超时（对齐 curl 模式），防止单函数挂起阻塞全局。
 - **最终结果**：curl while **34**（精确匹配 Ghidra！），httpd while **55**（从 44 提升 +11），29/29 函数完成（1 个 TIMEOUT 占位），0 goto。
+
+### 2026-06-29（续 5）：goto_cascade 收敛守卫改进 + remove_in_edge_from 死锁修复
+- goto_cascade 收敛守卫改为同时检查 graph size 和 change_count（两者都无进展才停止）。
+- `remove_in_edge_from` 自环死锁修复（block.rs）：try_read 替代 read。这是 ap_count_dirs 挂起的根因。
+- **最终结果**：curl while **36**（超过 Ghidra 34！），httpd while **58**，29/29 函数完成，0 TIMEOUT。

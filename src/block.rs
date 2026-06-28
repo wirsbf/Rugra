@@ -451,7 +451,9 @@ impl FlowBlock for BlockBasic {
     }
     fn remove_in_edge_from(&mut self, exclude_indices: &[i32]) {
         self.incoming.retain(|e| {
-            e.point.read().map(|p| !exclude_indices.contains(&p.get_index())).unwrap_or(true)
+            // Use try_read to avoid RwLock deadlock when e.point == self
+            // (self-loop edge while holding our own write lock).
+            e.point.try_read().map(|p| !exclude_indices.contains(&p.get_index())).unwrap_or(true)
         });
     }
 }

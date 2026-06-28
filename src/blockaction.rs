@@ -833,18 +833,20 @@ impl<'a> CollapseStructure<'a> {
         // selectGoto throws LowlevelError in this case; we cap instead.
         let max_goto_rounds = 10;
         let mut prev_graph_size = self.graph.get_size();
+        let mut prev_change_count = self.change_count;
         loop {
             if std::time::Instant::now() > goto_deadline { break; }
             if goto_rounds >= max_goto_rounds { break; }
-            // Convergence guard: if the graph size hasn't decreased in the last
-            // round (rules are oscillating without progress), stop to prevent
-            // infinite loops on pathological CFGs (e.g. httpd ap_count_dirs).
+            // Convergence guard: if neither graph size decreased NOR change_count
+            // increased since last round (no progress at all), stop.
             let cur_size = self.graph.get_size();
-            if goto_rounds >= 3 && cur_size >= prev_graph_size {
-                eprintln!("[COLLAPSE] {} goto cascade: no progress (size {}->{}), stopping", self.name, prev_graph_size, cur_size);
+            let cur_change = self.change_count;
+            if goto_rounds >= 2 && cur_size >= prev_graph_size && cur_change == prev_change_count {
+                eprintln!("[COLLAPSE] {} goto cascade: no progress (size {} change {}), stopping", self.name, cur_size, cur_change);
                 break;
             }
             prev_graph_size = cur_size;
+            prev_change_count = cur_change;
             let goto_marked = self.select_and_mark_goto();
             // Fallback: clip_extra_roots marks irreducible cross-over edges as
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
@@ -2810,15 +2812,17 @@ impl<'a> CollapseStructure<'a> {
         // that lets WhileDo see a reduced size_in on loop bodies with breaks.
         {
             let if_idx = if_block.read().unwrap().get_index();
+            let goto_target_idx = goto_target.read().unwrap().get_index();
             goto_target.write().unwrap().remove_in_edge_from(&[if_idx, cond_idx]);
             // Also remove the goto_target from the if_block's outgoing, so the
             // goto edge is fully "consumed" (invisible to size_out and
-            // clip_extra_roots). Faithful to Ghidra removeEdge which treats the
-            // edge as non-existent. The body edge (out[0]) is preserved.
+            // clip_extra_roots). Use try_read to avoid RwLock deadlock when
+            // e.point == if_block (self-loop edge while holding write lock).
             if let Some(bif) = if_block.write().unwrap().as_any_mut().downcast_mut::<BlockIf>() {
-                bif.outgoing.retain(|e| {
-                    e.point.read().map(|p| p.get_index() != goto_target.read().unwrap().get_index()).unwrap_or(true)
-                });
+                // Remove the goto_target edge from outgoing. Compare by Arc
+                // pointer identity (not by reading the target, which would
+                // deadlock if e.point == if_block under our write lock).
+                bif.outgoing.retain(|e| !std::sync::Arc::ptr_eq(&e.point, &goto_target));
             }
         }
         self.change_count += 1;

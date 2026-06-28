@@ -872,3 +872,6 @@ BlockGraph 新增：
 ### 2026-06-29：BlockIf goto_target 字段（newBlockIfGoto 风格，block.cc:1799）
 - BlockIf 新增 `goto_target: Option<Arc<...>>` 字段。当 Some 时，表示 if-goto 块（`if (cond) goto target;`），body 保持外部（非嵌入）。忠实 Ghidra BlockIf::gototarget（block.hh:660）。
 - 所有 7 个 BlockIf 构建点已更新（goto_target: None 为默认）。
+
+### 2026-06-29（续）：remove_in_edge_from 自环死锁修复
+- `remove_in_edge_from` 的 retain 闭包中 `e.point.read()` 改为 `try_read()`。此前若 `e.point == self`（自环边），在持有自身 write lock 时 read 会永久死锁（ap_count_dirs 挂起根因）。try_read 失败时保留边（安全默认）。
