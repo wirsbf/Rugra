@@ -2,20 +2,20 @@
 
 ActionTypePropagate 实现：多轮迭代类型传播 + 结构体指针检测 + LOAD 输出推断。
 
-### 多轮迭代类型传播
-`propagate_one_round(fd) -> bool`——忠实移植 Ghidra ActionInferTypes::apply（coreaction.cc:5374-5416）。最多 7 轮迭代到收敛。
+### 执行顺序
+1. Phase 1-4: 结构体指针检测（标记 `_struct*`）
+2. Phase 5: LOAD 输出推断（单 pass）
+3. Phase 6: 迭代类型传播（7轮到收敛）
 
-每轮的 propagateType 规则：
-- **COPY**：传递输入类型到输出（cc:411）
-- **LOAD**：从指针地址推断元素类型（propagateFromPointer cc:206）
-- **INT_ZEXT/INT_SEXT**：通过 widening 传播指针类型
-- **INT_ADD**（2026-06-28 新增）：指针算术传播（propagateAddPointer cc:1268）。ptr+const→输出继承指针类型；ptr+INT_MULT(var,const)→数组索引传播；ptr+ptr→不传播
-- **INT_SUB**（2026-06-28 新增）：ptr-const→输出继承指针类型
+### 迭代类型传播规则
+`propagate_one_round(fd) -> bool`——每轮处理 propagateType：
+- **COPY**：传递输入类型到输出
+- **LOAD**：元素类型推断（force_override=true，可覆盖错误指针标记）
+- **INT_ZEXT/INT_SEXT**：指针 widening
+- **INT_ADD**：ptr+const→ptr（propagateAddPointer cc:1268）
+- **INT_SUB**：ptr-const→ptr
 
-更新 vn.v_type 和 high.v_type。
+收敛判定：只有类型**名称**实际变化才算 changed（防止 Arc identity 振荡）。
 
-### Phase 1-4: 结构体指针检测
-保守标记 `_struct *`（>=2 个不同小偏移）。
-
-### Phase 5: LOAD 输出类型推断
-单 pass LOAD 元素类型推断。
+### 已知限制
+piVar92=*(int*)(piVar89+0x128) 仍显示 int* —— printc 的 pointer_type_for（pointer_varnodes 注册表）在 var_prefix 中优先于 type_infer 的 v_type。消除 reconcile 需调整 printc 的类型优先级。

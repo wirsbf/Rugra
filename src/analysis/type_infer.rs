@@ -16,13 +16,8 @@ use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer
 /// (coreaction.cc:5374-5416): multi-round iterative propagation until
 /// convergence (or max 7 rounds).
 pub fn propagate_types(fd: &mut Funcdata) {
-    // Phase 0: Iterative type propagation (Ghidra ActionInferTypes core loop)
-    for _round in 0..7 {
-        let changed = propagate_one_round(fd);
-        if !changed { break; }
-    }
-
-    // Phase 1-4: Struct pointer detection (existing logic)
+    // Phase 1-4: Struct pointer detection (runs first — marks candidate
+    // varnodes as _struct* / int* based on access patterns)
     propagate_load_output_types(fd);
 
     // Phase 1: Collect base_var → set of offsets used in *(base + offset) patterns
@@ -128,6 +123,14 @@ pub fn propagate_types(fd: &mut Funcdata) {
     // Ghidra's algorithm: if addr vn's type is Pointer(ptr_to=T), and T's size
     // matches the LOAD output size, set LOAD output type to T.
     propagate_load_output_types(fd);
+
+    // Phase 6: Iterative type propagation (runs AFTER struct pointer detection
+    // so LOAD element inference can override erroneous pointer marks).
+    // Ghidra ActionInferTypes core loop (coreaction.cc:5374-5416): up to 7 rounds.
+    for _round in 0..7 {
+        let changed = propagate_one_round(fd);
+        if !changed { break; }
+    }
 }
 
 /// One round of iterative type propagation. Returns true if any type changed.
@@ -136,7 +139,9 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
     // Collect all (op_ref, opcode, in_types, out_type) for propagation decisions.
     // We process COPY (direct transfer) and LOAD (element inference) edges,
     // which are the most impactful for eliminating reconcile workarounds.
-    let mut type_updates: Vec<(Arc<std::sync::RwLock<crate::varnode::Varnode>>, Arc<Datatype>)> = Vec::new();
+    // Third element: force_override = true for LOAD element inference (can
+    // overwrite an erroneous Pointer type with the correct element type).
+    let mut type_updates: Vec<(Arc<std::sync::RwLock<crate::varnode::Varnode>>, Arc<Datatype>, bool)> = Vec::new();
 
     for blk_i in 0..fd.bblocks.get_size() {
         let block_arc = match fd.bblocks.get_block(blk_i) { Some(b) => b, None => continue };
@@ -157,7 +162,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                                         || &**cur as *const _ != &**vt as *const _,
                                 };
                                 if needs_update {
-                                    type_updates.push((out_arc.clone(), vt.clone()));
+                                    type_updates.push((out_arc.clone(), vt.clone(), false));
                                 }
                             }
                         }
@@ -172,7 +177,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                             if let Some(ref out_arc) = op.output {
                                 let out_size = out_arc.read().unwrap().get_size();
                                 if pt.ptr_to.get_size() == out_size {
-                                    type_updates.push((out_arc.clone(), pt.ptr_to.clone()));
+                                    type_updates.push((out_arc.clone(), pt.ptr_to.clone(), true));
                                 }
                             }
                         }
@@ -184,7 +189,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                     if let Some(ref vt) = in_type {
                         if vt.get_metatype() == TypeMetatype::Pointer {
                             if let Some(ref out_arc) = op.output {
-                                type_updates.push((out_arc.clone(), vt.clone()));
+                                type_updates.push((out_arc.clone(), vt.clone(), false));
                             }
                         }
                     }
@@ -219,7 +224,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                                     };
                                 if should_propagate {
                                     if let Some(ref out_arc) = op.output {
-                                        type_updates.push((out_arc.clone(), vt.clone()));
+                                        type_updates.push((out_arc.clone(), vt.clone(), false));
                                     }
                                 }
                             }
@@ -238,7 +243,7 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
                                 .unwrap_or(false);
                             if !other_is_ptr {
                                 if let Some(ref out_arc) = op.output {
-                                    type_updates.push((out_arc.clone(), vt.clone()));
+                                    type_updates.push((out_arc.clone(), vt.clone(), false));
                                 }
                             }
                         }
@@ -251,18 +256,30 @@ fn propagate_one_round(fd: &mut Funcdata) -> bool {
 
     // Apply updates and check if anything changed
     let mut changed = false;
-    for (vn_arc, new_type) in type_updates {
+    for (vn_arc, new_type, force_override) in type_updates {
         let mut vn = vn_arc.write().unwrap();
         let old_meta = vn.v_type.as_ref().map(|t| t.get_metatype()).unwrap_or(TypeMetatype::Unknown);
         let new_meta = new_type.get_metatype();
-        // Only update if new type is "better" (Unknown → known, or different)
-        if old_meta == TypeMetatype::Unknown || old_meta != new_meta {
-            // Don't downgrade from Pointer to non-pointer unless current is Unknown
-            if old_meta != TypeMetatype::Pointer || new_meta == TypeMetatype::Pointer {
-                vn.v_type = Some(new_type.clone());
-                if let Some(ref high_arc) = vn.high {
-                    high_arc.write().unwrap().v_type = new_type;
-                }
+        // Update criteria:
+        // - Unknown → known: always update
+        // - force_override (LOAD element inference): update even Pointer→Base
+        // - Same metatype: update (refine type info)
+        // - Don't downgrade Pointer→non-pointer unless force_override
+        let should_update = old_meta == TypeMetatype::Unknown
+            || force_override
+            || (old_meta != TypeMetatype::Pointer && new_meta != TypeMetatype::Pointer && old_meta != new_meta)
+            || (old_meta == TypeMetatype::Pointer && new_meta == TypeMetatype::Pointer);
+        if should_update {
+            let old_name = vn.v_type.as_ref().map(|t| t.get_name()).unwrap_or("None");
+            let new_name = new_type.get_name();
+            // Only count as a real change if the type name actually differs
+            // (prevents oscillation from Arc identity changes).
+            let real_change = old_name != new_name;
+            vn.v_type = Some(new_type.clone());
+            if let Some(ref high_arc) = vn.high {
+                high_arc.write().unwrap().v_type = new_type;
+            }
+            if real_change {
                 changed = true;
             }
         }
