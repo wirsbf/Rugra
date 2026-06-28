@@ -331,10 +331,15 @@ pub fn build_cleanup_pool() -> ActionPool {
     let mut pool = ActionPool::new("cleanup");
     pool.add_rule(Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
     pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // coreaction.cc:5698
+    // RuleStringCopy / RuleStringStore are wired (constseq.cc:954-1002).
+    // Detection phase only — transform requires CALLOTHER/userop infrastructure
+    // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
+    pool.add_rule(Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
+    pool.add_rule(Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
     // skip RuleAddUnsigned / RuleDumptyHumpLate / RuleSubRight /
     // RuleFloatSignCleanup / RuleExpandLoad / RulePtrsubCharConstant /
     // RuleExtensionPush / RulePieceStructure / RuleSplitCopy / RuleSplitLoad /
-    // RuleSplitStore / RuleStringCopy / RuleStringStore — not yet ported
+    // RuleSplitStore — not yet ported
     pool
 }
 
