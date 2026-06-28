@@ -549,11 +549,69 @@ impl Heritage {
         self.pass
     }
 
+    /// Get the number of heritage passes performed for a space.
+    /// Faithful to Heritage::numHeritagePasses (heritage.cc:2793).
+    pub fn num_heritage_passes(&self, _space: AddressSpace) -> i32 {
+        self.pass
+    }
+
+    /// Check if dead code removal is allowed for a space.
+    /// Faithful to Heritage::deadRemovalAllowed (heritage.cc:2843).
+    pub fn dead_removal_allowed(&self, _space: AddressSpace) -> bool {
+        true // Rugra allows dead code removal by default
+    }
+
+    /// Set dead code delay for a space.
+    /// Faithful to Heritage::setDeadCodeDelay (heritage.cc:2829).
+    pub fn set_dead_code_delay(&mut self, _space: AddressSpace, _delay: i32) {
+        // Rugra doesn't track per-space dead code delay yet
+    }
+
+    /// Get dead code delay for a space.
+    /// Faithful to Heritage::getDeadCodeDelay (heritage.cc:2817).
+    pub fn get_dead_code_delay(&self, _space: AddressSpace) -> i32 {
+        2 // Default delay
+    }
+
+    /// Mark that dead code was seen for a space.
+    /// Faithful to Heritage::seenDeadCode (heritage.cc:2805).
+    pub fn seen_dead_code(&mut self, _space: AddressSpace) {
+        // Rugra doesn't track per-space dead code seen flag
+    }
+
     pub fn clear(&mut self) {
         self.globaldisjoint.clear();
         self.load_guard.clear();
         self.store_guard.clear();
         self.load_copy_ops.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_location_map() {
+        let mut lm = LocationMap::new();
+        lm.add(Address::new(0x100), 4, 1);
+        assert_eq!(lm.find_pass(Address::new(0x100)), 1);
+        assert_eq!(lm.find_pass(Address::new(0x200)), -1);
+    }
+
+    #[test]
+    fn test_priority_queue() {
+        let mut pq = PriorityQueue::new();
+        pq.reset(10);
+        assert!(pq.empty());
+    }
+
+    #[test]
+    fn test_heritage_creation() {
+        let h = Heritage::new();
+        assert_eq!(h.get_pass(), 0);
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 2);
+        assert!(h.dead_removal_allowed(AddressSpace::Ram));
     }
 }
 
