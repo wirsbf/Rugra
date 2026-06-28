@@ -88,7 +88,7 @@ int my_fwrite(void * param_1, long param_2, long param_3, void * param_4) {
 **对齐评估**:
 - ✅ **控制流完全对齐**（if/else 结构、早返回、fopen/fwrite 调用识别）
 - ✅ **结构体字段访问对齐**（param_4+8 = stream->_IO_read_ptr）
-- ⚠️ **变量命名差距**: Rugra 用 `piVar23`/`lVar24`（匿名），Ghidra 用 `__s`/`buffer`/`stream`（语义名）。根因：ActionNameVars 未接入（需要 ScopeLocal + HighVariable + 符号表）。
+- ⚠️ **变量命名差距（编号已对齐 2026-06-29）**: Rugra 现在用 Ghidra 风格的 compact 编号（`piVar1`/`lVar1`/`bVar1`，对齐 assignDefaultNames）；语义名差距仍在（Ghidra 用 `__s`/`buffer`/`stream`，需符号数据库）。根因：ActionNameVars 的 lookForFuncParamNames（符号名传播）未接入。
 - ⚠️ **参数类型差距**: Rugra 用 `void*/long`（泛型），Ghidra 用 `FILE*/size_t`（具体）。根因：类型传播不完整。
 - ⚠️ **uVar 碎片已消除**（本轮 ActionSpacebase 的成果）——此前 Rugra 输出含 149 个 uVar_N 碎片，现在为 0。
 
@@ -108,7 +108,7 @@ int my_fwrite(void * param_1, long param_2, long param_3, void * param_4) {
 ## 四、本轮 3 层移植的对齐效果验证
 
 ### Layer 1: ActionSpacebase (ce21821) — uVar 碎片消除
-- **验证**: 本轮 side-by-side 确认 Rugra 输出 **0 个 uVar_N 碎片**（对比此前 149 个）。Ghidra 的变量都有名字（`__s`/`buffer`），Rugra 现在用 `piVar23`/`lVar24`（匿名但有类型前缀），不再是碎片 `uVar_107`。
+- **验证**: 本轮 side-by-side 确认 Rugra 输出 **0 个 uVar_N 碎片**（对比此前 149 个）。Ghidra 的变量都有名字（`__s`/`buffer`），Rugra 现在用 Ghidra 风格 compact 编号（`piVar1`/`lVar1`/`bVar1`，对齐 assignDefaultNames），不再是碎片 `uVar_107` 或 offset-based `piVar23`。
 - **结论**: ✅ spacebase 标记让 varmap/printc 正确识别栈指针，def 断链问题解决。与 Ghidra 的 `Funcdata::spacebase()` 机制行为一致。
 
 ### Layer 2: ruleBlockWhileDo (5fa7dbc) — break 边识别基础

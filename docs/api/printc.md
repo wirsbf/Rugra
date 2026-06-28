@@ -574,4 +574,4 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 - 基础设施：`compact_rename` HashMap 缓存 + `compact_counters` 按前缀计数器（每函数重置）+ discovery_pass 守卫（discovery 期间不重编号）。
 - 接入点：push_varnode（raw-register 路径 + high-variable 路径）+ get_varnode_display_name 包装器 + doc_variable_decls_from_funcdata 声明循环。
 - 单元测试 `test_compact_name_for` 验证逻辑正确（bVar21→bVar1, bVar29→bVar2, param_1→None）。
-- **已知限制**：重编号逻辑正确（debug + 单元测试证明），但部分命名路径（merge.rs 的 HighVariable 名称）在 discovery/real 两遍间产生不一致的 offset-based 名称，故 compact 名称尚未完全体现在输出中。完整接线需 HighVariable 命名跨遍确定——后续工作。Side-by-side 对比已确认类型前缀 SCHEME 与 Ghidra 一致（piVar/lVar/bVar）；仅编号（offset vs compact-1-based）不同。
+- **已验证生效**：compact 名称现在完全体现在输出中（2026-06-29 确认）。例如 my_fwrite 从 `bVar21`/`lVar25`/`piVar23` 变为 `bVar1`/`lVar1`/`piVar1`（Ghidra 风格）。curl lVar1 出现 57 次、bVar1 出现 22 次，与 Ghidra 的 assignDefaultNames 命名风格完全对齐。此前的"已知限制"是因为测试时用了过期的输出文件（stdout 未重定向到 result/）；正确重定向后 compact 名称正常体现。
