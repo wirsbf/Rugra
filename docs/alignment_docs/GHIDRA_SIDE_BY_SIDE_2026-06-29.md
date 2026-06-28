@@ -152,3 +152,21 @@ Ghidra 的解法：`collapseAll`（blockaction.cc:1877-1893）主循环每轮调
 - **变量命名已完全对齐**（compact 重编号 bVar1/lVar1，commit f98e615 确认）。
 - **while 循环对齐**（28 vs Ghidra 34）需要 collapseInternal 迁移，但这是高风险架构工作。两种增量方法均失败。
 - **后续路径**：需要逐函数测试驱动的 collapseInternal 实现——对每个函数独立验证 while 数不降，而非全局应用。或：接受 staged 架构的 82% while 恢复率，转向其他 L2 缺口（如 coreaction Actions、ruleaction Rules），这些不影响结构化稳定性。
+
+## 七、对称边图审计与 ruleBlockGoto 消费机制（2026-06-29 深度）
+
+### 审计结论
+- `BlockGraph::add_edge`（block.rs:769）**已对称**：同时更新 from.outgoing 和 to.incoming。
+- `identify_internal`（blockaction.rs:2062）**已对称**：捕获边界边时重写外部块的 incoming/outgoing 指向 new_block。
+- 真正的不对称在于 **BlockIf 架构**：Rugra 的 BlockIf 嵌入 body（if_body/else_body），而 Ghidra 的 `newBlockIfGoto` 保持 body 为外部节点。
+
+### ruleBlockGoto 消费机制（部分实现）
+- **try_rule_goto（pure-goto, size_out==1）**：✅ 已实现 removeEdge（commit d217bc1）。BlockGoto 无结构化 fallthrough，移除 in-edge 安全。验证：curl 28, httpd 44, 780 测试，无回归。
+- **try_rule_if_goto（CBRANCH, size_out==2）**：❌ 无法安全实现。Ghidra `newBlockIfGoto(cond)` 只消费 [cond]，保持 body 外部 + forceOutputNum(2) + forceFalseEdge + removeEdge。Rugra `try_rule_if_goto` 消费 [body_idx]（嵌入 BlockIf），导致 if_block 只有 1 条 out-edge（goto_target），clear/remove 后图损坏（curl 28→26）。修复需 BlockIf 支持外部 body（newBlockIfGoto 风格）——架构重构。
+
+### while 循环对齐的最终阻断
+while 循环恢复（curl 28→34）需要 if-goto 的 goto 边被消费（CBRANCH break/continue 是 if-goto 模式）。这需要：
+1. BlockIf 支持 newBlockIfGoto 风格（body 外部节点，forceOutputNum/forceFalseEdge）
+2. 或 BlockIfGoto 作为独立块类型
+
+这是 BlockIf 架构重构，超出当前范围。pure-goto 消费已就绪（为非 CBRANCH 的 goto 边铺路）。
