@@ -229,7 +229,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 28 | `type.cc` (~1500行) | `type_system/datatype.rs` | 🔧 L2 | 基本类型完整；**2026-06-26 新增** get_align_size/get_alignment/get_sub_type/get_hole_size/type_order（解锁 varmap）；缺少 typegrp 类型组管理和完整约束求解 | `type.cc` |
-| 29 | `cast.cc` | `type_system/cast.rs` | 🔧 L2 | 基本 cast 逻辑；缺少完整的多级 cast 插入 | `cast.cc` |
+| 29 | `cast.cc` | `type_system/cast.rs` (200行) | ✅ **L3（2026-06-28 完整对齐）** | **全部 CastStrategyC 方法覆盖**：CastStrategy trait（is_cast_implied/cast_standard/check_int_promotion_for_extension/compare）+ CastStrategyC（is_char_type/is_enum_type/is_subpiece_cast/is_subpiece_cast_endian/is_sext_cast/is_zext_cast，对齐 cast.cc:411-469）。5 单元测试 | `cast.cc` |
 | 30 | `signature.cc` + `modelrules.cc` | — | 📋 L1 | **完全缺失**：函数签名匹配 + 模型规则 | `signature.cc`, `modelrules.cc` |
 | 31 | `signature_ghidra.cc` | — | 📋 L1 | **完全缺失**：Ghidra 签名格式 | `signature_ghidra.cc` |
 | 32 | `analyzesigs.cc` | — | 📋 L1 | **完全缺失**：签名分析 | `analyzesigs.cc` |

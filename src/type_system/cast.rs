@@ -47,6 +47,53 @@ impl CastStrategyC {
     fn is_enum_type(&self, dt: &Datatype) -> bool {
         matches!(dt.get_metatype(), TypeMetatype::Enum)
     }
+    /// Check if a SUBPIECE op should be rendered as a cast.
+    /// Faithful to Ghidra CastStrategyC::isSubpieceCast (cast.cc:411).
+    pub fn is_subpiece_cast(&self, out_type: &Datatype, in_type: &Datatype, offset: u32) -> bool {
+        if offset != 0 { return false; }
+        let in_meta = in_type.get_metatype();
+        if !matches!(in_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
+            | TypeMetatype::Pointer)
+        { return false; }
+        let out_meta = out_type.get_metatype();
+        if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
+            | TypeMetatype::Pointer | TypeMetatype::Float)
+        { return false; }
+        if in_meta == TypeMetatype::Pointer {
+            if out_meta == TypeMetatype::Pointer {
+                if out_type.get_size() < in_type.get_size() { return true; }
+            }
+            if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint) { return false; }
+        }
+        true
+    }
+
+    /// Check if a SUBPIECE with endianness should be rendered as a cast.
+    /// Faithful to Ghidra CastStrategyC::isSubpieceCastEndian (cast.cc:434).
+    pub fn is_subpiece_cast_endian(&self, out_type: &Datatype, in_type: &Datatype, offset: u32, is_bigend: bool) -> bool {
+        let tmpoff = if is_bigend { in_type.get_size() as u32 - 1 - offset } else { offset };
+        self.is_subpiece_cast(out_type, in_type, tmpoff)
+    }
+
+    /// Check if INT_SEXT should be rendered as a cast.
+    /// Faithful to Ghidra CastStrategyC::isSextCast (cast.cc:443).
+    pub fn is_sext_cast(&self, out_type: &Datatype, in_type: &Datatype) -> bool {
+        let metaout = out_type.get_metatype();
+        if !matches!(metaout, TypeMetatype::Uint | TypeMetatype::Int) { return false; }
+        let metain = in_type.get_metatype();
+        // Input must be signed for SEXT to be a cast
+        matches!(metain, TypeMetatype::Int | TypeMetatype::Bool)
+    }
+
+    /// Check if INT_ZEXT should be rendered as a cast.
+    /// Faithful to Ghidra CastStrategyC::isZextCast (cast.cc:457).
+    pub fn is_zext_cast(&self, out_type: &Datatype, in_type: &Datatype) -> bool {
+        let metaout = out_type.get_metatype();
+        if !matches!(metaout, TypeMetatype::Uint | TypeMetatype::Int) { return false; }
+        let metain = in_type.get_metatype();
+        // Input must be unsigned for ZEXT to be a cast
+        matches!(metain, TypeMetatype::Uint | TypeMetatype::Bool)
+    }
 }
 
 impl CastStrategy for CastStrategyC {
@@ -143,5 +190,37 @@ mod tests {
         assert!(strategy.check_int_promotion_for_extension(&int1));
         // int is not promoted (already at promote size)
         assert!(!strategy.check_int_promotion_for_extension(&int4));
+    }
+
+    #[test]
+    fn test_is_subpiece_cast() {
+        let s = CastStrategyC::new(4);
+        let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));
+        // offset 0, int→int subpiece is a cast
+        assert!(s.is_subpiece_cast(&int4, &int8, 0));
+        // offset != 0 → not a cast
+        assert!(!s.is_subpiece_cast(&int4, &int8, 4));
+    }
+
+    #[test]
+    fn test_is_sext_cast() {
+        let s = CastStrategyC::new(4);
+        let int2 = Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int));
+        let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        // signed input → sext is a cast
+        assert!(s.is_sext_cast(&int4, &int2));
+    }
+
+    #[test]
+    fn test_is_zext_cast() {
+        let s = CastStrategyC::new(4);
+        let uint2 = Datatype::Base(TypeBase::new("ushort".into(), 2, TypeMetatype::Uint));
+        let uint4 = Datatype::Base(TypeBase::new("uint".into(), 4, TypeMetatype::Uint));
+        // unsigned input → zext is a cast
+        assert!(s.is_zext_cast(&uint4, &uint2));
+        // signed input → zext is NOT a cast
+        let int2 = Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int));
+        assert!(!s.is_zext_cast(&uint4, &int2));
     }
 }
