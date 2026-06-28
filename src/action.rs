@@ -383,6 +383,12 @@ impl ActionDatabase {
 
         decompile_group.add_action(Box::new(ActionStart::new()));
         decompile_group.add_action(Box::new(ActionHeritage::new()));
+        // Mark the stack-pointer register (RSP) as a spacebase, faithful to
+        // Ghidra ActionSpacebase (coreaction.cc:5506, "Must come before
+        // infertypes and nonzeromask"). This lets varmap/ActionStackPtrFlow
+        // recognize RSP as a pointer into the Stack address space, so stack
+        // variables can be detected and named instead of leaking as uVar.
+        decompile_group.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
         // Stack pointer flow repair (Ghidra actstackstall, coreaction.cc:5656):
         // resolve stack-pointer "clogs" (LOAD fed into INT_ADD on spacebase) by
         // linking to the matching STORE. Must run after Heritage (needs the

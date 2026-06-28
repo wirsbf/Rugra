@@ -1119,6 +1119,149 @@ impl Funcdata {
         -1
     }
 
+    /// Mark registers that map to a virtual address space (the stack
+    /// spacebase). Faithful to `Funcdata::spacebase()` (funcdata.cc:230-269).
+    ///
+    /// For Rugra's x86-64 lift, the stack pointer is RSP at
+    /// `AddressSpace::Register`, offset 0x20, size 8 (see `x86_lift.rs:40`).
+    /// This method finds all varnodes at that location, marks them with the
+    /// `SPACEBASE` flag, and — for already-marked spacebase varnodes with
+    /// multiple descendants — calls `split_uses()` so each additive use
+    /// (`INT_ADD(RSP, off)`) becomes independently addressable.
+    ///
+    /// This is the canonical Ghidra mechanism: it does NOT require the lifter
+    /// to emit Stack-space varnodes. Instead, marking the RSP input as a
+    /// spacebase lets downstream passes (varmap, ActionStackPtrFlow,
+    /// heritage) recognize RSP as "a pointer into the Stack space."
+    pub fn spacebase(&mut self) {
+        // Rugra's x86 stack pointer: Register@0x20, size 8.
+        // Faithful to spc->getSpacebase(0) returning the register location.
+        let sb_space = crate::space::AddressSpace::Register;
+        let sb_offset = 0x20u64;
+        let sb_size = 8usize;
+
+        // Collect all varnodes at (Register, 0x20, size 8) that are not free.
+        // Faithful to vbank.beginLoc(size, Address) / endLoc iteration.
+        let candidates: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+            self.vbank
+                .loc_tree
+                .iter()
+                .filter(|v| {
+                    let g = v.0.read().unwrap();
+                    !g.is_free()
+                        && g.get_space() == sb_space
+                        && g.get_offset() == sb_offset
+                        && g.get_size() == sb_size
+                })
+                .map(|v| v.0.clone())
+                .collect()
+        };
+
+        for vn_arc in candidates {
+            let is_sb = vn_arc.read().unwrap().is_spacebase();
+            if is_sb {
+                // Already marked: give it a chance for descendants to be
+                // eliminated naturally, now force a split if it still has
+                // multiple descendants (funcdata.cc:253-259).
+                let def_arc = {
+                    let vn_g = vn_arc.read().unwrap();
+                    vn_g.def.as_ref().and_then(|w| w.upgrade())
+                };
+                if let Some(def_op) = def_arc {
+                    if def_op.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_INT_ADD {
+                        self.split_uses(&vn_arc);
+                    }
+                }
+            } else {
+                // Mark all base registers (not just input) with spacebase flag
+                // (funcdata.cc:262).
+                vn_arc.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+                // Note: Ghidra also sets TypeSpacebase pointer type on the
+                // input register (funcdata.cc:263-264). Rugra's type system
+                // does not yet have TypeSpacebase; the SPACEBASE flag alone is
+                // sufficient for varmap/ActionStackPtrFlow recognition.
+            }
+        }
+    }
+
+    /// Make all reads of the given Varnode unique. Faithful to
+    /// `Funcdata::splitUses` (funcdata_varnode.cc:1540-1567).
+    ///
+    /// If `vn` is defined by an op (e.g. INT_ADD) and has multiple
+    /// descendants, duplicate the defining op so each reader gets its own
+    /// independent output copy. This allows per-use analysis (e.g. distinct
+    /// stack offsets from the same spacebase-derived pointer).
+    pub fn split_uses(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        // Get the defining op of vn.
+        let def_arc = {
+            let vn_g = vn.read().unwrap();
+            match vn_g.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(a) => a,
+                None => return, // no defining op
+            }
+        };
+
+        // Collect descendant ops (readers), preserving order.
+        let descendents: Vec<(crate::op::PcodeOpRef, i32)> = {
+            let vn_g = vn.read().unwrap();
+            vn_g.descend_iter()
+                .map(|op| {
+                    let opref = crate::op::PcodeOpRef(op.clone());
+                    let slot = self.op_get_slot(&opref, vn);
+                    (opref, slot)
+                })
+                .collect()
+        };
+        if descendents.len() <= 1 {
+            return; // Only one (or zero) descendant — nothing to split.
+        }
+
+        // Clone the defining op for each descendant except the last.
+        let num_inputs = def_arc.read().unwrap().inrefs.len();
+        let def_addr = def_arc.read().unwrap().get_addr();
+        let def_opcode = def_arc.read().unwrap().opcode;
+        // Snapshot inputs before mutation (avoid holding lock across new_op).
+        let inputs: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            def_arc.read().unwrap().inrefs.clone();
+        let vn_size = vn.read().unwrap().get_size();
+        let vn_addr = vn.read().unwrap().loc.clone();
+        let vn_space = vn.read().unwrap().address_space;
+
+        // Faithful to funcdata_varnode.cc:1553-1565: for each descendant
+        // except the last, create a new op cloning the definition, give it a
+        // new output varnode, and redirect that descendant to the new output.
+        let last_idx = descendents.len() - 1;
+        for (i, (useop, slot)) in descendents.iter().enumerate() {
+            if i == last_idx {
+                break; // Last descendant keeps the original op.
+            }
+            if *slot < 0 {
+                continue;
+            }
+            // newop = newOp(op->numInput(), op->getAddr())
+            let newop = self.new_op(num_inputs, def_addr.clone());
+            // newvn = newVarnode(vn->getSize(), vn->getAddr(), vn->getType())
+            let newvn = self.vbank.create(vn_size, vn_addr.clone());
+            newvn.write().unwrap().address_space = vn_space;
+            // opSetOutput(newop, newvn)
+            newvn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+            newvn.write().unwrap().def = Some(std::sync::Arc::downgrade(&newop.0));
+            newop.0.write().unwrap().output = Some(newvn.clone());
+            // opSetOpcode(newop, op->code())
+            self.op_set_opcode(&newop, def_opcode);
+            // for each input: opSetInput(newop, op->getIn(i), i)
+            for (idx, inp) in inputs.iter().enumerate() {
+                self.op_set_input(&newop, inp.clone(), idx);
+            }
+            // opSetInput(useop, newvn, slot)
+            self.op_set_input(useop, newvn.clone(), *slot as usize);
+            // opInsertBefore(newop, op)
+            let def_ref = crate::op::PcodeOpRef(def_arc.clone());
+            self.op_insert_before(&newop, &def_ref);
+        }
+        // Dead-code actions should remove the original op if now unused.
+    }
+
     /// Eliminate a common subexpression between two ops. Faithful to
     /// `Funcdata::cseElimination` (funcdata_op.cc:1358-1398). Keeps the
     /// earlier-ordered op (by sequence number), total_replaces the other's
@@ -3957,6 +4100,111 @@ mod tests {
         // param_2 should appear in the body expression (not just signature)
         assert!(emitted_code.contains("(long)param_2") || emitted_code.contains("param_2"),
             "param_2 should be used in body expression");
+    }
+
+    /// Verify Funcdata::spacebase() marks the RSP input varnode with the
+    /// SPACEBASE flag, faithful to Ghidra Funcdata::spacebase()
+    /// (funcdata.cc:230-269). This is the foundational mechanism that lets
+    /// varmap/ActionStackPtrFlow recognize RSP as a Stack-space pointer.
+    #[test]
+    fn test_spacebase_marks_rsp_input() {
+        // RSP input at Register@0x20, size 8 (matches x86_lift.rs:40).
+        // A normal register (RAX @ 0x00) that should NOT be marked spacebase.
+        let mut read_rsp = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        read_rsp.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x10, 8));
+        read_rsp.add_input(VarnodeRaw::new(AddressSpace::Const, 0x100, 8)); // space-id const
+        read_rsp.add_input(VarnodeRaw::new(AddressSpace::Register, 0x20, 8)); // RSP
+
+        let mut read_rax = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        read_rax.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x18, 8));
+        read_rax.add_input(VarnodeRaw::new(AddressSpace::Const, 0x100, 8));
+        read_rax.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8)); // RAX
+
+        let mut fd = Funcdata::new("test_spacebase", Address::new(0x1000), 0x100);
+        fd.inject_raw_ops(&[read_rsp, read_rax]);
+
+        // Before spacebase(): no varnode has SPACEBASE flag.
+        let sb_before = fd.vbank.loc_tree.iter()
+            .filter(|v| v.0.read().unwrap().is_spacebase())
+            .count();
+        assert_eq!(sb_before, 0, "No spacebase varnodes before spacebase()");
+
+        // Run spacebase() — faithful to Ghidra Funcdata::spacebase().
+        fd.spacebase();
+
+        // After: the RSP input (Register@0x20) should be marked SPACEBASE.
+        let sb_varnodes: Vec<_> = fd.vbank.loc_tree.iter()
+            .filter(|v| v.0.read().unwrap().is_spacebase())
+            .map(|v| v.0.clone())
+            .collect();
+        assert!(!sb_varnodes.is_empty(), "RSP input should be marked SPACEBASE");
+
+        // Verify it's at Register@0x20, size 8.
+        let sb = sb_varnodes[0].read().unwrap();
+        assert_eq!(sb.get_space(), AddressSpace::Register);
+        assert_eq!(sb.get_offset(), 0x20);
+        assert_eq!(sb.get_size(), 8);
+        assert!(sb.is_spacebase());
+
+        // RAX (Register@0x00) must NOT be marked.
+        let rax_marked = fd.vbank.loc_tree.iter()
+            .any(|v| {
+                let g = v.0.read().unwrap();
+                g.get_space() == AddressSpace::Register
+                    && g.get_offset() == 0x00
+                    && g.is_spacebase()
+            });
+        assert!(!rax_marked, "RAX must NOT be marked spacebase");
+    }
+
+    /// Verify split_uses() duplicates a multi-descendant op so each reader
+    /// gets its own output, faithful to Ghidra Funcdata::splitUses()
+    /// (funcdata_varnode.cc:1540-1567).
+    #[test]
+    fn test_split_uses_duplicates_op() {
+        // Build a Funcdata where one INT_ADD output has 2 descendant readers.
+        // We construct varnodes directly in the bank with proper descend links
+        // (inject_raw_ops creates separate varnode instances for inputs, which
+        // breaks identity; so we wire the descend chain manually here).
+        let mut fd = Funcdata::new("test_split", Address::new(0x1000), 0x100);
+
+        // INT_ADD(RSP, 0x10) -> tmp_out
+        let add_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+        let tmp_out = fd.new_unique_out(8, &add_op);
+        let rsp = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let off = fd.vbank.create_constant(8, 0x10);
+        fd.op_set_input(&add_op, rsp, 0);
+        fd.op_set_input(&add_op, off, 1);
+        fd.obank.alivelist.push(add_op.clone());
+
+        // Two readers of tmp_out.
+        let r1 = fd.new_op(2, Address::new(0x1001));
+        fd.op_set_opcode(&r1, OpCode::CPUI_LOAD);
+        fd.op_set_input(&r1, tmp_out.clone(), 1);  // reads tmp_out -> adds descend
+        fd.obank.alivelist.push(r1);
+
+        let r2 = fd.new_op(3, Address::new(0x1002));
+        fd.op_set_opcode(&r2, OpCode::CPUI_STORE);
+        fd.op_set_input(&r2, tmp_out.clone(), 1);  // reads tmp_out -> adds descend
+        fd.obank.alivelist.push(r2);
+
+        // Before split: tmp_out has 2 descendants.
+        assert_eq!(tmp_out.read().unwrap().count_descends(), 2);
+
+        // Run split_uses — faithful to Ghidra Funcdata::splitUses().
+        fd.split_uses(&tmp_out);
+
+        // After: a new duplicated INT_ADD op exists whose output is NOT tmp_out.
+        let has_new_add = fd.obank.alivelist.iter().any(|r| {
+            let o = r.0.read().unwrap();
+            if o.opcode != OpCode::CPUI_INT_ADD { return false; }
+            match o.output.as_ref() {
+                Some(out) => !std::sync::Arc::ptr_eq(out, &tmp_out),
+                None => false,
+            }
+        });
+        assert!(has_new_add, "split_uses should create a duplicated INT_ADD op");
     }
 }
 

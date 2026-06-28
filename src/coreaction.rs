@@ -3985,6 +3985,27 @@ impl Action for ActionStackPtrFlow {
     fn get_name(&self) -> &str { "stackptrflow" }
 }
 
+/// Mark spacebase registers. Faithful to `ActionSpacebase`
+/// (coreaction.hh:270-279, coreaction.cc:5506). Delegates to
+/// `Funcdata::spacebase()`.
+///
+/// Ghidra schedules this early in the main loop ("Must come before
+/// infertypes and nonzeromask" — coreaction.cc:5506). It marks the stack
+/// pointer register (RSP) with the `SPACEBASE` flag so downstream passes
+/// (varmap, ActionStackPtrFlow, heritage) recognize it as a pointer into
+/// the Stack address space.
+pub struct ActionSpacebase;
+impl ActionSpacebase {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionSpacebase {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        fd.spacebase();
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "spacebase" }
+}
+
 /// Segmentize: resolve segment operations. Faithful to `ActionSegmentize`
 /// (coreaction.cc).
 pub struct ActionSegmentize;
