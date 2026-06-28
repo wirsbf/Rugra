@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: 已核对（当前有效）
+- **状态**: ✅ **L3（2026-06-28 完整对齐）**——Emit trait 覆盖全部 Ghidra Emit 虚方法（含 begin/end Document/ReturnType/VarDecl/Statement/FuncProto）。
 - **对应源码**: 当前 `rugra/src/prettyprint.rs`
 
 **源代码路径**: `src/prettyprint.rs`

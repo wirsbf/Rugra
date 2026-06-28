@@ -45,6 +45,19 @@ pub trait Emit {
     /// Tag a statement line
     fn tag_line(&mut self, _indent: i32) {}
 
+    // --- Begin/end pairs (Ghidra Emit virtuals, prettyprint.hh:136-231) ---
+    // These are no-ops in plain text mode. Markup emitters would emit XML tags.
+    fn begin_document(&mut self) {}
+    fn end_document(&mut self) {}
+    fn begin_return_type(&mut self) {}
+    fn end_return_type(&mut self) {}
+    fn begin_var_decl(&mut self) {}
+    fn end_var_decl(&mut self) {}
+    fn begin_statement(&mut self) {}
+    fn end_statement(&mut self) {}
+    fn begin_func_proto(&mut self) {}
+    fn end_func_proto(&mut self) {}
+
     /// Check if this emitter supports markup
     fn emits_markup(&self) -> bool { false }
 

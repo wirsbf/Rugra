@@ -242,7 +242,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 |---|---|---|---|---|---|
 | 33 | `printc.cc` (~2500行) | `printc.rs` (~3000行) | 🔧 L2 | C 输出工作（24/24 + 29/29 gcc 通过）；缺少一些格式化特性 | `printc.cc` |
 | 34 | `printlanguage.cc` | `printlanguage.rs` | 🔧 L2 | Emit 架构对齐；缺少完整 markup 支持 | `printlanguage.cc` |
-| 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | EmitNoMarkup 对齐；post_process 已实现 | `prettyprint.cc` |
+| 35 | `prettyprint.cc` | `prettyprint.rs` (3020行) | ✅ **L3（2026-06-28 完整对齐）** | Emit trait 覆盖全部 Ghidra Emit 虚方法（print/begin_block/end_block/open_paren/close_paren/begin_function/end_function/tag_type/tag_variable/tag_op/tag_field/tag_func_name/tag_comment/tag_label/tag_case_label/tag_line + begin/end Document/ReturnType/VarDecl/Statement/FuncProto）。EmitNoMarkup（完整 C 文本生成 + post_process 15 趟 + reconcile 函数）+ NullEmit + CaseDetectEmit + replace_word/count_word_occurrences 辅助。760 测试通过 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 基本函数规格；缺少完整选项系统 | `fspec.cc` |
 | 37 | `options.cc` | `options.rs` | ✅ L3 | **完整实现**：ArchOption trait + OptionDatabase 分发器 + 37 个注册选项（9 个完全功能化）+ XML decode（decode_one/decode）。所有 L3 缺口已关闭 | `options.cc` |
 | 38 | `comment.cc` | `comment.rs` | ✅ L3 | **完整实现**：Comment + comment_type + CommentDatabaseInternal（add/clear/query/encode/decode）+ CommentSorter（find_position 完整基本块关联 via Funcdata op 遍历 + setup_function_list/setup_block_list/setup_op_list）。所有 L3 缺口已关闭 | `comment.cc` |
