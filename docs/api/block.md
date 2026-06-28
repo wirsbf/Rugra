@@ -867,3 +867,4 @@ BlockGraph 新增：
 - `get_visit_count`/`set_visit_count`（block.hh visit count）
 - `is_goto_in(i)`/`is_goto_out(i)`（block.hh:346-347）——**2026-06-29 修复**：`BlockBasic::is_goto_out` 此前只查边级 `F_GOTO_EDGE`，但 TraceDAG 把 goto 标在 block 级 `GOTO_EDGE_0/1` 上。修复后同时查边级和 block 级标志，使 ruleBlockWhileDo 能正确识别 break 边。
 - `set_loop_exit(i)`/`clear_loop_exit(i)`（block.hh:294-295）
+- `remove_in_edge_from(exclude_indices)`（block.cc:1469 忠实移植）——从块的 incoming 列表中移除 index 匹配的前驱边。对应 Ghidra `BlockGraph::removeEdge(begin, end)`，是 newBlockGoto/newBlockIfGoto "消费" goto 边的机制（使 goto 源对 target 的 sizeIn 不可见）。2026-06-29 新增，当前未被调用（ruleBlockGoto 消费实验因 Rugra 非对称边追踪导致图损坏，已回退；保留为未来对称边图工作的基础设施）。

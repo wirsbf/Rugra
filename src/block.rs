@@ -230,6 +230,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn set_loop_exit(&mut self, _i: usize) {}
     /// Clear the loop-exit label on the i-th out edge (Ghidra `clearLoopExit`).
     fn clear_loop_exit(&mut self, _i: usize) {}
+    /// Remove the in-edge from a predecessor whose index matches one of
+    /// `exclude_indices`. Faithful to Ghidra `removeEdge(begin, end)` which
+    /// removes `begin` from `end`'s intothis list. Used by ruleBlockGoto
+    /// consumption to make the goto source invisible to the target's sizeIn.
+    fn remove_in_edge_from(&mut self, _exclude_indices: &[i32]) {}
 }
 
 /// Represents a basic block of P-code operations
@@ -443,6 +448,11 @@ impl FlowBlock for BlockBasic {
         if let Some(e) = self.outgoing.get_mut(i) {
             e.flags &= !edge_flags::F_LOOP_EXIT_EDGE;
         }
+    }
+    fn remove_in_edge_from(&mut self, exclude_indices: &[i32]) {
+        self.incoming.retain(|e| {
+            e.point.read().map(|p| !exclude_indices.contains(&p.get_index())).unwrap_or(true)
+        });
     }
 }
 
