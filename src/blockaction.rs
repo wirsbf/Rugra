@@ -3348,17 +3348,19 @@ impl<'a> CollapseStructure<'a> {
                     if e.point.read().unwrap().get_index() == cond_idx { return false; }
                 }
             }
-            // Faithful to blockaction.cc:1528-1530: skip if either edge is goto.
-            // This lets break-edges (marked goto) be skipped so the body edge
-            // is the one we structure. (isInteriorGotoTarget omitted — Rugra
-            // does not yet track interior-goto-target; the goto-out checks
-            // below cover the common case.)
-            if b.is_goto_out(0) { return false; }
-            if b.is_goto_out(1) { return false; }
+            // Faithful to blockaction.cc:1528-1530: in Ghidra, ruleBlockGoto has
+            // already consumed break-edges (wrapped as BlockIfGoto) before
+            // ruleBlockWhileDo runs, so neither edge is goto. In Rugra's staged
+            // approach, the break-edge may still be marked goto on the loop head.
+            // So we do NOT bail on goto edges here; instead we find the NON-goto
+            // clause below. (isInteriorGotoTarget omitted — Rugra does not track it.)
             // Find the clause: out-edge slot whose target has sizeIn==1,
             // sizeOut==1, not switch-out, and loops back to bl (cc:1531-1547).
             let mut found: Option<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, i32)> = None;
             for slot in 0..2 {
+                // Skip goto-marked edges (break-edges): they should not be
+                // structured as the loop body.
+                if b.is_goto_out(slot) { continue; }
                 let clause_edge = match b.get_out(slot) { Some(e) => e, None => continue };
                 let clauseblock = clause_edge.point.clone();
                 let loops_back = {
