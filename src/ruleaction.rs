@@ -8050,6 +8050,123 @@ impl Rule for RuleDivOpt {
     }
 }
 
+/// Simplify expressions that optimize INT_REM and INT_SREM. Faithful to
+/// `RuleModOpt` (ruleaction.cc:8612-8671). Detects the pattern:
+///   `x / d * (-d) + x  =>  x % d`
+/// where `-d` is either a constant (2's complement) or INT_2COMP of div.
+pub struct RuleModOpt;
+
+impl RuleModOpt {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleModOpt {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleModOpt::applyOp (ruleaction.cc:8621-8671).
+        let (x_vn, div_vn, out_vn) = {
+            let op = op_arc.read().unwrap();
+            let x = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let div = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            // Guard: skip if either input is a pointer type (prevents
+            // false-positive on pointer arithmetic that was lifted as INT_DIV).
+            if x.read().unwrap().v_type.as_ref().map_or(false, |t| {
+                matches!(t.as_ref(), crate::type_system::Datatype::Pointer(_))
+            }) { return Ok(action_status::NO_CHANGE); }
+            if div.read().unwrap().v_type.as_ref().map_or(false, |t| {
+                matches!(t.as_ref(), crate::type_system::Datatype::Pointer(_))
+            }) { return Ok(action_status::NO_CHANGE); }
+            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (x, div, out)
+        };
+        let op_opc = op_arc.read().unwrap().opcode;
+
+        // Iterate descendants of the div output: look for INT_MULT by -d.
+        let multops: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out_vn.read().unwrap().descend_iter().collect();
+        for multop_arc in multops {
+            let multopc = multop_arc.read().unwrap().opcode;
+            if multopc != OpCode::CPUI_INT_MULT { continue; }
+
+            // Get the other input of MULT (div2 = the multiplicand that should be -d)
+            let (mult_in0, mult_in1) = {
+                let m = multop_arc.read().unwrap();
+                (m.inrefs.get(0).cloned(), m.inrefs.get(1).cloned())
+            };
+            // Find which input is out_vn and which is div2
+            let div2_vn = {
+                let out_ptr = &out_vn;
+                if let Some(ref in0) = mult_in0 {
+                    if std::sync::Arc::ptr_eq(in0, out_ptr) { mult_in1.clone() }
+                    else if mult_in1.as_ref().map(|in1| std::sync::Arc::ptr_eq(in1, out_ptr)).unwrap_or(false) { Some(in0.clone()) }
+                    else { continue; }
+                } else { continue; }
+            };
+            let div2_vn = match div2_vn { Some(v) => v, None => continue };
+
+            // Check that div is 2's complement of div2
+            let div_g = div_vn.read().unwrap();
+            let div2_g = div2_vn.read().unwrap();
+            if div2_g.is_constant() {
+                if !div_g.is_constant() { continue; }
+                let mask = crate::address::calc_mask(div2_g.get_size());
+                let twos_comp = ((div2_g.get_offset() ^ mask).wrapping_add(1)) & mask;
+                if twos_comp != div_g.get_offset() { continue; }
+            } else {
+                if !div2_g.is_written() { continue; }
+                let div2_def = match div2_g.def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a, None => continue,
+                };
+                if div2_def.read().unwrap().opcode != OpCode::CPUI_INT_2COMP { continue; }
+                let div2_in = match div2_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+                if !std::sync::Arc::ptr_eq(&div2_in, &div_vn) { continue; }
+            }
+            drop(div_g); drop(div2_g);
+
+            // Found x/d * (-d). Now look for INT_ADD of its output + x.
+            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue };
+            let addops: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = mult_out.read().unwrap().descend_iter().collect();
+            for addop_arc in addops {
+                if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
+                let (add_in0, add_in1) = {
+                    let a = addop_arc.read().unwrap();
+                    (a.inrefs.get(0).cloned(), a.inrefs.get(1).cloned())
+                };
+                // lvn = the input that is NOT mult_out
+                let lvn = {
+                    let mult_out_ref = &mult_out;
+                    if add_in0.as_ref().map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref)).unwrap_or(false) { add_in1 }
+                    else if add_in1.as_ref().map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref)).unwrap_or(false) { add_in0 }
+                    else { continue; }
+                };
+                let lvn = match lvn { Some(v) => v, None => continue };
+                if !std::sync::Arc::ptr_eq(&lvn, &x_vn) { continue; }
+
+                // Transform: addop becomes REM/SREM
+                let add_ref = crate::op::PcodeOpRef(addop_arc.clone());
+                fd.op_set_input(&add_ref, x_vn.clone(), 0);
+                let div_size = div_vn.read().unwrap().get_size();
+                if div_vn.read().unwrap().is_constant() {
+                    let dc = fd.new_constant(div_size, div_vn.read().unwrap().get_offset());
+                    fd.op_set_input(&add_ref, dc, 1);
+                } else {
+                    fd.op_set_input(&add_ref, div_vn.clone(), 1);
+                }
+                if op_opc == OpCode::CPUI_INT_DIV {
+                    fd.op_set_opcode(&add_ref, OpCode::CPUI_INT_REM);
+                } else {
+                    fd.op_set_opcode(&add_ref, OpCode::CPUI_INT_SREM);
+                }
+                return Ok(action_status::CHANGE);
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "mod_opt" }
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV]
+    }
+}
+
 /// Merge range conditions of the form: `V < c, c < V, V == c` etc.
 ///
 /// Faithful to Ghidra's `RuleRangeMeld` (ruleaction.cc:1346-1437).

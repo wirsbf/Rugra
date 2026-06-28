@@ -283,7 +283,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleSignDiv2::new()));           // 5599
     pool.add_rule(Box::new(RuleDivChain::new()));           // 5600
     pool.add_rule(Box::new(RuleSignNearMult::new()));       // 5601
-    // skip 5602 RuleModOpt — not yet ported
+    pool.add_rule(Box::new(RuleModOpt::new()));         // 5602 — x/d*(-d)+x => x%d (ruleaction.cc:8612)
     pool.add_rule(Box::new(RuleSignMod2nOpt::new()));       // 5603
     // skip 5604-5605 RuleSignMod2nOpt2/SignMod2Opt — not yet ported
     // skip 5606 RuleSwitchSingle — not yet ported

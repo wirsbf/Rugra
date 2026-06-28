@@ -781,3 +781,9 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - `RulePopcountBoolXor` — 简化通过 POPCOUNT 组合的布尔表达式：`popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`。辅助函数 `get_boolean_result` 对应 Ghidra `getBooleanResult`（ruleaction.cc:10335-10419），追踪 INT_AND/XOR/OR/ZEXT/SEXT/LEFT 链提取布尔源。
 - 触发于 CPUI_POPCOUNT。注册进 oppool1（5616）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 3）：RuleModOpt（ruleaction.cc:8612）
+- `RuleModOpt` — 简化 INT_DIV/INT_SDIV 的模运算表达式：`x/d * (-d) + x => x%d`。检测 div2 是 div 的二补数（常量或 INT_2COMP）。
+- 指针守卫：若任一输入是指针类型则跳过（防止指针算术被误匹配）。
+- 触发于 CPUI_INT_DIV/CPUI_INT_SDIV。注册进 oppool1（5602）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
