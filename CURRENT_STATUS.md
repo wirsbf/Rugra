@@ -9,21 +9,25 @@
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **736/736 通过** | 2026-06-28 实跑 |
-| curl gcc 审计 | **22/24**（glob_set 类型错误，CFG 修复暴露） | `python tools/audit_syntax.py result/curl_cur.c` |
-| httpd gcc 审计 | 待重新核实（性能回归，需长超时） | 同上 |
-| **curl while 循环** | **26**（从 4 跃升！接近 Ghidra 34） | CFG 基本块划分修复后 |
-| goto | **0** | 实测 |
+| curl gcc 审计 | **24/24 OK 0 FAIL** | `python tools/audit_syntax.py result/curl_cur.c` |
+| httpd gcc 审计 | **27/29**（2 类型错误） | 同上 |
+| **curl while 循环** | **26**（从 4 跃升） | CFG 修复 + reconcile 类型修复 |
+| **httpd while 循环** | **44**（从 8 跃升！） | identify_internal 死锁修复 |
+| goto | **0**（curl + httpd） | 实测 |
 | uVar 碎片 | **0** | 实测 |
 
-### 2026-06-28 重大突破：CFG 基本块划分修复 → curl while 4→26
+### 2026-06-28 双重突破
 
-**根因**：`build_blocks_from_ops`（funcdata.rs）只在 terminator 后分裂块，**不收集跳转目标地址作为分裂点**。导致 CBRANCH 目标落在块中间时无法解析，边被静默丢弃。实测 curl main 56 个 / 全局 182 个 CBRANCH 目标未匹配，丢失大量回边。
+**突破 1：CFG 基本块划分修复 → curl while 4→26**（commit 2bcfcde）
+- 根因：`build_blocks_from_ops` 不在跳转目标地址处分裂块，导致回边丢失
+- 修复：忠实移植 Ghidra 块划分（terminator + 跳转目标分裂点）
 
-**修复**（commit 2bcfcde）：忠实移植 Ghidra 的块划分——在 terminator 后 + **跳转目标地址处**分裂。修复后 curl main 回边 3→8（3 个独立循环头），curl while **4→26**（接近 Ghidra 的 34）。
+**突破 2：identify_internal RwLock 死锁修复 → httpd while 8→44**（commit e581dbc）
+- 根因：identify_internal 持有 write guard 时对自环边的 point 调 read，write+read 同一 RwLock 死锁
+- 修复：4 处 `e.point.read().unwrap()` → `try_read()`，失败跳过
+- 影响：httpd 从"卡在第 8 个函数"变成"完成全部 29 函数，44 while"
 
-**已知次要问题**：glob_set 的 `0 - piVar50`（int 减指针）类型错误，由改进的循环结构化暴露。需类型推断（ActionTypePropagate）修复 INT_SUB 指针操作数。
-
-> ⚠️ **历史声明校正**：AGENTS.md 此前声称"curl 16 while / httpd 39 while"，2026-06-28 实跑核实为 curl 4 / httpd 8。审计通过率（24/24、29/29）和 goto=0、uVar=0 属实。
+**类型修复链**（commits 7a9b359/89bf0d4/1e67ae6/73f2581/3aa2fe7）：reconcile int-pointer 减法/除法 + 死循环修复 + 指针类型匹配 cast + discovery pass 不可达块遍历 → curl 审计 24/24。
 
 ## 已接入且实际生效的模块（curl/httpd 验证）
 
