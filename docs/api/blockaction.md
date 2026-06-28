@@ -694,3 +694,8 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - **验证**：777/777 测试（含 test_is_goto_out_reads_block_flags）。curl 24/24（while=28, goto=0, uVar=0），httpd 29/29（while=44, goto=0, uVar=0）。无回归。
 - **剩余缺口**：staged→collapseInternal 架构迁移。Ghidra 的 ruleBlockGoto 在每轮 collapseInternal 中"消费"goto 边（实际重连，使 break 边从结构化视图消失），然后 ruleBlockWhileDo 看到 2 条非 goto 边。Rugra 目前只标记不重连，故带 break 的循环 WhileDo 形成受限（parseconfig 检测到 7 loops 但仅 1 WhileDo）。这是 G4 架构工作。
 
+
+### 2026-06-29（续 2）：try_rule_goto removeEdge 消费机制（部分实现）
+- `try_rule_goto`（pure-goto, size_out==1）：创建 BlockGoto 后调用 `remove_in_edge_from` 从 goto target 的 incoming 移除 BlockGoto。忠实 Ghidra `newBlockGoto` 的 `removeEdge(ret, ret->getOut(0))`（block.cc:1711）。**安全**：BlockGoto 无结构化 fallthrough，移除 in-edge 不产生不对称。
+- `try_rule_if_goto`（CBRANCH, size_out==2）：**未实现** removeEdge。需 Ghidra `forceOutputNum(2)`+`forceFalseEdge` 保留条件边——Rugra 的 BlockIf 缺这些，尝试 removeEdge 导致图损坏（curl 28→26）。留作已记录缺口。
+- **验证**：780/780 测试，curl 24/24（while=28, goto=0），httpd 29/29（while=44, goto=0）。无回归。

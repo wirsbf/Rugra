@@ -2848,6 +2848,14 @@ impl<'a> CollapseStructure<'a> {
         // edges onto the BlockGoto so it has correct size_in for further merging.
         self.identify_internal(&goto_block, &[idx], i);
         self.update_switch_case_reference(idx, &goto_block);
+        // Faithful to Ghidra newBlockGoto: removeEdge(ret, ret->getOut(0)).
+        // After identify_internal, the goto_target has an in-edge from the new
+        // BlockGoto. Remove it so the target's sizeIn no longer counts the
+        // goto source — this is the "consumption" that lets WhileDo match.
+        {
+            let goto_idx = goto_block.read().unwrap().get_index();
+            goto_target.write().unwrap().remove_in_edge_from(&[goto_idx, idx]);
+        }
         self.change_count += 1;
         eprintln!("[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})", self.name, idx, size_out);
         true
