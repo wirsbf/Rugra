@@ -853,6 +853,12 @@ BlockGraph 新增：
 - `F_BACK_EDGE`（Ghidra f_back_edge）— 可归约图的回边
 - `F_IRREDUCIBLE_EDGE`（Ghidra f_irreducible）— 结构化器引入的不可归约边
 - **修正 bug**：`F_GOTO_EDGE` 原为 1<<1（与 F_CONTINUE_EDGE 重复），改为 1<<2
+- **2026-06-28 新增 spanning-tree 边分类**（对齐 Ghidra block.hh:108-118）：`F_TREE_EDGE`(1<<7)/`F_FORWARD_EDGE`(1<<8)/`F_CROSS_EDGE`(1<<9)/`F_LOOP_EDGE`(1<<10) + `SPANNING_MASK`。由 `CollapseStructure::find_spanning_tree`（DFS）标记，`order_loop_bodies` 读 `F_BACK_EDGE` 检测循环。
+
+**FlowBlock trait 新增方法（2026-06-28）**（对齐 Ghidra block.hh:288/331）：
+- `set_out_edge_flag(slot, flag)` — 对第 slot 条出边 OR-set 边 flag（Ghidra setOutEdgeFlag）。默认实现用 `as_any_mut` downcast 到 `BlockBasic`/`BlockGraph` 的 `outgoing` 字段。
+- `clear_edge_flags(mask)` — 清除所有出边的 mask 位（Ghidra clearEdgeFlags）。
+- `is_back_edge_out(slot)` — 第 slot 条出边是否为回边（Ghidra isBackEdgeOut）。
 
 **BlockBasic 新字段**：`visit_count: i32`（Ghidra getVisitCount/setVisitCount）。
 

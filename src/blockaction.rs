@@ -918,27 +918,68 @@ impl<'a> CollapseStructure<'a> {
     /// = innermost loops first).
     fn order_loop_bodies(&mut self) {
         self.loop_bodies.clear();
+        // Faithful to Ghidra: label back-edges via a DFS spanning tree
+        // (BlockGraph::structureLoops → findSpanningTree), then detect loops
+        // by scanning F_BACK_EDGE labels (CollapseStructure::labelLoops,
+        // blockaction.cc:1126-1143). This replaces the earlier dominator-based
+        // back-edge test, which silently failed on curl `main` (0 back-edges
+        // found despite 25 candidate edges).
+        self.find_spanning_tree();
+        // Dominators are still needed elsewhere (switch-case detection,
+        // LoopBody helpers), so keep them up to date.
         self.compute_dominators();
         let size = self.graph.get_size();
 
-        // Find all back-edges and create loop bodies
+        // Diagnostic: dominator coverage + back-edge scan (RUGRA_LOOP_DEBUG=1)
+        let loop_dbg = std::env::var("RUGRA_LOOP_DEBUG")
+            .map(|v| v == "1").unwrap_or(false);
+        if loop_dbg {
+            let idom_count = self.idom.len();
+            let entry = (0..size).find(|&i| {
+                self.graph.get_block(i).map_or(false, |b| b.read().unwrap().size_in() == 0)
+            });
+            // Count F_BACK_EDGE-labelled edges (the spanning-tree result).
+            let mut back_edges = 0;
+            let mut back_examples: Vec<(i32,i32)> = Vec::new();
+            for i in 0..size {
+                let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+                let b = block.read().unwrap();
+                let src = b.get_index();
+                for slot in 0..b.size_out() {
+                    if b.is_back_edge_out(slot) {
+                        let tgt = b.get_out(slot).unwrap().point.read().unwrap().get_index();
+                        back_edges += 1;
+                        if back_examples.len() < 8 { back_examples.push((src, tgt)); }
+                    }
+                }
+            }
+            eprintln!("[LOOPDBG] {} size={} entry={:?} idom_entries={}/{} dfs_back_edges={} examples={:?}",
+                self.name, size, entry, idom_count, size, back_edges, back_examples);
+        }
+
+        // Find all back-edges (via F_BACK_EDGE labels) and create loop bodies.
+        // Faithful to labelLoops (blockaction.cc:1126-1142): for each block,
+        // scan out-edges; a back edge `(src -> tgt)` makes `tgt` the loop
+        // head and `src` a loop tail.
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
-            let b = block.read().unwrap();
-            let src_idx = b.get_index();
-            // Check all out-edges for back-edges (target dominates source)
-            for slot in 0..b.size_out() {
-                if let Some(edge) = b.get_out(slot) {
-                    let tgt_idx = edge.point.read().unwrap().get_index();
-                    // Back-edge: target dominates source (target is loop head)
-                    if self.dominates_idx(tgt_idx, src_idx) {
-                        // Collect loop body: all blocks that can reach src_idx
-                        // without going through tgt_idx (the loop head).
-                        let body = self.collect_loop_body(tgt_idx, src_idx, size);
-                        if !body.is_empty() {
-                            self.loop_bodies.push((tgt_idx, body));
+            let (src_idx, back_targets): (i32, Vec<i32>) = {
+                let b = block.read().unwrap();
+                let src = b.get_index();
+                let mut tgts = Vec::new();
+                for slot in 0..b.size_out() {
+                    if b.is_back_edge_out(slot) {
+                        if let Some(e) = b.get_out(slot) {
+                            tgts.push(e.point.read().unwrap().get_index());
                         }
                     }
+                }
+                (src, tgts)
+            };
+            for tgt_idx in back_targets {
+                let body = self.collect_loop_body(tgt_idx, src_idx, size);
+                if !body.is_empty() {
+                    self.loop_bodies.push((tgt_idx, body));
                 }
             }
         }
@@ -972,10 +1013,9 @@ impl<'a> CollapseStructure<'a> {
                 let src = b.get_index();
                 let mut tgts = Vec::new();
                 for slot in 0..b.size_out() {
-                    if let Some(edge) = b.get_out(slot) {
-                        let tgt = edge.point.read().unwrap().get_index();
-                        if self.dominates_idx(tgt, src) {
-                            tgts.push(tgt);
+                    if b.is_back_edge_out(slot) {
+                        if let Some(edge) = b.get_out(slot) {
+                            tgts.push(edge.point.read().unwrap().get_index());
                         }
                     }
                 }
@@ -1595,6 +1635,193 @@ impl<'a> CollapseStructure<'a> {
 
     /// Compute immediate dominators using iterative dataflow (Cooper et al.
     /// 2001 simplified algorithm). Stores result in self.idom.
+    /// DFS spanning-tree computation. Faithful to Ghidra's
+    /// `BlockGraph::findSpanningTree` (block.cc:1009-1110) and
+    /// `BlockGraph::structureLoops` (block.cc:2194-2215).
+    ///
+    /// Computes a DFS spanning tree and labels every out-edge as one of:
+    ///   - `F_TREE_EDGE`    : edge to an unvisited child (spanning tree)
+    ///   - `F_BACK_EDGE`|`F_LOOP_EDGE` : edge to a node still on the DFS stack
+    ///     (this defines a loop — `order_loop_bodies` reads `F_BACK_EDGE`)
+    ///   - `F_FORWARD_EDGE` : edge to an already-finished descendant
+    ///   - `F_CROSS_EDGE`   : edge to an already-finished non-descendant
+    ///
+    /// Returns the list of roots (entry blocks) in visitation order.
+    ///
+    /// The back-edge labelling is what makes loop detection work: a back edge
+    /// `(src -> tgt)` means `tgt` is a loop header and `src` is a loop tail.
+    /// This replaces Rugra's earlier (buggy) dominator-based back-edge test,
+    /// which failed to find any loop in curl `main` (102 blocks, 0 back-edges
+    /// detected despite 25 candidate edges) due to a broken intersect step.
+    ///
+    /// IMPORTANT: this uses LOCAL DFS state (HashMaps), NOT the FlowBlock
+    /// `index`/`visit_count` fields. In Rugra, `index` is the block's
+    /// position in `BlockGraph.blocks` and is relied upon by
+    /// `compute_dominators`, `collect_loop_body`, etc. Ghidra overloads
+    /// `index` for rpostorder because its `getBlock(i)` is list-position
+    /// indexed while `get_index()` is rpostorder — Rugra conflates these, so
+    /// we keep them separate to avoid corrupting the dominator computation.
+    fn find_spanning_tree(&mut self) -> Vec<i32> {
+        use crate::block::edge_flags as ef;
+        let size = self.graph.get_size();
+        if size == 0 { return Vec::new(); }
+
+        // Local DFS state, keyed by block position index (NOT rpostorder).
+        // preorder_num: order first visited (-1 = unvisited)
+        // rpost_num:    reverse-postorder finish number (-1 = on stack/unfinished)
+        let mut preorder_num: std::collections::HashMap<i32, i32> =
+            std::collections::HashMap::with_capacity(size);
+        let mut rpost_num: std::collections::HashMap<i32, i32> =
+            std::collections::HashMap::with_capacity(size);
+        for i in 0..size {
+            preorder_num.insert(i as i32, -1);
+            rpost_num.insert(i as i32, -1);
+        }
+
+        // Collect root candidates (blocks with no in-edges). Ghidra swaps
+        // first and last root so the "original head" is visited last (first
+        // in reverse-post-order). We mirror this.
+        let mut rootlist: Vec<i32> = Vec::new();
+        for i in 0..size {
+            if let Some(blk) = self.graph.get_block(i) {
+                if blk.read().unwrap().size_in() == 0 {
+                    rootlist.push(i as i32);
+                }
+            }
+        }
+        if rootlist.len() > 1 {
+            let last = rootlist.len() - 1;
+            rootlist.swap(0, last);
+        } else if rootlist.is_empty() {
+            rootlist.push(0); // No obvious entry — assume block 0 (Ghidra: list[0]).
+        }
+
+        // Clear any prior spanning-tree labels on all out-edges.
+        for i in 0..size {
+            if let Some(blk) = self.graph.get_block(i) {
+                blk.write().unwrap().clear_edge_flags(ef::SPANNING_MASK);
+            }
+        }
+
+        // Iterative DFS (mirrors Ghidra's state/istate stacks). state holds
+        // block position indices; istate holds the next child slot to try.
+        let mut state: Vec<i32> = Vec::with_capacity(size);
+        let mut istate: Vec<usize> = Vec::with_capacity(size);
+        let mut preorder_count: i32 = 0;
+        let mut rpostcount = size as i32;
+        let mut rootindex: usize = 0;
+        let mut usedroots: Vec<i32> = Vec::new();
+
+        // Ghidra runs the DFS up to twice: the first pass may discover
+        // unreachable blocks and promotes them to extra roots; the second
+        // pass re-runs with the expanded root list.
+        for _repeat in 0..2 {
+            let mut extraroots = false;
+            rpostcount = size as i32;
+            rootindex = 0;
+            preorder_count = 0;
+            // Reset for a fresh traversal.
+            for i in 0..size {
+                preorder_num.insert(i as i32, -1);
+                rpost_num.insert(i as i32, -1);
+            }
+            for i in 0..size {
+                if let Some(blk) = self.graph.get_block(i) {
+                    blk.write().unwrap().clear_edge_flags(ef::SPANNING_MASK);
+                }
+            }
+            state.clear();
+            istate.clear();
+            usedroots.clear();
+
+            while preorder_count < size as i32 {
+                // Pick the next start block: prefer an unused root, else any
+                // unvisited block (which becomes a new root).
+                let mut startbl: i32 = -1;
+                while rootindex < rootlist.len() {
+                    let cand = rootlist[rootindex];
+                    rootindex += 1;
+                    if preorder_num[&cand] == -1 {
+                        startbl = cand;
+                        usedroots.push(cand);
+                        break;
+                    }
+                }
+                if startbl == -1 {
+                    extraroots = true;
+                    for i in 0..size {
+                        if preorder_num[&(i as i32)] == -1 {
+                            startbl = i as i32;
+                            break;
+                        }
+                    }
+                    if startbl == -1 { break; }
+                    rootlist.push(startbl);
+                    rootindex += 1;
+                    usedroots.push(startbl);
+                }
+
+                state.push(startbl);
+                istate.push(0);
+                preorder_num.insert(startbl, preorder_count);
+                preorder_count += 1;
+
+                while !state.is_empty() {
+                    let curbl = *state.last().unwrap();
+                    let cur_block = self.graph.get_block(curbl as usize).unwrap();
+                    let nout = cur_block.read().unwrap().size_out();
+                    if nout <= *istate.last().unwrap() {
+                        // All children visited: finish this node.
+                        state.pop();
+                        istate.pop();
+                        rpostcount -= 1;
+                        rpost_num.insert(curbl, rpostcount);
+                    } else {
+                        let edgenum = *istate.last().unwrap();
+                        *istate.last_mut().unwrap() += 1;
+                        // Child target of this out-edge (block position index).
+                        let childbl = match cur_block.read().unwrap().get_out(edgenum) {
+                            Some(e) => {
+                                // The child's position index. Note: edge.point's
+                                // get_index() returns the block's stored index,
+                                // which (for BlockBasic) is its position in the
+                                // graph's blocks list — same space we key on.
+                                e.point.read().unwrap().get_index()
+                            }
+                            None => continue,
+                        };
+                        let child_pre = preorder_num.get(&childbl).copied().unwrap_or(-2);
+                        let child_rpost = rpost_num.get(&childbl).copied().unwrap_or(-2);
+                        let cur_pre = preorder_num[&curbl];
+
+                        if child_pre == -1 {
+                            // Unvisited: tree edge, descend.
+                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_TREE_EDGE);
+                            state.push(childbl);
+                            istate.push(0);
+                            preorder_num.insert(childbl, preorder_count);
+                            preorder_count += 1;
+                        } else if child_rpost == -1 {
+                            // Child still on the DFS stack → back edge (loop).
+                            cur_block.write().unwrap()
+                                .set_out_edge_flag(edgenum, ef::F_BACK_EDGE | ef::F_LOOP_EDGE);
+                        } else if cur_pre >= 0 && cur_pre < child_pre {
+                            // curbl visited before childbl, child finished → forward edge.
+                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_FORWARD_EDGE);
+                        } else {
+                            // Already finished, not forward → cross edge.
+                            cur_block.write().unwrap().set_out_edge_flag(edgenum, ef::F_CROSS_EDGE);
+                        }
+                    }
+                }
+            }
+            if !extraroots { break; }
+        }
+
+        usedroots
+    }
+
+
     fn compute_dominators(&mut self) {
         self.idom.clear();
         let size = self.graph.get_size();

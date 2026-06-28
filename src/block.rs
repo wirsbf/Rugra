@@ -63,11 +63,30 @@ pub mod edge_flags {
     /// LoopBody::setExitMarks so TraceDAG knows where the loop ends.
     pub const F_LOOP_EXIT_EDGE: u32 = 1 << 4;
     /// Within a (reducible) graph, a back edge defining a loop (Ghidra
-    /// `f_back_edge`).
+    /// `f_back_edge`). Set by findSpanningTree DFS (block.cc:1101):
+    /// an edge to a node still on the DFS stack.
     pub const F_BACK_EDGE: u32 = 1 << 5;
     /// Irreducible edge introduced by the structurer (Ghidra `f_irreducible`).
     /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
     pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
+    // ---- Spanning-tree edge classification (Ghidra block.hh:108-118) ----
+    // Set by findSpanningTree (block.cc:1041-1108). These mirror Ghidra's
+    // f_tree_edge / f_forward_edge / f_cross_edge / f_loop_edge.
+    /// Edge in the DFS spanning tree (Ghidra `f_tree_edge` = 0x10).
+    pub const F_TREE_EDGE: u32 = 1 << 7;
+    /// Edge jumping forward in the spanning tree (Ghidra `f_forward_edge` = 0x20).
+    pub const F_FORWARD_EDGE: u32 = 1 << 8;
+    /// Edge crossing subtrees in the spanning tree (Ghidra `f_cross_edge` = 0x40).
+    pub const F_CROSS_EDGE: u32 = 1 << 9;
+    /// Edge that completes a loop; removing these yields a DAG (Ghidra
+    /// `f_loop_edge` = 2). A back edge is always also a loop edge, but a
+    /// loop edge may be set independently by calcLoop for irreducible cases.
+    pub const F_LOOP_EDGE: u32 = 1 << 10;
+
+    /// All spanning-tree edge flags, for clearing (Ghidra clears these
+    /// together in structureLoops, block.cc:2206).
+    pub const SPANNING_MASK: u32 =
+        F_TREE_EDGE | F_FORWARD_EDGE | F_CROSS_EDGE | F_BACK_EDGE | F_LOOP_EDGE;
 }
 
 /// Common interface for all types of blocks (Basic, Graph, Condition, etc.)
@@ -113,6 +132,41 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     fn get_in(&self, slot: usize) -> Option<BlockEdge>;
     fn get_out(&self, slot: usize) -> Option<BlockEdge>;
+
+    /// OR-set edge flags on the `slot`-th outgoing edge.
+    /// Faithful to Ghidra's `FlowBlock::setOutEdgeFlag` (block.hh:288).
+    /// Used by `findSpanningTree` to label tree/back/forward/cross edges.
+    fn set_out_edge_flag(&mut self, slot: usize, flag: u32) {
+        // Default: try to downcast to the concrete block types that hold an
+        // `outgoing: Vec<BlockEdge>` field. BlockGraph/BlockBasic/BlockCopy.
+        let any = self.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if slot < bb.outgoing.len() { bb.outgoing[slot].flags |= flag; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if slot < bg.outgoing.len() { bg.outgoing[slot].flags |= flag; }
+        }
+        // Other block kinds (BlockCopy etc.) don't own out-edges that need
+        // spanning-tree labels in Rugra's structurer.
+    }
+
+    /// Clear a mask of edge flags from ALL outgoing edges.
+    /// Faithful to Ghidra's `FlowBlock::clearEdgeFlags` (block.cc).
+    fn clear_edge_flags(&mut self, mask: u32) {
+        let any = self.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            for e in bb.outgoing.iter_mut() { e.flags &= !mask; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            for e in bg.outgoing.iter_mut() { e.flags &= !mask; }
+        }
+    }
+
+    /// Is the `slot`-th outgoing edge a back edge?
+    /// Faithful to Ghidra's `FlowBlock::isBackEdgeOut` (block.hh:331).
+    fn is_back_edge_out(&self, slot: usize) -> bool {
+        self.get_out(slot)
+            .map(|e| e.flags & edge_flags::F_BACK_EDGE != 0)
+            .unwrap_or(false)
+    }
 
     fn add_in_edge(&mut self, edge: BlockEdge);
     fn add_out_edge(&mut self, edge: BlockEdge);

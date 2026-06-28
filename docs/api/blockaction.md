@@ -627,3 +627,17 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 3. is_loop_dag_out（tracedag）跳过 loop-exit/goto 边
 
 689/689 测试，curl 24/24 + httpd 29/29，0 goto。
+
+### 2026-06-28：findSpanningTree DFS — 循环回边检测修复（blockaction L2→L3 关键）
+
+**根因**：curl `main`（102 块）用旧的支配者判定回边检测到 **0 个循环**，尽管有 25 条候选（tgt<src）边。Ghidra 在同一函数识别 5+ 个循环。支配者的 intersect 步骤计算了错误的 idom，导致 `dominates_idx` 对每个候选回边都返回 false。
+
+**修复（忠实移植 Ghidra，非简化）**：
+- 移植 `BlockGraph::findSpanningTree`（block.cc:1009-1110）：迭代式 DFS，标记每条出边为 tree/back/forward/cross。回边（指向 DFS 栈中仍存在的节点）定义循环。
+- 移植两遍结构（不可达块提升为额外 root）。
+- `order_loop_bodies` 改读 `F_BACK_EDGE` 标签（对齐 labelLoops, blockaction.cc:1126-1143），不再用支配者判定。
+- **设计要点**：用**局部 DFS 状态**（HashMap），**不碰** `FlowBlock.index`/`visit_count`。Rugra 的 `index` == 块在 `BlockGraph.blocks` 中的位置（被 compute_dominators/collect_loop_body 依赖）；Ghidra 把 index 重载为 rpostorder，此处不适用。
+
+**实测证据**（`RUGRA_LOOP_DEBUG=1`）：main 回边 0→3，my_get_line 1→2，next_url 2→3；curl 全局回边检测 0→19；idom_entries 恢复（main 21→86）。
+
+**剩余**：while 输出数未变（curl 4/httpd 8），因为下游循环结构化（把检测到的循环变成 while/do-while）是独立的下一层。736/736 测试，curl 24/24 + httpd 29/29，0 goto，0 回归。
