@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/opbehavior.rs`
 **Ghidra 对应**: `opbehavior.hh` / `opbehavior.cc` (1364行)
-**状态**: 🔧 L2（evaluate_unary/evaluate_binary 核心实现，覆盖 25+ opcode）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全 opcode evaluate/recoverInput 覆盖，含 INT_LEFT recoverInputBinary（对齐 cc:443）
 
 ## 模块说明
 
@@ -28,7 +28,7 @@ CARRY/SCARRY/SBORROW/BOOL_AND/BOOL_OR/BOOL_XOR）。
 - `evaluate_binary`: 新增 PTRADD/PTRSUB/PIECE
 - `evaluate_ternary`: PTRADD 三元求值（opbehavior.hh:71）
 - `recover_input_unary`: 逆操作恢复（opbehavior.hh:77）
-- `recover_input_binary`: 逆操作恢复（opbehavior.hh:74）
+- `recover_input_binary`: 逆操作恢复（opbehavior.hh:74）。**2026-06-28 新增 INT_LEFT**（对齐 OpBehaviorIntLeft::recoverInputBinary cc:443）：slot 0 时 `out >> shift_amount`，slot 1 返回 None。
 
-覆盖 Ghidra 的全部 evaluate/recoverInput 方法。
+覆盖 Ghidra 的全部 evaluate/recoverInput 方法。738/738 测试验证。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。

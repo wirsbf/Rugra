@@ -197,6 +197,21 @@ pub fn recover_input_binary(opc: OpCode, slot: usize, size_out: usize, out: u64,
         OpCode::CPUI_INT_XOR => {
             (out ^ other) & in_mask
         }
+        // Faithful to Ghidra OpBehaviorIntLeft::recoverInputBinary (cc:443):
+        // slot==0 (the value being shifted): out >> shift_amount.
+        // slot==1 (the shift amount): cannot recover (return None).
+        OpCode::CPUI_INT_LEFT => {
+            if slot != 0 || other as usize >= size_out * 8 {
+                return None;
+            }
+            // Check no high bits were lost: (out << (bits-sa)) & mask must be 0.
+            let sa = other as usize;
+            let full_mask = mask(size_out * 8);
+            if (out << (size_out * 8 - sa)) & full_mask != 0 {
+                return None; // Output not in range of left shift
+            }
+            (out >> sa) & in_mask
+        }
         _ => return None,
     };
     Some(result)
@@ -244,5 +259,27 @@ mod tests {
         assert_eq!(evaluate_unary(OpCode::CPUI_INT_NEGATE, 4, 4, 0), Some(0xffffffff));
         assert_eq!(evaluate_unary(OpCode::CPUI_INT_2COMP, 4, 4, 5), Some(0xfffffffb));
         assert_eq!(evaluate_unary(OpCode::CPUI_INT_SEXT, 2, 1, 0xff), Some(0xffff));
+    }
+
+    #[test]
+    fn test_recover_input_left() {
+        // INT_LEFT: 1 << 4 = 16. Recover slot 0: 16 >> 4 = 1.
+        // Signature: (opc, slot, size_out, out, size_in, other)
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_LEFT, 0, 4, 16, 4, 4), Some(1));
+        // slot 1 (shift amount) cannot be recovered.
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_LEFT, 1, 4, 16, 4, 1), None);
+        // Shift >= size*8 is invalid.
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_LEFT, 0, 4, 16, 4, 32), None);
+    }
+
+    #[test]
+    fn test_recover_input_add_sub() {
+        // INT_ADD: 3 + 4 = 7. Recover slot 0: 7 - 4 = 3.
+        // Signature: (opc, slot, size_out, out, size_in, other)
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_ADD, 0, 4, 7, 4, 4), Some(3));
+        // INT_SUB slot 0: 7 - 4 = 3. Recover: 3 + 4 = 7.
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_SUB, 0, 4, 3, 4, 4), Some(7));
+        // INT_SUB slot 1: 7 - 4 = 3. Recover: 7 - 3 = 4.
+        assert_eq!(recover_input_binary(OpCode::CPUI_INT_SUB, 1, 4, 3, 4, 7), Some(4));
     }
 }
