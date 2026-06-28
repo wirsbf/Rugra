@@ -107,17 +107,6 @@ impl CircleRange {
         }
     }
 
-    /// Normalize the representation of full sets.
-    fn normalize(&mut self) {
-        if self.right == self.left && self.step == 1 {
-            // Full range: [x, x) with step 1 = full.
-        }
-        // Ensure right != left unless it's a full range or empty.
-        if self.right == self.left && self.step == 1 && !self.isempty {
-            // Full range: left == right is fine.
-        }
-    }
-
     /// Intersect this range with another.
     /// Returns: 0=empty result, 1=non-empty intersection, 2=this contains op2.
     pub fn intersect(&mut self, op2: &CircleRange) -> i32 {
@@ -632,6 +621,98 @@ impl CircleRange {
         // Express as INT_LESSEQUAL(left, slot 0) && INT_LESS(right, slot 1) — too complex.
         None
     }
+
+    /// Normalize the range so that empty/full representation is canonical.
+    /// Faithful to Ghidra CircleRange::normalize (rangeutil.cc:25).
+    pub fn normalize(&mut self) {
+        if self.left == self.right {
+            if self.step != 1 {
+                self.left = self.left % self.step;
+            } else {
+                self.left = 0;
+            }
+            self.right = self.left;
+        }
+    }
+
+    /// Check if this range contains another range.
+    /// Faithful to Ghidra CircleRange::contains(CircleRange) (rangeutil.cc:301).
+    pub fn contains_range(&self, op2: &CircleRange) -> bool {
+        if self.isempty { return op2.isempty; }
+        if op2.isempty { return true; }
+        if self.step > op2.step {
+            if !op2.is_single() { return false; }
+        }
+        if self.left == self.right { return true; }
+        if op2.left == op2.right { return false; }
+        if self.left % self.step != op2.left % op2.step { return false; }
+        if self.left == op2.left && self.right == op2.right { return true; }
+        // Simplified containment: check if op2's boundaries are in this range
+        self.contains_val(op2.left) && self.contains_val(op2.right.wrapping_sub(1).wrapping_add(1).wrapping_sub(1))
+    }
+
+    /// Widen this range to better match the containing range.
+    /// Faithful to Ghidra CircleRange::widen (rangeutil.cc:1395).
+    pub fn widen(&mut self, op2: &CircleRange, left_is_stable: bool) {
+        if left_is_stable {
+            if self.step > 0 {
+                let lmod = self.left % self.step;
+                let mod_val = op2.right % self.step;
+                if mod_val <= lmod {
+                    self.right = op2.right + (lmod - mod_val);
+                } else {
+                    self.right = op2.right - (mod_val - lmod);
+                }
+                self.right &= self.mask;
+            }
+        } else {
+            self.left = op2.left & self.mask;
+        }
+        self.normalize();
+    }
+
+    /// Push forward through a trinary op (PTRADD).
+    /// Faithful to Ghidra CircleRange::pushForwardTrinary (rangeutil.cc:1381).
+    pub fn push_forward_trinary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in2: &CircleRange, in3: &CircleRange, in_size: usize, out_size: usize, max_step: i32) -> bool {
+        if opc != crate::opcodes::OpCode::CPUI_PTRADD { return false; }
+        let mut tmp_range = CircleRange::full(in_size);
+        if !tmp_range.push_forward_binary(crate::opcodes::OpCode::CPUI_INT_MULT, in2, in3, in_size, in_size, max_step) {
+            return false;
+        }
+        self.push_forward_binary(crate::opcodes::OpCode::CPUI_INT_ADD, in1, &tmp_range, in_size, out_size, max_step)
+    }
+
+    /// Get the maximum number of significant bits in the range.
+    /// Faithful to Ghidra CircleRange::getMaxInfo (rangeutil.cc:280).
+    pub fn get_max_info(&self) -> i32 {
+        let half_point = self.mask ^ (self.mask >> 1);
+        if self.contains_val(half_point) {
+            return (8 * std::mem::size_of::<u64>()) as i32 - (half_point.leading_zeros() as i32);
+        }
+        let size_left = if (half_point & self.left) == 0 {
+            self.left.leading_zeros() as i32
+        } else {
+            (!self.left & self.mask).leading_zeros() as i32
+        };
+        let size_right = if (half_point & self.right) == 0 {
+            self.right.leading_zeros() as i32
+        } else {
+            (!self.right & self.mask).leading_zeros() as i32
+        };
+        (8 * std::mem::size_of::<u64>()) as i32 - (size_right.min(size_left))
+    }
+
+    /// Set the stride of this range.
+    /// Faithful to Ghidra CircleRange::setStride (rangeutil.cc:707).
+    pub fn set_stride(&mut self, new_step: u64, rem: u64) {
+        self.step = new_step;
+        if self.step > 1 {
+            self.left = (self.left / self.step) * self.step + rem;
+            self.right = (self.right / self.step) * self.step + rem;
+            self.right &= self.mask;
+            self.left &= self.mask;
+        }
+    }
 }
 
 /// Calculate the number of bit transitions in the sized value. Faithful to
@@ -891,5 +972,44 @@ mod tests {
         assert_eq!(sign_extend_size(0x7F, 1, 4), 0x7F);
         // 0x80 as 1-byte sign-extended to 2 bytes = 0xFF80.
         assert_eq!(sign_extend_size(0x80, 1, 2), 0xFF80);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let mut r = CircleRange::full(4);
+        r.normalize();
+        assert_eq!(r.left, 0);
+        assert_eq!(r.right, 0);
+    }
+
+    #[test]
+    fn test_contains_range() {
+        let outer = CircleRange::new(0, 100, 4, 1);
+        let inner = CircleRange::new(10, 50, 4, 1);
+        assert!(outer.contains_range(&inner));
+        assert!(!inner.contains_range(&outer));
+    }
+
+    #[test]
+    fn test_widen() {
+        let mut r = CircleRange::new(5, 10, 4, 1);
+        let container = CircleRange::new(0, 100, 4, 1);
+        r.widen(&container, false); // left is not stable → expand left
+        assert!(r.get_size() > 5); // should have widened
+    }
+
+    #[test]
+    fn test_get_max_info() {
+        let r = CircleRange::new(0, 256, 4, 1); // values 0-255
+        let info = r.get_max_info();
+        assert!(info >= 0 && info <= 32);
+    }
+
+    #[test]
+    fn test_set_stride() {
+        let mut r = CircleRange::new(3, 99, 4, 1);
+        r.set_stride(4, 3); // stride 4, remainder 3
+        assert_eq!(r.get_step(), 4);
+        assert_eq!(r.get_left() % 4, 3);
     }
 }

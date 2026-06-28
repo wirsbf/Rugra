@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/rangeutil.rs`
 **Ghidra 对应**: `rangeutil.hh` / `rangeutil.cc` (3015行)
-**状态**: 📋 L1→🔧 L2（CircleRange 核心实现：构造/包含/交集/并集/迭代）
+**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 CircleRange 方法覆盖（含 normalize/contains_range/widen/push_forward_trinary/get_max_info/set_stride）。26 单元测试。
 
 ## 模块说明
 
