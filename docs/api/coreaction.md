@@ -594,3 +594,13 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - Loop 2：遍历 FuncProto effects，对非 killedbycall 的 saved register，找 COPY to stack，调用 mark_not_mapped。
 - 使用 collect-then-apply 模式避免借用冲突。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 4）：ActionDirectWrite L1→L2（coreaction.cc:1350-1432）
+- Phase 1：遍历所有 varnodes，清除 direct_write 标志。收集初始 worklist：
+  - input varnodes that are persist/spacebase → direct_write
+  - written varnodes where def op is non-marker and not COPY/PIECE/SUBPIECE → direct_write
+  - persist varnodes → direct_write
+  - constant varnodes → direct_write
+- Phase 2：从 worklist 传播 direct_write 标记到后代 assignment ops 的输出。
+- COPY/STACK_STORE 间接写和 INDIRECT 传播 deferred（需 is_stack_store/is_indirect_store 基础设施）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

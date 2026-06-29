@@ -3007,13 +3007,68 @@ impl ActionDirectWrite {
 }
 impl Action for ActionDirectWrite {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionDirectWrite::apply (coreaction.cc:1350-1432).
+        // Phase 1: Clear direct_write on all varnodes. Collect initial
+        // worklist of legal inputs / auto direct writes.
+        // Phase 2: Propagate direct_write taint through assignments.
+
         let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
+
+        // Phase 1: Clear + collect worklist
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn_arc in &varnodes {
+            vn_arc.write().unwrap().clear_direct_write();
             let vn_rg = vn_arc.read().unwrap();
-            if vn_rg.is_input() && vn_rg.is_spacebase() {
-                // Spacebase inputs are direct writes.
+            if vn_rg.is_input() {
+                if vn_rg.is_persist() || vn_rg.is_spacebase() {
+                    drop(vn_rg);
+                    vn_arc.write().unwrap().set_direct_write();
+                    worklist.push(vn_arc.clone());
+                }
+            } else if vn_rg.is_written() {
+                // Check defining op
+                let def_op = match vn_rg.def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(a) => a, None => { drop(vn_rg); continue; }
+                };
+                let is_marker = def_op.read().unwrap().is_marker();
+                let def_opc = def_op.read().unwrap().opcode;
+                if !is_marker {
+                    if vn_rg.is_persist() {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                        worklist.push(vn_arc.clone());
+                    } else if def_opc != OpCode::CPUI_PIECE && def_opc != OpCode::CPUI_SUBPIECE {
+                        // Non-COPY, non-PIECE, non-SUBPIECE writes are direct
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                        worklist.push(vn_arc.clone());
+                    }
+                    // COPY and STACK_STORE cases deferred (need is_stack_store infrastructure)
+                }
+            } else if vn_rg.is_constant() {
+                drop(vn_rg);
+                vn_arc.write().unwrap().set_direct_write();
+                worklist.push(vn_arc.clone());
             }
         }
+
+        // Phase 2: Propagate direct_write through descendants
+        while let Some(vn_arc) = worklist.pop() {
+            let descendents: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> = {
+                vn_arc.read().unwrap().descend_iter().collect()
+            };
+            for desc_op_arc in descendents {
+                // Only propagate through assignment ops (ops with output)
+                let out_vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> = match desc_op_arc.read().unwrap().output.as_ref() {
+                    Some(o) => o.clone(), None => continue,
+                };
+                if !out_vn.read().unwrap().is_direct_write() {
+                    out_vn.write().unwrap().set_direct_write();
+                    worklist.push(out_vn);
+                }
+            }
+        }
+
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "directwrite" }
