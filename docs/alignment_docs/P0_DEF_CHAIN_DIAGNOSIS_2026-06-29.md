@@ -113,3 +113,52 @@ cargo run --release --example debug_my_fwrite 2>&1 >/dev/null | sed -n '/=== P-c
 # 查看管线后 varnode def（证明同名 varnode 一有一无 def）
 cargo run --release --example debug_my_fwrite 2>&1 >/dev/null | sed -n '/=== After full pipeline/,/=== Output/p' | grep Unique
 ```
+
+---
+
+## 六、治本进展（2026-06-29 续：merge 权威化 + implied 移植调查）
+
+### 已完成并提交（4 commit，已验证）
+
+| commit | 内容 | 效果 |
+|---|---|---|
+| f61bd18 | merge: is_live_varnode 过滤 | merge 跳过死 varnode（后被 live_set 取代） |
+| efb02ba | core: move ActionMergeType 到 dead-code 之后 | 对齐 Ghidra coreaction.cc:5682→5718 顺序 |
+| f5f5653 | merge: live_set 权威存活集 | 修正 is_live_varnode 的错误判定（def-dead 不可靠，改用"被 alive op 引用"） |
+| 0e1cd48 | printc: push_varnode Priority 1.4 | 沿 high.get_type_representative() inline def |
+
+**判据 1（HighVariable.instances 权威）已达成**：merge 在 dead-code 后运行 + live_set 过滤，instances 只含被 alive op 引用的 varnode。780/780 测试通过，curl 审计 24/24。
+
+### 关键修正：is_live_varnode → live_set
+
+`is_live_varnode` 初版用 "vn.def 的 op 是否 dead" 判存活——**错误**。诊断证据（debug_my_fwrite）：loc_tree=108 varnode，is_live_varnode 只通过 10 个（29 个 written-with-dead-def 被误杀）。根因：copy-prop 重定向 `user.inrefs[slot]` 后**不更新**旧 varnode 的 vn.def（仍指向已 mark_dead 的 COPY）和 vn.descend（清空）。所以 def/descend 在 copy-prop 后不可靠。正确判定：**varnode 是否被某 alive op 的 inrefs/output 引用**（live_set）。
+
+### implied 机制移植调查（判据 3"删 map"的正确路径）
+
+按铁律 #6 读 Ghidra printc.cc 发现：**Ghidra printc 没有任何自建 map**（copy_map/def_map/value_def_map/comparison_def_map 全不存在）。Ghidra 控制内联的唯一权威机制是 **`isImplied()` 标志 + `ActionMarkImplied` pass**：
+- `ActionMarkImplied`（coreaction.cc:3416）DFS 遍历 varnode，用 `checkImpliedCover`（cover 相交检测）判定哪些 varnode 可 implied
+- `printc.cc:2704` `if (vn->isImplied()) continue` — implied output 的 op 不作为独立语句输出
+- implied varnode 的 def 表达式通过 `recurse()`（表达式 emit 时递归输入）在消费者处 inline
+
+**Rugra 现状**：
+- `ActionMarkImplied` struct 已定义（coreaction.rs:2373）但**未接入管线**（action.rs 零命中），且是**简化版**（注释明说"no full Cover-based checkImpliedCover"，desc_count==1 就标 implied）
+- `is_implied`/`is_explicit` 访问器 + `varnode_flags::IMPLIED/EXPLICIT` 标志位**已定义**
+- `cover.rs` + `Varnode.cover` 字段**已存在**，`compute_varnode_covers` 已实现
+- printc **完全不查 is_implied**（零命中），用 4 套自造 map 模拟内联
+
+**架构差异（implied 移植的真正阻塞）**：Rugra printc 是 **op-遍历 + 自造 map** 架构（emit_block_ops 遍历 op 输出语句，push_varnode 是叶子）；Ghidra 是 **op-push + recurse** 架构（opcode 自己决定输出，recurse 递归展开输入）。
+
+**验证证据**：尝试接入简化版 MarkImplied + printc 跳过 implied op → **输出变空**（commit 前撤回）。根因：简化版 MarkImplied 把单后代 varnode 都标 implied，printc 跳过这些 op，但 Rugra 的 push_varnode 不会在消费者处递归 inline（没有 recurse 等价物），所以这些 op 既不作为语句输出、也没在别处 inline，消失。
+
+### implied 移植的正确路径（下一步）
+
+完整移植 implied 机制需要：
+1. **补全 ActionMarkImplied 的 cover 检查**（checkImpliedCover + inflateTest，依赖 cover 相交）
+2. **重构 printc 表达式 emit 为 op-push + recurse 模型**（或在 push_varnode 遇 implied 时沿 def 递归 inline——已尝试的 Priority 1.4 是雏形，但需配合完整的 implied 标记）
+3. 接入后 4 套 map 自然冗余（implied 接管内联决策）
+
+这是独立的、比"删 map"更大的任务。当前已验证的 merge 权威化（4 commit）是其必要前提。
+
+### my_fwrite 残留（判据 4）的独立阻塞
+
+merge 权威化后 my_fwrite 未赋值变量 5→3，残留 3 个（`lVar_18`/`uVar_1050`/`uVar_1061`）的根因是 **CALL 返回值 def 缺失**：CALL op 无 output，RAX 返回值的 def 不建立。诊断证据：RAX varnode 只有 `def=INPUT`，无 `def=op`。这是 ActionReturnRecovery 需 active_output 的已知缺口（CURRENT_STATUS.md 记录），与 merge/implied 无关。
