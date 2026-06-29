@@ -586,6 +586,8 @@ Funcdata ready
 
 - `ActionFuncLink` 注册在 decompile_group 的 `ActionStart` 之后、`ActionHeritage` **之前**（对齐 Ghidra coreaction.cc:5484 FuncLink → 5492 Heritage）。它在 ActionFuncLink::apply 里调 `ensure_callspecs`（对齐 FlowInfo::setupCallSpecs flow.cc:680）扫描所有 alive CALL op 建立 FuncCallSpecs，存入 fd.callspecs，再对每个调 funcLinkInput/funcLinkOutput。此前 callspecs 仅测试填充。funcLink 的 locked 路径（opInsertInput/newVarnode/newVarnodeOut）仍 deferred。
 
+- **移除 ActionCallParams**（2026-06-29 完整移植）：CALL 参数现由 ActionFuncLink::funcLinkInput 建立（opInsertInput + newVarnode），对齐 Ghidra coreaction.cc:1474。ActionCallParams（lifter 挂寄存器 + trim 的简化方案）已移除。
+
 ### 2026-06-27（会话3 续）：ActionPool — Rule 调度器接入主管线（G6 核心补全）
 
 **系统性架构补全**：Rugra 此前 ~90 个 Rule 全部实现了 `apply_op` 但**均未接入主管线**——无 Ghidra ActionPool 式的 Rule 遍历调度。本次补全：

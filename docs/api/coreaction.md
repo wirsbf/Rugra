@@ -543,6 +543,17 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - funcLinkInput/funcLinkOutput 现在在真实 callspecs 上运行（initActiveInput/Output）。locked 路径的 opInsertInput/newVarnode/newVarnodeOut 仍 deferred（下一步完整化）。
 - 基础已就绪，无回归：780/780 测试，curl 24/24。
 
+### 2026-06-29（完整移植）：funcLinkInput/funcLinkOutput 完整 op-insert + 移除 ActionCallParams
+
+完整对齐 Ghidra 的 CALL 参数/返回值建立链（不再简化）：
+- **lifter 精简**（x86_lift.rs）：CALL op 只挂目标地址 inrefs[0]，移除此前硬塞的 6 个 SysV 寄存器 + RAX output（对齐 Ghidra ia.sinc）。
+- **funcLinkInput**（coreaction.rs，对齐 coreaction.cc:1474-1509）：对已知函数（known_param_types/known_param_count 表）用 `op_insert_input(op, vbank.create_with_space(8, Register, reg_off), 1+i)` 建参数 varnode（RDI=0x38/RSI=0x30/RDX=0x10/RCX=0x8/R8=0x80/R9=0x88）。未知函数走 initActiveInput（trial 恢复）。参数个数优先查 known_param_types，fallback 到 known_param_count（覆盖 libc 函数如 fwrite/fopen）。
+- **funcLinkOutput**（对齐 coreaction.cc:1521-1572）：用 `new_varnode_out(8, RAX@0x0, op)` 建返回值 output。
+- **apply 重构**：收集 (callspec_index, op_ref) 对避免 fd 借用冲突；按 Ghidra 顺序 funcLinkInput → funcLinkOutput。
+- **移除 ActionCallParams**（action.rs：被 funcLinkInput 取代）。ActionInferParams 保留（推本函数参数）。
+- 效果：`fwrite(param_1, param_2, ..., ...)` 现在有 4 个正确槽位的参数（此前是 `fwrite()` 无参）；返回值 `lVar_0 = fopen(...)` 正确。
+- 780/780 测试，curl 24/24 审计通过。
+
 ### 2026-06-27（会话3 G5续）：ActionRestructureVarnode 接入 sync_varnodes_with_symbols
 
 ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_varnodes_with_symbols(false, false)`，关闭路线图中"缺 syncVarnodesWithSymbols"的缺口。

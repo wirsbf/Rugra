@@ -424,7 +424,11 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionTypeInfer::new()));
         decompile_group.add_action(Box::new(ActionCopyPropagate::new()));
         decompile_group.add_action(Box::new(ActionTypePropagate::new()));
-        decompile_group.add_action(Box::new(ActionCallParams::new()));
+        // CALL parameter/output establishment is now done by ActionFuncLink
+        // (wired before ActionHeritage), faithful to Ghidra's funcLinkInput/
+        // funcLinkOutput (coreaction.cc:1474/1521). The old ActionCallParams
+        // (lifter-attached register trimming) is removed — funcLinkInput builds
+        // param varnodes via opInsertInput/newVarnode per Ghidra.
         // ActionRestrictLocal (coreaction.cc:1957): mark stack locations used
         // by saved registers / call params as not-mapped, preventing them from
         // being treated as local variables. Must run before DeadCode.

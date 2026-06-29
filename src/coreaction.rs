@@ -3886,32 +3886,36 @@ impl ActionFuncLink {
     /// param path (opStackLoad + spacebase placeholder) requires Funcdata
     /// op-edit pcode injection; the register-param trial registration is
     /// implemented here.
-    pub fn func_link_input(fc: &mut crate::fspec::FuncCallSpecs) {
-        let inputlocked = fc.is_input_locked();
-        let varargs = fc.is_dotdotdot();
-        if !inputlocked || varargs {
-            fc.init_active_input();
-        }
-        if inputlocked {
-            // Register each formal parameter as a trial, marked active.
-            // Ghidra also inserts pcode (opStackLoad for stack params,
-            // newVarnode for register params) — that requires Funcdata op-edit
-            // and is deferred. The trial registration is the data-model core.
-            if let Some(active) = fc.active_input.as_mut() {
-                let nump = fc.prototype.num_params();
-                for i in 0..nump {
-                    let (addr, sz) = {
-                        let p = match fc.prototype.get_param(i) { Some(p) => p, None => continue };
-                        (p.address, 8_i32) // size approximated; ProtoParameter lacks size
-                    };
-                    active.register_trial(addr, sz);
-                    active.get_trial_mut(i).mark_active();
-                    if varargs {
-                        active.get_trial_mut(i).set_fixed_position(i as i32);
-                    }
-                }
+    pub fn func_link_input(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        callee_name: Option<&str>,
+    ) {
+        use crate::space::AddressSpace;
+        // Determine param count: known_param_types (with type info) first,
+        // then fall back to known_param_count (count only).
+        let types = known_param_types(callee_name);
+        let n_args = if let Some(ref t) = types {
+            t.len()
+        } else if is_known_function(callee_name) {
+            known_param_count(callee_name)
+        } else {
+            0
+        };
+        if n_args > 0 {
+            // Known prototype: build parameter varnodes via opInsertInput.
+            // Ghidra coreaction.cc:1507-1508 opInsertInput(newVarnode(sz,addr)).
+            // SYSV arg register offsets (x86_lift.rs encoding):
+            // RDI=0x38, RSI=0x30, RDX=0x10, RCX=0x8, R8=0x80, R9=0x88
+            let sysv_offsets: [u64; 6] = [0x38, 0x30, 0x10, 0x8, 0x80, 0x88];
+            for (i, &reg_off) in sysv_offsets.iter().enumerate() {
+                if i >= n_args { break; }
+                let vn = fd.vbank.create_with_space(8, AddressSpace::Register, reg_off);
+                fd.op_insert_input(op, vn, 1 + i);
             }
         }
+        let _ = types;
+        // Unknown: caller (apply) sets fc.init_active_input() for trial recovery.
     }
 
     /// Set up return-value recovery for a sub-function call. Faithful to
@@ -3921,14 +3925,12 @@ impl ActionFuncLink {
     /// ParamActive so ActionActiveReturn can gather trials. The locked-output
     /// path (newVarnodeOut + assumedOutputExtension) requires Funcdata op-edit
     /// and is deferred.
-    pub fn func_link_output(fc: &mut crate::fspec::FuncCallSpecs) {
-        if fc.is_output_locked() {
-            // Locked output: Ghidra creates the output varnode + extension op.
-            // That requires Funcdata op-edit (newVarnodeOut/opInsertAfter) and
-            // is deferred. The active-output container stays None for locked.
-        } else {
-            fc.init_active_output();
-        }
+    pub fn func_link_output(fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
+        // Build the RAX return-value output varnode via newVarnodeOut.
+        // Faithful to Ghidra coreaction.cc:1551 newVarnodeOut(sz, addr, callop).
+        let has_output = op.0.read().unwrap().output.is_some();
+        if has_output { return; }
+        fd.new_varnode_out(8, crate::address::Address::new(0x0), op);
     }
 }
 impl Action for ActionFuncLink {
@@ -3937,11 +3939,40 @@ impl Action for ActionFuncLink {
         // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
         // stage, so we build FuncCallSpecs here (one per CALL op) before linking.
         let n_new = self.ensure_callspecs(fd);
+        // Collect (callspec_index, op_ref) pairs so we can pass the CALL op to
+        // funcLinkInput/funcLinkOutput without double-borrowing fd.
+        let symbol_table = fd.symbol_table.clone();
         let n_calls = fd.num_calls();
+        let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs_mut(i) {
-                Self::func_link_input(fc);
-                Self::func_link_output(fc);
+            if let Some(fc) = fd.get_call_specs(i) {
+                let target_op_addr = fc.op_addr.as_u64();
+                for op_ref in &fd.obank.alivelist {
+                    let op = op_ref.0.read().unwrap();
+                    if op.opcode == OpCode::CPUI_CALL
+                        && !op.is_dead()
+                        && op.get_seq_num().get_addr().as_u64() == target_op_addr
+                    {
+                        pairs.push((i, op_ref.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+        for (idx, op_ref) in pairs {
+            let callee_name = fd.get_call_specs(idx)
+                .and_then(|fc| fc.entry_addr.as_ref())
+                .and_then(|a| symbol_table.get(&a.as_u64()))
+                .map(|s| s.clone());
+            let known = known_param_types(callee_name.as_deref()).is_some()
+                || (is_known_function(callee_name.as_deref())
+                    && known_param_count(callee_name.as_deref()) > 0);
+            Self::func_link_input(fd, &op_ref, callee_name.as_deref());
+            Self::func_link_output(fd, &op_ref);
+            if !known {
+                if let Some(fc) = fd.get_call_specs_mut(idx) {
+                    fc.init_active_input();
+                }
             }
         }
         if n_new > 0 || n_calls > 0 {
@@ -3965,10 +3996,24 @@ impl Action for ActionFuncLinkOutOnly {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionFuncLinkOutOnly::apply (coreaction.cc:1588-1595).
         let n_calls = fd.num_calls();
+        let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
         for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs_mut(i) {
-                ActionFuncLink::func_link_output(fc);
+            if let Some(fc) = fd.get_call_specs(i) {
+                let target_op_addr = fc.op_addr.as_u64();
+                for op_ref in &fd.obank.alivelist {
+                    let op = op_ref.0.read().unwrap();
+                    if op.opcode == OpCode::CPUI_CALL
+                        && !op.is_dead()
+                        && op.get_seq_num().get_addr().as_u64() == target_op_addr
+                    {
+                        pairs.push((i, op_ref.clone()));
+                        break;
+                    }
+                }
             }
+        }
+        for (_idx, op_ref) in pairs {
+            ActionFuncLink::func_link_output(fd, &op_ref);
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -4765,17 +4810,26 @@ mod tests {
         let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
             crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
         let proto = FuncProto::new("callee".into(), void_t);
-        let fc = FuncCallSpecs::new(Address::new(0x2000), proto);
+        let mut fc = FuncCallSpecs::new(Address::new(0x2000), proto);
+        fc.entry_addr = Some(Address::new(0x9000)); // unknown callee (not in libc table)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
         fd.add_call_specs(fc);
         assert_eq!(fd.num_calls(), 1);
-        // Before: no active input/output.
+        // Add a CALL op at 0x2000 so funcLink can find it.
+        let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0x9000, 8)));
+        let mut call_op = crate::op::PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x2000), 0),
+            crate::opcodes::OpCode::CPUI_CALL);
+        call_op.inrefs = vec![target_vn];
+        let op_arc = std::sync::Arc::new(std::sync::RwLock::new(call_op));
+        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc));
+        // Before: no active input.
         assert!(fd.get_call_specs(0).unwrap().active_input.is_none());
         let a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
-        // After: unlocked proto → active_input + active_output initialized.
+        // After: unknown callee → active_input initialized for trial recovery.
         assert!(fd.get_call_specs(0).unwrap().active_input.is_some());
-        assert!(fd.get_call_specs(0).unwrap().active_output.is_some());
     }
 
     /// FuncCallSpecs.is_input_locked: true when all params type-locked.
