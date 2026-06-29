@@ -172,7 +172,16 @@ pub struct FuncCallSpecs {
     /// `FuncCallSpecs::model`. Set by setModel; used by resolveModel/
     /// deriveInputMap/checkInputTrialUse.
     pub proto_model: Option<crate::type_system::protomodel::ProtoModel>,
+    /// Relative offset of stack-pointer at time of this call. Faithful to
+    /// `FuncCallSpecs::stackoffset` (fspec.hh:1651). Set by
+    /// resolveSpacebaseRelative; used by ActionRestrictLocal to find
+    /// stack-relative call params. offset_unknown = i64::MIN.
+    pub stackoffset: i64,
 }
+
+/// Sentinel value for unknown stack offset. Faithful to
+/// `FuncCallSpecs::offset_unknown` (fspec.hh:1641).
+pub const OFFSET_UNKNOWN: i64 = i64::MIN;
 
 impl FuncCallSpecs {
     /// Create a new call specification
@@ -185,7 +194,26 @@ impl FuncCallSpecs {
             active_input: None,
             active_output: None,
             proto_model: None,
+            stackoffset: OFFSET_UNKNOWN,
         }
+    }
+
+    /// Get the stack-pointer relative offset at the point of this call site.
+    /// Faithful to `FuncCallSpecs::getSpacebaseOffset` (fspec.hh:1689).
+    /// Returns OFFSET_UNKNOWN if not resolved.
+    pub fn get_spacebase_offset(&self) -> i64 {
+        self.stackoffset
+    }
+
+    /// Set the stack-pointer relative offset. Used during call analysis
+    /// to record the RSP value at the call site.
+    pub fn set_spacebase_offset(&mut self, offset: i64) {
+        self.stackoffset = offset;
+    }
+
+    /// Is the spacebase offset known (not OFFSET_UNKNOWN)?
+    pub fn has_spacebase_offset(&self) -> bool {
+        self.stackoffset != OFFSET_UNKNOWN
     }
 
     /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to

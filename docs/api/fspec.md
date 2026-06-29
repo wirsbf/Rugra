@@ -132,3 +132,9 @@ FuncCallSpecs 新增 `proto_model: Option<ProtoModel>` 字段 + 方法：
 ### 2026-06-27（会话3 G5闭环）：buildInputFromTrials
 
 - `build_input_from_trials() -> Vec<(Address, i32)>` — `FuncCallSpecs::buildInputFromTrials`（fspec.cc:5685-5741）忠实适配：遍历 active-input 试验，收集 USED 试验的 (address, size) 作为最终参数列表，删除未用试验。关闭参数恢复闭环：checkInputTrialUse → deriveInputMap → buildInputFromTrials。
+
+### 2026-06-29：FuncCallSpecs::stackoffset + get_spacebase_offset
+- 新增 `stackoffset: i64` 字段 + `OFFSET_UNKNOWN` 常量（fspec.hh:1641/1651）。
+- `get_spacebase_offset() -> i64` — 忠实移植 `FuncCallSpecs::getSpacebaseOffset`（fspec.hh:1689）。
+- `set_spacebase_offset(offset)` / `has_spacebase_offset()` — 设置/查询。
+- 解锁 ActionRestrictLocal 的完整版（Loop 1: 遍历 locked stack params → markNotMapped）。
