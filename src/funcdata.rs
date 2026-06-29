@@ -70,6 +70,11 @@ pub struct Funcdata {
     /// Function call specifications, one per call site. Corresponds to
     /// Ghidra's `Funcdata::breefcall` vector.
     pub callspecs: Vec<crate::fspec::FuncCallSpecs>,
+    /// Active output parameter recovery. Faithful to
+    /// `Funcdata::activeoutput` (funcdata.hh). Set by ActionFuncLinkOutOnly;
+    /// used by ActionReturnRecovery to determine which RETURN varnodes
+    /// are the function's return value.
+    pub active_output: Option<crate::fspec::ParamActive>,
 }
 
 impl Funcdata {
@@ -97,6 +102,7 @@ impl Funcdata {
             external_prototypes: HashMap::new(),
             scope: None,
             callspecs: Vec::new(),
+            active_output: None,
         }
     }
 

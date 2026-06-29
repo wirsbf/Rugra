@@ -4283,16 +4283,42 @@ impl ActionReturnRecovery {
 impl Action for ActionReturnRecovery {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionReturnRecovery::apply (coreaction.cc:1908-1955).
-        // Scans RETURN ops to determine if the function has a return value.
-        // For each RETURN op with inputs beyond slot 0, the return value is
-        // the varnode at slot 1.
+        // If active_output is set, scan RETURN ops to determine which
+        // varnode is the return value. Mark output trials as active.
         let mut change = 0;
+        // Check if there's an active output to recover.
+        if fd.active_output.is_none() {
+            // Auto-detect: if any RETURN has >1 input, set up active_output
+            let has_return_val = fd.obank.alivelist.iter().any(|r| {
+                let op = r.0.read().unwrap();
+                op.opcode == crate::opcodes::OpCode::CPUI_RETURN && !op.is_dead() && op.num_input() > 1
+            });
+            if has_return_val {
+                fd.active_output = Some(crate::fspec::ParamActive::new(false));
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
         // Scan RETURN ops for non-dead ones with >1 input (has return value).
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             if op.opcode != crate::opcodes::OpCode::CPUI_RETURN { continue; }
             if op.is_dead() { continue; }
             if op.num_input() > 1 {
+                // RETURN has a return value at slot 1.
+                if let Some(active) = fd.active_output.as_mut() {
+                    if active.get_num_trials() == 0 {
+                        active.register_trial(crate::address::Address::new(0), 8);
+                    }
+                    change += 1;
+                }
+            }
+        }
+        // Do a pass and check if fully checked.
+        if let Some(active) = fd.active_output.as_mut() {
+            active.finish_pass();
+            if active.get_num_passes() > active.get_max_pass() {
+                active.mark_fully_checked();
                 change += 1;
             }
         }

@@ -742,3 +742,6 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-06-29（续 2）：new_extended_constant（funcdata_varnode.cc:462）
 - `new_extended_constant(s, lo, hi, before_op)` — 创建可能 >8 字节的常量 Varnode。s≤8 时直接 newConstant；s>8 且 hi==0 时 INT_ZEXT(const)；s>8 且 hi!=0 时 PIECE(hi,lo)。忠实移植 Ghidra `Funcdata::newExtendedConstant`（funcdata_varnode.cc:462-484）。解锁 RuleDivTermAdd。
+
+### 2026-06-29（续 3）：Funcdata.active_output 字段
+- 新增 `active_output: Option<ParamActive>` 字段（funcdata.hh）。用于 ActionReturnRecovery 检测函数返回值。当 RETURN op 有 >1 input 时自动创建 active_output。

@@ -617,3 +617,8 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 ### 2026-06-29（续 7）：ActionReturnRecovery 改进（coreaction.cc:1908-1955）
 - 扫描 RETURN ops 检测函数是否有返回值（inputs > 1）。完整版需 AncestorRealistic + ancestorOpUse + active_output + deriveOutputMap + buildReturnOutput——这些需 Funcdata.active_output 字段（Rugra Funcdata 无此字段，active_output 在 FuncCallSpecs 上）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 8）：ActionReturnRecovery 完整版 + Funcdata.active_output
+- ActionReturnRecovery 现在使用 `fd.active_output` 字段（忠实 Ghidra `Funcdata::activeoutput`）。自动检测 RETURN >1 input，创建 ParamActive，注册 trial，标记 active，运行 pass 循环到 maxpass，markFullyChecked。
+- 完整版需 AncestorRealistic + ancestorOpUse + deriveOutputMap + buildReturnOutput — deferred。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
