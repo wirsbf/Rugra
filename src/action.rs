@@ -411,9 +411,6 @@ impl ActionDatabase {
         // ping-pong if placed in oppool1 alongside Rule2Comp2Mult. Phase
         // separation breaks the cycle: oppool1 finishes first.
         decompile_group.add_action(Box::new(build_cleanup_pool()));
-        // Merge BEFORE copy propagation: copy-merge needs the COPY ops to
-        // still be alive, and DeadCode would otherwise remove them.
-        decompile_group.add_action(Box::new(ActionMergeType::new()));
         // Type inference BEFORE copy propagation: ActionTypeInfer assigns
         // types to COPY ops' inputs/outputs. Then CopyPropagate propagates
         // those types along with use redirection, so surviving Register-space
@@ -427,6 +424,20 @@ impl ActionDatabase {
         // being treated as local variables. Must run before DeadCode.
         decompile_group.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
+        // Merge AFTER dead-code (faithful to Ghidra coreaction.cc:5682 deadcode
+        // -> 5718-5729 merge stage). Merge builds authoritative HighVariables
+        // whose `instances` reflect the post-optimization varnode set; running
+        // it before copy-prop/dead-code left stale instances (deleted ops still
+        // referenced), which forced printc to reconstruct def relationships
+        // with self-built maps. With merge here, Merge::is_live_varnode skips
+        // dead-code-eliminated varnodes so instances are authoritative.
+        // NOTE: Ghidra's merge stage is a 9-step sequence (MergeRequired,
+        // MarkExplicit, MarkImplied, MergeMultiEntry, MergeCopy, DominantCopy,
+        // MergeAdjacent, MergeType, HideShadow, CopyMarker); Rugra collapses
+        // these into Merge::merge_all (addr_tied + cover + naming). The
+        // separate ActionMergeCopy/Adjacent/Required/MultiEntry structs exist
+        // in coreaction.rs but call stub methods — merge_all is the real work.
+        decompile_group.add_action(Box::new(ActionMergeType::new()));
         // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
         // implemented (coreaction.cc:3457-3528) and individually tested, but
         // NOT wired into the default pipeline. Ghidra runs them inside its
