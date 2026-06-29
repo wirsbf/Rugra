@@ -545,6 +545,17 @@ impl X86Lifter {
                     for &reg_off in &[0x38u64, 0x30, 0x10, 0x08, 0x80, 0x88] {
                         op.add_input(VarnodeRaw::new(AddressSpace::Register, reg_off, 8));
                     }
+                    // Establish the return-value output: RAX (Register@0x0).
+                    // Faithful to Ghidra's ActionFuncLink::funcLinkOutput
+                    // (coreaction.cc:1551 newVarnodeOut(sz,addr,callop)): for
+                    // an unlocked prototype, Ghidra allocates the return-value
+                    // register as the CALL's output so the value enters the SSA
+                    // def chain. Without this, the return value is "lost" —
+                    // downstream uses (e.g. __dest = strdup(buf)) become
+                    // "declared but never assigned". We use RAX@0x0 size 8,
+                    // matching the SysV AMD64 return register. Multi-register /
+                    // XMM returns and assumedOutputExtension are future work.
+                    op.set_output(VarnodeRaw::new(AddressSpace::Register, 0x0, 8));
                     ops.push(op);
                 } else if mnemonic == "ret" {
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
