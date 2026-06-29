@@ -3255,42 +3255,61 @@ impl Action for ActionOutputPrototype {
 }
 
 /// Prototype types locking. Faithful to `ActionPrototypeTypes`
-/// (coreaction.cc).
+/// (coreaction.cc:4609-4651).
 pub struct ActionPrototypeTypes;
 impl ActionPrototypeTypes {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeTypes {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs and lock the types of
-        // each call's parameters. Full algorithm requires TypeFactory +
-        // FuncProto.assignType.
-        let mut change_count = 0;
-        let n_calls = fd.num_calls();
+        // Faithful to ActionPrototypeTypes::apply (coreaction.cc:4609-4651).
+        // 1. Set evaluation prototype if not locked
+        // 2. Strip indirect register from RETURN ops (replace input(0) with constant 0)
+        // 3. If output locked: insert return varnodes for each RETURN
+        // 4. Else: init active output gathering
 
-        for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Check if this call spec has locked parameters.
-                let has_locked = fc.prototype.parameters.iter().any(|p| {
-                    (p.flags & crate::fspec::protoparam_flags::TYPE_LOCKED) != 0
-                });
-                if has_locked {
-                    change_count += 1;
+        // Step 2: Strip indirect register from RETURN ops
+        // (Ghidra coreaction.cc:4628-4635: "Strip the indirect register from
+        // all RETURN ops because we don't want to see this compiler mechanism
+        // in the high-level C output")
+        let return_ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.iter()
+            .filter(|r| r.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_RETURN)
+            .cloned()
+            .collect();
+        let mut change = 0;
+        for ret_op in &return_ops {
+            let (in0_is_const, in0_size) = {
+                let op = ret_op.0.read().unwrap();
+                match op.inrefs.get(0) {
+                    Some(vn) => {
+                        let g = vn.read().unwrap();
+                        (!g.is_constant(), g.get_size())
+                    }
+                    None => (false, 0),
                 }
+            };
+            if in0_is_const && in0_size > 0 {
+                let zero_vn = fd.new_constant(in0_size, 0);
+                fd.op_set_input(ret_op, zero_vn, 0);
+                change += 1;
             }
         }
 
-        // Also check the function's own prototype for locked types.
-        let proto = fd.get_func_proto();
-        let has_self_locked = proto.parameters.iter().any(|p| {
-            (p.flags & crate::fspec::protoparam_flags::TYPE_LOCKED) != 0
-        });
-        if has_self_locked {
-            change_count += 1;
+        // Step 4: Init active output if not locked
+        // (Ghidra calls initActiveOutput when output is not locked)
+        let is_output_void = matches!(fd.funcp.return_type.as_ref(),
+            crate::type_system::datatype::Datatype::Void(_));
+        if is_output_void && fd.active_output.is_none() {
+            // Check if any RETURN has a return value
+            let has_ret = return_ops.iter().any(|r| {
+                r.0.read().unwrap().num_input() > 1
+            });
+            if has_ret {
+                fd.active_output = Some(crate::fspec::ParamActive::new(false));
+            }
         }
 
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "prototypetypes" }
 }
