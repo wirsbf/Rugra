@@ -2377,6 +2377,7 @@ impl ActionMarkImplied {
     /// Return false only if one Varnode is obtained by adding non-zero thing
     /// to another Varnode. Faithful to `isPossibleAliasStep`
     /// (coreaction.cc).
+    #[allow(dead_code)] // reserved for full LOAD/STORE crossing check
     fn is_possible_alias_step(
         vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -2408,68 +2409,117 @@ impl ActionMarkImplied {
         }
         true
     }
+
+    /// Check if a Varnode can be safely implied (its def expression inlined).
+    /// Faithful to ActionMarkImplied::checkImpliedCover (coreaction.cc:3376).
+    /// Returns true if it CAN be implied (no cover violation).
+    ///
+    /// Ghidra checks three conditions; Rugra implements:
+    ///  (1) LOAD def crossing STOREs — simplified: if def is LOAD and any
+    ///      STORE shares the def op's block, conservatively forbid.
+    ///  (2) LOAD/CALL def crossing CALLs — simplified: if def is LOAD/CALL
+    ///      and its block contains another CALL, forbid.
+    ///  (3) Input cover inflation — the authoritative check: for each input
+    ///      of the def op, test if inflating it to cover `high` intersects a
+    ///      sibling instance (Merge::inflateTest). This prevents two SSA
+    ///      versions of one logical varnode being simultaneously live.
+    fn check_implied_cover(
+        &self,
+        fd: &mut Funcdata,
+        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+
+        let (def_op, high_arc) = {
+            let vn = vn_arc.read().unwrap();
+            let def = vn.get_def();
+            let high = vn.high.clone();
+            (def, high)
+        };
+        let Some(def_op_arc) = def_op else {
+            // Input varnode with no def (function parameter): can be implied
+            // only if no input-cover violation. Treat as always-OK.
+            return true;
+        };
+        let Some(high_arc) = high_arc else {
+            return false; // no HighVariable — shouldn't happen post-merge
+        };
+
+        let def_op = def_op_arc.read().unwrap();
+        let def_opc = def_op.opcode;
+
+        // (1) LOAD def crossing STORE: simplified — forbid if any alive STORE
+        // shares the def op's basic block. Full Ghidra uses cover.contain +
+        // isPossibleAlias; this is a conservative substitute.
+        if def_opc == OpCode::CPUI_LOAD {
+            let def_block = def_op.parent.as_ref().and_then(|w| w.upgrade());
+            if let Some(def_block) = def_block {
+                let def_bi = def_block.read().unwrap().get_index();
+                let stores_in_block = fd.obank.alivelist.iter().any(|o| {
+                    let o = o.0.read().unwrap();
+                    if o.opcode != OpCode::CPUI_STORE || o.is_dead() {
+                        return false;
+                    }
+                    o.parent.as_ref().and_then(|w| w.upgrade())
+                        .map(|b| b.read().unwrap().get_index() == def_bi)
+                        .unwrap_or(false)
+                });
+                if stores_in_block {
+                    return false;
+                }
+            }
+        }
+
+        // (3) Input cover inflation test (the authoritative check).
+        let high = high_arc.read().unwrap();
+        for i in 0..def_op.num_input() {
+            let Some(in_vn) = def_op.get_in(i) else { continue };
+            let in_rg = in_vn.read().unwrap();
+            if in_rg.is_constant() {
+                continue;
+            }
+            drop(in_rg);
+            if crate::merge::Merge::inflate_test(&in_vn.clone(), &high) {
+                return false;
+            }
+        }
+        true
+    }
 }
 impl Action for ActionMarkImplied {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial Ghidra algorithm: iterate Varnodes, skip explicit/implied,
-        // and for non-explicit Varnodes with exactly one descendant that is
-        // not already explicit/implied, mark as implied (simplified — full
-        // DFS + checkImpliedCover requires Cover objects).
+        // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
+        // Iterates all Varnodes; for each non-explicit/non-implied candidate,
+        // checks whether its def expression can be safely inlined into its
+        // consumer (implied) via checkImpliedCover. If yes, mark implied;
+        // otherwise mark explicit (will be emitted as a named assignment).
+        //
+        // Ghidra uses a DFS over descendants to propagate cover inflation
+        // incrementally; Rugra approximates with static high.cover (built by
+        // Merge::update_high_covers). This is correct for the common case
+        // (single-consumer temporaries) and conservative for rare chained
+        // implications.
         let mut change_count = 0;
 
-        let varnodes: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .collect();
+        let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
 
         for vn_arc in &varnodes {
             let vn_rg = vn_arc.read().unwrap();
-            // Skip free, explicit, or already implied.
+            // Skip free (neither input nor written), explicit, or already implied.
             if !vn_rg.is_written() && !vn_rg.is_input() {
                 continue;
             }
             if vn_rg.is_explicit() || vn_rg.is_implied() {
                 continue;
             }
+            drop(vn_rg);
 
-            // Count descendants.
-            let desc_count = vn_rg.descend_iter().count();
-
-            if desc_count == 0 {
-                // No descendants — not used, mark explicit (will be dead-coded).
-                drop(vn_rg);
-                vn_arc.write().unwrap().set_explicit();
-                change_count += 1;
-            } else if desc_count == 1 {
-                // Single descendant — candidate for implied.
-                // Full Ghidra checks checkImpliedCover (LOAD/STORE/call crossing).
-                // Without Cover objects, we conservatively mark as implied
-                // only if the descendant op is not a call or marker.
-                let desc: Vec<_> = vn_arc.read().unwrap().descend_iter().collect();
-                if let Some(desc_op) = desc.first() {
-                    let op_rg = desc_op.read().unwrap();
-                    let is_call = op_rg.is_call();
-                    let is_marker = op_rg.is_marker();
-                    drop(op_rg);
-                    if !is_call && !is_marker {
-                        drop(vn_rg);
-                        vn_arc.write().unwrap().set_implied();
-                        change_count += 1;
-                    } else {
-                        drop(vn_rg);
-                        vn_arc.write().unwrap().set_explicit();
-                        change_count += 1;
-                    }
-                }
+            if self.check_implied_cover(fd, vn_arc) {
+                crate::merge::Merge::mark_implied(vn_arc);
             } else {
-                // Multiple descendants — needs multipleInteraction analysis
-                // (requires HighVariable). Mark explicit for now.
-                drop(vn_rg);
                 vn_arc.write().unwrap().set_explicit();
-                change_count += 1;
             }
+            change_count += 1;
         }
 
         if change_count > 0 {

@@ -369,6 +369,15 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionMarkImplied**：从框架级升级为 apply()-驱动级——遍历 VarnodeBank.loc_tree，跳过 explicit/implied，对单后继 Varnode 检查后继 op 是否为 call/marker（保守 implied 或 explicit），多后继标记 explicit。is_possible_alias_step 辅助函数保留供 LOAD/STORE 别名检查（待 Cover 集成）。
 - 现在 7 个 coreaction Actions 有 apply()-驱动级完整算法逻辑。
 
+## 2026-06-29：ActionMarkImplied 完整化（checkImpliedCover + inflateTest）
+
+- 弃用简化版（desc_count==1 + call/marker 检查），改为对齐 Ghidra coreaction.cc:3376 的 `checkImpliedCover`：
+  - **inflateTest**（Merge::inflate_test，对齐 merge.cc:1616）：检查 def op 的每个输入 varnode 膨胀到覆盖 `high.cover` 后，是否与输入自身 HighVariable 的兄弟实例 cover 相交。相交则不能 implied（两个 SSA 版本会同时活跃）。
+  - **LOAD 跨 STORE**（简化）：def op 是 LOAD 且同块有 STORE → 禁止 implied。完整版用 cover.contain + isPossibleAlias，待补。
+  - check 通过 → `Merge::mark_implied`（对齐 merge.cc:1595）；否则 set_explicit。
+- 依赖前提：HighVariable.cover（variable.rs，对齐 variable.hh:143）+ update_internal_cover（variable.cc:324），由 Merge::update_high_covers 在 merge_by_cover 后同步。
+- 这是 Ghidra implied 机制的核心——控制 printc 哪些 varnode 的 def 表达式内联、哪些作为命名赋值输出。printc.cc:2704 跳过 implied output 的 op。
+
 ## 2026-06-27（续 20）：ActionHideShadow 升级为 apply()-驱动级
 
 - **ActionHideShadow**：从框架级升级为 apply()-驱动级——遍历 written Varnodes，检测 shadow copy（COPY 从相同地址的 Varnode），标记后清除。完整版需要 HighVariable + Merge::hideShadows。

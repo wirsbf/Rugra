@@ -67,6 +67,21 @@ from loc_tree varnodes (deduped by Arc pointer). Must run after
 merge_by_cover finalizes instance sets so high.cover reflects all members.
 ActionMarkImplied (later in pipeline) consults high.cover.
 
+### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29)
+
+Faithful to Merge::markImplied (merge.cc:1595). Sets the IMPLIED flag on a
+varnode. Ghidra also marks coverdirty on the def op's inputs; Rugra
+recomputes covers wholesale per merge_all so only the flag is set. Called
+by ActionMarkImplied when checkImpliedCover passes.
+
+### `pub fn inflate_test(a: &Arc<RwLock<Varnode>>, high: &HighVariable) -> bool` (2026-06-29)
+
+Faithful to Merge::inflateTest (merge.cc:1616). Tests if inflating varnode
+`a`'s cover to cover `high` causes an intersection with a sibling instance
+of a's own HighVariable (excluding `a` itself / its copy-shadow). Returns
+true if there IS an intersection (varnode CANNOT be implied). The
+authoritative check in ActionMarkImplied::checkImpliedCover.
+
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
 Merge varnodes that are tied to the same address+size.

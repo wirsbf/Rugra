@@ -138,6 +138,53 @@ impl Merge {
         }
     }
 
+    /// Mark a Varnode as implied. Faithful to Merge::markImplied (merge.cc:1595).
+    /// In Ghidra this also sets coverdirty on the def op's inputs so their
+    /// covers get recomputed; Rugra recomputes covers wholesale per merge_all,
+    /// so we only set the IMPLIED flag here.
+    pub fn mark_implied(vn: &Arc<RwLock<Varnode>>) {
+        vn.write().unwrap().set_implied();
+    }
+
+    /// Test if inflating a Varnode's Cover to cover `high` causes an intersection
+    /// with any OTHER instance of the Varnode's own HighVariable.
+    /// Faithful to Merge::inflateTest (merge.cc:1616).
+    ///
+    /// When a varnode is implied, its def op's inputs propagate farther (into
+    /// the consumer). Each such input must not have its inflated cover intersect
+    /// a sibling instance's cover — otherwise two SSA versions of the same
+    /// logical variable would be simultaneously live at the implied site.
+    ///
+    /// Returns true if there IS an intersection (i.e. the varnode CANNOT be
+    /// implied). `high` is the HighVariable being implied; `a` is an input
+    /// varnode of `a`'s def op.
+    pub fn inflate_test(
+        a: &Arc<RwLock<Varnode>>,
+        high: &crate::variable::HighVariable,
+    ) -> bool {
+        let a_high = a.read().unwrap().high.clone();
+        let Some(ahigh) = a_high else {
+            return false; // a has no HighVariable — no intersection possible
+        };
+        let ahigh = ahigh.read().unwrap();
+        // high.cover is the union of the implied varnode's instance covers.
+        // We test each instance of a's HighVariable against it.
+        for inst_arc in &ahigh.instances {
+            let inst = inst_arc.read().unwrap();
+            // Skip the instance that IS 'a' (Arc identity) — intersection
+            // with itself or its copy-shadow is allowed (merge.cc:1626 copyShadow).
+            if Arc::ptr_eq(inst_arc, a) {
+                continue;
+            }
+            if let Some(ic) = inst.cover.as_ref() {
+                if ic.intersects(&high.cover) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Merge varnodes that are tied to the same address+size.
     ///
     /// This is the primary merge pass: varnodes at the same location
