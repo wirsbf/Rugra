@@ -120,3 +120,7 @@ my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数�
 **验证效果**：helpf 的栈符号解析 StackX 使用 5→9（scope 10 符号中 9 个被引用）。配合 printc scope 声明增强（声明所有 scope 符号），输出 24/24 + 29/29 全绿。
 
 **uVar 碎片**：spacebase 修复的是*栈变量*恢复，而 uVar_N 是 SSA 中间临时碎片（main 69 个），属 printc 表达式内联问题（独立子系统）。
+
+### 2026-06-29：ScopeLocal::mark_not_mapped + has_overlap
+- `mark_not_mapped(offset, size, parameter)` — 忠实移植 Ghidra `ScopeLocal::markNotMapped`（varmap.cc:510-546）。从符号列表移除与范围重叠的符号。用于 ActionRestrictLocal 防止特定栈位置（保存的寄存器、调用参数）被当作局部变量。
+- `has_overlap(offset, size)` — 检查范围是否与任何符号重叠。

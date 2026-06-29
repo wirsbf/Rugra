@@ -582,3 +582,9 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 新增 `ActionSpacebase`（coreaction.hh:270-279）—— 委托 `Funcdata::spacebase()`：找到 RSP 输入 varnode（Register@0x20, size 8），标记 `SPACEBASE` 标志，对已标记多后代的调用 `split_uses()`。**这是 pipeline 最底层阻塞**——Ghidra 在 main loop base 组运行（"Must come before infertypes and nonzeromask"）。接入 set_default_actions 在 ActionHeritage 之后、ActionStackPtrFlow 之前。
 - 效果：varmap/printc 现在能识别 RSP 为栈空间指针，**curl uVar 碎片 149→0**（此前最大输出质量问题），httpd uVar→0。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+
+### 2026-06-29（续 2）：ActionRestrictLocal L1→L2→L3 + ScopeLocal::mark_not_mapped
+- 新增 `ScopeLocal::mark_not_mapped(offset, size, parameter)` — 忠实移植 Ghidra `ScopeLocal::markNotMapped`（varmap.cc:510-546）。从符号列表中移除与给定范围重叠的符号。
+- 新增 `ScopeLocal::has_overlap(offset, size)` — 检查范围是否与任何符号重叠。
+- `ActionRestrictLocal`（coreaction.cc:1957-2001）：接入主管线在 ActionCallParams 后、ActionDeadCode 前。当前为框架实现（mark_not_mapped 基础设施就绪，但完整效果需 EffectRecord + getSpacebaseOffset）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

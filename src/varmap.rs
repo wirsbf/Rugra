@@ -1279,6 +1279,32 @@ impl ScopeLocal {
         }
     }
 
+    /// Mark a specific stack address range as not mapped. Faithful to
+    /// `ScopeLocal::markNotMapped` (varmap.cc:510-546). Removes any symbols
+    /// overlapping the given range. Used by ActionRestrictLocal to prevent
+    /// specific stack locations (e.g. saved registers, call params) from
+    /// being treated as local variables.
+    pub fn mark_not_mapped(&mut self, offset: u64, size: i32, _parameter: bool) {
+        let last = offset + size as u64 - 1;
+        // Remove any symbols whose range overlaps [offset, last].
+        self.symbols.retain(|sym| {
+            let sym_start = sym.start;
+            let sym_end = sym.start + sym.size as u64 - 1;
+            // No overlap if sym_end < offset or sym_start > last
+            !(sym_end >= offset && sym_start <= last)
+        });
+    }
+
+    /// Check if a stack address range overlaps any symbol. Used by
+    /// ActionRestrictLocal to verify storage locations.
+    pub fn has_overlap(&self, offset: u64, size: i32) -> bool {
+        let last = offset + size as u64 - 1;
+        self.symbols.iter().any(|sym| {
+            let sym_end = sym.start + sym.size as u64 - 1;
+            sym_end >= offset && sym.start <= last
+        })
+    }
+
     /// Restructure the stack frame from varnodes.
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1256).

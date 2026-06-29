@@ -422,6 +422,10 @@ impl ActionDatabase {
         decompile_group.add_action(Box::new(ActionCopyPropagate::new()));
         decompile_group.add_action(Box::new(ActionTypePropagate::new()));
         decompile_group.add_action(Box::new(ActionCallParams::new()));
+        // ActionRestrictLocal (coreaction.cc:1957): mark stack locations used
+        // by saved registers / call params as not-mapped, preventing them from
+        // being treated as local variables. Must run before DeadCode.
+        decompile_group.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
         decompile_group.add_action(Box::new(ActionDeadCode::new()));
         // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
         // implemented (coreaction.cc:3457-3528) and individually tested, but
