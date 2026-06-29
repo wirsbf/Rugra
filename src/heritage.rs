@@ -176,6 +176,121 @@ impl Default for Heritage {
 }
 
 impl Heritage {
+    /// Discover stack-pointer-relative STORE ops and build Stack-space INDIRECT
+    /// ops for them. Faithful to Ghidra's discoverIndexedStackPointers
+    /// (heritage.cc:985) + guardStores (heritage.cc:1539).
+    ///
+    /// From the RSP input varnode, forward-descend through INT_ADD(const)/
+    /// INT_SUB(const)/COPY chains. For each STORE reached, compute the stack
+    /// offset and build a Stack-space INDIRECT via new_indirect_op.
+    pub fn discover_and_guard_stack_stores_fd(fd: &mut Funcdata) {
+        let (sp_space, sp_offset, sp_size) = (
+            fd.stack_pointer_space,
+            fd.stack_pointer_offset,
+            fd.stack_pointer_size,
+        );
+        // Find the RSP input varnode (shared, with accumulated descend).
+        let rsp_input: Option<Arc<RwLock<Varnode>>> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .filter(|v| {
+                let g = v.0.read().unwrap();
+                g.get_space() == sp_space
+                    && g.get_offset() == sp_offset
+                    && g.get_size() == sp_size
+                    && g.is_input()
+            })
+            .map(|v| v.0.clone())
+            .next();
+        let rsp_input = match rsp_input {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Forward-descend BFS from RSP input.
+        let mut worklist: VecDeque<(Arc<RwLock<Varnode>>, i64)> = VecDeque::new();
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        worklist.push_back((rsp_input.clone(), 0));
+        visited.insert(Arc::as_ptr(&rsp_input) as usize);
+
+        let mut stores_to_guard: Vec<(Arc<RwLock<PcodeOp>>, i64)> = Vec::new();
+
+        while let Some((vn, offset)) = worklist.pop_front() {
+            let descendants: Vec<Arc<RwLock<PcodeOp>>> = {
+                let g = vn.read().unwrap();
+                g.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for desc_op in descendants {
+                let op_guard = desc_op.read().unwrap();
+                let opc = op_guard.opcode;
+                match opc {
+                    crate::opcodes::OpCode::CPUI_STORE => {
+                        // STORE(space, addr, val). addr is inrefs[1].
+                        if op_guard.inrefs.len() > 1 && Arc::ptr_eq(&op_guard.inrefs[1], &vn) {
+                            stores_to_guard.push((desc_op.clone(), offset));
+                            drop(op_guard);
+                            desc_op.write().unwrap().mark_spacebase_ptr();
+                        }
+                    }
+                    crate::opcodes::OpCode::CPUI_INT_ADD
+                    | crate::opcodes::OpCode::CPUI_INT_SUB => {
+                        if let Some(out) = &op_guard.output {
+                            let other_idx = if Arc::ptr_eq(&op_guard.inrefs[0], &vn) {
+                                1
+                            } else {
+                                0
+                            };
+                            if let Some(other) = op_guard.inrefs.get(other_idx) {
+                                let other_g = other.read().unwrap();
+                                if other_g.is_constant() {
+                                    let delta = other_g.get_offset() as i64;
+                                    let new_offset = if opc
+                                        == crate::opcodes::OpCode::CPUI_INT_ADD
+                                    {
+                                        offset.wrapping_add(delta)
+                                    } else {
+                                        offset.wrapping_sub(delta)
+                                    };
+                                    let out_clone = out.clone();
+                                    let out_ptr = Arc::as_ptr(&out_clone) as usize;
+                                    drop(other_g);
+                                    drop(op_guard);
+                                    if visited.insert(out_ptr) {
+                                        worklist.push_back((out_clone, new_offset));
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    crate::opcodes::OpCode::CPUI_COPY => {
+                        if let Some(out) = &op_guard.output {
+                            let out_clone = out.clone();
+                            let out_ptr = Arc::as_ptr(&out_clone) as usize;
+                            drop(op_guard);
+                            if visited.insert(out_ptr) {
+                                worklist.push_back((out_clone, offset));
+                            }
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Phase 2: build Stack INDIRECT ops for each discovered STORE.
+        for (store_op, stack_off) in stores_to_guard {
+            let sz = {
+                let s = store_op.read().unwrap();
+                s.inrefs.get(2).map(|v| v.read().unwrap().get_size()).unwrap_or(8)
+            };
+            let store_ref = crate::op::PcodeOpRef(store_op);
+            fd.new_indirect_op(&store_ref, stack_off as u64, sz);
+        }
+    }
+
     /// Main entry point for heritage (SSA construction)
     pub fn heritage(&mut self) {
         if self.fd.is_none() {

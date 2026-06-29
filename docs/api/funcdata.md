@@ -760,3 +760,6 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-06-29（续 7）：new_indirect_op（funcdata_op.cc:683）
 - `new_indirect_op(indeffect, stack_offset, sz)` — 忠实移植 `Funcdata::newIndirectOp`。建 `STACK:off = INDIRECT(STACK:off, iop=STORE)`：input[0] + output 在 Stack 空间（stack_offset），input[1] 是引用 causing op 的 iop 常量。op 标记 INDIRECT_STORE，插在 causing op 前。这是 Ghidra 产生 Stack 空间 varnode 的核心机制（guardStores 调用它）。
+
+### 2026-06-29（续 8）：inject_raw_ops varnode 去重
+- `inject_raw_ops` 创建非 Const input varnode 时，改用 `vbank.find_or_create_input_space(size, space, offset)`（替代 `create_with_space`）。这让同地址的 input varnode 共享身份（对齐 Ghidra xref 去重），descend 累积所有 reader。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。

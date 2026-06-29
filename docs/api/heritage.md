@@ -670,3 +670,10 @@ pass 计数只代表处理轮次，不等于质量保证。
 
 `heritage.rs` 是 Rugra 当前 **SSA 构造与 heritage 过程控制** 的核心模块：它负责
 组织版本传播、合流节点放置、rename 及相关辅助状态管理，为后续数据流分析、变量恢复和输出层提供更稳定的函数级语义骨架。
+
+## 2026-06-29：discover_and_guard_stack_stores_fd（heritage.cc:985 + 1539）
+
+- 新增 `Heritage::discover_and_guard_stack_stores_fd(fd: &mut Funcdata)`——对齐 Ghidra 的 `discoverIndexedStackPointers` + `guardStores`。从 RSP input 前向 descend 追踪 INT_ADD/INT_SUB/COPY 链，对到达的 STORE 算 stack offset，调 `new_indirect_op` 建 Stack 空间 INDIRECT。
+- 接入 `ActionHeritage::apply`（coreaction.rs），在 place_multiequals/rename 之前跑。
+- 前置依赖：varnode 去重（find_or_create_input_space）修复 descend 碎片化后，RSP input 有 64 个 descendants。
+- 当前局限：written varnode（如 INT_ADD output）未去重，BFS 从 RSP 到 INT_ADD output 后，output 的 descend 不含 STORE（STORE 用独立副本）——待 inject_raw_ops 连接 op 图修复。

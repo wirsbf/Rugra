@@ -1627,13 +1627,20 @@ impl Funcdata {
                 op_ref.0.write().unwrap().output = Some(out_vn);
             }
 
-            // Create input varnodes
+            // Create input varnodes. For non-constant inputs, reuse an existing
+            // free/input varnode at the same (space, offset, size) if one exists.
+            // This ensures all reads of the same register (e.g. RSP) share ONE
+            // varnode, so its `descend` list accumulates all readers — faithful
+            // to Ghidra's varnode identity model (VarnodeBank::xref dedup).
             for input_raw in raw.inputs() {
                 let in_vn = if input_raw.space == AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank
-                        .create_with_space(input_raw.size, input_raw.space, input_raw.offset)
+                    self.vbank.find_or_create_input_space(
+                        input_raw.size,
+                        input_raw.space,
+                        input_raw.offset,
+                    )
                 };
                 // Add use-def link
                 in_vn

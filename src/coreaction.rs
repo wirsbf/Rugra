@@ -22,10 +22,12 @@ impl ActionHeritage {
 
 impl Action for ActionHeritage {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Temporarily extract Heritage to avoid deadlock:
-        // Heritage internally tries to acquire Funcdata through a Weak ref,
-        // but the caller already holds &mut Funcdata. By temporarily taking
-        // Heritage out, we can pass &mut Funcdata's fields directly.
+        // Discover stack-pointer-relative STOREs and build Stack-space INDIRECT
+        // varnodes BEFORE place/rename, faithful to Ghidra heritage.cc:2707
+        // discoverIndexedStackPointers + guardStores.
+        crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
+
+        // Temporarily extract Heritage to avoid deadlock.
         let mut heritage = std::mem::take(&mut fd.heritage);
         heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
         heritage.rename_direct(&mut fd.vbank, &fd.bblocks);

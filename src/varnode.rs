@@ -843,6 +843,39 @@ impl VarnodeBank {
             .map(|v| v.0.clone())
     }
 
+    /// Find or create an input varnode at (space, offset, size).
+    /// Faithful to Ghidra's varnode identity model: for the SAME storage
+    /// location (space, offset, size), there is ONE input varnode shared by
+    /// all reads. This ensures the `descend` list accumulates all readers.
+    ///
+    /// Ghidra achieves this via `VarnodeBank::xref` (varnode.cc:1291):
+    /// `loc_tree.insert` deduplicates by (Address, size, input/written/free),
+    /// where input varnodes at the same location are the SAME object.
+    ///
+    /// Rugra's BTreeSet doesn't deduplicate by input/written status, so we
+    /// do an explicit lookup: if a free/input varnode at (space, offset, size)
+    /// already exists, reuse it; otherwise create a new one.
+    pub fn find_or_create_input_space(
+        &mut self,
+        size: usize,
+        space: AddressSpace,
+        offset: u64,
+    ) -> Arc<RwLock<Varnode>> {
+        // Search for an existing free or input varnode at this location.
+        for entry in self.loc_tree.iter() {
+            let g = entry.0.read().unwrap();
+            if g.address_space == space
+                && g.get_offset() == offset
+                && g.get_size() == size
+                && (g.is_input() || (!g.is_written() && !g.is_constant()))
+            {
+                return entry.0.clone();
+            }
+        }
+        // Not found: create new.
+        self.create_with_space(size, space, offset)
+    }
+
     /// Find any varnode at (size, loc), regardless of create_index.
     ///
     /// `find_free` requires an exact (loc, size, create_index) match, so it
