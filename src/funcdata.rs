@@ -155,6 +155,13 @@ impl Funcdata {
         &self.name
     }
 
+    /// Find an input varnode of the given size at the given address.
+    /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324).
+    /// Used by ActionRestrictLocal and AncestorRealistic.
+    pub fn find_varnode_input(&self, size: usize, addr: crate::address::Address) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        self.vbank.find_input(size, addr)
+    }
+
     /// Register a symbol (function/global) at the given virtual address
     pub fn add_symbol(&mut self, addr: u64, name: String) {
         self.symbol_table.insert(addr, name);

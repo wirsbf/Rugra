@@ -875,3 +875,6 @@ BlockGraph 新增：
 
 ### 2026-06-29（续）：remove_in_edge_from 自环死锁修复
 - `remove_in_edge_from` 的 retain 闭包中 `e.point.read()` 改为 `try_read()`。此前若 `e.point == self`（自环边），在持有自身 write lock 时 read 会永久死锁（ap_count_dirs 挂起根因）。try_read 失败时保留边（安全默认）。
+
+### 2026-06-29（续 2）：VarnodeBank::find_input
+- `find_input(size, loc)` — 忠实移植 `VarnodeBank::findInput`（varnode.hh）。查找指定 size+address 的 INPUT varnode。用于 ActionRestrictLocal + AncestorRealistic。

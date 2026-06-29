@@ -821,6 +821,18 @@ impl VarnodeBank {
         self.loc_tree.get(&VarnodeLocRef(search_vn)).map(|v| v.0.clone())
     }
 
+    /// Find an input varnode at the given size and location. Faithful to
+    /// `VarnodeBank::findInput` (varnode.hh). Used by ActionRestrictLocal
+    /// and AncestorRealistic to find specific register inputs.
+    pub fn find_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+        self.loc_tree.iter()
+            .find(|v| {
+                let g = v.0.read().unwrap();
+                g.is_input() && g.get_size() == size && g.get_offset() == loc.as_u64()
+            })
+            .map(|v| v.0.clone())
+    }
+
     /// Find any varnode at (size, loc), regardless of create_index.
     ///
     /// `find_free` requires an exact (loc, size, create_index) match, so it
