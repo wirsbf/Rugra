@@ -103,8 +103,39 @@ impl Merge {
         // Phase 4: Merge non-address-tied HighVariables with disjoint covers
         self.merge_by_cover(fd);
 
+        // Phase 4.5: Sync HighVariable covers from member Varnode covers.
+        // Must run AFTER merge_by_cover (which finalizes the instance sets) so
+        // each HighVariable's cover reflects all its members. ActionMarkImplied
+        // (run later in the pipeline) consults high.cover via checkImpliedCover.
+        self.update_high_covers(fd);
+
         // Phase 5: Auto-name all HighVariables
         self.assign_names(fd);
+    }
+
+    /// Re-derive every HighVariable's internal cover from its member Varnodes.
+    /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
+    /// Collects the distinct HighVariables reachable from live varnodes (each
+    /// HighVariable holds Arc-shared instances, so we dedupe by Arc pointer).
+    fn update_high_covers(&mut self, fd: &mut Funcdata) {
+        use std::collections::HashSet;
+        let mut seen: HashSet<usize> = HashSet::new();
+        let mut to_update: Vec<std::sync::Arc<std::sync::RwLock<HighVariable>>> = Vec::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let high_arc = {
+                let vn = vn_ref.0.read().unwrap();
+                vn.high.clone()
+            };
+            if let Some(ha) = high_arc {
+                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
+                if seen.insert(ptr) {
+                    to_update.push(ha);
+                }
+            }
+        }
+        for ha in to_update {
+            ha.write().unwrap().update_internal_cover();
+        }
     }
 
     /// Merge varnodes that are tied to the same address+size.

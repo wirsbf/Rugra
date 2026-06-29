@@ -4,6 +4,7 @@
 
 use crate::varnode::Varnode;
 use crate::type_system::Datatype;
+use crate::cover::Cover;
 use std::sync::{Arc, RwLock};
 
 /// Represents a high-level variable in the decompiler
@@ -22,6 +23,10 @@ pub struct HighVariable {
     pub flags: u32,
     /// Unique ID assigned to this high variable
     pub id: u64,
+    /// Extended cover: union of all member Varnode covers.
+    /// Faithful to HighVariable::internalCover (variable.hh:143).
+    /// Used by ActionMarkImplied's checkImpliedCover / inflateTest.
+    pub cover: Cover,
 }
 
 impl HighVariable {
@@ -33,6 +38,7 @@ impl HighVariable {
             instances: Vec::new(),
             flags: 0,
             id: 0,
+            cover: Cover::new(),
         }
     }
 
@@ -166,6 +172,20 @@ impl HighVariable {
     pub fn strip_type(&mut self, unknown_type: Arc<Datatype>) {
         if !self.is_type_locked() {
             self.v_type = unknown_type;
+        }
+    }
+
+    /// Re-derive the internal cover from the member Varnodes.
+    /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
+    /// Clears the cover then merges every instance's cover. Skips
+    /// instances that have no cover (constants/annotations/free).
+    pub fn update_internal_cover(&mut self) {
+        self.cover.clear();
+        for inst_arc in &self.instances {
+            let inst = inst_arc.read().unwrap();
+            if let Some(ic) = inst.cover.as_ref() {
+                self.cover.merge(ic);
+            }
         }
     }
 }

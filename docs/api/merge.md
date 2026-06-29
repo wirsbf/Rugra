@@ -50,7 +50,22 @@ dead-code in the pipeline.
 
 ### `pub fn merge_all(&mut self, fd: &mut Funcdata)`
 
-Perform the full merging + naming pipeline
+Perform the full merging + naming pipeline. Phase order:
+1. `live_varnode_set` → cache authoritative live varnodes
+2. `merge_addr_tied` → group same-loc varnodes
+3. `ensure_all_have_high` → singleton HighVariables
+4. `compute_varnode_covers` → per-Varnode liveness covers
+5. `merge_by_cover` → merge copy-related disjoint-cover pairs
+6. `update_high_covers` → sync each HighVariable.cover from members
+7. `assign_names` → Ghidra-style auto-naming
+
+### `fn update_high_covers(&mut self, fd: &mut Funcdata)` (private, 2026-06-29)
+
+Re-derive every HighVariable's internal cover by calling
+`high.update_internal_cover()`. Collects distinct HighVariables reachable
+from loc_tree varnodes (deduped by Arc pointer). Must run after
+merge_by_cover finalizes instance sets so high.cover reflects all members.
+ActionMarkImplied (later in pipeline) consults high.cover.
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 

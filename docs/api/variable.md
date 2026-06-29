@@ -40,6 +40,15 @@ Get the data type of the high variable
 
 ### `pub fn set_type(&mut self, v_type: Arc<Datatype>)`
 
+### `pub fn update_internal_cover(&mut self)` (2026-06-29 新增)
+
+Re-derive the internal cover from member Varnodes. Faithful to
+`HighVariable::updateInternalCover` (variable.cc:324). Clears `cover`
+then merges every instance's cover; skips instances with no cover
+(constants/annotations/free). Called by `Merge::update_high_covers`
+after merge_by_cover finalizes instance sets, so ActionMarkImplied's
+checkImpliedCover/inflateTest can consult `high.cover`.
+
 Set the data type of the high variable
 
 ### `pub fn add_instance(&mut self, vn: Arc<RwLock<Varnode>>)`
