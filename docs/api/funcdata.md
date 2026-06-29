@@ -752,3 +752,8 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-06-29（续 5）：find_varnode_input
 - `find_varnode_input(size, addr)` — 忠实移植 `Funcdata::findVarnodeInput`（funcdata.hh:324）。查找指定 size+address 的 input varnode。用于 ActionRestrictLocal + AncestorRealistic。
+
+### 2026-06-29（续 6）：Stack 空间 / spacebase 配置字段
+- 新增字段（对齐 cspec `<stackpointer>` + Architecture stack 配置）：`stack_space: AddressSpace`（= Stack）、`stack_pointer_space/offset/size`（= Register@0x20 size 8 = x86-64 RSP）、`stack_grows_negative: bool`（= true）。
+- Funcdata 不持有 Architecture 引用（L3 缺口），这些字段用 x86-64 默认值初始化，模拟 Ghidra Funcdata 从 Architecture 拿 stack 配置。
+- `spacebase()` 改为从这些字段读 stack pointer 位置（不再硬编码 0x20）。

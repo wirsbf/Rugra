@@ -108,4 +108,10 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - **虚拟工厂钩子等价物**：`set_symboltab`/`set_loader`/`set_commentdb`/`set_string_manager`/`set_cpool`/`set_context_db`/`set_options_db`/`set_split_records`/`set_lane_records` — 替代 Ghidra 的 buildXxx 虚函数。
 - **init()**：验证架构 ID 已设置，编排初始化流程。
 - **clear_analysis()**、**read_loader_symbols()**、**encode()**。
+
+## 2026-06-29：Stack 空间 / spacebase 配置字段（cspec `<stackpointer>` 对齐）
+
+- Architecture 新增字段（对齐 Ghidra cspec `<stackpointer register="RSP" space="ram"/>` + `SpacebaseSpace::getSpacebase(0)`）：`stack_space: AddressSpace`（= Stack，IPTR_SPACEBASE）、`stack_pointer_space: AddressSpace`（= Register）、`stack_pointer_offset: u64`（= 0x20 = RSP）、`stack_pointer_size: usize`（= 8）、`stack_grows_negative: bool`（= true，x86 约定）。
+- 默认值匹配 x86-64-gcc.cspec。Funcdata 也有对应字段（不持有 Architecture 引用，用默认值初始化），`Funcdata::spacebase()` 从这些字段读 stack pointer 位置。
+- 这是层次 1 Stack 空间架构对齐的阶段 2：建立 spacebase 配置容器（暂不解析 .cspec 文件，用硬编码配置）。
 - arch.rs 所有 L3 缺口已关闭。

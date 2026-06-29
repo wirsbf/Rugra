@@ -75,6 +75,19 @@ pub struct Funcdata {
     /// used by ActionReturnRecovery to determine which RETURN varnodes
     /// are the function's return value.
     pub active_output: Option<crate::fspec::ParamActive>,
+
+    // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
+    // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
+    // not yet hold an Architecture reference (L3 gap), so these are defaults
+    // matching x86-64-gcc.cspec: <stackpointer register="RSP" space="ram"/>.
+    /// The stack address space (IPTR_SPACEBASE). Stack varnodes live here.
+    pub stack_space: crate::space::AddressSpace,
+    /// Stack pointer register: (space, offset, size) = (Register, 0x20, 8) for RSP.
+    pub stack_pointer_space: crate::space::AddressSpace,
+    pub stack_pointer_offset: u64,
+    pub stack_pointer_size: usize,
+    /// Stack grows toward negative offsets (x86 convention).
+    pub stack_grows_negative: bool,
 }
 
 impl Funcdata {
@@ -103,6 +116,11 @@ impl Funcdata {
             scope: None,
             callspecs: Vec::new(),
             active_output: None,
+            stack_space: crate::space::AddressSpace::Stack,
+            stack_pointer_space: crate::space::AddressSpace::Register,
+            stack_pointer_offset: 0x20, // x86-64 RSP
+            stack_pointer_size: 8,
+            stack_grows_negative: true,
         }
     }
 
@@ -1178,13 +1196,13 @@ impl Funcdata {
     /// spacebase lets downstream passes (varmap, ActionStackPtrFlow,
     /// heritage) recognize RSP as "a pointer into the Stack space."
     pub fn spacebase(&mut self) {
-        // Rugra's x86 stack pointer: Register@0x20, size 8.
+        // Stack pointer location from configuration (Architecture cspec fields).
         // Faithful to spc->getSpacebase(0) returning the register location.
-        let sb_space = crate::space::AddressSpace::Register;
-        let sb_offset = 0x20u64;
-        let sb_size = 8usize;
+        let sb_space = self.stack_pointer_space;
+        let sb_offset = self.stack_pointer_offset;
+        let sb_size = self.stack_pointer_size;
 
-        // Collect all varnodes at (Register, 0x20, size 8) that are not free.
+        // Collect all varnodes at the stack-pointer location that are not free.
         // Faithful to vbank.beginLoc(size, Address) / endLoc iteration.
         let candidates: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
             self.vbank

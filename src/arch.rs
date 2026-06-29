@@ -274,6 +274,21 @@ pub struct Architecture {
     pub split_records: Vec<crate::prefersplit::PreferSplitRecord>,
     /// Laned register records. Faithful to `lanerecords`.
     pub lane_records: Vec<crate::transform::LanedRegister>,
+
+    // ---- Stack space / spacebase configuration (cspec <stackpointer>) ----
+    /// The address space that the stack pointer indexes into (IPTR_SPACEBASE).
+    /// Faithful to `glb->getStackSpace()`. Defaults to AddressSpace::Stack.
+    pub stack_space: crate::space::AddressSpace,
+    /// The (space, offset, size) of the formal stack pointer register.
+    /// Faithful to cspec `<stackpointer register="RSP" space="ram"/>` +
+    /// `SpacebaseSpace::getSpacebase(0)`. Defaults to the x86-64 RSP:
+    /// Register@0x20, size 8.
+    pub stack_pointer_space: crate::space::AddressSpace,
+    pub stack_pointer_offset: u64,
+    pub stack_pointer_size: usize,
+    /// True if the stack grows toward negative offsets (x86 convention).
+    /// Faithful to cspec `growth="negative"`.
+    pub stack_grows_negative: bool,
 }
 
 impl Default for Architecture {
@@ -322,6 +337,11 @@ impl Architecture {
             options_db: None,
             split_records: Vec::new(),
             lane_records: Vec::new(),
+            stack_space: crate::space::AddressSpace::Stack,
+            stack_pointer_space: crate::space::AddressSpace::Register,
+            stack_pointer_offset: 0x20, // x86-64 RSP
+            stack_pointer_size: 8,
+            stack_grows_negative: true,
         };
         arch.reset_defaults_internal();
         arch
