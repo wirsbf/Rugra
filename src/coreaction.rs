@@ -2229,31 +2229,32 @@ impl ActionPrototypeWarnings {
 }
 impl Action for ActionPrototypeWarnings {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: generate override messages and collect
-        // them as warnings. Full Ghidra also checks FuncProto input/output
-        // errors and unknown model. We generate deadcode delay messages
-        // if an Override is available.
-        let mut change_count = 0;
+        // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4920).
+        // Check prototype for errors/warnings and emit diagnostic messages.
+        // Ghidra uses data.warningHeader() which logs to the decompiler's
+        // warning system. Rugra uses eprintln! (stderr).
 
-        // Check if Funcdata has a scope with any warnings to emit.
-        // In full Ghidra: data.getOverride().generateOverrideMessages(msgs, arch)
-        // Without Architecture integration, we skip override messages.
-
-        // Check for functions with no basic blocks (degenerate cases).
-        if fd.bblocks.get_size() == 0 {
-            // Could warn about empty functions.
-            change_count += 1;
+        // Check function's own prototype for issues
+        if fd.funcp.calling_convention == "unknown" {
+            let is_locked = fd.funcp.parameters.iter().any(|p| {
+                (p.flags & crate::fspec::protoparam_flags::TYPE_LOCKED) != 0
+            });
+            if is_locked {
+                eprintln!("[WARN] {} Unknown calling convention -- yet parameter storage is locked", fd.name);
+            }
         }
 
-        // The FuncProto warning checks (hasInputErrors, hasOutputErrors,
-        // isModelUnknown) require FuncProto integration into Funcdata.
-        // L3 gap: requires FuncProto + Architecture integration.
-
-        if change_count > 0 {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        // Check each call site for prototype issues
+        let n_calls = fd.num_calls();
+        for i in 0..n_calls {
+            if let Some(fc) = fd.get_call_specs(i) {
+                if fc.prototype.calling_convention == "unknown" && fc.has_model() {
+                    eprintln!("[WARN] {} call at {:?} has unknown calling convention", fd.name, fc.op_addr);
+                }
+            }
         }
+
+        Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "prototypewarnings" }
 }

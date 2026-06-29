@@ -649,3 +649,8 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - Step 2: Strip indirect register from RETURN ops — replace input(0) with constant 0（忠实 coreaction.cc:4628-4635）。这移除了编译器机制的间接寄存器，避免在高级 C 输出中出现。
 - Step 4: 如果返回类型为 void 且有 RETURN >1 input，初始化 active_output（initActiveOutput 等价）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 14）：ActionPrototypeWarnings 忠实移植（coreaction.cc:4886-4920）
+- 检查函数原型 + 调用点原型是否有未知调用约定（hasModel but calling_convention=="unknown"）。用 eprintln! 输出警告。
+- 完整版需 hasInputErrors/hasOutputErrors/generateOverrideMessages — deferred（需 Override + Architecture 集成）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
