@@ -831,6 +831,11 @@ PcodeOpRaw
 - `is_marker() -> bool`（op.hh:185）：检查 MARKER 标志（MULTIEQUAL/INDIRECT）。解锁 JumpBasic::is_prune。
 - `is_bool_output() -> bool`（op.hh:190）：检查 BOOLOUTPUT 标志。解锁 Varnode::is_bool_output_def。
 
+## 2026-06-29：uses_spacebase_ptr / mark_spacebase_ptr（op.hh:432 + funcdata.hh:487）
+
+- `uses_spacebase_ptr() -> bool`（对齐 `PcodeOp::usesSpacebasePtr`）：检查 SPACEBASE_PTR 标志。heritage 的 discoverIndexedStackPointers 给 stack-pointer-relative STORE 打此 flag，guardStores 据此决定是否建 Stack 空间 INDIRECT。
+- `mark_spacebase_ptr(&mut self)`（对齐 `Funcdata::opMarkSpacebasePtr`）：设置 SPACEBASE_PTR 标志。
+
 ## 2026-06-27（续）：CSE 方法
 
 - `get_eval_type() -> u32` — `PcodeOp::getEvalType`（op.hh:169）：返回 unary/binary/special/ternary 标志位。

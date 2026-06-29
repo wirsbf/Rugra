@@ -757,3 +757,6 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - 新增字段（对齐 cspec `<stackpointer>` + Architecture stack 配置）：`stack_space: AddressSpace`（= Stack）、`stack_pointer_space/offset/size`（= Register@0x20 size 8 = x86-64 RSP）、`stack_grows_negative: bool`（= true）。
 - Funcdata 不持有 Architecture 引用（L3 缺口），这些字段用 x86-64 默认值初始化，模拟 Ghidra Funcdata 从 Architecture 拿 stack 配置。
 - `spacebase()` 改为从这些字段读 stack pointer 位置（不再硬编码 0x20）。
+
+### 2026-06-29（续 7）：new_indirect_op（funcdata_op.cc:683）
+- `new_indirect_op(indeffect, stack_offset, sz)` — 忠实移植 `Funcdata::newIndirectOp`。建 `STACK:off = INDIRECT(STACK:off, iop=STORE)`：input[0] + output 在 Stack 空间（stack_offset），input[1] 是引用 causing op 的 iop 常量。op 标记 INDIRECT_STORE，插在 causing op 前。这是 Ghidra 产生 Stack 空间 varnode 的核心机制（guardStores 调用它）。

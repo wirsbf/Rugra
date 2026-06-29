@@ -144,6 +144,20 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::MARKER) != 0
     }
 
+    /// Does this op use a spacebase pointer? Faithful to `PcodeOp::usesSpacebasePtr`
+    /// (op.hh:432). Set by heritage's discoverIndexedStackPointers when a STORE
+    /// reads a stack-pointer-derived address. guardStores checks this to decide
+    /// whether to build a Stack-space INDIRECT.
+    pub fn uses_spacebase_ptr(&self) -> bool {
+        (self.flags & pcodeop_flags::SPACEBASE_PTR) != 0
+    }
+
+    /// Mark this op as using a spacebase pointer. Faithful to
+    /// `Funcdata::opMarkSpacebasePtr` (funcdata.hh:487).
+    pub fn mark_spacebase_ptr(&mut self) {
+        self.flags |= pcodeop_flags::SPACEBASE_PTR;
+    }
+
     /// Is this op's output a boolean? Faithful to `PcodeOp::isBoolOutput`
     /// (op.hh:190).
     pub fn is_bool_output(&self) -> bool {

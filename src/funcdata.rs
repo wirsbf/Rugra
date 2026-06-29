@@ -1141,6 +1141,47 @@ impl Funcdata {
         }
     }
 
+    /// Build a CPUI_INDIRECT op that models an indirect effect on a Stack-space
+    /// Varnode, caused by a STORE (or CALL) to memory via a spacebase pointer.
+    /// Faithful to `Funcdata::newIndirectOp` (funcdata_op.cc:683-698).
+    ///
+    /// Creates `STACK:addr = INDIRECT(STACK:addr, iop=indeffect)`:
+    ///   - input[0]  = Stack-space Varnode at (addr, sz) — the value before
+    ///   - output    = Stack-space Varnode at (addr, sz) — the value after
+    ///   - input[1]  = iop constant referencing the causing op
+    /// The op is inserted before `indeffect` and flagged INDIRECT_STORE.
+    pub fn new_indirect_op(
+        &mut self,
+        indeffect: &crate::op::PcodeOpRef,
+        stack_offset: u64,
+        sz: usize,
+    ) -> crate::op::PcodeOpRef {
+        use crate::space::AddressSpace;
+        // input[0]: Stack-space varnode at stack_offset
+        let newin = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
+        // The op
+        let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
+        let newop = self.new_op(2, indeffect_addr);
+        newop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_STORE;
+        // output: Stack-space varnode at stack_offset, defined by newop
+        let newout = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
+        newout.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        newout.write().unwrap().def = Some(std::sync::Arc::downgrade(&newop.0));
+        newop.0.write().unwrap().output = Some(newout);
+        // Set opcode to INDIRECT
+        self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
+        // input[0] = the Stack varnode
+        self.op_set_input(&newop, newin, 0);
+        // input[1] = iop constant referencing the causing op (use its seqnum addr)
+        let iop_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
+        let iop_vn = self.new_constant(8, iop_addr.as_u64());
+        iop_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        self.op_set_input(&newop, iop_vn, 1);
+        // Insert before the causing op
+        self.op_insert_before(&newop, indeffect);
+        newop
+    }
+
     /// Insert `op` immediately after `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertAfter` (funcdata.hh:456). Used by split transforms
     /// (prefersplit.cc) that create new ops adjacent to the original.
