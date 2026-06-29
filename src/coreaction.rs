@@ -3194,32 +3194,61 @@ impl Action for ActionInputPrototype {
 }
 
 /// Output prototype analysis. Faithful to `ActionOutputPrototype`
-/// (coreaction.cc).
+/// (coreaction.cc:4765-4782).
 pub struct ActionOutputPrototype;
 impl ActionOutputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionOutputPrototype {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: find the first RETURN op and check if
-        // it has a return value Varnode. Full algorithm requires
-        // FuncProto.updateOutputTypes.
+        // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
+        // If the return type is NOT locked, derive it from the first RETURN op.
+        // If RETURN has >1 input, the function has a return value (slot 1).
+        // Update FuncProto.return_type based on the return varnode's size/type.
         use crate::opcodes::OpCode;
-        let mut has_return_value = false;
 
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_RETURN {
-                // RETURN input(0) = return address, input(1) = return value
-                // (if numInput >= 2).
-                if op_rg.num_input() >= 2 {
-                    has_return_value = true;
-                }
-                break;
+        // Find the first RETURN op with a return value.
+        let return_vn = fd.obank.alivelist.iter()
+            .find_map(|r| {
+                let op = r.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_RETURN { return None; }
+                if op.is_dead() { return None; }
+                if op.num_input() < 2 { return None; }
+                op.inrefs.get(1).cloned()
+            });
+
+        if let Some(vn_arc) = return_vn {
+            let vn = vn_arc.read().unwrap();
+            let size = vn.get_size();
+            // Determine return type from varnode size
+            let new_return_type = match size {
+                0 => fd.funcp.return_type.clone(), // Keep existing
+                1 => std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new(
+                            "byte".to_string(), 1,
+                            crate::type_system::datatype::TypeMetatype::Int,
+                        ))),
+                4 => std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new(
+                            "int".to_string(), 4,
+                            crate::type_system::datatype::TypeMetatype::Int,
+                        ))),
+                _ => std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new(
+                            "long".to_string(), size,
+                            crate::type_system::datatype::TypeMetatype::Int,
+                        ))),
+            };
+            // Only update if the current return type is void or unknown
+            let is_void = matches!(fd.funcp.return_type.as_ref(),
+                crate::type_system::datatype::Datatype::Void(_));
+            if is_void {
+                fd.funcp.return_type = new_return_type;
             }
         }
-
-        let _ = has_return_value;
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "outputprototype" }

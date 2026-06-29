@@ -628,3 +628,8 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 为每个 active input 创建 ProtoParameter（type=long, name=param_N）。
 - 完整版需 resolveModel + deriveInputMap + updateInputTypes — deferred。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 10）：ActionOutputPrototype 忠实移植（coreaction.cc:4765-4782）
+- 从第一个 RETURN op 的 slot 1 varnode 推导返回类型。根据 varnode 大小设置 byte/int/long。仅当当前返回类型为 void 时更新。
+- 完整版需 updateOutputTypes（含 HighVariable 类型传播）— deferred。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
