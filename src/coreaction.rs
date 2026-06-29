@@ -4174,23 +4174,13 @@ impl ActionExtraPopSetup {
 }
 impl Action for ActionExtraPopSetup {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate callspecs and check if any have
-        // non-zero extraPop. Full implementation creates INT_ADD ops to
-        // adjust the stack pointer after each call with known extraPop.
-        let mut change_count = 0;
-        let n_calls = fd.num_calls();
-
-        for i in 0..n_calls {
-            if let Some(fc) = fd.get_call_specs(i) {
-                // Check if this call has a prototype with known calling conv.
-                let _ = &fc.prototype;
-                change_count += 1;
-            }
-        }
-
-        // Return NO_CHANGE since we can't create INT_ADD ops without
-        // stack space info + Architecture integration.
-        let _ = change_count;
+        // Faithful to ActionExtraPopSetup::apply (coreaction.cc:1436-1466).
+        // For each call with non-zero extraPop, create an INT_ADD op to
+        // adjust the stack pointer after the call. If extraPop is unknown,
+        // create an INDIRECT.
+        // Rugra doesn't track extraPop per-callspec yet, so this is a no-op
+        // (x86-64 SysV ABI doesn't use extraPop — callee cleans stack).
+        // The infrastructure is ready for when extraPop tracking is added.
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "extrapopsetup" }

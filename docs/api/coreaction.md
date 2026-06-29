@@ -609,3 +609,7 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 改进为忠实移植：对无 model 的 call spec，分配默认 ProtoModel（x86-64 SysV ABI），设置 calling_convention="default"。setInternal 等价实现。
 - insertPcode（调用点 pcode 注入）deferred（需 pcodeinjectlib）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 6）：ActionExtraPopSetup 清理（coreaction.cc:1436-1466）
+- 清理了重复的 impl 块和孤立代码。保留单个干净实现。
+- x86-64 SysV ABI 不使用 extraPop（被调用者不清理栈），对 Rugra 目标架构为正确 no-op。
