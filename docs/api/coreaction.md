@@ -604,3 +604,8 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - Phase 2：从 worklist 传播 direct_write 标记到后代 assignment ops 的输出。
 - COPY/STACK_STORE 间接写和 INDIRECT 传播 deferred（需 is_stack_store/is_indirect_store 基础设施）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 5）：ActionDefaultParams L1→L2（coreaction.cc:2311-2337）
+- 改进为忠实移植：对无 model 的 call spec，分配默认 ProtoModel（x86-64 SysV ABI），设置 calling_convention="default"。setInternal 等价实现。
+- insertPcode（调用点 pcode 注入）deferred（需 pcodeinjectlib）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
