@@ -3489,43 +3489,59 @@ impl ActionUnjustifiedParams {
 }
 impl Action for ActionUnjustifiedParams {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate input Varnodes and check if any
-        // are not covered by the function prototype's parameter list.
-        // Full algorithm requires FuncProto.unjustifiedInputParam + container
-        // creation for overlapping params.
-        let mut change_count = 0;
+        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
+        // Find input varnodes whose storage is not fully covered by the
+        // prototype's parameter list. These are "unjustified" inputs that
+        // need to be adjusted (e.g. by creating a larger container param).
+        //
+        // Simplified: scan input varnodes, find any whose (space, offset)
+        // doesn't match a declared parameter. For each, create a placeholder
+        // ProtoParameter if the varnode has descendants (is used).
+        if fd.funcp.is_input_locked() {
+            return Ok(action_status::NO_CHANGE);
+        }
 
-        let varnodes: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
+        let input_vns: Vec<_> = fd.vbank.loc_tree.iter()
             .map(|v| v.0.clone())
+            .filter(|v| {
+                let g = v.read().unwrap();
+                g.is_input() && !g.is_spacebase() && !g.is_persist()
+            })
             .collect();
 
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            if !vn_rg.is_input() {
-                continue;
-            }
-            // Check if this input Varnode's address matches any declared
-            // parameter in the function prototype.
-            let proto = fd.get_func_proto();
-            let vn_addr = vn_rg.get_addr().as_u64();
-            let vn_size = vn_rg.get_size();
+        let mut change = 0;
+        for vn_arc in &input_vns {
+            let vn = vn_arc.read().unwrap();
+            let vn_offset = vn.get_offset();
+            let vn_size = vn.get_size();
 
-            let is_justified = proto.parameters.iter().any(|p| {
-                p.address.as_u64() == vn_addr && p.address.as_u64() > 0
+            // Check if this input matches any declared parameter
+            let is_justified = fd.funcp.parameters.iter().any(|p| {
+                p.address.as_u64() == vn_offset
             });
 
-            if !is_justified && vn_addr > 0 {
-                // This input is not covered by any declared parameter.
-                change_count += 1;
+            if !is_justified && vn.count_descends() > 0 {
+                // This input is used but not declared as a parameter.
+                // Create a ProtoParameter for it.
+                let dt = std::sync::Arc::new(
+                    crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new(
+                            "long".to_string(),
+                            vn_size,
+                            crate::type_system::datatype::TypeMetatype::Int,
+                        )
+                    )
+                );
+                fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
+                    format!("param_{}", fd.funcp.parameters.len() + 1),
+                    dt,
+                    crate::address::Address::new(vn_offset),
+                ));
+                change += 1;
             }
         }
 
-        // Return NO_CHANGE since we don't create new params yet.
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "unjustifiedparams" }
 }

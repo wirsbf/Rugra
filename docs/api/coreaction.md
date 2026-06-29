@@ -633,3 +633,8 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 从第一个 RETURN op 的 slot 1 varnode 推导返回类型。根据 varnode 大小设置 byte/int/long。仅当当前返回类型为 void 时更新。
 - 完整版需 updateOutputTypes（含 HighVariable 类型传播）— deferred。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 11）：ActionUnjustifiedParams 忠实移植（coreaction.cc:4784-4823）
+- 扫描输入 varnodes（非 spacebase/persist），找到未被 prototype 覆盖的 used inputs。为每个创建 ProtoParameter（long, param_N）。
+- 完整版需 unjustifiedInputParam + container 重叠合并 + adjustInputVarnodes — deferred。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
