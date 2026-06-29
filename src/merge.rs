@@ -35,6 +35,32 @@ impl Merge {
         self.var_counter = 0;
     }
 
+    /// Decide whether a varnode should participate in merging.
+    ///
+    /// Faithful to the contract of Ghidra's merge: it operates on the
+    /// post-optimization varnode set, so only varnodes that are still live
+    /// (their defining op has not been dead-code eliminated) are merged.
+    /// - Input varnodes (function parameters / entry values) are always live.
+    /// - Written varnodes are live iff their def op is not marked DEAD.
+    /// - Free varnodes (neither input nor written) are skipped: they are
+    ///   leftovers from copy-prop/dead-code and have no meaningful def.
+    ///
+    /// This guard is what makes `high.instances` authoritative by the time
+    /// printc runs (merge now executes after dead-code — see action.rs).
+    fn is_live_varnode(vn: &Varnode) -> bool {
+        if vn.is_input() {
+            return true;
+        }
+        if !vn.is_written() {
+            return false; // free varnode — skip
+        }
+        // Written: check the def op is still alive.
+        match vn.get_def() {
+            Some(op_arc) => !op_arc.read().unwrap().is_dead(),
+            None => false, // written flag set but def link gone — treat as dead
+        }
+    }
+
     /// Perform the full merging + naming pipeline
     pub fn merge_all(&mut self, fd: &mut Funcdata) {
         // Phase 1: Group varnodes by address identity
@@ -67,10 +93,13 @@ impl Merge {
         {
             for vn_ref in &fd.vbank.loc_tree {
                 let vn_arc = vn_ref.0.clone();
-                let (addr, size) = {
+                let (addr, size, live) = {
                     let vn = vn_arc.read().unwrap();
-                    (vn.loc, vn.size)
+                    (vn.loc, vn.size, Self::is_live_varnode(&vn))
                 };
+                if !live {
+                    continue;
+                }
                 groups.entry((addr, size)).or_default().push(vn_arc);
             }
         }
@@ -102,8 +131,11 @@ impl Merge {
     /// Ensure every varnode in the bank has a HighVariable.
     /// Varnodes not merged by `merge_addr_tied` get their own singleton HighVariable.
     fn ensure_all_have_high(&mut self, fd: &mut Funcdata) {
-        let vn_arcs: Vec<Arc<RwLock<Varnode>>> =
-            fd.vbank.loc_tree.iter().map(|r| r.0.clone()).collect();
+        let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
+            .iter()
+            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .map(|r| r.0.clone())
+            .collect();
 
         for vn_arc in vn_arcs {
             let needs_high = {
@@ -209,8 +241,11 @@ impl Merge {
         // Track which register names have been used to avoid duplicates
         let mut used_reg_names: HashSet<String> = HashSet::new();
 
-        let vn_arcs: Vec<Arc<RwLock<Varnode>>> =
-            fd.vbank.loc_tree.iter().map(|r| r.0.clone()).collect();
+        let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
+            .iter()
+            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .map(|r| r.0.clone())
+            .collect();
 
         for vn_arc in vn_arcs {
             let vn = vn_arc.read().unwrap();
@@ -294,8 +329,11 @@ impl Merge {
     /// block some valid merges (if the varnode doesn't actually flow to
     /// ALL successors) but never allows invalid merges.
     pub fn compute_varnode_covers(&mut self, fd: &mut Funcdata) {
-        let vn_arcs: Vec<Arc<RwLock<Varnode>>> =
-            fd.vbank.loc_tree.iter().map(|r| r.0.clone()).collect();
+        let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
+            .iter()
+            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .map(|r| r.0.clone())
+            .collect();
 
         for vn_arc in vn_arcs {
             let skip = {

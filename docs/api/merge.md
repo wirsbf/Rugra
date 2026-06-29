@@ -28,6 +28,22 @@ Create a new Merge instance
 
 Clear all existing HighVariables and reset merge state
 
+### `fn is_live_varnode(vn: &Varnode) -> bool` (private)
+
+Liveness guard for merge participation. Faithful to Ghidra's contract
+that merge operates on the post-optimization varnode set: only varnodes
+still live after dead-code elimination are grouped into HighVariables.
+
+- Input varnodes (function parameters / entry values) always pass.
+- Written varnodes pass iff their def op is not marked DEAD.
+- Free varnodes (neither input nor written) are skipped — they are
+  copy-prop/dead-code leftovers with no meaningful def.
+
+Applied to all four `loc_tree` traversals (merge_addr_tied /
+ensure_all_have_high / compute_varnode_covers / assign_names). This is
+what makes `high.instances` authoritative when merge runs after
+dead-code in the pipeline.
+
 ### `pub fn merge_all(&mut self, fd: &mut Funcdata)`
 
 Perform the full merging + naming pipeline
