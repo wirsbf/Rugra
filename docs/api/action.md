@@ -582,6 +582,10 @@ Funcdata ready
 - **implied 机制接入**（2026-06-29）：MarkImplied 用 checkImpliedCover（cover 相交）标记 implied varnode；printc 的 emit_block_ops 跳过 implied-output 的 op（对齐 printc.cc:2704），push_varnode 对 implied varnode 递归 inline 其 def 表达式（recurse 等价）。这是 Ghidra 控制内联的权威机制，替代 printc 自造的 4 套 map。
 - curl 审计保持 24/24；`debug_my_fwrite` 中间变量（如 `piVar1`/`lVar3`）被正确内联。已知调优项：部分函数有重复变量声明（块内 shadow，gcc 允许但影响可读性）。
 
+### 2026-06-29：ActionFuncLink 接入主管线（在 ActionHeritage 之前）
+
+- `ActionFuncLink` 注册在 decompile_group 的 `ActionStart` 之后、`ActionHeritage` **之前**（对齐 Ghidra coreaction.cc:5484 FuncLink → 5492 Heritage）。它在 ActionFuncLink::apply 里调 `ensure_callspecs`（对齐 FlowInfo::setupCallSpecs flow.cc:680）扫描所有 alive CALL op 建立 FuncCallSpecs，存入 fd.callspecs，再对每个调 funcLinkInput/funcLinkOutput。此前 callspecs 仅测试填充。funcLink 的 locked 路径（opInsertInput/newVarnode/newVarnodeOut）仍 deferred。
+
 ### 2026-06-27（会话3 续）：ActionPool — Rule 调度器接入主管线（G6 核心补全）
 
 **系统性架构补全**：Rugra 此前 ~90 个 Rule 全部实现了 `apply_op` 但**均未接入主管线**——无 Ghidra ActionPool 式的 Rule 遍历调度。本次补全：

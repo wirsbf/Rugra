@@ -3825,6 +3825,58 @@ pub struct ActionFuncLink;
 impl ActionFuncLink {
     pub fn new() -> Self { Self }
 
+    /// Build FuncCallSpecs for every CALL op that lacks one.
+    /// Faithful to FlowInfo::setupCallSpecs (flow.cc:680-695): for each CALL
+    /// op, create a FuncCallSpecs initialized from the call's target address
+    /// (inrefs[0]), and store it in fd.callspecs. Rugra has no separate
+    /// FlowInfo stage, so this runs as the first step of ActionFuncLink.
+    fn ensure_callspecs(&self, fd: &mut Funcdata) -> usize {
+        use crate::space::AddressSpace;
+        // Collect CALL op addresses that already have a callspec.
+        let existing: std::collections::HashSet<u64> =
+            fd.callspecs.iter().map(|fc| fc.op_addr.as_u64()).collect();
+        // Scan alive CALL ops for new ones.
+        let mut new_specs: Vec<(u64, u64)> = Vec::new(); // (op_addr, target_addr)
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != OpCode::CPUI_CALL || op.is_dead() {
+                continue;
+            }
+            let op_addr = op.get_seq_num().get_addr().as_u64();
+            if existing.contains(&op_addr) {
+                continue;
+            }
+            // inrefs[0] is the target address (Ram space constant).
+            if let Some(target_vn) = op.get_in(0) {
+                let tv = target_vn.read().unwrap();
+                let target_addr = if tv.get_space() == AddressSpace::Ram {
+                    tv.get_offset()
+                } else {
+                    0
+                };
+                new_specs.push((op_addr, target_addr));
+            }
+        }
+        let n_new = new_specs.len();
+        for (op_addr, target_addr) in new_specs {
+            use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+            let proto = crate::fspec::FuncProto::new(
+                String::new(),
+                Arc::new(Datatype::Void(TypeBase::new(
+                    "void".to_string(), 0, TypeMetatype::Unknown,
+                ))),
+            );
+            let mut fc = crate::fspec::FuncCallSpecs::new(
+                crate::address::Address::new(op_addr),
+                proto,
+            );
+            fc.entry_addr = Some(crate::address::Address::new(target_addr));
+            fc.proto_model = Some(crate::type_system::protomodel::ProtoModel::default_x86_64());
+            fd.add_call_specs(fc);
+        }
+        n_new
+    }
+
     /// Set up input parameter recovery for a sub-function call. Faithful to
     /// `ActionFuncLink::funcLinkInput` (coreaction.cc:1474-1513).
     ///
@@ -3881,7 +3933,10 @@ impl ActionFuncLink {
 }
 impl Action for ActionFuncLink {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586).
+        // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586) +
+        // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
+        // stage, so we build FuncCallSpecs here (one per CALL op) before linking.
+        let n_new = self.ensure_callspecs(fd);
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
             if let Some(fc) = fd.get_call_specs_mut(i) {
@@ -3889,7 +3944,11 @@ impl Action for ActionFuncLink {
                 Self::func_link_output(fc);
             }
         }
-        Ok(action_status::NO_CHANGE)
+        if n_new > 0 || n_calls > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "funclink" }
 }

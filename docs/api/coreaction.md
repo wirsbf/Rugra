@@ -536,6 +536,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
 - ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output
 
+### 2026-06-29：ActionFuncLink 接入主管线 + 生产路径建立 FuncCallSpecs
+
+- **ensure_callspecs**（对齐 FlowInfo::setupCallSpecs flow.cc:680）：扫描所有 alive CALL op，为每个建 FuncCallSpecs（从 inrefs[0] 目标地址初始化 entry_addr），存入 fd.callspecs。此前 callspecs 仅单元测试填充——整个 FuncCallSpecs/trial 恢复链是死代码。
+- **接入管线**：ActionFuncLink 注册在 decompile_group 的 ActionHeritage **之前**（对齐 Ghidra coreaction.cc:5484），确保 funcLink 建的 varnode 进入 SSA rename。
+- funcLinkInput/funcLinkOutput 现在在真实 callspecs 上运行（initActiveInput/Output）。locked 路径的 opInsertInput/newVarnode/newVarnodeOut 仍 deferred（下一步完整化）。
+- 基础已就绪，无回归：780/780 测试，curl 24/24。
+
 ### 2026-06-27（会话3 G5续）：ActionRestructureVarnode 接入 sync_varnodes_with_symbols
 
 ActionRestructureVarnode::apply（coreaction.cc:2274-2295）现调用 `fd.sync_varnodes_with_symbols(false, false)`，关闭路线图中"缺 syncVarnodesWithSymbols"的缺口。

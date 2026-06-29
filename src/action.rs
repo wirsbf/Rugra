@@ -384,6 +384,12 @@ impl ActionDatabase {
         let mut decompile_group = ActionGroup::new("decompile");
 
         decompile_group.add_action(Box::new(ActionStart::new()));
+        // ActionFuncLink (Ghidra coreaction.cc:5484, runs BEFORE Heritage):
+        // builds FuncCallSpecs for every CALL op (ensure_callspecs, faithful
+        // to FlowInfo::setupCallSpecs flow.cc:680) then funcLinkInput/funcLinkOutput
+        // set up input/output parameter recovery (initActiveInput/Output). Must
+        // run before Heritage so any varnodes it creates are SSA-renamed.
+        decompile_group.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
         decompile_group.add_action(Box::new(ActionHeritage::new()));
         // Mark the stack-pointer register (RSP) as a spacebase, faithful to
         // Ghidra ActionSpacebase (coreaction.cc:5506, "Must come before
