@@ -1223,6 +1223,107 @@ impl Funcdata {
 
     /// Make all reads of the given Varnode unique. Faithful to
     /// `Funcdata::splitUses` (funcdata_varnode.cc:1540-1567).
+    /// Calculate the non-zero mask (NZM) property on all Varnode objects.
+    /// Faithful to `Funcdata::calcNZMask` (funcdata_varnode.cc:856-930).
+    /// DFS traversal of ops in alive order: for each op whose output hasn't
+    /// been calculated, compute its NZM from input NZMs using
+    /// `PcodeOp::getNZMaskLocal` (op.cc:547-700).
+    pub fn calc_nz_mask(&mut self) {
+        use crate::opcodes::OpCode;
+        // Process ops in alive list order (topological-ish).
+        // For each op with an output, compute NZM.
+        let ops: Vec<crate::op::PcodeOpRef> = self.obank.alivelist.clone();
+        for op_ref in &ops {
+            let (opcode, out_size) = {
+                let op = op_ref.0.read().unwrap();
+                let sz = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+                (op.opcode, sz)
+            };
+            if out_size == 0 { continue; }
+            let full_mask = crate::address::calc_mask(out_size);
+            // Get input NZMs
+            let (in0_nzm, in1_nzm, in0_const, in1_const, in0_size, in1_val) = {
+                let op = op_ref.0.read().unwrap();
+                let i0 = op.inrefs.get(0).map(|v| {
+                    let g = v.read().unwrap();
+                    if g.is_constant() { g.get_offset() } else { g.get_nz_mask() }
+                });
+                let i1 = op.inrefs.get(1).map(|v| {
+                    let g = v.read().unwrap();
+                    if g.is_constant() { g.get_offset() } else { g.get_nz_mask() }
+                });
+                let c0 = op.inrefs.get(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                let c1 = op.inrefs.get(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                let s0 = op.inrefs.get(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                let v1 = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                (i0.unwrap_or(full_mask), i1.unwrap_or(full_mask), c0, c1, s0, v1)
+            };
+            let res_mask = match opcode {
+                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
+                | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+                | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW
+                | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
+                | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
+                | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+                | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+                | OpCode::CPUI_FLOAT_NAN => 1u64,
+                OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => in0_nzm,
+                OpCode::CPUI_INT_SEXT => {
+                    // sign extend nzm from in0_size to out_size
+                    let signbit = 1u64 << (in0_size * 8 - 1);
+                    if (in0_nzm & signbit) != 0 && out_size > 8 {
+                        full_mask // sign bit set, upper bits all 1
+                    } else if (in0_nzm & signbit) != 0 {
+                        in0_nzm | (full_mask & !crate::address::calc_mask(in0_size))
+                    } else {
+                        in0_nzm
+                    }
+                }
+                OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                    if in0_nzm != full_mask { in0_nzm | in1_nzm } else { full_mask }
+                }
+                OpCode::CPUI_INT_AND => {
+                    if in0_nzm != 0 { in0_nzm & in1_nzm } else { 0 }
+                }
+                OpCode::CPUI_INT_LEFT => {
+                    if !in1_const { full_mask }
+                    else {
+                        let sa = in1_val as u32;
+                        if sa >= 64 { 0 } else { in0_nzm.wrapping_shl(sa) & full_mask }
+                    }
+                }
+                OpCode::CPUI_INT_RIGHT => {
+                    if !in1_const { full_mask }
+                    else {
+                        let sa = in1_val as u32;
+                        if sa >= 64 { 0 } else { in0_nzm >> sa }
+                    }
+                }
+                OpCode::CPUI_INT_NEGATE => !in0_nzm & full_mask,
+                OpCode::CPUI_INT_2COMP => {
+                    // -x: if x is power of 2, nzm = x; else full_mask
+                    if in0_nzm != 0 && (in0_nzm & (in0_nzm - 1)) == 0 { in0_nzm }
+                    else { full_mask }
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    let trunc = in1_val as usize;
+                    if trunc * 8 >= 64 { 0 }
+                    else { (in0_nzm >> (trunc * 8)) & full_mask }
+                }
+                OpCode::CPUI_PIECE => {
+                    // hi << lo_size | lo
+                    in0_nzm.wrapping_shl(((out_size - in0_size) * 8) as u32) | in1_nzm
+                }
+                _ => full_mask,
+            };
+            // Set the output varnode's NZM
+            if let Some(out) = op_ref.0.read().unwrap().output.as_ref() {
+                out.write().unwrap().set_nzm(res_mask);
+            }
+        }
+    }
+
     ///
     /// If `vn` is defined by an op (e.g. INT_ADD) and has multiple
     /// descendants, duplicate the defining op so each reader gets its own

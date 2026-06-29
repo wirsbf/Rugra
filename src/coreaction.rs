@@ -4416,6 +4416,26 @@ impl Action for ActionReturnRecovery {
     fn get_name(&self) -> &str { "returnrecovery" }
 }
 
+/// Calculate the non-zero mask property on all Varnode objects. Faithful
+/// to `ActionNonzeroMask` (coreaction.hh:293-301, coreaction.cc:5507).
+/// Delegates to `Funcdata::calc_nz_mask()`. Must run after spacebase +
+/// infertypes (coreaction.cc:5507 "Must come before infertypes and
+/// nonzeromask" refers to spacebase; nonzeromask runs after).
+pub struct ActionNonzeroMask;
+impl ActionNonzeroMask {
+    pub fn new() -> Self { Self }
+}
+impl Action for ActionNonzeroMask {
+    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to Funcdata::calcNZMask (funcdata_varnode.cc:856-930).
+        // DFS traversal of ops: for each op, compute output NZM from input NZMs
+        // using PcodeOp::getNZMaskLocal (op.cc:547-700).
+        fd.calc_nz_mask();
+        Ok(action_status::NO_CHANGE)
+    }
+    fn get_name(&self) -> &str { "nonzeromask" }
+}
+
 /// Force goto from overrides. Faithful to `ActionForceGoto`
 /// (coreaction.cc).
 ///

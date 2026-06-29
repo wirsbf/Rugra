@@ -638,3 +638,9 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 扫描输入 varnodes（非 spacebase/persist），找到未被 prototype 覆盖的 used inputs。为每个创建 ProtoParameter（long, param_N）。
 - 完整版需 unjustifiedInputParam + container 重叠合并 + adjustInputVarnodes — deferred。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 12）：ActionNonzeroMask + Funcdata::calc_nz_mask（coreaction.hh:293, funcdata_varnode.cc:856）
+- 新增 `ActionNonzeroMask`（coreaction.hh:293-301）+ `Funcdata::calc_nz_mask()`（funcdata_varnode.cc:856-930）。
+- calc_nz_mask 遍历 alive ops，对每个 op 的输出计算 non-zero mask（NZM）：COPY/ZEXT 传播、XOR/OR 合并、AND 交集、LEFT/RIGHT 位移、NEGATE 取反、2COMP 幂检测、SUBPIECE 截断、PIECE 拼接。
+- NZM 用于下游分析：RuleAndMask/RuleOrMask 等利用 NZM 进行位优化；类型推断利用 NZM 判断变量范围。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

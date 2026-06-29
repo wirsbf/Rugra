@@ -745,3 +745,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-06-29（续 3）：Funcdata.active_output 字段
 - 新增 `active_output: Option<ParamActive>` 字段（funcdata.hh）。用于 ActionReturnRecovery 检测函数返回值。当 RETURN op 有 >1 input 时自动创建 active_output。
+
+### 2026-06-29（续 4）：Funcdata::calc_nz_mask（funcdata_varnode.cc:856-930）
+- `calc_nz_mask()` — 计算所有 Varnode 的 non-zero mask（NZM）。遍历 alive ops，根据 opcode 从输入 NZM 推导输出 NZM：COPY/ZEXT 传播、XOR/OR 合并、AND 交集、LEFT/RIGHT 位移、NEGATE/2COMP/SUBPIECE/PIECE 等。
+- 用于 RuleAndMask/RuleOrMask 位优化 + 类型推断变量范围。
