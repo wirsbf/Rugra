@@ -76,6 +76,9 @@ raw semantics / P-code-like IR
 ### mark_varnode_used LOAD 检测（2026-06-28 新增）
 如果 varnode 是 LOAD op 的输出，type_name 用 size-based（int/long/byte）而非 vn.v_type 的指针类型。这让 LOAD 结果声明为 `int piVar92` 而非 `int * piVar92`，**消除了 reconcile_pointer_arith** 的需要。
 
+### push_varnode Priority 1.4 — 权威 HighVariable def inline（2026-06-29 新增）
+`push_varnode` 在 Priority 1（用 HighVariable 名字）之后、Priority 1.5（基于自造 map 的 def 查找）之前，新增基于权威 HighVariable 的 def inline：若当前 varnode 无可用 def（def 缺失或 def op 已 dead），但同 HighVariable 的兄弟实例（`high.get_type_representative()`）有可用 def，则 inline 那个 def 表达式。前提是 merge 已在 dead-code 之后运行（action.rs 管线顺序），`high.instances` 为权威存活集。这是用 SSA 权威 HighVariable 替代自造 map 的第一步，保守且安全（仅对"当前实例无 def"生效，不影响正常命名读取）。
+
 ---
 
 ## 设计边界

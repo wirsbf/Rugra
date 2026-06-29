@@ -4174,6 +4174,37 @@ impl PrintLanguage for PrintC {
                 };
                 let name = &display_name;
 
+                // Priority 1.4: Authoritative-HighVariable def inline.
+                // merge (now post-dead-code) builds authoritative high.instances.
+                // If the current varnode has no usable def but a sibling instance
+                // of the same HighVariable does, inline THAT def — this is the
+                // SSA-correct way to resolve a read, and it replaces the ad-hoc
+                // map lookups of Priority 1.5/1.7 for the common case.
+                // Guarded: not on LHS, depth-bounded, and only when the current
+                // varnode's own def is missing/dead (so normal named reads are
+                // unaffected).
+                if !self.is_lhs && self.inline_depth < 8 {
+                    let own_def_ok = vn.get_def()
+                        .map(|op| !op.read().unwrap().is_dead())
+                        .unwrap_or(false);
+                    if !own_def_ok {
+                        let sibling_def = {
+                            let high = high_arc.read().unwrap();
+                            high.get_type_representative()
+                                .and_then(|inst| inst.read().unwrap().get_def())
+                                .filter(|op| !op.read().unwrap().is_dead())
+                        };
+                        if let Some(def_op_arc) = sibling_def {
+                            let def_op = def_op_arc.read().unwrap();
+                            self.inline_depth += 1;
+                            self.inlined_ops.insert(*def_op.get_seq_num());
+                            self.emit_inline_expr(&def_op);
+                            self.inline_depth -= 1;
+                            return;
+                        }
+                    }
+                }
+
                 // Priority 1.5: For generic uVarN names on Register/Unique varnodes,
                 // try to resolve through the def chain to emit more meaningful output
                 // (constants, symbol names, RIP-relative addresses).
