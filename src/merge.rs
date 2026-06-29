@@ -19,12 +19,16 @@ use std::sync::{Arc, RwLock};
 pub struct Merge {
     /// Counter for auto-naming unique/register variables
     var_counter: u32,
+    /// Set of varnode Arc pointers that are still referenced by an alive op.
+    /// Built once per merge_all run; consulted by every loc_tree traversal so
+    /// dead copy-prop/dead-code leftovers are excluded from HighVariables.
+    live_set: std::collections::HashSet<usize>,
 }
 
 impl Merge {
     /// Create a new Merge instance
     pub fn new() -> Self {
-        Self { var_counter: 0 }
+        Self { var_counter: 0, live_set: std::collections::HashSet::new() }
     }
 
     /// Clear all existing HighVariables and reset merge state
@@ -38,31 +42,55 @@ impl Merge {
     /// Decide whether a varnode should participate in merging.
     ///
     /// Faithful to the contract of Ghidra's merge: it operates on the
-    /// post-optimization varnode set, so only varnodes that are still live
-    /// (their defining op has not been dead-code eliminated) are merged.
-    /// - Input varnodes (function parameters / entry values) are always live.
-    /// - Written varnodes are live iff their def op is not marked DEAD.
-    /// - Free varnodes (neither input nor written) are skipped: they are
-    ///   leftovers from copy-prop/dead-code and have no meaningful def.
+    /// post-optimization varnode set, so only varnodes still referenced by
+    /// an alive op are merged. This is determined by collecting the set of
+    /// varnodes referenced by any alive op's inputs or output, then testing
+    /// membership — NOT by inspecting `vn.def`/`vn.descend`, which become
+    /// unreliable after copy-propagation redirects edges and dead-code marks
+    /// ops dead without pruning varnode-side links.
     ///
-    /// This guard is what makes `high.instances` authoritative by the time
-    /// printc runs (merge now executes after dead-code — see action.rs).
-    fn is_live_varnode(vn: &Varnode) -> bool {
-        if vn.is_input() {
-            return true;
+    /// Input varnodes (function parameters / entry values) are always live.
+    fn live_varnode_set(fd: &Funcdata) -> std::collections::HashSet<usize> {
+        use std::collections::HashSet;
+        let mut live: HashSet<usize> = HashSet::new();
+        // Collect varnodes referenced by any alive op (inrefs + output).
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if let Some(out) = &op.output {
+                live.insert(std::sync::Arc::as_ptr(out) as usize);
+            }
+            for in_arc in &op.inrefs {
+                live.insert(std::sync::Arc::as_ptr(in_arc) as usize);
+            }
         }
-        if !vn.is_written() {
-            return false; // free varnode — skip
+        // Also include block-level ops (comparisons/booleans may live only in blocks).
+        for i in 0..fd.bblocks.get_size() {
+            if let Some(block_arc) = fd.bblocks.get_block(i) {
+                let block = block_arc.read().unwrap();
+                for op_ref in block.get_ops() {
+                    let op = op_ref.0.read().unwrap();
+                    if op.is_dead() {
+                        continue;
+                    }
+                    if let Some(out) = &op.output {
+                        live.insert(std::sync::Arc::as_ptr(out) as usize);
+                    }
+                    for in_arc in &op.inrefs {
+                        live.insert(std::sync::Arc::as_ptr(in_arc) as usize);
+                    }
+                }
+            }
         }
-        // Written: check the def op is still alive.
-        match vn.get_def() {
-            Some(op_arc) => !op_arc.read().unwrap().is_dead(),
-            None => false, // written flag set but def link gone — treat as dead
-        }
+        live
     }
 
     /// Perform the full merging + naming pipeline
     pub fn merge_all(&mut self, fd: &mut Funcdata) {
+        // Build the live varnode set once (post-dead-code): only varnodes
+        // referenced by an alive op participate in HighVariables. This makes
+        // high.instances authoritative for printc.
+        self.live_set = Self::live_varnode_set(fd);
+
         // Phase 1: Group varnodes by address identity
         self.merge_addr_tied(fd);
 
@@ -95,7 +123,9 @@ impl Merge {
                 let vn_arc = vn_ref.0.clone();
                 let (addr, size, live) = {
                     let vn = vn_arc.read().unwrap();
-                    (vn.loc, vn.size, Self::is_live_varnode(&vn))
+                    let live = vn.is_input()
+                        || self.live_set.contains(&(std::sync::Arc::as_ptr(&vn_arc) as usize));
+                    (vn.loc, vn.size, live)
                 };
                 if !live {
                     continue;
@@ -133,7 +163,10 @@ impl Merge {
     fn ensure_all_have_high(&mut self, fd: &mut Funcdata) {
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
-            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .filter(|r| {
+                let v = r.0.read().unwrap();
+                v.is_input() || self.live_set.contains(&(std::sync::Arc::as_ptr(&r.0) as usize))
+            })
             .map(|r| r.0.clone())
             .collect();
 
@@ -243,7 +276,10 @@ impl Merge {
 
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
-            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .filter(|r| {
+                let v = r.0.read().unwrap();
+                v.is_input() || self.live_set.contains(&(std::sync::Arc::as_ptr(&r.0) as usize))
+            })
             .map(|r| r.0.clone())
             .collect();
 
@@ -331,7 +367,10 @@ impl Merge {
     pub fn compute_varnode_covers(&mut self, fd: &mut Funcdata) {
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
-            .filter(|r| Self::is_live_varnode(&r.0.read().unwrap()))
+            .filter(|r| {
+                let v = r.0.read().unwrap();
+                v.is_input() || self.live_set.contains(&(std::sync::Arc::as_ptr(&r.0) as usize))
+            })
             .map(|r| r.0.clone())
             .collect();
 

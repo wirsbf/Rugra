@@ -28,20 +28,24 @@ Create a new Merge instance
 
 Clear all existing HighVariables and reset merge state
 
-### `fn is_live_varnode(vn: &Varnode) -> bool` (private)
+### `fn live_varnode_set(fd: &Funcdata) -> HashSet<usize>` (private)
 
-Liveness guard for merge participation. Faithful to Ghidra's contract
-that merge operates on the post-optimization varnode set: only varnodes
-still live after dead-code elimination are grouped into HighVariables.
+Liveness for merge. Builds the set of varnode Arc pointers that are still
+referenced (as input or output) by any **alive** op — drawn from
+`fd.obank.alivelist` plus block-level ops not marked DEAD. The result is
+cached in `Merge::live_set` once per `merge_all` run and consulted by every
+`loc_tree` traversal.
 
-- Input varnodes (function parameters / entry values) always pass.
-- Written varnodes pass iff their def op is not marked DEAD.
-- Free varnodes (neither input nor written) are skipped — they are
-  copy-prop/dead-code leftovers with no meaningful def.
+Why membership-in-alive-op-set, not `vn.def`/`vn.descend`: after
+copy-propagation redirects `user.inrefs[slot]` to a new source, the old
+varnode's `vn.def` still points at the now-marked-dead COPY op, and
+`vn.descend` becomes empty — even though the varnode is still live (the
+new consumer references it). So def/descend are unreliable post-optimization
+signals; the only authoritative liveness source is "is this varnode in some
+alive op's inrefs/output?". Input varnodes (function parameters) are always
+live.
 
-Applied to all four `loc_tree` traversals (merge_addr_tied /
-ensure_all_have_high / compute_varnode_covers / assign_names). This is
-what makes `high.instances` authoritative when merge runs after
+This is what makes `high.instances` authoritative when merge runs after
 dead-code in the pipeline.
 
 ### `pub fn merge_all(&mut self, fd: &mut Funcdata)`
