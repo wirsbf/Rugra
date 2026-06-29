@@ -2689,55 +2689,60 @@ impl ActionRestrictLocal {
 impl Action for ActionRestrictLocal {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestrictLocal::apply (coreaction.cc:1957-2001).
-        // Two loops:
-        // 1. For each call with locked input params on stack: markNotMapped
-        // 2. For each saved-register effect: find COPY to stack, markNotMapped
-        //
-        // Loop 1 requires getSpacebaseOffset (not yet available). Loop 2
-        // iterates FuncProto effects to find unaffected saved registers that
-        // are copied to stack storage — these should not be mapped as locals.
-        let mut change = 0;
+        // Collect all mark_not_mapped ranges first, then apply to scope
+        // at the end to avoid borrow conflicts.
+        let mut unmap_ranges: Vec<(u64, i32, bool)> = Vec::new();
 
-        // Build a scope if not already present (ActionRestructureVarnode
-        // normally runs first). If scope exists, use it; if not, skip —
-        // RestrictLocal only matters when there are symbols to restrict.
-        let scope = match fd.scope.as_mut() {
-            Some(s) => s,
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        // Loop 2: For each saved register effect, find COPY ops writing to
-        // stack and mark those locations as not-mapped.
-        // Ghidra uses FuncProto::effectBegin/effectEnd; Rugra doesn't have
-        // EffectRecord yet, so we use a heuristic: find COPY ops from
-        // input (unaffected) varnodes to stack-relative addresses.
-        let copy_ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.iter()
-            .filter(|r| r.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .cloned()
-            .collect();
-        for copy_op in &copy_ops {
-            let (in_vn, out_vn) = {
-                let op = copy_op.0.read().unwrap();
-                let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue };
-                let out = match op.output.as_ref() { Some(o) => o.clone(), None => continue };
-                (in0, out)
-            };
-            // Input must be an unaffected register (input varnode)
-            if !in_vn.read().unwrap().is_input() { continue; }
-            // Output must be stack-relative (Register space with RSP offset pattern)
-            // Check if output varnode's address is stack-derived
-            let out_g = out_vn.read().unwrap();
-            if out_g.get_space() != crate::space::AddressSpace::Register { continue; }
-            // Heuristic: the output is a stack slot if it was written via
-            // a STORE to RSP-relative address. Since we don't track that
-            // precisely, skip this for now — the mark_not_mapped infrastructure
-            // is in place for when EffectRecord is available.
-            drop(out_g);
+        // Loop 1: For each call with locked stack params, markNotMapped.
+        // Faithful to coreaction.cc:1967-1981.
+        let n_calls = fd.num_calls();
+        for i in 0..n_calls {
+            let fc = match fd.get_call_specs(i) { Some(fc) => fc, None => continue };
+            if !fc.is_input_locked() { continue; }
+            if !fc.has_spacebase_offset() { continue; }
+            let so = fc.get_spacebase_offset();
+            for p in &fc.prototype.parameters {
+                if p.address.as_u64() > 0x7FFF_FFFF {
+                    let off = (so as u64).wrapping_add(p.address.as_u64());
+                    unmap_ranges.push((off, p.data_type.get_size() as i32, true));
+                }
+            }
         }
 
-        // Loop 1 (simplified): For calls with locked stack params, mark them.
-        // This requires getSpacebaseOffset which isn't available yet.
-        // The mark_not_mapped + has_overlap infrastructure is ready.
+        // Loop 2: For each saved-register effect, find COPY ops writing to
+        // stack and mark those locations as not-mapped.
+        // Faithful to coreaction.cc:1983-2000.
+        let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effects.clone();
+        for effect in &effects {
+            if effect.get_type() == crate::fspec::EffectType::KilledByCall { continue; }
+            let effect_offset = effect.get_offset();
+            let effect_size = effect.get_size();
+            // Look for COPY ops from this register to stack storage
+            for op_ref in &fd.obank.alivelist {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_COPY { continue; }
+                let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue };
+                let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => continue };
+                let in_g = in_vn.read().unwrap();
+                if !in_g.is_input() { continue; }
+                if in_g.get_offset() != effect_offset { continue; }
+                if in_g.get_size() as i32 != effect_size { continue; }
+                drop(in_g);
+                let out_g = out_vn.read().unwrap();
+                if out_g.get_space() == crate::space::AddressSpace::Register {
+                    unmap_ranges.push((out_g.get_offset(), out_g.get_size() as i32, false));
+                }
+            }
+        }
+
+        // Apply collected unmap ranges to scope
+        let mut change = 0;
+        if let Some(scope) = fd.scope.as_mut() {
+            for (off, sz, param) in &unmap_ranges {
+                scope.mark_not_mapped(*off, *sz, *param);
+                change += 1;
+            }
+        }
 
         if change > 0 {
             Ok(action_status::CHANGE)

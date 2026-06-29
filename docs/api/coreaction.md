@@ -588,3 +588,9 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 新增 `ScopeLocal::has_overlap(offset, size)` — 检查范围是否与任何符号重叠。
 - `ActionRestrictLocal`（coreaction.cc:1957-2001）：接入主管线在 ActionCallParams 后、ActionDeadCode 前。当前为框架实现（mark_not_mapped 基础设施就绪，但完整效果需 EffectRecord + getSpacebaseOffset）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-06-29（续 3）：ActionRestrictLocal 完整实现（Loop 1 + Loop 2）
+- Loop 1：遍历 callspecs，对 locked stack params 调用 mark_not_mapped（需 stackoffset）。
+- Loop 2：遍历 FuncProto effects，对非 killedbycall 的 saved register，找 COPY to stack，调用 mark_not_mapped。
+- 使用 collect-then-apply 模式避免借用冲突。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。

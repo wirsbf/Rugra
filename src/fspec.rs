@@ -5,7 +5,53 @@
 
 use std::sync::Arc;
 use crate::address::Address;
+use crate::space::AddressSpace;
 use crate::type_system::datatype::Datatype;
+
+/// Effect type for a memory range across a call. Faithful to
+/// `EffectRecord` enum (fspec.hh:393-398).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectType {
+    /// The sub-function does not change the value at all
+    Unaffected = 1,
+    /// The memory is changed and is completely unrelated to its original value
+    KilledByCall = 2,
+    /// The memory is being used to store the return address
+    ReturnAddress = 3,
+    /// An unknown effect (indicates the absence of an EffectRecord)
+    UnknownEffect = 4,
+}
+
+/// A record of how a specific memory range is affected by a sub-function call.
+/// Faithful to `EffectRecord` (fspec.hh:391-416). Used by ActionRestrictLocal
+/// to identify saved registers (unaffected) that are copied to stack storage.
+#[derive(Debug, Clone)]
+pub struct EffectRecord {
+    /// The memory range affected (space + offset)
+    pub space: AddressSpace,
+    /// The starting offset of the affected range
+    pub offset: u64,
+    /// The size of the affected range
+    pub size: i32,
+    /// The type of effect
+    pub effect_type: EffectType,
+}
+
+impl EffectRecord {
+    /// Create a new effect record. Faithful to `EffectRecord(const VarnodeData&, uint4)`.
+    pub fn new(space: AddressSpace, offset: u64, size: i32, effect_type: EffectType) -> Self {
+        Self { space, offset, size, effect_type }
+    }
+
+    /// Get the type of effect. Faithful to `getType`.
+    pub fn get_type(&self) -> EffectType { self.effect_type }
+
+    /// Get the starting address offset. Faithful to `getAddress`.
+    pub fn get_offset(&self) -> u64 { self.offset }
+
+    /// Get the size of the affected range. Faithful to `getSize`.
+    pub fn get_size(&self) -> i32 { self.size }
+}
 
 /// Flags for ProtoParameter (corresponds to flags in fspec.hh)
 pub mod protoparam_flags {
@@ -69,6 +115,10 @@ pub struct FuncProto {
     pub calling_convention: String,
     /// True if the function accepts variable arguments (...)
     pub is_dotdotdot: bool,
+    /// Effect records: how registers/memory are affected by this function's calls.
+    /// Faithful to `FuncProto::effectlist` (fspec.hh). Used by ActionRestrictLocal
+    /// to identify saved registers (unaffected) that are copied to stack.
+    pub effects: Vec<EffectRecord>,
 }
 
 impl FuncProto {
@@ -80,6 +130,7 @@ impl FuncProto {
             parameters: Vec::new(),
             calling_convention: "unknown".to_string(),
             is_dotdotdot: false,
+            effects: Vec::new(),
         }
     }
 
@@ -96,6 +147,18 @@ impl FuncProto {
     /// Get a parameter by index
     pub fn get_param(&self, index: usize) -> Option<&ProtoParameter> {
         self.parameters.get(index)
+    }
+
+    /// Iterate effect records. Faithful to `FuncProto::effectBegin/effectEnd`
+    /// (fspec.hh). Returns a slice of all EffectRecords for this prototype.
+    pub fn effect_iter(&self) -> &[EffectRecord] {
+        &self.effects
+    }
+
+    /// Add an effect record. Used during prototype analysis to record
+    /// how registers/memory are affected by this function's calls.
+    pub fn add_effect(&mut self, effect: EffectRecord) {
+        self.effects.push(effect);
     }
 
     /// Check if input parameters are locked (type-locked).
