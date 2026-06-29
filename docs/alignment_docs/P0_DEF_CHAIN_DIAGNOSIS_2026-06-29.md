@@ -162,3 +162,32 @@ cargo run --release --example debug_my_fwrite 2>&1 >/dev/null | sed -n '/=== Aft
 ### my_fwrite 残留（判据 4）的独立阻塞
 
 merge 权威化后 my_fwrite 未赋值变量 5→3，残留 3 个（`lVar_18`/`uVar_1050`/`uVar_1061`）的根因是 **CALL 返回值 def 缺失**：CALL op 无 output，RAX 返回值的 def 不建立。诊断证据：RAX varnode 只有 `def=INPUT`，无 `def=op`。这是 ActionReturnRecovery 需 active_output 的已知缺口（CURRENT_STATUS.md 记录），与 merge/implied 无关。
+
+---
+
+## 七、implied 机制完整移植（2026-06-29 完成，3 commit）
+
+### 成果
+
+完整移植 Ghidra 的 implied 控制机制（替代 printc 自造 map 做内联决策）：
+
+| commit | 内容 |
+|---|---|
+| 3b4c34b | HighVariable.cover + update_internal_cover + update_high_covers（variable.hh:143 / variable.cc:324） |
+| 89622e2 | checkImpliedCover + inflateTest + mark_implied（coreaction.cc:3376 / merge.cc:1616/1595） |
+| e128161 | 接入管线（MarkExplicit+MarkImplied 在 MergeType 后）+ printc 跳过 implied op（printc.cc:2704）+ push_varnode 递归 inline（recurse 等价） |
+
+### 验证
+
+- **implied 工作**：my_fwrite 中间变量 `piVar1 = param_4 + 8` / `lVar3 = *(piVar1)` 被内联成 `if (*(long *)(param_4 + 0x8) == 0)`，消除冗余临时变量。
+- **780/780 测试通过**，curl 审计 24/24，0 goto，0 uVar。
+- **关键修复**：禁用 `propagate_cover_through_cfg`（merge.rs）——Ghidra Cover 是精确 def→use 范围，不是 CFG 前向可达性近似。传播到所有后继 `[0,MAX]` 让 cover 覆盖全图，破坏 inflateTest（每个输入都相交 → 0 implied）。精确范围后 implied 决策正确。
+- **时序修复**：MarkExplicit+MarkImplied 放在 MergeType **之后**（Ghidra 的 MergeRequired 在 MarkImplied 前建 high，Rugra 的 merge_all 合并了 MergeRequired+MergeType，故 MarkImplied 跟在 merge_all 后）。
+
+### 4 套 map 的现状
+
+implied 机制现在控制内联决策（Ghidra 方式）。printc 的 4 套自造 map（copy_map/def_map/value_def_map/comparison_def_map）成为 implied 的**冗余回退**——Priority 1.5/1.7 仍在，但 implied（push_varnode 开头 + Priority 1.4）优先。物理删除是后续清理任务（78 处引用，风险高，建议独立 commit）。
+
+### 已知非阻塞问题
+
+- **重复声明（curl 17 个）**：A/B 实验证明是**预先存在的 bug**（禁用 implied 跳过后仍有 17 个），非 implied 引入。根因是 doc_variable_decls 的声明收集与 switch 块结构交互，独立于 implied。
