@@ -278,6 +278,16 @@ impl PrintC {
                 continue;
             }
 
+            // Faithful to Ghidra printc.cc:2704: skip ops whose output isImplied().
+            // An implied varnode's def expression is inlined at its read site
+            // (push_varnode emits it), so the op is NOT emitted as a standalone
+            // `lhs = expr` statement.
+            if let Some(ref out_arc) = op.output {
+                if out_arc.read().unwrap().is_implied() {
+                    continue;
+                }
+            }
+
             // Skip RIP-relative INT_ADD ops — they create symbol aliases resolved via Priority 1.5
             if self.get_rip_relative_operand(&op).is_some() {
                 continue;
@@ -4083,6 +4093,25 @@ impl PrintLanguage for PrintC {
 
     fn push_varnode(&mut self, vn: &Varnode, _op: Option<&PcodeOp>) {
         use crate::space::AddressSpace;
+
+        // Faithful to Ghidra's implied-variable model: if this varnode is
+        // implied (ActionMarkImplied decided its def expression inlines into
+        // the consumer), emit the def expression here instead of the name.
+        // This is the recurse() equivalent for Rugra's leaf-based push_varnode.
+        // Guarded: not on LHS (an assignment target is never implied), and
+        // depth-bounded to prevent runaway recursion.
+        if vn.is_implied() && !self.is_lhs && self.inline_depth < 8 {
+            if let Some(def_op_arc) = vn.get_def() {
+                if !def_op_arc.read().unwrap().is_dead() {
+                    let def_op = def_op_arc.read().unwrap();
+                    self.inline_depth += 1;
+                    self.inlined_ops.insert(*def_op.get_seq_num());
+                    self.emit_inline_expr(&def_op);
+                    self.inline_depth -= 1;
+                    return;
+                }
+            }
+        }
 
         // Priority 0: Resolve known symbols/strings by address (overrides any auto-generated name)
         let addr = vn.get_offset();

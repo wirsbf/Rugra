@@ -575,11 +575,12 @@ Funcdata ready
 
 - `ActionRestructureVarnode`（coreaction.cc:5505 "localrecovery"）现注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionConditionalExe` 之前。此前它**未接入**，导致 `fd.scope` 永远为 None，printc 的 `get_stack_variable_name` 永远找不到栈变量名 → uVar 碎片。接入后 scope 被构建，local_ 统计从 81→78（curl）。**G3 剩余**：多数函数 gather_spacebase 收集到 0 hints，根因是栈访问用 RBP/param 指针而非 RSP 直派，需扩展 spacebase 基址识别 + 修复 SSA def 断链。
 
-### 2026-06-29：ActionMergeType 移到 dead-code 之后（对齐 Ghidra 管线顺序）
+### 2026-06-29：ActionMarkType 移到 dead-code 之后（对齐 Ghidra 管线顺序）
 
 - `ActionMergeType` 此前注册在 `CopyPropagate` **之前**（action.rs 416），违反 Ghidra 顺序（coreaction.cc:5682 deadcode → 5718-5729 merge 阶段）。后果：merge 在 copy-prop/dead-code 删除 op 之前建立 `high.instances`，之后这些 instances 永不更新（copy-prop/dead-code 不清理），printc 拿到陈旧 instances → 自建 4 套 map 重建 def 关系。
-- 现顺序：`CopyPropagate → TypePropagate → CallParams → RestrictLocal → DeadCode → ActionMergeType → RestructureVarnode`。配合 `Merge::is_live_varnode`（merge.rs）跳过死 varnode，`high.instances` 现反映 dead-code 后的 varnode 集，成为 printc 可信的权威来源。这是 P0 "声明却未赋值" 症状的根因修复（详见 `docs/alignment_docs/P0_DEF_CHAIN_DIAGNOSIS_2026-06-29.md`）。
-- curl 审计保持 24/24；`debug_my_fwrite` 未赋值变量 5→3。
+- 现顺序：`CopyPropagate → TypePropagate → CallParams → RestrictLocal → DeadCode → ActionMergeType → MarkExplicit → MarkImplied → RestructureVarnode`。MarkExplicit/MarkImplied 在 MergeType 之后（Ghidra 的 MergeRequired 在 MarkImplied 前建 high，Rugra 的 merge_all 合并了 MergeRequired+MergeType，故 MarkImplied 跟在 merge_all 后）。配合 `Merge::is_live_varnode`（merge.rs）跳过死 varnode，`high.instances` 现反映 dead-code 后的 varnode 集，成为 printc 可信的权威来源。这是 P0 "声明却未赋值" 症状的根因修复（详见 `docs/alignment_docs/P0_DEF_CHAIN_DIAGNOSIS_2026-06-29.md`）。
+- **implied 机制接入**（2026-06-29）：MarkImplied 用 checkImpliedCover（cover 相交）标记 implied varnode；printc 的 emit_block_ops 跳过 implied-output 的 op（对齐 printc.cc:2704），push_varnode 对 implied varnode 递归 inline 其 def 表达式（recurse 等价）。这是 Ghidra 控制内联的权威机制，替代 printc 自造的 4 套 map。
+- curl 审计保持 24/24；`debug_my_fwrite` 中间变量（如 `piVar1`/`lVar3`）被正确内联。已知调优项：部分函数有重复变量声明（块内 shadow，gcc 允许但影响可读性）。
 
 ### 2026-06-27（会话3 续）：ActionPool — Rule 调度器接入主管线（G6 核心补全）
 

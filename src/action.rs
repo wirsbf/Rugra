@@ -438,6 +438,16 @@ impl ActionDatabase {
         // separate ActionMergeCopy/Adjacent/Required/MultiEntry structs exist
         // in coreaction.rs but call stub methods — merge_all is the real work.
         decompile_group.add_action(Box::new(ActionMergeType::new()));
+        // MarkExplicit + MarkImplied run AFTER MergeType. In Ghidra the order
+        // is MergeRequired(5719) -> MarkImplied(5722) -> MergeType(5729):
+        // MergeRequired builds the HighVariables that MarkImplied needs. Rugra
+        // has no separate MergeRequired — merge_all builds HighVariables AND
+        // merges, so MarkImplied must follow merge_all to see high.instances
+        // + high.cover. MarkImplied decides which varnodes are "implied" (their
+        // def expression inlines into the consumer) via checkImpliedCover
+        // (cover intersection). printc.cc:2704 then skips implied-output ops.
+        decompile_group.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
+        decompile_group.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
         // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
         // implemented (coreaction.cc:3457-3528) and individually tested, but
         // NOT wired into the default pipeline. Ghidra runs them inside its

@@ -54,7 +54,10 @@ Perform the full merging + naming pipeline. Phase order:
 1. `live_varnode_set` → cache authoritative live varnodes
 2. `merge_addr_tied` → group same-loc varnodes
 3. `ensure_all_have_high` → singleton HighVariables
-4. `compute_varnode_covers` → per-Varnode liveness covers
+4. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
+   range, NOT propagated through CFG successors — that over-approximation
+   broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
+   now `#[allow(dead_code)]` disabled)
 5. `merge_by_cover` → merge copy-related disjoint-cover pairs
 6. `update_high_covers` → sync each HighVariable.cover from members
 7. `assign_names` → Ghidra-style auto-naming

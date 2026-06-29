@@ -499,7 +499,13 @@ impl Merge {
                 cb.end = end;
             }
 
-            propagate_cover_through_cfg(&mut cover, fd);
+            // NOTE: We intentionally do NOT propagate covers through CFG
+            // successors (unlike an earlier version). Ghidra's Cover is a
+            // precise def->use range (cover.cc), not a forward reachability
+            // over-approximation. Propagating live-out to ALL successors as
+            // [0, MAX] made covers cover the whole CFG, which broke
+            // ActionMarkImplied's inflateTest (every input intersected) and
+            // over-blocked merge_by_cover. Precise def/use ranges are correct.
 
             let mut vn = vn_arc.write().unwrap();
             if cover.blocks.is_empty() {
@@ -628,6 +634,7 @@ fn op_block_order(op_arc: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<(i32, u32)
 /// This is conservative: a varnode might not actually flow to EVERY
 /// successor (e.g., conditional branches). Over-approximating liveness
 /// is safe — it blocks some valid merges but never allows invalid ones.
+#[allow(dead_code)] // disabled: over-conservative CFG propagation broke inflateTest
 fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
     if cover.blocks.is_empty() {
         return;
