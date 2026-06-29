@@ -600,11 +600,21 @@ impl Ord for VarnodeLocRef {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
-        match a.loc.cmp(&b.loc) {
+        // Sort by (address_space, loc, size, create_index). Including
+        // address_space in the key is essential so that Stack-space varnodes
+        // (with stack offsets) are distinct from Ram/Register/Unique varnodes
+        // that may share the same numeric offset. This mirrors Ghidra's
+        // VarnodeLocSet which keys on the full Address (space+offset).
+        match a.address_space.cmp(&b.address_space) {
             std::cmp::Ordering::Equal => {
-                match a.size.cmp(&b.size) {
+                match a.loc.cmp(&b.loc) {
                     std::cmp::Ordering::Equal => {
-                        a.create_index.cmp(&b.create_index)
+                        match a.size.cmp(&b.size) {
+                            std::cmp::Ordering::Equal => {
+                                a.create_index.cmp(&b.create_index)
+                            }
+                            ord => ord,
+                        }
                     }
                     ord => ord,
                 }
@@ -854,6 +864,23 @@ impl VarnodeBank {
             }
         }
         best
+    }
+
+    /// Iterate all varnodes in a given address space, in sorted order.
+    /// Faithful to Ghidra's `beginLoc(size, addr, space, size4)` /
+    /// `endLoc` range iteration (varnode.hh). With address_space now part of
+    /// the loc_tree sort key (VarnodeLocRef::Ord), all varnodes of one space
+    /// form a contiguous range, so this collects them efficiently.
+    pub fn iter_space(
+        &self,
+        space: crate::space::AddressSpace,
+    ) -> impl Iterator<Item = Arc<RwLock<Varnode>>> + '_ {
+        self.loc_tree
+            .iter()
+            .filter(move |entry| {
+                entry.0.read().unwrap().address_space == space
+            })
+            .map(|entry| entry.0.clone())
     }
 }
 

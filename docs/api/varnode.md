@@ -41,7 +41,7 @@
 在当前 Rugra 架构里，`Varnode` 主要围绕以下三个维度组织：
 
 ### 1. 位置语义
-一个 `Varnode` 首先要能说明“它在哪”：
+一个 `Varnode` 首先要能说明"它在哪"：
 
 - 属于哪个 `AddressSpace`
 - 偏移是多少
@@ -54,6 +54,8 @@
 - 栈槽中的值
 - 内部临时值（如 `unique` 空间）
 - 常量值（通过特定空间或构造方式表达）
+
+**loc_tree 排序键**（2026-06-29）：`VarnodeLocRef::Ord` 现按 `(address_space, loc, size, create_index)` 排序（此前不含 address_space）。这让 Stack 空间的 varnode（stack offset）与 Ram/Register/Unique 空间可能共享相同数值 offset 的 varnode 区分开，对齐 Ghidra VarnodeLocSet 按 Address（space+offset）索引。新增 `VarnodeBank::iter_space(space)` 方法按空间遍历 varnode（对齐 Ghidra beginLoc/endLoc）。
 
 ### 2. 数据流节点语义
 `Varnode` 是 `PcodeOp` 的输入或输出节点，因此它天然处于数据流图中：
