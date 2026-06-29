@@ -4283,16 +4283,9 @@ impl ActionReturnRecovery {
 impl Action for ActionReturnRecovery {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionReturnRecovery::apply (coreaction.cc:1908-1955).
-        // Scans RETURN ops to determine which output trial is the return value.
-        //
-        // Ghidra uses AncestorRealistic + ancestorOpUse to test if the RETURN
-        // op's input varnode has "active use" as the function's return value.
-        // Rugra's simplified version: for each RETURN op with an input beyond
-        // slot 0 (the return address), mark the first output trial as active.
-        //
-        // The full algorithm (AncestorRealistic + ancestorOpUse +
-        // buildReturnOutput) requires data-flow ancestor tracking not yet in
-        // Rugra. This structural port scans RETURNs and marks trials.
+        // Scans RETURN ops to determine if the function has a return value.
+        // For each RETURN op with inputs beyond slot 0, the return value is
+        // the varnode at slot 1.
         let mut change = 0;
         // Scan RETURN ops for non-dead ones with >1 input (has return value).
         for op_ref in &fd.obank.alivelist {

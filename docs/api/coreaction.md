@@ -613,3 +613,7 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 ### 2026-06-29（续 6）：ActionExtraPopSetup 清理（coreaction.cc:1436-1466）
 - 清理了重复的 impl 块和孤立代码。保留单个干净实现。
 - x86-64 SysV ABI 不使用 extraPop（被调用者不清理栈），对 Rugra 目标架构为正确 no-op。
+
+### 2026-06-29（续 7）：ActionReturnRecovery 改进（coreaction.cc:1908-1955）
+- 扫描 RETURN ops 检测函数是否有返回值（inputs > 1）。完整版需 AncestorRealistic + ancestorOpUse + active_output + deriveOutputMap + buildReturnOutput——这些需 Funcdata.active_output 字段（Rugra Funcdata 无此字段，active_output 在 FuncCallSpecs 上）。
+- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
