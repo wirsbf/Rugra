@@ -18,7 +18,7 @@
 
 ### `pub struct ProtoModel`
 调用约定模型。
-- `default_x86_64()` — x86-64 System V ABI 默认模型（RDI/RSI/RDX/RCX/R8/R9 + 栈 + RAX 返回）
+- `default_x86_64()` — x86-64 System V ABI 默认模型（RDI=0x38/RSI=0x30/RDX=0x10/RCX=0x8/R8=0x80/R9=0x88 + 栈 + RAX=0x0 返回）。offset 与 x86_lift.rs 寄存器编码及 SYSV_ARG_REGS（coreaction.rs）一致。2026-06-29 修正：此前 RDI/RCX/RDX offset 错误（RDI=0x8, RCX=0x10, RDX=0x38），现已统一。
 - `fillin_input_map(active)` — fillinMap 参数推导算法
 - `derive_input_map(active)` — 调用 fillin_input_map
 - `derive_output_map(active)` — 至多标记 1 个输出试验为 USED

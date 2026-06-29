@@ -97,15 +97,17 @@ pub const EXTRAPOP_UNKNOWN: i32 = 0x8000;
 
 impl ProtoModel {
     /// Create the x86-64 System V ABI default model.
-    /// Registers: RDI(0x8), RSI(0x30), RDX(0x38), RCX(0x10), R8(0x80), R9(0x88).
-    /// Stack params start at offset 16 (after return addr + saved RBP).
-    /// Return: RAX(0x0).
+    /// Registers: RDI(0x38), RSI(0x30), RDX(0x10), RCX(0x8), R8(0x80), R9(0x88).
+    /// Offsets match x86_lift.rs register encoding (RAX=0x0, RCX=0x8, RDX=0x10,
+    /// RBX=0x18, RSP=0x20, RBP=0x28, RSI=0x30, RDI=0x38) and SYSV_ARG_REGS
+    /// (coreaction.rs). Stack params start at offset 16 (after return addr +
+    /// saved RBP). Return: RAX(0x0).
     pub fn default_x86_64() -> Self {
         let input_entries = vec![
-            ParamEntry { space: AddressSpace::Register, base: 0x8,  size: 8, minsize: 1, group: 0, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
+            ParamEntry { space: AddressSpace::Register, base: 0x38, size: 8, minsize: 1, group: 0, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
             ParamEntry { space: AddressSpace::Register, base: 0x30, size: 8, minsize: 1, group: 1, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
-            ParamEntry { space: AddressSpace::Register, base: 0x38, size: 8, minsize: 1, group: 2, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
-            ParamEntry { space: AddressSpace::Register, base: 0x10, size: 8, minsize: 1, group: 3, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
+            ParamEntry { space: AddressSpace::Register, base: 0x10, size: 8, minsize: 1, group: 2, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
+            ParamEntry { space: AddressSpace::Register, base: 0x8,  size: 8, minsize: 1, group: 3, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
             ParamEntry { space: AddressSpace::Register, base: 0x80, size: 8, minsize: 1, group: 4, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
             ParamEntry { space: AddressSpace::Register, base: 0x88, size: 8, minsize: 1, group: 5, alignment: 0, flags: param_entry_flags::SMALLSIZE_INTTYPE },
             ParamEntry { space: AddressSpace::Stack, base: 16, size: 8, minsize: 1, group: 6, alignment: 8, flags: 0 },
