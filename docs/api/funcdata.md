@@ -767,3 +767,10 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-07-01：TYPE_RECOVERY_START flag
 - `funcdata_flags::TYPE_RECOVERY_START`（funcdata.hh:90）+ `has_type_recovery_started()/set_type_recovery_started()`（funcdata.hh:151）。标记类型恢复已开始，Rule 据此决定 type-based 守卫是否生效。
+
+### 2026-07-01：Architecture 引用 + iop-space varnode + op_undo_ptradd（解锁 cpool/funcptr/iop 依赖 Rule）
+- `arch: Option<Arc<Architecture>>` 字段 + `get_arch()/set_arch()`（funcdata.hh:80/144）。Ghidra 在 ctor 从 scope 取 glb；Rugra 用 set_arch 接线。默认 None 保证现有 832 测试不破坏。
+- `new_varnode_iop(op)`（funcdata_varnode.cc:176-184）— 在 Iop 空间创建引用 op 的 varnode（Arc::as_ptr 编码）。
+- `get_op_from_const(vn)`（op.hh:249）— iop-space varnode 反查回 PcodeOp。
+- `op_undo_ptradd(op)`（funcdata_op.cc:579）— PTRADD 撤销为 INT_ADD/INT_MULT。
+- `op_mark_cpool_transformed(op)`（funcdata.hh:485）— 标记 cpool 已转换。

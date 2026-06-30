@@ -56,3 +56,7 @@ varmap `RangeHint::preferred` 用其选择更具体的类型。
 
 `type_system::datatype::tests` — 9 个测试覆盖上述原语：
 alignment map、calc_align_size、struct/array subtype、type_order（size & metatype）。
+
+### 2026-07-01：is_char_print / is_piece_structured（解锁 RulePtrsubCharConstant/RulePieceStructure/Rule2Comp2Sub）
+- `is_char_print()`（type.hh:218）— 检查 CHARTYPE|UTF16|UTF32|OPAQUE_STRUCT flag。
+- `is_piece_structured()`（type.hh:929-935）— Struct|Union|Array 语义判断（Ghidra 用 metatype<=TYPE_ARRAY，Rugra 枚举值不同故用 matches!）。

@@ -160,6 +160,27 @@ impl Datatype {
         (self.get_flags() & type_flags::VARLENGTH) != 0
     }
 
+    /// Should this type be printed as a character/string type?
+    /// Faithful to `Datatype::isCharPrint` (type.hh:218). Ghidra checks
+    /// flags (chartype|utf16|utf32|opaque_string). Rugra maps opaque_string
+    /// to OPAQUE_STRUCT.
+    pub fn is_char_print(&self) -> bool {
+        let f = self.get_flags();
+        (f & (type_flags::CHARTYPE | type_flags::UTF16 | type_flags::UTF32 | type_flags::OPAQUE_STRUCT))
+            != 0
+    }
+
+    /// Is this a structured type composed of pieces (struct/union/array)?
+    /// Faithful to `Datatype::isPieceStructured` (type.hh:929-935). Ghidra
+    /// checks `metatype <= TYPE_ARRAY`; Rugra's enum values differ so we use
+    /// a semantic match.
+    pub fn is_piece_structured(&self) -> bool {
+        matches!(
+            self.get_metatype(),
+            TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array
+        )
+    }
+
     /// Get the internal flags of the data type
     pub fn get_flags(&self) -> u32 {
         match self {

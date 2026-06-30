@@ -115,3 +115,6 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - 默认值匹配 x86-64-gcc.cspec。Funcdata 也有对应字段（不持有 Architecture 引用，用默认值初始化），`Funcdata::spacebase()` 从这些字段读 stack pointer 位置。
 - 这是层次 1 Stack 空间架构对齐的阶段 2：建立 spacebase 配置容器（暂不解析 .cspec 文件，用硬编码配置）。
 - arch.rs 所有 L3 缺口已关闭。
+
+### 2026-07-01：Architecture 手动 Debug impl
+- 为 Architecture 添加 `impl Debug`（打印 archid）。因 loader 字段是 `Arc<dyn LoadImage>`（无 Debug bound），不能 derive。这使得 Funcdata（derive Debug）能持有 `Option<Arc<Architecture>>` 字段。

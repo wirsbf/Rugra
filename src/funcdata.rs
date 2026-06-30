@@ -80,6 +80,12 @@ pub struct Funcdata {
     /// are the function's return value.
     pub active_output: Option<crate::fspec::ParamActive>,
 
+    /// Architecture configuration (Ghidra `glb` / funcdata.hh:80). Optional:
+    /// legacy callers/tests construct Funcdata without it. Set via
+    /// `set_arch` before running Rules that need cpool/funcptr_align/
+    /// nan_ignore_all/userops/types.
+    pub arch: Option<Arc<crate::arch::Architecture>>,
+
     // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
     // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
     // not yet hold an Architecture reference (L3 gap), so these are defaults
@@ -120,6 +126,7 @@ impl Funcdata {
             scope: None,
             callspecs: Vec::new(),
             active_output: None,
+            arch: None,
             stack_space: crate::space::AddressSpace::Stack,
             stack_pointer_space: crate::space::AddressSpace::Register,
             stack_pointer_offset: 0x20, // x86-64 RSP
@@ -151,6 +158,16 @@ impl Funcdata {
     /// Mark that type recovery has started.
     pub fn set_type_recovery_started(&mut self) {
         self.flags |= funcdata_flags::TYPE_RECOVERY_START;
+    }
+
+    /// Get the Architecture configuration, if set.
+    /// Faithful to `Funcdata::getArch` (funcdata.hh:144).
+    pub fn get_arch(&self) -> Option<&Arc<crate::arch::Architecture>> {
+        self.arch.as_ref()
+    }
+    /// Set the Architecture reference (Ghidra sets it in the ctor from scope).
+    pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
+        self.arch = Some(arch);
     }
 
     /// Set the self-reference after wrapping in Arc<RwLock>
@@ -1200,6 +1217,102 @@ impl Funcdata {
         self.op_insert_before(&newop, indeffect);
         newop
     }
+
+    /// Create a varnode in the iop address space referencing `op`.
+    /// Faithful to `Funcdata::newVarnodeIop` (funcdata_varnode.cc:176-184).
+    /// Ghidra encodes the raw op pointer as the iop-space offset; Rugra
+    /// encodes `Arc::as_ptr()` (the stable address of the inner RwLock).
+    pub fn new_varnode_iop(&mut self, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // Encode the op's identity as a raw address. We use the Arc's data
+        // pointer, which is stable for the Arc's lifetime (matching Ghidra's
+        // `(uintb)(uintp)op`).
+        let ptr_addr = std::sync::Arc::as_ptr(&op.0) as u64;
+        let vn = self.vbank.create_with_space(
+            std::mem::size_of::<usize>(),
+            crate::space::AddressSpace::Iop,
+            ptr_addr,
+        );
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        vn
+    }
+
+    /// Resolve an iop-space constant varnode back to the PcodeOp it references.
+    /// Faithful to `PcodeOp::getOpFromConst` (op.hh:249). Ghidra reinterprets
+    /// the offset as an op pointer; Rugra reinterprets it back to the
+    /// `Arc<RwLock<PcodeOp>>`.
+    pub fn get_op_from_const(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::op::PcodeOpRef> {
+        let v = vn.read().unwrap();
+        if v.get_space() != crate::space::AddressSpace::Iop {
+            return None;
+        }
+        let ptr_addr = v.get_offset() as usize;
+        // Reconstruct the Arc from the raw pointer. This is safe as long as
+        // the original Arc is still alive (which it is — the op bank holds it).
+        let raw = ptr_addr as *const std::sync::RwLock<crate::op::PcodeOp>;
+        // SAFETY: the pointer was obtained from Arc::as_ptr on an op that is
+        // still in the obank. We rebuild the Arc via ManuallyDrop-free clone.
+        unsafe {
+            let arc = std::sync::Arc::from_raw(raw);
+            // Clone to bump refcount, then forget the reconstructed one so we
+            // don't double-free.
+            let cloned = std::sync::Arc::clone(&arc);
+            std::mem::forget(arc);
+            Some(crate::op::PcodeOpRef(cloned))
+        }
+    }
+
+    /// Undo a PTRADD op, converting it back to INT_ADD/INT_MULT.
+    /// Faithful to `Funcdata::opUndoPtradd` (funcdata_op.cc:579).
+    pub fn op_undo_ptradd(&mut self, op: &crate::op::PcodeOpRef) {
+        use crate::opcodes::OpCode;
+        // PTRADD has 3 inputs: base, index, multiplier.
+        // Get multiplier (input[2]).
+        let mult_size = {
+            let g = op.0.read().unwrap();
+            if g.inrefs.len() < 3 {
+                return; // malformed PTRADD
+            }
+            let vn = g.inrefs[2].clone();
+            drop(g);
+            let vn_rg = vn.read().unwrap();
+            if vn_rg.is_constant() {
+                vn_rg.get_offset() as usize
+            } else {
+                1
+            }
+        };
+        // Remove input[2] (the multiplier).
+        self.op_remove_input(op, 2);
+        // Change opcode to INT_ADD.
+        self.op_set_opcode(op, OpCode::CPUI_INT_ADD);
+        if mult_size == 1 {
+            return; // INT_ADD(base, index) is correct.
+        }
+        // The index input is now slot 1; scale it by mult_size via INT_MULT.
+        let index_vn = {
+            let g = op.0.read().unwrap();
+            if g.inrefs.len() < 2 { return; }
+            g.inrefs[1].clone()
+        };
+        let mult_const = self.new_constant(8, mult_size as u64);
+        let mult_op = self.new_op(2, op.0.read().unwrap().get_seq_num().get_addr());
+        self.op_set_opcode(&mult_op, OpCode::CPUI_INT_MULT);
+        let mult_out = self.new_unique_out(8, &mult_op);
+        // mult_op inputs: index, mult_const
+        self.op_set_input(&mult_op, index_vn, 0);
+        self.op_set_input(&mult_op, mult_const, 1);
+        // Insert mult_op before op.
+        self.op_insert_before(&mult_op, op);
+        // Replace op's index input with mult_out.
+        self.op_set_input(op, mult_out, 1);
+    }
+
+    /// Mark `op` as having been checked for cpool transforms.
+    /// Faithful to `Funcdata::opMarkCpoolTransformed` (funcdata.hh:485).
+    pub fn op_mark_cpool_transformed(&mut self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().mark_cpool_transformed();
+    }
+
 
     /// Insert `op` immediately after `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertAfter` (funcdata.hh:456). Used by split transforms

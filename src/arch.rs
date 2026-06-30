@@ -291,6 +291,14 @@ pub struct Architecture {
     pub stack_grows_negative: bool,
 }
 
+// Manual Debug impl (the `loader` field is `Arc<dyn LoadImage>` without a
+// Debug bound, so we cannot derive). Print just the archid for diagnostics.
+impl std::fmt::Debug for Architecture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Architecture").field("archid", &self.archid).finish()
+    }
+}
+
 impl Default for Architecture {
     fn default() -> Self {
         Self::new()
