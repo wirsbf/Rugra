@@ -199,7 +199,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleSelectCse::new()));          // 5514
     pool.add_rule(Box::new(RuleCollectTerms::new()));       // 5515
     pool.add_rule(Box::new(RulePullsubMulti::new()));       // 5516
-    // skip 5517 RulePullsubIndirect — not yet ported
+    pool.add_rule(Box::new(RulePullsubIndirect::new()));    // 5517
     pool.add_rule(Box::new(RulePushMulti::new()));          // 5518
     pool.add_rule(Box::new(RuleSborrow::new()));            // 5519
     pool.add_rule(Box::new(RuleScarry::new()));             // 5520
@@ -233,7 +233,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleShift2Mult::new()));         // 5548
     pool.add_rule(Box::new(RuleShiftPiece::new()));     // 5549 — (zext(V)<<sa)|zext(V) => PIECE (ruleaction.cc:3791)
     pool.add_rule(Box::new(RuleMultiCollapse::new()));      // 5550
-    // skip 5551 RuleIndirectCollapse — not yet ported
+    pool.add_rule(Box::new(RuleIndirectCollapse::new()));   // 5551
     pool.add_rule(Box::new(Rule2Comp2Mult::new()));         // 5552
     pool.add_rule(Box::new(RuleSub2Add::new()));            // 5553
     pool.add_rule(Box::new(RuleCarryElim::new()));          // 5554
@@ -247,7 +247,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleXorCollapse::new()));        // 5562
     pool.add_rule(Box::new(RuleAddMultCollapse::new()));    // 5563
     pool.add_rule(Box::new(RuleCollapseConstants::new()));  // 5564
-    // skip 5565 RuleTransformCpool — not yet ported
+    pool.add_rule(Box::new(RuleTransformCpool::new()));     // 5565
     pool.add_rule(Box::new(RulePropagateCopy::new()));      // 5566
     pool.add_rule(Box::new(RuleZextEliminate::new()));      // 5567
     pool.add_rule(Box::new(RuleSlessToLess::new()));        // 5568
@@ -288,7 +288,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleSignMod2nOpt::new()));       // 5603
     pool.add_rule(Box::new(RuleSignMod2nOpt2::new())); // 5604 — V-(Vadj&~(2^n-1)) => V s% 2^n (ruleaction.cc:8867)
     pool.add_rule(Box::new(RuleSignMod2Opt::new()));  // 5605 — (V-sign)&1+sign => V s% 2 (ruleaction.cc:8794)
-    // skip 5606 RuleSwitchSingle — not yet ported
+    pool.add_rule(Box::new(RuleSwitchSingle::new()));       // 5606
     pool.add_rule(Box::new(RuleCondNegate::new()));         // 5607
     pool.add_rule(Box::new(RuleBoolNegate::new()));         // 5608
     pool.add_rule(Box::new(RuleLessEqual::new()));          // 5609
@@ -303,16 +303,41 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleLzcountShiftBool::new()));   // 5618
     pool.add_rule(Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)
     pool.add_rule(Box::new(RuleOrCompare::new()));          // 5620
-    // Rules 5621-5648 (subvar/float/segment/ptr/double-load) not yet ported.
+    // subvar family (subflow.cc, coreaction.cc:5621-5628) — SubvariableFlow
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarAnd::new()));       // 5621
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarSubpiece::new()));  // 5622
+    pool.add_rule(Box::new(crate::subflow::RuleSplitFlow::new()));       // 5623
+    // skip 5624 RulePtrFlow — ruleaction.cc:9177, not yet ported (heavy: trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch construction)
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarCompZero::new()));  // 5625
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarShift::new()));     // 5626
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarZext::new()));      // 5627
+    pool.add_rule(Box::new(crate::subflow::RuleSubvarSext::new()));      // 5628
+    pool.add_rule(Box::new(RuleNegateNegate::new()));       // 5629
+    pool.add_rule(Box::new(RuleConditionalMove::new()));    // 5630
+    // skip 5631 RuleOrPredicate — condexe.cc:509, exists in condexe.rs but not yet as a Rule trait impl (currently a standalone pass)
+    pool.add_rule(Box::new(RuleFuncPtrEncoding::new()));    // 5632
+    pool.add_rule(Box::new(crate::subflow::RuleSubfloatConvert::new())); // 5633
+    pool.add_rule(Box::new(RuleFloatCast::new()));          // 5634 — registered here per Ghidra (coreaction.cc:5634)
+    pool.add_rule(Box::new(RuleIgnoreNan::new()));          // 5635
+    pool.add_rule(Box::new(RuleUnsigned2Float::new()));     // 5636
+    pool.add_rule(Box::new(RuleInt2FloatCollapse::new()));  // 5637
+    pool.add_rule(Box::new(RulePtraddUndo::new()));         // 5638
+    pool.add_rule(Box::new(RulePtrsubUndo::new()));         // 5639
+    pool.add_rule(Box::new(RuleSegment::new()));            // 5640
+    pool.add_rule(Box::new(RulePiecePathology::new()));     // 5641
+    // skip 5642 (gap in Ghidra numbering — reserved)
+    pool.add_rule(Box::new(crate::double_precis::RuleDoubleLoad::new()));  // 5643
+    pool.add_rule(Box::new(crate::double_precis::RuleDoubleStore::new())); // 5644
+    pool.add_rule(Box::new(crate::double_precis::RuleDoubleIn::new()));    // 5645
+    pool.add_rule(Box::new(crate::double_precis::RuleDoubleOut::new()));   // 5646
 
     // Rugra-local companions that complete RuleSub2Add (5553): it emits
     // x + (y * -1), RuleMultNegOne collapses y*-1 to INT_NEG(y), Rule2Comp2Sub
     // handles the 2's-complement form. Grouped after their parent so the pool
-    // converges. RuleSextEliminate/Equality/FloatCast are Rugra-local extras.
-    // Other Rugra-local extras (NOT in Ghidra oppool1).
+    // converges. RuleSextEliminate/Equality are Rugra-local extras.
+    // (RuleFloatCast moved to its Ghidra-correct slot at 5634 above.)
     pool.add_rule(Box::new(RuleSextEliminate::new()));
     pool.add_rule(Box::new(RuleEquality::new()));
-    pool.add_rule(Box::new(RuleFloatCast::new()));
     // NOTE: RuleMultNegOne (x*-1 -> INT_2COMP) and Rule2Comp2Sub are NOT here
     // — they belong in the separate cleanup pool (see build_cleanup_pool) per
     // Ghidra coreaction.cc:5694-5710. Putting them in oppool1 alongside
@@ -332,16 +357,23 @@ pub fn build_cleanup_pool() -> ActionPool {
     use crate::ruleaction::*;
     let mut pool = ActionPool::new("cleanup");
     pool.add_rule(Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
-    pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // coreaction.cc:5698
+    pool.add_rule(Box::new(RuleAddUnsigned::new()));  // 5697
+    pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // 5698
+    // skip 5699 RuleDumptyHumpLate — subflow.cc:3012, not yet ported (cross-block SUBPIECE(PIECE) backtrack)
+    pool.add_rule(Box::new(RuleSubRight::new()));     // 5700
+    pool.add_rule(Box::new(RuleFloatSignCleanup::new())); // 5701
+    pool.add_rule(Box::new(RuleExpandLoad::new()));   // 5702
+    pool.add_rule(Box::new(RulePtrsubCharConstant::new())); // 5703
+    pool.add_rule(Box::new(RuleExtensionPush::new())); // 5704
+    pool.add_rule(Box::new(RulePieceStructure::new())); // 5705
+    pool.add_rule(Box::new(crate::subflow::RuleSplitCopy::new()));  // 5706
+    pool.add_rule(Box::new(crate::subflow::RuleSplitLoad::new()));  // 5707
+    pool.add_rule(Box::new(crate::subflow::RuleSplitStore::new())); // 5708
     // RuleStringCopy / RuleStringStore are wired (constseq.cc:954-1002).
     // Detection phase only — transform requires CALLOTHER/userop infrastructure
     // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
     pool.add_rule(Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
     pool.add_rule(Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
-    // skip RuleAddUnsigned / RuleDumptyHumpLate / RuleSubRight /
-    // RuleFloatSignCleanup / RuleExpandLoad / RulePtrsubCharConstant /
-    // RuleExtensionPush / RulePieceStructure / RuleSplitCopy / RuleSplitLoad /
-    // RuleSplitStore — not yet ported
     pool
 }
 
@@ -458,6 +490,14 @@ impl ActionDatabase {
         // (cover intersection). printc.cc:2704 then skips implied-output ops.
         decompile_group.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
         decompile_group.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
+        // NOTE: ActionSetCasts (coreaction.cc:2722) is implemented but NOT
+        // wired. Its cast_input path requires ActionInferTypes (type
+        // propagation, coreaction.cc:2800+) to run first, so that pointer
+        // arithmetic operands keep their pointer type and aren't
+        // over-cast to int. The faithful building blocks (cast_standard_full,
+        // base_type_for, CPUI_CAST insertion) are complete and tested; wiring
+        // needs ActionInferTypes ported first. See STACK_SPACE_TODO Gap C.
+        // decompile_group.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
         // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
         // implemented (coreaction.cc:3457-3528) and individually tested, but
         // NOT wired into the default pipeline. Ghidra runs them inside its

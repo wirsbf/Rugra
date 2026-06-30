@@ -607,3 +607,24 @@ Funcdata ready
 ActionDeterminedBranch/ActionUnreachable/ActionDoNothing/ActionRedundBranch 的 apply() 已完整移植（coreaction.cc:3457-3528），但**未接入 set_default_actions**。set_default_actions 中有 NOTE 说明：Ghidra 在 selectGoto→collapseInternal 循环内运行这些清理 Action，structurer 围绕块删除设计；Rugra 的 staged-phase structurer 依赖这些块，接入导致回归。完整接入需 staged→collapseInternal 架构迁移（G4 可选优化）。apply() 逻辑已就绪。
 ### 2026-06-27（续）：ActionStackPtrFlow 接入管线（Heritage 后）
 - set_default_actions 在 ActionHeritage 后接入 ActionStackPtrFlow（对齐 Ghidra actstackstall, coreaction.cc:5656）。
+
+### 2026-07-01：oppool1/cleanup pool 大批补缺 Rule 注册接入
+
+`build_simplify_pool`（oppool1）按 Ghidra coreaction.cc:5511-5649 顺序补齐此前 skip 的注册槽：
+- 5517 RulePullsubIndirect、5551 RuleIndirectCollapse、5565 RuleTransformCpool、5606 RuleSwitchSingle
+- 5621-5628 subvar 族（RuleSubvarAnd/Subpiece/SplitFlow/SubvarCompZero/Shift/Zext/Sext，来自 subflow.rs）
+  - 例外：5624 RulePtrFlow 仍未移植（ruleaction.cc:9177，重）
+- 5629-5641：RuleNegateNegate/ConditionalMove/FuncPtrEncoding/IgnoreNan/Unsigned2Float/Int2FloatCollapse/PtraddUndo/PtrsubUndo/Segment/PiecePathology
+  - 例外：5631 RuleOrPredicate 存于 condexe.rs 但非 Rule trait impl，暂 skip
+- 5633 RuleSubfloatConvert（subflow.rs）、5634 RuleFloatCast（从 local-extras 移至 Ghidra 正确槽位）
+- 5643-5646 RuleDoubleLoad/Store/In/Out（来自 double_precis.rs）
+
+`build_cleanup_pool`（actcleanup）补齐 coreaction.cc:5696-5708：
+- 5697 RuleAddUnsigned、5700 RuleSubRight、5701 RuleFloatSignCleanup、5702 RuleExpandLoad、
+  5703 RulePtrsubCharConstant、5704 RuleExtensionPush、5705 RulePieceStructure、
+  5706-5708 RuleSplitCopy/Load/Store（来自 subflow.rs）
+  - 例外：5699 RuleDumptyHumpLate 仍未移植（subflow.cc:3012）
+
+lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（避免与 5634 重复注册）。
+
+验证：832/832 测试，curl 24/24 无回归。

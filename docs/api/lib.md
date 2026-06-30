@@ -59,6 +59,7 @@
 - `variable`
 - `merge`
 - `blockaction`
+- `double_precis` — double.cc 双精度合并（SplitVarnode + RuleDouble*，2026-07-01）
 
 ### 现存但处于过渡/兼容阶段的模块
 
