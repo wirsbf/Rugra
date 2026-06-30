@@ -22,17 +22,34 @@ impl ActionHeritage {
 
 impl Action for ActionHeritage {
     fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Discover stack-pointer-relative STOREs and build Stack-space INDIRECT
-        // varnodes BEFORE place/rename, faithful to Ghidra heritage.cc:2707
-        // discoverIndexedStackPointers + guardStores.
+        // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
+        //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
+        //   The rename in pass 1 connects the op graph (rewrites STORE input
+        //   to reference INT_ADD output via SSA), so subsequent discovery sees
+        //   a connected graph.
+        //
+        // Rugra runs two passes to achieve the same effect:
+        //   pass 1: place + rename (connects op graph)
+        //   pass 2: discover + place + rename (discover on connected graph
+        //           finds stack STOREs, builds Stack INDIRECTs; place/rename
+        //           then handles the new Stack varnodes)
+        {
+            let mut heritage = std::mem::take(&mut fd.heritage);
+            heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
+            heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
+            heritage.pass += 1;
+            fd.heritage = heritage;
+        }
+        // Pass 2: discover stack STOREs on the connected graph, then
+        // place + rename to SSA the new Stack-space INDIRECT varnodes.
         crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
-
-        // Temporarily extract Heritage to avoid deadlock.
-        let mut heritage = std::mem::take(&mut fd.heritage);
-        heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
-        heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
-        heritage.pass += 1;
-        fd.heritage = heritage;
+        {
+            let mut heritage = std::mem::take(&mut fd.heritage);
+            heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
+            heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
+            heritage.pass += 1;
+            fd.heritage = heritage;
+        }
         Ok(action_status::CHANGE)
     }
 

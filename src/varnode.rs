@@ -846,10 +846,12 @@ impl VarnodeBank {
     /// Find or create an input varnode at (space, offset, size).
     /// Faithful to Ghidra's varnode identity model: for the SAME storage
     /// location (space, offset, size), there is ONE input/free varnode shared
-    /// by all reads. This ensures the `descend` list accumulates all readers.
-    /// Written varnodes (op outputs) are NOT deduped here — they are distinct
-    /// per def (SSA versions), like Ghidra's VarnodeCompareLocDef distinguishes
-    /// written varnodes by def SeqNum.
+    /// by all reads. Written varnodes (op outputs) are NOT deduped here —
+    /// they are distinct per def (SSA versions), like Ghidra's
+    /// VarnodeCompareLocDef which distinguishes written varnodes by def SeqNum.
+    /// Full written-varnode dedup (via xref) requires the loc_tree sort to
+    /// classify by input/written/free (VarnodeCompareLocDef) — a deeper
+    /// refactor tracked separately.
     pub fn find_or_create_input_space(
         &mut self,
         size: usize,

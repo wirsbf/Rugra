@@ -582,8 +582,18 @@ impl Heritage {
                 continue;
             }
 
-            // Rewrite inputs
+            // Rewrite inputs — faithful to Ghidra renameRecurse (heritage.cc:2494-2497).
+            // Only replace FREE varnodes (not input/written/constant). This mirrors
+            // Ghidra's isHeritageKnown() check: input and written varnodes are
+            // already SSA-resolved and must not be re-renamed.
             for i in 0..op.inrefs.len() {
+                let is_free = {
+                    let vn_read = op.inrefs[i].read().unwrap();
+                    !vn_read.is_input() && !vn_read.is_written() && !vn_read.is_constant()
+                };
+                if !is_free {
+                    continue;
+                }
                 let key = {
                     let vn_read = op.inrefs[i].read().unwrap();
                     (vn_read.address_space, vn_read.loc)
