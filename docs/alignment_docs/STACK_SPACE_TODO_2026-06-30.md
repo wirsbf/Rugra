@@ -48,53 +48,33 @@ curl 剩余 6 个 FAIL（1 个 `getparameter_constprop_0` 仅 stub conflicting-t
 
 ## 剩余 bug 的 Ghidra 机制 vs Rugra 缺口（2026-06-30 核实）
 
-### 缺口 A：CALL 输出无条件生成（影响：match_url / __libc_csu_init / main）
+### ✅ 缺口 A：CALL 输出无条件生成 — 已移植（commit 97a13c3）
 
-**Ghidra** `funcLinkOutput` (coreaction.cc:1521-1572)：
-- 若 CALL 已有 output，先 `opUnsetOutput`（移除），让返回值恢复重新决定
-- 若 callee 原型 **锁定**：仅当 `outtype != TYPE_VOID` 才 `newVarnodeOut`；void 函数（exit/__stack_chk_fail）**永不产生 output**
-- 若原型 **未锁定**：调 `initActiveOutput()`（开 trial），**不立即建 output**；由 `ActionReturnRecovery`/`ActionActiveReturn` 后续决定
+**Ghidra** `funcLinkOutput` (coreaction.cc:1521-1572)：locked + Void → 无 output；locked + 非 void → newVarnodeOut；unlocked → initActiveOutput。
 
-**Rugra** `func_link_output` (coreaction.rs:3976-3982)：
-```rust
-if has_output { return; }
-fd.new_varnode_out(8, Address::new(0x0), op);  // 无条件建 RAX output
-```
-→ 每个 CALL 都有 8 字节 RAX output，包括 void 函数 → `lVar1 = exit(3);`
+**Rugra 修复**：`func_link_output(fc_idx, op)` 完整 1:1 移植 + `FuncProto.output_type_locked` 字段 + `known_return_type()` 表（Void/Pointer/Int(sz)）+ `ensure_callspecs` 按已知函数设置锁定 return-type。
+**效果**：curl **17→19**（match_url/__libc_csu_init 的 `lVar = exit(...)` void 赋值消除）。
 
-**修复方向**：移植 Ghidra 的 `isOutputLocked()/outtype==TYPE_VOID` 门控 + `initActiveOutput` trial 机制（需 FuncCallSpecs 的 output prototype 字段 + ActionActiveReturn）。
+### ✅ 缺口 B：checkImpliedCover isCall() 分支 — 已移植（commit f80529c）
 
-### 缺口 B：CALL-def 不被 implied 门控（影响：glob_set / next_url）
+**Ghidra** `checkImpliedCover` (coreaction.cc:3401-3406)：CALL/LOAD-def varnode 的 cover 若包含另一 CALL → 不能 implied。
 
-**Ghidra** `checkImpliedCover` (coreaction.cc:3401-3406)：
-```cpp
-if (op->isCall() || (op->code() == CPUI_LOAD)) { // loads crossing calls
-  for(i=0;i<data.numCalls();++i) {
-    callop = data.getCallSpecs(i)->getOp();
-    if (vn->getCover()->contain(callop,2)) return false;  // 不 implied
-  }
-}
-```
-CALL 输出 varnode 的 cover 若包含另一个 CALL，**不能 implied** → `setExplicit()` → printc 用命名变量，不内联进表达式。
+**Rugra 修复**：`check_implied_cover` 补 isCall() 分支，用 `vn.cover.contain(call_bi, call_order)`（vn.cover 由 Merge::compute_varnode_covers 构建为 def→last-read 范围）。
+**连通性验证**：curl/httpd 用例无 crossing-call implied 场景（诊断 0 触发，符合预期）。
+**重要发现**：glob_set/next_url 的 `malloc(0)` 嵌套地址问题**不是** implied-crossing（Gap B 不触发），而是 **STORE 地址发射 + 类型 cast**（缺口 C 范畴）。
 
-**Rugra** `check_implied_cover` (coreaction.rs:2496-2519)：
-- 只有 LOAD-crossing-STORE 检查（且是简化版：同基本块即禁止，非真正的 cover.contain）
-- **完全缺失** `op->isCall()` 分支 → CALL 输出可被 implied → 内联进 STORE 地址 / CALL 参数 → `malloc(0)` 裸出现在 `piVar1 + malloc(0) * ...` 中
-
-**修复方向**：补 `isCall()` 分支 + 真正的 cover（Cover 类，op 序号区间）基础设施。这是个大工程（Cover 未移植），但对 printc 输出质量影响最大。
-
-### 缺口 C：ActionSetCasts 类型对齐（影响：myprogress / next_url / glob_set 的 `int *` 误用）
+### 缺口 C：ActionSetCasts 类型对齐（影响：myprogress / next_url / glob_set）
 
 **Ghidra** `ActionSetCasts` (coreaction.cc:2526-2700+)：op 的 `outputtype_token` 与 varnode 的 high-type 不一致时插入 cast（`castInput`/`castOutput`/`castStandard`）。`piVar` 被 LOAD 赋了 `int *`，用于 `INT_OR` 时 token 是 `long`，castStrategy 判定需 cast → 插入 `(long)piVar` 或 `(uint)`。
 
 **Rugra**：`ActionSetCasts` 是空桩（L2.5），无 castStrategy、无 `outputtype_token`、无类型 flow 解析。类型推断是 merge 阶段的简化版（vn.v_type 沿 def 传播），不与 op token 对齐。
 
-**修复方向**：移植 `ActionSetCasts` + `CastStrategyC` + `outputtype_token`（依赖 type system 完整度，type.cc L2）。
+**修复方向**：移植 `ActionSetCasts` + `CastStrategyC` + `outputtype_token`（依赖 type system 完整度，type.cc L2）。**大工程**。
 
-### 优先级排序（ROI）
-1. **缺口 A**（void CALL）：实现量小（FuncCallSpecs 加 output prototype + 一个 if），解锁 2 个 curl 函数 + httpd 多个。**最高 ROI**。
-2. **缺口 B**（CALL implied 门控）：需 Cover 基础设施，但能让所有嵌套 CALL 退化为命名变量，printc 质量大幅提升。中 ROI。
-3. **缺口 C**（ActionSetCasts）：大工程，依赖 type system。低 ROI（短期）。
+### 当前 curl 状态（2026-06-30，Gap A/B 移植后）
+- **19/24 OK**（从 9/24 → 17(lhs修复) → 19(Gap A)）
+- 剩余 5 FAIL：main（curl_easy_setopt arg0 丢失，预存 func_link_input bug）、myprogress/glob_set/next_url（Gap C 类型/cast）、getparameter_constprop_0（仅 stub conflicting-type）
+
 
 
 
