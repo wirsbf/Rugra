@@ -378,6 +378,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - 依赖前提：HighVariable.cover（variable.rs，对齐 variable.hh:143）+ update_internal_cover（variable.cc:324），由 Merge::update_high_covers 在 merge_by_cover 后同步。
 - 这是 Ghidra implied 机制的核心——控制 printc 哪些 varnode 的 def 表达式内联、哪些作为命名赋值输出。printc.cc:2704 跳过 implied output 的 op。
 
+## 2026-06-30：checkImpliedCover 补 isCall() 跨 CALL 分支（Gap B，coreaction.cc:3401-3406）
+
+- 忠实 1:1 移植 Ghidra `checkImpliedCover` 第二段：若 varnode 的 def 是 CALL/CALLIND/LOAD，且其 live cover（vn.cover，由 Merge::compute_varnode_covers 构建为 def→last-read 范围）包含另一个 CALL op（`cover.contain(call_bi, call_order)`，对齐 `vn->getCover()->contain(callop, 2)`），则不能 implied。
+- 跳过 def op 自身（同 block+order）——CALL 结果喂给同一 op 的另一 input 是正常情况，非 crossing。
+- 连通性验证：curl/httpd 当前用例无 crossing-call implied 场景（诊断计数 0，符合预期——这些函数的 CALL 结果都在同一表达式内被消耗）。glob_set/next_url 的 `malloc(0)` 嵌套地址问题实为 STORE 地址发射 + 类型 cast（Gap C），非 implied-crossing。
+
+
 ## 2026-06-27（续 20）：ActionHideShadow 升级为 apply()-驱动级
 
 - **ActionHideShadow**：从框架级升级为 apply()-驱动级——遍历 written Varnodes，检测 shadow copy（COPY 从相同地址的 Varnode），标记后清除。完整版需要 HighVariable + Merge::hideShadows。

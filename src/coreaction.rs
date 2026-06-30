@@ -2576,6 +2576,48 @@ impl ActionMarkImplied {
             }
         }
 
+        // (2) CALL/LOAD def crossing another CALL: faithful to Ghidra
+        // checkImpliedCover (coreaction.cc:3401-3406). A varnode defined by a
+        // CALL (or LOAD) whose live cover spans another CALL op cannot be
+        // implied — inlining its def expression would place a call result
+        // across another call boundary. The precise check is
+        // `vn->getCover()->contain(callop, 2)` (interior or shared-boundary).
+        // Rugra's varnode.cover (built by Merge::compute_varnode_covers) holds
+        // the def->last-read range per block, so contain(block_idx, order) is
+        // the faithful equivalent.
+        if matches!(def_opc, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_LOAD) {
+            let vn_cover = vn_arc.read().unwrap().cover.as_ref().map(|c| c.clone());
+            if let Some(cover) = vn_cover {
+                for call_op_ref in &fd.obank.alivelist {
+                    let call_op = call_op_ref.0.read().unwrap();
+                    if call_op.is_dead() { continue; }
+                    if !matches!(call_op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                        continue;
+                    }
+                    // Ghidra's contain(op, max=2) returns true for interior or
+                    // shared-boundary points. Rugra's contain(block_idx, order)
+                    // is the interior check; we also treat the def op itself as
+                    // not crossing (a CALL result feeding another input of the
+                    // SAME op is not a crossing — it's the normal case).
+                    if let (Some(call_blk), Some(def_blk)) = (
+                        call_op.parent.as_ref().and_then(|w| w.upgrade()),
+                        def_op.parent.as_ref().and_then(|w| w.upgrade()),
+                    ) {
+                        let call_bi = call_blk.read().unwrap().get_index();
+                        let def_bi = def_blk.read().unwrap().get_index();
+                        let call_order = call_op.start.get_order();
+                        // Skip the defining op itself (same block + order).
+                        if call_bi == def_bi && call_order == def_op.start.get_order() {
+                            continue;
+                        }
+                        if cover.contain(call_bi, call_order) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
         // (3) Input cover inflation test (the authoritative check).
         let high = high_arc.read().unwrap();
         for i in 0..def_op.num_input() {
