@@ -83,7 +83,12 @@ raw semantics / P-code-like IR
 - `get_varnode_name` 和 `push_varnode` Priority 1/2 不再保留 `name != "RSP"/"RBP"` 例外。Raw register 名统一转为 size-based 局部变量名（对齐 Ghidra `buildVariableName` 默认分支，database.cc:2501-2504）。
 - Priority 2 fallback 不再 `match(offset,size) → "RSP"/"RBP"`，统一用 size-based 前缀命名。
 - RSP 泄漏 137→0，RBP 泄漏 18→0。
-- 已知回归：15/24 函数 gcc 审计失败（self-assignment lvalue error），因为 INT_ADD/INT_SUB prologue op 不再被 stack_frame_size 门控跳过。需完成阶段 5c（删 stack_frame_size，改用 Ghidra spacebase 机制跳过 prologue）。
+
+### lhs 不内联修复（2026-06-30）
+- **根因**：`push_varnode` 的 Priority 2 Unique-space fallback 在 `is_lhs=true`（赋值左值）时仍从 `inline_candidates` 取出 def 表达式并调用 `emit_inline_expr`，导致无 HighVariable 的 Unique 输出 varnode 在左值处内联了它自身的 def → 产生 `(a + 8) = a + 8;` 自赋值（gcc `lvalue required as left operand of assignment`）。
+- **修复**：Priority 2 Unique 分支加 `!self.is_lhs` 守卫（对齐 Ghidra `pushSymbolDetail`/`pushUnnamedLocation`：赋值目标永远解析为命名位置，`recurse()` 内联只发生在读取侧）。Priority 2 Register 分支此前已有该守卫，Unique 分支遗漏，现已一致。
+- **效果**：curl gcc 审计 9/24 → 17/24。剩余 6 个失败为独立输出 bug（地址含嵌套 CALL、void 返回值赋值、类型推断 `int *` 误用于位运算），非 lhs-inlining。
+
 
 ---
 

@@ -4442,7 +4442,15 @@ impl PrintLanguage for PrintC {
             }
             AddressSpace::Unique => {
                 let key = (AddressSpace::Unique, vn.get_offset());
-                if self.inline_depth < 8 {
+                // Faithful to Ghidra pushSymbolDetail/pushUnnamedLocation: an
+                // assignment target (is_lhs) ALWAYS resolves to a named
+                // location, never an inlined expression. recurse() (def-
+                // expression inlining) only applies to reads (rhs). Without
+                // this guard a Unique-space output varnode with no HighVariable
+                // fell into Priority 2 here, inlined its own def expression on
+                // the lhs, and produced `(a + 8) = a + 8;` self-assignment
+                // (lvalue-required gcc errors).
+                if !self.is_lhs && self.inline_depth < 8 {
                     if let Some(def_op_arc) = self.inline_candidates.get(&key).cloned() {
                         self.inline_depth += 1;
                         if !self.discovery_pass {
