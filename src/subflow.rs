@@ -30,21 +30,49 @@
 //! whose full precision tracking is not yet ported); see below.
 //!
 //! # Known infrastructure gaps (do NOT work around — reported, not simplified)
-//!   - `Varnode::isPtrFlow()` is not present in Rugra. `RuleSubvarSubpiece` and
-//!     `RuleSubvarZext` use it to decide aggressiveness; the port passes
-//!     `aggressive=false` and logs the gap.
-//!   - `Varnode::isZeroExtended(size)` is not present; used by traceForward/
-//!     traceBackward INT_DIV/INT_REM cases — those cases are implemented but
-//!     approximate `isZeroExtended` via `getNZMask` and log it.
-//!   - `Funcdata::opSetAllInput` is not present; the `doReplacement`
+//!
+//! ## Gaps now closed (infrastructure landed)
+//!   - `Varnode::is_ptr_flow()` is now present (addlflags `PTR_FLOW`).
+//!     `RuleSubvarSubpiece` and `RuleSubvarZext` now pass the real
+//!     aggressiveness from `outvn.is_ptr_flow()` / `invn.is_ptr_flow()` 1:1 with
+//!     Ghidra (subflow.cc:1601, subflow.cc:1717).
+//!   - `Varnode::is_precis_lo()` / `is_precis_hi()` are now present. The
+//!     `RuleSplitFlow` `isPrecisLo()/isPrecisHi()` guard (subflow.cc:2054) is now
+//!     wired faithfully.
+//!   - `Varnode::is_addr_force()` is now present. The `setReplacement`
+//!     `isAddrForce()` guard (subflow.cc:95) is now wired faithfully.
+//!   - `Varnode::is_type_lock()` + `get_type()` + `Datatype::get_metatype()`
+//!     are now present. The `setReplacement` typelock guards (subflow.cc:103,
+//!     subflow.cc:114) are now wired, with the caveat below.
+//!
+//! ## Gaps still open
+//!   - `Varnode::is_zero_extended(size)` is still NOT a first-class method.
+//!     `trace_forward`/`trace_backward` INT_DIV/INT_REM cases approximate it
+//!     inline via `get_nz_mask` (plus the `size > 8` INT_ZEXT special case) and
+//!     log it. The logic is as faithful as the available accessors allow; the
+//!     remaining gap is the missing canonical `Varnode::is_zero_extended`
+//!     accessor (varnode.cc:958-970).
+//!   - `TypeMetatype::PartialStruct` has no variant in Rugra's enum
+//!     (`type_system/datatype.rs`). The `setReplacement` typelock guards
+//!     therefore cannot honour the `!= TYPE_PARTIALSTRUCT` exception: because no
+//!     Rugra type is ever PartialStruct, the exception is vacuously true and the
+//!     size guard always runs when typelocked. This is 1:1 with Ghidra's logic
+//!     given Rugra's type system; it only diverges if/when PartialStruct types
+//!     exist (not yet representable).
+//!   - `Funcdata::op_set_all_input` is not present; the `doReplacement`
 //!     extension_patch case that calls it is emulated with per-slot
 //!     `op_set_input` + `op_remove_input`.
-//!   - `Varnode::isPrecisLo/Hi`, `isAddrForce`, `getType`, `isTypeLock` &
-//!     type-metatype guards: not all present; the corresponding guards are
-//!     emulated conservatively (returning the safe "don't restrict" value) and
-//!     logged.
-//!   - `SubfloatFlow` / `LaneDivide` (`TransformManager` subclasses) are not
-//!     ported; `RuleSubfloatConvert` is therefore a documented TODO.
+//!   - Per-op `FuncCallSpecs` lookup (`fd->getCallSpecs(op)`) is not available;
+//!     `try_call_pull`/`try_call_return_push` conservatively skip and log it.
+//!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
+//!     artificial-halt guard is conservatively skipped and logged.
+//!   - `Funcdata::set_input_varnode`, `delete_varnode`, `copy_symbol_if_valid`,
+//!     `Address::is_big_endian`, and Architecture options (`aggressive_ext_trim`,
+//!     `split_datatype_config`) are not threaded through here; the relevant
+//!     spots emulate conservatively and log it.
+//!   - `SubfloatFlow` / `LaneDivide` / `SplitFlow` (`TransformManager`
+//!     subclasses) are not ported; `RuleSubfloatConvert` and the
+//!     `RuleSplitFlow` rewrite are therefore documented TODOs.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -279,6 +307,60 @@ impl SubvariableFlow {
         }
     }
 
+    /// Reproduce `Varnode::isZeroExtended(int4 baseSize)` (varnode.cc:958-970).
+    ///
+    /// `Varnode::isZeroExtended` is not yet a first-class accessor on Rugra's
+    /// `Varnode`, so this static method inlines Ghidra's exact logic using the
+    /// available accessors. It is used by the `INT_DIV`/`INT_REM` cases of
+    /// `trace_forward`/`trace_backward` (subflow.cc:450-451, subflow.cc:802-803).
+    ///
+    /// Ghidra logic (verbatim):
+    /// ```text
+    /// if (baseSize >= size) return false;
+    /// if (size > sizeof(uintb)) {            // uintb is 8 bytes
+    ///     if (!isWritten()) return false;
+    ///     if (def->code() != CPUI_INT_ZEXT) return false;
+    ///     if (def->getIn(0)->getSize() > baseSize) return false;
+    ///     return true;
+    /// }
+    /// uintb mask = nzm >> 8*baseSize;
+    /// return (mask == 0);
+    /// ```
+    fn is_zero_extended(vn: &Arc<RwLock<Varnode>>, base_size: usize) -> bool {
+        let v = vn.read().unwrap();
+        let size = v.get_size() as usize;
+        if base_size >= size {
+            return false;
+        }
+        if size > 8 {
+            // Beyond uintb precision: must be a written INT_ZEXT from a value
+            // whose size is within base_size bytes.
+            if !v.is_written() {
+                return false;
+            }
+            match v.get_def() {
+                Some(def_op) => {
+                    let d = def_op.read().unwrap();
+                    if d.opcode != OpCode::CPUI_INT_ZEXT {
+                        return false;
+                    }
+                    let in0_size = d.get_in(0).map(|i| i.read().unwrap().get_size() as usize).unwrap_or(usize::MAX);
+                    in0_size <= base_size
+                }
+                None => false,
+            }
+        } else {
+            // Within uintb precision: high bytes must be known-zero.
+            let nzm = v.get_nz_mask();
+            let mask = if base_size >= 8 {
+                0u64
+            } else {
+                nzm >> (8 * base_size)
+            };
+            mask == 0
+        }
+    }
+
     // -----------------------------------------------------------------
     // Constructor (subflow.cc:1366-1404)
     // -----------------------------------------------------------------
@@ -376,21 +458,44 @@ impl SubvariableFlow {
             return (Some(idx), false);
         }
 
-        let (vn_is_constant, vn_is_free, vn_size, vn_is_input, vn_is_persist, vn_is_addr_force) = {
+        let (vn_is_constant, vn_is_free, vn_size, vn_is_input, vn_is_persist, vn_is_addr_force,
+            vn_typelock_type_size) = {
             let v = vn.read().unwrap();
+            // Ghidra (subflow.cc:95): `vn->isAddrForce()` — now wired via
+            // Varnode::is_addr_force().
+            let is_addr_force = v.is_addr_force();
+            // Ghidra typelock guard (subflow.cc:103-106, subflow.cc:114-118):
+            //   if (vn->isTypeLock() && vn->getType()->getMetatype() != TYPE_PARTIALSTRUCT) {
+            //       if (vn->getType()->getSize() != flowsize) return 0;
+            //   }
+            // Varnode::is_type_lock() + get_type() + Datatype::get_metatype() are
+            // now available. Rugra's TypeMetatype has no PartialStruct variant,
+            // so `get_metatype() != PartialStruct` is always true here; we still
+            // honour the size check when typelocked. `vn_typelock_type_size`
+            // holds Some(type_size) when the guard should run, None otherwise.
+            let typelock_type_size = if v.is_type_lock() {
+                if let Some(dt) = v.get_type() {
+                    // getMetatype() != TYPE_PARTIALSTRUCT is vacuously true (no
+                    // PartialStruct variant in Rugra). So always run size check.
+                    Some(dt.get_size() as i32)
+                } else {
+                    // Typelocked but no type resolved: cannot honour the size
+                    // check, so skip it (conservative — don't restrict).
+                    None
+                }
+            } else {
+                None
+            };
             (
                 v.is_constant(),
                 v.is_free(),
                 v.get_size(),
                 v.is_input(),
                 v.is_persist(),
-                // Rugra has no isAddrForce() accessor; the flag constant exists.
-                // We approximate conservatively as false (no address-forced
-                // restriction). Logged at module top.
-                false,
+                is_addr_force,
+                typelock_type_size,
             )
         };
-        let _ = vn_is_addr_force;
 
         if vn_is_constant {
             if self.sext_restrictions {
@@ -410,8 +515,10 @@ impl SubvariableFlow {
             return (None, false); // Abort
         }
 
-        // Ghidra: if (vn->isAddrForce() && (vn->getSize() != flowsize)) return 0;
-        // (skipped — Rugra has no isAddrForce accessor; see module note).
+        // Ghidra (subflow.cc:95): if (vn->isAddrForce() && (vn->getSize() != flowsize)) return 0;
+        if vn_is_addr_force && vn_size as i32 != self.flowsize {
+            return (None, false);
+        }
 
         if self.sext_restrictions {
             if vn_size as i32 != self.flowsize {
@@ -422,9 +529,13 @@ impl SubvariableFlow {
                     return (None, false);
                 }
             }
-            // Ghidra also has a typelock guard (TYPE_PARTIALSTRUCT). Rugra's
-            // Varnode has no type-lock/metatype accessor wired here; the guard
-            // is conservatively skipped (logged at module top).
+            // Ghidra typelock guard (subflow.cc:103-106), now wired via
+            // Varnode::is_type_lock()/get_type() + Datatype::get_metatype().
+            if let Some(type_size) = vn_typelock_type_size {
+                if type_size != self.flowsize {
+                    return (None, false);
+                }
+            }
         } else {
             if self.bitsize >= 8 {
                 // Ghidra: if ((!aggressive)&&((vn->getConsume()&~mask)!=0)) return 0;
@@ -432,7 +543,12 @@ impl SubvariableFlow {
                 if !self.aggressive && (consume & (!mask)) != 0 {
                     return (None, false);
                 }
-                // Ghidra typelock guard skipped (no accessor); see module note.
+                // Ghidra typelock guard (subflow.cc:114-118), now wired.
+                if let Some(type_size) = vn_typelock_type_size {
+                    if type_size != self.flowsize {
+                        return (None, false);
+                    }
+                }
             }
 
             if vn_is_input {
@@ -921,22 +1037,13 @@ impl SubvariableFlow {
                         return false; // Must be a whole number of bytes
                     }
                     let o = op_arc.read().unwrap();
-                    // Varnode::isZeroExtended(flowsize) is not present in Rugra.
-                    // Approximate: a varnode is "zero extended to flowsize" if
-                    // all bits at/above flowsize are known zero (nzmask has no
-                    // bits above flowsize). Logged at module top.
-                    let in0_ok = {
-                        let v = o.get_in(0).unwrap();
-                        let nz = v.read().unwrap().get_nz_mask();
-                        let fs_mask = if self.flowsize >= 8 { u64::MAX } else { (1u64 << (self.flowsize as u64 * 8)) - 1 };
-                        (nz & (!fs_mask)) == 0
-                    };
-                    let in1_ok = {
-                        let v = o.get_in(1).unwrap();
-                        let nz = v.read().unwrap().get_nz_mask();
-                        let fs_mask = if self.flowsize >= 8 { u64::MAX } else { (1u64 << (self.flowsize as u64 * 8)) - 1 };
-                        (nz & (!fs_mask)) == 0
-                    };
+                    // Varnode::isZeroExtended(flowsize) is not a first-class
+                    // method in Rugra; we reproduce Ghidra's exact logic here
+                    // (varnode.cc:958-970) using get_nz_mask/get_size/is_written/
+                    // get_def. See `Self::is_zero_extended` and the module note.
+                    let in0_ok = Self::is_zero_extended(&o.get_in(0).unwrap(), self.flowsize as usize);
+                    let in1_ok = Self::is_zero_extended(&o.get_in(1).unwrap(), self.flowsize as usize);
+                    drop(o);
                     if !in0_ok || !in1_ok {
                         return false;
                     }
@@ -1478,10 +1585,11 @@ impl SubvariableFlow {
                     return false;
                 }
                 let o = op.read().unwrap();
-                // isZeroExtended approximated via nzmask (see trace_forward).
-                let fs_mask = if self.flowsize >= 8 { u64::MAX } else { (1u64 << (self.flowsize as u64 * 8)) - 1 };
-                let in0_ok = (o.get_in(0).unwrap().read().unwrap().get_nz_mask() & (!fs_mask)) == 0;
-                let in1_ok = (o.get_in(1).unwrap().read().unwrap().get_nz_mask() & (!fs_mask)) == 0;
+                // Varnode::isZeroExtended(flowsize) reproduced via
+                // Self::is_zero_extended (Ghidra varnode.cc:958-970); see
+                // trace_forward for the same call and the module note.
+                let in0_ok = Self::is_zero_extended(&o.get_in(0).unwrap(), self.flowsize as usize);
+                let in1_ok = Self::is_zero_extended(&o.get_in(1).unwrap(), self.flowsize as usize);
                 drop(o);
                 if !in0_ok || !in1_ok {
                     return false;
@@ -2476,7 +2584,7 @@ impl RuleSubvarSubpiece {
 impl Rule for RuleSubvarSubpiece {
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarSubpiece::applyOp (subflow.cc:1590-1619)
-        let (vn, flowsize, sa, in0_consume, out_has_no_descend, in0_size, lone_is_op) = {
+        let (vn, flowsize, sa, in0_consume, out_has_no_descend, in0_size, lone_is_op, out_is_ptr_flow) = {
             let op = op_arc.read().unwrap();
             let vn = op.get_in(0).cloned().unwrap();
             let outvn = op.get_out().cloned().unwrap();
@@ -2485,6 +2593,9 @@ impl Rule for RuleSubvarSubpiece {
             let in0_consume = vn.read().unwrap().get_consume();
             let out_has_no_descend = outvn.read().unwrap().has_no_descend();
             let in0_size = vn.read().unwrap().get_size();
+            // aggressive = outvn->isPtrFlow(); (subflow.cc:1601) — now wired
+            // via Varnode::is_ptr_flow() (addlflags PTR_FLOW).
+            let out_is_ptr_flow = outvn.read().unwrap().is_ptr_flow();
             // loneDescend() == op?
             let lone_is_op = vn
                 .read()
@@ -2492,7 +2603,7 @@ impl Rule for RuleSubvarSubpiece {
                 .lone_descend()
                 .map(|d| Arc::as_ptr(&d) == Arc::as_ptr(op_arc))
                 .unwrap_or(false);
-            (vn, flowsize, sa, in0_consume, out_has_no_descend, in0_size, lone_is_op)
+            (vn, flowsize, sa, in0_consume, out_has_no_descend, in0_size, lone_is_op, out_is_ptr_flow)
         };
         // Ghidra: `if (flowsize + sa > sizeof(uintb))`. uintb is an 8-byte
         // (64-bit) integer, so sizeof(uintb) == 8 (bytes). flowsize & sa are
@@ -2503,9 +2614,7 @@ impl Rule for RuleSubvarSubpiece {
         }
         let mut mask = calc_mask(flowsize as usize);
         mask <<= 8 * sa;
-        // aggressive = outvn->isPtrFlow(); — Rugra has no isPtrFlow().
-        // Conservatively use aggressive=false. Logged at module top.
-        let aggressive = false;
+        let aggressive = out_is_ptr_flow;
         if !aggressive {
             if (in0_consume & mask) != in0_consume {
                 return Ok(action_status::NO_CHANGE);
@@ -2683,15 +2792,17 @@ impl RuleSubvarZext {
 impl Rule for RuleSubvarZext {
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarZext::applyOp (subflow.cc:1710-1721)
-        let (vn, invn_size_mask) = {
+        let (vn, invn_size_mask, in_is_ptr_flow) = {
             let op = op_arc.read().unwrap();
             let vn = op.get_out().cloned().unwrap();
             let invn = op.get_in(0).cloned().unwrap();
             let mask = calc_mask(invn.read().unwrap().get_size());
-            (vn, mask)
+            // aggressive = invn->isPtrFlow(); (subflow.cc:1717) — now wired via
+            // Varnode::is_ptr_flow() (addlflags PTR_FLOW).
+            let in_is_ptr_flow = invn.read().unwrap().is_ptr_flow();
+            (vn, mask, in_is_ptr_flow)
         };
-        // aggressive = invn->isPtrFlow(); — Rugra has no isPtrFlow(). Use false.
-        let aggressive = false;
+        let aggressive = in_is_ptr_flow;
         let mut subflow = SubvariableFlow::new(fd, vn, invn_size_mask, aggressive, false, false);
         if !subflow.do_trace(fd) {
             return Ok(action_status::NO_CHANGE);
@@ -2791,7 +2902,10 @@ impl Rule for RuleSplitFlow {
             return Ok(action_status::NO_CHANGE);
         }
         // Ghidra: if (vn->isPrecisLo() || vn->isPrecisHi()) return 0;
-        // Rugra has no isPrecisLo/Hi accessor; guard skipped (logged at module top).
+        // (subflow.cc:2054) — now wired via Varnode::is_precis_lo()/is_precis_hi().
+        if vn.read().unwrap().is_precis_lo() || vn.read().unwrap().is_precis_hi() {
+            return Ok(action_status::NO_CHANGE); // Do not split if value comes from double-precision pieces
+        }
         let (out_size, vn_size) = {
             let op = op_arc.read().unwrap();
             let out_size = op.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(0) as i32;

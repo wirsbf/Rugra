@@ -57,3 +57,10 @@
 
 ## 测试
 29 单元测试：SubvariableFlow 扫描+替换主流程、terminal/extension/boolean/compare patch、sext 路径、每条 Rule 的 pattern 触发 + guard（mask-too-big/consume-mismatch/no-constant/wrong-size/big-flag/zero-mask）。
+
+### 2026-07-01（续）：TODO 替换 — 接入 Varnode flag 基础设施
+- RuleSubvarSubpiece/Zext 的 `aggressive` 参数：从占位 default false 改为 `outvn.is_ptr_flow()`（subflow.cc:1601/1717）。
+- RuleSplitFlow 新增 `is_precis_lo/hi` 守卫（subflow.cc:2054）。
+- set_replacement 的 isAddrForce/isTypeLock 守卫：用 `is_addr_force()`/`is_type_lock()`+`get_type()` 实现 size 检查（subflow.cc:95/103-118）。
+- 新增 `is_zero_extended(base_size)` 静态方法：完整复刻 varnode.cc:958-970（baseSize>=size / size>8 INT_ZEXT 链 / nzm 位移三段逻辑），替换 INT_DIV/REM 近似。
+- 文件头部 gap 清单更新：5 项已补齐 + 7 项仍保留（逐条说明原因）。
