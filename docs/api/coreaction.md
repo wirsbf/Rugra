@@ -543,6 +543,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionHeritage 接入 discover_and_guard_stack_stores_fd**（2026-06-29）：ActionHeritage::apply 在 place_multiequals/rename 之前调 `Heritage::discover_and_guard_stack_stores_fd(fd)`（对齐 heritage.cc:2707 discoverIndexedStackPointers + guardStores），发现 stack STORE 并建 Stack 空间 INDIRECT。
 - **两 pass heritage**（2026-06-29 续）：ActionHeritage::apply 跑两遍 place+rename。Pass 1 连接 op 图（rename 重写 STORE input 引用 INT_ADD output），Pass 2 的 discover 在连接后的图上发现 stack STOREs 建 Stack INDIRECT。对齐 Ghidra 多 pass heritage。
   - **INSERT/activeHeritage 对齐**（2026-06-29 续 2）：rename 使用 `is_heritage_known()` + `is_active_heritage()`（对齐 heritage.cc:2496-2498）。rename_direct 对 free varnode 设 activeHeritage。
+  - **Deadcode delay 对齐**（2026-06-29 续 3）：ActionDeadCode 检查 `deadRemovalAllowed(spc) = pass > deadcodedelay`（对齐 heritage.cc:2843）。Stack 空间 delay=1，pass 0 时 Stack varnode 全标记 consumed（不删）。ActionHeritage::apply 在两 pass 之间插入 dead-code（对齐 mainloop Heritage+DeadCode 交替，coreaction.cc:5503）。
 - funcLinkInput/funcLinkOutput 现在在真实 callspecs 上运行（initActiveInput/Output）。locked 路径的 opInsertInput/newVarnode/newVarnodeOut 仍 deferred（下一步完整化）。
 - 基础已就绪，无回归：780/780 测试，curl 24/24。
 

@@ -1325,10 +1325,6 @@ impl ScopeLocal {
         ));
         let mut state = MapState::new_with_default(local_start, local_end, default_type);
         state.gather_varnodes(fd);
-
-        // Promote RSP-relative LOAD/STORE into stack offsets (faithful
-        // Stack-spacebase resolution). This is the dominant source of stack
-        // references in Rugra, whose x86 lift does not emit Stack varnodes.
         state.gather_spacebase(fd);
 
         // Gather alias info.

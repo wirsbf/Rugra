@@ -40,6 +40,15 @@ impl Action for ActionHeritage {
             heritage.pass += 1;
             fd.heritage = heritage;
         }
+        // Dead-code between passes, faithful to Ghidra mainloop where each
+        // pass alternates Heritage + DeadCode (coreaction.cc:5503). At this
+        // point heritage.pass=1, Stack delay=1, so deadRemovalAllowed(Stack)
+        // = (1 > 1) = false → Stack INDIRECT varnodes are marked consumed and
+        // survive. Register/Unique varnodes are dead-coded normally.
+        {
+            let dc = ActionDeadCode::new();
+            let _ = dc.apply(fd);
+        }
         // Pass 2: discover stack STOREs on the connected graph, then
         // place + rename to SSA the new Stack-space INDIRECT varnodes.
         crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
@@ -165,17 +174,37 @@ impl Action for ActionDeadCode {
         // iterating Funcdata's varnode bank + op bank.
         let mut changed = 0;
 
+        // Determine which spaces are NOT yet heritaged (deadcode not allowed).
+        // Faithful to Ghidra coreaction.cc:3949-3958 + heritage.cc:2843-2848:
+        // deadRemovalAllowed(spc) = (pass > deadcodedelay). For spaces where
+        // dead removal is NOT allowed, all varnodes are marked fully consumed
+        // (so they survive dead-code). This protects Stack-space INDIRECT
+        // varnodes during Register/Unique heritage (Stack delay=1, so in
+        // pass 0 they're protected).
+        let heritage_pass = fd.heritage.pass;
+        let stack_deadcode_allowed = heritage_pass > 1; // Stack delay=1
+
         // Step 1: Clear consume flags on all Varnodes.
         for vn_ref in fd.vbank.loc_tree.iter() {
             let mut vn = vn_ref.0.write().unwrap();
             vn.set_consume(0);
         }
 
+        // Step 1.5: For spaces where dead removal is not allowed (Stack space
+        // before its heritage pass), mark all varnodes fully consumed.
+        // Faithful to Ghidra coreaction.cc:3949-3958.
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
+        if !stack_deadcode_allowed {
+            for vn_arc in fd.vbank.iter_space(crate::space::AddressSpace::Stack) {
+                Self::push_consumed(u64::MAX, &vn_arc, &mut worklist);
+            }
+        }
+
         // Step 2: Build initial worklist from terminal uses (ops with no
         // output, or whose output doesn't matter: RETURN, BRANCH, CBRANCH,
         // STORE, and ops whose output has no descendants).
-        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
-            Vec::new();
+        // (worklist already initialized in Step 1.5)
 
         for op_ref in &fd.obank.alivelist {
             let op_rg = op_ref.0.read().unwrap();
