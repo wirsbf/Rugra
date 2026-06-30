@@ -1339,22 +1339,16 @@ impl PrintC {
             let high = high_arc.read().unwrap();
             let name = high.get_name();
             if !name.is_empty() {
-                // Convert raw register names to local variable names
-                if Self::is_raw_register_name(name)
-                    && name != "RSP" && name != "ESP" && name != "RBP" && name != "EBP"
-                {
+                // Faithful to pushSymbolDetail: raw register names → size-based
+                // local variable name (Ghidra buildVariableName default case:
+                // database.cc:2501-2504 "ct->printNameBase; VarN").
+                if Self::is_raw_register_name(name) {
                     if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                         return pname.clone();
+                    } else {
+                        let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
+                        return format!("{}_{:x}", prefix, vn.get_offset());
                     }
-                    // Priority: vn's own v_type (set by type_infer) first, then
-                    // high-level type, then pointer_type_for heuristic. This lets
-                    // type_infer's LOAD element inference override Phase 4's
-                    // erroneous pointer marks on the same high variable.
-                    let effective_type = Self::vn_type_if_meaningful(vn)
-                        .or_else(|| Self::find_typed_instance(&high))
-                        .or_else(|| self.pointer_type_for(vn));
-                    let prefix = Self::var_prefix(&effective_type, vn.get_size());
-                    return format!("{}_{:x}", prefix, vn.get_offset());
                 }
                 let effective_type = Self::vn_type_if_meaningful(vn)
                     .or_else(|| Self::find_typed_instance(&high))
@@ -4185,11 +4179,11 @@ impl PrintLanguage for PrintC {
             let high = high_arc.read().unwrap();
             let name = high.get_name();
             if !name.is_empty() {
-                // Convert raw register names to local variable names
-                // (except RSP/RBP which are kept as stack/frame pointers)
-                let display_name = if Self::is_raw_register_name(name)
-                    && name != "RSP" && name != "ESP" && name != "RBP" && name != "EBP"
-                {
+                // Faithful to Ghidra pushSymbolDetail (printlanguage.cc:238-262):
+                // Raw register names (from merge's assign_names) are converted to
+                // size-based local variable names (Ghidra buildVariableName default:
+                // database.cc:2501-2504). NO hardcoded "RSP"/"RBP" exceptions.
+                let display_name = if Self::is_raw_register_name(name) {
                     if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                         pname.clone()
                     } else {
@@ -4370,10 +4364,14 @@ impl PrintLanguage for PrintC {
         }
         } // end if not Const space
 
-        // Priority 2: Fall back to raw address-based naming
+        // Priority 2: Fall back to address-based naming.
+        // Faithful to Ghidra's pushUnnamedLocation (printc.cc:1938-1945):
+        // outputs "space_name + raw_offset" (e.g., "Register20"), NOT
+        // register names like "RSP". The register name mapping is done
+        // by varmap/merge assign_names, not by printc's fallback.
         let name = match vn.get_space() {
             AddressSpace::Register => {
-                // Priority: parameter name > local variable name
+                // Priority: parameter name > unnamed location
                 if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                     pname.clone()
                 } else {
@@ -4388,25 +4386,11 @@ impl PrintLanguage for PrintC {
                             return;
                         }
                     }
-                    // Keep RSP/ESP and RBP/EBP as-is (stack/frame pointers)
-                    // Convert all other registers to local variable names
-                    match (vn.get_offset(), vn.get_size()) {
-                        (0x20, 8) => "RSP".to_string(),
-                        (0x20, 4) => "ESP".to_string(),
-                        (0x28, 8) => "RBP".to_string(),
-                        (0x28, 4) => "EBP".to_string(),
-                        (off, sz) => {
-                            // Generate Ghidra-style local variable name based on size
-                            let prefix = match sz {
-                                8 => "lVar",   // long
-                                4 => "iVar",   // int
-                                2 => "sVar",   // short
-                                1 => "bVar",   // byte
-                                _ => "uVar",   // unknown
-                            };
-                            format!("{}_{:x}", prefix, off)
-                        }
-                    }
+                    // Faithful to buildVariableName default (database.cc:2501):
+                    // size-based local variable name.
+                    let prefix = Self::var_prefix(&vn.v_type, vn.get_size());
+                    let raw = format!("{}_{:x}", prefix, vn.get_offset());
+                    self.compact_name_for(&raw).unwrap_or(raw)
                 }
             }
             AddressSpace::Const => {

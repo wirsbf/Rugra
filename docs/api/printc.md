@@ -79,11 +79,11 @@ raw semantics / P-code-like IR
 ### push_varnode Priority 1.4 — 权威 HighVariable def inline（2026-06-29 新增）
 `push_varnode` 在 Priority 1（用 HighVariable 名字）之后、Priority 1.5（基于自造 map 的 def 查找）之前，新增基于权威 HighVariable 的 def inline：若当前 varnode 无可用 def（def 缺失或 def op 已 dead），但同 HighVariable 的兄弟实例（`high.get_type_representative()`）有可用 def，则 inline 那个 def 表达式。前提是 merge 已在 dead-code 之后运行（action.rs 管线顺序），`high.instances` 为权威存活集。这是用 SSA 权威 HighVariable 替代自造 map 的第一步，保守且安全（仅对"当前实例无 def"生效，不影响正常命名读取）。
 
-### implied 机制接入（2026-06-29 续，对齐 Ghidra printc.cc:2704）
-完整移植 Ghidra 的 implied 控制机制（替代自造 map 做内联决策）：
-- **emit_block_ops 跳过 implied op**：op 的 output varnode 是 implied（ActionMarkImplied 标记）则跳过整个 op，不 emit 成 `lhs = expr` 语句（对齐 printc.cc:2704）。
-- **push_varnode 内联 implied def**：push_varnode 开头，若 vn.is_implied() 且非 LHS 且 depth<8，则 inline 它的 def 表达式（emit_inline_expr），递归展开。这是 Ghidra `recurse()` 的等价物（Ghidra 的 op-push+recurse 模型在 Rugra 的 leaf-based push_varnode 里表现为读时内联）。
-- 效果：中间变量（如 `piVar1 = param_4+8` 后立即 `if(lVar3==0)`）被内联成 `if(*(long*)(param_4+0x8)==0)`，消除冗余临时变量。
+### 移除硬编码 RSP/RBP 名（2026-06-29 续）
+- `get_varnode_name` 和 `push_varnode` Priority 1/2 不再保留 `name != "RSP"/"RBP"` 例外。Raw register 名统一转为 size-based 局部变量名（对齐 Ghidra `buildVariableName` 默认分支，database.cc:2501-2504）。
+- Priority 2 fallback 不再 `match(offset,size) → "RSP"/"RBP"`，统一用 size-based 前缀命名。
+- RSP 泄漏 137→0，RBP 泄漏 18→0。
+- 已知回归：15/24 函数 gcc 审计失败（self-assignment lvalue error），因为 INT_ADD/INT_SUB prologue op 不再被 stack_frame_size 门控跳过。需完成阶段 5c（删 stack_frame_size，改用 Ghidra spacebase 机制跳过 prologue）。
 
 ---
 
