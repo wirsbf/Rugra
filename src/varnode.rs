@@ -60,6 +60,22 @@ pub mod varnode_flags {
     pub const PROTO_PARTIAL: u32 = 1 << 31;
 }
 
+/// Additional boolean properties on a Varnode.
+/// Faithful to Ghidra's `addl_flags` (varnode.hh:115-140).
+pub mod addl_flags {
+    pub const ACTIVE_HERITAGE: u16 = 0x01;
+    pub const WRITE_MASK: u16 = 0x02;
+    pub const VAC_CONSUME: u16 = 0x04;
+    pub const LIS_CONSUME: u16 = 0x08;
+    pub const PTR_CHECK: u16 = 0x10;
+    pub const PTR_FLOW: u16 = 0x20;
+    pub const UNSIGNED_PRINT: u16 = 0x40;
+    pub const LONG_PRINT: u16 = 0x80;
+    pub const STACK_STORE: u16 = 0x100;
+    pub const LOCKED_INPUT: u16 = 0x200;
+    pub const SPACEBASE_PLACEHOLDER: u16 = 0x400;
+}
+
 /// A Varnode represents a storage location and size in P-code IR
 ///
 /// Corresponds to Ghidra's `Varnode` class in `varnode.hh`
@@ -284,6 +300,32 @@ impl Varnode {
 
     pub fn is_free(&self) -> bool {
         (self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN)) == 0
+    }
+
+    /// Is this varnode already known to heritage? Faithful to
+    /// `Varnode::isHeritageKnown` (varnode.hh:298):
+    /// `flags & (insert | constant | annotation)`.
+    /// Used by rename to skip varnodes that have already been SSA-resolved.
+    pub fn is_heritage_known(&self) -> bool {
+        (self.flags & (varnode_flags::INSERT | varnode_flags::CONSTANT | varnode_flags::ANNOTATION)) != 0
+    }
+
+    /// Is this varnode actively being heritaged this round? Faithful to
+    /// `Varnode::isActiveHeritage` (varnode.hh). Set by placeMultiequals/
+    /// guardStores on varnodes that need rename this pass.
+    pub fn is_active_heritage(&self) -> bool {
+        (self.addlflags & addl_flags::ACTIVE_HERITAGE) != 0
+    }
+
+    /// Mark this varnode as actively being heritaged. Faithful to
+    /// `Varnode::setActiveHeritage` (varnode.hh).
+    pub fn set_active_heritage(&mut self) {
+        self.addlflags |= addl_flags::ACTIVE_HERITAGE;
+    }
+
+    /// Clear active heritage flag. Faithful to `Varnode::clearActiveHeritage`.
+    pub fn clear_active_heritage(&mut self) {
+        self.addlflags &= !addl_flags::ACTIVE_HERITAGE;
     }
 
     pub fn set_flags(&mut self, f: u32) {
@@ -746,6 +788,10 @@ impl VarnodeBank {
 
     /// Create a new free varnode
     pub fn create(&mut self, size: usize, loc: Address) -> Arc<RwLock<Varnode>> {
+        // Faithful to VarnodeBank::create (varnode.cc:1250-1258): does NOT
+        // set INSERT flag. Only createDef/xref sets INSERT (for written
+        // varnodes). Free varnodes (created via newVarnode→create) have no
+        // INSERT — isHeritageKnown returns false — rename processes them.
         let mut vn = Varnode::new(size, loc);
         vn.create_index = self.create_index;
         self.create_index += 1;
@@ -785,23 +831,28 @@ impl VarnodeBank {
     }
 
     /// Mark a varnode as an input
+    /// Mark a varnode as a function input. Faithful to Ghidra's
+    /// VarnodeBank::makeInput which re-inserts via xref (sets INSERT).
     pub fn set_input(&mut self, vn: Arc<RwLock<Varnode>>) {
         self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
         self.def_tree.remove(&VarnodeDefRef(vn.clone()));
 
-        vn.write().unwrap().set_flags(varnode_flags::INPUT);
+        vn.write().unwrap().set_flags(varnode_flags::INPUT | varnode_flags::INSERT);
 
         self.loc_tree.insert(VarnodeLocRef(vn.clone()));
         self.def_tree.insert(VarnodeDefRef(vn.clone()));
     }
 
     /// Mark a varnode as defined by an operation
+    /// Set the defining op of a varnode. Faithful to Ghidra's model where
+    /// createDef (varnode.cc:1411) calls xref which sets INSERT.
+    /// A varnode with a def is "inserted" — isHeritageKnown returns true.
     pub fn set_def(&mut self, vn: Arc<RwLock<Varnode>>, op: Weak<RwLock<PcodeOp>>) {
         self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
         self.def_tree.remove(&VarnodeDefRef(vn.clone()));
 
         let mut v = vn.write().unwrap();
-        v.set_flags(varnode_flags::WRITTEN);
+        v.set_flags(varnode_flags::WRITTEN | varnode_flags::INSERT);
         v.def = Some(op);
 
         drop(v);

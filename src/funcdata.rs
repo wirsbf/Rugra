@@ -1157,26 +1157,31 @@ impl Funcdata {
         sz: usize,
     ) -> crate::op::PcodeOpRef {
         use crate::space::AddressSpace;
-        // input[0]: Stack-space varnode at stack_offset
+        // input[0]: Stack-space varnode at stack_offset (free, no INSERT)
         let newin = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
         // The op
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let newop = self.new_op(2, indeffect_addr);
         newop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_STORE;
-        // output: Stack-space varnode at stack_offset, defined by newop
+        // output: Stack-space varnode at stack_offset, defined by newop.
+        // set_def sets WRITTEN + INSERT (faithful to createDef→xref).
         let newout = self.vbank.create_with_space(sz, AddressSpace::Stack, stack_offset);
-        newout.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        newout.write().unwrap().def = Some(std::sync::Arc::downgrade(&newop.0));
-        newop.0.write().unwrap().output = Some(newout);
+        self.vbank.set_def(newout.clone(), std::sync::Arc::downgrade(&newop.0));
+        newop.0.write().unwrap().output = Some(newout.clone());
         // Set opcode to INDIRECT
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
         // input[0] = the Stack varnode
-        self.op_set_input(&newop, newin, 0);
-        // input[1] = iop constant referencing the causing op (use its seqnum addr)
+        self.op_set_input(&newop, newin.clone(), 0);
+        // input[1] = iop constant referencing the causing op
         let iop_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let iop_vn = self.new_constant(8, iop_addr.as_u64());
         iop_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
         self.op_set_input(&newop, iop_vn, 1);
+        // Faithful to guardStores (heritage.cc:1554-1556):
+        // setActiveHeritage on INDIRECT input + output so rename processes
+        // them (builds SSA def-use chain, preventing dead-code removal).
+        newin.write().unwrap().set_active_heritage();
+        newout.write().unwrap().set_active_heritage();
         // Insert before the causing op
         self.op_insert_before(&newop, indeffect);
         newop

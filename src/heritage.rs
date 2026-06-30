@@ -505,6 +505,18 @@ impl Heritage {
 
     /// Perform SSA renaming directly using bank references
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
+        // Mark all free varnodes as active heritage, faithful to Ghidra's
+        // guard() (heritage.cc:1175/1182) which calls setActiveHeritage on
+        // all read/write varnodes in the ranges being heritaged this pass.
+        // Free varnodes (no INSERT flag, created by newVarnode→create) need
+        // this flag so rename's isActiveHeritage check lets them through.
+        for vn_ref in &vbank.loc_tree {
+            let mut vn = vn_ref.0.write().unwrap();
+            if !vn.is_heritage_known() {
+                vn.set_active_heritage();
+            }
+        }
+
         let mut stacks: BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>> = BTreeMap::new();
 
         // Push initial/input varnodes to stacks
@@ -587,22 +599,24 @@ impl Heritage {
                 continue;
             }
 
-            // Rewrite inputs — faithful to Ghidra renameRecurse (heritage.cc:2494-2497).
-            // Only replace FREE varnodes (not input/written/constant). This mirrors
-            // Ghidra's isHeritageKnown() check: input and written varnodes are
-            // already SSA-resolved and must not be re-renamed.
+            // Rewrite inputs — faithful to Ghidra renameRecurse (heritage.cc:2494-2498).
+            // Skip heritage-known varnodes (insert/constant/annotation), then
+            // skip non-active-heritage varnodes. Only active free varnodes
+            // get replaced by the stack-top SSA version.
             for i in 0..op.inrefs.len() {
-                let is_free = {
+                let should_skip = {
                     let vn_read = op.inrefs[i].read().unwrap();
-                    !vn_read.is_input() && !vn_read.is_written() && !vn_read.is_constant()
+                    vn_read.is_heritage_known() || !vn_read.is_active_heritage()
                 };
-                if !is_free {
+                if should_skip {
                     continue;
                 }
                 let key = {
                     let vn_read = op.inrefs[i].read().unwrap();
                     (vn_read.address_space, vn_read.loc)
                 };
+                // Clear active heritage flag before replacing.
+                op.inrefs[i].write().unwrap().clear_active_heritage();
                 if let Some(stack) = stacks.get(&key) {
                     if let Some(new_vn) = stack.last() {
                         op.inrefs[i] = new_vn.clone();

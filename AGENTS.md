@@ -50,6 +50,20 @@ Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`（114
 
 **判定准则**：如果一个 Rule/Action 在 Ghidra oppool1/actcleanup/actmainloop 里注册，Rugra 侧出 bug，默认假设是**移植缺陷**（守卫缺失/算法不完整/基础设施缺口），去读 Ghidra 源码修；只有核实 Ghidra 确实没有该机制时，才考虑保守降级（且必须注释说明降级理由 + 修复路径）。
 
+### 5.5. 🔴 Ghidra 怎么做，Rugra 就怎么实现 — 禁止任何临时不对齐的操作
+
+**每一行实现都要对照 Ghidra 源码。禁止"先用简化版/临时方案，以后再对齐"的思路。简化版 = 技术债 = 后面处处受阻。**
+
+**本轮实例**：
+- ❌ 错误：rename 用 `!is_written` 做 `isHeritageKnown` 检查 —— 实际 Ghidra 检查的是 `Varnode::insert` flag（varnode.hh:298），不是 written。凭记忆猜错 flag 语义
+- ✅ 正确：读 varnode.hh:84/298 确认 `isHeritageKnown = flags & (insert | constant | annotation)`，实现 `insert` flag + `activeHeritage` flag + 正确的 rename 守卫
+
+**操作准则**：
+1. 写任何代码前，先读 Ghidra 对应源码的**精确行**（不是"大概那里"）
+2. 如果发现 Rugra 已有实现偏离 Ghidra（如 `is_free` 替代 `isHeritageKnown`），**立即修正为 Ghidra 的精确语义**
+3. 禁止"先跑起来再说"——每个 flag 的值、语义、检查时机必须和 Ghidra 一致
+4. 遇到 Rugra 缺失的基础设施（如 `insert`/`activeHeritage` flag），**补齐它**，不要用别的东西绕
+
 ### 6. 🔴 遇 bug 先看 Ghidra 怎么做 — 禁止凭猜测修
 
 **任何 bug/失败/非收敛/输出错误，第一步是读 Ghidra 对应源码看它怎么处理，第二步才是改 Rugra。禁止凭记忆/猜测/经验直接改。**
