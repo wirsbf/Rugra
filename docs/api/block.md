@@ -878,3 +878,9 @@ BlockGraph 新增：
 
 ### 2026-06-29（续 2）：VarnodeBank::find_input
 - `find_input(size, loc)` — 忠实移植 `VarnodeBank::findInput`（varnode.hh）。查找指定 size+address 的 INPUT varnode。用于 ActionRestrictLocal + AncestorRealistic。
+
+### 2026-07-01：CBRANCH 出边 + 支配查询（解锁 RuleConditionalMove/Int2FloatCollapse/IgnoreNan）
+- `FlowBlock::dominates(other)`（block.cc:386-395）— 沿 immed_dom 链上溯判断支配。
+- `FlowBlock::get_true_out(cbranch)/get_false_out(cbranch)`（block.hh:299-300）— 按 BOOLEAN_FLIP 重映射 CBRANCH 真/假出边（Rugra out[0]=taken,out[1]=fallthru；flip 时翻转）。
+- `FlowBlock::get_in_rev_index(slot)` trait 方法（block.hh:308）— 入边的反向索引。
+- `find_condition(bl1,edge1,bl2,edge2)` 自由函数（block.cc:839-858）— 返回支配两路径的 CBRANCH 块 + slot1。解锁 RuleInt2FloatCollapse 核心。

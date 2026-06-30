@@ -15,6 +15,10 @@ use crate::space::AddressSpace;
 pub mod funcdata_flags {
     /// Data-type analysis is being performed.
     pub const TYPE_RECOVERY_ON: u32 = 1 << 0;
+    /// Data-type analysis has started (Ghidra `typerecovery_start`,
+    /// funcdata.hh:90). Set once ActionInferTypes begins, used by Rules to
+    /// decide whether type-based guards apply.
+    pub const TYPE_RECOVERY_START: u32 = 1 << 1;
 }
 
 use crate::varnode::VarnodeBank;
@@ -137,6 +141,16 @@ impl Funcdata {
         } else {
             self.flags &= !funcdata_flags::TYPE_RECOVERY_ON;
         }
+    }
+
+    /// Has data-type analysis started? Faithful to
+    /// `Funcdata::hasTypeRecoveryStarted` (funcdata.hh:151).
+    pub fn has_type_recovery_started(&self) -> bool {
+        (self.flags & funcdata_flags::TYPE_RECOVERY_START) != 0
+    }
+    /// Mark that type recovery has started.
+    pub fn set_type_recovery_started(&mut self) {
+        self.flags |= funcdata_flags::TYPE_RECOVERY_START;
     }
 
     /// Set the self-reference after wrapping in Arc<RwLock>

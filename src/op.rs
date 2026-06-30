@@ -277,6 +277,29 @@ impl PcodeOp {
     pub fn is_calculated_bool(&self) -> bool {
         (self.flags & (pcodeop_flags::CALCULATED_BOOL | pcodeop_flags::BOOLOUTPUT)) != 0
     }
+
+    /// Does this op consume/produce a pointer? Faithful to
+    /// `PcodeOp::isPtrFlow` (op.hh:205).
+    pub fn is_ptr_flow(&self) -> bool {
+        (self.flags & pcodeop_flags::PTRFLOW) != 0
+    }
+    /// Mark this op as consuming/producing ptrs. Faithful to
+    /// `PcodeOp::setPtrFlow` (op.hh:206).
+    pub fn set_ptr_flow(&mut self) {
+        self.flags |= pcodeop_flags::PTRFLOW;
+    }
+
+    /// Has this cpool op been checked for transforms? Faithful to
+    /// `PcodeOp::isCpoolTransformed` (op.hh:213). Uses addlflags bit 0x20
+    /// (Ghidra `is_cpool_transformed = 0x20`, op.hh:114).
+    pub fn is_cpool_transformed(&self) -> bool {
+        (self.addlflags & 0x20) != 0
+    }
+    /// Mark this cpool op as transformed. Faithful to
+    /// `PcodeOp::setAdditionalFlag(is_cpool_transformed)` (op.hh:140/213).
+    pub fn mark_cpool_transformed(&mut self) {
+        self.addlflags |= 0x20;
+    }
 }
 
 /// Comparison for sorting PcodeOps in the bank

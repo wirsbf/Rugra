@@ -406,6 +406,95 @@ impl Varnode {
         self.flags &= !varnode_flags::DIRECTWRITE;
     }
 
+    // ---- Ghidra flag accessors (varnode.hh:251-300, 307-330) ----
+    // Flag constants already defined in varnode_flags/addl_flags above; these
+    // are the missing accessor methods needed by ported Rules.
+
+    /// Is this varnode forced to be treated as an address? (varnode.hh:251)
+    pub fn is_addr_force(&self) -> bool {
+        (self.flags & varnode_flags::ADDRFORCE) != 0
+    }
+    /// Mark as address-forced. (varnode.hh:307)
+    pub fn set_addr_force(&mut self) {
+        self.flags |= varnode_flags::ADDRFORCE;
+    }
+    /// Clear address-forced. (varnode.hh:308)
+    pub fn clear_addr_force(&mut self) {
+        self.flags &= !varnode_flags::ADDRFORCE;
+    }
+
+    /// Is the type locked on this varnode? (varnode.hh:299)
+    pub fn is_type_lock(&self) -> bool {
+        (self.flags & varnode_flags::TYPELOCK) != 0
+    }
+
+    /// Is the name locked on this varnode? (varnode.hh:300)
+    pub fn is_name_lock(&self) -> bool {
+        (self.flags & varnode_flags::NAMELOCK) != 0
+    }
+
+    /// Is this the low half of a precise register pair? (varnode.hh:275)
+    pub fn is_precis_lo(&self) -> bool {
+        (self.flags & varnode_flags::PRECISLO) != 0
+    }
+    /// Is this the high half of a precise register pair? (varnode.hh:276)
+    pub fn is_precis_hi(&self) -> bool {
+        (self.flags & varnode_flags::PRECISHI) != 0
+    }
+    /// Mark as precise low half. (varnode.hh:321)
+    pub fn set_precis_lo(&mut self) {
+        self.flags |= varnode_flags::PRECISLO;
+    }
+    /// Mark as precise high half. (varnode.hh:322)
+    pub fn set_precis_hi(&mut self) {
+        self.flags |= varnode_flags::PRECISHI;
+    }
+    /// Clear precise low half. (varnode.hh:323)
+    pub fn clear_precis_lo(&mut self) {
+        self.flags &= !varnode_flags::PRECISLO;
+    }
+    /// Clear precise high half. (varnode.hh:324)
+    pub fn clear_precis_hi(&mut self) {
+        self.flags &= !varnode_flags::PRECISHI;
+    }
+
+    /// Is this a partial prototype varnode? (varnode.hh:258)
+    pub fn is_proto_partial(&self) -> bool {
+        (self.flags & varnode_flags::PROTO_PARTIAL) != 0
+    }
+    /// Mark as proto-partial. (varnode.hh:329)
+    pub fn set_proto_partial(&mut self) {
+        self.flags |= varnode_flags::PROTO_PARTIAL;
+    }
+    /// Clear proto-partial. (varnode.hh:330)
+    pub fn clear_proto_partial(&mut self) {
+        self.flags &= !varnode_flags::PROTO_PARTIAL;
+    }
+
+    /// Is this varnode a pointer-flow tracking varnode? (varnode.hh:260)
+    /// Uses addlflags (ptrflow), not the main flags field.
+    pub fn is_ptr_flow(&self) -> bool {
+        (self.addlflags & addl_flags::PTR_FLOW) != 0
+    }
+    /// Mark as pointer-flow. (varnode.hh:317)
+    pub fn set_ptr_flow(&mut self) {
+        self.addlflags |= addl_flags::PTR_FLOW;
+    }
+    /// Clear pointer-flow. (varnode.hh:318)
+    pub fn clear_ptr_flow(&mut self) {
+        self.addlflags &= !addl_flags::PTR_FLOW;
+    }
+
+    /// Is this varnode marked as an indirect creation? (varnode.hh:248)
+    pub fn is_indirect_creation(&self) -> bool {
+        (self.flags & varnode_flags::INDIRECT_CREATION) != 0
+    }
+
+    /// Get the datatype of this varnode. (varnode.hh:192)
+    pub fn get_type(&self) -> Option<Arc<Datatype>> {
+        self.v_type.clone()
+    }
+
     /// Is the high-level variable tied to an address? (varnode.hh:250)
     /// Ghidra: (flags & (addrtied|insert)) == (addrtied|insert).
     pub fn is_addr_tied(&self) -> bool {
@@ -468,6 +557,56 @@ impl Varnode {
             Some(live.into_iter().next().unwrap())
         } else {
             None
+        }
+    }
+
+    /// Characterize the storage overlap between this varnode and `op`.
+    /// Faithful to `Varnode::characterizeOverlap` (varnode.cc:155-170).
+    /// Returns: 0 = no overlap, 1 = partial overlap, 2 = identical storage.
+    pub fn characterize_overlap(&self, other: &Varnode) -> i32 {
+        // Different address spaces => no overlap.
+        if self.address_space != other.address_space {
+            return 0;
+        }
+        let s_off = self.get_offset();
+        let o_off = other.get_offset();
+        let s_end = s_off.wrapping_add(self.get_size() as u64);
+        let o_end = o_off.wrapping_add(other.get_size() as u64);
+        // Same left boundary
+        if s_off == o_off {
+            return if self.get_size() == other.get_size() { 2 } else { 1 };
+        }
+        // Check whether the ranges overlap at all: one range must start within
+        // the other's [start, end) extent.
+        if s_off < o_off {
+            // this starts before other; overlap iff this's end > other's start
+            if s_end > o_off { 1 } else { 0 }
+        } else {
+            // other starts before this; overlap iff other's end > this's start
+            if o_end > s_off { 1 } else { 0 }
+        }
+    }
+
+    /// Determine containment relationship with another varnode.
+    /// Faithful to `Varnode::contains` (varnode.cc:105-116).
+    /// Returns: 0 = this fully contains op, -1 = op starts before this,
+    ///          1 = op starts within but extends past this's end,
+    ///          2 = op starts after this's end, 3 = different space.
+    pub fn contains_storage(&self, other: &Varnode) -> i32 {
+        if self.address_space != other.address_space {
+            return 3;
+        }
+        let s_off = self.get_offset();
+        let o_off = other.get_offset();
+        let s_end = s_off.wrapping_add(self.get_size() as u64);
+        let o_end = o_off.wrapping_add(other.get_size() as u64);
+        if o_off < s_off {
+            -1
+        } else if o_off < s_end {
+            // op starts within this's range
+            if o_end <= s_end { 0 } else { 1 }
+        } else {
+            2
         }
     }
 

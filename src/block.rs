@@ -203,6 +203,70 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn add_to_dom_frontier(&mut self, _idx: i32) {}
     fn clear_dom_frontier(&mut self) {}
 
+    /// Reverse-index of the given incoming edge slot — i.e. the index of
+    /// `this` in the source block's outgoing list. Faithful to
+    /// `FlowBlock::getInRevIndex` (block.hh:308).
+    fn get_in_rev_index(&self, _slot: usize) -> i32 {
+        -1
+    }
+
+    // ---- Dominance queries (block.hh:310, block.cc:386-395) ----
+
+    /// Does this block dominate `other`? Walk `other`'s dominator chain up
+    /// until we hit `self`. Faithful to `FlowBlock::dominates` (block.cc:386).
+    fn dominates(&self, other: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
+        let self_idx = self.get_index();
+        let mut cur = other.clone();
+        loop {
+            let (cur_idx, parent) = {
+                let g = cur.read().unwrap();
+                let idx = g.get_index();
+                let dom = g.get_immed_dom().and_then(|w| w.upgrade());
+                (idx, dom)
+            };
+            if cur_idx == self_idx && self_idx >= 0 {
+                return true;
+            }
+            match parent {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+    }
+
+    // ---- CBRANCH true/false out-edge helpers ----
+    // In Rugra, a CBRANCH's out-edges are ordered [branch(taken), fallthru].
+    // Ghidra orders them [false, true]. The BOOLEAN_FLIP flag remaps:
+    //   flip=false → true=out[0] (branch), false=out[1] (fallthru)
+    //   flip=true  → true=out[1] (fallthru), false=out[0] (branch)
+    // These helpers encapsulate that remap so ported Rules needn't repeat it.
+
+    /// Get the CBRANCH TRUE out-edge of this block, or None.
+    /// `cbranch` is the block's terminal CBRANCH op.
+    fn get_true_out(
+        &self,
+        cbranch: &PcodeOpRef,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        let flip = (cbranch.0.read().unwrap().flags
+            & crate::op::pcodeop_flags::BOOLEAN_FLIP)
+            != 0;
+        let true_idx = if flip { 1 } else { 0 };
+        self.get_out(true_idx).map(|e| e.point)
+    }
+
+    /// Get the CBRANCH FALSE out-edge of this block, or None.
+    fn get_false_out(
+        &self,
+        cbranch: &PcodeOpRef,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        let flip = (cbranch.0.read().unwrap().flags
+            & crate::op::pcodeop_flags::BOOLEAN_FLIP)
+            != 0;
+        let false_idx = if flip { 0 } else { 1 };
+        self.get_out(false_idx).map(|e| e.point)
+    }
+
+
     // ---- Mark / visit-count / edge-flag accessors (Ghidra block.hh:286-347) ----
     // These underpin LoopBody's body collection, exit detection, and TraceDAG
     // bounds. Defaults are no-ops; BlockBasic overrides them.
@@ -235,6 +299,80 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// removes `begin` from `end`'s intothis list. Used by ruleBlockGoto
     /// consumption to make the goto source invisible to the target's sizeIn.
     fn remove_in_edge_from(&mut self, _exclude_indices: &[i32]) {}
+}
+
+/// Find the CBRANCH that controls two block/edge paths.
+/// Faithful to `FlowBlock::findCondition` (block.cc:839-858).
+///
+/// Given `bl1` reached via its `edge1`-th in-edge, and `bl2` reached via its
+/// `edge2`-th in-edge, walk both in-chains up to the common 2-out (decision)
+/// block that dominates both. Returns `(cond_block, slot1)` where `slot1` is
+/// `bl1`'s rev-in-edge index into the condition block, or `None` if the paths
+/// don't share a single decision point.
+pub fn find_condition(
+    bl1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    edge1: usize,
+    bl2: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    edge2: usize,
+) -> Option<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, i32)> {
+    let cond1 = {
+        let rg = bl1.read().unwrap();
+        rg.get_in(edge1).map(|e| e.point)
+    };
+    let mut cond = cond1?;
+    // Walk bl1's in-chain up to a 2-out decision block.
+    loop {
+        let cond_rg = cond.read().unwrap();
+        let nout = cond_rg.size_out();
+        if nout == 2 {
+            break;
+        }
+        if nout != 1 {
+            return None;
+        }
+        let next = cond_rg.get_in(0).map(|e| e.point);
+        drop(cond_rg);
+        // bl1 becomes cond, edge1=0, cond = cond's in(0)
+        let new_cond = match next {
+            Some(p) => p,
+            None => return None,
+        };
+        // bl1 = cond (for rev-index below), but we need the original bl1's
+        // rev-index into the FINAL cond — Ghidra defers that to the end.
+        cond = new_cond;
+    }
+
+    // Now walk bl2's in-chain up to `cond`.
+    let mut cur_bl2 = bl2.clone();
+    let mut cur_edge2 = edge2;
+    loop {
+        let bl2_in = {
+            let rg = cur_bl2.read().unwrap();
+            rg.get_in(cur_edge2).map(|e| e.point)
+        };
+        let bl2_pred = match bl2_in {
+            Some(p) => p,
+            None => return None,
+        };
+        if Arc::ptr_eq(&bl2_pred, &cond) {
+            break;
+        }
+        let bl2_pred_rg = bl2_pred.read().unwrap();
+        if bl2_pred_rg.size_out() != 1 {
+            return None;
+        }
+        drop(bl2_pred_rg);
+        cur_bl2 = bl2_pred;
+        cur_edge2 = 0;
+    }
+
+    // slot1 = bl1's rev-in-edge index into cond.
+    // bl1 here is the original bl1 passed in; get_in_rev_index(edge1).
+    let slot1 = {
+        let rg = bl1.read().unwrap();
+        rg.get_in_rev_index(edge1)
+    };
+    Some((cond, slot1))
 }
 
 /// Represents a basic block of P-code operations
@@ -399,6 +537,9 @@ impl FlowBlock for BlockBasic {
     }
     fn clear_dom_frontier(&mut self) {
         self.dom_frontier.clear();
+    }
+    fn get_in_rev_index(&self, slot: usize) -> i32 {
+        self.incoming.get(slot).map(|e| e.reverse_index).unwrap_or(-1)
     }
 
     // ---- LoopBody mark / visit-count / edge-flag overrides ----

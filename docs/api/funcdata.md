@@ -764,3 +764,6 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-06-29（续 8）：inject_raw_ops varnode 去重
 - `inject_raw_ops` 创建非 Const input varnode 时，改用 `vbank.find_or_create_input_space(size, space, offset)`（替代 `create_with_space`）。这让同地址的 input varnode 共享身份（对齐 Ghidra xref 去重），descend 累积所有 reader。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
+
+### 2026-07-01：TYPE_RECOVERY_START flag
+- `funcdata_flags::TYPE_RECOVERY_START`（funcdata.hh:90）+ `has_type_recovery_started()/set_type_recovery_started()`（funcdata.hh:151）。标记类型恢复已开始，Rule 据此决定 type-based 守卫是否生效。

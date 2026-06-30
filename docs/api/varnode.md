@@ -680,3 +680,14 @@
 - `VarnodeBank::find_by_loc(size, loc) -> Option<Arc<Varnode>>` — 空间查找辅助：扫描 loc_tree 找任意 (size, loc) 匹配的 varnode（忽略 create_index），返回 create_index 最大者。用于 G3 诊断时桥接断链的 use-def（实验性，当前未被主管线调用）。
 ### 2026-06-27（续）：is_auto_live（解锁 RuleEarlyRemoval）
 - @is_auto_live() -> bool@ 对齐 @Varnode::isAutoLive@（varnode.hh）：保守返回 false（AUTOLIVE_HOLD 设置机制未移植，无 varnode 被标记）。is_indirect_source 才是空 varnode 的真修复。
+
+### 2026-07-01：Ghidra flag accessor + 几何 API（解锁 ~20 Rule TODO）
+- `is_addr_force/set_addr_force/clear_addr_force`（varnode.hh:251/307-308）— ADDRFORCE flag。
+- `is_type_lock/is_name_lock`（varnode.hh:299-300）— TYPELOCK/NAMELOCK flag。
+- `is_precis_lo/is_precis_hi` + set/clear（varnode.hh:275-276/321-324）— PRECISLO/PRECISHI flag。解锁 RulePullsubMulti/Indirect/SubCommute/SubNormal 的 omitted 守卫。
+- `is_proto_partial` + set/clear（varnode.hh:258/329-330）— PROTO_PARTIAL flag。解锁 RulePieceStructure。
+- `is_ptr_flow` + set/clear（varnode.hh:260/317-318）— addlflags PTR_FLOW。解锁 RulePtrFlow。
+- `is_indirect_creation`（varnode.hh:248）— INDIRECT_CREATION flag 访问器。
+- `get_type`（varnode.hh:192）— 返回 v_type。解锁 RulePieceStructure 的 leaf->getType() 路径。
+- `characterize_overlap(&Varnode) -> i32`（varnode.cc:155-170）— 0=无重叠/1=部分/2=完全相同。解锁 RuleIndirectCollapse。
+- `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。

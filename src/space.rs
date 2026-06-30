@@ -27,6 +27,10 @@ pub const SPACEID_CONST: SpaceId = 3;
 pub const SPACEID_STACK: SpaceId = 4;
 pub const SPACEID_JOIN: SpaceId = 5;
 pub const SPACEID_OVERLAY: SpaceId = 6;
+/// Internal "iop" space: varnodes that reference another PcodeOp (Ghidra
+/// `IPTR_IOP`, space.hh:35). Used by INDIRECT creation to point at the
+/// effect-producing op.
+pub const SPACEID_IOP: SpaceId = 7;
 
 /// Address space in which a varnode resides
 ///
@@ -53,6 +57,8 @@ pub enum AddressSpace {
     Stack,
     /// Join space (for combining multiple spaces)
     Join,
+    /// Internal iop space — varnodes referencing a PcodeOp (Ghidra IPTR_IOP).
+    Iop,
     /// Overlay space
     Overlay,
     /// Other/custom address space
@@ -69,6 +75,7 @@ impl AddressSpace {
             AddressSpace::Const => SPACEID_CONST,
             AddressSpace::Stack => SPACEID_STACK,
             AddressSpace::Join => SPACEID_JOIN,
+            AddressSpace::Iop => SPACEID_IOP,
             AddressSpace::Overlay => SPACEID_OVERLAY,
             AddressSpace::Other(id) => *id,
         }
@@ -83,6 +90,7 @@ impl AddressSpace {
             SPACEID_CONST => AddressSpace::Const,
             SPACEID_STACK => AddressSpace::Stack,
             SPACEID_JOIN => AddressSpace::Join,
+            SPACEID_IOP => AddressSpace::Iop,
             SPACEID_OVERLAY => AddressSpace::Overlay,
             id => AddressSpace::Other(id),
         }
@@ -113,6 +121,12 @@ impl AddressSpace {
         matches!(self, AddressSpace::Stack)
     }
 
+    /// Check if this is the internal iop space (references a PcodeOp).
+    /// Ghidra: `getSpaceType()==IPTR_IOP` (space.hh:35).
+    pub fn is_iop(&self) -> bool {
+        matches!(self, AddressSpace::Iop)
+    }
+
     /// Check if this is a big-endian space
     pub fn is_big_endian(&self) -> bool {
         // Default to false, can be overridden per architecture
@@ -125,7 +139,7 @@ impl AddressSpace {
             AddressSpace::Register | AddressSpace::Ram | AddressSpace::Stack => 1,
             AddressSpace::Unique => 1,
             AddressSpace::Const => 1,
-            AddressSpace::Join | AddressSpace::Overlay | AddressSpace::Other(_) => 1,
+            AddressSpace::Join | AddressSpace::Iop | AddressSpace::Overlay | AddressSpace::Other(_) => 1,
         }
     }
 
@@ -144,6 +158,7 @@ impl AddressSpace {
             AddressSpace::Const => "const",
             AddressSpace::Stack => "stack",
             AddressSpace::Join => "join",
+            AddressSpace::Iop => "iop",
             AddressSpace::Overlay => "overlay",
             AddressSpace::Other(_) => "other",
         }
@@ -159,6 +174,7 @@ impl fmt::Display for AddressSpace {
             AddressSpace::Const => write!(f, "const"),
             AddressSpace::Stack => write!(f, "stack"),
             AddressSpace::Join => write!(f, "join"),
+            AddressSpace::Iop => write!(f, "iop"),
             AddressSpace::Overlay => write!(f, "overlay"),
             AddressSpace::Other(id) => write!(f, "space{}", id),
         }
