@@ -821,3 +821,43 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - `RuleShiftPiece` — 检测 `(zext(V) << #sa) | zext(V)` 并转换为 PIECE。也处理 CDQ 特殊情况（INT_SRIGHT 形成高位 → INT_SEXT）。两条路径均为纯数据流，无需块结构。
 - 触发于 CPUI_INT_OR/INT_XOR/INT_ADD。注册进 oppool1（5549）。
 - 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+
+### 2026-07-01：oppool1 + cleanup 池大批补缺 Rule（21 条 + DivOpt 修复）
+
+**Bug 修复**：
+- `RuleDivOpt`（ruleaction.cc:8295）：补上 signed-division 路径缺失的 `moveSignBitExtraction` 调用（Ghidra ruleaction.cc:8335）。忠实移植 `moveSignBitExtraction`(8210-8253) 为 `move_sign_bit_extraction` + 辅助 `resolve_shift_const`。
+
+**cleanup 池新增（coreaction.cc:5696-5708）**：
+- `RuleAddUnsigned`(7200) — INT_ADD，`V+0xff..⇒V-0x00..`（数值变换 1:1）
+- `RuleSubRight`(7269) — INT_SUB，sub right 规范化（含 lone-shift lump）
+- `RuleFloatSignCleanup`(10789) — floatSignManipulation 1:1
+- `RuleExpandLoad`(10937) — helpers(checkAndComparison/modifyAndComparison) 1:1；applyOp 标 TODO（需 pointer datatype）
+- `RulePtrsubCharConstant`(7372) — pushConstFurther helper 1:1；applyOp 标 TODO（需 TYPE_SPACEBASE/Scope/stringManager）
+- `RuleExtensionPush`(7435) — descendant-count guard 1:1；duplicateNeed 标 TODO
+- `RulePieceStructure`(7625) — helpers(determineDatatype/spanningRange/convertZextToPiece) 占位 1:1；applyOp 标 TODO（需 structured types）
+
+**oppool1 独立族新增**：
+- `RulePullsubIndirect`(962) — 可触发非 creation 分支（复用 RulePullsubMulti helpers）；indirect-creation/iop 分支标 TODO
+- `RuleIndirectCollapse`(3177) — 标 TODO（需 iop-space coderef + characterizeOverlap）
+- `RuleTransformCpool`(3915) — 标 TODO（Funcdata 无 get_arch/cpool accessor）
+- `RuleSwitchSingle`(5430) — 标 TODO（需 findJumpTable/getStructure）
+- `RuleNegateNegate`(9258) — **完全可触发**（`~~V⇒V`）
+- `RuleConditionalMove`(9390) — checkBoolean helper 1:1；applyOp 标 TODO（需 block graph）
+- `RuleFuncPtrEncoding`(9926) — 标 TODO（Funcdata 无 get_arch/funcptr_align）
+- `RuleIgnoreNan`(9740) — 标 TODO（需 nan_ignore_all + block 查询）
+- `RuleUnsigned2Float`(9795) — **可触发**（pattern+变换 1:1）
+- `RuleInt2FloatCollapse`(9863) — 标 TODO（需 FlowBlock::findCondition）
+- `RulePtraddUndo`(6927) — 标 TODO（需 hasTypeRecoveryStarted + opUndoPtradd）
+- `RulePtrsubUndo`(7146) — **4 helper(getConstOffsetBack/getExtraOffset/removeLocalAddRecurse/removeLocalAdds) 1:1 完全移植**；applyOp 标 TODO（需 isPtrsubMatching）
+- `RuleSegment`(9013) — 标 TODO（需 SegmentOp/userops）
+- `RulePiecePathology`(10578) — 标 TODO（需 isInput/isPersist + bytes-consumed API）
+
+验证：832/832 测试（新增 13），curl 24/24 无回归。
+
+**基础设施缺口（TODO 清单，均已在代码注释标注，未绕过）**：
+1. Varnode 数据类型系统（get_type_read_facing/TYPE_UINT/TYPE_FLOAT/isCharPrint 等）
+2. Funcdata 无 `get_arch()` 访问器（影响 TransformCpool/FuncPtrEncoding/IgnoreNan）
+3. iop-space / coderef 解析缺失（影响 IndirectCollapse/PullsubIndirect）
+4. block graph 访问（影响 ConditionalMove/Int2FloatCollapse/IgnoreNan 的 CBRANCH 路径）
+5. Varnode flag/overlap API（isAddrForce/isTypeLock/isPrecisLo/Hi 等）
+6. Funcdata 高级 op API（opUndoPtradd/newIndirectCreation/newVarnodeIop 等）

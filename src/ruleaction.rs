@@ -8243,6 +8243,97 @@ impl RuleDivOpt {
         }
         false
     }
+
+    /// Faithful to `moveSignBitExtraction` (ruleaction.cc:8210-8253).
+    ///
+    /// `first_vn` is the (intermediate) output of the new INT_SDIV/INT_ADD op
+    /// whose sign-bit we want to reuse; `replace_vn` is the canonical sign-bit
+    /// source (the unextended dividend `inVn`). Walk the descendants of
+    /// `first_vn` (and, if `first_vn` is itself an INT_SRIGHT, the value it
+    /// shifts) and rewrite any redundant sign-bit extraction
+    /// `(V >> (size*8-1))` to read `replace_vn` instead.
+    fn move_sign_bit_extraction(
+        first_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        replace_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
+    ) {
+        use std::sync::Arc;
+        // Build the initial test list: firstVn, plus (if firstVn is written by
+        // an INT_SRIGHT) the value being shifted.
+        let mut test_list: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = vec![first_vn.clone()];
+        if first_vn.read().unwrap().is_written() {
+            if let Some(def) = first_vn.read().unwrap().get_def() {
+                if def.read().unwrap().opcode == OpCode::CPUI_INT_SRIGHT {
+                    if let Some(shifted) = def.read().unwrap().get_in(0).cloned() {
+                        test_list.push(shifted);
+                    }
+                }
+            }
+        }
+
+        let mut i = 0usize;
+        while i < test_list.len() {
+            let vn = test_list[i].clone();
+            i += 1;
+            // Collect descendants up-front so we can mutate them freely.
+            let descends: Vec<Arc<std::sync::RwLock<PcodeOp>>> = vn.read().unwrap().descend_iter().collect();
+            for op_arc in descends {
+                let opc = op_arc.read().unwrap().opcode;
+                if opc == OpCode::CPUI_INT_RIGHT || opc == OpCode::CPUI_INT_SRIGHT {
+                    // Resolve the (possibly wrapped) constant shift amount.
+                    let const_vn_opt = resolve_shift_const(&op_arc);
+                    if let Some(cvn) = const_vn_opt {
+                        if cvn.read().unwrap().is_constant() {
+                            let sa = first_vn.read().unwrap().get_size() as i32 * 8 - 1;
+                            if sa == cvn.read().unwrap().get_offset() as i32 {
+                                let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+                                fd.op_set_input(&op_ref, replace_vn.clone(), 0);
+                            }
+                        }
+                    }
+                } else if opc == OpCode::CPUI_COPY {
+                    // A COPY of vn extends the test list with its output.
+                    if let Some(out) = op_arc.read().unwrap().output.clone() {
+                        test_list.push(out);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resolve the (possibly wrapped) constant operand for an INT_RIGHT/INT_SRIGHT
+/// shift, as used by `RuleDivOpt::move_sign_bit_extraction`. Faithful to the
+/// in-body constant unwrapping (ruleaction.cc:8223-8243).
+///
+/// Walks the second input of the shift op. If that input is itself written by a
+/// COPY, returns the copied value; if written by an `INT_AND(c0, c1)` (with `c1`
+/// constant and `c0 & c1 == c0`), returns `c0`; otherwise returns the input as-is.
+fn resolve_shift_const(
+    shift_op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    let mut const_vn = shift_op.read().unwrap().get_in(1).cloned()?;
+    if !const_vn.read().unwrap().is_written() {
+        return Some(const_vn);
+    }
+    let const_op = const_vn.read().unwrap().get_def()?;
+    let const_opc = const_op.read().unwrap().opcode;
+    if const_opc == OpCode::CPUI_COPY {
+        const_vn = const_op.read().unwrap().get_in(0).cloned()?;
+    } else if const_opc == OpCode::CPUI_INT_AND {
+        let c0 = const_op.read().unwrap().get_in(0).cloned()?;
+        let other = const_op.read().unwrap().get_in(1).cloned()?;
+        if !other.read().unwrap().is_constant() {
+            return Some(const_vn);
+        }
+        let off = c0.read().unwrap().get_offset();
+        let mask = other.read().unwrap().get_offset();
+        if off != (off & mask) {
+            return Some(const_vn);
+        }
+        const_vn = c0;
+    }
+    Some(const_vn)
 }
 
 impl Rule for RuleDivOpt {
@@ -8275,7 +8366,7 @@ impl Rule for RuleDivOpt {
             let res_vn = fd.new_unique_out(in_vn.read().unwrap().get_size(), &new_op);
             fd.op_insert_before(&new_op, &op_ref);
             fd.op_set_opcode(&op_ref, OpCode::CPUI_SUBPIECE);
-            fd.op_set_input(&op_ref, res_vn, 0);
+            fd.op_set_input(&op_ref, res_vn.clone(), 0);
             let z = fd.new_constant(4, 0);
             fd.op_set_input(&op_ref, z, 1);
             // Main transform now changes new_op.
@@ -8286,6 +8377,9 @@ impl Rule for RuleDivOpt {
                 fd.op_set_input(&new_op, div_vn, 1);
             } else {
                 // Signed: INT_SDIV + sign correction.
+                // Faithful to moveSignBitExtraction call (ruleaction.cc:8335):
+                // op is now new_op, op->getOut() is res_vn, inVn is in_vn.
+                Self::move_sign_bit_extraction(&res_vn, &in_vn, fd);
                 let divop = fd.new_op(2, addr);
                 fd.op_set_opcode(&divop, OpCode::CPUI_INT_SDIV);
                 let new_out = fd.new_unique_out(out_size, &divop);
@@ -8314,6 +8408,13 @@ impl Rule for RuleDivOpt {
             fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_DIV);
         } else {
             // Signed: INT_SDIV + sign correction.
+            // Faithful to moveSignBitExtraction call (ruleaction.cc:8335):
+            // op is the original op, op->getOut() is its output, inVn is in_vn.
+            let out_vn_orig = match op_arc.read().unwrap().output.clone() {
+                Some(o) => o,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            Self::move_sign_bit_extraction(&out_vn_orig, &in_vn, fd);
             let divop = fd.new_op(2, addr);
             fd.op_set_opcode(&divop, OpCode::CPUI_INT_SDIV);
             let new_out = fd.new_unique_out(out_size, &divop);
@@ -9693,6 +9794,1588 @@ impl Rule for RulePullsubMulti {
 
     fn get_name(&self) -> &str { "pullsub_multi" }
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
+// ============================================================================
+// Cleanup-pool rules (coreaction.cc:5696-5710). Faithful 1:1 ports of
+// ruleaction.cc.
+// ============================================================================
+
+/// Cleanup: Convert INT_ADD of constants to INT_SUB: `V + 0xff.. ⇒ V - 0x00..`
+///
+/// Faithful to `RuleAddUnsigned` (ruleaction.cc:7200-7249). When the constant
+/// being added has its high quarter of bits all set, it is more naturally
+/// printed as a subtraction of the negated (small positive) value.
+///
+/// NOTE: Ghidra consults the constant's read-facing data-type (`TYPE_UINT`,
+/// not char-print, enum/equate name-locks). Rugra does not yet track
+/// per-Varnode data-types or SymbolEntry/EquateSymbol, so those guards are
+/// approximated: the rule applies the numeric transform whenever the high
+/// quarter bits are set, with the type/equate checks marked TODO.
+pub struct RuleAddUnsigned;
+
+impl RuleAddUnsigned {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleAddUnsigned {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleAddUnsigned::applyOp (ruleaction.cc:7200-7249).
+        let constvn = {
+            let op = op_arc.read().unwrap();
+            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        if !constvn.read().unwrap().is_constant() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // TODO(datatype): Ghidra reads constvn->getTypeReadFacing(op) and
+        //   requires metatype==TYPE_UINT and !isCharPrint(). It also skips
+        //   name-locked EquateSymbol and adjusts for named enum values.
+        //   Rugra lacks Varnode data-type / SymbolEntry, so these guards are
+        //   omitted; the numeric transform below is otherwise 1:1.
+        let size = constvn.read().unwrap().get_size();
+        let val = constvn.read().unwrap().get_offset();
+        let mask = calc_mask(size);
+        let sa = size * 6; // 1/4 less than full bitsize
+        let quarter = (mask >> sa) << sa;
+        if (val & quarter) != quarter {
+            return Ok(action_status::NO_CHANGE); // The first quarter of bits must all be 1's
+        }
+        let negated_val = val.wrapping_neg() & mask;
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SUB);
+        let cvn = fd.new_constant(size, negated_val);
+        // TODO(datatype): cvn->copySymbol(constvn) — Rugra lacks symbol copy.
+        fd.op_set_input(&op_ref, cvn, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "add_unsigned" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
+}
+
+/// Cleanup: Convert truncation to cast: `sub(V,c) ⇒ sub(V>>c*8,0)`.
+///
+/// Faithful to `RuleSubRight` (ruleaction.cc:7269-7339). If the lone descendant
+/// of the SUBPIECE is an INT_RIGHT/INT_SRIGHT by a constant, the shift and the
+/// SUBPIECE are lumped together. The SUBPIECE is then rewritten to extract the
+/// least-significant bytes of the shifted value.
+///
+/// NOTE: The `doesSpecialPrinting` / `isPieceStructured` guards and the
+/// addr-tied overlap check require data-type/mark APIs not present in Rugra;
+/// those guards are marked TODO and the numeric transform is otherwise 1:1.
+pub struct RuleSubRight;
+
+impl RuleSubRight {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSubRight {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSubRight::applyOp (ruleaction.cc:7269-7339).
+        // TODO(datatype): skip op->doesSpecialPrinting() and the
+        //   getTypeReadFacing()->isPieceStructured() special-print marker.
+        let (c, a, outvn) = {
+            let op = op_arc.read().unwrap();
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let c = in1.read().unwrap().get_offset() as i32;
+            let a = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            (c, a, outvn)
+        };
+        if c == 0 { return Ok(action_status::NO_CHANGE); } // SUBPIECE is not least sig
+        // TODO(addrtied): Ghidra checks outvn->isAddrTied() && a->isAddrTied()
+        //   && outvn->overlap(*a)==c to leave the op for ActionCopyMarker.
+        let mut opc = OpCode::CPUI_INT_RIGHT; // Default shift type
+        let mut d = c * 8; // Convert to bit shift
+        let mut working_op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // Search for lone right shift descendant and lump it in.
+        let mut lumped = false;
+        if let Some(lone) = outvn.read().unwrap().lone_descend() {
+            let opc2 = lone.read().unwrap().opcode;
+            if opc2 == OpCode::CPUI_INT_RIGHT || opc2 == OpCode::CPUI_INT_SRIGHT {
+                let shift_c = lone.read().unwrap().get_in(1).cloned();
+                if let Some(cv) = shift_c {
+                    if cv.read().unwrap().is_constant() {
+                        if outvn.read().unwrap().get_size() as i32 + c == a.read().unwrap().get_size() as i32 {
+                            // SUB is "hi": lump the SUB and shift together
+                            d += cv.read().unwrap().get_offset() as i32;
+                            let a_size_bits = a.read().unwrap().get_size() as i32 * 8;
+                            if d >= a_size_bits {
+                                if opc2 == OpCode::CPUI_INT_RIGHT {
+                                    return Ok(action_status::NO_CHANGE); // Result should have been 0
+                                }
+                                d = a_size_bits - 1; // sign extraction
+                            }
+                            // opUnlink(op); op = lone; opSetOpcode(op,SUBPIECE); opc = opc2;
+                            fd.op_unset_input(&working_op_ref, 0); // unlink this op's inputs
+                            working_op_ref = crate::op::PcodeOpRef(lone);
+                            fd.op_set_opcode(&working_op_ref, OpCode::CPUI_SUBPIECE);
+                            opc = opc2;
+                            lumped = true;
+                        }
+                    }
+                }
+            }
+        }
+        // Create shift BEFORE the SUBPIECE happens.
+        let a_size = a.read().unwrap().get_size();
+        let addr = op_arc.read().unwrap().get_addr();
+        let shiftop = fd.new_op(2, addr);
+        fd.op_set_opcode(&shiftop, opc);
+        // TODO(datatype): Ghidra attaches a TYPE_UINT/TYPE_INT base type to the
+        //   new output via data.getArch()->types->getBase(...). Rugra uses a plain unique.
+        let newout = fd.new_unique_out(a_size, &shiftop);
+        fd.op_set_input(&shiftop, a, 0);
+        let shift_const = fd.new_constant(4, d as u64);
+        fd.op_set_input(&shiftop, shift_const, 1);
+        fd.op_insert_before(&shiftop, &working_op_ref);
+
+        // Change SUBPIECE into a least sig SUBPIECE
+        fd.op_set_input(&working_op_ref, newout, 0);
+        let zero_const = fd.new_constant(4, 0);
+        fd.op_set_input(&working_op_ref, zero_const, 1);
+        let _ = lumped;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "sub_right" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
+/// Simplify INT_NEGATE chains: `~~V ⇒ V`.
+///
+/// Faithful to `RuleNegateNegate` (ruleaction.cc:9258-9271).
+pub struct RuleNegateNegate;
+
+impl RuleNegateNegate {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleNegateNegate {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleNegateNegate::applyOp (ruleaction.cc:9258-9271).
+        let vn1 = {
+            let op = op_arc.read().unwrap();
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+        };
+        if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let neg2 = match vn1.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if neg2.read().unwrap().opcode != OpCode::CPUI_INT_NEGATE {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let vn2 = match neg2.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if vn2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_input(&op_ref, vn2, 0);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "negate_negate" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEGATE] }
+}
+
+/// Cleanup: Convert floating-point sign-bit manipulation into FLOAT_ABS/FLOAT_NEG.
+///
+/// Faithful to `RuleFloatSignCleanup` (ruleaction.cc:10789-10802). Recognises
+/// the canonical sign-bit masks via `TypeOp::floatSignManipulation` and, when
+/// the output is floating-point, rewrites the INT_AND/INT_XOR into the
+/// corresponding FLOAT_ABS / FLOAT_NEG (single-input) op.
+pub struct RuleFloatSignCleanup;
+
+impl RuleFloatSignCleanup {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `TypeOp::floatSignManipulation` (op.cc). Given the mask
+    /// constant of an INT_AND/INT_XOR over a float-sized value, return the
+    /// FLOAT_* opcode it represents, or CPUI_MAX.
+    fn float_sign_manipulation(mask_val: u64, size: usize, is_xor: bool) -> OpCode {
+        // Sign bit is the most significant bit of the float-sized value.
+        let sign_bit = if size >= 8 { 0x8000_0000_0000_0000u64 } else { 1u64 << (size * 8 - 1) };
+        let all_ones = calc_mask(size);
+        if is_xor {
+            // XOR with sign bit => FLOAT_NEG
+            if mask_val == sign_bit { return OpCode::CPUI_FLOAT_NEG; }
+        } else {
+            // INT_AND:
+            //   mask = ~sign_bit  => FLOAT_ABS  (clears sign bit)
+            //   mask = sign_bit   => test only (no canonical float op)
+            if mask_val == (all_ones & !sign_bit) { return OpCode::CPUI_FLOAT_ABS; }
+        }
+        OpCode::CPUI_MAX
+    }
+}
+
+impl Rule for RuleFloatSignCleanup {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleFloatSignCleanup::applyOp (ruleaction.cc:10789-10802).
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // Ghidra: if (op->getOut()->getType()->getMetatype() != TYPE_FLOAT) return 0;
+        // TODO(datatype): Rugra Varnode has no TYPE_FLOAT metatype. We accept
+        //   float-sized (4 or 8 byte) outputs as the heuristic; this is the
+        //   only deviation and is localised here.
+        let out_size = outvn.read().unwrap().get_size();
+        if out_size != 4 && out_size != 8 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let is_xor = op_arc.read().unwrap().opcode == OpCode::CPUI_INT_XOR;
+        let maskvn = match op_arc.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !maskvn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        let mask_val = maskvn.read().unwrap().get_offset();
+        let opc = Self::float_sign_manipulation(mask_val, out_size, is_xor);
+        if opc == OpCode::CPUI_MAX { return Ok(action_status::NO_CHANGE); }
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&op_ref, 1);
+        fd.op_set_opcode(&op_ref, opc);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "float_sign_cleanup" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_XOR] }
+}
+
+/// Cleanup: Set-up to print string constants.
+///
+/// Faithful to `RulePtrsubCharConstant` (ruleaction.cc:7372-7421) plus its
+/// `pushConstFurther` helper (ruleaction.cc:7341-7358). When a PTRSUB over a
+/// TYPE_SPACEBASE refers to a read-only, string-looking address whose output is
+/// a (char *), the PTRSUB is converted to a COPY of a string pointer constant
+/// (and descendant PTRADDs are collapsed).
+///
+/// NOTE: This rule fundamentally depends on the type system
+/// (TYPE_SPACEBASE / Scope / isReadOnly / stringManager) which Rugra does not
+/// yet expose on Funcdata. The transform structure is ported 1:1; the type/scope
+/// guards are marked TODO and currently cause the rule to no-op until those
+/// APIs land.
+pub struct RulePtrsubCharConstant;
+
+impl RulePtrsubCharConstant {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `pushConstFurther` (ruleaction.cc:7341-7358). Given a
+    /// descendant PTRADD of the collapsed constant, fold the PTRADD's constant
+    /// index into the pointer value and turn the PTRADD into a COPY.
+    fn push_const_further(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        val: u64,
+    ) -> bool {
+        if op.0.read().unwrap().opcode != OpCode::CPUI_PTRADD { return false; }
+        if slot != 0 { return false; }
+        let (vn_in1, vn_in2_offset) = {
+            let o = op.0.read().unwrap();
+            let vn = match o.get_in(1) { Some(v) => v.clone(), None => return false };
+            if !vn.read().unwrap().is_constant() { return false; }
+            let mult_vn = match o.get_in(2) { Some(v) => v.clone(), None => return false };
+            let mult_offset = mult_vn.read().unwrap().get_offset();
+            (vn, mult_offset)
+        };
+        let addval = vn_in1.read().unwrap().get_offset();
+        let addval = addval.wrapping_mul(vn_in2_offset);
+        let val = val.wrapping_add(addval);
+        let newconst = fd.new_constant(vn_in1.read().unwrap().get_size(), val);
+        // TODO(datatype): newconst->updateType(outtype) — pointer datatype.
+        fd.op_remove_input(op, 2);
+        fd.op_remove_input(op, 1);
+        fd.op_set_opcode(op, OpCode::CPUI_COPY);
+        fd.op_set_input(op, newconst, 0);
+        true
+    }
+}
+
+impl Rule for RulePtrsubCharConstant {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7372-7421).
+        let (sb, vn1, outvn) = {
+            let op = op_arc.read().unwrap();
+            let sb = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            (sb, vn1, outvn)
+        };
+        if !vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        // TODO(datatype): sbType = sb->getTypeReadFacing(op); require TYPE_PTR to
+        //   TYPE_SPACEBASE; outvn must be (char *) with basetype isCharPrint();
+        //   sbtype->getAddress(...)/scope->isReadOnly(...); and
+        //   data.getArch()->stringManager->isString(...). None available in
+        //   Rugra, so the rule cannot currently fire. The full 1:1 transform
+        //   (pushConstFurther over descendants → COPY / opDestroy) is implemented
+        //   in push_const_further above and would be invoked here once those
+        //   type/scope guards can be evaluated.
+        let _ = (sb, vn1, outvn);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "ptrsub_char_constant" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
+}
+
+/// Cleanup: Duplicate INT_ZEXT/INT_SEXT when the result feeds multiple pointer
+/// calculations, so the extension becomes an implied cast per use.
+///
+/// Faithful to `RuleExtensionPush` (ruleaction.cc:7435-7476). Counts INT_ADD /
+/// PTRADD descendants; if more than one qualifying pointer calc exists, the
+/// extension op is duplicated to each descendant via `RulePushPtr::duplicateNeed`.
+///
+/// NOTE: Requires `isAddrForce` / `isAddrTied` / `isTypeLock` / `isNameLock`
+/// Varnode APIs and `RulePushPtr::duplicateNeed`, none of which exist in Rugra.
+/// The descendant-counting guard logic is ported 1:1; the duplication step is a
+/// TODO and the rule no-ops until `duplicateNeed` is available.
+pub struct RuleExtensionPush;
+
+impl RuleExtensionPush {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleExtensionPush {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleExtensionPush::applyOp (ruleaction.cc:7435-7476).
+        let (in_vn, out_vn) = {
+            let op = op_arc.read().unwrap();
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            (in_vn, out_vn)
+        };
+        if in_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        // TODO(addrtied/lock): skip if inVn->isAddrForce()/isAddrTied() or
+        //   outVn->isTypeLock()/isNameLock()/isAddrForce()/isAddrTied(). Rugra lacks these.
+
+        let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
+        let mut addcount = 0i32; // INT_ADD descendants feeding a lone PTRADD
+        let mut ptrcount = 0i32; // PTRADD descendants
+        for dec_op in &descends {
+            let opc = dec_op.read().unwrap().opcode;
+            if opc == OpCode::CPUI_PTRADD {
+                ptrcount += 1;
+            } else if opc == OpCode::CPUI_INT_ADD {
+                // subOp = decOp->getOut()->loneDescend(); must be PTRADD.
+                let out = match dec_op.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+                let sub_op = out.read().unwrap().lone_descend();
+                if sub_op.is_none() { return Ok(action_status::NO_CHANGE); }
+                if sub_op.unwrap().read().unwrap().opcode != OpCode::CPUI_PTRADD {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                addcount += 1;
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        if addcount + ptrcount <= 1 { return Ok(action_status::NO_CHANGE); }
+        if addcount > 0 {
+            // if op->getIn(0)->loneDescend() != null return 0
+            if in_vn.read().unwrap().lone_descend().is_some() {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // TODO(infra): RulePushPtr::duplicateNeed(op, data) — duplicate the
+        //   extension op to each descendant. Rugra has no RulePushPtr /
+        //   duplicateNeed helper, so we cannot complete the transform. No-op.
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "extension_push" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT, OpCode::CPUI_INT_SEXT] }
+}
+
+/// Cleanup: Convert LOAD size to match the pointer's data-type.
+///
+/// Faithful to `RuleExpandLoad` (ruleaction.cc:10937-11013) plus helpers
+/// `checkAndComparison` (ruleaction.cc:10878-10893) and `modifyAndComparison`
+/// (ruleaction.cc:10904-10925). Grows a LOAD's output to a larger size when it
+/// is used purely in `(load & C) == D` comparisons, or when a natural integer
+/// truncation applies.
+///
+/// NOTE: Depends on the pointer's pointed-to data-type (`getPtrTo`), AddrSpace
+/// const-space big-endian, and per-Varnode metatypes. Rugra lacks these, so the
+/// rule cannot currently fire; the helper logic is ported 1:1 and guarded by a
+/// TODO so it activates once data-types land.
+pub struct RuleExpandLoad;
+
+impl RuleExpandLoad {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `checkAndComparison` (ruleaction.cc:10878-10893). True iff
+    /// every descendant of `vn` is `INT_AND vn const` whose sole descendant is a
+    /// constant-comparison INT_EQUAL/INT_NOTEQUAL.
+    fn check_and_comparison(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
+        let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
+        if descends.is_empty() { return false; }
+        for op in descends {
+            if op.read().unwrap().opcode != OpCode::CPUI_INT_AND { return false; }
+            let c = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+            if !c.read().unwrap().is_constant() { return false; }
+            let and_out = match op.read().unwrap().output.clone() { Some(o) => o, None => return false };
+            let comp_op = match and_out.read().unwrap().lone_descend() { Some(o) => o, None => return false };
+            let opc = comp_op.read().unwrap().opcode;
+            if opc != OpCode::CPUI_INT_EQUAL && opc != OpCode::CPUI_INT_NOTEQUAL { return false; }
+            let cc = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+            if !cc.read().unwrap().is_constant() { return false; }
+        }
+        true
+    }
+
+    /// Faithful to `modifyAndComparison` (ruleaction.cc:10904-10925). Rewrites
+    /// the constants in the `(V & C) == D` forms scanned by
+    /// `check_and_comparison`: shift them left by `offset` bytes and point the
+    /// AND at the new bigger variable `new_vn`.
+    fn modify_and_comparison(
+        fd: &mut Funcdata,
+        old_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        new_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        new_size: usize,
+        offset: usize,
+    ) {
+        let shift = 8 * offset; // bytes → bits
+        let descends: Vec<_> = old_vn.read().unwrap().descend_iter().collect();
+        for and_op in descends {
+            // Find the lone compare descendant of the AND's output.
+            let comp_op = {
+                let and_out = and_op.read().unwrap().output.clone().unwrap();
+                let opt = and_out.read().unwrap().lone_descend();
+                opt.unwrap()
+            };
+            let and_ref = crate::op::PcodeOpRef(and_op.clone());
+            let comp_ref = crate::op::PcodeOpRef(comp_op.clone());
+            // AND mask constant
+            let (and_mask_off, cmp_off) = {
+                let and_rg = and_op.read().unwrap();
+                let and_mask = and_rg.get_in(1).unwrap().read().unwrap().get_offset();
+                let cmp_rg = comp_op.read().unwrap();
+                let cmp_c = cmp_rg.get_in(1).unwrap().read().unwrap().get_offset();
+                (and_mask << shift, cmp_c << shift)
+            };
+            let vn = fd.new_constant(new_size, and_mask_off);
+            // TODO(datatype): vn->updateType(dt)
+            fd.op_set_input(&and_ref, new_vn.clone(), 0);
+            fd.op_set_input(&and_ref, vn, 1);
+            // compare constant
+            let vn = fd.new_constant(new_size, cmp_off);
+            // TODO(datatype): vn->updateType(dt)
+            fd.op_set_input(&comp_ref, vn, 1);
+        }
+    }
+}
+
+impl Rule for RuleExpandLoad {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleExpandLoad::applyOp (ruleaction.cc:10937-11013).
+        let (out_vn, root_ptr) = {
+            let op = op_arc.read().unwrap();
+            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let root_ptr = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (out_vn, root_ptr)
+        };
+        let _out_size = out_vn.read().unwrap().get_size();
+        // TODO(datatype): elType = rootPtr->getTypeReadFacing(op)->getPtrTo();
+        //   require TYPE_PTR and elType->getSize() > outSize; then either the
+        //   addForm path (checkAndComparison/modifyAndComparison) or the natural
+        //   integer-truncation path. Rugra lacks Varnode data-types → cannot
+        //   determine the pointed-to element size, so the rule cannot fire.
+        //   The helper methods (check_and_comparison / modify_and_comparison)
+        //   above are ported 1:1 and would be invoked here.
+        let _ = (out_vn, root_ptr);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "expand_load" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
+}
+
+/// Cleanup: Concatenating structure pieces gets printed as explicit write
+/// statements.
+///
+/// Faithful to `RulePieceStructure` (ruleaction.cc:7625-7720) plus helpers
+/// `determineDatatype` (7481-7517), `spanningRange` (7519-7541),
+/// `convertZextToPiece` (7543-7572), `findReplaceZext` (7574-7596),
+/// `separateSymbol` (7598-7611).
+///
+/// NOTE: This rule is entirely driven by structured data-types
+/// (`getStructuredType`, `isPieceStructured`, `getSubType`, address-tied /
+/// proto-partial flags, `PieceNode::gatherPieces`, `newVarnodeOut(addr,...)`,
+/// `registerProtoPartialRoot`, `inheritResolution`). None of these are present
+/// in Rugra. The full transform structure is ported 1:1 but cannot fire until
+/// the type system lands; it currently no-ops with a TODO.
+pub struct RulePieceStructure;
+
+impl RulePieceStructure {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `determineDatatype` (ruleaction.cc:7481-7517). Returns the
+    /// structured (struct/array) data-type the varnode is part of, plus the
+    /// base offset. Currently always None (no structured-type API).
+    fn determine_datatype(
+        _vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<((), i32)> {
+        // TODO(datatype): vn->getStructuredType(); partial-offset computation
+        //   via SymbolEntry / getSubType. Rugra lacks structured data-types.
+        None
+    }
+
+    /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
+    /// range falls within a single non-structured element. Placeholder.
+    fn spanning_range(_ct: &(), _offset: i32, _size: i32) -> bool {
+        // TODO(datatype): walk getSubType chain. Rugra lacks structured types.
+        false
+    }
+
+    /// Faithful to `convertZextToPiece` (ruleaction.cc:7543-7572). Converts an
+    /// INT_ZEXT to a PIECE with a zero high constant. Returns false here as the
+    /// type-driven offset bookkeeping is unavailable.
+    fn convert_zext_to_piece(
+        _zext: &crate::op::PcodeOpRef,
+        _ct: &(),
+        _offset: i32,
+        _fd: &mut Funcdata,
+    ) -> bool {
+        // TODO(datatype): needs outvn->getSpace()->isBigEndian(), getSubType,
+        //   and invn->getType()->needsResolution()/inheritResolution.
+        false
+    }
+}
+
+impl Rule for RulePieceStructure {
+    fn apply_op(&self, _op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7720).
+        // The whole transform is data-type driven (determineDatatype →
+        // gatherPieces → findReplaceZext/convertZextToPiece → addr-tied
+        // rewrites). Rugra has no structured data-types, PieceNode tree, or
+        // proto-partial/address-tied APIs, so the rule cannot fire yet.
+        // TODO(datatype): implement once structured types / PieceNode land.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "piece_structure" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE, OpCode::CPUI_INT_ZEXT] }
+}
+
+// ============================================================================
+// oppool1 independent analysis-family rules. Faithful 1:1 ports of
+// ruleaction.cc.
+// ============================================================================
+
+/// Pull-back SUBPIECE through INDIRECT: when a SUBPIECE reads the output of an
+/// INDIRECT wrapping a (dead or resolved) op, narrow the INDIRECT to the
+/// truncated bytes.
+///
+/// Faithful to `RulePullsubIndirect` (ruleaction.cc:962-1014). Reuses the
+/// `RulePullsubMulti` helpers (minMaxUse / acceptableSize / findSubpiece /
+/// buildSubpiece / replaceDescendants).
+///
+/// NOTE: The `isIndirectCreation` branch needs `data.newIndirectCreation`,
+/// `newVarnodeIop`, and the `isPrecisLo/Hi` / `isAddrForce` Varnode flags, none
+/// of which exist in Rugra. The non-creation branch is ported 1:1; the
+/// indirect-creation branch is a TODO.
+pub struct RulePullsubIndirect;
+
+impl RulePullsubIndirect {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RulePullsubIndirect {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePullsubIndirect::applyOp (ruleaction.cc:962-1014).
+        let (vn, op_in1_offset) = {
+            let op = op_arc.read().unwrap();
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let off_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let off = off_vn.read().unwrap().get_offset();
+            (vn, off)
+        };
+        if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        // vn->getSize() > sizeof(uintb)  (8 bytes)
+        if vn.read().unwrap().get_size() > 8 { return Ok(action_status::NO_CHANGE); }
+        let indir = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if indir.read().unwrap().opcode != OpCode::CPUI_INDIRECT { return Ok(action_status::NO_CHANGE); }
+        // indir->getIn(1)->getSpace()->getType() != IPTR_IOP
+        let indir_in1 = match indir.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // TODO(iopspace): Rugra's AddressSpace has no IPTR_IOP variant, so we
+        //   cannot verify the second INDIRECT input is an iop-space coderef.
+        //   We accept any INDIRECT here; the targ_op lookup below is skipped.
+        let _ = indir_in1;
+        // PcodeOp *targ_op = PcodeOp::getOpFromConst(indir->getIn(1)->getAddr());
+        //   if (targ_op->isDead()) return 0;
+        // TODO(iopspace): no coderef resolution. Assume the target is live.
+        // vn->isAddrForce() guard.
+        // TODO(addrtied): Rugra lacks isAddrForce.
+        let (max_byte, min_byte) = RulePullsubMulti::min_max_use(&vn);
+        let new_size = max_byte - min_byte + 1;
+        if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !RulePullsubMulti::acceptable_size(new_size) { return Ok(action_status::NO_CHANGE); }
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // outvn->isPrecisLo()/isPrecisHi() guard.
+        // TODO(double): Rugra lacks precis flags.
+        // consume = calc_mask(newSize) << 8*minByte; consume = ~consume;
+        let consume = !(calc_mask(new_size as usize) << (8 * min_byte as u64));
+        // indir->getIn(0)->getConsume()  &  consume
+        let indir_in0 = match indir.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if (consume & indir_in0.read().unwrap().get_consume()) != 0 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // isIndirectCreation branch (data.newIndirectCreation) — TODO(infra).
+        // Non-creation branch (the common case) below.
+        let is_big_endian = vn.read().unwrap().space().is_big_endian();
+        let vn_addr = vn.read().unwrap().get_offset();
+        let vn_size = vn.read().unwrap().get_size();
+        let smalladdr2 = if !is_big_endian {
+            crate::address::Address::new(vn_addr + min_byte as u64)
+        } else {
+            crate::address::Address::new(vn_addr + (vn_size as u64 - max_byte as u64 - 1))
+        };
+        let basevn = indir_in0.clone();
+        // small1 = findSubpiece(basevn,newSize,op->getIn(1)->getOffset()) or buildSubpiece
+        let small1 = RulePullsubMulti::find_subpiece(&basevn, new_size as u32, op_in1_offset)
+            .unwrap_or_else(|| RulePullsubMulti::build_subpiece(fd, &basevn, new_size as u32, op_in1_offset));
+        // Create new indirect near original indirect.
+        let indir_addr = indir.read().unwrap().get_addr();
+        let new_ind = fd.new_op(2, indir_addr);
+        fd.op_set_opcode(&new_ind, OpCode::CPUI_INDIRECT);
+        let small2 = fd.new_varnode_out(new_size as usize, smalladdr2, &new_ind);
+        fd.op_set_input(&new_ind, small1, 0);
+        // TODO(iopspace): data.opSetInput(new_ind, data.newVarnodeIop(targ_op), 1);
+        //   We leave the second input unset (the original iop coderef cannot be
+        //   reconstructed without the iop-space). This is a known fidelity gap.
+        let _iop_placeholder = fd.new_constant(4, 0);
+        fd.op_insert_before(&new_ind, &crate::op::PcodeOpRef(indir.clone()));
+        // Replace descendants of vn with small2.
+        RulePullsubMulti::replace_descendants(fd, &vn, small2, max_byte, min_byte);
+        let _ = outvn;
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "pullsub_indirect" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
+/// Remove a CPUI_INDIRECT if its blocking PcodeOp is dead / resolved.
+///
+/// Faithful to `RuleIndirectCollapse` (ruleaction.cc:3177-3252). When the op
+/// wrapped by an INDIRECT has been resolved to a COPY (with full/partial/identical
+/// overlap) the INDIRECT becomes a COPY / SUBPIECE; otherwise, if the wrapped
+/// op is dead, the INDIRECT output is totalReplace'd by its input and destroyed.
+///
+/// NOTE: Depends on the iop-space coderef resolution (`PcodeOp::getOpFromConst`),
+/// `characterizeOverlap`/`contains` Varnode overlap methods, `hasNoLocalAlias`,
+/// `isIndirectCreation`, `noIndirectCollapse`, LoadGuard, and STORE spacebase-ptr
+/// guards. Rugra lacks all of these; the rule currently no-ops with a TODO.
+pub struct RuleIndirectCollapse;
+
+impl RuleIndirectCollapse {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleIndirectCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleIndirectCollapse::applyOp (ruleaction.cc:3177-3252).
+        let (in0, outvn) = {
+            let op = op_arc.read().unwrap();
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            // indir_in1 must be the iop-space coderef of the wrapped op.
+            (in1, outvn)
+        };
+        // TODO(iopspace): PcodeOp *indop = PcodeOp::getOpFromConst(in1->getAddr());
+        //   Requires IPTR_IOP space + coderef resolution. Without it we cannot
+        //   discover the wrapped op, so the rule cannot fire. The 1:1 transform
+        //   (COPY/SUBPIECE collapse on full/partial overlap, or
+        //   totalReplace(out,in0)+opDestroy when indop is dead) would follow.
+        let in0 = in0;
+        let _ = (in0, outvn, fd);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "indirect_collapse" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INDIRECT] }
+}
+
+/// Transform CPOOLREF operations by looking up the value in the constant pool.
+///
+/// Faithful to `RuleTransformCpool` (ruleaction.cc:3915-3940). For a CPOOLREF,
+/// look up the constant-pool record; if it is a `primitive`, replace the op
+/// with a COPY of the constant value; otherwise append the record tag.
+///
+/// NOTE: Requires `isCpoolTransformed`/`opMarkCpoolTransformed` op flags and
+/// `data.getArch()->cpool->getRecord(refs)` plus `CPoolRecord`. Rugra exposes a
+/// `cpool` module but Funcdata has no `getArch()`/cpool accessor, so the lookup
+/// cannot be performed; the rule no-ops with a TODO.
+pub struct RuleTransformCpool;
+
+impl RuleTransformCpool {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleTransformCpool {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleTransformCpool::applyOp (ruleaction.cc:3915-3940).
+        // TODO(infra): if (op->isCpoolTransformed()) return 0; data.opMarkCpoolTransformed(op);
+        //   Rugra PcodeOp has no cpool-transformed flag.
+        // Gather refs from slot 1..n.
+        let num_input = op_arc.read().unwrap().num_input();
+        if num_input < 2 { return Ok(action_status::NO_CHANGE); }
+        let mut refs = Vec::new();
+        for i in 1..num_input {
+            let vn = match op_arc.read().unwrap().get_in(i).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            refs.push(vn.read().unwrap().get_offset());
+        }
+        // TODO(infra): const CPoolRecord *rec = data.getArch()->cpool->getRecord(refs);
+        //   Funcdata has no get_arch()/cpool accessor; rugra's cpool module is
+        //   not wired to Funcdata. Cannot look up the record → rule no-ops.
+        let _ = (fd, refs);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "transform_cpool" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CPOOLREF] }
+}
+
+/// Convert BRANCHIND with only one computed destination to a BRANCH.
+///
+/// Faithful to `RuleSwitchSingle` (ruleaction.cc:5430-5485). Looks up the op's
+/// JumpTable; if the block has a single out-edge and the table is labelled,
+/// converts the BRANCHIND into a BRANCH to the (single) destination, emits a
+/// warning if the switch has >1 entry or a non-constant index, and removes the
+/// jump table.
+///
+/// NOTE: Requires `data.findJumpTable`, `JumpTable::numEntries/isLabelled/
+/// getAddressByIndex`, `data.removeJumpTable`, `data.newCodeRef`,
+/// `BlockBasic::sizeOut`, and `data.getStructure().clear()`. Rugra's Funcdata
+/// has none of these wired for rule use; the rule no-ops with a TODO.
+pub struct RuleSwitchSingle;
+
+impl RuleSwitchSingle {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSwitchSingle {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSwitchSingle::applyOp (ruleaction.cc:5430-5485).
+        // TODO(infra): BlockBasic *bb = op->getParent(); if (bb->sizeOut() != 1) return 0;
+        //   Rugra PcodeOp.parent is a Weak<dyn FlowBlock>; reaching the
+        //   out-edge count is possible but JumpTable lookup is not.
+        // TODO(infra): JumpTable *jt = data.findJumpTable(op); requires
+        //   data.findJumpTable / JumpTable API / data.removeJumpTable /
+        //   data.newCodeRef / data.getStructure().clear(). None wired on Funcdata.
+        let _ = (op_arc, fd);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "switch_single" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BRANCHIND] }
+}
+
+/// Eliminate ARM/THUMB style masking of the low order bits on function pointers.
+///
+/// Faithful to `RuleFuncPtrEncoding` (ruleaction.cc:9926-9948). For a CALLIND
+/// whose input is `INT_AND ptr, mask`, if `mask` selects out the low `align`
+/// alignment bits (per `data.getArch()->funcptr_align`), strip the mask by
+/// converting the INT_AND into a COPY.
+///
+/// NOTE: Needs `data.getArch()->funcptr_align`. Rugra stores `funcptr_align` on
+/// Architecture but Funcdata has no `get_arch()` accessor, so the alignment
+/// cannot be read; the rule no-ops with a TODO.
+pub struct RuleFuncPtrEncoding;
+
+impl RuleFuncPtrEncoding {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleFuncPtrEncoding {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleFuncPtrEncoding::applyOp (ruleaction.cc:9926-9948).
+        // TODO(infra): int4 align = data.getArch()->funcptr_align; if (align==0) return 0;
+        //   Funcdata has no get_arch() accessor → cannot read funcptr_align.
+        let vn = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let andop = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if andop.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+        // Without alignment we cannot validate the mask, so no-op.
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "funcptr_encoding" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CALLIND] }
+}
+
+/// Simplify unsigned-int → float conversion:
+/// `T = int2float((X >> 1) | (X & 1)); T + T ⇒ int2float(zext(X))`.
+///
+/// Faithful to `RuleUnsigned2Float` (ruleaction.cc:9795-9855). Detects the
+/// x86-style unsigned-to-float idiom and collapses the `T + T` into a single
+/// `FLOAT_INT2FLOAT(zext(X))`.
+///
+/// NOTE: Uses `TypeOpFloatInt2Float::preferredZextSize`, which Rugra does not
+/// expose. We approximate the preferred zext size as `base_size * 2` (capped to
+/// 8) — this is the standard value for the supported base sizes (1→2, 2→4,
+/// 4→8). Otherwise the pattern/recognition is 1:1.
+pub struct RuleUnsigned2Float;
+
+impl RuleUnsigned2Float {
+    pub fn new() -> Self { Self }
+
+    /// Approximation of `TypeOpFloatInt2Float::preferredZextSize` (see
+    /// opfloat.cc). The reference returns base_size*2 for the relevant sizes.
+    fn preferred_zext_size(base_size: usize) -> usize {
+        // Standard: 1→2, 2→4, 4→8. Cap at 8 bytes.
+        if base_size >= 4 { 8 } else { base_size * 2 }
+    }
+}
+
+impl Rule for RuleUnsigned2Float {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleUnsigned2Float::applyOp (ruleaction.cc:9795-9855).
+        let invn = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !invn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let orop = match invn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if orop.read().unwrap().opcode != OpCode::CPUI_INT_OR { return Ok(action_status::NO_CHANGE); }
+        let (or0, or1) = {
+            let o = orop.read().unwrap();
+            (o.get_in(0).cloned(), o.get_in(1).cloned())
+        };
+        let (or0, or1) = match (or0, or1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        if !or0.read().unwrap().is_written() || !or1.read().unwrap().is_written() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // shiftop = in(0) if it is INT_RIGHT else in(1); andop = the other.
+        let mut shiftop = or0.read().unwrap().get_def().unwrap();
+        let mut andop = or1.read().unwrap().get_def().unwrap();
+        if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT {
+            // swap
+            let tmp = shiftop; shiftop = andop; andop = tmp;
+        }
+        if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT { return Ok(action_status::NO_CHANGE); }
+        // shiftop->getIn(1)->constantMatch(1)
+        let shift_c = match shiftop.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !(shift_c.read().unwrap().is_constant() && shift_c.read().unwrap().get_offset() == 1) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let basevn = match shiftop.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if basevn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        // optional: andop may be INT_ZEXT of the real INT_AND.
+        if andop.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT {
+            let inner_def = {
+                let in0 = andop.read().unwrap().get_in(0).cloned().unwrap();
+                let is_written = in0.read().unwrap().is_written();
+                if !is_written {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                let def = in0.read().unwrap().get_def();
+                def
+            };
+            andop = match inner_def {
+                Some(d) => d,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+        }
+        if andop.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
+        let and_c = match andop.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !(and_c.read().unwrap().is_constant() && and_c.read().unwrap().get_offset() == 1) {
+            return Ok(action_status::NO_CHANGE); // Mask off least significant bit
+        }
+        let mut vn = match andop.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !std::sync::Arc::ptr_eq(&vn, &basevn) {
+            if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let subop = vn.read().unwrap().get_def().unwrap();
+            if subop.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
+            let sub_c = subop.read().unwrap().get_in(1).cloned();
+            match sub_c {
+                Some(v) if v.read().unwrap().get_offset() == 0 => {
+                    vn = subop.read().unwrap().get_in(0).cloned().unwrap();
+                    if !std::sync::Arc::ptr_eq(&vn, &basevn) {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                }
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        }
+        // outvn->beginDescend(): find FLOAT_ADD(outvn, outvn).
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let descends: Vec<_> = outvn.read().unwrap().descend_iter().collect();
+        for addop in descends {
+            if addop.read().unwrap().opcode != OpCode::CPUI_FLOAT_ADD { continue; }
+            let (ai0, ai1) = {
+                let a = addop.read().unwrap();
+                (a.get_in(0).cloned(), a.get_in(1).cloned())
+            };
+            match (ai0, ai1) {
+                (Some(a), Some(b)) if std::sync::Arc::ptr_eq(&a, &outvn) && std::sync::Arc::ptr_eq(&b, &outvn) => {
+                    let add_addr = addop.read().unwrap().get_addr();
+                    let zextop = fd.new_op(1, add_addr);
+                    fd.op_set_opcode(&zextop, OpCode::CPUI_INT_ZEXT);
+                    let base_size = basevn.read().unwrap().get_size();
+                    let zextout = fd.new_unique_out(Self::preferred_zext_size(base_size), &zextop);
+                    let add_ref = crate::op::PcodeOpRef(addop.clone());
+                    fd.op_set_opcode(&add_ref, OpCode::CPUI_FLOAT_INT2FLOAT);
+                    fd.op_remove_input(&add_ref, 1);
+                    fd.op_set_input(&zextop, basevn, 0);
+                    fd.op_set_input(&add_ref, zextout, 0);
+                    fd.op_insert_before(&zextop, &add_ref);
+                    return Ok(action_status::CHANGE);
+                }
+                _ => continue,
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "unsigned_2_float" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
+}
+
+/// Collapse equivalent FLOAT_INT2FLOAT computations along converging data-flow
+/// paths.
+///
+/// Faithful to `RuleInt2FloatCollapse` (ruleaction.cc:9863-9918). When an
+/// unsigned `FLOAT_INT2FLOAT(zext(V))` and a signed `FLOAT_INT2FLOAT(V)` merge
+/// via a MULTIEQUAL guarded by `V < 0`, collapse to a single unsigned
+/// `FLOAT_INT2FLOAT(zext(V))`.
+///
+/// NOTE: Needs `FlowBlock::findCondition`, block `lastOp`, `isBooleanFlip`,
+/// `constantMatch(calc_mask(...))`, and block reinsertion. Rugra's flow/block
+/// query API is insufficient for this; the rule no-ops with a TODO.
+pub struct RuleInt2FloatCollapse;
+
+impl RuleInt2FloatCollapse {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleInt2FloatCollapse {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleInt2FloatCollapse::applyOp (ruleaction.cc:9863-9918).
+        let in0 = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let zextop = match in0.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
+        let basevn = match zextop.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if basevn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        // multiop = op->getOut()->loneDescend()
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let multiop = match outvn.read().unwrap().lone_descend() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if multiop.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL { return Ok(action_status::NO_CHANGE); }
+        if multiop.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
+        // slot = multiop->getSlot(op->getOut())
+        let slot = multiop.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &outvn));
+        let slot = match slot { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
+        let otherout = match multiop.read().unwrap().get_in(1 - slot).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !otherout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let op2 = otherout.read().unwrap().get_def().unwrap();
+        if op2.read().unwrap().opcode != OpCode::CPUI_FLOAT_INT2FLOAT { return Ok(action_status::NO_CHANGE); }
+        let op2_in0 = op2.read().unwrap().get_in(0).cloned().unwrap();
+        if !std::sync::Arc::ptr_eq(&op2_in0, &basevn) { return Ok(action_status::NO_CHANGE); }
+        // FlowBlock *cond = FlowBlock::findCondition(...); cbranch = cond->lastOp();
+        //   compare = INT_SLESS(basevn,0) | INT_SLESS(-1,basevn).
+        // TODO(flow): Rugra lacks FlowBlock::findCondition and the block-level
+        //   CBRANCH/boolean-flip/lastOp queries needed to verify the guarding
+        //   condition. Without it we cannot safely collapse; the rule no-ops.
+        //   The transform (opUninsert multiop → redefine as FLOAT_INT2FLOAT over
+        //   new INT_ZEXT) is otherwise straightforward.
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "int_2_float_collapse" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
+}
+
+/// Remove PTRADD operations with mismatched data-type information.
+///
+/// Faithful to `RulePtraddUndo` (ruleaction.cc:6927-6944). Once type recovery
+/// has started and the PTRADD's pointed-to size no longer matches its index
+/// scale (or the index is non-zero), undo the PTRADD back to INT_MULT/INT_ADD.
+///
+/// NOTE: Needs `data.hasTypeRecoveryStarted()`, `getTypeReadFacing`,
+/// `TypePointer::getPtrTo`, `AddrSpace::addressToByteInt`, and
+/// `data.opUndoPtradd`. Rugra lacks all of these; the rule no-ops with a TODO.
+pub struct RulePtraddUndo;
+
+impl RulePtraddUndo {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RulePtraddUndo {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePtraddUndo::applyOp (ruleaction.cc:6927-6944).
+        // TODO(infra): if (!data.hasTypeRecoveryStarted()) return 0;
+        //   Rugra Funcdata has no has_type_recovery_started().
+        let (basevn, indvn) = {
+            let op = op_arc.read().unwrap();
+            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let indvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (basevn, indvn)
+        };
+        // size = op->getIn(2)->getOffset()  (the element-size operand of PTRADD)
+        // dt = basevn->getTypeReadFacing(op); if TYPE_PTR and tp->getPtrTo()->getAlignSize()==size && ind!=0 return 0;
+        // TODO(datatype): no Varnode data-types → cannot evaluate the
+        //   "still a correctly-typed pointer" guard. Then:
+        //   data.opUndoPtradd(op, false);
+        // TODO(infra): Funcdata has no op_undo_ptradd. The undo (PTRADD →
+        //   INT_MULT of index*size + INT_ADD) is implemented in Ghidra's
+        //   Funcdata::opUndoPtradd and is not yet ported.
+        let _ = (fd, basevn, indvn);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "ptradd_undo" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRADD] }
+}
+
+/// Remove PTRSUB operations with mismatched data-type information.
+///
+/// Faithful to `RulePtrsubUndo` (ruleaction.cc:6970-7190) plus helpers
+/// `getConstOffsetBack` (6970-7010), `getExtraOffset` (7011-7059),
+/// `removeLocalAddRecurse` (7061-7094), `removeLocalAdds` (7096-7143).
+///
+/// NOTE: The four helpers are pure data-flow walks and are ported 1:1 below.
+/// The final `applyOp` requires `data.hasTypeRecoveryStarted()`,
+/// `getTypeReadFacing()->isPtrsubMatching(...)`, `clearStopTypePropagation`,
+/// and `opUndoPtradd`, none present in Rugra; the rule no-ops with a TODO.
+pub struct RulePtrsubUndo;
+
+impl RulePtrsubUndo {
+    pub const DEPTH_LIMIT: i32 = 8;
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `getConstOffsetBack` (ruleaction.cc:6970-7010). Returns the
+    /// sum of constants in the additive tree rooted at `vn`, and the biggest
+    /// constant multiplier in `multiplier` (0 if none).
+    fn get_const_offset_back(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        multiplier: &mut i64,
+        max_level: i32,
+    ) -> i64 {
+        *multiplier = 0;
+        if vn.read().unwrap().is_constant() {
+            return vn.read().unwrap().get_offset() as i64;
+        }
+        if !vn.read().unwrap().is_written() { return 0; }
+        let max_level = max_level - 1;
+        if max_level < 0 { return 0; }
+        let def = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return 0,
+        };
+        let opc = def.read().unwrap().opcode;
+        let mut retval: i64 = 0;
+        if opc == OpCode::CPUI_INT_ADD {
+            let (in0, in1) = {
+                let d = def.read().unwrap();
+                (d.get_in(0).cloned(), d.get_in(1).cloned())
+            };
+            let mut submult: i64 = 0;
+            if let Some(in0) = in0 {
+                retval += Self::get_const_offset_back(&in0, &mut submult, max_level);
+                if submult > *multiplier { *multiplier = submult; }
+            }
+            if let Some(in1) = in1 {
+                retval += Self::get_const_offset_back(&in1, &mut submult, max_level);
+                if submult > *multiplier { *multiplier = submult; }
+            }
+        } else if opc == OpCode::CPUI_INT_MULT {
+            let cvn = match def.read().unwrap().get_in(1).cloned() {
+                Some(v) => v,
+                None => return 0,
+            };
+            if !cvn.read().unwrap().is_constant() { return 0; }
+            *multiplier = cvn.read().unwrap().get_offset() as i64;
+            if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                let mut submult: i64 = 0;
+                Self::get_const_offset_back(&in0, &mut submult, max_level);
+                if submult > 0 {
+                    *multiplier *= submult;
+                }
+            }
+        }
+        retval
+    }
+
+    /// Faithful to `getExtraOffset` (ruleaction.cc:7011-7059). Walks the
+    /// additive expression using `outvn`'s lone descendant, returning the extra
+    /// constant offset and the biggest multiplier.
+    fn get_extra_offset(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        multiplier: &mut i64,
+    ) -> i64 {
+        let mut extra: i64 = 0;
+        *multiplier = 0;
+        let mut submult: i64 = 0;
+        let mut outvn = match op.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return 0,
+        };
+        let mut cur = outvn.read().unwrap().lone_descend();
+        while let Some(o) = cur {
+            let opc = o.read().unwrap().opcode;
+            if opc == OpCode::CPUI_INT_ADD {
+                let slot = o.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &outvn)).unwrap_or(0);
+                let other = o.read().unwrap().get_in(1 - slot).cloned();
+                if let Some(other) = other {
+                    extra += Self::get_const_offset_back(&other, &mut submult, Self::DEPTH_LIMIT);
+                    if submult > *multiplier { *multiplier = submult; }
+                }
+            } else if opc == OpCode::CPUI_PTRSUB {
+                let in1 = o.read().unwrap().get_in(1).cloned();
+                if let Some(in1) = in1 {
+                    extra += in1.read().unwrap().get_offset() as i64;
+                }
+            } else if opc == OpCode::CPUI_PTRADD {
+                if !o.read().unwrap().get_in(0).map(|v| std::sync::Arc::ptr_eq(v, &outvn)).unwrap_or(false) {
+                    break;
+                }
+                let (ptraddmult, invn) = {
+                    let or = o.read().unwrap();
+                    let mult = or.get_in(2).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+                    let invn = or.get_in(1).cloned();
+                    (mult, invn)
+                };
+                if let Some(ref invn) = invn {
+                    if invn.read().unwrap().is_constant() {
+                        extra += ptraddmult * invn.read().unwrap().get_offset() as i64;
+                    }
+                    let mut sm: i64 = 0;
+                    Self::get_const_offset_back(invn, &mut sm, Self::DEPTH_LIMIT);
+                    if sm != 0 {
+                        let pm = ptraddmult * sm;
+                        if pm > *multiplier { *multiplier = pm; }
+                    }
+                }
+            } else {
+                break;
+            }
+            outvn = match o.read().unwrap().output.clone() {
+                Some(x) => x,
+                None => break,
+            };
+            cur = outvn.read().unwrap().lone_descend();
+        }
+        // sign_extend(extra, 8*outvn->getSize()-1)
+        let out_size_bits = outvn.read().unwrap().get_size() as u64 * 8;
+        if out_size_bits > 0 && out_size_bits <= 63 {
+            let signbit = 1i64 << (out_size_bits - 1);
+            let mask = if out_size_bits >= 64 { -1i64 as u64 } else { (1u64 << out_size_bits) - 1 };
+            extra = (extra & mask as i64) as i64;
+            if extra & signbit != 0 {
+                extra |= !mask as i64;
+            }
+        }
+        extra
+    }
+
+    /// Faithful to `removeLocalAddRecurse` (ruleaction.cc:7061-7094). Converts
+    /// INT_ADD-with-constant nodes in the additive tree into COPYs, returning
+    /// the sum of removed constants.
+    fn remove_local_add_recurse(
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        max_level: i32,
+        fd: &mut Funcdata,
+    ) -> i64 {
+        let vn = match op.0.read().unwrap().get_in(slot).cloned() {
+            Some(v) => v,
+            None => return 0,
+        };
+        if !vn.read().unwrap().is_written() { return 0; }
+        if vn.read().unwrap().lone_descend().map(|d| !std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(true) {
+            return 0; // Varnode must not be used anywhere else
+        }
+        let max_level = max_level - 1;
+        if max_level < 0 { return 0; }
+        let def = match vn.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return 0,
+        };
+        let def_ref = crate::op::PcodeOpRef(def);
+        let mut retval: i64 = 0;
+        if def_ref.0.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+            let in1 = def_ref.0.read().unwrap().get_in(1).cloned();
+            if let Some(in1) = in1 {
+                if in1.read().unwrap().is_constant() {
+                    retval += in1.read().unwrap().get_offset() as i64;
+                    fd.op_remove_input(&def_ref, 1);
+                    fd.op_set_opcode(&def_ref, OpCode::CPUI_COPY);
+                } else {
+                    retval += Self::remove_local_add_recurse(&def_ref, 0, max_level, fd);
+                    retval += Self::remove_local_add_recurse(&def_ref, 1, max_level, fd);
+                }
+            }
+        }
+        retval
+    }
+
+    /// Faithful to `removeLocalAdds` (ruleaction.cc:7096-7143). Walks the
+    /// additive chain rooted at `vn`, converting INT_ADD/PTRSUB/PTRADD constant
+    /// contributions into COPYs / undoing PTRADDs, and returns the removed sum.
+    fn remove_local_adds(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
+    ) -> i64 {
+        let mut extra: i64 = 0;
+        let mut vn = vn.clone();
+        loop {
+            let cur = match vn.read().unwrap().lone_descend() {
+                Some(o) => o,
+                None => break,
+            };
+            let opc = cur.read().unwrap().opcode;
+            let cur_ref = crate::op::PcodeOpRef(cur.clone());
+            if opc == OpCode::CPUI_INT_ADD {
+                let slot = cur.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &vn)).unwrap_or(0);
+                let in1 = cur.read().unwrap().get_in(1).cloned();
+                if slot == 0 && in1.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                    let in1v = in1.unwrap();
+                    extra += in1v.read().unwrap().get_offset() as i64;
+                    fd.op_remove_input(&cur_ref, 1);
+                    fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
+                } else {
+                    extra += Self::remove_local_add_recurse(&cur_ref, 1 - slot, Self::DEPTH_LIMIT, fd);
+                }
+            } else if opc == OpCode::CPUI_PTRSUB {
+                let in1 = cur.read().unwrap().get_in(1).cloned();
+                if let Some(in1) = in1 {
+                    extra += in1.read().unwrap().get_offset() as i64;
+                }
+                // op->clearStopTypePropagation();
+                // TODO(typing): Rugra has no clearStopTypePropagation on PcodeOp.
+                fd.op_remove_input(&cur_ref, 1);
+                fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
+            } else if opc == OpCode::CPUI_PTRADD {
+                if !cur.read().unwrap().get_in(0).map(|v| std::sync::Arc::ptr_eq(v, &vn)).unwrap_or(false) {
+                    break;
+                }
+                let (ptraddmult, invn_is_const, invn_off) = {
+                    let c = cur.read().unwrap();
+                    let mult = c.get_in(2).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+                    let invn = c.get_in(1).cloned();
+                    let (isc, off) = invn.as_ref().map(|v| (v.read().unwrap().is_constant(), v.read().unwrap().get_offset() as i64)).unwrap_or((false, 0));
+                    (mult, isc, off)
+                };
+                if invn_is_const {
+                    extra += ptraddmult * invn_off;
+                    fd.op_remove_input(&cur_ref, 2);
+                    fd.op_remove_input(&cur_ref, 1);
+                    fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
+                } else {
+                    // TODO(infra): data.opUndoPtradd(op, false);
+                    //   Funcdata has no op_undo_ptradd; we leave the PTRADD as-is.
+                    extra += Self::remove_local_add_recurse(&cur_ref, 1, Self::DEPTH_LIMIT, fd);
+                }
+            } else {
+                break;
+            }
+            vn = match cur.read().unwrap().output.clone() {
+                Some(o) => o,
+                None => break,
+            };
+        }
+        extra
+    }
+}
+
+impl Rule for RulePtrsubUndo {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePtrsubUndo::applyOp (ruleaction.cc:7146-7188).
+        // TODO(infra): if (!data.hasTypeRecoveryStarted()) return 0;
+        let (basevn, cvn) = {
+            let op = op_arc.read().unwrap();
+            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (basevn, cvn)
+        };
+        let val = cvn.read().unwrap().get_offset() as i64;
+        let mut multiplier: i64 = 0;
+        let extra = Self::get_extra_offset(op_arc, &mut multiplier);
+        // if (basevn->getTypeReadFacing(op)->isPtrsubMatching(val,extra,multiplier)) return 0;
+        // TODO(datatype): isPtrsubMatching is a data-type method not in Rugra.
+        //   Without it we cannot tell a "still valid" PTRSUB from a mis-typed
+        //   one, so we cannot safely convert. No-op.
+        let _ = (fd, basevn, cvn, val, extra, multiplier);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "ptrsub_undo" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
+}
+
+/// Propagate constants through a SEGMENTOP.
+///
+/// Faithful to `RuleSegment` (ruleaction.cc:9013-9057). If both segment inputs
+/// are constant, fold via `segdef->execute`; else if the segment supports far
+/// pointers and the inputs form a contiguous whole, replace with a COPY.
+///
+/// NOTE: Requires `data.getArch()->userops.getSegmentOp(...)`, `SegmentOp`,
+/// `contiguous_test`, and `findContiguousWhole`. Rugra has no SegmentOp/userops
+/// wired to Funcdata; the rule no-ops with a TODO.
+pub struct RuleSegment;
+
+impl RuleSegment {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleSegment {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleSegment::applyOp (ruleaction.cc:9013-9057).
+        let (vn1, vn2) = {
+            let op = op_arc.read().unwrap();
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (vn1, vn2)
+        };
+        // TODO(infra): SegmentOp *segdef = data.getArch()->userops.getSegmentOp(
+        //   op->getIn(0)->getSpaceFromConst()->getIndex());
+        //   Rugra has no Architecture accessor on Funcdata and no SegmentOp /
+        //   userops table, so we cannot recover the segment definition. The
+        //   fold (segdef->execute on two constants → COPY) and the far-pointer
+        //   contiguous-whole path cannot be performed.
+        let _ = (vn1, vn2, fd);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "segment" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SEGMENTOP] }
+}
+
+/// Search for concatenations with unlikely things to inform return/parameter
+/// consumption calculation.
+///
+/// Faithful to `RulePiecePathology` (ruleaction.cc:10578-10616) plus helpers
+/// `isPathology` (ruleaction.cc:10427-10505) and `tracePathologyForward`
+/// (ruleaction.cc:10506-10570).
+///
+/// NOTE: `isPathology` walks `vn->isInput() && !isPersist()` and the def-chain
+/// to calls (needs `getCallSpecs`, `isOutputActive`, `isCall`). The applyOp
+/// path needs `isIndirectCreation`, `isCall`, `getEvalType` masking, address
+/// contiguity (`getSpace()->isBigEndian()` + offset arithmetic) and
+/// `FuncProto::setReturnBytesConsumed` / `FuncCallSpecs::setInputBytesConsumed`.
+/// Rugra lacks isInput/isPersist on Varnode and the consumption APIs; the rule
+/// no-ops with a TODO.
+pub struct RulePiecePathology;
+
+impl RulePiecePathology {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RulePiecePathology {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
+        let (vn, lsb_vn) = {
+            let op = op_arc.read().unwrap();
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let lsb_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (vn, lsb_vn)
+        };
+        if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let sub_op = vn.read().unwrap().get_def().unwrap();
+        let opc = sub_op.read().unwrap().opcode;
+        if opc == OpCode::CPUI_SUBPIECE {
+            let in1 = sub_op.read().unwrap().get_in(1).cloned();
+            let off0 = in1.map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
+            if off0 == 0 { return Ok(action_status::NO_CHANGE); }
+            // if (!isPathology(subOp->getIn(0),data)) return 0;
+            // TODO(infra): isPathology needs vn->isInput()&&!isPersist() and
+            //   call-spec output-active checks. Rugra lacks these.
+        } else if opc == OpCode::CPUI_INDIRECT {
+            // if (!subOp->isIndirectCreation()) return 0; ...
+            // TODO(infra): needs isIndirectCreation + locked-output call checks.
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // return tracePathologyForward(op, data);
+        // TODO(infra): tracePathologyForward walks forward to CALL/RETURN and
+        //   sets return/parameter bytes-consumed; Rugra lacks those APIs.
+        let _ = (fd, lsb_vn);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "piece_pathology" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
+}
+
+/// Simplify various conditional move situations.
+///
+/// Faithful to `RuleConditionalMove` (ruleaction.cc:9390-9558) plus helpers
+/// `checkBoolean` (9277-9303), `gatherExpression` (9305-9344),
+/// `constructBool` (9346-9381).
+///
+/// NOTE: This rule is fundamentally block/control-flow driven (MULTIEQUAL's
+/// block in-edges, the dominating CBRANCH, `rootblock->getTrueOut`,
+/// `isBooleanFlip`, `opInsertBegin`, `CloneBlockOps::cloneExpression`). Rugra's
+/// Rule API has no access to the block graph from within `apply_op`, and
+/// `op_bool_negate` exists but `CloneBlockOps` does not. The checkBoolean
+/// helper is ported 1:1; the rule no-ops with a TODO until block access lands.
+pub struct RuleConditionalMove;
+
+impl RuleConditionalMove {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `checkBoolean` (ruleaction.cc:9277-9303). Given a MULTIEQUAL
+    /// input, return its boolean root if it is a boolean value (bool-output op
+    /// or a COPY of a 0/1 constant), else None.
+    fn check_boolean(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if !vn.read().unwrap().is_written() { return None; }
+        let op = vn.read().unwrap().get_def()?;
+        if op.read().unwrap().is_bool_output() {
+            return Some(vn.clone());
+        }
+        if op.read().unwrap().opcode == OpCode::CPUI_COPY {
+            let inner = op.read().unwrap().get_in(0).cloned()?;
+            if inner.read().unwrap().is_constant() {
+                let val = inner.read().unwrap().get_offset();
+                if (val & !1u64) == 0 {
+                    return Some(inner);
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Rule for RuleConditionalMove {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleConditionalMove::applyOp (ruleaction.cc:9390-9558).
+        if op_arc.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
+        let (in0, in1) = {
+            let op = op_arc.read().unwrap();
+            (op.get_in(0).cloned(), op.get_in(1).cloned())
+        };
+        let (in0, in1) = match (in0, in1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        let _bool0 = Self::check_boolean(&in0);
+        let _bool1 = Self::check_boolean(&in1);
+        // From here the rule needs the MULTIEQUAL's parent block, its two
+        // in-edges, the dominating CBRANCH, getTrueOut, isBooleanFlip,
+        // opInsertBegin, opUninsert, and CloneBlockOps::cloneExpression.
+        // TODO(flow): Rugra Rule::apply_op has no access to the block graph /
+        //   CBRANCH dominance, and CloneBlockOps is not ported. Cannot perform
+        //   the conditional-move collapse (zext(boolcond) / bool || other).
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "conditional_move" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
+}
+
+/// Remove certain NaN operations by assuming their result is always false.
+///
+/// Faithful to `RuleIgnoreNan` (ruleaction.cc:9740-9787) plus helpers
+/// `checkBackForCompare` (9622-9662), `isAnotherNan` (9664-9694),
+/// `testForComparison` (9696-9738).
+///
+/// NOTE: `applyOp` references `data.getArch()->nan_ignore_all`. Rugra stores
+/// `nan_ignore_all` on Architecture but Funcdata has no `get_arch()` accessor,
+/// so the option cannot be read; the rule no-ops with a TODO.
+pub struct RuleIgnoreNan;
+
+impl RuleIgnoreNan {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleIgnoreNan {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleIgnoreNan::applyOp (ruleaction.cc:9740-9787).
+        // TODO(infra): if (data.getArch()->nan_ignore_all) { COPY(const 0) }
+        //   Funcdata has no get_arch() accessor → cannot read nan_ignore_all.
+        let float_var = match op_arc.read().unwrap().get_in(0).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if float_var.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+        // The checkBackForCompare / isAnotherNan / testForComparison helpers
+        // walk the boolean data-flow (BOOL_NEGATE, BOOL_OR/AND, INT_EQUAL,
+        // CBRANCH protection) and remove NaN inputs. They are portable in
+        // principle but require functionalEquality (available) and the
+        // CBRANCH/block out-edge queries (not available from apply_op).
+        // TODO(flow): port the helper walks once apply_op has block access; the
+        // rule cannot currently fire.
+        let _ = fd;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "ignore_nan" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_NAN] }
 }
 
 #[cfg(test)]
@@ -12605,5 +14288,277 @@ mod tests {
         let rule = RuleSubCommute::new();
         let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE, "RuleSubCommute must NOT fire when base has 2 descendants");
+    }
+
+    // ========================================================================
+    // Tests for the newly-ported cleanup-pool and oppool1 rules.
+    // ========================================================================
+
+    /// RuleAddUnsigned: `V + 0xff.. ⇒ V - 0x00..` for a 1-byte value 0xff → -1.
+    #[test]
+    fn test_rule_add_unsigned_fires() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x00, 1, // V (1 byte)
+            crate::space::AddressSpace::Const, 0xff, 1,    // 0xff (high quarter all 1s)
+            1,
+        );
+        let rule = RuleAddUnsigned::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_INT_SUB);
+        // negatedVal = (-0xff) & 0xff = 1
+        assert_eq!(op_arc.read().unwrap().inrefs[1].read().unwrap().get_offset(), 1);
+    }
+
+    /// RuleAddUnsigned must NOT fire when the high quarter isn't all ones.
+    #[test]
+    fn test_rule_add_unsigned_no_fire() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x00, 4,
+            crate::space::AddressSpace::Const, 0x7f, 4, // high quarter not all 1s
+            4,
+        );
+        let rule = RuleAddUnsigned::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RuleNegateNegate: `~~V ⇒ V`.
+    #[test]
+    fn test_rule_negate_negate() {
+        let mut fd = Funcdata::new("test_negatenegate", Address::new(0x1000), 0x10);
+        // V: a written register
+        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let v_copy_op = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&v_copy_op, OpCode::CPUI_COPY);
+        let v_def = fd.new_unique_out(4, &v_copy_op);
+        fd.op_set_input(&v_copy_op, v, 0);
+        fd.obank.alivelist.push(v_copy_op.clone());
+        // inner negate: ~v_def
+        let neg1 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&neg1, OpCode::CPUI_INT_NEGATE);
+        let neg1_out = fd.new_unique_out(4, &neg1);
+        fd.op_set_input(&neg1, v_def, 0);
+        fd.obank.alivelist.push(neg1.clone());
+        // outer negate: ~~v_def
+        let neg2 = fd.new_op(1, Address::new(0x1000));
+        fd.op_set_opcode(&neg2, OpCode::CPUI_INT_NEGATE);
+        let _neg2_out = fd.new_unique_out(4, &neg2);
+        fd.op_set_input(&neg2, neg1_out, 0);
+        fd.obank.alivelist.push(neg2.clone());
+
+        let rule = RuleNegateNegate::new();
+        let result = rule.apply_op(&neg2.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(neg2.0.read().unwrap().opcode, OpCode::CPUI_COPY);
+    }
+
+    /// RuleFloatSignCleanup: XOR with sign bit → FLOAT_NEG (4-byte float).
+    #[test]
+    fn test_rule_float_sign_cleanup_neg() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_XOR,
+            crate::space::AddressSpace::Register, 0x00, 4, // float V
+            crate::space::AddressSpace::Const, 0x8000_0000, 4, // sign bit
+            4,
+        );
+        let rule = RuleFloatSignCleanup::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_FLOAT_NEG);
+        assert_eq!(op_arc.read().unwrap().inrefs.len(), 1);
+    }
+
+    /// RuleFloatSignCleanup: AND with ~sign_bit → FLOAT_ABS (8-byte float).
+    #[test]
+    fn test_rule_float_sign_cleanup_abs() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_AND,
+            crate::space::AddressSpace::Register, 0x00, 8, // float V (8 bytes)
+            crate::space::AddressSpace::Const, 0x7fff_ffff_ffff_ffff, 8, // ~sign
+            8,
+        );
+        let rule = RuleFloatSignCleanup::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_FLOAT_ABS);
+    }
+
+    /// RuleFloatSignCleanup must NOT fire on non-canonical masks.
+    #[test]
+    fn test_rule_float_sign_cleanup_no_fire() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_XOR,
+            crate::space::AddressSpace::Register, 0x00, 4,
+            crate::space::AddressSpace::Const, 0x0000_000f, 4, // not a sign bit
+            4,
+        );
+        let rule = RuleFloatSignCleanup::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RuleSubRight: SUBPIECE(V, 2) where V is 4 bytes, no shift descendant.
+    /// Should insert a shift and turn the SUBPIECE into a least-sig SUBPIECE.
+    #[test]
+    fn test_rule_sub_right_basic() {
+        let mut fd = Funcdata::new("test_subright", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        let _sub_out = fd.new_unique_out(2, &sub_op);
+        fd.op_set_input(&sub_op, a, 0);
+        let off2 = fd.new_constant(4, 2);
+        fd.op_set_input(&sub_op, off2, 1); // offset 2 (not least sig)
+        fd.obank.alivelist.push(sub_op.clone());
+
+        let rule = RuleSubRight::new();
+        let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE, "RuleSubRight should fire for SUBPIECE(V,2)");
+        // The original SUBPIECE must now have a zero offset (least sig).
+        assert_eq!(sub_op.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 0);
+    }
+
+    /// RuleSubRight must NOT fire when the SUBPIECE is least-significant (c==0).
+    #[test]
+    fn test_rule_sub_right_no_fire_leastsig() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_SUBPIECE,
+            crate::space::AddressSpace::Register, 0x00, 4,
+            crate::space::AddressSpace::Const, 0, 4, // offset 0 → least sig
+            2,
+        );
+        let rule = RuleSubRight::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RuleUnsigned2Float must NOT fire on a bare FLOAT_INT2FLOAT of a register
+    /// (not the (X>>1)|(X&1) idiom). Guards the early-out path.
+    #[test]
+    fn test_rule_unsigned_2_float_no_fire() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_FLOAT_INT2FLOAT,
+            crate::space::AddressSpace::Register, 0x10, 4, // bare register, not the idiom
+            crate::space::AddressSpace::Const, 0, 1, // unused second slot
+            8,
+        );
+        let rule = RuleUnsigned2Float::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RulePtrsubUndo helpers: getConstOffsetBack on a pure constant returns
+    /// the constant and multiplier 0.
+    #[test]
+    fn test_rule_ptrsub_undo_const_offset_back() {
+        let mut fd = Funcdata::new("test_ptrsubundo", Address::new(0x1000), 0x10);
+        let c = fd.vbank.create_constant(4, 42);
+        let mut mult: i64 = -1;
+        let off = RulePtrsubUndo::get_const_offset_back(&c, &mut mult, RulePtrsubUndo::DEPTH_LIMIT);
+        assert_eq!(off, 42);
+        assert_eq!(mult, 0);
+    }
+
+    /// RulePtrsubUndo helpers: getConstOffsetBack over INT_ADD(c1, c2) sums.
+    #[test]
+    fn test_rule_ptrsub_undo_const_offset_back_add() {
+        let mut fd = Funcdata::new("test_ptrsubundo2", Address::new(0x1000), 0x10);
+        let c1 = fd.vbank.create_constant(4, 10);
+        let c2 = fd.vbank.create_constant(4, 5);
+        let add = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&add, OpCode::CPUI_INT_ADD);
+        let out = fd.new_unique_out(4, &add);
+        fd.op_set_input(&add, c1, 0);
+        fd.op_set_input(&add, c2, 1);
+        fd.obank.alivelist.push(add.clone());
+        let mut mult: i64 = 0;
+        let off = RulePtrsubUndo::get_const_offset_back(&out, &mut mult, RulePtrsubUndo::DEPTH_LIMIT);
+        assert_eq!(off, 15);
+        assert_eq!(mult, 0);
+    }
+
+    /// Rules that require missing infra must no-op cleanly (return NO_CHANGE)
+    /// rather than panic.
+    #[test]
+    fn test_infra_gated_rules_no_op() {
+        // RulePtrsubCharConstant: PTRSUB → NO_CHANGE (no type system).
+        {
+            let (op_arc, mut fd) = make_binary_op(
+                OpCode::CPUI_PTRSUB,
+                crate::space::AddressSpace::Register, 0x00, 8,
+                crate::space::AddressSpace::Const, 4, 8,
+                8,
+            );
+            let r = RulePtrsubCharConstant::new();
+            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        }
+        // RuleExpandLoad: LOAD → NO_CHANGE (no pointer type).
+        {
+            let (op_arc, mut fd) = make_binary_op(
+                OpCode::CPUI_LOAD,
+                crate::space::AddressSpace::Const, 0, 8, // space id (const)
+                crate::space::AddressSpace::Register, 0x00, 8, // ptr
+                4,
+            );
+            let r = RuleExpandLoad::new();
+            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        }
+        // RuleTransformCpool: CPOOLREF → NO_CHANGE (no cpool accessor).
+        {
+            let (op_arc, mut fd) = make_binary_op(
+                OpCode::CPUI_CPOOLREF,
+                crate::space::AddressSpace::Register, 0x00, 8,
+                crate::space::AddressSpace::Const, 1, 8,
+                8,
+            );
+            let r = RuleTransformCpool::new();
+            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        }
+        // RuleSegment: SEGMENTOP → NO_CHANGE (no SegmentOp).
+        {
+            let mut fd = Funcdata::new("seg", Address::new(0x1000), 0x10);
+            let c0 = fd.vbank.create_constant(4, 0);
+            let c1 = fd.vbank.create_constant(4, 1);
+            let c2 = fd.vbank.create_constant(4, 2);
+            let seq = SeqNum::new(Address::new(0x1000), 0);
+            let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
+            op.inrefs = vec![c0, c1, c2];
+            op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+            let op_arc = Arc::new(RwLock::new(op));
+            let r = RuleSegment::new();
+            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        }
+        // RuleFuncPtrEncoding: CALLIND → NO_CHANGE (no funcptr_align).
+        {
+            let mut fd = Funcdata::new("fptr", Address::new(0x1000), 0x10);
+            let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+            let seq = SeqNum::new(Address::new(0x1000), 0);
+            let mut op = PcodeOp::new(seq, OpCode::CPUI_CALLIND);
+            op.inrefs = vec![ptr];
+            op.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x100));
+            let op_arc = Arc::new(RwLock::new(op));
+            let r = RuleFuncPtrEncoding::new();
+            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        }
+    }
+
+    /// RuleDivOpt.move_sign_bit_extraction + resolve_shift_const: smoke test
+    /// via the existing div-opt rejection test (the helper is exercised on the
+    /// signed path once a full form is recognised). Here we just confirm the
+    /// helper compiles and a bare no-form op still returns NO_CHANGE.
+    #[test]
+    fn test_rule_div_opt_move_sign_bit_helper_compiles() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_SRIGHT,
+            crate::space::AddressSpace::Register, 0x10, 8,
+            crate::space::AddressSpace::Const, 3, 8,
+            8,
+        );
+        let rule = RuleDivOpt::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 }
