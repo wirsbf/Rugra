@@ -995,6 +995,64 @@ fn is_known_function(func_name: Option<&str>) -> bool {
     known_param_count(func_name) != 6
 }
 
+/// Return-type category for a known callee. Faithful to Ghidra's callee
+/// FuncProto return type, which (for library/known functions) is loaded from
+/// the symbol database's type info. Rugra has no database type info, so this
+/// table encodes the libc/curl/httpd return-type metatype for the functions
+/// listed in `known_param_count`.
+///
+/// Returns `Some(ReturnType)` for functions whose return type is known (locked);
+/// `None` for unknown functions (unlocked — active-output trial recovery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnownReturn {
+    /// Function returns void — CALL produces NO output varnode.
+    Void,
+    /// Function returns a pointer (8 bytes on x86-64, RAX).
+    Pointer,
+    /// Function returns an integer of N bytes (RAX/EAX).
+    Int(usize),
+}
+
+/// Known callee return types. Mirrors the function names in `known_param_count`
+/// (coreaction.rs:894-961). libc signatures from the SysV ABI / glibc headers.
+fn known_return_type(func_name: Option<&str>) -> Option<KnownReturn> {
+    let name = func_name?.replace('.', "_");
+    let name = name.as_str();
+    // --- void-returning libc functions ---
+    const VOID_FNS: &[&str] = &[
+        "exit", "_exit", "abort", "free", "_Exit",
+        "__stack_chk_fail",
+        "perror", "clearerr", "rewind", "fflush", "fclose",
+        "free", "curl_free", "curl_global_cleanup", "curl_easy_cleanup",
+        "curl_slist_free_all",
+        "sleep", "alarm",
+        "close", "unlink", "remove", "rmdir",
+    ];
+    if VOID_FNS.contains(&name) { return Some(KnownReturn::Void); }
+    // --- pointer-returning functions ---
+    const PTR_FNS: &[&str] = &[
+        "malloc", "calloc", "realloc", "strdup",
+        "fopen", "fdopen", "freopen",
+        "strstr", "strchr", "strrchr", "strpbrk", "strtok",
+        "memcpy", "memmove", "memset",
+        "strcpy", "strcat", "strncpy", "strncat",
+        "curl_easy_init", "curl_getenv", "curl_slist_append",
+        "__errno_location", "__ctype_b_loc",
+        "GetStr",
+    ];
+    if PTR_FNS.contains(&name) { return Some(KnownReturn::Pointer); }
+    // --- integer-returning functions (size in bytes) ---
+    match name {
+        "strlen" | "fread" | "fwrite" | "read" | "write"
+        | "memcmp" | "strcmp" | "strncmp" | "strequal" | "strnequal" => Some(KnownReturn::Int(8)),
+        "atoi" | "atol" | "isatty" | "fileno" | "ferror" | "fgetc" | "fputc"
+        | "isalpha" | "isdigit" | "isspace" | "toupper" | "tolower"
+        | "abs" | "close" => Some(KnownReturn::Int(4)),
+        // curl/httpd internal functions: unknown return (unlocked, active recovery)
+        _ => None,
+    }
+}
+
 impl ActionCallParams {
     pub fn new() -> Self {
         Self
@@ -3907,13 +3965,47 @@ impl ActionFuncLink {
         }
         let n_new = new_specs.len();
         for (op_addr, target_addr) in new_specs {
-            use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
-            let proto = crate::fspec::FuncProto::new(
-                String::new(),
-                Arc::new(Datatype::Void(TypeBase::new(
-                    "void".to_string(), 0, TypeMetatype::Unknown,
-                ))),
-            );
+            use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+            // Faithful to Ghidra: when the callee is known (has a symbol/
+            // Funcdata with a locked FuncProto), the call site inherits the
+            // callee's locked return type. Rugra has no database type info,
+            // so known_return_type() encodes the libc/known-function return
+            // metatype. For unknown callees, the prototype stays unlocked
+            // (return_type=Void, not locked) and active-output trial recovery
+            // decides the return value.
+            let callee_name = fd.symbol_table.get(&target_addr).cloned();
+            let ret = known_return_type(callee_name.as_deref());
+            let (return_type, output_locked): (Arc<Datatype>, bool) = match ret {
+                Some(KnownReturn::Void) => (
+                    Arc::new(Datatype::Void(TypeBase::new(
+                        "void".to_string(), 0, TypeMetatype::Void))),
+                    true, // locked-void: no output ever
+                ),
+                Some(KnownReturn::Pointer) => (
+                    Arc::new(Datatype::Pointer(TypePointer {
+                        base: TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                        ptr_to: Arc::new(Datatype::Void(TypeBase::new(
+                            "void".to_string(), 0, TypeMetatype::Void))),
+                        wordsize: 1,
+                    })),
+                    true,
+                ),
+                Some(KnownReturn::Int(sz)) => (
+                    Arc::new(Datatype::Base(TypeBase::new(
+                        if sz == 8 { "long".to_string() } else { "int".to_string() },
+                        sz,
+                        TypeMetatype::Int,
+                    ))),
+                    true,
+                ),
+                None => (
+                    Arc::new(Datatype::Void(TypeBase::new(
+                        "void".to_string(), 0, TypeMetatype::Unknown))),
+                    false, // unlocked — active recovery decides
+                ),
+            };
+            let mut proto = crate::fspec::FuncProto::new(String::new(), return_type);
+            proto.set_output_lock(output_locked);
             let mut fc = crate::fspec::FuncCallSpecs::new(
                 crate::address::Address::new(op_addr),
                 proto,
@@ -3969,16 +4061,54 @@ impl ActionFuncLink {
     /// Set up return-value recovery for a sub-function call. Faithful to
     /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1521-1572).
     ///
-    /// If the output prototype is unlocked, initialize the active-output
-    /// ParamActive so ActionActiveReturn can gather trials. The locked-output
-    /// path (newVarnodeOut + assumedOutputExtension) requires Funcdata op-edit
-    /// and is deferred.
-    pub fn func_link_output(fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
-        // Build the RAX return-value output varnode via newVarnodeOut.
-        // Faithful to Ghidra coreaction.cc:1551 newVarnodeOut(sz, addr, callop).
-        let has_output = op.0.read().unwrap().output.is_some();
-        if has_output { return; }
-        fd.new_varnode_out(8, crate::address::Address::new(0x0), op);
+    /// Decide whether the CALL produces an output (return-value) varnode.
+    /// Faithful 1:1 port:
+    /// 1. If the CALL already has an output varnode, remove it (the return
+    ///    value is re-decided here).
+    /// 2. If the output prototype is LOCKED:
+    ///    - if the return type is VOID → produce NO output (void functions
+    ///      like exit/free never get a return varnode).
+    ///    - else → newVarnodeOut(sz, addr) builds the return varnode.
+    /// 3. If UNLOCKED → initActiveOutput() (defer to trial recovery; no
+    ///    output varnode yet).
+    ///
+    /// The locked-stack-output path (setStackOutputLock) and the small-size
+    /// extension path (assumedOutputExtension → SEXT/ZEXT/PIECE op) require
+    /// Funcdata op-edit infrastructure beyond this pass and are deferred.
+    pub fn func_link_output(fd: &mut Funcdata, fc_idx: usize, op: &crate::op::PcodeOpRef) {
+        // (1) Remove any existing output (Ghidra coreaction.cc:1525-1537).
+        {
+            let has_output = op.0.read().unwrap().output.is_some();
+            if has_output {
+                fd.op_unset_output(op);
+            }
+        }
+        let fc = match fd.get_call_specs(fc_idx) {
+            Some(fc) => fc,
+            None => return,
+        };
+        let output_locked = fc.is_output_locked();
+        let return_type = fc.prototype.return_type.clone();
+        // (3) Unlocked → active-output trial recovery (coreaction.cc:1572).
+        if !output_locked {
+            if let Some(fc_mut) = fd.get_call_specs_mut(fc_idx) {
+                fc_mut.init_active_output();
+            }
+            return;
+        }
+        // (2) Locked: check return type metatype.
+        use crate::type_system::datatype::TypeMetatype;
+        let meta = return_type.get_metatype();
+        if meta == TypeMetatype::Void {
+            // Locked-void return: NO output varnode (coreaction.cc:1541 gate).
+            return;
+        }
+        // Non-void locked return: build the output varnode.
+        // RAX = register offset 0x0 (x86_lift.rs encoding), size = return type
+        // size (8 for pointer/long on x86-64). Faithful to
+        // coreaction.cc:1551 newVarnodeOut(sz, addr, callop).
+        let sz = return_type.get_size().max(1);
+        fd.new_varnode_out(sz, crate::address::Address::new(0x0), op);
     }
 }
 impl Action for ActionFuncLink {
@@ -4016,7 +4146,7 @@ impl Action for ActionFuncLink {
                 || (is_known_function(callee_name.as_deref())
                     && known_param_count(callee_name.as_deref()) > 0);
             Self::func_link_input(fd, &op_ref, callee_name.as_deref());
-            Self::func_link_output(fd, &op_ref);
+            Self::func_link_output(fd, idx, &op_ref);
             if !known {
                 if let Some(fc) = fd.get_call_specs_mut(idx) {
                     fc.init_active_input();
@@ -4060,8 +4190,8 @@ impl Action for ActionFuncLinkOutOnly {
                 }
             }
         }
-        for (_idx, op_ref) in pairs {
-            ActionFuncLink::func_link_output(fd, &op_ref);
+        for (idx, op_ref) in pairs {
+            ActionFuncLink::func_link_output(fd, idx, &op_ref);
         }
         Ok(action_status::NO_CHANGE)
     }

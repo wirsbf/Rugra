@@ -536,6 +536,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - func_link_output（1521-1572）：unlocked→init_active_output；locked→需 newVarnodeOut（暂缓）
 - ActionFuncLinkOutOnly::apply（1588-1595）：只 func_link_output
 
+### 2026-06-30：func_link_output 完整移植 void 门控 + known_return_type 表
+
+- `func_link_output(fc_idx, op)` 完整 1:1 移植 coreaction.cc:1521-1572：① 已有 output → op_unset_output；② locked + Void → 无 output；③ locked + 非 void → new_varnode_out(sz, RAX)；④ unlocked → init_active_output。
+- `known_return_type(name) -> Option<KnownReturn{Void,Pointer,Int(sz)}>`：编码 libc/已知函数返回类型（忠实于 Ghidra 从数据库 FuncProto 锁定 callee 原型的机制）。`ensure_callspecs` 按此设置锁定 return-type。
+- `FuncProto.output_type_locked` + `set_output_lock` 真实置位 + `is_output_locked` 委托（见 fspec.md）。
+- 效果：curl 17→19（void-CALL 赋值 bug 消除）。剩余 5 个失败为 Gap B/C + 一个预存 func_link_input 参数丢失 bug（main 的 `curl_easy_setopt(,` 缺 arg0，非本改动引入）。
+
 ### 2026-06-29：ActionFuncLink 接入主管线 + 生产路径建立 FuncCallSpecs
 
 - **ensure_callspecs**（对齐 FlowInfo::setupCallSpecs flow.cc:680）：扫描所有 alive CALL op，为每个建 FuncCallSpecs（从 inrefs[0] 目标地址初始化 entry_addr），存入 fd.callspecs。此前 callspecs 仅单元测试填充——整个 FuncCallSpecs/trial 恢复链是死代码。

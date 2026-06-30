@@ -119,6 +119,12 @@ pub struct FuncProto {
     /// Faithful to `FuncProto::effectlist` (fspec.hh). Used by ActionRestrictLocal
     /// to identify saved registers (unaffected) that are copied to stack.
     pub effects: Vec<EffectRecord>,
+    /// Is the return-value (output) data-type locked? Faithful to
+    /// `FuncProto::isOutputLocked` (fspec.cc:3906-3914): a locked output means
+    /// the presence and data-type of the return value is fixed and analysis
+    /// must not change it. Set by `set_output_lock`. A locked-void return
+    /// (e.g. `exit`, `free`) means the CALL produces NO output varnode.
+    pub output_type_locked: bool,
 }
 
 impl FuncProto {
@@ -131,6 +137,7 @@ impl FuncProto {
             calling_convention: "unknown".to_string(),
             is_dotdotdot: false,
             effects: Vec::new(),
+            output_type_locked: false,
         }
     }
 
@@ -177,10 +184,19 @@ impl FuncProto {
         }
     }
 
-    /// Set output lock state.
-    /// Faithful to FuncProto::setOutputLock (fspec.cc:3942).
-    pub fn set_output_lock(&mut self, _val: bool) {
-        // Return type lock is implicit in return_type being set.
+    /// Set output lock state. When locked, the return value's presence and
+    /// data-type will not be overridden by active recovery.
+    /// Faithful to FuncProto::setOutputLock (fspec.cc:3942-3948).
+    pub fn set_output_lock(&mut self, val: bool) {
+        self.output_type_locked = val;
+    }
+
+    /// Is the output (return) data-type locked? Faithful to
+    /// `FuncProto::isOutputLocked`. Used by `funcLinkOutput` to decide
+    /// whether to build an output varnode immediately (locked) or defer to
+    /// active-output trials (unlocked).
+    pub fn is_output_locked(&self) -> bool {
+        self.output_type_locked
     }
 
     /// Copy from another FuncProto.
@@ -191,6 +207,7 @@ impl FuncProto {
         self.parameters = other.parameters.clone();
         self.calling_convention = other.calling_convention.clone();
         self.is_dotdotdot = other.is_dotdotdot;
+        self.output_type_locked = other.output_type_locked;
     }
 
     /// Clear unlocked input parameters.
@@ -286,13 +303,12 @@ impl FuncCallSpecs {
             && self.prototype.parameters.iter().all(|p| p.is_type_locked())
     }
 
-    /// Is the output (return) locked? Faithful to `FuncCallSpecs::isOutputLocked`.
-    /// True if the return type is non-void and locked.
+    /// Is the output (return) locked? Faithful to `FuncCallSpecs::isOutputLocked`
+    /// (delegates to FuncProto::isOutputLocked). A locked output means the
+    /// return data-type (possibly void) is fixed; `funcLinkOutput` builds the
+    /// output varnode only if the locked type is non-void.
     pub fn is_output_locked(&self) -> bool {
-        // Rugra's FuncProto doesn't track a separate output-lock flag; we treat
-        // a non-void return as locked when params are locked (heuristic matching
-        // Ghidra's modelname-locked semantics).
-        self.is_input_locked()
+        self.prototype.is_output_locked()
     }
 
     /// Is this a varargs (...) prototype? Faithful to `FuncCallSpecs::isDotdotdot`.
