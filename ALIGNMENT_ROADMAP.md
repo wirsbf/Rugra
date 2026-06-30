@@ -1,5 +1,12 @@
 # Rugra-Ghidra 完整对齐路线图
 
+> 📌 **主管线差异基线（2026-07-01）**：见 [`docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md`](docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md)。
+> 逐 Action 对齐 Ghidra `universalAction`（coreaction.cc:5462-5739）vs Rugra `set_default_actions`（action.rs:383-492）。
+> **核心发现**：Ghidra 是 4 层嵌套 repeatapply 管线（universal→fullloop→mainloop→stackstall），Rugra 是单遍扁平 24 步；
+> 37 个顶层 Action 中只有 8 个真正对齐，19 个有 impl 未接入，6 个完全缺失；oppool1 缺 36 条规则，oppool2 整池缺，cleanup 缺 11 条；
+> 另有 6 个 Ghidra 不存在的自造 Action（simplify/typeinfer/copypropagate/typepropagate/inferparams/cse）是技术债。
+> P0 = 管线嵌套化改造 + 19 个未接入 Action 接线。
+
 **最后核实**: 2026-06-27（逐行核对 Rugra 源码 vs Ghidra 源码）
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
 
