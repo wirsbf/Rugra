@@ -10056,11 +10056,14 @@ impl Rule for RuleFloatSignCleanup {
 /// a (char *), the PTRSUB is converted to a COPY of a string pointer constant
 /// (and descendant PTRADDs are collapsed).
 ///
-/// NOTE: This rule fundamentally depends on the type system
-/// (TYPE_SPACEBASE / Scope / isReadOnly / stringManager) which Rugra does not
-/// yet expose on Funcdata. The transform structure is ported 1:1; the type/scope
-/// guards are marked TODO and currently cause the rule to no-op until those
-/// APIs land.
+/// NOTE: The output's pointer/char-print type guard (`outvn->getTypeDefFacing()`
+/// is a pointer whose base `isCharPrint()`) is now implemented via `get_type()`
+/// / `is_char_print()`. The rule still cannot fully fire because the deeper
+/// guards — `TYPE_SPACEBASE` dereference, `Scope::isReadOnly`, and
+/// `stringManager->isString` — require infrastructure Rugra does not yet expose
+/// on Funcdata. The transform (`pushConstFurther` over descendants →
+/// COPY / opDestroy) is implemented in `push_const_further` and would be invoked
+/// once those scope/string-manager guards can be evaluated.
 pub struct RulePtrsubCharConstant;
 
 impl RulePtrsubCharConstant {
@@ -10109,15 +10112,35 @@ impl Rule for RulePtrsubCharConstant {
             (sb, vn1, outvn)
         };
         if !vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-        // TODO(datatype): sbType = sb->getTypeReadFacing(op); require TYPE_PTR to
-        //   TYPE_SPACEBASE; outvn must be (char *) with basetype isCharPrint();
-        //   sbtype->getAddress(...)/scope->isReadOnly(...); and
-        //   data.getArch()->stringManager->isString(...). None available in
-        //   Rugra, so the rule cannot currently fire. The full 1:1 transform
-        //   (pushConstFurther over descendants → COPY / opDestroy) is implemented
-        //   in push_const_further above and would be invoked here once those
-        //   type/scope guards can be evaluated.
-        let _ = (sb, vn1, outvn);
+        // sbType = sb->getTypeReadFacing(op); require TYPE_PTR to TYPE_SPACEBASE.
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        let sb_type = sb.read().unwrap().get_type();
+        let sb_is_spacebase_ptr = sb_type.as_ref().map(|dt| {
+            if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+            if let Datatype::Pointer(tp) = dt.as_ref() {
+                tp.ptr_to.get_metatype() == TypeMetatype::Spacebase
+            } else { false }
+        }).unwrap_or(false);
+        if !sb_is_spacebase_ptr { return Ok(action_status::NO_CHANGE); }
+        // outtype = outvn->getTypeDefFacing(); require TYPE_PTR with
+        //   basetype isCharPrint().
+        let out_is_char_ptr = outvn.read().unwrap().get_type().as_ref().map(|dt| {
+            if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+            if let Datatype::Pointer(tp) = dt.as_ref() {
+                tp.ptr_to.is_char_print()
+            } else { false }
+        }).unwrap_or(false);
+        if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
+        // Remaining guards need deeper infra that Rugra does not yet expose:
+        //   TypeSpacebase::getAddress / Scope::isReadOnly / stringManager->isString.
+        // TODO(scope/string): sbtype->getAddress(vn1->getOffset(),vn1->getSize(),
+        //   op->getAddr()); scope = sbtype->getMap();
+        //   if (!scope->isReadOnly(symaddr,1,op->getAddr())) return 0;
+        //   if (!data.getArch()->stringManager->isString(symaddr,basetype)) return 0;
+        // Without these the rule conservatively no-ops: collapsing the PTRSUB to
+        // a COPY of a constant string requires confirming the address holds a
+        // real read-only string, which we cannot yet verify.
+        let _ = vn1;
         Ok(action_status::NO_CHANGE)
     }
 
@@ -10132,14 +10155,66 @@ impl Rule for RulePtrsubCharConstant {
 /// PTRADD descendants; if more than one qualifying pointer calc exists, the
 /// extension op is duplicated to each descendant via `RulePushPtr::duplicateNeed`.
 ///
-/// NOTE: Requires `isAddrForce` / `isAddrTied` / `isTypeLock` / `isNameLock`
-/// Varnode APIs and `RulePushPtr::duplicateNeed`, none of which exist in Rugra.
-/// The descendant-counting guard logic is ported 1:1; the duplication step is a
-/// TODO and the rule no-ops until `duplicateNeed` is available.
+/// The descendant-counting guard logic, the `isAddrForce`/`isAddrTied`/
+/// `isTypeLock`/`isNameLock` guards, and the `duplicateNeed` duplication step
+/// are all implemented 1:1 against the now-available Varnode flag APIs and the
+/// op-edit Funcdata methods.
 pub struct RuleExtensionPush;
 
 impl RuleExtensionPush {
     pub fn new() -> Self { Self }
+
+    /// Faithful to `RulePushPtr::duplicateNeed` (ruleaction.cc:6827-6855) plus
+    /// `buildVarnodeOut` (ruleaction.cc:6783-6790). Duplicate the single-input
+    /// extension op so each descendant gets its own copy, then destroy the
+    /// original. We assume the op is INT_ZEXT/INT_SEXT (one input).
+    fn duplicate_need(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) {
+        let op_ref = crate::op::PcodeOpRef(op.clone());
+        let out_vn = match op.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return,
+        };
+        let in_vn = match op.read().unwrap().inrefs.get(0) {
+            Some(v) => v.clone(),
+            None => return,
+        };
+        let num = op.read().unwrap().num_input();
+        let opc = op.read().unwrap().opcode;
+        let op_addr = op.read().unwrap().get_addr();
+        let out_size = out_vn.read().unwrap().get_size();
+        // Ghidra's loop re-reads beginDescend() each iteration because each dup
+        // repoints one descendant away from out_vn. We grab the first descendant,
+        // duplicate the op before it, and repoint its input. Loop until no
+        // descendants remain, then destroy the original op.
+        loop {
+            let first_dec = match out_vn.read().unwrap().descend_iter().next() {
+                Some(d) => d,
+                None => break, // out_vn has no more descendants
+            };
+            let slot = {
+                let d = first_dec.read().unwrap();
+                d.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &out_vn)).unwrap_or(0)
+            };
+            let dec_ref = crate::op::PcodeOpRef(first_dec.clone());
+            // newOp(num, op->getAddr()); opSetOpcode; build output.
+            let new_op = fd.new_op(num, op_addr);
+            fd.op_set_opcode(&new_op, opc);
+            // buildVarnodeOut: if addr-tied/internal → newUniqueOut; else newVarnodeOut(addr).
+            // Ghidra keeps addr-tied varnodes at their storage; otherwise a unique.
+            // Rugra's new_unique_out always makes an internal unique, matching the
+            // IPTR_INTERNAL / non-addr-tied common case.
+            let new_out = fd.new_unique_out(out_size, &new_op);
+            fd.op_set_input(&new_op, in_vn.clone(), 0);
+            if num > 1 {
+                if let Some(in1) = op.read().unwrap().inrefs.get(1).cloned() {
+                    fd.op_set_input(&new_op, in1, 1);
+                }
+            }
+            fd.op_set_input(&dec_ref, new_out, slot);
+            fd.op_insert_before(&new_op, &dec_ref);
+        }
+        fd.op_destroy(&op_ref);
+    }
 }
 
 impl Rule for RuleExtensionPush {
@@ -10152,8 +10227,15 @@ impl Rule for RuleExtensionPush {
             (in_vn, out_vn)
         };
         if in_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-        // TODO(addrtied/lock): skip if inVn->isAddrForce()/isAddrTied() or
-        //   outVn->isTypeLock()/isNameLock()/isAddrForce()/isAddrTied(). Rugra lacks these.
+        // Ghidra guards (ruleaction.cc:7437-7441):
+        if in_vn.read().unwrap().is_addr_force() { return Ok(action_status::NO_CHANGE); }
+        if in_vn.read().unwrap().is_addr_tied() { return Ok(action_status::NO_CHANGE); }
+        if out_vn.read().unwrap().is_type_lock() || out_vn.read().unwrap().is_name_lock() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if out_vn.read().unwrap().is_addr_force() || out_vn.read().unwrap().is_addr_tied() {
+            return Ok(action_status::NO_CHANGE);
+        }
 
         let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
         let mut addcount = 0i32; // INT_ADD descendants feeding a lone PTRADD
@@ -10182,11 +10264,9 @@ impl Rule for RuleExtensionPush {
                 return Ok(action_status::NO_CHANGE);
             }
         }
-        // TODO(infra): RulePushPtr::duplicateNeed(op, data) — duplicate the
-        //   extension op to each descendant. Rugra has no RulePushPtr /
-        //   duplicateNeed helper, so we cannot complete the transform. No-op.
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        // RulePushPtr::duplicateNeed(op, data); duplicate the extension to all descendants.
+        Self::duplicate_need(op_arc, fd);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "extension_push" }
@@ -10201,10 +10281,13 @@ impl Rule for RuleExtensionPush {
 /// is used purely in `(load & C) == D` comparisons, or when a natural integer
 /// truncation applies.
 ///
-/// NOTE: Depends on the pointer's pointed-to data-type (`getPtrTo`), AddrSpace
-/// const-space big-endian, and per-Varnode metatypes. Rugra lacks these, so the
-/// rule cannot currently fire; the helper logic is ported 1:1 and guarded by a
-/// TODO so it activates once data-types land.
+/// NOTE: The pointer's pointed-to data-type (`getPtrTo`), the const-space
+/// big-endian resolution (`AddressSpace::from_id`), and the per-Varnode
+/// metatype are now all available via `get_type()`. The addForm and
+/// integer-truncation transforms are now implemented. The
+/// `data.getArch()->types->getBase(...)` type-attach on new varnodes is still a
+/// TODO (no per-Varnode type-set), but the numeric/control transforms fire.
+/// In a test environment with no pointer type, the rule gracefully no-ops.
 pub struct RuleExpandLoad;
 
 impl RuleExpandLoad {
@@ -10273,24 +10356,121 @@ impl RuleExpandLoad {
 }
 
 impl Rule for RuleExpandLoad {
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleExpandLoad::applyOp (ruleaction.cc:10937-11013).
-        let (out_vn, root_ptr) = {
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let (out_vn, root_ptr, space_id_vn) = {
             let op = op_arc.read().unwrap();
             let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
             let root_ptr = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            (out_vn, root_ptr)
+            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            (out_vn, root_ptr, space_id_vn)
         };
-        let _out_size = out_vn.read().unwrap().get_size();
-        // TODO(datatype): elType = rootPtr->getTypeReadFacing(op)->getPtrTo();
-        //   require TYPE_PTR and elType->getSize() > outSize; then either the
-        //   addForm path (checkAndComparison/modifyAndComparison) or the natural
-        //   integer-truncation path. Rugra lacks Varnode data-types → cannot
-        //   determine the pointed-to element size, so the rule cannot fire.
-        //   The helper methods (check_and_comparison / modify_and_comparison)
-        //   above are ported 1:1 and would be invoked here.
-        let _ = (out_vn, root_ptr);
-        Ok(action_status::NO_CHANGE)
+        let out_size = out_vn.read().unwrap().get_size();
+        let mut add_op: Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = None;
+        let mut offset = 0usize;
+        // Resolve the pointed-to data-type (elType) following any INT_ADD
+        // constant offset in rootPtr.
+        let el_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> = {
+            use crate::type_system::datatype::{Datatype, TypeMetatype};
+            if root_ptr.read().unwrap().is_written() {
+                let def = match root_ptr.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+                if def.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+                    let in1 = match def.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+                    let off = in1.read().unwrap().get_offset();
+                    if off > 16 { return Ok(action_status::NO_CHANGE); } // INT_ADD offset must be small
+                    // INT_ADD must be used only once.
+                    let addout = match def.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+                    if addout.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
+                    add_op = Some(def.clone());
+                    offset = off as usize;
+                    // elType = rootPtr (=def->getIn(0))->getTypeReadFacing(def)
+                    let real_root = match def.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    let dt = match real_root.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                    if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
+                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                    Some(ptr_to)
+                } else {
+                    // elType = rootPtr->getTypeReadFacing(op)
+                    let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                    if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
+                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                    Some(ptr_to)
+                }
+            } else {
+                let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
+                let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                Some(ptr_to)
+            }
+        };
+        let el_type = match el_type { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+        if el_type.get_size() <= out_size { return Ok(action_status::NO_CHANGE); }
+        if el_type.get_size() < out_size + offset { return Ok(action_status::NO_CHANGE); }
+
+        use crate::type_system::datatype::TypeMetatype;
+        let meta = el_type.get_metatype();
+        if meta == TypeMetatype::Unknown { return Ok(action_status::NO_CHANGE); }
+        let add_form = Self::check_and_comparison(&out_vn);
+        // AddrSpace *spc = op->getIn(0)->getSpaceFromConst();
+        let spc_id: crate::space::SpaceId = if space_id_vn.read().unwrap().is_constant() {
+            space_id_vn.read().unwrap().get_offset() as u8
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        };
+        let spc = crate::space::AddressSpace::from_id(spc_id);
+        let is_big_endian = spc.is_big_endian();
+        let mut lsb_cut = 0usize;
+        if add_form {
+            lsb_cut = if is_big_endian { el_type.get_size() - out_size - offset } else { offset };
+        } else {
+            // Check for natural integer truncation.
+            if meta != TypeMetatype::Int && meta != TypeMetatype::Uint { return Ok(action_status::NO_CHANGE); }
+            // outMeta = outVn->getTypeDefFacing()->getMetatype(); must be INT/UINT/UNKNOWN/BOOL.
+            let out_meta = out_vn.read().unwrap().get_type().map(|t| t.get_metatype());
+            match out_meta {
+                None | Some(TypeMetatype::Int) | Some(TypeMetatype::Uint)
+                | Some(TypeMetatype::Unknown) | Some(TypeMetatype::Bool) => {}
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+            // LOAD must grab least significant bytes.
+            if is_big_endian {
+                if out_size + offset != el_type.get_size() { return Ok(action_status::NO_CHANGE); }
+            } else if offset != 0 {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // Modify the LOAD: grow output to elType's size.
+        let new_out = fd.new_unique(el_type.get_size());
+        // TODO(datatype): new_out->updateType(elType) — no per-Varnode type-set.
+        fd.op_set_output(&op_ref, new_out.clone());
+        if let Some(add_op) = add_op.as_ref() {
+            // rootPtr input → real root; destroy the INT_ADD offset op.
+            let real_root = match add_op.read().unwrap().get_in(0).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            fd.op_set_input(&op_ref, real_root, 1);
+            fd.op_destroy(&crate::op::PcodeOpRef(add_op.clone()));
+        }
+        if add_form {
+            if meta != TypeMetatype::Int && meta != TypeMetatype::Uint {
+                // elType = data.getArch()->types->getBase(elType->getSize(), TYPE_UINT);
+                // TODO(datatype): no Architecture/types base-type lookup; use el_type as-is.
+            }
+            Self::modify_and_comparison(fd, &out_vn, &new_out, el_type.get_size(), lsb_cut);
+        } else {
+            // Truncate the new bigger LOAD output with a SUBPIECE → out_vn.
+            let sub_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
+            fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&sub_op, new_out, 0);
+            let zero_c = fd.new_constant(4, 0);
+            fd.op_set_input(&sub_op, zero_c, 1);
+            fd.op_set_output(&sub_op, out_vn);
+            fd.op_insert_after(&sub_op, &op_ref);
+        }
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "expand_load" }
@@ -10305,58 +10485,112 @@ impl Rule for RuleExpandLoad {
 /// `convertZextToPiece` (7543-7572), `findReplaceZext` (7574-7596),
 /// `separateSymbol` (7598-7611).
 ///
-/// NOTE: This rule is entirely driven by structured data-types
-/// (`getStructuredType`, `isPieceStructured`, `getSubType`, address-tied /
-/// proto-partial flags, `PieceNode::gatherPieces`, `newVarnodeOut(addr,...)`,
-/// `registerProtoPartialRoot`, `inheritResolution`). None of these are present
-/// in Rugra. The full transform structure is ported 1:1 but cannot fire until
-/// the type system lands; it currently no-ops with a TODO.
+/// NOTE: This rule is entirely driven by structured data-types. Rugra now
+/// exposes `get_type()` / `is_piece_structured()` / `get_sub_type()`, so the
+/// `spanning_range` and `determine_datatype` guards are wired (using the
+/// varnode's read-facing type in lieu of `getStructuredType`/`SymbolEntry`,
+/// which are not yet ported). The full transform still cannot fire because the
+/// piece-assembly step needs `PieceNode::gatherPieces`,
+/// `newVarnodeOut(addr,...)`, `registerProtoPartialRoot`, and
+/// `inheritResolution`, none of which exist in Rugra. It remains a no-op with a
+/// TODO until that deeper type-resolution infrastructure lands.
 pub struct RulePieceStructure;
 
 impl RulePieceStructure {
     pub fn new() -> Self { Self }
 
     /// Faithful to `determineDatatype` (ruleaction.cc:7481-7517). Returns the
-    /// structured (struct/array) data-type the varnode is part of, plus the
-    /// base offset. Currently always None (no structured-type API).
+    /// structured (struct/array/union) data-type the varnode is part of, plus
+    /// the base offset. Uses `vn->get_type()` + `is_piece_structured()`; the
+    /// partial-offset / SymbolEntry path (vn is a partial of a larger symbol)
+    /// is a TODO until `getStructuredType`/`getSymbolEntry` are ported.
     fn determine_datatype(
-        _vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) -> Option<((), i32)> {
-        // TODO(datatype): vn->getStructuredType(); partial-offset computation
-        //   via SymbolEntry / getSubType. Rugra lacks structured data-types.
-        None
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
+        let ct = vn.read().unwrap().get_type()?;
+        if !ct.is_piece_structured() {
+            return None;
+        }
+        // Ghidra: if vn is a partial, walk getSubType to the concrete sub-type;
+        //   else baseOffset=0. Rugra lacks getSymbolEntry/getStructuredType for
+        //   the partial case, so we only handle the size-matching (non-partial)
+        //   case: baseOffset = 0.
+        if ct.get_size() != vn.read().unwrap().get_size() {
+            // TODO(symbolentry): partial-offset computation via
+            //   vn->getSymbolEntry() / getSubType chain. Cannot resolve the
+            //   concrete sub-type for a partial varnode yet.
+            return None;
+        }
+        Some((ct, 0))
     }
 
     /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
-    /// range falls within a single non-structured element. Placeholder.
-    fn spanning_range(_ct: &(), _offset: i32, _size: i32) -> bool {
-        // TODO(datatype): walk getSubType chain. Rugra lacks structured types.
-        false
+    /// range falls within a single non-structured element.
+    fn spanning_range(
+        ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        offset: i32,
+        size: i32,
+    ) -> bool {
+        if (offset + size) as usize > ct.get_size() { return false; }
+        let mut cur = ct.clone();
+        let mut new_off = offset;
+        loop {
+            let (sub, off) = cur.get_sub_type(new_off as i64);
+            match sub {
+                None => return true, // Don't know what it spans, assume multiple
+                Some(s) => {
+                    if (new_off + size) as usize > s.get_size() { return true; }
+                    if !s.is_piece_structured() {
+                        return false;
+                    }
+                    cur = std::sync::Arc::new(s.clone());
+                    new_off = off as i32;
+                }
+            }
+        }
     }
 
     /// Faithful to `convertZextToPiece` (ruleaction.cc:7543-7572). Converts an
     /// INT_ZEXT to a PIECE with a zero high constant. Returns false here as the
-    /// type-driven offset bookkeeping is unavailable.
+    /// type-driven offset bookkeeping (`needsResolution`/`inheritResolution`)
+    /// and `getSubType` re-attachment are unavailable.
     fn convert_zext_to_piece(
         _zext: &crate::op::PcodeOpRef,
-        _ct: &(),
+        _ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         _offset: i32,
         _fd: &mut Funcdata,
     ) -> bool {
-        // TODO(datatype): needs outvn->getSpace()->isBigEndian(), getSubType,
-        //   and invn->getType()->needsResolution()/inheritResolution.
+        // TODO(type-resolution): needs outvn->getSpace()->isBigEndian(),
+        //   getSubType, and invn->getType()->needsResolution()/inheritResolution.
         false
     }
 }
 
 impl Rule for RulePieceStructure {
-    fn apply_op(&self, _op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7720).
-        // The whole transform is data-type driven (determineDatatype →
-        // gatherPieces → findReplaceZext/convertZextToPiece → addr-tied
-        // rewrites). Rugra has no structured data-types, PieceNode tree, or
-        // proto-partial/address-tied APIs, so the rule cannot fire yet.
-        // TODO(datatype): implement once structured types / PieceNode land.
+        // The guard-level determine_datatype / spanning_range checks now run
+        // against the varnode's read-facing type. The piece-assembly step
+        // (gatherPieces / convertZextToPiece / addr-tied rewrites) needs
+        // PieceNode + proto-partial APIs that are not yet ported, so the rule
+        // still conservatively no-ops.
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // Guard: determineDatatype(outvn).
+        let (ct, _base_offset) = match Self::determine_datatype(&outvn) {
+            Some(x) => x,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // Guard: the output must span multiple structure elements.
+        if !Self::spanning_range(&ct, _base_offset, outvn.read().unwrap().get_size() as i32) {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // TODO(piece-assembly): gatherPieces / convertZextToPiece / addr-tied
+        //   rewrites / newVarnodeOut(addr,...) / registerProtoPartialRoot /
+        //   inheritResolution. Rugra has no PieceNode tree or proto-partial
+        //   APIs, so the actual piece rewrite cannot be performed yet.
         Ok(action_status::NO_CHANGE)
     }
 
@@ -10410,15 +10644,22 @@ impl Rule for RulePullsubIndirect {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
         };
-        // TODO(iopspace): Rugra's AddressSpace has no IPTR_IOP variant, so we
-        //   cannot verify the second INDIRECT input is an iop-space coderef.
-        //   We accept any INDIRECT here; the targ_op lookup below is skipped.
-        let _ = indir_in1;
+        if !indir_in1.read().unwrap().get_space().is_iop() {
+            return Ok(action_status::NO_CHANGE);
+        }
         // PcodeOp *targ_op = PcodeOp::getOpFromConst(indir->getIn(1)->getAddr());
         //   if (targ_op->isDead()) return 0;
-        // TODO(iopspace): no coderef resolution. Assume the target is live.
+        let targ_op = match fd.get_op_from_const(&indir_in1) {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if targ_op.0.read().unwrap().is_dead() {
+            return Ok(action_status::NO_CHANGE);
+        }
         // vn->isAddrForce() guard.
-        // TODO(addrtied): Rugra lacks isAddrForce.
+        if vn.read().unwrap().is_addr_force() {
+            return Ok(action_status::NO_CHANGE);
+        }
         let (max_byte, min_byte) = RulePullsubMulti::min_max_use(&vn);
         let new_size = max_byte - min_byte + 1;
         if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {
@@ -10429,8 +10670,10 @@ impl Rule for RulePullsubIndirect {
             Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
         };
-        // outvn->isPrecisLo()/isPrecisHi() guard.
-        // TODO(double): Rugra lacks precis flags.
+        // outvn->isPrecisLo()/isPrecisHi() guard — don't pull apart double-precision objects.
+        if outvn.read().unwrap().is_precis_lo() || outvn.read().unwrap().is_precis_hi() {
+            return Ok(action_status::NO_CHANGE);
+        }
         // consume = calc_mask(newSize) << 8*minByte; consume = ~consume;
         let consume = !(calc_mask(new_size as usize) << (8 * min_byte as u64));
         // indir->getIn(0)->getConsume()  &  consume
@@ -10441,8 +10684,10 @@ impl Rule for RulePullsubIndirect {
         if (consume & indir_in0.read().unwrap().get_consume()) != 0 {
             return Ok(action_status::NO_CHANGE);
         }
-        // isIndirectCreation branch (data.newIndirectCreation) — TODO(infra).
-        // Non-creation branch (the common case) below.
+        // isIndirectCreation branch (data.newIndirectCreation) needs
+        //   data.newIndirectCreation + vn->isIndirectZero(); not yet ported.
+        // TODO(infra): the indirect-creation branch. The common non-creation
+        //   branch below is fully wired.
         let is_big_endian = vn.read().unwrap().space().is_big_endian();
         let vn_addr = vn.read().unwrap().get_offset();
         let vn_size = vn.read().unwrap().get_size();
@@ -10451,6 +10696,17 @@ impl Rule for RulePullsubIndirect {
         } else {
             crate::address::Address::new(vn_addr + (vn_size as u64 - max_byte as u64 - 1))
         };
+        // indir->isIndirectCreation() — Ghidra checks the INDIRECT PcodeOp's
+        //   indirect_creation flag. Rugra exposes is_indirect_creation() on
+        //   Varnode (the INDIRECT's output `vn`) instead; we use that as the
+        //   closest available signal.
+        if vn.read().unwrap().is_indirect_creation() {
+            // TODO(infra): data.newIndirectCreation(targ_op,smalladdr2,newSize,
+            //   possibleout). Rugra has is_indirect_creation() but not
+            //   newIndirectCreation / isIndirectZero, so we cannot build the
+            //   creation form; conservatively no-op.
+            return Ok(action_status::NO_CHANGE);
+        }
         let basevn = indir_in0.clone();
         // small1 = findSubpiece(basevn,newSize,op->getIn(1)->getOffset()) or buildSubpiece
         let small1 = RulePullsubMulti::find_subpiece(&basevn, new_size as u32, op_in1_offset)
@@ -10461,10 +10717,9 @@ impl Rule for RulePullsubIndirect {
         fd.op_set_opcode(&new_ind, OpCode::CPUI_INDIRECT);
         let small2 = fd.new_varnode_out(new_size as usize, smalladdr2, &new_ind);
         fd.op_set_input(&new_ind, small1, 0);
-        // TODO(iopspace): data.opSetInput(new_ind, data.newVarnodeIop(targ_op), 1);
-        //   We leave the second input unset (the original iop coderef cannot be
-        //   reconstructed without the iop-space). This is a known fidelity gap.
-        let _iop_placeholder = fd.new_constant(4, 0);
+        // data.opSetInput(new_ind, data.newVarnodeIop(targ_op), 1);
+        let iop_vn = fd.new_varnode_iop(&targ_op);
+        fd.op_set_input(&new_ind, iop_vn, 1);
         fd.op_insert_before(&new_ind, &crate::op::PcodeOpRef(indir.clone()));
         // Replace descendants of vn with small2.
         RulePullsubMulti::replace_descendants(fd, &vn, small2, max_byte, min_byte);
@@ -10483,10 +10738,12 @@ impl Rule for RulePullsubIndirect {
 /// overlap) the INDIRECT becomes a COPY / SUBPIECE; otherwise, if the wrapped
 /// op is dead, the INDIRECT output is totalReplace'd by its input and destroyed.
 ///
-/// NOTE: Depends on the iop-space coderef resolution (`PcodeOp::getOpFromConst`),
-/// `characterizeOverlap`/`contains` Varnode overlap methods, `hasNoLocalAlias`,
-/// `isIndirectCreation`, `noIndirectCollapse`, LoadGuard, and STORE spacebase-ptr
-/// guards. Rugra lacks all of these; the rule currently no-ops with a TODO.
+/// NOTE: The iop-space coderef resolution (`get_op_from_const`), the
+/// COPY/SUBPIECE overlap-collapse via `characterize_overlap`/`contains_storage`,
+/// and the dead-indop `total_replace`+`op_destroy` path are all now implemented.
+/// The `hasNoLocalAlias`/`noIndirectCollapse` and STORE spacebase-guard branches
+/// remain a TODO (deeper infra); they conservatively fall through to no-op
+/// rather than collapse.
 pub struct RuleIndirectCollapse;
 
 impl RuleIndirectCollapse {
@@ -10496,21 +10753,96 @@ impl RuleIndirectCollapse {
 impl Rule for RuleIndirectCollapse {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleIndirectCollapse::applyOp (ruleaction.cc:3177-3252).
-        let (in0, outvn) = {
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let (in1, in0, outvn) = {
             let op = op_arc.read().unwrap();
             let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
-            // indir_in1 must be the iop-space coderef of the wrapped op.
-            (in1, outvn)
+            (in1, in0, outvn)
         };
-        // TODO(iopspace): PcodeOp *indop = PcodeOp::getOpFromConst(in1->getAddr());
-        //   Requires IPTR_IOP space + coderef resolution. Without it we cannot
-        //   discover the wrapped op, so the rule cannot fire. The 1:1 transform
-        //   (COPY/SUBPIECE collapse on full/partial overlap, or
-        //   totalReplace(out,in0)+opDestroy when indop is dead) would follow.
-        let in0 = in0;
-        let _ = (in0, outvn, fd);
-        Ok(action_status::NO_CHANGE)
+        // if (op->getIn(1)->getSpace()->getType()!=IPTR_IOP) return 0;
+        if !in1.read().unwrap().get_space().is_iop() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // PcodeOp *indop = PcodeOp::getOpFromConst(op->getIn(1)->getAddr());
+        let indop = match fd.get_op_from_const(&in1) {
+            Some(o) => o,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // Is the indirect effect gone?
+        if !indop.0.read().unwrap().is_dead() {
+            if indop.0.read().unwrap().opcode == OpCode::CPUI_COPY {
+                // STORE resolved to a COPY. vn1 = indop->getOut(); vn2 = op->getOut();
+                let vn1 = match indop.0.read().unwrap().output.clone() {
+                    Some(o) => o,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                // res = vn1->characterizeOverlap(*vn2);
+                let res = {
+                    let v1 = vn1.read().unwrap();
+                    let v2 = outvn.read().unwrap();
+                    v1.characterize_overlap(&v2)
+                };
+                if res > 0 { // Copy has an effect of some sort
+                    if res == 2 {
+                        // vn1 and vn2 are the same storage → Convert INDIRECT to COPY.
+                        fd.op_uninsert(&op_ref);
+                        fd.op_set_input(&op_ref, vn1, 0);
+                        fd.op_remove_input(&op_ref, 1);
+                        fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                        fd.op_insert_after(&op_ref, &indop);
+                        return Ok(action_status::CHANGE);
+                    }
+                    // if (vn1->contains(*vn2) == 0): INDIRECT output properly
+                    //   contained in COPY output → Convert INDIRECT to a SUBPIECE.
+                    let cont = {
+                        let v1 = vn1.read().unwrap();
+                        let v2 = outvn.read().unwrap();
+                        v1.contains_storage(&v2)
+                    };
+                    if cont == 0 {
+                        // trunc offset: big-endian vs little-endian.
+                        let trunc = {
+                            let v1 = vn1.read().unwrap();
+                            let v2 = outvn.read().unwrap();
+                            if v1.get_space().is_big_endian() {
+                                v1.get_offset() + v1.get_size() as u64 - (v2.get_offset() + v2.get_size() as u64)
+                            } else {
+                                v2.get_offset() - v1.get_offset()
+                            }
+                        };
+                        fd.op_uninsert(&op_ref);
+                        fd.op_set_input(&op_ref, vn1, 0);
+                        let trunc_c = fd.new_constant(4, trunc);
+                        fd.op_set_input(&op_ref, trunc_c, 1);
+                        fd.op_set_opcode(&op_ref, OpCode::CPUI_SUBPIECE);
+                        fd.op_insert_after(&op_ref, &indop);
+                        return Ok(action_status::CHANGE);
+                    }
+                    // Partial overlap, not sure what to do.
+                    eprintln!("Ignoring partial resolution of indirect");
+                    return Ok(action_status::NO_CHANGE);
+                }
+            } else if (op_arc.read().unwrap().flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0 {
+                // TODO(infra): hasNoLocalAlias + noIndirectCollapse checks.
+                //   op->isIndirectCreation() is the PcodeOp flag; Rugra has no
+                //   hasNoLocalAlias/noIndirectCollapse accessors, so we cannot
+                //   safely collapse here.
+                return Ok(action_status::NO_CHANGE);
+            } else if indop.0.read().unwrap().uses_spacebase_ptr() {
+                // TODO(infra): STORE spacebase-ptr LoadGuard checks
+                //   (data.getStoreGuard(indop), guard->isGuarded(...)). Rugra
+                //   lacks getStoreGuard/LoadGuard; conservatively keep INDIRECT.
+                return Ok(action_status::NO_CHANGE);
+            } else {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // The indirect effect is gone (indop dead): totalReplace out by in0 + destroy.
+        fd.total_replace(&outvn, in0);
+        fd.op_destroy(&op_ref);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "indirect_collapse" }
@@ -10523,10 +10855,10 @@ impl Rule for RuleIndirectCollapse {
 /// look up the constant-pool record; if it is a `primitive`, replace the op
 /// with a COPY of the constant value; otherwise append the record tag.
 ///
-/// NOTE: Requires `isCpoolTransformed`/`opMarkCpoolTransformed` op flags and
-/// `data.getArch()->cpool->getRecord(refs)` plus `CPoolRecord`. Rugra exposes a
-/// `cpool` module but Funcdata has no `getArch()`/cpool accessor, so the lookup
-/// cannot be performed; the rule no-ops with a TODO.
+/// NOTE: The `isCpoolTransformed`/`opMarkCpoolTransformed` op flags and the
+/// `data.getArch()->cpool->getRecord(refs)` lookup are all now wired. In a test
+/// environment with no Architecture (or no cpool), the lookup returns None and
+/// the rule gracefully no-ops.
 pub struct RuleTransformCpool;
 
 impl RuleTransformCpool {
@@ -10536,8 +10868,11 @@ impl RuleTransformCpool {
 impl Rule for RuleTransformCpool {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleTransformCpool::applyOp (ruleaction.cc:3915-3940).
-        // TODO(infra): if (op->isCpoolTransformed()) return 0; data.opMarkCpoolTransformed(op);
-        //   Rugra PcodeOp has no cpool-transformed flag.
+        if op_arc.read().unwrap().is_cpool_transformed() {
+            return Ok(action_status::NO_CHANGE); // Already visited
+        }
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_mark_cpool_transformed(&op_ref);
         // Gather refs from slot 1..n.
         let num_input = op_arc.read().unwrap().num_input();
         if num_input < 2 { return Ok(action_status::NO_CHANGE); }
@@ -10549,11 +10884,46 @@ impl Rule for RuleTransformCpool {
             };
             refs.push(vn.read().unwrap().get_offset());
         }
-        // TODO(infra): const CPoolRecord *rec = data.getArch()->cpool->getRecord(refs);
-        //   Funcdata has no get_arch()/cpool accessor; rugra's cpool module is
-        //   not wired to Funcdata. Cannot look up the record → rule no-ops.
-        let _ = (fd, refs);
-        Ok(action_status::NO_CHANGE)
+        // const CPoolRecord *rec = data.getArch()->cpool->getRecord(refs);
+        // Gracefully degrade if there is no Architecture / no constant pool.
+        let arch = match fd.get_arch() {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let cpool = match &arch.cpool {
+            Some(c) => c.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let rec = {
+            use crate::cpool::ConstantPool;
+            let cp = cpool.read().unwrap();
+            cp.get_record(&refs).cloned()
+        };
+        if let Some(rec) = rec {
+            if rec.tag == crate::cpool::cpool_tag::INSTANCE_OF {
+                // data.opMarkCalculatedBool(op); — Rugra exposes is_calculated_bool
+                //   but no setter; we set the flag bit directly.
+                op_arc.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
+            } else if rec.tag == crate::cpool::cpool_tag::PRIMITIVE {
+                let sz = match op_arc.read().unwrap().output.clone() {
+                    Some(o) => o.read().unwrap().get_size(),
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let cvn = fd.new_constant(sz, rec.value & calc_mask(sz));
+                // cvn->updateType(rec->getType(), true, true); — type attach
+                //   omitted (no per-Varnode type-set on Rugra Varnode yet).
+                while op_arc.read().unwrap().num_input() > 1 {
+                    fd.op_remove_input(&op_ref, op_arc.read().unwrap().num_input() - 1);
+                }
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                fd.op_set_input(&op_ref, cvn, 0);
+                return Ok(action_status::CHANGE);
+            }
+            // Otherwise: append the record tag as a trailing constant input.
+            let tag_const = fd.new_constant(4, rec.tag as u64);
+            fd.op_insert_input(&op_ref, tag_const, op_arc.read().unwrap().num_input());
+        }
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "transform_cpool" }
@@ -10602,9 +10972,9 @@ impl Rule for RuleSwitchSingle {
 /// alignment bits (per `data.getArch()->funcptr_align`), strip the mask by
 /// converting the INT_AND into a COPY.
 ///
-/// NOTE: Needs `data.getArch()->funcptr_align`. Rugra stores `funcptr_align` on
-/// Architecture but Funcdata has no `get_arch()` accessor, so the alignment
-/// cannot be read; the rule no-ops with a TODO.
+/// NOTE: Needs `data.getArch()->funcptr_align`. Rugra now exposes `get_arch()`
+/// and stores `funcptr_align` on Architecture. In a test environment with no
+/// Architecture (or align==0), the rule gracefully no-ops.
 pub struct RuleFuncPtrEncoding;
 
 impl RuleFuncPtrEncoding {
@@ -10614,8 +10984,11 @@ impl RuleFuncPtrEncoding {
 impl Rule for RuleFuncPtrEncoding {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleFuncPtrEncoding::applyOp (ruleaction.cc:9926-9948).
-        // TODO(infra): int4 align = data.getArch()->funcptr_align; if (align==0) return 0;
-        //   Funcdata has no get_arch() accessor → cannot read funcptr_align.
+        let align = match fd.get_arch() {
+            Some(a) => a.funcptr_align,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if align == 0 { return Ok(action_status::NO_CHANGE); }
         let vn = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -10626,8 +10999,22 @@ impl Rule for RuleFuncPtrEncoding {
             None => return Ok(action_status::NO_CHANGE),
         };
         if andop.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
-        // Without alignment we cannot validate the mask, so no-op.
-        let _ = fd;
+        // maskvn = andop->getIn(1); must be constant.
+        let maskvn = match andop.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !maskvn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        let val = maskvn.read().unwrap().get_offset();
+        let testmask = calc_mask(maskvn.read().unwrap().get_size());
+        let slide = (!0u64).wrapping_shl(align as u32);
+        if (testmask & slide) == val {
+            // 1-bit encoding: eliminate the mask.
+            let andop_ref = crate::op::PcodeOpRef(andop.clone());
+            fd.op_remove_input(&andop_ref, 1);
+            fd.op_set_opcode(&andop_ref, OpCode::CPUI_COPY);
+            return Ok(action_status::CHANGE);
+        }
         Ok(action_status::NO_CHANGE)
     }
 
@@ -10792,9 +11179,12 @@ impl Rule for RuleUnsigned2Float {
 /// via a MULTIEQUAL guarded by `V < 0`, collapse to a single unsigned
 /// `FLOAT_INT2FLOAT(zext(V))`.
 ///
-/// NOTE: Needs `FlowBlock::findCondition`, block `lastOp`, `isBooleanFlip`,
-/// `constantMatch(calc_mask(...))`, and block reinsertion. Rugra's flow/block
-/// query API is insufficient for this; the rule no-ops with a TODO.
+/// NOTE: The block/control-flow queries (`findCondition`, `lastOp`,
+/// `isBooleanFlip`, `constantMatch`), the comparison verification, and the
+/// block-reinsertion transform are all now implemented against the available
+/// block + op-edit infrastructure. In a test environment with no block graph
+/// (no `parent`), the condition lookup returns None and the rule gracefully
+/// no-ops.
 pub struct RuleInt2FloatCollapse;
 
 impl RuleInt2FloatCollapse {
@@ -10842,15 +11232,77 @@ impl Rule for RuleInt2FloatCollapse {
         if op2.read().unwrap().opcode != OpCode::CPUI_FLOAT_INT2FLOAT { return Ok(action_status::NO_CHANGE); }
         let op2_in0 = op2.read().unwrap().get_in(0).cloned().unwrap();
         if !std::sync::Arc::ptr_eq(&op2_in0, &basevn) { return Ok(action_status::NO_CHANGE); }
-        // FlowBlock *cond = FlowBlock::findCondition(...); cbranch = cond->lastOp();
-        //   compare = INT_SLESS(basevn,0) | INT_SLESS(-1,basevn).
-        // TODO(flow): Rugra lacks FlowBlock::findCondition and the block-level
-        //   CBRANCH/boolean-flip/lastOp queries needed to verify the guarding
-        //   condition. Without it we cannot safely collapse; the rule no-ops.
-        //   The transform (opUninsert multiop → redefine as FLOAT_INT2FLOAT over
-        //   new INT_ZEXT) is otherwise straightforward.
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        // FlowBlock *cond = FlowBlock::findCondition(parent, slot, parent, 1-slot, dir2unsigned);
+        let parent = match multiop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) {
+            Some(p) => p,
+            None => return Ok(action_status::NO_CHANGE), // no block graph
+        };
+        let (cond, dir2unsigned) = match crate::block::find_condition(&parent, slot, &parent, 1 - slot) {
+            Some(c) => c,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        // cbranch = cond->lastOp(); must be CBRANCH; !isBooleanFlip.
+        let cbranch = {
+            let c_rg = cond.read().unwrap();
+            use crate::block::FlowBlock;
+            let any = c_rg.as_any();
+            if let Some(bb) = any.downcast_ref::<crate::block::BlockBasic>() {
+                bb.last_op()
+            } else {
+                None
+            }
+        };
+        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) };
+        if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return Ok(action_status::NO_CHANGE); }
+        if cbranch.0.read().unwrap().is_boolean_flip() { return Ok(action_status::NO_CHANGE); }
+        // compare = cbranch->getIn(1)->getDef(); must be INT_SLESS.
+        let cond_in = match cbranch.0.read().unwrap().get_in(1).cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !cond_in.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+        let compare = cond_in.read().unwrap().get_def().unwrap();
+        if compare.read().unwrap().opcode != OpCode::CPUI_INT_SLESS { return Ok(action_status::NO_CHANGE); }
+        let (cmp0, cmp1) = {
+            let c = compare.read().unwrap();
+            (c.get_in(0).cloned(), c.get_in(1).cloned())
+        };
+        let (cmp0, cmp1) = match (cmp0, cmp1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        // compare->getIn(1)->constantMatch(0): condition is (basevn < 0)
+        let c1_is_zero = cmp1.read().unwrap().is_constant() && cmp1.read().unwrap().get_offset() == 0;
+        // compare->getIn(0)->constantMatch(calc_mask(basevn->getSize())): (-1 < basevn)
+        let base_mask = calc_mask(basevn.read().unwrap().get_size());
+        let c0_is_allones = cmp0.read().unwrap().is_constant() && cmp0.read().unwrap().get_offset() == base_mask;
+        if c1_is_zero {
+            // basevn < 0: true branch must be the unsigned FLOAT_INT2FLOAT (dir2unsigned==1)
+            if !std::sync::Arc::ptr_eq(&cmp0, &basevn) { return Ok(action_status::NO_CHANGE); }
+            if dir2unsigned != 1 { return Ok(action_status::NO_CHANGE); }
+        } else if c0_is_allones {
+            // -1 < basevn: true branch must be the signed FLOAT_INT2FLOAT (dir2unsigned==0)
+            if !std::sync::Arc::ptr_eq(&cmp1, &basevn) { return Ok(action_status::NO_CHANGE); }
+            if dir2unsigned == 1 { return Ok(action_status::NO_CHANGE); }
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Transform: redefine the MULTIEQUAL as unsigned FLOAT_INT2FLOAT.
+        let multiop_ref = crate::op::PcodeOpRef(multiop.clone());
+        let outbl = parent.clone();
+        fd.op_uninsert(&multiop_ref);
+        fd.op_set_opcode(&multiop_ref, OpCode::CPUI_FLOAT_INT2FLOAT);
+        fd.op_remove_input(&multiop_ref, 0);
+        let newzext = fd.new_op(1, multiop.read().unwrap().get_addr());
+        fd.op_set_opcode(&newzext, OpCode::CPUI_INT_ZEXT);
+        let pref_size = RuleUnsigned2Float::preferred_zext_size(basevn.read().unwrap().get_size());
+        let newout = fd.new_unique_out(pref_size, &newzext);
+        fd.op_set_input(&newzext, basevn, 0);
+        fd.op_set_input(&multiop_ref, newout, 0);
+        // Reinsert modified MULTIEQUAL after any other MULTIEQUAL; then the zext before it.
+        fd.op_insert_begin(&multiop_ref, &outbl);
+        fd.op_insert_before(&newzext, &multiop_ref);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "int_2_float_collapse" }
@@ -10865,7 +11317,10 @@ impl Rule for RuleInt2FloatCollapse {
 ///
 /// NOTE: Needs `data.hasTypeRecoveryStarted()`, `getTypeReadFacing`,
 /// `TypePointer::getPtrTo`, `AddrSpace::addressToByteInt`, and
-/// `data.opUndoPtradd`. Rugra lacks all of these; the rule no-ops with a TODO.
+/// `data.opUndoPtradd`. The type-recovery gate, the pointer-type guard, and the
+/// undo are all now implemented against the available infrastructure. In a test
+/// environment without a type system, the pointer guard is conservatively
+/// skipped (no type ⇒ not a confirmed correct pointer ⇒ undo proceeds).
 pub struct RulePtraddUndo;
 
 impl RulePtraddUndo {
@@ -10875,24 +11330,45 @@ impl RulePtraddUndo {
 impl Rule for RulePtraddUndo {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtraddUndo::applyOp (ruleaction.cc:6927-6944).
-        // TODO(infra): if (!data.hasTypeRecoveryStarted()) return 0;
-        //   Rugra Funcdata has no has_type_recovery_started().
-        let (basevn, indvn) = {
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let (size, basevn, indvn) = {
             let op = op_arc.read().unwrap();
+            let in2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            if !in2.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+            let size = in2.read().unwrap().get_offset();
             let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let indvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            (basevn, indvn)
+            (size, basevn, indvn)
         };
-        // size = op->getIn(2)->getOffset()  (the element-size operand of PTRADD)
-        // dt = basevn->getTypeReadFacing(op); if TYPE_PTR and tp->getPtrTo()->getAlignSize()==size && ind!=0 return 0;
-        // TODO(datatype): no Varnode data-types → cannot evaluate the
-        //   "still a correctly-typed pointer" guard. Then:
-        //   data.opUndoPtradd(op, false);
-        // TODO(infra): Funcdata has no op_undo_ptradd. The undo (PTRADD →
-        //   INT_MULT of index*size + INT_ADD) is implemented in Ghidra's
-        //   Funcdata::opUndoPtradd and is not yet ported.
-        let _ = (fd, basevn, indvn);
-        Ok(action_status::NO_CHANGE)
+        // dt = basevn->getTypeReadFacing(op); if TYPE_PTR and tp->getPtrTo()
+        //   ->getAlignSize()==size && ind!=0 return 0;
+        // If the varnode has a pointer type whose pointed-to size matches the
+        // PTRADD element size AND the index is non-zero, this is still a valid
+        // pointer arithmetic — leave it alone.
+        let is_correctly_typed_ptr = basevn.read().unwrap().get_type()
+            .map(|dt| {
+                use crate::type_system::datatype::{Datatype, TypeMetatype};
+                if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+                if let Datatype::Pointer(tp) = dt.as_ref() {
+                    tp.ptr_to.get_align_size() == size as usize
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false); // no type ⇒ not confirmed ⇒ proceed with undo
+        if is_correctly_typed_ptr {
+            let ind_is_zero = indvn.read().unwrap().is_constant()
+                && indvn.read().unwrap().get_offset() == 0;
+            if !ind_is_zero {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+        // data.opUndoPtradd(op, false);
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_undo_ptradd(&op_ref);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "ptradd_undo" }
@@ -10914,6 +11390,76 @@ pub struct RulePtrsubUndo;
 impl RulePtrsubUndo {
     pub const DEPTH_LIMIT: i32 = 8;
     pub fn new() -> Self { Self }
+
+    /// Faithful to `TypePointer::isPtrsubMatching` (type.cc:1123-1162). Returns
+    /// true if a PTRSUB with offset `off`, extra `extra`, and `multiplier` still
+    /// matches the pointer's pointed-to type. wordsize defaults to 1
+    /// (addressToByteInt is a no-op); `testForArraySlack` is conservatively
+    /// treated as false (so the slack branch never relaxes the size bound).
+    fn is_ptrsub_matching(
+        dt: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        off: i64,
+        mut extra: i64,
+        mut multiplier: i64,
+    ) -> bool {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        if dt.get_metatype() != TypeMetatype::Pointer { return false; }
+        let tp = match dt.as_ref() { Datatype::Pointer(p) => p, _ => return false };
+        let ptrto = &tp.ptr_to;
+        let wordsize = tp.wordsize.max(1) as i64;
+        // addressToByteInt(x, wordsize) = x * wordsize
+        match ptrto.get_metatype() {
+            TypeMetatype::Spacebase => {
+                let newoff = off.wrapping_mul(wordsize);
+                let (sub, sub_off) = ptrto.get_sub_type(newoff);
+                match sub {
+                    None => false,
+                    Some(s) => {
+                        if sub_off != 0 { return false; }
+                        extra = extra.wrapping_mul(wordsize);
+                        if extra < 0 || extra >= s.get_size() as i64 {
+                            // testForArraySlack not modelled → false.
+                            return false;
+                        }
+                        true
+                    }
+                }
+            }
+            TypeMetatype::Array => {
+                if off != 0 { return false; }
+                multiplier = multiplier.wrapping_mul(wordsize);
+                if multiplier >= ptrto.get_align_size() as i64 { return false; }
+                true
+            }
+            TypeMetatype::Struct => {
+                let typesize = ptrto.get_size() as i64;
+                multiplier = multiplier.wrapping_mul(wordsize);
+                if multiplier >= ptrto.get_align_size() as i64 { return false; }
+                let newoff = off.wrapping_mul(wordsize);
+                extra = extra.wrapping_mul(wordsize);
+                let (sub, sub_off) = ptrto.get_sub_type(newoff);
+                match sub {
+                    Some(s) => {
+                        if sub_off != 0 { return false; }
+                        if extra < 0 || extra >= s.get_size() as i64 {
+                            // testForArraySlack not modelled → false.
+                            return false;
+                        }
+                        true
+                    }
+                    None => {
+                        let extra2 = extra + sub_off;
+                        if (extra2 < 0 || extra2 >= typesize) && typesize != 0 {
+                            return false;
+                        }
+                        true
+                    }
+                }
+            }
+            TypeMetatype::Union => false, // PTRSUB cannot be a union field resolution
+            _ => false, // not a pointer to a structured data-type
+        }
+    }
 
     /// Faithful to `getConstOffsetBack` (ruleaction.cc:6970-7010). Returns the
     /// sum of constants in the additive tree rooted at `vn`, and the biggest
@@ -11153,7 +11699,9 @@ impl RulePtrsubUndo {
 impl Rule for RulePtrsubUndo {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtrsubUndo::applyOp (ruleaction.cc:7146-7188).
-        // TODO(infra): if (!data.hasTypeRecoveryStarted()) return 0;
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
         let (basevn, cvn) = {
             let op = op_arc.read().unwrap();
             let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
@@ -11164,11 +11712,35 @@ impl Rule for RulePtrsubUndo {
         let mut multiplier: i64 = 0;
         let extra = Self::get_extra_offset(op_arc, &mut multiplier);
         // if (basevn->getTypeReadFacing(op)->isPtrsubMatching(val,extra,multiplier)) return 0;
-        // TODO(datatype): isPtrsubMatching is a data-type method not in Rugra.
-        //   Without it we cannot tell a "still valid" PTRSUB from a mis-typed
-        //   one, so we cannot safely convert. No-op.
-        let _ = (fd, basevn, cvn, val, extra, multiplier);
-        Ok(action_status::NO_CHANGE)
+        // We approximate isPtrsubMatching (type.cc:1123-1162) for the core
+        // TypePointer cases. wordsize defaults to 1 (addressToByteInt is a no-op).
+        // testForArraySlack and TypePointerRel are not yet modelled.
+        let still_matching = basevn.read().unwrap().get_type()
+            .map(|dt| Self::is_ptrsub_matching(&dt, val, extra, multiplier))
+            .unwrap_or(false);
+        if still_matching { return Ok(action_status::NO_CHANGE); }
+
+        // data.opSetOpcode(op,CPUI_INT_ADD); op->clearStopTypePropagation();
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
+        // TODO(typing): op->clearStopTypePropagation() — Rugra PcodeOp has no
+        //   stop-type-propagation flag setter. The numeric transform below
+        //   proceeds regardless.
+        // removeLocalAdds(op->getOut(), data) — walk the PTRSUB output's
+        //   downstream INT_ADD/PTRSUB chain and fold local constants.
+        let outvn = match op_arc.read().unwrap().output.clone() {
+            Some(o) => o,
+            None => return Ok(action_status::CHANGE),
+        };
+        let new_extra = Self::remove_local_adds(&outvn, fd);
+        if new_extra != 0 {
+            // Lump extra into additive offset.
+            let new_val = val.wrapping_add(new_extra);
+            let masked = new_val & calc_mask(cvn.read().unwrap().get_size()) as i64;
+            let new_const = fd.new_constant(cvn.read().unwrap().get_size(), masked as u64);
+            fd.op_set_input(&op_ref, new_const, 1);
+        }
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "ptrsub_undo" }
@@ -11275,12 +11847,13 @@ impl Rule for RulePiecePathology {
 /// `checkBoolean` (9277-9303), `gatherExpression` (9305-9344),
 /// `constructBool` (9346-9381).
 ///
-/// NOTE: This rule is fundamentally block/control-flow driven (MULTIEQUAL's
-/// block in-edges, the dominating CBRANCH, `rootblock->getTrueOut`,
-/// `isBooleanFlip`, `opInsertBegin`, `CloneBlockOps::cloneExpression`). Rugra's
-/// Rule API has no access to the block graph from within `apply_op`, and
-/// `op_bool_negate` exists but `CloneBlockOps` does not. The checkBoolean
-/// helper is ported 1:1; the rule no-ops with a TODO until block access lands.
+/// NOTE: This rule is fundamentally block/control-flow driven. The block
+/// in-edge analysis (find the common root block ending in a CBRANCH), the
+/// `getTrueOut`/`isBooleanFlip` path determination, and the bool-constant
+/// collapse paths are now implemented against the available block + op-edit
+/// infrastructure. The non-constant `constructBool`/`gatherExpression` paths
+/// still need `CloneBlockOps::cloneExpression` (cross-block op cloning), which
+/// is not yet ported; those paths conservatively no-op.
 pub struct RuleConditionalMove;
 
 impl RuleConditionalMove {
@@ -11314,24 +11887,125 @@ impl Rule for RuleConditionalMove {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleConditionalMove::applyOp (ruleaction.cc:9390-9558).
         if op_arc.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
-        let (in0, in1) = {
+        let (in0, in1, outvn) = {
             let op = op_arc.read().unwrap();
-            (op.get_in(0).cloned(), op.get_in(1).cloned())
+            (op.get_in(0).cloned(), op.get_in(1).cloned(), op.output.clone())
         };
         let (in0, in1) = match (in0, in1) {
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(action_status::NO_CHANGE),
         };
-        let _bool0 = Self::check_boolean(&in0);
-        let _bool1 = Self::check_boolean(&in1);
-        // From here the rule needs the MULTIEQUAL's parent block, its two
-        // in-edges, the dominating CBRANCH, getTrueOut, isBooleanFlip,
-        // opInsertBegin, opUninsert, and CloneBlockOps::cloneExpression.
-        // TODO(flow): Rugra Rule::apply_op has no access to the block graph /
-        //   CBRANCH dominance, and CloneBlockOps is not ported. Cannot perform
-        //   the conditional-move collapse (zext(boolcond) / bool || other).
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        let outvn = match outvn { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+        let bool0 = Self::check_boolean(&in0);
+        let bool1 = Self::check_boolean(&in1);
+        if bool0.is_none() || bool1.is_none() { return Ok(action_status::NO_CHANGE); }
+        let bool0 = bool0.unwrap();
+        let bool1 = bool1.unwrap();
+        // bb = op->getParent(); inblock0/1 = bb->getIn(0/1).
+        use crate::block::FlowBlock;
+        let bb = match op_arc.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) {
+            Some(b) => b,
+            None => return Ok(action_status::NO_CHANGE), // no block graph
+        };
+        let (inblock0, inblock1) = {
+            let rg = bb.read().unwrap();
+            let i0 = rg.get_in(0).map(|e| e.point);
+            let i1 = rg.get_in(1).map(|e| e.point);
+            match (i0, i1) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        // Determine rootblock0/rootblock1 (the block feeding the inblock).
+        let rootblock0 = {
+            let rg = inblock0.read().unwrap();
+            if rg.size_out() == 1 {
+                if rg.size_in() != 1 { return Ok(action_status::NO_CHANGE); }
+                rg.get_in(0).map(|e| e.point)
+            } else {
+                Some(inblock0.clone())
+            }
+        };
+        let rootblock1 = {
+            let rg = inblock1.read().unwrap();
+            if rg.size_out() == 1 {
+                if rg.size_in() != 1 { return Ok(action_status::NO_CHANGE); }
+                rg.get_in(0).map(|e| e.point)
+            } else {
+                Some(inblock1.clone())
+            }
+        };
+        let (rootblock0, rootblock1) = match (rootblock0, rootblock1) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(action_status::NO_CHANGE),
+        };
+        if !std::sync::Arc::ptr_eq(&rootblock0, &rootblock1) { return Ok(action_status::NO_CHANGE); }
+        let rootblock = rootblock0;
+        // cbranch = rootblock->lastOp(); must be CBRANCH.
+        let cbranch = {
+            let r_rg = rootblock.read().unwrap();
+            let any = r_rg.as_any();
+            if let Some(bb2) = any.downcast_ref::<crate::block::BlockBasic>() {
+                bb2.last_op()
+            } else { None }
+        };
+        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) };
+        if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return Ok(action_status::NO_CHANGE); }
+        // gatherExpression/constructBool need CloneBlockOps (cross-block cloning),
+        // which is not yet ported. We can only handle the bool0 && bool1 both
+        // constant case (which does not clone) without it.
+        // TODO(cloneblockops): port CloneBlockOps::cloneExpression so the
+        //   non-constant constructBool paths can fire.
+        if !bool0.read().unwrap().is_constant() || !bool1.read().unwrap().is_constant() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // path0istrue = (rootblock != inblock0) ? (getTrueOut==inblock0)
+        //                                         : (getTrueOut != inblock1)
+        let cbranch_ref = cbranch.clone();
+        let path0istrue = {
+            let r_rg = rootblock.read().unwrap();
+            let true_out = r_rg.get_true_out(&cbranch_ref);
+            if !std::sync::Arc::ptr_eq(&rootblock, &inblock0) {
+                true_out.as_ref().map(|o| std::sync::Arc::ptr_eq(o, &inblock0)).unwrap_or(false)
+            } else {
+                true_out.as_ref().map(|o| !std::sync::Arc::ptr_eq(o, &inblock1)).unwrap_or(false)
+            }
+        };
+        let mut path0istrue = path0istrue;
+        if cbranch.0.read().unwrap().is_boolean_flip() { path0istrue = !path0istrue; }
+        // bool0 and bool1 are both constants here.
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let sz = outvn.read().unwrap().get_size();
+        if bool0.read().unwrap().get_offset() == bool1.read().unwrap().get_offset() {
+            // COPY of the constant.
+            fd.op_uninsert(&op_ref);
+            fd.op_remove_input(&op_ref, 1);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+            let c = fd.new_constant(sz, bool0.read().unwrap().get_offset());
+            fd.op_set_input(&op_ref, c, 0);
+            fd.op_insert_begin(&op_ref, &bb);
+        } else {
+            // boolvn = cbranch->getIn(1).
+            fd.op_remove_input(&op_ref, 1);
+            let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let needcomplement = (bool0.read().unwrap().get_offset() == 0) == path0istrue;
+            if sz == 1 {
+                fd.op_set_opcode(&op_ref, if needcomplement { OpCode::CPUI_BOOL_NEGATE } else { OpCode::CPUI_COPY });
+                fd.op_insert_begin(&op_ref, &bb);
+                fd.op_set_input(&op_ref, boolvn, 0);
+            } else {
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ZEXT);
+                fd.op_insert_begin(&op_ref, &bb);
+                let boolvn = if needcomplement {
+                    fd.op_bool_negate(boolvn, &op_ref, false)
+                } else { boolvn };
+                fd.op_set_input(&op_ref, boolvn, 0);
+            }
+        }
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "conditional_move" }
@@ -11344,9 +12018,12 @@ impl Rule for RuleConditionalMove {
 /// `checkBackForCompare` (9622-9662), `isAnotherNan` (9664-9694),
 /// `testForComparison` (9696-9738).
 ///
-/// NOTE: `applyOp` references `data.getArch()->nan_ignore_all`. Rugra stores
-/// `nan_ignore_all` on Architecture but Funcdata has no `get_arch()` accessor,
-/// so the option cannot be read; the rule no-ops with a TODO.
+/// NOTE: The `nan_ignore_all` short-circuit (treat NaN as always false) is now
+/// implemented via `get_arch()`. The deeper `testForComparison`/`checkBackForCompare`
+/// traversal still requires a full `functionalEquality` data-flow analysis
+/// (Rugra only has a trivial `Arc::ptr_eq` approximation) and CBRANCH
+/// out-edge/lastOp block queries; that branch remains a TODO and is only
+/// reached when `nan_ignore_all` is false.
 pub struct RuleIgnoreNan;
 
 impl RuleIgnoreNan {
@@ -11356,21 +12033,27 @@ impl RuleIgnoreNan {
 impl Rule for RuleIgnoreNan {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleIgnoreNan::applyOp (ruleaction.cc:9740-9787).
-        // TODO(infra): if (data.getArch()->nan_ignore_all) { COPY(const 0) }
-        //   Funcdata has no get_arch() accessor → cannot read nan_ignore_all.
+        if let Some(arch) = fd.get_arch() {
+            if arch.nan_ignore_all {
+                // Treat these NaN operations as always returning false (0).
+                let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                let zero = fd.new_constant(1, 0);
+                fd.op_set_input(&op_ref, zero, 0);
+                return Ok(action_status::CHANGE);
+            }
+        }
+        // No Architecture / nan_ignore_all disabled: the deeper
+        // checkBackForCompare / isAnotherNan / testForComparison traversal.
         let float_var = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
         };
         if float_var.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-        // The checkBackForCompare / isAnotherNan / testForComparison helpers
-        // walk the boolean data-flow (BOOL_NEGATE, BOOL_OR/AND, INT_EQUAL,
-        // CBRANCH protection) and remove NaN inputs. They are portable in
-        // principle but require functionalEquality (available) and the
-        // CBRANCH/block out-edge queries (not available from apply_op).
-        // TODO(flow): port the helper walks once apply_op has block access; the
-        // rule cannot currently fire.
-        let _ = fd;
+        // The helper walks (BOOL_NEGATE, BOOL_OR/AND, INT_EQUAL, CBRANCH
+        // protection) need full functionalEquality data-flow analysis (Rugra
+        // only has an Arc::ptr_eq approximation) plus CBRANCH out-edge block
+        // queries. TODO(flow/analysis): port once functionalEquality is full.
         Ok(action_status::NO_CHANGE)
     }
 

@@ -861,3 +861,19 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 4. block graph 访问（影响 ConditionalMove/Int2FloatCollapse/IgnoreNan 的 CBRANCH 路径）
 5. Varnode flag/overlap API（isAddrForce/isTypeLock/isPrecisLo/Hi 等）
 6. Funcdata 高级 op API（opUndoPtradd/newIndirectCreation/newVarnodeIop 等）
+
+### 2026-07-01（续 2）：Layer-3 TODO 替换 — 接入基础设施让 Rule 生效
+11 个 Rule 的 TODO 占位替换为真实基础设施调用：
+- **RuleExtensionPush**(7435): is_addr_force/is_type_lock/is_name_lock + duplicate_need
+- **RulePtraddUndo**(6927): has_type_recovery_started + op_undo_ptradd + type guard
+- **RuleTransformCpool**(3915): get_arch().cpool + op_mark_cpool_transformed + CPoolRecord
+- **RuleFuncPtrEncoding**(9926): get_arch().funcptr_align + mask compare
+- **RuleIgnoreNan**(9740): get_arch().nan_ignore_all + find_condition
+- **RuleInt2FloatCollapse**(9863): find_condition + cbranch flip
+- **RuleIndirectCollapse**(3177): characterize_overlap/contains_storage + get_op_from_const + total_replace
+- **RuleExpandLoad**(10937): space from_id + get_type/get_sub_type
+- **RulePullsubIndirect**(962): is_addr_force/is_precis_lo/hi + new_varnode_iop/get_op_from_const
+- **RulePtrsubUndo**(7146): is_ptrsub_matching + remove_local_adds(op->getOut())
+- **RuleConditionalMove**(9390): get_true_out/get_false_out (bool-const-const path)
+
+仍保留为 guard+no-op（需更深基础设施）：RulePtrsubCharConstant(需 stringManager)、RulePieceStructure(需 PieceNode/gatherPieces)、RuleIgnoreNan 深度路径、RuleConditionalMove 非 const 路径、RuleIndirectCollapse 创建/空间库分支。每处 TODO 精确标注缺失项。
