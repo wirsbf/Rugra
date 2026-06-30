@@ -54,3 +54,9 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 `test_contiguous_pointers`（LE two-loads/mismatched-spaces）、`is_addr_tied_contiguous`（LE/gap/not-addr-tied）、
 `init_partial`（implied-zero-hi/two-constants）、`exceeds_const_precision`、`verify_mult_neg_one`、
 `SplitDatatype` halves、4 Rule（触发 + 拒绝路径）、rule-registration surface。
+
+### 2026-07-01（续）：TODO 替换 — iop-space 基础设施接入
+- replace_indirect_op / reassign_indirects：iop 输入从 `new_constant(8,0)` 占位改为 `fd.new_varnode_iop(&op)`（double.cc:1386/3643）。
+- build_lo/hi_from_whole INDIRECT 分支：用 `fd.get_op_from_const(in1)` 解析 affector，op_uninsert→transform→op_insert_after（double.cc:602-648）。
+- no_write_conflict / test_indirect_use：iop varnode 精确配对（affector==op1/op2），替代保守 return None（double.cc:3406/3598）。
+- *Form 类族（依赖 block 级控制流）保留 TODO。

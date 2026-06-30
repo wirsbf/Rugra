@@ -54,10 +54,19 @@
 //!   (`Arc<RwLock<...>>`); null checks become `Option`.
 //! - `wholeList`/`findCopies` consume `&self` for `&in` style but build new
 //!   `SplitVarnode`s by value, matching Ghidra's value semantics.
-//! - Infrastructure gaps (constructJoinAddress, basic-block iteration for
-//!   `noWriteConflict`, `combineInputVarnodes`, etc.) are marked with `TODO`
-//!   and either degrade gracefully or return `Ok(NO_CHANGE)` rather than
-//!   panic, so the rest of the logic remains faithful and testable.
+//! - iop-space plumbing is now backed by real infrastructure:
+//!   `Funcdata::new_varnode_iop` (≈ `Funcdata::newVarnodeIop`,
+//!   funcdata_varnode.cc:176) creates an iop-space varnode referencing an op,
+//!   and `Funcdata::get_op_from_const` (≈ `PcodeOp::getOpFromConst`,
+//!   op.hh:249) resolves such a varnode back to its op. These replace the
+//!   former `new_constant(8, 0)` placeholders used by `replaceIndirectOp`
+//!   (double.cc:1386), `reassignIndirects` (double.cc:3643), and the INDIRECT
+//!   affector resolution in `buildLo/HiFromWhole` (double.cc:604/642),
+//!   `noWriteConflict` (double.cc:3406) and `testIndirectUse` (double.cc:3598).
+//! - Remaining infrastructure gaps (constructJoinAddress, ordered basic-block
+//!   iteration for `noWriteConflict`, `combineInputVarnodes`, etc.) are marked
+//!   with `TODO` and either degrade gracefully or return `Ok(NO_CHANGE)`
+//!   rather than panic, so the rest of the logic remains faithful and testable.
 
 use std::sync::{Arc, RwLock};
 
@@ -1100,9 +1109,29 @@ impl SplitVarnode {
                 }
             }
             OpCode::CPUI_INDIRECT => {
-                // Reinsert AFTER the affector.
-                // TODO(double.cc:602-611): getOpFromConst(affector iop) not modeled.
-                set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                // Reinsert AFTER the affector. The affector is encoded as the
+                // iop-space varnode in the INDIRECT's second input
+                // (double.cc:604): affector = getOpFromConst(loop->getIn(1)).
+                let affector = {
+                    let in1 = loopop.read().unwrap().get_in(1).cloned();
+                    match in1 {
+                        Some(iop_vn) => data.get_op_from_const(&iop_vn),
+                        None => None,
+                    }
+                };
+                if let Some(ref affector) = affector {
+                    if !affector.0.read().unwrap().is_dead() {
+                        data.op_uninsert(&follow);
+                    }
+                    set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                    if !affector.0.read().unwrap().is_dead() {
+                        data.op_insert_after(&follow, affector);
+                    }
+                } else {
+                    // iop varnode could not be resolved (not an iop-space const);
+                    // fall back to the in-place transform.
+                    set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                }
             }
             _ => {
                 set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
@@ -1138,7 +1167,29 @@ impl SplitVarnode {
                 }
             }
             OpCode::CPUI_INDIRECT => {
-                set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                // Reinsert AFTER the affector (double.cc:640-648). The affector
+                // is encoded as the iop-space varnode in the INDIRECT's second
+                // input: affector = getOpFromConst(hiop->getIn(1)).
+                let affector = {
+                    let in1 = hiop.read().unwrap().get_in(1).cloned();
+                    match in1 {
+                        Some(iop_vn) => data.get_op_from_const(&iop_vn),
+                        None => None,
+                    }
+                };
+                if let Some(ref affector) = affector {
+                    if !affector.0.read().unwrap().is_dead() {
+                        data.op_uninsert(&follow);
+                    }
+                    set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                    if !affector.0.read().unwrap().is_dead() {
+                        data.op_insert_after(&follow, affector);
+                    }
+                } else {
+                    // iop varnode could not be resolved (not an iop-space const);
+                    // fall back to the in-place transform.
+                    set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
+                }
             }
             _ => {
                 set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
@@ -1754,14 +1805,10 @@ impl SplitVarnode {
         data.op_set_opcode(&newop, OpCode::CPUI_INDIRECT);
         data.op_set_output(&newop, out_whole);
         data.op_set_input(&newop, in_whole, 0);
-        // data.opSetInput(newop, data.newVarnodeIop(affector), 1)
-        // TODO(double.cc:1386): Rugra has no newVarnodeIop. Use a constant
-        // placeholder so the INDIRECT has a well-formed second operand.
-        eprintln!(
-            "double_precis: replace_indirect_op using placeholder iop (no newVarnodeIop, double.cc:1386)"
-        );
-        let iop_placeholder = data.new_constant(8, 0);
-        data.op_set_input(&newop, iop_placeholder, 1);
+        // data.opSetInput(newop, data.newVarnodeIop(affector), 1) — iop-space
+        // varnode referencing the causing op (double.cc:1386).
+        let iop_vn = data.new_varnode_iop(&PcodeOpRef(affector.clone()));
+        data.op_set_input(&newop, iop_vn, 1);
         data.op_insert_before(&newop, &PcodeOpRef(affector.clone()));
         out.build_lo_from_whole(data);
         out.build_hi_from_whole(data);
@@ -2272,6 +2319,7 @@ impl RuleDoubleLoad {
     /// best-effort over `FlowBlock::get_ops` and is marked TODO where it
     /// diverges.
     pub fn no_write_conflict(
+        data: &Funcdata,
         op1: &OpArc,
         op2: &OpArc,
         spc: AddressSpace,
@@ -2331,24 +2379,24 @@ impl RuleDoubleLoad {
                 }
                 OpCode::CPUI_INDIRECT => {
                     // affector = PcodeOp::getOpFromConst(curop->getIn(1)->getAddr())
-                    // TODO(double.cc:3406): Rugra has no getOpFromConst(iop).
-                    // Without affector resolution we cannot distinguish the
-                    // INDIRECTs caused by op1/op2; conservatively collect none.
-                    if indirects.is_some() {
-                        if let Some(ref mut ind) = indirect_owned {
-                            // Only collect if it is NOT clearly writing to spc.
-                            let out_spc = curop
-                                .read()
-                                .unwrap()
-                                .get_out()
-                                .map(|o| o.read().unwrap().get_space());
-                            if out_spc != Some(spc) {
+                    // (double.cc:3406). The iop-space varnode holds the causing op.
+                    let affector = curop
+                        .read()
+                        .unwrap()
+                        .get_in(1)
+                        .and_then(|iop_vn| data.get_op_from_const(iop_vn));
+                    let affector_matches = match &affector {
+                        Some(a) => Arc::ptr_eq(&a.0, &op1_clone) || Arc::ptr_eq(&a.0, &op2_clone),
+                        None => false,
+                    };
+                    if affector_matches {
+                        if indirects.is_some() {
+                            if let Some(ref mut ind) = indirect_owned {
                                 ind.push(curop.clone());
-                            } else {
-                                return None;
                             }
                         }
                     } else {
+                        // Not caused by op1/op2: bail if it writes the merge space.
                         let out_spc = curop
                             .read()
                             .unwrap()
@@ -2441,7 +2489,7 @@ impl Rule for RuleDoubleLoad {
             };
         let size = piece0.read().unwrap().get_size() + piece1.read().unwrap().get_size();
         let latest =
-            match Self::no_write_conflict(&loadlo, &loadhi, spc, None) {
+            match Self::no_write_conflict(data, &loadlo, &loadhi, spc, None) {
                 Some(l) => l,
                 None => return Ok(NO_CHANGE), // There was a conflict.
             };
@@ -2506,7 +2554,7 @@ impl RuleDoubleStore {
     /// Test if output Varnodes from a list of PcodeOps are used anywhere within
     /// a range of PcodeOps. (`testIndirectUse`, double.cc:3578) Returns true if
     /// no output in the list is used in the range.
-    pub fn test_indirect_use(op1: &OpArc, op2: &OpArc, indirects: &[OpArc]) -> bool {
+    pub fn test_indirect_use(data: &Funcdata, op1: &OpArc, op2: &OpArc, indirects: &[OpArc]) -> bool {
         let mut op1 = op1.clone();
         let mut op2 = op2.clone();
         if order_of(&op2) < order_of(&op1) {
@@ -2519,7 +2567,7 @@ impl RuleDoubleStore {
             };
             let descends: Vec<OpArc> = outvn.read().unwrap().descend_iter().collect();
             let mut usecount = 0;
-            let usebyop2 = 0;
+            let mut usebyop2 = 0;
             for op in descends {
                 usecount += 1;
                 if !same_block(&parent_block(&op), &parent_block(&op1)) {
@@ -2533,13 +2581,21 @@ impl RuleDoubleStore {
                     continue;
                 }
                 // Its likely that INDIRECTs from the first STORE feed INDIRECTs
-                // for the second STORE.
+                // for the second STORE (double.cc:3598). The pairing is made
+                // precise by resolving the descendant INDIRECT's iop varnode
+                // back to its causing op and comparing against op2.
                 if op.read().unwrap().opcode == OpCode::CPUI_INDIRECT {
-                    // op2 == PcodeOp::getOpFromConst(op->getIn(1)->getAddr())
-                    // TODO(double.cc:3598): getOpFromConst unavailable. We
-                    // cannot pair INDIRECTs precisely; conservatively treat as
-                    // a forbidden use to avoid incorrect merges.
-                    return false;
+                    let affector = op
+                        .read()
+                        .unwrap()
+                        .get_in(1)
+                        .and_then(|iop_vn| data.get_op_from_const(iop_vn));
+                    if let Some(a) = affector {
+                        if Arc::ptr_eq(&a.0, &op2) {
+                            usebyop2 += 1; // Note this pairing.
+                            continue;
+                        }
+                    }
                 }
                 return false;
             }
@@ -2590,13 +2646,10 @@ impl RuleDoubleStore {
             }
             data.op_uninsert(&PcodeOpRef(op_arc.clone()));
             data.op_insert_before(&PcodeOpRef(op_arc.clone()), &PcodeOpRef(new_store.clone()));
-            // data.opSetInput(op, data.newVarnodeIop(newStore), 1)
-            // TODO(double.cc:3643): newVarnodeIop unavailable; placeholder.
-            eprintln!(
-                "double_precis: reassign_indirects using placeholder iop (double.cc:3643)"
-            );
-            let iop_placeholder = data.new_constant(8, 0);
-            data.op_set_input(&PcodeOpRef(op_arc.clone()), iop_placeholder, 1);
+            // data.opSetInput(op, data.newVarnodeIop(newStore), 1) — iop-space
+            // varnode referencing the new STORE (double.cc:3643).
+            let iop_vn = data.new_varnode_iop(&PcodeOpRef(new_store.clone()));
+            data.op_set_input(&PcodeOpRef(op_arc.clone()), iop_vn, 1);
         }
     }
 }
@@ -2674,6 +2727,7 @@ impl Rule for RuleDoubleStore {
                 {
                     let mut indirects: Vec<OpArc> = Vec::new();
                     let latest = match RuleDoubleLoad::no_write_conflict(
+                        data,
                         &storelo,
                         &storehi,
                         spc,
@@ -2682,7 +2736,7 @@ impl Rule for RuleDoubleStore {
                         Some(l) => l,
                         None => continue, // There was a conflict.
                     };
-                    if !Self::test_indirect_use(&storelo, &storehi, &indirects) {
+                    if !Self::test_indirect_use(data, &storelo, &storehi, &indirects) {
                         continue;
                     }
                     // Create new STORE op that combines the two smaller STOREs.
