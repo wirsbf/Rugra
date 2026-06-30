@@ -3,9 +3,11 @@
 > 📌 **主管线差异基线（2026-07-01）**：见 [`docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md`](docs/alignment_docs/PIPELINE_DIFF_2026-07-01.md)。
 > 逐 Action 对齐 Ghidra `universalAction`（coreaction.cc:5462-5739）vs Rugra `set_default_actions`（action.rs:383-492）。
 > **核心发现**：Ghidra 是 4 层嵌套 repeatapply 管线（universal→fullloop→mainloop→stackstall），Rugra 是单遍扁平 24 步；
-> 37 个顶层 Action 中只有 8 个真正对齐，19 个有 impl 未接入，6 个完全缺失；oppool1 缺 36 条规则，oppool2 整池缺，cleanup 缺 11 条；
+> 37 个顶层 Action 中只有 8 个真正对齐，19 个有 impl 未接入，6 个完全缺失；~~oppool1 缺 36 条规则~~（2026-07-01 已补 ~30 条，剩 RulePtrFlow 等 ~6 条），oppool2 整池缺，~~cleanup 缺 11 条~~（已补 10 条，剩 RuleDumptyHumpLate）；
 > 另有 6 个 Ghidra 不存在的自造 Action（simplify/typeinfer/copypropagate/typepropagate/inferparams/cse）是技术债。
 > P0 = 管线嵌套化改造 + 19 个未接入 Action 接线。
+>
+> 📌 **2026-07-01 更新**：并发移植 subflow.cc（SubvariableFlow + 8 Rule）、double.cc（SplitVarnode + 4 Rule）、ruleaction.cc 补 21 Rule + 修 RuleDivOpt。oppool1/cleanup 池大批补缺 Rule 已接入主管线。832/832 测试，curl 24/24 无回归。
 
 **最后核实**: 2026-06-27（逐行核对 Rugra 源码 vs Ghidra 源码）
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
@@ -105,7 +107,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 17 | `blockaction.cc` (2366行) | `blockaction.rs` (4560行) | 🔧 **L2（orderLoopBodies 完整 + ruleBlockWhileDo 移植，剩 collapseInternal 架构迁移）** | identifyInternal/selfIdentify ✅；ruleBlockCat/ProperIf/IfElse/WhileDo/DoWhile/Goto ✅；**2026-06-29 进展**：①`order_loop_bodies` + LoopBody 全管道（find_base/merge_identical_heads/label_containments/find_exit/order_tails/extend/label_exit_edges）实测生效（parseconfig 12 回边→7 loops, depth 至 5）②新增 `rule_block_while_do`（blockaction.cc:1518-1549）1:1 移植含 isGotoOut 检查 ③修复 `is_goto_out` 读取 block 级 GOTO_EDGE_0/1 标志（此前 TraceDAG 标的 goto 查询不到）④findSpanningTree DFS 回边检测 + CFG 跳转目标分裂 + reconcile 类型修复链（curl while 4→28, 审计 24/24）。**剩余 L2 缺口**：staged→collapseInternal 架构迁移——Ghidra 的 ruleBlockGoto 在每轮 collapseInternal 中"消费"goto 边（重连而非仅标记），使 break 边从结构化视图中消失，ruleBlockWhileDo 才能看到 2 条非 goto 边。Rugra 目前只标记不重连，故 break 循环的 WhileDo 形成受限 | `blockaction.cc` |
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🔧 L2 | BranchPoint/BlockTrace/BadEdgeScore 骨架已移植；**check_open 精度不足，未完整启用** | `blockaction.cc:499-1014` |
 | 19 | `condexe.cc` (712行) | `condexe.rs` (1422行) | ✅ **L3（2026-06-27 全部移植）** | ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch/BooleanExpressionMatch 全部 1:1 移植。底层原语 find_common_block/compare_order/remove_from_flow_split 已补。接入主管线（ActionConditionalExe + ActionSimplify→RuleOrPredicate）。9 单元测试 + curl/httpd 回归 | `condexe.cc` |
-| 20 | `subflow.cc` (4130行) | `subflow.rs` (745行) | 🟢 **L2.5（代码完整，缺 9 个 Rule 包装器）** | SubvariableFlow 覆盖核心方法：ReplaceVarnode/ReplaceOp/PatchRecord 数据结构 + new/get_flow_size/get_bit_size/set_replacement/has_replacement/get_replacement_index/create_op/create_op_down/add_push/add_terminal_patch/add_compare_patch/num_new_vars/num_new_ops/num_patches/is_worthwhile/do_replacement（cc:1435）+ check_mask/does_or_set（cc:26）/does_and_clear（cc:43）/compute_consume_mask/do_trace（cc:1410）+ trace_forward_single/trace_backward_single。11 单元测试。**接入阻塞**：Ghidra 通过 9 个 Rule（RuleSubvarAnd/RuleSubvarSubpiece/RuleSplitFlow/RulePtrFlow/RuleSubvarCompZero/RuleSubvarShift/RuleSubvarZext/RuleSubvarSext/RuleSubfloatConvert，coreaction.cc:5621-5633）驱动 SubvariableFlow，Rugra 这 9 个 Rule 未移植。**移植这 9 个 Rule → oppool1 → L3**（无需新基础设施） | `subflow.cc` |
+| 20 | `subflow.cc` (4130行) | `subflow.rs` (3400+行) | 🟢 **L2.5→近 L3（2026-07-01：8/9 Rule 已移植+接入 oppool1/cleanup）** | SubvariableFlow 引擎完整 1:1（trace_forward/backward/sext, do_replacement, create_link/compare_bridge, patches, process_next_work）。**8 个 subvar/split Rule 已移植并注册进 oppool1(5621-5628)/cleanup(5706-5708)**：RuleSubvarAnd/Subpiece/SplitFlow/CompZero/Shift/Zext/Sext + RuleSplitCopy/Load/Store。29 单元测试。**唯一剩余缺口**：RulePtrFlow(5624, ruleaction.cc:9177)——重（trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch 构造）。另：RuleSubfloatConvert 的 TransformManager.apply 待补。基础设施 TODO：Varnode::isPtrFlow/isZeroExpanded | `subflow.cc` |
 | 21 | **`jumptable.cc`** | `jumptable.rs` | ✅ L3 | **完整实现**：全部数据结构 + 全部算法（find_determining_varnodes DFS 深度遍历、quasi_copy 链、get_max_value、isLoadInPath、CircleRange::pullBack 全套、analyze_guards pullBack 扩展、backup2_switch 反向模拟、find_unnormalized 链遍历、flows_only_to_model、emulate_path 地址计算、build_addresses/build_labels 使用真实模拟、fold_in_one_guard + fold_in_guards CFG 重写 via Funcdata::push_branch/force_goto）。Funcdata 新增 push_branch/force_goto/set_goto_branch/move_out_edge。所有 L3 缺口已关闭 | `jumptable.cc` |
 
 ---
@@ -338,7 +340,8 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | 模块 | 核心引擎 | 缺什么 | 解锁路径 |
 |---|---|---|---|
-| 🟢 **subflow** (#20) | SubvariableFlow（trace_forward/backward + do_replacement 完整，11 测试） | 9 个 Rule 包装器：RuleSubvarAnd/SubvarSubpiece/SplitFlow/PtrFlow/SubvarCompZero/SubvarShift/SubvarZext/SubvarSext/SubfloatConvert（coreaction.cc:5621-5633） | **移植这 9 个 Rule → 注册进 oppool1 → L3**。无需新基础设施，Rule 只需调用现有 SubvariableFlow API |
+| 🟢 **subflow** (#20) | SubvariableFlow 引擎完整 + 8/9 Rule 已移植+接入 oppool1/cleanup（2026-07-01） | **仅剩 RulePtrFlow**(5624, ruleaction.cc:9177)；RuleSubfloatConvert 的 TransformManager.apply 待补 | 移植 RulePtrFlow → L3。需 arch 构造 + trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer |
+| 🟢 **double_precis** (新增) | SplitVarnode 核心 + 4 Rule(RuleDoubleLoad/Store/In/Out) 已移植+接入 oppool1(5643-5646)，21 测试 | *Form 子类(double.cc:1433-3196)依赖 block 级控制流，apply_rule_in 为骨架 | 移植 *Form（需 dominance/CBRANCH flip 基础设施）→ L3 |
 
 ### 类型 B：Ghidra 设计上不属于 universalAction（4 个，非 bug）
 
