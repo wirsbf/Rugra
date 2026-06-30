@@ -55,9 +55,9 @@
 - 内部临时值（如 `unique` 空间）
 - 常量值（通过特定空间或构造方式表达）
 
-**loc_tree 排序键**（2026-06-29）：`VarnodeLocRef::Ord` 现按 `(address_space, loc, size, create_index)` 排序（此前不含 address_space）。这让 Stack 空间的 varnode（stack offset）与 Ram/Register/Unique 空间可能共享相同数值 offset 的 varnode 区分开，对齐 Ghidra VarnodeLocSet 按 Address（space+offset）索引。新增 `VarnodeBank::iter_space(space)` 方法按空间遍历 varnode（对齐 Ghidra beginLoc/endLoc）。
+**loc_tree 排序键**（2026-06-29）：`VarnodeLocRef::Ord` 按 `(address_space, loc, size, input/written/free 分类, def SeqNum or create_index)` 排序——对齐 Ghidra `VarnodeCompareLocDef`（varnode.cc:34-52）。关键：input varnode 同位置返回 Equal（同一个对象）；written 按 def SeqNum 区分；free 按 createIndex 区分。这让 Stack 空间 varnode 不与其他空间混淆，且 xref 去重能正确工作。新增 `VarnodeBank::iter_space(space)` 方法按空间遍历 varnode。
 
-**varnode 去重（find_or_create_input_space）**（2026-06-29）：新增 `VarnodeBank::find_or_create_input_space(size, space, offset)`——查找已有的同 (space, offset, size) 的 **free/input** varnode（不含 written），复用它；没有则创建。对齐 Ghidra `VarnodeBank::xref`（varnode.cc:1291）的去重语义。Written varnode 去重需要 loc_tree 排序按 input/written/free 分类（对齐 VarnodeCompareLocDef），是更深的重构。`inject_raw_ops` 用它替代 `create_with_space` 创建 input varnode。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
+**varnode 去重（find_or_create_input_space）**（2026-06-29）：新增 `VarnodeBank::find_or_create_input_space(size, space, offset)`——查找已有的同 (space, offset, size) 的 free/input varnode（不含 written），复用它；没有则创建。对齐 Ghidra `Funcdata::newVarnode`（funcdata_varnode.cc:148）——建 free varnode，由 rename 连接到 written。修复了 descend 链碎片化（RSP input 从 1 个 descend 变 64 个）。
 
 ### 2. 数据流节点语义
 `Varnode` 是 `PcodeOp` 的输入或输出节点，因此它天然处于数据流图中：

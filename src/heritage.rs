@@ -204,7 +204,10 @@ impl Heritage {
             .map(|v| v.0.clone())
             .next();
         let rsp_input = match rsp_input {
-            Some(r) => r,
+            Some(r) => {
+                let nd = r.read().unwrap().descend.len();
+                r
+            }
             None => return,
         };
 
@@ -221,6 +224,8 @@ impl Heritage {
                 let g = vn.read().unwrap();
                 g.descend.iter().filter_map(|w| w.upgrade()).collect()
             };
+            for d in &descendants {
+            }
             for desc_op in descendants {
                 let op_guard = desc_op.read().unwrap();
                 let opc = op_guard.opcode;

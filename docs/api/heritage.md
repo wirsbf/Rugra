@@ -683,3 +683,4 @@ pass 计数只代表处理轮次，不等于质量保证。
 - **rename 跳过 heritage-known varnode**（对齐 heritage.cc:2496 `isHeritageKnown`）：input 重写只替换 free varnode（非 input/written/constant），跳过已 SSA 解析的。此前 Rugra rename 无条件替换所有 input，会错误 re-rename。这是 written varnode dedup 的前提。
 - **两 pass heritage**：ActionHeritage::apply 跑两遍 place+rename。Pass 1 连接 op 图（rename 重写 STORE input 引用 INT_ADD output），Pass 2 的 discover 在连接后的图上发现 stack STOREs。对齐 Ghidra 多 pass heritage。
 - **varnode 去重仍限 free/input**：written varnode 去重需要 loc_tree 排序按 input/written/free 分类（VarnodeCompareLocDef），是更深的重构。
+- **VarnodeCompareLocDef 排序已对齐**（2026-06-29 续）：loc_tree 排序键改为 `(address_space, loc, size, input/written/free, def SeqNum or createIndex)`，对齐 Ghidra VarnodeCompareLocDef（varnode.cc:34-52）。input 同位置返回 Equal；written 按 def SeqNum 区分；free 按 createIndex 区分。

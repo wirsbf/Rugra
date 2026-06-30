@@ -600,26 +600,49 @@ impl Ord for VarnodeLocRef {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
-        // Sort by (address_space, loc, size, create_index). Including
-        // address_space in the key is essential so that Stack-space varnodes
-        // (with stack offsets) are distinct from Ram/Register/Unique varnodes
-        // that may share the same numeric offset. This mirrors Ghidra's
-        // VarnodeLocSet which keys on the full Address (space+offset).
+        // Faithful to Ghidra's VarnodeCompareLocDef (varnode.cc:34-52):
+        // (address_space, loc, size, input/written/free, def-SeqNum-or-createIndex)
+        //
+        // Key difference from the old (space, loc, size, create_index): the
+        // input/written/free classification layer makes:
+        //   - input varnodes at the same (space, loc, size) be EQUAL (same object)
+        //   - written varnodes distinguished by def SeqNum (SSA versions)
+        //   - free varnodes distinguished by createIndex (multiple allowed)
+        // This is what Ghidra's xref relies on: a newVarnode lookup finds the
+        // existing input varnode at a location (not a different free/written one).
         match a.address_space.cmp(&b.address_space) {
-            std::cmp::Ordering::Equal => {
-                match a.loc.cmp(&b.loc) {
-                    std::cmp::Ordering::Equal => {
-                        match a.size.cmp(&b.size) {
-                            std::cmp::Ordering::Equal => {
-                                a.create_index.cmp(&b.create_index)
-                            }
-                            ord => ord,
-                        }
-                    }
-                    ord => ord,
-                }
-            }
-            ord => ord,
+            ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
+            std::cmp::Ordering::Equal => {}
+        }
+        match a.loc.cmp(&b.loc) {
+            ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
+            std::cmp::Ordering::Equal => {}
+        }
+        match a.size.cmp(&b.size) {
+            ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
+            std::cmp::Ordering::Equal => {}
+        }
+        // Classify by input/written flags: 0=free, input(1<<3)=input, written(1<<4)=written.
+        // Ghidra ordering: (f-1) comparison puts free LAST, input before written.
+        let f1 = a.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        let f2 = b.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        match f1.cmp(&f2) {
+            ne @ std::cmp::Ordering::Less | ne @ std::cmp::Ordering::Greater => return ne,
+            std::cmp::Ordering::Equal => {}
+        }
+        // Same classification. For written: compare def SeqNum.
+        // For input: return Equal (same input varnode = same object).
+        // For free: compare createIndex.
+        if f1 == varnode_flags::WRITTEN {
+            // Compare def op SeqNum.
+            let a_seq = a.get_def().map(|d| *d.read().unwrap().get_seq_num());
+            let b_seq = b.get_def().map(|d| *d.read().unwrap().get_seq_num());
+            a_seq.cmp(&b_seq)
+        } else if f1 == varnode_flags::INPUT {
+            std::cmp::Ordering::Equal
+        } else {
+            // Free: compare createIndex.
+            a.create_index.cmp(&b.create_index)
         }
     }
 }
@@ -844,14 +867,12 @@ impl VarnodeBank {
     }
 
     /// Find or create an input varnode at (space, offset, size).
-    /// Faithful to Ghidra's varnode identity model: for the SAME storage
-    /// location (space, offset, size), there is ONE input/free varnode shared
-    /// by all reads. Written varnodes (op outputs) are NOT deduped here —
-    /// they are distinct per def (SSA versions), like Ghidra's
-    /// VarnodeCompareLocDef which distinguishes written varnodes by def SeqNum.
-    /// Full written-varnode dedup (via xref) requires the loc_tree sort to
-    /// classify by input/written/free (VarnodeCompareLocDef) — a deeper
-    /// refactor tracked separately.
+    /// Faithful to Ghidra's `Funcdata::newVarnode` (funcdata_varnode.cc:148):
+    /// creates a FREE varnode (no def). Same-location free/input varnodes are
+    /// deduped (faithful to Ghidra's xref), but written varnodes are NOT
+    /// reused — they are SSA versions (per def SeqNum). The op graph is
+    /// connected by heritage rename, which rewrites free inputs to reference
+    /// the defining written varnode + adds descend.
     pub fn find_or_create_input_space(
         &mut self,
         size: usize,
