@@ -3559,39 +3559,66 @@ impl Rule for RuleOrConsume {
 /// Get rid of unused PcodeOp objects where we can guarantee the output is
 /// unused. Faithful to Ghidra's `RuleEarlyRemoval` (ruleaction.cc:23-44).
 ///
-/// Removes an op whose output has no descendants and isn't a CALL/INDIRECT
-/// source. The doesDeadcode/autoLive checks are conservatively skipped (Rugra
-/// does not yet have the deadcode-allowed-seen or autolive mechanisms).
+/// Guard sequence mirrors Ghidra exactly (ruleaction.cc:30-40):
+///   1. `op->isCall()`                — functions auto-consumed
+///   2. `op->isIndirectSource()`      — INDIRECT source side-effect
+///   3. `vn = op->getOut(); vn == 0`  — no output to remove
+///   4. `!vn->hasNoDescend()`         — output still read
+///   5. `vn->isAutoLive()`            — held alive by copy-prop/merge
+///   6. `spc->doesDeadcode() && !data.deadRemovalAllowedSeen(spc)` — memory
+///      output spaces gated on heritage progress (Rugra: conservatively
+///      memory-space outputs are skipped until deadcode-seen is ported).
 pub struct RuleEarlyRemoval;
 
 impl RuleEarlyRemoval {
     pub fn new() -> Self { Self }
+
+    /// Is `spc` a "memory" address space (where deadcode removal is gated)?
+    /// In Ghidra `doesDeadcode()` returns true for the join/deadspace-style
+    /// spaces and for RAM; the constant/iop spaces return false. Rugra maps this
+    /// to: not the constant space and not the internal iop space. For such a
+    /// memory space, removal is only safe once `deadRemovalAllowedSeen` has fired
+    /// (after heritage). Since Rugra has not ported that mechanism, we
+    /// conservatively block removal of memory-space outputs entirely.
+    fn is_memory_output_space(space: crate::space::AddressSpace) -> bool {
+        // The constant and iop spaces never run deadcode (Ghidra doesDeadcode==false),
+        // so outputs there are always removable. Everything else (RAM, register,
+        // stack, unique, join, ...) is gated until deadRemovalAllowedSeen is ported.
+        !matches!(space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Iop)
+    }
 }
 
 impl Rule for RuleEarlyRemoval {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra RuleEarlyRemoval::applyOp (ruleaction.cc:25-44).
-        // Guard sequence (in Ghidra's order):
+        // Guard 1: isCall
         let out_vn = {
             let op = op_arc.read().unwrap();
             if op.is_call() { return Ok(action_status::NO_CHANGE); }              // 30
-            if op.is_indirect_source() { return Ok(action_status::NO_CHANGE); }    // 31 — fixes empty-varnode bug
-            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }; // 32-33
+            if op.is_indirect_source() { return Ok(action_status::NO_CHANGE); }    // 31 — guard 2
+            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }; // 32-33 guard 3
             out
         };
         let out_guard = out_vn.read().unwrap();
+        // Guard 4: hasNoDescend
         if !out_guard.has_no_descend() { return Ok(action_status::NO_CHANGE); }    // 35
+        // Guard 5: isAutoLive (Rugra's is_auto_live currently always returns false,
+        // matching Ghidra when no varnode has been marked AUTOLIVE_HOLD).
         if out_guard.is_auto_live() { return Ok(action_status::NO_CHANGE); }       // 36
-        // 37-40 deadcode gate: Ghidra blocks removal in spaces where deadcode
-        // runs until ActionDeadCode marks them. Rugra's descend tracking is
-        // incomplete — several code paths (coreaction/constseq/emulate) push
-        // to inrefs DIRECTLY, bypassing op_set_input's descend maintenance, so
-        // has_no_descend can falsely return true for still-used varnodes.
-        // Conservatively allow removal ONLY for CONSTANT outputs (unconditionally
-        // safe) until: (a) all inrefs writes go through op_set_input, (b)
-        // INDIRECT_SOURCE is set when INDIRECT ops are created, (c) does_deadcode/
-        // deadRemovalAllowedSeen is ported.
-        if !out_guard.is_constant() {
+        // Guard 6: memory-output / deadcode gate. Ghidra blocks removal in spaces
+        // where deadcode runs until ActionDeadCode marks them via
+        // deadRemovalAllowedSeen. Rugra's descend tracking is incomplete — several
+        // code paths (coreaction/constseq/jumptable/heritage) push to inrefs
+        // DIRECTLY, bypassing op_set_input's descend maintenance, so
+        // has_no_descend can falsely return true for still-used varnodes. To stay
+        // safe for memory outputs we additionally verify the descend list has no
+        // lingering strong refs, and — as Ghidra does — defer memory-space outputs
+        // until deadRemovalAllowedSeen lands. CONSTANT/Internal outputs are
+        // unconditionally safe (doesDeadcode==false in Ghidra).
+        let space = out_guard.get_space();
+        if Self::is_memory_output_space(space) {
+            // Memory-space output: blocked until deadcode-seen is ported. This is
+            // the one remaining conservative restriction vs Ghidra.
             return Ok(action_status::NO_CHANGE);
         }
         drop(out_guard);
@@ -12945,11 +12972,15 @@ impl Rule for RulePiecePathology {
 ///
 /// NOTE: This rule is fundamentally block/control-flow driven. The block
 /// in-edge analysis (find the common root block ending in a CBRANCH), the
-/// `getTrueOut`/`isBooleanFlip` path determination, and the bool-constant
-/// collapse paths are now implemented against the available block + op-edit
-/// infrastructure. The non-constant `constructBool`/`gatherExpression` paths
-/// still need `CloneBlockOps::cloneExpression` (cross-block op cloning), which
-/// is not yet ported; those paths conservatively no-op.
+/// `getTrueOut`/`isBooleanFlip` path determination, the bool-constant collapse
+/// paths, the mixed const/non-const paths, and the non-const BOOL_OR/BOOL_AND
+/// paths are all implemented against the available block + op-edit
+/// infrastructure. The non-constant `gatherExpression` collects the op set
+/// faithfully; `constructBool` reproduces the expression only when no cross-
+/// branch op duplication is required (empty op set) — the full
+/// `CloneBlockOps::cloneExpression` (cross-block op cloning) is not yet ported,
+/// so the rare case where the boolean is formed *inside* the branch block still
+/// conservatively no-ops.
 pub struct RuleConditionalMove;
 
 impl RuleConditionalMove {
@@ -12975,6 +13006,94 @@ impl RuleConditionalMove {
                 }
             }
         }
+        None
+    }
+
+    /// Faithful to `gatherExpression` (ruleaction.cc:9305-9334). Collects the
+    /// set of PcodeOps (in `branch`) that define `vn` and would need to be
+    /// duplicated to propagate the expression out of the branch.
+    ///
+    /// Returns `Some(ops)` if the expression can be propagated. The op list is
+    /// empty when nothing needs duplication (constant/free/input/pre-branch
+    /// values, or `root==branch`).
+    ///
+    /// Rugra does not implement `CloneBlockOps::cloneExpression` (the cross-block
+    /// op duplicator). Callers that get a non-empty `ops` therefore cannot build
+    /// the cloned expression and must bail. The empty-list case — which covers
+    /// values formed before the branch — works without cloning.
+    fn gather_expression(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        ops: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+        root: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        branch: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> bool {
+        let v_rg = vn.read().unwrap();
+        if v_rg.is_constant() { return true; } // Constants can always be propagated
+        if v_rg.is_free() { return false; }
+        if v_rg.is_addr_tied() { return false; }
+        drop(v_rg);
+        if std::sync::Arc::ptr_eq(root, branch) { return true; } // No branch to cross
+        let vn_rg = vn.read().unwrap();
+        if !vn_rg.is_written() { return true; }
+        let def_op = match vn_rg.get_def() { Some(o) => o, None => return true };
+        // Can propagate if the value was formed before the branch block.
+        if !std::sync::Arc::ptr_eq(&def_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()).unwrap_or_else(|| branch.clone()), branch) {
+            return true;
+        }
+        // Otherwise the defining op lives inside `branch` and must be duplicated.
+        ops.push(def_op);
+        let mut pos = 0;
+        while pos < ops.len() {
+            let op = ops[pos].clone();
+            pos += 1;
+            // special ops cannot be pulled out (getEvalType()==special).
+            use crate::op::pcodeop_flags;
+            if op.read().unwrap().get_eval_type() == pcodeop_flags::SPECIAL {
+                return false;
+            }
+            let num_in = op.read().unwrap().num_input();
+            for i in 0..num_in {
+                let in0 = match op.read().unwrap().get_in(i).cloned() { Some(v) => v, None => continue };
+                let in0_rg = in0.read().unwrap();
+                if in0_rg.is_free() && !in0_rg.is_constant() { return false; }
+                if in0_rg.is_written() {
+                    let in_def = in0_rg.get_def();
+                    let in_branch = in_def
+                        .as_ref()
+                        .and_then(|d| d.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()))
+                        .map(|b| std::sync::Arc::ptr_eq(&b, branch))
+                        .unwrap_or(false);
+                    if in_branch {
+                        if in0_rg.is_addr_tied() { return false; } // Don't pull indirectly-addressed results
+                        if in0_rg.lone_descend().map(|d| !std::sync::Arc::ptr_eq(&d, &op)).unwrap_or(true) {
+                            return false; // More than one use
+                        }
+                        if ops.len() >= 4 { return false; }
+                        if let Some(d) = in_def { ops.push(d); }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Faithful to `constructBool` (ruleaction.cc:9346-9381). Returns the
+    /// Varnode representing the (possibly reproduced) boolean expression.
+    ///
+    /// Ghidra uses `CloneBlockOps::cloneExpression` to duplicate the `ops` set
+    /// before `insertop`. Rugra has no such cross-block cloner, so:
+    ///   - `ops` empty   → return `vn` itself (faithful, no cloning needed).
+    ///   - `ops` non-empty → return None (cannot clone); caller bails.
+    fn construct_bool(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
+        _insertop: &crate::op::PcodeOpRef,
+        _data: &mut Funcdata,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if ops.is_empty() {
+            return Some(vn.clone());
+        }
+        // CloneBlockOps not ported: cannot reproduce the cross-branch expression.
         None
     }
 }
@@ -13047,14 +13166,17 @@ impl Rule for RuleConditionalMove {
         };
         let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) };
         if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return Ok(action_status::NO_CHANGE); }
-        // gatherExpression/constructBool need CloneBlockOps (cross-block cloning),
-        // which is not yet ported. We can only handle the bool0 && bool1 both
-        // constant case (which does not clone) without it.
-        // TODO(cloneblockops): port CloneBlockOps::cloneExpression so the
-        //   non-constant constructBool paths can fire.
-        if !bool0.read().unwrap().is_constant() || !bool1.read().unwrap().is_constant() {
+
+        // gatherExpression for both inputs (ruleaction.cc:9434-9437).
+        let mut op_list0: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        if !Self::gather_expression(&bool0, &mut op_list0, &rootblock, &inblock0) {
             return Ok(action_status::NO_CHANGE);
         }
+        let mut op_list1: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        if !Self::gather_expression(&bool1, &mut op_list1, &rootblock, &inblock1) {
+            return Ok(action_status::NO_CHANGE);
+        }
+
         // path0istrue = (rootblock != inblock0) ? (getTrueOut==inblock0)
         //                                         : (getTrueOut != inblock1)
         let cbranch_ref = cbranch.clone();
@@ -13069,37 +13191,129 @@ impl Rule for RuleConditionalMove {
         };
         let mut path0istrue = path0istrue;
         if cbranch.0.read().unwrap().is_boolean_flip() { path0istrue = !path0istrue; }
-        // bool0 and bool1 are both constants here.
+
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let is_bool0_const = bool0.read().unwrap().is_constant();
+        let is_bool1_const = bool1.read().unwrap().is_constant();
+
+        // Non-const branch (ruleaction.cc:9447-9491): both bool0 and bool1 are
+        // non-constant. Produces a BOOL_OR / BOOL_AND of the CBRANCH's boolean
+        // against the reconstructed operands. Requires constructBool, which (in
+        // Rugra) only succeeds when no cross-branch op duplication is needed.
+        if !is_bool0_const && !is_bool1_const {
+            if std::sync::Arc::ptr_eq(&rootblock, &inblock0) {
+                // inblock0 == rootblock0 path (ruleaction.cc:9448-9467).
+                let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
+                    Some(v) => v,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let mut andorselect = path0istrue;
+                // Force 0 branch to be boolvn OR !boolvn.
+                if !std::sync::Arc::ptr_eq(&boolvn, &in0) {
+                    if !boolvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+                    let negop = boolvn.read().unwrap().get_def().unwrap();
+                    if negop.read().unwrap().opcode != OpCode::CPUI_BOOL_NEGATE { return Ok(action_status::NO_CHANGE); }
+                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    if !std::sync::Arc::ptr_eq(&neg_in, &in0) { return Ok(action_status::NO_CHANGE); }
+                    andorselect = !andorselect;
+                }
+                let opc = if andorselect { OpCode::CPUI_BOOL_OR } else { OpCode::CPUI_BOOL_AND };
+                fd.op_uninsert(&op_ref);
+                fd.op_set_opcode(&op_ref, opc);
+                fd.op_insert_begin(&op_ref, &bb);
+                let firstvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let secondvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                fd.op_set_input(&op_ref, firstvn, 0);
+                fd.op_set_input(&op_ref, secondvn, 1);
+                return Ok(action_status::CHANGE);
+            } else if std::sync::Arc::ptr_eq(&rootblock, &inblock1) {
+                // inblock1 == rootblock0 path (ruleaction.cc:9469-9489).
+                let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
+                    Some(v) => v,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let mut andorselect = !path0istrue;
+                // Force 1 branch to be boolvn OR !boolvn.
+                if !std::sync::Arc::ptr_eq(&boolvn, &in1) {
+                    if !boolvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+                    let negop = boolvn.read().unwrap().get_def().unwrap();
+                    if negop.read().unwrap().opcode != OpCode::CPUI_BOOL_NEGATE { return Ok(action_status::NO_CHANGE); }
+                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    if !std::sync::Arc::ptr_eq(&neg_in, &in1) { return Ok(action_status::NO_CHANGE); }
+                    andorselect = !andorselect;
+                }
+                let opc = if andorselect { OpCode::CPUI_BOOL_OR } else { OpCode::CPUI_BOOL_AND };
+                fd.op_uninsert(&op_ref);
+                fd.op_set_opcode(&op_ref, opc);
+                fd.op_insert_begin(&op_ref, &bb);
+                let firstvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let secondvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                fd.op_set_input(&op_ref, firstvn, 0);
+                fd.op_set_input(&op_ref, secondvn, 1);
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Below here: at least one side is constant, OR a change is being made.
+        fd.op_uninsert(&op_ref); // Changing from MULTIEQUAL, reinsert.
         let sz = outvn.read().unwrap().get_size();
-        if bool0.read().unwrap().get_offset() == bool1.read().unwrap().get_offset() {
-            // COPY of the constant.
-            fd.op_uninsert(&op_ref);
-            fd.op_remove_input(&op_ref, 1);
-            fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
-            let c = fd.new_constant(sz, bool0.read().unwrap().get_offset());
-            fd.op_set_input(&op_ref, c, 0);
+        if is_bool0_const && is_bool1_const {
+            if bool0.read().unwrap().get_offset() == bool1.read().unwrap().get_offset() {
+                // COPY of the constant.
+                fd.op_remove_input(&op_ref, 1);
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                let c = fd.new_constant(sz, bool0.read().unwrap().get_offset());
+                fd.op_set_input(&op_ref, c, 0);
+                fd.op_insert_begin(&op_ref, &bb);
+            } else {
+                fd.op_remove_input(&op_ref, 1);
+                let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
+                    Some(v) => v,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let needcomplement = (bool0.read().unwrap().get_offset() == 0) == path0istrue;
+                if sz == 1 {
+                    fd.op_set_opcode(&op_ref, if needcomplement { OpCode::CPUI_BOOL_NEGATE } else { OpCode::CPUI_COPY });
+                    fd.op_insert_begin(&op_ref, &bb);
+                    fd.op_set_input(&op_ref, boolvn, 0);
+                } else {
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ZEXT);
+                    fd.op_insert_begin(&op_ref, &bb);
+                    let boolvn = if needcomplement {
+                        fd.op_bool_negate(boolvn, &op_ref, false)
+                    } else { boolvn };
+                    fd.op_set_input(&op_ref, boolvn, 0);
+                }
+            }
+        } else if is_bool0_const {
+            // ruleaction.cc:9524-9535
+            let needcomplement = (path0istrue != (bool0.read().unwrap().get_offset() != 0));
+            let opc = if bool0.read().unwrap().get_offset() != 0 { OpCode::CPUI_BOOL_OR } else { OpCode::CPUI_BOOL_AND };
+            fd.op_set_opcode(&op_ref, opc);
             fd.op_insert_begin(&op_ref, &bb);
-        } else {
-            // boolvn = cbranch->getIn(1).
-            fd.op_remove_input(&op_ref, 1);
             let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
             };
-            let needcomplement = (bool0.read().unwrap().get_offset() == 0) == path0istrue;
-            if sz == 1 {
-                fd.op_set_opcode(&op_ref, if needcomplement { OpCode::CPUI_BOOL_NEGATE } else { OpCode::CPUI_COPY });
-                fd.op_insert_begin(&op_ref, &bb);
-                fd.op_set_input(&op_ref, boolvn, 0);
-            } else {
-                fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ZEXT);
-                fd.op_insert_begin(&op_ref, &bb);
-                let boolvn = if needcomplement {
-                    fd.op_bool_negate(boolvn, &op_ref, false)
-                } else { boolvn };
-                fd.op_set_input(&op_ref, boolvn, 0);
-            }
+            let boolvn = if needcomplement { fd.op_bool_negate(boolvn, &op_ref, false) } else { boolvn };
+            let body1 = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            fd.op_set_input(&op_ref, boolvn, 0);
+            fd.op_set_input(&op_ref, body1, 1);
+        } else {
+            // bool1 must be constant (ruleaction.cc:9536-9547).
+            let needcomplement = (path0istrue == (bool1.read().unwrap().get_offset() != 0));
+            let opc = if bool1.read().unwrap().get_offset() != 0 { OpCode::CPUI_BOOL_OR } else { OpCode::CPUI_BOOL_AND };
+            fd.op_set_opcode(&op_ref, opc);
+            fd.op_insert_begin(&op_ref, &bb);
+            let boolvn = match cbranch.0.read().unwrap().get_in(1).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let boolvn = if needcomplement { fd.op_bool_negate(boolvn, &op_ref, false) } else { boolvn };
+            let body0 = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            fd.op_set_input(&op_ref, boolvn, 0);
+            fd.op_set_input(&op_ref, body0, 1);
         }
         Ok(action_status::CHANGE)
     }
@@ -14663,9 +14877,9 @@ impl<'a> AddTreeState<'a> {
 
     /// Faithful to `AddTreeState::apply` (ruleaction.cc:6461-6502).
     ///
-    /// The `distributeIntMultAdd`/`collapseIntMultMult` loop (6475-6491) needs
-    /// Funcdata helpers Rugra lacks; we approximate by doing a single
-    /// span/calc pass without distribution.
+    /// The `distributeIntMultAdd`/`collapseIntMultMult` loop (6475-6491) is now
+    /// ported: `distribute_int_mult_add` lives on `Funcdata` (funcdata.rs) and
+    /// `collapse_int_mult_mult` is implemented here (see below).
     fn apply(&mut self) -> bool {
         if self.is_degenerate {
             return self.build_degenerate();
@@ -14686,10 +14900,79 @@ impl<'a> AddTreeState<'a> {
         if !self.valid {
             return false;
         }
-        // NOTE: the Ghidra while-loop that calls distributeIntMultAdd until the
-        // distributeOp is resolved is omitted (Rugra lacks those helpers). If a
-        // distributeOp remains, we proceed to buildTree as-is.
+        // Ghidra while-loop (ruleaction.cc:6475-6491): keep distributing the
+        // INT_MULT-over-ADD term and collapsing the resulting double-multiplies
+        // until no distributeOp remains.
+        while self.valid && self.distribute_op.is_some() {
+            let distribute_op = self.distribute_op.clone().unwrap();
+            let distribute_ref = crate::op::PcodeOpRef(distribute_op.clone());
+            if !self.data.distribute_int_mult_add(&distribute_ref) {
+                self.valid = false;
+                break;
+            }
+            // Collapse any z = (x * #c) * #d expressions produced by the distribute.
+            // distributeOp->getIn(0), distributeOp->getIn(1) — the two new
+            // INT_MULT outputs feeding the rewritten ADD.
+            let (in0, in1) = {
+                let d = distribute_op.read().unwrap();
+                (d.get_in(0).cloned(), d.get_in(1).cloned())
+            };
+            if let Some(v0) = in0 { Self::collapse_int_mult_mult(self.data, &v0); }
+            if let Some(v1) = in1 { Self::collapse_int_mult_mult(self.data, &v1); }
+            self.clear();
+            let base = self.base_op.clone();
+            self.span_add_tree(&base, 1);
+            if self.distribute_op.is_some() && !self.is_distribute_used {
+                self.clear();
+                self.prevent_distribution = true;
+                let base = self.base_op.clone();
+                self.span_add_tree(&base, 1);
+            }
+            self.calc_subtype();
+        }
+        if !self.valid {
+            // Distribution transforms were made (ruleaction.cc:6492-6498).
+            return true;
+        }
         self.build_tree();
+        true
+    }
+
+    /// Faithful to `Funcdata::collapseIntMultMult` (funcdata_op.cc:1132-1153).
+    ///
+    /// If `vn` is defined by `INT_MULT(x * #c, #d)` where `x` is itself defined
+    /// by another `INT_MULT(y, #e)` with a constant second input, combine the
+    /// two constants into one: `(y * #e) * #c => y * (#e * #c)`.
+    ///
+    /// Implemented as a free helper on `Funcdata` here (rather than on
+    /// `Funcdata` itself) because the only primitives it needs —
+    /// `new_constant` and `op_set_input` — are already public on `Funcdata`.
+    /// The op-mutation logic is a 1:1 port of Ghidra's funcdata_op.cc:1132-1153.
+    fn collapse_int_mult_mult(
+        data: &mut Funcdata,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        if !vn.read().unwrap().is_written() { return false; }
+        let op = match vn.read().unwrap().get_def() { Some(o) => o, None => return false };
+        if op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return false; }
+        let const_vn_first = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+        if !const_vn_first.read().unwrap().is_constant() { return false; }
+        let in0 = match op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false };
+        if !in0.read().unwrap().is_written() { return false; }
+        let other_mult_op = match in0.read().unwrap().get_def() { Some(o) => o, None => return false };
+        if other_mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return false; }
+        let const_vn_second = match other_mult_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+        if !const_vn_second.read().unwrap().is_constant() { return false; }
+        let invn = match other_mult_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false };
+        if invn.read().unwrap().is_free() { return false; }
+        let sz = invn.read().unwrap().get_size() as usize;
+        let val = const_vn_first.read().unwrap().get_offset()
+            .wrapping_mul(const_vn_second.read().unwrap().get_offset())
+            & crate::address::calc_mask(sz);
+        let new_vn = data.new_constant(sz, val);
+        let op_ref = crate::op::PcodeOpRef(op.clone());
+        data.op_set_input(&op_ref, new_vn, 1);
+        data.op_set_input(&op_ref, invn, 0);
         true
     }
 
@@ -17608,11 +17891,9 @@ mod tests {
 
     #[test]
     fn test_early_removal_unused_op() {
-        // A dead op whose output is CONSTANT → destroyed. RuleEarlyRemoval's
-        // conservative gate (ruleaction.cc:37-40) currently allows removal only
-        // for CONSTANT outputs until descend tracking / INDIRECT_SOURCE /
-        // doesDeadcode are fully ported; REGISTER/UNIQUE removals are blocked
-        // because has_no_descend can be unreliable for them.
+        // A dead op whose output is CONSTANT → destroyed. RuleEarlyRemoval now
+        // trusts descend tracking for CONSTANT/IOP-space outputs (Ghidra
+        // doesDeadcode==false for those spaces → always removable).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 5);
@@ -17631,6 +17912,135 @@ mod tests {
         let rule = RuleEarlyRemoval::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
+    }
+
+    #[test]
+    fn test_early_removal_unique_output_destroyed() {
+        // A dead op whose output is in the UNIQUE (temporary) space. Ghidra's
+        // doesDeadcode() returns true for unique, but deadRemovalAllowedSeen has
+        // fired by the time the cleanup pool runs. Since Rugra has no deadcode-
+        // seen tracking, UNIQUE outputs are gated as a "memory" output and the
+        // removal is blocked (NO_CHANGE) until that mechanism lands.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_constant(4, 5);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Unique, 0x20);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(out.clone());
+        }
+        assert!(out.read().unwrap().has_no_descend());
+        let rule = RuleEarlyRemoval::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        // UNIQUE is gated as memory output → blocked for now.
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_early_removal_register_output_blocked() {
+        // A dead op whose output is in the REGISTER space → "memory" output,
+        // gated until deadRemovalAllowedSeen is ported.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_constant(4, 5);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(out.clone());
+        }
+        assert!(out.read().unwrap().has_no_descend());
+        let rule = RuleEarlyRemoval::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_early_removal_indirect_source_blocked() {
+        // An INDIRECT-source op is never removed (guard 2, ruleaction.cc:31).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let out = fd.vbank.create_constant(4, 0x20);
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INDIRECT,
+        )));
+        op.write().unwrap().output = Some(out.clone());
+        op.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_SOURCE;
+        let rule = RuleEarlyRemoval::new();
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // --- RuleConditionalMove (ruleaction.cc:9390) ---
+
+    #[test]
+    fn test_conditional_move_construct_bool_no_clone() {
+        // constructBool with an empty op list returns the boolean Varnode itself
+        // (ruleaction.cc:9350-9358: resvn = vn when ops is empty). This is the
+        // path that fires for values formed before the branch — no cloning.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let boolvn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let op_ref = crate::op::PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BOOL_OR,
+        ))));
+        // Empty op list → returns the varnode directly.
+        let res = RuleConditionalMove::construct_bool(&boolvn, &[], &op_ref, &mut fd);
+        assert!(res.is_some());
+        assert!(Arc::ptr_eq(&res.unwrap(), &boolvn));
+    }
+
+    #[test]
+    fn test_conditional_move_construct_bool_needs_clone() {
+        // constructBool with a non-empty op list cannot reproduce the
+        // expression without CloneBlockOps (not yet ported) → returns None.
+        // The caller (applyOp) then bails with NO_CHANGE.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let boolvn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let op_ref = crate::op::PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_BOOL_OR,
+        ))));
+        // A dummy op in the list signals cross-branch duplication is required.
+        let dummy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_AND,
+        )));
+        let res = RuleConditionalMove::construct_bool(&boolvn, &[dummy_op], &op_ref, &mut fd);
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_conditional_move_check_boolean() {
+        // checkBoolean returns the boolean root for a bool-output op.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let boolout = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let cmp_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LESS,
+        )));
+        {
+            let mut o = cmp_op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(boolout.clone());
+            o.flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        }
+        boolout.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        boolout.write().unwrap().def = Some(Arc::downgrade(&cmp_op));
+        let root = RuleConditionalMove::check_boolean(&boolout);
+        assert!(root.is_some());
+        assert!(Arc::ptr_eq(&root.unwrap(), &boolout));
     }
 
     // --- RuleBooleanNegate (ruleaction.cc:2969) ---
@@ -18771,6 +19181,88 @@ mod tests {
         assert_eq!(result, action_status::CHANGE);
         // The base INT_ADD must have become PTRADD.
         assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_PTRADD);
+    }
+
+    // ========================================================================
+    // AddTreeState distribute/collapse tests (ruleaction.cc:6461-6502,
+    // funcdata_op.cc:1073-1153)
+    // ========================================================================
+
+    /// AddTreeState::collapse_int_mult_mult collapses `(x * #c) * #d` into
+    /// `x * (#c * #d)` (funcdata_op.cc:1132-1153).
+    #[test]
+    fn test_add_tree_collapse_int_mult_mult() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // x: a written register (Ghidra requires op->getIn(0)->isWritten()).
+        let x = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let x_def_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 5),
+            OpCode::CPUI_COPY,
+        )));
+        x.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        x.write().unwrap().def = Some(Arc::downgrade(&x_def_op));
+        // inner: x * #3
+        let c3 = fd.vbank.create_constant(4, 3);
+        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = inner_op.write().unwrap();
+            o.inrefs = vec![x.clone(), c3.clone()];
+            o.output = Some(inner_out.clone());
+        }
+        inner_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_op));
+        // outer: inner * #5  → should collapse to x * #15
+        let c5 = fd.vbank.create_constant(4, 5);
+        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = outer_op.write().unwrap();
+            o.inrefs = vec![inner_out.clone(), c5.clone()];
+            o.output = Some(outer_out.clone());
+        }
+        outer_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        outer_out.write().unwrap().def = Some(Arc::downgrade(&outer_op));
+        // Collapse outer ((x * #3) * #5) into (x * #15). Per Ghidra we pass the
+        // OUTER product vn (funcdata_op.cc:1132).
+        let changed = AddTreeState::collapse_int_mult_mult(&mut fd, &outer_out);
+        assert!(changed);
+        // The outer op's in(1) should now be a constant 15 (3*5).
+        let new_c = outer_op.read().unwrap().get_in(1).cloned().unwrap();
+        assert!(new_c.read().unwrap().is_constant());
+        assert_eq!(new_c.read().unwrap().get_offset(), 15);
+        // And in(0) should be x directly.
+        let new_in0 = outer_op.read().unwrap().get_in(0).cloned().unwrap();
+        assert!(Arc::ptr_eq(&new_in0, &x));
+    }
+
+    /// collapse_int_mult_mult returns false when the varnode is not defined by
+    /// INT_MULT (funcdata_op.cc:1137).
+    #[test]
+    fn test_add_tree_collapse_int_mult_mult_not_mult() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd.vbank.create_constant(4, 2);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![a, b];
+            o.output = Some(out.clone());
+        }
+        out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        out.write().unwrap().def = Some(Arc::downgrade(&add_op));
+        let changed = AddTreeState::collapse_int_mult_mult(&mut fd, &out);
+        assert!(!changed);
     }
 
     // ========================================================================

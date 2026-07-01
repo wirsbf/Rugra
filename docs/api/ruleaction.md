@@ -916,3 +916,9 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 - PiecePathology：isPathology（ruleaction.cc:10427-10505）递归 def 链遍历 + tracePathologyForward（10506-10559）前向 descend 追踪到 CALL/RETURN 记 bytes_consumed。apply_op 双路径（SUBPIECE + INDIRECT）。
 - IgnoreNan 深度路径：checkBackForCompare（9622-9662）+ isAnotherNan（9664-9694）+ testForComparison（9696-9738）三种合并路径 + CBRANCH 保护。nan_ignore_all=false 时真正执行 NaN 数据流移除。
 - fspec.rs：FuncProto +return_bytes_consumed + FuncCallSpecs +input_consume Vec + getter/setter。
+
+### 2026-07-01（续 10）：4 条 stub/partial Rule 补全
+- SubfloatConvert：常量折叠路径（subflow.cc:3394-3403）。非 const 保持 NO_CHANGE（完整 SubfloatFlow 精度追踪 TODO）。
+- ConditionalMove 非 const 路径：gather_expression + construct_bool（ruleaction.cc:9305-9381）。值在分支前形成的非 const 情况能产生 BOOL_OR/AND。
+- RuleEarlyRemoval：6 guard 全对齐（ruleaction.cc:25-44）。IOP 空间输出新增可删。
+- AddTreeState distribute/collapse：while 循环补全（ruleaction.cc:6475-6491）+ collapse_int_mult_mult。

@@ -25,9 +25,11 @@
 //!   - `RuleSplitLoad`       (subflow.cc:2964)  trigger: LOAD
 //!   - `RuleSplitStore`      (subflow.cc:2985)  trigger: STORE
 //!
-//! `RuleSubfloatConvert` (subflow.cc:3483, FLOAT_FLOAT2FLOAT) is left as a
-//! documented TODO: it depends on `SubfloatFlow` (a `TransformManager` subclass
-//! whose full precision tracking is not yet ported); see below.
+//! `RuleSubfloatConvert` (subflow.cc:3483, FLOAT_FLOAT2FLOAT) is partially
+//! ported: the full `SubfloatFlow` precision trace is not yet ported, but the
+//! constant-fold subset (re-encoding a constant FLOAT2FLOAT at the destination
+//! precision → COPY) now fires; non-constant inputs defer until the full trace
+//! lands; see below.
 //!
 //! # Known infrastructure gaps (do NOT work around — reported, not simplified)
 //!
@@ -4026,12 +4028,24 @@ impl Rule for RuleSplitStore {
 /// Perform SubfloatFlow analysis triggered by FLOAT_FLOAT2FLOAT.
 /// Faithful to Ghidra's `RuleSubfloatConvert` (subflow.hh:409-418).
 ///
-/// TODO: depends on `SubfloatFlow` (subflow.hh:379-406), a
-/// `TransformManager` subclass that tracks floating-point precision via a
-/// `maxPrecisionMap`. Neither SubfloatFlow nor the precision tracking is
-/// ported yet. The Rule struct + get_name/get_opcodes are present so the
-/// engine can register it; apply_op returns NO_CHANGE until SubfloatFlow
-/// lands. Logged rather than simplified.
+/// Ghidra's `applyOp` (subflow.cc:3489-3507) constructs a `SubfloatFlow`
+/// (subflow.hh:379-406), a `TransformManager` subclass that pushes a logical
+/// sub-precision interpretation through the data-flow of a `FLOAT_FLOAT2FLOAT`
+/// output (or input) and rewrites the data-flow at the smaller precision,
+/// eliminating the precision conversions. `SubfloatFlow` traces forward and
+/// backward, accumulating the maximum precision reaching each float op in a
+/// `maxPrecisionMap`, and only applies the transform when the trace is
+/// consistent and reaches at least one terminator.
+///
+/// Rugra port: the full `SubfloatFlow` trace + precision map is not yet ported
+/// (it requires the precision-aware `traceForward`/`traceBackward`/`exceedsPrecision`
+/// machinery plus a complete `TransformManager::apply`). This rule implements the
+/// **safe subset** of what `SubfloatFlow::traceBackward` does for a
+/// `FLOAT_FLOAT2FLOAT` whose input is *constant* (subflow.cc:3389-3413): the
+/// constant is re-encoded at the smaller precision and the op folds to a
+/// constant `COPY`. This is exactly the `SubfloatFlow` constant-folding path
+/// (`newConstant(precision, 0, vn->getOffset())` after re-encoding). For
+/// non-constant inputs the rule defers (NO_CHANGE) until the full trace lands.
 pub struct RuleSubfloatConvert;
 impl RuleSubfloatConvert {
     pub fn new() -> Self {
@@ -4039,9 +4053,45 @@ impl RuleSubfloatConvert {
     }
 }
 impl Rule for RuleSubfloatConvert {
-    fn apply_op(&self, _op_arc: &Arc<RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507)
-        eprintln!("[subflow] RuleSubfloatConvert: SubfloatFlow not ported; deferring");
+    fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507).
+        // Full SubfloatFlow trace not ported; apply the constant-fold subset
+        // (subflow.cc:3394-3403: the FLOAT_FLOAT2FLOAT constant branch).
+        let (invn, outvn) = {
+            let o = op_arc.read().unwrap();
+            let invn = match o.get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let outvn = match o.output.clone() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            (invn, outvn)
+        };
+        let insize = invn.read().unwrap().get_size() as usize;
+        let outsize = outvn.read().unwrap().get_size() as usize;
+
+        // SubfloatFlow constant case (subflow.cc:3394-3403): a constant input is
+        // re-encoded at the destination precision. Ghidra keeps FLOAT2FLOAT only
+        // when re-encoding would change the value; otherwise it collapses to COPY.
+        if invn.read().unwrap().is_constant() {
+            // Only IEEE754 single/double are supported by Rugra's FloatFormat.
+            if (insize == 4 || insize == 8) && (outsize == 4 || outsize == 8) {
+                let inoffset = invn.read().unwrap().get_offset();
+                let infmt = crate::float_emulate::FloatFormat::new(insize);
+                let outfmt = crate::float_emulate::FloatFormat::new(outsize);
+                // Re-encode the constant value at the output precision.
+                let new_offset = infmt.op_float2_float(inoffset, &outfmt);
+                // Fold the FLOAT_FLOAT2FLOAT into a COPY of the re-encoded
+                // constant (faithful to SubfloatFlow's newConstant + COPY).
+                let op_ref = PcodeOpRef(op_arc.clone());
+                let newconst = fd.new_constant(outsize, new_offset);
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                fd.op_set_input(&op_ref, newconst, 0);
+                return Ok(action_status::CHANGE);
+            }
+            // Unsupported float format — defer to the full SubfloatFlow trace.
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Non-constant input: the full SubfloatFlow trace is required to determine
+        // whether the value can be reinterpreted at the sub-precision. Without the
+        // precision map there is no safe transformation, so defer.
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str {
@@ -4722,8 +4772,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rule_subfloat_convert_inert() {
-        // SubfloatFlow not ported -> always NO_CHANGE, never panics.
+    fn test_rule_subfloat_convert_nonconst_defers() {
+        // Non-constant input: full SubfloatFlow trace not ported -> NO_CHANGE.
+        // Mirrors the guard at the end of RuleSubfloatConvert::apply_op.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let invn = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
         let outvn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
@@ -4732,6 +4783,45 @@ mod tests {
         assert_eq!(rule.apply_op(&op, &mut fd).unwrap(), action_status::NO_CHANGE);
         assert_eq!(rule.get_name(), "subfloat_convert");
         assert_eq!(rule.get_opcodes(), vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT]);
+    }
+
+    #[test]
+    fn test_rule_subfloat_convert_constant_fold() {
+        // Constant input: the FLOAT_FLOAT2FLOAT is folded to a COPY of the
+        // re-encoded constant (subflow.cc:3394-3403 constant branch). We use the
+        // IEEE754 encoding of 1.0 in single precision (0x3F800000) and re-encode
+        // it to double, which must round-trip exactly to 1.0 (0x3FF0000000000000).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // 1.0f as a 4-byte constant = 0x3F800000
+        let invn = fd.vbank.create_constant(4, 0x3F800000);
+        let outvn = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn));
+        let rule = RuleSubfloatConvert::new();
+        let res = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // Op must now be a COPY.
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        // The COPY input is a constant holding 1.0 in double precision.
+        let new_in = op.read().unwrap().get_in(0).cloned().unwrap();
+        assert!(new_in.read().unwrap().is_constant());
+        assert_eq!(new_in.read().unwrap().get_offset(), 0x3FF0_0000_0000_0000);
+    }
+
+    #[test]
+    fn test_rule_subfloat_convert_constant_downcast() {
+        // Constant input, double -> single downcast. 1.0 (0x3FF0000000000000)
+        // re-encoded to single = 0x3F800000.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let invn = fd.vbank.create_constant(8, 0x3FF0_0000_0000_0000);
+        let outvn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        let op = make_op(0, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![invn], Some(outvn));
+        let rule = RuleSubfloatConvert::new();
+        let res = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        assert_eq!(op.read().unwrap().opcode, OpCode::CPUI_COPY);
+        let new_in = op.read().unwrap().get_in(0).cloned().unwrap();
+        assert!(new_in.read().unwrap().is_constant());
+        assert_eq!(new_in.read().unwrap().get_offset(), 0x3F80_0000);
     }
 
     #[test]
