@@ -694,3 +694,6 @@ ActionBlockStructure: +last_op_count，op count 变化时 clear sblocks 重建�
 
 ### 2026-07-01（续 14）：printc depth guard + mainloop repeatapply 最终状态
 printc emit_block_structured +thread_local depth guard（>200 回退）。sblocks 失效重建保留。mainloop repeatapply 测试：depth guard+rebuild 仍溢出（200层×栈帧>256MB）。不启用。
+
+### 2026-07-01（续 15）：mainloop repeatapply 栈帧分析
+根因=emit_block_structured match 栈帧巨大（所有 arm 局部变量同帧）。depth=50+256MB 仍溢出。修复需拆分 per-arm helpers 或完全迭代化。

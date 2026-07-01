@@ -598,3 +598,6 @@ WhileDo 块检查 for_init/for_iter：有则 `for(init;cond;iter)`，否则 `whi
 
 ### 2026-07-01（续 2）：emit_block_structured 深度保护（thread_local）
 emit_block_structured 加 thread_local depth guard（>200 层回退到 emit_block_ops）。防止深层嵌套结构的递归溢出。mainloop repeatapply 仍不启用：sblocks 重建后的新结构即使有 depth guard 也触发溢出（200 层 × 每层栈帧 > 256MB）。根因是 repeatapply 产生的结构与单遍不同，printc 递归无法处理。
+
+### 2026-07-01（续 3）：mainloop repeatapply 最终根因 — emit_block_structured 巨大栈帧
+测试 depth=50 + 256MB 栈仍溢出。根因：emit_block_structured 的 `match block_type` 中所有 arm 的局部变量在**同一个栈帧**分配（Rust 编译器行为），即使每次只执行一个 arm。所有 If/WhileDo/List/Switch/Condition 的 RwLockReadGuard + 变量 ≈ 单帧 ~100KB+。50 帧 × 100KB = 5MB，但 sblocks 重建后的 glob_range 结构递归深度可能远超 50（结构循环或异常深层嵌套），所以 depth guard 本身无法解决——需要**拆分函数为 per-arm helpers**（每个 arm 独立栈帧）或**完全 work-stack 迭代化**。
