@@ -74,7 +74,7 @@ use crate::address::{calc_mask, Address, SeqNum};
 use crate::block::FlowBlock;
 use crate::error::Result;
 use crate::funcdata::Funcdata;
-use crate::op::{PcodeOp, PcodeOpRef};
+use crate::op::{pcodeop_flags, PcodeOp, PcodeOpRef};
 use crate::opcodes::OpCode;
 use crate::space::AddressSpace;
 use crate::varnode::{varnode_flags, Varnode};
@@ -1848,26 +1848,4045 @@ impl SplitVarnode {
     /// given a specific input. (`applyRuleIn`, double.cc:1090) Returns the
     /// count of transforms applied (0 or 1).
     ///
-    /// The various *Form classes (AddForm, SubForm, LogicalForm, Equal*Form,
-    /// LessThreeWay, ShiftForm, MultForm, PhiForm, IndirectForm, CopyForceForm)
-    /// are large (~1500 lines in Ghidra, double.cc:1433-3196) and depend on
-    /// block-level control flow (dominance, CBRANCH flip) not yet wired in
-    /// Rugra. We dispatch on opcode exactly as Ghidra does, returning 0
-    /// (no transform) until the corresponding *Form is ported. This keeps the
-    /// dispatcher 1:1 aligned while marking the per-form bodies as TODOs.
-    pub fn apply_rule_in(_in: &mut SplitVarnode, _data: &mut Funcdata) -> i32 {
-        // Faithful opcode dispatch skeleton (double.cc:1093-1231).
-        // for i in 0..2 { vn = (i==0) ? in.hi : in.lo; ... switch(workop.code()) ... }
-        // Each case constructs the corresponding *Form and calls applyRule.
-        // TODO(double.cc:1104-1228): port AddForm/SubForm/LogicalForm/Equal1-3Form/
-        //   LessThreeWay/LessConstForm/ShiftForm/MultForm/PhiForm/IndirectForm/
-        //   CopyForceForm once block-level control-flow helpers are available.
+    /// All the various double precision forms are lined up against the input.
+    /// The first one that matches has its associated transform performed and
+    /// then 1 is returned. If no form matches, 0 is returned. This is a 1:1
+    /// port of the opcode dispatch in double.cc:1093-1231.
+    pub fn apply_rule_in(in_sv: &mut SplitVarnode, data: &mut Funcdata) -> i32 {
+        // double.cc:1093-1103: iterate hi (i==0) then lo (i==1), scanning each
+        // piece's descendants for a double-precision work op.
+        for i in 0..2u8 {
+            let vn = if i == 0 {
+                in_sv.hi.clone()
+            } else {
+                in_sv.lo.clone()
+            };
+            let vn = match vn {
+                Some(v) => v,
+                None => continue,
+            };
+            let workishi = i == 0;
+            // Materialize the descendant list up-front to avoid borrow issues
+            // while mutating the op-graph via the Form transforms below.
+            let descends: Vec<OpArc> = vn.read().unwrap().descend_iter().collect();
+            for workop in descends {
+                let code = workop.read().unwrap().opcode;
+                match code {
+                    OpCode::CPUI_INT_ADD => {
+                        // double.cc:1105-1114
+                        let mut addform = AddForm::new();
+                        if addform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                        let mut subform = SubForm::new();
+                        if subform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_AND => {
+                        // double.cc:1115-1124
+                        let mut equal3form = Equal3Form::new();
+                        if equal3form.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                        let mut logicalform = LogicalForm::new();
+                        if logicalform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR => {
+                        // double.cc:1125-1138
+                        let mut logicalform = LogicalForm::new();
+                        if logicalform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                        // double.cc:1139-1152
+                        let mut lessthreeway = LessThreeWay::new();
+                        if lessthreeway.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                        let mut equal1form = Equal1Form::new();
+                        if equal1form.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                        let mut equal2form = Equal2Form::new();
+                        if equal2form.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => {
+                        // double.cc:1153-1163
+                        let mut lessthreeway = LessThreeWay::new();
+                        if lessthreeway.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                        let mut lessconstform = LessConstForm::new();
+                        if lessconstform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                        // double.cc:1164-1177
+                        let mut lessconstform = LessConstForm::new();
+                        if lessconstform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_LEFT => {
+                        // double.cc:1178-1184
+                        let mut shiftform = ShiftForm::new();
+                        if shiftform.apply_rule_left(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+                        // double.cc:1185-1198
+                        let mut shiftform = ShiftForm::new();
+                        if shiftform.apply_rule_right(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INT_MULT => {
+                        // double.cc:1199-1205
+                        let mut multform = MultForm::new();
+                        if multform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_MULTIEQUAL => {
+                        // double.cc:1206-1212
+                        let mut phiform = PhiForm::new();
+                        if phiform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_INDIRECT => {
+                        // double.cc:1213-1219
+                        let mut indform = IndirectForm::new();
+                        if indform.apply_rule(in_sv, &workop, workishi, data) {
+                            return 1;
+                        }
+                    }
+                    OpCode::CPUI_COPY => {
+                        // double.cc:1220-1226: only if the COPY output is address-forced.
+                        let is_addr_force = workop
+                            .read()
+                            .unwrap()
+                            .get_out()
+                            .map(|o| o.read().unwrap().is_addr_force())
+                            .unwrap_or(false);
+                        if is_addr_force {
+                            let mut copyform = CopyForceForm::new();
+                            if copyform.apply_rule(in_sv, &workop, workishi, data) {
+                                return 1;
+                            }
+                        }
+                    }
+                    _ => {
+                        // double.cc:1227-1228: default: break
+                    }
+                }
+            }
+        }
         0
     }
 
     /// Clone the shared-state fields of this SplitVarnode (wholeList/findCopies
     /// build copies by value). Mirrors C++ value-copy semantics.
     fn clone_split(&self) -> SplitVarnode {
+        SplitVarnode {
+            lo: self.lo.clone(),
+            hi: self.hi.clone(),
+            whole: self.whole.clone(),
+            defpoint: self.defpoint.clone(),
+            defblock: self.defblock.clone(),
+            val: self.val,
+            wholesize: self.wholesize,
+        }
+    }
+}
+
+// ===========================================================================
+// Form classes (double.hh:102-313, double.cc:1433-3196)
+//
+// NOTE on structure: Ghidra's double.cc does NOT define a `WholeForm` base
+// class. Each *Form is a standalone class (double.hh:102-313) with its own
+// `verify()` (data-flow consistency) and `applyRule()` (decide + build) — the
+// two roles the task brief labels "trace/resolve" and "build". We model each
+// Form as a Rust struct holding the same member fields as the C++ class, with
+// `verify`/`apply_rule` methods. Construction is via `new()` (the C++ classes
+// have no explicit constructor; fields are default/uninitialized and filled by
+// `verify`). The dispatch in `SplitVarnode::apply_rule_in` matches
+// double.cc:1104-1228 exactly.
+//
+// Helpers below are local to this file. `vn_slot_of` mirrors `PcodeOp::getSlot`
+// (op.hh:380) without needing a Funcdata, so `verify()` methods (which take
+// only a `PcodeOp*`, not `Funcdata&`) stay faithful.
+// ===========================================================================
+
+/// `PcodeOp::getSlot(vn)` — find the input slot holding `vn`, or -1.
+/// Faithful to Ghidra op.hh:380 / op.cc. Standalone (no Funcdata) so the
+/// `verify()` methods, which take only a `PcodeOp *`, remain faithful.
+fn vn_slot_of(op: &OpArc, vn: &VnArc) -> i32 {
+    let o = op.read().unwrap();
+    for (i, v) in o.inrefs.iter().enumerate() {
+        if Arc::ptr_eq(v, vn) {
+            return i as i32;
+        }
+    }
+    -1
+}
+
+/// `Varnode::loneDescend()` wrapped for `OpArc` ergonomics.
+fn lone_descend(vn: &VnArc) -> Option<OpArc> {
+    vn.read().unwrap().lone_descend()
+}
+
+/// `FlowBlock::lastOp()` for the erased `dyn FlowBlock`. Ghidra's
+/// `BlockBasic::lastOp()` returns the terminal op; Rugra's `last_op` is only on
+/// the concrete `BlockBasic` struct, not the trait, so we implement it via the
+/// trait's `get_ops()` (`ops.last()`). Faithful to BlockBasic::lastOp
+/// (block.cc).
+fn block_last_op(bl: &BlockArc) -> Option<PcodeOpRef> {
+    let ops = bl.read().unwrap().get_ops();
+    ops.last().cloned()
+}
+
+// ---------------------------------------------------------------------------
+// AddForm (double.hh:102-117, double.cc:1433-1607)
+//
+// Given a known double precision input, look for a double precision add,
+// recovering the other double input and the double output:
+//   reshi = hi1 + hi2 + hizext
+//   hizext = zext(bool)
+//   bool   = (-lo1 <= lo2)   OR   (-lo2 <= lo1)
+//   reslo  = lo1 + lo2
+// ---------------------------------------------------------------------------
+
+/// Double-precision addition form. 1:1 with Ghidra `AddForm` (double.hh:102).
+pub struct AddForm {
+    in_sv: SplitVarnode,
+    hi1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo1: Option<VnArc>,
+    lo2: Option<VnArc>,
+    reshi: Option<VnArc>,
+    reslo: Option<VnArc>,
+    zextop: Option<OpArc>,
+    loadd: Option<OpArc>,
+    add2: Option<OpArc>,
+    hizext1: Option<VnArc>,
+    hizext2: Option<VnArc>,
+    slot1: i32,
+    negconst: u64,
+    existop: Option<OpArc>,
+    indoub: SplitVarnode,
+    outdoub: SplitVarnode,
+}
+
+impl AddForm {
+    /// Construct an uninitialized AddForm (C++ class fields are unset).
+    pub fn new() -> Self {
+        AddForm {
+            in_sv: SplitVarnode::new(),
+            hi1: None,
+            hi2: None,
+            lo1: None,
+            lo2: None,
+            reshi: None,
+            reslo: None,
+            zextop: None,
+            loadd: None,
+            add2: None,
+            hizext1: None,
+            hizext2: None,
+            slot1: 0,
+            negconst: 0,
+            existop: None,
+            indoub: SplitVarnode::new(),
+            outdoub: SplitVarnode::new(),
+        }
+    }
+
+    /// If `op` matches a CARRY construction based on lo1 (i.e. CARRY(x,lo1)),
+    /// set lo2 (and negconst if lo1 is a constant) to be the corresponding
+    /// part of the carry and return true. (`checkForCarry`, double.cc:1433)
+    fn check_for_carry(&mut self, lo1: &VnArc, op: &OpArc) -> bool {
+        // double.cc:1438-1501
+        if op.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+            return false;
+        }
+        let in0 = match op.read().unwrap().get_in(0) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        if !in0.read().unwrap().is_written() {
+            return false;
+        }
+        let carryop = match in0.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        let carrycode = carryop.read().unwrap().opcode;
+        match carrycode {
+            OpCode::CPUI_INT_CARRY => {
+                // double.cc:1442-1451: Normal CARRY form.
+                let c_in0 = carryop.read().unwrap().get_in(0).cloned();
+                let c_in1 = carryop.read().unwrap().get_in(1).cloned();
+                if let Some(c0) = &c_in0 {
+                    if Arc::ptr_eq(c0, lo1) {
+                        self.lo2 = c_in1.clone();
+                    } else if let Some(c1) = &c_in1 {
+                        if Arc::ptr_eq(c1, lo1) {
+                            self.lo2 = c_in0.clone();
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+                match &self.lo2 {
+                    Some(l2) if l2.read().unwrap().is_constant() => return false,
+                    None => return false,
+                    _ => {}
+                }
+                true
+            }
+            OpCode::CPUI_INT_LESS => {
+                // double.cc:1452-1491: Possible CARRY.
+                let tmpvn = carryop.read().unwrap().get_in(0).cloned();
+                let tmpvn = match tmpvn {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if tmpvn.read().unwrap().is_constant() {
+                    // double.cc:1454-1463
+                    let c_in1 = carryop.read().unwrap().get_in(1).cloned();
+                    let c_in1 = match c_in1 {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if !Arc::ptr_eq(&c_in1, lo1) {
+                        return false;
+                    }
+                    self.negconst = tmpvn.read().unwrap().get_offset();
+                    // In constant forms, the <= will get converted to a <
+                    // (lessthan-to-less adds 1; 2's complement subtracts 1 and
+                    // negates) — so all we need to do is negate.
+                    self.negconst = (!self.negconst) & calc_mask(lo1.read().unwrap().get_size());
+                    self.lo2 = None;
+                    true
+                } else if tmpvn.read().unwrap().is_written() {
+                    // double.cc:1464-1489: Calculate CARRY relative to loadd result.
+                    let loadd_op = match tmpvn.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => return false,
+                    };
+                    if loadd_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                        return false;
+                    }
+                    let la_in0 = loadd_op.read().unwrap().get_in(0).cloned();
+                    let la_in1 = loadd_op.read().unwrap().get_in(1).cloned();
+                    let othervn = if let Some(a) = &la_in0 {
+                        if Arc::ptr_eq(a, lo1) {
+                            la_in1.clone()
+                        } else if let Some(b) = &la_in1 {
+                            if Arc::ptr_eq(b, lo1) {
+                                la_in0.clone()
+                            } else {
+                                return false; // One side of the add must be lo1.
+                            }
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    };
+                    let othervn = match othervn {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    if othervn.read().unwrap().is_constant() {
+                        // double.cc:1474-1482
+                        self.negconst = othervn.read().unwrap().get_offset();
+                        self.lo2 = None;
+                        let relvn = carryop.read().unwrap().get_in(1).cloned();
+                        let relvn = match relvn {
+                            Some(v) => v,
+                            None => return false,
+                        };
+                        if Arc::ptr_eq(&relvn, lo1) {
+                            return true; // Comparison relative to lo1
+                        }
+                        if !relvn.read().unwrap().is_constant() {
+                            return false;
+                        }
+                        if relvn.read().unwrap().get_offset() != self.negconst {
+                            return false; // Must be relative to (constant) lo2
+                        }
+                        true
+                    } else {
+                        // double.cc:1483-1489: other side of putative loadd is lo2
+                        self.lo2 = Some(othervn.clone());
+                        let compvn = carryop.read().unwrap().get_in(1).cloned();
+                        let compvn = match compvn {
+                            Some(v) => v,
+                            None => return false,
+                        };
+                        if Arc::ptr_eq(&compvn, &othervn) || Arc::ptr_eq(&compvn, lo1) {
+                            return true;
+                        }
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            OpCode::CPUI_INT_NOTEQUAL => {
+                // double.cc:1492-1499: Possible CARRY against -1.
+                let c_in1 = carryop.read().unwrap().get_in(1).cloned();
+                let c_in0 = carryop.read().unwrap().get_in(0).cloned();
+                let c_in1 = match c_in1 {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if !c_in1.read().unwrap().is_constant() {
+                    return false;
+                }
+                let c_in0 = match c_in0 {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if !Arc::ptr_eq(&c_in0, lo1) {
+                    return false;
+                }
+                if c_in1.read().unwrap().get_offset() != 0 {
+                    return false;
+                }
+                // Original CARRY constant must have been -1.
+                self.negconst = calc_mask(lo1.read().unwrap().get_size());
+                self.lo2 = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// (`verify`, double.cc:1515-1587) Returns true on success, filling the
+    /// recovered fields (lo2, hi2, reshi, reslo).
+    fn verify(&mut self, h: &VnArc, l: &VnArc, op: &OpArc) -> bool {
+        self.hi1 = Some(h.clone());
+        self.lo1 = Some(l.clone());
+        self.slot1 = vn_slot_of(op, h);
+        for i in 0..3i32 {
+            // double.cc:1521-1543
+            if i == 0 {
+                // Assume we have to descend one more add.
+                let outvn = match op.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                let add2 = match lone_descend(&outvn) {
+                    Some(o) => o,
+                    None => continue,
+                };
+                if add2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                self.add2 = Some(add2.clone());
+                self.reshi = add2.read().unwrap().get_out().cloned();
+                let one_m_slot = (1 - self.slot1) as usize;
+                self.hizext1 = op.read().unwrap().get_in(one_m_slot).cloned();
+                // add2->getSlot(op->getOut()): find the slot in add2 that holds op's output.
+                let op_out = op.read().unwrap().get_out().cloned();
+                let add2_slot_of_opout = match op_out {
+                    Some(ref oo) => vn_slot_of(&add2, oo),
+                    None => continue,
+                };
+                self.hizext2 = add2
+                    .read()
+                    .unwrap()
+                    .get_in((1 - add2_slot_of_opout) as usize)
+                    .cloned();
+            } else if i == 1 {
+                // Assume we are at the bottom most of two adds.
+                let one_m_slot = (1 - self.slot1) as usize;
+                let tmpvn = match op.read().unwrap().get_in(one_m_slot) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !tmpvn.read().unwrap().is_written() {
+                    continue;
+                }
+                let add2 = match tmpvn.read().unwrap().get_def() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                if add2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                self.add2 = Some(add2.clone());
+                self.reshi = op.read().unwrap().get_out().cloned();
+                self.hizext1 = add2.read().unwrap().get_in(0).cloned();
+                self.hizext2 = add2.read().unwrap().get_in(1).cloned();
+            } else {
+                // double.cc:1539-1543: Assume only one add, second implied add by 0.
+                self.reshi = op.read().unwrap().get_out().cloned();
+                let one_m_slot = (1 - self.slot1) as usize;
+                self.hizext1 = op.read().unwrap().get_in(one_m_slot).cloned();
+                self.hizext2 = None;
+            }
+            for j in 0..2i32 {
+                // double.cc:1544-1584
+                let (zextop_arc, hi2): (Option<OpArc>, Option<VnArc>) = if i == 2 {
+                    // hi2 is an implied 0.
+                    let hz1 = match self.hizext1.clone() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !hz1.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let zo = match hz1.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    (Some(zo), None)
+                } else if j == 0 {
+                    let hz1 = match self.hizext1.clone() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !hz1.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let zo = match hz1.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    (Some(zo), self.hizext2.clone())
+                } else {
+                    let hz2 = match self.hizext2.clone() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !hz2.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let zo = match hz2.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    (Some(zo), self.hizext1.clone())
+                };
+                let zextop = match zextop_arc {
+                    Some(o) => o,
+                    None => continue,
+                };
+                self.zextop = Some(zextop.clone());
+                self.hi2 = hi2.clone();
+                // Calculate lo2 and negconst via checkForCarry (must reset lo2).
+                self.lo2 = None;
+                let lo1 = self.lo1.clone().unwrap();
+                if !self.check_for_carry(&lo1, &zextop) {
+                    continue;
+                }
+                // double.cc:1562-1583: scan lo1 descendants for the matching lo add.
+                let descends: Vec<OpArc> = lo1.read().unwrap().descend_iter().collect();
+                for loadd_arc in descends {
+                    let loadd = loadd_arc.clone();
+                    if loadd.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                        continue;
+                    }
+                    let lo_slot = vn_slot_of(&loadd, &lo1);
+                    let tmpvn = loadd
+                        .read()
+                        .unwrap()
+                        .get_in((1 - lo_slot) as usize)
+                        .cloned();
+                    let tmpvn = match tmpvn {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    let lo2_cur = self.lo2.clone();
+                    let accept = match &lo2_cur {
+                        None => {
+                            // double.cc:1570-1574: lo2 must be the constant used in CARRY.
+                            if !tmpvn.read().unwrap().is_constant() {
+                                false
+                            } else {
+                                tmpvn.read().unwrap().get_offset() == self.negconst
+                            }
+                        }
+                        Some(l2) if l2.read().unwrap().is_constant() => {
+                            // double.cc:1575-1578
+                            if !tmpvn.read().unwrap().is_constant() {
+                                false
+                            } else {
+                                l2.read().unwrap().get_offset()
+                                    == tmpvn.read().unwrap().get_offset()
+                            }
+                        }
+                        Some(_) => {
+                            // double.cc:1579-1580: must add same value used in CARRY
+                            Arc::ptr_eq(&tmpvn, lo2_cur.as_ref().unwrap())
+                        }
+                    };
+                    if !accept {
+                        continue;
+                    }
+                    if lo2_cur.is_none() {
+                        self.lo2 = Some(tmpvn.clone());
+                    }
+                    self.loadd = Some(loadd.clone());
+                    self.reslo = loadd.read().unwrap().get_out().cloned();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:1589-1607)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        op: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, op) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        let lo2 = self.lo2.clone();
+        let hi2 = self.hi2.clone();
+        self.indoub.init_partial_pieces(size, lo2.unwrap(), hi2);
+        if self.indoub.exceeds_const_precision() {
+            return false;
+        }
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.outdoub.init_partial_pieces(size, reslo, Some(reshi));
+        self.existop =
+            SplitVarnode::prepare_binary_op(&mut self.outdoub, &mut self.in_sv, &mut self.indoub);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        SplitVarnode::create_binary_op(
+            data,
+            &mut self.outdoub,
+            &mut self.in_sv,
+            &mut self.indoub,
+            &existop,
+            OpCode::CPUI_INT_ADD,
+        );
+        // Propagate mutations back to caller's SplitVarnode (Ghidra passes `in`
+        // by reference; `in` = `this->in` which was assigned from `i`).
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SubForm (double.hh:119-133, double.cc:1609-1702)
+//
+//   reshi = hi1 + -hi2 + -zext(lo1 < lo2)
+//   reslo = lo1 + -lo2
+// ---------------------------------------------------------------------------
+
+/// Double-precision subtraction form. 1:1 with Ghidra `SubForm` (double.hh:119).
+pub struct SubForm {
+    in_sv: SplitVarnode,
+    hi1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo1: Option<VnArc>,
+    lo2: Option<VnArc>,
+    reshi: Option<VnArc>,
+    reslo: Option<VnArc>,
+    zextop: Option<OpArc>,
+    lessop: Option<OpArc>,
+    negop: Option<OpArc>,
+    loadd: Option<OpArc>,
+    add2: Option<OpArc>,
+    hineg1: Option<VnArc>,
+    hineg2: Option<VnArc>,
+    hizext1: Option<VnArc>,
+    hizext2: Option<VnArc>,
+    slot1: i32,
+    existop: Option<OpArc>,
+    indoub: SplitVarnode,
+    outdoub: SplitVarnode,
+}
+
+impl SubForm {
+    pub fn new() -> Self {
+        SubForm {
+            in_sv: SplitVarnode::new(),
+            hi1: None,
+            hi2: None,
+            lo1: None,
+            lo2: None,
+            reshi: None,
+            reslo: None,
+            zextop: None,
+            lessop: None,
+            negop: None,
+            loadd: None,
+            add2: None,
+            hineg1: None,
+            hineg2: None,
+            hizext1: None,
+            hizext2: None,
+            slot1: 0,
+            existop: None,
+            indoub: SplitVarnode::new(),
+            outdoub: SplitVarnode::new(),
+        }
+    }
+
+    /// (`verify`, double.cc:1616-1681)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, op: &OpArc) -> bool {
+        self.hi1 = Some(h.clone());
+        self.lo1 = Some(l.clone());
+        self.slot1 = vn_slot_of(op, h);
+        for i in 0..2i32 {
+            // double.cc:1623-1640
+            if i == 0 {
+                // Assume we have to descend one more add.
+                let outvn = match op.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                let add2 = match lone_descend(&outvn) {
+                    Some(o) => o,
+                    None => continue,
+                };
+                if add2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                self.add2 = Some(add2.clone());
+                self.reshi = add2.read().unwrap().get_out().cloned();
+                let one_m_slot = (1 - self.slot1) as usize;
+                self.hineg1 = op.read().unwrap().get_in(one_m_slot).cloned();
+                let op_out = op.read().unwrap().get_out().cloned();
+                let add2_slot_of_opout = match op_out {
+                    Some(ref oo) => vn_slot_of(&add2, oo),
+                    None => continue,
+                };
+                self.hineg2 = add2
+                    .read()
+                    .unwrap()
+                    .get_in((1 - add2_slot_of_opout) as usize)
+                    .cloned();
+            } else {
+                let one_m_slot = (1 - self.slot1) as usize;
+                let tmpvn = match op.read().unwrap().get_in(one_m_slot) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !tmpvn.read().unwrap().is_written() {
+                    continue;
+                }
+                let add2 = match tmpvn.read().unwrap().get_def() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                if add2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                self.add2 = Some(add2.clone());
+                self.reshi = op.read().unwrap().get_out().cloned();
+                self.hineg1 = add2.read().unwrap().get_in(0).cloned();
+                self.hineg2 = add2.read().unwrap().get_in(1).cloned();
+            }
+            // double.cc:1641-1646
+            let hineg1 = match self.hineg1.clone() {
+                Some(v) => v,
+                None => continue,
+            };
+            let hineg2 = match self.hineg2.clone() {
+                Some(v) => v,
+                None => continue,
+            };
+            if !hineg1.read().unwrap().is_written() {
+                continue;
+            }
+            if !hineg2.read().unwrap().is_written() {
+                continue;
+            }
+            let hineg1_def = match hineg1.read().unwrap().get_def() {
+                Some(o) => o,
+                None => continue,
+            };
+            let hineg2_def = match hineg2.read().unwrap().get_def() {
+                Some(o) => o,
+                None => continue,
+            };
+            if !SplitVarnode::verify_mult_neg_one(&hineg1_def) {
+                continue;
+            }
+            if !SplitVarnode::verify_mult_neg_one(&hineg2_def) {
+                continue;
+            }
+            // double.cc:1645-1646: hizext = neg1->getIn(0)
+            self.hizext1 = hineg1_def.read().unwrap().get_in(0).cloned();
+            self.hizext2 = hineg2_def.read().unwrap().get_in(0).cloned();
+            for j in 0..2i32 {
+                // double.cc:1647-1679
+                let (zextop_arc, hi2): (Option<OpArc>, Option<VnArc>) = if j == 0 {
+                    let hz1 = match self.hizext1.clone() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !hz1.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let zo = match hz1.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    (Some(zo), self.hizext2.clone())
+                } else {
+                    let hz2 = match self.hizext2.clone() {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !hz2.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let zo = match hz2.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    (Some(zo), self.hizext1.clone())
+                };
+                let zextop = match zextop_arc {
+                    Some(o) => o,
+                    None => continue,
+                };
+                // double.cc:1658-1663
+                if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+                    continue;
+                }
+                let zext_in0 = zextop.read().unwrap().get_in(0).cloned();
+                let zext_in0 = match zext_in0 {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if !zext_in0.read().unwrap().is_written() {
+                    continue;
+                }
+                let lessop = match zext_in0.read().unwrap().get_def() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                if lessop.read().unwrap().opcode != OpCode::CPUI_INT_LESS {
+                    continue;
+                }
+                let less_in0 = lessop.read().unwrap().get_in(0).cloned();
+                let less_in0 = match less_in0 {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let lo1 = self.lo1.clone().unwrap();
+                if !Arc::ptr_eq(&less_in0, &lo1) {
+                    continue;
+                }
+                self.lessop = Some(lessop.clone());
+                self.lo2 = lessop.read().unwrap().get_in(1).cloned();
+                self.hi2 = hi2;
+                // double.cc:1664-1677: scan lo1 descendants for lo add with -lo2.
+                let descends: Vec<OpArc> = lo1.read().unwrap().descend_iter().collect();
+                for loadd_arc in descends {
+                    let loadd = loadd_arc.clone();
+                    if loadd.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                        continue;
+                    }
+                    let lo_slot = vn_slot_of(&loadd, &lo1);
+                    let tmpvn = loadd
+                        .read()
+                        .unwrap()
+                        .get_in((1 - lo_slot) as usize)
+                        .cloned();
+                    let tmpvn = match tmpvn {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if !tmpvn.read().unwrap().is_written() {
+                        continue;
+                    }
+                    let negop = match tmpvn.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    if !SplitVarnode::verify_mult_neg_one(&negop) {
+                        continue;
+                    }
+                    let neg_in0 = negop.read().unwrap().get_in(0).cloned();
+                    let neg_in0 = match neg_in0 {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    let lo2 = self.lo2.clone().unwrap();
+                    if !Arc::ptr_eq(&neg_in0, &lo2) {
+                        continue;
+                    }
+                    self.negop = Some(negop);
+                    self.loadd = Some(loadd.clone());
+                    self.reslo = loadd.read().unwrap().get_out().cloned();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:1683-1702)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        op: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, op) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        let lo2 = self.lo2.clone().unwrap();
+        let hi2 = self.hi2.clone();
+        self.indoub.init_partial_pieces(size, lo2, hi2);
+        if self.indoub.exceeds_const_precision() {
+            return false;
+        }
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.outdoub.init_partial_pieces(size, reslo, Some(reshi));
+        self.existop =
+            SplitVarnode::prepare_binary_op(&mut self.outdoub, &mut self.in_sv, &mut self.indoub);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        SplitVarnode::create_binary_op(
+            data,
+            &mut self.outdoub,
+            &mut self.in_sv,
+            &mut self.indoub,
+            &existop,
+            OpCode::CPUI_INT_SUB,
+        );
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LogicalForm (double.hh:135-146, double.cc:1704-1825)
+//
+//   reshi = hi1 & hi2   (or |, ^)
+//   reslo = lo1 & lo2
+// ---------------------------------------------------------------------------
+
+/// Double-precision logical-op form. 1:1 with Ghidra `LogicalForm` (double.hh:135).
+pub struct LogicalForm {
+    in_sv: SplitVarnode,
+    loop_: Option<OpArc>,
+    hiop: Option<OpArc>,
+    hi1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo1: Option<VnArc>,
+    lo2: Option<VnArc>,
+    existop: Option<OpArc>,
+    indoub: SplitVarnode,
+    outdoub: SplitVarnode,
+}
+
+impl LogicalForm {
+    pub fn new() -> Self {
+        LogicalForm {
+            in_sv: SplitVarnode::new(),
+            loop_: None,
+            hiop: None,
+            hi1: None,
+            hi2: None,
+            lo1: None,
+            lo2: None,
+            existop: None,
+            indoub: SplitVarnode::new(),
+            outdoub: SplitVarnode::new(),
+        }
+    }
+
+    /// (`findHiMatch`, double.cc:1704-1779). Returns 0 if found, -1 if can't
+    /// find an op, -2 if no op exists.
+    fn find_hi_match(&mut self) -> i32 {
+        let lo1_tmp = match self.lo1.clone() {
+            Some(v) => v,
+            None => return -2,
+        };
+        let loop_ = self.loop_.clone().unwrap();
+        let lo_slot = vn_slot_of(&loop_, &lo1_tmp);
+        let vn2 = loop_
+            .read()
+            .unwrap()
+            .get_in((1 - lo_slot) as usize)
+            .cloned();
+        let vn2 = match vn2 {
+            Some(v) => v,
+            None => return -2,
+        };
+
+        // double.cc:1713-1733: known double-precision output?
+        let mut out = SplitVarnode::new();
+        if out.in_hand_lo_out(&lo1_tmp) {
+            if let Some(hi) = out.hi.clone() {
+                if hi.read().unwrap().is_written() {
+                    if let Some(maybeop) = hi.read().unwrap().get_def() {
+                        let loop_code = loop_.read().unwrap().opcode;
+                        if maybeop.read().unwrap().opcode == loop_code {
+                            let m_in0 = maybeop.read().unwrap().get_in(0).cloned();
+                            let m_in1 = maybeop.read().unwrap().get_in(1).cloned();
+                            let hi1 = self.hi1.clone().unwrap();
+                            let vn2_const = vn2.read().unwrap().is_constant();
+                            if let Some(m0) = &m_in0 {
+                                if Arc::ptr_eq(m0, &hi1) {
+                                    if let Some(m1) = &m_in1 {
+                                        if m1.read().unwrap().is_constant() == vn2_const {
+                                            self.hiop = Some(maybeop);
+                                            return 0;
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(m1) = &m_in1 {
+                                if Arc::ptr_eq(m1, &hi1) {
+                                    if let Some(m0) = &m_in0 {
+                                        if m0.read().unwrap().is_constant() == vn2_const {
+                                            self.hiop = Some(maybeop);
+                                            return 0;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // double.cc:1735-1778
+        if !vn2.read().unwrap().is_constant() {
+            // Look via known double-precision in2.
+            let mut in2 = SplitVarnode::new();
+            if in2.in_hand_lo(&vn2) {
+                let in2_hi = in2.hi.clone().unwrap();
+                let loop_code = loop_.read().unwrap().opcode;
+                let hi1 = self.hi1.clone().unwrap();
+                let descends: Vec<OpArc> = in2_hi.read().unwrap().descend_iter().collect();
+                for maybeop_arc in descends {
+                    let maybeop = maybeop_arc.clone();
+                    if maybeop.read().unwrap().opcode == loop_code {
+                        let m_in0 = maybeop.read().unwrap().get_in(0).cloned();
+                        let m_in1 = maybeop.read().unwrap().get_in(1).cloned();
+                        let matches_hi1 = match (&m_in0, &m_in1) {
+                            (Some(a), _) => Arc::ptr_eq(a, &hi1),
+                            (_, Some(b)) => Arc::ptr_eq(b, &hi1),
+                            _ => false,
+                        };
+                        if matches_hi1 {
+                            self.hiop = Some(maybeop);
+                            return 0;
+                        }
+                    }
+                }
+            }
+            -1
+        } else {
+            // double.cc:1754-1778: vn2 constant — look for unique op computing hi.
+            let hi1 = self.hi1.clone().unwrap();
+            let loop_code = loop_.read().unwrap().opcode;
+            let descends: Vec<OpArc> = hi1.read().unwrap().descend_iter().collect();
+            let mut count = 0i32;
+            let mut lastop: Option<OpArc> = None;
+            for maybeop_arc in descends {
+                let maybeop = maybeop_arc.clone();
+                if maybeop.read().unwrap().opcode == loop_code {
+                    let m_in1 = maybeop.read().unwrap().get_in(1).cloned();
+                    if let Some(m1) = &m_in1 {
+                        if m1.read().unwrap().is_constant() {
+                            count += 1;
+                            if count > 1 {
+                                break;
+                            }
+                            lastop = Some(maybeop);
+                        }
+                    }
+                }
+            }
+            if count == 1 {
+                self.hiop = lastop;
+                return 0;
+            }
+            if count > 1 {
+                return -1; // Couldn't distinguish between multiple possibilities
+            }
+            -2
+        }
+    }
+
+    /// (`verify`, double.cc:1787-1803)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, lop: &OpArc) -> bool {
+        self.loop_ = Some(lop.clone());
+        self.lo1 = Some(l.clone());
+        self.hi1 = Some(h.clone());
+        let res = self.find_hi_match();
+        if res == 0 {
+            let loop_ = self.loop_.clone().unwrap();
+            let hiop = self.hiop.clone().unwrap();
+            let lo1 = self.lo1.clone().unwrap();
+            let hi1 = self.hi1.clone().unwrap();
+            let lo_slot = vn_slot_of(&loop_, &lo1);
+            self.lo2 = loop_
+                .read()
+                .unwrap()
+                .get_in((1 - lo_slot) as usize)
+                .cloned();
+            let hi_slot = vn_slot_of(&hiop, &hi1);
+            self.hi2 = hiop
+                .read()
+                .unwrap()
+                .get_in((1 - hi_slot) as usize)
+                .cloned();
+            let lo2 = self.lo2.clone().unwrap();
+            let hi2 = self.hi2.clone().unwrap();
+            // double.cc:1798-1800: no manipulation of itself / no lo2==hi2.
+            let bad = Arc::ptr_eq(&lo2, &lo1)
+                || Arc::ptr_eq(&lo2, &hi1)
+                || Arc::ptr_eq(&hi2, &hi1)
+                || Arc::ptr_eq(&hi2, &lo1);
+            if bad {
+                return false;
+            }
+            if Arc::ptr_eq(&lo2, &hi2) {
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:1805-1825)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        lop: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, lop) {
+            return false;
+        }
+        let loop_ = self.loop_.clone().unwrap();
+        let hiop = self.hiop.clone().unwrap();
+        let size = self.in_sv.get_size();
+        let reslo = loop_.read().unwrap().get_out().cloned().unwrap();
+        let reshi = hiop.read().unwrap().get_out().cloned().unwrap();
+        self.outdoub.init_partial_pieces(size, reslo, Some(reshi));
+        let lo2 = self.lo2.clone().unwrap();
+        let hi2 = self.hi2.clone().unwrap();
+        self.indoub.init_partial_pieces(size, lo2, Some(hi2));
+        if self.indoub.exceeds_const_precision() {
+            return false;
+        }
+        self.existop =
+            SplitVarnode::prepare_binary_op(&mut self.outdoub, &mut self.in_sv, &mut self.indoub);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        let opc = loop_.read().unwrap().opcode;
+        SplitVarnode::create_binary_op(
+            data,
+            &mut self.outdoub,
+            &mut self.in_sv,
+            &mut self.indoub,
+            &existop,
+            opc,
+        );
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equal1Form (double.hh:148-159, double.cc:1836-1916)
+//
+//   hibool = hi1 == hi2 ; lobool = lo1 == lo2
+//   each bool induces a CBRANCH.
+// ---------------------------------------------------------------------------
+
+/// Double-precision == / != branching form. 1:1 with `Equal1Form` (double.hh:148).
+pub struct Equal1Form {
+    in1: SplitVarnode,
+    in2: SplitVarnode,
+    loop_: Option<OpArc>,
+    hiop: Option<OpArc>,
+    hibool: Option<OpArc>,
+    lobool: Option<OpArc>,
+    hi1: Option<VnArc>,
+    lo1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo2: Option<VnArc>,
+    hi1slot: i32,
+    lo1slot: i32,
+    notequalformhi: bool,
+    notequalformlo: bool,
+    setonlow: bool,
+}
+
+impl Equal1Form {
+    pub fn new() -> Self {
+        Equal1Form {
+            in1: SplitVarnode::new(),
+            in2: SplitVarnode::new(),
+            loop_: None,
+            hiop: None,
+            hibool: None,
+            lobool: None,
+            hi1: None,
+            lo1: None,
+            hi2: None,
+            lo2: None,
+            hi1slot: 0,
+            lo1slot: 0,
+            notequalformhi: false,
+            notequalformlo: false,
+            setonlow: false,
+        }
+    }
+
+    /// (`applyRule`, double.cc:1836-1916)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        hop: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in1 = i.clone_split();
+        self.hiop = Some(hop.clone());
+        self.hi1 = self.in1.hi.clone();
+        self.lo1 = self.in1.lo.clone();
+        let hi1 = self.hi1.clone().unwrap();
+        self.hi1slot = vn_slot_of(hop, &hi1);
+        self.hi2 = hop
+            .read()
+            .unwrap()
+            .get_in((1 - self.hi1slot) as usize)
+            .cloned();
+        self.notequalformhi = hop.read().unwrap().opcode == OpCode::CPUI_INT_NOTEQUAL;
+
+        let lo1 = self.lo1.clone().unwrap();
+        let lo1_descends: Vec<OpArc> = lo1.read().unwrap().descend_iter().collect();
+        for loop_arc in lo1_descends {
+            let loopop = loop_arc.clone();
+            let lcode = loopop.read().unwrap().opcode;
+            if lcode == OpCode::CPUI_INT_EQUAL {
+                self.notequalformlo = false;
+            } else if lcode == OpCode::CPUI_INT_NOTEQUAL {
+                self.notequalformlo = true;
+            } else {
+                continue;
+            }
+            self.loop_ = Some(loopop.clone());
+            self.lo1slot = vn_slot_of(&loopop, &lo1);
+            self.lo2 = loopop
+                .read()
+                .unwrap()
+                .get_in((1 - self.lo1slot) as usize)
+                .cloned();
+            let hiop = self.hiop.clone().unwrap();
+            let hiop_out = hiop.read().unwrap().get_out().cloned();
+            let hiop_out = match hiop_out {
+                Some(v) => v,
+                None => continue,
+            };
+            // double.cc:1867-1868: hiop->getOut()->beginDescend
+            let hibool_descends: Vec<OpArc> = hiop_out.read().unwrap().descend_iter().collect();
+            for hibool_arc in hibool_descends {
+                self.hibool = Some(hibool_arc.clone());
+                let loopop_out = loopop.read().unwrap().get_out().cloned();
+                let loopop_out = match loopop_out {
+                    Some(v) => v,
+                    None => continue,
+                };
+                // double.cc:1872-1873: loop->getOut()->beginDescend
+                let lobool_descends: Vec<OpArc> =
+                    loopop_out.read().unwrap().descend_iter().collect();
+                for lobool_arc in lobool_descends {
+                    self.lobool = Some(lobool_arc.clone());
+                    let hi2 = self.hi2.clone().unwrap();
+                    let lo2 = self.lo2.clone().unwrap();
+                    let size = self.in1.get_size();
+                    self.in2 = SplitVarnode::new();
+                    self.in2.init_partial_pieces(size, lo2, Some(hi2));
+                    if self.in2.exceeds_const_precision() {
+                        continue;
+                    }
+                    let hibool = self.hibool.clone().unwrap();
+                    let lobool = self.lobool.clone().unwrap();
+                    let is_cbranch =
+                        hibool.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+                            && lobool.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+                    if !is_cbranch {
+                        continue;
+                    }
+                    // double.cc:1884-1911: branching form of the equal op.
+                    let (hibooltrue, hiboolfalse) =
+                        SplitVarnode::get_true_false(&hibool, self.notequalformhi);
+                    let (lobooltrue, loboolfalse) =
+                        SplitVarnode::get_true_false(&lobool, self.notequalformlo);
+                    let lobool_parent = parent_block(&lobool);
+                    let hibool_parent = parent_block(&hibool);
+                    // hi is checked first then lo
+                    if same_block(&hibooltrue, &lobool_parent)
+                        && same_block(&hiboolfalse, &loboolfalse)
+                        && SplitVarnode::otherwise_empty(&lobool)
+                    {
+                        // double.cc:1892-1898
+                        let in1_clone = self.in1.clone_split();
+                        let in2_clone = self.in2.clone_split();
+                        if SplitVarnode::prepare_bool_op(
+                            &mut in1_clone.clone_mut(),
+                            &mut in2_clone.clone_mut(),
+                            &hibool,
+                        ) {
+                            self.setonlow = true;
+                            SplitVarnode::create_bool_op(
+                                data,
+                                &hibool,
+                                &mut self.in1.clone_mut(),
+                                &mut self.in2.clone_mut(),
+                                if self.notequalformhi {
+                                    OpCode::CPUI_INT_NOTEQUAL
+                                } else {
+                                    OpCode::CPUI_INT_EQUAL
+                                },
+                            );
+                            // Change lobool so it always goes to the original TRUE block.
+                            let c = data.new_constant(
+                                1,
+                                if self.notequalformlo { 0 } else { 1 },
+                            );
+                            data.op_set_input(&PcodeOpRef(lobool.clone()), c, 1);
+                            return true;
+                        }
+                    } else if same_block(&lobooltrue, &hibool_parent)
+                        && same_block(&hiboolfalse, &loboolfalse)
+                        && SplitVarnode::otherwise_empty(&hibool)
+                    {
+                        // double.cc:1900-1909: lo is checked first then hi
+                        let in1_clone = self.in1.clone_split();
+                        let in2_clone = self.in2.clone_split();
+                        if SplitVarnode::prepare_bool_op(
+                            &mut in1_clone.clone_mut(),
+                            &mut in2_clone.clone_mut(),
+                            &lobool,
+                        ) {
+                            self.setonlow = false;
+                            SplitVarnode::create_bool_op(
+                                data,
+                                &lobool,
+                                &mut self.in1.clone_mut(),
+                                &mut self.in2.clone_mut(),
+                                if self.notequalformlo {
+                                    OpCode::CPUI_INT_NOTEQUAL
+                                } else {
+                                    OpCode::CPUI_INT_EQUAL
+                                },
+                            );
+                            // Change hibool so it always goes to the original TRUE block.
+                            let c = data.new_constant(
+                                1,
+                                if self.notequalformhi { 0 } else { 1 },
+                            );
+                            data.op_set_input(&PcodeOpRef(hibool.clone()), c, 1);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equal2Form (double.hh:161-169, double.cc:1918-1982)
+//
+//   res = (hi1 == hi2) && (lo1 == lo2)   OR
+//   res = (hi1 != hi2) || (lo1 != lo2)
+// ---------------------------------------------------------------------------
+
+/// Double-precision == / != boolean form. 1:1 with `Equal2Form` (double.hh:161).
+pub struct Equal2Form {
+    in_sv: SplitVarnode,
+    hi1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo1: Option<VnArc>,
+    lo2: Option<VnArc>,
+    bool_and_or: Option<OpArc>,
+    param2: SplitVarnode,
+}
+
+impl Equal2Form {
+    pub fn new() -> Self {
+        Equal2Form {
+            in_sv: SplitVarnode::new(),
+            hi1: None,
+            hi2: None,
+            lo1: None,
+            lo2: None,
+            bool_and_or: None,
+            param2: SplitVarnode::new(),
+        }
+    }
+
+    /// (`replace`, double.cc:1918-1934)
+    fn replace(&mut self, data: &mut Funcdata, bool_and_or: &OpArc) -> bool {
+        let lo1 = self.lo1.clone().unwrap();
+        let hi2 = self.hi2.clone().unwrap();
+        let lo2 = self.lo2.clone().unwrap();
+        if hi2.read().unwrap().is_constant() && lo2.read().unwrap().is_constant() {
+            // double.cc:1921-1927
+            let mut val = hi2.read().unwrap().get_offset();
+            val <<= 8 * lo1.read().unwrap().get_size();
+            val |= lo2.read().unwrap().get_offset();
+            let size = self.in_sv.get_size();
+            self.param2 = SplitVarnode::new();
+            self.param2.init_partial_const(size, val);
+            let in_clone = self.in_sv.clone_split();
+            SplitVarnode::prepare_bool_op(
+                &mut in_clone.clone_mut(),
+                &mut self.param2.clone_mut(),
+                bool_and_or,
+            )
+        } else if hi2.read().unwrap().is_constant() || lo2.read().unwrap().is_constant() {
+            // double.cc:1928-1931: some kind of mixed form.
+            false
+        } else {
+            // double.cc:1932-1933
+            let size = self.in_sv.get_size();
+            self.param2 = SplitVarnode::new();
+            self.param2.init_partial_pieces(size, lo2, Some(hi2));
+            let in_clone = self.in_sv.clone_split();
+            SplitVarnode::prepare_bool_op(
+                &mut in_clone.clone_mut(),
+                &mut self.param2.clone_mut(),
+                bool_and_or,
+            )
+        }
+    }
+
+    /// (`applyRule`, double.cc:1942-1982)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        op: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        self.hi1 = self.in_sv.hi.clone();
+        self.lo1 = self.in_sv.lo.clone();
+        let eq_code = op.read().unwrap().opcode;
+        let hi1 = self.hi1.clone().unwrap();
+        let hi1slot = vn_slot_of(op, &hi1);
+        self.hi2 = op.read().unwrap().get_in((1 - hi1slot) as usize).cloned();
+        let outvn = match op.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let descends: Vec<OpArc> = outvn.read().unwrap().descend_iter().collect();
+        for bool_arc in descends {
+            let bool_and_or = bool_arc.clone();
+            let bcode = bool_and_or.read().unwrap().opcode;
+            // double.cc:1960-1961
+            if eq_code == OpCode::CPUI_INT_EQUAL && bcode != OpCode::CPUI_BOOL_AND {
+                continue;
+            }
+            if eq_code == OpCode::CPUI_INT_NOTEQUAL && bcode != OpCode::CPUI_BOOL_OR {
+                continue;
+            }
+            self.bool_and_or = Some(bool_and_or.clone());
+            let slot = vn_slot_of(&bool_and_or, &outvn);
+            let othervn = bool_and_or
+                .read()
+                .unwrap()
+                .get_in((1 - slot) as usize)
+                .cloned();
+            let othervn = match othervn {
+                Some(v) => v,
+                None => continue,
+            };
+            if !othervn.read().unwrap().is_written() {
+                continue;
+            }
+            let equal_lo = match othervn.read().unwrap().get_def() {
+                Some(o) => o,
+                None => continue,
+            };
+            if equal_lo.read().unwrap().opcode != eq_code {
+                continue;
+            }
+            let lo1 = self.lo1.clone().unwrap();
+            let el_in0 = equal_lo.read().unwrap().get_in(0).cloned();
+            let el_in1 = equal_lo.read().unwrap().get_in(1).cloned();
+            if let Some(ref a) = el_in0 {
+                if Arc::ptr_eq(a, &lo1) {
+                    self.lo2 = el_in1.clone();
+                } else if let Some(ref b) = el_in1 {
+                    if Arc::ptr_eq(b, &lo1) {
+                        self.lo2 = el_in0.clone();
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            if !self.replace(data, &bool_and_or) {
+                continue;
+            }
+            if self.param2.exceeds_const_precision() {
+                continue;
+            }
+            SplitVarnode::replace_bool_op(
+                data,
+                &bool_and_or,
+                &mut self.in_sv.clone_mut(),
+                &mut self.param2.clone_mut(),
+                eq_code,
+            );
+            *i = self.in_sv.clone_split();
+            return true;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equal3Form (double.hh:171-180, double.cc:1984-2024)
+//
+//   hi & lo == -1   (a == -1 / a != -1)
+// ---------------------------------------------------------------------------
+
+/// Double-precision == -1 / != -1 form. 1:1 with `Equal3Form` (double.hh:171).
+pub struct Equal3Form {
+    in_sv: SplitVarnode,
+    hi: Option<VnArc>,
+    lo: Option<VnArc>,
+    andop: Option<OpArc>,
+    compareop: Option<OpArc>,
+    smallc: Option<VnArc>,
+}
+
+impl Equal3Form {
+    pub fn new() -> Self {
+        Equal3Form {
+            in_sv: SplitVarnode::new(),
+            hi: None,
+            lo: None,
+            andop: None,
+            compareop: None,
+            smallc: None,
+        }
+    }
+
+    /// (`verify`, double.cc:1984-2002)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, aop: &OpArc) -> bool {
+        if aop.read().unwrap().opcode != OpCode::CPUI_INT_AND {
+            return false;
+        }
+        self.hi = Some(h.clone());
+        self.lo = Some(l.clone());
+        self.andop = Some(aop.clone());
+        let hislot = vn_slot_of(aop, h);
+        let one_m_hislot = (1 - hislot) as usize;
+        let and_in1 = aop.read().unwrap().get_in(one_m_hislot).cloned();
+        match and_in1 {
+            Some(v) if Arc::ptr_eq(&v, l) => {} // hi and lo must be ANDed together
+            _ => return false,
+        }
+        let and_out = match aop.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let compareop = match lone_descend(&and_out) {
+            Some(o) => o,
+            None => return false,
+        };
+        let ccode = compareop.read().unwrap().opcode;
+        if ccode != OpCode::CPUI_INT_EQUAL && ccode != OpCode::CPUI_INT_NOTEQUAL {
+            return false;
+        }
+        let allonesval = calc_mask(l.read().unwrap().get_size());
+        self.compareop = Some(compareop.clone());
+        let smallc = compareop.read().unwrap().get_in(1).cloned();
+        let smallc = match smallc {
+            Some(v) => v,
+            None => return false,
+        };
+        if !smallc.read().unwrap().is_constant() {
+            return false;
+        }
+        if smallc.read().unwrap().get_offset() != allonesval {
+            return false;
+        }
+        self.smallc = Some(smallc);
+        true
+    }
+
+    /// (`applyRule`, double.cc:2009-2024)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        op: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, op) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        // Create the -1 value.
+        let mut in2 = SplitVarnode::from_constant(size, calc_mask(size));
+        if in2.exceeds_const_precision() {
+            return false;
+        }
+        let compareop = self.compareop.clone().unwrap();
+        let comp_code = compareop.read().unwrap().opcode;
+        if !SplitVarnode::prepare_bool_op(&mut i.clone_mut(), &mut in2, &compareop) {
+            return false;
+        }
+        SplitVarnode::replace_bool_op(
+            data,
+            &compareop,
+            &mut i.clone_mut(),
+            &mut in2,
+            comp_code,
+        );
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LessConstForm (double.hh:218-226, double.cc:2505-2548)
+//
+//   hi COMPARE #const  =>  whole COMPARE #constextend
+// ---------------------------------------------------------------------------
+
+/// Double-precision constant high-compare form. 1:1 with `LessConstForm`.
+pub struct LessConstForm {
+    in_sv: SplitVarnode,
+    vn: Option<VnArc>,
+    cvn: Option<VnArc>,
+    inslot: i32,
+    signcompare: bool,
+    hilessequalform: bool,
+    constin: SplitVarnode,
+}
+
+impl LessConstForm {
+    pub fn new() -> Self {
+        LessConstForm {
+            in_sv: SplitVarnode::new(),
+            vn: None,
+            cvn: None,
+            inslot: 0,
+            signcompare: false,
+            hilessequalform: false,
+            constin: SplitVarnode::new(),
+        }
+    }
+
+    /// (`applyRule`, double.cc:2505-2548)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        op: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if i.hi.is_none() {
+            return false; // We don't necessarily need the lo part
+        }
+        self.in_sv = i.clone_split();
+        self.vn = self.in_sv.hi.clone();
+        let vn = self.vn.clone().unwrap();
+        self.inslot = vn_slot_of(op, &vn);
+        self.cvn = op
+            .read()
+            .unwrap()
+            .get_in((1 - self.inslot) as usize)
+            .cloned();
+        let cvn = match self.cvn.clone() {
+            Some(v) => v,
+            None => return false,
+        };
+        let losize = self.in_sv.get_size() - vn.read().unwrap().get_size();
+        if !cvn.read().unwrap().is_constant() {
+            return false;
+        }
+        let ocode = op.read().unwrap().opcode;
+        self.signcompare =
+            ocode == OpCode::CPUI_INT_SLESSEQUAL || ocode == OpCode::CPUI_INT_SLESS;
+        self.hilessequalform =
+            ocode == OpCode::CPUI_INT_SLESSEQUAL || ocode == OpCode::CPUI_INT_LESSEQUAL;
+        // double.cc:2521-2523
+        let mut val = cvn.read().unwrap().get_offset() << (8 * losize);
+        if self.hilessequalform != (self.inslot == 1) {
+            val |= calc_mask(losize);
+        }
+        // double.cc:2526-2528: this rule only applies if it directly affects a branch.
+        let outvn = match op.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let desc = match lone_descend(&outvn) {
+            Some(o) => o,
+            None => return false,
+        };
+        if desc.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        self.constin = SplitVarnode::from_constant(size, val);
+        if self.constin.exceeds_const_precision() {
+            return false;
+        }
+        // double.cc:2534-2545
+        if self.inslot == 0 {
+            let in_clone = self.in_sv.clone_split();
+            if SplitVarnode::prepare_bool_op(&mut in_clone.clone_mut(), &mut self.constin.clone_mut(), op)
+            {
+                SplitVarnode::replace_bool_op(
+                    data,
+                    op,
+                    &mut self.in_sv.clone_mut(),
+                    &mut self.constin.clone_mut(),
+                    ocode,
+                );
+                *i = self.in_sv.clone_split();
+                return true;
+            }
+        } else {
+            let in_clone = self.in_sv.clone_split();
+            if SplitVarnode::prepare_bool_op(&mut self.constin.clone_mut(), &mut in_clone.clone_mut(), op)
+            {
+                SplitVarnode::replace_bool_op(
+                    data,
+                    op,
+                    &mut self.constin.clone_mut(),
+                    &mut self.in_sv.clone_mut(),
+                    ocode,
+                );
+                *i = self.in_sv.clone_split();
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ShiftForm (double.hh:228-246, double.cc:2550-2733)
+//
+// Double-precision left/right (signed) shift:
+//   reshi, reslo built via loshift / midshift / hishift with consistent
+//   shift-amount varnodes.
+// ---------------------------------------------------------------------------
+
+/// Double-precision shift form. 1:1 with Ghidra `ShiftForm` (double.hh:228).
+pub struct ShiftForm {
+    in_sv: SplitVarnode,
+    opc: OpCode,
+    loshift: Option<OpArc>,
+    midshift: Option<OpArc>,
+    hishift: Option<OpArc>,
+    orop: Option<OpArc>,
+    lo: Option<VnArc>,
+    hi: Option<VnArc>,
+    midlo: Option<VnArc>,
+    midhi: Option<VnArc>,
+    salo: Option<VnArc>,
+    sahi: Option<VnArc>,
+    samid: Option<VnArc>,
+    reslo: Option<VnArc>,
+    reshi: Option<VnArc>,
+    out: SplitVarnode,
+    existop: Option<OpArc>,
+}
+
+impl ShiftForm {
+    pub fn new() -> Self {
+        ShiftForm {
+            in_sv: SplitVarnode::new(),
+            opc: OpCode::CPUI_INT_LEFT,
+            loshift: None,
+            midshift: None,
+            hishift: None,
+            orop: None,
+            lo: None,
+            hi: None,
+            midlo: None,
+            midhi: None,
+            salo: None,
+            sahi: None,
+            samid: None,
+            reslo: None,
+            reshi: None,
+            out: SplitVarnode::new(),
+            existop: None,
+        }
+    }
+
+    /// (`mapLeft`, double.cc:2550-2582)
+    fn map_left(&mut self, lo: &VnArc, hi: &VnArc) -> bool {
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        if !reslo.read().unwrap().is_written() {
+            return false;
+        }
+        if !reshi.read().unwrap().is_written() {
+            return false;
+        }
+        let loshift = match reslo.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        self.opc = loshift.read().unwrap().opcode;
+        if self.opc != OpCode::CPUI_INT_LEFT {
+            return false;
+        }
+        self.loshift = Some(loshift.clone());
+        let orop = match reshi.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        let orcode = orop.read().unwrap().opcode;
+        if orcode != OpCode::CPUI_INT_OR
+            && orcode != OpCode::CPUI_INT_XOR
+            && orcode != OpCode::CPUI_INT_ADD
+        {
+            return false;
+        }
+        self.orop = Some(orop.clone());
+        let mut midlo = orop.read().unwrap().get_in(0).cloned();
+        let mut midhi = orop.read().unwrap().get_in(1).cloned();
+        let midlo_ok = midlo.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let midhi_ok = midhi.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        if !midlo_ok || !midhi_ok {
+            return false;
+        }
+        let midlo_def = midlo.as_ref().and_then(|v| v.read().unwrap().get_def());
+        let midhi_def = midhi.as_ref().and_then(|v| v.read().unwrap().get_def());
+        let midlo_is_left = midlo_def
+            .as_ref()
+            .map(|o| o.read().unwrap().opcode == OpCode::CPUI_INT_LEFT)
+            .unwrap_or(false);
+        if !midlo_is_left {
+            // double.cc:2565-2569: swap midlo/midhi
+            std::mem::swap(&mut midlo, &mut midhi);
+        }
+        let midshift = match midlo.as_ref().and_then(|v| v.read().unwrap().get_def()) {
+            Some(o) => o,
+            None => return false,
+        };
+        if midshift.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT {
+            return false; // Must be unsigned RIGHT
+        }
+        self.midshift = Some(midshift.clone());
+        let hishift = match midhi.as_ref().and_then(|v| v.read().unwrap().get_def()) {
+            Some(o) => o,
+            None => return false,
+        };
+        if hishift.read().unwrap().opcode != OpCode::CPUI_INT_LEFT {
+            return false;
+        }
+        self.hishift = Some(hishift.clone());
+        // double.cc:2575-2580
+        let ls_in0 = loshift.read().unwrap().get_in(0).cloned();
+        let hs_in0 = hishift.read().unwrap().get_in(0).cloned();
+        let ms_in0 = midshift.read().unwrap().get_in(0).cloned();
+        if !matches!(ls_in0, Some(ref a) if Arc::ptr_eq(a, lo)) {
+            return false;
+        }
+        if !matches!(hs_in0, Some(ref a) if Arc::ptr_eq(a, hi)) {
+            return false;
+        }
+        if !matches!(ms_in0, Some(ref a) if Arc::ptr_eq(a, lo)) {
+            return false;
+        }
+        self.salo = loshift.read().unwrap().get_in(1).cloned();
+        self.sahi = hishift.read().unwrap().get_in(1).cloned();
+        self.samid = midshift.read().unwrap().get_in(1).cloned();
+        self.midlo = midlo;
+        self.midhi = midhi;
+        true
+    }
+
+    /// (`mapRight`, double.cc:2584-2616)
+    fn map_right(&mut self, lo: &VnArc, hi: &VnArc) -> bool {
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        if !reslo.read().unwrap().is_written() {
+            return false;
+        }
+        if !reshi.read().unwrap().is_written() {
+            return false;
+        }
+        let hishift = match reshi.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        self.opc = hishift.read().unwrap().opcode;
+        if self.opc != OpCode::CPUI_INT_RIGHT && self.opc != OpCode::CPUI_INT_SRIGHT {
+            return false;
+        }
+        self.hishift = Some(hishift.clone());
+        let orop = match reslo.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        let orcode = orop.read().unwrap().opcode;
+        if orcode != OpCode::CPUI_INT_OR
+            && orcode != OpCode::CPUI_INT_XOR
+            && orcode != OpCode::CPUI_INT_ADD
+        {
+            return false;
+        }
+        self.orop = Some(orop.clone());
+        let mut midlo = orop.read().unwrap().get_in(0).cloned();
+        let mut midhi = orop.read().unwrap().get_in(1).cloned();
+        let midlo_ok = midlo.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let midhi_ok = midhi.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        if !midlo_ok || !midhi_ok {
+            return false;
+        }
+        let midlo_is_right = midlo
+            .as_ref()
+            .and_then(|v| v.read().unwrap().get_def())
+            .map(|o| o.read().unwrap().opcode == OpCode::CPUI_INT_RIGHT)
+            .unwrap_or(false);
+        if !midlo_is_right {
+            // double.cc:2599-2603: swap midlo/midhi
+            std::mem::swap(&mut midlo, &mut midhi);
+        }
+        let midshift = match midhi.as_ref().and_then(|v| v.read().unwrap().get_def()) {
+            Some(o) => o,
+            None => return false,
+        };
+        if midshift.read().unwrap().opcode != OpCode::CPUI_INT_LEFT {
+            return false;
+        }
+        self.midshift = Some(midshift.clone());
+        let loshift = match midlo.as_ref().and_then(|v| v.read().unwrap().get_def()) {
+            Some(o) => o,
+            None => return false,
+        };
+        if loshift.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT {
+            return false; // Must be unsigned RIGHT
+        }
+        self.loshift = Some(loshift.clone());
+        // double.cc:2609-2614
+        let ls_in0 = loshift.read().unwrap().get_in(0).cloned();
+        let hs_in0 = hishift.read().unwrap().get_in(0).cloned();
+        let ms_in0 = midshift.read().unwrap().get_in(0).cloned();
+        if !matches!(ls_in0, Some(ref a) if Arc::ptr_eq(a, lo)) {
+            return false;
+        }
+        if !matches!(hs_in0, Some(ref a) if Arc::ptr_eq(a, hi)) {
+            return false;
+        }
+        if !matches!(ms_in0, Some(ref a) if Arc::ptr_eq(a, hi)) {
+            return false;
+        }
+        self.salo = loshift.read().unwrap().get_in(1).cloned();
+        self.sahi = hishift.read().unwrap().get_in(1).cloned();
+        self.samid = midshift.read().unwrap().get_in(1).cloned();
+        self.midlo = midlo;
+        self.midhi = midhi;
+        true
+    }
+
+    /// (`verifyShiftAmount`, double.cc:2618-2630)
+    fn verify_shift_amount(&self, lo: &VnArc) -> bool {
+        let salo = match &self.salo {
+            Some(v) => v,
+            None => return false,
+        };
+        let samid = match &self.samid {
+            Some(v) => v,
+            None => return false,
+        };
+        let sahi = match &self.sahi {
+            Some(v) => v,
+            None => return false,
+        };
+        if !salo.read().unwrap().is_constant() {
+            return false;
+        }
+        if !samid.read().unwrap().is_constant() {
+            return false;
+        }
+        if !sahi.read().unwrap().is_constant() {
+            return false;
+        }
+        let mut val = salo.read().unwrap().get_offset();
+        if val != sahi.read().unwrap().get_offset() {
+            return false;
+        }
+        if val >= 8 * lo.read().unwrap().get_size() as u64 {
+            return false;
+        }
+        val = 8 * lo.read().unwrap().get_size() as u64 - val;
+        if samid.read().unwrap().get_offset() != val {
+            return false;
+        }
+        true
+    }
+
+    /// (`verifyLeft`, double.cc:2632-2664)
+    fn verify_left(&mut self, h: &VnArc, l: &VnArc, loop_: &OpArc) -> bool {
+        self.hi = Some(h.clone());
+        self.lo = Some(l.clone());
+        self.loshift = Some(loop_.clone());
+        self.reslo = loop_.read().unwrap().get_out().cloned();
+        let hi_descends: Vec<OpArc> = h.read().unwrap().descend_iter().collect();
+        for hishift_arc in hi_descends {
+            let hishift = hishift_arc.clone();
+            if hishift.read().unwrap().opcode != OpCode::CPUI_INT_LEFT {
+                continue;
+            }
+            let outvn = match hishift.read().unwrap().get_out() {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let out_descends: Vec<OpArc> = outvn.read().unwrap().descend_iter().collect();
+            for midshift_arc in out_descends {
+                let midshift = midshift_arc.clone();
+                let tmpvn = midshift.read().unwrap().get_out().cloned();
+                let tmpvn = match tmpvn {
+                    Some(v) => v,
+                    None => continue,
+                };
+                self.reshi = Some(tmpvn);
+                if !self.map_left(l, h) {
+                    continue;
+                }
+                if !self.verify_shift_amount(l) {
+                    continue;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// (`verifyRight`, double.cc:2666-2697)
+    fn verify_right(&mut self, h: &VnArc, l: &VnArc, hiop: &OpArc) -> bool {
+        self.hi = Some(h.clone());
+        self.lo = Some(l.clone());
+        self.hishift = Some(hiop.clone());
+        self.reshi = hiop.read().unwrap().get_out().cloned();
+        let lo_descends: Vec<OpArc> = l.read().unwrap().descend_iter().collect();
+        for loshift_arc in lo_descends {
+            let loshift = loshift_arc.clone();
+            if loshift.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT {
+                continue;
+            }
+            let outvn = match loshift.read().unwrap().get_out() {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let out_descends: Vec<OpArc> = outvn.read().unwrap().descend_iter().collect();
+            for midshift_arc in out_descends {
+                let midshift = midshift_arc.clone();
+                let tmpvn = midshift.read().unwrap().get_out().cloned();
+                let tmpvn = match tmpvn {
+                    Some(v) => v,
+                    None => continue,
+                };
+                self.reslo = Some(tmpvn);
+                if !self.map_right(l, h) {
+                    continue;
+                }
+                if !self.verify_shift_amount(l) {
+                    continue;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// (`applyRuleLeft`, double.cc:2699-2715)
+    pub fn apply_rule_left(
+        &mut self,
+        i: &mut SplitVarnode,
+        loop_: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify_left(&hi, &lo, loop_) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.out.init_partial_pieces(size, reslo, Some(reshi));
+        self.existop = SplitVarnode::prepare_shift_op(&mut self.out, &mut self.in_sv);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        let salo = self.salo.clone().unwrap();
+        let opc = self.opc;
+        SplitVarnode::create_shift_op(data, &mut self.out, &mut self.in_sv, salo, &existop, opc);
+        *i = self.in_sv.clone_split();
+        true
+    }
+
+    /// (`applyRuleRight`, double.cc:2717-2733)
+    pub fn apply_rule_right(
+        &mut self,
+        i: &mut SplitVarnode,
+        hiop: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify_right(&hi, &lo, hiop) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.out.init_partial_pieces(size, reslo, Some(reshi));
+        self.existop = SplitVarnode::prepare_shift_op(&mut self.out, &mut self.in_sv);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        let salo = self.salo.clone().unwrap();
+        let opc = self.opc;
+        SplitVarnode::create_shift_op(data, &mut self.out, &mut self.in_sv, salo, &existop, opc);
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MultForm (double.hh:248-272, double.cc:2735-3024)
+//
+//   reshi = hi1*lo2 + hi2*lo1 + (tmp>>32)  (full form), or
+//   reshi = hi1*lo2 + (tmp>>32)            (small-const form)
+//   reslo = lo1 * lo2
+// ---------------------------------------------------------------------------
+
+/// Double-precision multiply form. 1:1 with Ghidra `MultForm` (double.hh:248).
+pub struct MultForm {
+    in_sv: SplitVarnode,
+    add1: Option<OpArc>,
+    add2: Option<OpArc>,
+    subhi: Option<OpArc>,
+    multlo: Option<OpArc>,
+    multhi1: Option<OpArc>,
+    multhi2: Option<OpArc>,
+    midtmp: Option<VnArc>,
+    lo1zext: Option<VnArc>,
+    lo2zext: Option<VnArc>,
+    hi1: Option<VnArc>,
+    lo1: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo2: Option<VnArc>,
+    reslo: Option<VnArc>,
+    reshi: Option<VnArc>,
+    outdoub: SplitVarnode,
+    in2: SplitVarnode,
+    existop: Option<OpArc>,
+}
+
+impl MultForm {
+    pub fn new() -> Self {
+        MultForm {
+            in_sv: SplitVarnode::new(),
+            add1: None,
+            add2: None,
+            subhi: None,
+            multlo: None,
+            multhi1: None,
+            multhi2: None,
+            midtmp: None,
+            lo1zext: None,
+            lo2zext: None,
+            hi1: None,
+            lo1: None,
+            hi2: None,
+            lo2: None,
+            reslo: None,
+            reshi: None,
+            outdoub: SplitVarnode::new(),
+            in2: SplitVarnode::new(),
+            existop: None,
+        }
+    }
+
+    /// (`mapResHiSmallConst`, double.cc:2735-2763)
+    fn map_res_hi_small_const(&mut self, rhi: &VnArc) -> bool {
+        self.reshi = Some(rhi.clone());
+        if !rhi.read().unwrap().is_written() {
+            return false;
+        }
+        let add1 = match rhi.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        if add1.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return false;
+        }
+        self.add1 = Some(add1.clone());
+        let ad1 = add1.read().unwrap().get_in(0).cloned();
+        let ad2 = add1.read().unwrap().get_in(1).cloned();
+        let ad1_ok = ad1.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let ad2_ok = ad2.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        if !ad1_ok || !ad2_ok {
+            return false;
+        }
+        let ad1_def = ad1.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap();
+        let (multhi1, subhi_opt, ad_for_subhi) = if ad1_def.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
+            (ad1_def.clone(), ad2.clone(), ad1.clone())
+        } else {
+            (ad2.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap(), ad1.clone(), ad2.clone())
+        };
+        // Ghidra: subhi = (multhi1==MULT) ? ad2 : ad1's def... re-derive faithfully.
+        let subhi = if ad1_def.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
+            ad2.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap()
+        } else {
+            ad1_def
+        };
+        self.multhi1 = Some(multhi1.clone());
+        self.subhi = Some(subhi.clone());
+        if multhi1.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+            return false;
+        }
+        if subhi.read().unwrap().opcode != OpCode::CPUI_SUBPIECE {
+            return false;
+        }
+        let midtmp = subhi.read().unwrap().get_in(0).cloned();
+        let midtmp = match midtmp {
+            Some(v) => v,
+            None => return false,
+        };
+        if !midtmp.read().unwrap().is_written() {
+            return false;
+        }
+        let multlo = match midtmp.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        if multlo.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+            return false;
+        }
+        self.midtmp = Some(midtmp.clone());
+        self.multlo = Some(multlo.clone());
+        self.lo1zext = multlo.read().unwrap().get_in(0).cloned();
+        self.lo2zext = multlo.read().unwrap().get_in(1).cloned();
+        let _ = (ad_for_subhi, subhi_opt);
+        true
+    }
+
+    /// (`mapResHi`, double.cc:2765-2822)
+    fn map_res_hi(&mut self, rhi: &VnArc) -> bool {
+        self.reshi = Some(rhi.clone());
+        if !rhi.read().unwrap().is_written() {
+            return false;
+        }
+        let add1 = match rhi.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        if add1.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return false;
+        }
+        self.add1 = Some(add1.clone());
+        let mut ad1 = add1.read().unwrap().get_in(0).cloned();
+        let mut ad2 = add1.read().unwrap().get_in(1).cloned();
+        let mut ad3: Option<VnArc> = None;
+        let ad1_ok = ad1.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let ad2_ok = ad2.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        if !ad1_ok || !ad2_ok {
+            return false;
+        }
+        // double.cc:2777-2787: descend one level of ADD.
+        let add1_in0_def = ad1.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap();
+        let add2;
+        if add1_in0_def.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
+            add2 = add1_in0_def.clone();
+            ad1 = add2.read().unwrap().get_in(0).cloned();
+            ad3 = add2.read().unwrap().get_in(1).cloned();
+        } else {
+            let add1_in1_def = ad2.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap();
+            if add1_in1_def.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                return false;
+            }
+            add2 = add1_in1_def.clone();
+            ad2 = add2.read().unwrap().get_in(0).cloned();
+            ad3 = add2.read().unwrap().get_in(1).cloned();
+        }
+        self.add2 = Some(add2.clone());
+        let ad1_ok = ad1.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let ad2_ok = ad2.as_ref().map(|v| v.read().unwrap().is_written()).unwrap_or(false);
+        let ad3 = match ad3 {
+            Some(v) => v,
+            None => return false,
+        };
+        let ad3_ok = ad3.read().unwrap().is_written();
+        if !ad1_ok || !ad2_ok || !ad3_ok {
+            return false;
+        }
+        // double.cc:2791-2811: identify the SUBPIECE among the three addends.
+        let ad1_def = ad1.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap();
+        let ad2_def = ad2.as_ref().and_then(|v| v.read().unwrap().get_def()).unwrap();
+        let ad3_def = ad3.read().unwrap().get_def().unwrap();
+        let (subhi, multhi1, multhi2) = if ad1_def.read().unwrap().opcode == OpCode::CPUI_SUBPIECE {
+            (ad1_def.clone(), ad2_def.clone(), ad3_def.clone())
+        } else if ad2_def.read().unwrap().opcode == OpCode::CPUI_SUBPIECE {
+            (ad2_def.clone(), ad1_def.clone(), ad3_def.clone())
+        } else if ad3_def.read().unwrap().opcode == OpCode::CPUI_SUBPIECE {
+            (ad3_def.clone(), ad1_def.clone(), ad2_def.clone())
+        } else {
+            return false;
+        };
+        if multhi1.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+            return false;
+        }
+        if multhi2.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+            return false;
+        }
+        self.subhi = Some(subhi.clone());
+        self.multhi1 = Some(multhi1.clone());
+        self.multhi2 = Some(multhi2.clone());
+        let midtmp = subhi.read().unwrap().get_in(0).cloned();
+        let midtmp = match midtmp {
+            Some(v) => v,
+            None => return false,
+        };
+        if !midtmp.read().unwrap().is_written() {
+            return false;
+        }
+        let multlo = match midtmp.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        if multlo.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+            return false;
+        }
+        self.midtmp = Some(midtmp.clone());
+        self.multlo = Some(multlo.clone());
+        self.lo1zext = multlo.read().unwrap().get_in(0).cloned();
+        self.lo2zext = multlo.read().unwrap().get_in(1).cloned();
+        true
+    }
+
+    /// (`findLoFromInSmallConst`, double.cc:2824-2838)
+    fn find_lo_from_in_small_const(&mut self, hi1: &VnArc) -> bool {
+        let multhi1 = self.multhi1.clone().unwrap();
+        let vn1 = multhi1.read().unwrap().get_in(0).cloned();
+        let vn2 = multhi1.read().unwrap().get_in(1).cloned();
+        let lo2 = if let Some(ref v1) = vn1 {
+            if Arc::ptr_eq(v1, hi1) {
+                vn2.clone()
+            } else if let Some(ref v2) = vn2 {
+                if Arc::ptr_eq(v2, hi1) {
+                    vn1.clone()
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+        let lo2 = match lo2 {
+            Some(v) => v,
+            None => return false,
+        };
+        if !lo2.read().unwrap().is_constant() {
+            return false;
+        }
+        self.lo2 = Some(lo2);
+        self.hi2 = None; // hi2 is an implied zero in this case
+        true
+    }
+
+    /// (`findLoFromIn`, double.cc:2840-2868)
+    fn find_lo_from_in(&mut self, hi1: &VnArc, lo1: &VnArc) -> bool {
+        let mut multhi1 = self.multhi1.clone().unwrap();
+        let multhi2 = self.multhi2.clone().unwrap();
+        let mut vn1 = multhi1.read().unwrap().get_in(0).cloned();
+        let mut vn2 = multhi1.read().unwrap().get_in(1).cloned();
+        // double.cc:2845-2851: normalize so multhi1 contains lo1.
+        let contains_lo1 = match (&vn1, &vn2) {
+            (Some(a), _) => Arc::ptr_eq(a, lo1),
+            (_, Some(b)) => Arc::ptr_eq(b, lo1),
+            _ => false,
+        };
+        if !contains_lo1 {
+            // double.cc:2846-2851: swap multhi1 / multhi2 (PcodeOp *tmpop).
+            let tmpop = self.multhi1.take().unwrap();
+            self.multhi1 = self.multhi2.take();
+            self.multhi2 = Some(tmpop);
+            multhi1 = self.multhi1.clone().unwrap();
+            vn1 = multhi1.read().unwrap().get_in(0).cloned();
+            vn2 = multhi1.read().unwrap().get_in(1).cloned();
+        }
+        // double.cc:2852-2857
+        let hi2 = if let Some(ref v1) = vn1 {
+            if Arc::ptr_eq(v1, lo1) {
+                vn2.clone()
+            } else if let Some(ref v2) = vn2 {
+                if Arc::ptr_eq(v2, lo1) {
+                    vn1.clone()
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+        self.hi2 = hi2;
+        // double.cc:2858-2865: multhi2 should contain hi1 and lo2
+        let multhi2 = self.multhi2.clone().unwrap();
+        let m2_in0 = multhi2.read().unwrap().get_in(0).cloned();
+        let m2_in1 = multhi2.read().unwrap().get_in(1).cloned();
+        let lo2 = if let Some(ref v1) = m2_in0 {
+            if Arc::ptr_eq(v1, hi1) {
+                m2_in1.clone()
+            } else if let Some(ref v2) = m2_in1 {
+                if Arc::ptr_eq(v2, hi1) {
+                    m2_in0.clone()
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+        self.lo2 = lo2;
+        true
+    }
+
+    /// (`zextOf`, double.cc:2870-2893)
+    fn zext_of(big: &VnArc, small: &VnArc) -> bool {
+        if small.read().unwrap().is_constant() {
+            if !big.read().unwrap().is_constant() {
+                return false;
+            }
+            return big.read().unwrap().get_offset() == small.read().unwrap().get_offset();
+        }
+        if !big.read().unwrap().is_written() {
+            return false;
+        }
+        let op = match big.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        let code = op.read().unwrap().opcode;
+        if code == OpCode::CPUI_INT_ZEXT {
+            let in0 = op.read().unwrap().get_in(0).cloned();
+            return matches!(in0, Some(ref a) if Arc::ptr_eq(a, small));
+        }
+        if code == OpCode::CPUI_INT_AND {
+            let in1 = op.read().unwrap().get_in(1).cloned();
+            let in1 = match in1 {
+                Some(v) => v,
+                None => return false,
+            };
+            if !in1.read().unwrap().is_constant() {
+                return false;
+            }
+            if in1.read().unwrap().get_offset() != calc_mask(small.read().unwrap().get_size()) {
+                return false;
+            }
+            let whole = op.read().unwrap().get_in(0).cloned();
+            let whole = match whole {
+                Some(v) => v,
+                None => return false,
+            };
+            if !small.read().unwrap().is_written() {
+                return false;
+            }
+            let sub = match small.read().unwrap().get_def() {
+                Some(o) => o,
+                None => return false,
+            };
+            if sub.read().unwrap().opcode != OpCode::CPUI_SUBPIECE {
+                return false;
+            }
+            let sub_in0 = sub.read().unwrap().get_in(0).cloned();
+            return matches!(sub_in0, Some(ref a) if Arc::ptr_eq(a, &whole));
+        }
+        false
+    }
+
+    /// (`verifyLo`, double.cc:2895-2909)
+    fn verify_lo(&self, lo1: &VnArc, lo2: &VnArc) -> bool {
+        let subhi = self.subhi.clone().unwrap();
+        let sub_in1 = match subhi.read().unwrap().get_in(1) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        if sub_in1.read().unwrap().get_offset() != lo1.read().unwrap().get_size() as u64 {
+            return false;
+        }
+        let lo1zext = self.lo1zext.clone().unwrap();
+        let lo2zext = self.lo2zext.clone().unwrap();
+        if MultForm::zext_of(&lo1zext, lo1) {
+            if MultForm::zext_of(&lo2zext, lo2) {
+                return true;
+            }
+        } else if MultForm::zext_of(&lo1zext, lo2) {
+            if MultForm::zext_of(&lo2zext, lo1) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// (`findResLo`, double.cc:2911-2946)
+    fn find_res_lo(&mut self, lo1: &VnArc, lo2: &VnArc) -> bool {
+        let midtmp = self.midtmp.clone().unwrap();
+        let mid_descends: Vec<OpArc> = midtmp.read().unwrap().descend_iter().collect();
+        for op_arc in mid_descends {
+            let op = op_arc.clone();
+            if op.read().unwrap().opcode != OpCode::CPUI_SUBPIECE {
+                continue;
+            }
+            let in1 = match op.read().unwrap().get_in(1) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            if in1.read().unwrap().get_offset() != 0 {
+                continue; // Must grab low bytes
+            }
+            let reslo = match op.read().unwrap().get_out() {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            if reslo.read().unwrap().get_size() != lo1.read().unwrap().get_size() {
+                continue;
+            }
+            self.reslo = Some(reslo);
+            return true;
+        }
+        // double.cc:2926-2944: separate multiplies of lo1*lo2 for reshi/reslo.
+        let lo1_descends: Vec<OpArc> = lo1.read().unwrap().descend_iter().collect();
+        for op_arc in lo1_descends {
+            let op = op_arc.clone();
+            if op.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
+                continue;
+            }
+            let vn1 = op.read().unwrap().get_in(0).cloned();
+            let vn2 = op.read().unwrap().get_in(1).cloned();
+            let lo2_const = lo2.read().unwrap().is_constant();
+            let accept = if lo2_const {
+                let lo2_off = lo2.read().unwrap().get_offset();
+                let v1_match = vn1
+                    .as_ref()
+                    .map(|v| v.read().unwrap().is_constant() && v.read().unwrap().get_offset() == lo2_off)
+                    .unwrap_or(false);
+                let v2_match = vn2
+                    .as_ref()
+                    .map(|v| v.read().unwrap().is_constant() && v.read().unwrap().get_offset() == lo2_off)
+                    .unwrap_or(false);
+                v1_match || v2_match
+            } else {
+                let v1 = vn1.as_ref().map(|v| Arc::ptr_eq(v, lo2)).unwrap_or(false);
+                let v2 = vn2.as_ref().map(|v| Arc::ptr_eq(v, lo2)).unwrap_or(false);
+                v1 || v2
+            };
+            if !accept {
+                continue;
+            }
+            self.reslo = op.read().unwrap().get_out().cloned();
+            return true;
+        }
+        false
+    }
+
+    /// (`mapFromInSmallConst`, double.cc:2948-2956)
+    fn map_from_in_small_const(&mut self, rhi: &VnArc, hi1: &VnArc, lo1: &VnArc, lo2: &VnArc) -> bool {
+        if !self.map_res_hi_small_const(rhi) {
+            return false;
+        }
+        if !self.find_lo_from_in_small_const(hi1) {
+            return false;
+        }
+        if !self.verify_lo(lo1, lo2) {
+            return false;
+        }
+        self.find_res_lo(lo1, lo2)
+    }
+
+    /// (`mapFromIn`, double.cc:2958-2966)
+    fn map_from_in(&mut self, rhi: &VnArc, hi1: &VnArc, lo1: &VnArc, lo2: &VnArc, hi2: &VnArc) -> bool {
+        if !self.map_res_hi(rhi) {
+            return false;
+        }
+        if !self.find_lo_from_in(hi1, lo1) {
+            return false;
+        }
+        if !self.verify_lo(lo1, lo2) {
+            return false;
+        }
+        self.find_res_lo(lo1, lo2)
+    }
+
+    /// (`replace`, double.cc:2968-2980)
+    fn replace(&mut self, data: &mut Funcdata) -> bool {
+        let size = self.in_sv.get_size();
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.outdoub.init_partial_pieces(size, reslo, Some(reshi));
+        let lo2 = self.lo2.clone().unwrap();
+        let hi2 = self.hi2.clone();
+        self.in2.init_partial_pieces(size, lo2, hi2);
+        if self.in2.exceeds_const_precision() {
+            return false;
+        }
+        self.existop =
+            SplitVarnode::prepare_binary_op(&mut self.outdoub, &mut self.in_sv, &mut self.in2);
+        let existop = match self.existop.clone() {
+            Some(e) => e,
+            None => return false,
+        };
+        SplitVarnode::create_binary_op(
+            data,
+            &mut self.outdoub,
+            &mut self.in_sv,
+            &mut self.in2,
+            &existop,
+            OpCode::CPUI_INT_MULT,
+        );
+        true
+    }
+
+    /// (`verify`, double.cc:2982-3010)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, hop: &OpArc) -> bool {
+        self.hi1 = Some(h.clone());
+        self.lo1 = Some(l.clone());
+        let hop_out = match hop.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let hi1 = self.hi1.clone().unwrap();
+        let lo1 = self.lo1.clone().unwrap();
+        let hop_out_descends: Vec<OpArc> = hop_out.read().unwrap().descend_iter().collect();
+        for add1_arc in hop_out_descends {
+            let add1 = add1_arc.clone();
+            if add1.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                continue;
+            }
+            self.add1 = Some(add1.clone());
+            let add1_out = match add1.read().unwrap().get_out() {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let add1_out_descends: Vec<OpArc> = add1_out.read().unwrap().descend_iter().collect();
+            for add2_arc in add1_out_descends {
+                let add2 = add2_arc.clone();
+                if add2.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                self.add2 = Some(add2.clone());
+                let add2_out = match add2.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                // Full form attempt. lo2/hi2 are recovered inside map_from_in.
+                if self.map_from_in(&add2_out, &hi1, &lo1, &lo1, &hi1) {
+                    return true;
+                }
+            }
+            let add1_out2 = match add1.read().unwrap().get_out() {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            if self.map_from_in(&add1_out2, &hi1, &lo1, &lo1, &hi1) {
+                return true;
+            }
+            if self.map_from_in_small_const(&add1_out2, &hi1, &lo1, &lo1) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:3012-3024)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        hop: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, hop) {
+            return false;
+        }
+        if self.replace(data) {
+            *i = self.in_sv.clone_split();
+            return true;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PhiForm (double.hh:274-285, double.cc:3026-3078)
+//
+//   Create a double precision phi-node from two matching MULTIEQUALs.
+// ---------------------------------------------------------------------------
+
+/// Double-precision phi (MULTIEQUAL) form. 1:1 with `PhiForm` (double.hh:274).
+pub struct PhiForm {
+    in_sv: SplitVarnode,
+    outvn: SplitVarnode,
+    inslot: i32,
+    hibase: Option<VnArc>,
+    lobase: Option<VnArc>,
+    blbase: Option<BlockArc>,
+    lophi: Option<OpArc>,
+    hiphi: Option<OpArc>,
+    existop: Option<OpArc>,
+}
+
+impl PhiForm {
+    pub fn new() -> Self {
+        PhiForm {
+            in_sv: SplitVarnode::new(),
+            outvn: SplitVarnode::new(),
+            inslot: 0,
+            hibase: None,
+            lobase: None,
+            blbase: None,
+            lophi: None,
+            hiphi: None,
+            existop: None,
+        }
+    }
+
+    /// (`verify`, double.cc:3028-3052)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, hphi: &OpArc) -> bool {
+        self.hibase = Some(h.clone());
+        self.lobase = Some(l.clone());
+        self.hiphi = Some(hphi.clone());
+        self.inslot = vn_slot_of(hphi, h);
+        // double.cc:3037: hiphi->getOut()->hasNoDescend()
+        let hphi_out = match hphi.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        if hphi_out.read().unwrap().has_no_descend() {
+            return false;
+        }
+        self.blbase = parent_block(hphi);
+        let lobase = self.lobase.clone().unwrap();
+        let blbase = self.blbase.clone();
+        let lo_descends: Vec<OpArc> = lobase.read().unwrap().descend_iter().collect();
+        for lophi_arc in lo_descends {
+            let lophi = lophi_arc.clone();
+            if lophi.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                continue;
+            }
+            // double.cc:3047: lophi->getParent() != blbase
+            if !same_block(&parent_block(&lophi), &blbase) {
+                continue;
+            }
+            // double.cc:3048: lophi->getIn(inslot) != lobase
+            let in_slot_vn = lophi
+                .read()
+                .unwrap()
+                .get_in(self.inslot as usize)
+                .cloned();
+            if !matches!(in_slot_vn, Some(ref a) if Arc::ptr_eq(a, &lobase)) {
+                continue;
+            }
+            self.lophi = Some(lophi);
+            return true;
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:3054-3078)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        hphi: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(&hi, &lo, hphi) {
+            return false;
+        }
+        let hiphi = self.hiphi.clone().unwrap();
+        let lophi = self.lophi.clone().unwrap();
+        let numin = hiphi.read().unwrap().num_input();
+        let size = self.in_sv.get_size();
+        // double.cc:3066-3070: build the inlist of (lo,hi) SplitVarnodes.
+        let mut inlist: Vec<SplitVarnode> = Vec::with_capacity(numin);
+        for j in 0..numin {
+            let vhi = hiphi.read().unwrap().get_in(j).cloned();
+            let vlo = lophi.read().unwrap().get_in(j).cloned();
+            let (vhi, vlo) = match (vhi, vlo) {
+                (Some(h), Some(l)) => (h, l),
+                _ => return false,
+            };
+            let mut sv = SplitVarnode::new();
+            sv.init_partial_pieces(size, vlo, Some(vhi));
+            inlist.push(sv);
+        }
+        // double.cc:3071
+        let lophi_out = lophi.read().unwrap().get_out().cloned().unwrap();
+        let hiphi_out = hiphi.read().unwrap().get_out().cloned().unwrap();
+        self.outvn = SplitVarnode::new();
+        self.outvn.init_partial_pieces(size, lophi_out, Some(hiphi_out));
+        self.existop = SplitVarnode::prepare_phi_op(&mut self.outvn, &mut inlist);
+        match self.existop.clone() {
+            Some(existop) => {
+                SplitVarnode::create_phi_op(data, &mut self.outvn, &mut inlist, &existop);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IndirectForm (double.hh:287-297, double.cc:3080-3129)
+//
+//   Collapse two partial INDIRECTs (sharing one affector) into a whole INDIRECT.
+// ---------------------------------------------------------------------------
+
+/// Double-precision indirect form. 1:1 with `IndirectForm` (double.hh:287).
+pub struct IndirectForm {
+    in_sv: SplitVarnode,
+    outvn: SplitVarnode,
+    lo: Option<VnArc>,
+    hi: Option<VnArc>,
+    reslo: Option<VnArc>,
+    reshi: Option<VnArc>,
+    affector: Option<OpArc>,
+    indhi: Option<OpArc>,
+    indlo: Option<OpArc>,
+}
+
+impl IndirectForm {
+    pub fn new() -> Self {
+        IndirectForm {
+            in_sv: SplitVarnode::new(),
+            outvn: SplitVarnode::new(),
+            lo: None,
+            hi: None,
+            reslo: None,
+            reshi: None,
+            affector: None,
+            indhi: None,
+            indlo: None,
+        }
+    }
+
+    /// (`verify`, double.cc:3080-3112)
+    fn verify(&mut self, data: &Funcdata, h: &VnArc, l: &VnArc, ind: &OpArc) -> bool {
+        self.hi = Some(h.clone());
+        self.lo = Some(l.clone());
+        self.indhi = Some(ind.clone());
+        // double.cc:3086-3088
+        let in1 = match ind.read().unwrap().get_in(1) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        if !in1.read().unwrap().get_space().is_iop() {
+            return false;
+        }
+        let affector = match data.get_op_from_const(&in1) {
+            Some(o) => o,
+            None => return false,
+        };
+        if affector.0.read().unwrap().is_dead() {
+            return false;
+        }
+        self.affector = Some(affector.0.clone());
+        self.reshi = ind.read().unwrap().get_out().cloned();
+        let reshi = self.reshi.clone().unwrap();
+        // double.cc:3090: reshi->getSpace()->getType()==IPTR_INTERNAL => false.
+        // Rugra models the internal/temporary space as AddressSpace::Unique.
+        if reshi.read().unwrap().get_space().is_unique() {
+            return false;
+        }
+        let lo = self.lo.clone().unwrap();
+        let lo_descends: Vec<OpArc> = lo.read().unwrap().descend_iter().collect();
+        for indlo_arc in lo_descends {
+            let indlo = indlo_arc.clone();
+            if indlo.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                continue;
+            }
+            let indlo_in1 = match indlo.read().unwrap().get_in(1) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            // double.cc:3099: must be iop space
+            if !indlo_in1.read().unwrap().get_space().is_iop() {
+                continue;
+            }
+            // double.cc:3100: hi and lo must be affected by same op.
+            let lo_aff = match data.get_op_from_const(&indlo_in1) {
+                Some(o) => o,
+                None => continue,
+            };
+            if !Arc::ptr_eq(&lo_aff.0, &affector.0) {
+                continue;
+            }
+            self.indlo = Some(indlo.clone());
+            self.reslo = indlo.read().unwrap().get_out().cloned();
+            let reslo = self.reslo.clone().unwrap();
+            // double.cc:3102: indirect must not be through a temporary.
+            if reslo.read().unwrap().get_space().is_unique() {
+                return false;
+            }
+            // double.cc:3103-3108: if either piece is addr-tied, both must be
+            // and fit together as a contiguous whole.
+            if reslo.read().unwrap().is_addr_tied() || reshi.read().unwrap().is_addr_tied() {
+                if SplitVarnode::is_addr_tied_contiguous_result(&reslo, &reshi).is_none() {
+                    return false;
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:3114-3129)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        ind: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        if !self.verify(data, &hi, &lo, ind) {
+            return false;
+        }
+        let size = self.in_sv.get_size();
+        let reslo = self.reslo.clone().unwrap();
+        let reshi = self.reshi.clone().unwrap();
+        self.outvn = SplitVarnode::new();
+        self.outvn.init_partial_pieces(size, reslo, Some(reshi));
+        let affector = self.affector.clone().unwrap();
+        if !SplitVarnode::prepare_indirect_op(&mut self.in_sv, &affector) {
+            return false;
+        }
+        SplitVarnode::replace_indirect_op(data, &mut self.outvn, &mut self.in_sv, &affector);
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CopyForceForm (double.hh:303-313, double.cc:3131-3196)
+//
+//   Collapse two COPYs into contiguous address-forced Varnodes with no
+//   descendants, taking into account the special global-past-RETURN form.
+// ---------------------------------------------------------------------------
+
+/// Double-precision address-forced COPY form. 1:1 with `CopyForceForm`.
+pub struct CopyForceForm {
+    in_sv: SplitVarnode,
+    reslo: Option<VnArc>,
+    reshi: Option<VnArc>,
+    copylo: Option<OpArc>,
+    copyhi: Option<OpArc>,
+    addr_out: Address,
+}
+
+impl CopyForceForm {
+    pub fn new() -> Self {
+        CopyForceForm {
+            in_sv: SplitVarnode::new(),
+            reslo: None,
+            reshi: None,
+            copylo: None,
+            copyhi: None,
+            addr_out: Address::new(0),
+        }
+    }
+
+    /// (`verify`, double.cc:3137-3180)
+    fn verify(&mut self, h: &VnArc, l: &VnArc, w: Option<&VnArc>, cpy: &OpArc) -> bool {
+        let _w = match w {
+            Some(wn) => wn,
+            None => return false, // double.cc:3140-3141
+        };
+        self.copyhi = Some(cpy.clone());
+        // double.cc:3143
+        let cpy_in0 = match cpy.read().unwrap().get_in(0) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        if !Arc::ptr_eq(&cpy_in0, h) {
+            return false;
+        }
+        self.reshi = cpy.read().unwrap().get_out().cloned();
+        let reshi = self.reshi.clone().unwrap();
+        // double.cc:3145
+        if !reshi.read().unwrap().is_addr_force() || !reshi.read().unwrap().has_no_descend() {
+            return false;
+        }
+        let l_descends: Vec<OpArc> = l.read().unwrap().descend_iter().collect();
+        let cpy_parent = parent_block(cpy);
+        for copylo_arc in l_descends {
+            let copylo = copylo_arc.clone();
+            if copylo.read().unwrap().opcode != OpCode::CPUI_COPY {
+                continue;
+            }
+            // double.cc:3153: copylo->getParent() != copyhi->getParent()
+            if !same_block(&parent_block(&copylo), &cpy_parent) {
+                continue;
+            }
+            self.copylo = Some(copylo.clone());
+            self.reslo = copylo.read().unwrap().get_out().cloned();
+            let reslo = self.reslo.clone().unwrap();
+            // double.cc:3156-3157
+            if !reslo.read().unwrap().is_addr_force() || !reslo.read().unwrap().has_no_descend() {
+                self.copylo = None;
+                self.reslo = None;
+                continue;
+            }
+            // double.cc:3158-3159: output MUST be contiguous addresses.
+            match SplitVarnode::is_addr_tied_contiguous_result(&reslo, &reshi) {
+                Some(addr) => self.addr_out = addr,
+                None => {
+                    self.copylo = None;
+                    self.reslo = None;
+                    continue;
+                }
+            }
+            // double.cc:3160-3176: special return-copy form has extra requirements.
+            let is_return_copy = (copylo.read().unwrap().flags & pcodeop_flags::RETURN_COPY) != 0;
+            if is_return_copy {
+                if lone_descend(h).is_none() {
+                    self.copylo = None;
+                    self.reslo = None;
+                    continue;
+                }
+                if lone_descend(l).is_none() {
+                    self.copylo = None;
+                    self.reslo = None;
+                    continue;
+                }
+                // double.cc:3165: w->getAddr() != addrOut
+                if w.unwrap().read().unwrap().get_addr().as_u64() != self.addr_out.as_u64() {
+                    // double.cc:3166-3175: unless there are additional COPYs from
+                    // the same basic block.
+                    if !h.read().unwrap().is_written() || !l.read().unwrap().is_written() {
+                        self.copylo = None;
+                        self.reslo = None;
+                        continue;
+                    }
+                    let other_lo = match l.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => {
+                            self.copylo = None;
+                            self.reslo = None;
+                            continue;
+                        }
+                    };
+                    let other_hi = match h.read().unwrap().get_def() {
+                        Some(o) => o,
+                        None => {
+                            self.copylo = None;
+                            self.reslo = None;
+                            continue;
+                        }
+                    };
+                    if other_lo.read().unwrap().opcode != OpCode::CPUI_COPY
+                        || other_hi.read().unwrap().opcode != OpCode::CPUI_COPY
+                    {
+                        self.copylo = None;
+                        self.reslo = None;
+                        continue;
+                    }
+                    if !same_block(&parent_block(&other_lo), &parent_block(&other_hi)) {
+                        self.copylo = None;
+                        self.reslo = None;
+                        continue;
+                    }
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    /// (`applyRule`, double.cc:3186-3196)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        cpy: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if !workishi {
+            return false;
+        }
+        if !i.has_both_pieces() {
+            return false;
+        }
+        self.in_sv = i.clone_split();
+        let hi = self.in_sv.hi.clone().unwrap();
+        let lo = self.in_sv.lo.clone().unwrap();
+        let whole = self.in_sv.whole.clone();
+        if !self.verify(&hi, &lo, whole.as_ref(), cpy) {
+            return false;
+        }
+        let copylo = self.copylo.clone().unwrap();
+        let copyhi = self.copyhi.clone().unwrap();
+        SplitVarnode::replace_copy_force(data, self.addr_out.clone(), &mut self.in_sv, &copylo, &copyhi);
+        *i = self.in_sv.clone_split();
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LessThreeWay (double.hh:182-216, double.cc:2026-2496)
+//
+// Three-way double-precision less-than compare across three CBRANCH blocks.
+// This is the single most block-control-flow-heavy Form. Rugra has the
+// necessary block helpers (get_true_false/otherwise_empty/dominance), so the
+// full form is ported 1:1.
+// ---------------------------------------------------------------------------
+
+/// Double-precision three-way less-than form. 1:1 with `LessThreeWay`.
+pub struct LessThreeWay {
+    in_sv: SplitVarnode,
+    in2: SplitVarnode,
+    hilessbl: Option<BlockArc>,
+    lolessbl: Option<BlockArc>,
+    hieqbl: Option<BlockArc>,
+    hilesstrue: Option<BlockArc>,
+    hilessfalse: Option<BlockArc>,
+    hieqtrue: Option<BlockArc>,
+    hieqfalse: Option<BlockArc>,
+    lolesstrue: Option<BlockArc>,
+    lolessfalse: Option<BlockArc>,
+    hilessbool: Option<OpArc>,
+    lolessbool: Option<OpArc>,
+    hieqbool: Option<OpArc>,
+    hiless: Option<OpArc>,
+    hiequal: Option<OpArc>,
+    loless: Option<OpArc>,
+    vnhil1: Option<VnArc>,
+    vnhil2: Option<VnArc>,
+    vnhie1: Option<VnArc>,
+    vnhie2: Option<VnArc>,
+    vnlo1: Option<VnArc>,
+    vnlo2: Option<VnArc>,
+    hi: Option<VnArc>,
+    lo: Option<VnArc>,
+    hi2: Option<VnArc>,
+    lo2: Option<VnArc>,
+    hislot: i32,
+    hiflip: bool,
+    equalflip: bool,
+    loflip: bool,
+    lolessiszerocomp: bool,
+    lolessequalform: bool,
+    hilessequalform: bool,
+    signcompare: bool,
+    midlessform: bool,
+    midlessequal: bool,
+    midsigncompare: bool,
+    hiconstform: bool,
+    midconstform: bool,
+    loconstform: bool,
+    hival: u64,
+    midval: u64,
+    loval: u64,
+    finalopc: OpCode,
+}
+
+impl LessThreeWay {
+    pub fn new() -> Self {
+        LessThreeWay {
+            in_sv: SplitVarnode::new(),
+            in2: SplitVarnode::new(),
+            hilessbl: None,
+            lolessbl: None,
+            hieqbl: None,
+            hilesstrue: None,
+            hilessfalse: None,
+            hieqtrue: None,
+            hieqfalse: None,
+            lolesstrue: None,
+            lolessfalse: None,
+            hilessbool: None,
+            lolessbool: None,
+            hieqbool: None,
+            hiless: None,
+            hiequal: None,
+            loless: None,
+            vnhil1: None,
+            vnhil2: None,
+            vnhie1: None,
+            vnhie2: None,
+            vnlo1: None,
+            vnlo2: None,
+            hi: None,
+            lo: None,
+            hi2: None,
+            lo2: None,
+            hislot: 0,
+            hiflip: false,
+            equalflip: false,
+            loflip: false,
+            lolessiszerocomp: false,
+            lolessequalform: false,
+            hilessequalform: false,
+            signcompare: false,
+            midlessform: false,
+            midlessequal: false,
+            midsigncompare: false,
+            hiconstform: false,
+            midconstform: false,
+            loconstform: false,
+            hival: 0,
+            midval: 0,
+            loval: 0,
+            finalopc: OpCode::CPUI_INT_LESS,
+        }
+    }
+
+    /// (`mapBlocksFromLow`, double.cc:2026-2039)
+    fn map_blocks_from_low(&mut self, lobl: BlockArc) -> bool {
+        self.lolessbl = Some(lobl.clone());
+        {
+            let g = lobl.read().unwrap();
+            if g.size_in() != 1 {
+                return false;
+            }
+            if g.size_out() != 2 {
+                return false;
+            }
+            let hieqbl = match g.get_in(0) {
+                Some(e) => e.point.clone(),
+                None => return false,
+            };
+            self.hieqbl = Some(hieqbl.clone());
+            let hg = hieqbl.read().unwrap();
+            if hg.size_in() != 1 {
+                return false;
+            }
+            if hg.size_out() != 2 {
+                return false;
+            }
+            let hilessbl = match hg.get_in(0) {
+                Some(e) => e.point.clone(),
+                None => return false,
+            };
+            self.hilessbl = Some(hilessbl.clone());
+            let hlg = hilessbl.read().unwrap();
+            if hlg.size_out() != 2 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// (`mapOpsFromBlocks`, double.cc:2041-2146)
+    fn map_ops_from_blocks(&mut self) -> bool {
+        // double.cc:2044-2052: pull the three terminal CBRANCHes.
+        let lolessbl = self.lolessbl.clone().unwrap();
+        let lolessbool = match block_last_op(&lolessbl) {
+            Some(o) => o.0,
+            None => return false,
+        };
+        if lolessbool.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+            return false;
+        }
+        self.lolessbool = Some(lolessbool.clone());
+        let hieqbl = self.hieqbl.clone().unwrap();
+        let hieqbool = match block_last_op(&hieqbl) {
+            Some(o) => o.0,
+            None => return false,
+        };
+        if hieqbool.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+            return false;
+        }
+        self.hieqbool = Some(hieqbool.clone());
+        let hilessbl = self.hilessbl.clone();
+        let hilessbool = match block_last_op(&hilessbl.as_ref().unwrap()) {
+            Some(o) => o.0,
+            None => return false,
+        };
+        if hilessbool.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
+            return false;
+        }
+        self.hilessbool = Some(hilessbool.clone());
+
+        self.hiflip = false;
+        self.equalflip = false;
+        self.loflip = false;
+        self.midlessform = false;
+        self.lolessiszerocomp = false;
+
+        // double.cc:2062-2094: map the mid (equal) compare.
+        let vn = hieqbool.read().unwrap().get_in(1).cloned();
+        let vn = match vn {
+            Some(v) => v,
+            None => return false,
+        };
+        if !vn.read().unwrap().is_written() {
+            return false;
+        }
+        let hiequal = match vn.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        self.hiequal = Some(hiequal.clone());
+        match hiequal.read().unwrap().opcode {
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                self.midlessform = false;
+            }
+            OpCode::CPUI_INT_LESS => {
+                self.midlessequal = false;
+                self.midsigncompare = false;
+                self.midlessform = true;
+            }
+            OpCode::CPUI_INT_LESSEQUAL => {
+                self.midlessequal = true;
+                self.midsigncompare = false;
+                self.midlessform = true;
+            }
+            OpCode::CPUI_INT_SLESS => {
+                self.midlessequal = false;
+                self.midsigncompare = true;
+                self.midlessform = true;
+            }
+            OpCode::CPUI_INT_SLESSEQUAL => {
+                self.midlessequal = true;
+                self.midsigncompare = true;
+                self.midlessform = true;
+            }
+            _ => return false,
+        }
+
+        // double.cc:2096-2120: map the lo compare.
+        let vn = lolessbool.read().unwrap().get_in(1).cloned();
+        let vn = match vn {
+            Some(v) => v,
+            None => return false,
+        };
+        if !vn.read().unwrap().is_written() {
+            return false;
+        }
+        let loless = match vn.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        self.loless = Some(loless.clone());
+        match loless.read().unwrap().opcode {
+            OpCode::CPUI_INT_LESS => self.lolessequalform = false,
+            OpCode::CPUI_INT_LESSEQUAL => self.lolessequalform = true,
+            OpCode::CPUI_INT_EQUAL => {
+                let in1 = loless.read().unwrap().get_in(1).cloned();
+                let in1 = match in1 {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if !in1.read().unwrap().is_constant() {
+                    return false;
+                }
+                if in1.read().unwrap().get_offset() != 0 {
+                    return false;
+                }
+                self.lolessiszerocomp = true;
+                self.lolessequalform = true;
+            }
+            OpCode::CPUI_INT_NOTEQUAL => {
+                let in1 = loless.read().unwrap().get_in(1).cloned();
+                let in1 = match in1 {
+                    Some(v) => v,
+                    None => return false,
+                };
+                if !in1.read().unwrap().is_constant() {
+                    return false;
+                }
+                if in1.read().unwrap().get_offset() != 0 {
+                    return false;
+                }
+                self.lolessiszerocomp = true;
+                self.lolessequalform = false;
+            }
+            _ => return false,
+        }
+
+        // double.cc:2122-2144: map the hi compare.
+        let vn = hilessbool.read().unwrap().get_in(1).cloned();
+        let vn = match vn {
+            Some(v) => v,
+            None => return false,
+        };
+        if !vn.read().unwrap().is_written() {
+            return false;
+        }
+        let hiless = match vn.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        self.hiless = Some(hiless.clone());
+        match hiless.read().unwrap().opcode {
+            OpCode::CPUI_INT_LESS => {
+                self.hilessequalform = false;
+                self.signcompare = false;
+            }
+            OpCode::CPUI_INT_LESSEQUAL => {
+                self.hilessequalform = true;
+                self.signcompare = false;
+            }
+            OpCode::CPUI_INT_SLESS => {
+                self.hilessequalform = false;
+                self.signcompare = true;
+            }
+            OpCode::CPUI_INT_SLESSEQUAL => {
+                self.hilessequalform = true;
+                self.signcompare = true;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// (`checkSignedness`, double.cc:2148-2155)
+    fn check_signedness(&self) -> bool {
+        if self.midlessform && self.midsigncompare != self.signcompare {
+            return false;
+        }
+        true
+    }
+
+    /// (`normalizeHi`, double.cc:2157-2202)
+    fn normalize_hi(&mut self) -> bool {
+        let hiless = self.hiless.clone().unwrap();
+        let mut vnhil1 = hiless.read().unwrap().get_in(0).cloned();
+        let mut vnhil2 = hiless.read().unwrap().get_in(1).cloned();
+        let lo_size = if let Some(ref l) = self.in_sv.lo {
+            l.read().unwrap().get_size()
+        } else {
+            return false;
+        };
+        // double.cc:2163-2169: move constant to the right.
+        let l1_const = vnhil1.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if l1_const {
+            self.hiflip = !self.hiflip;
+            self.hilessequalform = !self.hilessequalform;
+            std::mem::swap(&mut vnhil1, &mut vnhil2);
+        }
+        self.hiconstform = false;
+        let l2_const = vnhil2.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if l2_const {
+            // double.cc:2171-2191
+            if self.in_sv.get_size() > std::mem::size_of::<u64>() {
+                return false; // Must have enough precision for constant
+            }
+            self.hiconstform = true;
+            self.hival = vnhil2.as_ref().unwrap().read().unwrap().get_offset();
+            let (hilesstrue, hilessfalse) =
+                SplitVarnode::get_true_false(&self.hilessbool.clone().unwrap(), self.hiflip);
+            self.hilesstrue = hilesstrue;
+            self.hilessfalse = hilessfalse.clone();
+            let hieqbl = self.hieqbl.clone().unwrap();
+            let mut inc: i64 = 1;
+            // double.cc:2177-2184: ensure hiless false branch goes to hieq block.
+            if !same_block(&hilessfalse, &Some(hieqbl.clone())) {
+                self.hiflip = !self.hiflip;
+                self.hilessequalform = !self.hilessequalform;
+                std::mem::swap(&mut vnhil1, &mut vnhil2);
+                inc = -1;
+            }
+            // double.cc:2185-2189: normalize lessequal to less.
+            if self.hilessequalform {
+                self.hival = (self.hival as i64 + inc) as u64
+                    & calc_mask(self.in_sv.get_size());
+                self.hilessequalform = false;
+            }
+            self.hival >>= lo_size * 8;
+        } else {
+            // double.cc:2192-2200
+            if self.hilessequalform {
+                self.hilessequalform = false;
+                self.hiflip = !self.hiflip;
+                std::mem::swap(&mut vnhil1, &mut vnhil2);
+            }
+        }
+        self.vnhil1 = vnhil1;
+        self.vnhil2 = vnhil2;
+        true
+    }
+
+    /// (`normalizeMid`, double.cc:2204-2259)
+    fn normalize_mid(&mut self) -> bool {
+        let hiequal = self.hiequal.clone().unwrap();
+        let mut vnhie1 = hiequal.read().unwrap().get_in(0).cloned();
+        let mut vnhie2 = hiequal.read().unwrap().get_in(1).cloned();
+        let lo = self.in_sv.lo.clone();
+        let lo_size = lo.as_ref().map(|l| l.read().unwrap().get_size()).unwrap_or(0);
+        // double.cc:2210-2218: move constant to the right.
+        let e1_const = vnhie1.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if e1_const {
+            std::mem::swap(&mut vnhie1, &mut vnhie2);
+            if self.midlessform {
+                self.equalflip = !self.equalflip;
+                self.midlessequal = !self.midlessequal;
+            }
+        }
+        self.midconstform = false;
+        let e2_const = vnhie2.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if e2_const {
+            // double.cc:2220-2246
+            if !self.hiconstform {
+                return false; // If mid is constant, both mid and hi must be constant
+            }
+            self.midconstform = true;
+            self.midval = vnhie2.as_ref().unwrap().read().unwrap().get_offset();
+            if vnhie2.as_ref().unwrap().read().unwrap().get_size() == self.in_sv.get_size() {
+                // double.cc:2224-2238: convert to comparison on high part.
+                let lopart = self.midval & calc_mask(lo_size);
+                self.midval >>= lo_size * 8;
+                if self.midlessform {
+                    if self.midlessequal {
+                        if lopart != calc_mask(lo_size) {
+                            return false;
+                        }
+                    } else if lopart != 0 {
+                        return false;
+                    }
+                } else {
+                    return false; // Compare forcing restriction on lo part
+                }
+            }
+            // double.cc:2239-2245: if mid and hi don't match, may be one off.
+            if self.midval != self.hival {
+                if !self.midlessform {
+                    return false;
+                }
+                self.midval = (self.midval as i64
+                    + if self.midlessequal { 1 } else { -1 }) as u64
+                    & calc_mask(lo_size);
+                self.midlessequal = !self.midlessequal;
+                if self.midval != self.hival {
+                    return false; // Last chance
+                }
+            }
+        }
+        // double.cc:2247-2257
+        if self.midlessform {
+            if !self.midlessequal {
+                self.equalflip = !self.equalflip;
+            }
+        } else if hiequal.read().unwrap().opcode == OpCode::CPUI_INT_NOTEQUAL {
+            self.equalflip = !self.equalflip;
+        }
+        self.vnhie1 = vnhie1;
+        self.vnhie2 = vnhie2;
+        true
+    }
+
+    /// (`normalizeLo`, double.cc:2261-2306)
+    fn normalize_lo(&mut self) -> bool {
+        let loless = self.loless.clone().unwrap();
+        let mut vnlo1 = loless.read().unwrap().get_in(0).cloned();
+        let mut vnlo2 = loless.read().unwrap().get_in(1).cloned();
+        if self.lolessiszerocomp {
+            // double.cc:2267-2277
+            self.loconstform = true;
+            if self.lolessequalform {
+                self.loval = 1; // Treat as vnlo1 <= 0
+                self.lolessequalform = false;
+            } else {
+                self.loflip = !self.loflip; // Treat as 0 < vnlo1
+                self.loval = 1;
+            }
+            return true;
+        }
+        let l1_const = vnlo1.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if l1_const {
+            // double.cc:2279-2285: move constant to the right.
+            self.loflip = !self.loflip;
+            self.lolessequalform = !self.lolessequalform;
+            std::mem::swap(&mut vnlo1, &mut vnlo2);
+        }
+        self.loconstform = false;
+        let l2_const = vnlo2.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        if l2_const {
+            // double.cc:2287-2295: normalize lessequal to less.
+            self.loconstform = true;
+            self.loval = vnlo2.as_ref().unwrap().read().unwrap().get_offset();
+            if self.lolessequalform {
+                self.loval = (self.loval + 1) & calc_mask(vnlo2.as_ref().unwrap().read().unwrap().get_size());
+                self.lolessequalform = false;
+            }
+        } else if self.lolessequalform {
+            // double.cc:2296-2304
+            self.lolessequalform = false;
+            self.loflip = !self.loflip;
+            std::mem::swap(&mut vnlo1, &mut vnlo2);
+        }
+        self.vnlo1 = vnlo1;
+        self.vnlo2 = vnlo2;
+        true
+    }
+
+    /// (`checkBlockForm`, double.cc:2308-2329)
+    fn check_block_form(&self) -> bool {
+        let (hilesstrue, hilessfalse) =
+            SplitVarnode::get_true_false(&self.hilessbool.clone().unwrap(), self.hiflip);
+        let (lolesstrue, lolessfalse) =
+            SplitVarnode::get_true_false(&self.lolessbool.clone().unwrap(), self.loflip);
+        let (hieqtrue, hieqfalse) =
+            SplitVarnode::get_true_false(&self.hieqbool.clone().unwrap(), self.equalflip);
+        // double.cc:2314-2319
+        same_block(&hilesstrue, &lolesstrue)
+            && same_block(&hieqfalse, &lolessfalse)
+            && same_block(&hilessfalse, &self.hieqbl)
+            && same_block(&hieqtrue, &self.lolessbl)
+            && SplitVarnode::otherwise_empty(&self.hieqbool.clone().unwrap())
+            && SplitVarnode::otherwise_empty(&self.lolessbool.clone().unwrap())
+    }
+
+    /// (`checkOpForm`, double.cc:2331-2401)
+    fn check_op_form(&mut self) -> bool {
+        let lo = self.in_sv.lo.clone();
+        let hi = self.in_sv.hi.clone();
+        let vnhie1 = self.vnhie1.clone();
+        let vnhie2 = self.vnhie2.clone();
+        let vnhil1 = self.vnhil1.clone();
+        let vnhil2 = self.vnhil2.clone();
+        let vnlo1 = self.vnlo1.clone();
+        let mut vnlo2 = self.vnlo2.clone();
+
+        // double.cc:2337-2351
+        if self.midconstform {
+            if !self.hiconstform {
+                return false;
+            }
+            let vnhie2_size = vnhie2.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            if vnhie2_size == self.in_sv.get_size() {
+                let vnhie1 = vnhie1.as_ref().unwrap();
+                let vnhil1 = vnhil1.as_ref().unwrap();
+                let vnhil2 = vnhil2.as_ref().unwrap();
+                if !Arc::ptr_eq(vnhie1, vnhil1) && !Arc::ptr_eq(vnhie1, vnhil2) {
+                    return false;
+                }
+            } else {
+                let hi = hi.as_ref().unwrap();
+                if !matches!(&vnhie1, Some(ref a) if Arc::ptr_eq(a, hi)) {
+                    return false;
+                }
+            }
+        } else {
+            // double.cc:2347-2351
+            let vnhil1 = vnhil1.as_ref().unwrap();
+            let vnhil2 = vnhil2.as_ref().unwrap();
+            let vnhie1 = vnhie1.as_ref().unwrap();
+            let vnhie2 = vnhie2.as_ref().unwrap();
+            if !Arc::ptr_eq(vnhil1, vnhie1) && !Arc::ptr_eq(vnhil1, vnhie2) {
+                return false;
+            }
+            if !Arc::ptr_eq(vnhil2, vnhie1) && !Arc::ptr_eq(vnhil2, vnhie2) {
+                return false;
+            }
+        }
+
+        // double.cc:2352-2398: determine hislot / lo2 / hi2.
+        let hi = hi.as_ref();
+        let vnhil1 = vnhil1.as_ref();
+        let vnhil2 = vnhil2.as_ref();
+        let lo = lo.as_ref();
+        let whole = self.in_sv.whole.as_ref();
+        if let (Some(hi), Some(vnhil1)) = (hi, vnhil1) {
+            if Arc::ptr_eq(hi, vnhil1) {
+                if self.hiconstform {
+                    return false;
+                }
+                self.hislot = 0;
+                self.hi2 = vnhil2.cloned();
+                let vnlo1 = vnlo1.as_ref().unwrap();
+                // double.cc:2356-2363: pieces must be on the same side.
+                if !matches!(lo, Some(l) if Arc::ptr_eq(l, vnlo1)) {
+                    std::mem::swap(&mut self.vnlo1, &mut self.vnlo2);
+                    let new_vnlo1 = self.vnlo1.clone().unwrap();
+                    let lo = lo.cloned().unwrap();
+                    if !Arc::ptr_eq(&new_vnlo1, &lo) {
+                        return false;
+                    }
+                    self.loflip = !self.loflip;
+                    self.lolessequalform = !self.lolessequalform;
+                }
+                self.lo2 = self.vnlo2.clone();
+                return true;
+            }
+        }
+        if let (Some(hi), Some(vnhil2)) = (hi, vnhil2) {
+            if Arc::ptr_eq(hi, vnhil2) {
+                // double.cc:2366-2379
+                if self.hiconstform {
+                    return false;
+                }
+                self.hislot = 1;
+                self.hi2 = vnhil1.cloned();
+                let vnlo2 = self.vnlo2.clone().unwrap();
+                let lo = lo.cloned().unwrap();
+                if !Arc::ptr_eq(&vnlo2, &lo) {
+                    std::mem::swap(&mut self.vnlo1, &mut self.vnlo2);
+                    let new_vnlo2 = self.vnlo2.clone().unwrap();
+                    if !Arc::ptr_eq(&new_vnlo2, &lo) {
+                        return false;
+                    }
+                    self.loflip = !self.loflip;
+                    self.lolessequalform = !self.lolessequalform;
+                }
+                self.lo2 = self.vnlo1.clone();
+                return true;
+            }
+        }
+        // double.cc:2380-2385: whole constant on the left
+        if let Some(whole) = whole {
+            if let Some(vnhil1) = vnhil1 {
+                if Arc::ptr_eq(whole, vnhil1) {
+                    if !self.hiconstform || !self.loconstform {
+                        return false;
+                    }
+                    let vnlo1 = self.vnlo1.clone().unwrap();
+                    let lo = lo.cloned().unwrap();
+                    if !Arc::ptr_eq(&vnlo1, &lo) {
+                        return false;
+                    }
+                    self.hislot = 0;
+                    return true;
+                }
+            }
+            // double.cc:2386-2396: whole constant appears on the left
+            if let Some(vnhil2) = vnhil2 {
+                if Arc::ptr_eq(whole, vnhil2) {
+                    if !self.hiconstform || !self.loconstform {
+                        return false;
+                    }
+                    let vnlo2 = self.vnlo2.clone().unwrap();
+                    let lo = lo.cloned().unwrap();
+                    if !Arc::ptr_eq(&vnlo2, &lo) {
+                        self.loflip = !self.loflip;
+                        self.loval = (self.loval as i64 - 1) as u64
+                            & calc_mask(lo.read().unwrap().get_size());
+                        let vnlo1 = self.vnlo1.clone().unwrap();
+                        if !Arc::ptr_eq(&vnlo1, &lo) {
+                            return false;
+                        }
+                    }
+                    self.hislot = 1;
+                    return true;
+                }
+            }
+        }
+        let _ = vnlo2;
+        false
+    }
+
+    /// (`setOpCode`, double.cc:2403-2414)
+    fn set_op_code(&mut self) {
+        // double.cc:2406-2409
+        if self.lolessequalform != self.hiflip {
+            self.finalopc = if self.signcompare {
+                OpCode::CPUI_INT_SLESSEQUAL
+            } else {
+                OpCode::CPUI_INT_LESSEQUAL
+            };
+        } else {
+            self.finalopc = if self.signcompare {
+                OpCode::CPUI_INT_SLESS
+            } else {
+                OpCode::CPUI_INT_LESS
+            };
+        }
+        // double.cc:2410-2413
+        if self.hiflip {
+            self.hislot = 1 - self.hislot;
+            self.hiflip = false;
+        }
+    }
+
+    /// (`setBoolOp`, double.cc:2416-2428)
+    fn set_bool_op(&mut self) -> bool {
+        let in_sv = self.in_sv.clone_split();
+        let in2 = self.in2.clone_split();
+        let hilessbool = self.hilessbool.clone().unwrap();
+        if self.hislot == 0 {
+            SplitVarnode::prepare_bool_op(&mut in_sv.clone_mut(), &mut in2.clone_mut(), &hilessbool)
+        } else {
+            SplitVarnode::prepare_bool_op(&mut in2.clone_mut(), &mut in_sv.clone_mut(), &hilessbool)
+        }
+    }
+
+    /// (`mapFromLow`, double.cc:2430-2445)
+    fn map_from_low(&mut self, op: &OpArc) -> bool {
+        let op_out = match op.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        let loop_ = match lone_descend(&op_out) {
+            Some(o) => o,
+            None => return false,
+        };
+        let loop_parent = parent_block(&loop_);
+        let loop_parent = match loop_parent {
+            Some(b) => b,
+            None => return false,
+        };
+        if !self.map_blocks_from_low(loop_parent) {
+            return false;
+        }
+        if !self.map_ops_from_blocks() {
+            return false;
+        }
+        if !self.check_signedness() {
+            return false;
+        }
+        if !self.normalize_hi() {
+            return false;
+        }
+        if !self.normalize_mid() {
+            return false;
+        }
+        if !self.normalize_lo() {
+            return false;
+        }
+        if !self.check_op_form() {
+            return false;
+        }
+        if !self.check_block_form() {
+            return false;
+        }
+        true
+    }
+
+    /// (`testReplace`, double.cc:2447-2460)
+    fn test_replace(&mut self) -> bool {
+        self.set_op_code();
+        let lo = self.in_sv.lo.clone();
+        let lo_size = lo.as_ref().map(|l| l.read().unwrap().get_size()).unwrap_or(0);
+        if self.hiconstform {
+            // double.cc:2452-2454
+            let val = (self.hival << (8 * lo_size)) | self.loval;
+            let size = self.in_sv.get_size();
+            self.in2 = SplitVarnode::from_constant(size, val);
+            if !self.set_bool_op() {
+                return false;
+            }
+        } else {
+            // double.cc:2455-2458
+            let size = self.in_sv.get_size();
+            let lo2 = self.lo2.clone().unwrap();
+            let hi2 = self.hi2.clone().unwrap();
+            self.in2 = SplitVarnode::new();
+            self.in2.init_partial_pieces(size, lo2, Some(hi2));
+            if !self.set_bool_op() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// (`applyRule`, double.cc:2476-2496)
+    pub fn apply_rule(
+        &mut self,
+        i: &mut SplitVarnode,
+        loop_: &OpArc,
+        workishi: bool,
+        data: &mut Funcdata,
+    ) -> bool {
+        if workishi {
+            return false;
+        }
+        if i.lo.is_none() {
+            return false; // Doesn't necessarily need the hi
+        }
+        self.in_sv = i.clone_split();
+        if !self.map_from_low(loop_) {
+            return false;
+        }
+        let res = self.test_replace();
+        if res {
+            if self.in2.exceeds_const_precision() {
+                return false;
+            }
+            let hilessbool = self.hilessbool.clone().unwrap();
+            let in_sv = self.in_sv.clone_split();
+            let in2 = self.in2.clone_split();
+            if self.hislot == 0 {
+                SplitVarnode::create_bool_op(
+                    data,
+                    &hilessbool,
+                    &mut in_sv.clone_mut(),
+                    &mut in2.clone_mut(),
+                    self.finalopc,
+                );
+            } else {
+                SplitVarnode::create_bool_op(
+                    data,
+                    &hilessbool,
+                    &mut in2.clone_mut(),
+                    &mut in_sv.clone_mut(),
+                    self.finalopc,
+                );
+            }
+            // double.cc:2492: change hieqbool so it always goes to the original
+            // FALSE block. The lolessbool block becomes unreachable.
+            let hieqbool = self.hieqbool.clone().unwrap();
+            let c = data.new_constant(1, if self.equalflip { 1 } else { 0 });
+            data.op_set_input(&PcodeOpRef(hieqbool), c, 1);
+        }
+        res
+    }
+}
+
+/// Helper trait so ported Form classes can mutate a cloned SplitVarnode while
+/// the originals stay usable. This mirrors C++ pass-by-reference semantics.
+trait CloneMut {
+    fn clone_mut(&self) -> SplitVarnode;
+}
+
+impl CloneMut for SplitVarnode {
+    fn clone_mut(&self) -> SplitVarnode {
         SplitVarnode {
             lo: self.lo.clone(),
             hi: self.hi.clone(),

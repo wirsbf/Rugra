@@ -60,3 +60,6 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 - build_lo/hi_from_whole INDIRECT 分支：用 `fd.get_op_from_const(in1)` 解析 affector，op_uninsert→transform→op_insert_after（double.cc:602-648）。
 - no_write_conflict / test_indirect_use：iop varnode 精确配对（affector==op1/op2），替代保守 return None（double.cc:3406/3598）。
 - *Form 类族（依赖 block 级控制流）保留 TODO。
+
+### 2026-07-01（续 2）：*Form 类完整移植（double.cc:1104-3196）
+13 个 Form 类全部 1:1 移植：AddForm/SubForm/LogicalForm/Equal1-3Form/LessThreeWay(13方法)/LessConstForm/ShiftForm/MultForm(9方法)/PhiForm/IndirectForm/CopyForceForm。SplitVarnode::apply_rule_in 调度器按 opcode 映射到 Form（double.cc:1090-1232）。各 Form 的 verify/apply_rule 完整实现，非 stub。
