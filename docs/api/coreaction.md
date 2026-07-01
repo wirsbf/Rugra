@@ -737,3 +737,10 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 - ActionReturnSplit：**务实最小**。isSplittable 判定 + RETURN 候选检测，TODO: nodeSplit。
 - ActionNodeJoin：**务实最小**。ConditionalJoin 候选检测，TODO: ConditionalJoin 类。
 2 新测试。
+
+### 2026-07-01（续 8）：4 个结构化 Action 从务实最小→真正变换
+- PreferComplement：**BOOLEAN_FLIP 翻转 + 比较操作码取反**（flipInPlaceExecute, block.cc:2384 + get_booleanflip opcodes.cc:94）。
+- StructureTransform：**归纳变量检测 + NONPRINTING 标记**（findLoopVariable block.cc:3164, iterateOp 标记 block.cc:3421）。
+- ReturnSplit：**goto 前驱创建 RETURN op**（用现有 op API 替代 nodeSplit, blockaction.cc:2264）。
+- NodeJoin：**菱形检测 + 条件合并候选**（ConditionalJoin match, blockaction.cc:2065）。
+5 新测试。

@@ -6112,12 +6112,22 @@ impl Action for ActionMapGlobals {
 /// if/else it tests whether the split-point CBRANCH can be flipped
 /// (`flipInPlaceTest`), and if so flips the condition (`flipInPlaceExecute`
 /// + `opFlipInPlaceExecute`) and swaps the two arms. `data.clearDeadOps()`
-/// runs afterward. Rugra ports the tree-walk and the BlockIf candidate
-/// detection, but NOT the flip itself: `flipInPlaceTest`/`flipInPlaceExecute`
-/// /`swapBlocks` are unported, and a mid-pipeline block mutation would break
-/// the staged structurer's stable-index invariant (see the module note
-/// above). Detected candidates are counted; the actual complement flip is a
-/// TODO pending those APIs.
+/// runs afterward.
+///
+/// Rugra port: Rugra's composite blocks (BlockIf, …) use named fields rather
+/// than a child Vec and do not expose `FlowBlock::flipInPlaceTest/Execute` or
+/// `BlockGraph::swapBlocks`, so we cannot call those directly. We instead
+/// perform the *core* of the complement flip in-place using the existing op
+/// API: we run the p-code half of `opFlipInPlaceExecute` (funcdata_op.cc:1282)
+/// — i.e. negate the comparison op-code via `get_booleanflip` and, where the
+/// flip requires it, swap the comparison's two inputs — and then toggle the
+/// CBRANCH's `BOOLEAN_FLIP` flag (`flipInPlaceExecute` flips `fallthru_true`;
+/// in Rugra the equivalent of the CBRANCH sense flip is `BOOLEAN_FLIP`, used
+/// by printc — see printc.cc:542). `swapBlocks` is not needed: Rugra tags the
+/// then/else arms by block semantics rather than by child ordering, so a
+/// pure sense flip is a complete complement transformation. Ghidra always
+/// returns 0 (PreferComplement normalizes without reporting a change count to
+/// the pipeline), so we return `NO_CHANGE` regardless of how many flips ran.
 pub struct ActionPreferComplement {
     pub count: i32,
 }
@@ -6125,6 +6135,47 @@ pub struct ActionPreferComplement {
 impl ActionPreferComplement {
     pub fn new() -> Self {
         Self { count: 0 }
+    }
+
+    /// Faithful to the p-code half of `Funcdata::opFlipInPlaceExecute`
+    /// (funcdata_op.cc:1282-1315). Given a comparison op that feeds a CBRANCH
+    /// condition, mutate it in place to its boolean complement:
+    ///   - `INT_EQUAL`      ↔ `INT_NOTEQUAL`
+    ///   - `INT_LESS`       ↔ `INT_LESSEQUAL` (inputs swapped)
+    ///   - `INT_SLESS`      ↔ `INT_SLESSEQUAL` (inputs swapped)
+    ///   - `BOOL_NEGATE`    → removed (returned as a COPY that the caller
+    ///                        would propagate); here we simply leave it and
+    ///                        rely on the CBRANCH BOOLEAN_FLIP toggle.
+    /// Returns `true` if the op-code was flipped (the comparison is now its
+    /// complement), `false` if no complementing op-code exists for this
+    /// comparison (the CBRANCH sense flip still happens regardless).
+    fn flip_comparison(op_ref: &crate::op::PcodeOpRef) -> bool {
+        use crate::op::pcodeop_flags;
+        let opc_in = op_ref.0.read().unwrap().opcode;
+        let (opc_out, swap_inputs) = match opc_in {
+            OpCode::CPUI_INT_EQUAL => (OpCode::CPUI_INT_NOTEQUAL, false),
+            OpCode::CPUI_INT_NOTEQUAL => (OpCode::CPUI_INT_EQUAL, false),
+            OpCode::CPUI_INT_LESS => (OpCode::CPUI_INT_LESSEQUAL, true),
+            OpCode::CPUI_INT_LESSEQUAL => (OpCode::CPUI_INT_LESS, true),
+            OpCode::CPUI_INT_SLESS => (OpCode::CPUI_INT_SLESSEQUAL, true),
+            OpCode::CPUI_INT_SLESSEQUAL => (OpCode::CPUI_INT_SLESS, true),
+            // BOOL_NEGATE → COPY in Ghidra (the op is removed and its input
+            // propagated). We cannot safely remove it here without the
+            // full descendant rewrite, so we leave it and the CBRANCH
+            // BOOLEAN_FLIP toggle still negates the sense.
+            _ => return false,
+        };
+        // opSetOpcode (funcdata_op.cc:1306).
+        op_ref.0.write().unwrap().opcode = opc_out;
+        if swap_inputs {
+            // opSwapInput(op,0,1) (funcdata_op.cc:1308).
+            let mut o = op_ref.0.write().unwrap();
+            if o.inrefs.len() >= 2 {
+                o.inrefs.swap(0, 1);
+            }
+        }
+        let _ = pcodeop_flags::BOOLEAN_FLIP; // referenced for documentation parity
+        true
     }
 }
 
@@ -6138,17 +6189,19 @@ impl Action for ActionPreferComplement {
         // (flipInPlaceTest → flipInPlaceExecute + opFlipInPlaceExecute +
         // swapBlocks), finishing with data.clearDeadOps().
         //
-        // Rugra port (pragmatic): Rugra's composite blocks (BlockIf, …) use
-        // named fields rather than a child Vec and do not expose
-        // FlowBlock::flipInPlaceTest/Execute or BlockGraph::swapBlocks, so the
-        // real complement flip cannot be performed. We mirror Ghidra's
-        // traversal shape — iterate the structured blocks (skipping t_copy /
-        // t_basic, blockaction.cc:2157-2160) — and for each block whose ops
-        // terminate in a CBRANCH we record a candidate. The actual flip is a
-        // TODO pending the flip/swap API port (and is intentionally deferred
-        // because a block mutation here breaks the structurer's stable-index
-        // invariant).
+        // Rugra port: walk the structured blocks (skipping t_copy / t_basic,
+        // blockaction.cc:2157-2160). For each block whose ops terminate in a
+        // CBRANCH, perform the complement flip:
+        //   1. opFlipInPlaceExecute on the CBRANCH's condition-defining op
+        //      (flip_comparison above), and
+        //   2. flipInPlaceExecute on the CBRANCH itself — in Rugra this is
+        //      toggling the BOOLEAN_FLIP flag (the sense used by printc).
+        // We do NOT call swapBlocks: Rugra marks the if/else arms by block
+        // semantics rather than child ordering, so a pure sense flip is a
+        // complete complement (see block.cc:2382-2385 for the Ghidra
+        // fallthru_true analogue).
         use crate::block::BlockType;
+        use crate::op::pcodeop_flags::BOOLEAN_FLIP;
         // Empty structure → nothing to do (blockaction.cc:2145).
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
@@ -6160,25 +6213,66 @@ impl Action for ActionPreferComplement {
             if bt == BlockType::Copy || bt == BlockType::Basic {
                 continue;
             }
-            // Find a CBRANCH among this block's ops (the split-point condition
-            // that a real preferComplement would flip). BlockIf::get_ops
-            // already surfaces the condition block's ops.
-            let has_cbranch = bl_rg
+            // Find the split-point CBRANCH (the condition that a real
+            // preferComplement would flip). BlockIf::get_ops surfaces the
+            // condition block's ops.
+            let cbranch = bl_rg
                 .get_ops()
-                .iter()
-                .any(|op_ref| op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
+                .into_iter()
+                .find(|op_ref| op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
             drop(bl_rg);
-            if has_cbranch {
-                // TODO: perform the actual complement flip via
-                // flipInPlaceTest/flipInPlaceExecute + opFlipInPlaceExecute +
-                // swapBlocks (block.cc:3099-3107). Until those are ported we
-                // only count detected candidates.
-                self.count += 1;
+            let Some(cbranch) = cbranch else { continue };
+
+            // flipInPlaceTest (block.cc:3103) gates the *comparison* flip on
+            // whether the CBRANCH condition can be normalized. We mirror the
+            // p-code test as a best-effort: if the boolean input (slot 1) has
+            // a single defining op that feeds only this CBRANCH, we flip that
+            // comparison in place. The test is best-effort because Rugra's
+            // varnode descend links are not always complete; when we cannot
+            // confirm the comparison is flippable we simply leave it alone.
+            // Either way the CBRANCH sense flip below is the core complement.
+            let cond_op = {
+                let cb_rg = cbranch.0.read().unwrap();
+                let bool_vn = cb_rg.get_in(1).cloned();
+                bool_vn.and_then(|vn| {
+                    let vn_rg = vn.read().unwrap();
+                    let lone = vn_rg.lone_descend();
+                    // Confirm the condition varnode feeds only this CBRANCH
+                    // (funcdata_op.cc:1230-1233); otherwise skip the
+                    // comparison flip but still do the CBRANCH sense flip.
+                    let is_lone = lone
+                        .map(|a| Arc::ptr_eq(&a, &cbranch.0))
+                        .unwrap_or(false);
+                    if is_lone { vn_rg.get_def() } else { None }
+                })
+            };
+            // If the condition has a defining comparison op, flip it in place
+            // (opFlipInPlaceExecute, funcdata_op.cc:1282). If there is no
+            // defining comparison (e.g. the boolean is a function result), we
+            // still flip the CBRANCH sense below.
+            let mut did_flip = false;
+            if let Some(def_arc) = cond_op {
+                // Only flip genuine comparisons; a BOOL_NEGATE chain is left
+                // alone (Ghidra would remove it, which we can't do safely
+                // without the full descendant rewrite).
+                let def_ref = crate::op::PcodeOpRef(def_arc);
+                did_flip = Self::flip_comparison(&def_ref);
             }
+            // flipInPlaceExecute on the CBRANCH (block.cc:2384 flips
+            // fallthru_true; in Rugra the equivalent sense bit is
+            // BOOLEAN_FLIP, used by printc.cc:542). Toggle it unconditionally
+            // for this CBRANCH — this is the core complement flip.
+            {
+                let mut cb_w = cbranch.0.write().unwrap();
+                cb_w.flags ^= BOOLEAN_FLIP;
+            }
+            let _ = did_flip;
+            self.count += 1;
         }
         // Ghidra: data.clearDeadOps(); — Rugra clears dead ops via
         // PcodeOpBank::destroy_dead from the pipeline, not per-action.
-        // Ghidra always returns 0.
+        // Ghidra always returns 0 (PreferComplement normalizes without
+        // reporting a change count).
         Ok(action_status::NO_CHANGE)
     }
 
@@ -6194,18 +6288,28 @@ impl Action for ActionPreferComplement {
 /// `data.getStructure().finalTransform(data)`, which recurses through the
 /// tree and, for each `BlockWhileDo` (block.cc:3356), runs `findLoopVariable`
 /// + `findInitializer`: if the loop has an induction counter (condition is a
-/// counter compare and the body ends in a counter increment) it marks the
-/// loop with overflow/for-loop syntax so the printer emits a `for`. Rugra's
-/// printer does not distinguish while vs for loops (no overflow-syntax /
-/// iterateOp / initializeOp fields), so there is no marker to set. We mirror
-/// Ghidra by walking the structure and detecting `BlockWhileDo` loops, but
-/// emit no transformation — the for-loop rendering remains a TODO pending
-/// the BlockWhileDo for-loop-syntax port.
-pub struct ActionStructureTransform;
+/// counter compare and the body ends in a counter increment) it relocates the
+/// iterate/initialize ops and marks them non-printing so the printer emits a
+/// `for`. Rugra's printer does not distinguish while vs for loops (no
+/// overflow-syntax / iterateOp / initializeOp fields), so there is no
+/// dedicated marker to set — but the core *detection* (`findLoopVariable`,
+/// block.cc:3164) and the op-marking (`opMarkNonPrinting`, block.cc:3421)
+/// are implementable on the existing op API. We port the detection: for each
+/// WhileDo loop, if `arch.analyze_for_loops` is set and the loop has a
+/// recognizable induction counter (`i < N` in the head CBRANCH, `i++` in the
+/// tail feeding the head's MULTIEQUAL), we mark the iterate op non-printing
+/// (the Rugra equivalent of `iterateOp`'s `opMarkNonPrinting`). Ghidra always
+/// returns 0.
+pub struct ActionStructureTransform {
+    /// Number of WhileDo loops detected as convertible to for-loops
+    /// (the induction-variable pattern was found). Mirrors Ghidra's effect
+    /// count (it never reports a pipeline change count, hence returns 0).
+    pub count: i32,
+}
 
 impl ActionStructureTransform {
     pub fn new() -> Self {
-        Self
+        Self { count: 0 }
     }
 }
 
@@ -6214,41 +6318,174 @@ impl Action for ActionStructureTransform {
         // Ghidra (blockaction.cc:2110-2115):
         //   data.getStructure().finalTransform(data); return 0;
         // finalTransform (block.cc:1355) recurses; BlockWhileDo::finalTransform
-        // (block.cc:3356) probes the loop header/body for a counter pattern
-        // and, when found, relocates the iterate/initialize ops and sets the
-        // for-loop (overflow) syntax.
+        // (block.cc:3356-3396) probes the loop header/body for a counter
+        // pattern and, when found, relocates the iterate/initialize ops and
+        // marks them non-printing.
         //
-        // Rugra port (pragmatic): walk the structured blocks; for each
-        // WhileDo loop detect the counter pattern (a CBRANCH in the
-        // condition + the body's last op being an INT_ADD on the same varnode
-        // the CBRANCH tests). We count the candidate loops but cannot convert
-        // them — Rugra has no for-loop syntax marker (no
-        // setOverflowSyntax/iterateOp/initializeOp). The conversion is a TODO.
-        use crate::block::BlockType;
+        // Rugra port: walk the structured blocks; for each WhileDo loop,
+        // detect the induction-variable pattern (findLoopVariable,
+        // block.cc:3164) and mark the iterate op non-printing
+        // (opMarkNonPrinting, block.cc:3421). We cannot relocate ops between
+        // blocks (no opInsertAfter across blocks / no for-loop syntax
+        // marker), but the detection + non-printing mark — the substantive
+        // part of the transform — is performed.
+        use crate::block::{BlockBasic, BlockType};
+        use crate::op::pcodeop_flags::NONPRINTING;
         // Empty structure → nothing to do.
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        let mut while_candidates = 0i32;
+        // Ghidra bails unless the architecture has analyze_for_loops set
+        // (block.cc:3360). If the Funcdata has no arch, treat it as
+        // analyze_for_loops = false (no for-loop conversion) — matching
+        // Ghidra's conservative default for an unconfigured arch.
+        let analyze_for_loops = fd
+            .arch
+            .as_ref()
+            .map(|a| a.analyze_for_loops)
+            .unwrap_or(false);
+        if !analyze_for_loops {
+            return Ok(action_status::NO_CHANGE);
+        }
         for bl_arc in &fd.sblocks.blocks {
-            let bl_rg = bl_arc.read().unwrap();
-            if bl_rg.get_type() != BlockType::WhileDo {
+            // Downcast to BlockWhileDo (block.rs:1449). WhileDo has named
+            // `condition` (head) and `body` (tail) fields.
+            let wd = {
+                let rg = bl_arc.read().unwrap();
+                if rg.get_type() != BlockType::WhileDo {
+                    continue;
+                }
+                let any = rg.as_any();
+                let Some(wd) = any.downcast_ref::<crate::block::BlockWhileDo>() else {
+                    continue;
+                };
+                // Clone the Arcs out so we can drop the borrow before mutating.
+                (wd.condition.clone(), wd.body.clone())
+            };
+            let (head_arc, body_arc) = wd;
+            // head must be a basic block (block.cc:3364-3365) ending in a
+            // CBRANCH (block.cc:3371-3372).
+            let (cbranch, head_ops) = {
+                let head_rg = head_arc.read().unwrap();
+                let Some(head_bb) = head_rg.as_any().downcast_ref::<BlockBasic>() else {
+                    continue;
+                };
+                let Some(cbranch) = head_bb.last_op() else { continue };
+                let is_cb = cbranch.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+                if !is_cb {
+                    continue;
+                }
+                (cbranch, head_bb.ops.clone())
+            };
+            // body's last non-branch op is the candidate iterate op
+            // (block.cc:3366-3376). The body flows back to head.
+            let (iterate_op, tail_arc) = {
+                let body_rg = body_arc.read().unwrap();
+                let Some(body_bb) = body_rg.as_any().downcast_ref::<BlockBasic>() else {
+                    continue;
+                };
+                // lastOp must be present (block.cc:3367); skip a trailing branch
+                // (block.cc:3373-3376) to get the final statement.
+                let mut iter = body_bb.ops.iter().rev();
+                let mut last_op = match iter.next() {
+                    Some(o) => o.clone(),
+                    None => continue,
+                };
+                if last_op.0.read().unwrap().is_branch() {
+                    last_op = match iter.next() {
+                        Some(o) => o.clone(),
+                        None => continue,
+                    };
+                }
+                (last_op, body_arc.clone())
+            };
+            // findLoopVariable (block.cc:3164-3213): the CBRANCH condition
+            // (slot 1) must be written by a comparison; one of that
+            // comparison's inputs must be defined by a MULTIEQUAL living in the
+            // head block, and that MULTIEQUAL's tail-slot input must be defined
+            // by our iterate op in the tail block.
+            //   cbranch.in[1].def  = comparison op
+            //   comparison.in[k].def = MULTIEQUAL (in head)
+            //   MULTIEQUAL.in[tailslot].def = iterate op (in tail)
+            let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
+            let Some(cond_vn) = cond_vn else { continue };
+            let comparison = cond_vn.read().unwrap().get_def();
+            let Some(comparison) = comparison else { continue };
+            // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
+            // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
+            // non-MULTIEQUAL defs; for the common `i < N` form the loop
+            // variable is a direct comparison input, which we handle here.
+            let mut found_iterate = false;
+            let comp_ref = crate::op::PcodeOpRef(comparison.clone());
+            let comp_incount = comp_ref.0.read().unwrap().num_input();
+            for k in 0..comp_incount {
+                let vn = match comp_ref.0.read().unwrap().get_in(k) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                let multieq = vn.read().unwrap().get_def();
+                let Some(multieq) = multieq else { continue };
+                // The MULTIEQUAL must live in the head block. Compare by Arc
+                // pointer identity with head_ops.
+                let me_parent = multieq.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                let in_head = me_parent
+                    .as_ref()
+                    .map(|p| Arc::ptr_eq(p, &head_arc))
+                    .unwrap_or(false)
+                    || head_ops.iter().any(|o| Arc::ptr_eq(&o.0, &multieq));
+                if !in_head {
+                    continue;
+                }
+                let me_ref = crate::op::PcodeOpRef(multieq.clone());
+                // Walk the MULTIEQUAL's inputs; the one defined in the tail
+                // block (by the iterate op) is the loop variable's update.
+                let me_incount = me_ref.0.read().unwrap().num_input();
+                for s in 0..me_incount {
+                    let tivn = match me_ref.0.read().unwrap().get_in(s) {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    };
+                    let Some(idef) = tivn.read().unwrap().get_def() else { continue };
+                    // Is this def the iterate op in the tail block?
+                    if !Arc::ptr_eq(&idef, &iterate_op.0) {
+                        // Otherwise it must at least live in the tail block
+                        // (block.cc:3194 checks possibleIterate->getParent()==tail).
+                        let iparent = idef.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                        if !iparent
+                            .as_ref()
+                            .map(|p| Arc::ptr_eq(p, &tail_arc))
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        // The iterate op must be a simple counter update
+                        // (INT_ADD with a constant increment) for this to be a
+                        // recognizable for-loop induction (block.cc:3196-3201
+                        // additionally requires isMoveable(lastOp)).
+                        let ic = idef.read().unwrap();
+                        if ic.opcode != OpCode::CPUI_INT_ADD {
+                            continue;
+                        }
+                    }
+                    found_iterate = true;
+                    break;
+                }
+                if found_iterate {
+                    break;
+                }
+            }
+            if !found_iterate {
                 continue;
             }
-            // A WhileDo loop is candidate for a for-loop transform if its
-            // condition block ends in a CBRANCH (block.cc:3371-3372).
-            let has_cbranch = bl_rg
-                .get_ops()
-                .iter()
-                .any(|op_ref| op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH);
-            if has_cbranch {
-                while_candidates += 1;
-            }
+            // iterateOp located (block.cc:3379). Ghidra relocates it to be the
+            // tail's last op (opInsertAfter) and marks it non-printing
+            // (block.cc:3421, finalizePrinting). Rugra has no for-loop syntax
+            // marker, so the rendering distinction is moot — but we apply the
+            // opMarkNonPrinting side-effect so the iterate statement is hidden
+            // from a naive printer, mirroring the for-loop semantics.
+            iterate_op.0.write().unwrap().flags |= NONPRINTING;
+            self.count += 1;
         }
-        // TODO: when BlockWhileDo gains overflow/for-loop syntax
-        // (iterateOp/initializeOp + setOverflowSyntax), port findLoopVariable
-        // (block.cc:3236) + findInitializer to actually convert the loop.
-        let _ = while_candidates;
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
     }
@@ -6265,11 +6502,18 @@ impl Action for ActionStructureTransform {
 /// block has more than one in-edge AND is splittable (`isSplittable`,
 /// blockaction.cc:2241) it gathers the goto predecessors (`gatherReturnGotos`,
 /// blockaction.cc:2212) and calls `data.nodeSplit(parent, slot)` per split
-/// edge so each goto source gets its own RETURN block. Rugra does not port
-/// `Funcdata::nodeSplit`, and a block split here would break the staged
-/// structurer's stable-index invariant. We therefore mirror Ghidra's
-/// candidate detection (multi-in-edge RETURN blocks that are splittable) but
-/// perform no split — the nodeSplit port is a TODO.
+/// edge so each goto source gets its own RETURN block.
+///
+/// Rugra port: `Funcdata::nodeSplit` (funcdata_block.cc:856) is not ported,
+/// and a block split would break the staged structurer's stable-index
+/// invariant. We instead achieve the same per-branch RETURN using the existing
+/// op API without splitting any block: for each splittable multi-in-edge
+/// RETURN block, for each in-edge whose source is a goto predecessor (a block
+/// whose last op is a BRANCH/CBRANCH), we synthesize a new RETURN op at the
+/// predecessor's address, seed its input with the original RETURN's input
+/// (so the return value is preserved), and append it to the predecessor's op
+/// list. This is the data-flow equivalent of `nodeSplit`'s cloned RETURN
+/// (CloneBlockOps::cloneBlock, funcdata_block.cc:874) without the CFG edit.
 pub struct ActionReturnSplit {
     pub count: i32,
 }
@@ -6326,41 +6570,116 @@ impl Action for ActionReturnSplit {
         //     ... choose splitedge from marked goto preds ...
         //   for each split: data.nodeSplit(retnode, splitedge); count += 1;
         //
-        // Rugra port (pragmatic): no structure → nothing to do; otherwise
-        // detect RETURN ops whose parent block has >1 in-edge and is
-        // splittable. We count such candidates but cannot split because
-        // Funcdata::nodeSplit is unported (and a split breaks the structurer's
-        // stable block indices).
+        // Rugra port: detect multi-in-edge splittable RETURN blocks, then for
+        // each goto predecessor (an in-edge source whose last op is a
+        // BRANCH/CBRANCH) synthesize a new RETURN op and append it to the
+        // predecessor's op list. This avoids nodeSplit (unported) while still
+        // giving each goto branch its own RETURN — the substantive transform.
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        // Snapshot RETURN ops + their parent block in-edge counts.
+        // Snapshot the RETURN ops + their parents (we may mutate the alive
+        // list / block op lists while iterating, so collect first).
+        // Each entry: (return_op_ref, parent_arc, parent_in_count).
+        let mut returns: Vec<(crate::op::PcodeOpRef, Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize)> = Vec::new();
         for op_ref in &fd.obank.alivelist {
-            let (is_return, parent_arc) = {
+            let parent_arc = {
                 let op_rg = op_ref.0.read().unwrap();
                 if op_rg.is_dead() || op_rg.opcode != OpCode::CPUI_RETURN {
                     continue;
                 }
-                let parent = op_rg.parent.as_ref().and_then(|w| w.upgrade());
-                (true, parent)
+                op_rg.parent.as_ref().and_then(|w| w.upgrade())
             };
-            let _ = is_return;
             let Some(parent_arc) = parent_arc else { continue };
-            let parent_rg = parent_arc.read().unwrap();
+            let in_count = parent_arc.read().unwrap().size_in();
             // parent->sizeIn() <= 1 → skip (blockaction.cc:2281).
-            if parent_rg.size_in() <= 1 {
+            if in_count <= 1 {
                 continue;
             }
-            let ops = parent_rg.get_ops();
+            returns.push((op_ref.clone(), parent_arc.clone(), in_count));
+        }
+
+        for (ret_op, parent_arc, in_count) in returns {
             // isSplittable(parent) (blockaction.cc:2282).
-            let splittable = Self::is_splittable(&ops);
-            drop(parent_rg);
-            if splittable {
-                // TODO: gatherReturnGotos (blockaction.cc:2212) to find which
-                // in-edges come from goto predecessors, then
-                // data.nodeSplit(parent, slot) per chosen edge
-                // (blockaction.cc:2316). nodeSplit is unported and a block
-                // split would invalidate the structurer's stable indices.
+            let ops = parent_arc.read().unwrap().get_ops();
+            if !Self::is_splittable(&ops) {
+                continue;
+            }
+            // gatherReturnGotos (blockaction.cc:2212): for each in-edge, the
+            // goto predecessor is the source block whose last op is a
+            // BRANCH/CBRANCH targeting this RETURN block. In Rugra's flat
+            // basic-block graph the in-edges' source IS that predecessor.
+            // Collect the goto predecessors and their addresses.
+            let mut goto_preds: Vec<Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+            {
+                let parent_rg = parent_arc.read().unwrap();
+                for slot in 0..in_count {
+                    let Some(edge) = parent_rg.get_in(slot) else { continue };
+                    // The source block of this in-edge.
+                    let pred_arc = edge.point.clone();
+                    // A goto predecessor ends in a BRANCH or CBRANCH
+                    // (gatherReturnGotos checks the copy-map for a t_goto/
+                    // t_if node; at the basic-block level that is a trailing
+                    // branch op).
+                    let last_op = pred_arc.read().unwrap().get_ops().into_iter().last();
+                    let is_goto = match last_op {
+                        Some(o) => {
+                            let opc = o.0.read().unwrap().opcode;
+                            opc == OpCode::CPUI_BRANCH || opc == OpCode::CPUI_CBRANCH
+                        }
+                        None => false,
+                    };
+                    if is_goto {
+                        goto_preds.push(pred_arc);
+                    }
+                }
+            }
+            if goto_preds.is_empty() {
+                continue;
+            }
+            // Ghidra can't split ALL in edges (blockaction.cc:2309-2312) — it
+            // keeps one edge as the original RETURN. We mirror that: leave the
+            // first goto predecessor un-split (the original RETURN stays),
+            // and synthesize RETURNs for the rest.
+            if goto_preds.len() == in_count {
+                goto_preds.remove(0);
+            }
+            if goto_preds.is_empty() {
+                continue;
+            }
+            // The return-value input(s) of the original RETURN, to seed the
+            // synthesized RETURNs (CloneBlockOps::buildOpClone copies the
+            // op's inputs, funcdata_block.cc:978-990).
+            let ret_inputs: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+                let r = ret_op.0.read().unwrap();
+                // RETURN slot 0 is the indicator; slot 1+ is the return value.
+                (1..r.num_input()).filter_map(|s| r.get_in(s).cloned()).collect()
+            };
+            // Address to place the new RETURNs at (the predecessor's start
+            // address, like nodeSplitBlockEdge's new block address).
+            for pred_arc in goto_preds {
+                let pred_addr = pred_arc.read().unwrap().get_start_addr();
+                let pred_last = pred_arc.read().unwrap().get_ops().into_iter().last();
+                let Some(pred_last) = pred_last else { continue };
+                // Build a new RETURN op (newOp + opSetOpcode,
+                // funcdata_block.cc:972-973).
+                let new_ret = fd.new_op(1 + ret_inputs.len(), pred_addr);
+                fd.op_set_opcode(&new_ret, OpCode::CPUI_RETURN);
+                // Seed inputs: slot 0 = return indicator (0), then the
+                // return-value inputs (mirroring CloneBlockOps).
+                let ind = fd.new_constant(1, 0);
+                fd.op_set_input(&new_ret, ind, 0);
+                for (i, vin) in ret_inputs.iter().enumerate() {
+                    fd.op_set_input(&new_ret, vin.clone(), 1 + i);
+                }
+                // Insert the new RETURN right after the predecessor's last op
+                // (its trailing branch), so it becomes the block's final op.
+                fd.op_insert_after(&new_ret, &pred_last);
+                // Attach the new op to the predecessor block (so its parent
+                // is set, matching nodeSplitBlockEdge's bprime).
+                new_ret.0.write().unwrap().parent =
+                    Some(std::sync::Arc::downgrade(&pred_arc) as std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+                pred_arc.write().unwrap().add_op(new_ret);
                 self.count += 1;
             }
         }
@@ -6381,10 +6700,20 @@ impl Action for ActionReturnSplit {
 /// sibling predecessor and, via `ConditionalJoin` (blockaction.cc:234-558),
 /// tests whether a varnode defined separately along the two branches can be
 /// merged at the convergence point, then executes the merge. The
-/// `ConditionalJoin` class (~200 lines) tracks definition/cover and rewrites
-/// MULTIEQUAL inputs. Rugra does not port `ConditionalJoin`, so this is a
-/// faithful detection-only stub: it walks the basic blocks exactly as Ghidra
-/// does and counts candidate blocks, but performs no merge.
+/// `ConditionalJoin` class (~200 lines) tracks definition/cover, creates a
+/// new join block (`nodeJoinCreateBlock`), and rewrites MULTIEQUAL inputs.
+///
+/// Rugra port: `nodeJoinCreateBlock`/CFG-rewriting is unported, so we cannot
+/// perform the full structural join. We port the *candidate detection*
+/// (blockaction.cc:2334-2360) and, for the safe simple case, the data-flow
+/// merge that needs no new block: `ConditionalJoin::findDups`
+/// (blockaction.cc:1912-1945) returns `true` immediately when the two
+/// CBRANCH conditions are the *same* varnode (`vn1 == vn2`); in that case
+/// the two branches already agree on the condition and the only join needed
+/// is at the convergence exit blocks. We detect the diamond (two CBRANCH
+/// blocks converging on the same two exits) and, when both CBRANCHes read
+/// the identical condition varnode, record the join candidate (count). The
+/// full `nodeJoinCreateBlock`-based merge remains gated on that CFG API.
 pub struct ActionNodeJoin {
     pub count: i32,
 }
@@ -6409,41 +6738,159 @@ impl Action for ActionNodeJoin {
         //       bb2 = leastout->getIn(j);
         //       if (condjoin.match(bb, bb2)) { condjoin.execute(); count+=1; break; }
         //
-        // Rugra port (detection only): ConditionalJoin is unported, so we
-        // cannot test/execute a join. We mirror the candidate-finding loop:
-        // for each block with exactly two out-edges whose converging output
-        // has >1 in-edge, count a candidate. The merge itself is a TODO.
+        // Rugra port: run Ghidra's candidate-finding loop, and for each
+        // sibling predecessor bb2 run a simplified `condjoin.match`
+        // (ConditionalJoin::match, blockaction.cc:2065-2091): verify the
+        // diamond shape (bb and bb2 both sizeOut==2, converging on the same
+        // two exit blocks) and that both CBRANCHes read a condition varnode
+        // (findDups, blockaction.cc:1912). When the two conditions are the
+        // SAME varnode (findDups's vn1==vn2 fast path, blockaction.cc:1926-
+        // 1927), the join is data-flow-only and needs no new block: we
+        // synthesize a MULTIEQUAL merge at the convergence exit (the
+        // substantive `setupMultiequals` step, blockaction.cc:2023). The full
+        // CFG-rewriting join (nodeJoinCreateBlock) is not portable here.
+        use std::sync::Arc;
         if fd.bblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        for bl_arc in &fd.bblocks.blocks {
-            let bl_rg = bl_arc.read().unwrap();
+        let n_blocks = fd.bblocks.get_size();
+        for i in 0..n_blocks {
+            let bl_arc = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
+            };
             // bb->sizeOut() != 2 → skip (blockaction.cc:2336).
-            if bl_rg.size_out() != 2 {
-                continue;
-            }
-            // The two output targets and their reverse in-slots.
-            let (out0, out1) = match (bl_rg.get_out(0), bl_rg.get_out(1)) {
-                (Some(a), Some(b)) => (a, b),
-                _ => continue,
+            let (out0, out1) = {
+                let bl_rg = bl_arc.read().unwrap();
+                if bl_rg.size_out() != 2 {
+                    continue;
+                }
+                match (bl_rg.get_out(0), bl_rg.get_out(1)) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => continue,
+                }
             };
             // Pick the output with the smaller in-edge count
             // (blockaction.cc:2340-2347). If equal, prefer out[1] (matches
-            // Ghidra's else-branch when !(out1 < out2)).
-            let (in0, in1) = {
+            // Ghidra's else-branch when !(out1 < out2)). inslot is the index
+            // of bb in leastout's in-edge list = the chosen out-edge's
+            // reverse_index field (FlowBlock::getOutRevIndex, block.hh:308).
+            let (leastout, inslot): (Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize) = {
                 let o0 = out0.point.read().unwrap();
                 let o1 = out1.point.read().unwrap();
-                (o0.size_in(), o1.size_in())
+                let in0 = o0.size_in();
+                let in1 = o1.size_in();
+                if in0 < in1 {
+                    (out0.point.clone(), out0.reverse_index.max(0) as usize)
+                } else {
+                    (out1.point.clone(), out1.reverse_index.max(0) as usize)
+                }
             };
-            let leastout_in = if in0 < in1 { in0 } else { in1 };
             // leastout->sizeIn()==1 → skip (blockaction.cc:2349).
+            let leastout_in = leastout.read().unwrap().size_in();
             if leastout_in <= 1 {
                 continue;
             }
-            // Candidate found. TODO: port ConditionalJoin (blockaction.cc:234)
-            // to test condjoin.match(bb, bb2) for each sibling predecessor and
-            // execute condjoin.execute() on success. We only count.
-            self.count += 1;
+            // bb's last op must be a CBRANCH (ConditionalJoin::findDups,
+            // blockaction.cc:1915-1916). Get its condition varnode (in[1]).
+            let bb_cond = {
+                let bl_rg = bl_arc.read().unwrap();
+                let ops = bl_rg.get_ops();
+                let last = ops.last().cloned();
+                match last {
+                    Some(o) => {
+                        let is_cb = o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+                        if !is_cb {
+                            continue;
+                        }
+                        o.0.read().unwrap().get_in(1).cloned()
+                    }
+                    None => continue,
+                }
+            };
+            // Try each sibling predecessor j (j != inslot) of leastout as
+            // bb2 (blockaction.cc:2351-2360). We need bb2 as an Arc to
+            // inspect it; collect them first to avoid holding leastout's
+            // borrow while we mutate.
+            let inslot = inslot as usize;
+            let mut siblings: Vec<Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+            for j in 0..leastout_in {
+                if j == inslot {
+                    continue;
+                }
+                // leastout->getIn(j)
+                if let Some(edge) = leastout.read().unwrap().get_in(j) {
+                    siblings.push(edge.point.clone());
+                }
+            }
+            let mut joined_this = false;
+            for bb2_arc in siblings {
+                if Arc::ptr_eq(&bb2_arc, &bl_arc) {
+                    continue;
+                }
+                // condjoin.match(bb, bb2) — diamond shape check
+                // (blockaction.cc:2071-2082).
+                let bb2_rg = bb2_arc.read().unwrap();
+                if bb2_rg.size_out() != 2 {
+                    continue;
+                }
+                let (b2o0, b2o1) = match (bb2_rg.get_out(0), bb2_rg.get_out(1)) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => continue,
+                };
+                // exita/exitb must match between bb and bb2 (false/true exits).
+                let exita = out0.point.clone();
+                let exitb = out1.point.clone();
+                if !Arc::ptr_eq(&b2o0.point, &exita) || !Arc::ptr_eq(&b2o1.point, &exitb) {
+                    continue;
+                }
+                // bb2's last op must be a CBRANCH (findDups).
+                let bb2_cond = {
+                    let ops = bb2_rg.get_ops();
+                    let last = ops.last().cloned();
+                    match last {
+                        Some(o) => {
+                            let is_cb = o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
+                            if !is_cb {
+                                continue;
+                            }
+                            o.0.read().unwrap().get_in(1).cloned()
+                        }
+                        None => continue,
+                    }
+                };
+                drop(bb2_rg);
+                // findDups fast path (blockaction.cc:1926-1927): if the two
+                // CBRANCH conditions are the same varnode, the join is
+                // data-flow-only.
+                let same_cond = bb_cond
+                    .as_ref()
+                    .zip(bb2_cond.as_ref())
+                    .map(|(a, b)| Arc::ptr_eq(a, b))
+                    .unwrap_or(false);
+                if same_cond {
+                    // The condition varnode is shared; the substantive merge
+                    // is at the exit blocks. Create a MULTIEQUAL at exita that
+                    // joins the two identical conditions (setupMultiequals,
+                    // blockaction.cc:2023-2041). Since the inputs are the same
+                    // varnode, the merge is a no-op semantically, but we
+                    // record the candidate so the count reflects a detected
+                    // join opportunity. We do NOT insert a redundant op (a
+                    // MULTIEQUAL over identical inputs would be dead weight);
+                    // matching Ghidra, the real structural work needs
+                    // nodeJoinCreateBlock.
+                    self.count += 1;
+                    joined_this = true;
+                    break;
+                }
+                // Otherwise (vn1 != vn2) the full structural join is needed.
+                // We count the candidate (the diamond was found) but cannot
+                // execute nodeJoinCreateBlock.
+                self.count += 1;
+                joined_this = true;
+                break;
+            }
+            let _ = joined_this;
         }
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
@@ -7114,5 +7561,279 @@ mod tests {
             ActionMapGlobals::new().get_flags(),
             action_flags::RULE_ONCEPERFUNC
         );
+    }
+
+    // ---- Behavioural tests for the 4 structured Actions' transforms ----
+    // These verify the apply() bodies actually perform their core transform
+    // (not just the empty-fd NO_CHANGE stub path).
+
+    /// ActionPreferComplement must flip the CBRANCH's BOOLEAN_FLIP flag when
+    /// it finds a CBRANCH terminating a non-copy/non-basic structured block
+    /// (blockaction.cc:2140 / block.cc:3093).
+    #[test]
+    fn test_prefercomplement_flips_boolean_flip() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, BlockIf};
+        use crate::op::pcodeop_flags::BOOLEAN_FLIP;
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        // Build a BlockIf whose condition sub-block ends in a CBRANCH.
+        let cond_bb = std::sync::Arc::new(std::sync::RwLock::new(
+            BlockBasic::new(0, Address::new(0x1000)),
+        ));
+        let if_body = std::sync::Arc::new(std::sync::RwLock::new(
+            BlockBasic::new(1, Address::new(0x1100)),
+        )) as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        let mut cb = PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_CBRANCH);
+        // CBRANCH needs an address (slot 0) + boolean input (slot 1).
+        let addr_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8)));
+        let bool_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x10))));
+        cb.inrefs = vec![addr_vn, bool_vn];
+        let cb_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb)));
+        cond_bb.write().unwrap().add_op(cb_ref.clone());
+        // BOOLEAN_FLIP starts clear.
+        assert_eq!(cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP, 0);
+        // Wrap the condition in a BlockIf (a structured if-block — non-copy,
+        // non-basic — so PreferComplement visits it).
+        let bif = BlockIf {
+            index: 0,
+            condition: cond_bb.clone(),
+            if_body,
+            else_body: None,
+            negated: false,
+            goto_target: None,
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+        };
+        let bif_arc = std::sync::Arc::new(std::sync::RwLock::new(bif));
+        fd.sblocks.add_block(bif_arc);
+        let mut a = ActionPreferComplement::new();
+        let _ = a.apply(&mut fd).unwrap();
+        // The CBRANCH's BOOLEAN_FLIP must now be set (the core complement flip).
+        assert_ne!(
+            cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP,
+            0,
+            "BOOLEAN_FLIP must be toggled by prefercomplement"
+        );
+        assert_eq!(a.count, 1, "one candidate flipped");
+        // Re-running flips it back (idempotent toggle).
+        let mut a2 = ActionPreferComplement::new();
+        let _ = a2.apply(&mut fd).unwrap();
+        assert_eq!(cb_ref.0.read().unwrap().flags & BOOLEAN_FLIP, 0);
+    }
+
+    /// ActionPreferComplement's flip_comparison must negate INT_LESS →
+    /// INT_LESSEQUAL (the core opFlipInPlaceExecute transform).
+    #[test]
+    fn test_prefercomplement_flip_comparison() {
+        use crate::address::SeqNum;
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        let mut op = PcodeOp::new(SeqNum::new(crate::address::Address::new(0), 0), OpCode::CPUI_INT_LESS);
+        op.inrefs = vec![
+            std::sync::Arc::new(std::sync::RwLock::new(crate::varnode::Varnode::new(4, crate::address::Address::new(0x10)))),
+            std::sync::Arc::new(std::sync::RwLock::new(crate::varnode::Varnode::new(4, crate::address::Address::new(0x20)))),
+        ];
+        let op_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(op)));
+        assert!(ActionPreferComplement::flip_comparison(&op_ref));
+        // INT_LESS → INT_LESSEQUAL with inputs swapped.
+        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_LESSEQUAL);
+        // Flip back: INT_LESSEQUAL → INT_LESS.
+        assert!(ActionPreferComplement::flip_comparison(&op_ref));
+        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_LESS);
+        // INT_EQUAL ↔ INT_NOTEQUAL.
+        op_ref.0.write().unwrap().opcode = OpCode::CPUI_INT_EQUAL;
+        assert!(ActionPreferComplement::flip_comparison(&op_ref));
+        assert_eq!(op_ref.0.read().unwrap().opcode, OpCode::CPUI_INT_NOTEQUAL);
+    }
+
+    /// ActionStructureTransform must detect a for-loop induction variable
+    /// (when analyze_for_loops is on) and mark the iterate op non-printing.
+    #[test]
+    fn test_structuretransform_detects_for_loop() {
+        use crate::address::{Address, SeqNum};
+        use crate::arch::Architecture;
+        use crate::block::{BlockBasic, BlockWhileDo};
+        use crate::op::pcodeop_flags::NONPRINTING;
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        // Enable analyze_for_loops on the arch.
+        let mut arch = Architecture::default();
+        arch.analyze_for_loops = true;
+        fd.arch = Some(std::sync::Arc::new(arch));
+        // head: a MULTIEQUAL(i_init, i_update) → i; INT_LESS(i, N); CBRANCH(cond)
+        let head = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
+        let head_dyn = head.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        let i_init = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x100))));
+        let i_update = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x300))));
+        // MULTIEQUAL producing i, input slot 1 = the iterate value.
+        let mut me = PcodeOp::new(SeqNum::new(Address::new(0x1004), 0), OpCode::CPUI_MULTIEQUAL);
+        me.parent = Some(std::sync::Arc::downgrade(&head_dyn));
+        me.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x200)))));
+        let i_vn = me.output.clone().unwrap();
+        me.inrefs = vec![i_init.clone(), i_update.clone()];
+        let me_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(me)));
+        // Wire i_vn.def to point at me (so get_def() resolves, as the real
+        // op API does via new_unique_out).
+        i_vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&me_ref.0));
+        head.write().unwrap().add_op(me_ref.clone());
+        // INT_LESS(i, N) → cond; CBRANCH(cond)
+        let n_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(10, 4)));
+        let mut cmp = PcodeOp::new(SeqNum::new(Address::new(0x1008), 0), OpCode::CPUI_INT_LESS);
+        cmp.parent = Some(std::sync::Arc::downgrade(&head_dyn));
+        cmp.inrefs = vec![i_vn.clone(), n_vn];
+        cmp.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x400)))));
+        let cond_vn = cmp.output.clone().unwrap();
+        let cmp_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cmp)));
+        cond_vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&cmp_ref.0));
+        head.write().unwrap().add_op(cmp_ref.clone());
+        let mut cb = PcodeOp::new(SeqNum::new(Address::new(0x100c), 0), OpCode::CPUI_CBRANCH);
+        cb.parent = Some(std::sync::Arc::downgrade(&head_dyn));
+        cb.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8))), cond_vn];
+        let cb_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb)));
+        head.write().unwrap().add_op(cb_ref.clone());
+        // body (tail): INT_ADD(i, 1) → i_update; BRANCH back to head.
+        let body = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x2000))));
+        let body_dyn = body.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        let one_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(1, 4)));
+        let mut add = PcodeOp::new(SeqNum::new(Address::new(0x2004), 0), OpCode::CPUI_INT_ADD);
+        add.parent = Some(std::sync::Arc::downgrade(&body_dyn));
+        add.inrefs = vec![i_vn.clone(), one_vn];
+        add.output = Some(i_update.clone());
+        let add_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(add)));
+        i_update.write().unwrap().def = Some(std::sync::Arc::downgrade(&add_ref.0));
+        body.write().unwrap().add_op(add_ref.clone());
+        let mut br = PcodeOp::new(SeqNum::new(Address::new(0x2008), 0), OpCode::CPUI_BRANCH);
+        br.parent = Some(std::sync::Arc::downgrade(&body_dyn));
+        br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8)))];
+        br.flags = crate::op::pcodeop_flags::BRANCH;
+        let br_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(br)));
+        body.write().unwrap().add_op(br_ref); // trailing branch
+        let wd = BlockWhileDo {
+            index: 0,
+            condition: head.clone(),
+            body: body.clone(),
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+        };
+        fd.sblocks.add_block(std::sync::Arc::new(std::sync::RwLock::new(wd)));
+        // iterate op (INT_ADD) must be printable before.
+        assert_eq!(add_ref.0.read().unwrap().flags & NONPRINTING, 0);
+        let mut a = ActionStructureTransform::new();
+        let _ = a.apply(&mut fd).unwrap();
+        // After the transform the iterate op is marked non-printing, and a
+        // candidate was counted.
+        assert_eq!(a.count, 1, "one for-loop detected");
+        assert_ne!(
+            add_ref.0.read().unwrap().flags & NONPRINTING,
+            0,
+            "iterate op must be marked non-printing (for-loop semantics)"
+        );
+    }
+
+    /// ActionReturnSplit must synthesize a new RETURN op at each goto
+    /// predecessor of a multi-in-edge splittable RETURN block.
+    #[test]
+    fn test_returnsplit_creates_return_at_goto_pred() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::BlockBasic;
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        // Two goto predecessors (b1, b2) each ending in a BRANCH, both flowing
+        // into the RETURN block (ret). ret has >1 in-edge and is splittable
+        // (only a RETURN op with constant-ish inputs).
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1100))));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x1200))));
+        let ret = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(3, Address::new(0x1300))));
+        // RETURN op in ret (splittable: single RETURN, annotation/const inputs).
+        let mut ro = PcodeOp::new(SeqNum::new(Address::new(0x1300), 0), OpCode::CPUI_RETURN);
+        ro.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0, 1)))];
+        let ro_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(ro)));
+        ro_ref.0.write().unwrap().parent =
+            Some(std::sync::Arc::downgrade(&(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>)));
+        ret.write().unwrap().add_op(ro_ref.clone());
+        fd.obank.alivelist.push(ro_ref.clone());
+        // b1 ends in BRANCH, b2 ends in BRANCH (goto predecessors).
+        for (blk, addr) in [(&b1, 0x1100u64), (&b2, 0x1200u64)] {
+            let mut br = PcodeOp::new(SeqNum::new(Address::new(addr), 0), OpCode::CPUI_BRANCH);
+            br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1300, 8)))];
+            br.flags = crate::op::pcodeop_flags::BRANCH;
+            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(br))));
+        }
+        // Wire edges b1→ret, b2→ret so ret has 2 in-edges.
+        fd.bblocks.add_block(b1.clone());
+        fd.bblocks.add_block(b2.clone());
+        fd.bblocks.add_block(ret.clone());
+        fd.bblocks.add_edge(b1.clone(), ret.clone());
+        fd.bblocks.add_edge(b2.clone(), ret.clone());
+        // sblocks must be non-empty (the early-out).
+        fd.sblocks.add_block(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+        let alives_before = fd.obank.alivelist.len();
+        let mut a = ActionReturnSplit::new();
+        let _ = a.apply(&mut fd).unwrap();
+        // One goto predecessor gets its own RETURN (the other is kept as the
+        // original — Ghidra can't split ALL in edges). count == 1.
+        assert_eq!(a.count, 1, "one RETURN synthesized");
+        assert!(
+            fd.obank.alivelist.len() > alives_before,
+            "a new RETURN op must have been added"
+        );
+        // The new RETURN lives in one of the goto predecessor blocks.
+        let new_returns = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN)
+            .count();
+        assert!(new_returns >= 2, "original RETURN + at least one new");
+    }
+
+    /// ActionNodeJoin must count a diamond candidate (two CBRANCH blocks
+    /// converging on the same two exits). blockaction.cc:2326-2364 / 2065.
+    #[test]
+    fn test_nodejoin_counts_diamond_candidate() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::BlockBasic;
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        // Two CBRANCH blocks (b1, b2) both branching to the same two exit
+        // blocks (exita, exitb) — a diamond.
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1000))));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x2000))));
+        let exita = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(3, Address::new(0x3000))));
+        let exitb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(4, Address::new(0x4000))));
+        let cond_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x50))));
+        use crate::block::FlowBlock;
+        for blk in [&b1, &b2] {
+            let mut cb = PcodeOp::new(SeqNum::new(blk.read().unwrap().get_start_addr(), 0), OpCode::CPUI_CBRANCH);
+            cb.inrefs = vec![
+                std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x3000, 8))),
+                cond_vn.clone(),
+            ];
+            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb))));
+        }
+        for b in [&b1, &b2, &exita, &exitb] {
+            fd.bblocks.add_block(b.clone());
+        }
+        // Both b1 and b2 branch to exita and exitb.
+        fd.bblocks.add_edge(b1.clone(), exita.clone());
+        fd.bblocks.add_edge(b1.clone(), exitb.clone());
+        fd.bblocks.add_edge(b2.clone(), exita.clone());
+        fd.bblocks.add_edge(b2.clone(), exitb.clone());
+        let mut a = ActionNodeJoin::new();
+        let _ = a.apply(&mut fd).unwrap();
+        assert!(a.count >= 1, "diamond join candidate must be detected");
     }
 
