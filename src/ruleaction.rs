@@ -12375,6 +12375,1461 @@ impl Rule for RuleIgnoreNan {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_NAN] }
 }
 
+// ============================================================================
+// RuleLoadVarnode / RuleStoreVarnode  (ruleaction.cc:4185-4361)
+// ============================================================================
+
+/// Convert LOAD operations using a constant offset (or a spacebase + offset)
+/// into a COPY of a named stack/global varnode.
+///
+/// Faithful to Ghidra's `RuleLoadVarnode` (ruleaction.cc:4285-4325) plus its
+/// three static helpers:
+///   - `correctSpacebase` (ruleaction.cc:4193-4204)
+///   - `vnSpacebase`      (ruleaction.cc:4214-4247)
+///   - `checkSpacebase`   (ruleaction.cc:4256-4283)
+///
+/// A LOAD's address operand (slot 1) is examined. If it is a plain constant,
+/// the load resolves directly into the LOAD's named space. If it is
+/// `spacebase + const`, it resolves into the spacebase's associated space. The
+/// LOAD is then rewritten to `COPY(newVarnode)`.
+pub struct RuleLoadVarnode;
+
+impl RuleLoadVarnode {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4193-4204).
+    ///
+    /// Returns the `AddressSpace` associated with the given varnode if it is an
+    /// *active* spacebase for `spc`; otherwise `None`.
+    ///
+    /// - A constant spacebase pseudo-varnode is associated with `spc`.
+    /// - A non-constant spacebase must be a function input; its associated
+    ///   space (looked up via `getSpaceBySpacebase`) must *contain* `spc`.
+    ///
+    /// TODO(spacebase-registry): Rugra has no `getSpaceBySpacebase` /
+    /// `getContain` yet, so the non-constant spacebase-input branch returns
+    /// `None`. The constant spacebase branch (used by global pseudo-spacebases)
+    /// and the early `isSpacebase()` guard are fully faithful.
+    fn correct_spacebase(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        spc: crate::space::AddressSpace,
+    ) -> Option<crate::space::AddressSpace> {
+        let v = vn.read().unwrap();
+        if !v.is_spacebase() {
+            return None;
+        }
+        if v.is_constant() {
+            // We have a global pseudo spacebase → associate with load/stored space.
+            return Some(spc);
+        }
+        if !v.is_input() {
+            return None;
+        }
+        // Ghidra: assoc = glb->getSpaceBySpacebase(vn->getAddr(), vn->getSize());
+        //         if (assoc->getContain() != spc) return 0;
+        // Rugra lacks the spacebase→space registry, so we cannot resolve the
+        // associated space for a non-constant spacebase input. Bail out.
+        None
+    }
+
+    /// Faithful to `RuleLoadVarnode::vnSpacebase` (ruleaction.cc:4214-4247).
+    ///
+    /// If `vn` is `spacebase + const`, pass back the constant offset in `val`
+    /// and return the associated space; otherwise `None`.
+    fn vn_spacebase(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        val: &mut u64,
+        spc: crate::space::AddressSpace,
+    ) -> Option<crate::space::AddressSpace> {
+        // Path 1: vn is itself an active spacebase (offset 0).
+        if let Some(retspace) = Self::correct_spacebase(vn, spc) {
+            *val = 0;
+            return Some(retspace);
+        }
+        let def = { vn.read().unwrap().get_def() };
+        let def_op = match def {
+            Some(op) => op,
+            None => return None, // vn->isWritten() == false
+        };
+        // def->code() != CPUI_INT_ADD
+        let d = def_op.read().unwrap();
+        if d.opcode != OpCode::CPUI_INT_ADD {
+            return None;
+        }
+        let vn1 = match d.get_in(0) { Some(v) => v.clone(), None => return None };
+        let vn2 = match d.get_in(1) { Some(v) => v.clone(), None => return None };
+        drop(d);
+        // Try vn1 as spacebase, vn2 as the constant offset.
+        if let Some(retspace) = Self::correct_spacebase(&vn1, spc) {
+            if vn2.read().unwrap().is_constant() {
+                *val = vn2.read().unwrap().get_offset();
+                return Some(retspace);
+            }
+            return None;
+        }
+        // Try vn2 as spacebase, vn1 as the constant offset.
+        if let Some(retspace) = Self::correct_spacebase(&vn2, spc) {
+            if vn1.read().unwrap().is_constant() {
+                *val = vn1.read().unwrap().get_offset();
+                return Some(retspace);
+            }
+        }
+        None
+    }
+
+    /// Faithful to `RuleLoadVarnode::checkSpacebase` (ruleaction.cc:4256-4283).
+    ///
+    /// Checks if a STORE/LOAD is off of `spacebase + constant`. If so, returns
+    /// the associated space and passes back the offset in `offoff`.
+    ///
+    /// `getSpaceFromConst` (varnode.cc) extracts the address space encoded in
+    /// a constant-space varnode (the LOAD/STORE space-id operand, slot 0).
+    /// Rugra encodes the space-id as a constant whose value is the space-id, so
+    /// we decode it via `AddressSpace::from_id`.
+    fn check_spacebase(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        offoff: &mut u64,
+    ) -> Option<crate::space::AddressSpace> {
+        let op_rg = op.read().unwrap();
+        // offvn = op->getIn(1); // Address offset
+        let offvn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return None };
+        // loadspace = op->getIn(0)->getSpaceFromConst(); // Space being loaded/stored
+        let space_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return None };
+        drop(op_rg);
+        let loadspace = {
+            let s = space_id_vn.read().unwrap();
+            if !s.is_constant() {
+                return None;
+            }
+            // The constant value encodes the SpaceId of the space being loaded.
+            crate::space::AddressSpace::from_id(s.get_val() as crate::space::SpaceId)
+        };
+
+        // Treat segmentop as part of load/store.
+        let off_is_written = offvn.read().unwrap().is_written();
+        let off_def_code = if off_is_written {
+            offvn.read().unwrap().get_def()
+                .map(|d| d.read().unwrap().opcode)
+        } else {
+            None
+        };
+
+        if off_is_written && off_def_code == Some(OpCode::CPUI_SEGMENTOP) {
+            // offvn = offvn->getDef()->getIn(2);
+            let inner = {
+                let d = offvn.read().unwrap().get_def().unwrap();
+                let dr = d.read().unwrap();
+                dr.get_in(2).cloned()
+            };
+            let inner = match inner { Some(v) => v, None => return None };
+            if inner.read().unwrap().is_constant() {
+                return None;
+            }
+            // Fall through to vnSpacebase(inner) — but Ghidra reassigns offvn.
+            return Self::vn_spacebase(&inner, offoff, loadspace);
+        } else if offvn.read().unwrap().is_constant() {
+            // Check for plain constant.
+            *offoff = offvn.read().unwrap().get_offset();
+            return Some(loadspace);
+        }
+        Self::vn_spacebase(&offvn, offoff, loadspace)
+    }
+}
+
+impl Rule for RuleLoadVarnode {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleLoadVarnode::applyOp (ruleaction.cc:4297-4325).
+        let mut offoff: u64 = 0;
+        let baseoff = match Self::check_spacebase(op_arc, &mut offoff) {
+            Some(s) => s,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // size = op->getOut()->getSize();
+        let out_size = {
+            let op = op_arc.read().unwrap();
+            let out = match op.get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sz = out.read().unwrap().get_size();
+            sz
+        };
+        // offoff = AddrSpace::addressToByte(offoff, baseoff->getWordSize());
+        let word_size = baseoff.word_size().max(1) as u64;
+        offoff = offoff.wrapping_mul(word_size);
+
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // newvn = data.newVarnode(size, baseoff, offoff);
+        // Rugra's new_varnode takes (size, Address) and defaults to Ram space.
+        // We create a varnode in the resolved space at the byte offset.
+        let newvn = fd.vbank.create_with_space(out_size, baseoff, offoff);
+
+        // data.opSetInput(op, newvn, 0);
+        fd.op_set_input(&op_ref, newvn, 0);
+        // data.opRemoveInput(op, 1);
+        fd.op_remove_input(&op_ref, 1);
+        // data.opSetOpcode(op, CPUI_COPY);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+
+        // The spacebase-placeholder / call-resolve tail (ruleaction.cc:4314-4323)
+        // requires FuncCallSpecs / resolveSpacebaseRelative, which Rugra does
+        // not yet model. The core LOAD→COPY transform is complete.
+        // TODO(callspecs): port resolveSpacebaseRelative once call specs exist.
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "load_varnode" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
+}
+
+/// Convert STORE operations using a constant offset into a COPY of a named
+/// stack/global varnode.
+///
+/// Faithful to Ghidra's `RuleStoreVarnode` (ruleaction.cc:4339-4361). Shares
+/// the `check_spacebase` helper from `RuleLoadVarnode` (just as Ghidra does —
+/// `RuleLoadVarnode::checkSpacebase`).
+pub struct RuleStoreVarnode;
+
+impl RuleStoreVarnode {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleStoreVarnode {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleStoreVarnode::applyOp (ruleaction.cc:4339-4361).
+        let mut offoff: u64 = 0;
+        let baseoff = match RuleLoadVarnode::check_spacebase(op_arc, &mut offoff) {
+            Some(s) => s,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // size = op->getIn(2)->getSize();
+        let val_size = {
+            let op = op_arc.read().unwrap();
+            let inv = match op.get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sz = inv.read().unwrap().get_size();
+            sz
+        };
+        // offoff = AddrSpace::addressToByte(offoff, baseoff->getWordSize());
+        let word_size = baseoff.word_size().max(1) as u64;
+        let offset_bytes = offoff.wrapping_mul(word_size);
+
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // Address addr(baseoff, offoff);
+        // data.newVarnodeOut(size, addr, op);
+        // Rugra's new_varnode_out places the output in Register space at `addr`.
+        // To honour the resolved stack/global space we create the output in the
+        // resolved space and wire it manually.
+        let new_out = fd.vbank.create_with_space(val_size, baseoff, offset_bytes);
+        new_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        new_out.write().unwrap().def = Some(std::sync::Arc::downgrade(&op_ref.0));
+        op_ref.0.write().unwrap().output = Some(new_out.clone());
+
+        // op->getOut()->setStackStore(); // Mark as originally from CPUI_STORE
+        new_out.write().unwrap().addlflags |= crate::varnode::addl_flags::STACK_STORE;
+
+        // data.opRemoveInput(op, 1);
+        fd.op_remove_input(&op_ref, 1);
+        // data.opRemoveInput(op, 0);
+        fd.op_remove_input(&op_ref, 0);
+        // data.opSetOpcode(op, CPUI_COPY);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+
+        // The isStoreUnmapped / markNotMapped tail (ruleaction.cc:4357-4359)
+        // needs ScopeLocal::markNotMapped, which Rugra does not model.
+        // TODO(scopelocal): port markNotMapped once scope-mapping exists.
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "store_varnode" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
+}
+
+// ============================================================================
+// RulePushPtr  (ruleaction.cc:6776-6913)
+// ============================================================================
+
+/// Push a varnode with a known pointer data-type to the bottom of its additive
+/// expression.
+///
+/// Faithful to Ghidra's `RulePushPtr` (ruleaction.cc:6852-6913) plus helpers:
+///   - `buildVarnodeOut`     (ruleaction.cc:6783-6789)
+///   - `collectDuplicateNeeds`(ruleaction.cc:6798-6817)
+///   - `duplicateNeed`       (ruleaction.cc:6827-6850)
+///
+/// This is the normalising step that precedes `RulePtrArith`: the pointer must
+/// sit at the *root* of the additive expression. If `evaluatePointerExpression`
+/// returns 1 (push needed), this rule rewrites each descendant
+/// `INT_ADD(out, X)` into `INT_ADD(vni, INT_ADD(vnadd1, vnadd2))`.
+pub struct RulePushPtr;
+
+impl RulePushPtr {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6783-6789).
+    ///
+    /// Build a duplicate of `vn` as an output of `op`, preserving the storage
+    /// address if possible. AddrTied / internal-space varnodes get a fresh
+    /// unique; otherwise a new varnode-out at the original address.
+    fn build_varnode_out(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &crate::op::PcodeOpRef,
+        fd: &mut Funcdata,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let (is_addr_tied, space, size, addr) = {
+            let v = vn.read().unwrap();
+            (v.is_addr_tied(), v.get_space(), v.get_size(), *v.get_addr())
+        };
+        if is_addr_tied || space == crate::space::AddressSpace::Iop {
+            return fd.new_unique_out(size, op);
+        }
+        fd.new_varnode_out(size, addr, op)
+    }
+
+    /// Faithful to `RulePushPtr::collectDuplicateNeeds` (ruleaction.cc:6798-6817).
+    ///
+    /// Walk back through the chain of ZEXT/SEXT/2COMP/INT_MULT(const) ops
+    /// building the offset; any with a lone descendant must be duplicated when
+    /// the pointer is pushed.
+    fn collect_duplicate_needs(
+        reslist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+        mut vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        loop {
+            let def = { vn.read().unwrap().get_def() };
+            let op = match def { Some(o) => o, None => return };
+            if vn.read().unwrap().is_auto_live() { return; }
+            if vn.read().unwrap().lone_descend().is_none() {
+                // Already has multiple descendants.
+                return;
+            }
+            let opc = { op.read().unwrap().opcode };
+            let keep = if opc == OpCode::CPUI_INT_ZEXT
+                || opc == OpCode::CPUI_INT_SEXT
+                || opc == OpCode::CPUI_INT_2COMP
+            {
+                true
+            } else if opc == OpCode::CPUI_INT_MULT {
+                // Keep if second input is constant.
+                let in1_const = op.read().unwrap()
+                    .get_in(1)
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                in1_const
+            } else {
+                false
+            };
+            if keep {
+                reslist.push(op.clone());
+            } else {
+                return;
+            }
+            // vn = op->getIn(0);
+            let next = match op.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return };
+            vn = next;
+        }
+    }
+
+    /// Faithful to `RulePushPtr::duplicateNeed` (ruleaction.cc:6827-6850).
+    ///
+    /// Duplicate the given PcodeOp so each output descendant gets its own copy
+    /// inserted just before it, then destroy the original. Assumes the op has a
+    /// single primary input (slot 0) and, optionally, a constant second input.
+    fn duplicate_need(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        fd: &mut Funcdata,
+    ) {
+        let (out_vn, in_vn, num, opc, _addr) = {
+            let o = op.read().unwrap();
+            let out_vn = match o.get_out() { Some(v) => v.clone(), None => return };
+            let in_vn = match o.get_in(0) { Some(v) => v.clone(), None => return };
+            let num = o.num_input();
+            let opc = o.opcode;
+            let addr = o.get_addr();
+            (out_vn, in_vn, num, opc, addr)
+        };
+        // We must snapshot the (descOp, slot) pairs first because creating new
+        // ops mutates the descend list of out_vn.
+        let mut targets: Vec<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, usize)> = Vec::new();
+        {
+            let o = out_vn.read().unwrap();
+            for dec_op in o.descend_iter() {
+                // slot = decOp->getSlot(outVn);
+                let slot = dec_op.read().unwrap()
+                    .inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &out_vn));
+                if let Some(s) = slot {
+                    targets.push((dec_op, s));
+                }
+            }
+        }
+        let in1 = if num > 1 {
+            op.read().unwrap().get_in(1).cloned()
+        } else {
+            None
+        };
+        for (dec_op, slot) in targets {
+            let dec_addr = dec_op.read().unwrap().get_addr();
+            // newOp(num, op->getAddr())
+            let new_op = fd.new_op(num, dec_addr);
+            // Varnode *newOut = buildVarnodeOut(outVn, newOp, data);
+            let new_out = Self::build_varnode_out(&out_vn, &new_op, fd);
+            // newOut->updateType(outVn->getType());
+            if let Some(t) = out_vn.read().unwrap().get_type() {
+                new_out.write().unwrap().update_type(t);
+            }
+            // data.opSetOpcode(newOp, opc);
+            fd.op_set_opcode(&new_op, opc);
+            // data.opSetInput(newOp, inVn, 0);
+            fd.op_set_input(&new_op, in_vn.clone(), 0);
+            if num > 1 {
+                if let Some(c1) = &in1 {
+                    fd.op_set_input(&new_op, c1.clone(), 1);
+                }
+            }
+            // data.opSetInput(decOp, newOut, slot);
+            fd.op_set_input(&crate::op::PcodeOpRef(dec_op.clone()), new_out, slot);
+            // data.opInsertBefore(newOp, decOp);
+            fd.op_insert_before(&new_op, &crate::op::PcodeOpRef(dec_op.clone()));
+        }
+        // data.opDestroy(op);
+        fd.op_destroy(&crate::op::PcodeOpRef(op.clone()));
+    }
+}
+
+impl Rule for RulePushPtr {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePushPtr::applyOp (ruleaction.cc:6863-6913).
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Search for pointer type among inputs.
+        let num_input = op_arc.read().unwrap().num_input();
+        let mut slot: usize = num_input;
+        let mut vni: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        for s in 0..num_input {
+            let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue };
+            let is_ptr = in_vn.read().unwrap()
+                .get_type_read_facing()
+                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+                .unwrap_or(false);
+            if is_ptr {
+                slot = s;
+                vni = Some(in_vn);
+                break;
+            }
+        }
+        let vni = match vni { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        if slot == num_input {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // if (evaluatePointerExpression(op, slot) != 1) return 0;
+        if RulePtrArith::evaluate_pointer_expression(op_arc, slot) != 1 {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let vn = match op_arc.read().unwrap().get_out() { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let vnadd2 = match op_arc.read().unwrap().get_in(1usize.wrapping_sub(slot).min(num_input - 1)) {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // if (vn->loneDescend() == null) collectDuplicateNeeds(duplicateList, vnadd2);
+        let mut duplicate_list: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        if vn.read().unwrap().lone_descend().is_none() {
+            Self::collect_duplicate_needs(&mut duplicate_list, vnadd2.clone());
+        }
+
+        // Main loop: for each descendant of vn, push the pointer down.
+        // Snapshot descendants first (creating ops mutates vn's descend list).
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        for decop in descendants {
+            // j = decop->getSlot(vn);
+            let j = decop.read().unwrap()
+                .inrefs
+                .iter()
+                .position(|v| std::sync::Arc::ptr_eq(v, &vn));
+            let j = match j { Some(s) => s, None => continue };
+            let one_minus_j = 1usize.wrapping_sub(j);
+            // vnadd1 = decop->getIn(1-j);
+            let vnadd1 = match decop.read().unwrap().get_in(one_minus_j) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+
+            // newop = data.newOp(2, decop->getAddr());
+            let dec_addr = decop.read().unwrap().get_addr();
+            let newop = fd.new_op(2, dec_addr);
+            // data.opSetOpcode(newop, CPUI_INT_ADD);
+            fd.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+            // newout = data.newUniqueOut(vnadd1->getSize(), newop);
+            let newout = fd.new_unique_out(vnadd1.read().unwrap().get_size(), &newop);
+
+            let dec_ref = crate::op::PcodeOpRef(decop.clone());
+            // data.opSetInput(decop, vni, 0);
+            fd.op_set_input(&dec_ref, vni.clone(), 0);
+            // data.opSetInput(decop, newout, 1);
+            fd.op_set_input(&dec_ref, newout.clone(), 1);
+
+            // data.opSetInput(newop, vnadd1, 0);
+            fd.op_set_input(&newop, vnadd1.clone(), 0);
+            // data.opSetInput(newop, vnadd2, 1);
+            fd.op_set_input(&newop, vnadd2.clone(), 1);
+
+            // data.opInsertBefore(newop, decop);
+            fd.op_insert_before(&newop, &dec_ref);
+        }
+
+        // if (!vn->isAutoLive()) data.opDestroy(op);
+        if !vn.read().unwrap().is_auto_live() {
+            fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
+        }
+        // for each in duplicateList: duplicateNeed(...).
+        for dop in duplicate_list {
+            Self::duplicate_need(&dop, fd);
+        }
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "push_ptr" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
+}
+
+// ============================================================================
+// RulePtrArith  (ruleaction.cc:6552-6676) + AddTreeState (5992-6550)
+// ============================================================================
+
+/// Transform integer pointer arithmetic into PTRADD/PTRSUB.
+///
+/// Faithful to Ghidra's `RulePtrArith` (ruleaction.cc:6629-6676) plus its two
+/// static helpers:
+///   - `verifyPreferredPointer`    (ruleaction.cc:6558-6572)
+///   - `evaluatePointerExpression` (ruleaction.cc:6586-6627)
+///
+/// The heavy lifting (the additive-tree analysis) lives in `AddTreeState`
+/// (ruleaction.cc:5992-6550), ported as a helper struct below.
+pub struct RulePtrArith;
+
+impl RulePtrArith {
+    pub fn new() -> Self { Self }
+
+    /// Faithful to `RulePtrArith::verifyPreferredPointer` (ruleaction.cc:6558-6572).
+    ///
+    /// Tests whether the node immediately above the putative base pointer also
+    /// looks like a base pointer. Returns true if `slot` holds the *preferred*
+    /// pointer (i.e. there is no earlier pointer that should be pushed first).
+    fn verify_preferred_pointer(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        slot: usize,
+    ) -> bool {
+        let vn = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return true };
+        let def = vn.read().unwrap().get_def();
+        let pre_op = match def { Some(o) => o, None => return true };
+        // if (preOp->code() != CPUI_INT_ADD) return true;
+        if pre_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return true;
+        }
+        // Find which input of preOp is a pointer.
+        let mut preslot: usize = 0;
+        let pre_is_ptr_0 = pre_op.read().unwrap()
+            .get_in(0)
+            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+            .unwrap_or(false);
+        if !pre_is_ptr_0 {
+            preslot = 1;
+            let pre_is_ptr_1 = pre_op.read().unwrap()
+                .get_in(1)
+                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+                .unwrap_or(false);
+            if !pre_is_ptr_1 {
+                return true;
+            }
+        }
+        // return (1 != evaluatePointerExpression(preOp, preslot));
+        Self::evaluate_pointer_expression(&pre_op, preslot) != 1
+    }
+
+    /// Faithful to `RulePtrArith::evaluatePointerExpression` (ruleaction.cc:6586-6627).
+    ///
+    /// Determines whether the INT_ADD expression rooted at `op` (with the
+    /// pointer at input `slot`) is ready for conversion. Returns a command
+    /// code:
+    ///   - 0 → no action (expression not fully linked / should not convert)
+    ///   - 1 → a push action is needed first
+    ///   - 2 → the conversion can proceed
+    fn evaluate_pointer_expression(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        slot: usize,
+    ) -> i32 {
+        let mut res: i32 = 1; // Assume we are going to push.
+        let mut count: i32 = 0;
+        let ptr_base = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return 0 };
+        // if (ptrBase->isFree() && !ptrBase->isConstant()) return 0;
+        if ptr_base.read().unwrap().is_free() && !ptr_base.read().unwrap().is_constant() {
+            return 0;
+        }
+        let other_slot = if slot == 0 { 1 } else { 0 };
+        let other_is_ptr = op.read().unwrap()
+            .get_in(other_slot)
+            .and_then(|v| v.read().unwrap().get_type_read_facing())
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+            .unwrap_or(false);
+        if other_is_ptr {
+            res = 2;
+        }
+        let out_vn = match op.read().unwrap().get_out() { Some(v) => v.clone(), None => return 0 };
+        for dec_op in out_vn.read().unwrap().descend_iter() {
+            count += 1;
+            let opc = dec_op.read().unwrap().opcode;
+            if opc == OpCode::CPUI_INT_ADD {
+                // otherVn = decOp->getIn(1 - decOp->getSlot(outVn));
+                let dec_slot = dec_op.read().unwrap()
+                    .inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &out_vn));
+                let other_idx = match dec_slot { Some(s) => 1usize.wrapping_sub(s), None => 0 };
+                let other_vn = match dec_op.read().unwrap().get_in(other_idx) { Some(v) => v.clone(), None => continue };
+                if other_vn.read().unwrap().is_free() && !other_vn.read().unwrap().is_constant() {
+                    return 0;
+                }
+                let ov_is_ptr = other_vn.read().unwrap()
+                    .get_type_read_facing()
+                    .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+                    .unwrap_or(false);
+                if ov_is_ptr {
+                    res = 2; // Do not push in the presence of other pointers.
+                }
+            } else if (opc == OpCode::CPUI_LOAD || opc == OpCode::CPUI_STORE)
+                && dec_op.read().unwrap().get_in(1).map(|v| std::sync::Arc::ptr_eq(v, &out_vn)).unwrap_or(false)
+            {
+                // If use is as pointer for LOAD or STORE.
+                let pb_is_spacebase = ptr_base.read().unwrap().is_spacebase();
+                let pb_is_input = ptr_base.read().unwrap().is_input();
+                let pb_is_const = ptr_base.read().unwrap().is_constant();
+                let other_is_const = op.read().unwrap()
+                    .get_in(other_slot)
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                if pb_is_spacebase && (pb_is_input || pb_is_const) && other_is_const {
+                    return 0;
+                }
+                res = 2;
+            } else {
+                // Any other op besides ADD: do not push.
+                res = 2;
+            }
+        }
+        if count == 0 {
+            return 0;
+        }
+        if count > 1 {
+            if out_vn.read().unwrap().is_spacebase() {
+                // A spacebase result must have only 1 descendant.
+                return 0;
+            }
+        }
+        res
+    }
+}
+
+impl Rule for RulePtrArith {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePtrArith::applyOp (ruleaction.cc:6654-6676).
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Search for pointer type among inputs.
+        let num_input = op_arc.read().unwrap().num_input();
+        let mut slot: usize = num_input;
+        for s in 0..num_input {
+            let is_ptr = op_arc.read().unwrap()
+                .get_in(s)
+                .and_then(|v| v.read().unwrap().get_type_read_facing())
+                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+                .unwrap_or(false);
+            if is_ptr { slot = s; break; }
+        }
+        if slot == num_input {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if Self::evaluate_pointer_expression(op_arc, slot) != 2 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        if !Self::verify_preferred_pointer(op_arc, slot) {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        let mut state = AddTreeState::new(fd, op_arc.clone(), slot);
+        if state.apply() {
+            return Ok(action_status::CHANGE);
+        }
+        if state.init_alternate_form() {
+            if state.apply() {
+                return Ok(action_status::CHANGE);
+            }
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "ptrarith" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
+}
+
+/// Faithful port of Ghidra's `AddTreeState` (ruleaction.cc:5992-6550).
+///
+/// Analyses an additive expression tree rooted at an INT_ADD whose `baseSlot`
+/// input is a typed pointer, splitting it into:
+///   - multiples of the pointed-to size  → PTRADD
+///   - a sub-type offset                 → PTRSUB
+///   - remaining non-multiple terms      → INT_ADD
+struct AddTreeState<'a> {
+    data: &'a mut Funcdata,
+    base_op: std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    base_slot: usize,
+    ptr: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    /// The pointed-to data-type (ct->getPtrTo()).
+    base_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ptrsize: usize,
+    ptrmask: u64,
+    /// Element size in address units (size of pointed-to type, in space units).
+    size: i64,
+    multsum: u64,
+    nonmultsum: u64,
+    biggest_non_mult_coeff: u64,
+    multiple: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    coeff: Vec<i64>,
+    nonmult: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    correct: u64,
+    offset: u64,
+    valid: bool,
+    is_distribute_used: bool,
+    is_subtype: bool,
+    distribute_op: Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
+    prevent_distribution: bool,
+    is_degenerate: bool,
+}
+
+impl<'a> AddTreeState<'a> {
+    /// Faithful to `AddTreeState::AddTreeState` ctor (ruleaction.cc:6036-6069).
+    fn new(data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize) -> Self {
+        // ptr = op->getIn(slot). The caller guarantees slot is a pointer, so it
+        // must exist; if not, fabricate a 1-byte const placeholder so the state
+        // is well-formed (apply() will bail via the type checks).
+        let ptr = op.read().unwrap().get_in(slot).cloned().unwrap_or_else(|| {
+            data.vbank.create_constant(1, 0)
+        });
+        let (ct, ptrsize, base_type, size, is_degenerate) = {
+            let v = ptr.read().unwrap();
+            let ct = v.get_type_read_facing();
+            let ptrsize = v.get_size();
+            let (base_type, size, is_degenerate) = if let Some(ref ct_arc) = ct {
+                use crate::type_system::datatype::{Datatype, TypeMetatype};
+                if ct_arc.get_metatype() == TypeMetatype::Pointer {
+                    if let Datatype::Pointer(tp) = ct_arc.as_ref() {
+                        let word_size = tp.wordsize.max(1) as i64;
+                        let bt = &tp.ptr_to;
+                        let is_var_len = bt.is_variable_length();
+                        let sz = if is_var_len {
+                            0
+                        } else {
+                            // byteToAddressInt(baseType->getAlignSize(), wordSize)
+                            byte_to_address_int(bt.get_align_size() as i64, tp.wordsize.max(1) as i64)
+                        };
+                        // isDegenerate: baseType->getAlignSize() <= unitsize && > 0
+                        // where unitsize = addressToByteInt(1, wordSize) == wordSize.
+                        let unitsize = word_size;
+                        let is_deg = (bt.get_align_size() as i64) <= unitsize && bt.get_align_size() > 0;
+                        (Some(tp.ptr_to.clone()), sz, is_deg)
+                    } else {
+                        (None, 0i64, false)
+                    }
+                } else {
+                    (None, 0i64, false)
+                }
+            } else {
+                (None, 0i64, false)
+            };
+            (ct, ptrsize, base_type, size, is_degenerate)
+        };
+        let ptrmask = crate::address::calc_mask(ptrsize);
+        let _ = ct;
+        AddTreeState {
+            data,
+            base_op: op,
+            base_slot: slot,
+            ptr,
+            base_type,
+            ptrsize,
+            ptrmask,
+            size,
+            multsum: 0,
+            nonmultsum: 0,
+            biggest_non_mult_coeff: 0,
+            multiple: Vec::new(),
+            coeff: Vec::new(),
+            nonmult: Vec::new(),
+            correct: 0,
+            offset: 0,
+            valid: true,
+            is_distribute_used: false,
+            is_subtype: false,
+            distribute_op: None,
+            prevent_distribution: false,
+            is_degenerate,
+        }
+    }
+
+    /// Faithful to `AddTreeState::clear` (ruleaction.cc:5992-6011). The
+    /// pRelType/`nonmultsum = addressOffset` branch is omitted (no
+    /// TypePointerRel in Rugra — pRelType is always null).
+    fn clear(&mut self) {
+        self.multsum = 0;
+        self.nonmultsum = 0;
+        self.biggest_non_mult_coeff = 0;
+        self.multiple.clear();
+        self.coeff.clear();
+        self.nonmult.clear();
+        self.correct = 0;
+        self.offset = 0;
+        self.valid = true;
+        self.is_distribute_used = false;
+        self.is_subtype = false;
+        self.distribute_op = None;
+    }
+
+    /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034).
+    /// With no TypePointerRel, there is never an alternate form.
+    fn init_alternate_form(&mut self) -> bool {
+        false
+    }
+
+    /// Faithful to `AddTreeState::checkMultTerm` (ruleaction.cc:6136-6179).
+    ///
+    /// Examine a CPUI_INT_MULT element mid-tree. Returns true if there are no
+    /// multiples of the base size discovered (i.e. treated as a non-multiple
+    /// leaf).
+    fn check_mult_term(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        tree_coeff: u64,
+    ) -> bool {
+        let (vnconst, vnterm, vn_size) = {
+            let o = op.read().unwrap();
+            let vc = o.get_in(1).cloned();
+            let vt = o.get_in(0).cloned();
+            let sz = vn.read().unwrap().get_size();
+            (vc, vt, sz)
+        };
+        let vnterm = match vnterm { Some(v) => v, None => return true };
+        if vnterm.read().unwrap().is_free() {
+            self.valid = false;
+            return false;
+        }
+        if let Some(vnconst) = vnconst {
+            if vnconst.read().unwrap().is_constant() {
+                let val = (vnconst.read().unwrap().get_offset().wrapping_mul(tree_coeff)) & self.ptrmask;
+                let sval = sign_extend_u64(val, vn_size * 8);
+                let rem = if self.size == 0 { sval } else { signed_rem(sval, self.size) };
+                if rem != 0 {
+                    if val >= self.size as u64 && self.size != 0 {
+                        self.valid = false; // Size too big: pointer type must be wrong.
+                        return false;
+                    }
+                    if !self.prevent_distribution {
+                        let vnterm_def = vnterm.read().unwrap().get_def();
+                        let is_add = vnterm_def.as_ref()
+                            .map(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_ADD)
+                            .unwrap_or(false);
+                        if is_add {
+                            if self.distribute_op.is_none() {
+                                self.distribute_op = Some(op.clone());
+                            }
+                            let def = vnterm.read().unwrap().get_def().unwrap();
+                            return self.span_add_tree(&def, val);
+                        }
+                    }
+                    let vncoeff: u64 = if sval < 0 { (-sval) as u64 } else { sval as u64 };
+                    if vncoeff > self.biggest_non_mult_coeff {
+                        self.biggest_non_mult_coeff = vncoeff;
+                    }
+                    return true;
+                } else {
+                    if tree_coeff != 1 {
+                        self.is_distribute_used = true;
+                    }
+                    self.multiple.push(vnterm.clone());
+                    self.coeff.push(sval);
+                    return false;
+                }
+            }
+        }
+        if tree_coeff > self.biggest_non_mult_coeff {
+            self.biggest_non_mult_coeff = tree_coeff;
+        }
+        true
+    }
+
+    /// Faithful to `AddTreeState::checkTerm` (ruleaction.cc:6186-6231).
+    fn check_term(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        tree_coeff: u64,
+    ) -> bool {
+        if std::sync::Arc::ptr_eq(vn, &self.ptr) {
+            return false;
+        }
+        let vn_size = vn.read().unwrap().get_size();
+        if vn.read().unwrap().is_constant() {
+            let val = vn.read().unwrap().get_offset().wrapping_mul(tree_coeff);
+            let sval = sign_extend_u64(val, vn_size * 8);
+            let rem = if self.size == 0 { sval } else { signed_rem(sval, self.size) };
+            if rem != 0 {
+                // constant is not a multiple of size.
+                if tree_coeff != 1 {
+                    if let Some(ref bt) = self.base_type {
+                        use crate::type_system::datatype::TypeMetatype;
+                        let mt = bt.get_metatype();
+                        if mt == TypeMetatype::Array || mt == TypeMetatype::Struct {
+                            self.is_distribute_used = true;
+                        }
+                    }
+                }
+                self.nonmultsum = (self.nonmultsum.wrapping_add(val)) & self.ptrmask;
+                return true;
+            }
+            if tree_coeff != 1 {
+                self.is_distribute_used = true;
+            }
+            self.multsum = (self.multsum.wrapping_add(val)) & self.ptrmask;
+            return false;
+        }
+        let is_written = vn.read().unwrap().is_written();
+        if is_written {
+            let def = vn.read().unwrap().get_def();
+            if let Some(def_op) = def {
+                let code = def_op.read().unwrap().opcode;
+                if code == OpCode::CPUI_INT_ADD {
+                    return self.span_add_tree(&def_op, tree_coeff);
+                }
+                if code == OpCode::CPUI_COPY {
+                    self.valid = false; // Not finished reducing yet.
+                    return false;
+                }
+                if code == OpCode::CPUI_INT_MULT {
+                    return self.check_mult_term(vn, &def_op, tree_coeff);
+                }
+            }
+        } else if vn.read().unwrap().is_free() {
+            self.valid = false;
+            return false;
+        }
+        if tree_coeff > self.biggest_non_mult_coeff {
+            self.biggest_non_mult_coeff = tree_coeff;
+        }
+        true
+    }
+
+    /// Faithful to `AddTreeState::spanAddTree` (ruleaction.cc:6244-6266).
+    fn span_add_tree(
+        &mut self,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        tree_coeff: u64,
+    ) -> bool {
+        let (in0, in1) = {
+            let o = op.read().unwrap();
+            (o.get_in(0).cloned(), o.get_in(1).cloned())
+        };
+        let in0 = match in0 { Some(v) => v, None => { self.valid = false; return false; } };
+        let in1 = match in1 { Some(v) => v, None => { self.valid = false; return false; } };
+        let one_is_non = self.check_term(&in0, tree_coeff);
+        if !self.valid { return false; }
+        let two_is_non = self.check_term(&in1, tree_coeff);
+        if !self.valid { return false; }
+        // pRelType is always null in Rugra, so the pRelType guard is skipped.
+        if one_is_non && two_is_non {
+            return true;
+        }
+        if one_is_non {
+            self.nonmult.push(in0);
+        }
+        if two_is_non {
+            self.nonmult.push(in1);
+        }
+        false // At least one side contains multiples.
+    }
+
+    /// Faithful to `AddTreeState::calcSubtype` (ruleaction.cc:6270-6355).
+    ///
+    /// The pRelType branches (6350-6354) are omitted (no TypePointerRel). The
+    /// TypePointerRel `hasMatchingSubType` path for SPACEBASE/STRUCT needs
+    /// `nearestArrayedComponent*` which Rugra lacks; we approximate with
+    /// `get_sub_type`, mirroring the arrayHint==0 Ghidra path.
+    fn calc_subtype(&mut self) {
+        let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
+        if self.size == 0 || (tmpoff as i64) < self.size {
+            self.offset = tmpoff;
+        } else {
+            let stmpoff = sign_extend_u64(tmpoff, self.ptrsize * 8);
+            let stmpoff = signed_rem(stmpoff, self.size);
+            if stmpoff >= 0 {
+                self.offset = stmpoff as u64;
+            } else {
+                // baseType STRUCT + array hints path needs biggestNonMultCoeff
+                // (modelled) but the array-hint logic is approximated.
+                let is_struct = self.base_type.as_ref()
+                    .map(|bt| bt.get_metatype() == crate::type_system::datatype::TypeMetatype::Struct)
+                    .unwrap_or(false);
+                if is_struct && self.biggest_non_mult_coeff != 0 && self.multsum == 0 {
+                    self.offset = tmpoff;
+                } else {
+                    self.offset = (stmpoff + self.size) as u64;
+                }
+            }
+        }
+        self.correct = self.nonmultsum; // double-counted constants corrected later.
+        self.multsum = (tmpoff.wrapping_sub(self.offset)) & self.ptrmask;
+        if self.nonmult.is_empty() {
+            if self.multsum == 0 && self.multiple.is_empty() {
+                self.valid = false;
+                return;
+            }
+            self.is_subtype = false;
+        } else if let Some(ref bt) = self.base_type {
+            use crate::type_system::datatype::TypeMetatype;
+            match bt.get_metatype() {
+                TypeMetatype::Spacebase => {
+                    // offsetbytes = addressToByteInt(offset, wordSize)
+                    // hasMatchingSubType needs scope/var-offset mapping; with
+                    // arrayHint 0, Ghidra falls to getSubType. We use that.
+                    // (nearestArrayedComponent* not modelled.)
+                    let extra = match bt.get_sub_type(self.offset as i64) {
+                        (Some(_), e) => e as u64,
+                        (None, _) => { self.valid = false; return; }
+                    };
+                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
+                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    self.is_subtype = true;
+                }
+                TypeMetatype::Struct => {
+                    let soffset = sign_extend_u64(self.offset, self.ptrsize * 8);
+                    let extra = match bt.get_sub_type(soffset) {
+                        (Some(_), e) => e as u64,
+                        (None, _) => {
+                            // Out of structure bounds check (compare as bytes).
+                            if (soffset < 0) || (soffset as u64) >= bt.get_size() as u64 {
+                                self.valid = false;
+                                return;
+                            }
+                            0 // No field, but pretend there is something there.
+                        }
+                    };
+                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
+                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    self.is_subtype = true;
+                }
+                TypeMetatype::Array => {
+                    self.is_subtype = true;
+                    self.correct = (self.correct.wrapping_sub(self.offset)) & self.ptrmask;
+                    self.offset = 0;
+                }
+                _ => {
+                    // No struct/array/spacebase but nonmult non-empty.
+                    self.valid = false;
+                }
+            }
+        } else {
+            self.valid = false;
+        }
+    }
+
+    /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
+    fn build_multiples(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let smultsum = sign_extend_u64(self.multsum, self.ptrsize * 8);
+        let const_coeff: u64 = if self.size == 0 { 0 } else { (signed_div(smultsum, self.size) as u64) & self.ptrmask };
+        let mut res_node: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        if const_coeff != 0 {
+            res_node = Some(self.data.new_constant(self.ptrsize, const_coeff));
+        }
+        for i in 0..self.multiple.len() {
+            let final_coeff: u64 = if self.size == 0 {
+                0
+            } else {
+                (signed_div(self.coeff[i], self.size) as u64) & self.ptrmask
+            };
+            let vn = self.multiple[i].clone();
+            let vn = if final_coeff != 1 {
+                let base_addr = self.base_op.read().unwrap().get_addr();
+                let const_vn = self.data.new_constant(self.ptrsize, final_coeff);
+                let newop = self.data.new_op(2, base_addr);
+                self.data.op_set_opcode(&newop, OpCode::CPUI_INT_MULT);
+                self.data.new_unique_out(self.ptrsize, &newop);
+                self.data.op_set_input(&newop, vn.clone(), 0);
+                self.data.op_set_input(&newop, const_vn, 1);
+                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                let out = newop.0.read().unwrap().output.clone().unwrap();
+                out
+            } else {
+                vn
+            };
+            if res_node.is_none() {
+                res_node = Some(vn);
+            } else {
+                let prev = res_node.unwrap();
+                let base_addr = self.base_op.read().unwrap().get_addr();
+                let newop = self.data.new_op(2, base_addr);
+                self.data.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+                self.data.new_unique_out(self.ptrsize, &newop);
+                self.data.op_set_input(&newop, vn, 0);
+                self.data.op_set_input(&newop, prev, 1);
+                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
+            }
+        }
+        res_node
+    }
+
+    /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
+    fn build_extra(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let mut res_node: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        // Snapshot the nonmult list to avoid borrow issues while we mutate.
+        let nonmult: Vec<_> = self.nonmult.iter().cloned().collect();
+        for vn in nonmult {
+            if vn.read().unwrap().is_constant() {
+                self.correct = self.correct.wrapping_sub(vn.read().unwrap().get_offset());
+                continue;
+            }
+            if res_node.is_none() {
+                res_node = Some(vn);
+            } else {
+                let prev = res_node.unwrap();
+                let base_addr = self.base_op.read().unwrap().get_addr();
+                let newop = self.data.new_op(2, base_addr);
+                self.data.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+                let _ = self.data.new_unique_out(self.ptrsize, &newop);
+                self.data.op_set_input(&newop, vn, 0);
+                self.data.op_set_input(&newop, prev, 1);
+                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
+            }
+        }
+        self.correct &= self.ptrmask;
+        if self.correct != 0 {
+            let vn = self.data.new_constant(self.ptrsize, uintb_negate(self.correct.wrapping_sub(1), self.ptrsize));
+            if res_node.is_none() {
+                res_node = Some(vn);
+            } else {
+                let prev = res_node.unwrap();
+                let base_addr = self.base_op.read().unwrap().get_addr();
+                let newop = self.data.new_op(2, base_addr);
+                self.data.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+                let _ = self.data.new_unique_out(self.ptrsize, &newop);
+                self.data.op_set_input(&newop, vn, 0);
+                self.data.op_set_input(&newop, prev, 1);
+                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
+            }
+        }
+        res_node
+    }
+
+    /// Faithful to `AddTreeState::buildDegenerate` (ruleaction.cc:6441-6458).
+    ///
+    /// When the base data-type is unit-sized, every ADD becomes a PTRADD.
+    fn build_degenerate(&mut self) -> bool {
+        let (base_align_lt_wordsize, word_size, ct_size, out_is_ptr) = {
+            let bt = match &self.base_type { Some(b) => b.clone(), None => return false };
+            let ws = {
+                let p = self.ptr.read().unwrap();
+                p.get_type_read_facing()
+                    .and_then(|ct| {
+                        use crate::type_system::datatype::Datatype;
+                        if let Datatype::Pointer(tp) = ct.as_ref() { Some(tp.wordsize) } else { None }
+                    })
+                    .unwrap_or(1)
+            };
+            let align = bt.get_align_size() as i64;
+            let is_lt = align < ws as i64;
+            let out_meta = self.base_op.read().unwrap()
+                .get_out()
+                .and_then(|o| o.read().unwrap().v_type.clone())
+                .map(|dt| {
+                    use crate::type_system::datatype::TypeMetatype;
+                    let _ = dt.get_metatype();
+                    // out->getTypeDefFacing()->getMetatype() != TYPE_PTR
+                    let m = dt.get_metatype();
+                    m == TypeMetatype::Pointer
+                })
+                .unwrap_or(false);
+            (is_lt, ws, 0i64, out_meta)
+        };
+        // If the size is really less than scale, there is padding — don't transform.
+        if base_align_lt_wordsize {
+            return false;
+        }
+        let _ = word_size;
+        let _ = ct_size;
+        // Make sure pointer propagates through INT_ADD.
+        if !out_is_ptr {
+            return false;
+        }
+        // newparams = { ptr, baseOp->getIn(1-slot), newConstant(ct->getSize(),1) }
+        let other_slot = if self.base_slot == 0 { 1 } else { 0 };
+        let other = match self.base_op.read().unwrap().get_in(other_slot) { Some(v) => v.clone(), None => return false };
+        let one = self.data.new_constant(self.ptrsize, 1);
+        let base_ref = crate::op::PcodeOpRef(self.base_op.clone());
+        // opSetAllInput(baseOp, newparams)
+        self.data.op_set_input(&base_ref, self.ptr.clone(), 0);
+        self.data.op_set_input(&base_ref, other, 1);
+        self.data.op_set_input(&base_ref, one, 2);
+        self.data.op_set_opcode(&base_ref, OpCode::CPUI_PTRADD);
+        true
+    }
+
+    /// Faithful to `AddTreeState::apply` (ruleaction.cc:6461-6502).
+    ///
+    /// The `distributeIntMultAdd`/`collapseIntMultMult` loop (6475-6491) needs
+    /// Funcdata helpers Rugra lacks; we approximate by doing a single
+    /// span/calc pass without distribution.
+    fn apply(&mut self) -> bool {
+        if self.is_degenerate {
+            return self.build_degenerate();
+        }
+        let base = self.base_op.clone();
+        self.span_add_tree(&base, 1);
+        if !self.valid {
+            return false;
+        }
+        // distributeOp handling: if distribution isn't used, retry without it.
+        if self.distribute_op.is_some() && !self.is_distribute_used {
+            self.clear();
+            self.prevent_distribution = true;
+            let base = self.base_op.clone();
+            self.span_add_tree(&base, 1);
+        }
+        self.calc_subtype();
+        if !self.valid {
+            return false;
+        }
+        // NOTE: the Ghidra while-loop that calls distributeIntMultAdd until the
+        // distributeOp is resolved is omitted (Rugra lacks those helpers). If a
+        // distributeOp remains, we proceed to buildTree as-is.
+        self.build_tree();
+        true
+    }
+
+    /// Faithful to `AddTreeState::buildTree` (ruleaction.cc:6508-6550).
+    ///
+    /// The type-inheritance (`inheritResolution`) / `assignPropagatedType`
+    /// calls are omitted (Rugra has no per-op type resolution propagation
+    /// wired here). The structural PTRADD/PTRSUB/INT_ADD restructure is
+    /// faithful.
+    fn build_tree(&mut self) {
+        let mult_node = self.build_multiples();
+        let extra_node = self.build_extra();
+        let mut newop: Option<crate::op::PcodeOpRef> = None;
+
+        // Create PTRADD portion.
+        let mut mult_node = if let Some(mn) = mult_node {
+            let base_addr = self.base_op.read().unwrap().get_addr();
+            let size_const = self.data.new_constant(self.ptrsize, self.size as u64);
+            let newp = self.data.new_op(3, base_addr);
+            self.data.op_set_opcode(&newp, OpCode::CPUI_PTRADD);
+            self.data.new_unique_out(self.ptrsize, &newp);
+            self.data.op_set_input(&newp, self.ptr.clone(), 0);
+            self.data.op_set_input(&newp, mn, 1);
+            self.data.op_set_input(&newp, size_const, 2);
+            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            newop = Some(newp.clone());
+            let out = newp.0.read().unwrap().output.clone().unwrap();
+            out
+        } else {
+            self.ptr.clone() // Zero multiple terms.
+        };
+
+        // Create PTRSUB portion.
+        if self.is_subtype {
+            let base_addr = self.base_op.read().unwrap().get_addr();
+            let off_const = self.data.new_constant(self.ptrsize, self.offset);
+            let newp = self.data.new_op(2, base_addr);
+            self.data.op_set_opcode(&newp, OpCode::CPUI_PTRSUB);
+            self.data.new_unique_out(self.ptrsize, &newp);
+            self.data.op_set_input(&newp, mult_node.clone(), 0);
+            self.data.op_set_input(&newp, off_const, 1);
+            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            newop = Some(newp.clone());
+            // setStopTypePropagation
+            newp.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+            mult_node = newp.0.read().unwrap().output.clone().unwrap();
+        }
+
+        // Add back any remaining terms.
+        if let Some(extra) = extra_node {
+            let base_addr = self.base_op.read().unwrap().get_addr();
+            let newp = self.data.new_op(2, base_addr);
+            self.data.op_set_opcode(&newp, OpCode::CPUI_INT_ADD);
+            let _ = self.data.new_unique_out(self.ptrsize, &newp);
+            self.data.op_set_input(&newp, mult_node, 0);
+            self.data.op_set_input(&newp, extra, 1);
+            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            newop = Some(newp.clone());
+        }
+
+        if let Some(newp) = newop {
+            // data.opSetOutput(newop, baseOp->getOut())
+            let base_out = self.base_op.read().unwrap().output.clone();
+            if let Some(bo) = base_out {
+                self.data.op_set_output(&newp, bo);
+            }
+            // data.opDestroy(baseOp)
+            self.data.op_destroy(&crate::op::PcodeOpRef(self.base_op.clone()));
+        } else {
+            // This should never happen — Ghidra emits a warning.
+        }
+    }
+}
+
+// ============================================================================
+// RuleStructOffset0  (ruleaction.cc:6678-6774)
+// ============================================================================
+
+/// Convert a LOAD/STORE to the first element of a structure into a PTRSUB.
+///
+/// Faithful to Ghidra's `RuleStructOffset0` (ruleaction.cc:6678-6774).
+///
+/// When type propagation says we have a pointer to a structure but we load/store
+/// too little data, we really need a pointer to the *first element*. This rule
+/// inserts a `PTRSUB(ptr, 0)` to drill down to that component. The
+/// TypePointerRel branch (6713-6743) is omitted (Rugra has no TypePointerRel);
+/// the plain STRUCT/ARRAY path is faithful.
+pub struct RuleStructOffset0;
+
+impl RuleStructOffset0 {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleStructOffset0 {
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6693-6774).
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let code = op_arc.read().unwrap().opcode;
+        let movesize = if code == OpCode::CPUI_LOAD {
+            // movesize = op->getOut()->getSize();
+            let out = match op_arc.read().unwrap().get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let ms = out.read().unwrap().get_size() as i64;
+            ms
+        } else if code == OpCode::CPUI_STORE {
+            // movesize = op->getIn(2)->getSize();
+            let inv = match op_arc.read().unwrap().get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let ms = inv.read().unwrap().get_size() as i64;
+            ms
+        } else {
+            return Ok(action_status::NO_CHANGE);
+        };
+
+        // ptrVn = op->getIn(1); ct = ptrVn->getTypeReadFacing(op);
+        let ptr_vn = match op_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let ct = match ptr_vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        if ct.get_metatype() != TypeMetatype::Pointer {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let tp = match ct.as_ref() { Datatype::Pointer(p) => p, _ => return Ok(action_status::NO_CHANGE) };
+        let base_type = tp.ptr_to.clone();
+
+        // The TypePointerRel `isFormalPointerRel` branch is omitted (no
+        // TypePointerRel in Rugra). Fall straight to the plain STRUCT/ARRAY
+        // path (ruleaction.cc:6744-6767).
+        let mut offset: i64 = 0;
+        match base_type.get_metatype() {
+            TypeMetatype::Struct => {
+                if (base_type.get_size() as i64) < movesize {
+                    return Ok(action_status::NO_CHANGE); // Moving > entire structure.
+                }
+                // subType = baseType->getSubType(offset, &offset);
+                let (sub_type, newoff) = base_type.get_sub_type(offset);
+                offset = newoff;
+                let sub = match sub_type { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
+                if (sub.get_size() as i64) < movesize {
+                    return Ok(action_status::NO_CHANGE); // Subtype too small.
+                }
+            }
+            TypeMetatype::Array => {
+                if (base_type.get_size() as i64) < movesize {
+                    return Ok(action_status::NO_CHANGE); // Moving > entire array.
+                }
+                if (base_type.get_size() as i64) == movesize {
+                    // Moving the entire array.
+                    let arr = match base_type.as_ref() { Datatype::Array(a) => a, _ => return Ok(action_status::NO_CHANGE) };
+                    if arr.num_elements != 1 {
+                        return Ok(action_status::NO_CHANGE);
+                    }
+                }
+            }
+            _ => return Ok(action_status::NO_CHANGE),
+        }
+
+        let ptr_size = ptr_vn.read().unwrap().get_size();
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // newop = data.newOpBefore(op, CPUI_PTRSUB, ptrVn, newConstant(ptrSize, 0))
+        let base_addr = op_arc.read().unwrap().get_addr();
+        let zero_const = fd.new_constant(ptr_size, 0);
+        let newop = fd.new_op(2, base_addr);
+        fd.op_set_opcode(&newop, OpCode::CPUI_PTRSUB);
+        fd.new_unique_out(ptr_size, &newop);
+        fd.op_set_input(&newop, ptr_vn.clone(), 0);
+        fd.op_set_input(&newop, zero_const, 1);
+        fd.op_insert_before(&newop, &op_ref);
+        // newop->setStopTypePropagation()
+        newop.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+        // data.opSetInput(op, newop->getOut(), 1)
+        let new_out = newop.0.read().unwrap().output.clone().unwrap();
+        fd.op_set_input(&op_ref, new_out, 1);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "struct_offset0" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD, OpCode::CPUI_STORE] }
+}
+
+// ---------------------------------------------------------------------------
+// Numeric helpers used by AddTreeState (faithful to Ghidra's inline helpers).
+// ---------------------------------------------------------------------------
+
+/// Faithful to Ghidra's `sign_extend` (address.hh). Sign-extend the low
+/// `bits` of `value` to an i64.
+fn sign_extend_u64(value: u64, bits: usize) -> i64 {
+    crate::utils::bits::sign_extend(value, bits)
+}
+
+/// Signed remainder faithful to Ghidra's `intb % size`.
+fn signed_rem(a: i64, size: i64) -> i64 {
+    if size == 0 { a } else { a % size }
+}
+
+/// Signed division faithful to Ghidra's `intb / size`.
+fn signed_div(a: i64, size: i64) -> i64 {
+    if size == 0 { 0 } else { a / size }
+}
+
+/// Faithful to Ghidra's `uintb_negate` (ruleaction.cc / pcoderaw). Negates the
+/// low `size_bytes`-worth of bits of `val`.
+fn uintb_negate(val: u64, size_bytes: usize) -> u64 {
+    let mask = if size_bytes >= 8 { !0u64 } else { (1u64 << (size_bytes * 8)) - 1 };
+    !val & mask
+}
+
+/// Faithful to `AddrSpace::byteToAddressInt` (space.hh). Converts a byte count
+/// to address units: `val / word_size` (truncating).
+fn byte_to_address_int(val: i64, word_size: i64) -> i64 {
+    if word_size <= 1 { val } else { val / word_size }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -15557,5 +17012,494 @@ mod tests {
         let rule = RuleDivOpt::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // ========================================================================
+    // RuleLoadVarnode / RuleStoreVarnode tests
+    // (ruleaction.cc:4185-4361)
+    // ========================================================================
+
+    /// Helper: build a LOAD(spaceid_const, ptr) → out, where the address operand
+    /// (slot 1) is a plain constant. This is the form that should collapse to COPY.
+    fn make_load_const_ptr(
+        space_id_val: u64,
+        ptr_offset: u64,
+        out_size: usize,
+    ) -> (Arc<RwLock<PcodeOp>>, Funcdata) {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_constant(8, space_id_val);
+        let ptr = fd.vbank.create_constant(8, ptr_offset);
+        let out = fd.vbank.create_with_space(out_size, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        (Arc::new(RwLock::new(op)), fd)
+    }
+
+    /// RuleLoadVarnode: LOAD(stack_spaceid, const offset) → COPY of a named
+    /// stack varnode. The plain-constant-offset path (ruleaction.cc:4278-4281).
+    #[test]
+    fn test_rule_load_varnode_const_offset() {
+        // space-id 4 == SPACEID_STACK; pointer offset 0x40.
+        let (op_arc, mut fd) = make_load_const_ptr(
+            crate::space::SPACEID_STACK as u64,
+            0x40,
+            4,
+        );
+        let rule = RuleLoadVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // LOAD must now be COPY with a single input (the named varnode).
+        let op = op_arc.read().unwrap();
+        assert_eq!(op.opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.inrefs.len(), 1);
+    }
+
+    /// RuleLoadVarnode: with a non-constant (register) address operand and no
+    /// spacebase, check_spacebase cannot resolve → NO_CHANGE.
+    #[test]
+    fn test_rule_load_varnode_no_const_ptr() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleLoadVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RuleLoadVarnode: when slot 0 (space-id) is not a constant, getSpaceFromConst
+    /// fails → NO_CHANGE.
+    #[test]
+    fn test_rule_load_varnode_non_const_spaceid() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x0);
+        let ptr = fd.vbank.create_constant(8, 0x40);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleLoadVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    /// RuleLoadVarnode::correct_spacebase: a non-spacebase varnode returns None.
+    #[test]
+    fn test_rule_load_varnode_correct_spacebase_non_spacebase() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let r = RuleLoadVarnode::correct_spacebase(&vn, crate::space::AddressSpace::Stack);
+        assert!(r.is_none());
+    }
+
+    /// RuleStoreVarnode: STORE(stack_spaceid, const offset, value) → COPY with
+    /// the output marked STACK_STORE (ruleaction.cc:4339-4361).
+    #[test]
+    fn test_rule_store_varnode_const_offset() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
+        let ptr = fd.vbank.create_constant(8, 0x80);
+        let val = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
+        op.inrefs = vec![spaceid, ptr, val];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStoreVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // STORE → COPY with one input, output marked STACK_STORE.
+        let op = op_arc.read().unwrap();
+        assert_eq!(op.opcode, OpCode::CPUI_COPY);
+        assert_eq!(op.inrefs.len(), 1);
+        assert_ne!(op.output.as_ref().unwrap().read().unwrap().addlflags & crate::varnode::addl_flags::STACK_STORE, 0);
+    }
+
+    /// RuleStoreVarnode: non-constant address operand → NO_CHANGE.
+    #[test]
+    fn test_rule_store_varnode_no_const_ptr() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let val = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
+        op.inrefs = vec![spaceid, ptr, val];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStoreVarnode::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    // ========================================================================
+    // RulePtrArith / evaluatePointerExpression tests
+    // (ruleaction.cc:6552-6676)
+    // ========================================================================
+
+    /// Helper: make an int* (8-byte pointer to a 4-byte int).
+    fn make_int_ptr_type() -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        let int_dt = std::sync::Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        std::sync::Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: int_dt,
+            wordsize: 1,
+        }))
+    }
+
+    /// evaluatePointerExpression: an INT_ADD(ptr, const) with NO descendants
+    /// returns 0 (count==0 → no action). Faithful to ruleaction.cc:6619.
+    #[test]
+    fn test_evaluate_pointer_expression_no_descendants() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let ptr_type = make_int_ptr_type();
+        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let c = fd.vbank.create_constant(8, 4);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn, c];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 0);
+    }
+
+    /// evaluatePointerExpression: an INT_ADD(ptr, const) feeding an INT_ADD
+    /// (i.e. one ADD descendant whose other input is non-pointer) returns 1
+    /// (push needed) — the pointer is not yet at the root.
+    #[test]
+    fn test_evaluate_pointer_expression_push_needed() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let ptr_type = make_int_ptr_type();
+        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        // Mark as a function input so it is not "free" (data-flow fully linked).
+        ptr_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let c = fd.vbank.create_constant(8, 4);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn, c];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        // Descendant INT_ADD(out, non_ptr_const) → one ADD descendant.
+        let c2 = fd.vbank.create_constant(8, 8);
+        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let dec_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut d = dec_op.write().unwrap();
+            d.inrefs = vec![out.clone(), c2];
+            d.output = Some(out2);
+        }
+        out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
+        // Single ADD descendant with a non-pointer other input → res stays 1 (push).
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 1);
+    }
+
+    /// evaluatePointerExpression: when the other input is itself a pointer,
+    /// returns 2 (do not push; convert can proceed). Faithful to ruleaction.cc:6594.
+    #[test]
+    fn test_evaluate_pointer_expression_other_is_ptr() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let ptr_type = make_int_ptr_type();
+        let ptr_vn0 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn0.write().unwrap().update_type(ptr_type.clone());
+        ptr_vn0.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let ptr_vn1 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x18);
+        ptr_vn1.write().unwrap().update_type(ptr_type);
+        ptr_vn1.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn0, ptr_vn1];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        // One non-ADD descendant (a COPY) forces res=2 in the "any other op" branch.
+        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let dec_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        {
+            let mut d = dec_op.write().unwrap();
+            d.inrefs = vec![out.clone()];
+            d.output = Some(out2);
+        }
+        out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
+        assert_eq!(RulePtrArith::evaluate_pointer_expression(&op_arc, 0), 2);
+    }
+
+    /// verifyPreferredPointer: when the putative base pointer is NOT defined by
+    /// an INT_ADD (e.g. it's a plain register input), there is no earlier
+    /// candidate → returns true (preferred).
+    #[test]
+    fn test_verify_preferred_pointer_no_add_def() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let ptr_type = make_int_ptr_type();
+        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let c = fd.vbank.create_constant(8, 4);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn, c];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        assert!(RulePtrArith::verify_preferred_pointer(&op_arc, 0));
+    }
+
+    /// RulePtrArith::applyOp: no type recovery → NO_CHANGE (early out).
+    #[test]
+    fn test_rule_ptr_arith_no_type_recovery() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x10, 8,
+            crate::space::AddressSpace::Const, 4, 8,
+            8,
+        );
+        // type recovery NOT started.
+        let rule = RulePtrArith::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RulePtrArith::applyOp: with type recovery but no pointer-typed input →
+    /// NO_CHANGE.
+    #[test]
+    fn test_rule_ptr_arith_no_ptr_input() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x10, 8,
+            crate::space::AddressSpace::Const, 4, 8,
+            8,
+        );
+        fd.set_type_recovery_started();
+        let rule = RulePtrArith::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RulePtrArith: degenerate form (pointer to a 1-byte type) converts an
+    /// INT_ADD(ptr, x) into PTRADD(ptr, x, 1). Build an int8* with a single
+    /// non-ADD descendant so evaluatePointerExpression returns 2.
+    #[test]
+    fn test_rule_ptr_arith_degenerate() {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.set_type_recovery_started();
+        // base type: 1-byte int (align 1) → unit-sized → degenerate.
+        let byte_dt = std::sync::Arc::new(Datatype::Base(TypeBase::new(
+            "char".to_string(), 1, TypeMetatype::Int,
+        )));
+        let ptr_dt = std::sync::Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: byte_dt,
+            wordsize: 1,
+        }));
+        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_dt.clone());
+        // Mark as a function input so it is not "free".
+        ptr_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let idx = fd.vbank.create_constant(8, 3);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        out.write().unwrap().update_type(ptr_dt);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn, idx];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+        // Add a non-ADD descendant so evaluatePointerExpression → 2.
+        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let dec_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        {
+            let mut d = dec_op.write().unwrap();
+            d.inrefs = vec![out.clone()];
+            d.output = Some(out2);
+        }
+        out.write().unwrap().descend.push(Arc::downgrade(&dec_op));
+        let rule = RulePtrArith::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The base INT_ADD must have become PTRADD.
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_PTRADD);
+    }
+
+    // ========================================================================
+    // RulePushPtr tests (ruleaction.cc:6776-6913)
+    // ========================================================================
+
+    /// RulePushPtr::collect_duplicate_needs: a plain register varnode (not
+    /// written) terminates immediately and adds nothing.
+    #[test]
+    fn test_rule_push_ptr_collect_duplicate_needs_plain_vn() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let mut list: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        RulePushPtr::collect_duplicate_needs(&mut list, vn);
+        assert!(list.is_empty());
+    }
+
+    /// RulePushPtr::applyOp: no type recovery → NO_CHANGE.
+    #[test]
+    fn test_rule_push_ptr_no_type_recovery() {
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_ADD,
+            crate::space::AddressSpace::Register, 0x10, 8,
+            crate::space::AddressSpace::Const, 4, 8,
+            8,
+        );
+        let rule = RulePushPtr::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RulePushPtr::applyOp: with type recovery but evaluatePointerExpression
+    /// returning 2 (not 1) → NO_CHANGE (push only when == 1).
+    #[test]
+    fn test_rule_push_ptr_not_push_needed() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.set_type_recovery_started();
+        let ptr_type = make_int_ptr_type();
+        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let idx = fd.vbank.create_constant(8, 4);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
+        op.inrefs = vec![ptr_vn, idx];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        // No descendants → evaluatePointerExpression returns 0, not 1 → NO_CHANGE.
+        let rule = RulePushPtr::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    // ========================================================================
+    // RuleStructOffset0 tests (ruleaction.cc:6678-6774)
+    // ========================================================================
+
+    /// Helper: make a `struct { int a; int b; }` (size 8) type.
+    fn make_struct2_type() -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeField, TypeMetatype, TypeStruct,
+        };
+        let int_dt = std::sync::Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        std::sync::Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("struct2".to_string(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() },
+                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt },
+            ],
+        }))
+    }
+
+    /// RuleStructOffset0: no type recovery → NO_CHANGE.
+    #[test]
+    fn test_rule_struct_offset0_no_type_recovery() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStructOffset0::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RuleStructOffset0: pointer to a struct, LOAD of one int (smaller than
+    /// the struct) → inserts a PTRSUB(ptr, 0) and rewrites the LOAD's pointer
+    /// input. Faithful to ruleaction.cc:6745-6772.
+    #[test]
+    fn test_rule_struct_offset0_struct_load() {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.set_type_recovery_started();
+        let struct_dt = make_struct2_type();
+        let ptr_dt = std::sync::Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("struct2 *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: struct_dt,
+            wordsize: 1,
+        }));
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr.write().unwrap().update_type(ptr_dt);
+        // LOAD out is a single int (4 bytes) — smaller than the 8-byte struct.
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+        let rule = RuleStructOffset0::new();
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        // The LOAD's slot-1 input must now be the output of a PTRSUB.
+        let new_ptr = op_arc.read().unwrap().inrefs[1].clone();
+        let def = new_ptr.read().unwrap().get_def();
+        let def_op = def.expect("new pointer should be defined by PTRSUB");
+        assert_eq!(def_op.read().unwrap().opcode, OpCode::CPUI_PTRSUB);
+    }
+
+    /// RuleStructOffset0: pointer to an int (base type, not struct/array) →
+    /// NO_CHANGE (ruleaction.cc:6765-6766).
+    #[test]
+    fn test_rule_struct_offset0_base_type_no_change() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.set_type_recovery_started();
+        let ptr_dt = make_int_ptr_type(); // pointer to a base int
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr.write().unwrap().update_type(ptr_dt);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStructOffset0::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RuleStructOffset0: non-pointer typed ptr varnode → NO_CHANGE.
+    #[test]
+    fn test_rule_struct_offset0_no_ptr_type() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        fd.set_type_recovery_started();
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        // ptr has no type → not a pointer.
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
+        op.inrefs = vec![spaceid, ptr];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+        let rule = RuleStructOffset0::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
     }
 }

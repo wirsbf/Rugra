@@ -893,3 +893,11 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 ### 2026-07-01（续 5）：determine_datatype partial path + RulePtrsubCharConstant full transform
 - determine_datatype（ruleaction.cc:7481-7510）：partial 路径用 get_structured_type + get_symbol_entry + SymbolEntry::get_addr/get_offset + get_sub_type walk 实现。不再对 partial 返回 None。
 - RulePtrsubCharConstant（ruleaction.cc:7372-7421）：完整 transform。用 Funcdata::string_table 做 read-only+string 检查（symaddr=vn1 offset，spacebase base=0）。PTRSUB→COPY of constant pointer + update_type。删除 resolveConstant/isReadOnly TODO（退化 via string_table）。
+
+### 2026-07-01（续 6）：oppool2 完整移植（5 条 Rule，0%→100%）
+- RuleLoadVarnode（ruleaction.cc:4285）+ correct_spacebase/vn_spacebase/check_spacebase helper — LOAD→COPY 栈变量化。
+- RuleStoreVarnode（4339）— STORE→COPY 栈变量化。
+- RulePtrArith（6629）+ AddTreeState 状态机 + verify_preferred_pointer/evaluate_pointer_expression — INT_ADD/MULT→PTRADD/PTRSUB。
+- RulePushPtr（6852）+ build_varnode_out/collect_duplicate_needs/duplicate_need — 指针 push 到使用点。
+- RuleStructOffset0（6678）— struct offset 0 下钻 PTRSUB。
+20 新测试。
