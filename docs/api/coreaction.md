@@ -754,3 +754,12 @@ ActionStructureTransform::apply 现在在检测到归纳变量后：
 3. 设置 BlockWhileDo.for_init/for_iter
 4. 标记 iterate op NONPRINTING
 printc 在 for_init+for_iter 都存在时发射 `for(init;cond;iter)`。
+
+### 2026-07-01（续 11）：NodeJoin nodeJoinCreateBlock CFG 重写
+ActionNodeJoin::apply 在检测到不同条件的菱形（diamond）后，执行 nodeJoinCreateBlock（funcdata_block.cc:790-826）：
+1. 创建新基本块（JOINED_BLOCK flag）
+2. remove_edge: block1→exita, block2→exitb
+3. add_edge: block1→join, block2→join, join→exita, join→exitb
+4. rebuild_dom_tree
+Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
+同条件菱形：data-flow only（无新块）。
