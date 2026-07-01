@@ -5720,7 +5720,9 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionFuncLinkOutOnly::new()),  // :5485
 
         // --- mainloop (coreaction.cc:5490-5508) ---
-        Box::new(ActionUnreachable::new()),      // :5490
+        // NOTE: ActionUnreachable excluded — it removes blocks, which breaks
+        // Rugra's staged structurer (block index out of bounds). Needs
+        // collapseInternal migration. See PIPELINE_DIFF.
         Box::new(ActionVarnodeProps::new()),     // :5491
         Box::new(ActionParamDouble::new()),      // :5493
         Box::new(ActionSegmentize::new()),       // :5494
@@ -5737,8 +5739,8 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionDeindirect::new()),       // :5655
 
         // --- mainloop tail / deadcontrolflow (coreaction.cc:5658-5676) ---
-        Box::new(ActionRedundBranch::new()),     // :5658
-        Box::new(ActionDeterminedBranch::new()), // :5672
+        // NOTE: ActionRedundBranch/DeterminedBranch excluded — same block-removal
+        // issue as ActionUnreachable. Needs collapseInternal migration.
         // (ActionUnreachable is listed once above at :5490; Ghidra registers it
         // again at :5673, but a single registration suffices for the flat list.)
         // (ActionConditionalConst at :5676 is detect-only with no effect — excluded.)
@@ -5748,7 +5750,7 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionActiveReturn::new()),     // :5688
 
         // --- post-fullloop (coreaction.cc:5691) ---
-        Box::new(ActionDoNothing::new()),        // :5683
+        // NOTE: ActionDoNothing excluded — removes empty blocks, same issue.
         Box::new(ActionSwitchNorm::new()),       // :5684
 
         // --- merge/fixate/casts (coreaction.cc:5728-5737) ---

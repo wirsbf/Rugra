@@ -711,3 +711,6 @@ ActionInferTypes::apply 移植 coreaction.cc:5374-5416：
 - propagate_across_returns（coreaction.cc:5342）。
 - write_back（coreaction.cc:5043）：update_type 回写。
 build_full_pipeline_actions()：返回 26 个已实现非 stub Action，按 Ghidra 顺序排列（含 ActionSetCasts，现可用）。
+
+### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
+action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。

@@ -721,6 +721,12 @@ impl ActionDatabase {
         // --- Top-level Actions (coreaction.cc:5477-5485) ---
         universal.add_action(Box::new(ActionStart::new()));
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
+        // Wire in additional implemented Actions from coreaction (Ghidra
+        // coreaction.cc:5479-5485: NormalizeSetup/DefaultParams/PrototypeTypes/
+        // FuncLinkOutOnly).
+        for extra in crate::coreaction::build_full_pipeline_actions() {
+            universal.add_action(extra);
+        }
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
         // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).

@@ -645,3 +645,5 @@ lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（
 - ActionRestartGroup apply 返回值修复：只在 res<0（断点）时早返回。
 - stackstall 启用 RULE_REPEATAPPLY（唯一子节点 simplify pool 可收敛）。
 - mainloop/fullloop 暂不启用（非幂等子 Action 导致死循环）。
+
+### 2026-07-01（续 2）：接入 22 个 pipeline Action
