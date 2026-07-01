@@ -5,7 +5,7 @@
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::printlanguage::PrintLanguage;
-use crate::type_system::Datatype;
+use crate::type_system::{Datatype, TypeMetatype};
 // use crate::varnode::Varnode;
 // use std::sync::{Arc, RwLock};
 use std::sync::Arc;
@@ -78,6 +78,46 @@ pub trait TypeOp {
 
     /// Get the minimal (or suggested) data-type of an input to this op-code
     fn get_input_local(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+        None
+    }
+
+    /// Find the data-type of the output that would be assigned by a compiler.
+    ///
+    /// Corresponds to Ghidra's `TypeOp::getOutputToken(op, castStrategy)`.
+    /// The default returns `None`, meaning the output uses its local type
+    /// (`outputTypeLocal`) with no token-level override.
+    fn get_output_token(&self, _op: &PcodeOp) -> Option<Arc<Datatype>> {
+        None
+    }
+
+    /// Find the data-type of the input to a specific PcodeOp (for casting).
+    ///
+    /// Corresponds to Ghidra's `TypeOp::getInputCast(op, slot, castStrategy)`.
+    /// A `None` result indicates the input does not need a cast (the default).
+    fn get_input_cast(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+        None
+    }
+
+    /// Propagate an incoming data-type across a specific PcodeOp.
+    ///
+    /// Corresponds to Ghidra's `TypeOp::propagateType(alttype, op, invn, outvn,
+    /// inslot, outslot)`. `alt_type` is the incoming type; `inslot`/`outslot`
+    /// are -1 for the output varnode and >=0 for an input slot. Returns the
+    /// outgoing data-type or `None` to indicate no propagation (the default).
+    fn propagate_type(
+        &self,
+        _alt_type: &Arc<Datatype>,
+        _op: &PcodeOp,
+        _inslot: i32,
+        _outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        None
+    }
+
+    /// Helper: the metatype assigned to an op's output for printing/token
+    /// purposes. Mirrors Ghidra's per-opcode `metaout` metatype. Default
+    /// `None` lets the caller fall back to the output varnode's own type.
+    fn get_output_metatype(&self) -> Option<TypeMetatype> {
         None
     }
 }
@@ -354,6 +394,45 @@ impl TypeOp for TypeOpCopy {
         op.get_out()
             .and_then(|vn| vn.read().unwrap().v_type.clone())
     }
+
+    /// The output token of a COPY is just the high type of its input.
+    /// Faithful to `TypeOpCopy::getOutputToken` (typeop.cc:405-409).
+    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        op.get_in(0)
+            .and_then(|vn| vn.read().unwrap().v_type.clone())
+    }
+
+    /// COPY is transparent: a type propagates across it in either direction
+    /// (input<->output). One of the slots must be the output (-1). Spacebase
+    /// inputs are rewrapped as a pointer to an unknown base type.
+    /// Faithful to `TypeOpCopy::propagateType` (typeop.cc:411-423).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        if inslot != -1 && outslot != -1 {
+            return None; // Must propagate input <-> output
+        }
+        // If the source varnode is a spacebase, rewrap as ptr-to-unknown.
+        let src_slot = if inslot == -1 { outslot } else { inslot };
+        if src_slot >= 0 {
+            if let Some(vn) = op.get_in(src_slot as usize) {
+                if vn.read().unwrap().is_spacebase() {
+                    return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
+                        crate::type_system::TypeBase::new(
+                            "unknown".to_string(),
+                            1,
+                            TypeMetatype::Unknown,
+                        ),
+                    ))));
+                }
+            }
+        }
+        Some(alt_type.clone())
+    }
 }
 
 /// CPUI_LOAD implementation
@@ -400,6 +479,57 @@ impl TypeOp for TypeOpLoad {
             }
             None
         })
+    }
+
+    /// The output token dereferences the pointer input: if in[1] is a pointer
+    /// whose pointee matches the output size, the token is the pointee;
+    /// otherwise fall back to the output varnode's high type.
+    /// Faithful to `TypeOpLoad::getOutputToken` (typeop.cc:472-485).
+    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        let out_size = op.get_out().map(|v| v.read().unwrap().get_size());
+        if let Some(vn) = op.get_in(1) {
+            let vn_read = vn.read().unwrap();
+            if let Some(Datatype::Pointer(ptr)) = vn_read.v_type.as_ref().map(|d| d.as_ref()) {
+                if Some(ptr.ptr_to.get_size()) == out_size {
+                    return Some(ptr.ptr_to.clone());
+                }
+            }
+        }
+        op.get_out()
+            .and_then(|vn| vn.read().unwrap().v_type.clone())
+    }
+
+    /// For LOAD, a type propagates between the value (output/slot 2) and the
+    /// pointer (input 1), never along the space constant (slot 0). Output-to-
+    /// input rewraps the type as a pointer (propagateToPointer); input-to-
+    /// output unwraps it (propagateFromPointer).
+    /// Faithful to `TypeOpLoad::propagateType` (typeop.cc:487-500).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        if inslot == 0 || outslot == 0 {
+            return None; // Don't propagate along the space-constant edge
+        }
+        // Spacebase pointers do not propagate.
+        let src_slot = if inslot == -1 { outslot } else { inslot };
+        if src_slot >= 0 {
+            if let Some(vn) = op.get_in(src_slot as usize) {
+                if vn.read().unwrap().is_spacebase() {
+                    return None;
+                }
+            }
+        }
+        if inslot == -1 {
+            // output -> input : wrap value type as a pointer (propagateToPointer)
+            Some(propagate_to_pointer(alt_type))
+        } else {
+            // input -> output : unwrap pointer to its pointee (propagateFromPointer)
+            propagate_from_pointer(alt_type)
+        }
     }
 }
 
@@ -451,16 +581,84 @@ impl TypeOp for TypeOpStore {
         }
         None
     }
+
+    /// For STORE, a type propagates between the value (slot 2) and the pointer
+    /// (slot 1), never along the space constant (slot 0). Value-to-pointer
+    /// rewraps (propagateToPointer); pointer-to-value unwraps
+    /// (propagateFromPointer). Note STORE has no output varnode, so outslot is
+    /// only ever an input slot.
+    /// Faithful to `TypeOpStore::propagateType` (typeop.cc:557-570).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        if inslot == 0 || outslot == 0 {
+            return None; // Don't propagate along the space-constant edge
+        }
+        // Spacebase pointers do not propagate.
+        let src_slot = if inslot == -1 { outslot } else { inslot };
+        if src_slot >= 0 {
+            if let Some(vn) = op.get_in(src_slot as usize) {
+                if vn.read().unwrap().is_spacebase() {
+                    return None;
+                }
+            }
+        }
+        if inslot == 2 {
+            // value -> pointer : wrap value type as a pointer (propagateToPointer)
+            Some(propagate_to_pointer(alt_type))
+        } else {
+            // pointer -> value : unwrap pointer to its pointee (propagateFromPointer)
+            propagate_from_pointer(alt_type)
+        }
+    }
+}
+
+/// Wrap a value data-type as a pointer to it (used by LOAD/STORE output->input
+/// propagation). Mirrors Ghidra's `TypeOp::propagateToPointer`
+/// (typeop.cc:186-198): a pointer-to-pointer is collapsed to a pointer to an
+/// unknown base of the right size to avoid creating ptr->ptr.
+fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
+    use crate::type_system::datatype::TypePointer;
+    let sz = alt_type.get_size();
+    let pointee = match alt_type.as_ref() {
+        // If already a pointer, point at an unknown base of the pointee's size
+        // so we never build ptr->ptr.
+        Datatype::Pointer(_) => Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
+            "unknown".to_string(),
+            alt_type.get_size(),
+            TypeMetatype::Unknown,
+        ))),
+        _ => alt_type.clone(),
+    };
+    Arc::new(Datatype::Pointer(TypePointer {
+        base: crate::type_system::TypeBase::new(
+            format!("{} *", pointee.get_name()),
+            sz,
+            TypeMetatype::Pointer,
+        ),
+        ptr_to: pointee,
+        wordsize: 1,
+    }))
+}
+
+/// Unwrap a pointer data-type to its pointee (used by LOAD/STORE input->output
+/// propagation). Mirrors Ghidra's `TypeOp::propagateFromPointer`
+/// (typeop.cc:206-228): returns the pointee if `alt_type` is a pointer,
+/// otherwise `None`.
+fn propagate_from_pointer(alt_type: &Arc<Datatype>) -> Option<Arc<Datatype>> {
+    match alt_type.as_ref() {
+        Datatype::Pointer(ptr) => Some(ptr.ptr_to.clone()),
+        _ => None,
+    }
 }
 
 // Arithmetic Operations
-binary_op!(
-    TypeOpIntAdd,
-    CPUI_INT_ADD,
-    "INT_ADD",
-    typeop_flags::ARITHMETIC_OP,
-    "+"
-);
+// NOTE: TypeOpIntAdd has a hand-written impl below (it needs a custom
+// get_output_token and propagate_type).
 binary_op!(
     TypeOpIntSub,
     CPUI_INT_SUB,
@@ -572,36 +770,9 @@ binary_op!(
 );
 
 // Comparison Operations
-binary_op!(TypeOpIntEqual, CPUI_INT_EQUAL, "INT_EQUAL", 0, "==");
-binary_op!(
-    TypeOpIntNotEqual,
-    CPUI_INT_NOTEQUAL,
-    "INT_NOTEQUAL",
-    0,
-    "!="
-);
-binary_op!(TypeOpIntLess, CPUI_INT_LESS, "INT_LESS", 0, "<");
-binary_op!(
-    TypeOpIntSless,
-    CPUI_INT_SLESS,
-    "INT_SLESS",
-    typeop_flags::INHERITS_SIGN,
-    "s<"
-);
-binary_op!(
-    TypeOpIntLessEqual,
-    CPUI_INT_LESSEQUAL,
-    "INT_LESSEQUAL",
-    0,
-    "<="
-);
-binary_op!(
-    TypeOpIntSlessEqual,
-    CPUI_INT_SLESSEQUAL,
-    "INT_SLESSEQUAL",
-    typeop_flags::INHERITS_SIGN,
-    "s<="
-);
+// NOTE: The six comparison ops (Equal, NotEqual, Less, LessEqual, Sless,
+// SlessEqual) have hand-written impls below: each has bool output metaout and
+// a propagate_type that flows across the two input operands.
 
 // Extension Operations
 functional_unary_op!(
@@ -1024,6 +1195,37 @@ impl TypeOp for TypeOpMulti {
         // Inputs should match the output type
         op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
     }
+
+    /// MULTIEQUAL is a transparent phi node: a type propagates across it in
+    /// either direction (input<->output). One slot must be the output (-1).
+    /// Spacebase inputs are rewrapped as a pointer to an unknown base type.
+    /// Faithful to `TypeOpMulti::propagateType` (typeop.cc:1951-1965).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        if inslot != -1 && outslot != -1 {
+            return None; // Must propagate input <-> output
+        }
+        let src_slot = if inslot == -1 { outslot } else { inslot };
+        if src_slot >= 0 {
+            if let Some(vn) = op.get_in(src_slot as usize) {
+                if vn.read().unwrap().is_spacebase() {
+                    return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
+                        crate::type_system::TypeBase::new(
+                            "unknown".to_string(),
+                            1,
+                            TypeMetatype::Unknown,
+                        ),
+                    ))));
+                }
+            }
+        }
+        Some(alt_type.clone())
+    }
 }
 
 pub struct TypeOpIndirect;
@@ -1061,6 +1263,41 @@ impl TypeOp for TypeOpIndirect {
         // Indirect usually inherits type from its first input
         op.get_in(0)
             .and_then(|vn| vn.read().unwrap().v_type.clone())
+    }
+
+    /// INDIRECT is transparent (like COPY/MULTIEQUAL) but never propagates
+    /// along slot 1 (the code-pointer input) and does not propagate for an
+    /// indirect creation. Otherwise a type flows input<->output, with a
+    /// spacebase rewrapped as a pointer to an unknown base type.
+    /// Faithful to `TypeOpIndirect::propagateType` (typeop.cc:2005-2020).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        if inslot == 1 || outslot == 1 {
+            return None; // Never propagate along the code-pointer edge
+        }
+        if inslot != -1 && outslot != -1 {
+            return None; // Must propagate input <-> output
+        }
+        let src_slot = if inslot == -1 { outslot } else { inslot };
+        if src_slot >= 0 {
+            if let Some(vn) = op.get_in(src_slot as usize) {
+                if vn.read().unwrap().is_spacebase() {
+                    return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
+                        crate::type_system::TypeBase::new(
+                            "unknown".to_string(),
+                            1,
+                            TypeMetatype::Unknown,
+                        ),
+                    ))));
+                }
+            }
+        }
+        Some(alt_type.clone())
     }
 }
 
@@ -1170,6 +1407,277 @@ impl TypeOp for TypeOpCallother {
 
 functional_binary_op!(TypeOpInsert, CPUI_INSERT, "INSERT", 0, "insert");
 functional_binary_op!(TypeOpExtract, CPUI_EXTRACT, "EXTRACT", 0, "extract");
+
+// ---------------------------------------------------------------------------
+// Hand-written impls for the comparison ops and INT_ADD.
+//
+// These were pulled out of the `binary_op!` macro because Ghidra's
+// `TypeOpBinary` gives them a non-default metaout (TYPE_BOOL for comparisons,
+// TYPE_INT for INT_ADD) and they override getInputCast/propagateType.
+// ---------------------------------------------------------------------------
+
+/// Shared body emitted by `compare_op_impl!` / `signed_compare_op_impl!`:
+/// matches the fields the `binary_op!` macro sets (opcode/name/flags/print/push
+/// + the transparent input<->output get_output_local/get_input_local).
+macro_rules! compare_op_common {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
+        fn get_opcode(&self) -> OpCode {
+            OpCode::$opcode
+        }
+        fn get_name(&self) -> &str {
+            $name
+        }
+        fn get_flags(&self) -> u32 {
+            $flags
+        }
+        fn print_raw(&self, op: &PcodeOp) -> String {
+            let out = op
+                .get_out()
+                .map(|v| format!("{}", v.read().unwrap()))
+                .unwrap_or_else(|| "_".to_string());
+            let in0 = op
+                .get_in(0)
+                .map(|v| format!("{}", v.read().unwrap()))
+                .unwrap_or_else(|| "_".to_string());
+            let in1 = op
+                .get_in(1)
+                .map(|v| format!("{}", v.read().unwrap()))
+                .unwrap_or_else(|| "_".to_string());
+            format!("{} = {} {} {}", out, in0, $symbol, in1)
+        }
+        fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+            lng.op_binary(op);
+        }
+        fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+            // Comparisons produce a bool of the output's size.
+            Some(Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
+                "bool".to_string(),
+                op.get_out().map(|v| v.read().unwrap().get_size()).unwrap_or(1),
+                TypeMetatype::Bool,
+            ))))
+        }
+        fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+            op.get_in(slot)
+                .and_then(|vn| vn.read().unwrap().v_type.clone())
+        }
+    };
+}
+
+/// Comparison ops whose output is a bool and whose propagateType flows the
+/// incoming type across the two inputs (input<->input only), matching Ghidra's
+/// `TypeOpEqual::propagateAcrossCompare` (typeop.cc:963-986). The result
+/// metatype is Bool.
+macro_rules! compare_op_impl {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
+        pub struct $struct_name;
+        impl TypeOp for $struct_name {
+            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
+
+            /// A comparison's output is boolean.
+            fn get_output_metatype(&self) -> Option<TypeMetatype> {
+                Some(TypeMetatype::Bool)
+            }
+
+            /// The two comparison operands should share a type. We return the
+            /// other operand's high type as the cast target for `slot` so the
+            /// caller can reconcile them (or None if there is nothing to cast).
+            /// Faithful in spirit to `TypeOpEqual::getInputCast`
+            /// (typeop.cc:932-943), which picks the more general of the two
+            /// input types.
+            fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+                let other = if slot == 0 { 1 } else { 0 };
+                op.get_in(other)
+                    .and_then(|vn| vn.read().unwrap().v_type.clone())
+            }
+
+            /// Comparisons propagate a type across their two input operands
+            /// (never to/from the output). Spacebase inputs are rewrapped as a
+            /// pointer to an unknown base type.
+            /// Faithful to `TypeOpEqual::propagateAcrossCompare`
+            /// (typeop.cc:963-986).
+            fn propagate_type(
+                &self,
+                alt_type: &Arc<Datatype>,
+                op: &PcodeOp,
+                inslot: i32,
+                outslot: i32,
+            ) -> Option<Arc<Datatype>> {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
+                }
+                let src_slot = inslot;
+                if src_slot >= 0 {
+                    if let Some(vn) = op.get_in(src_slot as usize) {
+                        if vn.read().unwrap().is_spacebase() {
+                            return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
+                                crate::type_system::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            ))));
+                        }
+                    }
+                }
+                Some(alt_type.clone())
+            }
+        }
+    };
+}
+
+/// Signed comparisons (INT_SLESS / INT_SLESSEQUAL) only propagate TYPE_INT
+/// across their inputs, matching Ghidra's `TypeOpIntSless::propagateType`
+/// (typeop.cc:1033-1039).
+macro_rules! signed_compare_op_impl {
+    ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
+        pub struct $struct_name;
+        impl TypeOp for $struct_name {
+            compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
+
+            /// A signed comparison's output is boolean.
+            fn get_output_metatype(&self) -> Option<TypeMetatype> {
+                Some(TypeMetatype::Bool)
+            }
+
+            /// Signed comparisons only propagate signed (TYPE_INT) types
+            /// across their inputs; nothing flows to/from the bool output.
+            /// Faithful to `TypeOpIntSless::propagateType`
+            /// (typeop.cc:1033-1039).
+            fn propagate_type(
+                &self,
+                alt_type: &Arc<Datatype>,
+                _op: &PcodeOp,
+                inslot: i32,
+                outslot: i32,
+            ) -> Option<Arc<Datatype>> {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
+                }
+                if alt_type.get_metatype() != TypeMetatype::Int {
+                    return None; // Only propagate signed things
+                }
+                Some(alt_type.clone())
+            }
+        }
+    };
+}
+
+compare_op_impl!(TypeOpIntEqual, CPUI_INT_EQUAL, "INT_EQUAL", 0, "==");
+compare_op_impl!(
+    TypeOpIntNotEqual,
+    CPUI_INT_NOTEQUAL,
+    "INT_NOTEQUAL",
+    0,
+    "!="
+);
+compare_op_impl!(TypeOpIntLess, CPUI_INT_LESS, "INT_LESS", 0, "<");
+compare_op_impl!(
+    TypeOpIntLessEqual,
+    CPUI_INT_LESSEQUAL,
+    "INT_LESSEQUAL",
+    0,
+    "<="
+);
+signed_compare_op_impl!(
+    TypeOpIntSless,
+    CPUI_INT_SLESS,
+    "INT_SLESS",
+    typeop_flags::INHERITS_SIGN,
+    "s<"
+);
+signed_compare_op_impl!(
+    TypeOpIntSlessEqual,
+    CPUI_INT_SLESSEQUAL,
+    "INT_SLESSEQUAL",
+    typeop_flags::INHERITS_SIGN,
+    "s<="
+);
+
+/// CPUI_INT_ADD with custom get_output_token and propagate_type.
+///
+/// `get_output_token` uses the arithmetic typing rule (the output's own high
+/// type). `propagate_type` lets a pointer flow input->output (and back) when
+/// the other addend is a constant, and otherwise flows int/uint types when
+/// adding a constant; it never flows pointer types output->input.
+/// Faithful to `TypeOpIntAdd` (typeop.cc:1167-1201).
+pub struct TypeOpIntAdd;
+impl TypeOp for TypeOpIntAdd {
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_INT_ADD
+    }
+    fn get_name(&self) -> &str {
+        "INT_ADD"
+    }
+    fn get_flags(&self) -> u32 {
+        typeop_flags::ARITHMETIC_OP
+    }
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = {} + {}", out, in0, in1)
+    }
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        lng.op_binary(op);
+    }
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        op.get_in(0)
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+        op.get_out()
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+
+    /// The output token of an ADD follows the arithmetic typing rule, i.e. the
+    /// output varnode's own resolved high type.
+    /// Faithful to `TypeOpIntAdd::getOutputToken` (typeop.cc:1175-1179), which
+    /// returns `castStrategy->arithmeticOutputStandard(op)`.
+    fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        op.get_out()
+            .and_then(|vn| vn.read().unwrap().v_type.clone())
+    }
+
+    /// Pointer arithmetic rule. A pointer propagates input->output when the
+    /// other input is a constant; ints/uints propagate when adding a constant
+    /// to slot 1. Pointers never propagate output->input. Anything else is
+    /// blocked.
+    /// Faithful to `TypeOpIntAdd::propagateType` (typeop.cc:1181-1201).
+    fn propagate_type(
+        &self,
+        alt_type: &Arc<Datatype>,
+        op: &PcodeOp,
+        inslot: i32,
+        outslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        let meta = alt_type.get_metatype();
+        if meta != TypeMetatype::Pointer {
+            // Only int/uint may flow, and only when adding a constant on slot 1.
+            if meta != TypeMetatype::Int && meta != TypeMetatype::Uint {
+                return None;
+            }
+            if outslot != 1 || op.get_in(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                return None;
+            }
+        } else if inslot != -1 && outslot != -1 {
+            return None; // Pointers only propagate input <-> output
+        }
+        // Don't propagate pointer types output -> input.
+        if inslot == -1 && meta == TypeMetatype::Pointer {
+            return None;
+        }
+        Some(alt_type.clone())
+    }
+}
 
 /// Manager for TypeOps
 ///
@@ -1308,5 +1816,149 @@ impl crate::op::PcodeOp {
             // Default to binary for all other ops
             _ => lng.op_binary(self),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::address::{Address, SeqNum};
+    use crate::type_system::TypeBase;
+    use crate::type_system::datatype::TypePointer;
+    use crate::varnode::Varnode;
+    use std::sync::{Arc, RwLock};
+
+    /// Build a typed varnode with the given data-type.
+    fn typed_vn(size: usize, offset: u64, dt: Option<Arc<Datatype>>) -> Arc<RwLock<Varnode>> {
+        let mut vn = Varnode::new(size, Address::new(offset));
+        vn.v_type = dt;
+        Arc::new(RwLock::new(vn))
+    }
+
+    fn pcodeop(opcode: OpCode) -> PcodeOp {
+        PcodeOp::new(SeqNum::new(Address::new(0), 0), opcode)
+    }
+
+    fn int_t() -> Arc<Datatype> {
+        Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)))
+    }
+
+    /// Compare two `Option<Arc<Datatype>>` by Arc identity (same allocation).
+    fn same_arc(got: Option<Arc<Datatype>>, want: &Arc<Datatype>) -> bool {
+        match got {
+            Some(g) => Arc::ptr_eq(&g, want),
+            None => false,
+        }
+    }
+
+    #[test]
+    fn copy_propagate_type_is_transparent() {
+        // COPY propagates input<->output (one slot is -1).
+        let op = pcodeop(OpCode::CPUI_COPY);
+        let t = int_t();
+        // input slot 0 -> output returns the same Arc.
+        assert!(same_arc(TypeOpCopy.propagate_type(&t, &op, 0, -1), &t));
+        // input<->input is blocked (both slots >= 0).
+        assert!(TypeOpCopy.propagate_type(&t, &op, 0, 1).is_none());
+    }
+
+    #[test]
+    fn copy_get_output_token_uses_input() {
+        let mut op = pcodeop(OpCode::CPUI_COPY);
+        let t = int_t();
+        op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        // The token is the input varnode's high type (Arc identity).
+        assert!(same_arc(TypeOpCopy.get_output_token(&op), &t));
+    }
+
+    #[test]
+    fn compare_propagate_only_across_inputs() {
+        // INT_EQUAL propagates a type across its two inputs, never to output.
+        let op = pcodeop(OpCode::CPUI_INT_EQUAL);
+        let t = int_t();
+        assert!(same_arc(
+            TypeOpIntEqual.propagate_type(&t, &op, 0, 1),
+            &t
+        ));
+        // To/from the output is blocked.
+        assert!(TypeOpIntEqual.propagate_type(&t, &op, -1, 0).is_none());
+    }
+
+    #[test]
+    fn signed_compare_only_propagates_int() {
+        let op = pcodeop(OpCode::CPUI_INT_SLESS);
+        // uint does NOT propagate through a signed compare.
+        let uint_t = Arc::new(Datatype::Base(TypeBase::new(
+            "uint".into(),
+            4,
+            TypeMetatype::Uint,
+        )));
+        assert!(TypeOpIntSless.propagate_type(&uint_t, &op, 0, 1).is_none());
+        // int does.
+        let t = int_t();
+        assert!(same_arc(
+            TypeOpIntSless.propagate_type(&t, &op, 0, 1),
+            &t
+        ));
+    }
+
+    #[test]
+    fn compare_output_metatype_is_bool_and_cast_uses_other_operand() {
+        let mut op = pcodeop(OpCode::CPUI_INT_LESS);
+        let t = int_t();
+        op.inrefs.push(typed_vn(4, 0x10, Some(t.clone())));
+        op.inrefs.push(typed_vn(4, 0x20, None));
+        assert_eq!(TypeOpIntLess.get_output_metatype(), Some(TypeMetatype::Bool));
+        // Casting slot 1 should target the other operand's type (in[0]).
+        assert!(same_arc(TypeOpIntLess.get_input_cast(&op, 1), &t));
+    }
+
+    #[test]
+    fn load_propagate_wraps_and_unwraps_pointer() {
+        // LOAD: output(value) -> input(pointer) wraps the value as a pointer.
+        let op = pcodeop(OpCode::CPUI_LOAD);
+        let t = int_t();
+        let wrapped = TypeOpLoad.propagate_type(&t, &op, -1, 1).expect("wraps");
+        assert_eq!(wrapped.get_metatype(), TypeMetatype::Pointer);
+        // input(pointer) -> output(value) unwraps to the pointee.
+        let ptr_t = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: t.clone(),
+            wordsize: 1,
+        }));
+        assert!(same_arc(TypeOpLoad.propagate_type(&ptr_t, &op, 1, -1), &t));
+        // The space-constant edge (slot 0) never propagates.
+        assert!(TypeOpLoad.propagate_type(&t, &op, 0, -1).is_none());
+    }
+
+    #[test]
+    fn int_add_propagates_pointer_with_constant() {
+        // INT_ADD lets a pointer flow input->output; here in[1] is a constant.
+        let mut op = pcodeop(OpCode::CPUI_INT_ADD);
+        op.inrefs.push(typed_vn(8, 0x10, None));
+        op.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(4, 8))));
+        let ptr_t = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t(),
+            wordsize: 1,
+        }));
+        // pointer input 0 -> output propagates.
+        assert!(same_arc(
+            TypeOpIntAdd.propagate_type(&ptr_t, &op, 0, -1),
+            &ptr_t
+        ));
+        // pointer output -> input is blocked.
+        assert!(TypeOpIntAdd.propagate_type(&ptr_t, &op, -1, 0).is_none());
+    }
+
+    #[test]
+    fn default_trait_methods_are_none() {
+        // Ops without overrides use the trait defaults.
+        let op = pcodeop(OpCode::CPUI_BRANCH);
+        assert!(TypeOpBranch.get_output_token(&op).is_none());
+        assert!(TypeOpBranch.get_input_cast(&op, 0).is_none());
+        assert!(TypeOpBranch.get_output_metatype().is_none());
+        let t = int_t();
+        assert!(TypeOpBranch.propagate_type(&t, &op, -1, 0).is_none());
     }
 }
