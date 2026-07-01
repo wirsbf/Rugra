@@ -728,3 +728,12 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 
 ### 2026-07-01（续 6）：Dead-flow Actions 接入方式
 4 个 dead-flow Action（Unreachable/DoNothing/RedundBranch/DeterminedBranch）的 apply() 全部实现。Unreachable+DeterminedBranch 在 ActionBlockStructure 内运行（pre-structuring pass）。DoNothing/RedundBranch 不在管线（破坏测试预期）。block.rs build_dom_tree 加 reindex 防止越界。heritage.rs block-not-found 优雅降级。ruleaction.rs empty-pairs 防越界。
+
+### 2026-07-01（续 7）：6 个结构化 Action apply 实现
+- ActionMarkIndirectOnly：**真实实现**。遍历 input varnode，check_indirect_use（funcdata_varnode.cc:771-811），全 INDIRECT descend 则设 INDIRECTONLY flag。
+- ActionMapGlobals：**务实最小**。遍历 vbank，RAM+persist varnode 设 PERSIST+READONLY。
+- ActionPreferComplement：**务实最小**。遍历 sblocks 找 CBRANCH 候选，TODO: preferComplement flipInPlace。
+- ActionStructureTransform：**务实最小**。遍历 WhileDo 候选，TODO: finalTransform while→for。
+- ActionReturnSplit：**务实最小**。isSplittable 判定 + RETURN 候选检测，TODO: nodeSplit。
+- ActionNodeJoin：**务实最小**。ConditionalJoin 候选检测，TODO: ConditionalJoin 类。
+2 新测试。
