@@ -666,3 +666,8 @@ cap 从 100→10→3。mainloop repeatapply 根因：ActionGroup.perform 在嵌�
 
 ### 2026-07-01（续 8）：256MB 线程栈 + mainloop repeatapply 深度根因
 curl_decompile 改用 256MB 线程栈（防嵌套 perform 递归溢出）。mainloop repeatapply 在 256MB 栈下仍溢出→根因不是栈大小，而是 **pipeline 非收敛**：repeatapply 导致 Rule 在每轮创建新 op，alivelist 无限增长，ActionPool apply 的 clone(alivelist) 消耗全部内存。这是 pipeline 正确性问题（某些 Rule/Action 每轮产生新 op 而非收敛到不动点），需要逐个验证哪个 Rule/Action 不收敛。暂不启用 mainloop repeatapply。
+
+### 2026-07-01（续 9）：迭代式 ActionGroup.apply（消除 perform 递归）
+ActionGroup::apply 改为：对有 repeatapply flag 的子 Action 调 perform（如 ActionPool），对没有的调 apply（如中间 ActionGroup）。这消除了 perform→apply→child.perform→child.apply 的递归链——只有叶子级 repeatapply Action（ActionPool）使用 perform，中间 ActionGroup 用 apply + 父级 perform 循环。
+
+mainloop repeatapply 仍不启用：即使迭代式 apply + 256MB 栈仍溢出。根因是 Rule apply_op 内部的深层 RwLock guard 链（Rule 接收 &Arc<RwLock<PcodeOp>>，apply_op 内部可能持有嵌套 read/write guard）。修复需重构 Rule apply_op 避免 nested lock，或用非递归 pipeline executor。

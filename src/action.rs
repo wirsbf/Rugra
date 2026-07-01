@@ -224,28 +224,33 @@ impl ActionGroup {
 }
 
 impl Action for ActionGroup {
-    /// Run all child Actions in sequence via their `perform()`. Faithful to
-    /// `ActionGroup::apply` (action.cc:506-528). Each child's perform drives
-    /// its own repeatapply/onceperfunc; the group itself is repeatapply'd by
-    /// its parent if `self.flags` includes RULE_REPEATAPPLY.
+    /// Run all child Actions' `apply()` in sequence. Faithful to
+    /// `ActionGroup::apply` (action.cc:506-528). NOTE: we call `apply()`
+    /// directly, NOT `perform()`. The repeatapply loop is driven by THIS
+    /// group's own `perform()` (the default trait impl), which re-runs this
+    /// `apply()` until no child reports changes. This avoids recursive
+    /// `perform → apply → child.perform → child.apply → ...` stack overflow.
+    /// Child Actions with their own repeatapply (e.g. ActionPool) still get
+    /// repeated via their own perform when called from a parent that delegates
+    /// via `apply_all` or calls `get_action_mut().perform()`.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut total = 0;
         for i in 0..self.actions.len() {
-            let res = {
-                let (action, state) = (&mut self.actions[i], &mut self.child_states[i]);
-                action.perform(fd, state)?
+            let child_flags = self.child_states[i].flags;
+            // If the child has its own repeatapply flag, call its perform()
+            // (which loops internally). Otherwise call apply() directly.
+            // This avoids deep perform→perform recursion: only leaf-level
+            // repeatapply Actions (ActionPool) use perform; intermediate
+            // ActionGroups use apply + the parent's perform loop.
+            let res = if child_flags & action_flags::RULE_REPEATAPPLY != 0 {
+                self.actions[i].perform(fd, &mut self.child_states[i])?
+            } else {
+                self.actions[i].apply(fd)?
             };
             if res > 0 {
                 total += res;
             }
-            // res < 0 (partial completion / breakpoint): Ghidra returns -1
-            // without advancing state. We do the same — set self.state for resume.
-            if res < 0 {
-                self.state = i; // Will retry this child on next perform call
-                return Ok(res);
-            }
         }
-        self.state = 0;
         Ok(total)
     }
 
@@ -764,6 +769,15 @@ impl ActionDatabase {
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
+        // NOTE: mainloop repeatapply causes stack overflow even with iterative
+        // ActionGroup.apply and 256MB stack. Root cause appears to be deep
+        // RwLock guard chains inside Rule apply_op (which receive &Arc and
+        // may hold nested read/write guards). The iterative ActionGroup fix
+        // (calling child.apply not child.perform) is retained as an improvement.
+        // Enabling mainloop repeatapply requires either:
+        //   1. Identifying the specific Rule/Action causing deep guard nesting
+        //   2. Refactoring Rule apply_op to avoid nested locks
+        //   3. Using a stack-based (non-recursive) pipeline executor
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
