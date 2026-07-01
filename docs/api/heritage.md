@@ -689,3 +689,11 @@ pass 计数只代表处理轮次，不等于质量保证。
 - `LoadGuard::is_guarded(space, offset)`（heritage.cc:819-826）— 范围检查 space+minimum/maximum。
 - `LoadGuard::get_minimum/get_maximum/get_op`（heritage.hh:164-165/161）。
 - `Heritage::get_store_guard(op)/get_load_guard(op)`（heritage.hh:337-338）— 线性扫描 guard Vec。
+
+### 2026-07-01（续）：LoadGuard/StoreGuard 填充逻辑
+guard_stores（heritage.cc:1539+927）：扫描 spacebase-marked stack STORE，创建 StoreGuard 记录，去重。
+guard_loads（heritage.cc:1571+910）：同理 LOAD，含 stale-record 清理。
+guard_calls/guard_returns：stub（需 FuncCallSpecs effect characterization）。
+guard_all：调用全部 4 个阶段。
+establish_range/finalize_range：stub（需 ValueSetRead 求解器）。
+LoadGuard::set/new_unanalyzed/Default/space_highest。3 新测试验证填充。

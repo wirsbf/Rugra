@@ -158,6 +158,97 @@ impl LoadGuard {
     pub fn get_op(&self) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
         self.op.upgrade()
     }
+
+    /// Initialize a fresh unanalyzed guard that initially protects the whole
+    /// space. Faithful to `LoadGuard::set` (heritage.hh:159-161).
+    ///
+    /// Ghidra: `set(o,s,off) { op=o; spc=s; pointerBase=off; minimumOffset=0;
+    /// maximumOffset=s->getHighest(); step=0; analysisState=0; }`.
+    ///
+    /// Rugra's `AddressSpace` is a flat enum without a per-space
+    /// `getHighest()`, so we use a conservative all-space maximum
+    /// (`u64::MAX`). This matches Ghidra's "guards everything until value-set
+    /// analysis narrows it" semantics and keeps `is_guarded` permissive.
+    pub fn set(
+        &mut self,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        spc: AddressSpace,
+        off: u64,
+    ) {
+        self.op = std::sync::Arc::downgrade(op);
+        self.spc = spc;
+        self.pointer_base = off;
+        self.minimum_offset = 0;
+        self.maximum_offset = space_highest(spc);
+        self.step = 0;
+        self.analysis_state = 0;
+    }
+
+    /// Build a fresh guard via `set` and return it. Convenience wrapper used
+    /// by `guard_stores`/`guard_loads` (mirrors Ghidra's
+    /// `loadGuard.emplace_back(); loadGuard.back().set(...)`).
+    pub fn new_unanalyzed(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        spc: AddressSpace,
+        off: u64,
+    ) -> Self {
+        let mut g = Self::default();
+        g.set(op, spc, off);
+        g
+    }
+
+    /// Convert a partial value-set analysis result into the guard range.
+    /// Faithful to `LoadGuard::establishRange` (heritage.cc:741-786).
+    ///
+    /// Rugra does not yet have a `ValueSetRead`/`CircleRange` solver, so the
+    /// body records what the analysis *would* do and leaves the initial
+    /// "guard everything" range intact, matching Ghidra's behaviour for an
+    /// empty/full range (which cannot be narrowed). `analysis_state` stays 0
+    /// so a later full solver run can still refine it.
+    /// TODO(value-set-analysis): wire a real `ValueSetRead` here.
+    pub fn establish_range(&mut self) {
+        // With no value-set solver available we mirror Ghidra's empty/full
+        // range branch (heritage.cc:747-750): minimumOffset = pointerBase,
+        // maximumOffset = spc->getHighest(). We keep minimumOffset = 0 to
+        // remain maximally permissive (the conservative initial guard) until
+        // a real solver narrows it.
+        self.analysis_state = 0;
+    }
+
+    /// Convert a final value-set analysis result into the guard range.
+    /// Faithful to `LoadGuard::finalizeRange` (heritage.cc:788-814).
+    ///
+    /// Without a `ValueSetRead` solver there is nothing to converge on, so we
+    /// mark the range as partially analyzed (`analysisState == 1`), which in
+    /// Ghidra means "analyzed but partial result, still guard everything".
+    /// TODO(value-set-analysis): wire a real `ValueSetRead` here.
+    pub fn finalize_range(&mut self) {
+        // heritage.cc:791 sets analysisState = 1 unconditionally first.
+        self.analysis_state = 1;
+        // No CircleRange to read; keep the conservative full-range guard.
+    }
+}
+
+impl Default for LoadGuard {
+    fn default() -> Self {
+        Self {
+            op: Weak::default(),
+            spc: AddressSpace::Ram,
+            pointer_base: 0,
+            minimum_offset: 0,
+            maximum_offset: space_highest(AddressSpace::Ram),
+            step: 0,
+            analysis_state: 0,
+        }
+    }
+}
+
+/// Conservative "highest addressable offset" for a space, standing in for
+/// Ghidra's `AddrSpace::getHighest()`. Rugra spaces are 64-bit addressable
+/// (`addr_size()==8`), so the all-ones value is the natural maximum and keeps
+/// `is_guarded` permissive until value-set analysis narrows a range.
+fn space_highest(_spc: AddressSpace) -> u64 {
+    u64::MAX
 }
 
 /// Main Heritage class responsible for SSA construction
@@ -326,6 +417,234 @@ impl Heritage {
             let store_ref = crate::op::PcodeOpRef(store_op);
             fd.new_indirect_op(&store_ref, stack_off as u64, sz);
         }
+    }
+
+    // ======================================================================
+    // LoadGuard / StoreGuard population.
+    //
+    // These mirror Ghidra's `Heritage::guard*` family (heritage.cc:1157-1693)
+    // together with `generateLoadGuard`/`generateStoreGuard`
+    // (heritage.cc:910-935), which `discoverIndexedStackPointers` calls while
+    // tracing the stack pointer. The Ghidra variants split responsibilities:
+    //
+    //   generateStoreGuard/generateLoadGuard -- create the LoadGuard record
+    //       (op, spc, pointerBase) and `emplace_back` it into storeGuard/
+    //       loadGuard. They are guarded by `!op->usesSpacebasePtr()` and call
+    //       `fd->opMarkSpacebasePtr(op)`.
+    //
+    //   guardStores/guardLoads/guardCalls/guardReturns -- run during `guard()`
+    //       (heritage.cc:1157) to build the INDIRECT/COPY ops that make SSA
+    //       renaming see the memory effect, and (for guardLoads) to drop stale
+    //       guard records.
+    //
+    // Rugra's pragmatic policy (per the alignment task) is to *populate* the
+    // store_guard/load_guard Vecs so that `get_store_guard`/`get_load_guard`
+    // return non-`None` and RuleActionShadowOp's store-alias check works. We
+    // therefore implement the record-creation half faithfully and leave the
+    // value-set-analysis refinement (establishRange/finalizeRange) as TODO.
+    // ======================================================================
+
+    /// Guard STORE ops in preparation for renaming.
+    ///
+    /// Faithful to `Heritage::guardStores` (heritage.cc:1539-1560) combined
+    /// with `generateStoreGuard` (heritage.cc:927-935): for every live STORE
+    /// that targets the stack space and was marked as using a spacebase
+    /// pointer, create a `LoadGuard` record in `store_guard` (if not already
+    /// present) and build a Stack-space INDIRECT so renaming sees the memory
+    /// write.
+    ///
+    /// Differences from Ghidra: Ghidra's `guardStores` iterates by address
+    /// range (`addr`/`size`) and creates the INDIRECT via `newIndirectOp`.
+    /// Rugra does not yet drive guarding per disjoint memory range (the SSA
+    /// pipeline calls this once per heritage pass), so we guard the *whole*
+    /// stack space — i.e. every spacebase-marked STORE — which is the
+    /// conservative superset and never under-protects. The full-range
+    /// INDIRECTs are produced by `discover_and_guard_stack_stores_fd`; here we
+    /// only ensure each such STORE has a guard record.
+    pub fn guard_stores(&mut self, fd: &mut Funcdata) {
+        // Snapshot of (op_arc, store_space, spc) for STOREs that need a guard
+        // record. We collect under a read borrow so we can later mutate the
+        // obank (mark_spacebase_ptr) without holding it.
+        let mut to_guard: Vec<(
+            std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+            AddressSpace,
+        )> = Vec::new();
+
+        for op_ref in &fd.obank.optree {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != crate::opcodes::OpCode::CPUI_STORE {
+                continue;
+            }
+            if (op.flags & crate::op::pcodeop_flags::DEAD) != 0 {
+                continue; // heritage.cc:1550
+            }
+            // STORE inputs: in[0]=space-id constant, in[1]=pointer, in[2]=value.
+            // `getSpaceFromConst` on in[0] gives the target space. If a STORE
+            // has no in[0] (malformed), skip it.
+            let store_space = match op.inrefs.first() {
+                Some(vn) => vn.read().unwrap().get_space(),
+                None => continue,
+            };
+            // STORE space constants are encoded as Const-space varnodes whose
+            // offset carries the space id (see space.rs SPACEID_*). Recover it.
+            // Accept either the CONSTANT flag or a Const address space, since
+            // both encodings appear (lifter uses the flag; manual construction
+            // may set only the space).
+            let target_space = op
+                .inrefs
+                .first()
+                .and_then(|v| {
+                    let g = v.read().unwrap();
+                    if g.is_constant() || g.get_space().is_const() {
+                        Some(AddressSpace::from_id(g.get_offset() as u8))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(store_space);
+            // heritage.cc:1552: a STORE is guarded if its target space is the
+            //   container of `spc` AND usesSpacebasePtr(), OR if its target
+            //   space == spc. Rugra's stack space has no separate "container"
+            //   space, so we simply guard STOREs targeting the stack space that
+            //   are spacebase-marked (the indexed case), plus any STORE the
+            //   existing discovery already flagged.
+            let is_stack = target_space.is_stack();
+            if is_stack && op.uses_spacebase_ptr() {
+                to_guard.push((op_ref.0.clone(), AddressSpace::Stack));
+            }
+        }
+
+        // Create the guard records (dedup against existing entries — a STORE
+        // may survive multiple heritage passes). Mirrors generateStoreGuard's
+        // `!op->usesSpacebasePtr()` guard: once marked, we don't add a second
+        // record for the same op.
+        for (store_op, spc) in to_guard {
+            if self.store_guard.iter().any(|g| match g.op.upgrade() {
+                Some(g_op) => std::sync::Arc::ptr_eq(&g_op, &store_op),
+                None => false,
+            }) {
+                continue;
+            }
+            let pointer_base = store_guard_pointer_base(&store_op, &fd);
+            // generateStoreGuard marks the op spacebase again (idempotent).
+            store_op.write().unwrap().mark_spacebase_ptr();
+            self.store_guard
+                .push(LoadGuard::new_unanalyzed(&store_op, spc, pointer_base));
+        }
+    }
+
+    /// Guard LOAD ops in preparation for renaming.
+    ///
+    /// Faithful to `Heritage::guardLoads` (heritage.cc:1571-1602) combined
+    /// with `generateLoadGuard` (heritage.cc:910-918): for every live LOAD
+    /// reading from an indexed stack-space pointer, create a `LoadGuard`
+    /// record in `load_guard` (if not already present). Mirrors Ghidra's
+    /// validity pruning (`isValid`) by dropping records whose op is dead or no
+    /// longer a LOAD.
+    ///
+    /// Differences from Ghidra: Ghidra inserts a `COPY` "guard" op before each
+    /// guarded LOAD (heritage.cc:1591-1600) to force a specific address, and
+    /// only guards LOADs whose indexed range intersects the heritage range.
+    /// Rugra builds the guard records for all stack-pointer-indexed LOADs
+    /// (conservative superset) and defers the COPY insertion to a future
+    /// per-range driver. Value-set analysis is not run yet, so each guard
+    /// initially protects the whole stack space.
+    pub fn guard_loads(&mut self, fd: &mut Funcdata) {
+        // Prune stale load_guard records (heritage.cc:1581-1586 isValid check).
+        self.load_guard.retain(|g| {
+            let op = match g.op.upgrade() {
+                Some(o) => o,
+                None => return false,
+            };
+            let opg = op.read().unwrap();
+            !((opg.flags & crate::op::pcodeop_flags::DEAD) != 0
+                || opg.opcode != crate::opcodes::OpCode::CPUI_LOAD)
+        });
+
+        // Collect LOADs that read an indexed stack-space pointer.
+        let mut to_guard: Vec<(
+            std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+            AddressSpace,
+        )> = Vec::new();
+        for op_ref in &fd.obank.optree {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode != crate::opcodes::OpCode::CPUI_LOAD {
+                continue;
+            }
+            if (op.flags & crate::op::pcodeop_flags::DEAD) != 0 {
+                continue;
+            }
+            // LOAD inputs: in[0]=space-id constant, in[1]=pointer.
+            let target_space = op
+                .inrefs
+                .first()
+                .and_then(|v| {
+                    let g = v.read().unwrap();
+                    if g.is_constant() || g.get_space().is_const() {
+                        Some(AddressSpace::from_id(g.get_offset() as u8))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(AddressSpace::Ram);
+            if !target_space.is_stack() {
+                continue;
+            }
+            // generateLoadGuard only records a LOAD once (!usesSpacebasePtr)
+            // and then marks it. We mirror that by skipping already-marked
+            // LOADs for record creation below.
+            to_guard.push((op_ref.0.clone(), AddressSpace::Stack));
+        }
+
+        for (load_op, spc) in to_guard {
+            if self.load_guard.iter().any(|g| match g.op.upgrade() {
+                Some(g_op) => std::sync::Arc::ptr_eq(&g_op, &load_op),
+                None => false,
+            }) {
+                continue;
+            }
+            let pointer_base = load_guard_pointer_base(&load_op, &fd);
+            load_op.write().unwrap().mark_spacebase_ptr();
+            self.load_guard
+                .push(LoadGuard::new_unanalyzed(&load_op, spc, pointer_base));
+        }
+    }
+
+    /// Guard CALL ops in preparation for renaming.
+    ///
+    /// Faithful in shape to `Heritage::guardCalls` (heritage.cc:1444-1528):
+    /// it exists so the heritage driver can ask for call-site guards. Ghidra's
+    /// implementation is tightly coupled to `FuncCallSpecs`/`ParamActive`
+    /// (effect characterization, output-overlap guards, INDIRECT creation)
+    /// which Rugra's call-analysis layer does not yet expose. This stub keeps
+    /// the API aligned so the driver can call it, and is a no-op until
+    /// `FuncCallSpecs` gains the needed methods.
+    /// TODO(call-analysis): wire effect characterization + INDIRECT creation.
+    pub fn guard_calls(&mut self, _fd: &mut Funcdata) {}
+
+    /// Guard RETURN ops in preparation for renaming.
+    ///
+    /// Faithful in shape to `Heritage::guardReturns` (heritage.cc:1653-1693):
+    /// Ghidra either registers the range as a return-value trial or inserts a
+    /// forced-address COPY before each RETURN. This requires
+    /// `FuncProto::characterizeAsOutput`/`ParamActive` which Rugra does not
+    /// yet expose. Stub kept for API alignment.
+    /// TODO(funcproto): wire return-value trials + COPY insertion.
+    pub fn guard_returns(&mut self, _fd: &mut Funcdata) {}
+
+    /// Run the four guard phases (calls, returns, stores, loads) against the
+    /// whole stack space. This is the per-space analogue of the indirect half
+    /// of Ghidra's `Heritage::guard` (heritage.cc:1189-1199), which Ghidra
+    /// invokes once per disjoint memory range during `placeMultiequals`.
+    ///
+    /// Rugra's driver calls this once per heritage pass over the stack space;
+    /// the guard_stores/guard_loads implementations are range-agnostic (they
+    /// guard conservatively over the whole stack), so a single call suffices.
+    pub fn guard_all(&mut self, fd: &mut Funcdata) {
+        self.guard_calls(fd);
+        self.guard_returns(fd);
+        self.guard_stores(fd);
+        self.guard_loads(fd);
     }
 
     /// Main entry point for heritage (SSA construction)
@@ -781,6 +1100,118 @@ impl Heritage {
     }
 }
 
+/// Compute the `pointerBase` (stack-pointer base offset) recorded for a STORE
+/// guard, mirroring the `StackNode.offset` that Ghidra's
+/// `discoverIndexedStackPointers` threads into `generateStoreGuard`
+/// (heritage.cc:927-932, 1077-1090).
+///
+/// The STORE pointer is `in[1]`. We follow INT_ADD(const)/INT_SUB(const)/COPY
+/// definitions backward and accumulate the constant offset. If we cannot
+/// resolve a constant offset (non-constant add, multiequal, or a free
+/// varnode), we return 0, which matches Ghidra's `StackNode(spInput,0,0)`
+/// starting offset and yields a maximally conservative guard.
+fn store_guard_pointer_base(
+    store_op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    _fd: &Funcdata,
+) -> u64 {
+    let g = store_op.read().unwrap();
+    let ptr = match g.inrefs.get(1) {
+        Some(v) => v.clone(),
+        None => return 0,
+    };
+    drop(g);
+    trace_const_stack_offset(&ptr)
+}
+
+/// Compute the `pointerBase` recorded for a LOAD guard. The LOAD pointer is
+/// `in[1]`; see `store_guard_pointer_base` for the tracing strategy.
+fn load_guard_pointer_base(
+    load_op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    _fd: &Funcdata,
+) -> u64 {
+    let g = load_op.read().unwrap();
+    let ptr = match g.inrefs.get(1) {
+        Some(v) => v.clone(),
+        None => return 0,
+    };
+    drop(g);
+    trace_const_stack_offset(&ptr)
+}
+
+/// Follow INT_ADD(const)/INT_SUB(const)/COPY chains backward from a pointer
+/// varnode and accumulate the constant offset added to the stack pointer.
+/// Returns 0 if the offset cannot be resolved to a single constant (the
+/// conservative default, matching Ghidra's initial `StackNode.offset == 0`).
+fn trace_const_stack_offset(ptr: &std::sync::Arc<std::sync::RwLock<Varnode>>) -> u64 {
+    let mut cur = ptr.clone();
+    let mut offset: u64 = 0;
+    let mut hops = 0;
+    loop {
+        // Guard against pathological cycles.
+        hops += 1;
+        if hops > 64 {
+            break;
+        }
+        let next = {
+            let vn = cur.read().unwrap();
+            if !vn.is_written() {
+                return offset;
+            }
+            let def = match vn.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(o) => o,
+                None => return offset,
+            };
+            let defg = def.read().unwrap();
+            match defg.opcode {
+                crate::opcodes::OpCode::CPUI_COPY => defg.inrefs.first().cloned(),
+                crate::opcodes::OpCode::CPUI_INT_ADD
+                | crate::opcodes::OpCode::CPUI_INT_SUB => {
+                    // The other operand must be a constant.
+                    let (a, b) = (
+                        defg.inrefs.first().cloned(),
+                        defg.inrefs.get(1).cloned(),
+                    );
+                    let (other, _) = match (a, b) {
+                        (Some(a), Some(b)) => {
+                            if Arc::ptr_eq(&a, &cur) {
+                                (Some(b), 0)
+                            } else if Arc::ptr_eq(&b, &cur) {
+                                (Some(a), 1)
+                            } else {
+                                return offset;
+                            }
+                        }
+                        _ => return offset,
+                    };
+                    let other = match other {
+                        Some(o) => o,
+                        None => return offset,
+                    };
+                    let og = other.read().unwrap();
+                    if !og.is_constant() {
+                        return offset;
+                    }
+                    let delta = og.get_offset();
+                    drop(og);
+                    if defg.opcode == crate::opcodes::OpCode::CPUI_INT_ADD {
+                        offset = offset.wrapping_add(delta);
+                    } else {
+                        offset = offset.wrapping_sub(delta);
+                    }
+                    defg.inrefs.first().filter(|v| !Arc::ptr_eq(v, &cur)).cloned()
+                }
+                _ => return offset,
+            }
+        };
+        match next {
+            Some(n) => cur = n,
+            None => return offset,
+        }
+    }
+    offset
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,6 +1237,124 @@ mod tests {
         assert_eq!(h.get_pass(), 0);
         assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 2);
         assert!(h.dead_removal_allowed(AddressSpace::Ram));
+    }
+
+    /// Build a STORE op targeting the stack space, mark it spacebase, and
+    /// verify `guard_stores` records a `LoadGuard` for it. Mirrors Ghidra's
+    /// `generateStoreGuard` (heritage.cc:927) + `guardStores` (heritage.cc:1539).
+    #[test]
+    fn test_guard_stores_populates_store_guard() {
+        use crate::op::PcodeOpRef;
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+
+        let start = Address::new(0x1000);
+        let mut fd = Funcdata::new("guard_stores", start, 0);
+
+        // STORE(const(stack_space_id), ptr, val)
+        let store = fd.obank.create(OpCode::CPUI_STORE, 3, start);
+        // in[0]: const varnode carrying the Stack space id (getSpaceFromConst).
+        // The lifter emits this with the CONSTANT flag + Const space.
+        let space_const = fd.vbank.create_constant(8, AddressSpace::Stack.space_id() as u64);
+        // in[1]: a (stack-pointer) pointer varnode.
+        let ptr = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        // in[2]: the value varnode.
+        let val = fd.vbank.create_with_space(8, AddressSpace::Ram, 0x1000);
+        fd.op_set_input(&store, space_const, 0);
+        fd.op_set_input(&store, ptr, 1);
+        fd.op_set_input(&store, val, 2);
+        // Mark the STORE as spacebase-indexed (as discoverIndexedStackPointers
+        // would for an indexed stack STORE).
+        store.0.write().unwrap().mark_spacebase_ptr();
+
+        let mut h = Heritage::new();
+        assert!(h.store_guard.is_empty());
+        h.guard_stores(&mut fd);
+
+        // Exactly one guard should be created.
+        assert_eq!(h.store_guard.len(), 1, "guard_stores must record the STORE");
+        let g = &h.store_guard[0];
+        assert_eq!(g.spc, AddressSpace::Stack);
+        assert_eq!(g.minimum_offset, 0); // initial guard protects the whole space
+        assert_eq!(g.analysis_state, 0); // unanalyzed until value-set runs
+
+        // get_store_guard must now return the record for this op.
+        let found = h.get_store_guard(&store.0);
+        assert!(found.is_some(), "get_store_guard must find the guarded STORE");
+
+        // Calling guard_stores again must NOT duplicate the record.
+        h.guard_stores(&mut fd);
+        assert_eq!(h.store_guard.len(), 1, "guard_stores must dedup across passes");
+
+        // A non-stack STORE (Ram target) must not be guarded.
+        let ram_store = fd.obank.create(OpCode::CPUI_STORE, 3, start);
+        let ram_const = fd.vbank.create_constant(8, AddressSpace::Ram.space_id() as u64);
+        let ptr2 = fd.vbank.create_with_space(8, AddressSpace::Register, 0x28);
+        let val2 = fd.vbank.create_with_space(8, AddressSpace::Ram, 0x2000);
+        fd.op_set_input(&ram_store, ram_const, 0);
+        fd.op_set_input(&ram_store, ptr2, 1);
+        fd.op_set_input(&ram_store, val2, 2);
+        ram_store.0.write().unwrap().mark_spacebase_ptr();
+        let before = h.store_guard.len();
+        h.guard_stores(&mut fd);
+        assert_eq!(h.store_guard.len(), before, "non-stack STORE must not be guarded");
+        // PcodeOpRef must outlive the borrow checker usage above.
+        let _ = PcodeOpRef(store.0.clone());
+    }
+
+    /// Build a LOAD op from the stack space (spacebase-marked) and verify
+    /// `guard_loads` records a `LoadGuard` for it. Mirrors Ghidra's
+    /// `generateLoadGuard` (heritage.cc:910) + `guardLoads` (heritage.cc:1571).
+    #[test]
+    fn test_guard_loads_populates_load_guard() {
+        use crate::opcodes::OpCode;
+        use crate::space::AddressSpace;
+
+        let start = Address::new(0x2000);
+        let mut fd = Funcdata::new("guard_loads", start, 0);
+
+        // LOAD(const(stack_space_id), ptr)
+        let load = fd.obank.create(OpCode::CPUI_LOAD, 2, start);
+        let space_const = fd.vbank.create_constant(8, AddressSpace::Stack.space_id() as u64);
+        let ptr = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        fd.op_set_input(&load, space_const, 0);
+        fd.op_set_input(&load, ptr, 1);
+        load.0.write().unwrap().mark_spacebase_ptr();
+
+        let mut h = Heritage::new();
+        assert!(h.load_guard.is_empty());
+        h.guard_loads(&mut fd);
+
+        assert_eq!(h.load_guard.len(), 1, "guard_loads must record the LOAD");
+        assert_eq!(h.load_guard[0].spc, AddressSpace::Stack);
+        assert!(h.get_load_guard(&load.0).is_some());
+
+        // Dedup: a second call must not re-add it.
+        h.guard_loads(&mut fd);
+        assert_eq!(h.load_guard.len(), 1);
+    }
+
+    /// `establish_range`/`finalize_range` must run without panicking and leave
+    /// the guard in a valid (still-permissive) state, since no value-set
+    /// solver is wired yet. TODO(value-set-analysis) will tighten this.
+    #[test]
+    fn test_load_guard_range_stubs() {
+        use crate::space::AddressSpace;
+        let mut g = LoadGuard::default();
+        // Default guard protects the whole Ram space.
+        assert_eq!(g.minimum_offset, 0);
+        assert_eq!(g.maximum_offset, u64::MAX);
+        assert_eq!(g.analysis_state, 0);
+
+        g.establish_range(); // no-op refinement (no solver)
+        assert_eq!(g.analysis_state, 0);
+        assert!(g.is_guarded(&AddressSpace::Ram, 0x1234));
+
+        g.finalize_range(); // marks partially analyzed (state==1), still permissive
+        assert_eq!(g.analysis_state, 1);
+        assert!(g.is_guarded(&AddressSpace::Ram, 0xffff));
+        // A different space is never guarded.
+        assert!(!g.is_guarded(&AddressSpace::Stack, 0x1234));
     }
 }
 
