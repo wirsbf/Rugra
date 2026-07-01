@@ -929,3 +929,6 @@ PtrsubCharConstant：stringManager.is_string 精确守卫（ruleaction.cc:7393�
 
 ### 2026-07-01（续 12）：empty pairs guard
 RulePushMulti find_substitute 对空 pairs 防越界。
+
+### 2026-07-01（续 13）：RulePtrFlow has_truncations=false 是正确行为（非缺陷）
+Ghidra 的 `hasTruncations` 检查 `glb->getDefaultDataSpace()->isTruncated()`。`isTruncated` 是地址空间属性（space.hh:94），仅在 16-bit x86 等有段截断的架构上为 true。x86-64 没有截断空间，所以 `has_truncations=false` 对 x86-64 是**正确**的——RulePtrFlow 应该在该架构上不触发。**非缺陷，无需修复**。
