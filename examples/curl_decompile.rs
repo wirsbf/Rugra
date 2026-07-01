@@ -21,7 +21,22 @@ struct FuncInfo {
     name: String,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    // Run in a thread with a large stack to avoid stack overflow from
+    // deeply nested ActionGroup.perform recursion in the repeatapply pipeline.
+    let child = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024) // 256MB
+        .spawn(|| {
+            if let Err(e) = run_main() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        })
+        .expect("Failed to spawn stack thread");
+    child.join().expect("Worker thread panicked");
+}
+
+fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Rugra End-to-End Decompilation: curl (all functions) ===\n");
 
     let buffer = match fs::read("examples/curl") {

@@ -663,3 +663,6 @@ perform 加 100 次迭代安全阀（防止非幂等 Action 死循环）。mainl
 
 ### 2026-07-01（续 7）：perform cap=3 + mainloop repeatapply 根因分析
 cap 从 100→10→3。mainloop repeatapply 根因：ActionGroup.perform 在嵌套树中递归调用子 Action perform（5 层 × repeatapply 迭代），每个 RwLock guard ~2KB 栈，3³=27 层嵌套 perform 超过 Windows 8MB 栈。修复需重写 ActionGroup.perform 为迭代（非递归）或增大栈。cap=3 保留作为 ActionPool 叶子级安全阀。
+
+### 2026-07-01（续 8）：256MB 线程栈 + mainloop repeatapply 深度根因
+curl_decompile 改用 256MB 线程栈（防嵌套 perform 递归溢出）。mainloop repeatapply 在 256MB 栈下仍溢出→根因不是栈大小，而是 **pipeline 非收敛**：repeatapply 导致 Rule 在每轮创建新 op，alivelist 无限增长，ActionPool apply 的 clone(alivelist) 消耗全部内存。这是 pipeline 正确性问题（某些 Rule/Action 每轮产生新 op 而非收敛到不动点），需要逐个验证哪个 Rule/Action 不收敛。暂不启用 mainloop repeatapply。

@@ -764,13 +764,6 @@ impl ActionDatabase {
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
-        // NOTE: mainloop repeatapply causes stack overflow on complex functions.
-        // Root cause: deeply nested ActionGroup.perform recursion (5 levels ×
-        // repeatapply iterations). Each RwLock guard uses ~2KB stack; at 3³=27
-        // nested perform calls this overflows Windows 8MB stack. Fixing requires
-        // rewriting ActionGroup.perform to iterate (not recurse) or increasing
-        // stack size. Tracked as TODO. The perform loop cap (3 iterations) is
-        // retained as a safety valve for ActionPool (leaf-level repeatapply).
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
