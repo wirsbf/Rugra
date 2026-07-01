@@ -84,7 +84,16 @@ pub trait Action {
         // count from prior iterations and breaking repeatapply convergence.
         state.count = 0;
         state.count_tests += 1;
+        let mut iterations = 0u32;
         loop {
+            iterations += 1;
+            if iterations > 100 {
+                // Safety valve: some Rugra self-made Actions are not fully
+                // idempotent and would loop forever. Ghidra's Actions converge
+                // in 2-3 passes; 100 is a generous cap.
+                eprintln!("[WARN] perform loop cap hit for {}", self.get_name());
+                break;
+            }
             // Snapshot count before apply (action.cc:314 lcount = count).
             state.lcount = state.count;
             let res = self.apply(fd)?;
@@ -752,13 +761,12 @@ impl ActionDatabase {
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
-        // NOTE: mainloop kept without RULE_REPEATAPPLY. Rugra's self-made
-        // Actions (Simplify/CopyPropagate/BlockStructure) are idempotent on
-        // their own but the build_full_pipeline_actions extras (22 Actions
-        // including ActionDirectWrite/ActiveParam/etc.) report changes every
-        // pass in the repeatapply loop, causing infinite loops. To enable,
-        // each of those 22 Actions must be verified idempotent (return 0 on
-        // second pass). Tracked as TODO.
+        // NOTE: mainloop repeatapply tested but causes stack overflow on
+        // complex functions — the simplifypool hits the 100-iteration cap,
+        // then mainloop's repeatapply re-runs everything. Enabling requires
+        // all 22 build_full_pipeline_actions to be truly idempotent (return
+        // 0 on second pass without side effects). The perform loop cap
+        // (100 iterations) is retained as a safety valve. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

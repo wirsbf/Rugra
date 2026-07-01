@@ -657,3 +657,6 @@ RulePtrFlow(oppool1:5624) + RuleOrPredicate(oppool1:5631) + RuleDumptyHumpLate(c
 
 ### 2026-07-01（续 5）：mainloop repeatapply 调查结果
 mainloop RULE_REPEATAPPLY 测试：导致无限循环。根因：build_full_pipeline_actions 的 22 个 Action 中某些（ActionDirectWrite/ActiveParam 等）每次 apply 都报告变化。启用需要逐个验证这些 Action 的幂等性。暂不启用，标注 TODO。
+
+### 2026-07-01（续 6）：perform loop cap + mainloop repeatapply 调查（栈溢出）
+perform 加 100 次迭代安全阀（防止非幂等 Action 死循环）。mainloop RULE_REPEATAPPLY 测试：simplifypool 达到 cap 后 mainloop repeatapply 导致栈溢出（复杂函数）。结论：启用需要所有 22 个 extra Action 真正幂等（第二次 apply 返回 0 无副作用）。当前不启用。DoNothing/RedundBranch 接入测试：破坏 16 个结构化测试预期（splice 改变 bblocks），回退。
