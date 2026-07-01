@@ -714,3 +714,5 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - goto_cascade 收敛守卫改为同时检查 graph size 和 change_count（两者都无进展才停止）。
 - `remove_in_edge_from` 自环死锁修复（block.rs）：try_read 替代 read。这是 ap_count_dirs 挂起的根因。
 - **最终结果**：curl while **36**（超过 Ghidra 34！），httpd while **58**，29/29 函数完成，0 TIMEOUT。
+
+### 2026-07-01（管线改造）：Action apply &self→&mut self 连锁

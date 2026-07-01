@@ -25,7 +25,7 @@ impl ActionBlockStructure {
 }
 
 impl Action for ActionBlockStructure {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Check if already structured
         if fd.sblocks.get_size() != 0 {
             return Ok(action_status::NO_CHANGE);
@@ -4615,7 +4615,7 @@ impl ActionFinalStructure {
 }
 
 impl Action for ActionFinalStructure {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
         let mut changed = 0;
@@ -4699,7 +4699,7 @@ impl ActionNormalizeBranches {
 }
 
 impl Action for ActionNormalizeBranches {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
         let size = fd.sblocks.get_size();
 

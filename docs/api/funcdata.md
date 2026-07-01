@@ -786,3 +786,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `DOUBLE_PRECIS_ON` flag（funcdata.hh:85=0x2000）+ `set_double_precis_recovery`/`is_double_precis_on`。
 - `new_varnode(size, addr)`（funcdata.hh:282）— 包装 vbank.create。
 - `warning_header(txt)`（funcdata.cc:135-145）— 通过 commentdb 加 WARNINGHEADER 注释。
+
+### 2026-07-01（管线改造）：restart_pending + jumptable_recovery
+- `restart_pending: bool` 字段 + `has_restart_pending()/set_restart_pending(bool)` — ActionRestartGroup 的重启信号。
+- `is_jumptable_recovery_on() -> bool` — Rugra 无 jumptable 恢复，返回 false（TODO）。

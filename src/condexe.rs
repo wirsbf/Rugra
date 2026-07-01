@@ -1259,7 +1259,7 @@ impl ActionConditionalExe {
 }
 
 impl Action for ActionConditionalExe {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Conditional execution elimination may not work with unreachable blocks.
         // (Rugra does not currently track reachability precisely; proceed.)
         let mut numhits = 0;
@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_action_name() {
-        let a = ActionConditionalExe::new();
+        let mut a = ActionConditionalExe::new();
         assert_eq!(a.get_name(), "conditionalexe");
     }
 
@@ -1327,7 +1327,7 @@ mod tests {
     #[test]
     fn test_apply_on_empty_fd() {
         let mut fd = Funcdata::new("t", crate::address::Address::new(0), 0);
-        let a = ActionConditionalExe::new();
+        let mut a = ActionConditionalExe::new();
         let r = a.apply(&mut fd).unwrap();
         assert_eq!(r, action_status::NO_CHANGE);
     }
@@ -1373,7 +1373,7 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
         // A single empty block with 0 in / 0 out cannot be an iblock.
         let _ = fd.bblocks.get_size();
-        let a = ActionConditionalExe::new();
+        let mut a = ActionConditionalExe::new();
         let r = a.apply(&mut fd).unwrap();
         // No removable iblock -> NO_CHANGE.
         assert_eq!(r, action_status::NO_CHANGE);

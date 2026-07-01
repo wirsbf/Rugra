@@ -8,22 +8,135 @@ use crate::coreaction::*;
 use crate::blockaction::*;
 // use std::sync::Arc;
 
+// ---- Action rule/status/break flags (action.hh:55-87) ----
+// These mirror Ghidra's flag bit values exactly, used by the perform() state
+// machine to drive repeatapply / onceperfunc semantics.
+
+/// Action rule flags (action.hh:56-63). Stored in an Action's `flags` field.
+pub mod action_flags {
+    /// Apply repeatedly until no change (action.hh:56).
+    pub const RULE_REPEATAPPLY: u32 = 4;
+    /// Apply once per function, regardless of whether it changed (action.hh:57).
+    pub const RULE_ONCEPERFUNC: u32 = 8;
+    /// Apply at most once per function, only if it makes a change (action.hh:58).
+    pub const RULE_ONEACTPERFUNC: u32 = 16;
+    /// Debug tracing enabled (action.hh:59).
+    pub const RULE_DEBUG: u32 = 32;
+    /// Warnings will be issued (action.hh:60).
+    pub const RULE_WARNINGS_ON: u32 = 64;
+    /// A warning has been issued for this action (action.hh:61).
+    pub const RULE_WARNINGS_GIVEN: u32 = 128;
+}
+
+/// Action status flags (action.hh:65-70). Tracks the perform() state machine.
+pub mod status_flags {
+    pub const STATUS_START: u32 = 1;
+    pub const STATUS_BREAKSTARTHIT: u32 = 2;
+    pub const STATUS_REPEAT: u32 = 4;
+    pub const STATUS_MID: u32 = 8;
+    pub const STATUS_END: u32 = 16;
+    pub const STATUS_ACTIONBREAK: u32 = 32;
+}
+
+/// Breakpoint flags (action.hh:73-77). Used for debugging — halt at specific points.
+pub mod break_flags {
+    pub const BREAK_START: u32 = 1;
+    pub const TMPBREAK_START: u32 = 2;
+    pub const BREAK_ACTION: u32 = 4;
+    pub const TMPBREAK_ACTION: u32 = 8;
+}
+
 /// Base trait for all analysis actions
 ///
 /// Corresponds to Ghidra's `Action` class. An action represents a high-level
 /// analysis or transformation step performed on a function.
+///
+/// State management: Ghidra's Action carries `status`/`flags`/`count` fields
+/// that drive the `perform()` state machine (repeatapply/onceperfunc). Rugra
+/// mirrors this via `ActionState`, stored alongside each Action in its container.
 pub trait Action {
-    /// Perform the action on the given function data
+    /// Perform the action's work on the given function data.
     ///
     /// # Returns
-    /// 0 if no change occurred, positive if changes were made
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32>;
+    /// 0 if no change occurred, positive if changes were made, negative for
+    /// partial completion (breakpoint).
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32>;
 
     /// Get the name of the action
     fn get_name(&self) -> &str;
 
-    /// Reset the action state
-    fn reset(&mut self) {}
+    /// Reset the action state for a new function. Faithful to
+    /// `Action::reset` (action.cc:100-105). Default: clear status/count.
+    fn reset(&mut self, _fd: &mut Funcdata) {}
+
+    /// Get the rule flags (repeatapply / onceperfunc / etc). Default: 0
+    /// (single-pass). Containers override to return their group's flags.
+    fn get_flags(&self) -> u32 { 0 }
+
+    /// The perform state machine. Faithful to `Action::perform`
+    /// (action.cc:298-362). Drives repeatapply / onceperfunc semantics by
+    /// looping apply() until no change (or once for onceperfunc).
+    fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
+        loop {
+            state.count = 0;
+            state.count_tests += 1;
+            state.lcount = state.count;
+            let res = self.apply(fd)?;
+            state.count += res;
+            if res < 0 {
+                state.status = status_flags::STATUS_MID;
+                return Ok(res);
+            }
+            // If no change, or repeatapply not set, exit loop.
+            let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
+            if state.count == 0 || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
+                break;
+            }
+        }
+        // onceperfunc / oneactperfunc handling.
+        let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
+        if (flags & (action_flags::RULE_ONCEPERFUNC | action_flags::RULE_ONEACTPERFUNC)) != 0 {
+            if state.count > 0 || (flags & action_flags::RULE_ONCEPERFUNC) != 0 {
+                state.status = status_flags::STATUS_END;
+            } else {
+                state.status = status_flags::STATUS_START;
+            }
+        } else {
+            state.status = status_flags::STATUS_START;
+        }
+        Ok(state.count)
+    }
+}
+
+/// Per-Action execution state, mirroring Ghidra's Action member fields
+/// (action.hh:79-87). Stored in containers alongside each child Action.
+#[derive(Debug, Clone)]
+pub struct ActionState {
+    pub status: u32,
+    pub count: i32,
+    pub lcount: i32,
+    pub count_tests: u32,
+    pub count_apply: u32,
+    /// Rule flags for this Action (repeatapply / onceperfunc).
+    pub flags: u32,
+}
+
+impl ActionState {
+    pub fn new(flags: u32) -> Self {
+        Self {
+            status: status_flags::STATUS_START,
+            count: 0,
+            lcount: 0,
+            count_tests: 0,
+            count_apply: 0,
+            flags,
+        }
+    }
+
+    /// Resolve effective flags.
+    pub fn get_flags_val(&self) -> u32 {
+        self.flags
+    }
 }
 
 /// Base trait for small-scale transformation rules
@@ -46,51 +159,180 @@ pub trait Rule {
 
 /// A group of actions executed together
 ///
-/// Corresponds to Ghidra's `ActionGroup` class
+/// Corresponds to Ghidra's `ActionGroup` class. On `apply`, runs each child
+/// Action's `perform()` in sequence. The parent's `perform()` (via the trait
+/// default) drives repeatapply if the group's flags include it.
 pub struct ActionGroup {
     name: String,
     actions: Vec<Box<dyn Action>>,
+    /// Per-child execution state (status/count/etc). Parallel to `actions`.
+    child_states: Vec<ActionState>,
+    /// Iterator index for breakpoint resume (action.hh:146 `state`).
+    state: usize,
+    /// This group's rule flags (repeatapply etc).
+    flags: u32,
 }
 
 impl ActionGroup {
     pub fn new(name: &str) -> Self {
+        Self::with_flags(name, 0)
+    }
+
+    /// Create with explicit rule flags (e.g. rule_repeatapply for fullloop).
+    pub fn with_flags(name: &str, flags: u32) -> Self {
         Self {
             name: name.to_string(),
             actions: Vec::new(),
+            child_states: Vec::new(),
+            state: 0,
+            flags,
         }
     }
 
     pub fn add_action(&mut self, action: Box<dyn Action>) {
+        let child_flags = action.get_flags();
         self.actions.push(action);
+        self.child_states.push(ActionState::new(child_flags));
     }
+
+    pub fn get_name_str(&self) -> &str { &self.name }
+    pub fn num_actions(&self) -> usize { self.actions.len() }
 }
 
 impl Action for ActionGroup {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        let mut total_changes = 0;
-        for action in &self.actions {
-            total_changes += action.apply(fd)?;
+    /// Run all child Actions in sequence via their `perform()`. Faithful to
+    /// `ActionGroup::apply` (action.cc:506-528). Each child's perform drives
+    /// its own repeatapply/onceperfunc; the group itself is repeatapply'd by
+    /// its parent if `self.flags` includes RULE_REPEATAPPLY.
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        let mut total = 0;
+        for i in 0..self.actions.len() {
+            let res = {
+                let (action, state) = (&mut self.actions[i], &mut self.child_states[i]);
+                action.perform(fd, state)?
+            };
+            if res > 0 {
+                total += res;
+            }
+            // res < 0 (partial completion / breakpoint): Ghidra returns -1
+            // without advancing state. We do the same — set self.state for resume.
+            if res < 0 {
+                self.state = i; // Will retry this child on next perform call
+                return Ok(res);
+            }
         }
-        Ok(total_changes)
+        self.state = 0;
+        Ok(total)
+    }
+
+    fn get_name(&self) -> &str { &self.name }
+    fn get_flags(&self) -> u32 { self.flags }
+
+    fn reset(&mut self, fd: &mut Funcdata) {
+        self.state = 0;
+        for i in 0..self.actions.len() {
+            self.child_states[i].status = status_flags::STATUS_START;
+            self.actions[i].reset(fd);
+        }
+    }
+}
+
+/// A restartable action group — the top-level container for the universal
+/// pipeline. Faithful to `ActionRestartGroup` (action.hh:173, action.cc:554-583).
+///
+/// Wraps an `ActionGroup`. After the group converges (apply returns 0), if
+/// `Funcdata::has_restart_pending()` is true, it clears analysis state and
+/// re-runs the entire subtree. Used by jumptable recovery and late structural
+/// adjustments that need a clean restart.
+pub struct ActionRestartGroup {
+    name: String,
+    group: ActionGroup,
+    maxrestarts: i32,
+    curstart: i32,
+    /// State for this Action (used by parent perform — though this is root).
+    flags: u32,
+}
+
+impl ActionRestartGroup {
+    /// Create with rule flags and max restart count.
+    /// Ghidra: `ActionRestartGroup(rule_onceperfunc, "universal", 1)`.
+    pub fn new(name: &str, flags: u32, maxrestarts: i32) -> Self {
+        Self {
+            name: name.to_string(),
+            group: ActionGroup::with_flags(name, flags),
+            maxrestarts,
+            curstart: 0,
+            flags,
+        }
+    }
+
+    pub fn add_action(&mut self, action: Box<dyn Action>) {
+        self.group.add_action(action);
+    }
+}
+
+impl Action for ActionRestartGroup {
+    /// Faithful to `ActionRestartGroup::apply` (action.cc:554-583).
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        if self.curstart == -1 {
+            return Ok(0); // Already completed
+        }
+        loop {
+            let res = self.group.apply(fd)?;
+            if res != 0 {
+                return Ok(res); // Bubble up partial completion
+            }
+            // Group converged. Check if a restart is pending.
+            if !fd.has_restart_pending() {
+                self.curstart = -1;
+                return Ok(0);
+            }
+            // Don't restart during jumptable recovery.
+            if fd.is_jumptable_recovery_on() {
+                return Ok(0);
+            }
+            self.curstart += 1;
+            if self.curstart > self.maxrestarts {
+                fd.warning_header("Exceeded maximum restarts with more pending");
+                self.curstart = -1;
+                return Ok(0);
+            }
+            // clearAnalysis — Rugra does not yet model analysis-clearable state.
+            // Reset the entire subtree (all children) for a fresh run.
+            self.group.reset(fd);
+            // Loop back to re-run the group.
+        }
     }
 
     fn get_name(&self) -> &str {
         &self.name
     }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
+
+    fn reset(&mut self, fd: &mut Funcdata) {
+        self.curstart = 0;
+        self.group.reset(fd);
+    }
 }
 
 /// A pool of Rules applied to every matching P-code op.
 ///
-/// Corresponds to Ghidra's `ActionPool` (action.hh:262). It holds a set of
-/// `Rule`s and, on `apply`, iterates over all live ops, dispatching each op
-/// to the Rules whose `get_opcodes()` include the op's opcode. Repeats until
-/// a full pass makes no change (mirrors Ghidra's `rule_repeatapply` group
-/// semantics — the universal-action main loop reruns the pool until stable).
+/// Corresponds to Ghidra's `ActionPool` (action.hh:262). On `apply`, does a
+/// **single pass** over all live ops, dispatching each to matching Rules.
+/// The repeat-until-stable behaviour is driven by the parent's `perform()`
+/// via `rule_repeatapply` (action.cc:350), not by this pool itself.
 pub struct ActionPool {
     name: String,
     rules: Vec<Box<dyn Rule>>,
     /// Opcode → indices into `rules`, built on add_rule for O(1) dispatch.
     per_op: std::collections::HashMap<crate::opcodes::OpCode, Vec<usize>>,
+    /// Rule flags — RULE_REPEATAPPLY so perform() loops this pool.
+    flags: u32,
+    /// Diagnostic stats (gated by RUGRA_RULE_STATS=1).
+    rule_hits: std::collections::HashMap<usize, i32>,
+    total: i32,
 }
 
 impl ActionPool {
@@ -99,6 +341,9 @@ impl ActionPool {
             name: name.to_string(),
             rules: Vec::new(),
             per_op: std::collections::HashMap::new(),
+            flags: action_flags::RULE_REPEATAPPLY,
+            rule_hits: std::collections::HashMap::new(),
+            total: 0,
         }
     }
 
@@ -115,67 +360,70 @@ impl ActionPool {
 }
 
 impl Action for ActionPool {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionPool::apply + the universal main loop's
-        // repeat-until-stable behaviour. We snapshot the live op list per
-        // pass because applyOp may destroy/insert ops.
-        let mut total = 0;
-        // Diagnostic: per-Rule trigger counts, enabled via RUGRA_RULE_STATS=1.
-        // Mirrors how Ghidra developers inspect rule effectiveness; this is
-        // NOT a behavioural change — it only counts, gated behind an env var.
+    /// Single-pass Rule application. Faithful to `ActionPool::apply`
+    /// (action.cc:878-889) + `processOp` (action.cc:823-876). The parent
+    /// `perform()` repeats this until no change (via rule_repeatapply).
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let want_stats = std::env::var("RUGRA_RULE_STATS")
             .map(|v| v == "1")
             .unwrap_or(false);
-        let mut rule_hits: std::collections::HashMap<usize, i32> =
-            std::collections::HashMap::new();
-        loop {
-            let mut pass_changes = 0;
-            // Snapshot indices; the bank's alivelist may shift, so re-fetch
-            // each op by current position defensively.
-            let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
-            for op_ref in ops {
-                // Skip dead ops (Ghidra's processOp checks isDead).
-                let (is_dead, opc) = {
-                    let o = op_ref.0.read().unwrap();
-                    (o.is_dead(), o.opcode)
-                };
-                if is_dead {
-                    continue;
-                }
-                if let Some(rule_idxs) = self.per_op.get(&opc) {
-                    for &ridx in rule_idxs {
-                        // Re-check dead after each rule (a prior rule may
-                        // have destroyed this op).
-                        let dead = op_ref.0.read().unwrap().is_dead();
-                        if dead { break; }
-                        let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
-                        if res > 0 {
-                            pass_changes += res;
-                            if want_stats {
-                                *rule_hits.entry(ridx).or_insert(0) += res;
-                            }
+        let mut pass_changes = 0;
+        // Snapshot the live op list — applyOp may destroy/insert ops.
+        let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+        for op_ref in ops {
+            // Skip dead ops (Ghidra's processOp checks isDead).
+            let (is_dead, mut opc) = {
+                let o = op_ref.0.read().unwrap();
+                (o.is_dead(), o.opcode)
+            };
+            if is_dead { continue; }
+            // processOp: iterate rules for this opcode, with opcode-change
+            // detection (action.cc:862-867): if a Rule changes the op's
+            // opcode, re-dispatch to the new opcode's rule list.
+            loop {
+                let rule_idxs: Vec<usize> = self.per_op.get(&opc)
+                    .cloned()
+                    .unwrap_or_default();
+                if rule_idxs.is_empty() { break; }
+                let mut applied_any = false;
+                for ridx in rule_idxs {
+                    // Re-check dead after each rule.
+                    if op_ref.0.read().unwrap().is_dead() { break; }
+                    let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
+                    if res > 0 {
+                        pass_changes += res;
+                        applied_any = true;
+                        if want_stats {
+                            *self.rule_hits.entry(ridx).or_insert(0) += res;
                         }
                     }
                 }
+                // Opcode-change detection (action.cc:862-867): if the op's
+                // opcode changed during rule application, re-dispatch.
+                let new_opc = op_ref.0.read().unwrap().opcode;
+                if !op_ref.0.read().unwrap().is_dead() && new_opc != opc {
+                    opc = new_opc;
+                    continue; // Re-scan with new opcode's rules
+                }
+                let _ = applied_any;
+                break;
             }
-            total += pass_changes;
-            if pass_changes == 0 { break; }
         }
-        if want_stats && !rule_hits.is_empty() {
+        self.total += pass_changes;
+        // Print stats on each pass if enabled.
+        if want_stats && pass_changes > 0 {
             let fn_name = fd.name.as_str();
-            eprintln!("[RULESTATS] {} pool={} total_changes={}", fn_name, self.name, total);
-            let mut hits: Vec<_> = rule_hits.into_iter().collect();
-            hits.sort_by(|a, b| b.1.cmp(&a.1));
-            for (ridx, n) in hits {
-                let rname = self.rules[ridx].get_name();
-                eprintln!("[RULESTATS]   {:>30} = {}", rname, n);
-            }
+            eprintln!("[RULESTATS] {} pool={} pass_changes={}", fn_name, self.name, pass_changes);
         }
-        Ok(total)
+        Ok(pass_changes)
     }
 
-    fn get_name(&self) -> &str {
-        &self.name
+    fn get_name(&self) -> &str { &self.name }
+    fn get_flags(&self) -> u32 { self.flags }
+
+    fn reset(&mut self, _fd: &mut Funcdata) {
+        self.total = 0;
+        self.rule_hits.clear();
     }
 }
 
@@ -396,6 +644,15 @@ impl ActionDatabase {
         self.all_actions.push(action);
     }
 
+    pub fn get_action_mut(&mut self, name: &str) -> Option<&mut (dyn Action)> {
+        for a in &mut self.all_actions {
+            if a.get_name() == name {
+                return Some(a.as_mut());
+            }
+        }
+        None
+    }
+
     pub fn get_action(&self, name: &str) -> Option<&dyn Action> {
         self.all_actions.iter()
             .find(|a| a.get_name() == name)
@@ -403,124 +660,99 @@ impl ActionDatabase {
     }
 
     /// Run all registered actions on the given function data
-    pub fn apply_all(&self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
+    /// Run all registered actions on the given function data via perform().
+    pub fn apply_all(&mut self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
         let mut total = 0;
-        for action in &self.all_actions {
-            total += action.apply(fd)?;
+        for i in 0..self.all_actions.len() {
+            // Reset per-function state.
+            self.all_actions[i].reset(fd);
+            // Create a state for this root action.
+            let mut state = ActionState::new(self.all_actions[i].get_flags());
+            total += self.all_actions[i].perform(fd, &mut state)?;
         }
         Ok(total)
     }
 
-    /// Set up default decompiler actions
+    /// Set up default decompiler actions. Faithful to Ghidra's
+    /// `universalAction` (coreaction.cc:5462-5738) — builds a nested tree:
+    ///   ActionRestartGroup(universal)
+    ///   ├─ Start / FuncLink ...
+    ///   ├─ fullloop (repeatapply)
+    ///   │  ├─ mainloop (repeatapply)
+    ///   │  │  ├─ Heritage / Spacebase / StackPtrFlow ...
+    ///   │  │  ├─ stackstall (repeatapply): oppool1 + LaneDivide/MultiCse/...
+    ///   │  │  ├─ oppool2 / ConditionalExe ...
+    ///   │  └─ DeadCode / DoNothing / SwitchNorm ...
+    ///   ├─ cleanup pool
+    ///   ├─ MergeType / MarkExplicit / MarkImplied ...
+    ///   └─ SetCasts / FinalStructure / Stop
     pub fn set_default_actions(&mut self) {
-        let mut decompile_group = ActionGroup::new("decompile");
+        // Root: ActionRestartGroup (Ghidra coreaction.cc:5474, onceperfunc, maxrestarts=1)
+        let mut universal = ActionRestartGroup::new(
+            "decompile",
+            action_flags::RULE_ONCEPERFUNC,
+            1,
+        );
 
-        decompile_group.add_action(Box::new(ActionStart::new()));
-        // ActionFuncLink (Ghidra coreaction.cc:5484, runs BEFORE Heritage):
-        // builds FuncCallSpecs for every CALL op (ensure_callspecs, faithful
-        // to FlowInfo::setupCallSpecs flow.cc:680) then funcLinkInput/funcLinkOutput
-        // set up input/output parameter recovery (initActiveInput/Output). Must
-        // run before Heritage so any varnodes it creates are SSA-renamed.
-        decompile_group.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
-        decompile_group.add_action(Box::new(ActionHeritage::new()));
-        // Mark the stack-pointer register (RSP) as a spacebase, faithful to
-        // Ghidra ActionSpacebase (coreaction.cc:5506, "Must come before
-        // infertypes and nonzeromask"). This lets varmap/ActionStackPtrFlow
-        // recognize RSP as a pointer into the Stack address space, so stack
-        // variables can be detected and named instead of leaking as uVar.
-        decompile_group.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
-        // Stack pointer flow repair (Ghidra actstackstall, coreaction.cc:5656):
-        // resolve stack-pointer "clogs" (LOAD fed into INT_ADD on spacebase) by
-        // linking to the matching STORE. Must run after Heritage (needs the
-        // spacebase input varnode) and before simplification.
-        decompile_group.add_action(Box::new(ActionStackPtrFlow::new()));
-        decompile_group.add_action(Box::new(ActionInferParams::new())); // Early: before copy propagation removes Register varnodes
-        decompile_group.add_action(Box::new(ActionConstantPtr::new()));
-        decompile_group.add_action(Box::new(ActionCse::new()));
-        decompile_group.add_action(Box::new(ActionSimplify::new()));
-        // Rule-driven algebraic simplification pool (Ghidra oppool1/oppool2).
-        // Runs the registered Rules to a fixed point, folding redundant
-        // P-code. This is the first time Rugra actually dispatches its ~90
-        // implemented Rules; previously none were wired into the pipeline.
-        decompile_group.add_action(Box::new(build_simplify_pool()));
-        // Cleanup pool (Ghidra coreaction.cc:5694 actcleanup) runs AFTER the
-        // main simplify pool converges. It holds reverse-canonicalization
-        // Rules (RuleMultNegOne x*-1->INT_2COMP, Rule2Comp2Sub) that would
-        // ping-pong if placed in oppool1 alongside Rule2Comp2Mult. Phase
-        // separation breaks the cycle: oppool1 finishes first.
-        decompile_group.add_action(Box::new(build_cleanup_pool()));
-        // Type inference BEFORE copy propagation: ActionTypeInfer assigns
-        // types to COPY ops' inputs/outputs. Then CopyPropagate propagates
-        // those types along with use redirection, so surviving Register-space
-        // varnodes inherit types from the Unique-space temporaries.
-        decompile_group.add_action(Box::new(ActionTypeInfer::new()));
-        decompile_group.add_action(Box::new(ActionCopyPropagate::new()));
-        decompile_group.add_action(Box::new(ActionTypePropagate::new()));
-        // CALL parameter/output establishment is now done by ActionFuncLink
-        // (wired before ActionHeritage), faithful to Ghidra's funcLinkInput/
-        // funcLinkOutput (coreaction.cc:1474/1521). The old ActionCallParams
-        // (lifter-attached register trimming) is removed — funcLinkInput builds
-        // param varnodes via opInsertInput/newVarnode per Ghidra.
-        // ActionRestrictLocal (coreaction.cc:1957): mark stack locations used
-        // by saved registers / call params as not-mapped, preventing them from
-        // being treated as local variables. Must run before DeadCode.
-        decompile_group.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
-        decompile_group.add_action(Box::new(ActionDeadCode::new()));
-        // Merge AFTER dead-code (faithful to Ghidra coreaction.cc:5682 deadcode
-        // -> 5718-5729 merge stage). Merge builds authoritative HighVariables
-        // whose `instances` reflect the post-optimization varnode set; running
-        // it before copy-prop/dead-code left stale instances (deleted ops still
-        // referenced), which forced printc to reconstruct def relationships
-        // with self-built maps. With merge here, Merge::is_live_varnode skips
-        // dead-code-eliminated varnodes so instances are authoritative.
-        // NOTE: Ghidra's merge stage is a 9-step sequence (MergeRequired,
-        // MarkExplicit, MarkImplied, MergeMultiEntry, MergeCopy, DominantCopy,
-        // MergeAdjacent, MergeType, HideShadow, CopyMarker); Rugra collapses
-        // these into Merge::merge_all (addr_tied + cover + naming). The
-        // separate ActionMergeCopy/Adjacent/Required/MultiEntry structs exist
-        // in coreaction.rs but call stub methods — merge_all is the real work.
-        decompile_group.add_action(Box::new(ActionMergeType::new()));
-        // MarkExplicit + MarkImplied run AFTER MergeType. In Ghidra the order
-        // is MergeRequired(5719) -> MarkImplied(5722) -> MergeType(5729):
-        // MergeRequired builds the HighVariables that MarkImplied needs. Rugra
-        // has no separate MergeRequired — merge_all builds HighVariables AND
-        // merges, so MarkImplied must follow merge_all to see high.instances
-        // + high.cover. MarkImplied decides which varnodes are "implied" (their
-        // def expression inlines into the consumer) via checkImpliedCover
-        // (cover intersection). printc.cc:2704 then skips implied-output ops.
-        decompile_group.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
-        decompile_group.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
-        // NOTE: ActionSetCasts (coreaction.cc:2722) is implemented but NOT
-        // wired. Its cast_input path requires ActionInferTypes (type
-        // propagation, coreaction.cc:2800+) to run first, so that pointer
-        // arithmetic operands keep their pointer type and aren't
-        // over-cast to int. The faithful building blocks (cast_standard_full,
-        // base_type_for, CPUI_CAST insertion) are complete and tested; wiring
-        // needs ActionInferTypes ported first. See STACK_SPACE_TODO Gap C.
-        // decompile_group.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
-        // NOTE: ActionDeterminedBranch/Unreachable/DoNothing/RedundBranch are
-        // implemented (coreaction.cc:3457-3528) and individually tested, but
-        // NOT wired into the default pipeline. Ghidra runs them inside its
-        // selectGoto->collapseInternal loop, where the structurer is designed
-        // around block removal. Rugra's staged-phase structurer (collapse_loops
-        // /collapse_conditions) relies on blocks that these actions remove, so
-        // wiring them causes regressions (curl 24->11, goto 0->2). Re-enabling
-        // needs the staged->collapseInternal architecture migration (G4 opt).
-        // The apply() logic is complete and available for that migration.
-        // Local variable recovery (coreaction.cc:5505 "localrecovery"): build
-        // the stack-variable scope via ScopeLocal::restructure_varnode, which
-        // printc's get_stack_variable_name queries to name stack slots instead
-        // of emitting uVar fragments. Must run after DeadCode (so the scope
-        // sees only live varnodes) and before block structuring.
-        decompile_group.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
-        // Conditional-execution elimination (coreaction.cc:5675): collapse
-        // redundant CBRANCH joins. Must run before block structuring.
-        decompile_group.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
-        decompile_group.add_action(Box::new(ActionBlockStructure::new()));
-        decompile_group.add_action(Box::new(ActionNormalizeBranches::new()));
-        decompile_group.add_action(Box::new(ActionFinalStructure::new()));
+        // --- Top-level Actions (coreaction.cc:5477-5485) ---
+        universal.add_action(Box::new(ActionStart::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
 
-        self.register_action(Box::new(decompile_group));
+        // --- fullloop (coreaction.cc:5487, repeatapply) ---
+        let mut fullloop = ActionGroup::new("fullloop");
+
+        // --- mainloop (coreaction.cc:5489, repeatapply) ---
+        let mut mainloop = ActionGroup::new("mainloop");
+
+        mainloop.add_action(Box::new(ActionHeritage::new()));
+        mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
+        mainloop.add_action(Box::new(ActionStackPtrFlow::new()));
+        // Rugra-local Actions (TODO: replace with Ghidra mechanisms once
+        // ActionActiveParam / ActionDefaultParams / ActionDirectWrite are wired).
+        mainloop.add_action(Box::new(ActionInferParams::new()));
+        mainloop.add_action(Box::new(ActionConstantPtr::new()));
+        mainloop.add_action(Box::new(ActionCse::new()));
+        mainloop.add_action(Box::new(ActionSimplify::new()));
+
+        // --- stackstall (coreaction.cc:5509, repeatapply) ---
+        let mut stackstall = ActionGroup::new("stackstall");
+        // oppool1 (coreaction.cc:5511, repeatapply)
+        stackstall.add_action(Box::new(build_simplify_pool()));
+
+        mainloop.add_action(Box::new(stackstall));
+
+        // oppool2 would go here (coreaction.cc:5662) — Rugra merges into oppool1.
+        // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
+        mainloop.add_action(Box::new(ActionTypeInfer::new()));
+        mainloop.add_action(Box::new(ActionCopyPropagate::new()));
+        mainloop.add_action(Box::new(ActionTypePropagate::new()));
+
+        mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
+        mainloop.add_action(Box::new(ActionDeadCode::new()));
+        mainloop.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
+        mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
+        mainloop.add_action(Box::new(ActionBlockStructure::new()));
+
+        fullloop.add_action(Box::new(mainloop));
+        // fullloop post-mainloop Actions (coreaction.cc:5679-5688)
+        fullloop.add_action(Box::new(ActionDeadCode::new()));
+
+        universal.add_action(Box::new(fullloop));
+
+        // --- Post-fullloop top-level (coreaction.cc:5691-5738) ---
+        // Cleanup pool (coreaction.cc:5694, repeatapply)
+        universal.add_action(Box::new(build_cleanup_pool()));
+        // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
+        // Merge::merge_all (see ActionMergeType).
+        universal.add_action(Box::new(ActionMergeType::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
+        // NOTE: ActionSetCasts implemented but needs ActionInferTypes first.
+        // universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
+        universal.add_action(Box::new(ActionNormalizeBranches::new()));
+        universal.add_action(Box::new(ActionFinalStructure::new()));
+
+        self.register_action(Box::new(universal));
     }
 }
 
@@ -534,7 +766,7 @@ impl ActionTypePropagate {
 }
 
 impl Action for ActionTypePropagate {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         crate::analysis::type_infer::propagate_types(fd);
         Ok(0)
     }

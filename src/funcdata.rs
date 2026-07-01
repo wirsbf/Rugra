@@ -88,6 +88,8 @@ pub struct Funcdata {
     /// `set_arch` before running Rules that need cpool/funcptr_align/
     /// nan_ignore_all/userops/types.
     pub arch: Option<Arc<crate::arch::Architecture>>,
+    /// Restart-pending flag for ActionRestartGroup (funcdata.hh).
+    pub restart_pending: bool,
     /// Jump tables recovered for this function. Faithful to
     /// `Funcdata::jumpvec` (funcdata.hh:89). Populated by JumpTable recovery.
     pub jump_tables: Vec<std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>>,
@@ -133,6 +135,7 @@ impl Funcdata {
             callspecs: Vec::new(),
             active_output: None,
             arch: None,
+            restart_pending: false,
             jump_tables: Vec::new(),
             stack_space: crate::space::AddressSpace::Stack,
             stack_pointer_space: crate::space::AddressSpace::Register,
@@ -322,6 +325,20 @@ impl Funcdata {
     /// Set the Architecture reference (Ghidra sets it in the ctor from scope).
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
         self.arch = Some(arch);
+    }
+
+    /// Is a pipeline restart pending? Faithful to `Funcdata::hasRestartPending`.
+    pub fn has_restart_pending(&self) -> bool {
+        self.restart_pending
+    }
+    /// Request a pipeline restart (ActionRestartGroup will detect this).
+    pub fn set_restart_pending(&mut self, v: bool) {
+        self.restart_pending = v;
+    }
+    /// Is jumptable recovery currently active? Faithful to
+    /// `Funcdata::isJumptableRecoveryOn`. Rugra has no jumptable recovery yet.
+    pub fn is_jumptable_recovery_on(&self) -> bool {
+        false
     }
 
     /// Set the self-reference after wrapping in Arc<RwLock>
@@ -4071,11 +4088,11 @@ mod tests {
         fd.bblocks.build_dom_tree();
 
         use crate::action::Action;
-        let structurer = crate::blockaction::ActionBlockStructure::new();
+        let mut structurer = crate::blockaction::ActionBlockStructure::new();
         let result = structurer.apply(&mut fd);
         assert!(result.is_ok());
 
-        let normalizer = crate::blockaction::ActionNormalizeBranches::new();
+        let mut normalizer = crate::blockaction::ActionNormalizeBranches::new();
         let result = normalizer.apply(&mut fd);
         assert!(result.is_ok());
 
@@ -4315,7 +4332,7 @@ mod tests {
         fd.bblocks.add_edge(b0.clone(), b2.clone());
 
         // Run block structuring action
-        let action = ActionBlockStructure::new();
+        let mut action = ActionBlockStructure::new();
         action.apply(&mut fd).unwrap();
 
         // Verify the main block was collapsed into a Switch
@@ -4434,7 +4451,7 @@ mod tests {
         }
 
         // Run type propagation
-        let action = ActionTypeInfer::new();
+        let mut action = ActionTypeInfer::new();
         action.apply(&mut fd).unwrap();
 
         // Verify propagation results on our unified SSA variable chain
@@ -4524,7 +4541,7 @@ mod tests {
         assert!(fd.funcp.parameters.is_empty());
 
         // Run ActionInferParams
-        let action = ActionInferParams::new();
+        let mut action = ActionInferParams::new();
         let result = action.apply(&mut fd).unwrap();
         assert!(result > 0, "ActionInferParams should report changes");
 

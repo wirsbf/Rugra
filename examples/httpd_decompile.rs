@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut fd = Funcdata::new(name, Address::new(vaddr), size as i32);
         fd.inject_raw_ops(&raw_ops);
         fd.run_heritage_direct();
-        let infer = rugra::coreaction::ActionInferParams::new();
+        let mut infer = rugra::coreaction::ActionInferParams::new();
         let _ = infer.apply(&mut fd);
         prototype_db.insert(vaddr, fd.funcp.num_params());
     }
@@ -208,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut fd = Funcdata::new(&name, Address::new(target), 512);
         fd.inject_raw_ops(&raw_ops);
         fd.run_heritage_direct();
-        let infer = rugra::coreaction::ActionInferParams::new();
+        let mut infer = rugra::coreaction::ActionInferParams::new();
         let _ = infer.apply(&mut fd);
         prototype_db.insert(target, fd.funcp.num_params());
     }
@@ -266,7 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut db = ActionDatabase::new();
             db.set_default_actions();
-            if let Some(action) = db.get_action("decompile") {
+            if let Some(action) = db.get_action_mut("decompile") {
                 let mut fd_write = fd_arc.write().unwrap();
                 eprintln!("[THREAD] {} actions start", func_name);
                 let result = action.apply(&mut *fd_write);

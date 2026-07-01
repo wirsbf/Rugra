@@ -21,7 +21,7 @@ impl ActionHeritage {
 }
 
 impl Action for ActionHeritage {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
         //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
         //   The rename in pass 1 connects the op graph (rewrites STORE input
@@ -46,7 +46,7 @@ impl Action for ActionHeritage {
         // = (1 > 1) = false → Stack INDIRECT varnodes are marked consumed and
         // survive. Register/Unique varnodes are dead-coded normally.
         {
-            let dc = ActionDeadCode::new();
+            let mut dc = ActionDeadCode::new();
             let _ = dc.apply(fd);
         }
         // Pass 2: discover stack STOREs on the connected graph, then
@@ -169,7 +169,7 @@ impl ActionDeadCode {
 }
 
 impl Action for ActionDeadCode {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Full Ghidra consumed-bit propagation algorithm, driven by
         // iterating Funcdata's varnode bank + op bank.
         let mut changed = 0;
@@ -285,7 +285,7 @@ impl ActionConstantPtr {
 }
 
 impl Action for ActionConstantPtr {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
 
         // Scan all alive ops for LOAD/STORE with constant address varnodes.
@@ -335,7 +335,7 @@ impl ActionCse {
 }
 
 impl Action for ActionCse {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Build a hash map: (opcode, sorted-input-pointer-list) -> first op
         // If two alive ops share the same key, redirect the second op's
         // output users to the first op's output, then kill the duplicate.
@@ -434,7 +434,7 @@ impl ActionRestructureVarnode {
 }
 
 impl Action for ActionRestructureVarnode {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2295).
         let mut scope = crate::varmap::ScopeLocal::new();
         scope.restructure_varnode(fd);
@@ -460,7 +460,7 @@ impl ActionStart {
 }
 
 impl Action for ActionStart {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
 
@@ -481,7 +481,7 @@ impl ActionMergeRequired {
 }
 
 impl Action for ActionMergeRequired {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_addr_tied(fd);
         Ok(action_status::CHANGE)
@@ -504,7 +504,7 @@ impl ActionMergeAdjacent {
 }
 
 impl Action for ActionMergeAdjacent {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_adjacent(fd);
         Ok(action_status::CHANGE)
@@ -527,7 +527,7 @@ impl ActionMergeCopy {
 }
 
 impl Action for ActionMergeCopy {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         let mut changed = 0;
 
@@ -585,7 +585,7 @@ impl ActionMergeMultiEntry {
 }
 
 impl Action for ActionMergeMultiEntry {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_multi_entry(fd);
         Ok(action_status::CHANGE)
@@ -608,7 +608,7 @@ impl ActionMergeType {
 }
 
 impl Action for ActionMergeType {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_all(fd);
         Ok(action_status::CHANGE)
@@ -635,7 +635,7 @@ impl ActionSimplify {
 }
 
 impl Action for ActionSimplify {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
 
         #[derive(Clone)]
@@ -771,7 +771,7 @@ impl ActionCopyPropagate {
 }
 
 impl Action for ActionCopyPropagate {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
         let mut to_kill: Vec<crate::op::PcodeOpRef> = Vec::new();
 
@@ -1060,7 +1060,7 @@ impl ActionCallParams {
 }
 
 impl Action for ActionCallParams {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::AddressSpace;
         let mut changed = 0;
 
@@ -1309,7 +1309,7 @@ impl ActionInferParams {
 }
 
 impl Action for ActionInferParams {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::AddressSpace;
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
@@ -1633,7 +1633,7 @@ impl ActionTypeInfer {
 }
 
 impl Action for ActionTypeInfer {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
         let int_type = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
@@ -1940,7 +1940,7 @@ impl ActionUnreachable {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionUnreachable {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464).
         if fd.remove_unreachable_blocks() {
             Ok(action_status::CHANGE)
@@ -1961,7 +1961,7 @@ impl ActionDoNothing {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDoNothing {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         let n = fd.bblocks.get_size();
         for i in 0..n {
@@ -2047,7 +2047,7 @@ impl ActionRedundBranch {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionRedundBranch {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let n = fd.bblocks.get_size();
         for i in 0..n {
             let bl = match fd.bblocks.get_block(i) {
@@ -2125,7 +2125,7 @@ impl ActionDeterminedBranch {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeterminedBranch {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         let n_blocks = fd.bblocks.get_size();
         for i in 0..n_blocks {
@@ -2185,7 +2185,7 @@ impl ActionHideShadow {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionHideShadow {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate written Varnodes, find shadow
         // copies (Varnodes that are COPY outputs of another Varnode with the
         // same address), and mark them. Full Ghidra uses HighVariable +
@@ -2262,7 +2262,7 @@ impl ActionSwitchNorm {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionSwitchNorm {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate PcodeOpBank looking for BRANCHIND
         // ops, which are the root of jump tables. In full Ghidra, these
         // are stored in Funcdata.jumpvec and accessed via numJumpTables().
@@ -2303,7 +2303,7 @@ impl ActionNormalizeSetup {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNormalizeSetup {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: clear the Funcdata's scope to prepare
         // for re-normalization. Full Ghidra also clears FuncProto input
         // and model/output locks.
@@ -2334,7 +2334,7 @@ impl ActionPrototypeWarnings {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeWarnings {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4920).
         // Check prototype for errors/warnings and emit diagnostic messages.
         // Ghidra uses data.warningHeader() which logs to the decompiler's
@@ -2428,7 +2428,7 @@ impl ActionMarkExplicit {
     }
 }
 impl Action for ActionMarkExplicit {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let max_ref = 2; // arch.max_implied_ref default
         let mut change_count = 0;
 
@@ -2635,7 +2635,7 @@ impl ActionMarkImplied {
     }
 }
 impl Action for ActionMarkImplied {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
         // Iterates all Varnodes; for each non-explicit/non-implied candidate,
         // checks whether its def expression can be safely inlined into its
@@ -2692,29 +2692,131 @@ impl Action for ActionMarkImplied {
 pub struct ActionSetCasts { pub count: i32 }
 impl ActionSetCasts {
     pub fn new() -> Self { Self { count: 0 } }
+
+    /// Expected input metatype for an op's input slot. Faithful to Ghidra
+    /// `TypeOpBinary::metain` / `TypeOpUnary::metain` (typeop.hh:206,225) and
+    /// `TypeOp::inputTypeLocal` → `getBase(size, metain)` (typeop.cc:329-333).
+    /// Integer binary/unary ops (INT_ADD/SUB/MULT/DIV/AND/OR/XOR/shifts) have
+    /// metain=TYPE_INT; BOOL_* have metain=TYPE_BOOL. Returns None for ops
+    /// with no fixed input metatype (LOAD/STORE/CALL/branch etc.), which
+    /// Ghidra handles via op-specific getInputCast overrides not ported here.
+    fn input_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
+        use crate::type_system::datatype::TypeMetatype;
+        match opc {
+            // Integer arithmetic/logic/shift binary ops: metain = TYPE_INT.
+            // These are the ops where a pointer-typed operand must be cast to
+            // an integer (Ghidra TypeOpBinary metain, typeop.hh:206).
+            // Comparisons, COPY, and extensions have op-specific getInputCast
+            // overrides not captured here, so they are excluded (return None)
+            // to avoid over-casting — faithful to the metain model for the
+            // arithmetic/logic subset only.
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+                Some(TypeMetatype::Int)
+            }
+            // Boolean ops: metain = TYPE_BOOL
+            OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
+            | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => Some(TypeMetatype::Bool),
+            _ => None,
+        }
+    }
+
+    /// Faithful 1:1 port of `ActionSetCasts::castInput` (coreaction.cc:2655-2720).
+    /// For input `slot` of `op`, compute the op's expected input type
+    /// (inputTypeLocal = getBase(size, metain)), the current varnode's high
+    /// type, and if `castStandard` says a cast is needed, insert a CPUI_CAST op
+    /// feeding the slot: `out = CAST(in)`, with out implied (inlined by printc
+    /// as `(reqtype)in`).
+    ///
+    /// Returns true if a cast was inserted.
+    fn cast_input(
+        &self,
+        fd: &mut Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> bool {
+        use crate::type_system::cast::base_type_for;
+        // (1) Compute reqtype = op->inputTypeLocal(slot) = getBase(size, metain).
+        let (in_vn, reqtype, curtype, op_pc, in_size) = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_arc_ref) = op.get_in(slot) else { return false; };
+            let in_arc = in_arc_ref.clone();
+            let op_pc = op.get_addr();
+            let meta_opt = Self::input_metatype(op.opcode);
+            drop(op);
+            let Some(meta) = meta_opt else { return false; };
+            let (in_size, curtype, is_annot) = {
+                let in_rg = in_arc.read().unwrap();
+                let is_annot = in_rg.is_annotation();
+                let in_size = in_rg.get_size();
+                let curtype = in_rg.high.as_ref()
+                    .map(|h| h.read().unwrap().v_type.clone())
+                    .or_else(|| in_rg.v_type.clone())
+                    .unwrap_or_else(|| base_type_for(in_size, meta));
+                (in_size, curtype, is_annot)
+            };
+            if is_annot { return false; }
+            let reqtype = base_type_for(in_size, meta);
+            (in_arc, reqtype, curtype, op_pc, in_size)
+        };
+        // (2) castStandard(reqtype, curtype, care_uint_int=false, care_ptr_uint=true)
+        let Some(_cast_type) = strategy.cast_standard_full(&reqtype, &curtype, false, true) else {
+            return false;
+        };
+        // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
+        //     Faithful to coreaction.cc:2702-2712.
+        if in_vn.read().unwrap().is_constant() {
+            // Constants just get their type updated (castInput const path).
+            in_vn.write().unwrap().v_type = Some(reqtype);
+            return true;
+        }
+        let new_op = fd.new_op(1, op_pc);
+        let out_vn = fd.new_unique_out(in_size, &new_op);
+        out_vn.write().unwrap().v_type = Some(reqtype);
+        out_vn.write().unwrap().set_implied();
+        fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
+        fd.op_set_input(&new_op, in_vn, 0);
+        fd.op_set_input(op_ref, out_vn, slot);
+        fd.op_insert_before(&new_op, op_ref);
+        true
+    }
 }
 impl Action for ActionSetCasts {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. data.startCastPhase()
-        // 2. Get CastStrategy from print language
-        // 3. For each basic block (in dominance order):
-        //    For each op in the block:
-        //      - Skip notPrinted and CAST ops
-        //      - PTRADD: check if element size matches pointer target
-        //      - PTRSUB: check if offset matches field layout
-        //      - For each input: resolveUnion + castInput
-        //      - LOAD/STORE: checkPointerIssues
-        //      - castOutput on the output Varnode
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionSetCasts::apply (coreaction.cc:2722-2774). Iterate
+        // ops in basic-block/dominance order (Rugra iterates alivelist, which
+        // is already in block+seq order). For each non-CAST op, for each input
+        // slot, run castInput (inserting CPUI_CAST where the op's expected
+        // input type differs from the varnode's high type).
         //
-        use crate::opcodes::OpCode;
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_PTRADD || op_rg.opcode == OpCode::CPUI_PTRSUB {
-                // PTRADD/PTRSUB need type checking in full implementation.
+        // Scope: this ports the integer binary/unary input-cast path (the
+        // common case causing `piVar | param` int*-to-long errors). The
+        // PTRADD/PTRSUB pointer-fit checks, resolveUnion, checkPointerIssues,
+        // and castOutput are deferred (they need more type-system + union
+        // infrastructure).
+        let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+        let strategy = crate::type_system::cast::CastStrategyC::new(4);
+        let mut count = 0;
+        for op_ref in &ops {
+            let (opc, n_inputs) = {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() { continue; }
+                (op.opcode, op.num_input())
+            };
+            if opc == OpCode::CPUI_CAST { continue; }
+            // castInput may mutate inputs; iterate a snapshot of slots.
+            for slot in 0..n_inputs {
+                if self.cast_input(fd, op_ref, slot, &strategy) {
+                    count += 1;
+                }
             }
         }
-        Ok(action_status::NO_CHANGE)
+        if count > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "setcasts" }
 }
@@ -2740,7 +2842,7 @@ impl ActionInferTypes {
     pub fn new() -> Self { Self { local_count: 0 } }
 }
 impl Action for ActionInferTypes {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra algorithm:
         // 1. If type recovery not started, return.
         // 2. If localcount >= 7: warn "not settling", return.
@@ -2780,7 +2882,7 @@ impl ActionNameVars {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNameVars {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra algorithm:
         // 1. linkSymbols(data, namerec):
         //    - Iterate constant-space Varnodes with SymbolEntry → linkSymbol
@@ -2814,7 +2916,7 @@ impl ActionVarnodeProps {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionVarnodeProps {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation of ActionVarnodeProps (coreaction.cc).
         // The full Ghidra algorithm sets Varnode properties like readonly
         // propagation, autolive-hold clearing, and action-property handling.
@@ -2886,7 +2988,7 @@ impl ActionRestrictLocal {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionRestrictLocal {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestrictLocal::apply (coreaction.cc:1957-2001).
         // Collect all mark_not_mapped ranges first, then apply to scope
         // at the end to avoid borrow conflicts.
@@ -3148,7 +3250,7 @@ impl ActionMultiCse {
     }
 }
 impl Action for ActionMultiCse {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionMultiCse::apply (coreaction.cc:879-890).
         use crate::block::BlockBasic;
         let mut local_count = 0i32;
@@ -3205,7 +3307,7 @@ impl ActionDirectWrite {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDirectWrite {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDirectWrite::apply (coreaction.cc:1350-1432).
         // Phase 1: Clear direct_write on all varnodes. Collect initial
         // worklist of legal inputs / auto direct writes.
@@ -3284,7 +3386,7 @@ impl ActionConstbase {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionConstbase {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: get entry block and function address,
         // check for tracked context. Without ContextDatabase integration,
         // we can't create the COPY ops, but we correctly handle the
@@ -3325,7 +3427,7 @@ impl ActionInputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInputPrototype {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
         // If the function's input prototype is NOT locked, derive it from
         // the input varnodes:
@@ -3399,7 +3501,7 @@ impl ActionOutputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionOutputPrototype {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
         // If the return type is NOT locked, derive it from the first RETURN op.
         // If RETURN has >1 input, the function has a return value (slot 1).
@@ -3460,7 +3562,7 @@ impl ActionPrototypeTypes {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeTypes {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionPrototypeTypes::apply (coreaction.cc:4609-4651).
         // 1. Set evaluation prototype if not locked
         // 2. Strip indirect register from RETURN ops (replace input(0) with constant 0)
@@ -3520,7 +3622,7 @@ impl ActionActiveParam {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveParam {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveParam::apply (coreaction.cc:1725-1771).
         // For each call spec with active input recovery:
         // 1. checkInputTrialUse — mark trials active/inactive via ProtoModel
@@ -3570,7 +3672,7 @@ impl ActionActiveReturn {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveReturn {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveReturn::apply (coreaction.cc:1773-1792).
         // For each call spec with active output recovery:
         // 1. checkOutputTrialUse — mark trials active/inactive
@@ -3636,7 +3738,7 @@ impl ActionDefaultParams {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDefaultParams {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDefaultParams::apply (coreaction.cc:2311-2337).
         // For each call without a model:
         // 1. If the called function is known (has Funcdata), copy its prototype
@@ -3672,7 +3774,7 @@ impl ActionParamDouble {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionParamDouble {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate callspecs, for each call with
         // stack-relative params, check if the input Varnode is defined by
         // a PIECE op (indicating a doubled parameter).
@@ -3706,7 +3808,7 @@ impl ActionUnjustifiedParams {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionUnjustifiedParams {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
         // Find input varnodes whose storage is not fully covered by the
         // prototype's parameter list. These are "unjustified" inputs that
@@ -3776,7 +3878,7 @@ impl ActionLikelyTrash {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionLikelyTrash {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra algorithm:
         // 1. For each VarnodeData in funcProto.trashBegin..trashEnd:
         //    - Find covered input Varnode at that address
@@ -3807,7 +3909,7 @@ impl ActionShadowVar {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionShadowVar {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionShadowVar::apply (coreaction.cc:892-946).
         //
         // For each basic block, iterate the ops at the block's start address.
@@ -4154,7 +4256,7 @@ impl ActionFuncLink {
     }
 }
 impl Action for ActionFuncLink {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586) +
         // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
         // stage, so we build FuncCallSpecs here (one per CALL op) before linking.
@@ -4213,7 +4315,7 @@ impl ActionFuncLinkOutOnly {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionFuncLinkOutOnly {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionFuncLinkOutOnly::apply (coreaction.cc:1588-1595).
         let n_calls = fd.num_calls();
         let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
@@ -4247,7 +4349,7 @@ impl ActionDeindirect {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeindirect {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDeindirect::apply (coreaction.cc:1219-1280).
         // For each CALLIND call site, trace the indirect target through COPY
         // chains; if the resolved target is a constant address that names a
@@ -4490,7 +4592,7 @@ impl ActionStackPtrFlow {
     }
 }
 impl Action for ActionStackPtrFlow {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         // Locate the spacebase (stack-pointer) INPUT varnode: an input varnode
         // flagged is_spacebase. Faithful to checkClog's beginLoc lookup
@@ -4584,7 +4686,7 @@ impl ActionSpacebase {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionSpacebase {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         fd.spacebase();
         Ok(action_status::NO_CHANGE)
     }
@@ -4598,7 +4700,7 @@ impl ActionSegmentize {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionSegmentize {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: scan for CALLOTHER ops that might be
         // segment operations. Full algorithm requires UserOpManage +
         // SegmentOp + Architecture integration.
@@ -4625,7 +4727,7 @@ impl ActionInternalStorage {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInternalStorage {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate Varnodes and check if any match
         // internal storage locations declared in the FuncProto.
         // Full algorithm requires FuncProto.internalBegin/End + markNotMapped.
@@ -4656,7 +4758,7 @@ impl ActionExtraPopSetup {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionExtraPopSetup {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionExtraPopSetup::apply (coreaction.cc:1436-1466).
         // For each call with non-zero extraPop, create an INT_ADD op to
         // adjust the stack pointer after the call. If extraPop is unknown,
@@ -4688,7 +4790,7 @@ impl ActionConditionalConst {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionConditionalConst {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         for op_ref in &fd.obank.alivelist {
             let op_rg = op_ref.0.read().unwrap();
@@ -4712,7 +4814,7 @@ impl ActionDynamicMapping {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDynamicMapping {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "dynamicmapping" }
@@ -4725,7 +4827,7 @@ impl ActionDynamicSymbols {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDynamicSymbols {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "dynamicsymbols" }
@@ -4738,7 +4840,7 @@ impl ActionMappedLocalSync {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionMappedLocalSync {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "mappedlocalsync" }
@@ -4751,7 +4853,7 @@ impl ActionLaneDivide {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionLaneDivide {
-    fn apply(&self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
     fn get_name(&self) -> &str { "lanedivide" }
@@ -4764,7 +4866,7 @@ impl ActionReturnRecovery {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionReturnRecovery {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionReturnRecovery::apply (coreaction.cc:1908-1955).
         // If active_output is set, scan RETURN ops to determine which
         // varnode is the return value. Mark output trials as active.
@@ -4820,7 +4922,7 @@ impl ActionNonzeroMask {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNonzeroMask {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Funcdata::calcNZMask (funcdata_varnode.cc:856-930).
         // DFS traversal of ops: for each op, compute output NZM from input NZMs
         // using PcodeOp::getNZMaskLocal (op.cc:547-700).
@@ -4840,7 +4942,7 @@ impl ActionForceGoto {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionForceGoto {
-    fn apply(&self, fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.getOverride().applyForceGoto(data);
         // Our Override::apply_force_gotos calls fd.force_goto for each
         // stored (targetpc, destpc) pair.
@@ -4868,7 +4970,7 @@ mod tests {
         // behaviour of always populating the local scope.
         let mut fd = Funcdata::new("empty", crate::address::Address::new(0x1000), 0x10);
         assert!(fd.scope.is_none(), "fresh Funcdata has no scope");
-        let action = ActionRestructureVarnode::new();
+        let mut action = ActionRestructureVarnode::new();
         let status = action.apply(&mut fd).unwrap();
         // restructure_varnode always returns CHANGE in our port (it rebuilds
         // the scope unconditionally), matching Ghidra's always-rebuild design.
@@ -4878,7 +4980,7 @@ mod tests {
 
     #[test]
     fn test_action_restructure_varnode_get_name() {
-        let action = ActionRestructureVarnode::new();
+        let mut action = ActionRestructureVarnode::new();
         assert_eq!(action.get_name(), "restructureVarnode");
     }
 
@@ -4891,25 +4993,25 @@ mod tests {
 
     #[test]
     fn test_action_unreachable_name() {
-        let a = ActionUnreachable::new();
+        let mut a = ActionUnreachable::new();
         assert_eq!(a.get_name(), "unreachable");
     }
 
     #[test]
     fn test_action_donothing_name() {
-        let a = ActionDoNothing::new();
+        let mut a = ActionDoNothing::new();
         assert_eq!(a.get_name(), "donothing");
     }
 
     #[test]
     fn test_action_redundbranch_name() {
-        let a = ActionRedundBranch::new();
+        let mut a = ActionRedundBranch::new();
         assert_eq!(a.get_name(), "redundbranch");
     }
 
     #[test]
     fn test_action_determinedbranch_name() {
-        let a = ActionDeterminedBranch::new();
+        let mut a = ActionDeterminedBranch::new();
         // DeterminedBranch's get_name — verify it's wired.
         let _ = a;
     }
@@ -4919,7 +5021,7 @@ mod tests {
     fn test_action_unreachable_empty_fd() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0);
-        let a = ActionUnreachable::new();
+        let mut a = ActionUnreachable::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
@@ -4928,7 +5030,7 @@ mod tests {
     fn test_action_donothing_empty_fd() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0);
-        let a = ActionDoNothing::new();
+        let mut a = ActionDoNothing::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
@@ -4937,7 +5039,7 @@ mod tests {
     fn test_action_redundbranch_empty_fd() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0);
-        let a = ActionRedundBranch::new();
+        let mut a = ActionRedundBranch::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
@@ -4988,13 +5090,13 @@ mod tests {
     fn test_action_deindirect_empty_fd() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = ActionDeindirect::new();
+        let mut a = ActionDeindirect::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
     #[test]
     fn test_action_deindirect_name() {
-        let a = ActionDeindirect::new();
+        let mut a = ActionDeindirect::new();
         assert_eq!(a.get_name(), "deindirect");
     }
 
@@ -5018,7 +5120,7 @@ mod tests {
     fn test_action_funclink_empty_fd() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = ActionFuncLink::new();
+        let mut a = ActionFuncLink::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
@@ -5046,7 +5148,7 @@ mod tests {
         fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc));
         // Before: no active input.
         assert!(fd.get_call_specs(0).unwrap().active_input.is_none());
-        let a = ActionFuncLink::new();
+        let mut a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
         // After: unknown callee → active_input initialized for trial recovery.
         assert!(fd.get_call_specs(0).unwrap().active_input.is_some());
@@ -5076,7 +5178,7 @@ mod tests {
     fn test_action_restructure_calls_sync() {
         use crate::address::Address;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let action = ActionRestructureVarnode::new();
+        let mut action = ActionRestructureVarnode::new();
         let status = action.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");

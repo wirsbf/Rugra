@@ -124,3 +124,5 @@ condexe.cc 的第二部分，一个独立的 Rule，处理谓词构造：
 apply_on_empty_fd、boolean_match_same_condition、trial_rejects_unrelated_conditions、
 rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_order_basic。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+
+### 2026-07-01（管线改造）：ActionConditionalExe apply &self→&mut self

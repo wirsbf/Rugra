@@ -628,3 +628,14 @@ ActionDeterminedBranch/ActionUnreachable/ActionDoNothing/ActionRedundBranch 的 
 lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（避免与 5634 重复注册）。
 
 验证：832/832 测试，curl 24/24 无回归。
+
+### 2026-07-01（重大）：管线架构改造 — perform 调度引擎 + 嵌套树结构
+- **perform 状态机**：移植 Ghidra action.cc:298-362。`Action::perform(&mut self, fd, &mut ActionState)` 驱动 repeatapply/onceperfunc 语义。ActionState 持有 status/count/flags 字段。
+- **Action trait 改 `&mut self`**：apply/reset 签名变更，全仓连锁修改（coreaction.rs/blockaction.rs/condexe.rs/funcdata.rs/examples/bin）。
+- **ActionGroup 改 perform 驱动**：apply 调子 Action 的 perform（而非直接 apply），支持状态续传。
+- **ActionPool 单遍化**：移除内部 repeat loop，由父级 perform 的 rule_repeatapply 驱动。补 opcode 变化检测（action.cc:862-867）。
+- **ActionRestartGroup 新建**：移植 action.cc:554-583。universal 根容器，支持 restart pending → clearAnalysis → 重跑。
+- **Funcdata +restart_pending + has_restart_pending/set_restart_pending + is_jumptable_recovery_on**。
+- **set_default_actions 重构为嵌套树**：universal(ActionRestartGroup) → fullloop(ActionGroup) → mainloop(ActionGroup) → stackstall(ActionGroup) → oppool1(ActionPool)。
+- **TODO**：fullloop/mainloop/stackstall 暂不设 RULE_REPEATAPPLY（Rugra 自造 Action 非幂等，重复会导致死循环）。待自造 Action 幂等化或替换为 Ghidra 机制后启用。
+- **apply_all 改 perform 驱动**：每个函数先 reset，再 perform。
