@@ -76,3 +76,6 @@ SUBPIECE(PIECE) 回溯：尝试低/高半分量，三路重写（size 不匹配/
 
 ### 2026-07-01（续 4）：SubfloatConvert 常量折叠
 FLOAT_FLOAT2FLOAT 常量输入→op_float2_float fold→COPY(constant)（subflow.cc:3394-3403）。3 新测试。
+
+### 2026-07-01（续 5）：SubfloatConvert 非 const 精度追踪
+非 const 路径：widening→root=outvn+insize，narrowing→root=invn+outsize。update_type 标记有效精度 float 类型。5 新测试。

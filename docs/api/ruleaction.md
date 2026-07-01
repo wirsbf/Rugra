@@ -922,3 +922,7 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 - ConditionalMove 非 const 路径：gather_expression + construct_bool（ruleaction.cc:9305-9381）。值在分支前形成的非 const 情况能产生 BOOL_OR/AND。
 - RuleEarlyRemoval：6 guard 全对齐（ruleaction.cc:25-44）。IOP 空间输出新增可删。
 - AddTreeState distribute/collapse：while 循环补全（ruleaction.cc:6475-6491）+ collapse_int_mult_mult。
+
+### 2026-07-01（续 11）：PtrsubUndo testForArraySlack + PtrsubCharConstant stringManager
+PtrsubUndo：test_for_array_slack（type.cc:990-1005）+ nearest_arrayed_component_forward/backward + get_lower_bound_field。数组 slack 现在允许 PTRSUB。
+PtrsubCharConstant：stringManager.is_string 精确守卫（ruleaction.cc:7393）。string_table + is_string 双重确认。6 新测试。

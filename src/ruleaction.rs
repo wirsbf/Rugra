@@ -10231,12 +10231,24 @@ impl Rule for RulePtrsubCharConstant {
         if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
         // Compute the symbol address. Ghidra uses TypeSpacebase::getAddress
         // (which calls Architecture::resolveConstant). Rugra's spacebase base
-        // is 0 (the load image base), so symaddr = vn1 offset. We verify
-        // read-only + string by checking Funcdata's string_table (populated
-        // from .rodata, which is inherently read-only).
+        // is 0 (the load image base), so symaddr = vn1 offset.
         let symaddr = vn1.read().unwrap().get_offset();
+        // ruleaction.cc:7390 — Scope::isReadOnly(symaddr, 1, op->getAddr()).
+        // Rugra has no Scope/Database read-only query wired to rules, so we use
+        // Funcdata's string_table as a read-only proxy: its entries come from
+        // .rodata (inherently read-only) and stand in for isReadOnly.
         if !_fd.string_table.contains_key(&symaddr) {
-            return Ok(action_status::NO_CHANGE); // not a known read-only string
+            return Ok(action_status::NO_CHANGE); // not a known read-only address
+        }
+        // ruleaction.cc:7393 — stringManager->isString(symaddr, basetype).
+        // If the Architecture exposes a populated StringManager, require it to
+        // confirm symaddr holds a real string (the precise Ghidra guard). When
+        // no StringManager is attached (legacy/test Funcdata), fall back to the
+        // string_table hit alone, which is itself a string-bearing address.
+        if let Some(sm) = _fd.get_arch().and_then(|a| a.string_manager.as_ref()) {
+            if !sm.read().unwrap().is_string(crate::Address::new(symaddr)) {
+                return Ok(action_status::NO_CHANGE); // confirmed not a string
+            }
         }
         // If we reach here, the PTRSUB should be converted to a COPY of a
         // constant pointer. Faithful to ruleaction.cc:7396-7421.
@@ -12057,20 +12069,165 @@ impl Rule for RulePtraddUndo {
 /// The final `applyOp` uses `fd.has_type_recovery_started()`, the pointer-type
 /// guard (`get_type()` + `is_ptrsub_matching`, approximating
 /// `isPtrsubMatching`), `op_arc.write().clear_stop_type_propagation()`, and
-/// `fd.op_undo_ptradd(...)` — all now wired. The numeric transform is faithful;
-/// `is_ptrsub_matching` approximates the TypePointerRel/testForArraySlack cases
-/// conservatively.
+/// `fd.op_undo_ptradd(...)` — all now wired. The numeric transform is faithful.
+/// `is_ptrsub_matching` models the core TypePointer cases plus
+/// `testForArraySlack` (type.cc:990-1005) for the Spacebase/Struct branches;
+/// TypePointerRel (the relative-pointer subclass) is still not modelled.
 pub struct RulePtrsubUndo;
 
 impl RulePtrsubUndo {
     pub const DEPTH_LIMIT: i32 = 8;
     pub fn new() -> Self { Self }
 
-    /// Faithful to `TypePointer::isPtrsubMatching` (type.cc:1123-1162). Returns
+    /// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005). If the
+    /// given data-type is an array, or has an arrayed component at/near the
+    /// out-of-bounds offset `off`, return true (the offset can be explained as
+    /// array slack, i.e. a PTRSUB into an array element, not an INT_ADD).
+    ///
+    /// Calls `nearest_arrayed_component_forward/backward` (type.cc:188-205
+    /// base + 1669-1741 struct override) to find a component that is (or
+    /// contains) an array near `off`.
+    fn test_for_array_slack(
+        dt: &crate::type_system::datatype::Datatype,
+        off: i64,
+    ) -> bool {
+        use crate::type_system::datatype::TypeMetatype;
+        // type.cc:995-996 — a bare array always has slack.
+        if dt.get_metatype() == TypeMetatype::Array { return true; }
+        let comp = if off < 0 {
+            Self::nearest_arrayed_component_forward(dt, off)
+        } else {
+            Self::nearest_arrayed_component_backward(dt, off)
+        };
+        comp.is_some()
+    }
+
+    /// Faithful to `Datatype::nearestArrayedComponentForward` (type.cc:188-192)
+    /// base + `TypeStruct::nearestArrayedComponentForward` (type.cc:1698-1740).
+    /// Find the first component data-type that is (or contains) an array
+    /// starting at or after offset `off`, returning the component if found.
+    /// Base/array/union/etc. return None (the base override returns null).
+    fn nearest_arrayed_component_forward(
+        dt: &crate::type_system::datatype::Datatype,
+        off: i64,
+    ) -> Option<&crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        // Base Datatype override (type.cc:188-192) returns null; only structs
+        // (TypeStruct override, type.cc:1698-1740) walk fields.
+        if let Datatype::Struct(s) = dt {
+            // getLowerBoundField(off): index of field with greatest offset <= off, else -1.
+            let first_index = Self::get_lower_bound_field(s, off);
+            let mut i: i64 = first_index;
+            let mut remain: i64;
+            if i < 0 {
+                // No component starting before off: start at first field after.
+                i = 0;
+                remain = 0;
+            } else {
+                let idx = i as usize;
+                let subfield = &s.fields[idx];
+                remain = off - subfield.offset as i64;
+                if remain != 0
+                    && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
+                        || remain >= subfield.type_ptr.get_size() as i64)
+                {
+                    // Middle of a non-structure that we must go forward from: skip it.
+                    i += 1;
+                    remain = 0;
+                }
+            }
+            while (i as usize) < s.fields.len() {
+                let idx = i as usize;
+                let subfield = &s.fields[idx];
+                // diff = field.offset - off (may be negative for the first field).
+                let diff = subfield.offset as i64 - off;
+                if diff > 128 { break; }
+                let subtype = subfield.type_ptr.as_ref();
+                if subtype.get_metatype() == TypeMetatype::Array {
+                    return Some(subtype);
+                } else {
+                    let res = Self::nearest_arrayed_component_forward(subtype, remain);
+                    if res.is_some() {
+                        let subdiff = diff + remain; // suboff folded in via remain
+                        if subdiff > 128 { break; }
+                        return Some(subtype);
+                    }
+                }
+                i += 1;
+                remain = 0;
+            }
+        }
+        None
+    }
+
+    /// Faithful to `Datatype::nearestArrayedComponentBackward` (type.cc:201-205)
+    /// base + `TypeStruct::nearestArrayedComponentBackward` (type.cc:1669-1696).
+    /// Find the last component data-type that is (or contains) an array
+    /// starting before or at offset `off`, returning the component if found.
+    fn nearest_arrayed_component_backward(
+        dt: &crate::type_system::datatype::Datatype,
+        off: i64,
+    ) -> Option<&crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        // Base Datatype override (type.cc:201-205) returns null; only structs
+        // (TypeStruct override, type.cc:1669-1696) walk fields.
+        if let Datatype::Struct(s) = dt {
+            let first_index = Self::get_lower_bound_field(s, off);
+            let mut i: i64 = first_index;
+            while i >= 0 {
+                let idx = i as usize;
+                let subfield = &s.fields[idx];
+                let diff = off - subfield.offset as i64;
+                if diff > 128 { break; }
+                let subtype = subfield.type_ptr.as_ref();
+                if subtype.get_metatype() == TypeMetatype::Array {
+                    return Some(subtype);
+                } else {
+                    let remain = if idx == first_index as usize {
+                        diff
+                    } else {
+                        subtype.get_size() as i64 - 1
+                    };
+                    let res = Self::nearest_arrayed_component_backward(subtype, remain);
+                    if res.is_some() {
+                        return Some(subtype);
+                    }
+                }
+                i -= 1;
+            }
+        }
+        None
+    }
+
+    /// Faithful to `TypeStruct::getLowerBoundField` (type.cc:1604-1622). Returns
+    /// the index of the field with the greatest offset <= `off`, or -1 if none.
+    /// Assumes `fields` is sorted ascending by offset (as in struct_get_sub_type).
+    fn get_lower_bound_field(
+        s: &crate::type_system::datatype::TypeStruct,
+        off: i64,
+    ) -> i64 {
+        if s.fields.is_empty() { return -1; }
+        let mut min: i64 = 0;
+        let mut max: i64 = s.fields.len() as i64 - 1;
+        while min < max {
+            let mid = (min + max + 1) / 2;
+            if s.fields[mid as usize].offset as i64 > off {
+                max = mid - 1;
+            } else {
+                min = mid;
+            }
+        }
+        if min == max && s.fields[min as usize].offset as i64 <= off {
+            return min;
+        }
+        -1
+    }
+
+    /// Faithful to `TypePointer::isPtrsubMatching` (type.cc:1123-1175). Returns
     /// true if a PTRSUB with offset `off`, extra `extra`, and `multiplier` still
     /// matches the pointer's pointed-to type. wordsize defaults to 1
-    /// (addressToByteInt is a no-op); `testForArraySlack` is conservatively
-    /// treated as false (so the slack branch never relaxes the size bound).
+    /// (addressToByteInt is a no-op). When an out-of-bounds `extra` is found,
+    /// `testForArraySlack` (type.cc:1134, 1157) is consulted before rejecting.
     fn is_ptrsub_matching(
         dt: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         off: i64,
@@ -12093,8 +12250,11 @@ impl RulePtrsubUndo {
                         if sub_off != 0 { return false; }
                         extra = extra.wrapping_mul(wordsize);
                         if extra < 0 || extra >= s.get_size() as i64 {
-                            // testForArraySlack not modelled → false.
-                            return false;
+                            // type.cc:1134 — testForArraySlack allows PTRSUB into
+                            // an arrayed component even when extra is OOB.
+                            if !Self::test_for_array_slack(s, extra) {
+                                return false;
+                            }
                         }
                         true
                     }
@@ -12117,8 +12277,11 @@ impl RulePtrsubUndo {
                     Some(s) => {
                         if sub_off != 0 { return false; }
                         if extra < 0 || extra >= s.get_size() as i64 {
-                            // testForArraySlack not modelled → false.
-                            return false;
+                            // type.cc:1157 — testForArraySlack allows PTRSUB into
+                            // an arrayed component even when extra is OOB.
+                            if !Self::test_for_array_slack(s, extra) {
+                                return false;
+                            }
                         }
                         true
                     }
@@ -18774,6 +18937,223 @@ mod tests {
             let r = RuleFuncPtrEncoding::new();
             assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
         }
+    }
+
+    /// testForArraySlack (type.cc:990-1005): a bare array always has slack.
+    /// Drives the is_ptrsub_matching Spacebase/Struct branches so a PTRSUB into
+    /// an arrayed component is no longer rejected.
+    #[test]
+    fn test_rule_ptrsub_undo_test_for_array_slack_array() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeField, TypeMetatype, TypePointer, TypeStruct,
+        };
+        // int[4] (element int size 4)
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let arr = Datatype::Array(TypeArray {
+            base: TypeBase::new("int[4]".into(), 16, TypeMetatype::Array),
+            array_of: int_t,
+            num_elements: 4,
+        });
+        // A bare array → test_for_array_slack is true regardless of offset.
+        assert!(RulePtrsubUndo::test_for_array_slack(&arr, 0));
+        assert!(RulePtrsubUndo::test_for_array_slack(&arr, 17));
+    }
+
+    /// testForArraySlack on a struct containing an array field: the arrayed
+    /// component is found via nearestArrayedComponentBackward/Forward
+    /// (type.cc:1669-1741), so slack is allowed.
+    #[test]
+    fn test_rule_ptrsub_undo_test_for_array_slack_struct_array_field() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeField, TypeMetatype, TypeStruct,
+        };
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        // buf: char[8] at offset 0
+        let buf_arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("char[8]".into(), 8, TypeMetatype::Array),
+            array_of: char_t,
+            num_elements: 8,
+        }));
+        // struct { char buf[8] @0; int x @8; } size 12
+        let s = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 12, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "buf".into(), offset: 0, type_ptr: buf_arr },
+                TypeField { name: "x".into(), offset: 8, type_ptr: int_t },
+            ],
+        });
+        // Within the array field → slack true (backward search finds the array).
+        assert!(RulePtrsubUndo::test_for_array_slack(&s, 5));
+        // Before the struct (negative offset) → forward search finds the array.
+        assert!(RulePtrsubUndo::test_for_array_slack(&s, -2));
+    }
+
+    /// testForArraySlack negative: a struct with no arrayed component and an
+    /// out-of-bounds extra must return false (no slack to explain it).
+    #[test]
+    fn test_rule_ptrsub_undo_test_for_array_slack_no_array() {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeField, TypeMetatype, TypeStruct,
+        };
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        // struct { char a @0; int b @4; } size 8 — no array field.
+        let s = Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S2".into(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: char_t },
+                TypeField { name: "b".into(), offset: 4, type_ptr: int_t },
+            ],
+        });
+        // No array component reachable → false.
+        assert!(!RulePtrsubUndo::test_for_array_slack(&s, 3));
+    }
+
+    /// is_ptrsub_matching end-to-end: a PTRSUB into a Spacebase sub-type that is
+    /// itself an array keeps matching once testForArraySlack is wired
+    /// (type.cc:1133-1136). Before the fix this returned false for an OOB extra.
+    #[test]
+    fn test_rule_ptrsub_undo_is_ptrsub_matching_array_slack() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer,
+        };
+        // int[4], element size 4.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let arr = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("int[4]".into(), 16, TypeMetatype::Array),
+            array_of: int_t,
+            num_elements: 4,
+        }));
+        // (int[4] *) — pointer to the array.
+        let ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int[4] *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: arr,
+            wordsize: 1,
+        }));
+        // off=0 (sub-type is the array, sub_off=0), extra=20 (>= array size 16
+        // → out of bounds). testForArraySlack(array, 20) == true, so it still
+        // matches.
+        assert!(RulePtrsubUndo::is_ptrsub_matching(&ptr, 0, 20, 0));
+    }
+
+    /// RulePtrsubCharConstant: when the Architecture exposes a StringManager
+    /// that does NOT confirm symaddr as a string, the rule must no-op even if
+    /// symaddr is in the read-only string_table proxy.
+    #[test]
+    fn test_rule_ptrsub_char_constant_string_manager_rejects() {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+        };
+        let mut fd = Funcdata::new("charconst", Address::new(0x1000), 0x10);
+        // spacebase type for the input pointer's pointed-to type.
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+        }));
+        let sb_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 1,
+        }));
+        // char with chartype flag set so isCharPrint() is true.
+        let char_print = {
+            let mut b = TypeBase::new("char".into(), 1, TypeMetatype::Int);
+            b.flags |= type_flags::CHARTYPE;
+            Arc::new(Datatype::Base(b))
+        };
+        let out_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: char_print,
+            wordsize: 1,
+        }));
+        // Register symaddr=0x2000 in string_table (read-only proxy).
+        fd.add_string(0x2000, "hello".to_string());
+        // Architecture with an EMPTY StringManager (no entry at 0x2000) →
+        // isString must reject.
+        let mut arch = crate::arch::Architecture::new();
+        let sm = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::stringmanage::StringManager::new(100),
+        ));
+        arch.set_string_manager(sm);
+        fd.set_arch(std::sync::Arc::new(arch));
+        // sb input: a constant carrying the spacebase pointer type.
+        let sb_vn = fd.vbank.create_constant(8, 0);
+        sb_vn.write().unwrap().update_type(sb_ptr);
+        // vn1: constant offset 0x2000.
+        let vn1 = fd.vbank.create_constant(8, 0x2000);
+        // output: a unique carrying the char * type.
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
+        op.inrefs = vec![sb_vn, vn1];
+        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        outvn.write().unwrap().update_type(out_ptr);
+        op.output = Some(outvn);
+        let op_arc = Arc::new(RwLock::new(op));
+        let r = RulePtrsubCharConstant::new();
+        // StringManager has no entry at 0x2000 → NO_CHANGE (rejected by the
+        // precise isString guard added per ruleaction.cc:7393).
+        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// RulePtrsubCharConstant: when the Architecture's StringManager CONFIRMS
+    /// symaddr as a string, the PTRSUB is collapsed to a COPY of the constant
+    /// (ruleaction.cc:7396-7421).
+    #[test]
+    fn test_rule_ptrsub_char_constant_string_manager_confirms() {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+        };
+        let mut fd = Funcdata::new("charconst2", Address::new(0x1000), 0x10);
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+        }));
+        let sb_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 1,
+        }));
+        let char_print = {
+            let mut b = TypeBase::new("char".into(), 1, TypeMetatype::Int);
+            b.flags |= type_flags::CHARTYPE;
+            Arc::new(Datatype::Base(b))
+        };
+        let out_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: char_print.clone(),
+            wordsize: 1,
+        }));
+        // Register symaddr=0x2000 in both string_table (read-only proxy) and
+        // the Architecture's StringManager (precise isString confirmation).
+        fd.add_string(0x2000, "hello".to_string());
+        let mut arch = crate::arch::Architecture::new();
+        let mut sm = crate::stringmanage::StringManager::new(100);
+        sm.insert_string_data(
+            Address::new(0x2000),
+            crate::stringmanage::StringData {
+                is_truncated: false,
+                byte_data: vec![b'h', b'e', b'l', b'l', b'o'],
+            },
+        );
+        arch.set_string_manager(std::sync::Arc::new(std::sync::RwLock::new(sm)));
+        fd.set_arch(std::sync::Arc::new(arch));
+        let sb_vn = fd.vbank.create_constant(8, 0);
+        sb_vn.write().unwrap().update_type(sb_ptr);
+        let vn1 = fd.vbank.create_constant(8, 0x2000);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
+        op.inrefs = vec![sb_vn, vn1];
+        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        outvn.write().unwrap().update_type(out_ptr);
+        op.output = Some(outvn);
+        let op_arc = Arc::new(RwLock::new(op));
+        let r = RulePtrsubCharConstant::new();
+        // StringManager confirms 0x2000 → CHANGE (collapsed to COPY).
+        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_COPY);
     }
 
     /// RuleSegment constant-fold path: both SEGMENTOP inputs constant with a

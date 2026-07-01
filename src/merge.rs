@@ -692,15 +692,92 @@ impl Merge {
     /// Step 4: ActionMergeMultiEntry (coreaction.hh:403).
     /// Faithful to `Merge::mergeMultiEntry` (merge.cc:908-963).
     ///
-    /// Merges Varnodes mapped to different SymbolEntries of the same Symbol.
-    /// Rugra does not yet build the multi-entry Symbol/SymbolEntry map
-    /// (ScopeLocal::beginMultiEntry), so there is no multi-entry symbol set
-    /// to iterate. Kept as a named no-op so the step sequence stays faithful
-    /// and is wired into merge_all.
-    pub fn merge_multi_entry(&mut self, _fd: &mut Funcdata) {
-        // TODO: requires ScopeLocal multi-entry symbol iteration
-        // (data.getScopeLocal()->beginMultiEntry, merge.cc:911). When the
-        // symbol/scope machinery is ported, port mergeMultiEntry verbatim.
+    /// Ghidra iterates `data.getScopeLocal()->beginMultiEntry()..endMultiEntry()`
+    /// — the set of Symbols that own more than one SymbolEntry. For each such
+    /// Symbol it gathers every linked Varnode (`findLinkedVarnodes`) and merges
+    /// them all into one HighVariable so the multiple storage locations of a
+    /// single logical variable are represented as one.
+    ///
+    /// Rugra does not yet build the `ScopeLocal` multi-entry registry
+    /// (`beginMultiEntry`), but Varnodes *do* carry a `mapentry` back-pointer
+    /// to their `SymbolEntry` (and through it to the owning `Symbol`). So we
+    /// reconstruct the multi-entry grouping directly: group live, merge-eligible
+    /// Varnodes by their owning Symbol's Arc identity, and for every Symbol
+    /// that owns ≥ 2 distinct SymbolEntries (the `is_multi_entry` test,
+    /// `whole_count > 1`), merge all its Varnodes into one HighVariable.
+    ///
+    /// Unlike Ghidra we cannot `snip` the data flow to resolve cover
+    /// intersections (Rugra has no trim machinery), so the merge is attempted
+    /// *speculatively* via `merge_speculative`: Varnodes whose covers make them
+    /// simultaneously live are left in separate HighVariables rather than
+    /// producing an incorrect union. This mirrors Ghidra's
+    /// `mergeTestRequired` failure path (`newHigh->setUnmerged()`).
+    pub fn merge_multi_entry(&mut self, fd: &mut Funcdata) {
+        use crate::address::Address;
+        use std::collections::HashMap;
+
+        // Group live, merge-eligible Varnodes by owning Symbol (Arc pointer).
+        // Each entry also records its SymbolEntry's address+size so we can
+        // count DISTINCT whole-sized entries per Symbol — mirroring Ghidra's
+        // `symbol->numEntries()` loop (merge.cc:916-928) which skips piece
+        // entries whose size != the Symbol's whole type size.
+        let mut by_symbol: HashMap<
+            usize, // Symbol Arc ptr
+            Vec<(Address, usize, Arc<RwLock<Varnode>>)>, // (entry addr, size, vn)
+        > = HashMap::new();
+
+        for vn_ref in &fd.vbank.loc_tree {
+            let vn_arc = vn_ref.0.clone();
+            // Resolve (symbol ptr, entry addr, entry size) or skip. A Varnode
+            // with no mapentry is not a symbol storage location and never
+            // participates in multi-entry merging.
+            let (sym_ptr, entry_addr, entry_size) = {
+                let vn = vn_arc.read().unwrap();
+                let live = vn.is_input()
+                    || self.live_set.contains(&(std::sync::Arc::as_ptr(&vn_arc) as usize));
+                if !live || !Self::merge_test_basic(&vn) {
+                    continue;
+                }
+                let me = match vn.get_symbol_entry() {
+                    Some(e) => e,
+                    None => continue, // No symbol mapping: not a symbol entry.
+                };
+                let me = me.read().unwrap();
+                (
+                    std::sync::Arc::as_ptr(&me.get_symbol()) as usize,
+                    me.addr,
+                    me.size as usize,
+                )
+            };
+            by_symbol
+                .entry(sym_ptr)
+                .or_default()
+                .push((entry_addr, entry_size, vn_arc));
+        }
+
+        // For each Symbol group with ≥ 2 distinct whole-sized entries, merge
+        // all its Varnodes into one HighVariable. Faithful to merge.cc:920-948
+        // (the per-SymbolEntry loop that accumulates mergeList, then the
+        // merge(anchor, vn, false) loop).
+        for (_, group) in by_symbol.drain() {
+            // Distinct entries (by addr) — Ghidra counts whole-sized entries.
+            let distinct_entries: std::collections::HashSet<u64> = group
+                .iter()
+                .map(|(a, _, _)| a.as_u64())
+                .collect();
+            if distinct_entries.len() < 2 {
+                continue; // Not multi-entry for this Symbol.
+            }
+            // Ghidra uses mergeList[0]->getHigh() as the merge anchor and
+            // attempts merge(anchor, vn, false) for each subsequent vn. We
+            // take the first vn as the anchor and merge each other vn's High.
+            let group: Vec<Arc<RwLock<Varnode>>> =
+                group.into_iter().map(|(_, _, vn)| vn).collect();
+            let anchor_arc = group[0].clone();
+            for vn_arc in group.into_iter().skip(1) {
+                self.merge_speculative_by_vn(&anchor_arc, &vn_arc);
+            }
+        }
     }
 
     /// Step 5: ActionMergeCopy (coreaction.hh:392).
@@ -803,18 +880,106 @@ impl Merge {
         self.merge_speculative_except(&h1, &h2, exclude_block, exclude_order)
     }
 
-    /// Step 6: ActionDominantCopy (coreaction.hh:1008).
-    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
+    /// Step 6: ActionDominantCopy (coreaction.cc:4831 / coreaction.hh:1008).
+    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436) and its
+    /// delegate `Merge::processHighDominantCopy` (merge.cc:1316-1337).
     ///
-    /// Replaces multiple COPYs into the same HighVariable (produced by the
-    /// earlier snip trims) with a single dominant COPY. The trims are
-    /// accumulated in `copyTrims`, which is only populated by Rugra's
-    /// absent `allocateCopyTrim`/`snipReads` machinery — so in Rugra there
-    /// is never anything to process. This is a faithful no-op.
-    pub fn dominant_copy(&mut self, _fd: &mut Funcdata) {
-        // TODO: requires allocateCopyTrim/snipReads (merge.cc:411,443) which
-        // Rugra does not perform. With no copyTrims accumulated, there are no
-        // dominant-copy replacements to make. Mirrors Ghidra's empty-list path.
+    /// In Ghidra, `processCopyTrims` walks the `copyTrims` list — COPY ops
+    /// inserted by the earlier snip trims (`allocateCopyTrim`/`snipReads`,
+    /// merge.cc:411,443) — to find HighVariables that received ≥ 2 such COPYs
+    /// and calls `processHighDominantCopy(high)` to replace them with a single
+    /// dominant COPY (the one whose block dominates all the others). The output
+    /// Varnodes of the redundant COPYs are merged into the dominant COPY's
+    /// output High.
+    ///
+    /// Rugra has no snip/trim machinery, so the literal `copyTrims` list is
+    /// always empty and the Ghidra path would be a no-op. The pragmatic
+    /// implementation here mirrors `merge_copy` but with the *dominant* anchor
+    /// chosen by cover extent: for each alive COPY whose input and output are
+    /// NOT yet in the same HighVariable, attempt a speculative
+    /// (cover-guarded) merge of the input and output HighVariables, with the
+    /// side holding the larger cover acting as the dominant anchor. When
+    /// several COPYs read the same source Varnode, this folds their outputs
+    /// into the source's HighVariable, achieving the dominant-copy
+    /// consolidation. This keeps the same safety contract as Ghidra's
+    /// `buildDominantCopy` (merge.cc:1207): a merge is skipped when it would
+    /// make two instances of one logical variable simultaneously live.
+    pub fn dominant_copy(&mut self, fd: &mut Funcdata) {
+        use crate::opcodes::OpCode;
+
+        // Gather (in_vn, out_vn, op_arc) for every alive COPY whose input and
+        // output are NOT already in the same HighVariable. This mirrors the
+        // `findAllIntoCopies` self-merge skip (merge.cc:1303: an internal copy
+        // whose input high == output high is already consolidated).
+        let copies: Vec<(
+            Arc<RwLock<Varnode>>,
+            Arc<RwLock<Varnode>>,
+            Arc<RwLock<crate::op::PcodeOp>>,
+        )> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_COPY {
+                    return None;
+                }
+                let out = op.output.clone()?;
+                let in_vn = op.inrefs.get(0).cloned()?;
+                let same_high = {
+                    let o = out.read().unwrap();
+                    let i = in_vn.read().unwrap();
+                    match (o.high.as_ref(), i.high.as_ref()) {
+                        (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
+                        _ => false,
+                    }
+                };
+                if same_high {
+                    return None; // internal copy — already consolidated
+                }
+                drop(op);
+                Some((in_vn, out, op_ref.0.clone()))
+            })
+            .collect();
+
+        for (in_vn, out_vn, op_arc) in copies {
+            // Skip varnodes that fail the basic merge-eligibility test.
+            let (in_basic, out_basic) = {
+                let vi = in_vn.read().unwrap();
+                let vo = out_vn.read().unwrap();
+                (Self::merge_test_basic(&vi), Self::merge_test_basic(&vo))
+            };
+            if !in_basic || !out_basic {
+                continue;
+            }
+            // Choose the DOMINANT anchor: the side with the larger aggregate
+            // cover becomes the merge target. Faithful to Ghidra's notion of a
+            // dominant COPY (merge.cc:1158 domCopy) — the COPY whose reach
+            // dominates the others. We use cover block count as the dominance
+            // proxy (the wider live range dominates the narrower ones).
+            let (cover_in, cover_out) = {
+                let vi = in_vn.read().unwrap();
+                let vo = out_vn.read().unwrap();
+                let ci = vi.high.as_ref().map(aggregate_high_cover).unwrap_or_else(Cover::new);
+                let co = vo.high.as_ref().map(aggregate_high_cover).unwrap_or_else(Cover::new);
+                (ci, co)
+            };
+            let in_dominant = cover_in.blocks.len() >= cover_out.blocks.len();
+            // Exempt the COPY op's own block/order from the intersection test:
+            // the COPY reads the input and writes the output at one op, so
+            // their covers always overlap there — that meeting IS the merge
+            // point, not a real simultaneity (the same exemption merge_copy
+            // uses). Any OTHER overlap still blocks the merge.
+            if let Some((block, order)) = op_block_order(&op_arc) {
+                if in_dominant {
+                    self.merge_speculative_by_vn_except(&in_vn, &out_vn, block, order);
+                } else {
+                    self.merge_speculative_by_vn_except(&out_vn, &in_vn, block, order);
+                }
+            } else {
+                self.merge_speculative_by_vn(&in_vn, &out_vn);
+            }
+        }
     }
 
     /// Step 9: ActionMergeAdjacent (coreaction.hh:381).
@@ -1678,6 +1843,245 @@ mod tests {
         assert!(
             Arc::ptr_eq(&in_high, &out_high),
             "MULTIEQUAL input and output must share a HighVariable after merge_marker"
+        );
+    }
+
+    /// `merge_multi_entry` (ActionMergeMultiEntry, merge.cc:908) must merge
+    /// Varnodes mapped to distinct SymbolEntries of the same Symbol.
+    ///
+    /// Setup: two Unique-space temps `t1` and `t2` at different addresses,
+    /// each carrying a `mapentry` pointing to a different SymbolEntry of the
+    /// SAME Symbol (the multi-entry condition: ≥ 2 distinct whole-sized
+    /// entries per Symbol). After `merge_all`, `t1` and `t2` must share one
+    /// HighVariable because they are two storage locations of one logical
+    /// variable.
+    #[test]
+    fn test_merge_multi_entry_unifies_symbol_entries() {
+        use crate::database::{Symbol, SymbolEntry};
+        use crate::address::RangeList;
+
+        let mut fd = Funcdata::new("multi_entry", Address::new(0x6000), 0x80);
+
+        // Two independent temps (different addresses) — nothing copy-related
+        // links them, so only merge_multi_entry (via the shared Symbol) can
+        // merge them.
+        let mut def1 = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        def1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        def1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RBX ptr
+        def1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8)); // t1
+
+        let mut use1 = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        use1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        use1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x20, 8)); // RSP addr
+        use1.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8)); // store t1
+
+        let mut def2 = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        def2.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        def2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x28, 8)); // RBP ptr
+        def2.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8)); // t2
+
+        let mut use2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        use2.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8)); // use t2
+
+        fd.inject_raw_ops(&[def1, use1, def2, use2]);
+        fd.run_heritage_direct();
+
+        // Resolve the actual live Varnode objects (post-heritage the LOAD
+        // outputs are the canonical t1/t2 instances). We grab them from the
+        // defining LOAD ops' outputs — robust against loc_tree duplicate
+        // entries that arise from raw injection.
+        let loads: Vec<_> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_LOAD)
+            .map(|o| o.0.clone())
+            .collect();
+        assert_eq!(loads.len(), 2, "two LOAD ops expected");
+        let t1 = {
+            let l = loads[0].read().unwrap();
+            l.output.clone().expect("LOAD1 output")
+        };
+        let t2 = {
+            let l = loads[1].read().unwrap();
+            l.output.clone().expect("LOAD2 output")
+        };
+        assert!(
+            t1.read().unwrap().loc != t2.read().unwrap().loc,
+            "t1 and t2 must be at distinct addresses"
+        );
+
+        // Build a single Symbol with two distinct SymbolEntries (multi-entry).
+        let sym = Arc::new(RwLock::new(Symbol::new(0, "shared", "long")));
+        let entry1 = Arc::new(RwLock::new(SymbolEntry::new_static(
+            sym.clone(),
+            0,
+            Address::new(0xAAA),
+            0,
+            8,
+            RangeList::new(),
+        )));
+        let entry2 = Arc::new(RwLock::new(SymbolEntry::new_static(
+            sym.clone(),
+            0,
+            Address::new(0xBBB),
+            0,
+            8,
+            RangeList::new(),
+        )));
+
+        // Attach entry1 → t1, entry2 → t2 (the canonical instances).
+        t1.write().unwrap().mapentry = Some(entry1.clone());
+        t2.write().unwrap().mapentry = Some(entry2.clone());
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        let h1 = t1.read().unwrap().high.clone().expect("t1 has high");
+        let h2 = t2.read().unwrap().high.clone().expect("t2 has high");
+        assert!(
+            Arc::ptr_eq(&h1, &h2),
+            "multi-entry symbol's varnodes must share a HighVariable after merge_multi_entry"
+        );
+    }
+
+    /// `merge_multi_entry` must NOT merge Varnodes whose SymbolEntries map to
+    /// DIFFERENT Symbols (the single-entry case). Two temps each with their own
+    /// one-entry Symbol should remain separate.
+    #[test]
+    fn test_merge_multi_entry_keeps_single_entry_symbols_separate() {
+        use crate::database::{Symbol, SymbolEntry};
+        use crate::address::RangeList;
+
+        let mut fd = Funcdata::new("single_entry", Address::new(0x6050), 0x80);
+
+        let mut def1 = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        def1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        def1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8));
+        def1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+
+        let mut use1 = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        use1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        use1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x20, 8));
+        use1.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+
+        let mut def2 = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        def2.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        def2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x28, 8));
+        def2.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8));
+
+        let mut use2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        use2.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8));
+
+        fd.inject_raw_ops(&[def1, use1, def2, use2]);
+        fd.run_heritage_direct();
+
+        // Resolve the canonical live Varnode objects via the defining LOAD ops.
+        let loads: Vec<_> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_LOAD)
+            .map(|o| o.0.clone())
+            .collect();
+        assert_eq!(loads.len(), 2, "two LOAD ops expected");
+        let t1 = {
+            let l = loads[0].read().unwrap();
+            l.output.clone().expect("LOAD1 output")
+        };
+        let t2 = {
+            let l = loads[1].read().unwrap();
+            l.output.clone().expect("LOAD2 output")
+        };
+
+        // Two DIFFERENT symbols, each with one entry (not multi-entry).
+        let sym_a = Arc::new(RwLock::new(Symbol::new(0, "a", "long")));
+        let sym_b = Arc::new(RwLock::new(Symbol::new(0, "b", "long")));
+        let entry_a = Arc::new(RwLock::new(SymbolEntry::new_static(
+            sym_a,
+            0,
+            Address::new(0xAAA),
+            0,
+            8,
+            RangeList::new(),
+        )));
+        let entry_b = Arc::new(RwLock::new(SymbolEntry::new_static(
+            sym_b,
+            0,
+            Address::new(0xBBB),
+            0,
+            8,
+            RangeList::new(),
+        )));
+
+        t1.write().unwrap().mapentry = Some(entry_a.clone());
+        t2.write().unwrap().mapentry = Some(entry_b.clone());
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        let h1 = t1.read().unwrap().high.clone().expect("t1 has high");
+        let h2 = t2.read().unwrap().high.clone().expect("t2 has high");
+        assert!(
+            !Arc::ptr_eq(&h1, &h2),
+            "single-entry symbol varnodes must NOT be merged by merge_multi_entry"
+        );
+    }
+
+    /// `dominant_copy` (ActionDominantCopy / processHighDominantCopy,
+    /// merge.cc:1316) must merge the input and output HighVariables of a COPY
+    /// when their covers are disjoint (the COPY op point excepted). This is the
+    /// core dominant-copy mechanism: for each alive COPY whose input/output are
+    /// not yet in the same High, attempt a cover-guarded merge with the side
+    /// holding the larger cover as the dominant anchor.
+    ///
+    /// Setup: `RDI` (function input) flows into a unique temp `t1` via COPY,
+    /// and `t1` is read by a STORE. This is the same shape as the verified
+    /// `test_merge_by_cover_unifies_copy_pair` — the COPY input and output
+    /// covers are disjoint except at the COPY op, so the merge must happen.
+    #[test]
+    fn test_dominant_copy_unifies_copy_input_output() {
+        let mut fd = Funcdata::new("dom_copy", Address::new(0x7000), 0x40);
+
+        // t1 = COPY(RDI)
+        let mut c1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        c1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        c1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+
+        // use(t1) via STORE so t1 is live and multi-reader
+        let mut store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        store.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        store.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RBX addr
+        store.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+
+        fd.inject_raw_ops(&[c1, store, ret]);
+        fd.run_heritage_direct();
+
+        // Resolve the canonical COPY input/output via the defining COPY op.
+        let copy_op = fd
+            .obank
+            .alivelist
+            .iter()
+            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
+            .map(|o| o.0.clone())
+            .expect("COPY op should exist");
+        let (in_vn, out_vn) = {
+            let c = copy_op.read().unwrap();
+            (c.inrefs[0].clone(), c.output.clone().expect("COPY output"))
+        };
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        let in_high = in_vn.read().unwrap().high.clone().expect("COPY input has high");
+        let out_high = out_vn.read().unwrap().high.clone().expect("COPY output has high");
+        assert!(
+            Arc::ptr_eq(&in_high, &out_high),
+            "COPY input and output must share a HighVariable after dominant_copy \
+             (covers disjoint except at the COPY op)"
         );
     }
 }

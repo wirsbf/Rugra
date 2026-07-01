@@ -4039,13 +4039,28 @@ impl Rule for RuleSplitStore {
 ///
 /// Rugra port: the full `SubfloatFlow` trace + precision map is not yet ported
 /// (it requires the precision-aware `traceForward`/`traceBackward`/`exceedsPrecision`
-/// machinery plus a complete `TransformManager::apply`). This rule implements the
-/// **safe subset** of what `SubfloatFlow::traceBackward` does for a
-/// `FLOAT_FLOAT2FLOAT` whose input is *constant* (subflow.cc:3389-3413): the
-/// constant is re-encoded at the smaller precision and the op folds to a
-/// constant `COPY`. This is exactly the `SubfloatFlow` constant-folding path
-/// (`newConstant(precision, 0, vn->getOffset())` after re-encoding). For
-/// non-constant inputs the rule defers (NO_CHANGE) until the full trace lands.
+/// machinery plus a complete `TransformManager::apply`). This rule implements two
+/// **safe subsets**:
+///
+/// 1. **Constant folding** — what `SubfloatFlow::traceBackward` does for a
+///    `FLOAT_FLOAT2FLOAT` whose input is *constant* (subflow.cc:3389-3413):
+///    the constant is re-encoded at the smaller precision and the op folds to a
+///    constant `COPY` (`newConstant(precision, 0, vn->getOffset())`).
+///
+/// 2. **Non-constant precision tracking** — the pragmatic minimum of
+///    `SubfloatFlow`'s effect without the full transform. `applyOp`
+///    (subflow.cc:3489-3507) selects the root Varnode and precision
+///    (`outvn`+`insize` when widening, `invn`+`outsize` when narrowing), so the
+///    logical value's effective precision is `min(insize, outsize)`. Rather than
+///    rewriting Varnode sizes (which needs the trace to be proven consistent),
+///    we propagate the determined precision *through the type system*: the root
+///    Varnode is tagged with the float type of the effective precision
+///    (mirroring `setReplacement`'s `newPiece(vn, precision*8, 0)`,
+///    subflow.cc:3236). Downstream type propagation then carries the precision
+///    forward. This is safe: `update_type` honours existing type-locks and the
+///    `isAddrForce` guard from `setReplacement` (subflow.cc:3217-3218); when no
+///    float type of the precision is available (e.g. unsupported size or no
+///    `TypeFactory` wired up) the rule defers (NO_CHANGE).
 pub struct RuleSubfloatConvert;
 impl RuleSubfloatConvert {
     pub fn new() -> Self {
@@ -4055,8 +4070,8 @@ impl RuleSubfloatConvert {
 impl Rule for RuleSubfloatConvert {
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507).
-        // Full SubfloatFlow trace not ported; apply the constant-fold subset
-        // (subflow.cc:3394-3403: the FLOAT_FLOAT2FLOAT constant branch).
+        // Constant inputs are folded (subflow.cc:3394-3403); non-constant inputs
+        // take the precision-tracking path below (see struct doc comment).
         let (invn, outvn) = {
             let o = op_arc.read().unwrap();
             let invn = match o.get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
@@ -4089,10 +4104,83 @@ impl Rule for RuleSubfloatConvert {
             return Ok(action_status::NO_CHANGE);
         }
 
-        // Non-constant input: the full SubfloatFlow trace is required to determine
-        // whether the value can be reinterpreted at the sub-precision. Without the
-        // precision map there is no safe transformation, so defer.
-        Ok(action_status::NO_CHANGE)
+        // -----------------------------------------------------------------
+        // Non-constant input: precision-tracking path (pragmatic minimum).
+        //
+        // Ghidra's `RuleSubfloatConvert::applyOp` (subflow.cc:3489-3507) builds
+        // a `SubfloatFlow` rooted at `outvn` with `precision = insize` when the
+        // op widens (`outsize > insize`), or rooted at `invn` with
+        // `precision = outsize` when it narrows. In both cases the *effective*
+        // precision of the logical float value is `min(insize, outsize)`: the
+        // wider operand merely holds a value that genuinely fits in the smaller
+        // precision. `SubfloatFlow` rewrites the data-flow so the smaller
+        // precision becomes the explicit Varnode size.
+        //
+        // The full `SubfloatFlow` trace (`traceForward`/`traceBackward` +
+        // `maxPrecisionMap`, subflow.cc:3079-3419) plus a precision-aware
+        // `TransformManager::apply` are not yet ported. The pragmatic minimum
+        // below propagates the determined precision *through the type system*:
+        // the logical value has the smaller precision, so the root Varnode is
+        // tagged with the float type of the smaller size. This mirrors
+        // `SubfloatFlow::setReplacement`'s effect of making "the smaller
+        // precision the explicit size" by encoding it in the Varnode's type,
+        // which downstream type propagation then carries forward. It only acts
+        // when a float type of the effective precision exists (Rugra supports
+        // IEEE754 single/double, i.e. sizes 4/8) and is otherwise a safe
+        // no-op (no rewrites, no type-lock violations).
+        //
+        // For the narrowing case (`outsize < insize`) Ghidra roots at `invn`;
+        // for the widening case (`outsize > insize`) it roots at `outvn`. We
+        // tag whichever is the *root* — that is where the sub-precision value
+        // lives — using the smaller size as the precision.
+        if !(insize == 4 || insize == 8) || !(outsize == 4 || outsize == 8) {
+            // Only IEEE754 single/double are supported; otherwise defer.
+            return Ok(action_status::NO_CHANGE);
+        }
+        let eff_prec = if insize < outsize { insize } else { outsize };
+        // If the conversion is a no-op size-wise there is no precision to track.
+        if eff_prec == insize && insize == outsize {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Determine the root Varnode faithfully:
+        //   outsize > insize  -> root = outvn, precision = insize  (widening)
+        //   outsize < insize  -> root = invn,  precision = outsize (narrowing)
+        let root = if outsize > insize { outvn.clone() } else { invn.clone() };
+
+        // Resolve the float type of the effective precision (single/double) via
+        // the architecture's TypeFactory (Ghidra: translate->getFloatFormat +
+        // setReplacement's newPiece at precision). If no arch/types are wired up
+        // (e.g. standalone test Funcdata) there is nothing safe to do here.
+        let ft = fd
+            .get_arch()
+            .and_then(|a| a.get_base_type(eff_prec, crate::type_system::TypeMetatype::Float));
+        let ft = match ft {
+            Some(t) => t,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+
+        // Mirrors SubfloatFlow::setReplacement guards (subflow.cc:3217-3228):
+        //   - AddrForce varnodes whose size != precision are not retyped.
+        //   - TypeLock'd varnodes not at the precision are not retyped.
+        // update_type() itself already honours type-lock and dedup, so we only
+        // need to skip the AddrForce case that update_type cannot detect.
+        {
+            let r = root.read().unwrap();
+            if r.is_addr_force() && r.get_size() != eff_prec {
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+
+        // Tag the root with the smaller-precision float type. update_type
+        // returns true only if it actually changed the type (and never violates
+        // an existing type-lock), which is exactly the signal we want for
+        // CHANGE vs NO_CHANGE.
+        if root.write().unwrap().update_type(ft) {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str {
         "subfloat_convert"
@@ -4984,6 +5072,131 @@ mod tests {
         let sub_op = make_op(1, OpCode::CPUI_SUBPIECE, vec![mid, offset], Some(out));
         let rule = RuleDumptyHumpLate::new();
         assert_eq!(rule.apply_op(&sub_op, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    // ==================================================================
+    // RuleSubfloatConvert tests (subflow.cc:3489-3507, 3389-3419)
+    // ==================================================================
+    use crate::type_system::TypeMetatype;
+
+    /// Build a Funcdata whose Architecture carries a TypeFactory so the
+    /// non-const precision path can resolve a float type. Mirrors how a real
+    /// Funcdata is wired up.
+    fn fd_with_types() -> Funcdata {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let mut arch = crate::arch::Architecture::new();
+        let tf = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new(8),
+        ));
+        arch.set_types(tf);
+        fd.set_arch(std::sync::Arc::new(arch));
+        fd
+    }
+
+    /// getOpList / name.
+    #[test]
+    fn test_rule_subfloat_convert_opcodes() {
+        let rule = RuleSubfloatConvert::new();
+        assert_eq!(rule.get_name(), "subfloat_convert");
+        assert_eq!(rule.get_opcodes(), vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT]);
+    }
+
+    /// Constant FLOAT_FLOAT2FLOAT folding is covered by the pre-existing
+    /// `test_rule_subfloat_convert_constant_fold` / `_constant_downcast`
+    /// tests above (subflow.cc:3394-3403 constant branch). The tests below
+    /// exercise the **non-const precision-tracking path** added here.
+
+    /// Non-const widening (4->8): the root is the *output*, and we tag it with
+    /// the single-precision float type (eff_prec = insize = 4). This is the
+    /// non-const precision-tracking path (subflow.cc:3496-3499: root=outvn,
+    /// precision=insize). Returns CHANGE and sets the type.
+    #[test]
+    fn test_rule_subfloat_convert_nonconst_widening_tags_output() {
+        let mut fd = fd_with_types();
+        // Non-constant 4-byte input produced by a COPY (so it is "written").
+        let src = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let inv = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
+        // 8-byte output.
+        let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out.clone()));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // The root (output) is now typed as the 4-byte float.
+        let ty = out.read().unwrap().get_type().expect("output typed");
+        assert_eq!(ty.get_size(), 4);
+        assert_eq!(ty.get_metatype(), TypeMetatype::Float);
+    }
+
+    /// Non-const narrowing (8->4): the root is the *input*, tagged with the
+    /// 4-byte float type (subflow.cc:3501-3504: root=invn, precision=outsize).
+    #[test]
+    fn test_rule_subfloat_convert_nonconst_narrowing_tags_input() {
+        let mut fd = fd_with_types();
+        // Non-constant 8-byte input.
+        let src = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
+        let inv = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
+        // 4-byte output.
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv.clone()], Some(out));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // The root (input) is now typed as the 4-byte float; output unchanged.
+        let in_ty = inv.read().unwrap().get_type().expect("input typed");
+        assert_eq!(in_ty.get_size(), 4);
+        assert_eq!(in_ty.get_metatype(), TypeMetatype::Float);
+    }
+
+    /// Non-const but no Architecture/TypeFactory wired up -> the float type
+    /// cannot be resolved, so the rule safely defers (NO_CHANGE) rather than
+    /// guessing.
+    #[test]
+    fn test_rule_subfloat_convert_nonconst_no_types_defers() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10); // no arch
+        let src = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let inv = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
+        let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+    }
+
+    /// Non-const with a type-lock already set on the root: update_type honours
+    /// the lock and returns false -> NO_CHANGE (faithful to
+    /// setReplacement's typelock guard, subflow.cc:3220-3224).
+    #[test]
+    fn test_rule_subfloat_convert_nonconst_typelock_defers() {
+        let mut fd = fd_with_types();
+        let src = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let inv = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
+        let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
+        // Lock the output (root for widening) to a double so update_type bails.
+        let dbl = fd
+            .get_arch()
+            .unwrap()
+            .get_base_type(8, TypeMetatype::Float)
+            .unwrap();
+        out.write().unwrap().update_type_lock(dbl, true, false);
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+    }
+
+    /// Non-supported float sizes (e.g. a hypothetical 2-byte float) -> the
+    /// rule defers (only IEEE754 single/double are supported).
+    #[test]
+    fn test_rule_subfloat_convert_unsupported_size_defers() {
+        let mut fd = fd_with_types();
+        let src = fd.vbank.create_with_space(2, AddressSpace::Register, 0x10);
+        let inv = fd.vbank.create_with_space(2, AddressSpace::Register, 0x20);
+        let _def = make_op(0, OpCode::CPUI_COPY, vec![src], Some(inv.clone()));
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
+        let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out));
+        let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
     }
 }
 
