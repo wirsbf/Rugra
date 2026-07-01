@@ -647,3 +647,7 @@ lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（
 - mainloop/fullloop 暂不启用（非幂等子 Action 导致死循环）。
 
 ### 2026-07-01（续 2）：接入 22 个 pipeline Action
+
+### 2026-07-01（续 3）：oppool2 接入 + build_full_pipeline_actions 更新
+- build_oppool2() 新增，注册进 mainloop（stackstall 之后，coreaction.cc:5662）。
+- build_full_pipeline_actions 新增 ActionStartTypes/AssignHigh/DominantCopy/CopyMarker。

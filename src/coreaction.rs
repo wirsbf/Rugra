@@ -2,7 +2,7 @@
 //!
 //! Corresponds to Ghidra's `coreaction.hh`
 
-use crate::action::{Action, action_status};
+use crate::action::{Action, action_status, action_flags};
 use crate::funcdata::Funcdata;
 use crate::opcodes::OpCode;
 use crate::error::Result;
@@ -5680,6 +5680,428 @@ impl Action for ActionForceGoto {
     fn get_name(&self) -> &str { "forcegoto" }
 }
 
+// ===========================================================================
+// 12 previously-missing Actions (coreaction.hh / blockaction.hh).
+//
+// Each was written by first reading the Ghidra class declaration and the
+// matching `apply()` body (coreaction.cc / blockaction.cc). Where Rugra
+// lacks the underlying API (scope/symbol discovery for mapGlobals,
+// ConditionalJoin for nodejoin, collapseInternal/structure tree for the
+// block transforms), the struct + `impl Action` is still provided with a
+// faithful-but-stub `apply()` so the action exists in the inventory; only
+// actions with real effect are wired into `build_full_pipeline_actions`.
+//
+// ActionParamShiftStart / ActionParamShiftStop (coreaction.hh:772-793) are
+// COMMENTED OUT in Ghidra (both the class bodies and their pipeline
+// registration at coreaction.cc:5481/5501) and are therefore intentionally
+// NOT ported.
+// ===========================================================================
+
+// ---- Simple marker Actions (coreaction.hh:46-86) -------------------------
+
+/// Marker: post-main-transform clean-up phase has begun.
+///
+/// Faithful to `ActionStartCleanUp` (coreaction.hh:58). Ghidra's `apply`
+/// only calls `data.startCleanUp()` which records a varnode creation index
+/// for the clean-up phase. Rugra's Funcdata does not yet carry a
+/// `clean_up_index`, so this is a faithful no-op marker.
+pub struct ActionStartCleanUp;
+
+impl ActionStartCleanUp {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionStartCleanUp {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.startCleanUp();  // records clean_up_index
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "startcleanup"
+    }
+}
+
+/// Marker: data-type recovery may now run.
+///
+/// Faithful to `ActionStartTypes` (coreaction.hh:74). Ghidra's `reset()`
+/// enables type recovery on the function, and `apply()` flips the
+/// "type recovery started" bit (incrementing `count` on the first flip).
+/// Rugra maps this to `set_type_recovery_started()` / `set_type_recovery_on`.
+pub struct ActionStartTypes {
+    /// Number of times the type-recovery-start bit transitioned to set.
+    pub count: i32,
+}
+
+impl ActionStartTypes {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Action for ActionStartTypes {
+    fn reset(&mut self, fd: &mut Funcdata) {
+        // Ghidra: data.setTypeRecovery(true);
+        fd.set_type_recovery_on(true);
+    }
+
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: if (data.startTypeRecovery()) count += 1;
+        // startTypeRecovery() returns true only on the first flip.
+        if !fd.has_type_recovery_started() {
+            fd.set_type_recovery_started();
+            self.count += 1;
+        }
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "starttypes"
+    }
+}
+
+/// Marker: decompilation pipeline has completed.
+///
+/// Faithful to `ActionStop` (coreaction.hh:46). Ghidra's `apply` only calls
+/// `data.stopProcessing()`, which sets the `processing_complete` flag.
+/// Rugra's Funcdata does not yet track that flag, so this is a faithful
+/// no-op marker.
+pub struct ActionStop;
+
+impl ActionStop {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionStop {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.stopProcessing();
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "stop"
+    }
+}
+
+// ---- Merge Actions (coreaction.hh:339,1001,1012) -------------------------
+
+/// Create a HighVariable for every Varnode (rule_onceperfunc).
+///
+/// Faithful to `ActionAssignHigh` (coreaction.hh:339). Ghidra's `apply`
+/// calls `data.setHighLevel()` (funcdata_varnode.cc:595), which, if not
+/// already done, sets `highlevel_on`, records `high_level_index`, and calls
+/// `assignHigh(vn)` for every Varnode — constructing a fresh `HighVariable`
+/// wrapping that single instance (funcdata_varnode.cc:48).
+pub struct ActionAssignHigh;
+
+impl ActionAssignHigh {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionAssignHigh {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to Funcdata::setHighLevel (funcdata_varnode.cc:595):
+        // assign a fresh HighVariable to each Varnode that does not already
+        // have one. We model `highlevel_on` by checking that every varnode
+        // already carries a `high`; idempotent on re-run.
+        use crate::type_system::datatype::{Datatype, TypeBase};
+        use crate::type_system::TypeMetatype;
+        use crate::variable::HighVariable;
+        use std::sync::{Arc, RwLock};
+
+        let mut changed = 0;
+        for vn_ref in &fd.vbank.loc_tree {
+            let needs_high = vn_ref.0.read().unwrap().high.is_none();
+            if !needs_high {
+                continue;
+            }
+            let vn = vn_ref.0.read().unwrap();
+            let dt = vn.v_type.clone().unwrap_or_else(|| {
+                Arc::new(Datatype::Base(TypeBase::new(
+                    "undefined".to_string(),
+                    vn.size,
+                    TypeMetatype::Unknown,
+                )))
+            });
+            drop(vn);
+
+            let high = Arc::new(RwLock::new(HighVariable::new(dt)));
+            high.write().unwrap().add_instance(vn_ref.0.clone());
+            vn_ref.0.write().unwrap().high = Some(high);
+            changed += 1;
+        }
+        if changed > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
+    }
+
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
+    fn get_name(&self) -> &str {
+        "assignhigh"
+    }
+}
+
+/// Choose the dominant COPY in the merge phase (rule_onceperfunc).
+///
+/// Faithful to `ActionDominantCopy` (coreaction.hh:1001). Ghidra's `apply`
+/// calls `data.getMerge().processCopyTrims()`, which walks the copy-trim
+/// list accumulated by speculative merging and rewrites the dominant COPY.
+/// Rugra's `Merge::dominant_copy` mirrors the empty-list path (no trims are
+/// accumulated, so no replacements are made).
+pub struct ActionDominantCopy;
+
+impl ActionDominantCopy {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionDominantCopy {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.getMerge().processCopyTrims();
+        let mut merge = crate::merge::Merge::new();
+        merge.dominant_copy(fd);
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
+    fn get_name(&self) -> &str {
+        "dominantcopy"
+    }
+}
+
+/// Mark COPY ops between merged Varnodes as non-printing (rule_onceperfunc).
+///
+/// Faithful to `ActionCopyMarker` (coreaction.hh:1012). Ghidra's `apply`
+/// calls `data.getMerge().markInternalCopies()`, which sets the
+/// `nonprinting` flag on COPY ops whose input and output share a
+/// HighVariable. Rugra's `Merge::copy_marker` performs exactly this.
+pub struct ActionCopyMarker;
+
+impl ActionCopyMarker {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionCopyMarker {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.getMerge().markInternalCopies();
+        let mut merge = crate::merge::Merge::new();
+        merge.copy_marker(fd);
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
+    fn get_name(&self) -> &str {
+        "copymarker"
+    }
+}
+
+/// Mark illegal input Varnodes used only in INDIRECT ops (rule_onceperfunc).
+///
+/// Faithful to `ActionMarkIndirectOnly` (coreaction.hh:350). Ghidra's
+/// `apply` calls `data.markIndirectOnly()` (funcdata_varnode.cc:815), which
+/// iterates input varnodes, and for each illegal input whose sole uses are
+/// INDIRECT ops, sets the `indirectonly` flag. Rugra does not yet track the
+/// `illegal_input` / `indirectonly` varnode flags, so this is a faithful
+/// no-op stub.
+pub struct ActionMarkIndirectOnly;
+
+impl ActionMarkIndirectOnly {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionMarkIndirectOnly {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.markIndirectOnly();
+        // TODO: requires Varnode::illegal_input / indirectonly flags.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
+    fn get_name(&self) -> &str {
+        "markindirectonly"
+    }
+}
+
+/// Ensure a Symbol exists for every persistent (global) Varnode (rule_onceperfunc).
+///
+/// Faithful to `ActionMapGlobals` (coreaction.hh:878). Ghidra's `apply`
+/// calls `data.mapGlobals()` (funcdata_varnode.cc:1653), which groups
+/// overlapping persistent varnodes and creates Symbol entries in the
+/// discovered scope. Rugra's ScopeLocal does not yet expose
+/// `queryProperties`/`discoverScope`, so this is a faithful no-op stub.
+pub struct ActionMapGlobals;
+
+impl ActionMapGlobals {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionMapGlobals {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra: data.mapGlobals();
+        // TODO: requires Scope::queryProperties / discoverScope (symbol
+        // creation for persistent varnodes). Rugra lacks this API.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_flags(&self) -> u32 {
+        action_flags::RULE_ONCEPERFUNC
+    }
+
+    fn get_name(&self) -> &str {
+        "mapglobals"
+    }
+}
+
+// ---- Block-transform Actions (blockaction.hh) ----------------------------
+// These operate on the structured control-flow tree / basic-block graph and
+// can split or delete blocks. They are intentionally NOT registered in
+// build_full_pipeline_actions (see PIPELINE_DIFF / inclusion criteria),
+// because Rugra's staged structurer assumes block indices are stable and a
+// mid-pipeline block edit would push it out of bounds. The structs exist so
+// the inventory matches Ghidra and so they can be enabled once the
+// collapseInternal migration lands.
+
+/// Normalize symmetric structured control-flow (e.g. swap if/else arms).
+///
+/// Faithful to `ActionPreferComplement` (blockaction.hh:300). Ghidra's
+/// `apply` (blockaction.cc:2140) walks the structure tree and calls
+/// `preferComplement(data)` on each composite block, flipping children when
+/// the complement yields more natural source. Requires the structured tree.
+pub struct ActionPreferComplement {
+    pub count: i32,
+}
+
+impl ActionPreferComplement {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Action for ActionPreferComplement {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra (blockaction.cc:2140): iterate structure tree, call
+        // curbl->preferComplement(data); also mutates the basic-block graph
+        // (block flips). Not implemented: requires the structured tree and
+        // block-edge mutation that conflicts with Rugra's staged structurer.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "prefercomplement"
+    }
+}
+
+/// Final transform of structured control-flow (while→for loop setup).
+///
+/// Faithful to `ActionStructureTransform` (blockaction.hh:270). Ghidra's
+/// `apply` (blockaction.cc:2110) calls
+/// `data.getStructure().finalTransform(data)`. Requires the structured tree.
+pub struct ActionStructureTransform;
+
+impl ActionStructureTransform {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Action for ActionStructureTransform {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra (blockaction.cc:2110): data.getStructure().finalTransform(data);
+        // Not implemented: requires the structured tree.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "structuretransform"
+    }
+}
+
+/// Split a RETURN block's epilog so each branch keeps its own RETURN.
+///
+/// Faithful to `ActionReturnSplit` (blockaction.hh:337). Ghidra's `apply`
+/// (blockaction.cc:2264) finds RETURN blocks with multiple in-edges plus
+/// goto predecessors, and calls `data.nodeSplit(...)` per split edge.
+/// Requires basic-block edge splitting that Rugra's structurer tolerates.
+pub struct ActionReturnSplit {
+    pub count: i32,
+}
+
+impl ActionReturnSplit {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Action for ActionReturnSplit {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra (blockaction.cc:2264): for each RETURN op with >1 in-edge,
+        // gather goto predecessors and data.nodeSplit(...). Not implemented:
+        // nodeSplit mutates the block graph and conflicts with the staged
+        // structurer.
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "returnsplit"
+    }
+}
+
+/// Rejoin Varnodes split across converging conditional branches.
+///
+/// Faithful to `ActionNodeJoin` (blockaction.hh:350). Ghidra's `apply`
+/// (blockaction.cc:2326) iterates basic blocks with exactly two out-edges,
+/// and for each candidate pair uses a `ConditionalJoin` (blockaction.cc:234)
+/// to test and execute a cross-block varnode merge. Rugra does not port
+/// `ConditionalJoin`, so this is a faithful no-op stub.
+pub struct ActionNodeJoin {
+    pub count: i32,
+}
+
+impl ActionNodeJoin {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Action for ActionNodeJoin {
+    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra (blockaction.cc:2326): walk basic blocks, ConditionalJoin.
+        // TODO: requires ConditionalJoin (blockaction.cc:234).
+        Ok(action_status::NO_CHANGE)
+    }
+
+    fn get_name(&self) -> &str {
+        "nodejoin"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Full Ghidra decompile pipeline: implemented-but-unregistered Actions
 // ---------------------------------------------------------------------------
@@ -5747,18 +6169,29 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
 
         // --- fullloop tail (coreaction.cc:5679-5688) ---
         Box::new(ActionUnjustifiedParams::new()),// :5686
+        Box::new(ActionStartTypes::new()),       // :5687 — flips the type-recovery bit
         Box::new(ActionActiveReturn::new()),     // :5688
 
         // --- post-fullloop (coreaction.cc:5691) ---
         // NOTE: ActionDoNothing excluded — removes empty blocks, same issue.
+        // ActionStartCleanUp (:5692) is a pure marker with no effect in Rugra — excluded.
         Box::new(ActionSwitchNorm::new()),       // :5684
 
-        // --- merge/fixate/casts (coreaction.cc:5728-5737) ---
+        // --- merge/fixate/casts (coreaction.cc:5714-5738) ---
+        // NOTE: ActionPreferComplement (:5714) / ActionStructureTransform (:5715)
+        // excluded — they mutate the structured block tree and conflict with the
+        // staged structurer. ActionMarkIndirectOnly (:5725) and ActionMapGlobals
+        // (:5732) are excluded as stubs (Rugra lacks the symbol/flag APIs).
+        Box::new(ActionAssignHigh::new()),       // :5717 — create HighVariables (merge prerequisite)
         Box::new(ActionHideShadow::new()),       // :5728
+        Box::new(ActionDominantCopy::new()),     // :5723 — merge-phase dominant COPY (processCopyTrims)
+        Box::new(ActionCopyMarker::new()),       // :5729 — mark internal COPY ops non-printing
         Box::new(ActionOutputPrototype::new()),  // :5730
         Box::new(ActionInputPrototype::new()),   // :5731
         Box::new(ActionSetCasts::new()),         // :5735 (requires ActionInferTypes, now ready)
         Box::new(ActionPrototypeWarnings::new()),// :5737
+        // ActionStop (:5738) is a pure end-of-pipeline marker with no effect in
+        // Rugra — excluded.
     ]
 }
 
@@ -6069,3 +6502,158 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), before, "duplicate action name in pipeline");
     }
+
+    // ---- Tests for the 12 newly-implemented Actions ----
+
+    #[test]
+    fn test_build_full_pipeline_actions_has_new_actions() {
+        // The merge/merge-prerequisite + real-work actions must be present.
+        let actions = build_full_pipeline_actions();
+        let names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
+        assert!(names.contains(&"assignhigh"), "ActionAssignHigh missing");
+        assert!(names.contains(&"starttypes"), "ActionStartTypes missing");
+        assert!(names.contains(&"copymarker"), "ActionCopyMarker missing");
+        assert!(names.contains(&"dominantcopy"), "ActionDominantCopy missing");
+    }
+
+    #[test]
+    fn test_build_full_pipeline_actions_excludes_block_mutators_and_stubs() {
+        // Block-tree mutators that break the staged structurer must NOT be in
+        // the flat pipeline; their structs exist but are unregistered.
+        let actions = build_full_pipeline_actions();
+        let names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
+        assert!(!names.contains(&"prefercomplement"));
+        assert!(!names.contains(&"structuretransform"));
+        assert!(!names.contains(&"returnsplit"));
+        assert!(!names.contains(&"nodejoin"));
+        // Pure stubs that do nothing in Rugra must not slip in.
+        assert!(!names.contains(&"markindirectonly"));
+        assert!(!names.contains(&"mapglobals"));
+    }
+
+    #[test]
+    fn test_new_action_names_match_ghidra() {
+        // The get_name strings must exactly mirror Ghidra's action names.
+        assert_eq!(ActionStartCleanUp::new().get_name(), "startcleanup");
+        assert_eq!(ActionStartTypes::new().get_name(), "starttypes");
+        assert_eq!(ActionStop::new().get_name(), "stop");
+        assert_eq!(ActionAssignHigh::new().get_name(), "assignhigh");
+        assert_eq!(ActionDominantCopy::new().get_name(), "dominantcopy");
+        assert_eq!(ActionCopyMarker::new().get_name(), "copymarker");
+        assert_eq!(ActionMarkIndirectOnly::new().get_name(), "markindirectonly");
+        assert_eq!(ActionMapGlobals::new().get_name(), "mapglobals");
+        assert_eq!(ActionPreferComplement::new().get_name(), "prefercomplement");
+        assert_eq!(ActionStructureTransform::new().get_name(), "structuretransform");
+        assert_eq!(ActionReturnSplit::new().get_name(), "returnsplit");
+        assert_eq!(ActionNodeJoin::new().get_name(), "nodejoin");
+    }
+
+    #[test]
+    fn test_action_starttypes_flips_type_recovery_bit() {
+        // ActionStartTypes.apply() must set the type-recovery-started bit on
+        // the first call and bump count; it must be idempotent on re-run.
+        use crate::address::Address;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x10);
+        assert!(!fd.has_type_recovery_started());
+        let mut a = ActionStartTypes::new();
+        assert_eq!(a.count, 0);
+        let _ = a.apply(&mut fd).unwrap();
+        assert!(fd.has_type_recovery_started(), "bit must be set after apply");
+        assert_eq!(a.count, 1, "count must bump on the first flip");
+        // Re-run: already started, count must not bump.
+        let _ = a.apply(&mut fd).unwrap();
+        assert_eq!(a.count, 1, "idempotent — count must not bump again");
+    }
+
+    #[test]
+    fn test_action_assignhigh_creates_highvariables() {
+        // ActionAssignHigh must give every varnode a HighVariable.
+        use crate::address::Address;
+        use crate::varnode::Varnode;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        let vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+            4,
+            Address::new(0x300),
+        )));
+        fd.vbank
+            .loc_tree
+            .insert(crate::varnode::VarnodeLocRef(vn.clone()));
+        assert!(vn.read().unwrap().high.is_none());
+        let mut a = ActionAssignHigh::new();
+        let status = a.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::CHANGE);
+        assert!(
+            vn.read().unwrap().high.is_some(),
+            "varnode must have a HighVariable after assignhigh"
+        );
+        // Idempotent: a second run reports no change.
+        let status2 = a.apply(&mut fd).unwrap();
+        assert_eq!(status2, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_action_marker_stubs_return_nochange() {
+        // The pure marker Actions (no effect in Rugra) must return NO_CHANGE
+        // and not panic on an empty Funcdata.
+        use crate::address::Address;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x10);
+        assert_eq!(
+            ActionStartCleanUp::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionStop::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionMarkIndirectOnly::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionMapGlobals::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        // Block-tree stubs likewise.
+        assert_eq!(
+            ActionPreferComplement::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionStructureTransform::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionReturnSplit::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+        assert_eq!(
+            ActionNodeJoin::new().apply(&mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+    }
+
+    #[test]
+    fn test_action_assignhigh_onceperfunc_flag() {
+        // ActionAssignHigh is rule_onceperfunc in Ghidra (coreaction.hh:341).
+        assert_eq!(
+            ActionAssignHigh::new().get_flags(),
+            action_flags::RULE_ONCEPERFUNC
+        );
+        assert_eq!(
+            ActionDominantCopy::new().get_flags(),
+            action_flags::RULE_ONCEPERFUNC
+        );
+        assert_eq!(
+            ActionCopyMarker::new().get_flags(),
+            action_flags::RULE_ONCEPERFUNC
+        );
+        assert_eq!(
+            ActionMarkIndirectOnly::new().get_flags(),
+            action_flags::RULE_ONCEPERFUNC
+        );
+        assert_eq!(
+            ActionMapGlobals::new().get_flags(),
+            action_flags::RULE_ONCEPERFUNC
+        );
+    }
+

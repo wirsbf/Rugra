@@ -714,3 +714,11 @@ build_full_pipeline_actions()：返回 26 个已实现非 stub Action，按 Ghid
 
 ### 2026-07-01（续 3）：接入 build_full_pipeline_actions 到主管线 + 排除 dead-flow
 action.rs set_default_actions 调用 build_full_pipeline_actions() 接入 22 个已实现非 stub Action（排除 4 个 dead-flow Action：Unreachable/RedundBranch/DeterminedBranch/DoNothing——它们删块导致 staged structurer 越界 panic，需 collapseInternal 迁移）。
+
+### 2026-07-01（续 4）：12 个缺失 Action 实现
+简单标记类：ActionStartCleanUp（coreaction.cc:5692）、ActionStartTypes（5687，实际工作：set_type_recovery_started）、ActionStop（5738）。
+Merge 类：ActionAssignHigh（coreaction.hh:339，rule_onceperfunc，建 HighVariable）、ActionDominantCopy（调 dominant_copy）、ActionCopyMarker（调 copy_marker）。
+结构化类（stub，不接入管线）：ActionPreferComplement/StructureTransform/ReturnSplit/NodeJoin（需结构化树/collapseInternal/ConditionalJoin）。
+其他（stub）：ActionMapGlobals（需 Scope::queryProperties）、ActionMarkIndirectOnly（需 indirectonly flag）。
+ParamShiftStart/Stop 确认在 Ghidra 中被注释掉，不需要实现。
+build_full_pipeline_actions 新增 ActionStartTypes/AssignHigh/DominantCopy/CopyMarker。

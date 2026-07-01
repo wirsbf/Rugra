@@ -655,6 +655,19 @@ pub struct ActionDatabase {
     all_actions: Vec<Box<dyn Action>>,
     current_group: Option<String>,
 }
+/// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
+/// (coreaction.cc:5662-5671). These are type-recovery / stack-variable Rules
+/// that run after oppool1 within the main loop.
+pub fn build_oppool2() -> ActionPool {
+    use crate::ruleaction::*;
+    let mut pool = ActionPool::new("oppool2");
+    pool.add_rule(Box::new(RulePushPtr::new()));           // 5664
+    pool.add_rule(Box::new(RuleStructOffset0::new()));     // 5665
+    pool.add_rule(Box::new(RulePtrArith::new()));          // 5666
+    pool.add_rule(Box::new(RuleLoadVarnode::new()));       // 5668
+    pool.add_rule(Box::new(RuleStoreVarnode::new()));      // 5669
+    pool
+}
 
 impl ActionDatabase {
     pub fn new() -> Self {
@@ -767,7 +780,8 @@ impl ActionDatabase {
 
         mainloop.add_action(Box::new(stackstall));
 
-        // oppool2 would go here (coreaction.cc:5662) — Rugra merges into oppool1.
+        // oppool2 (coreaction.cc:5662) — type-recovery / stack-variable Rules.
+        mainloop.add_action(Box::new(build_oppool2()));
         // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
         mainloop.add_action(Box::new(ActionTypeInfer::new()));
         mainloop.add_action(Box::new(ActionCopyPropagate::new()));
