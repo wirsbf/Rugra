@@ -691,3 +691,9 @@
 - `get_type`（varnode.hh:192）— 返回 v_type。解锁 RulePieceStructure 的 leaf->getType() 路径。
 - `characterize_overlap(&Varnode) -> i32`（varnode.cc:155-170）— 0=无重叠/1=部分/2=完全相同。解锁 RuleIndirectCollapse。
 - `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。
+
+### 2026-07-01（续 2）：update_type + get_type_read_facing + copy_symbol（解锁 ~15 TODO）
+- `update_type(ct)`（varnode.cc:456-464）— 无锁设类型，typelock 时不改。
+- `update_type_lock(ct, lock, override)`（varnode.cc:474-489）— TYPE_UNKNOWN 强制 unlock + lock/override 控制。
+- `get_type_read_facing()`（varnode.cc:639-645）— 退化版直接返回 v_type（union 解析路径 Rugra 无 union varnode）。
+- `copy_symbol(vn)`（varnode.cc:493-505）— 退化版复制 type + typelock/namelock flag（mapentry stub 不碰）。

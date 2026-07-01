@@ -685,3 +685,7 @@ pass 计数只代表处理轮次，不等于质量保证。
 - **varnode 去重仍限 free/input**：written varnode 去重需要 loc_tree 排序按 input/written/free 分类（VarnodeCompareLocDef），是更深的重构。
 - **VarnodeCompareLocDef 排序已对齐**（2026-06-29 续）：loc_tree 排序键改为 `(address_space, loc, size, input/written/free, def SeqNum or createIndex)`，对齐 Ghidra VarnodeCompareLocDef（varnode.cc:34-52）。input 同位置返回 Equal；written 按 def SeqNum 区分；free 按 createIndex 区分。
 - **INSERT/activeHeritage flag 对齐**（2026-06-29 续 2）：rename 使用 `is_heritage_known()`（检查 INSERT flag，对齐 varnode.hh:298）+ `is_active_heritage()`（addl_flags，对齐 varnode.hh:115）。rename_direct 对所有 free varnode 设 activeHeritage（对齐 guard heritage.cc:1175/1182）。create 不设 INSERT（对齐 varnode.cc:1250）；set_def/set_input 设 INSERT（对齐 createDef/makeInput→xref）。
+### 2026-07-01：LoadGuard methods + Heritage get_store/load_guard
+- `LoadGuard::is_guarded(space, offset)`（heritage.cc:819-826）— 范围检查 space+minimum/maximum。
+- `LoadGuard::get_minimum/get_maximum/get_op`（heritage.hh:164-165/161）。
+- `Heritage::get_store_guard(op)/get_load_guard(op)`（heritage.hh:337-338）— 线性扫描 guard Vec。

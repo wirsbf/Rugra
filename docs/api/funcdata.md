@@ -774,3 +774,9 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `get_op_from_const(vn)`（op.hh:249）— iop-space varnode 反查回 PcodeOp。
 - `op_undo_ptradd(op)`（funcdata_op.cc:579）— PTRADD 撤销为 INT_ADD/INT_MULT。
 - `op_mark_cpool_transformed(op)`（funcdata.hh:485）— 标记 cpool 已转换。
+
+### 2026-07-01（续 2）：new_indirect_creation + jump_tables + get_store_guard/load_guard
+- `new_indirect_creation(op, addr, sz, possibleout)`（funcdata_op.cc:710-728）— constant 零输入 + indirect_creation flag on op/in/out。
+- `jump_tables: Vec<Arc<RwLock<JumpTable>>>` 字段（funcdata.hh:89）。
+- `find_jump_table(op)`（funcdata_block.cc:446）+ `remove_jump_table(jt)`（funcdata_block.cc:65）。
+- `get_store_guard(op)/get_load_guard(op)`（funcdata.hh:269-270）— 转发到 Heritage。

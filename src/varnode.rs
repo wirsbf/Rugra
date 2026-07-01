@@ -495,6 +495,59 @@ impl Varnode {
         self.v_type.clone()
     }
 
+    /// Set the type without locking. Faithful to `Varnode::updateType(Datatype*)`
+    /// (varnode.cc:456-464). Returns true if the type was changed.
+    pub fn update_type(&mut self, ct: Arc<Datatype>) -> bool {
+        if self.v_type.as_ref().map(|t| Arc::ptr_eq(t, &ct)).unwrap_or(false) || self.is_type_lock() {
+            return false;
+        }
+        self.v_type = Some(ct);
+        // typeDirty on high — no-op until HighVariable tracks dirtiness.
+        true
+    }
+
+    /// Set the type with lock/override control. Faithful to
+    /// `Varnode::updateType(Datatype*, bool, bool)` (varnode.cc:474-489).
+    /// TYPE_UNKNOWN always forces lock=false. Returns true if changed.
+    pub fn update_type_lock(&mut self, ct: Arc<Datatype>, lock: bool, override_lock: bool) -> bool {
+        use crate::type_system::datatype::TypeMetatype;
+        let mut effective_lock = lock;
+        if ct.get_metatype() == TypeMetatype::Unknown {
+            effective_lock = false;
+        }
+        if self.is_type_lock() && !override_lock {
+            return false;
+        }
+        let same = self.v_type.as_ref().map(|t| Arc::ptr_eq(t, &ct)).unwrap_or(false);
+        if same && self.is_type_lock() == effective_lock {
+            return false;
+        }
+        self.clear_flags(varnode_flags::TYPELOCK);
+        if effective_lock {
+            self.set_flags(varnode_flags::TYPELOCK);
+        }
+        self.v_type = Some(ct);
+        true
+    }
+
+    /// Get the type as seen by a reading op. Faithful to
+    /// `Varnode::getTypeReadFacing` (varnode.cc:639-645). For union types this
+    /// resolves the field; Rugra has no union varnodes in Rule paths, so this
+    /// is the degenerate form returning v_type directly.
+    pub fn get_type_read_facing(&self) -> Option<Arc<Datatype>> {
+        self.v_type.clone()
+    }
+
+    /// Copy symbol/type info from another varnode. Faithful to
+    /// `Varnode::copySymbol` (varnode.cc:493-505). Degraded: only copies type
+    /// + typelock/namelock flags (mapentry/SymbolEntry is a stub).
+    pub fn copy_symbol(&mut self, vn: &Varnode) {
+        self.v_type = vn.v_type.clone();
+        self.clear_flags(varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
+        let inherit = vn.flags & (varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
+        self.set_flags(inherit);
+    }
+
     /// Is the high-level variable tied to an address? (varnode.hh:250)
     /// Ghidra: (flags & (addrtied|insert)) == (addrtied|insert).
     pub fn is_addr_tied(&self) -> bool {

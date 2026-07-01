@@ -85,6 +85,9 @@ pub struct Funcdata {
     /// `set_arch` before running Rules that need cpool/funcptr_align/
     /// nan_ignore_all/userops/types.
     pub arch: Option<Arc<crate::arch::Architecture>>,
+    /// Jump tables recovered for this function. Faithful to
+    /// `Funcdata::jumpvec` (funcdata.hh:89). Populated by JumpTable recovery.
+    pub jump_tables: Vec<std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>>,
 
     // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
     // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
@@ -127,6 +130,7 @@ impl Funcdata {
             callspecs: Vec::new(),
             active_output: None,
             arch: None,
+            jump_tables: Vec::new(),
             stack_space: crate::space::AddressSpace::Stack,
             stack_pointer_space: crate::space::AddressSpace::Register,
             stack_pointer_offset: 0x20, // x86-64 RSP
@@ -1311,6 +1315,77 @@ impl Funcdata {
     /// Faithful to `Funcdata::opMarkCpoolTransformed` (funcdata.hh:485).
     pub fn op_mark_cpool_transformed(&mut self, op: &crate::op::PcodeOpRef) {
         op.0.write().unwrap().mark_cpool_transformed();
+    }
+
+    /// Find the STORE guard for `op`. Faithful to
+    /// `Funcdata::getStoreGuard` (funcdata.hh:270). Returns None if no guard.
+    pub fn get_store_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
+        self.heritage.get_store_guard(&op.0)
+    }
+
+    /// Find the LOAD guard for `op`. Faithful to
+    /// `Funcdata::getLoadGuard` (funcdata.hh:269).
+    pub fn get_load_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
+        self.heritage.get_load_guard(&op.0)
+    }
+
+    /// Create an INDIRECT op with indirect_creation semantics. Faithful to
+    /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728). Unlike
+    /// `new_indirect_op`, the input is a constant zero, and both the op and
+    /// output carry the indirect_creation flag.
+    pub fn new_indirect_creation(
+        &mut self,
+        indeffect: &crate::op::PcodeOpRef,
+        addr: u64,
+        sz: usize,
+        possibleout: bool,
+    ) -> crate::op::PcodeOpRef {
+        use crate::op::pcodeop_flags;
+        use crate::varnode::varnode_flags;
+        // input[0]: constant zero.
+        let newin = self.new_constant(sz, 0);
+        // The op.
+        let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
+        let newop = self.new_op(2, indeffect_addr);
+        newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
+        // output: varnode at addr, defined by newop.
+        let newout = self.vbank.create_with_space(sz, crate::space::AddressSpace::Unique, addr);
+        self.vbank.set_def(newout.clone(), std::sync::Arc::downgrade(&newop.0));
+        newop.0.write().unwrap().output = Some(newout.clone());
+        // indirect_creation flags on input (if !possibleout) and output.
+        if !possibleout {
+            newin.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
+        }
+        newout.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
+        // Set opcode to INDIRECT.
+        self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
+        // input[0] = constant zero.
+        self.op_set_input(&newop, newin, 0);
+        // input[1] = iop varnode referencing the causing op.
+        let iop_vn = self.new_varnode_iop(indeffect);
+        self.op_set_input(&newop, iop_vn, 1);
+        // active_heritage so rename processes the new varnodes.
+        newout.write().unwrap().set_active_heritage();
+        // Insert before the causing op.
+        self.op_insert_before(&newop, indeffect);
+        newop
+    }
+
+    /// Find the JumpTable whose indirect op is at the same address as `op`.
+    /// Faithful to `Funcdata::findJumpTable` (funcdata_block.cc:446-457).
+    pub fn find_jump_table(&self, op: &crate::op::PcodeOpRef) -> Option<&std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>> {
+        let op_addr = op.0.read().unwrap().get_seq_num().get_addr().as_u64();
+        self.jump_tables.iter().find(|jt| {
+            let jt_rg = jt.read().unwrap();
+            jt_rg.get_op_address().as_u64() == op_addr
+        })
+    }
+
+    /// Remove a JumpTable from this function. Faithful to
+    /// `Funcdata::removeJumpTable` (funcdata_block.cc:65).
+    pub fn remove_jump_table(&mut self, jt: &std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>) {
+        let jt_ptr = std::sync::Arc::as_ptr(jt);
+        self.jump_tables.retain(|j| std::sync::Arc::as_ptr(j) != jt_ptr);
     }
 
 

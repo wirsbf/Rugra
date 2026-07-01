@@ -128,6 +128,38 @@ pub struct LoadGuard {
     pub analysis_state: i32,
 }
 
+impl LoadGuard {
+    /// Does this guard apply to the given address (space + offset range)?
+    /// Faithful to `LoadGuard::isGuarded` (heritage.cc:819-826).
+    pub fn is_guarded(&self, space: &crate::space::AddressSpace, offset: u64) -> bool {
+        if space != &self.spc {
+            return false;
+        }
+        if offset < self.minimum_offset {
+            return false;
+        }
+        if offset > self.maximum_offset {
+            return false;
+        }
+        true
+    }
+
+    /// Get minimum offset of the guarded range. (heritage.hh:164)
+    pub fn get_minimum(&self) -> u64 {
+        self.minimum_offset
+    }
+
+    /// Get maximum offset of the guarded range. (heritage.hh:165)
+    pub fn get_maximum(&self) -> u64 {
+        self.maximum_offset
+    }
+
+    /// Get the guarded op. (heritage.hh:161)
+    pub fn get_op(&self) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
+        self.op.upgrade()
+    }
+}
+
 /// Main Heritage class responsible for SSA construction
 /// Corresponds to Ghidra's `Heritage` class
 #[derive(Debug)]
@@ -728,6 +760,24 @@ impl Heritage {
         self.load_guard.clear();
         self.store_guard.clear();
         self.load_copy_ops.clear();
+    }
+
+    /// Find the STORE guard matching `op`. Faithful to
+    /// `Heritage::getStoreGuard` (heritage.hh:338). Linear scan of store_guard.
+    pub fn get_store_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
+        self.store_guard.iter().find(|g| match g.op.upgrade() {
+            Some(g_op) => std::sync::Arc::ptr_eq(&g_op, op),
+            None => false,
+        })
+    }
+
+    /// Find the LOAD guard matching `op`. Faithful to
+    /// `Heritage::getLoadGuard` (heritage.hh:337).
+    pub fn get_load_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
+        self.load_guard.iter().find(|g| match g.op.upgrade() {
+            Some(g_op) => std::sync::Arc::ptr_eq(&g_op, op),
+            None => false,
+        })
     }
 }
 
