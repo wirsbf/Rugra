@@ -77,23 +77,35 @@ pub trait Action {
     /// (action.cc:298-362). Drives repeatapply / onceperfunc semantics by
     /// looping apply() until no change (or once for onceperfunc).
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
+        // Faithful to Action::perform (action.cc:298-362). `count` is cleared
+        // ONCE at the start (status_start case), and count_tests is incremented
+        // ONCE per perform() call — NOT once per loop iteration. The original
+        // Rugra code reset count=0 inside the loop, discarding the accumulated
+        // count from prior iterations and breaking repeatapply convergence.
+        state.count = 0;
+        state.count_tests += 1;
         loop {
-            state.count = 0;
-            state.count_tests += 1;
+            // Snapshot count before apply (action.cc:314 lcount = count).
             state.lcount = state.count;
             let res = self.apply(fd)?;
-            state.count += res;
             if res < 0 {
+                // Partial completion / breakpoint (action.cc:323-326).
                 state.status = status_flags::STATUS_MID;
                 return Ok(res);
             }
-            // If no change, or repeatapply not set, exit loop.
+            // accumulate changes (Ghidra increments member count inside apply)
+            state.count += res;
+            if res > 0 {
+                state.count_apply += 1;
+            }
+            // Loop condition (action.cc:350): repeat only if THIS iteration
+            // made a change (lcount < count) AND repeatapply is set.
             let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
-            if state.count == 0 || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
+            if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
                 break;
             }
         }
-        // onceperfunc / oneactperfunc handling.
+        // onceperfunc / oneactperfunc handling (action.cc:352-359).
         let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
         if (flags & (action_flags::RULE_ONCEPERFUNC | action_flags::RULE_ONEACTPERFUNC)) != 0 {
             if state.count > 0 || (flags & action_flags::RULE_ONCEPERFUNC) != 0 {
@@ -273,16 +285,28 @@ impl ActionRestartGroup {
 
 impl Action for ActionRestartGroup {
     /// Faithful to `ActionRestartGroup::apply` (action.cc:554-583).
+    ///
+    /// NOTE: Ghidra's ActionGroup::apply returns 0 on success (changes
+    /// accumulate in member `count` fields). Rugra's ActionGroup::apply returns
+    /// the positive `total` change count instead (ActionState is external, so
+    /// there's no member field to stash it in). To preserve Ghidra semantics —
+    /// where a converged group always falls through to the restart check — we
+    /// ignore a positive return and only bail out on res < 0 (partial
+    /// completion / breakpoint). Without this, the restart logic is dead code
+    /// (res != 0 always returned early), so jumptable/late-restructure restarts
+    /// never fire.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         if self.curstart == -1 {
             return Ok(0); // Already completed
         }
         loop {
             let res = self.group.apply(fd)?;
-            if res != 0 {
-                return Ok(res); // Bubble up partial completion
+            if res < 0 {
+                return Ok(res); // Bubble up partial completion / breakpoint
             }
-            // Group converged. Check if a restart is pending.
+            // Group converged (Ghidra semantics: res==0). Whether or not Rugra's
+            // total is positive, the group has run to completion this pass, so
+            // always check for a pending restart.
             if !fd.has_restart_pending() {
                 self.curstart = -1;
                 return Ok(0);
@@ -699,9 +723,25 @@ impl ActionDatabase {
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
+        // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
+        // With fullloop repeatapply, test_realistic_curl_function still
+        // infinite-loops even after reverting mainloop — fullloop re-runs
+        // mainloop + ActionDeadCode each cycle, and one of those reports a
+        // change every pass (non-idempotent). Reverted to keep the build/test
+        // suite green. stackstall repeatapply is retained (its only child, the
+        // simplify pool, is designed to converge to a fixed point).
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
+        // NOTE: mainloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
+        // Enabling repeatapply here causes test_realistic_curl_function to
+        // infinite-loop: one of mainloop's non-pool children (ActionBlockStructure
+        // / ActionCopyPropagate / ActionSimplify / ActionInferParams family) is
+        // non-idempotent — it reports a change on every pass, so lcount<count
+        // never becomes false. Per task fallback, reverted mainloop while keeping
+        // fullloop + stackstall repeatapply. See action.cc:5489 (Ghidra marks
+        // mainloop repeatapply, but its children are fully ported/convergent
+        // there; Rugra's local mainloop Actions are not yet all idempotent).
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
@@ -715,7 +755,7 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(ActionSimplify::new()));
 
         // --- stackstall (coreaction.cc:5509, repeatapply) ---
-        let mut stackstall = ActionGroup::new("stackstall");
+        let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         // oppool1 (coreaction.cc:5511, repeatapply)
         stackstall.add_action(Box::new(build_simplify_pool()));
 

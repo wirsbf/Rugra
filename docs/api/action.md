@@ -639,3 +639,9 @@ lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（
 - **set_default_actions 重构为嵌套树**：universal(ActionRestartGroup) → fullloop(ActionGroup) → mainloop(ActionGroup) → stackstall(ActionGroup) → oppool1(ActionPool)。
 - **TODO**：fullloop/mainloop/stackstall 暂不设 RULE_REPEATAPPLY（Rugra 自造 Action 非幂等，重复会导致死循环）。待自造 Action 幂等化或替换为 Ghidra 机制后启用。
 - **apply_all 改 perform 驱动**：每个函数先 reset，再 perform。
+
+### 2026-07-01（续）：perform count 修复 + stackstall repeatapply 启用
+- perform count 累加 bug 修复：count/count_tests 只在循环外清零/递增一次（对齐 action.cc:298-362）。
+- ActionRestartGroup apply 返回值修复：只在 res<0（断点）时早返回。
+- stackstall 启用 RULE_REPEATAPPLY（唯一子节点 simplify pool 可收敛）。
+- mainloop/fullloop 暂不启用（非幂等子 Action 导致死循环）。
