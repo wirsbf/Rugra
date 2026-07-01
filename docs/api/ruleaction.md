@@ -889,3 +889,7 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 ### 2026-07-01（续 4）：Layer-6 剩余 TODO 填补（12 处）
 RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSubRight: does_special_printing + is_piece_structured + is_addr_tied + get_base_type(Uint/Int)+update_type。RuleFloatSignCleanup: TYPE_FLOAT 判断。RuleExpandLoad: get_base_type(Uint) 重写。RuleIndirectCollapse: has_no_local_alias + no_indirect_collapse + INDIRECT_CREATION。RuleSwitchSingle: warning_header 替换 eprintln。RulePtrsubUndo: clear_stop_type_propagation + op_undo_ptradd 完整接入。RuleSegment: userops.get_segment_op 接入 + contiguous_test/findContiguousWhole 移植。RuleTransformCpool: tf.find_by_name(rec.type_name) + update_type_lock。剩余 10 处 TODO 每处精确标注缺失 API（SymbolEntry/resolveConstant/PieceNode/CloneBlockOps/functionalEquality/SegmentOp.execute）。
+
+### 2026-07-01（续 5）：determine_datatype partial path + RulePtrsubCharConstant full transform
+- determine_datatype（ruleaction.cc:7481-7510）：partial 路径用 get_structured_type + get_symbol_entry + SymbolEntry::get_addr/get_offset + get_sub_type walk 实现。不再对 partial 返回 None。
+- RulePtrsubCharConstant（ruleaction.cc:7372-7421）：完整 transform。用 Funcdata::string_table 做 read-only+string 检查（symaddr=vn1 offset，spacebase base=0）。PTRSUB→COPY of constant pointer + update_type。删除 resolveConstant/isReadOnly TODO（退化 via string_table）。

@@ -10202,25 +10202,28 @@ impl Rule for RulePtrsubCharConstant {
             } else { false }
         }).unwrap_or(false);
         if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
-        // Remaining guards need infra Rugra does not yet expose:
-        //   - Architecture::resolveConstant (used by TypeSpacebase::getAddress,
-        //     type.cc:3063-3071) to map the constant offset to a global symbol
-        //     address. Not present: `grep resolveConstant src/` returns nothing.
-        //   - Scope::isReadOnly (ruleaction.cc:7390) to confirm the symbol is a
-        //     read-only constant. Rugra's Scope (src/database.rs:690) has no
-        //     is_read_only / readonly flag.
-        //   - TypeSpacebase::getMap (type.cc:2935) to fetch the owning Scope.
-        //     Rugra's TypeSpacebase (src/type_system/datatype.rs:535) has no
-        //     scope handle.
-        // StringManager::is_string IS available (src/stringmanage.rs:295), but
-        // cannot be used without the symaddr from resolveConstant. Until those
-        // land this rule conservatively no-ops: collapsing the PTRSUB to a COPY
-        // of a constant string requires confirming the address holds a real
-        // read-only string, which we cannot yet verify.
-        // TODO(scope/string): add Architecture::resolveConstant +
-        //   Scope::isReadOnly, then wire symaddr + stringManager.is_string.
-        let _ = vn1;
-        Ok(action_status::NO_CHANGE)
+        // Compute the symbol address. Ghidra uses TypeSpacebase::getAddress
+        // (which calls Architecture::resolveConstant). Rugra's spacebase base
+        // is 0 (the load image base), so symaddr = vn1 offset. We verify
+        // read-only + string by checking Funcdata's string_table (populated
+        // from .rodata, which is inherently read-only).
+        let symaddr = vn1.read().unwrap().get_offset();
+        if !_fd.string_table.contains_key(&symaddr) {
+            return Ok(action_status::NO_CHANGE); // not a known read-only string
+        }
+        // If we reach here, the PTRSUB should be converted to a COPY of a
+        // constant pointer. Faithful to ruleaction.cc:7396-7421.
+        // Convert the original PTRSUB to a COPY of the constant.
+        let outvn_size = outvn.read().unwrap().get_size();
+        let newvn = _fd.new_constant(outvn_size, vn1.read().unwrap().get_offset());
+        if let Some(outtype) = outvn.read().unwrap().get_type() {
+            newvn.write().unwrap().update_type(outtype);
+        }
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        _fd.op_remove_input(&op_ref, 1);
+        _fd.op_set_input(&op_ref, newvn, 0);
+        _fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "ptrsub_char_constant" }
@@ -10591,35 +10594,50 @@ pub struct RulePieceStructure;
 impl RulePieceStructure {
     pub fn new() -> Self { Self }
 
-    /// Faithful to `determineDatatype` (ruleaction.cc:7481-7517). Returns the
+    /// Faithful to `determineDatatype` (ruleaction.cc:7481-7510). Returns the
     /// structured (struct/array/union) data-type the varnode is part of, plus
-    /// the base offset. Uses `vn->get_type()` + `is_piece_structured()` and, for
-    /// the partial case, resolves the byte offset via `vn.mapentry`
-    /// (SymbolEntry) then walks `get_sub_type` to the concrete sub-type.
+    /// the base offset. Uses `getStructuredType` and, for the partial case,
+    /// resolves the byte offset via `SymbolEntry` then walks `getSubType`.
     fn determine_datatype(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
-        let ct = vn.read().unwrap().get_type()?;
-        if !ct.is_piece_structured() {
-            return None;
+        let ct = vn.read().unwrap().get_structured_type()?;
+        let vn_size = vn.read().unwrap().get_size();
+        if ct.get_size() != vn_size {
+            // vn is a partial: compute baseOffset from SymbolEntry.
+            let entry = vn.read().unwrap().get_symbol_entry()?;
+            let entry_rg = entry.read().unwrap();
+            let entry_addr = entry_rg.get_addr().as_u64();
+            let vn_addr = vn.read().unwrap().get_offset();
+            // baseOffset = vn->getAddr().overlap(0, entry->getAddr(), ct->getSize())
+            // which is the byte distance of vn's start within the symbol.
+            let mut base_offset = vn_addr as i64 - entry_addr as i64;
+            if base_offset < 0 {
+                return None;
+            }
+            base_offset += entry_rg.get_offset() as i64;
+            // Walk getSubType down to the concrete sub-type matching vn size.
+            let mut sub_type = ct.clone();
+            let mut sub_offset = base_offset;
+            while sub_type.get_size() > vn_size {
+                let (st_opt, so) = sub_type.get_sub_type(sub_offset);
+                match st_opt {
+                    Some(st) => {
+                        sub_type = std::sync::Arc::new(st.clone());
+                        sub_offset = so;
+                    }
+                    None => break,
+                }
+            }
+            if sub_type.get_size() == vn_size && sub_offset == 0 {
+                if !sub_type.is_piece_structured() {
+                    return None; // don't split CONCAT forming the sub-type
+                }
+            }
+            Some((ct, base_offset as i32))
+        } else {
+            Some((ct, 0))
         }
-        // Ghidra (ruleaction.cc:7488-7508): if vn is a partial, compute
-        // baseOffset from the varnode's SymbolEntry address and walk getSubType
-        // down to the concrete sub-type matching the varnode size; if that
-        // concrete sub-type is non-structured, return null (don't split a
-        // CONCAT forming the sub-type). Rugra cannot resolve this: Varnode's
-        // `mapentry` field is typed as `stubs::SymbolEntry` (an empty unit
-        // struct in src/varnode.rs:16), which exposes no get_addr/get_offset,
-        // and there is no Varnode::getStructuredType. So only the
-        // size-matching (non-partial) case is handled: baseOffset = 0.
-        if ct.get_size() != vn.read().unwrap().get_size() {
-            // TODO(symbolentry): replace stubs::SymbolEntry (src/varnode.rs:16)
-            //   with database::SymbolEntry so vn.mapentry exposes get_addr /
-            //   get_offset; then compute the partial baseOffset and walk
-            //   get_sub_type as in ruleaction.cc:7488-7508.
-            return None;
-        }
-        Some((ct, 0))
     }
 
     /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
