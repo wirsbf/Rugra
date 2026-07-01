@@ -678,3 +678,13 @@ ActionGroup.perform 重写为迭代式：循环调 self.apply()，不递归进�
 **最终根因**：mainloop repeatapply 重新运行 ActionHeritage（有深层递归 rename 逻辑 visit_rename_impl）。glob_range 有 17 bblocks，Heritage 的递归重命名在多轮 repeatapply 下累积递归深度，即使 256MB 栈也溢出。修复需要让 Heritage 的 rename 迭代化（非递归），或接受 Rugra 的 Actions 有内部循环不需要外部 repeatapply。
 
 ### 2026-07-01（续 11）：mainloop repeatapply 仍阻塞（迭代 Heritage 后 cap=1 仍溢出）
+
+### 2026-07-01（续 12）：mainloop repeatapply 最终根因确认
+通过加 `[STEP]` 日志定位：栈溢出发生在 `[STEP] glob_range action done` **之后**——即 pipeline 已完成，溢出在 `printer.doc_function()` 期间。这证明根因不是 pipeline 执行时的栈深度，而是 **sblocks 与 bblocks 不同步**：
+1. mainloop repeatapply 第 1 轮：ActionBlockStructure 构建 sblocks
+2. mainloop repeatapply 第 2 轮：其他 Action（Heritage/Simplify/CopyPropagate）改变 bblocks（新 op/varnode）
+3. ActionBlockStructure 检查 `sblocks.get_size() != 0` → 跳过（不重建 sblocks）
+4. sblocks 此时与 bblocks 不一致
+5. printc 的 `emit_block_structured` 递归遍历 sblocks → 结构不匹配 → 无限递归 → 栈溢出
+
+修复需要：sblocks 失效机制（bblocks 变化时清除 sblocks 让 ActionBlockStructure 重建）或将结构化 Action 移出 repeatapply 循环。这是架构级改进。

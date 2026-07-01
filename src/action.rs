@@ -806,10 +806,12 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // NOTE: mainloop repeatapply still overflows even with iterative
-        // Heritage and cap=1. Root cause unclear — possibly the iterative
-        // Heritage's work stack interacts with repeatapply in a way that
-        // accumulates memory. Disabled pending further investigation.
+        // NOTE: mainloop repeatapply cannot be enabled because mainloop contains
+        // Actions (Heritage/BlockStructure/FinalStructure) that mutate the CFG
+        // and structured blocks. repeatapply re-runs these, causing sblocks to
+        // become stale relative to bblocks → printc infinite recursion → stack
+        // overflow. Only stackstall (leaf-level, oppool1+oppool2) uses
+        // repeatapply safely. Tracked as architectural TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
