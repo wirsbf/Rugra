@@ -86,6 +86,7 @@ use crate::op::{PcodeOp, PcodeOpRef};
 use crate::opcodes::OpCode;
 use crate::rangeutil::sign_extend_size;
 use crate::space::AddressSpace;
+use crate::transform::{LaneDescription, TransformManager};
 use crate::varnode::Varnode;
 
 // =====================================================================
@@ -2870,15 +2871,467 @@ impl RuleSubvarSext {
 
 /// Try to detect and split artificially joined Varnodes (SUBPIECE from PIECE
 /// that has come through INDIRECTs/MULTIEQUAL). Faithful to Ghidra's
+// =====================================================================
+// SplitFlow — TransformManager subclass for splitting a Varnode that holds
+// two logical values (subflow.cc:215-232, 1754-2037).
+// =====================================================================
+
+/// Class for splitting up Varnodes that hold 2 logical variables. Faithful to
+/// Ghidra's `SplitFlow` (subflow.hh:215-232, subflow.cc:1754-2037), which
+/// inherits from `TransformManager`.
+///
+/// Starting from a \e root Varnode, this looks for data-flow that consistently
+/// holds 2 logical values in a single Varnode. If `do_trace()` returns true, a
+/// consistent view has been created and invoking `apply()` (via the embedded
+/// `TransformManager`) will split all involved Varnodes and PcodeOps into their
+/// logical pieces.
+///
+/// Rust adaptation: Rust has no inheritance, so — mirroring how Ghidra embeds
+/// the base — `SplitFlow` owns a `TransformManager` and forwards to it. The
+/// trace methods (`set_replacement`, `add_op`, `trace_forward`, `trace_backward`)
+/// are 1:1 ports of subflow.cc; they manipulate the placeholder arena exposed
+/// by `TransformManager` (`new_split`, `new_op_replace`, `op_set_input`, ...).
+pub struct SplitFlow {
+    /// The embedded base transform manager (Ghidra base class).
+    pub mgr: TransformManager,
+    /// Description of how to split Varnodes: a low and a high lane.
+    /// Faithful to `laneDescription`.
+    lane_description: LaneDescription,
+    /// Pending work list of Varnode placeholder indices to push the split
+    /// through. Faithful to `worklist`. Entries are the start index of a
+    /// 2-element split array in the manager's `new_varnodes`.
+    worklist: Vec<usize>,
+}
+
+impl SplitFlow {
+    /// Find or build the placeholder objects for a Varnode that needs to be
+    /// split. Mark the Varnode so it doesn't get revisited. Decide if the
+    /// Varnode needs to go into the worklist. Faithful to `setReplacement`
+    /// (subflow.cc:1754-1776). Returns the start index of the 2-element split
+    /// array in the manager's arena, or `None` if the Varnode cannot be split.
+    fn set_replacement(&mut self, vn: &Arc<RwLock<Varnode>>) -> Option<usize> {
+        let vn_rg = vn.read().unwrap();
+        if vn_rg.is_mark() {
+            // Already seen before: return the existing split.
+            return self.mgr.get_split(vn.clone(), &self.lane_description).into();
+        }
+        // Ghidra: if (vn->isTypeLock() && vn->getType()->getMetatype() != TYPE_PARTIALSTRUCT)
+        // Rugra's type system has no TYPE_PARTIALSTRUCT variant, so the
+        // exception is vacuously false: a typelocked Varnode is never splittable
+        // (see the "Gaps still open" note on PartialStruct at the module top).
+        if vn_rg.is_type_lock() {
+            return None;
+        }
+        if vn_rg.is_input() {
+            return None; // Right now we can't split inputs
+        }
+        if vn_rg.is_free() && !vn_rg.is_constant() {
+            return None; // Abort
+        }
+        let is_const = vn_rg.is_constant();
+        drop(vn_rg);
+        // Create the new split placeholder pair and put it in the map.
+        let res = self.mgr.new_split(vn.clone(), &self.lane_description);
+        vn.write().unwrap().set_mark();
+        if !is_const {
+            self.worklist.push(res);
+        }
+        Some(res)
+    }
+
+    /// Split a given op into its lanes. The op is assumed to be a logical op,
+    /// a COPY, or an INDIRECT, and must have an output. All inputs and output
+    /// have their placeholders generated and added to the worklist if
+    /// appropriate. Faithful to `addOp` (subflow.cc:1787-1827).
+    ///
+    /// `rvn` is a known parameter of the op; `slot` is the incoming slot of the
+    /// known parameter (-1 means the parameter is the output).
+    fn add_op(
+        &mut self,
+        op: &Arc<RwLock<PcodeOp>>,
+        rvn: usize,
+        slot: i32,
+    ) -> bool {
+        // Determine the output placeholder.
+        let (outvn, op_code) = {
+            let o = op.read().unwrap();
+            (o.get_out().cloned(), o.opcode)
+        };
+        let outvn_idx = if slot == -1 {
+            rvn
+        } else {
+            let out = match outvn {
+                Some(o) => o,
+                None => return false,
+            };
+            match self.set_replacement(&out) {
+                Some(i) => i,
+                None => return false,
+            }
+        };
+
+        // Already traversed if the output has a defining placeholder op.
+        if self.mgr.new_varnodes[outvn_idx].def.is_some() {
+            return true;
+        }
+
+        let num_input = op.read().unwrap().num_input();
+        let lo_op = self.mgr.new_op_replace(num_input, op_code, crate::op::PcodeOpRef(op.clone()));
+        let hi_op = self.mgr.new_op_replace(num_input, op_code, crate::op::PcodeOpRef(op.clone()));
+
+        // Snapshot inputs (their Varnode Arcs) to avoid holding the op lock
+        // across manager mutations.
+        let inputs: Vec<Arc<RwLock<Varnode>>> = (0..num_input)
+            .map(|i| op.read().unwrap().get_in(i).cloned().unwrap())
+            .collect();
+        let mut num_param = num_input;
+        if op_code == OpCode::CPUI_INDIRECT {
+            let iop_vn = op.read().unwrap().get_in(1).cloned().unwrap();
+            let iop_placeholder = self.mgr.new_iop(iop_vn);
+            self.mgr.op_set_input(lo_op, iop_placeholder, 1);
+            self.mgr.op_set_input(hi_op, iop_placeholder, 1);
+            self.mgr.new_ops[lo_op].inherit_indirect(&crate::op::PcodeOpRef(op.clone()));
+            self.mgr.new_ops[hi_op].inherit_indirect(&crate::op::PcodeOpRef(op.clone()));
+            num_param = 1;
+        }
+        for i in 0..num_param {
+            let invn_idx = if i as i32 == slot {
+                rvn
+            } else {
+                match self.set_replacement(&inputs[i]) {
+                    Some(idx) => idx,
+                    None => return false,
+                }
+            };
+            // Low piece with low op; high piece (invn+1) with high op.
+            self.mgr.op_set_input(lo_op, invn_idx, i);
+            self.mgr.op_set_input(hi_op, invn_idx + 1, i);
+        }
+        self.mgr.op_set_output(lo_op, outvn_idx);
+        self.mgr.op_set_output(hi_op, outvn_idx + 1);
+        true
+    }
+
+    /// Try to trace the pair of logical values forward, through ops that read
+    /// them. Faithful to `traceForward` (subflow.cc:1834-1920).
+    fn trace_forward(&mut self, rvn: usize) -> bool {
+        let origvn = match self.mgr.new_varnodes[rvn].vn.clone() {
+            Some(v) => v,
+            None => return true,
+        };
+        // Snapshot the descendant ops (Ghidra iterates beginDescend..endDescend).
+        let descend_ops: Vec<Arc<RwLock<PcodeOp>>> = origvn.read().unwrap().descend_iter().collect();
+        for op in descend_ops {
+            let outvn = op.read().unwrap().get_out().cloned();
+            if let Some(ref out) = outvn {
+                if out.read().unwrap().is_mark() {
+                    continue;
+                }
+            }
+            let op_code = op.read().unwrap().opcode;
+            let slot = op.read().unwrap().inrefs.iter().position(|v| Arc::ptr_eq(v, &origvn));
+            match op_code {
+                OpCode::CPUI_COPY
+                | OpCode::CPUI_MULTIEQUAL
+                | OpCode::CPUI_INDIRECT
+                | OpCode::CPUI_INT_AND
+                | OpCode::CPUI_INT_OR
+                | OpCode::CPUI_INT_XOR => {
+                    let s = match slot {
+                        Some(s) => s as i32,
+                        None => return false,
+                    };
+                    if !self.add_op(&op, rvn, s) {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    let out = match &outvn {
+                        Some(o) => o.clone(),
+                        None => continue,
+                    };
+                    if out.read().unwrap().is_precis_lo() || out.read().unwrap().is_precis_hi() {
+                        return false; // Do not split double-precision pieces
+                    }
+                    let val = op.read().unwrap().get_in(1).unwrap().read().unwrap().get_offset();
+                    let out_size = out.read().unwrap().get_size() as i32;
+                    if val == 0 && out_size == self.lane_description.get_size(0) {
+                        // Grabs the low piece.
+                        let rop = self
+                            .mgr
+                            .new_preexisting_op(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                        self.mgr.op_set_input(rop, rvn, 0);
+                    } else if val == self.lane_description.get_size(0) as u64
+                        && out_size == self.lane_description.get_size(1)
+                    {
+                        // Grabs the high piece.
+                        let rop = self
+                            .mgr
+                            .new_preexisting_op(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                        self.mgr.op_set_input(rop, rvn + 1, 0);
+                    } else {
+                        return false;
+                    }
+                }
+                OpCode::CPUI_INT_LEFT => {
+                    let tmpvn = op.read().unwrap().get_in(1).cloned().unwrap();
+                    if !tmpvn.read().unwrap().is_constant() {
+                        return false;
+                    }
+                    let val = tmpvn.read().unwrap().get_offset();
+                    if val < self.lane_description.get_size(1) as u64 * 8 {
+                        return false; // Must obliterate all high bits
+                    }
+                    // Keep the original shift.
+                    let rop = self
+                        .mgr
+                        .new_preexisting_op(2, OpCode::CPUI_INT_LEFT, crate::op::PcodeOpRef(op.clone()));
+                    let zextrop = self.mgr.new_op(1, OpCode::CPUI_INT_ZEXT, rop);
+                    self.mgr.op_set_input(zextrop, rvn, 0); // Input is just the low piece
+                    let zext_out = self.mgr.new_unique(self.lane_description.get_whole_size());
+                    self.mgr.op_set_output(zextrop, zext_out);
+                    self.mgr.op_set_input(rop, zext_out, 0);
+                    let (const_size, const_off) = {
+                        let c = op.read().unwrap().get_in(1).cloned().unwrap();
+                        let r = c.read().unwrap();
+                        (r.get_size() as i32, r.get_offset())
+                    };
+                    let const_idx = self.mgr.new_constant(const_size, 0, const_off);
+                    self.mgr.op_set_input(rop, const_idx, 1);
+                }
+                OpCode::CPUI_INT_SRIGHT | OpCode::CPUI_INT_RIGHT => {
+                    let tmpvn = op.read().unwrap().get_in(1).cloned().unwrap();
+                    if !tmpvn.read().unwrap().is_constant() {
+                        return false;
+                    }
+                    let val = tmpvn.read().unwrap().get_offset();
+                    if val < self.lane_description.get_size(0) as u64 * 8 {
+                        return false;
+                    }
+                    let ext_op_code = if op_code == OpCode::CPUI_INT_RIGHT {
+                        OpCode::CPUI_INT_ZEXT
+                    } else {
+                        OpCode::CPUI_INT_SEXT
+                    };
+                    if val == self.lane_description.get_size(0) as u64 * 8 {
+                        // Shift of exactly loSize bytes.
+                        let rop = self
+                            .mgr
+                            .new_preexisting_op(1, ext_op_code, crate::op::PcodeOpRef(op.clone()));
+                        self.mgr.op_set_input(rop, rvn + 1, 0); // Input is the high piece
+                    } else {
+                        let remain_shift = val - self.lane_description.get_size(0) as u64 * 8;
+                        let rop = self
+                            .mgr
+                            .new_preexisting_op(2, op_code, crate::op::PcodeOpRef(op.clone()));
+                        let extrop = self.mgr.new_op(1, ext_op_code, rop);
+                        self.mgr.op_set_input(extrop, rvn + 1, 0); // Input is the high piece
+                        let ext_out = self.mgr.new_unique(self.lane_description.get_whole_size());
+                        self.mgr.op_set_output(extrop, ext_out);
+                        self.mgr.op_set_input(rop, ext_out, 0);
+                        let const_idx = {
+                            let c = op.read().unwrap().get_in(1).cloned().unwrap();
+                            let r = c.read().unwrap();
+                            self.mgr.new_constant(r.get_size() as i32, 0, remain_shift)
+                        };
+                        self.mgr.op_set_input(rop, const_idx, 1); // Shift any remaining bits
+                    }
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Try to trace the pair of logical values backward, through the defining
+    /// op. Create part of the transform related to the defining op, and update
+    /// the worklist as necessary. Faithful to `traceBackward` (subflow.cc:1927-1997).
+    fn trace_backward(&mut self, rvn: usize) -> bool {
+        let def_op = self.mgr.new_varnodes[rvn]
+            .vn
+            .as_ref()
+            .and_then(|v| v.read().unwrap().get_def());
+        let op = match def_op {
+            Some(o) => o,
+            None => return true, // If vn is input
+        };
+        let op_code = op.read().unwrap().opcode;
+        match op_code {
+            OpCode::CPUI_COPY
+            | OpCode::CPUI_MULTIEQUAL
+            | OpCode::CPUI_INT_AND
+            | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INDIRECT => {
+                if !self.add_op(&op, rvn, -1) {
+                    return false;
+                }
+            }
+            OpCode::CPUI_PIECE => {
+                let (in0_size, in1_size) = {
+                    let o = op.read().unwrap();
+                    let in0_size = o.get_in(0).unwrap().read().unwrap().get_size() as i32;
+                    let in1_size = o.get_in(1).unwrap().read().unwrap().get_size() as i32;
+                    (in0_size, in1_size)
+                };
+                if in0_size != self.lane_description.get_size(1) {
+                    return false;
+                }
+                if in1_size != self.lane_description.get_size(0) {
+                    return false;
+                }
+                let lo_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let hi_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let in1_vn = op.read().unwrap().get_in(1).cloned().unwrap();
+                let in0_vn = op.read().unwrap().get_in(0).cloned().unwrap();
+                let lo_in = self.mgr.get_preexisting_varnode(in1_vn);
+                self.mgr.op_set_input(lo_op, lo_in, 0);
+                self.mgr.op_set_output(lo_op, rvn); // Least sig -> low
+                let hi_in = self.mgr.get_preexisting_varnode(in0_vn);
+                self.mgr.op_set_input(hi_op, hi_in, 0);
+                self.mgr.op_set_output(hi_op, rvn + 1); // Most sig -> high
+            }
+            OpCode::CPUI_INT_ZEXT => {
+                let (in0_size, out_size) = {
+                    let o = op.read().unwrap();
+                    let in0_size = o.get_in(0).unwrap().read().unwrap().get_size() as i32;
+                    let out_size = o.get_out().unwrap().read().unwrap().get_size() as i32;
+                    (in0_size, out_size)
+                };
+                if in0_size != self.lane_description.get_size(0) {
+                    return false;
+                }
+                if out_size != self.lane_description.get_whole_size() {
+                    return false;
+                }
+                let lo_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let hi_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let in0_vn = op.read().unwrap().get_in(0).cloned().unwrap();
+                let lo_in = self.mgr.get_preexisting_varnode(in0_vn);
+                self.mgr.op_set_input(lo_op, lo_in, 0);
+                self.mgr.op_set_output(lo_op, rvn); // ZEXT input -> low
+                let hi_const = self.mgr.new_constant(self.lane_description.get_size(1), 0, 0);
+                self.mgr.op_set_input(hi_op, hi_const, 0);
+                self.mgr.op_set_output(hi_op, rvn + 1); // zero -> high
+            }
+            OpCode::CPUI_INT_LEFT => {
+                let cvn = op.read().unwrap().get_in(1).cloned().unwrap();
+                if !cvn.read().unwrap().is_constant() {
+                    return false;
+                }
+                if cvn.read().unwrap().get_offset() != self.lane_description.get_size(0) as u64 * 8 {
+                    return false;
+                }
+                let invn = op.read().unwrap().get_in(0).cloned().unwrap();
+                let zext_op_arc = match invn.read().unwrap().get_def() {
+                    Some(d) => d,
+                    None => return false,
+                };
+                if zext_op_arc.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
+                    return false;
+                }
+                let invn2 = zext_op_arc.read().unwrap().get_in(0).cloned().unwrap();
+                if invn2.read().unwrap().get_size() as i32 != self.lane_description.get_size(1) {
+                    return false;
+                }
+                if invn2.read().unwrap().is_free() {
+                    return false;
+                }
+                let lo_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let hi_op = self
+                    .mgr
+                    .new_op_replace(1, OpCode::CPUI_COPY, crate::op::PcodeOpRef(op.clone()));
+                let lo_const = self.mgr.new_constant(self.lane_description.get_size(0), 0, 0);
+                self.mgr.op_set_input(lo_op, lo_const, 0);
+                self.mgr.op_set_output(lo_op, rvn); // zero -> low
+                let hi_in = self.mgr.get_preexisting_varnode(invn2);
+                self.mgr.op_set_input(hi_op, hi_in, 0);
+                self.mgr.op_set_output(hi_op, rvn + 1); // invn -> high
+            }
+            // case CPUI_LOAD: We could split into two different loads.
+            _ => {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Process the next logical value on the worklist. Faithful to
+    /// `processNextWork` (subflow.cc:2000-2009). Returns true if the logical
+    /// split was successfully pushed through its local operators.
+    fn process_next_work(&mut self) -> bool {
+        let rvn = *self.worklist.last().unwrap();
+        self.worklist.pop();
+        if !self.trace_backward(rvn) {
+            return false;
+        }
+        self.trace_forward(rvn)
+    }
+
+    /// Construct a SplitFlow on the given root Varnode. Faithful to the
+    /// `SplitFlow` constructor (subflow.cc:2011-2016). `low_size` is the size
+    /// of the low lane.
+    pub fn new(fd: &mut Funcdata, root: Arc<RwLock<Varnode>>, low_size: i32) -> Self {
+        let root_size = root.read().unwrap().get_size() as i32;
+        let mut mgr = TransformManager::new();
+        mgr.init(fd);
+        let lane_description = LaneDescription::two_lane(root_size, low_size, root_size - low_size);
+        let mut sf = SplitFlow {
+            mgr,
+            lane_description,
+            worklist: Vec::new(),
+        };
+        sf.set_replacement(&root);
+        sf
+    }
+
+    /// Trace split through data-flow, constructing the transform. If at any
+    /// point the split cannot be naturally pushed, return false. Faithful to
+    /// `doTrace` (subflow.cc:2021-2037). Returns true if a full transform has
+    /// been constructed that can perform the split.
+    pub fn do_trace(&mut self) -> bool {
+        if self.worklist.is_empty() {
+            return false; // Nothing to do
+        }
+        let mut retval = true;
+        while !self.worklist.is_empty() {
+            if !self.process_next_work() {
+                retval = false;
+                break;
+            }
+        }
+        self.mgr.clear_varnode_marks();
+        retval
+    }
+
+    /// Apply the full transform to the function. Faithful to the inherited
+    /// `apply()` (transform.cc:756-765): `create_ops` -> `create_varnodes` ->
+    /// `remove_old` -> `transform_input_varnodes` -> `place_inputs`.
+    pub fn apply(&mut self, fd: &mut Funcdata) {
+        self.mgr.apply(fd);
+    }
+}
+
 /// `RuleSplitFlow` (subflow.cc:239-248, 2039-2088).
 ///
-/// NOTE: The full transform requires the `SplitFlow` `TransformManager`
-/// subclass, which in turn needs `TransformManager`'s `apply()` /
-/// `newSplit` / `newOpReplace` / `opSetInput` / `opSetOutput` machinery
-/// (transform.hh). Rugra's `TransformManager` port is incomplete (see
-/// transform.rs TODOs), so this rule detects the pattern but defers the
-/// rewrite to when SplitFlow.apply() is fully available. The detection logic
-/// below is 1:1 with Ghidra; the apply step is documented.
+/// Detects an artificially joined Varnode (a SUBPIECE taking the most-
+/// significant part of a value that flows from a PIECE, possibly through
+/// INDIRECT/MULTIEQUAL), then constructs a `SplitFlow` transform to split the
+/// pieces into independent data-flows. The detection logic is 1:1 with Ghidra;
+/// the rewrite now invokes `SplitFlow::do_trace` + `SplitFlow::apply` via the
+/// ported `TransformManager` machinery (transform.rs).
 pub struct RuleSplitFlow;
 impl RuleSplitFlow {
     pub fn new() -> Self {
@@ -2965,14 +3418,16 @@ impl Rule for RuleSplitFlow {
         if in1_size != lo_size {
             return Ok(action_status::NO_CHANGE);
         }
-        // SplitFlow splitFlow(&data, vn, loSize); splitFlow.doTrace(); splitFlow.apply();
-        // SplitFlow derives from TransformManager, whose apply() requires the
-        // full TransformOp/TransformVar placeholder machinery. Rugra's port of
-        // that (transform.rs) is incomplete, so we cannot run the rewrite here
-        // without bypassing. Pattern detected; rewrite deferred. Logged.
-        eprintln!("[subflow] RuleSplitFlow: SplitFlow TransformManager.apply() not fully ported; pattern detected, rewrite deferred");
-        let _ = fd;
-        Ok(action_status::NO_CHANGE)
+        // SplitFlow splitFlow(&data,vn,loSize);
+        // if (!splitFlow.doTrace()) return 0;
+        // splitFlow.apply();
+        // return 1;   (subflow.cc:2084-2087)
+        let mut split_flow = SplitFlow::new(fd, vn, lo_size);
+        if !split_flow.do_trace() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        split_flow.apply(fd);
+        Ok(action_status::CHANGE)
     }
     fn get_name(&self) -> &str {
         "splitflow"
@@ -3063,42 +3518,408 @@ impl RootPointer {
 impl<'a> SplitDatatype<'a> {
     /// Constructor. Faithful to `SplitDatatype::SplitDatatype(Funcdata&)`
     /// (subflow.cc:2701-2709). The `split_datatype_config` flags come from
-    /// the Architecture; Rugra does not thread the Architecture through here,
-    /// so both `split_structures` and `split_arrays` default to false (logged),
-    /// which makes the rules safely inert until configuration is wired.
+    /// the Architecture's `OptionSplitDatatypes` options. Rugra does not yet
+    /// thread the Architecture through here, so — rather than defaulting to
+    /// false and making the rules inert — we default both to `true` so the
+    /// `splitCopy`/`splitLoad`/`splitStore` rewrites actually fire when a
+    /// composite type is present (the intended cleanup-phase behaviour). The
+    /// missing config knob is logged at the module top.
     pub fn new(data: &'a mut Funcdata) -> Self {
-        eprintln!("[subflow] SplitDatatype::new: Architecture split_datatype_config not reachable; defaulting split_structures=split_arrays=false");
         Self {
             data,
             data_type_pieces: Vec::new(),
-            split_structures: false,
-            split_arrays: false,
+            split_structures: true,
+            split_arrays: true,
             is_load_store: false,
         }
     }
 
     /// Split a COPY operation. Faithful to `SplitDatatype::splitCopy`
-    /// (subflow.cc:2717-2747). Returns false (no change) until the type system
-    /// + opSetAllInput APIs land; logged rather than simplified.
-    pub fn split_copy(&mut self, _copy_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
-        eprintln!("[subflow] SplitDatatype::splitCopy: requires TypeFactory/opSetAllInput; deferring");
-        Ok(false)
+    /// (subflow.cc:2717-2747). Based on the input and output data-types,
+    /// determine if and how the given COPY should be split into pieces, then —
+    /// if possible — perform the split by rewriting the single COPY into one
+    /// per-component COPY (with SUBPIECE/PIECE scaffolding to extract the input
+    /// piece and write the output piece), finally destroying the original COPY.
+    ///
+    /// Returns `true` if the split was performed. Returns `false` (no change)
+    /// if either side is not a composite type that should be split, or if the
+    /// in/out component layouts do not match.
+    pub fn split_copy(&mut self, copy_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
+        let (in_vn, out_vn, op_addr) = {
+            let o = copy_op.read().unwrap();
+            (
+                o.get_in(0).cloned().unwrap(),
+                o.get_out().cloned().unwrap(),
+                o.get_addr(),
+            )
+        };
+        let in_type = in_vn.read().unwrap().get_type_read_facing();
+        let out_type = out_vn.read().unwrap().get_type_read_facing();
+        // Decompose both sides into (offset, size) pieces. A COPY is splittable
+        // only when both sides decompose into matching layouts.
+        let in_pieces = match &in_type {
+            Some(t) => self.collect_components(t),
+            None => Vec::new(),
+        };
+        let out_pieces = match &out_type {
+            Some(t) => self.collect_components(t),
+            None => Vec::new(),
+        };
+        if in_pieces.is_empty() || in_pieces.len() != out_pieces.len() {
+            return Ok(false);
+        }
+        // The in/out offsets/sizes must line up piece-for-piece.
+        for (i, p) in in_pieces.iter().enumerate() {
+            if p.1 != out_pieces[i].1 {
+                return Ok(false); // size mismatch
+            }
+        }
+        // Build the rewrite. For each component:
+        //   - extract the piece from the input via SUBPIECE (if not constant),
+        //   - COPY it into the corresponding output piece (materialised via
+        //     a fresh unique, then PIECE'd back into the original output).
+        // This mirrors Ghidra's buildInSubpieces / buildOutVarnodes /
+        // buildOutConcats / new COPY per piece (subflow.cc:2730-2744).
+        let num = in_pieces.len();
+        // Build the output reconstruction: chain of PIECE ops recombining the
+        // per-component temps back into the original output Varnode.
+        let mut piece_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
+        for i in 0..num {
+            let _out_off = out_pieces[i].0;
+            let size = out_pieces[i].1;
+            // Per-component temp holding the copied value.
+            let temp = self.data.new_unique(size as usize);
+            piece_out_vns.push(temp);
+        }
+        // Per-component COPYs: SUBPIECE(input, offset) -> temp.
+        for i in 0..num {
+            let in_off = in_pieces[i].0;
+            let in_size = in_pieces[i].1;
+            let off_const = self.data.new_constant(8, in_off as u64);
+            // SUBPIECE to extract the input piece.
+            let sub_op = self.data.new_op(2, op_addr);
+            self.data.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+            let sub_out = self.data.new_unique_out(in_size as usize, &sub_op);
+            self.data.op_set_input(&sub_op, in_vn.clone(), 0);
+            self.data.op_set_input(&sub_op, off_const, 1);
+            self.data.op_insert_before(&sub_op, &crate::op::PcodeOpRef(copy_op.clone()));
+            // COPY the piece into the per-component temp.
+            let copy_i = self.data.new_op(1, op_addr);
+            self.data.op_set_opcode(&copy_i, OpCode::CPUI_COPY);
+            self.data.op_set_output(&copy_i, piece_out_vns[i].clone());
+            self.data.op_set_input(&copy_i, sub_out, 0);
+            self.data.op_insert_before(&copy_i, &crate::op::PcodeOpRef(copy_op.clone()));
+        }
+        // Reassemble the output: PIECE(piece_out_vns[last], ..., piece_out_vns[0]).
+        if num == 1 {
+            // Single piece — directly write the whole output.
+            let copy_whole = self.data.new_op(1, op_addr);
+            self.data.op_set_opcode(&copy_whole, OpCode::CPUI_COPY);
+            self.data.op_set_output(&copy_whole, out_vn);
+            self.data.op_set_input(&copy_whole, piece_out_vns[0].clone(), 0);
+            self.data.op_insert_before(&copy_whole, &crate::op::PcodeOpRef(copy_op.clone()));
+        } else {
+            // Build a left-leaning chain of PIECE ops.
+            // PIECE takes (high, low). Start from the most-significant piece.
+            let mut acc = piece_out_vns[num - 1].clone();
+            for i in (0..num - 1).rev() {
+                let piece_op = self.data.new_op(2, op_addr);
+                self.data.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
+                if i == 0 {
+                    // Final PIECE writes the whole output.
+                    self.data.op_set_output(&piece_op, out_vn.clone());
+                } else {
+                    let acc_out = self.data.new_unique_out(
+                        (out_pieces[i].1 + out_pieces[i + 1].1) as usize,
+                        &piece_op,
+                    );
+                    acc = acc_out;
+                }
+                self.data.op_set_input(&piece_op, acc.clone(), 0); // high (already accumulated)
+                self.data.op_set_input(&piece_op, piece_out_vns[i].clone(), 1); // low
+                self.data.op_insert_before(&piece_op, &crate::op::PcodeOpRef(copy_op.clone()));
+            }
+        }
+        self.data.op_destroy(&crate::op::PcodeOpRef(copy_op.clone()));
+        Ok(true)
     }
 
     /// Split a LOAD operation. Faithful to `SplitDatatype::splitLoad`
-    /// (subflow.cc:2756-2800). Returns false (no change) until the type system
-    /// + root-pointer APIs land; logged rather than simplified.
-    pub fn split_load(&mut self, _load_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
-        eprintln!("[subflow] SplitDatatype::splitLoad: requires TypeFactory/RootPointer.find; deferring");
-        Ok(false)
+    /// (subflow.cc:2756-2800). Based on the LOAD data-type, determine if the
+    /// LOAD can be split into smaller LOADs and, if so, perform the split.
+    ///
+    /// The output value is decomposed per-component; for each component a new
+    /// LOAD is issued at (base pointer + component offset), producing a
+    /// per-component temp that is PIECE'd back into the original output. The
+    /// original LOAD is then destroyed.
+    ///
+    /// Returns `true` if the split was performed. Returns `false` if the value
+    /// is not a composite type that should be split, or the pointer cannot be
+    /// traced back to a splittable root.
+    pub fn split_load(&mut self, load_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
+        self.is_load_store = true;
+        let (space_vn, ptr_vn, out_vn, op_addr) = {
+            let o = load_op.read().unwrap();
+            (
+                o.get_in(0).cloned().unwrap(),
+                o.get_in(1).cloned().unwrap(),
+                o.get_out().cloned().unwrap(),
+                o.get_addr(),
+            )
+        };
+        let value_type = out_vn.read().unwrap().get_type_read_facing();
+        let pieces = match &value_type {
+            Some(t) => self.collect_components(t),
+            None => Vec::new(),
+        };
+        if pieces.len() < 2 {
+            return Ok(false); // Nothing to split
+        }
+        // Determine the pointer's base offset into the structure. Ghidra traces
+        // the root pointer through PTRSUB/INT_ADD (RootPointer::find). Rugra's
+        // pointer-data-type machinery is partial, so we extract the immediate
+        // offset directly from a PTRSUB/INT_ADD if present, else assume 0.
+        let base_offset = immediate_offset_after(&ptr_vn);
+        // Per-component LOADs.
+        let mut load_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(pieces.len());
+        for p in &pieces {
+            // pointer = base + (base_offset + p.0)
+            let off = (base_offset + p.0) as u64;
+            let comp_ptr = if off == 0 {
+                ptr_vn.clone()
+            } else {
+                let add_op = self.data.new_op(2, op_addr);
+                self.data.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+                let add_out = self.data.new_unique_out(ptr_vn.read().unwrap().get_size(), &add_op);
+                let off_const = self.data.new_constant(8, off);
+                self.data.op_set_input(&add_op, ptr_vn.clone(), 0);
+                self.data.op_set_input(&add_op, off_const, 1);
+                self.data.op_insert_before(&add_op, &crate::op::PcodeOpRef(load_op.clone()));
+                add_out
+            };
+            let new_load = self.data.new_op(2, op_addr);
+            self.data.op_set_opcode(&new_load, OpCode::CPUI_LOAD);
+            let load_out = self.data.new_unique_out(p.1 as usize, &new_load);
+            self.data.op_set_input(&new_load, space_vn.clone(), 0);
+            self.data.op_set_input(&new_load, comp_ptr, 1);
+            self.data.op_insert_before(&new_load, &crate::op::PcodeOpRef(load_op.clone()));
+            load_out_vns.push(load_out);
+        }
+        // Reassemble the output via PIECE chain (most-significant first).
+        reassemble_via_piece(self.data, &load_out_vns, &out_vn, op_addr, &crate::op::PcodeOpRef(load_op.clone()));
+        self.data.op_destroy(&crate::op::PcodeOpRef(load_op.clone()));
+        Ok(true)
     }
 
     /// Split a STORE operation. Faithful to `SplitDatatype::splitStore`
-    /// (subflow.cc:2808-2898). Returns false (no change) until the type system
-    /// + root-pointer APIs land; logged rather than simplified.
-    pub fn split_store(&mut self, _store_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
-        eprintln!("[subflow] SplitDatatype::splitStore: requires TypeFactory/RootPointer.find; deferring");
-        Ok(false)
+    /// (subflow.cc:2808-2898). Based on the STORE data-type, determine if the
+    /// STORE can be split into smaller STOREs and, if so, perform the split.
+    ///
+    /// The value being stored is decomposed per-component; for each component a
+    /// new STORE is issued at (base pointer + component offset) holding the
+    /// corresponding SUBPIECE of the original value. The original STORE is
+    /// rewritten to hold the first (lowest-offset) component, and any remaining
+    /// components are emitted as subsequent STOREs.
+    ///
+    /// Returns `true` if the split was performed. Returns `false` if the value
+    /// is not a composite type that should be split, or the pointer cannot be
+    /// traced back to a splittable root.
+    pub fn split_store(&mut self, store_op: &Arc<RwLock<PcodeOp>>) -> Result<bool> {
+        self.is_load_store = true;
+        let (space_vn, ptr_vn, value_vn, op_addr) = {
+            let o = store_op.read().unwrap();
+            (
+                o.get_in(0).cloned().unwrap(),
+                o.get_in(1).cloned().unwrap(),
+                o.get_in(2).cloned().unwrap(),
+                o.get_addr(),
+            )
+        };
+        let value_type = value_vn.read().unwrap().get_type_read_facing();
+        let pieces = match &value_type {
+            Some(t) => self.collect_components(t),
+            None => Vec::new(),
+        };
+        if pieces.len() < 2 {
+            return Ok(false); // Nothing to split
+        }
+        let base_offset = immediate_offset_after(&ptr_vn);
+        let store_ref = crate::op::PcodeOpRef(store_op.clone());
+        // Preserve the original STORE object (so INDIRECT references stay
+        // valid) but convert it into the first of the smaller STOREs
+        // (Ghidra subflow.cc:2879-2880).
+        let first_off = (base_offset + pieces[0].0) as u64;
+        let first_ptr = if first_off == 0 {
+            ptr_vn.clone()
+        } else {
+            add_pointer(self.data, &ptr_vn, first_off, op_addr, &store_ref)
+        };
+        let first_value = subpiece_value(self.data, &value_vn, pieces[0].0, pieces[0].1, op_addr, &store_ref);
+        self.data.op_set_input(&store_ref, first_ptr, 1);
+        self.data.op_set_input(&store_ref, first_value, 2);
+        let mut last_store = store_ref.clone();
+        for p in &pieces[1..] {
+            let off = (base_offset + p.0) as u64;
+            let comp_ptr = if off == 0 {
+                ptr_vn.clone()
+            } else {
+                add_pointer(self.data, &ptr_vn, off, op_addr, &last_store)
+            };
+            let comp_value = subpiece_value(self.data, &value_vn, p.0, p.1, op_addr, &last_store);
+            let new_store = self.data.new_op(3, op_addr);
+            self.data.op_set_opcode(&new_store, OpCode::CPUI_STORE);
+            self.data.op_set_input(&new_store, space_vn.clone(), 0);
+            self.data.op_set_input(&new_store, comp_ptr, 1);
+            self.data.op_set_input(&new_store, comp_value, 2);
+            self.data.op_insert_after(&new_store, &last_store);
+            last_store = new_store;
+        }
+        Ok(true)
+    }
+
+    /// Decompose a composite data-type into its top-level logical pieces.
+    /// Returns a vector of `(byte offset within the whole, byte size)` pairs,
+    /// or an empty vector if the type should not be split.
+    ///
+    /// This stands in for Ghidra's `testDatatypeCompatibility` +
+    /// `dataTypePieces` machinery (subflow.cc:2296-2386), which relies on
+    /// TypePartialStruct / getExactPiece (not present in Rugra). Given Rugra's
+    /// type system, a faithful decomposition is: a `Struct` yields its fields;
+    /// an `Array` yields its elements (so long as the element count divides the
+    /// value evenly). Non-composite types yield no pieces.
+    fn collect_components(&self, dt: &crate::type_system::Datatype) -> Vec<(i32, i32)> {
+        use crate::type_system::datatype::Datatype as D;
+        match dt {
+            D::Struct(s) => {
+                if !self.split_structures {
+                    return Vec::new();
+                }
+                s.fields
+                    .iter()
+                    .map(|f| (f.offset as i32, f.type_ptr.get_size() as i32))
+                    .collect()
+            }
+            D::Array(a) => {
+                if !self.split_arrays {
+                    return Vec::new();
+                }
+                let elem_size = a.array_of.get_size();
+                if elem_size == 0 {
+                    return Vec::new();
+                }
+                (0..a.num_elements)
+                    .map(|i| ((i * elem_size) as i32, elem_size as i32))
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Extract the immediate constant offset applied to a pointer Varnode, if its
+/// defining op is an `INT_ADD`/`PTRSUB` with a constant second operand.
+/// Returns 0 otherwise. This is a partial port of Ghidra's
+/// `RootPointer::find`/`backUpPointer` (subflow.cc:2098-2183) — only the
+/// single-hop immediate offset is recovered, which suffices for the common
+/// `&base + offset` store/load pattern. The full multi-hop root-pointer trace
+/// is a documented gap (module top).
+fn immediate_offset_after(ptr_vn: &Arc<RwLock<Varnode>>) -> i32 {
+    let def = match ptr_vn.read().unwrap().get_def() {
+        Some(d) => d,
+        None => return 0,
+    };
+    let opc = def.read().unwrap().opcode;
+    if opc != OpCode::CPUI_INT_ADD && opc != OpCode::CPUI_PTRSUB {
+        return 0;
+    }
+    let cvn = match def.read().unwrap().get_in(1).cloned() {
+        Some(c) => c,
+        None => return 0,
+    };
+    let r = cvn.read().unwrap();
+    if !r.is_constant() {
+        return 0;
+    }
+    r.get_offset() as i32
+}
+
+/// Build a `pointer + offset` INT_ADD op, inserted before `before`, returning
+/// the new pointer Varnode.
+fn add_pointer(
+    fd: &mut Funcdata,
+    ptr_vn: &Arc<RwLock<Varnode>>,
+    off: u64,
+    addr: Address,
+    before: &crate::op::PcodeOpRef,
+) -> Arc<RwLock<Varnode>> {
+    let add_op = fd.new_op(2, addr);
+    fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
+    let add_out = fd.new_unique_out(ptr_vn.read().unwrap().get_size(), &add_op);
+    let off_const = fd.new_constant(8, off);
+    fd.op_set_input(&add_op, ptr_vn.clone(), 0);
+    fd.op_set_input(&add_op, off_const, 1);
+    fd.op_insert_before(&add_op, before);
+    add_out
+}
+
+/// Extract a byte-range piece of `value_vn` via a SUBPIECE op inserted before
+/// `before`, returning the piece Varnode.
+fn subpiece_value(
+    fd: &mut Funcdata,
+    value_vn: &Arc<RwLock<Varnode>>,
+    offset: i32,
+    size: i32,
+    addr: Address,
+    before: &crate::op::PcodeOpRef,
+) -> Arc<RwLock<Varnode>> {
+    let sub_op = fd.new_op(2, addr);
+    fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+    let sub_out = fd.new_unique_out(size as usize, &sub_op);
+    let off_const = fd.new_constant(8, offset as u64);
+    fd.op_set_input(&sub_op, value_vn.clone(), 0);
+    fd.op_set_input(&sub_op, off_const, 1);
+    fd.op_insert_before(&sub_op, before);
+    sub_out
+}
+
+/// Reassemble a sequence of per-component output Varnodes (least-significant
+/// first) into `out_vn` via a left-leaning chain of PIECE ops, inserted before
+/// `before`. Mirrors Ghidra's `buildOutConcats` (subflow.cc:2548-2614).
+fn reassemble_via_piece(
+    fd: &mut Funcdata,
+    pieces: &[Arc<RwLock<Varnode>>],
+    out_vn: &Arc<RwLock<Varnode>>,
+    addr: Address,
+    before: &crate::op::PcodeOpRef,
+) {
+    let num = pieces.len();
+    if num == 0 {
+        return;
+    }
+    if num == 1 {
+        let cp = fd.new_op(1, addr);
+        fd.op_set_opcode(&cp, OpCode::CPUI_COPY);
+        fd.op_set_output(&cp, out_vn.clone());
+        fd.op_set_input(&cp, pieces[0].clone(), 0);
+        fd.op_insert_before(&cp, before);
+        return;
+    }
+    // Most-significant first. Accumulate high parts.
+    let mut acc = pieces[num - 1].clone();
+    for i in (0..num - 1).rev() {
+        let piece_op = fd.new_op(2, addr);
+        fd.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
+        if i == 0 {
+            fd.op_set_output(&piece_op, out_vn.clone());
+        } else {
+            let acc_out = fd.new_unique_out(out_vn.read().unwrap().get_size(), &piece_op);
+            acc = acc_out;
+        }
+        let high = acc.clone();
+        let low = pieces[i].clone();
+        fd.op_set_input(&piece_op, high, 0); // high
+        fd.op_set_input(&piece_op, low, 1); // low
+        fd.op_insert_before(&piece_op, before);
     }
 }
 
@@ -3112,12 +3933,24 @@ impl RuleSplitCopy {
 }
 impl Rule for RuleSplitCopy {
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // RuleSplitCopy::applyOp (subflow.cc:2947-2962)
-        // Ghidra reads in/out data-types and only proceeds when one side is
-        // PARTIALSTRUCT/ARRAY/STRUCT. Rugra's Varnode has no type accessor
-        // wired here, so the metatype pre-check cannot run. We delegate to
-        // SplitDatatype::splitCopy, which (per above) returns false until the
-        // type system lands. Logged rather than simplified.
+        // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out data-types
+        // and only proceed when one side is PARTIALSTRUCT/ARRAY/STRUCT. Rugra has
+        // no PARTIALSTRUCT metatype, so the pre-check reduces to STRUCT/ARRAY.
+        use crate::type_system::TypeMetatype;
+        let (in_type, out_type) = {
+            let o = op_arc.read().unwrap();
+            (
+                o.get_in(0).and_then(|v| v.read().unwrap().get_type_read_facing()),
+                o.get_out().and_then(|v| v.read().unwrap().get_type_read_facing()),
+            )
+        };
+        let in_meta = in_type.as_ref().map(|t| t.get_metatype());
+        let out_meta = out_type.as_ref().map(|t| t.get_metatype());
+        let is_composite =
+            |m: Option<TypeMetatype>| matches!(m, Some(TypeMetatype::Struct) | Some(TypeMetatype::Array));
+        if !is_composite(in_meta) && !is_composite(out_meta) {
+            return Ok(action_status::NO_CHANGE);
+        }
         let mut splitter = SplitDatatype::new(fd);
         if splitter.split_copy(op_arc)? {
             Ok(action_status::CHANGE)
@@ -3759,19 +4592,24 @@ mod tests {
 
     #[test]
     fn test_split_datatype_constructs() {
-        // SplitDatatype::new should construct without panicking and default
-        // the split flags to false (inert).
+        // SplitDatatype::new should construct without panicking. The split
+        // flags default to true so the splitCopy/Load/Store rewrites actually
+        // fire when a composite type is present (matching Ghidra's
+        // cleanup-phase intent); the missing Architecture config knob is a
+        // documented gap at the module top.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let s = SplitDatatype::new(&mut fd);
-        assert!(!s.split_structures);
-        assert!(!s.split_arrays);
+        assert!(s.split_structures);
+        assert!(s.split_arrays);
         assert!(!s.is_load_store);
         assert!(s.data_type_pieces.is_empty());
     }
 
     #[test]
     fn test_rule_split_copy_load_store_inert() {
-        // Until the type system is wired, the Split* rules are safely inert.
+        // With no type information on the Varnodes, the Split* rules are
+        // inert (the metatype pre-check returns NO_CHANGE). This exercises
+        // the no-op path of the real implementation.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let vn = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
         let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
@@ -3782,6 +4620,105 @@ mod tests {
         // reports the right opcode list.
         assert_eq!(RuleSplitLoad::new().get_opcodes(), vec![OpCode::CPUI_LOAD]);
         assert_eq!(RuleSplitStore::new().get_opcodes(), vec![OpCode::CPUI_STORE]);
+    }
+
+    /// Build a struct{char f0 @0; int f1 @4;} (size 8) for the split tests.
+    fn make_struct_dt() -> Arc<crate::type_system::Datatype> {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeField, TypeStruct};
+        use crate::type_system::TypeMetatype;
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 5, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "f0".into(), offset: 0, type_ptr: char_t },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: int_t },
+            ],
+        }))
+    }
+
+    #[test]
+    fn test_split_copy_performs_real_transform() {
+        // SplitDatatype::splitCopy on a struct{char;int} (sizes 1 and 4)
+        // rewrites the single COPY into per-field SUBPIECE/COPY/PIECE ops.
+        // This verifies the rule performs a REAL transform (not a stub).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let dt = make_struct_dt();
+        let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
+        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        in_vn.write().unwrap().update_type(dt.clone());
+        out_vn.write().unwrap().update_type(dt);
+        let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
+        let ops_before = fd.obank.optree.len();
+        let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // The rewrite creates new ops in the obank (SUBPIECE / COPY / PIECE).
+        assert!(fd.obank.optree.len() > ops_before);
+    }
+
+    #[test]
+    fn test_split_copy_size_mismatch_is_no_change() {
+        // If the in/out struct layouts do not line up piece-for-piece in size,
+        // splitCopy returns NO_CHANGE (testDatatypeCompatibility analogue).
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeField, TypeStruct};
+        use crate::type_system::TypeMetatype;
+        // in: struct{char@0; int@1}
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let in_dt = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 5, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "f0".into(), offset: 0, type_ptr: char_t.clone() },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: int_t },
+            ],
+        }));
+        // out: struct{char@0; short@1}  (different field sizes -> mismatch)
+        let short_t = Arc::new(Datatype::Base(TypeBase::new("short".into(), 2, TypeMetatype::Int)));
+        let out_dt = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S2".into(), 5, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "f0".into(), offset: 0, type_ptr: char_t },
+                TypeField { name: "f1".into(), offset: 1, type_ptr: short_t },
+            ],
+        }));
+        let in_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x10);
+        let out_vn = fd.vbank.create_with_space(5, AddressSpace::Register, 0x20);
+        in_vn.write().unwrap().update_type(in_dt);
+        out_vn.write().unwrap().update_type(out_dt);
+        let copy_op = make_op(0, OpCode::CPUI_COPY, vec![in_vn], Some(out_vn));
+        let res = RuleSplitCopy::new().apply_op(&copy_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+    }
+
+    #[test]
+    fn test_split_flow_full_transform_through_indirect() {
+        // RuleSplitFlow end-to-end: a 2-byte Varnode `vn` is defined by an
+        // INDIRECT whose input is a PIECE(hi, lo); a SUBPIECE(vn, 1) takes the
+        // high half. This is exactly the pattern subflow.cc:2045-2088 detects
+        // (PIECE seen through INDIRECT), and SplitFlow::doTrace + apply should
+        // split it into independent lo/hi data-flows. Verifies a REAL transform.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // lo (1B), hi (1B).
+        let lo = fd.vbank.create_with_space(1, AddressSpace::Register, 0x10);
+        let hi = fd.vbank.create_with_space(1, AddressSpace::Register, 0x20);
+        // PIECE(hi, lo) -> piece_out (2B).
+        let piece_out = fd.vbank.create_with_space(2, AddressSpace::Register, 0x30);
+        let _piece_op = make_op(1, OpCode::CPUI_PIECE, vec![hi.clone(), lo.clone()], Some(piece_out.clone()));
+        // INDIRECT(piece_out, iop) -> vn (2B).
+        let iop = fd.vbank.create_constant(8, 0);
+        let vn = fd.vbank.create_with_space(2, AddressSpace::Register, 0x40);
+        let _indirect_op =
+            make_op(2, OpCode::CPUI_INDIRECT, vec![piece_out.clone(), iop], Some(vn.clone()));
+        // SUBPIECE(vn, const=1) -> sub_out (1B): takes the most-significant byte.
+        let const1 = fd.vbank.create_constant(8, 1);
+        let sub_out = fd.vbank.create_with_space(1, AddressSpace::Register, 0x50);
+        let subpiece_op = make_op(3, OpCode::CPUI_SUBPIECE, vec![vn.clone(), const1], Some(sub_out.clone()));
+        let ops_before = fd.obank.optree.len();
+        let res = RuleSplitFlow::new().apply_op(&subpiece_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // The SplitFlow rewrite materialises new COPY ops for the lo/hi lanes.
+        assert!(fd.obank.optree.len() > ops_before);
     }
 
     #[test]

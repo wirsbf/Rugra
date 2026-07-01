@@ -43,13 +43,20 @@ pub mod userop_flags {
     pub const DISPLAY_STRING: u32 = 4;
 }
 
-/// Built-in CALLOTHER ids.
-pub const BUILTIN_STRINGDATA: u32 = 1;
-pub const BUILTIN_VOLATILE_READ: u32 = 2;
-pub const BUILTIN_VOLATILE_WRITE: u32 = 3;
-pub const BUILTIN_MEMCPY: u32 = 4;
-pub const BUILTIN_STRNCPY: u32 = 5;
-pub const BUILTIN_WCSNCPY: u32 = 6;
+/// Built-in CALLOTHER ids. Faithful to `UserPcodeOp::BUILTIN_*`
+/// (userop.cc:30-35). These are large, distinct values used as the
+/// CALLOTHER constant id passed in input[0] of a CPUI_CALLOTHER op.
+pub const BUILTIN_STRINGDATA: u32 = 0x1000_0000;
+pub const BUILTIN_VOLATILE_READ: u32 = 0x1000_0001;
+pub const BUILTIN_VOLATILE_WRITE: u32 = 0x1000_0002;
+/// Built-in id for `memcpy`. Used by RuleStringStore.
+pub const BUILTIN_MEMCPY: u32 = 0x1000_0003;
+/// Built-in id for `strncpy` (Ghidra names it "strcpy"). Used by
+/// RuleStringCopy for 1-byte (char) elements.
+pub const BUILTIN_STRNCPY: u32 = 0x1000_0004;
+/// Built-in id for `wcsncpy`. Used by RuleStringCopy for 2-byte
+/// (wchar_t) elements.
+pub const BUILTIN_WCSNCPY: u32 = 0x1000_0005;
 
 /// The base class for a detailed definition of a user-defined p-code operation.
 /// Corresponds to Ghidra's `UserPcodeOp` (userop.hh:47).
@@ -267,11 +274,20 @@ pub struct UserOpManage {
     /// Segment ops registered by space index. Faithful to the segment-op
     /// vector in Ghidra's UserOpManage (userop.hh:347 `getSegmentOp`).
     pub segment_ops: HashMap<i32, SegmentOp>,
+    /// Built-in id (BUILTIN_*) → user op. Faithful to Ghidra's
+    /// `UserOpManage::builtinmap` (userop.hh:342), populated by
+    /// `registerBuiltin(uint4)` (userop.cc:432-484).
+    pub builtin_map: HashMap<u32, UserPcodeOp>,
 }
 
 impl UserOpManage {
     pub fn new() -> Self {
-        Self { ops: Vec::new(), name_map: HashMap::new(), segment_ops: HashMap::new() }
+        Self {
+            ops: Vec::new(),
+            name_map: HashMap::new(),
+            segment_ops: HashMap::new(),
+            builtin_map: HashMap::new(),
+        }
     }
 
     /// Look up the SegmentOp for the given space index. Faithful to
@@ -305,11 +321,68 @@ impl UserOpManage {
     /// Get the number of registered ops.
     pub fn num_ops(&self) -> usize { self.ops.len() }
 
+    /// Ensure an active record exists for the given built-in op id. Faithful
+    /// to Ghidra `UserOpManage::registerBuiltin(uint4)` (userop.cc:432-484).
+    /// The built-in id (one of the `BUILTIN_*` constants) is stored in
+    /// `builtin_map` and returned as the CALLOTHER constant index. Idempotent:
+    /// repeated calls return the same id.
+    pub fn register_builtin_by_id(&mut self, builtin_id: u32) -> u32 {
+        if self.builtin_map.contains_key(&builtin_id) {
+            return builtin_id;
+        }
+        let (name, op_type) = match builtin_id {
+            BUILTIN_STRINGDATA => ("builtin_string_data", UserOpType::StringData),
+            BUILTIN_VOLATILE_READ => ("read_volatile", UserOpType::VolatileRead),
+            BUILTIN_VOLATILE_WRITE => ("write_volatile", UserOpType::VolatileWrite),
+            BUILTIN_MEMCPY => ("builtin_memcpy", UserOpType::StringData),
+            BUILTIN_STRNCPY => ("builtin_strncpy", UserOpType::StringData),
+            BUILTIN_WCSNCPY => ("builtin_wcsncpy", UserOpType::StringData),
+            _ => ("builtin_unknown", UserOpType::Unspecialized),
+        };
+        let op = UserPcodeOp::new(name.to_string(), op_type, builtin_id as i32);
+        self.builtin_map.insert(builtin_id, op);
+        builtin_id
+    }
+
+    /// Register the string-copy (`strncpy`/`wcsncpy`) CALLOTHER and return its
+    /// CALLOTHER constant index. Used by RuleStringCopy. Faithful to the
+    /// `glb->userops.registerBuiltin(BUILTIN_STRNCPY)` call embedded in
+    /// `StringSequence::buildStringCopy` (constseq.cc:360).
+    ///
+    /// `char_size` selects the function: 1 → strncpy (BUILTIN_STRNCPY),
+    /// 2 → wcsncpy (BUILTIN_WCSNCPY).
+    pub fn register_string_copy_op(&mut self, char_size: i32) -> u32 {
+        let builtin_id = if char_size == 2 { BUILTIN_WCSNCPY } else { BUILTIN_STRNCPY };
+        self.register_builtin_by_id(builtin_id)
+    }
+
+    /// Register the string-store (`memcpy`) CALLOTHER and return its CALLOTHER
+    /// constant index. Used by RuleStringStore. Faithful to the
+    /// `registerBuiltin(BUILTIN_MEMCPY)` call embedded in
+    /// `HeapSequence::buildStringCopy` (constseq.cc:751).
+    pub fn register_string_store_op(&mut self) -> u32 {
+        self.register_builtin_by_id(BUILTIN_MEMCPY)
+    }
+
+    /// Look up the CALLOTHER name for a given constant id. Faithful to
+    /// `UserOpManage::getOp(uint4)->getName()`. Checks built-ins first, then
+    /// the by-index list.
+    pub fn get_call_other_name(&self, index: u32) -> Option<&str> {
+        // Built-in ids are large sentinel values (0x1000_00xx); small values
+        // index the registered list.
+        if index >= 0x1000_0000 {
+            return self.builtin_map.get(&index).map(|op| op.name.as_str());
+        }
+        self.get_op(index as i32).map(|op| op.name.as_str())
+    }
+
     /// Register a built-in op if not already present.
     pub fn register_builtin(&mut self, name: &str, builtin_id: u32) {
         if self.get_index_by_name(name).is_none() {
             self.register_op(name.to_string(), UserOpType::Unspecialized);
         }
+        // Also keep the faithful by-id record in sync.
+        self.register_builtin_by_id(builtin_id);
     }
 
     /// Initialize all built-in CALLOTHER ids.
@@ -417,8 +490,11 @@ mod tests {
 
     #[test]
     fn test_builtin_ids() {
-        assert_eq!(BUILTIN_MEMCPY, 4);
-        assert_eq!(BUILTIN_VOLATILE_READ, 2);
+        // Faithful to Ghidra userop.cc:30-35.
+        assert_eq!(BUILTIN_MEMCPY, 0x1000_0003);
+        assert_eq!(BUILTIN_VOLATILE_READ, 0x1000_0001);
+        assert_eq!(BUILTIN_STRNCPY, 0x1000_0004);
+        assert_eq!(BUILTIN_WCSNCPY, 0x1000_0005);
     }
 
     #[test]
@@ -428,6 +504,48 @@ mod tests {
         assert!(mgr.get_index_by_name("memcpy").is_some());
         assert!(mgr.get_index_by_name("volatile_read").is_some());
         assert_eq!(mgr.num_ops(), 6);
+    }
+
+    #[test]
+    fn test_register_builtin_by_id() {
+        let mut mgr = UserOpManage::new();
+        // Faithful to Ghidra registerBuiltin (userop.cc:432-484).
+        let id = mgr.register_builtin_by_id(BUILTIN_STRNCPY);
+        assert_eq!(id, BUILTIN_STRNCPY);
+        // Idempotent.
+        let id2 = mgr.register_builtin_by_id(BUILTIN_STRNCPY);
+        assert_eq!(id2, BUILTIN_STRNCPY);
+        // Name lookup.
+        assert_eq!(mgr.get_call_other_name(BUILTIN_STRNCPY), Some("builtin_strncpy"));
+        assert_eq!(mgr.get_call_other_name(BUILTIN_MEMCPY), None);
+    }
+
+    #[test]
+    fn test_register_string_copy_store_op() {
+        let mut mgr = UserOpManage::new();
+        // RuleStringCopy selects strncpy for 1-byte chars, wcsncpy for 2-byte.
+        let sc1 = mgr.register_string_copy_op(1);
+        assert_eq!(sc1, BUILTIN_STRNCPY);
+        assert_eq!(mgr.get_call_other_name(sc1), Some("builtin_strncpy"));
+        let sc2 = mgr.register_string_copy_op(2);
+        assert_eq!(sc2, BUILTIN_WCSNCPY);
+        assert_eq!(mgr.get_call_other_name(sc2), Some("builtin_wcsncpy"));
+        // RuleStringStore selects memcpy.
+        let ss = mgr.register_string_store_op();
+        assert_eq!(ss, BUILTIN_MEMCPY);
+        assert_eq!(mgr.get_call_other_name(ss), Some("builtin_memcpy"));
+    }
+
+    #[test]
+    fn test_get_call_other_name_indexed() {
+        let mut mgr = UserOpManage::new();
+        let idx = mgr.register_op("custom_op".into(), UserOpType::Unspecialized);
+        // Small ids index the registered list.
+        assert_eq!(mgr.get_call_other_name(idx as u32), Some("custom_op"));
+        // Large sentinel ids check the builtin map.
+        assert_eq!(mgr.get_call_other_name(BUILTIN_VOLATILE_WRITE), None);
+        mgr.register_builtin_by_id(BUILTIN_VOLATILE_WRITE);
+        assert_eq!(mgr.get_call_other_name(BUILTIN_VOLATILE_WRITE), Some("write_volatile"));
     }
 
     #[test]

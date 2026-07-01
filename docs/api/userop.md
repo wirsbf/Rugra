@@ -51,3 +51,6 @@ UserPcodeOp 新增：get_operator_name/extract_annotation_size/is_volatile_read/
 
 ### 2026-07-01：segment_ops + get_segment_op
 - `UserOpManage.segment_ops: HashMap<i32, SegmentOp>`（userop.hh:347）+ `get_segment_op(space_idx)`。
+
+### 2026-07-01（续）：CALLOTHER 注册 API
+BUILTIN 常量对齐 userop.cc:30-35。register_builtin_by_id/register_string_copy_op/register_string_store_op + builtin_map + get_call_other_name。4 新测试。

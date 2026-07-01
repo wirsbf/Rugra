@@ -67,3 +67,9 @@
 
 ### 2026-07-01（续 2）：RuleDumptyHumpLate（subflow.cc:3006-3064）
 SUBPIECE(PIECE) 回溯：尝试低/高半分量，三路重写（size 不匹配/isAutoLive/完全替换）。
+
+### 2026-07-01（续 3）：SplitFlow TransformManager 子类 + SplitCopy/Load/Store 真正变换
+- SplitFlow（subflow.cc:1754-2037）：TransformManager 子类，set_replacement/add_op/trace_forward/trace_backward/do_trace。委托 TransformManager::apply。
+- RuleSplitFlow::apply_op：从 eprintln+return 改为 SplitFlow::new→do_trace→apply→CHANGE。
+- SplitCopy/SplitLoad/SplitStore：从 return false 改为真正变换（SUBPIECE→COPY/LOAD/STORE 拆分+PIECE 重组）。
+4 新测试验证变换执行。

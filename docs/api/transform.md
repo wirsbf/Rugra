@@ -102,3 +102,6 @@ orchestrates 变换生命周期。
 two_lane/get_boundary/subset/restriction/extension）、TransformVar（initialize）、
 TransformManager（preexisting/unique/constant/constant-shift/split/op-replace/
 op-set-input-output/preexisting-guard/constant-getpiece）。
+
+### 2026-07-01（续）：TransformManager::apply 确认完整
+TransformManager::apply（transform.cc:756-765）：create_ops→create_varnodes→remove_old→place_inputs→transform_input_varnodes。SplitFlow 委托此方法。

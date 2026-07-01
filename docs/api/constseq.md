@@ -48,3 +48,7 @@
 - **interfere_between(fd, start, end)** — interfereBetween(constseq.cc:42-58)：检查两个 op 之间是否有干扰 op（call/branch/STORE）
 - **check_interference(fd, root_offset, element_size)** — checkInterference(constseq.cc:62-103)：从 root 开始收集同块 COPY 常量到连续偏移的 op，找无干扰的最大连续集
 - **RuleStringCopy::apply_op** — RuleStringCopy::applyOp(constseq.cc:954-1002)：检测 COPY 常量字符序列，形成字节数组，验证字符串有效性。transform（替换为 strncpy CALLOTHER）需要 userop 基础设施。
+
+### 2026-07-01（续）：StringCopy/StringStore CALLOTHER 替换（非 stub）
+- userop.rs：BUILTIN 常量对齐 Ghidra（MEMCPY/STRNCPY/WCSNCPY），register_string_copy_op/register_string_store_op/register_builtin_by_id + builtin_map。
+- constseq.rs：select_string_copy_function（constseq.cc:161）+ build_string_copy（347-372）+ transform（453-461）。RuleStringCopy/Store 现在真正创建 CPUI_CALLOTHER op + op_destroy_recursive。2 新测试。
