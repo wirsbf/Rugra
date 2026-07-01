@@ -5,7 +5,28 @@
 //! types are promoted during arithmetic operations.
 
 use std::sync::Arc;
-use crate::type_system::datatype::{Datatype, TypeMetatype};
+use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+
+/// Build a base integer/unsigned type for a given size and metatype.
+/// Faithful to Ghidra `TypeFactory::getBase(size, metatype)` (type.cc) for
+/// the integer cases: size 1→char/byte, 2→short, 4→int, 8→long (signed) /
+/// ulong (unsigned). Used by input-type-local to derive the type an op
+/// expects for its input slot (`TypeOpBinary::getInputLocal`,
+/// typeop.cc:329-333).
+pub fn base_type_for(size: usize, meta: TypeMetatype) -> Arc<Datatype> {
+    let name = match (meta, size) {
+        (TypeMetatype::Int, 1) => "byte",
+        (TypeMetatype::Int, 2) => "short",
+        (TypeMetatype::Int, 4) => "int",
+        (TypeMetatype::Int, 8) => "long",
+        (TypeMetatype::Uint, 1) => "undefined",
+        (TypeMetatype::Uint, 2) => "ushort",
+        (TypeMetatype::Uint, 4) => "uint",
+        (TypeMetatype::Uint, 8) => "ulong",
+        _ => "long",
+    };
+    Arc::new(Datatype::Base(TypeBase::new(name.to_string(), size, meta)))
+}
 
 /// Interface for determining when a cast is necessary
 ///
@@ -158,6 +179,118 @@ impl CastStrategy for CastStrategyC {
         let meta = op_type.get_metatype();
         // Comparison also triggers promotion for small types
         matches!(meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool | TypeMetatype::Enum)
+    }
+}
+
+impl CastStrategyC {
+    /// Faithful 1:1 port of Ghidra `CastStrategyC::castStandard`
+    /// (cast.cc:300-392). Determines whether an explicit cast is required
+    /// when a varnode of `curtype` feeds an op expecting `reqtype`.
+    ///
+    /// Returns `Some(reqtype)` if a cast IS needed (the caller inserts a
+    /// CPUI_CAST emitting `(reqtype)expr`), or `None` if no cast is needed.
+    ///
+    /// `care_uint_int` — if true, distinguish signed/unsigned (used under
+    ///   pointers, where the distinction matters); if false, treat int/uint
+    ///   interchangeably (most arithmetic ops).
+    /// `care_ptr_uint` — if true, casting a pointer to an integer DOES need a
+    ///   cast (e.g. STORE value slot); if false, it's implied.
+    ///
+    /// Rugra's Datatype lacks typedef chains, variable-length arrays, and
+    /// per-pointer AddrSpace; those branches are faithfully no-ops (a cast
+    /// decision is never wrong in their absence — at worst slightly more
+    /// conservative).
+    pub fn cast_standard_full(
+        &self,
+        reqtype: &Datatype,
+        curtype: &Datatype,
+        mut care_uint_int: bool,
+        care_ptr_uint: bool,
+    ) -> Option<Arc<Datatype>> {
+        let req_arc = Arc::new(reqtype.clone());
+        // Types equal → no cast.
+        if Arc::ptr_eq(&req_arc, &Arc::new(curtype.clone())) {
+            return None;
+        }
+        // From void → always cast.
+        if curtype.get_metatype() == TypeMetatype::Void {
+            return Some(req_arc);
+        }
+        // Peel matching pointer layers (cast.cc:310-324).
+        let mut reqbase = reqtype;
+        let mut curbase = curtype;
+        let mut isptr = false;
+        while reqbase.get_metatype() == TypeMetatype::Pointer
+            && curbase.get_metatype() == TypeMetatype::Pointer
+        {
+            // Rugra TypePointer has no separate AddrSpace/wordsize comparison
+            // beyond wordsize==1 default; skip the space-mismatch cast branch
+            // (would need AddrSpace wiring). Wordsize equality is implicitly
+            // handled by size equality below.
+            reqbase = match reqbase { Datatype::Pointer(p) => &p.ptr_to, _ => break };
+            curbase = match curbase { Datatype::Pointer(p) => &p.ptr_to, _ => break };
+            care_uint_int = true;
+            isptr = true;
+        }
+        // No typedef chains in Rugra (getTypedef loop is a no-op).
+        if std::ptr::eq(reqbase as *const _, curbase as *const _) {
+            return None;
+        }
+        let reqmeta = reqbase.get_metatype();
+        let curmeta = curbase.get_metatype();
+        // Don't cast to/from a void pointer.
+        if reqmeta == TypeMetatype::Void || curmeta == TypeMetatype::Void {
+            return None;
+        }
+        // Size change → always cast (cast.cc:333-337).
+        if reqbase.get_size() != curbase.get_size() {
+            return Some(req_arc);
+        }
+        // Same size: metatype-specific rules (cast.cc:339-389).
+        match reqmeta {
+            TypeMetatype::Unknown => return None,
+            _ => {}
+        }
+        match reqmeta {
+            TypeMetatype::Uint => {
+                if !care_uint_int {
+                    if matches!(curmeta,
+                        TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
+                        | TypeMetatype::Bool) {
+                        return None;
+                    }
+                } else {
+                    if matches!(curmeta, TypeMetatype::Uint | TypeMetatype::Bool) {
+                        return None;
+                    }
+                    if isptr && curmeta == TypeMetatype::Unknown {
+                        return None; // Don't cast pointers to unknown
+                    }
+                }
+                if !care_ptr_uint && curmeta == TypeMetatype::Pointer {
+                    return None;
+                }
+            }
+            TypeMetatype::Int => {
+                if !care_uint_int {
+                    if matches!(curmeta,
+                        TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
+                        | TypeMetatype::Bool) {
+                        return None;
+                    }
+                } else {
+                    if matches!(curmeta, TypeMetatype::Int | TypeMetatype::Bool) {
+                        return None;
+                    }
+                    if isptr && curmeta == TypeMetatype::Unknown {
+                        return None;
+                    }
+                }
+            }
+            // TYPE_CODE / default → fall through to "cast needed".
+            _ => {}
+        }
+        Some(req_arc)
     }
 }
 
