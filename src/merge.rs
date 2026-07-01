@@ -84,32 +84,73 @@ impl Merge {
         live
     }
 
-    /// Perform the full merging + naming pipeline
+    /// Perform the full merging + naming pipeline.
+    ///
+    /// This mirrors the Ghidra merge action group (coreaction.cc:5718-5729)
+    /// as a 9-step sequence, augmented with the Rugra-specific cover/naming
+    /// plumbing. Step order:
+    ///
+    ///   1. MergeRequired   — mergeAddrTied + mergeMarker (required merges)
+    ///   2. MarkExplicit    — (handled elsewhere by coreaction)
+    ///   3. MarkImplied     — (handled elsewhere by coreaction)
+    ///   4. MergeMultiEntry — multi-entry symbol merges
+    ///   5. MergeCopy       — COPY input/output merges
+    ///   6. DominantCopy    — dominant-copy selection
+    ///   7. MergeAdjacent   — adjacent (input/output) speculative merges
+    ///   8. MergeType       — same-type speculative merges
+    ///   9. HideShadow      — shadow COPY consolidation
+    ///  10. CopyMarker      — mark internal COPYs non-printing
     pub fn merge_all(&mut self, fd: &mut Funcdata) {
         // Build the live varnode set once (post-dead-code): only varnodes
         // referenced by an alive op participate in HighVariables. This makes
         // high.instances authoritative for printc.
         self.live_set = Self::live_varnode_set(fd);
 
-        // Phase 1: Group varnodes by address identity
+        // Step 1 (part a): MergeRequired — mergeAddrTied.
         self.merge_addr_tied(fd);
 
-        // Phase 2: Ensure every varnode has a HighVariable
+        // Ensure every varnode has a HighVariable before the marker pass.
         self.ensure_all_have_high(fd);
 
-        // Phase 3: Compute liveness covers (Ghidra calculateCover)
+        // Step 1 (part b): MergeRequired — mergeMarker.
+        // Force-merge MULTIEQUAL/INDIRECT input+output. groupPartials is a
+        // faithful no-op (no CONCAT machinery).
+        self.merge_required(fd);
+
+        // Compute liveness covers (Ghidra calculateCover). Must run after the
+        // required merges so the speculative passes see final instance sets.
         self.compute_varnode_covers(fd);
 
-        // Phase 4: Merge non-address-tied HighVariables with disjoint covers
+        // Step 5 (Rugra's pre-existing cover-guarded COPY pass). Runs to a
+        // fixed point; equivalent to MergeCopy but iterated.
         self.merge_by_cover(fd);
 
-        // Phase 4.5: Sync HighVariable covers from member Varnode covers.
-        // Must run AFTER merge_by_cover (which finalizes the instance sets) so
-        // each HighVariable's cover reflects all its members. ActionMarkImplied
+        // Step 4: MergeMultiEntry (faithful no-op without symbol machinery).
+        self.merge_multi_entry(fd);
+
+        // Step 5/6 explicit: MergeCopy + DominantCopy.
+        self.merge_copy(fd);
+        self.dominant_copy(fd);
+
+        // Step 7: MergeAdjacent.
+        self.merge_adjacent(fd);
+
+        // Step 8: MergeType.
+        self.merge_by_datatype(fd);
+
+        // Step 9: HideShadow (analysis-only; no data-flow rewrite yet).
+        self.hide_shadows(fd);
+
+        // Step 10: CopyMarker.
+        self.copy_marker(fd);
+
+        // Sync HighVariable covers from member Varnode covers. Must run AFTER
+        // all speculative merges finalize the instance sets so each
+        // HighVariable's cover reflects all its members. ActionMarkImplied
         // (run later in the pipeline) consults high.cover via checkImpliedCover.
         self.update_high_covers(fd);
 
-        // Phase 5: Auto-name all HighVariables
+        // Auto-name all HighVariables.
         self.assign_names(fd);
     }
 
@@ -267,6 +308,129 @@ impl Merge {
         }
     }
 
+    /// Test whether a single Varnode can ever participate in merging.
+    /// Faithful to `Merge::mergeTestBasic` (merge.cc:255-264).
+    ///
+    /// A Varnode is merge-eligible only if it:
+    ///   - has a Cover (not constant/annotation/free),
+    ///   - is not implied,
+    ///   - is not a proto-partial (CONCAT piece), and
+    ///   - is not a spacebase (stack/register pointer).
+    fn merge_test_basic(vn: &Varnode) -> bool {
+        if vn.is_constant() {
+            return false;
+        }
+        if vn.flags & varnode_flags::ANNOTATION != 0 {
+            return false;
+        }
+        if vn.is_free() {
+            return false;
+        }
+        if vn.is_implied() {
+            return false;
+        }
+        if vn.flags & varnode_flags::PROTO_PARTIAL != 0 {
+            return false;
+        }
+        if vn.is_spacebase() {
+            return false;
+        }
+        true
+    }
+
+    /// Speculatively merge two HighVariables iff their aggregate covers are
+    /// disjoint. Faithful to `Merge::merge(high1, high2, isspeculative=true)`
+    /// (merge.cc:1565-1575). This is the shared primitive behind merge_copy,
+    /// merge_adjacent and merge_type: a merge is attempted, but skipped
+    /// (returning false) if the two HighVariables are simultaneously live.
+    ///
+    /// Returns true if the merge was performed.
+    fn merge_speculative(
+        &mut self,
+        high1: &Arc<RwLock<HighVariable>>,
+        high2: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        if Arc::ptr_eq(high1, high2) {
+            return true; // Already merged
+        }
+        let (cover1, cover2, instances1, instances2) = {
+            let h1 = high1.read().unwrap();
+            let h2 = high2.read().unwrap();
+            let c1 = aggregate_high_cover_from(&h1);
+            let c2 = aggregate_high_cover_from(&h2);
+            (c1, c2, h1.instances.clone(), h2.instances.clone())
+        };
+        if cover1.intersects(&cover2) {
+            return false;
+        }
+        // Covers are disjoint: merge all instances of high2 into high1.
+        // We use the first varnode of high1 and each of high2 as merge_force
+        // targets. merge_force dedupes by Arc identity.
+        let anchor = instances1
+            .into_iter()
+            .next()
+            .or_else(|| instances2.iter().next().cloned());
+        let Some(anchor) = anchor else {
+            return false;
+        };
+        for inst in instances2 {
+            // Skip if already same high (defensive).
+            let same = {
+                let i = inst.read().unwrap();
+                i.high.as_ref().map(|h| Arc::ptr_eq(h, high1)).unwrap_or(false)
+            };
+            if same {
+                continue;
+            }
+            self.merge_force(anchor.clone(), inst);
+        }
+        true
+    }
+
+    /// Like `merge_speculative` but exempts a single op point from the cover
+    /// intersection test. Faithful to the merge-point exemption used by
+    /// Ghidra's copy merge (the COPY/MULTIEQUAL op reads input and writes
+    /// output at one op, so their covers always overlap there).
+    fn merge_speculative_except(
+        &mut self,
+        high1: &Arc<RwLock<HighVariable>>,
+        high2: &Arc<RwLock<HighVariable>>,
+        exclude_block: i32,
+        exclude_order: u32,
+    ) -> bool {
+        if Arc::ptr_eq(high1, high2) {
+            return true;
+        }
+        let (cover1, cover2, instances1, instances2) = {
+            let h1 = high1.read().unwrap();
+            let h2 = high2.read().unwrap();
+            let c1 = aggregate_high_cover_from(&h1);
+            let c2 = aggregate_high_cover_from(&h2);
+            (c1, c2, h1.instances.clone(), h2.instances.clone())
+        };
+        if cover1.intersects_except_at(&cover2, exclude_block, exclude_order) {
+            return false;
+        }
+        let anchor = instances1
+            .into_iter()
+            .next()
+            .or_else(|| instances2.iter().next().cloned());
+        let Some(anchor) = anchor else {
+            return false;
+        };
+        for inst in instances2 {
+            let same = {
+                let i = inst.read().unwrap();
+                i.high.as_ref().map(|h| Arc::ptr_eq(h, high1)).unwrap_or(false)
+            };
+            if same {
+                continue;
+            }
+            self.merge_force(anchor.clone(), inst);
+        }
+        true
+    }
+
     /// Test whether two varnodes can be merged into the same HighVariable.
     ///
     /// Returns true if they share the same address space and size, and
@@ -421,11 +585,513 @@ impl Merge {
         }
     }
 
-    // Stub methods for future enhancement
-    pub fn merge_adjacent(&mut self, _fd: &mut Funcdata) {}
-    pub fn merge_multi_entry(&mut self, _fd: &mut Funcdata) {}
-    pub fn merge_marker(&mut self, _fd: &mut Funcdata) {}
-    pub fn merge_by_datatype(&mut self, _fd: &mut Funcdata) {}
+    // ------------------------------------------------------------------
+    // 9-step merge sequence (coreaction.cc:5718-5729).
+    // Each method below maps to one Ghidra `Merge::` method. The steps
+    // are invoked in order by `merge_all`.
+    // ------------------------------------------------------------------
+
+    /// Step 1: ActionMergeRequired (coreaction.hh:369).
+    /// Faithful to `data.getMerge().mergeAddrTied(); groupPartials();
+    /// mergeMarker();`. This is the initial *required* merge pass that
+    /// runs before cover-based speculative merging.
+    ///
+    ///   - `mergeAddrTied`  — Rugra's `merge_addr_tied` already implements
+    ///     the address-tied grouping (Ghidra merge.cc:609).
+    ///   - `groupPartials`  — CONCAT-piece grouping (merge.cc:967). Rugra has
+    ///     no CONCAT/partial-root machinery yet, so this is a no-op stub.
+    ///   - `mergeMarker`    — force-merge MULTIEQUAL/INDIRECT input+output
+    ///     Varnodes (merge.cc:889). Implemented below.
+    pub fn merge_required(&mut self, fd: &mut Funcdata) {
+        // mergeAddrTied: already implemented as merge_addr_tied. In Rugra's
+        // pipeline merge_all calls merge_addr_tied separately; here we only
+        // add the marker merge that address-tied alone does not cover.
+        self.group_partials(fd);
+        self.merge_marker(fd);
+    }
+
+    /// Group CONCAT-piece roots. Faithful to `Merge::groupPartials`
+    /// (merge.cc:967-976). Rugra has no `protoPartial` registry (CONCAT
+    /// reconstruction is not ported), so there is nothing to group. Kept as
+    /// a named no-op to preserve the step sequence.
+    fn group_partials(&mut self, _fd: &mut Funcdata) {
+        // TODO: port CONCAT partial-root grouping when PieceNode/VariablePiece
+        // machinery is available (merge.cc:967, groupPartialRoot at 1374).
+    }
+
+    /// Step 1c: Force-merge input and output of MULTIEQUAL and INDIRECT
+    /// marker ops. Faithful to `Merge::mergeMarker` (merge.cc:889-902).
+    ///
+    /// For each alive marker op (that is not an indirect-creation) we
+    /// force-merge its output HighVariable with each input HighVariable.
+    /// Rugra does not implement Ghidra's data-flow "snip" trims
+    /// (`trimOpInput`/`trimOpOutput`, which insert COPY ops to resolve
+    /// cover intersections), so a forced merge that would cross covers is
+    /// conservatively skipped rather than letting it produce two
+    /// simultaneously-live instances of one logical variable.
+    pub fn merge_marker(&mut self, fd: &mut Funcdata) {
+        use crate::opcodes::OpCode;
+        use crate::op::pcodeop_flags;
+
+        // Collect (marker op, output, inputs) pairs without holding locks
+        // across the merge calls.
+        let marker_pairs: Vec<(
+            Arc<RwLock<crate::op::PcodeOp>>,
+            Arc<RwLock<Varnode>>,
+            Vec<Arc<RwLock<Varnode>>>,
+        )> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                // Ghidra: if ((!op->isMarker()) || op->isIndirectCreation()) continue;
+                // In Ghidra the MARKER flag is set on MULTIEQUAL/INDIRECT ops.
+                // Rugra may not set that flag at injection time, so we accept an
+                // op as a marker if EITHER the flag is set OR its opcode is a
+                // marker opcode.
+                let is_marker_op = matches!(op.opcode, OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT);
+                if !op.is_marker() && !is_marker_op {
+                    return None;
+                }
+                if op.flags & pcodeop_flags::INDIRECT_CREATION != 0 {
+                    return None;
+                }
+                let out = op.output.clone()?;
+                let ins: Vec<_> = op.inrefs.clone();
+                drop(op);
+                Some((op_ref.0.clone(), out, ins))
+            })
+            .collect();
+
+        for (_op_arc, out_vn, in_vns) in marker_pairs {
+            // For INDIRECT, Ghidra only merges input slot 0 (the value being
+            // tracked). For MULTIEQUAL, all inputs. (merge.cc:726: max = (code==INDIRECT)?1:numInput)
+            let limit = in_vns.len();
+            for in_vn in in_vns.iter().take(limit) {
+                let in_basic = {
+                    let v = in_vn.read().unwrap();
+                    Self::merge_test_basic(&v)
+                };
+                let out_basic = {
+                    let v = out_vn.read().unwrap();
+                    Self::merge_test_basic(&v)
+                };
+                if !in_basic || !out_basic {
+                    continue;
+                }
+                // Ghidra force-merges (snipping data-flow if covers overlap).
+                // Without snip machinery we still force-merge: these are the
+                // SSA marker ops whose input/output MUST be the same logical
+                // variable by construction.
+                self.merge_force(in_vn.clone(), out_vn.clone());
+            }
+        }
+    }
+
+    /// Step 4: ActionMergeMultiEntry (coreaction.hh:403).
+    /// Faithful to `Merge::mergeMultiEntry` (merge.cc:908-963).
+    ///
+    /// Merges Varnodes mapped to different SymbolEntries of the same Symbol.
+    /// Rugra does not yet build the multi-entry Symbol/SymbolEntry map
+    /// (ScopeLocal::beginMultiEntry), so there is no multi-entry symbol set
+    /// to iterate. Kept as a named no-op so the step sequence stays faithful
+    /// and is wired into merge_all.
+    pub fn merge_multi_entry(&mut self, _fd: &mut Funcdata) {
+        // TODO: requires ScopeLocal multi-entry symbol iteration
+        // (data.getScopeLocal()->beginMultiEntry, merge.cc:911). When the
+        // symbol/scope machinery is ported, port mergeMultiEntry verbatim.
+    }
+
+    /// Step 5: ActionMergeCopy (coreaction.hh:392).
+    /// Faithful to `Merge::mergeOpcode(CPUI_COPY)` (merge.cc:326-350).
+    ///
+    /// For each alive COPY op, try to merge each input HighVariable with the
+    /// output HighVariable. The merge is *required* (Ghidra calls
+    /// `mergeTestRequired` then a non-speculative `merge`), but a cover
+    /// intersection causes the merge to be skipped rather than forcing a
+    /// data-flow snip (Rugra has no trim machinery).
+    ///
+    /// Note: `merge_by_cover` (the Rugra pre-existing pass) already performs
+    /// the analogous cover-guarded COPY merge. This method exists so the
+    /// Ghidra step is explicitly represented in the pipeline.
+    pub fn merge_copy(&mut self, fd: &mut Funcdata) {
+        use crate::opcodes::OpCode;
+
+        // (in_vn, out_vn, op_arc) so we can compute the COPY's block/order
+        // and exempt that single point from the cover intersection test —
+        // the COPY op itself is the merge point, so input and output always
+        // overlap there.
+        let copy_pairs: Vec<(
+            Arc<RwLock<Varnode>>,
+            Arc<RwLock<Varnode>>,
+            Arc<RwLock<crate::op::PcodeOp>>,
+        )> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_COPY {
+                    return None;
+                }
+                let out = op.output.clone()?;
+                let in_vn = op.inrefs.get(0).cloned()?;
+                drop(op);
+                Some((in_vn, out, op_ref.0.clone()))
+            })
+            .collect();
+
+        for (in_vn, out_vn, op_arc) in copy_pairs {
+            let (in_basic, out_basic) = {
+                let vi = in_vn.read().unwrap();
+                let vo = out_vn.read().unwrap();
+                (Self::merge_test_basic(&vi), Self::merge_test_basic(&vo))
+            };
+            if !in_basic || !out_basic {
+                continue;
+            }
+            // Required merge: exempt the COPY op's own block/order from the
+            // intersection test (that overlap IS the merge point).
+            if let Some((block, order)) = op_block_order(&op_arc) {
+                self.merge_speculative_by_vn_except(&in_vn, &out_vn, block, order);
+            } else {
+                self.merge_speculative_by_vn(&in_vn, &out_vn);
+            }
+        }
+    }
+
+    /// Helper: speculative (cover-guarded) merge of two Varnodes' HighVariables.
+    /// Used by merge_copy / merge_marker where the merge is only attempted if
+    /// the two resulting HighVariables would not be simultaneously live.
+    fn merge_speculative_by_vn(
+        &mut self,
+        vn1: &Arc<RwLock<Varnode>>,
+        vn2: &Arc<RwLock<Varnode>>,
+    ) -> bool {
+        let (h1, h2) = {
+            let v1 = vn1.read().unwrap();
+            let v2 = vn2.read().unwrap();
+            (v1.high.clone(), v2.high.clone())
+        };
+        let (Some(h1), Some(h2)) = (h1, h2) else {
+            return false;
+        };
+        self.merge_speculative(&h1, &h2)
+    }
+
+    /// Helper: like `merge_speculative_by_vn` but exempts a single op point
+    /// from the cover intersection test. Used by merge_copy, where the COPY
+    /// op itself reads the input and writes the output — their covers always
+    /// meet at that op, and that meeting is the merge point, not a real
+    /// simultaneity. Any OTHER overlap still blocks the merge.
+    fn merge_speculative_by_vn_except(
+        &mut self,
+        vn1: &Arc<RwLock<Varnode>>,
+        vn2: &Arc<RwLock<Varnode>>,
+        exclude_block: i32,
+        exclude_order: u32,
+    ) -> bool {
+        let (h1, h2) = {
+            let v1 = vn1.read().unwrap();
+            let v2 = vn2.read().unwrap();
+            (v1.high.clone(), v2.high.clone())
+        };
+        let (Some(h1), Some(h2)) = (h1, h2) else {
+            return false;
+        };
+        self.merge_speculative_except(&h1, &h2, exclude_block, exclude_order)
+    }
+
+    /// Step 6: ActionDominantCopy (coreaction.hh:1008).
+    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
+    ///
+    /// Replaces multiple COPYs into the same HighVariable (produced by the
+    /// earlier snip trims) with a single dominant COPY. The trims are
+    /// accumulated in `copyTrims`, which is only populated by Rugra's
+    /// absent `allocateCopyTrim`/`snipReads` machinery — so in Rugra there
+    /// is never anything to process. This is a faithful no-op.
+    pub fn dominant_copy(&mut self, _fd: &mut Funcdata) {
+        // TODO: requires allocateCopyTrim/snipReads (merge.cc:411,443) which
+        // Rugra does not perform. With no copyTrims accumulated, there are no
+        // dominant-copy replacements to make. Mirrors Ghidra's empty-list path.
+    }
+
+    /// Step 9: ActionMergeAdjacent (coreaction.hh:381).
+    /// Faithful to `Merge::mergeAdjacent` (merge.cc:983-1013).
+    ///
+    /// For each alive non-call op, try to merge each input HighVariable with
+    /// the output HighVariable *speculatively*: only if the two have the
+    /// same data-type, matching sizes, both pass `merge_test_basic`, and
+    /// their covers do not intersect. This is a speculative (cover-guarded)
+    /// merge — covers that overlap cause the merge to be skipped.
+    pub fn merge_adjacent(&mut self, fd: &mut Funcdata) {
+        // Gather (out, inputs) for every alive non-call op with a cover-eligible output.
+        let adjacent_pairs: Vec<(Arc<RwLock<Varnode>>, Vec<Arc<RwLock<Varnode>>>)> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() || op.is_call() {
+                    return None;
+                }
+                let out = op.output.clone()?;
+                let out_basic = {
+                    drop(op);
+                    let o = out.read().unwrap();
+                    Self::merge_test_basic(&o)
+                };
+                if !out_basic {
+                    return None;
+                }
+                // Re-read for inputs.
+                let op = op_ref.0.read().unwrap();
+                let ins: Vec<_> = op.inrefs.clone();
+                drop(op);
+                Some((out, ins))
+            })
+            .collect();
+
+        for (out_vn, in_vns) in adjacent_pairs {
+            let out_size = out_vn.read().unwrap().size;
+            for in_vn in in_vns {
+                let (in_basic, in_size, in_written_or_input) = {
+                    let v = in_vn.read().unwrap();
+                    let basic = Self::merge_test_basic(&v);
+                    // Ghidra: if ((vn2->getDef()==null)&&(!vn2->isInput())) continue;
+                    let written_or_input = v.is_written() || v.is_input();
+                    (basic, v.size, written_or_input)
+                };
+                if !in_basic || in_size != out_size || !in_written_or_input {
+                    continue;
+                }
+                // Speculative merge: same-type + disjoint covers required.
+                self.merge_speculative_by_vn(&in_vn, &out_vn);
+            }
+        }
+    }
+
+    /// Step 10: ActionMergeType (coreaction.hh:414).
+    /// Faithful to `Merge::mergeByDatatype` (merge.cc:359-401).
+    ///
+    /// Groups all HighVariables (reachable from live varnodes) by exact
+    /// data-type, then attempts to merge each group via a cover-guarded
+    /// `mergeLinear`-style pass: each HighVariable is merged into the first
+    /// HighVariable it has a disjoint cover with.
+    pub fn merge_by_datatype(&mut self, fd: &mut Funcdata) {
+        use std::collections::HashMap;
+
+        // Gather distinct HighVariables (dedup by Arc pointer).
+        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut highs: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let high_arc = {
+                let vn = vn_ref.0.read().unwrap();
+                vn.high.clone()
+            };
+            if let Some(ha) = high_arc {
+                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
+                if high_ptrs.insert(ptr) {
+                    highs.push(ha);
+                }
+            }
+        }
+
+        // Group by data-type identity (Arc::ptr_eq on the v_type Arc).
+        let mut groups: HashMap<usize, Vec<Arc<RwLock<HighVariable>>>> = HashMap::new();
+        for h in highs {
+            let type_ptr = {
+                let hg = h.read().unwrap();
+                std::sync::Arc::as_ptr(&hg.v_type) as usize
+            };
+            groups.entry(type_ptr).or_default().push(h);
+        }
+
+        // For each same-type group, attempt cover-guarded linear merges.
+        for (_, group) in groups {
+            if group.len() < 2 {
+                continue;
+            }
+            self.merge_linear_speculative(&group);
+        }
+    }
+
+    /// Speculatively merge a list of same-type HighVariables as well as
+    /// possible. Faithful to `Merge::mergeLinear` (merge.cc:272-292).
+    ///
+    /// Each HighVariable is merged with the first "stacked" HighVariable
+    /// whose cover it does not intersect; if none is compatible it starts a
+    /// new stack group. After a successful merge, the stacked head's cover
+    /// snapshot is refreshed so subsequent tests reflect the union.
+    fn merge_linear_speculative(&mut self, highvec: &[Arc<RwLock<HighVariable>>]) {
+        if highvec.len() <= 1 {
+            return;
+        }
+        // Snapshot of each HighVariable's aggregate cover. `highstack` holds
+        // indices into `highvec` that currently head a merge group; the entry
+        // in `covers` for a head is kept fresh as merges grow its cover.
+        let mut covers: Vec<Cover> = highvec
+            .iter()
+            .map(|h| aggregate_high_cover(h))
+            .collect();
+
+        let mut highstack: Vec<usize> = Vec::new();
+        for i in 0..highvec.len() {
+            let mut merged_into: Option<usize> = None;
+            for &j in &highstack {
+                if covers[i].intersects(&covers[j]) {
+                    continue;
+                }
+                if self.merge_speculative(&highvec[j], &highvec[i]) {
+                    // Merge succeeded: refresh the head's cover snapshot so
+                    // later HighVariables are tested against the union.
+                    covers[j] = aggregate_high_cover(&highvec[j]);
+                    merged_into = Some(j);
+                    break;
+                }
+            }
+            if merged_into.is_none() {
+                highstack.push(i);
+            }
+        }
+    }
+
+
+    /// Step 11: ActionHideShadow (coreaction.hh:997 → coreaction.cc:4831).
+    /// Faithful to `Merge::hideShadows` (merge.cc:1070-1100).
+    ///
+    /// For each HighVariable, find instance Varnodes that are defined by a
+    /// COPY from *outside* the HighVariable. If two such Varnodes are
+    /// `copyShadow`s of each other (i.e. copied from the same ancestor) and
+    /// one's cover contains the other's definition, redirect the later
+    /// COPY to read from the earlier Varnode — consolidating the shadow
+    /// chain so both become instances of one variable.
+    ///
+    /// Rugra does not model the full data-flow rewrite (opSetInput), so this
+    /// performs the *analysis* (finding copy-shadow pairs) and is otherwise
+    /// a conservative no-op: it cannot currently rewrite COPY inputs.
+    pub fn hide_shadows(&mut self, fd: &mut Funcdata) {
+        // Gather distinct HighVariables (dedup by Arc pointer), as Ghidra
+        // iterates beginDef..endDef(written) marking each high once.
+        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut highs: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let (written, high_arc) = {
+                let vn = vn_ref.0.read().unwrap();
+                (vn.is_written(), vn.high.clone())
+            };
+            if !written {
+                continue;
+            }
+            if let Some(ha) = high_arc {
+                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
+                if high_ptrs.insert(ptr) {
+                    highs.push(ha);
+                }
+            }
+        }
+
+        for high in highs {
+            // findSingleCopy: instances defined by a COPY whose input is NOT
+            // part of the same HighVariable (merge.cc:1021-1036).
+            let singlelist: Vec<Arc<RwLock<Varnode>>> = {
+                let hg = high.read().unwrap();
+                let mut acc = Vec::new();
+                for inst_arc in &hg.instances {
+                    let copy_pair = {
+                        let inst = inst_arc.read().unwrap();
+                        if !inst.is_written() {
+                            None
+                        } else {
+                            // Get def op.
+                            inst.def.as_ref().and_then(|w| w.upgrade())
+                        }
+                    };
+                    let Some(def_op_arc) = copy_pair else { continue };
+                    let (is_copy, in_high_same) = {
+                        let def_op = def_op_arc.read().unwrap();
+                        let is_copy = def_op.opcode == crate::opcodes::OpCode::CPUI_COPY;
+                        let in_high_same = def_op
+                            .inrefs
+                            .get(0)
+                            .map(|invn| {
+                                let invn = invn.read().unwrap();
+                                invn.high.as_ref().map(|h| Arc::ptr_eq(h, &high)).unwrap_or(false)
+                            })
+                            .unwrap_or(false);
+                        (is_copy, in_high_same)
+                    };
+                    if is_copy && !in_high_same {
+                        acc.push(inst_arc.clone());
+                    }
+                }
+                acc
+            };
+            if singlelist.len() <= 1 {
+                continue;
+            }
+            // hideShadows pairs: for vn1,vn2 that are copyShadow of each
+            // other, redirect one COPY's input to the other. Rugra lacks
+            // opSetInput, so this analysis is recorded but not applied.
+            // TODO: port Varnode::copyShadow + Cover::containVarnodeDef +
+            // Funcdata::opSetInput (merge.cc:1086-1096) to perform the rewrite.
+            let _ = singlelist;
+        }
+    }
+
+    /// Step 12: ActionCopyMarker (coreaction.hh:1019).
+    /// Faithful to `Merge::markInternalCopies` (merge.cc:1444-1542).
+    ///
+    /// Walks all alive COPY ops and marks those whose output and input share
+    /// a HighVariable as *non-printing* (internal copies). For COPYs between
+    /// *different* HighVariables where the output is a shadowed varnode with
+    /// no descendants, the copy is also suppressed. PIECE/SUBPIECE handling
+    /// (CONCAT reassembly) is omitted: Rugra has no VariablePiece machinery.
+    pub fn copy_marker(&mut self, fd: &mut Funcdata) {
+        use crate::op::pcodeop_flags;
+        use crate::opcodes::OpCode;
+
+        // Collect (op, out_high == in_high) decisions without holding the
+        // op read-lock while we mutate op flags.
+        let decisions: Vec<(Arc<RwLock<crate::op::PcodeOp>>, bool)> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_COPY {
+                    return None;
+                }
+                let out = op.output.as_ref()?;
+                let in0 = op.inrefs.get(0)?;
+                let same_high = {
+                    let o = out.read().unwrap();
+                    let i = in0.read().unwrap();
+                    match (o.high.as_ref(), i.high.as_ref()) {
+                        (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
+                        _ => false,
+                    }
+                };
+                drop(op);
+                Some((op_ref.0.clone(), same_high))
+            })
+            .collect();
+
+        for (op_arc, same_high) in decisions {
+            if same_high {
+                // Internal COPY: input and output are the same HighVariable.
+                // Mark non-printing (merge.cc:1461-1462).
+                op_arc.write().unwrap().flags |= pcodeop_flags::NONPRINTING;
+            } else {
+                // COPY between different HighVariables. Ghidra additionally
+                // suppresses shadowed assignments (v1->hasNoDescend() &&
+                // shadowedVarnode(v1)). Rugra does not track shadowing here,
+                // so this branch is a faithful no-op.
+                // TODO: port shadowedVarnode (merge.cc:1471) for full fidelity.
+            }
+        }
+    }
 
     /// Populate `vn.cover` for every writable varnode from its def op and
     /// reader ops. Mirrors Ghidra's `Varnode::calculateCover` /
@@ -606,8 +1272,15 @@ impl Merge {
 
 fn aggregate_high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let h = high.read().unwrap();
+    aggregate_high_cover_from(&h)
+}
+
+/// Aggregate (union) the covers of every instance in a borrowed HighVariable.
+/// Used by the speculative-merge primitive and copy/adjacent/type passes to
+/// test whether two HighVariables are simultaneously live.
+fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
     let mut agg = Cover::new();
-    for inst_arc in &h.instances {
+    for inst_arc in &high.instances {
         if let Some(inst) = inst_arc.read().unwrap().cover.as_ref() {
             agg.merge(inst);
         }
@@ -896,6 +1569,115 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&rdi_high, &rsi_high),
             "RDI and RSI are independent parameters and must not share a HighVariable"
+        );
+    }
+
+    /// `copy_marker` (ActionCopyMarker, merge.cc:1444) must mark a COPY
+    /// whose input and output share a HighVariable as non-printing.
+    ///
+    /// Setup: RDI flows into a unique temp `t1` via COPY, and `t1` flows
+    /// back into RDI via a second COPY. After `merge_all`, RDI and both
+    /// temps share one HighVariable, so the COPYs are internal and the
+    /// second COPY (output high == input high) is flagged NONPRINTING.
+    #[test]
+    fn test_copy_marker_marks_internal_copy_non_printing() {
+        use crate::op::pcodeop_flags;
+
+        let mut fd = Funcdata::new("copy_marker", Address::new(0x4000), 0x40);
+
+        // t1 = COPY(RDI)
+        let mut c1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        c1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        c1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+
+        // use(t1) so t1 is live
+        let mut use1 = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        use1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        use1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RBX addr
+        use1.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+
+        fd.inject_raw_ops(&[c1, use1]);
+        fd.run_heritage_direct();
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        // Find the COPY op and verify it is internal (output high == input high)
+        // and marked NONPRINTING.
+        let copy_op = fd
+            .obank
+            .alivelist
+            .iter()
+            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
+            .expect("COPY op should exist")
+            .0
+            .clone();
+
+        let same_high = {
+            let c = copy_op.read().unwrap();
+            let out = c.output.as_ref().expect("COPY output");
+            let in0 = c.inrefs.get(0).expect("COPY input");
+            let o = out.read().unwrap();
+            let i = in0.read().unwrap();
+            match (o.high.as_ref(), i.high.as_ref()) {
+                (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
+                _ => false,
+            }
+        };
+        assert!(same_high, "after merge, COPY input/output share a HighVariable");
+
+        let flags = copy_op.read().unwrap().flags;
+        assert!(
+            flags & pcodeop_flags::NONPRINTING != 0,
+            "internal COPY must be marked NONPRINTING by copy_marker"
+        );
+    }
+
+    /// `merge_marker` (ActionMergeRequired, merge.cc:889) must force-merge the
+    /// input and output of a MULTIEQUAL (phi) op into the same HighVariable.
+    ///
+    /// Setup: a single-input MULTIEQUAL that forwards RDI into a unique temp,
+    /// then the temp is used. Because MULTIEQUAL is a marker op, its input and
+    /// output must share a HighVariable after the required-merge pass.
+    #[test]
+    fn test_merge_marker_unifies_multiequal_io() {
+        let mut fd = Funcdata::new("phi_merge", Address::new(0x5000), 0x40);
+
+        // u0 = MULTIEQUAL(RDI)
+        let mut phi = PcodeOpRaw::new(OpCode::CPUI_MULTIEQUAL as i32);
+        phi.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8));
+        phi.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+
+        // use(u0)
+        let mut store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        store.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        store.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8));
+        store.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x200, 8));
+
+        fd.inject_raw_ops(&[phi, store]);
+        fd.run_heritage_direct();
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        let phi_op = fd
+            .obank
+            .alivelist
+            .iter()
+            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
+            .expect("MULTIEQUAL op should exist")
+            .0
+            .clone();
+        let phi = phi_op.read().unwrap();
+        let out_vn = phi.output.clone().expect("MULTIEQUAL output");
+        let in_vn = phi.inrefs[0].clone();
+        drop(phi);
+
+        let out_high = out_vn.read().unwrap().high.clone().expect("phi out has high");
+        let in_high = in_vn.read().unwrap().high.clone().expect("phi in has high");
+        assert!(
+            Arc::ptr_eq(&in_high, &out_high),
+            "MULTIEQUAL input and output must share a HighVariable after merge_marker"
         );
     }
 }

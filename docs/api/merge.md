@@ -139,3 +139,5 @@ Merge by datatype compatibility (placeholder for future enhancement)
 Represents a varnode within a specific block for merging purposes
 
  
+### 2026-07-01：补全 Merge 9 步序列
+merge_required(mergeAddrTied+groupPartials+mergeMarker)、merge_marker(MULTIEQUAL/INDIRECT IO 合并)、merge_copy(COPY 链 cover-guarded 合并)、merge_adjacent(同 op IO 推测合并)、merge_by_datatype(类型分组+线性合并)、hide_shadows(copy-shadow 分析)、copy_marker(internal COPY NONPRINTING 标记)。+merge_speculative 原语。merge_all 重排为完整 9 步。2 新测试。multi_entry/group_partials/dominant_copy 仍 stub（需 ScopeLocal 符号机器）。
