@@ -746,3 +746,11 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 5 新测试。
 
 ### 2026-07-01（续 9）：StructureTransform 测试 BlockWhileDo for_init/for_iter
+
+### 2026-07-01（续 10）：StructureTransform 实际填充 for_init/for_iter
+ActionStructureTransform::apply 现在在检测到归纳变量后：
+1. 构建 init 字符串（MULTIEQUAL entry-block input）
+2. 构建 iter 字符串（INT_ADD 表达式 `var = var + N`）
+3. 设置 BlockWhileDo.for_init/for_iter
+4. 标记 iterate op NONPRINTING
+printc 在 for_init+for_iter 都存在时发射 `for(init;cond;iter)`。

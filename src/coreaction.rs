@@ -6477,13 +6477,79 @@ impl Action for ActionStructureTransform {
             if !found_iterate {
                 continue;
             }
-            // iterateOp located (block.cc:3379). Ghidra relocates it to be the
-            // tail's last op (opInsertAfter) and marks it non-printing
-            // (block.cc:3421, finalizePrinting). Rugra has no for-loop syntax
-            // marker, so the rendering distinction is moot — but we apply the
-            // opMarkNonPrinting side-effect so the iterate statement is hidden
-            // from a naive printer, mirroring the for-loop semantics.
+            // iterateOp located (block.cc:3379). Build the for-loop init/iter
+            // expressions and set them on the BlockWhileDo so printc can emit
+            // for(init;cond;iter) instead of while(cond).
+            // Init: the MULTIEQUAL's first input (the value before the loop).
+            // Iter: the iterate op expression (e.g. "i + 1").
+            let init_str = {
+                // Find the MULTIEQUAL again to get its entry-block input.
+                let mut result = String::new();
+                'outer: for k in 0..comp_incount {
+                    let vn = match comp_ref.0.read().unwrap().get_in(k) {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    };
+                    let multieq = vn.read().unwrap().get_def();
+                    let Some(multieq) = multieq else { continue };
+                    let me_ref2 = crate::op::PcodeOpRef(multieq.clone());
+                    // Entry input is slot 0 (the value coming from before the loop).
+                    if let Some(entry_vn) = me_ref2.0.read().unwrap().get_in(0) {
+                        let vn_rg = entry_vn.read().unwrap();
+                        if vn_rg.is_constant() {
+                            result = format!("#{}", vn_rg.get_offset());
+                        } else {
+                            result = format!("var_{:x}", vn_rg.get_offset());
+                        }
+                    }
+                    break 'outer;
+                }
+                result
+            };
+            // Iter: the iterate op's expression. For INT_ADD(i, #1) → "i + 1".
+            let iter_str = {
+                let io = iterate_op.0.read().unwrap();
+                if io.opcode == OpCode::CPUI_INT_ADD && io.num_input() >= 2 {
+                    let in0 = io.get_in(0).map(|v| v.clone());
+                    let in1 = io.get_in(1).map(|v| v.clone());
+                    let out = io.output.as_ref().map(|v| v.clone());
+                    let lhs = out.map(|v| {
+                        let vr = v.read().unwrap();
+                        format!("var_{:x}", vr.get_offset())
+                    }).unwrap_or_default();
+                    let rhs = match (&in0, &in1) {
+                        (Some(a), Some(b)) => {
+                            let ar = a.read().unwrap();
+                            let br = b.read().unwrap();
+                            if br.is_constant() {
+                                format!("var_{:x} + {}", ar.get_offset(), br.get_offset())
+                            } else if ar.is_constant() {
+                                format!("var_{:x} + {}", br.get_offset(), ar.get_offset())
+                            } else {
+                                format!("var_{:x} + var_{:x}", ar.get_offset(), br.get_offset())
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    if !lhs.is_empty() && !rhs.is_empty() {
+                        format!("{} = {}", lhs, rhs)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            };
+            // Mark iterate op non-printing (block.cc:3421) and set for_init/for_iter.
             iterate_op.0.write().unwrap().flags |= NONPRINTING;
+            // Write the for-loop metadata to the BlockWhileDo.
+            if !init_str.is_empty() && !iter_str.is_empty() {
+                let mut bl_write = bl_arc.write().unwrap();
+                if let Some(wd) = bl_write.as_any_mut().downcast_mut::<crate::block::BlockWhileDo>() {
+                    wd.for_init = Some(init_str);
+                    wd.for_iter = Some(iter_str);
+                }
+            }
             self.count += 1;
         }
         // Ghidra always returns 0.
