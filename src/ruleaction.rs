@@ -9845,7 +9845,12 @@ impl Rule for RuleAddUnsigned {
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SUB);
         let cvn = fd.new_constant(size, negated_val);
-        // TODO(datatype): cvn->copySymbol(constvn) — Rugra lacks symbol copy.
+        // Ghidra: cvn->copySymbol(constvn); propagate the constant's symbol/type
+        // + lock flags into the new constant (ruleaction.cc:7229).
+        {
+            let cvn_lock = constvn.read().unwrap();
+            cvn.write().unwrap().copy_symbol(&cvn_lock);
+        }
         fd.op_set_input(&op_ref, cvn, 1);
         Ok(action_status::CHANGE)
     }
@@ -10077,6 +10082,7 @@ impl RulePtrsubCharConstant {
         op: &crate::op::PcodeOpRef,
         slot: usize,
         val: u64,
+        outtype: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ) -> bool {
         if op.0.read().unwrap().opcode != OpCode::CPUI_PTRADD { return false; }
         if slot != 0 { return false; }
@@ -10092,7 +10098,9 @@ impl RulePtrsubCharConstant {
         let addval = addval.wrapping_mul(vn_in2_offset);
         let val = val.wrapping_add(addval);
         let newconst = fd.new_constant(vn_in1.read().unwrap().get_size(), val);
-        // TODO(datatype): newconst->updateType(outtype) — pointer datatype.
+        // Ghidra: newconst->updateType(outtype); put the pointer datatype on the
+        // new constant (ruleaction.cc:7352).
+        newconst.write().unwrap().update_type(outtype);
         fd.op_remove_input(op, 2);
         fd.op_remove_input(op, 1);
         fd.op_set_opcode(op, OpCode::CPUI_COPY);
@@ -10323,6 +10331,7 @@ impl RuleExpandLoad {
         new_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         new_size: usize,
         offset: usize,
+        dt: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ) {
         let shift = 8 * offset; // bytes → bits
         let descends: Vec<_> = old_vn.read().unwrap().descend_iter().collect();
@@ -10343,13 +10352,14 @@ impl RuleExpandLoad {
                 let cmp_c = cmp_rg.get_in(1).unwrap().read().unwrap().get_offset();
                 (and_mask << shift, cmp_c << shift)
             };
+            // Ghidra: vn = data.newConstant(dt->getSize(), newOff); vn->updateType(dt);
             let vn = fd.new_constant(new_size, and_mask_off);
-            // TODO(datatype): vn->updateType(dt)
+            vn.write().unwrap().update_type(dt.clone());
             fd.op_set_input(&and_ref, new_vn.clone(), 0);
             fd.op_set_input(&and_ref, vn, 1);
-            // compare constant
+            // compare constant: vn = data.newConstant(dt->getSize(), newOff); vn->updateType(dt);
             let vn = fd.new_constant(new_size, cmp_off);
-            // TODO(datatype): vn->updateType(dt)
+            vn.write().unwrap().update_type(dt.clone());
             fd.op_set_input(&comp_ref, vn, 1);
         }
     }
@@ -10441,9 +10451,11 @@ impl Rule for RuleExpandLoad {
                 return Ok(action_status::NO_CHANGE);
             }
         }
-        // Modify the LOAD: grow output to elType's size.
+        // Modify the LOAD: grow output to elType's size. Ghidra passes elType
+        // to newUnique; Rugra's new_unique takes no type, so we set it here
+        // (ruleaction.cc:10994 newUnique(elType->getSize(), elType)).
         let new_out = fd.new_unique(el_type.get_size());
-        // TODO(datatype): new_out->updateType(elType) — no per-Varnode type-set.
+        new_out.write().unwrap().update_type(el_type.clone());
         fd.op_set_output(&op_ref, new_out.clone());
         if let Some(add_op) = add_op.as_ref() {
             // rootPtr input → real root; destroy the INT_ADD offset op.
@@ -10455,11 +10467,15 @@ impl Rule for RuleExpandLoad {
             fd.op_destroy(&crate::op::PcodeOpRef(add_op.clone()));
         }
         if add_form {
-            if meta != TypeMetatype::Int && meta != TypeMetatype::Uint {
-                // elType = data.getArch()->types->getBase(elType->getSize(), TYPE_UINT);
-                // TODO(datatype): no Architecture/types base-type lookup; use el_type as-is.
-            }
-            Self::modify_and_comparison(fd, &out_vn, &new_out, el_type.get_size(), lsb_cut);
+            // Ghidra rewrites elType to a TYPE_UINT base when meta is not
+            // INT/UINT (ruleaction.cc:11001-11002):
+            //   if (meta != TYPE_INT && meta != TYPE_UINT)
+            //     elType = data.getArch()->types->getBase(elType->getSize(), TYPE_UINT);
+            // TODO(datatype): Rugra has no Architecture/types base-type lookup, so
+            // we pass el_type through unchanged. The constants still get a
+            // data-type attached (the existing pointer-to type) rather than a
+            // freshly minted TYPE_UINT.
+            Self::modify_and_comparison(fd, &out_vn, &new_out, el_type.get_size(), lsb_cut, el_type.clone());
         } else {
             // Truncate the new bigger LOAD output with a SUBPIECE → out_vn.
             let sub_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
@@ -10611,10 +10627,9 @@ impl Rule for RulePieceStructure {
 /// `RulePullsubMulti` helpers (minMaxUse / acceptableSize / findSubpiece /
 /// buildSubpiece / replaceDescendants).
 ///
-/// NOTE: The `isIndirectCreation` branch needs `data.newIndirectCreation`,
-/// `newVarnodeIop`, and the `isPrecisLo/Hi` / `isAddrForce` Varnode flags, none
-/// of which exist in Rugra. The non-creation branch is ported 1:1; the
-/// indirect-creation branch is a TODO.
+/// NOTE: The `isIndirectCreation` branch now uses `Funcdata::new_indirect_creation`
+/// (with `isIndirectZero` computed inline from the varnode flags). The non-creation
+/// branch is ported 1:1.
 pub struct RulePullsubIndirect;
 
 impl RulePullsubIndirect {
@@ -10684,10 +10699,9 @@ impl Rule for RulePullsubIndirect {
         if (consume & indir_in0.read().unwrap().get_consume()) != 0 {
             return Ok(action_status::NO_CHANGE);
         }
-        // isIndirectCreation branch (data.newIndirectCreation) needs
-        //   data.newIndirectCreation + vn->isIndirectZero(); not yet ported.
-        // TODO(infra): the indirect-creation branch. The common non-creation
-        //   branch below is fully wired.
+        // Non-creation branch: build a normal INDIRECT wrapping a SUBPIECE of
+        // the original base varnode. (The indirect-creation branch above uses
+        // Funcdata::new_indirect_creation.)
         let is_big_endian = vn.read().unwrap().space().is_big_endian();
         let vn_addr = vn.read().unwrap().get_offset();
         let vn_size = vn.read().unwrap().get_size();
@@ -10700,12 +10714,36 @@ impl Rule for RulePullsubIndirect {
         //   indirect_creation flag. Rugra exposes is_indirect_creation() on
         //   Varnode (the INDIRECT's output `vn`) instead; we use that as the
         //   closest available signal.
+        // indir->isIndirectCreation() — Ghidra checks the INDIRECT PcodeOp's
+        //   indirect_creation flag. Rugra exposes is_indirect_creation() on
+        //   Varnode (the INDIRECT's output `vn`) instead; we use that as the
+        //   closest available signal.
         if vn.read().unwrap().is_indirect_creation() {
-            // TODO(infra): data.newIndirectCreation(targ_op,smalladdr2,newSize,
-            //   possibleout). Rugra has is_indirect_creation() but not
-            //   newIndirectCreation / isIndirectZero, so we cannot build the
-            //   creation form; conservatively no-op.
-            return Ok(action_status::NO_CHANGE);
+            // Ghidra (ruleaction.cc:998-1002):
+            //   bool possibleout = !indir->getIn(0)->isIndirectZero();
+            //   new_ind = data.newIndirectCreation(targ_op,smalladdr2,newSize,possibleout);
+            //   small2 = new_ind->getOut();
+            // isIndirectZero (varnode.hh:271) is
+            //   (flags & (indirect_creation|constant)) == (indirect_creation|constant).
+            let possibleout = {
+                use crate::varnode::varnode_flags;
+                let f = indir_in0.read().unwrap().flags;
+                (f & (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT))
+                    != (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT)
+            };
+            let new_ind = fd.new_indirect_creation(
+                &targ_op,
+                smalladdr2.as_u64(),
+                new_size as usize,
+                possibleout,
+            );
+            let small2 = match new_ind.0.read().unwrap().output.clone() {
+                Some(o) => o,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            RulePullsubMulti::replace_descendants(fd, &vn, small2, max_byte, min_byte);
+            let _ = outvn;
+            return Ok(action_status::CHANGE);
         }
         let basevn = indir_in0.clone();
         // small1 = findSubpiece(basevn,newSize,op->getIn(1)->getOffset()) or buildSubpiece
@@ -10831,10 +10869,36 @@ impl Rule for RuleIndirectCollapse {
                 //   safely collapse here.
                 return Ok(action_status::NO_CHANGE);
             } else if indop.0.read().unwrap().uses_spacebase_ptr() {
-                // TODO(infra): STORE spacebase-ptr LoadGuard checks
-                //   (data.getStoreGuard(indop), guard->isGuarded(...)). Rugra
-                //   lacks getStoreGuard/LoadGuard; conservatively keep INDIRECT.
-                return Ok(action_status::NO_CHANGE);
+                // Ghidra (ruleaction.cc:3223-3236):
+                //   if (indop->code() == CPUI_STORE) {
+                //     const LoadGuard *guard = data.getStoreGuard(indop);
+                //     if (guard != null) {
+                //       if (guard->isGuarded(op->getOut()->getAddr())) return 0;
+                //     }
+                //     else return 0;  // marked STORE not yet guarded: keep INDIRECT
+                //   }
+                if indop.0.read().unwrap().opcode == OpCode::CPUI_STORE {
+                    // Grab the INDIRECT output's space+offset before borrowing fd
+                    // via get_store_guard (which returns Option<&LoadGuard>).
+                    let (out_spc, out_off) = {
+                        let v = outvn.read().unwrap();
+                        (v.get_space(), v.get_offset())
+                    };
+                    match fd.get_store_guard(&indop) {
+                        Some(guard) => {
+                            // Guarded range blocks the address → keep INDIRECT.
+                            if guard.is_guarded(&out_spc, out_off) {
+                                return Ok(action_status::NO_CHANGE);
+                            }
+                            // Not guarded → fall through to totalReplace (collapse).
+                        }
+                        None => {
+                            // A marked STORE that is not guarded should eventually
+                            // get converted to a COPY, so keep the INDIRECT.
+                            return Ok(action_status::NO_CHANGE);
+                        }
+                    }
+                }
             } else {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -10910,8 +10974,14 @@ impl Rule for RuleTransformCpool {
                     None => return Ok(action_status::NO_CHANGE),
                 };
                 let cvn = fd.new_constant(sz, rec.value & calc_mask(sz));
-                // cvn->updateType(rec->getType(), true, true); — type attach
-                //   omitted (no per-Varnode type-set on Rugra Varnode yet).
+                // Ghidra: cvn->updateType(rec->getType(), true, true)
+                //   (ruleaction.cc:3931). Varnode::update_type_lock is now
+                //   available, but Rugra's CPoolRecord only stores a type-name
+                //   string, not the resolved Datatype that Ghidra's
+                //   CPoolRecord::getType() returns, and no TypeFactory is
+                //   reachable here to resolve it. So the type-attach is still
+                //   TODO(cpool): until CPoolRecord carries a Datatype.
+                // cvn.write().unwrap().update_type_lock(dt, true, true);
                 while op_arc.read().unwrap().num_input() > 1 {
                     fd.op_remove_input(&op_ref, op_arc.read().unwrap().num_input() - 1);
                 }
@@ -10938,10 +11008,12 @@ impl Rule for RuleTransformCpool {
 /// warning if the switch has >1 entry or a non-constant index, and removes the
 /// jump table.
 ///
-/// NOTE: Requires `data.findJumpTable`, `JumpTable::numEntries/isLabelled/
-/// getAddressByIndex`, `data.removeJumpTable`, `data.newCodeRef`,
-/// `BlockBasic::sizeOut`, and `data.getStructure().clear()`. Rugra's Funcdata
-/// has none of these wired for rule use; the rule no-ops with a TODO.
+/// NOTE: Now uses `Funcdata::find_jump_table`, `JumpTable::num_entries/
+/// is_labelled/get_address_by_index`, `Funcdata::remove_jump_table`, the op's
+/// `parent` block `size_out`, and `Funcdata::structure_reset` (which clears the
+/// cached high-level structure = `getStructure().clear()`). `Funcdata::newCodeRef`
+/// and `Funcdata::warningHeader` are not yet ported: the code-ref varnode is
+/// built inline, and the warning is emitted via `eprintln!`.
 pub struct RuleSwitchSingle;
 
 impl RuleSwitchSingle {
@@ -10950,15 +11022,93 @@ impl RuleSwitchSingle {
 
 impl Rule for RuleSwitchSingle {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleSwitchSingle::applyOp (ruleaction.cc:5430-5485).
-        // TODO(infra): BlockBasic *bb = op->getParent(); if (bb->sizeOut() != 1) return 0;
-        //   Rugra PcodeOp.parent is a Weak<dyn FlowBlock>; reaching the
-        //   out-edge count is possible but JumpTable lookup is not.
-        // TODO(infra): JumpTable *jt = data.findJumpTable(op); requires
-        //   data.findJumpTable / JumpTable API / data.removeJumpTable /
-        //   data.newCodeRef / data.getStructure().clear(). None wired on Funcdata.
-        let _ = (op_arc, fd);
-        Ok(action_status::NO_CHANGE)
+        // Faithful to RuleSwitchSingle::applyOp (ruleaction.cc:5430-5477).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // BlockBasic *bb = op->getParent(); if (bb->sizeOut() != 1) return 0;
+        let size_out = {
+            let op = op_arc.read().unwrap();
+            op.parent.as_ref().and_then(|w| w.upgrade())
+                .map(|bb| bb.read().unwrap().size_out())
+        };
+        match size_out {
+            Some(n) if n == 1 => {}
+            _ => return Ok(action_status::NO_CHANGE),
+        }
+        // JumpTable *jt = data.findJumpTable(op); find_jump_table borrows fd
+        // immutably and returns Option<&Arc<RwLock<JumpTable>>>. We must gather
+        // everything we need from the table (entries, labelled, addresses) and
+        // clone the Arc BEFORE any &mut fd call (remove_jump_table / op edits).
+        let (jt_arc, num_entries, addr): (
+            std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>,
+            usize, crate::address::Address,
+        ) = match fd.find_jump_table(&op_ref) {
+            None => return Ok(action_status::NO_CHANGE),
+            Some(jt_ref) => {
+                let jt = jt_ref.read().unwrap();
+                if jt.num_entries() == 0 { return Ok(action_status::NO_CHANGE); }
+                if !jt.is_labelled() { return Ok(action_status::NO_CHANGE); } // Labels must be recovered
+                (jt_ref.clone(), jt.num_entries(), jt.get_address_by_index(0))
+            }
+        };
+        // needwarning / allcasesmatch (ruleaction.cc:5441-5452).
+        let mut need_warning = false;
+        let mut all_cases_match = false;
+        if num_entries != 1 {
+            need_warning = true;
+            all_cases_match = true;
+            for i in 1..num_entries {
+                if jt_arc.read().unwrap().get_address_by_index(i) != addr {
+                    all_cases_match = false;
+                    break;
+                }
+            }
+        }
+        // if (!op->getIn(0)->isConstant()) needwarning = true;
+        let in0_is_const = match op_arc.read().unwrap().get_in(0) {
+            Some(v) => v.read().unwrap().is_constant(),
+            None => false,
+        };
+        if !in0_is_const {
+            need_warning = true;
+        }
+        if need_warning {
+            // Ghidra builds an ostringstream and calls data.warningHeader(s).
+            // Rugra Funcdata has no warningHeader collector yet, so we emit via
+            // eprintln! as a degraded form.
+            // TODO(infra): port Funcdata::warningHeader so warnings are attached
+            // to the Funcdata and surfaced to the user.
+            let op_addr = op_arc.read().unwrap().get_addr();
+            if all_cases_match {
+                eprintln!(
+                    "Switch with 1 destination removed at {}: {} cases all go to same destination",
+                    op_addr, num_entries
+                );
+            } else {
+                eprintln!("Switch with 1 destination removed at {}", op_addr);
+            }
+        }
+        // Convert the BRANCHIND to just a branch.
+        // data.opSetOpcode(op,CPUI_BRANCH);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_BRANCH);
+        // data.opSetInput(op,data.newCodeRef(addr),0);
+        // Rugra Funcdata has no newCodeRef; build the code-ref varnode inline.
+        // newCodeRef(addr) (funcdata_varnode.cc:222-233): a size-1 varnode at
+        // `addr` in the (code) address space with the annotation flag set.
+        // Rugra's Address carries no space; the BRANCH target address space is
+        // the default code space (Ram).
+        let coderef = {
+            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Ram, addr.as_u64());
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+            vn
+        };
+        fd.op_set_input(&op_ref, coderef, 0);
+        // data.removeJumpTable(jt);
+        fd.remove_jump_table(&jt_arc);
+        // data.getStructure().clear(); — clear cached high-level structure so
+        // the (now collapsed) switch block structures get regenerated. Rugra's
+        // structure_reset() rebuilds dominators/loops and clears sblocks.
+        fd.structure_reset();
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "switch_single" }

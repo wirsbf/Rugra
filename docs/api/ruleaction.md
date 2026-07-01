@@ -877,3 +877,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - **RuleConditionalMove**(9390): get_true_out/get_false_out (bool-const-const path)
 
 仍保留为 guard+no-op（需更深基础设施）：RulePtrsubCharConstant(需 stringManager)、RulePieceStructure(需 PieceNode/gatherPieces)、RuleIgnoreNan 深度路径、RuleConditionalMove 非 const 路径、RuleIndirectCollapse 创建/空间库分支。每处 TODO 精确标注缺失项。
+
+### 2026-07-01（续 3）：Layer-5 TODO 替换 — update_type/new_indirect_creation/find_jump_table/get_store_guard
+- RulePtrsubCharConstant: push_const_further 加 outtype 参数 + update_type（cc:7351）
+- RuleExpandLoad: modify_and_comparison 加 dt 参数 + update_type ×2（cc:10915）
+- RuleExpandLoad apply: new_out update_type（cc:10994）
+- RuleAddUnsigned: copy_symbol（cc:7228）
+- RulePullsubIndirect: indirect-creation 分支完整移植 new_indirect_creation（cc:998-1002）
+- RuleIndirectCollapse: STORE guard 完整移植 get_store_guard + is_guarded（cc:3223-3236）
+- RuleSwitchSingle: 完整 applyOp（find_jump_table + jt 判断 + BRANCH 改写 + remove_jump_table + structure clear，cc:5430-5477）
