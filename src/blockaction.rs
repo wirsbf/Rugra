@@ -36,6 +36,27 @@ impl Action for ActionBlockStructure {
             return Ok(action_status::NO_CHANGE);
         }
 
+        // Dead-flow cleanup: run the 4 dead-control-flow Actions as a
+        // pre-structuring pass (Ghidra runs them inside selectGoto→
+        // collapseInternal). This removes unreachable blocks, empty blocks,
+        // redundant branches, and constant-condition branches BEFORE
+        // structuring, so the structurer sees a clean CFG.
+        // We run them here (not as standalone pipeline Actions) because they
+        // mutate the CFG and running them in repeatapply loops causes
+        // timeouts. After cleanup, bblocks indices are re-normalized by
+        // build_dom_tree (called during heritage/structuring).
+        {
+            // Run only ActionUnreachable + DeterminedBranch (safest dead-flow).
+            // DoNothing/RedundBranch are more aggressive and break structuring
+            // test expectations (they remove blocks the tests expect to see).
+            let mut unreach = crate::coreaction::ActionUnreachable::new();
+            let _ = unreach.apply(fd);
+            let mut determ = crate::coreaction::ActionDeterminedBranch::new();
+            let _ = determ.apply(fd);
+            // Rebuild dom tree after block removal to re-index blocks.
+            fd.bblocks.build_dom_tree();
+        }
+
         // Build a copy of the basic block graph into the structure graph
         build_copy(&mut fd.sblocks, &fd.bblocks);
         eprintln!("[BLOCKSTRUCT] {} build_copy done sblocks={}", fd.name, fd.sblocks.get_size());

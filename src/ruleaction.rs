@@ -4722,7 +4722,7 @@ impl Rule for RulePushMulti {
             if res == 0 {
                 return Ok(action_status::NO_CHANGE);
             }
-            let substitute = match Self::find_substitute(&result.pairs[0].0, &result.pairs[0].1) {
+            let substitute = match result.pairs.get(0).and_then(|p| Self::find_substitute(&p.0, &p.1)) {
                 Some(s) => s,
                 None => return Ok(action_status::NO_CHANGE),
             };

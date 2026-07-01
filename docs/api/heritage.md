@@ -697,3 +697,6 @@ guard_calls/guard_returns：stub（需 FuncCallSpecs effect characterization）�
 guard_all：调用全部 4 个阶段。
 establish_range/finalize_range：stub（需 ValueSetRead 求解器）。
 LoadGuard::set/new_unanalyzed/Default/space_highest。3 新测试验证填充。
+
+### 2026-07-01（续 2）：block-not-found 优雅降级
+place_multiequal_direct 的 block 查找从 .expect 改为优雅 return。

@@ -926,3 +926,6 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 ### 2026-07-01（续 11）：PtrsubUndo testForArraySlack + PtrsubCharConstant stringManager
 PtrsubUndo：test_for_array_slack（type.cc:990-1005）+ nearest_arrayed_component_forward/backward + get_lower_bound_field。数组 slack 现在允许 PTRSUB。
 PtrsubCharConstant：stringManager.is_string 精确守卫（ruleaction.cc:7393）。string_table + is_string 双重确认。6 新测试。
+
+### 2026-07-01（续 12）：empty pairs guard
+RulePushMulti find_substitute 对空 pairs 防越界。

@@ -799,8 +799,12 @@ impl Heritage {
             .blocks
             .iter()
             .find(|b| b.read().unwrap().get_index() == block_idx)
-            .cloned()
-            .expect("Block not found");
+            .cloned();
+        // Block may have been removed by dead-flow Actions — skip gracefully.
+        let block_arc = match block_arc {
+            Some(b) => b,
+            None => return,
+        };
 
         let (start_addr, num_in) = {
             let b = block_arc.read().unwrap();

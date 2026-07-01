@@ -716,3 +716,6 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - **最终结果**：curl while **36**（超过 Ghidra 34！），httpd while **58**，29/29 函数完成，0 TIMEOUT。
 
 ### 2026-07-01（管线改造）：Action apply &self→&mut self 连锁
+
+### 2026-07-01（续）：Dead-flow Actions 作为 pre-structuring pass
+ActionUnreachable + ActionDeterminedBranch 在 ActionBlockStructure::apply 开头运行（build_copy 之前）。build_dom_tree 在删除后重新索引块。ActionDoNothing/RedundBranch 实现就位但未接入（删除测试预期的块）。

@@ -949,6 +949,13 @@ impl BlockGraph {
     ///
     /// Corresponds to Ghidra's `BlockGraph::buildDomTree`
     pub fn build_dom_tree(&mut self) {
+        // Re-index all blocks to match their current vector position. This is
+        // essential after dead-flow Actions (ActionUnreachable/DoNothing/etc.)
+        // remove blocks — stale indices would cause out-of-bounds panics below.
+        for (i, blk) in self.blocks.iter_mut().enumerate() {
+            blk.write().unwrap().set_index(i as i32);
+        }
+
         let rpo = self.calc_rpo();
         if rpo.is_empty() {
             return;

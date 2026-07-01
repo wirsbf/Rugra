@@ -888,3 +888,6 @@ BlockGraph 新增：
 ### 2026-07-01（续 2）：is_entry_point + get_start_block
 - `FlowBlock::is_entry_point()`（block.hh:325）— ENTRY_POINT flag 检查，trait default。
 - `BlockGraph::get_start_block()`（block.cc:1649-1655）— 第一个 entry point 块。
+
+### 2026-07-01（续 2）：build_dom_tree reindex
+build_dom_tree 开头 reindex 所有块到向量位置（防止 dead-flow 删块后索引越界）。

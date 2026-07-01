@@ -725,3 +725,6 @@ build_full_pipeline_actions 新增 ActionStartTypes/AssignHigh/DominantCopy/Copy
 
 ### 2026-07-01（续 5）：ActionSwitchNorm 调用 recover_jump_tables
 ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入跳转表恢复。
+
+### 2026-07-01（续 6）：Dead-flow Actions 接入方式
+4 个 dead-flow Action（Unreachable/DoNothing/RedundBranch/DeterminedBranch）的 apply() 全部实现。Unreachable+DeterminedBranch 在 ActionBlockStructure 内运行（pre-structuring pass）。DoNothing/RedundBranch 不在管线（破坏测试预期）。block.rs build_dom_tree 加 reindex 防止越界。heritage.rs block-not-found 优雅降级。ruleaction.rs empty-pairs 防越界。

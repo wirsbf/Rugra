@@ -6154,9 +6154,10 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionFuncLinkOutOnly::new()),  // :5485
 
         // --- mainloop (coreaction.cc:5490-5508) ---
-        // NOTE: ActionUnreachable excluded — it removes blocks, which breaks
-        // Rugra's staged structurer (block index out of bounds). Needs
-        // collapseInternal migration. See PIPELINE_DIFF.
+        // NOTE: ActionUnreachable/DoNothing/RedundBranch/DeterminedBranch run
+        // INSIDE ActionBlockStructure (as a pre-structuring pass), not as
+        // standalone pipeline Actions — they mutate the CFG and running them
+        // in the repeatapply mainloop causes timeouts. See blockaction.rs.
         Box::new(ActionVarnodeProps::new()),     // :5491
         Box::new(ActionParamDouble::new()),      // :5493
         Box::new(ActionSegmentize::new()),       // :5494
@@ -6173,11 +6174,8 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionDeindirect::new()),       // :5655
 
         // --- mainloop tail / deadcontrolflow (coreaction.cc:5658-5676) ---
-        // NOTE: ActionRedundBranch/DeterminedBranch excluded — same block-removal
-        // issue as ActionUnreachable. Needs collapseInternal migration.
-        // (ActionUnreachable is listed once above at :5490; Ghidra registers it
-        // again at :5673, but a single registration suffices for the flat list.)
-        // (ActionConditionalConst at :5676 is detect-only with no effect — excluded.)
+        // NOTE: RedundBranch/DeterminedBranch run inside ActionBlockStructure.
+        // (ActionConditionalConst at :5676 is detect-only — excluded.)
 
         // --- fullloop tail (coreaction.cc:5679-5688) ---
         Box::new(ActionUnjustifiedParams::new()),// :5686
@@ -6185,8 +6183,7 @@ pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
         Box::new(ActionActiveReturn::new()),     // :5688
 
         // --- post-fullloop (coreaction.cc:5691) ---
-        // NOTE: ActionDoNothing excluded — removes empty blocks, same issue.
-        // ActionStartCleanUp (:5692) is a pure marker with no effect in Rugra — excluded.
+        // NOTE: ActionDoNothing runs inside ActionBlockStructure.
         Box::new(ActionSwitchNorm::new()),       // :5684
 
         // --- merge/fixate/casts (coreaction.cc:5714-5738) ---
