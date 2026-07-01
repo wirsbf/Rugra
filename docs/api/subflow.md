@@ -64,3 +64,6 @@
 - set_replacement 的 isAddrForce/isTypeLock 守卫：用 `is_addr_force()`/`is_type_lock()`+`get_type()` 实现 size 检查（subflow.cc:95/103-118）。
 - 新增 `is_zero_extended(base_size)` 静态方法：完整复刻 varnode.cc:958-970（baseSize>=size / size>8 INT_ZEXT 链 / nzm 位移三段逻辑），替换 INT_DIV/REM 近似。
 - 文件头部 gap 清单更新：5 项已补齐 + 7 项仍保留（逐条说明原因）。
+
+### 2026-07-01（续 2）：RuleDumptyHumpLate（subflow.cc:3006-3064）
+SUBPIECE(PIECE) 回溯：尝试低/高半分量，三路重写（size 不匹配/isAutoLive/完全替换）。

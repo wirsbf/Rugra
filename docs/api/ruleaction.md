@@ -901,3 +901,9 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 - RulePushPtr（6852）+ build_varnode_out/collect_duplicate_needs/duplicate_need — 指针 push 到使用点。
 - RuleStructOffset0（6678）— struct offset 0 下钻 PTRSUB。
 20 新测试。
+
+### 2026-07-01（续 7）：3 条缺失 Rule 实现 + 注册
+- RulePtrFlow（ruleaction.cc:9050-9251）：指针流传播+截断。trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer。注册 oppool1:5624。has_truncations 默认 false（Rugra 无 isTruncated 空间）。
+- RuleDumptyHumpLate（subflow.cc:3006-3064）：SUBPIECE(PIECE) 回溯。注册 cleanup:5699。
+- RuleOrPredicate（condexe.cc:509-635）：impl Rule trait（包装现有 apply_op）。注册 oppool1:5631。
+13 新测试。

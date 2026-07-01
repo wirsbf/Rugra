@@ -2601,7 +2601,129 @@ impl JumpTable {
         self.default_block = -1;
         self.partial_table = false;
     }
+
+    /// Recover a model for the switch. Faithful to `JumpTable::recoverModel`
+    /// (jumptable.cc:2276).
+    ///
+    /// Ghidra tries (in order): an override model, `JumpAssisted` (if the
+    /// switch var is produced by a CALLOTHER), `JumpBasic`, then `JumpBasic2`.
+    /// Rugra currently only implements `JumpBasic` and `JumpModelTrivial`, so
+    /// we mirror the sequence with the available models. Returns `true` if any
+    /// model recovered successfully.
+    ///
+    /// The BRANCHIND op must already be linked via [`set_indirect_op`].
+    pub fn recover_model(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+        maxtablesize: u32,
+    ) -> bool {
+        // If an override model is already attached, just re-run it.
+        if let Some(m) = self.jmodel.as_mut() {
+            if m.is_override() {
+                let indop = match &self.indirect {
+                    Some(o) => o.clone(),
+                    None => return false,
+                };
+                return m.recover_model(fd, &indop, 0, maxtablesize);
+            }
+        }
+        // Otherwise discard any stale model (Ghidra: delete jmodel).
+        self.jmodel = None;
+
+        // The models hold an `Arc<RwLock<JumpTable>>` back-reference to their
+        // parent (mirroring Ghidra's `new JumpBasic(this)`). We cannot obtain
+        // such an Arc from `&mut self`, so we pass a throw-away Arc; the models
+        // only dereference this parent Arc during fold-in stages (foldInGuards)
+        // which we do not run here, so a stand-in Arc is safe during recovery.
+        let dummy_arc = std::sync::Arc::new(std::sync::RwLock::new(JumpTable::new(self.opaddress)));
+        let indop = match &self.indirect {
+            Some(o) => o.clone(),
+            None => return false,
+        };
+        let matchsize = self.addresstable.len() as u32;
+
+        // JumpBasic first (Ghidra's primary model).
+        let mut jbasic = JumpBasic::new(dummy_arc.clone());
+        if jbasic.recover_model(fd, &indop, matchsize, maxtablesize) {
+            self.jmodel = Some(Box::new(jbasic));
+            return true;
+        }
+        // Fall back to the trivial model (number of out-edges == table size).
+        let mut jtriv = JumpModelTrivial::new(dummy_arc);
+        if jtriv.recover_model(fd, &indop, matchsize, maxtablesize) {
+            self.jmodel = Some(Box::new(jtriv));
+            return true;
+        }
+        self.jmodel = None;
+        false
+    }
+
+    /// Build the explicit address table from the recovered model. Faithful to
+    /// `JumpTable::recoverAddresses` (jumptable.cc:2645).
+    ///
+    /// Returns `true` on success. On failure (no model or zero entries) the
+    /// address table is left empty and `false` is returned instead of throwing
+    /// (Rugra cannot throw `LowlevelError`, so callers skip the table).
+    pub fn recover_addresses(&mut self, fd: &crate::funcdata::Funcdata) -> bool {
+        if !self.recover_model(fd, MAX_JUMPTABLE_SIZE) {
+            return false;
+        }
+        // The model must report a non-zero size before we build addresses.
+        let table_size = self.jmodel.as_ref().map_or(0, |m| m.get_table_size());
+        if table_size == 0 {
+            return false;
+        }
+        let indop = match &self.indirect {
+            Some(o) => o.clone(),
+            None => return false,
+        };
+        let mut addrs: Vec<Address> = Vec::new();
+        let mut loadpoints: Vec<LoadTable> = Vec::new();
+        // build_addresses needs an immutable model ref; sanity_check needs a
+        // mutable one. We split the borrows so the checker is satisfied.
+        if self.collect_loads {
+            let mut loadcounts: Vec<i32> = Vec::new();
+            {
+                let m = self.jmodel.as_ref().unwrap();
+                m.build_addresses(
+                    fd,
+                    &indop,
+                    &mut addrs,
+                    Some(&mut loadpoints),
+                    Some(&mut loadcounts),
+                );
+            }
+            {
+                let m = self.jmodel.as_mut().unwrap();
+                let _ = m.sanity_check(
+                    fd,
+                    &indop,
+                    &mut addrs,
+                    &mut loadpoints,
+                    Some(&mut loadcounts),
+                );
+            }
+            LoadTable::collapse_table(&mut loadpoints);
+        } else {
+            {
+                let m = self.jmodel.as_ref().unwrap();
+                m.build_addresses(fd, &indop, &mut addrs, None, None);
+            }
+            {
+                let m = self.jmodel.as_mut().unwrap();
+                let _ = m.sanity_check(fd, &indop, &mut addrs, &mut loadpoints, None);
+            }
+        }
+        self.addresstable = addrs;
+        self.loadpoints = loadpoints;
+        !self.addresstable.is_empty()
+    }
 }
+
+/// Default upper bound on the number of entries a jump-table may hold when no
+/// `Architecture` is attached to the [`crate::funcdata::Funcdata`]. Faithful to
+/// the `max_jumptable_size` field of `Architecture` (arch.cc:383, default 1024).
+pub const MAX_JUMPTABLE_SIZE: u32 = 1024;
 
 /// A light-weight emulator to calculate switch targets from switch variables.
 ///
@@ -2812,6 +2934,91 @@ impl Default for EmulateFunction {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Attempt to recover a single [`JumpTable`] for the BRANCHIND op `indop`.
+///
+/// This is the Rust analogue of Ghidra's
+/// `Funcdata::recoverJumpTable` (funcdata_block.cc:640) +
+/// `JumpTable::recoverAddresses` (jumptable.cc:2645), collapsed into a single
+/// call because Rugra does not yet clone a partial `Funcdata` for dedicated
+/// jumptable simplification. Returns a populated `JumpTable` on success, or
+/// `None` if no model could be recovered.
+///
+/// Because Rugra's emulator / guard analysis is incomplete, recovery may
+/// legitimately fail (or panic) on many real switches; such failures are
+/// caught here and yield `None`, so the caller can simply skip the op.
+pub fn try_recover(
+    indop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    fd: &crate::funcdata::Funcdata,
+) -> Option<JumpTable> {
+    let op_addr = indop.read().unwrap().get_addr();
+    let mut jt = JumpTable::new(op_addr);
+    jt.set_indirect_op(indop.clone());
+
+    // Mirror Ghidra's try/catch around recoverAddresses: any LowlevelError
+    // (or Rust panic from incomplete emulation) is treated as a normal
+    // recovery failure and skipped.
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        jt.recover_addresses(fd)
+    }));
+    match res {
+        Ok(true) => Some(jt),
+        Ok(false) => None,
+        Err(_) => None,
+    }
+}
+
+/// Recover jump-tables for every BRANCHIND in `fd` and attach the successful
+/// ones to `fd.jump_tables`.
+///
+/// This is the entry point that finally wires the [`JumpTable`] machinery into
+/// [`crate::funcdata::Funcdata`]. It mirrors the per-BRANCHIND loop that, in
+/// Ghidra, is driven from flow tracing (`subflow.cc` →
+/// `Funcdata::recoverJumpTable`). Because Rugra performs recovery in-place
+/// (no partial `Funcdata` clone), we run it as a pre-pass.
+///
+/// For each alive BRANCHIND op that does not already have a [`JumpTable`] (see
+/// [`crate::funcdata::Funcdata::find_jump_table`]), we attempt recovery via
+/// [`try_recover`]; successes are pushed onto `fd.jump_tables`. Failures are
+/// silently skipped — recovery is best-effort and may miss switches whose
+/// data-flow the current emulator cannot fully evaluate.
+///
+/// Faithful to the integration point described in
+/// `Funcdata::recoverJumpTable` (funcdata_block.cc:640).
+pub fn recover_jump_tables(fd: &mut crate::funcdata::Funcdata) -> usize {
+    use crate::opcodes::OpCode;
+    // Snapshot the alive op list so we can mutably borrow fd while iterating.
+    let alive: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+    let mut recovered = 0usize;
+
+    for op_ref in alive {
+        // Only BRANCHIND ops can anchor a jump-table.
+        let is_branchind = {
+            let op_rg = op_ref.0.read().unwrap();
+            op_rg.opcode == OpCode::CPUI_BRANCHIND
+        };
+        if !is_branchind {
+            continue;
+        }
+
+        // Skip if a table for this op address already exists.
+        let op_addr = op_ref.0.read().unwrap().get_addr().as_u64();
+        let already = fd
+            .jump_tables
+            .iter()
+            .any(|jt| jt.read().unwrap().get_op_address().as_u64() == op_addr);
+        if already {
+            continue;
+        }
+
+        if let Some(jt) = try_recover(&op_ref.0, fd) {
+            fd.jump_tables
+                .push(std::sync::Arc::new(std::sync::RwLock::new(jt)));
+            recovered += 1;
+        }
+    }
+    recovered
 }
 
 #[cfg(test)]
@@ -3205,6 +3412,81 @@ mod tests {
         // No blocks exist, so force_goto returns false → count 0.
         let count = o.apply_force_gotos(&mut fd);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_recover_jump_tables_runs_without_panic() {
+        // The recovery machinery must run over a real BRANCHIND without
+        // panicking the binary. With an unwritten switch varnode, JumpBasic's
+        // range is unbounded (size > maxtablesize), so recovery legitimately
+        // yields zero tables here — but crucially it must not unwind the
+        // process. This guards the `catch_unwind` boundary in `try_recover`.
+        use crate::funcdata::Funcdata;
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+
+        let mut fd = Funcdata::new("switch", crate::Address::new(0x1000), 16);
+
+        // BRANCHIND at 0x1010 whose input is an unwritten unique varnode (a
+        // plausible, but unbounded, switch variable).
+        let branchind = fd.obank.create(OpCode::CPUI_BRANCHIND, 1, crate::Address::new(0x1010));
+        let switchvn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_unique(0, 4)));
+        branchind.0.write().unwrap().inrefs.push(switchvn);
+
+        assert_eq!(fd.jump_tables.len(), 0);
+        assert!(fd.find_jump_table(&branchind).is_none());
+
+        let _recovered = recover_jump_tables(&mut fd);
+        // No hard assertion on the count: the point is that we returned here
+        // at all (no panic) and left the Funcdata in a consistent state.
+        assert!(fd.jump_tables.len() <= 1);
+    }
+
+    #[test]
+    fn test_recover_jump_tables_skips_non_branchind() {
+        // A function with no BRANCHIND ops must recover zero tables and must
+        // not panic.
+        use crate::funcdata::Funcdata;
+        use crate::opcodes::OpCode;
+
+        let mut fd = Funcdata::new("plain", crate::Address::new(0x1000), 16);
+        // A non-branch op should be ignored.
+        let _copy = fd.obank.create(OpCode::CPUI_COPY, 1, crate::Address::new(0x1000));
+
+        assert_eq!(fd.jump_tables.len(), 0);
+        let recovered = recover_jump_tables(&mut fd);
+        assert_eq!(recovered, 0);
+        assert_eq!(fd.jump_tables.len(), 0);
+    }
+
+    #[test]
+    fn test_find_jump_table_returns_attached_table() {
+        // Once a JumpTable is attached to Funcdata.jump_tables (by whatever
+        // means — recovery or otherwise), find_jump_table must locate it by
+        // the BRANCHIND's address. This is the integration contract the
+        // recovery pre-pass exists to satisfy.
+        use crate::funcdata::Funcdata;
+        use crate::opcodes::OpCode;
+
+        let mut fd = Funcdata::new("switch", crate::Address::new(0x1000), 16);
+        let branchind = fd.obank.create(OpCode::CPUI_BRANCHIND, 1, crate::Address::new(0x1010));
+
+        // Nothing attached yet.
+        assert!(fd.find_jump_table(&branchind).is_none());
+
+        // Attach a table whose op-address matches the BRANCHIND.
+        let mut jt = JumpTable::new(crate::Address::new(0x1010));
+        jt.set_indirect_op(branchind.0.clone());
+        jt.add_block_to_switch(crate::Address::new(0x2000), 0);
+        fd.jump_tables
+            .push(std::sync::Arc::new(std::sync::RwLock::new(jt)));
+
+        // find_jump_table must now resolve it.
+        let found = fd.find_jump_table(&branchind);
+        assert!(found.is_some(), "find_jump_table should locate the attached table");
+        let jt = found.unwrap().read().unwrap();
+        assert_eq!(jt.get_op_address().as_u64(), 0x1010);
+        assert_eq!(jt.num_entries(), 1);
     }
 
     fn _silence_unused() {

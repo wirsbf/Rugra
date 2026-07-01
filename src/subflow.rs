@@ -3219,6 +3219,193 @@ impl Rule for RuleSubfloatConvert {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RuleDumptyHumpLate (subflow.cc:3006-3064)
+// ---------------------------------------------------------------------------
+
+/// Late SUBPIECE-of-PIECE simplification.
+///
+/// Detects `SUBPIECE(PIECE(x,y))` and backtracks through the PIECE components:
+/// if the SUBPIECE truncation selects exactly one PIECE input, it replaces the
+/// SUBPIECE operand with that component (adjusting or removing the SUBPIECE as
+/// needed). This is the late cross-block variant run in the cleanup pool; the
+/// intra-block sibling `RuleDumptyHump` lives in ruleaction.rs.
+///
+/// Faithful to Ghidra's `RuleDumptyHumpLate` (subflow.cc:3006-3064).
+pub struct RuleDumptyHumpLate;
+
+impl RuleDumptyHumpLate {
+    pub fn new() -> Self { Self }
+}
+
+impl Rule for RuleDumptyHumpLate {
+    fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
+        // Faithful to RuleDumptyHumpLate::applyOp (subflow.cc:3012-3064).
+        let op_ref = PcodeOpRef(op_arc.clone());
+
+        // vn = op->getIn(0); if (!vn->isWritten()) return 0;
+        let vn_initial = match op_arc.read().unwrap().get_in(0) {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if !vn_initial.read().unwrap().is_written() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // pieceOp = vn->getDef(); if (pieceOp->code() != CPUI_PIECE) return 0;
+        let mut piece_op = match vn_initial.read().unwrap().get_def() {
+            Some(d) => d,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        if piece_op.read().unwrap().opcode != OpCode::CPUI_PIECE {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // int4 outSize = out->getSize(); int4 trunc = op->getIn(1)->getOffset();
+        let out_vn = match op_arc.read().unwrap().get_out() {
+            Some(v) => v.clone(),
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let out_size = out_vn.read().unwrap().get_size() as i64;
+        let mut trunc = op_arc
+            .read()
+            .unwrap()
+            .get_in(1)
+            .map(|v| v.read().unwrap().get_offset() as i64)
+            .unwrap_or(0);
+
+        let mut vn = vn_initial.clone();
+        // Backtrack loop (subflow.cc:3025-3040).
+        loop {
+            // trialVn = pieceOp->getIn(1); // least significant component
+            let trial_vn = match piece_op.read().unwrap().get_in(1) {
+                Some(v) => v.clone(),
+                None => break,
+            };
+            let mut trial_trunc = trunc;
+            if trunc >= trial_vn.read().unwrap().get_size() as i64 {
+                // Truncation from the most significant part.
+                trial_trunc -= trial_vn.read().unwrap().get_size() as i64;
+                // trialVn = pieceOp->getIn(0);
+                match piece_op.read().unwrap().get_in(0) {
+                    Some(v) => {
+                        vn = v.clone();
+                    }
+                    None => break,
+                }
+            } else {
+                vn = trial_vn;
+            }
+            let trial_vn_size = vn.read().unwrap().get_size() as i64;
+            if out_size + trial_trunc > trial_vn_size {
+                break; // vn crosses both components
+            }
+            // Commit to this component.
+            trunc = trial_trunc;
+            if vn.read().unwrap().get_size() as i64 == out_size {
+                break; // Found matching component
+            }
+            if !vn.read().unwrap().is_written() {
+                break;
+            }
+            let next_piece = match vn.read().unwrap().get_def() {
+                Some(d) => d,
+                None => break,
+            };
+            if next_piece.read().unwrap().opcode != OpCode::CPUI_PIECE {
+                break;
+            }
+            piece_op = next_piece;
+        }
+
+        // if (vn == op->getIn(0)) return 0; // Didn't backtrack thru any PIECE.
+        if Arc::ptr_eq(&vn, &vn_initial) {
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // if (vn->isWritten() && vn->getDef()->code() == CPUI_COPY)
+        //   vn = vn->getDef()->getIn(0);
+        let vn = {
+            let advance = vn.read().unwrap().is_written();
+            if advance {
+                let def = vn.read().unwrap().get_def();
+                if let Some(d) = def {
+                    if d.read().unwrap().opcode == OpCode::CPUI_COPY {
+                        match d.read().unwrap().get_in(0) {
+                            Some(v) => v.clone(),
+                            None => vn,
+                        }
+                    } else {
+                        vn
+                    }
+                } else {
+                    vn
+                }
+            } else {
+                vn
+            }
+        };
+
+        let vn_size = vn.read().unwrap().get_size() as i64;
+
+        // Determine removeOp and rewrite the SUBPIECE (subflow.cc:3048-3061).
+        let remove_op: Option<Arc<RwLock<PcodeOp>>> = if vn_size != out_size {
+            // Component does not match size exactly. Preserve SUBPIECE.
+            // removeOp = op->getIn(0)->getDef();
+            let r = vn_initial.read().unwrap().get_def();
+            // if (op->getIn(1)->getOffset() != trunc)
+            //   data.opSetInput(op, data.newConstant(4, trunc), 1);
+            let cur_offset = op_arc
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i64)
+                .unwrap_or(0);
+            if cur_offset != trunc {
+                let c = data.new_constant(4, trunc as u64);
+                data.op_set_input(&op_ref, c, 1);
+            }
+            // data.opSetInput(op, vn, 0);
+            data.op_set_input(&op_ref, vn, 0);
+            r
+        } else if out_vn.read().unwrap().is_auto_live() {
+            // Exact match but output address fixed. Change SUBPIECE to COPY.
+            // removeOp = op->getIn(0)->getDef();
+            let r = vn_initial.read().unwrap().get_def();
+            data.op_remove_input(&op_ref, 1);
+            data.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+            data.op_set_input(&op_ref, vn, 0);
+            r
+        } else {
+            // Exact match. Completely replace output with component.
+            // removeOp = op;  data.totalReplace(out, vn);
+            data.total_replace(&out_vn, vn);
+            Some(op_arc.clone())
+        };
+
+        // if (removeOp->getOut()->hasNoDescend() && !removeOp->getOut()->isAutoLive())
+        //   data.opDestroyRecursive(removeOp);
+        if let Some(ro) = remove_op {
+            let destroy = {
+                let out = ro.read().unwrap().output.clone();
+                if let Some(o) = out {
+                    let o_rg = o.read().unwrap();
+                    o_rg.has_no_descend() && !o_rg.is_auto_live()
+                } else {
+                    false
+                }
+            };
+            if destroy {
+                let ro_ref = PcodeOpRef(ro);
+                data.op_destroy_recursive(&ro_ref);
+            }
+        }
+
+        Ok(action_status::CHANGE)
+    }
+
+    fn get_name(&self) -> &str { "dumptyhump_late" }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -3668,6 +3855,108 @@ mod tests {
         // terminal pull, so the trace succeeds with at least one pull.
         assert!(sf.do_trace(&fd));
         assert!(sf.pull_count() >= 1);
+    }
+
+    // ==================================================================
+    // RuleDumptyHumpLate tests (subflow.cc:3006-3064)
+    // ==================================================================
+
+    /// getOpList / name.
+    #[test]
+    fn test_rule_dumpty_hump_late_opcodes() {
+        let rule = RuleDumptyHumpLate::new();
+        assert_eq!(rule.get_name(), "dumptyhump_late");
+        assert_eq!(rule.get_opcodes(), vec![OpCode::CPUI_SUBPIECE]);
+    }
+
+    /// SUBPIECE whose input is NOT written -> NO_CHANGE (early return,
+    /// subflow.cc:3014).
+    #[test]
+    fn test_rule_dumpty_hump_late_input_not_written() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // Free (not written) input varnode.
+        let base = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let offset = fd.vbank.create_constant(8, 0);
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        let op_arc = make_op(0, OpCode::CPUI_SUBPIECE, vec![base, offset], Some(out));
+        let rule = RuleDumptyHumpLate::new();
+        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// SUBPIECE(PIECE(hi,lo), 0) where lo has the same size as the SUBPIECE
+    /// output (exact match): backtracking selects `lo`. Because Rugra's
+    /// `isAutoLive()` is always false (matching Ghidra until copy-propagation
+    /// marks the flag), the rule takes the `totalReplace(out, vn)` + destroy
+    /// branch (subflow.cc:3058-3061). We give `out` a descendant so the
+    /// replacement is observable: the descendant is rewritten to read `lo`.
+    #[test]
+    fn test_rule_dumpty_hump_late_exact_match_total_replace() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // PIECE inputs: hi (4 bytes), lo (4 bytes).
+        let hi = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let lo = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        // PIECE -> piece_out (8 bytes).
+        let piece_out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
+        let _piece_op = make_op(0, OpCode::CPUI_PIECE, vec![hi.clone(), lo.clone()], Some(piece_out.clone()));
+        // SUBPIECE(piece_out, 0) -> out (4 bytes).
+        let offset = fd.vbank.create_constant(8, 0);
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x40);
+        let sub_op = make_op(1, OpCode::CPUI_SUBPIECE, vec![piece_out, offset], Some(out.clone()));
+        // Descendant that reads `out` — totalReplace rewrites it to read `lo`.
+        let sink = fd.vbank.create_with_space(4, AddressSpace::Register, 0x50);
+        let _dec = make_op(2, OpCode::CPUI_COPY, vec![out], Some(sink));
+
+        let rule = RuleDumptyHumpLate::new();
+        let res = rule.apply_op(&sub_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // After totalReplace, the descendant COPY now reads `lo`.
+        let _dec_ref = PcodeOpRef(_dec.clone());
+        let dec_in0 = _dec.read().unwrap().get_in(0).cloned();
+        assert!(dec_in0.is_some());
+        assert!(Arc::ptr_eq(&dec_in0.unwrap(), &lo));
+    }
+
+    /// Size-mismatch path (subflow.cc:3048-3051): SUBPIECE selects one PIECE
+    /// component that is BIGGER than outSize, so the SUBPIECE is preserved and
+    /// its operand 0 is replaced with the component (offset adjusted if needed).
+    #[test]
+    fn test_rule_dumpty_hump_late_size_mismatch_preserves_subpiece() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // PIECE of two 8-byte halves.
+        let hi = fd.vbank.create_with_space(8, AddressSpace::Register, 0x10);
+        let lo = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
+        let piece_out = fd.vbank.create_with_space(16, AddressSpace::Register, 0x30);
+        let _piece_op = make_op(0, OpCode::CPUI_PIECE, vec![hi, lo.clone()], Some(piece_out.clone()));
+        // SUBPIECE(piece_out, 0) -> out (4 bytes). trunc=0 < lo size(8) ->
+        // trialVn = lo, trialTrunc = 0; outSize(4)+0 <= 8 -> commit vn=lo.
+        // vn_size(8) != outSize(4) -> preserve SUBPIECE, set input 0 = lo.
+        let offset = fd.vbank.create_constant(8, 0);
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x40);
+        let sub_op = make_op(1, OpCode::CPUI_SUBPIECE, vec![piece_out, offset], Some(out));
+
+        let rule = RuleDumptyHumpLate::new();
+        let res = rule.apply_op(&sub_op, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // SUBPIECE preserved; operand 0 is now `lo`.
+        assert_eq!(sub_op.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
+        let in0 = sub_op.read().unwrap().get_in(0).cloned();
+        assert!(in0.is_some());
+        assert!(Arc::ptr_eq(&in0.unwrap(), &lo));
+    }
+
+    /// SUBPIECE input's def is not a PIECE -> NO_CHANGE (subflow.cc:3017).
+    #[test]
+    fn test_rule_dumpty_hump_late_def_not_piece() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let src = fd.vbank.create_with_space(4, AddressSpace::Register, 0x10);
+        let mid = fd.vbank.create_with_space(4, AddressSpace::Register, 0x20);
+        // Def is a COPY, not PIECE.
+        let _copy = make_op(0, OpCode::CPUI_COPY, vec![src], Some(mid.clone()));
+        let offset = fd.vbank.create_constant(8, 0);
+        let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
+        let sub_op = make_op(1, OpCode::CPUI_SUBPIECE, vec![mid, offset], Some(out));
+        let rule = RuleDumptyHumpLate::new();
+        assert_eq!(rule.apply_op(&sub_op, &mut fd).unwrap(), action_status::NO_CHANGE);
     }
 }
 

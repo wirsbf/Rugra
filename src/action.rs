@@ -579,14 +579,14 @@ pub fn build_simplify_pool() -> ActionPool {
     pool.add_rule(Box::new(crate::subflow::RuleSubvarAnd::new()));       // 5621
     pool.add_rule(Box::new(crate::subflow::RuleSubvarSubpiece::new()));  // 5622
     pool.add_rule(Box::new(crate::subflow::RuleSplitFlow::new()));       // 5623
-    // skip 5624 RulePtrFlow — ruleaction.cc:9177, not yet ported (heavy: trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch construction)
+    pool.add_rule(Box::new(RulePtrFlow::new()));           // 5624
     pool.add_rule(Box::new(crate::subflow::RuleSubvarCompZero::new()));  // 5625
     pool.add_rule(Box::new(crate::subflow::RuleSubvarShift::new()));     // 5626
     pool.add_rule(Box::new(crate::subflow::RuleSubvarZext::new()));      // 5627
     pool.add_rule(Box::new(crate::subflow::RuleSubvarSext::new()));      // 5628
     pool.add_rule(Box::new(RuleNegateNegate::new()));       // 5629
     pool.add_rule(Box::new(RuleConditionalMove::new()));    // 5630
-    // skip 5631 RuleOrPredicate — condexe.cc:509, exists in condexe.rs but not yet as a Rule trait impl (currently a standalone pass)
+    pool.add_rule(Box::new(crate::condexe::RuleOrPredicate::new())); // 5631
     pool.add_rule(Box::new(RuleFuncPtrEncoding::new()));    // 5632
     pool.add_rule(Box::new(crate::subflow::RuleSubfloatConvert::new())); // 5633
     pool.add_rule(Box::new(RuleFloatCast::new()));          // 5634 — registered here per Ghidra (coreaction.cc:5634)
@@ -631,7 +631,7 @@ pub fn build_cleanup_pool() -> ActionPool {
     pool.add_rule(Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
     pool.add_rule(Box::new(RuleAddUnsigned::new()));  // 5697
     pool.add_rule(Box::new(Rule2Comp2Sub::new()));    // 5698
-    // skip 5699 RuleDumptyHumpLate — subflow.cc:3012, not yet ported (cross-block SUBPIECE(PIECE) backtrack)
+    pool.add_rule(Box::new(crate::subflow::RuleDumptyHumpLate::new())); // 5699
     pool.add_rule(Box::new(RuleSubRight::new()));     // 5700
     pool.add_rule(Box::new(RuleFloatSignCleanup::new())); // 5701
     pool.add_rule(Box::new(RuleExpandLoad::new()));   // 5702

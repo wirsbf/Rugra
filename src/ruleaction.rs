@@ -13830,6 +13830,303 @@ fn byte_to_address_int(val: i64, word_size: i64) -> i64 {
     if word_size <= 1 { val } else { val / word_size }
 }
 
+// ---------------------------------------------------------------------------
+// RulePtrFlow (ruleaction.cc:9050-9251)
+// ---------------------------------------------------------------------------
+
+/// Mark Varnode and PcodeOp objects that are carrying or operating on pointers.
+///
+/// Used on architectures where the data-flow for pointer values needs to be
+/// truncated. This marks the places where the truncation needs to happen. Then
+/// the SubvariableFlow actions do the actual truncation.
+///
+/// Faithful to Ghidra's `RulePtrFlow` (ruleaction.cc:9050-9251).
+pub struct RulePtrFlow {
+    /// True if the architecture's default data space is truncated
+    /// (`glb->getDefaultDataSpace()->isTruncated()`, ruleaction.cc:9060).
+    /// When false, `getOpList` returns no opcodes — the rule stays inert
+    /// (Ghidra does the same: "Only stick ourselves into pool if aggressiveness
+    /// is turned on"). Rugra has no truncated address spaces yet, so this
+    /// defaults to false; the full applyOp logic is ported 1:1 so the rule is
+    /// ready when truncation modelling lands.
+    has_truncations: bool,
+}
+
+impl RulePtrFlow {
+    /// Construct with truncation flag. Faithful to the Ghidra ctor
+    /// (ruleaction.cc:9056-9061), which derives `hasTruncations` from
+    /// `glb->getDefaultDataSpace()->isTruncated()`. Rugra's Architecture has no
+    /// `getDefaultDataSpace`/`isTruncated` yet, so we default to false — exactly
+    /// matching Ghidra's behaviour for non-truncated architectures.
+    pub fn new() -> Self {
+        Self { has_truncations: false }
+    }
+
+    /// Set \e ptrflow property on PcodeOp only if it is propagating. Returns
+    /// true if the ptrflow property is newly set. Faithful to
+    /// `RulePtrFlow::trialSetPtrFlow` (ruleaction.cc:9083-9099).
+    fn trial_set_ptr_flow(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> bool {
+        let opc = op.read().unwrap().opcode;
+        match opc {
+            OpCode::CPUI_COPY
+            | OpCode::CPUI_MULTIEQUAL
+            | OpCode::CPUI_INT_ADD
+            | OpCode::CPUI_INDIRECT
+            | OpCode::CPUI_PTRSUB
+            | OpCode::CPUI_PTRADD => {
+                if !op.read().unwrap().is_ptr_flow() {
+                    op.write().unwrap().set_ptr_flow();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Propagate \e ptrflow property to given Varnode and the defining PcodeOp.
+    /// Returns true if a change was made. Faithful to
+    /// `RulePtrFlow::propagateFlowToDef` (ruleaction.cc:9108-9120).
+    fn propagate_flow_to_def(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        let mut made_change = false;
+        if !vn.read().unwrap().is_ptr_flow() {
+            vn.write().unwrap().set_ptr_flow();
+            made_change = true;
+        }
+        let def = vn.read().unwrap().get_def();
+        if let Some(def_op) = def {
+            if Self::trial_set_ptr_flow(&def_op) {
+                made_change = true;
+            }
+        }
+        made_change
+    }
+
+    /// Propagate \e ptrflow property to given Varnode and to descendant
+    /// PcodeOps. Returns true if a change was made. Faithful to
+    /// `RulePtrFlow::propagateFlowToReads` (ruleaction.cc:9127-9145).
+    fn propagate_flow_to_reads(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        let mut made_change = false;
+        if !vn.read().unwrap().is_ptr_flow() {
+            vn.write().unwrap().set_ptr_flow();
+            made_change = true;
+        }
+        // Snapshot descendant ops (the descend set may change as we set flags).
+        let descend_ops: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        for op in descend_ops {
+            if Self::trial_set_ptr_flow(&op) {
+                made_change = true;
+            }
+        }
+        made_change
+    }
+
+    /// Truncate pointer Varnode being read by given PcodeOp. Inserts a SUBPIECE
+    /// operation truncating the value to the size necessary for a pointer into
+    /// the given address space, and updates the PcodeOp input. Returns the new
+    /// truncated Varnode. Faithful to `RulePtrFlow::truncatePointer`
+    /// (ruleaction.cc:9154-9184).
+    fn truncate_pointer(
+        spc: &crate::space::AddressSpace,
+        op: &crate::op::PcodeOpRef,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        slot: usize,
+        data: &mut Funcdata,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let addr_size = spc.addr_size();
+        let vn_size = vn.read().unwrap().get_size();
+        let vn_space = vn.read().unwrap().get_space();
+        let op_addr = op.0.read().unwrap().get_addr();
+        let truncop = data.new_op(2, op_addr);
+        data.op_set_opcode(&truncop, OpCode::CPUI_SUBPIECE);
+        let const_zero = data.new_constant(vn_size, 0);
+        data.op_set_input(&truncop, const_zero, 1);
+        let newvn = if vn_space.is_unique() {
+            // vn->getSpace()->getType() == IPTR_INTERNAL.
+            data.new_unique_out(addr_size, &truncop)
+        } else {
+            // Address addr = vn->getAddr();
+            //   if (addr.isBigEndian()) addr = addr + (vn->getSize() - spc->getAddrSize());
+            //   addr.renormalize(spc->getAddrSize());
+            // Rugra's Address is a plain u64 (Copy); renormalize is a no-op
+            // modulo word_size, which is 1 here, so the address is unchanged.
+            let addr = vn.read().unwrap().get_addr().clone();
+            let addr_val = if spc.is_big_endian() {
+                addr.offset((vn_size - addr_size) as i64)
+            } else {
+                addr
+            };
+            data.new_varnode_out(addr_size, addr_val, &truncop)
+        };
+        data.op_set_input(op, newvn.clone(), slot);
+        data.op_set_input(&truncop, vn.clone(), 0);
+        data.op_insert_before(&truncop, op);
+        newvn
+    }
+}
+
+impl Rule for RulePtrFlow {
+    fn apply_op(
+        &self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        data: &mut Funcdata,
+    ) -> Result<i32> {
+        // Faithful to RulePtrFlow::applyOp (ruleaction.cc:9177-9251).
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let opc = op_arc.read().unwrap().opcode;
+        let mut made_change = 0;
+
+        match opc {
+            OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
+                // vn = op->getIn(1); spc = op->getIn(0)->getSpaceFromConst();
+                let (vn, spc_id) = {
+                    let op_rg = op_arc.read().unwrap();
+                    let vn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return Ok(0) };
+                    let spc_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return Ok(0) };
+                    let id = if spc_id_vn.read().unwrap().is_constant() {
+                        spc_id_vn.read().unwrap().get_offset() as u8
+                    } else {
+                        return Ok(0);
+                    };
+                    (vn, id)
+                };
+                let spc = crate::space::AddressSpace::from_id(spc_id);
+                let vn_size = vn.read().unwrap().get_size();
+                let vn = if vn_size > spc.addr_size() {
+                    made_change = 1;
+                    Self::truncate_pointer(&spc, &op_ref, &vn, 1, data)
+                } else {
+                    vn
+                };
+                if Self::propagate_flow_to_def(&vn) {
+                    made_change = 1;
+                }
+            }
+            OpCode::CPUI_CALLIND | OpCode::CPUI_BRANCHIND => {
+                // vn = op->getIn(0); spc = data.getArch()->getDefaultCodeSpace();
+                let vn = match op_arc.read().unwrap().get_in(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                // Rugra has no getDefaultCodeSpace; the default code space is the
+                // RAM space (matches the x86-64 default). Use its addr_size (8).
+                let spc = crate::space::AddressSpace::Ram;
+                let vn_size = vn.read().unwrap().get_size();
+                let vn = if vn_size > spc.addr_size() {
+                    made_change = 1;
+                    Self::truncate_pointer(&spc, &op_ref, &vn, 0, data)
+                } else {
+                    vn
+                };
+                if Self::propagate_flow_to_def(&vn) {
+                    made_change = 1;
+                }
+            }
+            OpCode::CPUI_NEW => {
+                // vn = op->getOut();
+                let vn = match op_arc.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_reads(&vn) {
+                    made_change = 1;
+                }
+            }
+            OpCode::CPUI_INDIRECT => {
+                if !op_arc.read().unwrap().is_ptr_flow() {
+                    return Ok(0);
+                }
+                let vn = match op_arc.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_reads(&vn) {
+                    made_change = 1;
+                }
+                let vn = match op_arc.read().unwrap().get_in(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_def(&vn) {
+                    made_change = 1;
+                }
+            }
+            OpCode::CPUI_COPY | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD => {
+                if !op_arc.read().unwrap().is_ptr_flow() {
+                    return Ok(0);
+                }
+                let vn = match op_arc.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_reads(&vn) {
+                    made_change = 1;
+                }
+                let vn = match op_arc.read().unwrap().get_in(0) {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_def(&vn) {
+                    made_change = 1;
+                }
+            }
+            OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INT_ADD => {
+                if !op_arc.read().unwrap().is_ptr_flow() {
+                    return Ok(0);
+                }
+                let vn = match op_arc.read().unwrap().get_out() {
+                    Some(v) => v.clone(),
+                    None => return Ok(0),
+                };
+                if Self::propagate_flow_to_reads(&vn) {
+                    made_change = 1;
+                }
+                let num_inputs = op_arc.read().unwrap().num_input();
+                for i in 0..num_inputs {
+                    let vn = match op_arc.read().unwrap().get_in(i) {
+                        Some(v) => v.clone(),
+                        None => continue,
+                    };
+                    if Self::propagate_flow_to_def(&vn) {
+                        made_change = 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(made_change)
+    }
+
+    fn get_name(&self) -> &str { "ptrflow" }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // Faithful to RulePtrFlow::getOpList (ruleaction.cc:9063-9077):
+        // "if (!hasTruncations) return; // Only stick ourselves into pool if
+        //  aggressiveness is turned on".
+        if !self.has_truncations {
+            return Vec::new();
+        }
+        vec![
+            OpCode::CPUI_STORE,
+            OpCode::CPUI_LOAD,
+            OpCode::CPUI_COPY,
+            OpCode::CPUI_MULTIEQUAL,
+            OpCode::CPUI_INDIRECT,
+            OpCode::CPUI_INT_ADD,
+            OpCode::CPUI_CALLIND,
+            OpCode::CPUI_BRANCHIND,
+            OpCode::CPUI_PTRSUB,
+            OpCode::CPUI_PTRADD,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -17501,5 +17798,146 @@ mod tests {
         let op_arc = Arc::new(RwLock::new(op));
         let rule = RuleStructOffset0::new();
         assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    // ==================================================================
+    // RulePtrFlow tests (ruleaction.cc:9050-9251)
+    // ==================================================================
+
+    /// getOpList returns no opcodes when hasTruncations is false — faithful to
+    /// Ghidra's "Only stick ourselves into pool if aggressiveness is turned on"
+    /// early-return (ruleaction.cc:9065).
+    #[test]
+    fn test_rule_ptrflow_get_oplist_empty_when_not_truncated() {
+        let rule = RulePtrFlow::new();
+        assert!(rule.get_opcodes().is_empty());
+        assert_eq!(rule.get_name(), "ptrflow");
+    }
+
+    /// trialSetPtrFlow / propagateFlowToDef: marking a COPY op that writes a
+    /// varnode should set ptrflow on both the op and its output varnode
+    /// (ruleaction.cc:9083-9120). Applied indirectly via an INT_ADD whose
+    /// defining COPY we wire up.
+    #[test]
+    fn test_rule_ptrflow_propagate_to_def_via_int_add() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // root input varnode (the value feeding the COPY).
+        let root = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        root.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        // COPY: root -> mid
+        let mid = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        )));
+        {
+            let mut o = copy_op.write().unwrap();
+            o.inrefs = vec![root.clone()];
+            o.output = Some(mid.clone());
+        }
+        root.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        mid.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        mid.write().unwrap().def = Some(Arc::downgrade(&copy_op));
+
+        // INT_ADD: mid + const -> out, marked ptrflow (so applyOp processes it).
+        let c = fd.vbank.create_constant(8, 4);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![mid.clone(), c.clone()];
+            o.output = Some(out.clone());
+            o.set_ptr_flow(); // mark the ADD as ptrflow (the trigger condition)
+        }
+        mid.write().unwrap().descend.push(Arc::downgrade(&add_op));
+        c.write().unwrap().descend.push(Arc::downgrade(&add_op));
+        out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        out.write().unwrap().def = Some(Arc::downgrade(&add_op));
+
+        let rule = RulePtrFlow::new();
+        let res = rule.apply_op(&add_op, &mut fd).unwrap();
+        // A change is made: ptrflow propagated to the COPY (via mid's def) and
+        // to out + its reads.
+        assert_eq!(res, 1);
+        // The COPY should now be ptrflow (propagateFlowToDef -> trialSetPtrFlow).
+        assert!(copy_op.read().unwrap().is_ptr_flow());
+        // The output varnode of the ADD should be ptrflow (propagateFlowToReads).
+        assert!(out.read().unwrap().is_ptr_flow());
+    }
+
+    /// applyOp on a non-ptrflow INT_ADD returns 0 immediately (the early
+    /// `if (!op->isPtrFlow()) return 0;` guard, ruleaction.cc:9243).
+    #[test]
+    fn test_rule_ptrflow_int_add_not_ptrflow_returns_zero() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let in0 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let in1 = fd.vbank.create_constant(8, 1);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let op_arc = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = op_arc.write().unwrap();
+            o.inrefs = vec![in0, in1];
+            o.output = Some(out);
+            // NOT marked ptrflow.
+        }
+        let rule = RulePtrFlow::new();
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(),
+            action_status::NO_CHANGE
+        );
+    }
+
+    /// applyOp on a LOAD whose pointer input size exceeds the space addr size
+    /// truncates the pointer (truncatePointer, ruleaction.cc:9154-9184).
+    /// Here the ptr size (8) == RAM addr size (8), so no truncation; instead
+    /// ptrflow is propagated to the pointer's defining op.
+    #[test]
+    fn test_rule_ptrflow_load_propagates_without_truncation() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // Space-id constant (input 0) encoding RAM.
+        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        // Pointer varnode, defined by a COPY (so propagateFlowToDef marks it).
+        let src = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        src.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_COPY,
+        )));
+        {
+            let mut o = copy_op.write().unwrap();
+            o.inrefs = vec![src.clone()];
+            o.output = Some(ptr.clone());
+        }
+        src.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        ptr.write().unwrap().def = Some(Arc::downgrade(&copy_op));
+
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_LOAD,
+        )));
+        {
+            let mut o = load_op.write().unwrap();
+            o.inrefs = vec![spaceid.clone(), ptr.clone()];
+            o.output = Some(out);
+        }
+        ptr.write().unwrap().descend.push(Arc::downgrade(&load_op));
+        spaceid.write().unwrap().descend.push(Arc::downgrade(&load_op));
+
+        let rule = RulePtrFlow::new();
+        let res = rule.apply_op(&load_op, &mut fd).unwrap();
+        // ptr size (8) == RAM addr size (8): no truncation, but ptrflow
+        // propagated to the COPY defining ptr -> change made.
+        assert_eq!(res, 1);
+        assert!(copy_op.read().unwrap().is_ptr_flow());
+        assert!(ptr.read().unwrap().is_ptr_flow());
     }
 }

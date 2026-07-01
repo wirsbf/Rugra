@@ -221,3 +221,6 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 - `apply_force_gotos(fd) -> usize`（override.cc:204）：将所有 force-goto 覆写推入函数。
 
 测试：新增 2 个（set_goto_branch 标志 + apply_force_gotos）。jumptable.rs 所有算法 L3 缺口已关闭。
+
+### 2026-07-01：JumpTable 接入 Funcdata
+recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNorm 调用 recover_jump_tables。jump_tables 现可被填充，find_jump_table 返回非 None。

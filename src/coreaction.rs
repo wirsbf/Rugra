@@ -2263,32 +2263,44 @@ impl ActionSwitchNorm {
 }
 impl Action for ActionSwitchNorm {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate PcodeOpBank looking for BRANCHIND
-        // ops, which are the root of jump tables. In full Ghidra, these
-        // are stored in Funcdata.jumpvec and accessed via numJumpTables().
-        //
-        // Without jumpvec, we scan alive ops for BRANCHIND and count them.
-        // Full matchModel/recoverLabels/foldInNormalization requires the
-        // JumpTable objects to be attached to Funcdata.
-        let mut change_count = 0;
-        use crate::opcodes::OpCode;
+        // Pre-pass: recover jump-tables for any BRANCHIND that doesn't already
+        // have one. In full Ghidra this happens during flow tracing
+        // (`subflow.cc` → `Funcdata::recoverJumpTable`, funcdata_block.cc:640)
+        // which runs *before* the core action pipeline. Rugra does not yet
+        // clone a partial `Funcdata` for dedicated jumptable simplification,
+        // so we run recovery in-place here, populating `fd.jump_tables`.
+        // This finally attaches `JumpTable` objects to `Funcdata` so that
+        // `Funcdata::find_jump_table` can return non-`None`.
+        let newly_recovered = crate::jumptable::recover_jump_tables(fd);
 
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_BRANCHIND {
-                // Found a switch (BRANCHIND) op.
-                // Full Ghidra: find associated JumpTable, if unlabelled:
-                //   jt->matchModel(&data)
-                //   jt->recoverLabels(&data)
-                //   jt->foldInNormalization(&data)
-                // L3 gap: requires Funcdata.jumpvec field.
+        // Now mirror Ghidra's `ActionSwitchNorm` (coreaction.cc:4548): for each
+        // jump-table that hasn't been labelled yet, matchModel/recoverLabels/
+        // foldInNormalization, then foldInGuards.
+        let mut change_count = 0;
+
+        for jt_arc in &fd.jump_tables {
+            // Full Ghidra:
+            //   jt->matchModel(&data)
+            //   jt->recoverLabels(&data)
+            //   jt->foldInNormalization(&data)
+            //   if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
+            // Rugra exposes recovery/normalization on the JumpTable; the
+            // fold-in stages that rewrite the CFG are still L3 gaps.
+            let is_labelled = jt_arc.read().unwrap().is_labelled();
+            if !is_labelled {
                 change_count += 1;
             }
         }
 
-        // Return NO_CHANGE since we can't actually normalize without jumpvec.
-        let _ = change_count;
-        Ok(action_status::NO_CHANGE)
+        if newly_recovered > 0 {
+            change_count += newly_recovered as i32;
+        }
+
+        if change_count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     fn get_name(&self) -> &str { "switchnorm" }
 }

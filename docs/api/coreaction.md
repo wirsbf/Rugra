@@ -722,3 +722,6 @@ Merge 类：ActionAssignHigh（coreaction.hh:339，rule_onceperfunc，建 HighVa
 其他（stub）：ActionMapGlobals（需 Scope::queryProperties）、ActionMarkIndirectOnly（需 indirectonly flag）。
 ParamShiftStart/Stop 确认在 Ghidra 中被注释掉，不需要实现。
 build_full_pipeline_actions 新增 ActionStartTypes/AssignHigh/DominantCopy/CopyMarker。
+
+### 2026-07-01（续 5）：ActionSwitchNorm 调用 recover_jump_tables
+ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入跳转表恢复。

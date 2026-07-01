@@ -28,7 +28,7 @@
 //! implementation only detected candidates and emitted diagnostics; this one
 //! performs the actual transformation.
 
-use crate::action::{Action, action_status};
+use crate::action::{Action, Rule, action_status};
 use crate::funcdata::Funcdata;
 use crate::error::Result;
 use crate::opcodes::OpCode;
@@ -1246,6 +1246,31 @@ impl RuleOrPredicate {
     }
 }
 
+/// `impl Rule` wrapper for `RuleOrPredicate` (condexe.cc:509-710).
+///
+/// The core logic lives in [`RuleOrPredicate::apply_op`], which takes a
+/// `&PcodeOpRef`. This trait impl adapts it to the `Rule` trait's
+/// `&Arc<RwLock<PcodeOp>>` signature (as used by `ActionPool::processOp`,
+/// action.cc:823-876), wrapping the inner op in a `PcodeOpRef` and mapping the
+/// raw `i32` result to the `Result<i32>` the pool expects.
+impl Rule for RuleOrPredicate {
+    fn apply_op(
+        &self,
+        op_arc: &Arc<RwLock<PcodeOp>>,
+        fd: &mut Funcdata,
+    ) -> Result<i32> {
+        let op_ref = PcodeOpRef(op_arc.clone());
+        Ok(RuleOrPredicate::apply_op(self, &op_ref, fd))
+    }
+
+    fn get_name(&self) -> &str { "or_predicate" }
+
+    fn get_opcodes(&self) -> Vec<OpCode> {
+        // Faithful to RuleOrPredicate::getOpList (condexe.cc:631-635).
+        vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
+    }
+}
+
 // ======================================================================
 // ActionConditionalExe (condexe.hh:133, condexe.cc:478-503)
 // ======================================================================
@@ -1418,5 +1443,48 @@ mod tests {
         let b = mk(0x100, 1);
         // Same block (no parent set): both None -> compare_order returns 0.
         assert_eq!(a.compare_order(&b), 0);
+    }
+
+    // ==================================================================
+    // RuleOrPredicate `impl Rule` wrapper tests (condexe.cc:509-710)
+    // ==================================================================
+
+    /// The `Rule` trait impl reports the same name/opcodes as the inner struct
+    /// (condexe.cc:631-635), and constructs via `new()`.
+    #[test]
+    fn test_rule_or_predicate_trait_name_and_opcodes() {
+        let rule: &dyn Rule = &RuleOrPredicate::new();
+        assert_eq!(rule.get_name(), "or_predicate");
+        let ops = rule.get_opcodes();
+        assert_eq!(ops.len(), 2);
+        assert!(ops.contains(&OpCode::CPUI_INT_OR));
+        assert!(ops.contains(&OpCode::CPUI_INT_XOR));
+    }
+
+    /// The `Rule` trait `apply_op` wrapper delegates to the inner `apply_op`:
+    /// an INT_OR whose inputs are not the (cond ? v : 0) MULTIEQUAL form returns
+    /// NO_CHANGE (0). This exercises the `&Arc<RwLock<PcodeOp>>` -> `&PcodeOpRef`
+    /// adaptation (condexe.cc:654-656).
+    #[test]
+    fn test_rule_or_predicate_trait_apply_no_form() {
+        use crate::address::{Address, SeqNum};
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // Two plain register inputs — neither is a MULTIEQUAL(cond,v,0).
+        let in0 = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let in1 = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let op = PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_OR);
+        let op_arc = Arc::new(RwLock::new(op));
+        {
+            let mut o = op_arc.write().unwrap();
+            o.inrefs = vec![in0, in1];
+            o.output = Some(out);
+        }
+        let rule = RuleOrPredicate::new();
+        // Call the `Rule` trait method explicitly (the struct also has an
+        // inherent apply_op with a different signature — PcodeOpRef vs Arc).
+        let res = <RuleOrPredicate as Rule>::apply_op(&rule, &op_arc, &mut fd).unwrap();
+        // discoverZeroSlot fails on plain (non-written) inputs -> no form -> 0.
+        assert_eq!(res, 0);
     }
 }
