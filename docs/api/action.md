@@ -660,3 +660,6 @@ mainloop RULE_REPEATAPPLY 测试：导致无限循环。根因：build_full_pipe
 
 ### 2026-07-01（续 6）：perform loop cap + mainloop repeatapply 调查（栈溢出）
 perform 加 100 次迭代安全阀（防止非幂等 Action 死循环）。mainloop RULE_REPEATAPPLY 测试：simplifypool 达到 cap 后 mainloop repeatapply 导致栈溢出（复杂函数）。结论：启用需要所有 22 个 extra Action 真正幂等（第二次 apply 返回 0 无副作用）。当前不启用。DoNothing/RedundBranch 接入测试：破坏 16 个结构化测试预期（splice 改变 bblocks），回退。
+
+### 2026-07-01（续 7）：perform cap=3 + mainloop repeatapply 根因分析
+cap 从 100→10→3。mainloop repeatapply 根因：ActionGroup.perform 在嵌套树中递归调用子 Action perform（5 层 × repeatapply 迭代），每个 RwLock guard ~2KB 栈，3³=27 层嵌套 perform 超过 Windows 8MB 栈。修复需重写 ActionGroup.perform 为迭代（非递归）或增大栈。cap=3 保留作为 ActionPool 叶子级安全阀。

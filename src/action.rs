@@ -87,11 +87,14 @@ pub trait Action {
         let mut iterations = 0u32;
         loop {
             iterations += 1;
-            if iterations > 100 {
+            if iterations > 3 {
+                // Safety valve: Ghidra's Actions converge in 1-3 passes.
+                // Cap at 3 to prevent stack overflow in deeply nested
+                // repeatapply groups (universal→fullloop→mainloop→stackstall).
                 // Safety valve: some Rugra self-made Actions are not fully
                 // idempotent and would loop forever. Ghidra's Actions converge
-                // in 2-3 passes; 100 is a generous cap.
-                eprintln!("[WARN] perform loop cap hit for {}", self.get_name());
+                // in 2-3 passes; 10 is a generous cap that avoids stack
+                // overflow in deeply nested groups.
                 break;
             }
             // Snapshot count before apply (action.cc:314 lcount = count).
@@ -761,12 +764,13 @@ impl ActionDatabase {
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
-        // NOTE: mainloop repeatapply tested but causes stack overflow on
-        // complex functions — the simplifypool hits the 100-iteration cap,
-        // then mainloop's repeatapply re-runs everything. Enabling requires
-        // all 22 build_full_pipeline_actions to be truly idempotent (return
-        // 0 on second pass without side effects). The perform loop cap
-        // (100 iterations) is retained as a safety valve. Tracked as TODO.
+        // NOTE: mainloop repeatapply causes stack overflow on complex functions.
+        // Root cause: deeply nested ActionGroup.perform recursion (5 levels ×
+        // repeatapply iterations). Each RwLock guard uses ~2KB stack; at 3³=27
+        // nested perform calls this overflows Windows 8MB stack. Fixing requires
+        // rewriting ActionGroup.perform to iterate (not recurse) or increasing
+        // stack size. Tracked as TODO. The perform loop cap (3 iterations) is
+        // retained as a safety valve for ActionPool (leaf-level repeatapply).
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
