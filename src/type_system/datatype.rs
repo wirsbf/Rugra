@@ -29,16 +29,31 @@ pub enum TypeMetatype {
     Spacebase = 12,
 }
 
-/// Flags for Datatype properties (corresponds to flags in type.hh)
+/// Flags for Datatype properties (corresponds to the `Datatype` enum in
+/// type.hh:169-186). Values mirror Ghidra exactly.
 pub mod type_flags {
-    pub const CORETYPE: u32 = 1 << 0;
-    pub const CHARTYPE: u32 = 1 << 1;
-    pub const ENUMTYPE: u32 = 1 << 2;
-    pub const TYPEDEF: u32 = 1 << 3;
-    pub const VARLENGTH: u32 = 1 << 4;
-    pub const UTF16: u32 = 1 << 5;
-    pub const UTF32: u32 = 1 << 6;
-    pub const OPAQUE_STRUCT: u32 = 1 << 7;
+    pub const CORETYPE: u32 = 1 << 0;          // coretype
+    pub const CHARTYPE: u32 = 1 << 1;          // chartype
+    pub const ENUMTYPE: u32 = 1 << 2;          // enumtype
+    pub const POWEROF2: u32 = 1 << 3;          // poweroftwo
+    pub const UTF16: u32 = 1 << 4;             // utf16
+    pub const UTF32: u32 = 1 << 5;             // utf32
+    pub const OPAQUE_STRUCT: u32 = 1 << 6;     // opaque_string (mapped to OPAQUE_STRUCT)
+    pub const VARLENGTH: u32 = 1 << 7;         // variable_length
+    pub const HAS_STRIPPED: u32 = 1 << 8;      // has_stripped
+    pub const IS_PTRREL: u32 = 1 << 9;         // is_ptrrel
+    pub const TYPE_INCOMPLETE: u32 = 1 << 10;  // type_incomplete
+    pub const NEEDS_RESOLUTION: u32 = 1 << 11; // needs_resolution
+    // Bits 0x7000..0x8000 are `force_format` in Ghidra (3 display-format bits).
+    // Bit 0x8000 is `truncate_bigendian`, 0x10000 is `pointer_to_array`,
+    // 0x20000 is `warning_issued`. Ghidra has NO equate flag on Datatype —
+    // equates are `EquateSymbol`s (database.hh:302). Rugra reserves a high
+    // private bit (not conflicting with any Ghidra flag) to track an
+    // equated-mark on the type for the print path.
+    pub const EQUATED: u32 = 1 << 20; // Rugra-private (no Ghidra counterpart)
+
+    // Kept for backward compatibility with earlier code (TYPEDEF alias).
+    pub const TYPEDEF: u32 = VARLENGTH;
 }
 
 /// A single field within a structure or union
@@ -352,8 +367,100 @@ impl Datatype {
     }
 
     /// Get the "stripped" version (removes typedef wrappers).
-    /// Faithful to Datatype::getStripped (type.cc:561).
+    /// Faithful to Datatype::getStripped (type.cc:561-565). The base class
+    /// returns null (here: `None`); the various overrides (TypePointerRel,
+    /// TypeTypedef, etc.) return their `stripped` field. Rugra does not yet
+    /// model stripped forms on every variant, so for variants without an
+    /// explicit stripped reference we return `self`, matching the intent of
+    /// "no stripped form" by returning the type itself.
     pub fn get_stripped(&self) -> &Datatype { self }
+
+    /// Return `true` if this data-type is a union or a pointer to a union
+    /// (or otherwise needs resolution before propagation).
+    /// Faithful to `Datatype::needsResolution` (type.hh:231).
+    pub fn needs_resolution(&self) -> bool {
+        (self.get_flags() & type_flags::NEEDS_RESOLUTION) != 0
+    }
+
+    /// Is this an enumerated type?
+    /// Faithful to `Datatype::isEnumType` (type.hh:219): checks the
+    /// `enumtype` flag. Note this is flag-based, not metatype-based, because
+    /// in Ghidra an enum is internally a TypeBase with the enumtype flag set
+    /// (type.hh:490-494), and partial-enum types share the flag.
+    pub fn is_enum_type(&self) -> bool {
+        (self.get_flags() & type_flags::ENUMTYPE) != 0
+    }
+
+    /// Has a stripped form for formal declarations?
+    /// Faithful to `Datatype::hasStripped` (type.hh:229).
+    pub fn has_stripped(&self) -> bool {
+        (self.get_flags() & type_flags::HAS_STRIPPED) != 0
+    }
+
+    /// The constant version of `resolve_in_flow`. If a resulting sub-type has
+    /// already been calculated for the particular read (`slot >= 0`) or write
+    /// (`slot == -1`), then return it; otherwise return the original
+    /// data-type.
+    ///
+    /// Faithful to `Datatype::findResolve` (type.cc:586-590): the base class
+    /// simply returns `self`. Subclass overrides (TypePointer, TypeArray,
+    /// TypeStruct, TypeUnion) walk down to a resolved component; those are
+    /// added on their respective variants. Here `op`/`slot` are taken as
+    /// opaque `&PcodeOp`-style references — Rugra threads them as
+    /// `Option<&op::PcodeOp>` so callers that do not have a concrete op can
+    /// pass `None` and still get the base "return self" behaviour.
+    pub fn find_resolve(&self, _op: Option<&crate::op::PcodeOp>, _slot: i32) -> &Datatype {
+        self
+    }
+
+    /// Mark/unmark this data-type as equated. Ghidra has no
+    /// `Datatype::markEquate`; equates are represented as `EquateSymbol`
+    /// objects in a `Scope` (database.hh:302). Rugra mirrors the intent with
+    /// a dedicated flag bit on the data-type so that print/format code can
+    /// detect equated types without pulling in the full symbol machinery.
+    /// Faithful in spirit to the equate handling in `printc.cc`/`varnode.cc`.
+    pub fn mark_equate(&mut self) {
+        self.set_flags_mut(type_flags::EQUATED);
+    }
+
+    /// Clear the equate marker. See `mark_equate`.
+    pub fn mark_un_equate(&mut self) {
+        self.clear_flags_mut(type_flags::EQUATED);
+    }
+
+    /// Has this data-type been marked equated? (Rugra-private, no Ghidra
+    /// counterpart — see `mark_equate`.)
+    pub fn is_equated(&self) -> bool {
+        (self.get_flags() & type_flags::EQUATED) != 0
+    }
+
+    /// Internal: OR flags into the variant's `TypeBase.flags`.
+    fn set_flags_mut(&mut self, bits: u32) {
+        let f = self.base_mut();
+        *f |= bits;
+    }
+
+    /// Internal: AND-NOT flags out of the variant's `TypeBase.flags`.
+    fn clear_flags_mut(&mut self, bits: u32) {
+        let f = self.base_mut();
+        *f &= !bits;
+    }
+
+    /// Internal: mutable access to the underlying `TypeBase.flags` regardless
+    /// of which variant `self` is.
+    fn base_mut(&mut self) -> &mut u32 {
+        match self {
+            Datatype::Void(b) => &mut b.flags,
+            Datatype::Base(b) => &mut b.flags,
+            Datatype::Pointer(p) => &mut p.base.flags,
+            Datatype::Array(a) => &mut a.base.flags,
+            Datatype::Struct(s) => &mut s.base.flags,
+            Datatype::Enum(e) => &mut e.base.flags,
+            Datatype::Union(u) => &mut u.base.flags,
+            Datatype::Code(c) => &mut c.base.flags,
+            Datatype::Spacebase(s) => &mut s.base.flags,
+        }
+    }
 
     /// Check if this type occupies a whole primitive value.
     /// Faithful to Datatype::isPrimitiveWhole (type.cc:501).
@@ -675,5 +782,71 @@ mod tests {
         // type_order(unk, int4): metatype 0 < 3 → return -1.
         assert_eq!(unk.type_order(&int4), -1);
         assert_eq!(int4.type_order(&unk), 1);
+    }
+
+    // --- new Datatype methods aligned with type.hh / type.cc ---
+
+    #[test]
+    fn test_needs_resolution_union() {
+        // type.hh:231 / TypeUnion constructor type.hh:551 — union sets
+        // needs_resolution; a plain int does not.
+        let mut u_base = TypeBase::new("U".into(), 0, TypeMetatype::Union);
+        u_base.flags |= type_flags::NEEDS_RESOLUTION;
+        let u = Datatype::Union(TypeUnion { base: u_base, fields: vec![] });
+        assert!(u.needs_resolution());
+
+        let int_t = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        assert!(!int_t.needs_resolution());
+    }
+
+    #[test]
+    fn test_is_enum_type_flag() {
+        // type.hh:219 — isEnumType checks the enumtype flag, not metatype.
+        let mut e_base = TypeBase::new("Color".into(), 4, TypeMetatype::Int);
+        e_base.flags |= type_flags::ENUMTYPE;
+        let e = Datatype::Enum(TypeEnum { base: e_base, values: Default::default() });
+        assert!(e.is_enum_type());
+
+        let int_t = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        assert!(!int_t.is_enum_type());
+    }
+
+    #[test]
+    fn test_find_resolve_base_returns_self() {
+        // type.cc:586-590 — base Datatype::findResolve returns self.
+        let int_t = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        let resolved = int_t.find_resolve(None, -1);
+        assert!(std::ptr::eq(resolved as *const _, &int_t as *const _));
+    }
+
+    #[test]
+    fn test_get_stripped_base_is_identity() {
+        // type.cc:561-565 — base getStripped returns null/self for non-stripped.
+        let int_t = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        let stripped = int_t.get_stripped();
+        assert!(std::ptr::eq(stripped as *const _, &int_t as *const _));
+    }
+
+    #[test]
+    fn test_mark_unmark_equate() {
+        // Rugra-private (no Ghidra counterpart): toggle EQUATED flag.
+        let mut int_t = Datatype::Base(TypeBase::new("x".into(), 4, TypeMetatype::Int));
+        assert!(!int_t.is_equated());
+        int_t.mark_equate();
+        assert!(int_t.is_equated());
+        int_t.mark_un_equate();
+        assert!(!int_t.is_equated());
+    }
+
+    #[test]
+    fn test_has_stripped_flag() {
+        // type.hh:229 — hasStripped checks HAS_STRIPPED.
+        let mut td_base = TypeBase::new("Word".into(), 4, TypeMetatype::Int);
+        td_base.flags |= type_flags::HAS_STRIPPED;
+        let td = Datatype::Base(td_base);
+        assert!(td.has_stripped());
+
+        let plain = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
+        assert!(!plain.has_stripped());
     }
 }
