@@ -702,3 +702,12 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 
 ### 2026-07-01（管线改造）：Action trait apply &self→&mut self + ActionDeadCode local mut
 管线架构改造的连锁签名修改：所有 Action 的 apply 签名从 &self 改为 &mut self（支持 perform 状态机）。
+
+### 2026-07-01（续 2）：ActionInferTypes 完整移植 + build_full_pipeline_actions
+ActionInferTypes::apply 移植 coreaction.cc:5374-5416：
+- build_local_types（coreaction.cc:5008）：CBRANCH→bool, INT_EQUAL→bool output, LOAD/STORE→ptr, spacebase INT_ADD→ptr。
+- propagate_type_edge（coreaction.cc:5074）：typelock+nzm guard + typeOrder。
+- propagate_one_type（coreaction.cc:5172）：DFS 后代+定义边传播。
+- propagate_across_returns（coreaction.cc:5342）。
+- write_back（coreaction.cc:5043）：update_type 回写。
+build_full_pipeline_actions()：返回 26 个已实现非 stub Action，按 Ghidra 顺序排列（含 ActionSetCasts，现可用）。

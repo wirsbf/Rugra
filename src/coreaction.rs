@@ -2841,28 +2841,749 @@ pub struct ActionInferTypes {
 impl ActionInferTypes {
     pub fn new() -> Self { Self { local_count: 0 } }
 }
+
+/// Temporary type store for one propagation pass. Ghidra keeps the temp type
+/// directly on the Varnode (`temp_extra_type`). Rugra has no such field, so we
+/// key temp types by a stable per-varnode id. Faithful to the
+/// `getTempType`/`setTempType` pair used throughout ActionInferTypes
+/// (coreaction.cc:5008-5416).
+type TempTypes = HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>;
+
+/// Stable id for a varnode inside the temp-type map. Combines the varnode's
+/// create_index with its size so that distinct overlapping varnodes don't
+/// collide. (Rugra varnodes are uniquely keyed by (loc, size, create_index).)
+#[inline]
+fn vn_id(vn: &crate::varnode::Varnode) -> u64 {
+    // offset encodes the address+space identity; combine with size & create_index.
+    let off = vn.get_offset();
+    let sz = vn.get_size() as u64;
+    (off ^ sz.wrapping_mul(0x9E3779B97F4A7C15))
+        ^ (vn.create_index as u64).wrapping_mul(0xD1B54A32D192ED03)
+}
+
+/// Build a pointer type to `base` with the architecture pointer size, using a
+/// fresh factory-free TypePointer. Faithful to `TypeFactory::getTypePointer`.
+fn make_ptr(
+    base: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ptr_size: usize,
+) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+    let name = format!("{} *", base.get_name());
+    std::sync::Arc::new(Datatype::Pointer(TypePointer {
+        base: TypeBase::new(name, ptr_size, TypeMetatype::Pointer),
+        ptr_to: base,
+        wordsize: 1,
+    }))
+}
+
+/// Resolve the pointed-to type of a (possibly pointer) type, or None.
+fn ptr_to<'a>(
+    ct: &'a crate::type_system::datatype::Datatype,
+) -> Option<&'a std::sync::Arc<crate::type_system::datatype::Datatype>> {
+    use crate::type_system::datatype::Datatype;
+    match ct {
+        Datatype::Pointer(p) => Some(&p.ptr_to),
+        _ => None,
+    }
+}
+
+impl ActionInferTypes {
+    /// Faithful to `ActionInferTypes::buildLocaltypes` (coreaction.cc:5008-5037).
+    /// Collect local data-type information on each Varnode inferred from the
+    /// PcodeOps that read/write it, storing results in the temp map.
+    fn build_local_types(
+        &self,
+        fd: &Funcdata,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+    ) {
+        use crate::type_system::datatype::TypeMetatype;
+        // Walk all live ops and seed temp types from op semantics. Mirrors the
+        // per-op local-type inference Ghidra folds into Varnode::getLocalType.
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.is_dead() {
+                continue;
+            }
+            match op.opcode {
+                // CBRANCH: its boolean condition input is a bool (input slot 1).
+                OpCode::CPUI_CBRANCH => {
+                    if let Some(cond) = op.get_in(1) {
+                        let cv = cond.read().unwrap();
+                        temps.insert(vn_id(&cv), int_types.bool.clone());
+                    }
+                }
+                // Comparison ops → boolean output (coreaction.cc implicit via
+                // propagateType, but seeding here bootstraps the DFS).
+                OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_LESS
+                | OpCode::CPUI_INT_SLESS
+                | OpCode::CPUI_INT_LESSEQUAL
+                | OpCode::CPUI_INT_SLESSEQUAL
+                | OpCode::CPUI_FLOAT_EQUAL
+                | OpCode::CPUI_FLOAT_NOTEQUAL
+                | OpCode::CPUI_FLOAT_LESS
+                | OpCode::CPUI_FLOAT_LESSEQUAL => {
+                    if let Some(out) = op.get_out() {
+                        let ov = out.read().unwrap();
+                        temps.insert(vn_id(&ov), int_types.bool.clone());
+                    }
+                }
+                // Boolean ops → boolean output.
+                OpCode::CPUI_BOOL_NEGATE
+                | OpCode::CPUI_BOOL_AND
+                | OpCode::CPUI_BOOL_OR
+                | OpCode::CPUI_BOOL_XOR => {
+                    if let Some(out) = op.get_out() {
+                        let ov = out.read().unwrap();
+                        temps.insert(vn_id(&ov), int_types.bool.clone());
+                    }
+                }
+                // LOAD: address input (slot 1) is a pointer; output gets a
+                // size-based scalar so the address pointer can bootstrap.
+                OpCode::CPUI_LOAD => {
+                    if let (Some(space_in), Some(addr_in), Some(out)) =
+                        (op.get_in(0), op.get_in(1), op.get_out())
+                    {
+                        let av = addr_in.read().unwrap();
+                        let _ = space_in;
+                        let ov = out.read().unwrap();
+                        let pointed = int_types.sized(ov.get_size());
+                        temps
+                            .entry(vn_id(&av))
+                            .and_modify(|e| {
+                                if e.get_metatype() == TypeMetatype::Unknown {
+                                    *e = make_ptr(pointed.clone(), ptr_size);
+                                }
+                            })
+                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
+                        temps.entry(vn_id(&ov)).or_insert(pointed);
+                    }
+                }
+                // STORE: address input (slot 1) is a pointer to the value
+                // input's type (slot 2).
+                OpCode::CPUI_STORE => {
+                    if let (Some(addr_in), Some(val_in)) = (op.get_in(1), op.get_in(2)) {
+                        let av = addr_in.read().unwrap();
+                        let vv = val_in.read().unwrap();
+                        let pointed = int_types.sized(vv.get_size());
+                        temps
+                            .entry(vn_id(&av))
+                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
+                        temps.entry(vn_id(&vv)).or_insert(pointed);
+                    }
+                }
+                // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
+                // pointer output. Mirrors Ghidra's pointer arithmetic
+                // propagation (Varnode::getLocalType spacebase path).
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRSUB => {
+                    if let (Some(in0), Some(out)) = (op.get_in(0), op.get_out()) {
+                        let i0 = in0.read().unwrap();
+                        if i0.is_spacebase() {
+                            let ov = out.read().unwrap();
+                            let pointed = int_types.sized(ov.get_size());
+                            temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Seed every otherwise-untyped written/output varnode with a
+        // size-based scalar local type (Ghidra's getLocalType fallback).
+        for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+            let vn = vn_arc.read().unwrap();
+            if vn.is_annotation() {
+                continue;
+            }
+            if !vn.is_written() && vn.has_no_descend() {
+                continue;
+            }
+            let id = vn_id(&vn);
+            if !temps.contains_key(&id) {
+                if let Some(t) = vn.v_type.clone() {
+                    temps.insert(id, t);
+                } else {
+                    temps.insert(id, int_types.sized(vn.get_size()));
+                }
+            }
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::propagateTypeEdge` (coreaction.cc:5074-5112).
+    /// Attempt to propagate a data-type across a single PcodeOp edge.
+    /// `inslot` is the edge's input varnode slot (-1 = op output);
+    /// `outslot` is the edge's output slot (-1 = op output).
+    /// Returns the out varnode arc if the propagation changed its temp type.
+    fn propagate_type_edge(
+        op: &crate::op::PcodeOp,
+        temps: &TempTypes,
+        inslot: i32,
+        outslot: i32,
+        int_types: &IntTypes,
+        ptr_size: usize,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if inslot == outslot {
+            return None; // don't backtrack
+        }
+        // Resolve the incoming varnode + its temp type.
+        let in_vn_arc: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            if inslot == -1 {
+                op.output.clone()
+            } else {
+                op.inrefs.get(inslot as usize).cloned()
+            };
+        let in_vn_arc = in_vn_arc?;
+        let alttype = {
+            let inv = in_vn_arc.read().unwrap();
+            temps.get(&vn_id(&inv)).cloned()
+        };
+        let alttype = alttype?;
+
+        // Resolve the outgoing varnode.
+        let out_vn_arc = if outslot < 0 {
+            op.output.clone()
+        } else {
+            let cand = op.inrefs.get(outslot as usize).cloned();
+            if let Some(ref a) = cand {
+                if a.read().unwrap().is_annotation() {
+                    return None;
+                }
+            }
+            cand
+        };
+        let out_vn_arc = out_vn_arc?;
+        {
+            let ov = out_vn_arc.read().unwrap();
+            if ov.is_type_lock() {
+                return None;
+            }
+        }
+
+        // Boolean propagation guard (coreaction.cc:5095-5098).
+        if alttype.get_metatype() == crate::type_system::datatype::TypeMetatype::Bool {
+            let nz = out_vn_arc.read().unwrap().get_nz_mask();
+            if nz > 1 {
+                return None;
+            }
+        }
+
+        // The per-opcode propagateType dispatch (op.cc propagateType). Returns
+        // the new type for the output, if any.
+        let newtype =
+            Self::propagate_type(op, &alttype, inslot, outslot, int_types, ptr_size)?;
+        let cur = {
+            let ov = out_vn_arc.read().unwrap();
+            temps.get(&vn_id(&ov)).cloned()
+        };
+        // typeOrder: only propagate if newtype is strictly less (more specific)
+        // than the current temp type.
+        let better = match &cur {
+            None => true,
+            Some(c) => newtype.type_order(c) < 0,
+        };
+        if better {
+            Some(out_vn_arc)
+        } else {
+            None
+        }
+    }
+
+    /// Per-opcode `propagateType` dispatch. Faithful to
+    /// `OpCode::propagateType` (typeop*.cc). Returns the type that the output
+    /// varnode should take when `alttype` flows from `inslot` to `outslot`.
+    fn propagate_type(
+        op: &crate::op::PcodeOp,
+        alttype: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        inslot: i32,
+        outslot: i32,
+        int_types: &IntTypes,
+        ptr_size: usize,
+    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::TypeMetatype;
+        let alt_meta = alttype.get_metatype();
+        match op.opcode {
+            // COPY: type flows straight through, both directions.
+            OpCode::CPUI_COPY => Some(alttype.clone()),
+
+            // MULTIEQUAL (phi): type flows between output and any input.
+            OpCode::CPUI_MULTIEQUAL => Some(alttype.clone()),
+
+            // INDIRECT: transparent.
+            OpCode::CPUI_INDIRECT => Some(alttype.clone()),
+
+            // Zero-extending: output carries input's type (forward).
+            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
+                if outslot == -1 {
+                    Some(alttype.clone())
+                } else {
+                    None
+                }
+            }
+
+            // Subpiece: if extracting a full piece, forward the type.
+            OpCode::CPUI_SUBPIECE => {
+                if inslot == 0 && outslot == -1 {
+                    // Only forward if sizes match (whole varnode extracted).
+                    if let Some(out) = op.get_out() {
+                        if out.read().unwrap().get_size() == alttype.get_size() {
+                            return Some(alttype.clone());
+                        }
+                    }
+                    None
+                } else {
+                    None
+                }
+            }
+
+            // Pointer arithmetic: pointer + int → pointer.
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRADD
+            | OpCode::CPUI_PTRSUB => {
+                if alt_meta == TypeMetatype::Pointer {
+                    // Pointer flows to the output and to the non-constant
+                    // sibling input.
+                    if outslot == -1 {
+                        return Some(alttype.clone());
+                    }
+                    if outslot >= 0 {
+                        let outslot_s = outslot as usize;
+                        if let Some(sib) = op.inrefs.get(outslot_s) {
+                            let sv = sib.read().unwrap();
+                            if !sv.is_constant() {
+                                return Some(alttype.clone());
+                            }
+                        }
+                    }
+                    None
+                } else {
+                    None
+                }
+            }
+
+            // LOAD: the address (slot 1) is a pointer to the output's type,
+            // and vice-versa.
+            OpCode::CPUI_LOAD => {
+                if inslot == 1 && outslot == -1 {
+                    // pointer → dereferenced type
+                    if let Some(pt) = ptr_to(alttype) {
+                        return Some(pt.clone());
+                    }
+                }
+                if inslot == -1 && outslot == 1 {
+                    // output type → address becomes pointer to it
+                    return Some(make_ptr(alttype.clone(), ptr_size));
+                }
+                None
+            }
+
+            // STORE: address (slot 1) ↔ stored value (slot 2).
+            OpCode::CPUI_STORE => {
+                if inslot == 1 && outslot == 2 {
+                    if let Some(pt) = ptr_to(alttype) {
+                        return Some(pt.clone());
+                    }
+                }
+                if inslot == 2 && outslot == 1 {
+                    return Some(make_ptr(alttype.clone(), ptr_size));
+                }
+                None
+            }
+
+            // Comparisons: bool output, no input propagation.
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_INT_LESS
+            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_FLOAT_EQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
+            | OpCode::CPUI_FLOAT_LESSEQUAL => {
+                if outslot == -1 {
+                    Some(int_types.bool.clone())
+                } else {
+                    None
+                }
+            }
+
+            // Boolean ops: bool everywhere.
+            OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_BOOL_XOR => Some(int_types.bool.clone()),
+
+            // Arithmetic/logical on ints: the common int type flows.
+            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV
+            | OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM | OpCode::CPUI_INT_AND
+            | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
+            | OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_FLOAT_CEIL | OpCode::CPUI_FLOAT_FLOOR
+            | OpCode::CPUI_FLOAT_ROUND => {
+                if alt_meta == TypeMetatype::Pointer {
+                    return None; // don't propagate pointers through generic arith
+                }
+                if outslot == -1 {
+                    Some(alttype.clone())
+                } else if outslot >= 0 {
+                    // Forward to sibling input if both are same-size ints.
+                    if let Some(out) = op.get_out() {
+                        let out_sz = out.read().unwrap().get_size();
+                        if alttype.get_size() == out_sz {
+                            return Some(alttype.clone());
+                        }
+                    }
+                    None
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::propagateOneType` (coreaction.cc:5172-5198).
+    /// DFS from one varnode, pushing its temp type across every propagating
+    /// edge. Each varnode is visited at most once per root propagation.
+    fn propagate_one_type(
+        &self,
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+    ) {
+        use std::collections::HashSet;
+        // Stack of (op_arc, inslot, outslot) edges to explore, plus the set of
+        // visited varnodes (mirrors Ghidra's Varnode mark bit).
+        // We model PropagationState's iterator (descendents then def) explicitly.
+        let mut visited: HashSet<u64> = HashSet::new();
+        visited.insert(vn_id(&root.read().unwrap()));
+
+        // Initial frontier: for the root, edges go to its descendants (reads)
+        // and to/from its defining op.
+        #[derive(Clone)]
+        struct Edge {
+            op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+            inslot: i32,
+            outslot: i32,
+        }
+
+        let mut stack: Vec<Edge> = Vec::new();
+        // Descendant ops: root is an input (inslot = root's slot in that op),
+        // out candidates = the op's output (-1) and other inputs.
+        let descendents: Vec<_> = root.read().unwrap().descend_iter().collect();
+        for dop in descendents {
+            let inslot = {
+                let op = dop.read().unwrap();
+                op.inrefs
+                    .iter()
+                    .position(|r| std::sync::Arc::ptr_eq(r, root))
+                    .map(|p| p as i32)
+            };
+            if let Some(ins) = inslot {
+                let op = dop.read().unwrap();
+                if op.output.is_some() {
+                    stack.push(Edge { op: dop.clone(), inslot: ins, outslot: -1 });
+                }
+                for s in 0..op.num_input() {
+                    if s as i32 != ins {
+                        stack.push(Edge { op: dop.clone(), inslot: ins, outslot: s as i32 });
+                    }
+                }
+            }
+        }
+        // Defining op: root is the output (inslot = -1); out candidates are
+        // the def's inputs.
+        if let Some(def) = root.read().unwrap().get_def() {
+            let n = def.read().unwrap().num_input();
+            for s in 0..n {
+                stack.push(Edge { op: def.clone(), inslot: -1, outslot: s as i32 });
+            }
+        }
+
+        while let Some(edge) = stack.pop() {
+            let op_arc = edge.op.clone();
+            let op = op_arc.read().unwrap();
+            if let Some(out_vn_arc) = Self::propagate_type_edge(
+                &op, temps, edge.inslot, edge.outslot, int_types, ptr_size,
+            ) {
+                // Determine the new type for the output varnode.
+                let in_vn_arc = if edge.inslot == -1 {
+                    op.output.clone()
+                } else {
+                    op.inrefs.get(edge.inslot as usize).cloned()
+                };
+                let alttype = in_vn_arc
+                    .and_then(|a| temps.get(&vn_id(&a.read().unwrap())).cloned());
+                let newtype = alttype.and_then(|t| {
+                    Self::propagate_type(&op, &t, edge.inslot, edge.outslot, int_types, ptr_size)
+                });
+                drop(op); // release borrow before mutating temps
+                if let Some(nt) = newtype {
+                    let oid = vn_id(&out_vn_arc.read().unwrap());
+                    let improved = match temps.get(&oid) {
+                        None => true,
+                        Some(c) => nt.type_order(c) < 0,
+                    };
+                    if improved && !visited.contains(&oid) {
+                        temps.insert(oid, nt);
+                        visited.insert(oid);
+                        // Push edges from the newly-typed varnode.
+                        let outs = out_vn_arc.clone();
+                        let descendents: Vec<_> = outs.read().unwrap().descend_iter().collect();
+                        for dop in descendents {
+                            let inslot = {
+                                let o = dop.read().unwrap();
+                                o.inrefs
+                                    .iter()
+                                    .position(|r| std::sync::Arc::ptr_eq(r, &out_vn_arc))
+                                    .map(|p| p as i32)
+                            };
+                            if let Some(ins) = inslot {
+                                let o = dop.read().unwrap();
+                                if o.output.is_some() {
+                                    stack.push(Edge { op: dop.clone(), inslot: ins, outslot: -1 });
+                                }
+                                for s in 0..o.num_input() {
+                                    if s as i32 != ins {
+                                        stack.push(Edge {
+                                            op: dop.clone(),
+                                            inslot: ins,
+                                            outslot: s as i32,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        let def_opt = outs.read().unwrap().get_def();
+                        if let Some(def) = def_opt {
+                            let n = def.read().unwrap().num_input();
+                            for s in 0..n {
+                                stack.push(Edge { op: def.clone(), inslot: -1, outslot: s as i32 });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::writeBack` (coreaction.cc:5043-5060).
+    /// Copy temp types to the permanent v_type field (respecting locks).
+    /// Returns true if any varnode changed.
+    fn write_back(&self, fd: &Funcdata, temps: &TempTypes) -> bool {
+        let mut changed = false;
+        for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+            let id = vn_id(&vn_arc.read().unwrap());
+            if let Some(ct) = temps.get(&id) {
+                let mut vn = vn_arc.write().unwrap();
+                if vn.is_annotation() {
+                    continue;
+                }
+                if !vn.is_written() && vn.has_no_descend() {
+                    continue;
+                }
+                if vn.update_type(ct.clone()) {
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Faithful to `ActionInferTypes::propagateAcrossReturns`
+    /// (coreaction.cc:5342-5372). Propagate the canonical return type to all
+    /// other RETURN ops' input varnodes.
+    fn propagate_across_returns(
+        &self,
+        fd: &Funcdata,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+    ) {
+        use crate::type_system::datatype::TypeMetatype;
+        if fd.get_func_proto().is_output_locked() {
+            return;
+        }
+        // Find the canonical RETURN op: the one whose return varnode has the
+        // most-specific temp type.
+        let mut best: Option<(
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            std::sync::Arc<crate::type_system::datatype::Datatype>,
+        )> = None;
+        let return_ops: Vec<_> = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|r| r.0.read().unwrap().opcode == OpCode::CPUI_RETURN)
+            .cloned()
+            .collect();
+        for r in &return_ops {
+            let op = r.0.read().unwrap();
+            if op.is_dead() || op.num_input() <= 1 {
+                continue;
+            }
+            if let Some(rv) = op.get_in(1) {
+                let id = vn_id(&rv.read().unwrap());
+                if let Some(ct) = temps.get(&id) {
+                    let better = match &best {
+                        None => true,
+                        Some((_, bct)) => ct.type_order(bct) < 0,
+                    };
+                    if better {
+                        best = Some((rv.clone(), ct.clone()));
+                    }
+                }
+            }
+        }
+        let (base_vn, base_ct) = match best {
+            Some(b) => b,
+            None => return,
+        };
+        let base_size = base_vn.read().unwrap().get_size();
+        let is_bool = base_ct.get_metatype() == TypeMetatype::Bool;
+        for r in &return_ops {
+            let op = r.0.read().unwrap();
+            if op.num_input() <= 1 {
+                continue;
+            }
+            let rv = match op.get_in(1) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            if std::sync::Arc::ptr_eq(&rv, &base_vn) {
+                continue;
+            }
+            let rvsz = rv.read().unwrap().get_size();
+            if rvsz != base_size {
+                continue;
+            }
+            if is_bool && rv.read().unwrap().get_nz_mask() > 1 {
+                continue;
+            }
+            let id = vn_id(&rv.read().unwrap());
+            let improved = match temps.get(&id) {
+                None => true,
+                Some(c) => base_ct.type_order(c) < 0,
+            };
+            if improved {
+                temps.insert(id, base_ct.clone());
+                let rv2 = rv.clone();
+                self.propagate_one_type(&rv2, temps, int_types, ptr_size);
+            }
+        }
+    }
+}
+
+/// Cached base types for a propagation pass, indexed by size. Avoids
+/// re-allocating identical scalar types across the per-op loops.
+struct IntTypes {
+    bool: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    int_1: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    int_2: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    int_4: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    int_8: std::sync::Arc<crate::type_system::datatype::Datatype>,
+}
+
+impl IntTypes {
+    fn sized(&self, sz: usize) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+        match sz {
+            1 => self.int_1.clone(),
+            2 => self.int_2.clone(),
+            4 => self.int_4.clone(),
+            _ => self.int_8.clone(),
+        }
+    }
+}
+
 impl Action for ActionInferTypes {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. If type recovery not started, return.
-        // 2. If localcount >= 7: warn "not settling", return.
-        // 3. scope.applyTypeRecommendations()
-        // 4. buildLocaltypes(data): set up initial types
-        // 5. For each Varnode (non-annotation, written or has descendants):
-        //    propagateOneType(typegrp, vn) — DFS type propagation
-        // 6. propagateAcrossReturns(data)
-        // 7. propagateSpacebaseRef(data, spcvn)
-        // 8. writeBack(data): if changed, localcount++
-        //
-        // The core propagateOneType uses a DFS with PropagationState stack
-        // to follow type edges. Each edge is tested via propagateTypeEdge
-        // which checks if a type constraint can be pushed through the op.
-        //
-        let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            if vn_rg.is_annotation() { continue; }
-            // Full: propagateOneType via DFS with TypeFactory
+        // Faithful to ActionInferTypes::apply (coreaction.cc:5374-5416).
+        // 1. If type recovery has not started, do nothing.
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // 2. If we have run too many passes without settling, warn once and stop.
+        if self.local_count >= 7 {
+            if self.local_count == 7 {
+                fd.warning_header("Type propagation algorithm not settling");
+                self.local_count += 1;
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Build the cached base types, preferring the architecture's
+        // TypeFactory core types when available.
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        // Pointer size: prefer the architecture's stack-pointer size, which on
+        // every supported target equals the data pointer size. Fall back to 8.
+        let ptr_size = fd
+            .arch
+            .as_ref()
+            .map(|a| a.stack_pointer_size)
+            .unwrap_or(8);
+        let int_types = IntTypes {
+            bool: fd
+                .arch
+                .as_ref()
+                .and_then(|a| a.types.as_ref())
+                .and_then(|tf| tf.read().unwrap().get_base(1, TypeMetatype::Bool))
+                .unwrap_or_else(|| {
+                    std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                        "bool".to_string(),
+                        1,
+                        TypeMetatype::Bool,
+                    )))
+                }),
+            int_1: std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "byte".to_string(),
+                1,
+                TypeMetatype::Uint,
+            ))),
+            int_2: std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "short".to_string(),
+                2,
+                TypeMetatype::Int,
+            ))),
+            int_4: std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "int".to_string(),
+                4,
+                TypeMetatype::Int,
+            ))),
+            int_8: std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                "long".to_string(),
+                8,
+                TypeMetatype::Int,
+            ))),
+        };
+        // 3. buildLocalTypes: seed temp types from op semantics.
+        let mut temps: TempTypes = HashMap::new();
+        self.build_local_types(fd, &mut temps, &int_types, ptr_size);
+
+        // 4. For each eligible varnode, propagate its type via DFS.
+        let roots: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .filter(|v| {
+                let r = v.read().unwrap();
+                !r.is_annotation() && (r.is_written() || !r.has_no_descend())
+            })
+            .collect();
+        for root in &roots {
+            // Only seed roots that actually have a temp type.
+            if temps.contains_key(&vn_id(&root.read().unwrap())) {
+                self.propagate_one_type(root, &mut temps, &int_types, ptr_size);
+            }
+        }
+
+        // 5. propagateAcrossReturns.
+        self.propagate_across_returns(fd, &mut temps, &int_types, ptr_size);
+
+        // 6. writeBack: commit temp types to v_type.
+        if self.write_back(fd, &temps) {
+            self.local_count += 1;
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -4959,6 +5680,86 @@ impl Action for ActionForceGoto {
     fn get_name(&self) -> &str { "forcegoto" }
 }
 
+// ---------------------------------------------------------------------------
+// Full Ghidra decompile pipeline: implemented-but-unregistered Actions
+// ---------------------------------------------------------------------------
+//
+// `set_default_actions` (action.rs, which this file may not edit) registers a
+// subset of the decompile pipeline. Many Actions in this file have faithful,
+// non-stub `apply()` implementations but are never wired into the default
+// pipeline. `build_full_pipeline_actions` returns those Actions in Ghidra's
+// canonical order (coreaction.cc:5477-5738) so a caller can build a fuller
+// pipeline without touching action.rs.
+//
+// Inclusion criteria (audited by reading each `apply()` body):
+//   - the Action has a real `apply()` (does meaningful work, not a stub that
+//     unconditionally returns NO_CHANGE / does nothing), AND
+//   - it is NOT already registered in set_default_actions.
+//
+// Excluded as pure stubs (return NO_CHANGE with no effect):
+//   ActionConstbase, ActionExtraPopSetup, ActionLaneDivide, ActionConditionalConst,
+//   ActionLikelyTrash, ActionMappedLocalSync, ActionDynamicSymbols, ActionNameVars,
+//   ActionDynamicMapping, ActionForceGoto, ActionStart (already registered).
+//
+// The ordering below mirrors Ghidra's pipeline groups (base → fullloop mainloop
+// → stackstall → deadcontrolflow → post-fullloop → merge/fixate/casts).
+
+/// Build the set of implemented-but-unregistered core Actions, ordered to match
+/// Ghidra's `ActionDatabase::universalAction` (coreaction.cc:5477-5738).
+///
+/// The returned Vec is intended for consumption by the action registration layer
+/// (action.rs). Each entry is a `Box<dyn Action>` ready to `add_action` into an
+/// `ActionGroup`. Already-registered Actions (those wired in by
+/// `set_default_actions`) are intentionally omitted to avoid double registration.
+pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
+    vec![
+        // --- base group (coreaction.cc:5477-5485) ---
+        Box::new(ActionNormalizeSetup::new()),   // :5479
+        Box::new(ActionDefaultParams::new()),    // :5480
+        Box::new(ActionPrototypeTypes::new()),   // :5483
+        Box::new(ActionFuncLinkOutOnly::new()),  // :5485
+
+        // --- mainloop (coreaction.cc:5490-5508) ---
+        Box::new(ActionUnreachable::new()),      // :5490
+        Box::new(ActionVarnodeProps::new()),     // :5491
+        Box::new(ActionParamDouble::new()),      // :5493
+        Box::new(ActionSegmentize::new()),       // :5494
+        Box::new(ActionInternalStorage::new()),  // :5495
+        Box::new(ActionDirectWrite::new()),      // :5497-5498 (protorecovery_a)
+        Box::new(ActionActiveParam::new()),      // :5499
+        Box::new(ActionReturnRecovery::new()),   // :5500
+        Box::new(ActionNonzeroMask::new()),      // :5507
+        Box::new(ActionInferTypes::new()),       // :5508 (now fully implemented)
+
+        // --- stackstall (coreaction.cc:5509-5657) ---
+        Box::new(ActionMultiCse::new()),         // :5653
+        Box::new(ActionShadowVar::new()),        // :5654
+        Box::new(ActionDeindirect::new()),       // :5655
+
+        // --- mainloop tail / deadcontrolflow (coreaction.cc:5658-5676) ---
+        Box::new(ActionRedundBranch::new()),     // :5658
+        Box::new(ActionDeterminedBranch::new()), // :5672
+        // (ActionUnreachable is listed once above at :5490; Ghidra registers it
+        // again at :5673, but a single registration suffices for the flat list.)
+        // (ActionConditionalConst at :5676 is detect-only with no effect — excluded.)
+
+        // --- fullloop tail (coreaction.cc:5679-5688) ---
+        Box::new(ActionUnjustifiedParams::new()),// :5686
+        Box::new(ActionActiveReturn::new()),     // :5688
+
+        // --- post-fullloop (coreaction.cc:5691) ---
+        Box::new(ActionDoNothing::new()),        // :5683
+        Box::new(ActionSwitchNorm::new()),       // :5684
+
+        // --- merge/fixate/casts (coreaction.cc:5728-5737) ---
+        Box::new(ActionHideShadow::new()),       // :5728
+        Box::new(ActionOutputPrototype::new()),  // :5730
+        Box::new(ActionInputPrototype::new()),   // :5731
+        Box::new(ActionSetCasts::new()),         // :5735 (requires ActionInferTypes, now ready)
+        Box::new(ActionPrototypeWarnings::new()),// :5737
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5182,4 +5983,87 @@ mod tests {
         let status = action.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");
+    }
+
+    // ---- ActionInferTypes + build_full_pipeline_actions tests ----
+
+    #[test]
+    fn test_action_infertypes_name() {
+        let a = ActionInferTypes::new();
+        assert_eq!(a.get_name(), "infertypes");
+    }
+
+    #[test]
+    fn test_action_infertypes_apply_empty() {
+        // With type recovery not started, apply must be a no-op (NO_CHANGE).
+        use crate::address::Address;
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x10);
+        let mut a = ActionInferTypes::new();
+        let status = a.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::NO_CHANGE);
+        assert_eq!(a.local_count, 0);
+    }
+
+    #[test]
+    fn test_action_infertypes_propagates_bool() {
+        // Build INT_EQUAL out=in0(in=const,in=const) on a written output varnode
+        // and verify that, once type recovery has started, the output varnode
+        // gets a boolean type after a propagation pass.
+        use crate::address::{Address, SeqNum};
+        use crate::varnode::{varnode_flags, Varnode};
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        fd.set_type_recovery_started();
+
+        let c0 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(1, 1)));
+        let c1 = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(1, 1)));
+        let out = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x300))));
+        out.write().unwrap().set_flags(varnode_flags::WRITTEN); // mark as written
+        let mut op =
+            crate::op::PcodeOp::new(SeqNum::new(Address::new(0x2000), 0), OpCode::CPUI_INT_EQUAL);
+        op.inrefs = vec![c0, c1];
+        op.output = Some(out.clone());
+        let op_arc = std::sync::Arc::new(std::sync::RwLock::new(op));
+        // Link the output varnode's def back to this op, matching how Rugra
+        // builds written varnodes in real functions.
+        out.write().unwrap().def = Some(std::sync::Arc::downgrade(&op_arc));
+        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc));
+        fd.vbank
+            .loc_tree
+            .insert(crate::varnode::VarnodeLocRef(out.clone()));
+
+        let mut a = ActionInferTypes::new();
+        a.apply(&mut fd).unwrap();
+        // The comparison output should be boolean-typed.
+        let meta = out.read().unwrap().v_type.as_ref().map(|t| t.get_metatype());
+        assert_eq!(
+            meta,
+            Some(crate::type_system::datatype::TypeMetatype::Bool),
+            "INT_EQUAL output must be inferred as bool"
+        );
+    }
+
+    #[test]
+    fn test_build_full_pipeline_actions_nonempty() {
+        let actions = build_full_pipeline_actions();
+        assert!(!actions.is_empty(), "pipeline must contain actions");
+        // Must include the newly-implemented ActionInferTypes.
+        assert!(actions.iter().any(|a| a.get_name() == "infertypes"));
+        // And several other implemented actions.
+        assert!(actions.iter().any(|a| a.get_name() == "setcasts"));
+        assert!(actions.iter().any(|a| a.get_name() == "nonzeromask"));
+        assert!(actions.iter().any(|a| a.get_name() == "deindirect"));
+        assert!(actions.iter().any(|a| a.get_name() == "outputprototype"));
+        // No stubs should slip in.
+        assert!(!actions.iter().any(|a| a.get_name() == "lanedivide"));
+        assert!(!actions.iter().any(|a| a.get_name() == "dynamicsymbols"));
+    }
+
+    #[test]
+    fn test_build_full_pipeline_actions_unique_names() {
+        let actions = build_full_pipeline_actions();
+        let mut names: Vec<&str> = actions.iter().map(|a| a.get_name()).collect();
+        names.sort();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "duplicate action name in pipeline");
     }
