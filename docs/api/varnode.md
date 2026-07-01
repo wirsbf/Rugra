@@ -701,3 +701,9 @@
 ### 2026-07-01（续 3）：has_no_local_alias + destroy_varnode
 - `has_no_local_alias()/set_no_local_alias()/clear_no_local_alias()`（varnode.hh:262）— NOLOCALALIAS flag。
 - `VarnodeBank::destroy_varnode(&vn)`（varnode.hh）— 从 loc_tree/def_tree 移除。
+
+### 2026-07-01（续 4）：SymbolEntry 统一 + get_symbol_entry + get_structured_type
+- 移除 stub SymbolEntry，改用 database.rs 的真实 SymbolEntry。mapentry 字段现在持有真实符号映射。
+- `get_symbol_entry() -> Option<Arc<RwLock<SymbolEntry>>>`（varnode.hh:190）。
+- `get_structured_type() -> Option<Arc<Datatype>>`（varnode.cc:1137-1148）— 优先 mapentry 的 symbol 类型，否则 v_type；返回 piece-structured 类型。
+- `copy_symbol` 完善：现在复制 mapentry（不再退化）。

@@ -272,6 +272,9 @@ pub struct Symbol {
     pub symbol_id: u64,
     /// Number of SymbolEntries that map to the whole Symbol.
     pub whole_count: u32,
+    /// The resolved Datatype of this symbol (Ghidra `Symbol::type`).
+    /// Faithful to `Symbol::getType` (database.hh:244).
+    pub dtype: Option<Arc<crate::type_system::datatype::Datatype>>,
 }
 
 impl Symbol {
@@ -290,6 +293,7 @@ impl Symbol {
             catindex: 0,
             symbol_id: 0,
             whole_count: 0,
+            dtype: None,
         }
     }
 
@@ -311,6 +315,17 @@ impl Symbol {
     /// Get the data-type name.
     pub fn get_type_name(&self) -> &str {
         &self.type_name
+    }
+
+    /// Get the resolved Datatype of this symbol. Faithful to
+    /// `Symbol::getType` (database.hh:244).
+    pub fn get_type(&self) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        self.dtype.clone()
+    }
+
+    /// Set the resolved Datatype.
+    pub fn set_dtype(&mut self, dt: Arc<crate::type_system::datatype::Datatype>) {
+        self.dtype = Some(dt);
     }
 
     /// Get a unique id for the symbol.

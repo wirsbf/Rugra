@@ -13,11 +13,10 @@ use std::sync::{Arc, Weak, RwLock};
 // These placeholders allow the code to compile while other modules are being aligned.
 pub mod stubs {
 // use super::*;
-    #[derive(Debug)] pub struct SymbolEntry;
     #[derive(Debug)] pub struct ValueSet;
 }
 
-use stubs::*;
+use crate::database::SymbolEntry;
 use crate::variable::HighVariable;
 use crate::cover::Cover;
 use crate::op::PcodeOp;
@@ -539,13 +538,34 @@ impl Varnode {
     }
 
     /// Copy symbol/type info from another varnode. Faithful to
-    /// `Varnode::copySymbol` (varnode.cc:493-505). Degraded: only copies type
-    /// + typelock/namelock flags (mapentry/SymbolEntry is a stub).
+    /// `Varnode::copySymbol` (varnode.cc:493-505). Copies type + mapentry +
+    /// typelock/namelock flags.
     pub fn copy_symbol(&mut self, vn: &Varnode) {
         self.v_type = vn.v_type.clone();
+        self.mapentry = vn.mapentry.clone();
         self.clear_flags(varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
         let inherit = vn.flags & (varnode_flags::TYPELOCK | varnode_flags::NAMELOCK);
         self.set_flags(inherit);
+    }
+
+    /// Get the SymbolEntry (symbol mapping) of this varnode, if any.
+    /// Faithful to `Varnode::getSymbolEntry` (varnode.hh:190).
+    pub fn get_symbol_entry(&self) -> Option<Arc<RwLock<SymbolEntry>>> {
+        self.mapentry.clone()
+    }
+
+    /// Get the structured type of this varnode, preferring the symbol's type
+    /// over the varnode's own type. Faithful to `Varnode::getStructuredType`
+    /// (varnode.cc:1137-1148). Returns the type if it is piece-structured,
+    /// else None.
+    pub fn get_structured_type(&self) -> Option<Arc<Datatype>> {
+        let ct = if let Some(me) = &self.mapentry {
+            let me_rg = me.read().unwrap();
+            me_rg.get_symbol().read().unwrap().get_type().or_else(|| self.v_type.clone())
+        } else {
+            self.v_type.clone()
+        };
+        ct.filter(|t| t.is_piece_structured())
     }
 
     /// Is the high-level variable tied to an address? (varnode.hh:250)

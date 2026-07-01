@@ -125,3 +125,6 @@ my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数�
 ### 2026-06-29：ScopeLocal::mark_not_mapped + has_overlap
 - `mark_not_mapped(offset, size, parameter)` — 忠实移植 Ghidra `ScopeLocal::markNotMapped`（varmap.cc:510-546）。从符号列表移除与范围重叠的符号。用于 ActionRestrictLocal 防止特定栈位置（保存的寄存器、调用参数）被当作局部变量。
 - `has_overlap(offset, size)` — 检查范围是否与任何符号重叠。
+
+### 2026-07-01：query_by_addr
+- `ScopeLocal::query_by_addr(offset, size) -> Option<(&LocalSymbol, i32)>` — 查栈范围匹配符号，返回符号+偏移（partial read）。

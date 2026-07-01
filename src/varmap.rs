@@ -1305,6 +1305,20 @@ impl ScopeLocal {
         })
     }
 
+    /// Find the LocalSymbol whose storage range contains `(offset, offset+size)`.
+    /// Faithful to `ScopeLocal::queryByAddr` / `Scope::findContainer`.
+    /// Returns the symbol and the offset within the symbol (for partial reads).
+    pub fn query_by_addr(&self, offset: u64, size: i32) -> Option<(&LocalSymbol, i32)> {
+        let last = offset + size as u64 - 1;
+        for sym in &self.symbols {
+            let sym_end = sym.start + sym.size as u64 - 1;
+            if sym.start <= offset && sym_end >= last {
+                return Some((sym, (offset - sym.start) as i32));
+            }
+        }
+        None
+    }
+
     /// Restructure the stack frame from varnodes.
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1256).
