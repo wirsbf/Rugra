@@ -262,7 +262,7 @@ impl Action for ActionGroup {
         let mut iterations = 0u32;
         loop {
             iterations += 1;
-            if iterations > 3 {
+            if iterations > 2 {
                 break;
             }
             state.lcount = state.count;
@@ -806,12 +806,13 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // NOTE: mainloop repeatapply cannot be enabled because mainloop contains
-        // Actions (Heritage/BlockStructure/FinalStructure) that mutate the CFG
-        // and structured blocks. repeatapply re-runs these, causing sblocks to
-        // become stale relative to bblocks → printc infinite recursion → stack
-        // overflow. Only stackstall (leaf-level, oppool1+oppool2) uses
-        // repeatapply safely. Tracked as architectural TODO.
+        // NOTE: mainloop repeatapply confirmed to cause printc stack overflow
+        // even with sblocks rebuild. Root cause: rebuilding sblocks on round 2+
+        // creates different structure than round 1, and printc's recursive
+        // emit_block_structured overflows on the new structure. The proper fix
+        // is either: (a) make printc iterative, or (b) separate the repeatapply
+        // loop to only cover non-structuring Actions (Heritage/Simplify/oppool).
+        // Currently only stackstall (leaf oppool) uses repeatapply.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

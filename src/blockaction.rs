@@ -15,21 +15,35 @@ use std::sync::{Arc, RwLock};
 /// Corresponds to Ghidra's `ActionBlockStructure`. This action transforms
 /// a flat basic block graph into a hierarchical structure of if, while,
 /// and other high-level blocks.
-pub struct ActionBlockStructure;
+pub struct ActionBlockStructure {
+    /// Number of ops when we last structured. If this differs on a subsequent
+    /// call, it means bblocks changed (new ops from Heritage/Simplify/etc.)
+    /// and we must rebuild sblocks to stay in sync.
+    last_op_count: usize,
+}
 
 impl ActionBlockStructure {
     /// Create a new ActionBlockStructure instance
     pub fn new() -> Self {
-        Self
+        Self { last_op_count: 0 }
     }
 }
 
 impl Action for ActionBlockStructure {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Check if already structured
+        // Check if bblocks changed since last structuring. If sblocks is
+        // non-empty but the op count differs, bblocks was mutated (e.g. by
+        // Heritage/Simplify in a repeatapply loop) and sblocks is stale.
+        // Clear sblocks to force rebuild.
+        let current_op_count = fd.obank.alivelist.len();
         if fd.sblocks.get_size() != 0 {
-            return Ok(action_status::NO_CHANGE);
+            if current_op_count == self.last_op_count {
+                return Ok(action_status::NO_CHANGE);
+            }
+            // bblocks changed — clear sblocks for rebuild.
+            fd.sblocks.clear();
         }
+        self.last_op_count = current_op_count;
 
         // Need at least 1 basic block to structure
         if fd.bblocks.get_size() == 0 {

@@ -722,3 +722,6 @@ ActionUnreachable + ActionDeterminedBranch 在 ActionBlockStructure::apply 开�
 
 ### 2026-07-01（续 2）：BlockWhileDo for-loop 字段 + printc for 发射
 BlockWhileDo 加 for_init/for_iter 字段（对齐 Ghidra iterateOp/initializeOp）。printc WhileDo 发射：有 for_init+for_iter → `for(init;cond;iter)`，否则 `while(cond)`。
+
+### 2026-07-01（续 3）：ActionBlockStructure sblocks 失效重建
+ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current op count vs last：不同则 clear sblocks 重建（防止 bblocks 变化后 sblocks 不同步）。mainloop repeatapply 仍不启用：sblocks 重建后 printc 的 emit_block_structured 在新结构上仍递归溢出。修复 printc 迭代化是前置条件。

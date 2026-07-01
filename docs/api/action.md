@@ -688,3 +688,6 @@ ActionGroup.perform 重写为迭代式：循环调 self.apply()，不递归进�
 5. printc 的 `emit_block_structured` 递归遍历 sblocks → 结构不匹配 → 无限递归 → 栈溢出
 
 修复需要：sblocks 失效机制（bblocks 变化时清除 sblocks 让 ActionBlockStructure 重建）或将结构化 Action 移出 repeatapply 循环。这是架构级改进。
+
+### 2026-07-01（续 13）：sblocks 失效 + printc 递归溢出
+ActionBlockStructure: +last_op_count，op count 变化时 clear sblocks 重建。mainloop repeatapply 仍不启用：sblocks 重建后 printc emit_block_structured 在新结构上递归溢出。修复需迭代化 printc。
