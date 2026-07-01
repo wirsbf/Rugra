@@ -147,6 +147,10 @@ pub struct PrintC {
     /// Current loop nesting depth. >0 means we are inside a while/do-while body.
     /// Used to suppress `continue` statements in non-loop contexts.
     loop_depth: u32,
+    /// Recursion depth guard for emit_block_structured. Prevents stack overflow
+    /// on deeply nested structures (e.g. when mainloop repeatapply rebuilds
+    /// sblocks with different nesting).
+    struct_emit_depth: u32,
     /// Set of block addresses that are targets of BRANCH/CBRANCH goto statements.
     /// Used to emit LAB_XXXX: labels at the start of target blocks.
     goto_targets: HashSet<u64>,
@@ -193,6 +197,7 @@ impl PrintC {
             stack_structs: Vec::new(),
             block_local_reg_defs: HashMap::new(),
             loop_depth: 0,
+            struct_emit_depth: 0,
             goto_targets: HashSet::new(),
             scope: None,
 
@@ -415,6 +420,27 @@ impl PrintC {
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<i32>,
     ) {
+        // Depth guard: prevent stack overflow on deeply nested structures.
+        // Fallback to sequential ops emission when depth exceeds safe limit.
+        // Uses thread_local to avoid borrow conflicts with &mut self.
+        thread_local! {
+            static EMIT_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+        }
+        let depth = EMIT_DEPTH.with(|d| { let v = d.get(); d.set(v + 1); v });
+        if depth > 200 {
+            EMIT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+            self.emit_block_ops(block_arc, false);
+            return;
+        }
+        // Ensure decrement happens on all exit paths via a scope guard.
+        struct DepthDec;
+        impl Drop for DepthDec {
+            fn drop(&mut self) {
+                EMIT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+            }
+        }
+        let _dec = DepthDec;
+
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
 
         let block_idx = block_arc.read().unwrap().get_index();

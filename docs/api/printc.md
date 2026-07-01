@@ -595,3 +595,6 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 
 ### 2026-07-01：while→for 发射
 WhileDo 块检查 for_init/for_iter：有则 `for(init;cond;iter)`，否则 `while(cond)`。
+
+### 2026-07-01（续 2）：emit_block_structured 深度保护（thread_local）
+emit_block_structured 加 thread_local depth guard（>200 层回退到 emit_block_ops）。防止深层嵌套结构的递归溢出。mainloop repeatapply 仍不启用：sblocks 重建后的新结构即使有 depth guard 也触发溢出（200 层 × 每层栈帧 > 256MB）。根因是 repeatapply 产生的结构与单遍不同，printc 递归无法处理。

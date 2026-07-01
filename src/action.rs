@@ -806,13 +806,13 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // NOTE: mainloop repeatapply confirmed to cause printc stack overflow
-        // even with sblocks rebuild. Root cause: rebuilding sblocks on round 2+
-        // creates different structure than round 1, and printc's recursive
-        // emit_block_structured overflows on the new structure. The proper fix
-        // is either: (a) make printc iterative, or (b) separate the repeatapply
-        // loop to only cover non-structuring Actions (Heritage/Simplify/oppool).
-        // Currently only stackstall (leaf oppool) uses repeatapply.
+        // NOTE: mainloop repeatapply remains disabled. The sblocks rebuild fix
+        // (ActionBlockStructure checks op count) works for tests but the rebuilt
+        // structure on complex functions (glob_range) causes printc stack overflow
+        // even with depth guards. Root cause: repeatapply creates a different
+        // structure than single-pass, and printc's recursive emission can't
+        // handle it. Fix requires either: (a) iterative printc block emission,
+        // or (b) separating repeatapply to only cover non-structuring Actions.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

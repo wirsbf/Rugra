@@ -691,3 +691,6 @@ ActionGroup.perform 重写为迭代式：循环调 self.apply()，不递归进�
 
 ### 2026-07-01（续 13）：sblocks 失效 + printc 递归溢出
 ActionBlockStructure: +last_op_count，op count 变化时 clear sblocks 重建。mainloop repeatapply 仍不启用：sblocks 重建后 printc emit_block_structured 在新结构上递归溢出。修复需迭代化 printc。
+
+### 2026-07-01（续 14）：printc depth guard + mainloop repeatapply 最终状态
+printc emit_block_structured +thread_local depth guard（>200 回退）。sblocks 失效重建保留。mainloop repeatapply 测试：depth guard+rebuild 仍溢出（200层×栈帧>256MB）。不启用。
