@@ -884,3 +884,7 @@ BlockGraph 新增：
 - `FlowBlock::get_true_out(cbranch)/get_false_out(cbranch)`（block.hh:299-300）— 按 BOOLEAN_FLIP 重映射 CBRANCH 真/假出边（Rugra out[0]=taken,out[1]=fallthru；flip 时翻转）。
 - `FlowBlock::get_in_rev_index(slot)` trait 方法（block.hh:308）— 入边的反向索引。
 - `find_condition(bl1,edge1,bl2,edge2)` 自由函数（block.cc:839-858）— 返回支配两路径的 CBRANCH 块 + slot1。解锁 RuleInt2FloatCollapse 核心。
+
+### 2026-07-01（续 2）：is_entry_point + get_start_block
+- `FlowBlock::is_entry_point()`（block.hh:325）— ENTRY_POINT flag 检查，trait default。
+- `BlockGraph::get_start_block()`（block.cc:1649-1655）— 第一个 entry point 块。

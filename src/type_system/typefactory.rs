@@ -84,6 +84,37 @@ impl TypeFactory {
         self.types.get(name).cloned()
     }
 
+    /// Get a base scalar type of `size` bytes with metatype `m`. Faithful to
+    /// `TypeFactory::getBase` (type.cc:3631-3660). For int/uint/float/bool,
+    /// looks up the pre-generated core type by name; if not found, creates
+    /// a new base type on the fly.
+    pub fn get_base(&self, size: usize, m: TypeMetatype) -> Option<Arc<Datatype>> {
+        use TypeMetatype::*;
+        match m {
+            Int => {
+                let name = if size == 4 { "int".to_string() } else { format!("int{}", size) };
+                self.find_by_name(&name).or_else(|| {
+                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Int))))
+                })
+            }
+            Uint => {
+                let name = if size == 4 { "uint".to_string() } else { format!("uint{}", size) };
+                self.find_by_name(&name).or_else(|| {
+                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Uint))))
+                })
+            }
+            Float => {
+                let name = if size <= 4 { "float".to_string() } else { "double".to_string() };
+                self.find_by_name(&name).or_else(|| {
+                    Some(Arc::new(Datatype::Base(TypeBase::new(name, size, Float))))
+                })
+            }
+            Bool => self.find_by_name("bool"),
+            Void => self.find_by_name("void"),
+            _ => None,
+        }
+    }
+
     /// Get or create a pointer type to the given base type
     pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype> {
         let name = format!("{} *", ptr_to.get_name());

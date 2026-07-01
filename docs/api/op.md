@@ -855,3 +855,7 @@ PcodeOpRaw
 ### 2026-07-01：PcodeOp flag accessor（解锁 RulePtrFlow/RuleTransformCpool）
 - `is_ptr_flow/set_ptr_flow`（op.hh:205-206）— PTRFLOW flag(1<<30)。RulePtrFlow 用。
 - `is_cpool_transformed/mark_cpool_transformed`（op.hh:213/140）— addlflags 0x20。RuleTransformCpool 去重保护用。
+
+### 2026-07-01（续 2）：op_addl_flags mod + 访问器
+- `op_addl_flags` mod（op.hh:108-120）：SPECIAL_PRINT/MODIFIED/WARNING/INCIDENTAL_COPY/IS_CPOOL_TRANSFORMED/STOP_TYPE_PROPAGATION/HOLD_OUTPUT/CONCAT_ROOT/NO_INDIRECT_COLLAPSE/STORE_UNMAPPED。
+- `does_special_printing()`（op.hh:208）、`clear_stop_type_propagation()`/`stops_type_propagation()`（op.hh:217）、`no_indirect_collapse()`/`set_no_indirect_collapse()`（op.hh:223-224）。

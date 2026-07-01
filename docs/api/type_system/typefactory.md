@@ -57,3 +57,6 @@ Get the number of types currently managed
 Clear all non-core types
 
 
+
+### 2026-07-01：get_base(size, metatype)（type.cc:3631-3660）
+- 按 (size, metatype) 查 core_types（int→int/int2/int8, uint→uint/uint2/uint8, float→float/double），未命中则现场创建 Base type。

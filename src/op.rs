@@ -55,6 +55,22 @@ pub mod pcodeop_flags {
     pub const INDIRECT_STORE: u32 = 1 << 31;
 }
 
+/// PcodeOp additional flags (Ghidra `op.hh:108-120`). Stored in the
+/// `addlflags: u32` field. These mirror Ghidra's bit values exactly.
+pub mod op_addl_flags {
+    pub const SPECIAL_PRINT: u32 = 0x2;
+    pub const MODIFIED: u32 = 0x4;
+    pub const WARNING: u32 = 0x8;
+    pub const INCIDENTAL_COPY: u32 = 0x10;
+    /// is_cpool_transformed (already used via 0x20 in mark_cpool_transformed).
+    pub const IS_CPOOL_TRANSFORMED: u32 = 0x20;
+    pub const STOP_TYPE_PROPAGATION: u32 = 0x40;
+    pub const HOLD_OUTPUT: u32 = 0x80;
+    pub const CONCAT_ROOT: u32 = 0x100;
+    pub const NO_INDIRECT_COLLAPSE: u32 = 0x200;
+    pub const STORE_UNMAPPED: u32 = 0x400;
+}
+
 pub mod branch_type {
     pub const NONE: u8 = 0;
     pub const BREAK: u8 = 1;
@@ -299,6 +315,27 @@ impl PcodeOp {
     /// `PcodeOp::setAdditionalFlag(is_cpool_transformed)` (op.hh:140/213).
     pub fn mark_cpool_transformed(&mut self) {
         self.addlflags |= 0x20;
+    }
+
+    /// Does this op require special printing? (op.hh:208, addlflags 0x2)
+    pub fn does_special_printing(&self) -> bool {
+        (self.addlflags & op_addl_flags::SPECIAL_PRINT) != 0
+    }
+
+    /// Clear the stop-type-propagation flag. (op.hh:217, addlflags 0x40)
+    pub fn clear_stop_type_propagation(&mut self) {
+        self.addlflags &= !op_addl_flags::STOP_TYPE_PROPAGATION;
+    }
+    pub fn stops_type_propagation(&self) -> bool {
+        (self.addlflags & op_addl_flags::STOP_TYPE_PROPAGATION) != 0
+    }
+
+    /// Is this op marked to never be indirect-collapsed? (op.hh:223, addlflags 0x200)
+    pub fn no_indirect_collapse(&self) -> bool {
+        (self.addlflags & op_addl_flags::NO_INDIRECT_COLLAPSE) != 0
+    }
+    pub fn set_no_indirect_collapse(&mut self) {
+        self.addlflags |= op_addl_flags::NO_INDIRECT_COLLAPSE;
     }
 }
 

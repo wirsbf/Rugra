@@ -118,3 +118,8 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 
 ### 2026-07-01：Architecture 手动 Debug impl
 - 为 Architecture 添加 `impl Debug`（打印 archid）。因 loader 字段是 `Arc<dyn LoadImage>`（无 Debug bound），不能 derive。这使得 Funcdata（derive Debug）能持有 `Option<Arc<Architecture>>` 字段。
+
+### 2026-07-01（续 2）：types + userops 字段 + get_base_type + construct_join_address
+- `types: Option<Arc<RwLock<TypeFactory>>>` + `userops: Option<Arc<RwLock<UserOpManage>>>` 字段 + set_types/set_userops。
+- `get_base_type(size, metatype)` — 委托 TypeFactory::get_base。
+- `construct_join_address(hi,sz,lo,sz)`（translate.cc:817）— 桩：contiguous 早返回，否则 0。

@@ -260,6 +260,11 @@ pub struct Architecture {
     pub loader: Option<std::sync::Arc<dyn crate::loadimage::LoadImage>>,
     /// Type factory. Faithful to `types`.
     pub type_factory_name: Option<String>,
+    /// Type factory instance (faithful to Architecture `types`). Optional until
+    /// set via `set_types`. Used by Rules needing `getBase(size, metatype)`.
+    pub types: Option<std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    /// User-defined op manager (faithful to Architecture `userops`). Optional.
+    pub userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
     /// Comment database. Faithful to `commentdb`.
     pub commentdb: Option<std::sync::Arc<std::sync::RwLock<crate::comment::CommentDatabaseInternal>>>,
     /// String manager. Faithful to `stringManager`.
@@ -338,6 +343,8 @@ impl Architecture {
             symboltab: None,
             loader: None,
             type_factory_name: None,
+            types: None,
+            userops: None,
             commentdb: None,
             string_manager: None,
             cpool: None,
@@ -563,6 +570,38 @@ impl Architecture {
     /// Set the options database. Replaces the OptionDatabase constructor.
     pub fn set_options_db(&mut self, opts: std::sync::Arc<std::sync::RwLock<crate::options::OptionDatabase>>) {
         self.options_db = Some(opts);
+    }
+
+    /// Set the TypeFactory instance.
+    pub fn set_types(&mut self, tf: std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>) {
+        self.types = Some(tf);
+    }
+
+    /// Set the userop manager.
+    pub fn set_userops(&mut self, uo: std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>) {
+        self.userops = Some(uo);
+    }
+
+    /// Get a base type of `size`/`metatype` from the TypeFactory, if set.
+    /// Faithful to `TypeFactory::getBase` via Architecture.
+    pub fn get_base_type(&self, size: usize, m: crate::type_system::datatype::TypeMetatype) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        self.types.as_ref().and_then(|tf| tf.read().unwrap().get_base(size, m))
+    }
+
+    /// Construct a "join" address for a multi-register value. Faithful to
+    /// `Translate::constructJoinAddress` (translate.cc:817-860). Degraded:
+    /// only the contiguous-same-space fast path is implemented (returns the
+    /// lower address); non-contiguous returns a zero placeholder.
+    pub fn construct_join_address(&self, hi_offset: u64, hi_size: usize, lo_offset: u64, lo_size: usize) -> u64 {
+        // If the two pieces are contiguous in the same space, the join is
+        // just the lowest address.
+        if lo_offset + lo_size as u64 == hi_offset {
+            return lo_offset;
+        }
+        if hi_offset + hi_size as u64 == lo_offset {
+            return hi_offset;
+        }
+        0
     }
 
     /// Set the prefer-split records. Replaces `decodePreferSplit`.

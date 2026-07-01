@@ -48,3 +48,6 @@
 - **InternalStringOp** — 内部字符串操作
 
 UserPcodeOp 新增：get_operator_name/extract_annotation_size/is_volatile_read/is_volatile_write/is_segment/is_jump_assist/is_injected/is_string_data。
+
+### 2026-07-01：segment_ops + get_segment_op
+- `UserOpManage.segment_ops: HashMap<i32, SegmentOp>`（userop.hh:347）+ `get_segment_op(space_idx)`。

@@ -780,3 +780,9 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `jump_tables: Vec<Arc<RwLock<JumpTable>>>` 字段（funcdata.hh:89）。
 - `find_jump_table(op)`（funcdata_block.cc:446）+ `remove_jump_table(jt)`（funcdata_block.cc:65）。
 - `get_store_guard(op)/get_load_guard(op)`（funcdata.hh:269-270）— 转发到 Heritage。
+
+### 2026-07-01（续 3）：combine_input_varnodes + DOUBLE_PRECIS_ON + new_varnode + warning_header
+- `combine_input_varnodes(vn_hi, vn_lo)`（funcdata_varnode.cc:381-454）— 合并连续 input varnode，PIECE→COPY，非 PIECE reader 造 SUBPIECE。
+- `DOUBLE_PRECIS_ON` flag（funcdata.hh:85=0x2000）+ `set_double_precis_recovery`/`is_double_precis_on`。
+- `new_varnode(size, addr)`（funcdata.hh:282）— 包装 vbank.create。
+- `warning_header(txt)`（funcdata.cc:135-145）— 通过 commentdb 加 WARNINGHEADER 注释。

@@ -264,11 +264,20 @@ pub struct UserOpManage {
     pub ops: Vec<UserPcodeOp>,
     /// Map from name to index
     pub name_map: HashMap<String, i32>,
+    /// Segment ops registered by space index. Faithful to the segment-op
+    /// vector in Ghidra's UserOpManage (userop.hh:347 `getSegmentOp`).
+    pub segment_ops: HashMap<i32, SegmentOp>,
 }
 
 impl UserOpManage {
     pub fn new() -> Self {
-        Self { ops: Vec::new(), name_map: HashMap::new() }
+        Self { ops: Vec::new(), name_map: HashMap::new(), segment_ops: HashMap::new() }
+    }
+
+    /// Look up the SegmentOp for the given space index. Faithful to
+    /// `UserOpManage::getSegmentOp` (userop.hh:347).
+    pub fn get_segment_op(&self, space_idx: i32) -> Option<&SegmentOp> {
+        self.segment_ops.get(&space_idx)
     }
 
     /// Register a new user op, returning its index.

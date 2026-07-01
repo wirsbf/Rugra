@@ -19,6 +19,9 @@ pub mod funcdata_flags {
     /// funcdata.hh:90). Set once ActionInferTypes begins, used by Rules to
     /// decide whether type-based guards apply.
     pub const TYPE_RECOVERY_START: u32 = 1 << 1;
+    /// Double-precision recovery is active (Ghidra `double_precis_on`,
+    /// funcdata.hh:85 = 0x2000).
+    pub const DOUBLE_PRECIS_ON: u32 = 1 << 13;
 }
 
 use crate::varnode::VarnodeBank;
@@ -162,6 +165,153 @@ impl Funcdata {
     /// Mark that type recovery has started.
     pub fn set_type_recovery_started(&mut self) {
         self.flags |= funcdata_flags::TYPE_RECOVERY_START;
+    }
+
+    /// Is double-precision recovery active? (funcdata.hh:167)
+    pub fn is_double_precis_on(&self) -> bool {
+        (self.flags & funcdata_flags::DOUBLE_PRECIS_ON) != 0
+    }
+    /// Set/clear double-precis recovery. (funcdata.hh:167)
+    pub fn set_double_precis_recovery(&mut self, on: bool) {
+        if on {
+            self.flags |= funcdata_flags::DOUBLE_PRECIS_ON;
+        } else {
+            self.flags &= !funcdata_flags::DOUBLE_PRECIS_ON;
+        }
+    }
+
+    /// Create a varnode of `size` bytes at a specific address. Faithful to
+    /// `Funcdata::newVarnode(int4, const Address&)` (funcdata.hh:282).
+    pub fn new_varnode(&mut self, size: usize, addr: crate::address::Address) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        self.vbank.create(size, addr)
+    }
+
+    /// Combine two contiguous input varnodes into one. Faithful to
+    /// `Funcdata::combineInputVarnodes` (funcdata_varnode.cc:381-454).
+    /// Replaces PIECE(hi,lo) ops with COPY of the combined varnode; creates
+    /// SUBPIECE replacements for any non-PIECE readers of hi/lo.
+    pub fn combine_input_varnodes(
+        &mut self,
+        vn_hi: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        vn_lo: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        use crate::opcodes::OpCode;
+        // Determine contiguity (little-endian: lo is at lower address).
+        let lo_off = vn_lo.read().unwrap().get_offset();
+        let lo_size = vn_lo.read().unwrap().get_size();
+        let hi_off = vn_hi.read().unwrap().get_offset();
+        let hi_size = vn_hi.read().unwrap().get_size();
+        let combined_addr = if lo_off + lo_size as u64 == hi_off {
+            lo_off
+        } else if hi_off + hi_size as u64 == lo_off {
+            hi_off
+        } else {
+            // Not contiguous — cannot combine.
+            return;
+        };
+        // Collect PIECE(hi,lo) ops and detect other readers.
+        let mut piece_list = Vec::new();
+        let mut other_ops_hi = false;
+        let mut other_ops_lo = false;
+        {
+            let hi_rg = vn_hi.read().unwrap();
+            for w in &hi_rg.descend {
+                if let Some(op) = w.upgrade() {
+                    let g = op.read().unwrap();
+                    if g.opcode == OpCode::CPUI_PIECE
+                        && g.inrefs.len() >= 2
+                        && std::sync::Arc::ptr_eq(&g.inrefs[0], vn_hi)
+                        && std::sync::Arc::ptr_eq(&g.inrefs[1], vn_lo)
+                    {
+                        piece_list.push(crate::op::PcodeOpRef(op.clone()));
+                    } else {
+                        other_ops_hi = true;
+                    }
+                }
+            }
+        }
+        {
+            let lo_rg = vn_lo.read().unwrap();
+            for w in &lo_rg.descend {
+                if let Some(op) = w.upgrade() {
+                    let g = op.read().unwrap();
+                    if g.opcode != OpCode::CPUI_PIECE
+                        || g.inrefs.len() < 2
+                        || !std::sync::Arc::ptr_eq(&g.inrefs[0], vn_hi)
+                        || !std::sync::Arc::ptr_eq(&g.inrefs[1], vn_lo)
+                    {
+                        other_ops_lo = true;
+                    }
+                }
+            }
+        }
+        // For each PIECE: remove input[1], unset input[0] (will be replaced).
+        for p in &piece_list {
+            self.op_remove_input(p, 1);
+            self.op_unset_input(p, 0);
+        }
+        // Create SUBPIECE replacements for non-PIECE readers.
+        let entry_block = self.bblocks.get_block(0);
+        let out_size = hi_size + lo_size;
+        // Destroy the original input varnodes and create the combined input.
+        self.vbank.destroy_varnode(vn_hi);
+        self.vbank.destroy_varnode(vn_lo);
+        let in_vn = self.new_varnode(out_size, crate::address::Address::new(combined_addr));
+        self.vbank.set_input(in_vn.clone());
+        // Rewrite PIECE ops to COPY.
+        for p in &piece_list {
+            self.op_set_input(p, in_vn.clone(), 0);
+            self.op_set_opcode(p, OpCode::CPUI_COPY);
+        }
+        // SUBPIECE replacements for other readers.
+        if other_ops_hi {
+            if let Some(bb) = &entry_block {
+                let sub_hi = self.new_op(2, crate::address::Address::new(0));
+                self.op_set_opcode(&sub_hi, OpCode::CPUI_SUBPIECE);
+                let lo_size_const = self.new_constant(4, lo_size as u64);
+                self.op_set_input(&sub_hi, lo_size_const, 1);
+                let new_hi = self.new_unique_out(hi_size, &sub_hi);
+                new_hi.write().unwrap().update_type(vn_hi.read().unwrap().get_type().unwrap_or_else(|| {
+                    std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new("unknown".into(), hi_size, crate::type_system::datatype::TypeMetatype::Unknown)
+                    ))
+                }));
+                self.op_insert_begin(&sub_hi, bb);
+                self.total_replace(vn_hi, new_hi.clone());
+                self.op_set_input(&sub_hi, in_vn.clone(), 0);
+            }
+        }
+        if other_ops_lo {
+            if let Some(bb) = &entry_block {
+                let sub_lo = self.new_op(2, crate::address::Address::new(0));
+                self.op_set_opcode(&sub_lo, OpCode::CPUI_SUBPIECE);
+                let zero_const = self.new_constant(4, 0);
+                self.op_set_input(&sub_lo, zero_const, 1);
+                let new_lo = self.new_unique_out(lo_size, &sub_lo);
+                self.op_insert_begin(&sub_lo, bb);
+                self.total_replace(vn_lo, new_lo.clone());
+                self.op_set_input(&sub_lo, in_vn.clone(), 0);
+            }
+        }
+    }
+
+    /// Attach a warning comment to this function. Faithful to
+    /// `Funcdata::warningHeader` (funcdata.cc:135-145). Uses the arch's
+    /// commentdb if available; otherwise eprintln as fallback.
+    pub fn warning_header(&self, txt: &str) {
+        let msg = format!("WARNING: {}", txt);
+        if let Some(a) = &self.arch {
+            if let Some(cdb) = &a.commentdb {
+                let _ = cdb.write().unwrap().add_comment_no_duplicate(
+                    crate::comment::comment_type::WARNINGHEADER,
+                    self.baseaddr,
+                    self.baseaddr,
+                    &msg,
+                );
+                return;
+            }
+        }
+        eprintln!("[WARNING] {}: {}", self.name, msg);
     }
 
     /// Get the Architecture configuration, if set.

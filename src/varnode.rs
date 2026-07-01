@@ -564,6 +564,17 @@ impl Varnode {
     pub fn is_unaffected(&self) -> bool {
         (self.flags & varnode_flags::UNAFFECTED) != 0
     }
+
+    /// Does the high-level variable have no local alias? (varnode.hh:262)
+    pub fn has_no_local_alias(&self) -> bool {
+        (self.flags & varnode_flags::NOLOCALALIAS) != 0
+    }
+    pub fn set_no_local_alias(&mut self) {
+        self.flags |= varnode_flags::NOLOCALALIAS;
+    }
+    pub fn clear_no_local_alias(&mut self) {
+        self.flags &= !varnode_flags::NOLOCALALIAS;
+    }
     /// Mark Varnode as unaffected. (varnode.hh:167)
     pub fn set_unaffected(&mut self) {
         self.flags |= varnode_flags::UNAFFECTED;
@@ -1050,6 +1061,14 @@ impl VarnodeBank {
         drop(v);
         self.loc_tree.insert(VarnodeLocRef(vn.clone()));
         self.def_tree.insert(VarnodeDefRef(vn.clone()));
+    }
+
+    /// Remove a varnode from both trees. Faithful to `VarnodeBank::destroy`.
+    /// The varnode is detached from the bank; if no other Arc holds it, it
+    /// is dropped.
+    pub fn destroy_varnode(&mut self, vn: &Arc<RwLock<Varnode>>) {
+        self.loc_tree.remove(&VarnodeLocRef(vn.clone()));
+        self.def_tree.remove(&VarnodeDefRef(vn.clone()));
     }
 
     pub fn clear(&mut self) {

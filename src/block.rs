@@ -290,6 +290,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn is_goto_out(&self, _i: usize) -> bool {
         false
     }
+
+    /// Is this block the entry point of the function? (block.hh:325)
+    fn is_entry_point(&self) -> bool {
+        (self.get_flags() & block_flags::ENTRY_POINT) != 0
+    }
     /// Label the i-th out edge as a loop-exit edge (Ghidra `setLoopExit`).
     fn set_loop_exit(&mut self, _i: usize) {}
     /// Clear the loop-exit label on the i-th out edge (Ghidra `clearLoopExit`).
@@ -787,6 +792,13 @@ impl BlockGraph {
 
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
+    }
+
+    /// Get the entry (start) block of this graph. Faithful to
+    /// `BlockGraph::getStartBlock` (block.cc:1649-1655): the first block
+    /// carrying the `f_entry_point` flag.
+    pub fn get_start_block(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.blocks.iter().find(|b| b.read().unwrap().is_entry_point()).cloned()
     }
 
     /// Remove a block from the graph, first detaching all its in/out edges.

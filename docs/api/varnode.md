@@ -697,3 +697,7 @@
 - `update_type_lock(ct, lock, override)`（varnode.cc:474-489）— TYPE_UNKNOWN 强制 unlock + lock/override 控制。
 - `get_type_read_facing()`（varnode.cc:639-645）— 退化版直接返回 v_type（union 解析路径 Rugra 无 union varnode）。
 - `copy_symbol(vn)`（varnode.cc:493-505）— 退化版复制 type + typelock/namelock flag（mapentry stub 不碰）。
+
+### 2026-07-01（续 3）：has_no_local_alias + destroy_varnode
+- `has_no_local_alias()/set_no_local_alias()/clear_no_local_alias()`（varnode.hh:262）— NOLOCALALIAS flag。
+- `VarnodeBank::destroy_varnode(&vn)`（varnode.hh）— 从 loc_tree/def_tree 移除。
