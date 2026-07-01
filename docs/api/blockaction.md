@@ -1,11 +1,15 @@
 # `blockaction.rs` API Reference
 
-**状态**: 已核对（当前有效）  
+**状态**: 已核对（当前有效，2026-07-02 CFT 对齐 Phase 1.1 finalize_structure sweep 已加）
 **源代码路径**: `src/blockaction.rs`
 
 > 监控日志：collapse_all 结尾输出 `[COLLAPSE] {name} FINAL basic={} dead={} structured={}`，
 > 以及当未结构化 basic 块 >10 时输出 `[COLLAPSE] {name} CBR-CAT loop={} multiin={} single={}`，
 > 用于跟踪结构化覆盖率。均为 stderr、标准 [COLLAPSE] tag。
+>
+> **finalize_structure（2026-07-02 新增）**：collapse_all 最末调用，物理移除 DEAD-flagged
+> 块并重排 index（faithful to block.cc:960 `list = newlist`）。输出
+> `[BLOCKSTRUCT] {name} finalize_structure: {before} -> {after} (removed {N} DEAD)`。
 
 ## 模块说明 (Module Doc)
 

@@ -783,6 +783,46 @@ impl<'a> CollapseStructure<'a> {
         }
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
         self.run_goto_cascade();
+        // Final sweep: physically remove DEAD-flagged blocks from the top-level
+        // blocks[] array, faithful to Ghidra identifyInternal's list=newlist
+        // (block.cc:953-960). In Ghidra, identifyInternal removes consumed nodes
+        // from the parent BlockGraph's list at structuring time; Rugra instead
+        // marks them DEAD (blockaction.rs:2363) and leaves them in the array.
+        // This final sweep collapses the array to only the surviving roots and
+        // structured blocks, giving the CFT (control flow tree) single-ownership
+        // property that printc's emitBlockGraph tree traversal relies on
+        // (printc.cc:2746). Survivors are re-indexed to reflect new positions.
+        self.finalize_structure();
+    }
+
+    /// Remove DEAD-flagged blocks from the top-level structure graph and
+    /// re-index survivors. Faithful to Ghidra's identifyInternal list compaction
+    /// (block.cc:953-960: `list = newlist`), applied as a single final sweep
+    /// rather than incrementally.
+    ///
+    /// After this, `graph.get_size()` returns only the count of surviving
+    /// roots + structured blocks, and each survivor's `get_index()` reflects
+    /// its position in the compacted array. Edges are unaffected (they use Arc
+    /// pointer identity, not indices).
+    fn finalize_structure(&mut self) {
+        let before = self.graph.get_size();
+        let before_dead = (0..before).filter(|&i| {
+            self.graph.get_block(i).map_or(false, |b| {
+                b.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0
+            })
+        }).count();
+        // Retain only non-DEAD blocks, preserving relative order (emitBlockGraph
+        // emits in list order, matching Ghidra's preorder).
+        self.graph.blocks.retain(|b| {
+            b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0
+        });
+        // Re-index survivors so get_index() reflects the new compacted position.
+        for (i, b) in self.graph.blocks.iter().enumerate() {
+            b.write().unwrap().set_index(i as i32);
+        }
+        let after = self.graph.get_size();
+        eprintln!("[BLOCKSTRUCT] {} finalize_structure: {} -> {} (removed {} DEAD)",
+                  self.name, before, after, before_dead);
     }
 
     /// Apply interleaved rules to a single block at graph index i.
