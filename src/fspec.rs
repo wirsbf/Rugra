@@ -125,6 +125,12 @@ pub struct FuncProto {
     /// must not change it. Set by `set_output_lock`. A locked-void return
     /// (e.g. `exit`, `free`) means the CALL produces NO output varnode.
     pub output_type_locked: bool,
+    /// Number of bytes of the return value that are consumed by callers
+    /// (0 = all bytes). Faithful to `FuncProto::returnBytesConsumed`
+    /// (fspec.hh:1367). Set by `set_return_bytes_consumed`; read by the
+    /// dead-code consume algorithm. RulePiecePathology records the partial
+    /// consumption of a pathological PIECE here.
+    pub return_bytes_consumed: u32,
 }
 
 impl FuncProto {
@@ -138,6 +144,7 @@ impl FuncProto {
             is_dotdotdot: false,
             effects: Vec::new(),
             output_type_locked: false,
+            return_bytes_consumed: 0,
         }
     }
 
@@ -199,6 +206,28 @@ impl FuncProto {
         self.output_type_locked
     }
 
+    /// Get the number of bytes of the return value consumed by callers.
+    /// Faithful to `FuncProto::getReturnBytesConsumed` (fspec.hh:1429).
+    /// A value of 0 means all bytes are presumed consumed.
+    pub fn get_return_bytes_consumed(&self) -> u32 {
+        self.return_bytes_consumed
+    }
+
+    /// Set the hint for how many bytes of the return value are consumed.
+    /// Faithful to `FuncProto::setReturnBytesConsumed` (fspec.cc:3954-3965).
+    /// The smallest hint wins (the value can only shrink). Returns true if
+    /// the smallest hint changed.
+    pub fn set_return_bytes_consumed(&mut self, val: u32) -> bool {
+        if val == 0 {
+            return false;
+        }
+        if self.return_bytes_consumed == 0 || val < self.return_bytes_consumed {
+            self.return_bytes_consumed = val;
+            return true;
+        }
+        false
+    }
+
     /// Copy from another FuncProto.
     /// Faithful to FuncProto::copy (fspec.cc:3789).
     pub fn copy_from(&mut self, other: &FuncProto) {
@@ -208,6 +237,7 @@ impl FuncProto {
         self.calling_convention = other.calling_convention.clone();
         self.is_dotdotdot = other.is_dotdotdot;
         self.output_type_locked = other.output_type_locked;
+        self.return_bytes_consumed = other.return_bytes_consumed;
     }
 
     /// Clear unlocked input parameters.
@@ -257,6 +287,13 @@ pub struct FuncCallSpecs {
     /// resolveSpacebaseRelative; used by ActionRestrictLocal to find
     /// stack-relative call params. offset_unknown = i64::MIN.
     pub stackoffset: i64,
+    /// Per-input-slot bytes-consumed hints. Faithful to
+    /// `FuncCallSpecs::inputConsume` (fspec.cc:5870-5906). A non-zero entry
+    /// means that many least-significant bytes of the parameter storage are
+    /// used by the sub-function; 0 means all bytes. Indexed by input slot
+    /// (with slot 0 = the call target, parameters start at slot 1).
+    /// Sparse — grown lazily by `set_input_bytes_consumed`.
+    pub input_consume: Vec<u32>,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
@@ -275,6 +312,7 @@ impl FuncCallSpecs {
             active_output: None,
             proto_model: None,
             stackoffset: OFFSET_UNKNOWN,
+            input_consume: Vec::new(),
         }
     }
 
@@ -411,6 +449,36 @@ impl FuncCallSpecs {
     /// `FuncCallSpecs::clearActiveOutput`.
     pub fn clear_active_output(&mut self) {
         self.active_output = None;
+    }
+
+    /// Get the estimated number of bytes within the given parameter that are
+    /// consumed. Faithful to `FuncCallSpecs::getInputBytesConsumed`
+    /// (fspec.cc:5870-5882). A non-zero value means that many LSBs of the
+    /// storage location are used; 0 means all bytes are presumed used.
+    pub fn get_input_bytes_consumed(&self, slot: usize) -> u32 {
+        if slot >= self.input_consume.len() {
+            0
+        } else {
+            self.input_consume[slot]
+        }
+    }
+
+    /// Set the estimated number of bytes within the given parameter that are
+    /// consumed. Faithful to `FuncCallSpecs::setInputBytesConsumed`
+    /// (fspec.cc:5887-5906). Provides a hint to the dead-code consume
+    /// algorithm about how the parameter is used. The value can only shrink
+    /// (the smallest hint wins). Returns true if there was a change.
+    pub fn set_input_bytes_consumed(&mut self, slot: usize, val: u32) -> bool {
+        while self.input_consume.len() <= slot {
+            self.input_consume.push(0);
+        }
+        let old_val = self.input_consume[slot];
+        if old_val == 0 || val < old_val {
+            // Only let the value get smaller.
+            self.input_consume[slot] = val;
+            return true;
+        }
+        false
     }
 
     /// Check if trial slots have active data-flow usage. Faithful to

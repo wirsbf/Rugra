@@ -12575,26 +12575,291 @@ fn find_contiguous_whole(
 /// `isPathology` (ruleaction.cc:10427-10505) and `tracePathologyForward`
 /// (ruleaction.cc:10506-10570).
 ///
-/// NOTE: `isPathology` walks `vn->is_input() && !is_persist()` and the def-chain
-/// to calls; `tracePathologyForward` walks forward to CALL/RETURN and records
-/// partial consumption. Rugra has `is_input`/`is_persist`/`is_call`/
-/// `get_eval_type`/`get_call_specs(by-index)`/`is_output_active`/`is_output_locked`/
-/// `get_func_proto().is_output_locked()`, so most of `isPathology` and the
-/// applyOp guards are in principle feasible. The blockers are: (1) Rugra's
-/// `get_call_specs` takes an index, not a `PcodeOp*` — there is no op→call-spec
-/// lookup; (2) `FuncProto::setReturnBytesConsumed` and
-/// `FuncCallSpecs::setInputBytesConsumed` (which `tracePathologyForward` calls
-/// to record partial consumption) are not implemented (grep src/ → nothing).
-/// Until those land the rule conservatively no-ops.
+/// Detects PIECE ops that "pathologically" concatenate a truncated return value
+/// (from a CALL) with unrelated low bytes. When such a concatenation feeds a
+/// CALL input or a RETURN, the partially-consumed bytes are recorded via
+/// `FuncProto::set_return_bytes_consumed` / `FuncCallSpecs::set_input_bytes_consumed`
+/// so the subvariable-flow rules can later truncate the data-flow.
 pub struct RulePiecePathology;
 
 impl RulePiecePathology {
     pub fn new() -> Self { Self }
+
+    /// Faithful to `RulePiecePathology::isPathology` (ruleaction.cc:10427-10505).
+    ///
+    /// Recursively checks whether `vn` originates from a CALL whose output is
+    /// not actively recovered (i.e. an opaque/unrecovered call return). It
+    /// walks the def-chain through COPY/MULTIEQUAL/INDIRECT, marking MULTIEQUAL
+    /// ops on a worklist to explore all merge branches. Returns true as soon as
+    /// a CALL/CALLIND (or INDIRECT-around-a-call) with a non-active output is
+    /// reached, or the varnode is a plain function input.
+    fn is_pathology(
+        start_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &Funcdata,
+    ) -> bool {
+        use crate::op::pcodeop_flags;
+        // Worklist of marked MULTIEQUAL ops whose input branches still need
+        // exploration (faithful to Ghidra's vector<PcodeOp*> worklist).
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        let mut marked: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        let mut vn = start_vn.clone();
+        let mut res = false;
+        // Per-multiequal cursor: (pos in worklist, next input slot to inspect).
+        let mut pos: usize = 0;
+        let mut slot: usize = 0;
+        loop {
+            // vn->isInput() && !vn->isPersist()  →  a plain parameter/input.
+            {
+                let v = vn.read().unwrap();
+                if v.is_input() && !v.is_persist() {
+                    res = true;
+                    break;
+                }
+            }
+            // Walk the def-chain starting at vn's def.
+            let mut op_opt = vn.read().unwrap().get_def();
+            while !res {
+                let op = match op_opt.clone() {
+                    Some(o) => o,
+                    None => break,
+                };
+                let code = op.read().unwrap().opcode;
+                match code {
+                    OpCode::CPUI_COPY => {
+                        // Follow through the copy.
+                        let next = op.read().unwrap().get_in(0).cloned();
+                        match next {
+                            Some(n) => {
+                                vn = n;
+                                op_opt = vn.read().unwrap().get_def();
+                            }
+                            None => { op_opt = None; }
+                        }
+                    }
+                    OpCode::CPUI_MULTIEQUAL => {
+                        // Mark it and enqueue; exploration continues from the
+                        // worklist below (Ghidra sets mark + pushes op, then
+                        // sets op = NULL to break the inner walk).
+                        let already = (op.read().unwrap().flags & pcodeop_flags::MARK) != 0;
+                        if !already {
+                            op.write().unwrap().flags |= pcodeop_flags::MARK;
+                            marked.push(op.clone());
+                            worklist.push(op.clone());
+                        }
+                        op_opt = None;
+                    }
+                    OpCode::CPUI_INDIRECT => {
+                        // Ghidra: if in(1) is an IOP-space const pointing at a
+                        // CALL op whose callspec has a non-active output, this
+                        // is pathology. Rugra has no getOpFromConst, so we
+                        // approximate: an INDIRECT around a call is detected
+                        // via the op's CALL flag is not set on INDIRECT; but a
+                        // call-result INDIRECT is one whose in(1) is IOP-space.
+                        // We conservatively only flag it when the underlying
+                        // IOP target is resolvable to a call — which we cannot
+                        // do without getOpFromConst, so we fall back to the
+                        // indirect_creation heuristic: if this INDIRECT was
+                        // produced by a call (indirect_creation flag), treat as
+                        // pathology when the call's output is not active.
+                        let in1 = op.read().unwrap().get_in(1).cloned();
+                        if let Some(iop_vn) = in1 {
+                            let is_iop = iop_vn.read().unwrap().get_space()
+                                == crate::space::AddressSpace::Iop;
+                            if is_iop {
+                                // Resolve the referenced op by scanning the op
+                                // bank for a CALL at the const address.
+                                let target_addr = iop_vn.read().unwrap().get_offset();
+                                if let Some(call_idx) =
+                                    Self::find_call_spec_by_addr(fd, target_addr)
+                                {
+                                    if let Some(fc) = fd.get_call_specs(call_idx) {
+                                        if !fc.is_output_active() {
+                                            res = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        op_opt = None;
+                    }
+                    OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                        if let Some(idx) = Self::find_call_spec_for_op(fd, &op) {
+                            if let Some(fc) = fd.get_call_specs(idx) {
+                                if !fc.is_output_active() {
+                                    res = true;
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        op_opt = None;
+                    }
+                }
+            }
+            if res { break; }
+            // Advance through the MULTIEQUAL worklist.
+            if pos >= worklist.len() { break; }
+            let cur = worklist[pos].clone();
+            let n_in = cur.read().unwrap().num_input();
+            if slot < n_in {
+                let next = cur.read().unwrap().get_in(slot).cloned();
+                slot += 1;
+                match next {
+                    Some(n) => { vn = n; }
+                    None => { /* skip */ }
+                }
+            } else {
+                pos += 1;
+                if pos >= worklist.len() { break; }
+                let next = worklist[pos].read().unwrap().get_in(0).cloned();
+                slot = 1;
+                match next {
+                    Some(n) => { vn = n; }
+                    None => { break; }
+                }
+            }
+        }
+        // Clear all marks we set (faithful to Ghidra's clearMark loop).
+        for o in &marked {
+            o.write().unwrap().flags &= !pcodeop_flags::MARK;
+        }
+        res
+    }
+
+    /// Faithful to `RulePiecePathology::tracePathologyForward`
+    /// (ruleaction.cc:10506-10559).
+    ///
+    /// Given a known pathological PIECE op, trace its output forward through
+    /// COPY/INDIRECT/MULTIEQUAL until reaching a CALL/CALLIND input (record
+    /// `set_input_bytes_consumed`) or a RETURN (record
+    /// `set_return_bytes_consumed`). Returns the number of new bytes labeled as
+    /// unconsumed (a non-zero value signals a change).
+    fn trace_pathology_forward(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        fd: &mut Funcdata,
+    ) -> i32 {
+        use crate::op::pcodeop_flags;
+        // The size of the LSB piece (in(1)) is the number of "consumed" bytes
+        // — only the low piece is real, the high piece (in(0)) is the
+        // pathological truncation.
+        let bytes_consumed = op
+            .read().unwrap()
+            .get_in(1)
+            .map(|v| v.read().unwrap().get_size() as u32)
+            .unwrap_or(0);
+        if bytes_consumed == 0 {
+            return 0;
+        }
+        let mut count = 0i32;
+        // Forward worklist of marked ops whose output we still need to scan
+        // descendants of.
+        let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        let mut marked: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = Vec::new();
+        op.write().unwrap().flags |= pcodeop_flags::MARK;
+        marked.push(op.clone());
+        worklist.push(op.clone());
+        let mut pos = 0usize;
+        while pos < worklist.len() {
+            let cur_op = worklist[pos].clone();
+            pos += 1;
+            // Snapshot of descendant ops reading cur_op's output.
+            let descends: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
+                let cur = cur_op.read().unwrap();
+                match cur.get_out() {
+                    Some(out_vn) => out_vn
+                        .read().unwrap()
+                        .descend
+                        .iter()
+                        .filter_map(|w| w.upgrade())
+                        .collect(),
+                    None => Vec::new(),
+                }
+            };
+            // The output varnode of cur_op (compared by ptr against call inputs).
+            let out_vn = cur_op.read().unwrap().get_out().cloned();
+            for dop in descends {
+                let code = dop.read().unwrap().opcode;
+                match code {
+                    OpCode::CPUI_COPY | OpCode::CPUI_INDIRECT | OpCode::CPUI_MULTIEQUAL => {
+                        let already = (dop.read().unwrap().flags & pcodeop_flags::MARK) != 0;
+                        if !already {
+                            dop.write().unwrap().flags |= pcodeop_flags::MARK;
+                            marked.push(dop.clone());
+                            worklist.push(dop);
+                        }
+                    }
+                    OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                        if let (Some(out), Some(idx)) =
+                            (out_vn.as_ref(), Self::find_call_spec_for_op(fd, &dop))
+                        {
+                            let fc = fd.get_call_specs(idx);
+                            if let Some(fc) = fc {
+                                if !fc.is_input_active() && !fc.is_input_locked() {
+                                    let n_in = dop.read().unwrap().num_input();
+                                    for i in 1..n_in {
+                                        let same = dop
+                                            .read().unwrap()
+                                            .get_in(i)
+                                            .map(|v| std::sync::Arc::ptr_eq(v, out))
+                                            .unwrap_or(false);
+                                        if same {
+                                            if fd.get_call_specs_mut(idx)
+                                                .map(|fc| fc.set_input_bytes_consumed(i, bytes_consumed))
+                                                .unwrap_or(false)
+                                            {
+                                                count += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    OpCode::CPUI_RETURN => {
+                        if !fd.get_func_proto().is_output_locked() {
+                            if fd.get_func_proto_mut().set_return_bytes_consumed(bytes_consumed) {
+                                count += 1;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Clear all marks.
+        for o in &marked {
+            o.write().unwrap().flags &= !pcodeop_flags::MARK;
+        }
+        count
+    }
+
+    /// Look up the FuncCallSpecs index whose `op_addr` matches the given op's
+    /// address. Faithful to Ghidra's `Funcdata::getCallSpecs(PcodeOp*)`, which
+    /// in C++ is a direct pointer/index lookup; Rugra stores callspecs by the
+    /// CALL op's base address, so we match on that.
+    fn find_call_spec_for_op(
+        fd: &Funcdata,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<usize> {
+        let addr = op.read().unwrap().get_seq_num().get_addr();
+        Self::find_call_spec_by_addr(fd, addr.as_u64())
+    }
+
+    /// Look up the FuncCallSpecs index whose `op_addr` matches `addr_u64`.
+    fn find_call_spec_by_addr(fd: &Funcdata, addr_u64: u64) -> Option<usize> {
+        for (i, fc) in fd.callspecs.iter().enumerate() {
+            if fc.op_addr.as_u64() == addr_u64 {
+                return Some(i);
+            }
+        }
+        None
+    }
 }
 
 impl Rule for RulePiecePathology {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
+        use crate::op::pcodeop_flags;
         let (vn, lsb_vn) = {
             let op = op_arc.read().unwrap();
             let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
@@ -12605,32 +12870,67 @@ impl Rule for RulePiecePathology {
         let sub_op = vn.read().unwrap().get_def().unwrap();
         let opc = sub_op.read().unwrap().opcode;
         if opc == OpCode::CPUI_SUBPIECE {
+            // Make sure we are concatenating the most significant bytes of a
+            // truncation: the SUBPIECE offset (in(1)) must be non-zero.
             let in1 = sub_op.read().unwrap().get_in(1).cloned();
             let off0 = in1.map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
             if off0 == 0 { return Ok(action_status::NO_CHANGE); }
-            // if (!isPathology(subOp->getIn(0),data)) return 0; — isPathology's
-            // primitives (is_input/is_persist/is_call/get_call_specs) exist, but
-            // it walks the def-chain to CALLs and needs an op→FuncCallSpecs
-            // lookup (Rugra's get_call_specs is index-only) — see the apply
-            // TODO below for why the whole rule no-ops regardless.
+            // The truncated value being concatenated must itself be pathological.
+            let sub_in0 = match sub_op.read().unwrap().get_in(0).cloned() {
+                Some(v) => v,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            if !Self::is_pathology(&sub_in0, fd) { return Ok(action_status::NO_CHANGE); }
         } else if opc == OpCode::CPUI_INDIRECT {
-            // Ghidra: if (!subOp->isIndirectCreation()) return 0; then checks
-            // lsbOp->getEvalType()/isCall() + getCallSpecs + isOutputLocked +
-            // address contiguity. Rugra has these primitives except the op→
-            // FuncCallSpecs lookup (index-only get_call_specs). See below.
+            // Ghidra: if (!subOp->isIndirectCreation()) return 0;
+            let is_indirect_creation =
+                (sub_op.read().unwrap().flags & pcodeop_flags::INDIRECT_CREATION) != 0;
+            if !is_indirect_creation { return Ok(action_status::NO_CHANGE); }
+            // The LSB piece (in(1) of the PIECE) must be written by a unary/
+            // binary op, or be a CALL with a locked-output callspec.
+            if !lsb_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
+            let lsb_op = match lsb_vn.read().unwrap().get_def() {
+                Some(o) => o,
+                None => return Ok(action_status::NO_CHANGE),
+            };
+            let eval_type = lsb_op.read().unwrap().get_eval_type();
+            let is_unary_or_binary =
+                (eval_type & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) != 0;
+            if !is_unary_or_binary {
+                // ... or a CALL with a locked output.
+                if !lsb_op.read().unwrap().is_call() { return Ok(action_status::NO_CHANGE); }
+                let fc_idx = Self::find_call_spec_for_op(fd, &lsb_op);
+                let locked = fc_idx
+                    .and_then(|i| fd.get_call_specs(i))
+                    .map(|fc| fc.is_output_locked())
+                    .unwrap_or(false);
+                if !locked { return Ok(action_status::NO_CHANGE); }
+            }
+            // Address contiguity check: the LSB piece must sit immediately
+            // after (little-endian) or before (big-endian) the INDIRECT output.
+            let (lsb_addr, lsb_size, vn_addr, vn_size) = {
+                let l = lsb_vn.read().unwrap();
+                let v = vn.read().unwrap();
+                (l.get_addr().clone(), l.get_size(), v.get_addr().clone(), v.get_size())
+            };
+            // Rugra does not track per-space endianness on Address; we use the
+            // little-endian branch (the common case) and fall back to
+            // big-endian if the LE result does not match. This matches Ghidra's
+            // `addr = isBigEndian ? addr - vn->getSize() : addr + lsb->getSize()`.
+            let le_addr = lsb_addr.offset(lsb_size as i64);
+            let be_addr = lsb_addr.offset(-(vn_size as i64));
+            if le_addr.as_u64() != vn_addr.as_u64()
+                && be_addr.as_u64() != vn_addr.as_u64()
+            {
+                return Ok(action_status::NO_CHANGE);
+            }
         } else {
             return Ok(action_status::NO_CHANGE);
         }
-        // return tracePathologyForward(op, data);
-        // TODO(consumption): tracePathologyForward (ruleaction.cc:10506-10559)
-        //   walks forward to CALL/RETURN and records partial consumption via
-        //   FuncProto::setReturnBytesConsumed / FuncCallSpecs::
-        //   setInputBytesConsumed — neither exists in Rugra (grep src/ →
-        //   nothing), and get_call_specs needs an op→index map. Without a way
-        //   to record consumption the rule has no observable effect, so it
-        //   conservatively no-ops.
-        let _ = (fd, lsb_vn);
-        Ok(action_status::NO_CHANGE)
+        // Trace the pathological concatenation forward and record partial
+        // consumption on any CALL input / RETURN it reaches.
+        let count = Self::trace_pathology_forward(op_arc, fd);
+        Ok(if count > 0 { action_status::CHANGE } else { action_status::NO_CHANGE })
     }
 
     fn get_name(&self) -> &str { "piece_pathology" }
@@ -12814,16 +13114,257 @@ impl Rule for RuleConditionalMove {
 /// `checkBackForCompare` (9622-9662), `isAnotherNan` (9664-9694),
 /// `testForComparison` (9696-9738).
 ///
-/// NOTE: The `nan_ignore_all` short-circuit (treat NaN as always false) is now
-/// implemented via `get_arch()`. The deeper `testForComparison`/`checkBackForCompare`
-/// traversal still requires a full `functionalEquality` data-flow analysis
-/// (Rugra only has a trivial `Arc::ptr_eq` approximation) and CBRANCH
-/// out-edge/lastOp block queries; that branch remains a TODO and is only
-/// reached when `nan_ignore_all` is false.
+/// The `nan_ignore_all` short-circuit (treat NaN as always false) is
+/// implemented via `get_arch()`. When `nan_ignore_all` is false, the deeper
+/// `testForComparison`/`checkBackForCompare` traversal removes a NaN data-flow
+/// only when it is combined (via BOOL_OR/BOOL_AND/INT_EQUAL/INT_NOTEQUAL, or a
+/// CBRANCH protecting another CBRANCH) with a floating-point comparison that
+/// takes the same float operand. The functional-equivalence test uses
+/// `crate::address::functional_equality` (the level-0 ptr/const equality).
 pub struct RuleIgnoreNan;
 
 impl RuleIgnoreNan {
     pub fn new() -> Self { Self }
+
+    /// Is `opc` a two-input floating-point comparison op?
+    /// Faithful to `OpCode::isFloatingPointOp` combined with the
+    /// `numInput()==2` guard in Ghidra's checkBackForCompare.
+    fn is_float_compare(opc: OpCode) -> bool {
+        matches!(
+            opc,
+            OpCode::CPUI_FLOAT_EQUAL
+                | OpCode::CPUI_FLOAT_NOTEQUAL
+                | OpCode::CPUI_FLOAT_LESS
+                | OpCode::CPUI_FLOAT_LESSEQUAL
+        )
+    }
+
+    /// Faithful to `RuleIgnoreNan::checkBackForCompare` (ruleaction.cc:9622-9662).
+    ///
+    /// Check if a boolean Varnode `root` incorporates a floating-point
+    /// comparison whose input is functionally equal to `float_var`. The root
+    /// may be the direct output of a comparison, a BOOL_NEGATE of one, or a
+    /// BOOL_AND/BOOL_OR combining a comparison output.
+    fn check_back_for_compare(
+        float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        if !root.read().unwrap().is_written() { return false; }
+        let mut def1 = match root.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        if !def1.read().unwrap().is_bool_output() { return false; }
+        // Peel a BOOL_NEGATE.
+        if def1.read().unwrap().opcode == OpCode::CPUI_BOOL_NEGATE {
+            let inner = def1.read().unwrap().get_in(0).cloned();
+            let inner = match inner {
+                Some(v) if v.read().unwrap().is_written() => v,
+                _ => return false,
+            };
+            def1 = match inner.read().unwrap().get_def() {
+                Some(o) => o,
+                None => return false,
+            };
+        }
+        // Direct floating-point comparison on the (negated) root.
+        let opc1 = def1.read().unwrap().opcode;
+        if Self::is_float_compare(opc1) {
+            if def1.read().unwrap().num_input() != 2 { return false; }
+            let in0 = def1.read().unwrap().get_in(0).cloned();
+            let in1 = def1.read().unwrap().get_in(1).cloned();
+            if let Some(v0) = in0 {
+                if crate::address::functional_equality(float_var, &v0) { return true; }
+            }
+            if let Some(v1) = in1 {
+                if crate::address::functional_equality(float_var, &v1) { return true; }
+            }
+            return false;
+        }
+        // BOOL_AND / BOOL_OR: each branch may hold a comparison.
+        if opc1 != OpCode::CPUI_BOOL_AND && opc1 != OpCode::CPUI_BOOL_OR {
+            return false;
+        }
+        for i in 0..2 {
+            let vn = match def1.read().unwrap().get_in(i).cloned() {
+                Some(v) if v.read().unwrap().is_written() => v,
+                _ => continue,
+            };
+            let def2 = match vn.read().unwrap().get_def() {
+                Some(o) => o,
+                None => continue,
+            };
+            if !def2.read().unwrap().is_bool_output() { continue; }
+            if !Self::is_float_compare(def2.read().unwrap().opcode) { continue; }
+            if def2.read().unwrap().num_input() != 2 { continue; }
+            let a = def2.read().unwrap().get_in(0).cloned();
+            let b = def2.read().unwrap().get_in(1).cloned();
+            if let Some(a) = a {
+                if crate::address::functional_equality(float_var, &a) { return true; }
+            }
+            if let Some(b) = b {
+                if crate::address::functional_equality(float_var, &b) { return true; }
+            }
+        }
+        false
+    }
+
+    /// Faithful to `RuleIgnoreNan::isAnotherNan` (ruleaction.cc:9664-9694).
+    ///
+    /// Test if `vn` is produced by a NaN operation (directly, or via a
+    /// BOOL_NEGATE of a NaN output).
+    fn is_another_nan(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        if !vn.read().unwrap().is_written() { return false; }
+        let mut op = match vn.read().unwrap().get_def() {
+            Some(o) => o,
+            None => return false,
+        };
+        let mut opc = op.read().unwrap().opcode;
+        if opc == OpCode::CPUI_BOOL_NEGATE {
+            let inner = op.read().unwrap().get_in(0).cloned();
+            let inner = match inner {
+                Some(v) if v.read().unwrap().is_written() => v,
+                _ => return false,
+            };
+            op = match inner.read().unwrap().get_def() {
+                Some(o) => o,
+                None => return false,
+            };
+            opc = op.read().unwrap().opcode;
+        }
+        opc == OpCode::CPUI_FLOAT_NAN
+    }
+
+    /// Faithful to `RuleIgnoreNan::testForComparison` (ruleaction.cc:9696-9738).
+    ///
+    /// The NaN output reaches `op` through input `slot`. If `op` combines it
+    /// (BOOL_OR/BOOL_AND/INT_EQUAL/INT_NOTEQUAL) with a floating-point
+    /// comparison of the same float operand — or is a CBRANCH protecting
+    /// another CBRANCH holding such a comparison — the NaN input is removed
+    /// (replaced by a constant 0/1, assuming the NaN is always false). Returns
+    /// the output varnode of `op` when `op`'s opcode equals `match_code` (so the
+    /// caller can continue the chain), else None. Increments `count` on a real
+    /// transformation.
+    fn test_for_comparison(
+        float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        slot: usize,
+        match_code: OpCode,
+        count: &mut i32,
+        fd: &mut Funcdata,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let opc = op.read().unwrap().opcode;
+        let other_idx = 1usize.wrapping_sub(slot); // 1 - slot, for 2-input ops
+        if opc == match_code {
+            // BOOL_AND / BOOL_OR combining the NaN with another boolean.
+            let vn = op.read().unwrap().get_in(other_idx).cloned();
+            if let Some(vn) = vn {
+                if Self::check_back_for_compare(float_var, &vn) {
+                    // data.opSetOpcode(op, COPY); opRemoveInput(op,1);
+                    // opSetInput(op, vn, 0);
+                    let op_ref = crate::op::PcodeOpRef(op.clone());
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                    fd.op_remove_input(&op_ref, 1);
+                    fd.op_set_input(&op_ref, vn, 0);
+                    *count += 1;
+                    return None;
+                } else if Self::is_another_nan(&vn) {
+                    return op.read().unwrap().get_out().cloned();
+                }
+            }
+        } else if opc == OpCode::CPUI_INT_EQUAL || opc == OpCode::CPUI_INT_NOTEQUAL {
+            let vn = op.read().unwrap().get_in(other_idx).cloned();
+            if let Some(vn) = vn {
+                if Self::check_back_for_compare(float_var, &vn) {
+                    // data.opSetInput(op, newConstant(1, matchCode==BOOL_OR?0:1), slot)
+                    let op_ref = crate::op::PcodeOpRef(op.clone());
+                    let val = if match_code == OpCode::CPUI_BOOL_OR { 0 } else { 1 };
+                    let c = fd.new_constant(1, val);
+                    fd.op_set_input(&op_ref, c, slot);
+                    *count += 1;
+                }
+            }
+        } else if opc == OpCode::CPUI_CBRANCH {
+            // The CBRANCH guards control-flow to another CBRANCH that reads a
+            // comparison on the same float operand.
+            Self::try_cbranch_protection(float_var, op, match_code, count, fd);
+        }
+        None
+    }
+
+    /// CBRANCH-protection branch of testForComparison (ruleaction.cc:9722-9737).
+    /// If the CBRANCH's taken/fallthru out-edge leads to a block whose last op
+    /// is another CBRANCH reading (in slot 1) a comparison on `float_var`, and
+    /// that block's other out-edge rejoins the sibling branch, replace the NaN
+    /// input with a constant.
+    fn try_cbranch_protection(
+        float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        match_code: OpCode,
+        count: &mut i32,
+        fd: &mut Funcdata,
+    ) {
+        // Determine which out-edge the NaN-controlled value follows.
+        let boolean_flip = op.read().unwrap().is_boolean_flip();
+        let mut out_dir = if match_code == OpCode::CPUI_BOOL_OR { 0 } else { 1 };
+        if boolean_flip { out_dir = 1 - out_dir; }
+        // Resolve the parent block and its out-edge targets.
+        let parent = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+        let parent = match parent { Some(p) => p, None => return };
+        let out_branch = parent.read().unwrap().get_out(out_dir);
+        let (out_branch, other_branch) = match out_branch {
+            Some(e) => {
+                let other = parent.read().unwrap().get_out(1 - out_dir);
+                (e.point.clone(), other.map(|o| o.point.clone()))
+            }
+            None => return,
+        };
+        // lastOp of the out-branch block.
+        let last_op_ref = {
+            let ob = out_branch.read().unwrap();
+            ob.as_any().downcast_ref::<crate::block::BlockBasic>().and_then(|bb| bb.last_op())
+        };
+        let last_op = match last_op_ref { Some(r) => r.0, None => return };
+        if last_op.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return; }
+        // The protected block's other out-edge must rejoin the sibling branch.
+        let rejoins = if let Some(other) = &other_branch {
+            let ob = out_branch.read().unwrap();
+            let o0 = ob.get_out(0).map(|e| std::sync::Arc::ptr_eq(&e.point, other));
+            let o1 = ob.get_out(1).map(|e| std::sync::Arc::ptr_eq(&e.point, other));
+            o0.unwrap_or(false) || o1.unwrap_or(false)
+        } else {
+            false
+        };
+        if !rejoins { return; }
+        // lastOp->getIn(1) must hold a comparison on float_var.
+        let cmp_in = last_op.read().unwrap().get_in(1).cloned();
+        if let Some(cmp_in) = cmp_in {
+            if Self::check_back_for_compare(float_var, &cmp_in) {
+                let op_ref = crate::op::PcodeOpRef(op.clone());
+                let val = if match_code == OpCode::CPUI_BOOL_OR { 0 } else { 1 };
+                let c = fd.new_constant(1, val);
+                fd.op_set_input(&op_ref, c, 1);
+                *count += 1;
+            }
+        }
+    }
+
+    /// Find the input slot of `target_vn` within `op` (which input slot reads
+    /// it). Faithful to Ghidra's `PcodeOp::getSlot(Varnode*)`.
+    fn input_slot_of(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        target_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<usize> {
+        let o = op.read().unwrap();
+        for (i, inv) in o.inrefs.iter().enumerate() {
+            if std::sync::Arc::ptr_eq(inv, target_vn) {
+                return Some(i);
+            }
+        }
+        None
+    }
 }
 
 impl Rule for RuleIgnoreNan {
@@ -12846,11 +13387,60 @@ impl Rule for RuleIgnoreNan {
             None => return Ok(action_status::NO_CHANGE),
         };
         if float_var.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-        // The helper walks (BOOL_NEGATE, BOOL_OR/AND, INT_EQUAL, CBRANCH
-        // protection) need full functionalEquality data-flow analysis (Rugra
-        // only has an Arc::ptr_eq approximation) plus CBRANCH out-edge block
-        // queries. TODO(flow/analysis): port once functionalEquality is full.
-        Ok(action_status::NO_CHANGE)
+        let out1 = match op_arc.read().unwrap().get_out().cloned() {
+            Some(v) => v,
+            None => return Ok(action_status::NO_CHANGE),
+        };
+        let mut count = 0i32;
+        // Walk the descendants of the NaN output, up to 3 levels deep (faithful
+        // to applyOp's three nested beginDescend/endDescend loops).
+        let level0: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out1
+            .read().unwrap()
+            .descend
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .collect();
+        for bool_read1 in level0 {
+            let match_code;
+            let out2;
+            if bool_read1.read().unwrap().opcode == OpCode::CPUI_BOOL_NEGATE {
+                match_code = OpCode::CPUI_BOOL_AND;
+                out2 = bool_read1.read().unwrap().get_out().cloned();
+            } else {
+                match_code = OpCode::CPUI_BOOL_OR;
+                let slot = Self::input_slot_of(&bool_read1, &out1).unwrap_or(0);
+                out2 = Self::test_for_comparison(
+                    &float_var, &bool_read1, slot, match_code, &mut count, fd,
+                );
+            }
+            let out2 = match out2 { Some(v) => v, None => continue };
+            let level1: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out2
+                .read().unwrap()
+                .descend
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .collect();
+            for bool_read2 in level1 {
+                let slot = Self::input_slot_of(&bool_read2, &out2).unwrap_or(0);
+                let out3 = Self::test_for_comparison(
+                    &float_var, &bool_read2, slot, match_code, &mut count, fd,
+                );
+                let out3 = match out3 { Some(v) => v, None => continue };
+                let level2: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out3
+                    .read().unwrap()
+                    .descend
+                    .iter()
+                    .filter_map(|w| w.upgrade())
+                    .collect();
+                for bool_read3 in level2 {
+                    let slot = Self::input_slot_of(&bool_read3, &out3).unwrap_or(0);
+                    Self::test_for_comparison(
+                        &float_var, &bool_read3, slot, match_code, &mut count, fd,
+                    );
+                }
+            }
+        }
+        Ok(if count > 0 { action_status::CHANGE } else { action_status::NO_CHANGE })
     }
 
     fn get_name(&self) -> &str { "ignore_nan" }

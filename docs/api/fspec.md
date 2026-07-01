@@ -150,3 +150,7 @@ FuncCallSpecs 新增 `proto_model: Option<ProtoModel>` 字段 + 方法：
 - 新增 `EffectRecord` 结构 + `EffectType` 枚举（unaffected/killedbycall/return_address/unknown_effect）。忠实移植 Ghidra `EffectRecord`（fspec.hh:391-416）。
 - `FuncProto` 新增 `effects: Vec<EffectRecord>` 字段 + `effect_iter()` / `add_effect()` 方法。对应 Ghidra `FuncProto::effectlist` + `effectBegin/effectEnd`。
 - 解锁 ActionRestrictLocal Loop 2（遍历 effect records 找 saved registers → COPY to stack → markNotMapped）。
+
+### 2026-07-01：bytes_consumed tracking
+FuncProto: +return_bytes_consumed 字段 + get/set（fspec.hh:1367/1429）。
+FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870）。

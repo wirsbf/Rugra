@@ -911,3 +911,8 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫。RuleSu
 ### 2026-07-01（续 8）：PieceStructure piece 重组引擎 + Segment 常量折叠
 - PieceStructure：PieceNode struct + is_leaf_node + gather_pieces（op.cc:801-876）+ convert_zext_to_piece（cc:7543）+ find_replace_zext + separate_symbol + get_exact_piece + apply_op 真正变换（cc:7625-7718）。4 新测试。
 - Segment：SegmentOp::execute（userop.cc:218）+ supports_far_pointer/has_far_pointer_support。RuleSegment::apply_op 常量折叠分支（cc:9024）+ far-pointer 分支（cc:9034）+ contiguous_test/find_contiguous_whole helper。4 新测试。
+
+### 2026-07-01（续 9）：PiecePathology + IgnoreNan 深度路径
+- PiecePathology：isPathology（ruleaction.cc:10427-10505）递归 def 链遍历 + tracePathologyForward（10506-10559）前向 descend 追踪到 CALL/RETURN 记 bytes_consumed。apply_op 双路径（SUBPIECE + INDIRECT）。
+- IgnoreNan 深度路径：checkBackForCompare（9622-9662）+ isAnotherNan（9664-9694）+ testForComparison（9696-9738）三种合并路径 + CBRANCH 保护。nan_ignore_all=false 时真正执行 NaN 数据流移除。
+- fspec.rs：FuncProto +return_bytes_consumed + FuncCallSpecs +input_consume Vec + getter/setter。
