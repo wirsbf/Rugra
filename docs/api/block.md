@@ -891,3 +891,5 @@ BlockGraph 新增：
 
 ### 2026-07-01（续 2）：build_dom_tree reindex
 build_dom_tree 开头 reindex 所有块到向量位置（防止 dead-flow 删块后索引越界）。
+
+### 2026-07-01（续 3）：BlockWhileDo +for_init/for_iter

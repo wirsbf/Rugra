@@ -1277,7 +1277,7 @@ impl<'a> CollapseStructure<'a> {
                         incoming: Vec::new(),
                         outgoing: Vec::new(),
                         parent: None,
-                        flags: 0,
+                        flags: 0, for_init: None, for_iter: None,
                     }));
                 self.identify_internal(&while_block, &[body_idx], hi);
                 self.change_count += 1;
@@ -2961,7 +2961,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
-                    flags: 0,
+                    flags: 0, for_init: None, for_iter: None,
                 }));
             // Ghidra newBlockWhileDo: identifyInternal([cond, cl]) + forceOutputNum(1).
             // Consume the body clause; self_identify captures its boundary edges.
@@ -3144,7 +3144,7 @@ impl<'a> CollapseStructure<'a> {
                                             incoming: Vec::new(),
                                             outgoing: Vec::new(),
                                             parent: None,
-                                            flags: 0,
+                                            flags: 0, for_init: None, for_iter: None,
                                         }));
                                     replacements.push((i, while_block));
                                     self.change_count += 1;
@@ -3238,7 +3238,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
-                    flags: 0,
+                    flags: 0, for_init: None, for_iter: None,
                 }));
             replacements.push((header_idx as usize, while_block));
             self.change_count += 1;
@@ -3374,7 +3374,7 @@ impl<'a> CollapseStructure<'a> {
                             incoming: Vec::new(),
                             outgoing: Vec::new(),
                             parent: None,
-                            flags: 0,
+                            flags: 0, for_init: None, for_iter: None,
                         }));
                     replacements.push((header_idx as usize, while_block));
                     self.change_count += 1;
@@ -3469,7 +3469,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
-                    flags: 0,
+                    flags: 0, for_init: None, for_iter: None,
                 }));
             if i < self.graph.blocks.len() {
                 self.graph.blocks[i] = while_block.clone();

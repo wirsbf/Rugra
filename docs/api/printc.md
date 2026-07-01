@@ -592,3 +592,6 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 
 ### 2026-06-29：BlockIf if-goto emit（goto_target.is_some()）
 - printc.rs BlockType::If emit 新增 if-goto 分支：当 `if_data.goto_target.is_some()` 时，emit condition block 的 ops（CBRANCH 处理分支），不 emit 占位 body。对应 Ghidra newBlockIfGoto 的 emit 语义。
+
+### 2026-07-01：while→for 发射
+WhileDo 块检查 for_init/for_iter：有则 `for(init;cond;iter)`，否则 `while(cond)`。

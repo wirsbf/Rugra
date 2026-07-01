@@ -647,19 +647,32 @@ impl PrintC {
                 }
             }
             BlockType::WhileDo => {
-                // Structured while loop
+                // Structured while loop (or for loop if for_init/for_iter set)
                 let block = block_arc.read().unwrap();
                 let while_block = block.as_any().downcast_ref::<BlockWhileDo>();
                 if let Some(while_data) = while_block {
                     self.emit.tag_line(0);
-                    self.emit.print("while (");
-                    self.emit_block_condition(&while_data.condition);
-                    self.emit.print(")");
+                    // Check if this was identified as a for-loop by
+                    // ActionStructureTransform (has init + iterate expressions).
+                    let has_for = while_data.for_init.is_some() && while_data.for_iter.is_some();
+                    if has_for {
+                        // Emit as for(init; cond; iter)
+                        self.emit.print("for (");
+                        self.emit.print(while_data.for_init.as_ref().unwrap());
+                        self.emit.print("; ");
+                        self.emit_block_condition(&while_data.condition);
+                        self.emit.print("; ");
+                        self.emit.print(while_data.for_iter.as_ref().unwrap());
+                        self.emit.print(")");
+                    } else {
+                        // Emit as while(cond)
+                        self.emit.print("while (");
+                        self.emit_block_condition(&while_data.condition);
+                        self.emit.print(")");
+                    }
 
                     self.emit.begin_block();
                     self.loop_depth += 1;
-                    // The body was consumed (DEAD) by identify_internal.
-                    // emit_block_structured skips DEAD blocks, so emit ops directly.
                     let body_is_dead = while_data.body.read().unwrap().get_flags()
                         & crate::block::block_flags::DEAD != 0;
                     if body_is_dead {
@@ -2168,6 +2181,28 @@ impl PrintC {
                     }
                 }
                 self.emit.close_paren();
+            }
+            // CPUI_CAST: emit `(type)input`. Faithful to Ghidra printCc's
+            // op-cast handling (printc.cc): a CAST op renders as a C cast of
+            // its single input to the output varnode's type. ActionSetCasts
+            // inserts these (coreaction.cc:2702) when an op's expected input
+            // type differs from the feeding varnode's high type.
+            OpCode::CPUI_CAST => {
+                // Emit "(typename)". The output varnode's v_type (set by
+                // castInput to reqtype) is the cast target type.
+                let type_name = def_op.output.as_ref()
+                    .and_then(|o| {
+                        let guard = o.read().unwrap();
+                        guard.v_type.as_ref().map(|t| t.get_name().to_string())
+                    })
+                    .unwrap_or_else(|| "long".to_string());
+                if !self.discovery_pass {
+                    self.emit.print(&format!("({})", type_name));
+                }
+                if !def_op.inrefs.is_empty() {
+                    self.push_input(def_op, 0);
+                }
+                return;
             }
             _ => {
                 // Fallback: emit as variable name (don't inline unknown ops)

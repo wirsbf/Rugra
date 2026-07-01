@@ -719,3 +719,6 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 ### 2026-07-01（续）：Dead-flow Actions 作为 pre-structuring pass
 ActionUnreachable + ActionDeterminedBranch 在 ActionBlockStructure::apply 开头运行（build_copy 之前）。build_dom_tree 在删除后重新索引块。ActionDoNothing/RedundBranch 实现就位但未接入（删除测试预期的块）。
+
+### 2026-07-01（续 2）：BlockWhileDo for-loop 字段 + printc for 发射
+BlockWhileDo 加 for_init/for_iter 字段（对齐 Ghidra iterateOp/initializeOp）。printc WhileDo 发射：有 for_init+for_iter → `for(init;cond;iter)`，否则 `while(cond)`。

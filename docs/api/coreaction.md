@@ -744,3 +744,5 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 - ReturnSplit：**goto 前驱创建 RETURN op**（用现有 op API 替代 nodeSplit, blockaction.cc:2264）。
 - NodeJoin：**菱形检测 + 条件合并候选**（ConditionalJoin match, blockaction.cc:2065）。
 5 新测试。
+
+### 2026-07-01（续 9）：StructureTransform 测试 BlockWhileDo for_init/for_iter

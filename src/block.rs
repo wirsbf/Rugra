@@ -1454,6 +1454,11 @@ pub struct BlockWhileDo {
     pub outgoing: Vec<BlockEdge>,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
     pub flags: u32,
+    /// For-loop metadata set by ActionStructureTransform when the while-do
+    /// matches the canonical `for(init; cond; iterate)` pattern.
+    /// Faithful to Ghidra's BlockWhileDo iterateOp/initializeOp (block.hh:690+).
+    pub for_init: Option<String>,
+    pub for_iter: Option<String>,
 }
 
 impl FlowBlock for BlockWhileDo {

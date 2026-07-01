@@ -7722,7 +7722,7 @@ mod tests {
             incoming: Vec::new(),
             outgoing: Vec::new(),
             parent: None,
-            flags: 0,
+            flags: 0, for_init: None, for_iter: None,
         };
         fd.sblocks.add_block(std::sync::Arc::new(std::sync::RwLock::new(wd)));
         // iterate op (INT_ADD) must be printable before.
