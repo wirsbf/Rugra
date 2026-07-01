@@ -54,3 +54,6 @@ UserPcodeOp 新增：get_operator_name/extract_annotation_size/is_volatile_read/
 
 ### 2026-07-01（续）：CALLOTHER 注册 API
 BUILTIN 常量对齐 userop.cc:30-35。register_builtin_by_id/register_string_copy_op/register_string_store_op + builtin_map + get_call_other_name。4 新测试。
+
+### 2026-07-01（续 2）：SegmentOp::execute + supports_far_pointer
+SegmentOp::execute（userop.cc:218-223）：2输入(base,inner)→(base<<4)+inner；1输入→inner。supports_far_pointer 字段 + has_far_pointer_support()。

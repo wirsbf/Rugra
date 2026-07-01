@@ -203,10 +203,15 @@ impl VolatileWriteOp {
 #[derive(Debug, Clone)]
 pub struct SegmentOp {
     pub base: UserPcodeOp,
-    /// The address space this segment op operates on.
+    /// The address space this segment op operates on. Faithful to the
+    /// `spc` field (userop.hh:265).
     pub space: u32,
     /// Base resolution: how the segment base is computed.
     pub supports_index: bool,
+    /// True if the joined pair base:near acts as a far pointer. Faithful to
+    /// `supportsfarpointer` (userop.hh:269); set by the `farpointer="yes"`
+    /// attribute in `<segmentop>` (userop.cc:240 `ATTRIB_FARPOINTER`).
+    pub supports_far_pointer: bool,
 }
 
 impl SegmentOp {
@@ -215,6 +220,42 @@ impl SegmentOp {
             base: UserPcodeOp::new(name, UserOpType::Segment, index),
             space: 0,
             supports_index: false,
+            supports_far_pointer: false,
+        }
+    }
+
+    /// Return true if this op supports far pointers. Faithful to
+    /// `SegmentOp::hasFarPointerSupport` (userop.hh:274).
+    pub fn has_far_pointer_support(&self) -> bool {
+        self.supports_far_pointer
+    }
+
+    /// Constant-fold a SEGMENTOP given constant inputs.
+    ///
+    /// Faithful to `SegmentOp::execute` (userop.cc:218-223). Ghidra evaluates
+    /// the `<pcode>` body of the `<segmentop>` via `pcodeinjectlib`:
+    ///   `ExecutablePcode *script = getPayload(injectId); return script->evaluate(input);`
+    /// Rugra has no pcode-inject engine, so we evaluate the canonical
+    /// segmented-address formula directly. For the only architecture Rugra
+    /// models a segment on (x86 16-bit real mode, see
+    /// `x86-16-real.pspec`/`x86-16.pspec`), the injected p-code is:
+    ///   `res = (zext(base) << 4) + zext(inner);`
+    /// i.e. `linear = (selector << 4) + offset`. This is the general
+    /// real-mode form `segment_base + offset` with a fixed `base << 4`
+    /// shift, matching Ghidra's bundled cspec definitions.
+    ///
+    /// Inputs follow Ghidra's `bindlist` ordering (userop.cc:198-215): with a
+    /// base term present, `[base, inner]`; with no base term, `[inner]` only.
+    /// Returns `None` if the input arity does not match a recognised segment
+    /// form (Ghidra always has 1 or 2 inputs, declared in `decode`,
+    /// userop.cc:280-289).
+    pub fn execute(&self, inputs: &[u64]) -> Option<u64> {
+        match inputs.len() {
+            // base term present: linear = (base << 4) + inner
+            2 => Some((inputs[0] << 4).wrapping_add(inputs[1])),
+            // no base term (near pointer): linear = inner
+            1 => Some(inputs[0]),
+            _ => None,
         }
     }
 }
@@ -575,5 +616,36 @@ mod tests {
         let idx = mgr.manual_call_other_fixup("my_fixup", "out", &["in1".into(), "in2".into()]);
         assert!(mgr.get_op(idx).is_some());
         assert_eq!(mgr.get_op(idx).unwrap().get_type(), UserOpType::Injected);
+    }
+
+    #[test]
+    fn test_segment_op_execute() {
+        // Faithful to SegmentOp::execute (userop.cc:218-223) via the canonical
+        // x86-16 real-mode formula res = (base << 4) + inner, matching the
+        // injected p-code in x86-16-real.pspec / x86-16.pspec.
+        let seg = SegmentOp::new("segment".into(), 0);
+        // base=0x1234, inner=0x0002 -> (0x1234 << 4) + 2 = 0x12342.
+        assert_eq!(seg.execute(&[0x1234, 0x0002]), Some(0x12342));
+        // base=0x2000, inner=0x0010 -> 0x20010.
+        assert_eq!(seg.execute(&[0x2000, 0x0010]), Some(0x20010));
+        // base=0, inner=5 -> 5 (zero segment).
+        assert_eq!(seg.execute(&[0, 5]), Some(5));
+        // Near-pointer form (no base term): linear = inner.
+        assert_eq!(seg.execute(&[0x1234]), Some(0x1234));
+        // Wrapping arithmetic: (0xFFF...F << 4) + 0x10 overflows u64 to 0.
+        assert_eq!(seg.execute(&[u64::MAX >> 4, 0x10]), Some(0));
+        // Unrecognised arity -> None (Ghidra always declares 1 or 2 inputs).
+        assert_eq!(seg.execute(&[]), None);
+        assert_eq!(seg.execute(&[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn test_segment_op_far_pointer_support() {
+        // Faithful to SegmentOp::hasFarPointerSupport (userop.hh:274) and the
+        // `supportsfarpointer` field (userop.hh:269).
+        let mut seg = SegmentOp::new("segment".into(), 0);
+        assert!(!seg.has_far_pointer_support());
+        seg.supports_far_pointer = true; // set by farpointer="yes" attribute
+        assert!(seg.has_far_pointer_support());
     }
 }

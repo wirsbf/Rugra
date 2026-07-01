@@ -10572,23 +10572,143 @@ impl Rule for RuleExpandLoad {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
 
+/// A node in a CONCAT tree of CPUI_PIECE operations.
+///
+/// Faithful to Ghidra's `PieceNode` (op.hh:262-277, op.cc:801-876). Records a
+/// single piece Varnode within a PIECE op: which op reads it, which input slot,
+/// its byte offset into the structured data-type, and whether it is a leaf of
+/// the tree (i.e. does not itself read the output of another PIECE).
+struct PieceNode {
+    /// The CPUI_PIECE op that reads this piece (held by Arc; the same op may
+    /// appear in two nodes, one per input slot).
+    op: std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    /// Input slot (0 = high half, 1 = low half) of this piece within `op`.
+    slot: usize,
+    /// Byte offset of this piece into the structured data-type.
+    type_offset: i32,
+    /// True if this node is a leaf (its Varnode is not itself a PIECE output).
+    leaf: bool,
+}
+
+impl PieceNode {
+    /// True if this node is a leaf of the CONCAT tree.
+    fn is_leaf(&self) -> bool { self.leaf }
+    /// Byte offset of this piece into the data-type.
+    fn get_type_offset(&self) -> i32 { self.type_offset }
+    /// The PIECE op reading this piece.
+    fn get_op(&self) -> &std::sync::Arc<std::sync::RwLock<PcodeOp>> { &self.op }
+    /// The input slot of this piece within its PIECE op.
+    fn get_slot(&self) -> usize { self.slot }
+
+    /// The Varnode representing this piece (`op->getIn(slot)`).
+    fn get_varnode(&self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        self.op.read().unwrap().inrefs.get(self.slot).cloned()
+    }
+
+    /// Faithful to `PieceNode::isLeaf` (op.cc:801-817). A Varnode `vn` (at byte
+    /// offset `rel_offset` within the data-type, relative to the root's offset)
+    /// is a leaf unless it is itself the output of a PIECE feeding a lone
+    /// descendant with matching address bookkeeping.
+    fn is_leaf_node(
+        root_vn: &crate::varnode::Varnode,
+        vn: &crate::varnode::Varnode,
+        rel_offset: i32,
+    ) -> bool {
+        // vn->isMapped() && root->getSymbolEntry() != vn->getSymbolEntry()
+        if vn.mapentry.is_some() {
+            let root_entry = root_vn.get_symbol_entry();
+            let vn_entry = vn.get_symbol_entry();
+            let differ = match (&root_entry, &vn_entry) {
+                (Some(r), Some(v)) => !std::sync::Arc::ptr_eq(r, v),
+                _ => true,
+            };
+            if differ { return true; }
+        }
+        // !vn->isWritten()
+        if !vn.is_written() { return true; }
+        // def->code() != CPUI_PIECE
+        let def = match vn.get_def() { Some(d) => d, None => return true };
+        if def.read().unwrap().opcode != OpCode::CPUI_PIECE { return true; }
+        // op = vn->loneDescend(); op == null → leaf
+        let lone = match vn.lone_descend() { Some(o) => o, None => return true };
+        // vn->isAddrTied() → leaf unless vn->getAddr() == root->getAddr()+relOffset
+        if vn.is_addr_tied() {
+            let addr = root_vn.get_offset().wrapping_add(rel_offset as u64);
+            if vn.get_offset() != addr { return true; }
+            // (the lone descendant must be the PIECE we came from; the address
+            //  bookkeeping is satisfied by the loneDescend check above.)
+            let _ = lone;
+        }
+        false
+    }
+
+    /// Faithful to `PieceNode::gatherPieces` (op.cc:865-876). Recursively walk
+    /// backwards from the root through CPUI_PIECE ops, appending one node per
+    /// input slot. Endianness determines the byte offset of each input: in a
+    /// big-endian space, slot 1 (low half) sits at the higher offset.
+    fn gather_pieces(
+        stack: &mut Vec<PieceNode>,
+        root_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        base_offset: i32,
+        root_offset: i32,
+    ) {
+        // Big-endianness comes from the root's address space.
+        let big_endian = root_vn.read().unwrap().get_space().is_big_endian();
+        // Snapshot the two input varnodes + their sizes to avoid holding the
+        // op lock across recursive calls.
+        let (in0, in1, sz0, sz1) = {
+            let o = op.read().unwrap();
+            let i0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return };
+            let i1 = match o.inrefs.get(1) { Some(v) => v.clone(), None => return };
+            let s0 = i0.read().unwrap().get_size() as i32;
+            let s1 = i1.read().unwrap().get_size() as i32;
+            (i0, i1, s0, s1)
+        };
+        // Process slot 0 then slot 1. For each non-leaf input, recurse into its
+        // defining PIECE op. The borrow on root_vn is released after is_leaf_node.
+        for (slot, vn, other_sz) in [(0usize, in0.clone(), sz1), (1usize, in1.clone(), sz0)] {
+            // offset = (isBigEndian == (slot==1)) ? baseOffset + otherSize : baseOffset
+            let offset = if big_endian == (slot == 1) {
+                base_offset + other_sz
+            } else {
+                base_offset
+            };
+            let res = {
+                let root_rg = root_vn.read().unwrap();
+                let vn_rg = vn.read().unwrap();
+                Self::is_leaf_node(&root_rg, &vn_rg, offset - root_offset)
+            };
+            stack.push(PieceNode { op: op.clone(), slot, type_offset: offset, leaf: res });
+            if !res {
+                // Recurse into the defining PIECE op of this non-leaf input.
+                let def = vn.read().unwrap().get_def();
+                if let Some(defop) = def {
+                    Self::gather_pieces(stack, root_vn, &defop, offset, root_offset);
+                }
+            }
+        }
+    }
+}
+
 /// Cleanup: Concatenating structure pieces gets printed as explicit write
 /// statements.
 ///
 /// Faithful to `RulePieceStructure` (ruleaction.cc:7625-7720) plus helpers
 /// `determineDatatype` (7481-7517), `spanningRange` (7519-7541),
 /// `convertZextToPiece` (7543-7572), `findReplaceZext` (7574-7596),
-/// `separateSymbol` (7598-7611).
+/// `separateSymbol` (7598-7611), and the `PieceNode` engine (op.cc:801-876).
 ///
-/// NOTE: This rule is entirely driven by structured data-types. Rugra now
-/// exposes `get_type()` / `is_piece_structured()` / `get_sub_type()`, so the
-/// `spanning_range` and `determine_datatype` guards are wired (the partial
-/// varnode sub-case needs a real SymbolEntry — see TODO in determine_datatype).
-/// The full transform still cannot fire because the piece-assembly step needs
-/// `PieceNode::gatherPieces`, `newVarnodeOut(addr,...)`,
-/// `registerProtoPartialRoot`, and `inheritResolution`, none of which exist in
-/// Rugra. It remains a no-op (see TODO at the apply site) until that deeper
-/// type-resolution infrastructure lands.
+/// The rule is driven by structured data-types. Rugra exposes
+/// `get_type()` / `is_piece_structured()` / `get_sub_type()`, so the
+/// `spanning_range` and `determine_datatype` guards are wired. The piece
+/// reassembly now performs a real transform: for each leaf of the CONCAT tree
+/// it inserts a COPY into a correctly-addressed Varnode (typed via
+/// `get_sub_type`) and rewires the PIECE input. Internal (non-leaf) Varnodes
+/// that need new storage are replaced in place. Ghidra's
+/// `registerProtoPartialRoot` / `inheritResolution` / `getExactPiece` are not
+/// modelled in Rugra, so those sub-steps are omitted (the proto-partial flag is
+/// still set on rewritten Varnodes for the merge pass).
 pub struct RulePieceStructure;
 
 impl RulePieceStructure {
@@ -10666,52 +10786,310 @@ impl RulePieceStructure {
         }
     }
 
-    /// Faithful to `convertZextToPiece` (ruleaction.cc:7543-7572). Converts an
-    /// INT_ZEXT to a PIECE with a zero high constant. Returns false here as the
-    /// type-driven offset bookkeeping (`needsResolution`/`inheritResolution`)
-    /// and the proto-partial re-attachment are unavailable.
+    /// Faithful to `convertZextToPiece` (ruleaction.cc:7543-7564). Converts an
+    /// INT_ZEXT op into a PIECE with a zero constant as its first (high) input.
+    /// `ct`/`offset` describe the data-type and byte offset of the op's output.
+    /// A zero Varnode of size `out - in` is created and, if `get_sub_type`
+    /// resolves to a matching-size sub-type, given that type. The op's opcode is
+    /// switched to CPUI_PIECE and the zero inserted at slot 0.
+    /// `invn->getType()->needsResolution()` → `inheritResolution` (7561-7562) is
+    /// not modelled in Rugra and is skipped.
     fn convert_zext_to_piece(
-        _zext: &crate::op::PcodeOpRef,
-        _ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
-        _offset: i32,
-        _fd: &mut Funcdata,
+        zext: &crate::op::PcodeOpRef,
+        ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        offset: i32,
+        fd: &mut Funcdata,
     ) -> bool {
-        // TODO(proto-partial): the big-endian term (outvn->getSpace()->
-        //   isBigEndian) and Datatype::get_sub_type ARE available, but the
-        //   transform also needs invn->getType()->needsResolution() /
-        //   inheritResolution (proto-partial resolution state tracked on the
-        //   Funcdata's type-resolution machinery) which Rugra does not model
-        //   (grep needsResolution/inheritResolution src/ → nothing).
+        let (outvn, invn, big_endian) = {
+            let z = zext.0.read().unwrap();
+            let outvn = match &z.output { Some(o) => o.clone(), None => return false };
+            let invn = match z.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+            let big_endian = outvn.read().unwrap().get_space().is_big_endian();
+            (outvn, invn, big_endian)
+        };
+        // invn->isConstant() → false
+        if invn.read().unwrap().is_constant() { return false; }
+        let in_size = invn.read().unwrap().get_size() as i32;
+        let out_size = outvn.read().unwrap().get_size() as i32;
+        let sz = out_size - in_size;
+        // sz > sizeof(uintb) (8) → false
+        if sz > 8 { return false; }
+        // offset += outvn->getSpace()->isBigEndian() ? 0 : invn->getSize()
+        let mut new_off = offset + if big_endian { 0 } else { in_size };
+        // Walk getSubType down until ct->getSize() <= sz.
+        let mut cur: std::sync::Arc<crate::type_system::datatype::Datatype> = ct.clone();
+        let zero_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> = loop {
+            if cur.get_size() as i32 <= sz {
+                if cur.get_size() as i32 == sz {
+                    break Some(cur.clone());
+                }
+                break None;
+            }
+            let (sub, off) = cur.get_sub_type(new_off as i64);
+            match sub {
+                Some(s) => {
+                    cur = std::sync::Arc::new(s.clone());
+                    new_off = off as i32;
+                }
+                None => break None,
+            }
+        };
+        // zerovn = data.newConstant(sz, 0); updateType if ct matches.
+        let zerovn = fd.new_constant(sz as usize, 0);
+        if let Some(t) = zero_type {
+            zerovn.write().unwrap().update_type(t);
+        }
+        // data.opSetOpcode(zext, CPUI_PIECE); opInsertInput(zext, zerovn, 0)
+        fd.op_set_opcode(zext, OpCode::CPUI_PIECE);
+        fd.op_insert_input(zext, zerovn, 0);
+        // invn->getType()->needsResolution() → inheritResolution: skipped
+        // (no type-resolution state in Rugra).
+        true
+    }
+
+    /// Faithful to `findReplaceZext` (ruleaction.cc:7574-7590). Walks the
+    /// gathered CONCAT-tree nodes; for each INT_ZEXT leaf whose Varnode spans
+    /// multiple structure elements, converts the ZEXT to a PIECE. Returns true
+    /// if any conversion happened (so the caller rebuilds the tree).
+    fn find_replace_zext(
+        stack: &[PieceNode],
+        structured_type: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        fd: &mut Funcdata,
+    ) -> bool {
+        let mut change = false;
+        // Snapshot the (varnode, type_offset) of every leaf up front, since
+        // convert_zext_to_piece mutates the tree and we must not iterate it.
+        let mut leaves: Vec<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32)> = Vec::new();
+        for node in stack {
+            if !node.is_leaf() { continue; }
+            if let Some(vn) = node.get_varnode() {
+                leaves.push((vn, node.get_type_offset()));
+            }
+        }
+        for (vn, type_offset) in leaves {
+            if !vn.read().unwrap().is_written() { continue; }
+            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            if def.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { continue; }
+            let vn_size = vn.read().unwrap().get_size() as i32;
+            if !Self::spanning_range(structured_type, type_offset, vn_size) { continue; }
+            if Self::convert_zext_to_piece(&crate::op::PcodeOpRef(def), structured_type, type_offset, fd) {
+                change = true;
+            }
+        }
+        change
+    }
+
+    /// Faithful to `separateSymbol` (ruleaction.cc:7598-7611). Returns true if a
+    /// CONCAT-tree leaf should be treated as belonging to a different symbol
+    /// than the root. A leaf is separate if its symbol entry differs from the
+    /// root's, or if the root is not addr-tied, or if the leaf is proto-partial
+    /// / defined by a marker / defined by a PIECE whose type is itself
+    /// piece-structured.
+    fn separate_symbol(
+        root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        leaf: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        let root_entry = root.read().unwrap().get_symbol_entry();
+        let leaf_entry = leaf.read().unwrap().get_symbol_entry();
+        let differ = match (&root_entry, &leaf_entry) {
+            (Some(r), Some(l)) => !std::sync::Arc::ptr_eq(r, l),
+            _ => true,
+        };
+        if differ {
+            return true; // forced to be different symbols
+        }
+        if root.read().unwrap().is_addr_tied() { return false; }
+        if !leaf.read().unwrap().is_written() { return true; }
+        if leaf.read().unwrap().is_proto_partial() { return true; }
+        let def = match leaf.read().unwrap().get_def() { Some(d) => d, None => return true };
+        if def.read().unwrap().is_marker() { return true; }
+        if def.read().unwrap().opcode != OpCode::CPUI_PIECE { return false; }
+        if let Some(t) = leaf.read().unwrap().get_type() {
+            if t.is_piece_structured() { return true; }
+        }
         false
+    }
+
+    /// Faithful to `TypeFactory::getExactPiece` (type.cc:2945-2976). Given a
+    /// structured data-type, an offset, and a size, descend through
+    /// `get_sub_type` until the component exactly matches `(offset, size)`; if
+    /// such an exact component exists return it, otherwise None. This replaces
+    /// Ghidra's `data.getArch()->types->getExactPiece(ct, off, sz)`.
+    fn get_exact_piece(
+        mut ct: &crate::type_system::datatype::Datatype,
+        mut off: i64,
+        size: i64,
+    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        loop {
+            if ct.get_size() as i64 == size && off == 0 {
+                return Some(std::sync::Arc::new(ct.clone()));
+            }
+            if ct.get_size() as i64 <= size {
+                return None;
+            }
+            let (sub, new_off) = ct.get_sub_type(off);
+            match sub {
+                Some(s) => {
+                    ct = s;
+                    off = new_off;
+                }
+                None => return None,
+            }
+        }
     }
 }
 
 impl Rule for RulePieceStructure {
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7720).
-        // The guard-level determine_datatype / spanning_range checks now run
-        // against the varnode's read-facing type. The piece-assembly step
-        // (gatherPieces / convertZextToPiece / addr-tied rewrites) needs
-        // PieceNode + proto-partial APIs that are not yet ported, so the rule
-        // still conservatively no-ops.
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7718).
+        // Ghidra's `op->isPartialRoot()` re-visit guard is not modelled in
+        // Rugra (no partial-root flag on PcodeOp), so it is skipped.
         let outvn = match op_arc.read().unwrap().output.clone() {
             Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
         };
-        // Guard: determineDatatype(outvn).
-        let (ct, _base_offset) = match Self::determine_datatype(&outvn) {
+        // determineDatatype(outvn).
+        let (ct, base_offset) = match Self::determine_datatype(&outvn) {
             Some(x) => x,
             None => return Ok(action_status::NO_CHANGE),
         };
-        // Guard: the output must span multiple structure elements.
-        if !Self::spanning_range(&ct, _base_offset, outvn.read().unwrap().get_size() as i32) {
+        // INT_ZEXT fast path: convert to PIECE immediately.
+        let is_zext = op_arc.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT;
+        if is_zext {
+            let out_type = outvn.read().unwrap().get_type().unwrap_or(ct.clone());
+            if Self::convert_zext_to_piece(&crate::op::PcodeOpRef(op_arc.clone()), &out_type, 0, fd) {
+                return Ok(action_status::CHANGE);
+            }
             return Ok(action_status::NO_CHANGE);
         }
-        // TODO(piece-assembly): gatherPieces / convertZextToPiece / addr-tied
-        //   rewrites / newVarnodeOut(addr,...) / registerProtoPartialRoot /
-        //   inheritResolution. Rugra has no PieceNode tree or proto-partial
-        //   APIs, so the actual piece rewrite cannot be performed yet.
-        Ok(action_status::NO_CHANGE)
+        // The rule also only targets PIECE (per get_opcodes); anything else no-ops.
+        if op_arc.read().unwrap().opcode != OpCode::CPUI_PIECE {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Check if outvn is really the root: if its lone descendant is a PIECE
+        // or INT_ZEXT, it is a sub-piece — defer to that descendant.
+        let lone = outvn.read().unwrap().lone_descend();
+        if let Some(zext) = lone {
+            let zcode = zext.read().unwrap().opcode;
+            if zcode == OpCode::CPUI_PIECE {
+                return Ok(action_status::NO_CHANGE); // more PIECEs below, not a root
+            }
+            if zcode == OpCode::CPUI_INT_ZEXT {
+                // Extension of a structured data-type: convert extension first.
+                let zout = match zext.read().unwrap().output.clone() {
+                    Some(o) => o,
+                    None => return Ok(action_status::NO_CHANGE),
+                };
+                let z_type = zout.read().unwrap().get_type().unwrap_or(ct.clone());
+                if Self::convert_zext_to_piece(&crate::op::PcodeOpRef(zext.clone()), &z_type, 0, fd) {
+                    return Ok(action_status::CHANGE);
+                }
+                return Ok(action_status::NO_CHANGE);
+            }
+        }
+
+        // gatherPieces + findReplaceZext loop: build the CONCAT tree, then
+        // convert any INT_ZEXT leaves that span the structure into PIECEs and
+        // rebuild the tree until no more ZEXT leaves remain.
+        let mut stack: Vec<PieceNode> = Vec::new();
+        loop {
+            stack.clear();
+            PieceNode::gather_pieces(&mut stack, &outvn, op_arc, base_offset, base_offset);
+            if !Self::find_replace_zext(&stack, &ct, fd) {
+                break;
+            }
+        }
+        // op->setPartialRoot(): no partial-root flag in Rugra, skipped.
+
+        // Walk every node and give it the correct storage address.
+        // baseAddr = outvn->getAddr() - baseOffset
+        let base_addr = crate::address::Address::new(
+            outvn.read().unwrap().get_offset().wrapping_sub(base_offset as u64),
+        );
+        let mut any_addr_tied = outvn.read().unwrap().is_addr_tied();
+        for i in 0..stack.len() {
+            let (op_clone, slot, type_offset, is_leaf) = {
+                let n = &stack[i];
+                (n.op.clone(), n.slot, n.type_offset, n.leaf)
+            };
+            let vn = match op_clone.read().unwrap().inrefs.get(slot).cloned() {
+                Some(v) => v,
+                None => continue,
+            };
+            // addr = baseAddr + node.getTypeOffset(); (renormalize is a no-op for
+            // non-join spaces in Rugra's flat Address model.)
+            let addr = crate::address::Address::new(base_addr.as_u64().wrapping_add(type_offset as u64));
+            let vn_addr = vn.read().unwrap().get_offset();
+            if vn_addr == addr.as_u64() {
+                // vn already has the correct address.
+                if !is_leaf || !Self::separate_symbol(&outvn, &vn) {
+                    // Part of the same symbol as the root: just mark proto-partial.
+                    let mut vn_w = vn.write().unwrap();
+                    if !vn_w.is_addr_tied() && !vn_w.is_proto_partial() {
+                        vn_w.set_proto_partial();
+                    }
+                    any_addr_tied = any_addr_tied || vn_w.is_addr_tied();
+                    continue;
+                }
+            }
+            let vn_size = vn.read().unwrap().get_size();
+            if is_leaf {
+                // Insert a COPY: vn → newVn at the correct address, then point
+                // the PIECE input at newVn. Faithful to 7679-7699.
+                let op_addr = op_clone.read().unwrap().get_addr();
+                let copy_op = fd.new_op(1, op_addr);
+                let new_vn = fd.new_varnode_out(vn_size, addr, &copy_op);
+                any_addr_tied = any_addr_tied || new_vn.read().unwrap().is_addr_tied();
+                // newType = getExactPiece(ct, typeOffset, vn->getSize()) ?: vn->getType()
+                let new_type = Self::get_exact_piece(&ct, type_offset as i64, vn_size as i64)
+                    .or_else(|| vn.read().unwrap().get_type());
+                if let Some(t) = new_type {
+                    new_vn.write().unwrap().update_type(t);
+                }
+                fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+                fd.op_set_input(&copy_op, vn, 0);
+                fd.op_set_input(&crate::op::PcodeOpRef(op_clone.clone()), new_vn.clone(), slot);
+                fd.op_insert_before(&copy_op, &crate::op::PcodeOpRef(op_clone.clone()));
+                // needsResolution / resolveInFlow: not modelled in Rugra.
+                let mut nv = new_vn.write().unwrap();
+                if !nv.is_addr_tied() {
+                    nv.set_proto_partial();
+                }
+            } else {
+                // Non-leaf: vn has a lone descendant and is not addr-tied; replace
+                // its storage in place. Faithful to 7701-7713.
+                let def_op = match vn.read().unwrap().get_def() {
+                    Some(d) => crate::op::PcodeOpRef(d),
+                    None => continue,
+                };
+                let lone_op = match vn.read().unwrap().lone_descend() {
+                    Some(o) => crate::op::PcodeOpRef(o),
+                    None => continue,
+                };
+                // slot of vn within loneOp.
+                let vn_arc = vn.clone();
+                let lslot = {
+                    let l = lone_op.0.read().unwrap();
+                    l.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &vn_arc))
+                };
+                let lslot = match lslot { Some(s) => s, None => continue };
+                let vn_type = vn.read().unwrap().get_type();
+                let new_vn = fd.new_varnode(vn_size, addr);
+                if let Some(t) = vn_type {
+                    new_vn.write().unwrap().update_type(t);
+                }
+                fd.op_set_output(&def_op, new_vn.clone());
+                fd.op_set_input(&lone_op, new_vn.clone(), lslot);
+                fd.vbank.destroy_varnode(&vn);
+                let mut nv = new_vn.write().unwrap();
+                if !nv.is_addr_tied() {
+                    nv.set_proto_partial();
+                }
+            }
+        }
+        // registerProtoPartialRoot(outvn) when !anyAddrTied: not modelled.
+        let _ = any_addr_tied;
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str { "piece_structure" }
@@ -12024,14 +12402,13 @@ impl Rule for RulePtrsubUndo {
 /// are constant, fold via `segdef->execute`; else if the segment supports far
 /// pointers and the inputs form a contiguous whole, replace with a COPY.
 ///
-/// NOTE: The segment definition is now resolved via
-/// `fd.get_arch().userops.get_segment_op(space_idx)`. The two actual transforms
-/// still need infra Rugra lacks: the constant fold needs `SegmentOp::execute`
-/// (pcode-inject evaluation via pcodeinjectlib, userop.cc:218-223) and the
-/// far-pointer branch needs the `supportsfarpointer` flag on SegmentOp
-/// (src/userop.rs:197 has no such field) to gate `hasFarPointerSupport()`, so
-/// the contiguous-whole helpers are not yet wired. Those two sub-paths no-op;
-/// see the TODOs at the call sites.
+/// NOTE: The segment definition is resolved via
+/// `fd.get_arch().userops.get_segment_op(space_idx)`. The constant fold uses
+/// `SegmentOp::execute` (userop.cc:218-223; evaluated via Rugra's canonical
+/// `(base << 4) + inner` formula since pcodeinjectlib is not present). The
+/// far-pointer branch is gated by `SegmentOp::has_far_pointer_support()`
+/// (`supportsfarpointer`, userop.hh:269) and uses the contiguous-whole
+/// test from `contiguous_test`/`findContiguousWhole` (varnode.cc:2014-2076).
 pub struct RuleSegment;
 
 impl RuleSegment {
@@ -12056,34 +12433,139 @@ impl Rule for RuleSegment {
         let space_idx = space_id_vn.read().unwrap().get_offset() as i32;
         // SegmentOp *segdef = data.getArch()->userops.getSegmentOp(space_idx);
         // Ghidra throws if null; Rugra conservatively no-ops.
-        let _segdef = fd.get_arch()
+        let segdef = fd.get_arch()
             .and_then(|a| a.userops.as_ref())
-            .and_then(|u| u.read().unwrap().get_segment_op(space_idx).map(|_| ()));
-        if _segdef.is_none() { return Ok(action_status::NO_CHANGE); } // no segment definition
+            .and_then(|u| u.read().unwrap().get_segment_op(space_idx).cloned());
+        let segdef = match segdef { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         let (vn1_const, vn2_const) = (vn1.read().unwrap().is_constant(), vn2.read().unwrap().is_constant());
         if vn1_const && vn2_const {
-            // TODO(infra): the constant fold needs SegmentOp::execute(bindlist),
-            //   which evaluates a pcode-inject payload (userop.cc:218-223) via
-            //   pcodeinjectlib — not present in Rugra. Cannot compute the folded
-            //   pointer value, so leave the SEGMENTOP.
-            let _ = (vn1, vn2, op_ref, out_size);
-            return Ok(action_status::NO_CHANGE);
+            // ruleaction.cc:9024-9033: both inputs constant -> fold.
+            //   vector<uintb> bindlist; bindlist.push_back(vn1->getOffset());
+            //   bindlist.push_back(vn2->getOffset());
+            //   uintb val = segdef->execute(bindlist);
+            let (v1_off, v2_off) = (
+                vn1.read().unwrap().get_offset(),
+                vn2.read().unwrap().get_offset(),
+            );
+            let bindlist = [v1_off, v2_off];
+            match segdef.execute(&bindlist) {
+                Some(val) => {
+                    // ruleaction.cc:9027-9031:
+                    //   data.opRemoveInput(op,2); data.opRemoveInput(op,1);
+                    //   data.opSetInput(op,data.newConstant(out->getSize(),val),0);
+                    //   data.opSetOpcode(op,CPUI_COPY);
+                    fd.op_remove_input(&op_ref, 2);
+                    fd.op_remove_input(&op_ref, 1);
+                    let folded = fd.new_constant(out_size, val);
+                    fd.op_set_input(&op_ref, folded, 0);
+                    fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                    return Ok(action_status::CHANGE);
+                }
+                None => return Ok(action_status::NO_CHANGE),
+            }
         }
-        // Ghidra (ruleaction.cc:9034-9046): else if (segdef->hasFarPointerSupport())
-        //   { if (!contiguous_test(...)) return 0; whole = findContiguousWhole(...);
-        //     if (whole==0 || whole->isFree()) return 0; ... COPY }
-        // TODO(infra): the far-pointer branch needs the `supportsfarpointer`
-        //   flag on SegmentOp to gate `segdef->hasFarPointerSupport()`. Rugra's
-        //   SegmentOp (src/userop.rs:197) has no such field, so we cannot
-        //   confirm far-pointer support; the contiguous-whole COPY is skipped
-        //   to avoid incorrectly folding a non-far-pointer segment.
-        let _ = (vn1, vn2, op_ref);
+        // ruleaction.cc:9034-9046: else if (segdef->hasFarPointerSupport())
+        if segdef.has_far_pointer_support() {
+            // ruleaction.cc:9036: if (!contiguous_test(vn1,vn2)) return 0;
+            //   contiguous_test (varnode.cc:2014-2037): vn1/vn2 must not be
+            //   inputs, must be written, and be SUBPIECEs of a common whole
+            //   where op2's sub-offset is 0 (vn2 is least-sig) and op1's
+            //   sub-offset equals vn2's size (contiguous high/low pieces).
+            if !contiguous_test(&vn1, &vn2) { return Ok(action_status::NO_CHANGE); }
+            // ruleaction.cc:9037: whole = findContiguousWhole(data,vn1,vn2);
+            let whole = find_contiguous_whole(&vn1, &vn2);
+            // ruleaction.cc:9038-9039: if (whole==0 || whole->isFree()) return 0;
+            let whole = match whole { Some(w) => w, None => return Ok(action_status::NO_CHANGE) };
+            if whole.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
+            // ruleaction.cc:9041-9045: use the contiguous source as whole ptr.
+            //   data.opRemoveInput(op,2); data.opRemoveInput(op,1);
+            //   data.opSetInput(op,whole,0); data.opSetOpcode(op,CPUI_COPY);
+            fd.op_remove_input(&op_ref, 2);
+            fd.op_remove_input(&op_ref, 1);
+            fd.op_set_input(&op_ref, whole, 0);
+            fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+            return Ok(action_status::CHANGE);
+        }
         Ok(action_status::NO_CHANGE)
     }
 
     fn get_name(&self) -> &str { "segment" }
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SEGMENTOP] }
+}
+
+/// Return true if `vn1` (high) and `vn2` (low) are pieces of a single value.
+///
+/// Faithful to `contiguous_test` (varnode.cc:2014-2037). Both varnodes must be
+/// written (not inputs), defined by SUBPIECE ops sharing the same source, with
+/// `vn2`'s sub-offset 0 (least-significant) and `vn1`'s sub-offset equal to
+/// `vn2`'s size (immediately contiguous high piece).
+fn contiguous_test(
+    vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> bool {
+    // varnode.cc:2018-2019: if (vn1->isInput()||vn2->isInput()) return false;
+    // varnode.cc:2020: if ((!vn1->isWritten())||(!vn2->isWritten())) return false;
+    let (vn1_is_input, vn2_is_input, vn1_written, vn2_written) = {
+        let a = vn1.read().unwrap();
+        let b = vn2.read().unwrap();
+        (a.is_input(), b.is_input(), a.is_written(), b.is_written())
+    };
+    if vn1_is_input || vn2_is_input { return false; }
+    if !vn1_written || !vn2_written { return false; }
+    // varnode.cc:2021-2022: PcodeOp *op1 = vn1->getDef(); PcodeOp *op2 = vn2->getDef();
+    let op1 = match vn1.read().unwrap().get_def() { Some(o) => o, None => return false };
+    let op2 = match vn2.read().unwrap().get_def() { Some(o) => o, None => return false };
+    let (vn2_size, op1_opc, op2_opc) = {
+        let o1 = op1.read().unwrap();
+        let o2 = op2.read().unwrap();
+        let vn2_size = vn2.read().unwrap().get_size() as u64;
+        (vn2_size, o1.opcode, o2.opcode)
+    };
+    // varnode.cc:2025-2034: switch(op1->code()) { case CPUI_SUBPIECE:
+    //   if (op2->code() != CPUI_SUBPIECE) return false;
+    //   vnwhole = op1->getIn(0); if (op2->getIn(0) != vnwhole) return false;
+    //   if (op2->getIn(1)->getOffset() != 0) return false; // vn2 least-sig
+    //   if (op1->getIn(1)->getOffset() != vn2->getSize()) return false; // contig
+    //   return true; }
+    if op1_opc != OpCode::CPUI_SUBPIECE || op2_opc != OpCode::CPUI_SUBPIECE { return false; }
+    let (o1_in0, o1_in1_off, o2_in0, o2_in1_off) = {
+        let o1 = op1.read().unwrap();
+        let o2 = op2.read().unwrap();
+        let o1_in0 = match o1.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+        let o2_in0 = match o2.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+        let o1_in1_off = match o1.inrefs.get(1) {
+            Some(v) => v.read().unwrap().get_offset(), None => return false };
+        let o2_in1_off = match o2.inrefs.get(1) {
+            Some(v) => v.read().unwrap().get_offset(), None => return false };
+        (o1_in0, o1_in1_off, o2_in0, o2_in1_off)
+    };
+    // Compare whole-source identity by raw varnode address (Arc ptr eq, like
+    // Ghidra's pointer comparison `op2->getIn(0) != vnwhole`).
+    if !std::sync::Arc::ptr_eq(&o1_in0, &o2_in0) { return false; }
+    if o2_in1_off != 0 { return false; } // vn2 must be least-significant
+    if o1_in1_off != vn2_size { return false; } // vn1 must be the contiguous high piece
+    true
+}
+
+/// Assuming `vn1`,`vn2` passed `contiguous_test`, return the whole varnode.
+///
+/// Faithful to `findContiguousWhole` (varnode.cc:2045-2062): returns
+/// `vn1->getDef()->getIn(0)`, i.e. the SUBPIECE source of the high piece.
+fn find_contiguous_whole(
+    vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    _vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    // varnode.cc:2046-2047: if (vn1->isWritten())
+    //   if (vn1->getDef()->code() == CPUI_SUBPIECE) return vn1->getDef()->getIn(0);
+    if !vn1.read().unwrap().is_written() { return None; }
+    let op1 = vn1.read().unwrap().get_def()?;
+    let in0 = {
+        let o = op1.read().unwrap();
+        if o.opcode != OpCode::CPUI_SUBPIECE { return None; }
+        o.inrefs.get(0).cloned()
+    };
+    in0
 }
 
 /// Search for concatenations with unlikely things to inform return/parameter
@@ -17294,6 +17776,66 @@ mod tests {
         }
     }
 
+    /// RuleSegment constant-fold path: both SEGMENTOP inputs constant with a
+    /// registered SegmentOp folds to a COPY of `(base<<4)+inner`
+    /// (ruleaction.cc:9024-9033; faithful to SegmentOp::execute userop.cc:218).
+    #[test]
+    fn test_rule_segment_const_fold() {
+        use crate::userop::SegmentOp;
+        let mut fd = Funcdata::new("segfold", Address::new(0x1000), 0x10);
+        // Register a SegmentOp for space index 0 in the architecture's userops.
+        let mut arch = crate::arch::Architecture::new();
+        let mut uo = crate::userop::UserOpManage::new();
+        let mut seg = SegmentOp::new("segment".into(), 0);
+        seg.supports_far_pointer = true; // mark far-pointer support for completeness
+        uo.segment_ops.insert(0, seg);
+        let uo_arc = std::sync::Arc::new(std::sync::RwLock::new(uo));
+        arch.set_userops(uo_arc);
+        fd.set_arch(std::sync::Arc::new(arch));
+        // SEGMENTOP(space_idx=0, base=0x1234, inner=0x0002), output size 4.
+        let c0 = fd.vbank.create_constant(4, 0);       // space index 0
+        let c1 = fd.vbank.create_constant(4, 0x1234);   // base
+        let c2 = fd.vbank.create_constant(4, 0x0002);   // inner
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
+        op.inrefs = vec![c0, c1, c2];
+        op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+        let op_arc = Arc::new(RwLock::new(op));
+        let r = RuleSegment::new();
+        let res = r.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE, "RuleSegment should fold constant SEGMENTOP");
+        // After fold: opcode is COPY, single input = (0x1234<<4)+0x0002 = 0x12342.
+        let o = op_arc.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs.len(), 1);
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 0x12342);
+    }
+
+    /// RuleSegment no-fold when a registered SegmentOp exists but inputs are
+    /// non-constant and far-pointer support is off (ruleaction.cc:9034).
+    #[test]
+    fn test_rule_segment_no_fold_nonconst() {
+        use crate::userop::SegmentOp;
+        let mut fd = Funcdata::new("segnf", Address::new(0x1000), 0x10);
+        let mut arch = crate::arch::Architecture::new();
+        let mut uo = crate::userop::UserOpManage::new();
+        let seg = SegmentOp::new("segment".into(), 0); // supports_far_pointer=false
+        uo.segment_ops.insert(0, seg);
+        arch.set_userops(std::sync::Arc::new(std::sync::RwLock::new(uo)));
+        fd.set_arch(std::sync::Arc::new(arch));
+        // Non-constant vn1/vn2 (Register space, not const) -> neither branch fires.
+        let c0 = fd.vbank.create_constant(4, 0);
+        let vn1 = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let vn2 = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
+        op.inrefs = vec![c0, vn1, vn2];
+        op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+        let op_arc = Arc::new(RwLock::new(op));
+        let r = RuleSegment::new();
+        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
     /// RuleDivOpt.move_sign_bit_extraction + resolve_shift_const: smoke test
     /// via the existing div-opt rejection test (the helper is exercised on the
     /// signed path once a full form is recognised). Here we just confirm the
@@ -17939,5 +18481,179 @@ mod tests {
         assert_eq!(res, 1);
         assert!(copy_op.read().unwrap().is_ptr_flow());
         assert!(ptr.read().unwrap().is_ptr_flow());
+    }
+
+    // ========================================================================
+    // RulePieceStructure tests (ruleaction.cc:7625-7718, op.cc:801-876)
+    // ========================================================================
+
+    /// Helper: make a `struct { int a; int b; }` (size 8) type.
+    fn make_piece_struct_type() -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeField, TypeMetatype, TypeStruct,
+        };
+        let int_dt = std::sync::Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        std::sync::Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("struct2".to_string(), 8, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() },
+                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt },
+            ],
+        }))
+    }
+
+    /// RulePieceStructure: PIECE(hi=4B, lo=4B) with an 8-byte struct-typed
+    /// output spanning two int fields. The rule should perform a real
+    /// transform — inserting a COPY for each leaf into a correctly-addressed
+    /// Varnode — and report CHANGE. Faithful to ruleaction.cc:7652-7717.
+    #[test]
+    fn test_piece_structure_reassembles_two_fields() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let struct_dt = make_piece_struct_type();
+        // PIECE output: 8 bytes, struct-typed, at address 0x200.
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        out.write().unwrap().update_type(struct_dt);
+        // Two 4-byte leaf inputs (unwritten → leaves), distinct addresses so a
+        // COPY is inserted for each.
+        let hi = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let lo = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x304);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_PIECE);
+        op.inrefs = vec![hi.clone(), lo.clone()];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+
+        let rule = RulePieceStructure::new();
+        let res = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // Each leaf input (slot 0 = hi, slot 1 = lo) must now read the output of
+        // a freshly-inserted CPUI_COPY whose output is at the correct field
+        // address: hi (slot 0) → baseAddr+4 = 0x204 (field b); lo (slot 1) →
+        // baseAddr+0 = 0x200 (field a).  (Rugra is little-endian.)
+        let new_hi = op_arc.read().unwrap().inrefs[0].clone();
+        let new_lo = op_arc.read().unwrap().inrefs[1].clone();
+        assert_eq!(new_hi.read().unwrap().get_offset(), 0x204);
+        assert_eq!(new_lo.read().unwrap().get_offset(), 0x200);
+        let hi_def = new_hi.read().unwrap().get_def().expect("hi must now be COPY-defined");
+        let lo_def = new_lo.read().unwrap().get_def().expect("lo must now be COPY-defined");
+        assert_eq!(hi_def.read().unwrap().opcode, OpCode::CPUI_COPY);
+        assert_eq!(lo_def.read().unwrap().opcode, OpCode::CPUI_COPY);
+    }
+
+    /// RulePieceStructure: an INT_ZEXT whose 8-byte output is struct-typed
+    /// (spanning two int fields) is converted to a PIECE with a zero high
+    /// constant. Faithful to convertZextToPiece (ruleaction.cc:7543-7564).
+    #[test]
+    fn test_piece_structure_zext_to_piece() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let struct_dt = make_piece_struct_type();
+        // INT_ZEXT: 4-byte input → 8-byte struct-typed output.
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        out.write().unwrap().update_type(struct_dt);
+        let invn = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ZEXT);
+        op.inrefs = vec![invn.clone()];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+
+        let rule = RulePieceStructure::new();
+        let res = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(res, action_status::CHANGE);
+        // The op must now be a PIECE with 2 inputs: slot 0 = zero constant,
+        // slot 1 = the original input.
+        let g = op_arc.read().unwrap();
+        assert_eq!(g.opcode, OpCode::CPUI_PIECE);
+        assert_eq!(g.inrefs.len(), 2);
+        assert!(g.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(g.inrefs[0].read().unwrap().get_offset(), 0);
+        assert!(std::sync::Arc::ptr_eq(&g.inrefs[1], &invn));
+    }
+
+    /// RulePieceStructure: PIECE output that is a single non-structured base
+    /// type → determineDatatype returns None → NO_CHANGE.
+    #[test]
+    fn test_piece_structure_non_structured_no_change() {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let int8 = std::sync::Arc::new(Datatype::Base(TypeBase::new(
+            "long".to_string(), 8, TypeMetatype::Int,
+        )));
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        out.write().unwrap().update_type(int8);
+        let hi = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let lo = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x304);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_PIECE);
+        op.inrefs = vec![hi, lo];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+
+        let rule = RulePieceStructure::new();
+        let res = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(res, action_status::NO_CHANGE);
+    }
+
+    /// PieceNode::gather_pieces on a two-level PIECE tree builds 4 leaf nodes
+    /// (one per bottom-level input). Faithful to op.cc:865-876.
+    #[test]
+    fn test_piece_node_gather_two_level_tree() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        // Root PIECE: out16 = PIECE(hi8, lo8); each input is itself a PIECE of
+        // two 4-byte leaves. Leaves are unwritten varnodes.
+        let leaf_a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let leaf_b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x14);
+        let leaf_c = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x18);
+        let leaf_d = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x1c);
+        // Inner PIECE ops (their outputs are the root's inputs).
+        let seq1 = SeqNum::new(Address::new(0x1000), 1);
+        let mut hi8_op = PcodeOp::new(seq1, OpCode::CPUI_PIECE);
+        let hi8 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        hi8_op.inrefs = vec![leaf_a.clone(), leaf_b.clone()];
+        hi8_op.output = Some(hi8.clone());
+        let hi8_op_arc = Arc::new(RwLock::new(hi8_op));
+        // leaf_a, leaf_b descend into hi8_op
+        leaf_a.write().unwrap().descend.push(Arc::downgrade(&hi8_op_arc));
+        leaf_b.write().unwrap().descend.push(Arc::downgrade(&hi8_op_arc));
+        // hi8 is WRITTEN by hi8_op (mirrors opSetOutput).
+        {
+            let mut h = hi8.write().unwrap();
+            h.set_flags(crate::varnode::varnode_flags::WRITTEN);
+            h.def = Some(Arc::downgrade(&hi8_op_arc));
+        }
+        let seq2 = SeqNum::new(Address::new(0x1000), 2);
+        let mut lo8_op = PcodeOp::new(seq2, OpCode::CPUI_PIECE);
+        let lo8 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x48);
+        lo8_op.inrefs = vec![leaf_c.clone(), leaf_d.clone()];
+        lo8_op.output = Some(lo8.clone());
+        let lo8_op_arc = Arc::new(RwLock::new(lo8_op));
+        leaf_c.write().unwrap().descend.push(Arc::downgrade(&lo8_op_arc));
+        leaf_d.write().unwrap().descend.push(Arc::downgrade(&lo8_op_arc));
+        {
+            let mut l = lo8.write().unwrap();
+            l.set_flags(crate::varnode::varnode_flags::WRITTEN);
+            l.def = Some(Arc::downgrade(&lo8_op_arc));
+        }
+        // hi8/lo8 each have a single descendant (the root) so they are non-leaves.
+        let seq0 = SeqNum::new(Address::new(0x1000), 0);
+        let mut root_op = PcodeOp::new(seq0, OpCode::CPUI_PIECE);
+        let out16 = fd.vbank.create_with_space(16, crate::space::AddressSpace::Register, 0x80);
+        root_op.inrefs = vec![hi8.clone(), lo8.clone()];
+        root_op.output = Some(out16.clone());
+        let root_op_arc = Arc::new(RwLock::new(root_op));
+        hi8.write().unwrap().descend.push(Arc::downgrade(&root_op_arc));
+        lo8.write().unwrap().descend.push(Arc::downgrade(&root_op_arc));
+
+        let mut stack: Vec<PieceNode> = Vec::new();
+        PieceNode::gather_pieces(&mut stack, &out16, &root_op_arc, 0, 0);
+        // 2 nodes at the root level + 2 nodes per inner op = 6 total.
+        assert_eq!(stack.len(), 6);
+        let leaves = stack.iter().filter(|n| n.is_leaf()).count();
+        let non_leaves = stack.iter().filter(|n| !n.is_leaf()).count();
+        assert_eq!(leaves, 4); // leaf_a..leaf_d
+        assert_eq!(non_leaves, 2); // hi8, lo8
     }
 }
