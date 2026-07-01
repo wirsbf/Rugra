@@ -9808,10 +9808,12 @@ impl Rule for RulePullsubMulti {
 /// printed as a subtraction of the negated (small positive) value.
 ///
 /// NOTE: Ghidra consults the constant's read-facing data-type (`TYPE_UINT`,
-/// not char-print, enum/equate name-locks). Rugra does not yet track
-/// per-Varnode data-types or SymbolEntry/EquateSymbol, so those guards are
-/// approximated: the rule applies the numeric transform whenever the high
-/// quarter bits are set, with the type/equate checks marked TODO.
+/// not char-print, enum/equate name-locks). Rugra now resolves the
+/// read-facing type via `get_type_read_facing()` and applies the `TYPE_UINT` /
+/// `!isCharPrint()` guards; if the varnode has no type it falls back to the
+/// numeric transform. The `SymbolEntry`/`EquateSymbol` name-lock guard and the
+/// enum named-value re-naming still require SymbolEntry infra not in Rugra, so
+/// those are skipped (see TODO at the guard site).
 pub struct RuleAddUnsigned;
 
 impl RuleAddUnsigned {
@@ -9828,11 +9830,24 @@ impl Rule for RuleAddUnsigned {
         if !constvn.read().unwrap().is_constant() {
             return Ok(action_status::NO_CHANGE);
         }
-        // TODO(datatype): Ghidra reads constvn->getTypeReadFacing(op) and
-        //   requires metatype==TYPE_UINT and !isCharPrint(). It also skips
-        //   name-locked EquateSymbol and adjusts for named enum values.
-        //   Rugra lacks Varnode data-type / SymbolEntry, so these guards are
-        //   omitted; the numeric transform below is otherwise 1:1.
+        use crate::type_system::datatype::TypeMetatype;
+        // Ghidra: dt = constvn->getTypeReadFacing(op); require metatype==
+        // TYPE_UINT, skip char-print types (ruleaction.cc:7206-7208). Rugra's
+        // get_type_read_facing returns the varnode's resolved type; if absent
+        // (type recovery not yet run on this varnode) we conservatively keep
+        // the legacy numeric-only behaviour.
+        if let Some(dt) = constvn.read().unwrap().get_type_read_facing() {
+            if dt.get_metatype() != TypeMetatype::Uint {
+                return Ok(action_status::NO_CHANGE);
+            }
+            if dt.is_char_print() {
+                return Ok(action_status::NO_CHANGE); // Only change integer forms
+            }
+            // TODO(symbolentry): Ghidra also skips name-locked EquateSymbol
+            //   (ruleaction.cc:7214-7220) and re-names via enum named values
+            //   (7222-7226). Rugra has no SymbolEntry/EquateSymbol lookup on a
+            //   Varnode, so these two sub-checks are omitted.
+        }
         let size = constvn.read().unwrap().get_size();
         let val = constvn.read().unwrap().get_offset();
         let mask = calc_mask(size);
@@ -9867,8 +9882,13 @@ impl Rule for RuleAddUnsigned {
 /// least-significant bytes of the shifted value.
 ///
 /// NOTE: The `doesSpecialPrinting` / `isPieceStructured` guards and the
-/// addr-tied overlap check require data-type/mark APIs not present in Rugra;
-/// those guards are marked TODO and the numeric transform is otherwise 1:1.
+/// addr-tied overlap check now use Rugra's `does_special_printing()` /
+/// `is_piece_structured()` / `is_addr_tied()`. Ghidra also calls
+/// `data.opMarkSpecialPrint(op)` when the SUBPIECE extracts a structured field;
+/// Rugra has no Funcdata helper, so the rule sets the addlflag bit directly
+/// (matching `op.hh:140` SPECIAL_PRINT). The `outvn->overlap(*a)` term is
+/// unavailable (no Varnode::overlap), so the addr-tied branch is approximated
+/// to the `isAddrTied` portion only (see TODO at the guard site).
 pub struct RuleSubRight;
 
 impl RuleSubRight {
@@ -9878,8 +9898,26 @@ impl RuleSubRight {
 impl Rule for RuleSubRight {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubRight::applyOp (ruleaction.cc:7269-7339).
-        // TODO(datatype): skip op->doesSpecialPrinting() and the
-        //   getTypeReadFacing()->isPieceStructured() special-print marker.
+        // Ghidra: if (op->doesSpecialPrinting()) return 0 (7272-7273).
+        if op_arc.read().unwrap().does_special_printing() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Ghidra: if (op->getIn(0)->getTypeReadFacing(op)->isPieceStructured())
+        //   { data.opMarkSpecialPrint(op); return 0; } (7274-7277).
+        {
+            let in0_vn = op_arc.read().unwrap().inrefs.get(0).cloned();
+            if let Some(vn) = in0_vn {
+                if let Some(dt) = vn.read().unwrap().get_type_read_facing() {
+                    if dt.is_piece_structured() {
+                        // Rugra has no Funcdata::opMarkSpecialPrint; set the
+                        // SPECIAL_PRINT addlflag bit directly (op.hh:140, value 0x2).
+                        let mut op = op_arc.write().unwrap();
+                        op.addlflags |= 0x2;
+                        return Ok(action_status::NO_CHANGE); // Print this as a field extraction
+                    }
+                }
+            }
+        }
         let (c, a, outvn) = {
             let op = op_arc.read().unwrap();
             let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
@@ -9890,8 +9928,14 @@ impl Rule for RuleSubRight {
             (c, a, outvn)
         };
         if c == 0 { return Ok(action_status::NO_CHANGE); } // SUBPIECE is not least sig
-        // TODO(addrtied): Ghidra checks outvn->isAddrTied() && a->isAddrTied()
-        //   && outvn->overlap(*a)==c to leave the op for ActionCopyMarker.
+        // Ghidra: if (outvn->isAddrTied() && a->isAddrTied())
+        //   { if (outvn->overlap(*a) == c) return 0; } (7283-7286). Rugra has no
+        //   Varnode::overlap, so the overlap test is omitted (TODO(varnode)):
+        //   when both inputs are addr-tied we conservatively leave the op alone
+        //   so ActionCopyMarker can convert it, matching Ghidra's intent.
+        if outvn.read().unwrap().is_addr_tied() && a.read().unwrap().is_addr_tied() {
+            return Ok(action_status::NO_CHANGE); // Leave for ActionCopyMarker
+        }
         let mut opc = OpCode::CPUI_INT_RIGHT; // Default shift type
         let mut d = c * 8; // Convert to bit shift
         let mut working_op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -9929,9 +9973,21 @@ impl Rule for RuleSubRight {
         let addr = op_arc.read().unwrap().get_addr();
         let shiftop = fd.new_op(2, addr);
         fd.op_set_opcode(&shiftop, opc);
-        // TODO(datatype): Ghidra attaches a TYPE_UINT/TYPE_INT base type to the
-        //   new output via data.getArch()->types->getBase(...). Rugra uses a plain unique.
+        // Ghidra: ct = getBase(a->getSize(), opc==INT_RIGHT?TYPE_UINT:TYPE_INT)
+        // and attaches it via newUnique(size,ct) (ruleaction.cc:7312-7319). Rugra
+        // resolves the base type via Architecture::get_base_type then attaches it
+        // with Varnode::update_type.
+        let base_meta = if opc == OpCode::CPUI_INT_RIGHT {
+            crate::type_system::datatype::TypeMetatype::Uint
+        } else {
+            crate::type_system::datatype::TypeMetatype::Int
+        };
         let newout = fd.new_unique_out(a_size, &shiftop);
+        if let Some(arch) = fd.get_arch() {
+            if let Some(dt) = arch.get_base_type(a_size, base_meta) {
+                newout.write().unwrap().update_type(dt);
+            }
+        }
         fd.op_set_input(&shiftop, a, 0);
         let shift_const = fd.new_constant(4, d as u64);
         fd.op_set_input(&shiftop, shift_const, 1);
@@ -10027,12 +10083,19 @@ impl Rule for RuleFloatSignCleanup {
             None => return Ok(action_status::NO_CHANGE),
         };
         // Ghidra: if (op->getOut()->getType()->getMetatype() != TYPE_FLOAT) return 0;
-        // TODO(datatype): Rugra Varnode has no TYPE_FLOAT metatype. We accept
-        //   float-sized (4 or 8 byte) outputs as the heuristic; this is the
-        //   only deviation and is localised here.
-        let out_size = outvn.read().unwrap().get_size();
-        if out_size != 4 && out_size != 8 {
-            return Ok(action_status::NO_CHANGE);
+        // (ruleaction.cc:10792). Rugra resolves the varnode's type via get_type;
+        // if the varnode is untyped (type recovery not yet run) we fall back to
+        // accepting float-sized (4 or 8 byte) outputs as a heuristic.
+        let (out_size, has_float_type) = {
+            let vn = outvn.read().unwrap();
+            let is_float = vn.get_type().map(|dt| dt.get_metatype())
+                == Some(crate::type_system::datatype::TypeMetatype::Float);
+            (vn.get_size(), is_float)
+        };
+        if has_float_type {
+            // typed as float: proceed
+        } else if out_size != 4 && out_size != 8 {
+            return Ok(action_status::NO_CHANGE); // untyped & not float-sized
         }
         let is_xor = op_arc.read().unwrap().opcode == OpCode::CPUI_INT_XOR;
         let maskvn = match op_arc.read().unwrap().get_in(1).cloned() {
@@ -10139,15 +10202,23 @@ impl Rule for RulePtrsubCharConstant {
             } else { false }
         }).unwrap_or(false);
         if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
-        // Remaining guards need deeper infra that Rugra does not yet expose:
-        //   TypeSpacebase::getAddress / Scope::isReadOnly / stringManager->isString.
-        // TODO(scope/string): sbtype->getAddress(vn1->getOffset(),vn1->getSize(),
-        //   op->getAddr()); scope = sbtype->getMap();
-        //   if (!scope->isReadOnly(symaddr,1,op->getAddr())) return 0;
-        //   if (!data.getArch()->stringManager->isString(symaddr,basetype)) return 0;
-        // Without these the rule conservatively no-ops: collapsing the PTRSUB to
-        // a COPY of a constant string requires confirming the address holds a
-        // real read-only string, which we cannot yet verify.
+        // Remaining guards need infra Rugra does not yet expose:
+        //   - Architecture::resolveConstant (used by TypeSpacebase::getAddress,
+        //     type.cc:3063-3071) to map the constant offset to a global symbol
+        //     address. Not present: `grep resolveConstant src/` returns nothing.
+        //   - Scope::isReadOnly (ruleaction.cc:7390) to confirm the symbol is a
+        //     read-only constant. Rugra's Scope (src/database.rs:690) has no
+        //     is_read_only / readonly flag.
+        //   - TypeSpacebase::getMap (type.cc:2935) to fetch the owning Scope.
+        //     Rugra's TypeSpacebase (src/type_system/datatype.rs:535) has no
+        //     scope handle.
+        // StringManager::is_string IS available (src/stringmanage.rs:295), but
+        // cannot be used without the symaddr from resolveConstant. Until those
+        // land this rule conservatively no-ops: collapsing the PTRSUB to a COPY
+        // of a constant string requires confirming the address holds a real
+        // read-only string, which we cannot yet verify.
+        // TODO(scope/string): add Architecture::resolveConstant +
+        //   Scope::isReadOnly, then wire symaddr + stringManager.is_string.
         let _ = vn1;
         Ok(action_status::NO_CHANGE)
     }
@@ -10292,10 +10363,10 @@ impl Rule for RuleExtensionPush {
 /// NOTE: The pointer's pointed-to data-type (`getPtrTo`), the const-space
 /// big-endian resolution (`AddressSpace::from_id`), and the per-Varnode
 /// metatype are now all available via `get_type()`. The addForm and
-/// integer-truncation transforms are now implemented. The
-/// `data.getArch()->types->getBase(...)` type-attach on new varnodes is still a
-/// TODO (no per-Varnode type-set), but the numeric/control transforms fire.
-/// In a test environment with no pointer type, the rule gracefully no-ops.
+/// integer-truncation transforms are now implemented, and the
+/// `data.getArch()->types->getBase(...)` type-attach on new varnodes is wired
+/// via `Architecture::get_base_type` + `Varnode::update_type`. In a test
+/// environment with no pointer type, the rule gracefully no-ops.
 pub struct RuleExpandLoad;
 
 impl RuleExpandLoad {
@@ -10471,11 +10542,16 @@ impl Rule for RuleExpandLoad {
             // INT/UINT (ruleaction.cc:11001-11002):
             //   if (meta != TYPE_INT && meta != TYPE_UINT)
             //     elType = data.getArch()->types->getBase(elType->getSize(), TYPE_UINT);
-            // TODO(datatype): Rugra has no Architecture/types base-type lookup, so
-            // we pass el_type through unchanged. The constants still get a
-            // data-type attached (the existing pointer-to type) rather than a
-            // freshly minted TYPE_UINT.
-            Self::modify_and_comparison(fd, &out_vn, &new_out, el_type.get_size(), lsb_cut, el_type.clone());
+            // Rugra resolves the base type via Architecture::get_base_type;
+            // if the architecture has no type-table it keeps el_type unchanged.
+            let eff_type = if meta != TypeMetatype::Int && meta != TypeMetatype::Uint {
+                fd.get_arch()
+                    .and_then(|a| a.get_base_type(el_type.get_size(), TypeMetatype::Uint))
+                    .unwrap_or_else(|| el_type.clone())
+            } else {
+                el_type.clone()
+            };
+            Self::modify_and_comparison(fd, &out_vn, &new_out, eff_type.get_size(), lsb_cut, eff_type);
         } else {
             // Truncate the new bigger LOAD output with a SUBPIECE → out_vn.
             let sub_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
@@ -10503,13 +10579,13 @@ impl Rule for RuleExpandLoad {
 ///
 /// NOTE: This rule is entirely driven by structured data-types. Rugra now
 /// exposes `get_type()` / `is_piece_structured()` / `get_sub_type()`, so the
-/// `spanning_range` and `determine_datatype` guards are wired (using the
-/// varnode's read-facing type in lieu of `getStructuredType`/`SymbolEntry`,
-/// which are not yet ported). The full transform still cannot fire because the
-/// piece-assembly step needs `PieceNode::gatherPieces`,
-/// `newVarnodeOut(addr,...)`, `registerProtoPartialRoot`, and
-/// `inheritResolution`, none of which exist in Rugra. It remains a no-op with a
-/// TODO until that deeper type-resolution infrastructure lands.
+/// `spanning_range` and `determine_datatype` guards are wired (the partial
+/// varnode sub-case needs a real SymbolEntry — see TODO in determine_datatype).
+/// The full transform still cannot fire because the piece-assembly step needs
+/// `PieceNode::gatherPieces`, `newVarnodeOut(addr,...)`,
+/// `registerProtoPartialRoot`, and `inheritResolution`, none of which exist in
+/// Rugra. It remains a no-op (see TODO at the apply site) until that deeper
+/// type-resolution infrastructure lands.
 pub struct RulePieceStructure;
 
 impl RulePieceStructure {
@@ -10517,9 +10593,9 @@ impl RulePieceStructure {
 
     /// Faithful to `determineDatatype` (ruleaction.cc:7481-7517). Returns the
     /// structured (struct/array/union) data-type the varnode is part of, plus
-    /// the base offset. Uses `vn->get_type()` + `is_piece_structured()`; the
-    /// partial-offset / SymbolEntry path (vn is a partial of a larger symbol)
-    /// is a TODO until `getStructuredType`/`getSymbolEntry` are ported.
+    /// the base offset. Uses `vn->get_type()` + `is_piece_structured()` and, for
+    /// the partial case, resolves the byte offset via `vn.mapentry`
+    /// (SymbolEntry) then walks `get_sub_type` to the concrete sub-type.
     fn determine_datatype(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
@@ -10527,14 +10603,20 @@ impl RulePieceStructure {
         if !ct.is_piece_structured() {
             return None;
         }
-        // Ghidra: if vn is a partial, walk getSubType to the concrete sub-type;
-        //   else baseOffset=0. Rugra lacks getSymbolEntry/getStructuredType for
-        //   the partial case, so we only handle the size-matching (non-partial)
-        //   case: baseOffset = 0.
+        // Ghidra (ruleaction.cc:7488-7508): if vn is a partial, compute
+        // baseOffset from the varnode's SymbolEntry address and walk getSubType
+        // down to the concrete sub-type matching the varnode size; if that
+        // concrete sub-type is non-structured, return null (don't split a
+        // CONCAT forming the sub-type). Rugra cannot resolve this: Varnode's
+        // `mapentry` field is typed as `stubs::SymbolEntry` (an empty unit
+        // struct in src/varnode.rs:16), which exposes no get_addr/get_offset,
+        // and there is no Varnode::getStructuredType. So only the
+        // size-matching (non-partial) case is handled: baseOffset = 0.
         if ct.get_size() != vn.read().unwrap().get_size() {
-            // TODO(symbolentry): partial-offset computation via
-            //   vn->getSymbolEntry() / getSubType chain. Cannot resolve the
-            //   concrete sub-type for a partial varnode yet.
+            // TODO(symbolentry): replace stubs::SymbolEntry (src/varnode.rs:16)
+            //   with database::SymbolEntry so vn.mapentry exposes get_addr /
+            //   get_offset; then compute the partial baseOffset and walk
+            //   get_sub_type as in ruleaction.cc:7488-7508.
             return None;
         }
         Some((ct, 0))
@@ -10569,15 +10651,19 @@ impl RulePieceStructure {
     /// Faithful to `convertZextToPiece` (ruleaction.cc:7543-7572). Converts an
     /// INT_ZEXT to a PIECE with a zero high constant. Returns false here as the
     /// type-driven offset bookkeeping (`needsResolution`/`inheritResolution`)
-    /// and `getSubType` re-attachment are unavailable.
+    /// and the proto-partial re-attachment are unavailable.
     fn convert_zext_to_piece(
         _zext: &crate::op::PcodeOpRef,
         _ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         _offset: i32,
         _fd: &mut Funcdata,
     ) -> bool {
-        // TODO(type-resolution): needs outvn->getSpace()->isBigEndian(),
-        //   getSubType, and invn->getType()->needsResolution()/inheritResolution.
+        // TODO(proto-partial): the big-endian term (outvn->getSpace()->
+        //   isBigEndian) and Datatype::get_sub_type ARE available, but the
+        //   transform also needs invn->getType()->needsResolution() /
+        //   inheritResolution (proto-partial resolution state tracked on the
+        //   Funcdata's type-resolution machinery) which Rugra does not model
+        //   (grep needsResolution/inheritResolution src/ → nothing).
         false
     }
 }
@@ -10778,10 +10864,9 @@ impl Rule for RulePullsubIndirect {
 ///
 /// NOTE: The iop-space coderef resolution (`get_op_from_const`), the
 /// COPY/SUBPIECE overlap-collapse via `characterize_overlap`/`contains_storage`,
-/// and the dead-indop `total_replace`+`op_destroy` path are all now implemented.
-/// The `hasNoLocalAlias`/`noIndirectCollapse` and STORE spacebase-guard branches
-/// remain a TODO (deeper infra); they conservatively fall through to no-op
-/// rather than collapse.
+/// the `hasNoLocalAlias`/`noIndirectCollapse` guard, the STORE spacebase-guard
+/// branch, and the dead-indop `total_replace`+`op_destroy` path are all now
+/// implemented against Rugra's flag/op APIs.
 pub struct RuleIndirectCollapse;
 
 impl RuleIndirectCollapse {
@@ -10862,12 +10947,23 @@ impl Rule for RuleIndirectCollapse {
                     eprintln!("Ignoring partial resolution of indirect");
                     return Ok(action_status::NO_CHANGE);
                 }
-            } else if (op_arc.read().unwrap().flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0 {
-                // TODO(infra): hasNoLocalAlias + noIndirectCollapse checks.
-                //   op->isIndirectCreation() is the PcodeOp flag; Rugra has no
-                //   hasNoLocalAlias/noIndirectCollapse accessors, so we cannot
-                //   safely collapse here.
-                return Ok(action_status::NO_CHANGE);
+            } else if outvn.read().unwrap().has_no_local_alias() {
+                // Ghidra (ruleaction.cc:3219-3222):
+                //   else if (op->getOut()->hasNoLocalAlias()) {
+                //     if (op->isIndirectCreation() || op->noIndirectCollapse())
+                //       return 0;
+                //   }
+                // The indirect's output has no aliasable local, so the INDIRECT
+                // is collapsible — unless it is an indirect-creation op or was
+                // explicitly marked to never collapse.
+                let (is_indirect_creation, no_collapse) = {
+                    let op = op_arc.read().unwrap();
+                    let ic = (op.flags & crate::op::pcodeop_flags::INDIRECT_CREATION) != 0;
+                    (ic, op.no_indirect_collapse())
+                };
+                if is_indirect_creation || no_collapse {
+                    return Ok(action_status::NO_CHANGE);
+                }
             } else if indop.0.read().unwrap().uses_spacebase_ptr() {
                 // Ghidra (ruleaction.cc:3223-3236):
                 //   if (indop->code() == CPUI_STORE) {
@@ -10975,13 +11071,16 @@ impl Rule for RuleTransformCpool {
                 };
                 let cvn = fd.new_constant(sz, rec.value & calc_mask(sz));
                 // Ghidra: cvn->updateType(rec->getType(), true, true)
-                //   (ruleaction.cc:3931). Varnode::update_type_lock is now
-                //   available, but Rugra's CPoolRecord only stores a type-name
-                //   string, not the resolved Datatype that Ghidra's
-                //   CPoolRecord::getType() returns, and no TypeFactory is
-                //   reachable here to resolve it. So the type-attach is still
-                //   TODO(cpool): until CPoolRecord carries a Datatype.
-                // cvn.write().unwrap().update_type_lock(dt, true, true);
+                //   (ruleaction.cc:3931). Rugra's CPoolRecord stores only a
+                //   type-name string; resolve it via the arch's TypeFactory
+                //   (find_by_name, mirroring TypeFactory::resolveByName which
+                //   CPoolRecord::getType uses) and attach with update_type_lock.
+                let resolved_dt = fd.get_arch()
+                    .and_then(|a| a.types.as_ref())
+                    .and_then(|tf| tf.read().unwrap().find_by_name(&rec.type_name));
+                if let Some(dt) = resolved_dt {
+                    cvn.write().unwrap().update_type_lock(dt, true, true);
+                }
                 while op_arc.read().unwrap().num_input() > 1 {
                     fd.op_remove_input(&op_ref, op_arc.read().unwrap().num_input() - 1);
                 }
@@ -11072,20 +11171,20 @@ impl Rule for RuleSwitchSingle {
             need_warning = true;
         }
         if need_warning {
-            // Ghidra builds an ostringstream and calls data.warningHeader(s).
-            // Rugra Funcdata has no warningHeader collector yet, so we emit via
-            // eprintln! as a degraded form.
-            // TODO(infra): port Funcdata::warningHeader so warnings are attached
-            // to the Funcdata and surfaced to the user.
+            // Ghidra (ruleaction.cc:5460-5468) builds an ostringstream and
+            // calls data.warningHeader(s). Rugra's Funcdata::warning_header now
+            // attaches the warning to the Funcdata (and falls back to eprintln
+            // if no commentdb is wired).
             let op_addr = op_arc.read().unwrap().get_addr();
-            if all_cases_match {
-                eprintln!(
+            let msg = if all_cases_match {
+                format!(
                     "Switch with 1 destination removed at {}: {} cases all go to same destination",
                     op_addr, num_entries
-                );
+                )
             } else {
-                eprintln!("Switch with 1 destination removed at {}", op_addr);
-            }
+                format!("Switch with 1 destination removed at {}", op_addr)
+            };
+            fd.warning_header(&msg);
         }
         // Convert the BRANCHIND to just a branch.
         // data.opSetOpcode(op,CPUI_BRANCH);
@@ -11532,9 +11631,12 @@ impl Rule for RulePtraddUndo {
 /// `removeLocalAddRecurse` (7061-7094), `removeLocalAdds` (7096-7143).
 ///
 /// NOTE: The four helpers are pure data-flow walks and are ported 1:1 below.
-/// The final `applyOp` requires `data.hasTypeRecoveryStarted()`,
-/// `getTypeReadFacing()->isPtrsubMatching(...)`, `clearStopTypePropagation`,
-/// and `opUndoPtradd`, none present in Rugra; the rule no-ops with a TODO.
+/// The final `applyOp` uses `fd.has_type_recovery_started()`, the pointer-type
+/// guard (`get_type()` + `is_ptrsub_matching`, approximating
+/// `isPtrsubMatching`), `op_arc.write().clear_stop_type_propagation()`, and
+/// `fd.op_undo_ptradd(...)` — all now wired. The numeric transform is faithful;
+/// `is_ptrsub_matching` approximates the TypePointerRel/testForArraySlack cases
+/// conservatively.
 pub struct RulePtrsubUndo;
 
 impl RulePtrsubUndo {
@@ -11809,8 +11911,8 @@ impl RulePtrsubUndo {
                 if let Some(in1) = in1 {
                     extra += in1.read().unwrap().get_offset() as i64;
                 }
-                // op->clearStopTypePropagation();
-                // TODO(typing): Rugra has no clearStopTypePropagation on PcodeOp.
+                // op->clearStopTypePropagation() (ruleaction.cc:7118).
+                cur.write().unwrap().clear_stop_type_propagation();
                 fd.op_remove_input(&cur_ref, 1);
                 fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
             } else if opc == OpCode::CPUI_PTRADD {
@@ -11830,8 +11932,11 @@ impl RulePtrsubUndo {
                     fd.op_remove_input(&cur_ref, 1);
                     fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
                 } else {
-                    // TODO(infra): data.opUndoPtradd(op, false);
-                    //   Funcdata has no op_undo_ptradd; we leave the PTRADD as-is.
+                    // Ghidra (ruleaction.cc:7133): data.opUndoPtradd(op, false).
+                    // Rugra's op_undo_ptradd performs the numeric PTRADD→
+                    // INT_ADD/(index*mult) transform with no type-locking,
+                    // matching the finalize=false call.
+                    fd.op_undo_ptradd(&cur_ref);
                     extra += Self::remove_local_add_recurse(&cur_ref, 1, Self::DEPTH_LIMIT, fd);
                 }
             } else {
@@ -11873,9 +11978,7 @@ impl Rule for RulePtrsubUndo {
         // data.opSetOpcode(op,CPUI_INT_ADD); op->clearStopTypePropagation();
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ADD);
-        // TODO(typing): op->clearStopTypePropagation() — Rugra PcodeOp has no
-        //   stop-type-propagation flag setter. The numeric transform below
-        //   proceeds regardless.
+        op_arc.write().unwrap().clear_stop_type_propagation();
         // removeLocalAdds(op->getOut(), data) — walk the PTRSUB output's
         //   downstream INT_ADD/PTRSUB chain and fold local constants.
         let outvn = match op_arc.read().unwrap().output.clone() {
@@ -11903,9 +12006,14 @@ impl Rule for RulePtrsubUndo {
 /// are constant, fold via `segdef->execute`; else if the segment supports far
 /// pointers and the inputs form a contiguous whole, replace with a COPY.
 ///
-/// NOTE: Requires `data.getArch()->userops.getSegmentOp(...)`, `SegmentOp`,
-/// `contiguous_test`, and `findContiguousWhole`. Rugra has no SegmentOp/userops
-/// wired to Funcdata; the rule no-ops with a TODO.
+/// NOTE: The segment definition is now resolved via
+/// `fd.get_arch().userops.get_segment_op(space_idx)`. The two actual transforms
+/// still need infra Rugra lacks: the constant fold needs `SegmentOp::execute`
+/// (pcode-inject evaluation via pcodeinjectlib, userop.cc:218-223) and the
+/// far-pointer branch needs the `supportsfarpointer` flag on SegmentOp
+/// (src/userop.rs:197 has no such field) to gate `hasFarPointerSupport()`, so
+/// the contiguous-whole helpers are not yet wired. Those two sub-paths no-op;
+/// see the TODOs at the call sites.
 pub struct RuleSegment;
 
 impl RuleSegment {
@@ -11915,19 +12023,44 @@ impl RuleSegment {
 impl Rule for RuleSegment {
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSegment::applyOp (ruleaction.cc:9013-9057).
-        let (vn1, vn2) = {
+        let (space_id_vn, vn1, vn2, out_size) = {
             let op = op_arc.read().unwrap();
+            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let vn2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            (vn1, vn2)
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let out_size = outvn.read().unwrap().get_size();
+            (space_id_vn, vn1, vn2, out_size)
         };
-        // TODO(infra): SegmentOp *segdef = data.getArch()->userops.getSegmentOp(
-        //   op->getIn(0)->getSpaceFromConst()->getIndex());
-        //   Rugra has no Architecture accessor on Funcdata and no SegmentOp /
-        //   userops table, so we cannot recover the segment definition. The
-        //   fold (segdef->execute on two constants → COPY) and the far-pointer
-        //   contiguous-whole path cannot be performed.
-        let _ = (vn1, vn2, fd);
+        // op->getIn(0)->getSpaceFromConst()->getIndex(): the segment op's input
+        // 0 is a constant holding the address-space index (ruleaction.cc:9016).
+        if !space_id_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
+        let space_idx = space_id_vn.read().unwrap().get_offset() as i32;
+        // SegmentOp *segdef = data.getArch()->userops.getSegmentOp(space_idx);
+        // Ghidra throws if null; Rugra conservatively no-ops.
+        let _segdef = fd.get_arch()
+            .and_then(|a| a.userops.as_ref())
+            .and_then(|u| u.read().unwrap().get_segment_op(space_idx).map(|_| ()));
+        if _segdef.is_none() { return Ok(action_status::NO_CHANGE); } // no segment definition
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        let (vn1_const, vn2_const) = (vn1.read().unwrap().is_constant(), vn2.read().unwrap().is_constant());
+        if vn1_const && vn2_const {
+            // TODO(infra): the constant fold needs SegmentOp::execute(bindlist),
+            //   which evaluates a pcode-inject payload (userop.cc:218-223) via
+            //   pcodeinjectlib — not present in Rugra. Cannot compute the folded
+            //   pointer value, so leave the SEGMENTOP.
+            let _ = (vn1, vn2, op_ref, out_size);
+            return Ok(action_status::NO_CHANGE);
+        }
+        // Ghidra (ruleaction.cc:9034-9046): else if (segdef->hasFarPointerSupport())
+        //   { if (!contiguous_test(...)) return 0; whole = findContiguousWhole(...);
+        //     if (whole==0 || whole->isFree()) return 0; ... COPY }
+        // TODO(infra): the far-pointer branch needs the `supportsfarpointer`
+        //   flag on SegmentOp to gate `segdef->hasFarPointerSupport()`. Rugra's
+        //   SegmentOp (src/userop.rs:197) has no such field, so we cannot
+        //   confirm far-pointer support; the contiguous-whole COPY is skipped
+        //   to avoid incorrectly folding a non-far-pointer segment.
+        let _ = (vn1, vn2, op_ref);
         Ok(action_status::NO_CHANGE)
     }
 
@@ -11942,13 +12075,17 @@ impl Rule for RuleSegment {
 /// `isPathology` (ruleaction.cc:10427-10505) and `tracePathologyForward`
 /// (ruleaction.cc:10506-10570).
 ///
-/// NOTE: `isPathology` walks `vn->isInput() && !isPersist()` and the def-chain
-/// to calls (needs `getCallSpecs`, `isOutputActive`, `isCall`). The applyOp
-/// path needs `isIndirectCreation`, `isCall`, `getEvalType` masking, address
-/// contiguity (`getSpace()->isBigEndian()` + offset arithmetic) and
-/// `FuncProto::setReturnBytesConsumed` / `FuncCallSpecs::setInputBytesConsumed`.
-/// Rugra lacks isInput/isPersist on Varnode and the consumption APIs; the rule
-/// no-ops with a TODO.
+/// NOTE: `isPathology` walks `vn->is_input() && !is_persist()` and the def-chain
+/// to calls; `tracePathologyForward` walks forward to CALL/RETURN and records
+/// partial consumption. Rugra has `is_input`/`is_persist`/`is_call`/
+/// `get_eval_type`/`get_call_specs(by-index)`/`is_output_active`/`is_output_locked`/
+/// `get_func_proto().is_output_locked()`, so most of `isPathology` and the
+/// applyOp guards are in principle feasible. The blockers are: (1) Rugra's
+/// `get_call_specs` takes an index, not a `PcodeOp*` — there is no op→call-spec
+/// lookup; (2) `FuncProto::setReturnBytesConsumed` and
+/// `FuncCallSpecs::setInputBytesConsumed` (which `tracePathologyForward` calls
+/// to record partial consumption) are not implemented (grep src/ → nothing).
+/// Until those land the rule conservatively no-ops.
 pub struct RulePiecePathology;
 
 impl RulePiecePathology {
@@ -11971,18 +12108,27 @@ impl Rule for RulePiecePathology {
             let in1 = sub_op.read().unwrap().get_in(1).cloned();
             let off0 = in1.map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
             if off0 == 0 { return Ok(action_status::NO_CHANGE); }
-            // if (!isPathology(subOp->getIn(0),data)) return 0;
-            // TODO(infra): isPathology needs vn->isInput()&&!isPersist() and
-            //   call-spec output-active checks. Rugra lacks these.
+            // if (!isPathology(subOp->getIn(0),data)) return 0; — isPathology's
+            // primitives (is_input/is_persist/is_call/get_call_specs) exist, but
+            // it walks the def-chain to CALLs and needs an op→FuncCallSpecs
+            // lookup (Rugra's get_call_specs is index-only) — see the apply
+            // TODO below for why the whole rule no-ops regardless.
         } else if opc == OpCode::CPUI_INDIRECT {
-            // if (!subOp->isIndirectCreation()) return 0; ...
-            // TODO(infra): needs isIndirectCreation + locked-output call checks.
+            // Ghidra: if (!subOp->isIndirectCreation()) return 0; then checks
+            // lsbOp->getEvalType()/isCall() + getCallSpecs + isOutputLocked +
+            // address contiguity. Rugra has these primitives except the op→
+            // FuncCallSpecs lookup (index-only get_call_specs). See below.
         } else {
             return Ok(action_status::NO_CHANGE);
         }
         // return tracePathologyForward(op, data);
-        // TODO(infra): tracePathologyForward walks forward to CALL/RETURN and
-        //   sets return/parameter bytes-consumed; Rugra lacks those APIs.
+        // TODO(consumption): tracePathologyForward (ruleaction.cc:10506-10559)
+        //   walks forward to CALL/RETURN and records partial consumption via
+        //   FuncProto::setReturnBytesConsumed / FuncCallSpecs::
+        //   setInputBytesConsumed — neither exists in Rugra (grep src/ →
+        //   nothing), and get_call_specs needs an op→index map. Without a way
+        //   to record consumption the rule has no observable effect, so it
+        //   conservatively no-ops.
         let _ = (fd, lsb_vn);
         Ok(action_status::NO_CHANGE)
     }

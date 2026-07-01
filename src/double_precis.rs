@@ -63,10 +63,11 @@
 //!   (double.cc:1386), `reassignIndirects` (double.cc:3643), and the INDIRECT
 //!   affector resolution in `buildLo/HiFromWhole` (double.cc:604/642),
 //!   `noWriteConflict` (double.cc:3406) and `testIndirectUse` (double.cc:3598).
-//! - Remaining infrastructure gaps (constructJoinAddress, ordered basic-block
-//!   iteration for `noWriteConflict`, `combineInputVarnodes`, etc.) are marked
-//!   with `TODO` and either degrade gracefully or return `Ok(NO_CHANGE)`
-//!   rather than panic, so the rest of the logic remains faithful and testable.
+//! - Remaining infrastructure gaps are marked with `TODO` and degrade
+//!   gracefully. As of this revision the only such gap is
+//!   `Funcdata::hasUnreachableBlocks` (double.cc:3267, 3348): Rugra has only
+//!   the mutating `remove_unreachable_blocks`, so the "bail if unreachable
+//!   blocks exist" guard is not modeled (we proceed, a conservative over-approx).
 
 use std::sync::{Arc, RwLock};
 
@@ -832,9 +833,15 @@ impl SplitVarnode {
                     continue; // Not defined in earliest block
                 }
             } else {
-                // op->getParent()->isEntryPoint()
-                // TODO(double.cc:421): Rugra FlowBlock has no isEntryPoint().
-                // Conservatively allow; matching Ghidra requires entry check.
+                // double.cc:421: op->getParent()->isEntryPoint()
+                let op_parent = op.parent.as_ref().and_then(|w| w.upgrade());
+                let is_entry = op_parent
+                    .as_ref()
+                    .map(|b| b.read().unwrap().is_entry_point())
+                    .unwrap_or(false);
+                if !is_entry {
+                    continue;
+                }
             }
             match &res {
                 None => res = Some(op_arc.clone()),
@@ -963,21 +970,27 @@ impl SplitVarnode {
         }
 
         // Determine the address where the concat op should be placed.
-        let (addr, _topblock): (Address, Option<BlockArc>) = match &self.defblock {
-            Some(_) => (
-                self.defpoint
-                    .as_ref()
-                    .map(|d| d.read().unwrap().get_addr())
-                    .unwrap_or(Address::new(0)),
-                None,
-            ),
-            None => {
-                // TODO(double.cc:520): Rugra has no Funcdata::getBasicBlocks().getStartBlock().
-                // Use the function's base address as the entry-point start.
+        // double.cc:517-522: if defblock set, addr = defpoint->getAddr();
+        // else topblock = data.getBasicBlocks().getStartBlock();
+        //      addr = topblock->getStart();
+        let topblock: Option<BlockArc> = if self.defblock.is_none() {
+            data.bblocks.get_start_block()
+        } else {
+            None
+        };
+        let addr: Address = match (&self.defblock, &topblock) {
+            (Some(_), _) => self
+                .defpoint
+                .as_ref()
+                .map(|d| d.read().unwrap().get_addr())
+                .unwrap_or(Address::new(0)),
+            (None, Some(tb)) => tb.read().unwrap().get_start_addr(),
+            (None, None) => {
+                // No entry block available; fall back to function base.
                 eprintln!(
-                    "double_precis: find_create_whole using func base as start block (double.cc:520)"
+                    "double_precis: find_create_whole has no entry block (double.cc:520)"
                 );
-                (Address::new(0), None)
+                Address::new(0)
             }
         };
 
@@ -1014,11 +1027,13 @@ impl SplitVarnode {
                 }
             }
             None => {
-                // TODO(double.cc:544): opInsertBegin(concatop, topblock). Rugra's
-                // op_insert_begin requires a block; we have none available here.
-                eprintln!(
-                    "double_precis: find_create_whole cannot opInsertBegin without entry block (double.cc:544)"
-                );
+                // double.cc:544: data.opInsertBegin(concatop, topblock).
+                match &topblock {
+                    Some(tb) => data.op_insert_begin(&concatop, tb),
+                    None => eprintln!(
+                        "double_precis: find_create_whole cannot opInsertBegin without entry block (double.cc:544)"
+                    ),
+                }
             }
         }
 
@@ -1056,23 +1071,35 @@ impl SplitVarnode {
         }
         let lo = self.lo.clone().unwrap();
         let hi = self.hi.clone().unwrap();
-        let _newaddr = match is_addr_tied_contiguous(&lo, &hi) {
+        // double.cc:571-576: if contiguous, newaddr is the shared storage;
+        // otherwise newaddr = getArch()->constructJoinAddress(...).
+        let newaddr = match is_addr_tied_contiguous(&lo, &hi) {
             Some(a) => a,
             None => {
-                // TODO(double.cc:573): data.getArch()->constructJoinAddress(...).
-                // Rugra has no Architecture::constructJoinAddress. Fall back to a
-                // fresh unique varnode (loses join-storage semantics) so the rest
-                // of the transform can proceed.
-                eprintln!(
-                    "double_precis: create_joined_whole falling back to unique (no constructJoinAddress, double.cc:573)"
-                );
-                Address::new(0)
+                let hi_addr = hi.read().unwrap().get_addr().as_u64();
+                let hi_size = hi.read().unwrap().get_size();
+                let lo_addr = lo.read().unwrap().get_addr().as_u64();
+                let lo_size = lo.read().unwrap().get_size();
+                let joined = data
+                    .get_arch()
+                    .map(|a| {
+                        a.construct_join_address(hi_addr, hi_size, lo_addr, lo_size)
+                    });
+                match joined {
+                    Some(off) => Address::new(off),
+                    None => {
+                        // No Architecture set; fall back to a zero address so the
+                        // rest of the transform can proceed.
+                        eprintln!(
+                            "double_precis: create_joined_whole no arch for constructJoinAddress (double.cc:573)"
+                        );
+                        Address::new(0)
+                    }
+                }
             }
         };
-        // whole = data.newVarnode(wholesize, newaddr)
-        // TODO(double.cc:576): Rugra has no Funcdata::newVarnode(size, addr).
-        // Use new_unique as the closest available approximation.
-        let whole = data.new_unique(self.wholesize);
+        // double.cc:576: whole = data.newVarnode(wholesize, newaddr)
+        let whole = data.new_varnode(self.wholesize, newaddr);
         // whole->setWriteMask()
         whole.write().unwrap().addlflags |= crate::varnode::addl_flags::WRITE_MASK;
         self.whole = Some(whole);
@@ -1099,10 +1126,11 @@ impl SplitVarnode {
         let follow = PcodeOpRef(loopop.clone());
         match code {
             OpCode::CPUI_MULTIEQUAL => {
-                // Reinsert so as not to break the MULTIEQUAL sequence at block start.
+                // double.cc:596-601: reinsert so as not to break the MULTIEQUAL
+                // sequence at the beginning of the block. Ghidra uninserts,
+                // rewrites the opcode/inputs, then opInsertBegin(loop, bl).
                 let bl = parent_block(&loopop);
-                // TODO(double.cc:596-601): opUninsert/opInsertBegin require a
-                // concrete block. Best-effort: just transform opcode & inputs.
+                data.op_uninsert(&follow);
                 set_opcode_and_inputs(data, &follow, OpCode::CPUI_SUBPIECE, inlist);
                 if let Some(b) = bl {
                     data.op_insert_begin(&follow, &b);
@@ -1431,9 +1459,9 @@ impl SplitVarnode {
             let mut addr = locpy.read().unwrap().get_addr().as_u64();
             let hi_size = hi.read().unwrap().get_size();
             let lo_size = locpy.read().unwrap().get_size();
-            // Ghidra: addr.isBigEndian() ? addr - hi_size : addr + lo_size.
-            // TODO(double.cc:887): Rugra Address has no isBigEndian(); use the
-            // space of the locpy varnode.
+            // double.cc:887: addr.isBigEndian() ? addr - hi_size : addr + lo_size.
+            // Rugra exposes endianness via the varnode's address space
+            // (AddressSpace::is_big_endian, space.rs:131).
             if locpy.read().unwrap().get_space().is_big_endian() {
                 addr = addr.wrapping_sub(hi_size as u64);
             } else {
@@ -1475,18 +1503,20 @@ impl SplitVarnode {
         boolop: &OpArc,
         flip: bool,
     ) -> (Option<BlockArc>, Option<BlockArc>) {
-        // TODO(double.cc:920-921): getTrueOut/getFalseOut on FlowBlock.
-        // Rugra's FlowBlock::get_out(0)/get_out(1) approximates this.
+        // double.cc:920-921: trueblock = parent->getTrueOut();
+        //                    falseblock = parent->getFalseOut();
+        // Rugra's FlowBlock trait exposes get_true_out/get_false_out which, like
+        // Ghidra, read the CBRANCH's boolean-flip flag to pick the right out-edge.
+        // double.cc:922 then optionally swaps the pair based on `flip`.
         let parent = boolop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
         let parent = match parent {
             Some(p) => p,
             None => return (None, None),
         };
         let pg = parent.read().unwrap();
-        let trueblock = pg.get_out(0).map(|e| e.point.clone());
-        let falseblock = pg.get_out(1).map(|e| e.point.clone());
-        let boolflip = boolop.read().unwrap().is_boolean_flip();
-        if boolflip != flip {
+        let trueblock = pg.get_true_out(&PcodeOpRef(boolop.clone()));
+        let falseblock = pg.get_false_out(&PcodeOpRef(boolop.clone()));
+        if flip {
             (falseblock, trueblock)
         } else {
             (trueblock, falseblock)
@@ -1511,9 +1541,9 @@ impl SplitVarnode {
                 _ => None,
             }
         };
-        // Iterate all ops in the block.
-        // TODO(double.cc:948-957): Rugra FlowBlock::get_ops returns only ops
-        // explicitly added; this is a faithful but limited approximation.
+        // double.cc:948-957: iterate bl->beginOp() .. bl->endOp().
+        // Rugra's FlowBlock::get_ops returns the block's ordered op list,
+        // which is the faithful equivalent of Ghidra's [beginOp, endOp).
         let ops = parent.read().unwrap().get_ops();
         for op_arc in ops {
             if let Some(ref o) = otherop {
@@ -1823,25 +1853,69 @@ impl SplitVarnode {
         copylo: &OpArc,
         copyhi: &OpArc,
     ) {
-        let in_vn = in_sv.whole.clone().unwrap();
-        // Ghidra checks copyhi->isReturnCopy(); Rugra does not yet model
-        // return-copy flags, so the global-propagation-past-RETURN branch is
-        // skipped (TODO double.cc:1406-1420).
-        let _return_form = false; // TODO: model ReturnCopy on PcodeOp.
+        let mut in_vn = in_sv.whole.clone().unwrap();
+        // double.cc:1406: bool returnForm = copyhi->isReturnCopy();
+        let return_form = (copyhi.read().unwrap().flags
+            & crate::op::pcodeop_flags::RETURN_COPY)
+            != 0;
+        // double.cc:1407-1420: when propagating a global past a RETURN whose
+        // address differs, an additional COPY is needed.
+        if return_form && *in_vn.read().unwrap().get_addr() != addr {
+            let other_point1 = copyhi
+                .read()
+                .unwrap()
+                .get_in(0)
+                .and_then(|v| v.read().unwrap().get_def());
+            let other_point2 = copylo
+                .read()
+                .unwrap()
+                .get_in(0)
+                .and_then(|v| v.read().unwrap().get_def());
+            // Compute the later of the two defining COPYs (same basic block).
+            let mut later = other_point2.clone();
+            match (&other_point1, &other_point2) {
+                (Some(p1), Some(p2)) => {
+                    later = if order_of(p1) < order_of(p2) {
+                        Some(p2.clone())
+                    } else {
+                        Some(p1.clone())
+                    };
+                }
+                (Some(p1), None) => later = Some(p1.clone()),
+                (None, Some(p2)) => later = Some(p2.clone()),
+                (None, None) => {}
+            }
+            if let Some(later_op) = later {
+                let later_addr = later_op.read().unwrap().get_addr();
+                let other_copy = data.new_op(1, later_addr);
+                data.op_set_opcode(&other_copy, OpCode::CPUI_COPY);
+                let vn = data.new_varnode_out(in_sv.get_size(), addr, &other_copy);
+                data.op_set_input(&other_copy, in_vn.clone(), 0);
+                data.op_insert_before(&other_copy, &PcodeOpRef(later_op));
+                in_vn = vn;
+            }
+        }
 
+        // double.cc:1421-1424
         let hi_addr = copyhi.read().unwrap().get_addr();
         let size = in_sv.get_size();
         let whole_copy = data.new_op(1, hi_addr);
         data.op_set_opcode(&whole_copy, OpCode::CPUI_COPY);
         let out_vn = data.new_varnode_out(size, addr, &whole_copy);
         out_vn.write().unwrap().flags |= varnode_flags::ADDRFORCE;
-        // TODO(double.cc:1426): markReturnCopy when return_form.
+        // double.cc:1425-1426: if (returnForm) data.markReturnCopy(wholeCopy).
+        if return_form {
+            whole_copy
+                .0
+                .write()
+                .unwrap()
+                .flags |= crate::op::pcodeop_flags::RETURN_COPY;
+        }
         data.op_set_input(&whole_copy, in_vn.clone(), 0);
         data.op_insert_before(&whole_copy, &PcodeOpRef(copyhi.clone()));
-        // Destroy the original COPYs (outputs have no descendants).
+        // double.cc:1429-1430: destroy the original COPYs.
         data.op_destroy(&PcodeOpRef(copyhi.clone()));
         data.op_destroy(&PcodeOpRef(copylo.clone()));
-        let _ = in_vn; // silence unused if path above is generalized later.
     }
 
     /// Try to perform one transform on a logical double precision operation
@@ -6086,12 +6160,9 @@ impl RuleDoubleIn {
 
     /// Mark that we are doing double precision recovery. (`reset`,
     /// double.cc:3198-3202)
-    pub fn reset(&self, _data: &mut Funcdata) {
-        // Ghidra: data.setDoublePrecisRecovery(true)
-        // TODO(double.cc:3201): Rugra Funcdata has no set_double_precis_recovery.
-        eprintln!(
-            "double_precis: RuleDoubleIn::reset (setDoublePrecisRecovery not modeled, double.cc:3201)"
-        );
+    pub fn reset(&self, data: &mut Funcdata) {
+        // double.cc:3201: data.setDoublePrecisRecovery(true)
+        data.set_double_precis_recovery(true);
     }
 
     /// Determine if the given Varnode from a SUBPIECE should be marked as a
@@ -6102,8 +6173,19 @@ impl RuleDoubleIn {
             Some(v) => v.clone(),
             None => return 0,
         };
-        // whole->isTypeLock() / whole->getType()->isPrimitiveWhole()
-        // TODO(double.cc:3222-3224): Rugra has no isPrimitiveWhole on Datatype.
+        // double.cc:3222-3224: if typelocked, only mark primitive-whole types.
+        {
+            let wg = whole.read().unwrap();
+            if wg.is_type_lock() {
+                let primitive_whole = wg
+                    .get_type()
+                    .map(|t| t.is_primitive_whole())
+                    .unwrap_or(false);
+                if !primitive_whole {
+                    return 0;
+                }
+            }
+        }
         let offset = subpiece_op
             .read()
             .unwrap()
@@ -6119,8 +6201,10 @@ impl RuleDoubleIn {
         }
         let whole_g = whole.read().unwrap();
         if whole_g.is_input() {
-            // if (!whole->isTypeLock()) return 0;
-            // TODO(double.cc:3230): typelock check not modeled; allow.
+            // double.cc:3229-3230: input whole must be type-locked.
+            if !whole_g.is_type_lock() {
+                return 0;
+            }
         } else if !whole_g.is_written() {
             return 0;
         } else {
@@ -6184,9 +6268,11 @@ impl Rule for RuleDoubleIn {
             }
             return Ok(Self::attempt_marking(&outvn, &op_arc));
         }
-        // data.hasUnreachableBlocks()
-        // TODO(double.cc:3267): Rugra has has_unreachable_blocks; if it returns
-        // true Ghidra returns 0. We approximate as no unreachable blocks.
+        // double.cc:3267: if (data.hasUnreachableBlocks()) return 0;
+        // TODO(double.cc:3267): Rugra has no Funcdata::hasUnreachableBlocks
+        // (only remove_unreachable_blocks, which mutates). Guard is therefore
+        // not modeled; we proceed as if there were no unreachable blocks.
+        // Conservative effect: we may attempt a transform Ghidra would skip.
         let invn = match op_arc.read().unwrap().get_in(0) {
             Some(v) => v.clone(),
             None => return Ok(NO_CHANGE),
@@ -6236,8 +6322,19 @@ impl RuleDoubleOut {
             Some(o) => o.clone(),
             None => return 0,
         };
-        // whole->isTypeLock() / !whole->getType()->isPrimitiveWhole()
-        // TODO(double.cc:3299-3302): typelock / isPrimitiveWhole not modeled.
+        // double.cc:3299-3302: if typelocked, only mark primitive-whole types.
+        {
+            let wg = whole.read().unwrap();
+            if wg.is_type_lock() {
+                let primitive_whole = wg
+                    .get_type()
+                    .map(|t| t.is_primitive_whole())
+                    .unwrap_or(false);
+                if !primitive_whole {
+                    return 0;
+                }
+            }
+        }
         if vnhi.read().unwrap().get_size() != vnlo.read().unwrap().get_size() {
             return 0;
         }
@@ -6291,15 +6388,15 @@ impl Rule for RuleDoubleOut {
         if !is_precis_hi(&vnhi.read().unwrap()) || !is_precis_lo(&vnlo.read().unwrap()) {
             return Ok(Self::attempt_marking(&vnhi, &vnlo, &op_arc));
         }
-        // data.hasUnreachableBlocks() -> return 0 (double.cc:3348).
-        // TODO: modelled as no unreachable blocks.
+        // double.cc:3348: if (data.hasUnreachableBlocks()) return 0;
+        // TODO(double.cc:3348): Rugra has no Funcdata::hasUnreachableBlocks
+        // (only remove_unreachable_blocks, which mutates). Guard not modeled; we
+        // proceed as if there were no unreachable blocks (conservative: may
+        // combine where Ghidra would skip).
         match SplitVarnode::is_addr_tied_contiguous_result(&vnlo, &vnhi) {
             Some(_addr) => {
-                // data.combineInputVarnodes(vnhi, vnlo)
-                // TODO(double.cc:3353): Rugra has no combine_input_varnodes.
-                eprintln!(
-                    "double_precis: RuleDoubleOut combine_input_varnodes not implemented (double.cc:3353)"
-                );
+                // double.cc:3353: data.combineInputVarnodes(vnhi, vnlo)
+                data.combine_input_varnodes(&vnhi, &vnlo);
                 Ok(CHANGE)
             }
             None => Ok(NO_CHANGE),
@@ -6333,10 +6430,10 @@ impl RuleDoubleLoad {
     /// from being combined. (`noWriteConflict`, double.cc:3370) Returns the
     /// later of the two PcodeOps if combinable, otherwise None.
     ///
-    /// Rugra's PcodeOp does not yet expose ordered basic-block iteration
-    /// (`getBasicIter`, `previousOp`); the block walk is therefore a faithful
-    /// best-effort over `FlowBlock::get_ops` and is marked TODO where it
-    /// diverges.
+    /// Ghidra walks the block with `getBasicIter()`/`previousOp()`. Rugra does
+    /// not expose those on PcodeOp, but `FlowBlock::get_ops` returns the block's
+    /// ordered op list, which is walked in order (and backwards for the STORE
+    /// leading-INDIRECT extension, double.cc:3385-3389).
     pub fn no_write_conflict(
         data: &Funcdata,
         op1: &OpArc,
@@ -6356,20 +6453,36 @@ impl RuleDoubleLoad {
             std::mem::swap(&mut op2, &mut op1);
         }
         let startop = op1.clone();
-        if startop.read().unwrap().opcode == OpCode::CPUI_STORE {
-            // TODO(double.cc:3385-3389): extend range backwards over leading
-            // INDIRECTs. Rugra has no previousOp(); we approximate by NOT
-            // extending, which is conservative (may miss a combinable pair).
-        }
-        // Iterate ops in the block from startop to op2.
-        // TODO(double.cc:3391-3392): ordered getBasicIter unavailable. We
-        // collect the block's ops and process those with order in range.
+        // double.cc:3385-3389: if startop is a STORE, walk backwards (previousOp)
+        // extending the range start over leading INDIRECTs. Rugra has no
+        // previousOp(), but FlowBlock::get_ops returns the block's ordered op
+        // list, so we find startop's position and step backwards over INDIRECTs.
         let bb = parent_block(&startop);
         let block_ops: Vec<PcodeOpRef> = match &bb {
             Some(b) => b.read().unwrap().get_ops(),
             None => return None,
         };
-        let start_order = order_of(&startop);
+        let mut start_order = order_of(&startop);
+        if startop.read().unwrap().opcode == OpCode::CPUI_STORE {
+            // Find startop's index in the ordered list.
+            let mut idx = block_ops
+                .iter()
+                .position(|r| Arc::ptr_eq(&r.0, &startop));
+            while let Some(i) = idx {
+                if i == 0 {
+                    break;
+                }
+                let prev = &block_ops[i - 1];
+                if prev.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                    break;
+                }
+                start_order = order_of(&prev.0);
+                idx = Some(i - 1);
+            }
+        }
+        // double.cc:3391-3392: ordered iteration [startop->getBasicIter(), op2->getBasicIter()).
+        // We emulate this by scanning the block's ordered op list and processing
+        // ops whose order falls in [start_order, end_order].
         let end_order = order_of(&op2);
         let op1_clone = op1.clone();
         let op2_clone = op2.clone();
@@ -6865,11 +6978,11 @@ fn is_floating_point_op(opc: OpCode) -> bool {
 }
 
 /// Create the space-id Varnode for a LOAD/STORE's first input.
-/// Ghidra: `data.newVarnodeSpace(spc)`. Rugra has no newVarnodeSpace, so we
-/// model it as a constant holding the space id (consistent with
-/// `get_space_from_const`).
+/// Faithful to Ghidra `Funcdata::newVarnodeSpace(spc)` (funcdata.hh:286),
+/// which the header documents as "create a constant Varnode referring to an
+/// address space". We model it as a constant holding the space id; this is
+/// symmetric with `get_space_from_const`, which reads the id back.
 fn make_space_varnode(data: &mut Funcdata, spc: AddressSpace) -> VnArc {
-    // TODO(double.cc:3479): data.newVarnodeSpace(spc) not modeled.
     let id = spc.space_id() as u64;
     let vn = data.new_constant(8, id);
     vn
