@@ -87,7 +87,7 @@ pub trait Action {
         let mut iterations = 0u32;
         loop {
             iterations += 1;
-            if iterations > 2 {
+            if iterations > 1 {
                 break;
             }
             // Snapshot count before apply (action.cc:314 lcount = count).
@@ -806,13 +806,10 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // NOTE: mainloop repeatapply causes stack overflow at glob_range (17
-        // bblocks). Root cause: mainloop repeatapply re-runs ActionHeritage
-        // which has deep recursive rename logic (visit_rename_impl). With
-        // 256MB stack, the recursive heritage passes on complex functions
-        // still overflow. Fix requires making Heritage iterative or accepting
-        // that Rugra's Actions have internal loops that don't need external
-        // repeatapply. Tracked as TODO.
+        // NOTE: mainloop repeatapply still overflows even with iterative
+        // Heritage and cap=1. Root cause unclear — possibly the iterative
+        // Heritage's work stack interacts with repeatapply in a way that
+        // accumulates memory. Disabled pending further investigation.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

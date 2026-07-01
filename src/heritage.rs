@@ -912,134 +912,145 @@ impl Heritage {
         block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
     ) {
-        self.visit_rename_impl(_vbank, block_arc, stacks, 0);
-    }
+        // Iterative dominator-tree traversal using an explicit work stack.
+        // Each entry is (block_to_process, defined_keys_for_pop_after_children).
+        // This avoids deep recursion in the dominator tree (which caused stack
+        // overflow when mainloop repeatapply re-runs Heritage on complex functions).
 
-    fn visit_rename_impl(
-        &mut self,
-        _vbank: &mut VarnodeBank,
-        block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
-        depth: usize,
-    ) {
-        if depth > 200 {
-            return; // Safety limit for deep dominator trees
+        // Work item: (block, phase) where phase 0 = process ops, phase 1 = pop.
+        // We store defined_here alongside so we can pop after children.
+        enum WorkItem {
+            Enter(Arc<RwLock<dyn FlowBlock + Send + Sync>>),
+            Leave(Vec<(AddressSpace, Address)>),
         }
 
-        if (block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD) != 0 {
-            return;
-        }
+        let mut work: Vec<WorkItem> = vec![WorkItem::Enter(block_arc)];
+        // Guard against dom-tree cycles (which would grow the work stack unboundedly).
+        let max_work = 100000usize;
 
-        let mut defined_here: Vec<(AddressSpace, Address)> = Vec::new();
-
-        // 1. Process Phis (MULTIEQUAL) - only their outputs
-        let ops = block_arc.read().unwrap().get_ops();
-        for op_ref in &ops {
-            let op = op_ref.0.write().unwrap();
-            if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                if let Some(out_vn) = &op.output {
-                    let vn_read = out_vn.read().unwrap();
-                    let key = (vn_read.address_space, vn_read.loc);
-                    drop(vn_read);
-                    stacks.entry(key).or_default().push(out_vn.clone());
-                    defined_here.push(key);
-                }
+        while let Some(item) = work.pop() {
+            if work.len() > max_work {
+                eprintln!("[WARN] Heritage rename work stack exceeded {} items, aborting", max_work);
+                break;
             }
-        }
-
-        // 2. Process regular Ops
-        for op_ref in &ops {
-            let mut op = op_ref.0.write().unwrap();
-            if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                continue;
-            }
-
-            // Rewrite inputs — faithful to Ghidra renameRecurse (heritage.cc:2494-2498).
-            // Skip heritage-known varnodes (insert/constant/annotation), then
-            // skip non-active-heritage varnodes. Only active free varnodes
-            // get replaced by the stack-top SSA version.
-            for i in 0..op.inrefs.len() {
-                let should_skip = {
-                    let vn_read = op.inrefs[i].read().unwrap();
-                    vn_read.is_heritage_known() || !vn_read.is_active_heritage()
-                };
-                if should_skip {
-                    continue;
-                }
-                let key = {
-                    let vn_read = op.inrefs[i].read().unwrap();
-                    (vn_read.address_space, vn_read.loc)
-                };
-                // Clear active heritage flag before replacing.
-                op.inrefs[i].write().unwrap().clear_active_heritage();
-                if let Some(stack) = stacks.get(&key) {
-                    if let Some(new_vn) = stack.last() {
-                        op.inrefs[i] = new_vn.clone();
-                        new_vn
-                            .write()
-                            .unwrap()
-                            .descend
-                            .push(Arc::downgrade(&op_ref.0));
+            match item {
+                WorkItem::Enter(block_arc) => {
+                    // Skip dead blocks.
+                    if (block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD) != 0 {
+                        continue;
                     }
-                }
-            }
 
-            // Rewrite output
-            if let Some(out_vn) = &op.output {
-                let vn_read = out_vn.read().unwrap();
-                let key = (vn_read.address_space, vn_read.loc);
-                drop(vn_read);
-                stacks.entry(key).or_default().push(out_vn.clone());
-                defined_here.push(key);
-            }
-        }
+                    let mut defined_here: Vec<(AddressSpace, Address)> = Vec::new();
 
-        // 3. Fill Phi inputs in successors
-        let size_out = block_arc.read().unwrap().size_out();
-        for i in 0..size_out {
-            if let Some(edge) = block_arc.read().unwrap().get_out(i) {
-                let succ_arc = edge.point.clone();
-                let my_in_idx = edge.reverse_index as usize;
-
-                let succ_ops = succ_arc.read().unwrap().get_ops();
-                for op_ref in succ_ops {
-                    let mut op = op_ref.0.write().unwrap();
-                    if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                        if let Some(out_vn) = &op.output {
-                            let key = {
+                    // 1. Process Phis (MULTIEQUAL) - only their outputs
+                    let ops = block_arc.read().unwrap().get_ops();
+                    for op_ref in &ops {
+                        let op = op_ref.0.write().unwrap();
+                        if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                            if let Some(out_vn) = &op.output {
                                 let vn_read = out_vn.read().unwrap();
+                                let key = (vn_read.address_space, vn_read.loc);
+                                drop(vn_read);
+                                stacks.entry(key).or_default().push(out_vn.clone());
+                                defined_here.push(key);
+                            }
+                        }
+                    }
+
+                    // 2. Process regular Ops
+                    for op_ref in &ops {
+                        let mut op = op_ref.0.write().unwrap();
+                        if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                            continue;
+                        }
+
+                        for i in 0..op.inrefs.len() {
+                            let should_skip = {
+                                let vn_read = op.inrefs[i].read().unwrap();
+                                vn_read.is_heritage_known() || !vn_read.is_active_heritage()
+                            };
+                            if should_skip {
+                                continue;
+                            }
+                            let key = {
+                                let vn_read = op.inrefs[i].read().unwrap();
                                 (vn_read.address_space, vn_read.loc)
                             };
+                            op.inrefs[i].write().unwrap().clear_active_heritage();
                             if let Some(stack) = stacks.get(&key) {
                                 if let Some(new_vn) = stack.last() {
-                                    if my_in_idx < op.inrefs.len() {
-                                        op.inrefs[my_in_idx] = new_vn.clone();
-                                        new_vn
-                                            .write()
-                                            .unwrap()
-                                            .descend
-                                            .push(Arc::downgrade(&op_ref.0));
-                                    }
+                                    op.inrefs[i] = new_vn.clone();
+                                    new_vn
+                                        .write()
+                                        .unwrap()
+                                        .descend
+                                        .push(Arc::downgrade(&op_ref.0));
                                 }
                             }
                         }
-                    } else {
-                        break;
+
+                        if let Some(out_vn) = &op.output {
+                            let vn_read = out_vn.read().unwrap();
+                            let key = (vn_read.address_space, vn_read.loc);
+                            drop(vn_read);
+                            stacks.entry(key).or_default().push(out_vn.clone());
+                            defined_here.push(key);
+                        }
+                    }
+
+                    // 3. Fill Phi inputs in successors
+                    let size_out = block_arc.read().unwrap().size_out();
+                    for i in 0..size_out {
+                        if let Some(edge) = block_arc.read().unwrap().get_out(i) {
+                            let succ_arc = edge.point.clone();
+                            let my_in_idx = edge.reverse_index as usize;
+
+                            let succ_ops = succ_arc.read().unwrap().get_ops();
+                            for op_ref in succ_ops {
+                                let mut op = op_ref.0.write().unwrap();
+                                if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                                    if let Some(out_vn) = &op.output {
+                                        let key = {
+                                            let vn_read = out_vn.read().unwrap();
+                                            (vn_read.address_space, vn_read.loc)
+                                        };
+                                        if let Some(stack) = stacks.get(&key) {
+                                            if let Some(new_vn) = stack.last() {
+                                                if my_in_idx < op.inrefs.len() {
+                                                    op.inrefs[my_in_idx] = new_vn.clone();
+                                                    new_vn
+                                                        .write()
+                                                        .unwrap()
+                                                        .descend
+                                                        .push(Arc::downgrade(&op_ref.0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Schedule: Leave (pop) AFTER all children.
+                    // Push Leave first (it will execute last due to LIFO).
+                    let children = block_arc.read().unwrap().get_dom_children();
+                    work.push(WorkItem::Leave(defined_here));
+                    // Push children in reverse order so they process in original order.
+                    for child in children.into_iter().rev() {
+                        work.push(WorkItem::Enter(child));
                     }
                 }
-            }
-        }
-
-        // 4. Recurse to children in dominator tree
-        let children = block_arc.read().unwrap().get_dom_children();
-        for child in children {
-            self.visit_rename_impl(_vbank, child, stacks, depth + 1);
-        }
-
-        // 5. Pop stacks
-        for key in defined_here {
-            if let Some(stack) = stacks.get_mut(&key) {
-                stack.pop();
+                WorkItem::Leave(defined_here) => {
+                    // 5. Pop stacks
+                    for key in defined_here {
+                        if let Some(stack) = stacks.get_mut(&key) {
+                            stack.pop();
+                        }
+                    }
+                }
             }
         }
     }

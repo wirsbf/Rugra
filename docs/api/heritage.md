@@ -700,3 +700,6 @@ LoadGuard::set/new_unanalyzed/Default/space_highest。3 新测试验证填充。
 
 ### 2026-07-01（续 2）：block-not-found 优雅降级
 place_multiequal_direct 的 block 查找从 .expect 改为优雅 return。
+
+### 2026-07-01（续 3）：visit_rename 迭代化（消除递归栈深度）
+visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状态）。work stack 有 100000 上限防循环。消除 dominator-tree 递归深度。但 mainloop repeatapply 仍栈溢出（即使 cap=1+迭代 Heritage），根因待进一步调查。
