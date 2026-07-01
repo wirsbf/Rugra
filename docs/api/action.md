@@ -671,3 +671,8 @@ curl_decompile 改用 256MB 线程栈（防嵌套 perform 递归溢出）。main
 ActionGroup::apply 改为：对有 repeatapply flag 的子 Action 调 perform（如 ActionPool），对没有的调 apply（如中间 ActionGroup）。这消除了 perform→apply→child.perform→child.apply 的递归链——只有叶子级 repeatapply Action（ActionPool）使用 perform，中间 ActionGroup 用 apply + 父级 perform 循环。
 
 mainloop repeatapply 仍不启用：即使迭代式 apply + 256MB 栈仍溢出。根因是 Rule apply_op 内部的深层 RwLock guard 链（Rule 接收 &Arc<RwLock<PcodeOp>>，apply_op 内部可能持有嵌套 read/write guard）。修复需重构 Rule apply_op 避免 nested lock，或用非递归 pipeline executor。
+
+### 2026-07-01（续 10）：迭代式 ActionGroup.perform + mainloop repeatapply 最终根因
+ActionGroup.perform 重写为迭代式：循环调 self.apply()，不递归进默认 perform。cap=1+mainloop repeatapply→24/24 通过；cap=2→glob_range 栈溢出。
+
+**最终根因**：mainloop repeatapply 重新运行 ActionHeritage（有深层递归 rename 逻辑 visit_rename_impl）。glob_range 有 17 bblocks，Heritage 的递归重命名在多轮 repeatapply 下累积递归深度，即使 256MB 栈也溢出。修复需要让 Heritage 的 rename 迭代化（非递归），或接受 Rugra 的 Actions 有内部循环不需要外部 repeatapply。

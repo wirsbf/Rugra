@@ -87,14 +87,7 @@ pub trait Action {
         let mut iterations = 0u32;
         loop {
             iterations += 1;
-            if iterations > 3 {
-                // Safety valve: Ghidra's Actions converge in 1-3 passes.
-                // Cap at 3 to prevent stack overflow in deeply nested
-                // repeatapply groups (universal→fullloop→mainloop→stackstall).
-                // Safety valve: some Rugra self-made Actions are not fully
-                // idempotent and would loop forever. Ghidra's Actions converge
-                // in 2-3 passes; 10 is a generous cap that avoids stack
-                // overflow in deeply nested groups.
+            if iterations > 2 {
                 break;
             }
             // Snapshot count before apply (action.cc:314 lcount = count).
@@ -257,6 +250,42 @@ impl Action for ActionGroup {
     fn get_name(&self) -> &str { &self.name }
     fn get_flags(&self) -> u32 { self.flags }
 
+    /// Override perform for ActionGroup to be **iterative** (not recursive).
+    /// The default perform would call self.apply() in a loop, which calls
+    /// child.perform() for repeatapply children — creating deep recursion.
+    /// Instead, we inline the repeatapply loop here: call self.apply() (which
+    /// calls child.apply/perform), and repeat if the group has repeatapply.
+    /// This keeps the stack depth O(1) per repeatapply iteration.
+    fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
+        state.count = 0;
+        state.count_tests += 1;
+        let mut iterations = 0u32;
+        loop {
+            iterations += 1;
+            if iterations > 3 {
+                break;
+            }
+            state.lcount = state.count;
+            let res = self.apply(fd)?;
+            state.count += res;
+            let flags = if state.flags != 0 { state.flags } else { self.flags };
+            if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
+                break;
+            }
+        }
+        let flags = if state.flags != 0 { state.flags } else { self.flags };
+        if (flags & (action_flags::RULE_ONCEPERFUNC | action_flags::RULE_ONEACTPERFUNC)) != 0 {
+            state.status = if state.count > 0 || (flags & action_flags::RULE_ONCEPERFUNC) != 0 {
+                status_flags::STATUS_END
+            } else {
+                status_flags::STATUS_START
+            };
+        } else {
+            state.status = status_flags::STATUS_START;
+        }
+        Ok(state.count)
+    }
+
     fn reset(&mut self, fd: &mut Funcdata) {
         self.state = 0;
         for i in 0..self.actions.len() {
@@ -409,7 +438,6 @@ impl Action for ActionPool {
             .map(|v| v == "1")
             .unwrap_or(false);
         let mut pass_changes = 0;
-        // Snapshot the live op list — applyOp may destroy/insert ops.
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
         for op_ref in ops {
             // Skip dead ops (Ghidra's processOp checks isDead).
@@ -778,6 +806,13 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
+        // NOTE: mainloop repeatapply causes stack overflow at glob_range (17
+        // bblocks). Root cause: mainloop repeatapply re-runs ActionHeritage
+        // which has deep recursive rename logic (visit_rename_impl). With
+        // 256MB stack, the recursive heritage passes on complex functions
+        // still overflow. Fix requires making Heritage iterative or accepting
+        // that Rugra's Actions have internal loops that don't need external
+        // repeatapply. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
