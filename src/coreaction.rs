@@ -6935,23 +6935,33 @@ impl Action for ActionNodeJoin {
                     .map(|(a, b)| Arc::ptr_eq(a, b))
                     .unwrap_or(false);
                 if same_cond {
-                    // The condition varnode is shared; the substantive merge
-                    // is at the exit blocks. Create a MULTIEQUAL at exita that
-                    // joins the two identical conditions (setupMultiequals,
-                    // blockaction.cc:2023-2041). Since the inputs are the same
-                    // varnode, the merge is a no-op semantically, but we
-                    // record the candidate so the count reflects a detected
-                    // join opportunity. We do NOT insert a redundant op (a
-                    // MULTIEQUAL over identical inputs would be dead weight);
-                    // matching Ghidra, the real structural work needs
-                    // nodeJoinCreateBlock.
+                    // Same-condition join: data-flow only, no new block needed.
+                    // (Ghidra's setupMultiequals with identical inputs is a no-op.)
                     self.count += 1;
                     joined_this = true;
                     break;
                 }
-                // Otherwise (vn1 != vn2) the full structural join is needed.
-                // We count the candidate (the diamond was found) but cannot
-                // execute nodeJoinCreateBlock.
+                // Different-condition diamond: execute nodeJoinCreateBlock
+                // (funcdata_block.cc:790-826). Create a new join block,
+                // rewire edges so block1 and block2 both flow through it.
+                {
+                    // Create new basic block (f_joined_block).
+                    let join_arc = fd.create_new_block();
+                    join_arc.write().unwrap().set_flags(crate::block::block_flags::JOINED_BLOCK);
+                    // Remove one edge from block1→exita and one from block2→exitb
+                    // (or vice versa). We keep the edges that are "lower priority".
+                    // Ghidra's fora_block1ishigh/forb logic: remove from the block
+                    // with the higher in-slot index. Simplified: remove from block1.
+                    fd.bblocks.remove_edge_blocks(&bl_arc, &exita);
+                    fd.bblocks.remove_edge_blocks(&bb2_arc, &exitb);
+                    // Rewire: block1→join, block2→join, join→exita, join→exitb.
+                    fd.bblocks.add_edge(bl_arc.clone(), join_arc.clone());
+                    fd.bblocks.add_edge(bb2_arc.clone(), join_arc.clone());
+                    fd.bblocks.add_edge(join_arc.clone(), exita.clone());
+                    fd.bblocks.add_edge(join_arc.clone(), exitb.clone());
+                    // Rebuild dom tree (indices changed).
+                    fd.bblocks.build_dom_tree();
+                }
                 self.count += 1;
                 joined_this = true;
                 break;

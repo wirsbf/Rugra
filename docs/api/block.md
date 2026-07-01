@@ -893,3 +893,6 @@ BlockGraph 新增：
 build_dom_tree 开头 reindex 所有块到向量位置（防止 dead-flow 删块后索引越界）。
 
 ### 2026-07-01（续 3）：BlockWhileDo +for_init/for_iter
+
+### 2026-07-01（续 4）：JOINED_BLOCK flag + create_new_block
+block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。

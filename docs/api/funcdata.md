@@ -790,3 +790,6 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 ### 2026-07-01（管线改造）：restart_pending + jumptable_recovery
 - `restart_pending: bool` 字段 + `has_restart_pending()/set_restart_pending(bool)` — ActionRestartGroup 的重启信号。
 - `is_jumptable_recovery_on() -> bool` — Rugra 无 jumptable 恢复，返回 false（TODO）。
+
+### 2026-07-01（续 4）：create_new_block
+create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.cc newBlockBasic）。

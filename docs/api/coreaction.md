@@ -763,3 +763,5 @@ ActionNodeJoin::apply 在检测到不同条件的菱形（diamond）后，执行
 4. rebuild_dom_tree
 Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 同条件菱形：data-flow only（无新块）。
+
+### 2026-07-01（续 12）：NodeJoin 真正执行 nodeJoinCreateBlock 变换

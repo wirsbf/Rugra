@@ -1174,6 +1174,15 @@ impl Funcdata {
     /// we splice the CFG: this block inherits the successor's out-edges and the
     /// successor is removed. This is used by ActionRedundBranch (case 1) and
     /// ActionDoNothing.
+    /// Create a new empty basic block and add it to bblocks. Faithful to
+    /// `Funcdata::newBlockBasic` (funcdata_block.cc). Returns the Arc.
+    pub fn create_new_block(&mut self) -> Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> {
+        let addr = crate::address::Address::new(0);
+        let bb = Arc::new(RwLock::new(crate::block::BlockBasic::new(0, addr)));
+        self.bblocks.add_block(bb.clone());
+        bb
+    }
+
     pub fn splice_block_basic(&mut self, bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
         let (out_block, out_has_single_in) = {
             let rg = bb.read().unwrap();

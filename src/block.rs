@@ -41,6 +41,9 @@ pub mod block_flags {
     pub const GOTO_EDGE_1: u32 = 1 << 7;
     /// Out-edge[0] (fallthrough) is marked as goto by selectGoto.
     pub const GOTO_EDGE_0: u32 = 1 << 8;
+    /// Block is a joined block (created by nodeJoinCreateBlock).
+    /// Ghidra `f_joined_block` (block.hh:97).
+    pub const JOINED_BLOCK: u32 = 1 << 9;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)
