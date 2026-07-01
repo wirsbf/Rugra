@@ -490,7 +490,22 @@ impl PrintC {
         let block_type = block_arc.read().unwrap().get_type();
 
         match block_type {
-            BlockType::If => {
+            BlockType::If => self.emit_structured_if(block_arc, graph, emitted),
+            BlockType::WhileDo => self.emit_structured_whiledo(block_arc, graph, emitted),
+            BlockType::DoWhile => self.emit_structured_dowhile(block_arc, graph, emitted),
+            BlockType::List => self.emit_structured_list(block_arc, graph, emitted),
+            BlockType::Condition => self.emit_structured_condition(block_arc, graph, emitted),
+            BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted),
+            _ => self.emit_structured_basic(block_arc, graph, emitted),
+        }
+    }
+    fn emit_structured_if(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured if-then or if-then-else
                 let block = block_arc.read().unwrap();
                 let if_block = block.as_any().downcast_ref::<BlockIf>();
@@ -671,8 +686,16 @@ impl PrintC {
                     // Fallback: emit flat
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            BlockType::WhileDo => {
+    }
+
+
+    fn emit_structured_whiledo(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured while loop (or for loop if for_init/for_iter set)
                 let block = block_arc.read().unwrap();
                 let while_block = block.as_any().downcast_ref::<BlockWhileDo>();
@@ -711,8 +734,16 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            BlockType::DoWhile => {
+    }
+
+
+    fn emit_structured_dowhile(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured do-while loop
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
@@ -741,8 +772,16 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            BlockType::List => {
+    }
+
+
+    fn emit_structured_list(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Sequence of blocks — emit children in order
                 let block = block_arc.read().unwrap();
                 let list_block = block.as_any().downcast_ref::<BlockList>();
@@ -770,8 +809,16 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            BlockType::Condition => {
+    }
+
+
+    fn emit_structured_condition(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // BlockCondition at top level (not inside a BlockIf/BlockWhile) —
                 // Just emit the sub-block ops flat. The individual CBRANCH ops will
                 // produce proper `if (cond) goto` statements.
@@ -787,8 +834,16 @@ impl PrintC {
                     drop(block);
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            BlockType::Switch => {
+    }
+
+
+    fn emit_structured_switch(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 let block = block_arc.read().unwrap();
                 let switch_block = block.as_any().downcast_ref::<BlockSwitch>();
                 if let Some(switch_data) = switch_block {
@@ -960,8 +1015,16 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
-            }
-            _ => {
+    }
+
+
+    fn emit_structured_basic(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<i32>,
+    ) {
+        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // BlockBasic or other — flat statement emission
                 // Still check for inline CBRANCH pattern as fallback
                 let has_cond = {
@@ -1110,9 +1173,9 @@ impl PrintC {
                         }
                     }
                 }
-            }
-        }
     }
+
+
     /// Emit a goto label name. Uses `LAB_xxxx` for intra-function addresses,
     /// falls back to symbol lookup then `DAT_xxxx` for external addresses.
     fn push_goto_target(&mut self, vn: &Varnode) {

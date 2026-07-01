@@ -697,3 +697,6 @@ printc emit_block_structured +thread_local depth guard（>200 回退）。sblock
 
 ### 2026-07-01（续 15）：mainloop repeatapply 栈帧分析
 根因=emit_block_structured match 栈帧巨大（所有 arm 局部变量同帧）。depth=50+256MB 仍溢出。修复需拆分 per-arm helpers 或完全迭代化。
+
+### 2026-07-01（续 16）：per-arm printc helpers + mainloop repeatapply 最终诊断（无限递归）
+printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply 测试 depth 20-200+256MB：全部溢出。最终诊断=不是栈帧大小而是 sblocks 重建后的真正无限递归。

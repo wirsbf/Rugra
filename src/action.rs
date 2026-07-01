@@ -806,12 +806,12 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // NOTE: mainloop repeatapply not enabled. Even with depth guard=50
-        // + 256MB stack + sblocks rebuild, printc emit_block_structured
-        // overflows because the function has a massive stack frame (all
-        // match arms' locals allocated). Fix requires splitting the function
-        // into per-arm helpers (each with small stack frame) or full work-
-        // stack iteration. Tracked as TODO.
+        // mainloop repeatapply: not enabled. Tested exhaustively with per-arm
+        // printc helpers + depth guard 20-200 + 256MB stack. Overflow persists
+        // at all depths — root cause appears to be genuine infinite recursion
+        // in the rebuilt sblocks structure (block graph cycle not caught by
+        // the emitted HashSet). Fix requires debugging the sblocks rebuild to
+        // ensure no cycles. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

@@ -601,3 +601,8 @@ emit_block_structured 加 thread_local depth guard（>200 层回退到 emit_bloc
 
 ### 2026-07-01（续 3）：mainloop repeatapply 最终根因 — emit_block_structured 巨大栈帧
 测试 depth=50 + 256MB 栈仍溢出。根因：emit_block_structured 的 `match block_type` 中所有 arm 的局部变量在**同一个栈帧**分配（Rust 编译器行为），即使每次只执行一个 arm。所有 If/WhileDo/List/Switch/Condition 的 RwLockReadGuard + 变量 ≈ 单帧 ~100KB+。50 帧 × 100KB = 5MB，但 sblocks 重建后的 glob_range 结构递归深度可能远超 50（结构循环或异常深层嵌套），所以 depth guard 本身无法解决——需要**拆分函数为 per-arm helpers**（每个 arm 独立栈帧）或**完全 work-stack 迭代化**。
+
+### 2026-07-01（续 4）：emit_block_structured per-arm helpers 拆分
+emit_block_structured 的 match block_type 拆分为 7 个 per-arm helper 函数（emit_structured_if/whiledo/dowhile/list/condition/switch/basic）。每个 helper 有独立栈帧。
+
+mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**全部溢出**。最终结论：溢出不是栈帧大小问题——是 sblocks 重建后的结构中存在**真正的无限递归**（block graph 循环未被 emitted HashSet 捕获，因为重建后的 block index 变化导致 HashSet 失效）。修复需调试 sblocks 重建确保无循环。
