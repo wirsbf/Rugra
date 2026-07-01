@@ -654,3 +654,6 @@ lib.rs 新增 `pub mod double_precis`。RuleFloatCast 从 local-extras 移除（
 
 ### 2026-07-01（续 4）：注册 3 条缺失 Rule
 RulePtrFlow(oppool1:5624) + RuleOrPredicate(oppool1:5631) + RuleDumptyHumpLate(cleanup:5699) 全部注册。
+
+### 2026-07-01（续 5）：mainloop repeatapply 调查结果
+mainloop RULE_REPEATAPPLY 测试：导致无限循环。根因：build_full_pipeline_actions 的 22 个 Action 中某些（ActionDirectWrite/ActiveParam 等）每次 apply 都报告变化。启用需要逐个验证这些 Action 的幂等性。暂不启用，标注 TODO。

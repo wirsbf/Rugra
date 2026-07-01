@@ -752,15 +752,13 @@ impl ActionDatabase {
         let mut fullloop = ActionGroup::new("fullloop");
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
-        // NOTE: mainloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
-        // Enabling repeatapply here causes test_realistic_curl_function to
-        // infinite-loop: one of mainloop's non-pool children (ActionBlockStructure
-        // / ActionCopyPropagate / ActionSimplify / ActionInferParams family) is
-        // non-idempotent — it reports a change on every pass, so lcount<count
-        // never becomes false. Per task fallback, reverted mainloop while keeping
-        // fullloop + stackstall repeatapply. See action.cc:5489 (Ghidra marks
-        // mainloop repeatapply, but its children are fully ported/convergent
-        // there; Rugra's local mainloop Actions are not yet all idempotent).
+        // NOTE: mainloop kept without RULE_REPEATAPPLY. Rugra's self-made
+        // Actions (Simplify/CopyPropagate/BlockStructure) are idempotent on
+        // their own but the build_full_pipeline_actions extras (22 Actions
+        // including ActionDirectWrite/ActiveParam/etc.) report changes every
+        // pass in the repeatapply loop, causing infinite loops. To enable,
+        // each of those 22 Actions must be verified idempotent (return 0 on
+        // second pass). Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));
