@@ -806,12 +806,13 @@ impl ActionDatabase {
         //   1. Identifying the specific Rule/Action causing deep guard nesting
         //   2. Refactoring Rule apply_op to avoid nested locks
         //   3. Using a stack-based (non-recursive) pipeline executor
-        // mainloop repeatapply: not enabled. Tested exhaustively with per-arm
-        // printc helpers + depth guard 20-200 + 256MB stack. Overflow persists
-        // at all depths — root cause appears to be genuine infinite recursion
-        // in the rebuilt sblocks structure (block graph cycle not caught by
-        // the emitted HashSet). Fix requires debugging the sblocks rebuild to
-        // ensure no cycles. Tracked as TODO.
+        // mainloop repeatapply: not enabled. Despite Arc::as_ptr emitted fix
+        // + per-arm helpers + depth guard + 256MB stack, overflow persists.
+        // The overflow is in a code path not covered by the depth guard
+        // (possibly emit_block_ops or doc_function's discovery pass, which
+        // also recurses). Full diagnosis requires stack trace analysis tools
+        // not available in this environment. The Arc::as_ptr fix is retained
+        // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
         mainloop.add_action(Box::new(ActionHeritage::new()));

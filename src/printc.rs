@@ -418,7 +418,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         // Depth guard: prevent stack overflow on deeply nested structures.
         // Fallback to sequential ops emission when depth exceeds safe limit.
@@ -443,7 +443,7 @@ impl PrintC {
 
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
 
-        let block_idx = block_arc.read().unwrap().get_index();
+        let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
         if emitted.contains(&block_idx) {
             return;
         }
@@ -503,7 +503,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured if-then or if-then-else
@@ -537,7 +537,7 @@ impl PrintC {
                         if matches!(if_type, BlockType::Basic) {
                             self.emit_block_ops(&if_data.if_body, false);
                         } else {
-                            let mut dry_emitted: HashSet<i32> = HashSet::new();
+                            let mut dry_emitted: HashSet<usize> = HashSet::new();
                             self.emit_block_structured(&if_data.if_body, graph, &mut dry_emitted);
                         }
                         let has_case = self.emit.as_any_mut()
@@ -545,7 +545,7 @@ impl PrintC {
                             .map_or(false, |d| d.has_case());
                         self.emit = saved_emit;
                         if has_case {
-                            let if_idx = if_data.if_body.read().unwrap().get_index();
+                            let if_idx = std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize;
                             let ibt = if_data.if_body.read().unwrap().get_type();
                             if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
                                 emitted.insert(if_idx);
@@ -567,12 +567,12 @@ impl PrintC {
                         // Both bodies empty — skip entire if/else, just emit condition block's ops
                         let ibt = if_data.if_body.read().unwrap().get_type();
                         if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
-                            emitted.insert(if_data.if_body.read().unwrap().get_index());
+                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
                         }
                         if let Some(ref eb) = if_data.else_body {
                             let ebt = eb.read().unwrap().get_type();
                             if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
-                                emitted.insert(eb.read().unwrap().get_index());
+                                emitted.insert(std::sync::Arc::as_ptr(&eb) as *const () as usize);
                             }
                         }
                         self.emit_block_ops(&if_data.condition, true);
@@ -581,7 +581,7 @@ impl PrintC {
                         self.emit_block_ops(&if_data.condition, true);
                         let ibt = if_data.if_body.read().unwrap().get_type();
                         if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
-                            emitted.insert(if_data.if_body.read().unwrap().get_index());
+                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
                         }
                         let else_body = if_data.else_body.as_ref().unwrap();
                         self.emit.tag_line(0);
@@ -609,7 +609,7 @@ impl PrintC {
                         self.emit.begin_block();
                         let else_body_type = else_body.read().unwrap().get_type();
                         if matches!(else_body_type, BlockType::Basic) {
-                            emitted.insert(else_body.read().unwrap().get_index());
+                            emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
                             self.emit_block_ops(else_body, true);
                         } else {
                             self.emit_block_structured(else_body, graph, emitted);
@@ -646,7 +646,7 @@ impl PrintC {
                         self.emit.begin_block();
                         let if_body_type = if_data.if_body.read().unwrap().get_type();
                         if matches!(if_body_type, BlockType::Basic) {
-                            emitted.insert(if_data.if_body.read().unwrap().get_index());
+                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
                             self.emit_block_ops(&if_data.if_body, true);
                         } else {
                             self.emit_block_structured(&if_data.if_body, graph, emitted);
@@ -661,7 +661,7 @@ impl PrintC {
                                 self.emit.begin_block();
                                 let else_body_type = else_body.read().unwrap().get_type();
                                 if matches!(else_body_type, BlockType::Basic) {
-                                    emitted.insert(else_body.read().unwrap().get_index());
+                                    emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
                                     let saved = self.seen_return;
                                     self.seen_return = false;
                                     self.emit_block_ops(else_body, true);
@@ -676,7 +676,7 @@ impl PrintC {
                             } else {
                                 let ebt = else_body.read().unwrap().get_type();
                                 if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
-                                    emitted.insert(else_body.read().unwrap().get_index());
+                                    emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
                                 }
                             }
                         }
@@ -693,7 +693,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured while loop (or for loop if for_init/for_iter set)
@@ -741,7 +741,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Structured do-while loop
@@ -779,7 +779,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // Sequence of blocks — emit children in order
@@ -798,7 +798,7 @@ impl PrintC {
                         (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
                     };
                     for succ in &outs {
-                        let succ_idx = succ.read().unwrap().get_index();
+                        let succ_idx = std::sync::Arc::as_ptr(succ) as *const () as usize;
                         if emitted.contains(&succ_idx) { continue; }
                         let st = succ.read().unwrap().get_type();
                         if st != crate::block::BlockType::Basic
@@ -816,7 +816,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // BlockCondition at top level (not inside a BlockIf/BlockWhile) —
@@ -841,7 +841,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 let block = block_arc.read().unwrap();
@@ -942,7 +942,7 @@ impl PrintC {
                     // Print each case block
                     let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
-                        let case_idx = case_block.read().unwrap().get_index();
+                        let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
                         let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
                         // Skip duplicate case values (two CBRANCH blocks comparing
@@ -991,7 +991,7 @@ impl PrintC {
 
                     // Print default case
                     if let Some(ref def_block) = switch_data.default_case {
-                        let def_idx = def_block.read().unwrap().get_index();
+                        let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
                         if emitted.contains(&def_idx) {
                             // Skip default if extracted
                         } else {
@@ -1022,7 +1022,7 @@ impl PrintC {
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
-        emitted: &mut std::collections::HashSet<i32>,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
                 // BlockBasic or other — flat statement emission
@@ -1055,13 +1055,13 @@ impl PrintC {
                             let t = te.point.read().unwrap().get_type();
                             // Don't suppress structured blocks (WhileDo/DoWhile) — they must emit.
                             if t == crate::block::BlockType::Basic || t == crate::block::BlockType::Copy {
-                                emitted.insert(te.point.read().unwrap().get_index());
+                                emitted.insert(std::sync::Arc::as_ptr(&te.point) as *const () as usize);
                             }
                         }
                         if let Some(ref fe) = false_edge {
                             let f = fe.point.read().unwrap().get_type();
                             if f == crate::block::BlockType::Basic || f == crate::block::BlockType::Copy {
-                                emitted.insert(fe.point.read().unwrap().get_index());
+                                emitted.insert(std::sync::Arc::as_ptr(&fe.point) as *const () as usize);
                             }
                         }
                     } else if true_empty && !false_empty {
@@ -1070,7 +1070,7 @@ impl PrintC {
                         if let Some(ref te) = true_edge {
                             let t = te.point.read().unwrap().get_type();
                             if t == crate::block::BlockType::Basic || t == crate::block::BlockType::Copy {
-                                emitted.insert(te.point.read().unwrap().get_index());
+                                emitted.insert(std::sync::Arc::as_ptr(&te.point) as *const () as usize);
                             }
                         }
 
@@ -1089,7 +1089,7 @@ impl PrintC {
                             .unwrap_or_else(|| format!("!({})", trimmed));
                         self.emit.print(&format!("if ({})", negated_cond2));
                         if let Some(false_block_edge) = false_edge {
-                            let false_idx = false_block_edge.point.read().unwrap().get_index();
+                            let false_idx = std::sync::Arc::as_ptr(&false_block_edge.point) as *const () as usize;
                             let ft = false_block_edge.point.read().unwrap().get_type();
                             self.emit.begin_block();
                             if ft == crate::block::BlockType::Basic || ft == crate::block::BlockType::Copy {
@@ -1109,7 +1109,7 @@ impl PrintC {
                         self.emit.print(")");
 
                         if let Some(true_block_edge) = true_edge {
-                            let true_idx = true_block_edge.point.read().unwrap().get_index();
+                            let true_idx = std::sync::Arc::as_ptr(&true_block_edge.point) as *const () as usize;
                             let tt = true_block_edge.point.read().unwrap().get_type();
                             self.emit.begin_block();
                             if tt == crate::block::BlockType::Basic || tt == crate::block::BlockType::Copy {
@@ -1120,7 +1120,7 @@ impl PrintC {
                         }
 
                         if let Some(false_block_edge) = false_edge {
-                            let false_idx = false_block_edge.point.read().unwrap().get_index();
+                            let false_idx = std::sync::Arc::as_ptr(&false_block_edge.point) as *const () as usize;
                             let ft = false_block_edge.point.read().unwrap().get_type();
                             // The else block is part of the conditional, not sequential code.
                             // seen_return from the then-branch should NOT suppress it.
@@ -1163,7 +1163,7 @@ impl PrintC {
                         (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
                     };
                     for succ in &outs {
-                        let succ_idx = succ.read().unwrap().get_index();
+                        let succ_idx = std::sync::Arc::as_ptr(succ) as *const () as usize;
                         if emitted.contains(&succ_idx) { continue; }
                         let st = succ.read().unwrap().get_type();
                         // Only recurse into structured blocks, not basic blocks.
@@ -3305,10 +3305,10 @@ impl PrintLanguage for PrintC {
         }
 
 
-        let mut discovery_emitted: HashSet<i32> = HashSet::new();
+        let mut discovery_emitted: HashSet<usize> = HashSet::new();
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = block_arc.read().unwrap().get_index();
+                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 let size_in = block_arc.read().unwrap().size_in();
                 if size_in == 0 && !discovery_emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut discovery_emitted);
@@ -3321,7 +3321,7 @@ impl PrintLanguage for PrintC {
         // collected in Pass 1, so their extern declarations are missing.
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = block_arc.read().unwrap().get_index();
+                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 if !discovery_emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut discovery_emitted);
                 }
@@ -3568,11 +3568,11 @@ impl PrintLanguage for PrintC {
             }
         }
 
-        let mut emitted: HashSet<i32> = HashSet::new();
+        let mut emitted: HashSet<usize> = HashSet::new();
         // 2b. Emit body starting from root/entry blocks
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = block_arc.read().unwrap().get_index();
+                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 let size_in = block_arc.read().unwrap().size_in();
                 if size_in == 0 && !emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut emitted);
@@ -3583,7 +3583,7 @@ impl PrintLanguage for PrintC {
         // 2c. Emit any disconnected or unreachable subgraphs
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
-                let block_idx = block_arc.read().unwrap().get_index();
+                let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 if !emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut emitted);
                 }
@@ -3594,12 +3594,12 @@ impl PrintLanguage for PrintC {
         // never actually rendered. Use a FRESH emitted set so the loop isn't
         // skipped by the stale emitted entry from if-empty paths.
         {
-            let mut fresh_emitted: HashSet<i32> = HashSet::new();
+            let mut fresh_emitted: HashSet<usize> = HashSet::new();
             for i in 0..graph.get_size() {
                 if let Some(block_arc) = graph.get_block(i) {
                     let bt = block_arc.read().unwrap().get_type();
                     if bt == crate::block::BlockType::WhileDo || bt == crate::block::BlockType::DoWhile {
-                        let block_idx = block_arc.read().unwrap().get_index();
+                        let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                         if !fresh_emitted.contains(&block_idx) {
                             self.emit_block_structured(&block_arc, graph, &mut fresh_emitted);
                         }

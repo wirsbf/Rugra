@@ -4,7 +4,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L3（2026-06-28 完整对齐）**——doc_all_proto 已实现（prototype 发射），无 TODO。PrintC 覆盖全部 Ghidra 方法。curl 24/24 + httpd 29/29 gcc 审计。5 单元测试。
+- **状态**: 🔧 **L2→L3 迁移中（2026-07-02）**——printc 当前依赖 `emitted: HashSet<usize>`（key=Arc 指针身份）做去重，是 CFT 树遍历尚未完成的临时补丁。正在按 `beginBlock/endBlock` 对齐计划迁移到 Ghidra 的 `emitBlockGraph` 树遍历（block.cc:960 identifyInternal 物理移除子块 + printc.cc:2746 单次遍历），届时 emitted HashSet 全家桶（emitted/dry_emitted/discovery_emitted/fresh_emitted）将删除。doc_all_proto 已实现，PrintC 覆盖全部 Ghidra emitBlock* 方法。5 单元测试。
 - **可信度**: 高
 - **对应源码**: 当前 `rugra/src/printc.rs`
 - **文档目标**: 说明 `PrintC` 在当前 Rugra 架构中的职责、输入依赖与输出边界
