@@ -1,34 +1,37 @@
 # Ghidra 黄金输出集（Golden Outputs）
 
-本目录存放从**真实 Ghidra** 跑出的反编译输出，作为 `tools/compare_ghidra.py` 差分测试的基准（AGENTS.md 铁律 11）。
+本目录存放从**真实 Ghidra** 跑出的反编译输出，作为 `tools/compare_ghidra.py` /
+`tools/func_gap_audit.py` / `tools/align_check.py` 差分测试的基准（AGENTS.md 铁律 11）。
 
 ## 文件
 
-| 文件 | 来源二进制 | Ghidra 版本 | 生成日期 |
-|---|---|---|---|
-| `ghidra_curl.c` | `examples/curl` | Ghidra 11.3.2 PUBLIC | 2026-06-29 |
-
-## 生成方法
-
-```bash
-# 用 Ghidra analyzeHeadless 反编译, 导出 C 代码
-# (详见 tools/ghidra_decompile_all.py)
-python tools/ghidra_decompile_all.py examples/curl --output /tmp/ghidra_curl_raw.c
-
-# 清洗: 剥离前 ~124 行 INFO 日志噪音, 从第一个 "/* ---- 0x" 函数头开始
-# (ghidra_decompile_all.py 的输出格式: 前缀是 Ghidra 启动日志, 之后是 C 代码)
-tail -n +<FIRST_HEADER_LINE> /tmp/ghidra_curl_raw.c > tests/golden/ghidra_curl.c
-```
+| 文件 | 来源二进制 | Ghidra 版本 | 生成日期 | 说明 |
+|---|---|---|---|---|
+| `ghidra_curl.c` | `examples/curl` | Ghidra 11.3.2 PUBLIC | 2026-06-29 | 清理版（尾部 4 行 INFO 噪音已剥） |
+| `ghidra_curl.11.3.2.c` | `examples/curl` | Ghidra 11.3.2 PUBLIC | 2026-06-29 | 原始存档（含尾部 INFO 噪音，留底） |
 
 ## 格式约定
 
 - 函数头格式：`/* ---- 0xADDR: NAME (SIZE bytes) ---- */`（Rugra 与 Ghidra 两边相同）
 - 地址用 Ghidra 绝对地址（如 `0x1025a0`），Rugra 用相对偏移（`0x25a0`），差值恒为 `0x100000`
 - 函数名：Ghidra 会剥离 GCC 优化后缀（`.constprop.0`/`.part.0`/`.isra.0`），Rugra 保留；`compare_ghidra.py` 的 `strip_gcc_suffix` 处理此差异
+- 文件首行必须是函数头（`/* ---- 0x`），末行必须是 `}` 或空——**不得**含 Ghidra INFO/REPORT 日志行
 
 ## 重新生成
 
-当升级 Ghidra 版本或更换测试二进制时，重新跑生成命令并更新本目录。**不要手工编辑黄金输出**——它们必须反映真实 Ghidra 的输出。
+```bash
+# 需要"已安装/已 build"的 Ghidra distribution（不能是源码 repo）。
+# 本机 D:/ghidra/rugra/ghidra 是未 build 的 12.1 源码 repo，跑不了 headless；
+# 待装好 distribution 后，用本命令一键重生成：
+python tools/regen_golden.py --binary examples/curl --ghidra <path-to-analyzeHeadless.bat>
+```
+
+`tools/regen_golden.py` 驱动 `analyzeHeadless` 跑改写后的
+`tools/ghidra_decompile_all.py`（postScript **写文件**而非 print stdout，
+根因消除 C 输出与 Ghidra INFO 日志的交错），写后校验首行/末行/函数头数。
+
+**不要手工编辑黄金输出**——它们必须反映真实 Ghidra 的输出。唯一的例外是
+从原始存档剥除 INFO 日志噪音（如本次 `ghidra_curl.c` 从 `.11.3.2.c` 剥除尾部 4 行）。
 
 ## 已知差异（非缺陷，compare_ghidra.py 会归一化处理）
 
@@ -37,3 +40,8 @@ tail -n +<FIRST_HEADER_LINE> /tmp/ghidra_curl_raw.c > tests/golden/ghidra_curl.c
 - 变量命名：Ghidra 用类型化连续编号（`cVar1,lVar2,bVar3`）+ 语义名（`config`）；Rugra 用 `StackX_N` + 编号可能非连续（181538f bug，待修）
 
 这些差异在 `compare_ghidra.py` 的 `normalize_skeleton`/`strip_noise` 中归一化，不产生 diff 噪音。
+
+## 版本漂移
+
+当前 golden 是 11.3.2 产出，本机源码 repo 是 12.1（未 build）。升级到 12.1
+重生成后，所有函数的 golden 输出都会变，差分基线会重置——这是预期行为。

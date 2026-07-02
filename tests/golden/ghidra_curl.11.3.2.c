@@ -3370,3 +3370,7 @@ void __cxa_finalize(void)
 }
 
 
+INFO  ANALYZING changes made by post scripts: file:///D:/ghidra/rugra/examples/curl (HeadlessAnalyzer)  
+INFO  REPORT: Post-analysis succeeded for file: file:///D:/ghidra/rugra/examples/curl (HeadlessAnalyzer)  
+INFO  REPORT: Save succeeded for: /curl (curl_proj:/curl) (HeadlessAnalyzer)  
+INFO  REPORT: Import succeeded (HeadlessAnalyzer)  
