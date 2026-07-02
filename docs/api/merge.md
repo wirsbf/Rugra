@@ -48,12 +48,22 @@ live.
 This is what makes `high.instances` authoritative when merge runs after
 dead-code in the pipeline.
 
+**Note (2026-07-02)**: `live_set` is now consulted only for cover computation.
+`ensure_all_have_high` and `assign_names` no longer filter by it — they
+iterate the full `loc_tree`, faithful to Ghidra's `Funcdata::setHighLevel`
+(funcdata_varnode.cc:595) and `ActionNameVars::linkSymbols`
+(coreaction.cc:2940-2976). The prior live_set filter left implied/CAST-output
+and free Varnodes without a HighVariable name, forcing printc into the
+`uVar_{offset}` fallback (341 placeholders in curl).
+
 ### `pub fn merge_all(&mut self, fd: &mut Funcdata)`
 
 Perform the full merging + naming pipeline. Phase order:
 1. `live_varnode_set` → cache authoritative live varnodes
 2. `merge_addr_tied` → group same-loc varnodes
-3. `ensure_all_have_high` → singleton HighVariables
+3. `ensure_all_have_high` → singleton HighVariables for EVERY Varnode in
+   `loc_tree` lacking one (faithful to `Funcdata::setHighLevel`,
+   funcdata_varnode.cc:595 — no live_set filter)
 4. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
    range, NOT propagated through CFG successors — that over-approximation
    broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
@@ -110,6 +120,13 @@ If neither has one, create a new HighVariable for both.
 ### `pub fn assign_names(&mut self, fd: &mut Funcdata)`
 
 Assign human-readable names to all HighVariables in the function.
+
+Iterates every Varnode in `loc_tree` except constants and annotations
+(faithful to `ActionNameVars::linkSymbols`, coreaction.cc:2940-2976).
+Free Varnodes are named too — see the TODO in source: Ghidra skips `isFree()`
+because its printc routes free Varnodes to `pushUnnamedLocation` (raw address),
+but Rugra's printc still emits them (SSA-completeness gap), so they need a
+name to avoid the `uVar_{offset}` fallback.
 
 Naming follows Ghidra conventions:
 - Stack negative offset → `local_Xh`

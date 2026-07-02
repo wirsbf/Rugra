@@ -280,12 +280,14 @@ impl Merge {
     /// Ensure every varnode in the bank has a HighVariable.
     /// Varnodes not merged by `merge_addr_tied` get their own singleton HighVariable.
     fn ensure_all_have_high(&mut self, fd: &mut Funcdata) {
+        // Faithful to ActionAssignHigh (coreaction.hh:339) /
+        // Funcdata::setHighLevel (funcdata_varnode.cc:595): assign a
+        // HighVariable to EVERY Varnode in loc_tree that lacks one. The prior
+        // live_set filter diverged from Ghidra and left implied/CAST-output
+        // varnodes without a HighVariable, forcing printc into uVar_{offset}.
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
-            .filter(|r| {
-                let v = r.0.read().unwrap();
-                v.is_input() || self.live_set.contains(&(std::sync::Arc::as_ptr(&r.0) as usize))
-            })
+            .filter(|r| r.0.read().unwrap().high.is_none())
             .map(|r| r.0.clone())
             .collect();
 
@@ -516,11 +518,22 @@ impl Merge {
         // Track which register names have been used to avoid duplicates
         let mut used_reg_names: HashSet<String> = HashSet::new();
 
+        // Faithful to ActionNameVars::linkSymbols (coreaction.cc:2940-2976):
+        // iterate every Varnode in every space except const. Ghidra skips
+        // isFree() (coreaction.cc:2957) because its printc never emits a free
+        // Varnode (pushSymbolDetail routes to pushUnnamedLocation → raw addr).
+        // Rugra's printc currently still emits free Varnodes (SSA-completeness
+        // gap: some alive ops reference Varnodes whose def was dead-code-elim'd),
+        // so we name them too — otherwise they fall through to uVar_{offset}.
+        // TODO: once SSA completeness is fixed (no alive op refs a free
+        // Varnode), restore the is_free() skip to match Ghidra exactly.
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
             .filter(|r| {
                 let v = r.0.read().unwrap();
-                v.is_input() || self.live_set.contains(&(std::sync::Arc::as_ptr(&r.0) as usize))
+                if v.is_constant() { return false; }
+                if v.flags & crate::varnode::varnode_flags::ANNOTATION != 0 { return false; }
+                true
             })
             .map(|r| r.0.clone())
             .collect();
