@@ -1,0 +1,272 @@
+//! Single-function decompiler entry point for the alignment diff gate.
+//!
+//! Decompile ONE function from a binary and print it with the same
+//! `/* ---- 0xADDR: NAME (SIZE bytes) ---- */` header format that
+//! tests/golden/ uses, so tools/align_check.py can diff Rugra output
+//! against a Ghidra golden slice token-for-token.
+//!
+//! Usage:
+//!   cargo run --release --example rugra_decompile_func -- <binary> <name_or_addr>
+//!   cargo run --release --example rugra_decompile_func -- examples/curl my_fwrite
+//!   cargo run --release --example rugra_decompile_func -- examples/curl 0x3460
+//!
+//! Output goes to stdout (the C text only), diagnostic logs to stderr.
+//! Exit code 0 on success, 1 if the function is not found.
+
+use goblin::Object;
+use std::collections::HashMap;
+use std::fs;
+
+use rugra::action::ActionDatabase;
+use rugra::address::Address;
+use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
+use rugra::funcdata::Funcdata;
+use rugra::printc::PrintC;
+use rugra::prettyprint::EmitNoMarkup;
+use rugra::printlanguage::PrintLanguage;
+
+/// Resolve a target specifier (name or hex address) to (vaddr, size, file_offset).
+/// name lookup scans syms + dynsyms; addr parse accepts 0x.. or bare hex.
+fn resolve_target(
+    elf: &goblin::elf::Elf,
+    spec: &str,
+) -> Option<(u64, usize, u64, String)> {
+    // Try as address first.
+    let as_addr = spec
+        .strip_prefix("0x")
+        .or_else(|| spec.strip_prefix("0X"))
+        .unwrap_or(spec);
+    if let Ok(addr) = u64::from_str_radix(as_addr, 16) {
+        for sym in elf.syms.iter() {
+            if sym.st_value == addr && sym.st_size != 0 {
+                if let Some(off) = file_offset_for(elf, sym.st_value) {
+                    return Some((addr, sym.st_size as usize, off, spec.to_string()));
+                }
+            }
+        }
+    }
+    // Name lookup (syms + dynsyms). Return the first match.
+    for sym in elf.syms.iter().chain(elf.dynsyms.iter()) {
+        if sym.st_value == 0 || sym.st_size == 0 {
+            continue;
+        }
+        let name = elf
+            .strtab
+            .get_at(sym.st_name)
+            .or_else(|| elf.dynstrtab.get_at(sym.st_name));
+        if let Some(n) = name {
+            if n == spec {
+                if let Some(off) = file_offset_for(elf, sym.st_value) {
+                    return Some((sym.st_value, sym.st_size as usize, off, n.to_string()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn file_offset_for(elf: &goblin::elf::Elf, vaddr: u64) -> Option<u64> {
+    for header in elf.section_headers.iter() {
+        if vaddr >= header.sh_addr && vaddr < header.sh_addr + header.sh_size {
+            return Some(header.sh_offset + (vaddr - header.sh_addr));
+        }
+    }
+    None
+}
+
+fn build_tables(
+    elf: &goblin::elf::Elf,
+    buffer: &[u8],
+) -> (HashMap<u64, String>, HashMap<u64, String>) {
+    let mut symbol_table: HashMap<u64, String> = HashMap::new();
+    let mut string_table: HashMap<u64, String> = HashMap::new();
+
+    for sym in elf.syms.iter().chain(elf.dynsyms.iter()) {
+        if sym.st_value != 0 {
+            if let Some(name) = elf
+                .strtab
+                .get_at(sym.st_name)
+                .or_else(|| elf.dynstrtab.get_at(sym.st_name))
+            {
+                if !name.is_empty() {
+                    symbol_table.insert(sym.st_value, name.to_string());
+                }
+            }
+        }
+    }
+    // PLT thunks → symbol names so calls resolve.
+    let mut plt_sec_base = 0u64;
+    let mut plt_base = 0u64;
+    for header in elf.section_headers.iter() {
+        if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
+            if name == ".plt" {
+                plt_base = header.sh_addr;
+            } else if name == ".plt.sec" {
+                plt_sec_base = header.sh_addr;
+            }
+        }
+    }
+    let (base, offset_start) = if plt_sec_base != 0 {
+        (plt_sec_base, 0u64)
+    } else if plt_base != 0 {
+        (plt_base, 1u64)
+    } else {
+        (0, 0)
+    };
+    if base != 0 {
+        for (i, reloc) in elf.pltrelocs.iter().enumerate() {
+            let plt_addr = base + 16 * (i as u64 + offset_start);
+            if let Some(sym) = elf.dynsyms.get(reloc.r_sym) {
+                if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                    if !name.is_empty() {
+                        symbol_table.insert(plt_addr, name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    // .rodata C-strings.
+    for header in elf.section_headers.iter() {
+        if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
+            if name == ".rodata" {
+                let start = header.sh_offset as usize;
+                let end = std::cmp::min(start + header.sh_size as usize, buffer.len());
+                let rodata = &buffer[start..end];
+                let base_vaddr = header.sh_addr;
+                let mut i = 0;
+                while i < rodata.len() {
+                    if rodata[i].is_ascii_graphic() || rodata[i] == b' ' || rodata[i] == b'\n' {
+                        let str_start = i;
+                        while i < rodata.len() && rodata[i] != 0 {
+                            i += 1;
+                        }
+                        let str_len = i - str_start;
+                        let va = base_vaddr + str_start as u64;
+                        if str_len >= 4 {
+                            let s = String::from_utf8_lossy(&rodata[str_start..str_start + str_len]);
+                            let clean: String = s.chars().filter(|c| c.is_ascii()).collect();
+                            if !clean.is_empty() {
+                                string_table.insert(va, clean);
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                break;
+            }
+        }
+    }
+    (symbol_table, string_table)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!(
+            "usage: {} <binary> <name_or_addr>\n  e.g. {} examples/curl my_fwrite",
+            args[0], args[0]
+        );
+        std::process::exit(1);
+    }
+    let binary_path = &args[1];
+    let target_spec = &args[2];
+
+    // Run on a big-stack thread (ActionGroup.perform can recurse deep).
+    // run_main returns a plain String error so the closure is Send.
+    let bp = binary_path.clone();
+    let ts = target_spec.clone();
+    let child = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || run_main(&bp, &ts))
+        .expect("Failed to spawn stack thread");
+    match child.join().expect("Worker thread panicked") {
+        Ok(()) => Ok(()),
+        Err(msg) => Err(format!("{}", msg).into()),
+    }
+}
+
+fn run_main(binary_path: &str, target_spec: &str) -> Result<(), String> {
+    let buffer = fs::read(binary_path).map_err(|e| e.to_string())?;
+    let obj = Object::parse(&buffer).map_err(|e| e.to_string())?;
+    let elf = match &obj {
+        Object::Elf(e) => e,
+        _ => {
+            eprintln!("[!] not an ELF binary: {}", binary_path);
+            std::process::exit(1);
+        }
+    };
+
+    let (target_addr, func_size, file_offset, func_name) =
+        match resolve_target(elf, target_spec) {
+            Some(t) => t,
+            None => {
+                eprintln!(
+                    "[!] function '{}' not found in {} (tried addr + name lookup)",
+                    target_spec, binary_path
+                );
+                std::process::exit(1);
+            }
+        };
+
+    let (symbol_table, string_table) = build_tables(elf, &buffer);
+    let code_bytes = &buffer[file_offset as usize..file_offset as usize + func_size];
+
+    // Disassemble + lift to P-code (stateless; cheap per function).
+    let mut disasm = X86_64Disassembler::new();
+    let instructions = disasm
+        .disassemble(code_bytes, Address::new(target_addr))
+        .map_err(|e| e.to_string())?;
+    let mut lifter = X86Lifter::new();
+    let mut raw_ops = Vec::new();
+    for inst in &instructions {
+        let mut ops = lifter.lift(inst);
+        for op in &mut ops {
+            op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        }
+        raw_ops.extend(ops);
+    }
+
+    // Build Funcdata, run full pipeline.
+    let mut fd = Funcdata::new(&func_name, Address::new(target_addr), func_size as i32);
+    for (&addr, n) in &symbol_table {
+        fd.add_symbol(addr, n.clone());
+    }
+    for (&addr, s) in &string_table {
+        fd.add_string(addr, s.clone());
+    }
+    fd.inject_raw_ops(&raw_ops);
+    fd.run_heritage_direct();
+
+    let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+    fd_arc
+        .write()
+        .unwrap()
+        .set_self_ref(std::sync::Arc::downgrade(&fd_arc));
+
+    let mut db = ActionDatabase::new();
+    db.set_default_actions();
+    if let Some(action) = db.get_action_mut("decompile") {
+        let mut fdw = fd_arc.write().unwrap();
+        let _ = action.apply(&mut *fdw);
+    }
+
+    // Print with the golden header format. Rugra uses relative addresses;
+    // align_check.py handles the 0x100000 offset to Ghidra's absolute addrs.
+    let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+    {
+        let fdr = fd_arc.read().unwrap();
+        printer.doc_function(&fdr);
+    }
+    let buf = printer
+        .take_emit()
+        .into_any()
+        .downcast::<EmitNoMarkup>()
+        .unwrap();
+    let body = buf.get_output();
+    println!(
+        "/* ---- 0x{:x}: {} ({} bytes) ---- */",
+        target_addr, func_name, func_size
+    );
+    println!("{}", body);
+    Ok(())
+}

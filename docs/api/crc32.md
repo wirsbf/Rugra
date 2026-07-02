@@ -11,6 +11,6 @@ Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/crc32.{hh
 
 ## Functions
 - `crc_update(reg, val) -> u32` — feed 8 bits into CRC register (crc32.hh:33).
-- `crc32(data) -> u32` — compute CRC32 of a byte slice (starts at 0, no final XOR).
-- `crc32_with_init(init, data) -> u32` — compute with non-zero initial register
-  (used by stringmanage::calcInternalHash which uses 0x7b7c66a9).
+
+> Note: the non-Ghidra convenience wrappers `crc32` / `crc32_with_init` were
+> removed (they had no callers and were not part of `crc32.hh`/`.cc`).

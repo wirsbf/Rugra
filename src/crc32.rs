@@ -49,31 +49,10 @@ pub const CRC32_TABLE: [u32; 256] = [
 ///
 /// `reg` is the current state of the CRC register; `val` holds the 8 bits
 /// (least significant) to feed in. Returns the new register value.
+// Ghidra: crc32.hh:33 inline uint4 crc_update(uint4 reg,uint4 val)
 #[inline]
 pub fn crc_update(reg: u32, val: u32) -> u32 {
     CRC32_TABLE[((reg ^ val) & 0xff) as usize] ^ (reg >> 8)
-}
-
-/// Compute the CRC32 of a byte slice. Starts with a register of 0 and feeds
-/// each byte. This is a convenience function not in Ghidra's source but used
-/// by `stringmanage`'s `calcInternalHash`.
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut reg = 0u32;
-    for &b in data {
-        reg = crc_update(reg, b as u32);
-    }
-    reg
-}
-
-/// Compute the CRC32 of a byte slice with a non-zero initial register. Used by
-/// `stringmanage::calcInternalHash` (stringmanage.cc:98) which starts with
-/// `0x7b7c66a9`.
-pub fn crc32_with_init(init: u32, data: &[u8]) -> u32 {
-    let mut reg = init;
-    for &b in data {
-        reg = crc_update(reg, b as u32);
-    }
-    reg
 }
 
 #[cfg(test)]
@@ -89,41 +68,5 @@ mod tests {
     fn test_crc_update_zero() {
         // crc_update(0, 0) = table[0] ^ 0 = 0.
         assert_eq!(crc_update(0, 0), 0);
-    }
-
-    #[test]
-    fn test_crc32_empty() {
-        assert_eq!(crc32(b""), 0);
-    }
-
-    #[test]
-    fn test_crc32_known() {
-        // Ghidra's CRC32 starts with reg=0 and has no final XOR. The table is
-        // the standard CRC32 table (polynomial 0xEDB88320) but without the
-        // final inversion that the standard CRC32 applies.
-        let result = crc32(b"123456789");
-        // Verify it's deterministic and non-zero.
-        assert_ne!(result, 0);
-        assert_eq!(result, crc32(b"123456789"));
-    }
-
-    #[test]
-    fn test_crc32_short() {
-        let r1 = crc32(b"a");
-        let r2 = crc32(b"ab");
-        assert_ne!(r1, r2);
-    }
-
-    #[test]
-    fn test_crc32_with_init() {
-        // With init=0, should match crc32.
-        assert_eq!(crc32_with_init(0, b"test"), crc32(b"test"));
-        // With non-zero init, different result.
-        assert_ne!(crc32_with_init(0x7b7c66a9, b"test"), crc32(b"test"));
-    }
-
-    #[test]
-    fn test_crc32_deterministic() {
-        assert_eq!(crc32(b"hello"), crc32(b"hello"));
     }
 }
