@@ -2,8 +2,7 @@
 
 **状态**: 已核对（当前有效）  
 **源代码路径**: `src/ruleaction.rs`
-
-## 模块说明 (Module Doc)
+**2026-07-02 修复（R9）**: `RuleTrivialArith` 重写为忠实移植 Ghidra ruleaction.cc:2370-2433——同输入坍缩（`x^x→0`/`x==x→1`/`x!=x→0`/`x^^x→0`/`x&&x→x` 等），输入须 Arc::ptr_eq 或 is_cse_match。原 Rugra 实现做了 `RuleIdentityEl` 的活（`x+0→x`），从不执行同输入坍缩 → `x^x` 残留。getOpList 改为 Ghidra 16 opcode。3 个旧测试（add_zero/mult_one/sub_zero）重定向到 `RuleIdentityEl`（其本应处理），3 个新测试覆盖 x^x→0/x==x→1/distinct-no-change。
 
 Rule-based transformations for P-code operations
 

@@ -313,11 +313,26 @@ impl Rule for RuleSextEliminate {
     }
 }
 
-/// Rule for simplifying trivial arithmetic identities
+/// Rule for collapsing same-input binary ops.
 ///
-/// Corresponds to Ghidra's `RuleTrivialArith`.
-/// Simplifies: `x + 0 → x`, `x - 0 → x`, `x * 1 → x`,
-/// `x ^ 0 → x`, `x | 0 → x`.
+/// Faithful port of Ghidra's `RuleTrivialArith` (ruleaction.cc:2370-2433).
+/// This is NOT identity-element folding (`x + 0 → x` — that's `RuleIdentityEl`).
+/// It collapses ops whose two inputs are the SAME varnode (or CSE-equivalent):
+///   - `x ^ x        → 0`           (INT_XOR)
+///   - `x == x       → 1`           (INT_EQUAL)
+///   - `x != x       → 0`           (INT_NOTEQUAL)
+///   - `x < x        → 0`           (INT_LESS, INT_SLESS)
+///   - `x <= x       → 1`           (INT_LESSEQUAL, INT_SLESSEQUAL)
+///   - `x && x       → x`           (BOOL_AND, BOOL_OR, INT_AND, INT_OR)
+///   - `x ^^ x       → 0`           (BOOL_XOR)
+///   - float compares likewise.
+///
+/// The 2 inputs must be identical (`Arc::ptr_eq`) or constructed identically
+/// (`is_cse_match`). The result is emitted as `COPY(const)` or `COPY(in0)`.
+///
+/// The previous Rugra implementation did `x + 0 → x` etc. (RuleIdentityEl's
+/// job) and never performed the same-input collapse — leaving `x ^ x` intact,
+/// which produced the `switch((iVar1 ^ iVar1))` defect. (Audit: BATCH1 R9.)
 pub struct RuleTrivialArith;
 
 impl RuleTrivialArith {
@@ -327,46 +342,99 @@ impl RuleTrivialArith {
 }
 
 impl Rule for RuleTrivialArith {
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to Ghidra ruleaction.cc:2382-2433.
+        use std::sync::Arc;
+        let op = op_arc.read().unwrap();
         if op.inrefs.len() != 2 {
             return Ok(action_status::NO_CHANGE);
         }
+        let in0 = op.inrefs[0].clone();
+        let in1 = op.inrefs[1].clone();
 
-        // Determine which slot (if any) is a constant, and get its value
-        let (const_slot, const_val, other_slot) = {
-            let v0 = op.inrefs[0].read().unwrap();
-            let v1 = op.inrefs[1].read().unwrap();
-            if v0.is_constant() {
-                (0usize, v0.get_val(), 1usize)
-            } else if v1.is_constant() {
-                (1, v1.get_val(), 0)
+        // Inputs must be identical, OR constructed identically (CSE match).
+        // Mirrors Ghidra's `in0 != in1 && ... && !isCseMatch` guard.
+        let same = {
+            let v0 = in0.read().unwrap();
+            let v1 = in1.read().unwrap();
+            if Arc::ptr_eq(&in0, &in1) {
+                true
+            } else if v0.is_written() && v1.is_written() {
+                // Compare defining ops via is_cse_match.
+                let d0 = v0.get_def();
+                let d1 = v1.get_def();
+                match (d0, d1) {
+                    (Some(a), Some(b)) => {
+                        let aop = a.read().unwrap();
+                        let bop = b.read().unwrap();
+                        aop.is_cse_match(&bop)
+                    }
+                    _ => false,
+                }
             } else {
-                return Ok(action_status::NO_CHANGE);
+                false
             }
         };
+        if !same {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let out_size = op.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+        let opcode = op.opcode;
+        drop(op); // release read lock before mutating fd
 
-        let is_identity = match op.opcode {
-            // x + 0, 0 + x → x
-            OpCode::CPUI_INT_ADD => const_val == 0,
-            // x - 0 → x  (but NOT 0 - x)
-            OpCode::CPUI_INT_SUB => const_val == 0 && const_slot == 1,
-            // x * 1, 1 * x → x
-            OpCode::CPUI_INT_MULT => const_val == 1,
-            // x ^ 0, 0 ^ x → x
-            OpCode::CPUI_INT_XOR => const_val == 0,
-            // x | 0, 0 | x → x
-            OpCode::CPUI_INT_OR => const_val == 0,
-            _ => false,
+        // Determine the result varnode (mirrors the switch at cc:2396-2425).
+        // Use a local result type to avoid clashing with the crate `Result`.
+        //  Ok(Some(val)) → COPY of constant val
+        //  Ok(None)      → COPY of in0 (identity, for AND/OR)
+        //  Err(())       → opcode not handled → no change
+        let result: std::result::Result<Option<u64>, ()> = match opcode {
+            // Boolean 0
+            OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_LESS
+            | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS => Ok(Some(0)),
+            // Boolean 1
+            OpCode::CPUI_INT_EQUAL
+            | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_FLOAT_EQUAL
+            | OpCode::CPUI_FLOAT_LESSEQUAL => Ok(Some(1)),
+            // Same-size 0
+            OpCode::CPUI_INT_XOR => Ok(Some(0)),
+            // Identity (COPY in0)
+            OpCode::CPUI_BOOL_AND
+            | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_INT_AND
+            | OpCode::CPUI_INT_OR => Ok(None),
+            _ => Err(()),
         };
 
-        if is_identity {
-            let identity_vn = op.inrefs[other_slot].clone();
-            op.opcode = OpCode::CPUI_COPY;
-            op.inrefs = vec![identity_vn];
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        match result {
+            Err(()) => Ok(action_status::NO_CHANGE),
+            Ok(const_val) => {
+                // Ghidra: opRemoveInput(op,1); opSetOpcode(op,COPY);
+                //         if (vn) opSetInput(op,vn,0);
+                use crate::op::PcodeOpRef;
+                let op_ref = PcodeOpRef(op_arc.clone());
+                fd.op_remove_input(&op_ref, 1);
+                fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+                let new_vn = match const_val {
+                    Some(val) => {
+                        // Ghidra uses size 1 for boolean results, out_size for INT_XOR.
+                        let sz = if opcode == OpCode::CPUI_INT_XOR {
+                            out_size.max(1)
+                        } else {
+                            1
+                        };
+                        fd.new_constant(sz, val)
+                    }
+                    None => in0, // identity: COPY(in0)
+                };
+                fd.op_set_input(&op_ref, new_vn, 0);
+                Ok(action_status::CHANGE)
+            }
         }
     }
 
@@ -375,12 +443,24 @@ impl Rule for RuleTrivialArith {
     }
 
     fn get_opcodes(&self) -> Vec<OpCode> {
+        // Faithful to Ghidra ruleaction.cc:2372-2380 (16 opcodes).
         vec![
-            OpCode::CPUI_INT_ADD,
-            OpCode::CPUI_INT_SUB,
-            OpCode::CPUI_INT_MULT,
+            OpCode::CPUI_INT_NOTEQUAL,
+            OpCode::CPUI_INT_SLESS,
+            OpCode::CPUI_INT_LESS,
+            OpCode::CPUI_BOOL_XOR,
+            OpCode::CPUI_BOOL_AND,
+            OpCode::CPUI_BOOL_OR,
+            OpCode::CPUI_INT_EQUAL,
+            OpCode::CPUI_INT_SLESSEQUAL,
+            OpCode::CPUI_INT_LESSEQUAL,
             OpCode::CPUI_INT_XOR,
+            OpCode::CPUI_INT_AND,
             OpCode::CPUI_INT_OR,
+            OpCode::CPUI_FLOAT_EQUAL,
+            OpCode::CPUI_FLOAT_NOTEQUAL,
+            OpCode::CPUI_FLOAT_LESS,
+            OpCode::CPUI_FLOAT_LESSEQUAL,
         ]
     }
 }
@@ -15686,7 +15766,9 @@ mod tests {
 
     #[test]
     fn test_trivial_arith_add_zero() {
-        let rule = RuleTrivialArith::new();
+        // `x + 0 → x` is RuleIdentityEl's job (RuleTrivialArith now does the
+        // same-input collapse `x ^ x → 0` per Ghidra ruleaction.cc:2382).
+        let rule = RuleIdentityEl::new();
         let (op_arc, mut fd) = make_binary_op(
             OpCode::CPUI_INT_ADD,
             crate::space::AddressSpace::Register, 0x00, 8, // x = RAX
@@ -15702,7 +15784,8 @@ mod tests {
 
     #[test]
     fn test_trivial_arith_mult_one() {
-        let rule = RuleTrivialArith::new();
+        // `x * 1 → x` is RuleIdentityEl's job.
+        let rule = RuleIdentityEl::new();
         let (op_arc, mut fd) = make_binary_op(
             OpCode::CPUI_INT_MULT,
             crate::space::AddressSpace::Register, 0x00, 4,
@@ -15717,7 +15800,8 @@ mod tests {
 
     #[test]
     fn test_trivial_arith_sub_zero() {
-        let rule = RuleTrivialArith::new();
+        // `x - 0 → x` is RuleIdentityEl's job.
+        let rule = RuleIdentityEl::new();
         let (op_arc, mut fd) = make_binary_op(
             OpCode::CPUI_INT_SUB,
             crate::space::AddressSpace::Register, 0x00, 8,
@@ -15726,6 +15810,67 @@ mod tests {
         );
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
+    }
+
+    #[test]
+    fn test_trivial_arith_xor_self_to_zero() {
+        // `x ^ x → 0` — the core same-input collapse (Ghidra ruleaction.cc:2413).
+        // This is the defect the rewrite fixes: previously Rugra's RuleTrivialArith
+        // did RuleIdentityEl's job (x+0→x) and never performed this collapse,
+        // leaving `x ^ x` intact → `switch((iVar1 ^ iVar1))` defect.
+        let rule = RuleTrivialArith::new();
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        // Same varnode as both inputs.
+        let in_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_XOR);
+        op.inrefs = vec![in_vn.clone(), in_vn];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op_arc.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert_eq!(o.inrefs.len(), 1);
+        assert!(o.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 0);
+    }
+
+    #[test]
+    fn test_trivial_arith_equal_self_to_one() {
+        // `x == x → 1` (Ghidra ruleaction.cc:2406).
+        let rule = RuleTrivialArith::new();
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
+        let in_vn = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x100);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_EQUAL);
+        op.inrefs = vec![in_vn.clone(), in_vn];
+        op.output = Some(out);
+        let op_arc = Arc::new(RwLock::new(op));
+
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = op_arc.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_COPY);
+        assert!(o.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 1);
+    }
+
+    #[test]
+    fn test_trivial_arith_distinct_inputs_no_change() {
+        // Two distinct varnodes (different offsets) → no collapse.
+        let rule = RuleTrivialArith::new();
+        let (op_arc, mut fd) = make_binary_op(
+            OpCode::CPUI_INT_XOR,
+            crate::space::AddressSpace::Register, 0x10, 8,
+            crate::space::AddressSpace::Register, 0x20, 8,
+            8,
+        );
+        let result = rule.apply_op(&op_arc, &mut fd).unwrap();
+        assert_eq!(result, action_status::NO_CHANGE);
     }
 
     #[test]
