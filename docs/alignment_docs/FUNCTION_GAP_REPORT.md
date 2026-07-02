@@ -189,3 +189,54 @@ uncontaminated by library stubs.**
   flag-sync were in the working tree before this session (not authored here).
   Verified **output-neutral** (gap audit identical with/without). Left in place
   per 铁律 §8; their owner should verify/commit.
+
+---
+
+## Phase 2 progress (2026-07-02 21:30) — naming fixes
+
+### Done (commits 084e9aa, 81d7b9e)
+- **compact_name_for 共享 base** (`084e9aa`): per-prefix `HashMap<&str,u32>` → 单一
+  `compact_base: u32` (初值1, 跨所有前缀单调递增)。faithful to Ghidra
+  `assignDefaultNames(int4 &base)` (database.cc:2850) + `ActionNameVars::apply`
+  `int4 base=1` (coreaction.cc:2988)。修正 181538f bug。Alignment Evidence 4/4。
+- **StackX_ 符号接入共享 base 重命名** (`81d7b9e`): 新增 `rename_scope_symbol`,
+  两处接入 (get_stack_variable_name 使用路径 + doc_variable_decls 声明路径)。
+  faithful to Ghidra `assignDefaultNames` 对 stack-local fallback 名 (varmap.cc:548)
+  的重命名。**StackX_ 102→0** (21 distinct 全转 iVar/lVar/bVar)。Alignment Evidence 4/4。
+
+### Measured impact (curl_cur.c, 2026-07-02 21:30)
+| metric | before phase 2 | after naming fixes | delta |
+|---|---|---|---|
+| StackX_ | 98 (102 with decls) | **0** | **−102** ✅ |
+| param_N | 74 | 74 | 0 (独立路径, 未处理) |
+| selfxor V^V | 17 | 17 | 0 (ActionReturnRecovery 缺) |
+| reg-leak | 195 | 195 | 0 (varmap/HighVariable 缺) |
+| func_gap_audit EXACT | 0 | **0** | 0 |
+
+### 为什么 EXACT 仍 0 (诚实)
+命名对齐消除了**一整类占位缺陷** (StackX_ 全清), 但每个函数仍有多类
+剩余差异使整体 token 序列无法 EXACT:
+- **param_N** (74): 走 printc 的 param_names 路径 (独立于 compact_name_for),
+  未接入共享 base。需单独处理 (ActionInputPrototype/param naming)。
+- **reg-leak** (195, 53 distinct): EAX_/RAX_ 等未提升为 HighVariable 的寄存器名
+  直接输出。根因在 varmap/HighVariable 合并未覆盖这些寄存器 varnode。
+- **selfxor V^V** (17): ActionReturnRecovery::buildReturnOutput 缺 (见上方阶段2①)。
+- **struct 访问** (-> 1 vs Ghidra 87): struct/pointer 类型恢复缺 (R60/R61)。
+- **丢失的语句/调用** (如 GetStr 丢 strdup 调用): 控制流结构化 + ActionMarkExplicit
+  把 CALL 输出标 implied 导致 printc 跳过。
+
+### GetStr 逐函数示例 (剩余差距的典型)
+```
+GHIDRA: void GetStr(char **string,char *value){ char *pcVar1; if(*string!=0) free(*string);
+        if(value!=0 && *value!='\0'){ pcVar1=strdup(value); *string=pcVar1; return; } *string=0; return; }
+RUGRA:  long GetStr(long param_1,long param_2){ long bVar2; long lVar1; int * piVar3;
+        if(param_1!=0) free(param_2); if(lVar1==0){ *(int *)piVar3=0; return; } else { if(!(bVar2)) return; } }
+```
+差异: param_N 命名 / 类型 (char** vs long) / reg-leak (bVar2,lVar1,piVar3 未初始化) /
+丢失 strdup 调用 / 条件结构错位。非单一命名问题。
+
+### 剩余对齐优先级 (按 ROI)
+1. **param_N (74)** — 接入共享 base 重命名 (类似 StackX_ 修复, 中等工作量)
+2. **reg-leak (195)** — varmap/HighVariable 提升寄存器 varnode (大工程, SSA 层)
+3. **selfxor V^V (17)** — ActionReturnRecovery 移植 (大工程, ParamActive 基础设施)
+4. **struct -> 访问 (−96)** — struct/pointer 类型恢复 (R60/R61, 大工程)
