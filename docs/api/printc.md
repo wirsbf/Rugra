@@ -650,3 +650,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **根因**：main 的 `curl_easy_setopt(, 0x4e2b, ...)` 第一参数为空（gcc: expected expression before ','）。op_call 的参数解析（block_local_reg_defs / value_def_map / COPY-source 追踪 / inline）当 def op 已 dead 或解析到的 varnode 是 inline-candidate Unique（push_varnode 返回 ""）时，emit_inline_expr / push_varnode 不输出任何东西 → `f(, arg)` 非法 C。对照 Ghidra opCall（printc.cc:626-633）：每个参数都经 pushVn，永不空。
 - **修复**：把参数解析逻辑抽到 `emit_call_arg_text`（capture-emit-swap，保存/恢复 is_lhs），返回保证非空的 String；解析为空时 fallback 到 `in_<offset>`（对齐 Ghidra buildVariableName 不规则输入分支 database.cc:2470）并 mark_variable_used 注册声明。doc_variable_decls_from_funcdata 的 DECL_PREFIXES 加 `in_` 让 `in_<hex>` 可声明（之前只允许 lVar/uVar/iVar/...）。
 - **效果**：curl gcc 审计 23/24 → **24/24 OK**（main comma 错误消除）；Total Rugra defects 0（保持）。
+
+### 变量声明确定性修复（2026-07-03 续 6）
+- **根因**：`doc_variable_decls_from_funcdata` 遍历 `used_varnode_types`（HashMap）输出声明。Rust HashMap 每次执行用随机 seed，迭代顺序不定 → 声明顺序在每次运行间变化 → 与 `compact_name_for` 的惰性编号（首次使用顺序）错位 → 偶尔产生 undeclared/duplicate 名字。实测：同一二进制 5 次运行 gcc 审计 22/24~24/24 随机波动。这是**输出非确定性** bug——Ghidra 永远是确定性的。
+- **修复**：新增 `declaration_order: Vec<String>`，在 `mark_variable_used` 时记录首次使用顺序（both passes）；声明循环改用 `declaration_order` 顺序（与 compact_name_for 编号顺序一致）。对齐 Ghidra `assignDefaultNames`（database.cc:2850-2865）单一确定性遍历顺序。
+- **效果**：curl 输出现在**完全确定**（5 次运行 gcc 审计恒定）；Total Rugra defects 恒定 0；956/956 测试。代价：稳定在 23/24 gcc（之前随机 22-24）——确定性优于偶发的 24。剩余 1 fail 是独立的 cast-concat bug（`(long)bVar1(long)bVar12` 缺 `||`），下一轮修。

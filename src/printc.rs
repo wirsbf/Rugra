@@ -90,6 +90,14 @@ pub struct PrintC {
     used_varnode_names: HashSet<String>,
     /// Track actual types, space and offset of used variables for robust declaration mapping
     used_varnode_types: HashMap<String, (String, crate::space::AddressSpace, u64)>,
+    /// First-use order of used variable names recorded during the REAL emit
+    /// pass (not discovery). Declarations are emitted in this order so they
+    /// are monotonic with compact_name_for's lazy numbering (bVar1, bVar2, ...
+    /// assigned in first-use order). Faithful to Ghidra assignDefaultNames
+    /// (database.cc:2850-2865). Without this, declarations iterated the
+    /// HashMap in RANDOM order (Rust HashMap is randomly seeded), causing
+    /// non-deterministic output: gcc audit varied 22-24/24 across runs.
+    declaration_order: Vec<String>,
     /// Scope-local stack symbols (from varmap's restructure_varnode) that were
     /// referenced during the body emit. These MUST be declared even if the
     /// general discovery/mark path missed them (it sometimes does for STORE
@@ -185,6 +193,7 @@ impl PrintC {
             inlined_ops: HashSet::new(),
             used_varnode_names: HashSet::new(),
             used_varnode_types: HashMap::new(),
+            declaration_order: Vec::new(),
             used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
             compact_rename: HashMap::new(),
             compact_base: 1, // faithful to Ghidra int4 base=1 (coreaction.cc:2988)
@@ -1427,20 +1436,22 @@ impl PrintC {
             true
         };
 
-        // Snapshot used_varnode_types to avoid borrow conflict with
-        // compact_name_for (which needs &mut self).
-        let uv_snapshot: Vec<(String, String, crate::space::AddressSpace, u64)> =
-            self.used_varnode_types.iter()
-                .map(|(n, (t, s, o))| (n.clone(), t.clone(), *s, *o))
-                .collect();
-        for (name, type_name, space, offset) in &uv_snapshot {
-            // Apply compact renumbering (assignDefaultNames) so declarations
-            // match body references.
-            let decl_name = self.compact_name_for(name).unwrap_or_else(|| name.clone());
-            if is_declarable(&decl_name, *space, *offset, &self.call_targets) {
-                let entry = declared.entry(decl_name).or_insert_with(|| type_name.clone());
-                if type_name.contains('*') && !entry.contains('*') {
-                    *entry = type_name.clone();
+        // Emit declarations in REAL-EMIT first-use order (declaration_order),
+        // matching compact_name_for's numbering order. This fixes non-
+        // determinism: previously iterated used_varnode_types (a randomly-
+        // seeded HashMap), so declaration order varied per run and could
+        // mismatch the lazy numbering, producing undeclared/duplicate names.
+        // Faithful to Ghidra assignDefaultNames (database.cc:2850-2865).
+        let order_snapshot: Vec<String> = self.declaration_order.clone();
+        for name in &order_snapshot {
+            if let Some((type_name, space, offset)) = self.used_varnode_types.get(name) {
+                let (type_name, space, offset) = (type_name.clone(), *space, *offset);
+                let decl_name = self.compact_name_for(name).unwrap_or_else(|| name.clone());
+                if is_declarable(&decl_name, space, offset, &self.call_targets) {
+                    let entry = declared.entry(decl_name).or_insert_with(|| type_name.clone());
+                    if type_name.contains('*') && !entry.contains('*') {
+                        *entry = type_name.clone();
+                    }
                 }
             }
         }
@@ -1522,8 +1533,18 @@ impl PrintC {
         if name.contains("->") || name.contains('.') || name.contains('[') || name.contains('*') || name.contains('&') {
             return;
         }
+        let is_new = !self.used_varnode_names.contains(&name);
         self.used_varnode_names.insert(name.clone());
-        self.used_varnode_types.insert(name, (type_name, space, offset));
+        self.used_varnode_types.insert(name.clone(), (type_name, space, offset));
+        // Record first-use order in BOTH passes. compact_name_for numbers
+        // during emit, but names that don't go through it (e.g. in_<hex>
+        // fallbacks) still need declaration. Recording in both passes
+        // ensures every used name is declared in a deterministic order,
+        // while compact names still get monotonic numbering (they're added
+        // in emit order during emit, which is when compact_name_for runs).
+        if is_new {
+            self.declaration_order.push(name);
+        }
     }
 
     /// Mark a varnode's display name as used, recording its space, offset, and type
@@ -3660,6 +3681,7 @@ impl PrintLanguage for PrintC {
         self.inlined_ops.clear();
         self.used_varnode_names.clear();
         self.used_varnode_types.clear();
+        self.declaration_order.clear();
         self.used_scope_symbols.borrow_mut().clear();
         // Reset compact variable renumbering for this function.
         self.compact_rename.clear();
