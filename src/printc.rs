@@ -1380,6 +1380,11 @@ impl PrintC {
                     "lVar", "uVar", "iVar", "bVar", "sVar",
                     "piVar", "pcVar", "psVar", "ppVar", "pvVar",
                     "fVar", "dVar",
+                    // `in_<hex>` is the fallback name for irregular/unresolved
+                    // input-register CALL args (emit_call_arg_text, faithful to
+                    // Ghidra buildVariableName's irregular-input case,
+                    // database.cc:2470). It must be declarable.
+                    "in_",
                 ];
                 let is_auto_local = DECL_PREFIXES.iter().any(|p| {
                     if let Some(rest) = name.strip_prefix(p) {
@@ -2571,6 +2576,12 @@ impl PrintC {
     // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
     // because Rugra's late/dead self-XORs escape op-layer folding and reach
     // print, where text-level detection is the practical equivalent.
+    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
+    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
+    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
+    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
+    // because Rugra's late/dead self-XORs escape op-layer folding and reach
+    // print, where text-level detection is the practical equivalent.
     fn is_textual_self_xor(text: &str) -> bool {
         let t = text.trim();
         if let Some(idx) = t.find(" ^ ") {
@@ -2579,6 +2590,119 @@ impl PrintC {
             return !lhs.is_empty() && lhs == rhs;
         }
         false
+    }
+
+    /// Resolve and render a single CALL argument to a String, guaranteed
+    /// non-empty. Mirrors the arg-resolution that used to be inline in
+    /// op_call (block_local_reg_defs / value_def_map / COPY-source chase /
+    /// inline / push_varnode fallback), but captures the emit and falls back
+    /// to a concrete name if resolution produces nothing — faithful to Ghidra
+    /// opCall's pushVn which never emits empty (prevents illegal `f(, arg)`).
+    // RUGRA-GLUE: Rust-side arg-text extractor (capture-emit-swap pattern).
+    fn emit_call_arg_text(&mut self, op: &PcodeOp, i: usize) -> String {
+        use crate::opcodes::OpCode;
+        let vn_arc = match op.get_in(i) { Some(a) => a, None => return "0".to_string() };
+        let (space, offset) = {
+            let vn = vn_arc.read().unwrap();
+            (vn.get_space(), vn.get_offset())
+        };
+        let orig_emit = std::mem::replace(&mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let saved_lhs = self.is_lhs;
+        self.is_lhs = false;
+
+        // Register args: try block-local def, then value_def_map, then the
+        // COPY-source / inline chase that op_call used to do inline.
+        let mut resolved = false;
+        if space == crate::space::AddressSpace::Register {
+            let key = (space, offset);
+            let def_op_opt = self.block_local_reg_defs.get(&key).cloned()
+                .or_else(|| self.value_def_map.get(&key).cloned());
+            if let Some(def_op_arc) = def_op_opt {
+                let is_copy = {
+                    let d = def_op_arc.read().unwrap();
+                    d.opcode == OpCode::CPUI_COPY && !d.inrefs.is_empty()
+                };
+                if is_copy {
+                    let src_arc = def_op_arc.read().unwrap().inrefs[0].clone();
+                    let (src_space, src_offset) = {
+                        let v = src_arc.read().unwrap();
+                        (v.get_space(), v.get_offset())
+                    };
+                    let src_key = (src_space, src_offset);
+                    let src_def = self.value_def_map.get(&src_key).cloned()
+                        .or_else(|| self.inline_candidates.get(&src_key).cloned());
+                    if let Some(src_def_arc) = src_def {
+                        let rip_idx = self.get_rip_relative_operand(&src_def_arc.read().unwrap());
+                        if let Some(non_rip_idx) = rip_idx {
+                            let sdo = src_def_arc.read().unwrap();
+                            if non_rip_idx < sdo.inrefs.len() {
+                                let sym_arc = sdo.inrefs[non_rip_idx].clone();
+                                drop(sdo);
+                                self.push_varnode(&sym_arc.read().unwrap(), None);
+                                resolved = true;
+                            }
+                        }
+                        if !resolved {
+                            let sdo = src_def_arc.read().unwrap();
+                            self.inlined_ops.insert(*sdo.get_seq_num());
+                            self.emit_inline_expr(&sdo);
+                            resolved = true;
+                        }
+                    }
+                    if !resolved {
+                        self.push_varnode(&src_arc.read().unwrap(), None);
+                        resolved = true;
+                    }
+                } else {
+                    let has_inrefs = !def_op_arc.read().unwrap().inrefs.is_empty();
+                    if has_inrefs {
+                        let rip_idx = self.get_rip_relative_operand(&def_op_arc.read().unwrap());
+                        if let Some(non_rip_idx) = rip_idx {
+                            let d = def_op_arc.read().unwrap();
+                            if non_rip_idx < d.inrefs.len() {
+                                let sym_arc = d.inrefs[non_rip_idx].clone();
+                                drop(d);
+                                self.push_varnode(&sym_arc.read().unwrap(), None);
+                                resolved = true;
+                            }
+                        }
+                        if !resolved {
+                            let d = def_op_arc.read().unwrap();
+                            let seq = *d.get_seq_num();
+                            drop(d);
+                            self.inlined_ops.insert(seq);
+                            self.emit_inline_expr(&def_op_arc.read().unwrap());
+                            resolved = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !resolved {
+            self.push_varnode(&vn_arc.read().unwrap(), Some(op));
+        }
+
+        let buf = std::mem::replace(&mut self.emit, orig_emit);
+        self.is_lhs = saved_lhs;
+        let text = buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output()).unwrap_or_default();
+        if text.trim().is_empty() {
+            // Resolution produced nothing (dead def / inline-candidate
+            // Unique). Fall back to a concrete, declared local name so the
+            // call stays valid C, matching Ghidra opCall's never-empty pushVn.
+            // Ghidra's buildVariableName irregular-input case (database.cc:2470)
+            // produces `in_<reg>` and declares it as a local; we mirror that by
+            // registering the name with mark_variable_used so a declaration is
+            // emitted. Type defaults to the varnode's size-based int.
+            let name = format!("in_{:x}", offset);
+            let sz = vn_arc.read().unwrap().get_size();
+            let ty = match sz { 8 => "long", 4 => "int", _ => "int" }.to_string();
+            self.mark_variable_used(name.clone(), space, offset, ty);
+            name
+        } else {
+            text
+        }
     }
 
     fn emit_block_condition_inner(
@@ -4296,77 +4420,19 @@ impl PrintLanguage for PrintC {
             if i > 1 {
                 self.emit.print(", ");
             }
-            if let Some(vn_arc) = op.get_in(i) {
-                let vn = vn_arc.read().unwrap();
-                let space = vn.get_space();
-                let offset = vn.get_offset();
-                drop(vn);
-
-                // For register args, try to find what value was written to this register
-                // Prefer block-local def (avoids cross-block contamination) over global value_def_map
-                if space == crate::space::AddressSpace::Register {
-                    let key = (space, offset);
-                    let def_op_opt = self.block_local_reg_defs.get(&key).cloned()
-                        .or_else(|| self.value_def_map.get(&key).cloned());
-                    if let Some(def_op_arc) = def_op_opt {
-                        let def_op = def_op_arc.read().unwrap();
-                        if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
-                            // Resolve COPY source — check what defined the source
-                            let src_arc = def_op.inrefs[0].clone();
-                            let src_vn = src_arc.read().unwrap();
-                            let src_space = src_vn.get_space();
-                            let src_offset = src_vn.get_offset();
-                            drop(src_vn);
-                            drop(def_op);
-
-                            // Try to find the source's defining op for deeper resolution
-                            let src_key = (src_space, src_offset);
-                            let src_def = self.value_def_map.get(&src_key).cloned()
-                                .or_else(|| self.inline_candidates.get(&src_key).cloned());
-                            
-                            if let Some(src_def_arc) = src_def {
-                                let src_def_op = src_def_arc.read().unwrap();
-                                // RIP-relative? Just emit the symbol
-                                if let Some(non_rip_idx) = self.get_rip_relative_operand(&src_def_op) {
-                                    if non_rip_idx < src_def_op.inrefs.len() {
-                                        let sym_arc = src_def_op.inrefs[non_rip_idx].clone();
-                                        drop(src_def_op);
-                                        self.push_varnode(&sym_arc.read().unwrap(), None);
-                                        continue;
-                                    }
-                                }
-                                // Other inlineable expression
-                                self.inlined_ops.insert(*src_def_op.get_seq_num());
-                                self.emit_inline_expr(&src_def_op);
-                                continue;
-                            }
-                            // Fallback: push the COPY source directly
-                            self.push_varnode(&src_arc.read().unwrap(), None);
-                            continue;
-                        }
-                        // For other ops (not COPY), try inline the expression
-                        if !def_op.inrefs.is_empty() {
-                            // RIP-relative? Just emit the symbol
-                            if let Some(non_rip_idx) = self.get_rip_relative_operand(&def_op) {
-                                if non_rip_idx < def_op.inrefs.len() {
-                                    let sym_arc = def_op.inrefs[non_rip_idx].clone();
-                                    drop(def_op);
-                                    self.push_varnode(&sym_arc.read().unwrap(), None);
-                                    continue;
-                                }
-                            }
-                            self.inlined_ops.insert(*def_op.get_seq_num());
-                            self.emit_inline_expr(&def_op);
-                            continue;
-                        }
-                    }
-                }
-                // Fallback: print the varnode as-is
-                self.push_varnode(&vn_arc.read().unwrap(), Some(op));
-            }
+            // Faithful to Ghidra opCall (printc.cc:626-633): every parameter is
+            // emitted via pushVn, which always produces text. Rugra's arg-
+            // resolution can resolve to an empty emit (dead def / inline-
+            // candidate Unique). That yields illegal `f(, arg)` (gcc: "expected
+            // expression before ','"). emit_call_arg_text captures each arg's
+            // text and falls back to a concrete name if empty (faithful to
+            // Ghidra's never-empty pushVn).
+            let arg_text = self.emit_call_arg_text(op, i);
+            self.emit.print(&arg_text);
         }
         self.emit.close_paren();
     }
+
 
     fn op_return(&mut self, op: &PcodeOp) {
         self.emit.print("return");
