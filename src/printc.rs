@@ -102,9 +102,15 @@ pub struct PrintC {
     /// from 1 (iVar1, iVar2, lVar1, ...) instead of using the raw register
     /// offset (iVar23, lVar107). Built on-demand in push_varnode and
     /// get_varnode_display_name during the REAL emit pass (not discovery).
-    compact_rename: HashMap<String, String>,
-    /// Per-prefix counter for compact renumbering. Reset at function start.
-    compact_counters: HashMap<&'static str, u32>,
+     compact_rename: HashMap<String, String>,
+    /// Single shared counter for auto-local renaming, faithful to Ghidra's
+    /// `int4 base` in `ActionNameVars::apply` (coreaction.cc:2988) +
+    /// `assignDefaultNames(int4 &base)` (database.cc:2850). Initial value 1,
+    /// monotonically incremented across ALL prefixes (iVar/lVar/bVar/...).
+    /// This replaces the previous per-prefix `HashMap<&str,u32>` counter,
+    /// which was the 181538f bug (per-prefix independent numbering produced
+    /// `bVar1,bVar2` instead of Ghidra's shared `...iVar4,lVar5...`).
+    compact_base: u32,
     /// If true, we are in the discovery pass (only collecting names, not printing)
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
@@ -181,7 +187,7 @@ impl PrintC {
             used_varnode_types: HashMap::new(),
             used_scope_symbols: std::cell::RefCell::new(std::collections::HashSet::new()),
             compact_rename: HashMap::new(),
-            compact_counters: HashMap::new(),
+            compact_base: 1, // faithful to Ghidra int4 base=1 (coreaction.cc:2988)
             discovery_pass: false,
             call_targets: HashSet::new(),
         pointer_varnodes: HashSet::new(),
@@ -1301,10 +1307,20 @@ impl PrintC {
         if let Some(compact) = self.compact_rename.get(raw) {
             return Some(compact.clone());
         }
-        // Assign next sequential number for this prefix.
-        let counter = self.compact_counters.entry(prefix).or_insert(0);
-        *counter += 1;
-        let compact = format!("{}{}", prefix, counter);
+        // Faithful to Ghidra `assignDefaultNames` (database.cc:2850-2865) +
+        // `buildDefaultName`→`buildVariableName` local case (database.cc:2501-2504):
+        //   ct->printNameBase(s); s << "Var" << dec << index++;
+        // `index` is the SINGLE shared `int4 base` (initial 1, monotonic across
+        // all prefixes). This is the 181538f fix: per-prefix counters were wrong;
+        // Ghidra uses one shared counter. NOTE: Ghidra traverses symbols in
+        // `nametree` order (SymbolCompareName: name.compare() then nameDedup),
+        // i.e. creation order — Rugra approximates this by the lazy first-touch
+        // order of `get_varnode_display_name` during op traversal (the closest
+        // analogue available in Rugra's print-time architecture; see
+        // FUNCTION_GAP_REPORT.md for the full nametree-order gap analysis).
+        let n = self.compact_base;
+        self.compact_base += 1;
+        let compact = format!("{}{}", prefix, n);
         self.compact_rename.insert(raw.to_string(), compact.clone());
         Some(compact)
     }
@@ -3391,7 +3407,7 @@ impl PrintLanguage for PrintC {
         self.used_scope_symbols.borrow_mut().clear();
         // Reset compact variable renumbering for this function.
         self.compact_rename.clear();
-        self.compact_counters.clear();
+        self.compact_base = 1; // reset shared base per function (coreaction.cc:2988)
 
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;
@@ -4865,21 +4881,26 @@ mod tests {
     /// Verify compact_name_for renumbers auto-local variable names.
     #[test]
     fn test_compact_name_for() {
+        // Faithful to Ghidra `assignDefaultNames` (database.cc:2850-2865):
+        // a SINGLE shared `int4 base` (initial 1, monotonic across ALL prefixes),
+        // NOT a per-prefix counter. This test pins the 181538f fix — previously
+        // each prefix had its own counter (bVar1,bVar2,lVar1,lVar2), but Ghidra
+        // shares one base (bVar1,bVar2,lVar3,lVar4).
         let emit = Box::new(EmitNoMarkup::new());
         let mut printer = PrintC::new(emit);
-        // bVar21 → bVar1 (first bVar)
+        // bVar21 → bVar1 (shared base = 1)
         let r1 = printer.compact_name_for("bVar21");
-        assert_eq!(r1, Some("bVar1".to_string()), "bVar21 -> bVar1");
-        // bVar29 → bVar2 (second bVar)
+        assert_eq!(r1, Some("bVar1".to_string()), "bVar21 -> bVar1 (base=1)");
+        // bVar29 → bVar2 (shared base = 2)
         let r2 = printer.compact_name_for("bVar29");
-        assert_eq!(r2, Some("bVar2".to_string()), "bVar29 -> bVar2");
-        // lVar25 → lVar1 (first lVar)
+        assert_eq!(r2, Some("bVar2".to_string()), "bVar29 -> bVar2 (base=2)");
+        // lVar25 → lVar3 (shared base = 3, NOT a per-prefix lVar1)
         let r3 = printer.compact_name_for("lVar25");
-        assert_eq!(r3, Some("lVar1".to_string()), "lVar25 -> lVar1");
-        // bVar21 again → bVar1 (cached)
+        assert_eq!(r3, Some("lVar3".to_string()), "lVar25 -> lVar3 (shared base=3)");
+        // bVar21 again → bVar1 (cached, no new allocation)
         let r4 = printer.compact_name_for("bVar21");
         assert_eq!(r4, Some("bVar1".to_string()), "bVar21 cached -> bVar1");
-        // param_1 → None (not renumbered)
+        // param_1 → None (not an auto-local name, not renumbered)
         let r5 = printer.compact_name_for("param_1");
         assert_eq!(r5, None, "param_1 not renumbered");
     }

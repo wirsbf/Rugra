@@ -607,3 +607,9 @@ emit_block_structured 加 thread_local depth guard（>200 层回退到 emit_bloc
 emit_block_structured 的 match block_type 拆分为 7 个 per-arm helper 函数（emit_structured_if/whiledo/dowhile/list/condition/switch/basic）。每个 helper 有独立栈帧。
 
 mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**全部溢出**。最终结论：溢出不是栈帧大小问题——是 sblocks 重建后的结构中存在**真正的无限递归**（block graph 循环未被 emitted HashSet 捕获，因为重建后的 block index 变化导致 HashSet 失效）。修复需调试 sblocks 重建确保无循环。
+
+### 2026-07-02：compact_name_for 共享 base 计数器（181538f 修正）
+- **变更**：`compact_name_for`（src/printc.rs:1280）的 `compact_counters: HashMap<&'static str, u32>`（per-prefix 计数器）替换为单一 `compact_base: u32`（初值 1，跨所有前缀单调递增）。
+- **动机**：181538f 类红旗修正。Ghidra `ActionNameVars::apply`（coreaction.cc:2988）+ `assignDefaultNames(int4 &base)`（database.cc:2850）用**单一共享** `int4 base`（初值 1），非 per-prefix。此前 Rugra 用 per-prefix 计数器，产出 `bVar1,bVar2,lVar1,lVar2`（每前缀独立），而 Ghidra 产出 `...iVar4,lVar5...`（跨前缀共享编号）。
+- **实测**：glob_set 现产出 `bVar1,bVar4,bVar5,...,iVar3,iVar9,iVar10,...,lVar13,lVar14,piVar2,piVar8`（共享单调编号），符合 Ghidra 共享 base 语义。
+- **诚实限制**：EXACT 数仍为 0（仅编号模型对齐不够）。Ghidra 的具体编号顺序由 `nametree` 创建顺序（SymbolCompareName: name.compare() + nameDedup）决定，需复现 varmap/HighVariable 的符号创建顺序才能完全匹配；Rugra 当前用 lazy first-touch 顺序近似。另：StackX_ 占位名（87 处）走另一路径（get_stack_variable_name → scope.find_symbol），未受本次修复影响，需独立处理。测试 `test_compact_name_for` 已改为断言共享编号（bVar1→bVar2→lVar3）。
