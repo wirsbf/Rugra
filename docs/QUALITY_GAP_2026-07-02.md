@@ -156,3 +156,37 @@ diff <(grep -A100 'next_url' result/curl_cur.c) <(grep -A100 'next_url' result/g
 ## 7. 一句话总结
 
 **Rugra 的输出不是"差一点"，而是底层变量映射（HighVariable/HighSymbol）这条主干根本没接通**——heritage 产出了 SSA，但没向上汇聚成有名字的高级变量，导致 printc 层只能吐 `uVar_xxx` 占位符。这是 215 个垃圾变量名、77 个未命名参数、大量残缺语句的总根因。优先级 P0：把 varmap 的 HighVariable 链真正建立起来并接入 printc。
+
+---
+
+## 8. 进度更新（2026-07-03 实测）
+
+### 8.1 寄存器名泄漏根因已修复（commit dd585d7）
+
+**根因修正**：07-02 报告把 `uVar_<hex>` 占位名归因于"HighVariable 链未建立"，但 07-03 的 `[DBG-DET]` 诊断显示 HighVariable 链**已经建立**（merge.rs 跑通），问题是 `Merge::assign_names`（merge.rs:560-574）给 HighVariable 起的是**带 SSA 后缀的原始寄存器名**（`RAX_7`、`RDI_6`、`EAX_13`），而 printc 的 `is_raw_register_name` 只精确匹配 `"RAX"`（不带后缀）→ 后缀名直接泄漏进 C 输出。
+
+**修复**：`is_raw_register_name` 先剥掉尾部 `_<digits>` SSA 后缀再查寄存器名表，让 `RAX_7`/`RAX_71` 与 `RAX` 走同一条既有 raw-register → `<prefix>_<offset>` → `compact_name_for` 重编号链（对齐 Ghidra `buildVariableName` database.cc:2501-2504 + `assignDefaultNames` database.cc:2862）。
+
+**量化效果**（`tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --summary-only`）：
+
+| 指标 | 07-02 | 07-03 | 变化 |
+|---|---|---|---|
+| 寄存器名泄漏（RAX_/EAX_/... 全量） | 177 | **0** | ✅ 全消 |
+| defect 函数数 | 17/24 | **7/24** | ✅ -10 |
+| 剩余 defect 类型 | 寄存器泄漏 + 空 else + 调用丢失 | **全是空 else body-collapse** | 收敛到单一根因 |
+
+### 8.2 当前唯一可见缺陷：empty-else body-collapse
+
+7 个 defect 函数（main/my_fwrite/my_get_line/file2string/glob_word/next_url/match_url）的 defect 全是 `empty else block`。这是 §3.3 的控制流结构化 + body emit 问题（独立根因，与命名无关）：
+
+- `my_fwrite`：Rugra 10 行 vs Ghidra 22 行，缺 fwrite/fopen 调用、缺 if-body 主体（`if(param_4==0){...} else {}` 的 else 空但 if-body 也残缺）。
+- 根因层：blockaction 结构化 + printc body emit（QUALITY_GAP §P3）。
+- 下一步对齐目标。
+
+### 8.3 number 计数说明
+
+numbering issues 408→597 的增量**不是新引入的编号 bug**，而是：
+1. diff 工具的跨函数同名声明重叠计数（`bVar4` 在 my_fwrite 与 myprogress 各声明一次，工具计为 duplicate）—— 工具限制，非真实缺陷。
+2. 既有的声明非单调序（lVar 声明顺序与编号不一致）—— §P3 body 问题的一部分，非本次命名改动引入。
+
+my_fwrite 内部无真重复声明（bVar4/lVar1/lVar2/lVar3/lVar5/lVar6 各一次）。
