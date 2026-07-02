@@ -632,13 +632,13 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 新增 `ScopeLocal::mark_not_mapped(offset, size, parameter)` — 忠实移植 Ghidra `ScopeLocal::markNotMapped`（varmap.cc:510-546）。从符号列表中移除与给定范围重叠的符号。
 - 新增 `ScopeLocal::has_overlap(offset, size)` — 检查范围是否与任何符号重叠。
 - `ActionRestrictLocal`（coreaction.cc:1957-2001）：接入主管线在 ActionCallParams 后、ActionDeadCode 前。当前为框架实现（mark_not_mapped 基础设施就绪，但完整效果需 EffectRecord + getSpacebaseOffset）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 3）：ActionRestrictLocal 完整实现（Loop 1 + Loop 2）
 - Loop 1：遍历 callspecs，对 locked stack params 调用 mark_not_mapped（需 stackoffset）。
 - Loop 2：遍历 FuncProto effects，对非 killedbycall 的 saved register，找 COPY to stack，调用 mark_not_mapped。
 - 使用 collect-then-apply 模式避免借用冲突。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 4）：ActionDirectWrite L1→L2（coreaction.cc:1350-1432）
 - Phase 1：遍历所有 varnodes，清除 direct_write 标志。收集初始 worklist：
@@ -648,12 +648,12 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
   - constant varnodes → direct_write
 - Phase 2：从 worklist 传播 direct_write 标记到后代 assignment ops 的输出。
 - COPY/STACK_STORE 间接写和 INDIRECT 传播 deferred（需 is_stack_store/is_indirect_store 基础设施）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 5）：ActionDefaultParams L1→L2（coreaction.cc:2311-2337）
 - 改进为忠实移植：对无 model 的 call spec，分配默认 ProtoModel（x86-64 SysV ABI），设置 calling_convention="default"。setInternal 等价实现。
 - insertPcode（调用点 pcode 注入）deferred（需 pcodeinjectlib）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 6）：ActionExtraPopSetup 清理（coreaction.cc:1436-1466）
 - 清理了重复的 impl 块和孤立代码。保留单个干净实现。
@@ -661,44 +661,44 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 
 ### 2026-06-29（续 7）：ActionReturnRecovery 改进（coreaction.cc:1908-1955）
 - 扫描 RETURN ops 检测函数是否有返回值（inputs > 1）。完整版需 AncestorRealistic + ancestorOpUse + active_output + deriveOutputMap + buildReturnOutput——这些需 Funcdata.active_output 字段（Rugra Funcdata 无此字段，active_output 在 FuncCallSpecs 上）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 8）：ActionReturnRecovery 完整版 + Funcdata.active_output
 - ActionReturnRecovery 现在使用 `fd.active_output` 字段（忠实 Ghidra `Funcdata::activeoutput`）。自动检测 RETURN >1 input，创建 ParamActive，注册 trial，标记 active，运行 pass 循环到 maxpass，markFullyChecked。
 - 完整版需 AncestorRealistic + ancestorOpUse + deriveOutputMap + buildReturnOutput — deferred。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 9）：ActionInputPrototype 忠实移植（coreaction.cc:4707-4763）
 - 对未锁定 input prototype 的函数，扫描输入 varnodes（非 spacebase/persist），创建 ParamActive trials，标记有后代的为 active。
 - 为每个 active input 创建 ProtoParameter（type=long, name=param_N）。
 - 完整版需 resolveModel + deriveInputMap + updateInputTypes — deferred。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 10）：ActionOutputPrototype 忠实移植（coreaction.cc:4765-4782）
 - 从第一个 RETURN op 的 slot 1 varnode 推导返回类型。根据 varnode 大小设置 byte/int/long。仅当当前返回类型为 void 时更新。
 - 完整版需 updateOutputTypes（含 HighVariable 类型传播）— deferred。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 11）：ActionUnjustifiedParams 忠实移植（coreaction.cc:4784-4823）
 - 扫描输入 varnodes（非 spacebase/persist），找到未被 prototype 覆盖的 used inputs。为每个创建 ProtoParameter（long, param_N）。
 - 完整版需 unjustifiedInputParam + container 重叠合并 + adjustInputVarnodes — deferred。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 12）：ActionNonzeroMask + Funcdata::calc_nz_mask（coreaction.hh:293, funcdata_varnode.cc:856）
 - 新增 `ActionNonzeroMask`（coreaction.hh:293-301）+ `Funcdata::calc_nz_mask()`（funcdata_varnode.cc:856-930）。
 - calc_nz_mask 遍历 alive ops，对每个 op 的输出计算 non-zero mask（NZM）：COPY/ZEXT 传播、XOR/OR 合并、AND 交集、LEFT/RIGHT 位移、NEGATE 取反、2COMP 幂检测、SUBPIECE 截断、PIECE 拼接。
 - NZM 用于下游分析：RuleAndMask/RuleOrMask 等利用 NZM 进行位优化；类型推断利用 NZM 判断变量范围。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 13）：ActionPrototypeTypes 忠实移植（coreaction.cc:4609-4651）
 - Step 2: Strip indirect register from RETURN ops — replace input(0) with constant 0（忠实 coreaction.cc:4628-4635）。这移除了编译器机制的间接寄存器，避免在高级 C 输出中出现。
 - Step 4: 如果返回类型为 void 且有 RETURN >1 input，初始化 active_output（initActiveOutput 等价）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 14）：ActionPrototypeWarnings 忠实移植（coreaction.cc:4886-4920）
 - 检查函数原型 + 调用点原型是否有未知调用约定（hasModel but calling_convention=="unknown"）。用 eprintln! 输出警告。
 - 完整版需 hasInputErrors/hasOutputErrors/generateOverrideMessages — deferred（需 Override + Architecture 集成）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-07-01（管线改造）：Action trait apply &self→&mut self + ActionDeadCode local mut
 管线架构改造的连锁签名修改：所有 Action 的 apply 签名从 &self 改为 &mut self（支持 perform 状态机）。

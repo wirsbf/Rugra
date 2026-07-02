@@ -769,43 +769,43 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 ### 2026-06-29：RuleFloatSign（ruleaction.cc:10714 + typeop.cc:153）
 - `RuleFloatSign` — 检测浮点符号位操作并转换为 FLOAT_ABS/FLOAT_NEG：`x & 0x7fffffff => FLOAT_ABS(x)`，`x ^ 0x80000000 => FLOAT_NEG(x)`。辅助函数 `float_sign_manipulation` 对应 Ghidra `TypeOp::floatSignManipulation`（typeop.cc:153-176）。
 - 触发于所有 FLOAT_ opcodes（18 个）。注册进 oppool1（5619）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续）：RuleSLess2Zero（ruleaction.cc:5711 + getHiBit 5659）
 - `RuleSLess2Zero` — 简化 INT_SLESS 与 0/-1 的比较。形式包括：`-1 s< SUB(V,hi) => -1 s< V`、`~V s< 0 => -1 s< V`、`-1 s< CONCAT(V,W) => -1 s< V` 等。辅助函数 `get_hi_bit` 对应 Ghidra `getHiBit`（ruleaction.cc:5659-5682）。
 - 触发于 CPUI_INT_SLESS。注册进 oppool1（5558）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 2）：RulePopcountBoolXor（ruleaction.cc:10265 + getBooleanResult 10335）
 - `RulePopcountBoolXor` — 简化通过 POPCOUNT 组合的布尔表达式：`popcount((b1 << 6) | (b2 << 2)) & 1 => b1 ^ b2`。辅助函数 `get_boolean_result` 对应 Ghidra `getBooleanResult`（ruleaction.cc:10335-10419），追踪 INT_AND/XOR/OR/ZEXT/SEXT/LEFT 链提取布尔源。
 - 触发于 CPUI_POPCOUNT。注册进 oppool1（5616）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 3）：RuleModOpt（ruleaction.cc:8612）
 - `RuleModOpt` — 简化 INT_DIV/INT_SDIV 的模运算表达式：`x/d * (-d) + x => x%d`。检测 div2 是 div 的二补数（常量或 INT_2COMP）。
 - 指针守卫：若任一输入是指针类型则跳过（防止指针算术被误匹配）。
 - 触发于 CPUI_INT_DIV/CPUI_INT_SDIV。注册进 oppool1（5602）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 4）：RuleDivTermAdd（ruleaction.cc:7832 + findSubshift 7928）
 - `RuleDivTermAdd` — 简化优化的除法表达式：`sub(ext(V)*c,b)>>d + V => sub((ext(V)*(c+2^n))>>n, 0)`，其中 n=d+b*8。
 - 使用 Rust 原生 `u128` 替代 Ghidra 的 128 位多精度算术（set_u128/leftshift128/add128）。`is_constant_extended` 已存在（varnode.rs），`new_extended_constant` 新增到 funcdata.rs（funcdata_varnode.cc:462 忠实移植）。
 - 辅助函数 `find_subshift` 对应 Ghidra `findSubshift`（ruleaction.cc:7928-7953）。
 - 触发于 CPUI_SUBPIECE/INT_RIGHT/INT_SRIGHT。注册进 oppool1（5594）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 5）：RuleDivTermAdd2（ruleaction.cc:7955）
 - `RuleDivTermAdd2` — 简化优化的除法表达式变体：`W+((V-W)>>1) => sub((zext(V)*(c+2^n))>>(n+1), 0)`，其中 W=sub(zext(V)*c,d)，n=d*8。使用 Rust 原生 u128。
 - 指针守卫：若输入是指针类型则跳过。
 - 触发于 CPUI_INT_RIGHT（shift==1）。注册进 oppool1（5595）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 6）：RuleSignMod2nOpt2（ruleaction.cc:8867）
 - `RuleSignMod2nOpt2` — 转换 INT_SREM 形式：`V - (Vadj & ~(2^n-1)) => V s% 2^n`。
 - 实现了 `check_sign_ext_form` 路径（INT_ADD，CDQ 风格符号扩展，ruleaction.cc:8928-8952）。
 - MULTIEQUAL 路径（`checkMultiequalForm`）需块结构访问（getParent/getIn/getTrueOut），deferred。
 - 触发于 CPUI_INT_MULT。注册进 oppool1（5604）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 7）：RuleSignMod2nOpt 去重确认
 - `RuleSignMod2nOpt`（ruleaction.cc:8673）此前已完整实现并注册（oppool1 5603）。本轮清理了意外添加的重复定义。现有实现含 `check_sign_extraction` 辅助函数 + 完整模式匹配（含 trunc_size/ZEXT/SUBPIECE 变体）。
@@ -814,12 +814,12 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - `RuleSignMod2Opt` — 转换 INT_SREM 特殊形式：`(V-sign)&1+sign => V s% 2`（sign = V s>> 63）。是 RuleSignMod2nOpt 的 mod-2 特化。
 - 复用 `check_sign_extraction` 辅助函数。支持 SUBPIECE 截断变体。
 - 触发于 CPUI_INT_AND。注册进 oppool1（5605）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-06-29（续 9）：RuleShiftPiece（ruleaction.cc:3791）
 - `RuleShiftPiece` — 检测 `(zext(V) << #sa) | zext(V)` 并转换为 PIECE。也处理 CDQ 特殊情况（INT_SRIGHT 形成高位 → INT_SEXT）。两条路径均为纯数据流，无需块结构。
 - 触发于 CPUI_INT_OR/INT_XOR/INT_ADD。注册进 oppool1（5549）。
-- 验证：780/780 测试，curl 24/24（while=36），httpd 29/29（while=58）。
+- 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
 ### 2026-07-01：oppool1 + cleanup 池大批补缺 Rule（21 条 + DivOpt 修复）
 

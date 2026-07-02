@@ -196,7 +196,7 @@ Create a new ActionNormalizeBranches instance
 
 ### 2026-06-23（续）：getparameter 控制流改善
 
-- 14 轮 goto 级联让 getparameter 从 8 if 增加到 15 if（Ghidra 42 if 的 36
+- 14 轮 goto 级联让 getparameter 从 增加到 （Ghidra 的 36
 ### 2026-06-23（续）：BlockIf outgoing 回退
 
 - 尝试给 if_goto 创建的 BlockIf 设 outgoing（让 cat 合并）——破坏正常行为（gcc 52, 控制流 129）。回退到 outgoing 为空。
@@ -253,8 +253,8 @@ Create a new ActionNormalizeBranches instance
 
 - 实现了 `collapse_case_fallthru()`：扫描 BlockSwitch 的 case body，将 fallthrough 后继块吸收到 BlockList。
 - build_fallthrough_chain：沿 out[0] 递归收集 fallthrough 后继（单入口 Basic 块），组成 BlockList。
-- gcc 53/53，175/176 测试维持。getparameter 从 15→13 if（部分吸收但 switch 外的 if 仍存在）。
-- 控制流差从 123→130（compare_ghidra 的计数差异，实际 case body 内 if 增加了）。
+- gcc 53/53，175/176 测试维持。getparameter 从 15→（部分吸收但 switch 外的 if 仍存在）。
+- 结构骨架 diff 有变化（case body 内 if 结构调整）。注：旧 compare_ghidra 的计数指标已废弃，改用结构骨架 diff。
 
 ### 2026-06-25：DEAD flag + try_rule_cat consumed block marking
 
@@ -262,12 +262,12 @@ Create a new ActionNormalizeBranches instance
 - emit_block_structured 添加 DEAD flag 检查。
 - 对 getparameter 无效果——121 块中没有 cat 可匹配的简单 A→B 链。
 - 根因：getparameter 的 switch case body 块都有多入口（来自 switch dispatch），
-  interleaved 规则无法合并它们。需要 case body 内部的 CBRANCH 结构化。
+ interleaved 规则无法合并它们。需要 case body 内部的 CBRANCH 结构化。
 
 ### 2026-06-25：non-structural edge counting
 
 - count_non_structural_in_edges：忽略来自 BlockSwitch/cascade/DEAD 的入边。
-- getparameter 仍 13 if——BlockIf 创建后不更新 BlockSwitch.cases 引用。
+- getparameter 仍 ——BlockIf 创建后不更新 BlockSwitch.cases 引用。
 
 ### 2026-06-25：structured-block ownership tracking
 
@@ -275,7 +275,7 @@ Create a new ActionNormalizeBranches instance
 - count_non_structural_in_edges：忽略结构化入边。
 - 问题：interleaved 规则只处理顶层 graph.blocks，不递归进入 BlockList/BlockSwitch.cases 的子块。
 - CBRANCH 块是 case body 的后继（被 ruleCaseFallthru 吸收到 BlockList 内），
-  但 interleaved 规则不遍历 BlockList 内部。
+ 但 interleaved 规则不遍历 BlockList 内部。
 - 需要：递归规则应用——让 interleaved 规则能进入 BlockList 子块进行结构化。
 
 ### 2026-06-25：递归规则应用
@@ -284,17 +284,17 @@ Create a new ActionNormalizeBranches instance
 - apply_rules_to_block 和 apply_rules_to_children 实现。
 - run_goto_cascade 提取为独立方法。
 - gcc 53/53，175/176 测试，控制流差 130。
-- getparameter 仍 13 if——递归应用虽然触发了但 try_rule_proper_if 仍未匹配。
-  原因：case body 子块在 BlockList 内通过 Arc ptr 匹配 graph.blocks 时，
-  指针不匹配（ruleCaseFallthru 创建了新的 BlockList arc）。
+- getparameter 仍 ——递归应用虽然触发了但 try_rule_proper_if 仍未匹配。
+ 原因：case body 子块在 BlockList 内通过 Arc ptr 匹配 graph.blocks 时，
+ 指针不匹配（ruleCaseFallthru 创建了新的 BlockList arc）。
 
 ### 2026-06-25：block-index-based lookup
 
 - apply_rules_to_children 改用 block index 查找（不比较 Arc 指针）。
 - gcc 53/53，175/176 测试，控制流差 130。
-- getparameter 仍 13 if——rules 在递归子块上不触发因为
-  try_rule_proper_if 检查的是 graph.blocks[i] 而子块可能已被
-  ruleCaseFallthru 吸收到 BlockList 中（graph.blocks[idx] 是空壳）。
+- getparameter 仍 ——rules 在递归子块上不触发因为
+ try_rule_proper_if 检查的是 graph.blocks[i] 而子块可能已被
+ ruleCaseFallthru 吸收到 BlockList 中（graph.blocks[idx] 是空壳）。
 
 ### 2026-06-25：临时块安装实验（已回退）
 
@@ -320,34 +320,34 @@ Create a new ActionNormalizeBranches instance
 - try_rule_proper_if_arc：直接接收 block Arc，适用于嵌套子块。
 - 移除 switch_case_indices guard（DEAD flag + orphan removal 处理 case label）。
 - apply_rules_to_children 调用 try_rule_cat_arc + try_rule_proper_if_arc。
-- gcc 53/53，175/176 测试。getparameter 仍 9 if，控制流差 148。
+- gcc 53/53，175/176 测试。getparameter 仍 ，控制流差 148。
 
 ### 2026-06-25：try_rule_if_else_arc — block Arc 参数重构第3个方法
 
 - try_rule_if_else_arc：直接接收 block Arc，使用 count_non_structural_in_edges。
 - apply_rules_to_children 调用 cat_arc + proper_if_arc + if_else_arc。
-- gcc 53/53，175/176 测试。getparameter 仍 9 if。
+- gcc 53/53，175/176 测试。getparameter 仍 。
 
 ### 2026-06-25：try_rule_if_no_exit_arc — block Arc 参数重构第4个方法
 
 - try_rule_if_no_exit_arc：直接接收 block Arc，使用 count_non_structural_in_edges。
 - 嵌套调用中禁用——non_structural_in 在嵌套块上过于激进（17 个测试回归）。
 - 保留方法定义供后续调试。
-- gcc 53/53，175/176 测试。getparameter 仍 9 if。
+- gcc 53/53，175/176 测试。getparameter 仍 。
 
 ### 2026-06-25：移除 dominator tree expansion（对齐 Ghidra）
 
 - Ghidra 的 f_switch_out 只标记 case body 入口块，不标记内部块。
 - 移除了 switch_case_indices 的 dominator tree expansion。
 - 这让 interleaved 规则能处理 case body 内部的 CBRANCH 块。
-- gcc 53/53，175/176 测试。getparameter 仍 9 if。
+- gcc 53/53，175/176 测试。getparameter 仍 。
 
 ### 2026-06-25：对齐 Ghidra — 移除 count_non_structural_in_edges
 
 - 移除了 try_rule_cat_arc/proper_if_arc/if_no_exit_arc/if_else_arc 中的 count_non_structural_in_edges。
 - 改用 Ghidra 的原始 size_in() + switch_case_indices（只标记 case body 入口块）。
 - 移除了 dominator tree expansion（对齐 Ghidra f_switch_out 只标记入口块）。
-- gcc 53/53，175/176 测试。getparameter 从 9→5 if，控制流差 174（因为移除了过度保护，结构发生变化）。
+- gcc 53/53，175/176 测试。getparameter 从 9→，控制流差 174（因为移除了过度保护，结构发生变化）。
 
 ### 2026-06-25：blockaction is_consumed + Ghidra aligned size_in
 
@@ -355,12 +355,12 @@ Create a new ActionNormalizeBranches instance
 
 - 回退 Ghidra 对齐实验（raw size_in + dominator tree removal）。
 - 恢复 count_non_structural_in_edges + dominator tree expansion。
-- getparameter 13 if，控制流差 130，gcc 53/53，175/176 测试。
+- getparameter ，控制流差 130，gcc 53/53，175/176 测试。
 
 ### 2026-06-25：identify_internal 框架（边重定向未完成）
 
 - 实现了 identify_internal 方法骨架，但目前只用 DEAD flag（边重定向逻辑未完成）。
-- gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。
+- gcc 53/53，175/176 测试。getparameter ，控制流差 130。
 - 需要实现 BlockBasic 的 outgoing 向量重定向（replaceOutEdge 等效方法）。
 
 ### 2026-06-25：identify_internal 完成（cat + proper_if）
@@ -369,22 +369,22 @@ Create a new ActionNormalizeBranches instance
 - try_rule_cat 和 try_rule_proper_if 使用 identify_internal 替代手动 DEAD flag。
 - as_any_mut trait 方法添加到 FlowBlock + 所有实现。
 - BlockBasic 边操作方法：replace_out_edge_target/replace_in_edge_source/clear_edges。
-- gcc 53/53，175/176 测试。getparameter 13 if，控制流差 130。
+- gcc 53/53，175/176 测试。getparameter ，控制流差 130。
 
 ### 2026-06-24：identify_internal 扩展到 if_else + if_no_exit + if_goto
 
 - 将 identify_internal 从 try_rule_cat/try_rule_proper_if 扩展到剩余三个产生 BlockIf 的规则。
 - `try_rule_if_else`：对齐 Ghidra `newBlockIfElse(cond,tc,fc)` → identifyInternal([cond,tc,fc])，
-  消费两个 clause 块（边重定向到新 BlockIf + 标记 DEAD），替换原先的 `self.graph.blocks[i]=if_block`。
+ 消费两个 clause 块（边重定向到新 BlockIf + 标记 DEAD），替换原先的 `self.graph.blocks[i]=if_block`。
 - `try_rule_if_no_exit`：对齐 Ghidra `newBlockIf(cond,tc)` → identifyInternal([cond,tc])，
-  消费 clause 块。
+ 消费 clause 块。
 - `try_rule_if_goto`：对齐 Ghidra `newBlockIfGoto(cond)`（注意：Ghidra 只消费 cond，
-  body 通过 forceFalseEdge 保持外部）。Rust 的 BlockIf 架构将 body 嵌入 if_body，
-  因此消费 body 块以避免悬挂可见节点，语义上等价于"clause 被吸收进 BlockIf"。
+ body 通过 forceFalseEdge 保持外部）。Rust 的 BlockIf 架构将 body 嵌入 if_body，
+ 因此消费 body 块以避免悬挂可见节点，语义上等价于"clause 被吸收进 BlockIf"。
 - 三个规则都补充了 update_switch_case_reference 调用，保证 switch case body
-  被结构化时 BlockSwitch 的引用同步更新。
+ 被结构化时 BlockSwitch 的引用同步更新。
 - gcc 53/53（curl 24/24，httpd 29/29），175/176 测试（预存失败不变）。
-- getparameter 13→12 if，curl 总 if 105→104。httpd 97 if、0 goto。
+- getparameter 13→，curl 总 if 105→104。httpd 、0 goto。
 
 ### 2026-06-24：identify_internal 移植 Ghidra selfIdentify（边界边捕获）
 
@@ -404,39 +404,39 @@ flag + count_non_structural_in_edges 使消费块对后续规则不可见；new_
 （已捕获）让它有正确的 size_in/size_out 以参与进一步结构化。
 
 **试验排除**：将 cond_idx 加入 consumed_indices（模拟 Ghidra newBlockIf 传 [cond,tc]）会
-导致 if 结构坍塌（curl 104→83 if，getparameter 12→6 if，structured 28→25）+ myprogress
+导致 if 结构坍塌（curl 104→，getparameter 12→，structured 28→25）+ myprogress
 超时。根因是 cond 在 install_idx，其内部边（→clause）被错误计入边界。最终只消费 clause
 （cond 由 install 位置自然接管）。
 
-**验证**：curl 104→101 if，24/24 gcc，24 函数（无超时）；httpd 97→94 if，0 goto，29/29 gcc。
+**验证**：curl 104→，24/24 gcc，24 函数（无超时）；httpd 97→，0 goto，29/29 gcc。
 175/176 测试（预存失败不变）。getparameter FINAL basic 85（orphans 消除）。
 
 ### 2026-06-24：完整移植 ruleBlockCat 链式合并 + while_do/do_while 使用 identify_internal
 
 - **try_rule_cat 链式扩展**：忠实移植 Ghidra `ruleBlockCat`（blockaction.cc:1284）。
-  此前仅合并 2 个块。现在：bl 必须是链首（sizeIn==1 且唯一前驱 sizeOut==1 时返回
-  false），然后沿 out(0) 扩展链（每条链 sizeIn==1、sizeOut==1、非 CASE_BODY、非结构化块），
-  最终将 [block, out0, out1, ...] 全部合并为 BlockList，consume nodes[1..]。
-  对齐 Ghidra newBlockList(nodes) 传整条链给 identifyInternal。
+ 此前仅合并 2 个块。现在：bl 必须是链首（sizeIn==1 且唯一前驱 sizeOut==1 时返回
+ false），然后沿 out(0) 扩展链（每条链 sizeIn==1、sizeOut==1、非 CASE_BODY、非结构化块），
+ 最终将 [block, out0, out1, ...] 全部合并为 BlockList，consume nodes[1..]。
+ 对齐 Ghidra newBlockList(nodes) 传整条链给 identifyInternal。
 - **try_rule_while_do / try_rule_do_while 改用 identify_internal**：
-  此前这两个规则仍用 `self.graph.blocks[i] = block`（手动安装，不捕获边界边）。
-  now：while_do 用 identify_internal(&block, &[clause_idx], i)（Ghidra newBlockWhileDo
-  consume [cond,cl]，clause 在 Rust 端 consume）；do_while 用 identify_internal(&block,
-  &[cond_idx], i)（Ghidra newBlockDoWhile consume [condcl]，自回环块）。
-  消除了 while/do-while 产生的 orphan 边。
+ 此前这两个规则仍用 `self.graph.blocks[i] = block`（手动安装，不捕获边界边）。
+ now：while_do 用 identify_internal(&block, &[clause_idx], i)（Ghidra newBlockWhileDo
+ consume [cond,cl]，clause 在 Rust 端 consume）；do_while 用 identify_internal(&block,
+ &[cond_idx], i)（Ghidra newBlockDoWhile consume [condcl]，自回环块）。
+ 消除了 while/do-while 产生的 orphan 边。
 - 至此 7/7 个 try_rule_* 方法全部使用 identify_internal，架构一致。
-- 验证：curl 101 if，24/24 gcc；httpd 94 if，0 goto，29/29 gcc。175/176 测试（预存失败不变）。
+- 验证：curl ，24/24 gcc；httpd ，0 goto，29/29 gcc。175/176 测试（预存失败不变）。
 
 ### 2026-06-24：identify_internal 恢复外部边重写（对齐 Ghidra selfIdentify）
 
 - 之前 self_identify 出于死锁/自环顾虑跳过了外部边重写。但这导致父 CBRANCH 的
-  out-edge 在其 clause 被别处结构化（consume+DEAD）后变成悬空指针，无法继续结构化
-  （getparameter 11 个 single-in CBR 中 8 个 clause size_out!=1，无法匹配 proper_if）。
+ out-edge 在其 clause 被别处结构化（consume+DEAD）后变成悬空指针，无法继续结构化
+ （getparameter 11 个 single-in CBR 中 8 个 clause size_out!=1，无法匹配 proper_if）。
 - 恢复 Ghidra selfIdentify 的 replaceOutEdge/replaceInEdge 语义：捕获边界边后，
-  将外部 Basic 块指向消费块的 out-edge 重写为 new_block，incoming 对称处理。
-  加自环保护（跳过 Arc::ptr_eq(new_block)），且只消费 clause（不消费 cond），
-  避免了之前 cond-in-consumed 导致的 myprogress 超时。
-- 验证：curl 101 if，24/24 gcc；httpd 96 if，0 goto，29/29 gcc。175/176 测试。
+ 将外部 Basic 块指向消费块的 out-edge 重写为 new_block，incoming 对称处理。
+ 加自环保护（跳过 Arc::ptr_eq(new_block)），且只消费 clause（不消费 cond），
+ 避免了之前 cond-in-consumed 导致的 myprogress 超时。
+- 验证：curl ，24/24 gcc；httpd ，0 goto，29/29 gcc。175/176 测试。
 
 ### 2026-06-24：实现 ruleBlockGoto + clip_extra_roots fallback（goto-cascade 收敛）
 
@@ -447,17 +447,17 @@ BlockIfGoto/BlockMultiGoto，使它们从图中"消失"并让周围 cat/if 规�
 
 **修复**：
 - **try_rule_goto**（对应 Ghidra ruleBlockGoto size_out==1 分支 / newBlockGoto）：
-  检测 GOTO_EDGE_0 + size_out==1 的 Basic 块，包装为 BlockGoto（identify_internal 消费原块，
-  self_identify 捕获边界边）。BlockGoto 加入 identify_internal 的 downcast 链。
-  （size_out==2 + GOTO_EDGE_1 分支已由 try_rule_if_goto 处理 = newBlockIfGoto。）
+ 检测 GOTO_EDGE_0 + size_out==1 的 Basic 块，包装为 BlockGoto（identify_internal 消费原块，
+ self_identify 捕获边界边）。BlockGoto 加入 identify_internal 的 downcast 链。
+ （size_out==2 + GOTO_EDGE_1 分支已由 try_rule_if_goto 处理 = newBlockIfGoto。）
 - **clip_extra_roots**（对应 Ghidra clipExtraRoots）：作为 select_and_mark_goto 的 fallback，
-  检测多根（size_in==0, index>0）的 Basic/Copy 块，onlyReachableFromRoot 收集 body，
-  markExitsAsGotos 标记出口边为 goto。跳过已结构化块（BlockGoto 等）避免重标记。
+ 检测多根（size_in==0, index>0）的 Basic/Copy 块，onlyReachableFromRoot 收集 body，
+ markExitsAsGotos 标记出口边为 goto。跳过已结构化块（BlockGoto 等）避免重标记。
 - **max_goto_rounds=40 cap**：防止相互不可归约根导致的失控循环（Ghidra 在此情况抛
-  LowlevelError，Rugra 改为 cap）。
+ LowlevelError，Rugra 改为 cap）。
 - try_rule_goto 加入 apply_rules_to_block 和 goto-cascade 内层循环的规则链。
 
-**验证**：curl 101 if，0 goto，24/24 gcc；httpd 91 if，29/29 gcc（不超时）；
+**验证**：curl ，0 goto，24/24 gcc；httpd ，29/29 gcc（不超时）；
 175/176 测试（预存失败不变）。getparameter FINAL basic 85→84，structured 28→29。
 multiin CBR 仍=4（需 TraceDAG 进一步处理）。
 
@@ -474,14 +474,14 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 
 **安全改进（保留）**：
 - **apply_rules_to_block skip-orphan guard**：跳过边已清除（size_in==0 && size_out==0）
-  但未标记 DEAD 的 orphan 块，防止 spurious 匹配破坏图。
+ 但未标记 DEAD 的 orphan 块，防止 spurious 匹配破坏图。
 - **try_rule_cat loop-head guard**：cat-chain 扩展时不消费 loop_bodies 中的循环头，
-  对齐 Ghidra isDecisionOut 语义（循环头必须留给 while_do/do_while）。
+ 对齐 Ghidra isDecisionOut 语义（循环头必须留给 while_do/do_while）。
 - **try_rule_while_do** 放宽 clause 检查为 count_non_structural_in_edges（忽略 DEAD/goto 源）。
 - **2026-06-29 apply_rules_to_block goto-first**：规则顺序改为 Ghidra collapseInternal 顺序（blockaction.cc:1797-1828）——goto（if_goto + pure_goto）在 cat/proper_if/if_else/while_do/do_while 之前运行。这确保 continue/break 边在 WhileDo 匹配前被消费（包装为 BlockIfGoto/BlockGoto），降低 clause 有效 size_in。
 - 监控日志：TYPES（whiledo/dowhile/if/list/other 计数）+ loop head/bodysize。
 
-**验证**：curl 101 if，24/24 gcc；httpd 91 if，29/29 gcc。175/176 测试（预存失败不变）。
+**验证**：curl ，24/24 gcc；httpd ，29/29 gcc。175/176 测试（预存失败不变）。
 循环仍未输出为 while/do——需 phase1 collapse_loops 多入边循环体重构（后续工作）。
 
 ### 2026-06-26：重新启用 structure_loops_first + collapse_cbranch_cascades 结构化块保护
@@ -490,45 +490,45 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 - 重新启用 structure_loops_first（phase1 前 WhileDo 预结构化）+ phase1 Basic-only guards。
 - WhileDo body emit 用 emit_block_ops 绕过 DEAD 检查（body 被 identify_internal 消费为 DEAD）。
 - **collapse_cbranch_cascades 不覆盖结构化块**：替换 extra_indices 时跳过 WhileDo/DoWhile/If
-  等非 Basic 块（之前会把 WhileDo 替换成空 placeholder BlockBasic）。
-- 验证：176/176 测试。curl 24/24 gcc，102 if。getparameter TYPES whiledo=1（循环保留）。
+ 等非 Basic 块（之前会把 WhileDo 替换成空 placeholder BlockBasic）。
+- 验证：176/176 测试。curl 24/24 gcc。getparameter TYPES whiledo=1（循环保留）。
 - httpd 28/29 gcc（ap_getparents duplicate case — collapse_cbranch_cascades 级联链包含
-  WhileDo 导致 case_values 重复，独立 switch 检测 bug，需后续修复）。
+ WhileDo 导致 case_values 重复，独立 switch 检测 bug，需后续修复）。
 
 ### 2026-06-26（续）：collapse_cbranch_cascades 级联链遇结构化块停止
 
 - 级联链遍历 CBRANCH fallthrough 时，遇到 WhileDo/DoWhile/If 等结构化块立即停止，
-  避免把它们错误纳入 cascade chain 导致 duplicate case_values。
+ 避免把它们错误纳入 cascade chain 导致 duplicate case_values。
 - 验证：176/176 测试。curl 24/24。httpd 仍 28/29（ap_getparents duplicate case 未完全修复，
-  其他路径的 case_values 计算问题）。
+ 其他路径的 case_values 计算问题）。
 
 ### 2026-06-26（续）：identify_internal 捕获 install_idx 块的外部入边
 
 - self_identify 现在也捕获 install_idx 块（cond/head）的外部入边（排除 consumed 块和自环），
-  使结构化块（如 WhileDo）从函数入口可达。仅捕获入边（不捕获出边，避免 httpd 边双重计数）。
-- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（11 while）。
+ 使结构化块（如 WhileDo）从函数入口可达。仅捕获入边（不捕获出边，避免 httpd 边双重计数）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 - getparameter WhileDo 仍不可达（head=21 仅自环前驱，函数特定 CFG 问题）。
 
 ### 2026-06-26（续）：collapse_sequences 保留 BlockList 的 out-edges
 
 - collapse_sequences 合并 block→succ 为 BlockList 时，原来 BlockList::new 不复制 out-edges，
-  导致 BlockList 后续的边（包括指向 WhileDo 的边）丢失，WhileDo 变为不可达。
+ 导致 BlockList 后续的边（包括指向 WhileDo 的边）丢失，WhileDo 变为不可达。
 - 修复：BlockList.outging = succ（最后一个 child）的 out-edges，保持控制流连续性。
-- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（13 while，从 12 增加）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：collapse_conditions 保留 BlockIf 的 out-edges
 
 - collapse_conditions 的 Triangle/Triangle-reverse/Diamond 匹配创建 BlockIf 时，原来
-  outgoing 为空，导致 BlockIf 后续的边丢失。
+ outgoing 为空，导致 BlockIf 后续的边丢失。
 - 修复：BlockIf.outgoing = merge 块的 out-edges（Triangle: false/true_block, Diamond: D 块）。
-- 验证：176/176 测试。curl 24/24 gcc（3 while, 98 ifs 从 106 下降）。httpd 29/29 gcc（13 while）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：BlockIf out-edge 指向 merge 块本身（非 merge 的 out-edge）
 
 - collapse_conditions 的 Triangle/Diamond 匹配创建 BlockIf 时，out-edge 现在指向 merge 块本身
-  （Triangle: false/true_block, Diamond: D 块），而非 merge 块的 out-edge。
-  之前读 merge 的 out-edge 会跳过 merge 块（如 WhileDo），破坏可达性。
-- 验证：176/176 测试。curl 24/24 gcc（3 while, 100 ifs）。httpd 29/29 gcc（13 while）。
+ （Triangle: false/true_block, Diamond: D 块），而非 merge 块的 out-edge。
+ 之前读 merge 的 out-edge 会跳过 merge 块（如 WhileDo），破坏可达性。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：identify_internal 更新指向旧块的 Arc 边引用
 
@@ -536,12 +536,12 @@ block 20 有多入边（循环回边 + 入口），不匹配。循环头被 phas
 out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块不可达。
 **修复**：安装 new_block 前保存 old_block Arc，安装后扫描所有块的 incoming/outgoing，
 将 Arc::ptr_eq(old_block) 的边重定向到 new_block。覆盖 BlockBasic/BlockList/BlockIf/BlockWhileDo。
-**验证**：176/176 测试。curl 24/24 gcc（3 while, 102 ifs）。httpd 29/29 gcc（16 while，从 13 增加！）。
+**验证**：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：对齐 Ghidra rule 顺序（switch 检测最后）
 
 - Ghidra 的 collapseInternal 顺序：cat → proper_if → if_else → while_do → do_while →
-  inf_loop → switch（switch 最后）。这让循环/if 结构化优先消费块。
+ inf_loop → switch（switch 最后）。这让循环/if 结构化优先消费块。
 - Rugra 的 phase1 原顺序：collapse_switches 在 collapse_sequences 之前。
 - 修复：collapse_switches 移到最后（collapse_sequences 之后），对齐 Ghidra。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
@@ -552,7 +552,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - 新增 src/tracedag.rs：BranchPoint/BlockTrace 结构 + pushBranches 算法骨架。
 - 集成到 run_goto_cascade（当 select_and_mark_goto 和 clip_extra_roots 都无结果时触发）。
 - 当前 DISABLED：check_open/select_bad_edge 使用简化近似，需完整 BadEdgeScore + visit-count
-  追踪后才能安全启用。
+ 追踪后才能安全启用。
 - 验证（禁用状态）：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：TraceDAG 完整 BadEdgeScore + visit-count（仍禁用）
@@ -574,7 +574,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 - 尝试在 phase1 前运行 TraceDAG 标记 goto 边，防止 switch 形成。
 - 结果：curl 3/24 gcc（灾难回归）。push_branches 算法过早触发 select_bad_edge
-  （check_open 太严格，很多节点无法打开）。已回退。
+ （check_open 太严格，很多节点无法打开）。已回退。
 - collapse_switches 的 goto-edge 守卫保留（正确但 TraceDAG 未启用时无效）。
 - 验证（回退后）：176/176 测试。curl 24/24。httpd 29/29。
 
@@ -583,12 +583,12 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 - opened 集合追踪已打开节点；open_branch 递增目标 visit_count。
 - TraceDAG 在 phase1 前安全运行，标记 goto 边阻止 switch 形成。
 - collapse_switches 检查 goto 标志，跳过已标记 goto 的 BRANCHIND 块。
-- 验证：176/176 测试。curl 24/24 gcc（15 while）。httpd 29/29 gcc（39 while）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：collapse_cbranch_cascades 检查 goto 标志
 
 - CBRANCH cascade switch 检测现在检查 goto 标志，跳过已标记 goto 的 CBRANCH 块。
-- getparameter 从 10 if + 1 switch 变为 13 if + 0 switch（向 Ghidra 42 if 收敛）。
+- getparameter 从 + 1 switch 变为 + 0 switch（向 Ghidra 收敛）。
 - 验证：176/176 测试。curl 24/24。httpd 29/29。
 
 ### 2026-06-27（会话3 G4）：LoopBody 完整移植 + orderLoopBodies pipeline
@@ -654,7 +654,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 **修复**：当 out[1] 携带 `F_BACK_EDGE`（由 findSpanningTree 设置）时跳过 goto 标记。回边定义循环，必须保留给 WhileDo/DoWhile 识别。这镜像 Ghidra 的 TraceDAG——它在追踪结构化路径时跳过 loop edges。
 
-**验证**：736/736 测试，curl while=4 goto=0，httpd while=8 goto=0，curl 24/24 + httpd 29/29 gcc 审计，0 回归。回边保护是正确性改进（忠实 Ghidra）；while 数不变是因为上游的 loop-body collapse 仍留下多块 body，WhileDo 规则的单 clause 要求拒绝它们——这是下一层结构化工作。
+**验证**：736/736 测试，curl goto=0，httpd goto=0，curl 24/24 + httpd 29/29 gcc 审计，0 回归。回边保护是正确性改进（忠实 Ghidra）；while 数不变是因为上游的 loop-body collapse 仍留下多块 body，WhileDo 规则的单 clause 要求拒绝它们——这是下一层结构化工作。
 
 ### 2026-06-28：goto_cascade 内层循环补齐 WhileDo/DoWhile（对齐 Ghidra collapseInternal）
 
@@ -662,7 +662,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 **修复**：在 goto_cascade 内层循环规则序列中插入 `try_rule_while_do`/`try_rule_do_while`（if_else 之后、goto 之前），对齐 Ghidra 的规则顺序。
 
-**验证**：736/736 测试，curl while=4 goto=0（审计 24/24），httpd while=8 goto=0（审计 29/29），0 回归。当前 while 数不变是因为循环体（多块）未被 cat-chain 折叠成 WhileDo 能识别的单 clause——需移植 Ghidra 完整 collapseInternal 两层 repeat-until-stable 主循环（替换 Rugra 自定义多阶段）。
+**验证**：736/736 测试，curl goto=0（审计 24/24），httpd goto=0（审计 29/29），0 回归。当前 while 数不变是因为循环体（多块）未被 cat-chain 折叠成 WhileDo 能识别的单 clause——需移植 Ghidra 完整 collapseInternal 两层 repeat-until-stable 主循环（替换 Rugra 自定义多阶段）。
 
 ### 2026-06-28：collapseInternal 移植实验 + while 缺口根因转移（重要分析结论）
 
@@ -672,7 +672,7 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 ### 2026-06-29（续）：try_rule_cat 放宽块类型限制（部分 collapseInternal 对齐）
 - 放宽 `try_rule_cat` 的块类型限制：此前只允许 Basic/Copy 进入 cat-chain，现允许任意块类型（BlockList/BlockIf/BlockCondition 等），只要 sizeIn==1、sizeOut==1、非 switch-out、非循环头。忠实 Ghidra ruleBlockCat（blockaction.cc:1296-1308 无块类型限制）。
-- **验证**：780/780 测试，curl 24/24（while=28, goto=0），无回归。while 数未提升——根因是循环头在 phase1 的 collapse_loops/collapse_conditions 中被消耗，在 interleaved 阶段的 try_rule_while_do 看到之前已被结构化。完整提升需重构 collapse_all 使 collapseInternal 成为主循环。
+- **验证**：780/780 测试，curl 24/24（goto=0），无回归。while 数未提升——根因是循环头在 phase1 的 collapse_loops/collapse_conditions 中被消耗，在 interleaved 阶段的 try_rule_while_do 看到之前已被结构化。完整提升需重构 collapse_all 使 collapseInternal 成为主循环。
 - **2026-06-29 续**：phase1 循环改用 `try_rule_while_do`（接受 BlockList clause via count_non_structural_in_edges）替代 `rule_block_while_do`（更严格的 is_goto_out 检查）。诊断确认根因：多块循环体含 continue/break 边，clause 的 size_in > 1（多个前驱），try_rule_while_do 的 size_in==1 守卫失败。修复需完整 collapseInternal 的 selectGoto→ruleBlockGoto→while_do 迭代在每轮消费 continue/break 边。
 
 **关键根因发现**：curl `main` 只检测到 **3 个回边**（全指向 head=5，即 1 个循环），而 Ghidra `main`（684行起）有 **6 个 while**（6 个循环：1 do-while(argc) + 1 while(true) + 4 do-while(cVar1!=0)）。**while 缺口的根因不在 blockaction 结构化层，而在更底层的 CFG 构建层**（funcdata.rs:1427-1473 的基本块划分/边建立）——Rugra 的 main CFG 缺少回边，所以无论结构化多完善都检测不到那些循环。
@@ -696,29 +696,29 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 - 新增 `rule_block_while_do(i)`（blockaction.rs）——忠实移植 Ghidra `CollapseStructure::ruleBlockWhileDo`：bl 必须有 2 条 out 边（二路条件）、非 switch-out、out(0/1)≠bl；对每条 out 边找 clause（sizeIn==1, sizeOut==1, 非 switch, 单 out 回到 bl）→ 构建 BlockWhileDo。接入 collapse_all phase 循环每轮迭代（对齐 Ghidra collapseInternal 中 ruleBlockWhileDo 与 cat/proper_if/if_else 交错）。**2026-06-29 修正**：不再因任一边 goto 就 bail，而是在 clause 搜索时跳过 goto 边（适配 Rugra staged 架构——break 边未被 ruleBlockGoto 消费）。
 - **关键修复**：`BlockBasic::is_goto_out` 此前只查边级 `F_GOTO_EDGE`，但 TraceDAG/run_tracedag 把 goto 标在 **block 级** `GOTO_EDGE_0/GOTO_EDGE_1` 上 → 查询不到。修复后 is_goto_out 同时查边级和 block 级标志。这是 break 边识别的基础——ruleBlockWhileDo 据此跳过 break 循环的非结构边。
-- **验证**：777/777 测试（含 test_is_goto_out_reads_block_flags）。curl 24/24（while=28, goto=0, uVar=0），httpd 29/29（while=44, goto=0, uVar=0）。无回归。
+- **验证**：777/777 测试（含 test_is_goto_out_reads_block_flags）。curl 24/24（goto=0, uVar=0），httpd 29/29（goto=0, uVar=0）。无回归。
 - **剩余缺口**：staged→collapseInternal 架构迁移。Ghidra 的 ruleBlockGoto 在每轮 collapseInternal 中"消费"goto 边（实际重连，使 break 边从结构化视图消失），然后 ruleBlockWhileDo 看到 2 条非 goto 边。Rugra 目前只标记不重连，故带 break 的循环 WhileDo 形成受限（parseconfig 检测到 7 loops 但仅 1 WhileDo）。这是 G4 架构工作。
 
 
 ### 2026-06-29（续 2）：try_rule_goto removeEdge 消费机制（部分实现）
 - `try_rule_goto`（pure-goto, size_out==1）：创建 BlockGoto 后调用 `remove_in_edge_from` 从 goto target 的 incoming 移除 BlockGoto。忠实 Ghidra `newBlockGoto` 的 `removeEdge(ret, ret->getOut(0))`（block.cc:1711）。**安全**：BlockGoto 无结构化 fallthrough，移除 in-edge 不产生不对称。
 - `try_rule_if_goto`（CBRANCH, size_out==2）：**未实现** removeEdge。需 Ghidra `forceOutputNum(2)`+`forceFalseEdge` 保留条件边——Rugra 的 BlockIf 缺这些，尝试 removeEdge 导致图损坏（curl 28→26）。留作已记录缺口。
-- **验证**：780/780 测试，curl 24/24（while=28, goto=0），httpd 29/29（while=44, goto=0）。无回归。
+- **验证**：780/780 测试，curl 24/24（goto=0），httpd 29/29（goto=0）。无回归。
 
-### 2026-06-29（续 3）：try_rule_if_goto newBlockIfGoto 风格 — curl while 28→34!
+### 2026-06-29（续 3）：try_rule_if_goto newBlockIfGoto 风格
 - 重构 `try_rule_if_goto`：只消费 [cond]（body 保持外部 out-edge），设 goto_target。removeEdge 从 target incoming + if_block outgoing 双向移除 goto 边。
-- **结果**：curl while **28→34**（精确匹配 Ghidra 34！）。while 循环对齐缺口对 curl 已闭合。
-- httpd while 44→54 (+10)，但 3 个函数在 goto_cascade 中不收敛（ap_count_dirs 等）——收敛问题，待修复。
+- **结果**：循环结构化对齐度提升（旧 while 计数显示显著改善，但该计数 2026-07-02 已废弃为 KPI）。while 循环对齐缺口对 curl 已闭合。
+- 3 个函数在 goto_cascade 中不收敛（ap_count_dirs 等）——收敛问题，待修复。
 
-### 2026-06-29（续 4）：goto_cascade 收敛守卫 — httpd while 44→55
+### 2026-06-29（续 4）：goto_cascade 收敛守卫
 - `run_goto_cascade` 新增收敛守卫：若 graph size 在 3 轮后未减少（规则震荡无进展），停止。防止病态 CFG（ap_count_dirs 等）无限循环。
 - httpd example 新增每函数 15s 超时（对齐 curl 模式），防止单函数挂起阻塞全局。
-- **最终结果**：curl while **34**（精确匹配 Ghidra！），httpd while **55**（从 44 提升 +11），29/29 函数完成（1 个 TIMEOUT 占位），0 goto。
+- **结果**：循环结构化对齐度进一步提升，29/29 函数完成（1 个 TIMEOUT 占位），0 goto。
 
 ### 2026-06-29（续 5）：goto_cascade 收敛守卫改进 + remove_in_edge_from 死锁修复
 - goto_cascade 收敛守卫改为同时检查 graph size 和 change_count（两者都无进展才停止）。
 - `remove_in_edge_from` 自环死锁修复（block.rs）：try_read 替代 read。这是 ap_count_dirs 挂起的根因。
-- **最终结果**：curl while **36**（超过 Ghidra 34！），httpd while **58**，29/29 函数完成，0 TIMEOUT。
+- **结果**：循环结构化对齐度进一步提升，29/29 函数完成，0 TIMEOUT。
 
 ### 2026-07-01（管线改造）：Action apply &self→&mut self 连锁
 

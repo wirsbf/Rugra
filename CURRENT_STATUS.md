@@ -4,28 +4,31 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；大规模算法移植 + 接入生效**
 
-## 关键指标（2026-06-28 重新核实）
+## 关键指标（2026-07-02 重新核实）
 
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
 | 单元测试 (`cargo test --lib`) | **736/736 通过** | 2026-06-28 实跑 |
 | curl gcc 审计 | **24/24 OK 0 FAIL** | `python tools/audit_syntax.py result/curl_cur.c` |
 | httpd gcc 审计 | **29/29 OK 0 FAIL** | 同上 |
-| **curl while 循环** | **26**（从 4 跃升） | CFG 修复 + reconcile 类型修复 |
-| **httpd while 循环** | **44**（从 8 跃升！） | identify_internal 死锁修复 |
+| curl 结构缺陷 | **17/24 函数有缺陷**（空 else / 寄存器泄漏 / 调用丢失） | `python tools/compare_ghidra.py --summary-only` |
+| curl 变量编号问题 | **332 个**（181538f 类 per-prefix 计数 bug） | 同上 |
 | goto | **0**（curl + httpd） | 实测 |
 | uVar 碎片 | **0** | 实测 |
 
-### 2026-06-28 双重突破
+> ⚠️ **旧 while/if 计数 KPI 已废弃**（2026-07-02）。计数相同 ≠ 结构对齐（for↔while 等价变换），且检测不到真实缺陷。详见 `tools/compare_ghidra.py`（重写为结构骨架 diff + 编号连续性检查）和 AGENTS.md 铁律 11。
 
-**突破 1：CFG 基本块划分修复 → curl while 4→26**（commit 2bcfcde）
+### 2026-06-28 双重突破（历史记录，数值已被后续覆盖）
+
+**突破 1：CFG 基本块划分修复**（commit 2bcfcde）
 - 根因：`build_blocks_from_ops` 不在跳转目标地址处分裂块，导致回边丢失
 - 修复：忠实移植 Ghidra 块划分（terminator + 跳转目标分裂点）
+- 效果：循环回边检测恢复（旧计数显示 curl 循环数大幅提升，但该计数已不作为 KPI）
 
-**突破 2：identify_internal RwLock 死锁修复 → httpd while 8→44**（commit e581dbc）
+**突破 2：identify_internal RwLock 死锁修复**（commit e581dbc）
 - 根因：identify_internal 持有 write guard 时对自环边的 point 调 read，write+read 同一 RwLock 死锁
 - 修复：4 处 `e.point.read().unwrap()` → `try_read()`，失败跳过
-- 影响：httpd 从"卡在第 8 个函数"变成"完成全部 29 函数，44 while"
+- 影响：httpd 从"卡在第 8 个函数"变成"完成全部 29 函数"
 
 **类型修复链**（commits 7a9b359/89bf0d4/1e67ae6/73f2581/3aa2fe7）：reconcile int-pointer 减法/除法 + 死循环修复 + 指针类型匹配 cast + discovery pass 不可达块遍历 → curl 审计 24/24。
 

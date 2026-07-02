@@ -35,19 +35,19 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - select_bad_edge 改为完整 BadEdgeScore 评分（siblingedge/terminal/distance/depth）。
 - remove_trace 更新 visit-count（标记 goto 时增加计数，忽略该边）。
 - 当前仍 DISABLED：open_branch/retire_branch 需在节点打开/退休时更新 visit-count，
-  否则计数过时导致错误边选择。需进一步修复后启用。
+ 否则计数过时导致错误边选择。需进一步修复后启用。
 
 ## 2026-06-26 更新2：back-edge 过滤
 
 - open_branch 现在跳过 back-edge（target index <= dest），防止追踪回环。
 - 启用测试时 gcc 无回归（curl 24/24, httpd 29/29）但 test_bool_condition_folding 失败
-  （简单函数被错误标记边）。仍 DISABLED。
+ （简单函数被错误标记边）。仍 DISABLED。
 
 ## 2026-06-26 更新3：简单函数保护 + 启用
 
 - generate_likely_gotos 跳过 < 10 块的简单函数（防止误标 goto 边）。
 - TraceDAG 已启用！176/176 测试通过。curl 24/24 gcc。httpd 29/29 gcc。
-- getparameter 仍 10 if（switch 检测先消费块，需进一步对齐）。
+- getparameter 仍 （switch 检测先消费块，需进一步对齐）。
 
 ## 2026-06-26 更新4：opened 集合 + visit-count 边递增
 
@@ -60,7 +60,7 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - open_branch 同时使用 back-edge 过滤（target <= dest）和 opened 集合检查。
 - back-edge 过滤防止追踪进入循环（匹配 Ghidra isLoopDAGOut 语义）。
 - opened 集合防止重复打开已打开的节点。
-- getparameter: 13 ifs, 0 switch（从 10 ifs + 1 switch 改善）。
+- getparameter: , 0 switch（从 + 1 switch 改善）。
 
 ### 2026-06-27（会话3 G4续）：isLoopDAGOut 集成 — LoopBody 驱动 TraceDAG
 

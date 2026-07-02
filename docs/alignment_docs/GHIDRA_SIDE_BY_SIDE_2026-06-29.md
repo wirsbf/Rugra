@@ -1,5 +1,7 @@
 # Rugra vs Ghidra 逐函数 Side-by-Side 对齐验证
 
+> ⚠️ **2026-07-02 废弃声明**：本文档的"宏观指标对比"（while/if/do-while 计数）和"逐函数 while 对比"表使用了 **已废弃的验证度量**。计数相同 ≠ 结构对齐（for↔while 等价变换），且检测不到真实缺陷（实测 curl 17/24 函数有空 else/寄存器泄漏/调用丢失，计数全报 0）。**while 恢复率 82%→100% 这类表述不再作为对齐证据**。新的验证手段是 `tools/compare_ghidra.py`（归一化结构骨架 diff + 编号连续性检查），详见 AGENTS.md 铁律 11。本文档的**技术根因分析**（如 52-53 行的 break 边未消费、do-while 分裂根因）仍有参考价值，但其中的计数数字仅供历史记录。
+
 **日期**: 2026-06-29
 **验证对象**: curl 二进制（Ghidra 参考输出 `result/ghidra_curl_ref.c`，Rugra 输出 `result/curl_cur.c`）
 **本轮已移植**: ActionSpacebase (ce21821) / ruleBlockWhileDo (5fa7dbc) / RuleSubCommute (3688709)
@@ -185,7 +187,7 @@ BlockIf newBlockIfGoto 风格重构（commit f3b269e + cc94377）：
 2. try_rule_if_goto 只消费 [cond]（body 保持外部），removeEdge 双向消费 goto 边
 3. goto_cascade 收敛守卫 + 每函数 15s 超时
 
-### 逐函数对比（总数精确匹配，单函数有差异）
-8/17 函数完全对齐（✓）。DIFF 函数的差异来自 do-while 拆分方式和部分函数的结构差异，但**总数 34=34 精确匹配**。main 从 2→2（Ghidra 11，但 Ghidra 的 main 是不同二进制版本的更大函数）。
+### 逐函数对比（⚠️ 计数度量已废弃，单函数差异分析仍有参考价值）
+8/17 函数在旧计数下"对齐"。DIFF 函数的差异来自 do-while 拆分方式和部分函数的结构差异。**注**："34=34 精确匹配"是旧计数度量的结论（2026-07-02 已废弃）；当前结构骨架 diff 显示这些函数仍有真实缺陷（空 else、调用丢失），见 `tools/compare_ghidra.py`。
 
 **关键成就**：while 循环恢复率从 82%（28/34）提升到 **100%（34/34）**。

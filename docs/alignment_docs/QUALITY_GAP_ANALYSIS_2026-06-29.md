@@ -130,7 +130,7 @@ if (lVar2 == 0) {                       // lVar2 从未赋值
 
 | 方面 | 状态 | 证据 |
 |---|---|---|
-| 控制流结构（if/else/switch/while/do-while） | ✅ 对齐 | curl 36 while > Ghidra 34 |
+| 控制流结构（if/else/switch/while/do-while） | ⚠️ 待重新验证 | 旧计数显示 curl 36 while > Ghidra 34，但计数已废弃（2026-07-02）；结构骨架 diff 显示 17/24 函数仍有真实缺陷，待修复后重新验证 |
 | goto 消除 | ✅ 超越 | Rugra 0 goto vs Ghidra 61 |
 | 库函数识别 | ✅ 部分 | fopen/fwrite/free/strlen 等已识别 |
 | gcc 语法合法性 | ✅ 对齐 | curl 24/24 + httpd 29/29 |
@@ -172,7 +172,7 @@ if (lVar2 == 0) {                       // lVar2 从未赋值
 |---|---|
 | pipeline 底层 | ActionSpacebase + spacebase() + split_uses() — uVar 149→0 |
 | 变量命名 | compact 重编号 (assignDefaultNames) — bVar1/lVar1 |
-| 结构化核心 | BlockIf newBlockIfGoto + removeEdge + goto-first + 死锁修复 — while 28→36 |
+| 结构化核心 | BlockIf newBlockIfGoto + removeEdge + goto-first + 死锁修复（旧 while 计数 28→36，该计数已废弃） |
 | 11 个新 Rule | oppool1 102→112 (skip 12→4) |
 | 128 位基础设施 | new_extended_constant + u128 |
 | 13 个 Action 改进 | RestrictLocal/DirectWrite/DefaultParams/ExtraPopSetup/ReturnRecovery/InputPrototype/OutputPrototype/UnjustifiedParams/NonzeroMask/PrototypeTypes/PrototypeWarnings + calc_nz_mask |

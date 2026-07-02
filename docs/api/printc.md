@@ -21,11 +21,11 @@
 
 ```text
 raw semantics / P-code-like IR
-  -> Funcdata
-  -> Action / Heritage / CFG-related processing
-  -> PrintLanguage
-  -> PrintC
-  -> C-like pseudocode text
+ -> Funcdata
+ -> Action / Heritage / CFG-related processing
+ -> PrintLanguage
+ -> PrintC
+ -> C-like pseudocode text
 ```
 
 因此，`PrintC` 的职责不是：
@@ -251,10 +251,10 @@ raw semantics / P-code-like IR
 - `PrintC` 是当前输出层主干之一
 - `PrintC` 能表达 C 风格结果
 - 但 `PrintC` 的存在不等于：
-  - 输出已接近真实源码
-  - 所有控制流都已结构化
-  - 所有变量都已正确恢复
-  - 与 Ghidra 输出已经一致
+ - 输出已接近真实源码
+ - 所有控制流都已结构化
+ - 所有变量都已正确恢复
+ - 与 Ghidra 输出已经一致
 
 ---
 
@@ -337,19 +337,19 @@ raw semantics / P-code-like IR
 ### 2026-06-23（续）：STORE 地址 cast 合法化
 
 - `op_store()` 所有地址解引用路径现在统一 emit `*(long *)addr` 形式：
-  - 全局符号：`*(long *)sym_name`
-  - 合成 DAT 名：`*(long *)DAT_xxxxx`
-  - 表达式地址 `*(a + b)`：`*(long *)(a + b)`
-  - 默认：`*(long *)addr`
+ - 全局符号：`*(long *)sym_name`
+ - 合成 DAT 名：`*(long *)DAT_xxxxx`
+ - 表达式地址 `*(a + b)`：`*(long *)(a + b)`
+ - 默认：`*(long *)addr`
 - 原因：STORE 的地址操作数可能是 long/int scalar（非指针），直接 `*addr` 非法。`*(long *)` cast 让整数转指针再解引用，无论 addr 声明类型如何都合法。
 
 ### 2026-06-23（续）：LOAD/STORE 全路径 cast 合法化
 
 - `op_load()` 和 `op_store()` 的所有地址解引用路径现在统一 emit `*(long *)addr`：
-  - LOAD 默认路径（非指针地址）
-  - STORE RIP-relative 路径（`*(RIP + sym)` → `*(long *)sym`）
-  - STORE 表达式地址（`*(a + b)` → `*(long *)(a + b)`）
-  - STORE 全局符号 / 合成 DAT_ 名
+ - LOAD 默认路径（非指针地址）
+ - STORE RIP-relative 路径（`*(RIP + sym)` → `*(long *)sym`）
+ - STORE 表达式地址（`*(a + b)` → `*(long *)(a + b)`）
+ - STORE 全局符号 / 合成 DAT_ 名
 - 原因：与之前的 `->field` 重写一致，地址操作数可能是 scalar，`*(long *)` cast 保证无论声明类型如何都合法。
 
 ### 2026-06-23（续）：callee-saved/帧寄存器声明
@@ -441,7 +441,7 @@ raw semantics / P-code-like IR
 ### 2026-06-26：emit_block_structured DEAD 块标记为 emitted（single-ownership）
 
 - DEAD 块（被 identify_internal 消费的块）在 emit_block_structured 跳过时现在也标记为
-  emitted，防止 doc_function 的 root/unreachable 循环（行 3116-3134）重复访问。
+ emitted，防止 doc_function 的 root/unreachable 循环（行 3116-3134）重复访问。
 - 这是 single-ownership 原则：消费块只通过其结构化父块 emit，不通过后继遍历重入。
 - 验证：curl 24/24 gcc，httpd 29/29 gcc。175/176 测试（test_switch_case 预存失败不变）。
 
@@ -454,55 +454,55 @@ seen_return 保存/恢复启用后更多 case body 被 emit，触发该 bug 导�
 **修复**：
 - pass19 不再移除大括号（naive 计数不可靠），改为 emit as-is。
 - 重新启用 switch case body emit 的 seen_return 保存/恢复（每个 case 是独立控制流路径，
-  一个 case 的 return 不应抑制其他 case 的 body）。
+ 一个 case 的 return 不应抑制其他 case 的 body）。
 
 **验证**：176/176 测试通过（含 test_switch_case_structuring，输出 case 0 + case 1）。
-curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
+curl 24/24 gcc。httpd 29/29 gcc，0 goto。
 
 ### 2026-06-26（续）：WhileDo body emit 用 emit_block_ops 绕过 DEAD 检查
 
 - WhileDo body 被 identify_internal 消费（DEAD）。emit_block_structured 会跳过 DEAD 块，
-  导致循环体操作不被输出。
+ 导致循环体操作不被输出。
 - 修复：WhileDo emit 时检查 body 是否 DEAD，若 DEAD 则用 emit_block_ops 直接输出操作。
 - 验证：176/176 测试。getparameter TYPES whiledo=1（循环保留）。
 
 ### 2026-06-26（续）：switch case_values 去重（修复 ap_getparents duplicate case）
 
 - 两个 CBRANCH 块比较相同常量时会在同一 switch 产生重复 case。emit switch case 时用
-  emitted_case_values 集合去重，跳过已输出的 case value。
+ emitted_case_values 集合去重，跳过已输出的 case value。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc（恢复！）。
 
 ### 2026-06-26（续）：seen_return 不抑制控制结构块（WhileDo/DoWhile/If/List）
 
 - emit_block_structured 的 seen_return 检查现在跳过控制结构块（WhileDo/DoWhile/If/List），
-  这些块代表可达控制流路径，必须在 RETURN 后仍渲染。
-- 验证：176/176 测试。curl 24/24 gcc（3 个 while 循环）。httpd 29/29 gcc（11 个 while 循环）。
+ 这些块代表可达控制流路径，必须在 RETURN 后仍渲染。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：基本块 emit 后递归结构化后继块
 
 - 非 CBRANCH 基本块 emit 操作后，现在递归 follow out-edges 到结构化块（WhileDo/DoWhile/If/Switch 等）。
-  只递归结构化块（不递归基本块）避免 canary 问题。
+ 只递归结构化块（不递归基本块）避免 canary 问题。
 - 之前后继递归被禁用（canary blocks），导致 WhileDo 等只能通过 unreachable-loop 输出。
-- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while，从 11 增加）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：BlockList emit 后递归结构化后继块
 
 - BlockList emit 完所有 children 后，现在 follow out-edges 到结构化块（WhileDo/If/Switch 等）。
 - 与基本块后继递归对称，确保 BlockList 的后续结构化块被访问。
-- 验证：176/176 测试。curl 24/24 gcc（3 while）。httpd 29/29 gcc（12 while）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：if-empty-check 不抑制结构化块（WhileDo/DoWhile）
 
 - 基本块的 if-branch empty-check（两分支空/单分支空/legacy if-else）在直接 emitted.insert
-  分支索引时，现在只对 Basic/Copy 块插入，不抑制 WhileDo/DoWhile 等结构化块。
+ 分支索引时，现在只对 Basic/Copy 块插入，不抑制 WhileDo/DoWhile 等结构化块。
 - 之前 WhileDo 被直接 insert 到 emitted 集合而不被 emit，导致不可达。
-- 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while，从 19 增加）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：BlockIf body emit 的 emitted.insert 加 Basic-only 守卫
 
 - BlockIf 的 has_case/both-empty/if-body-empty 路径的 emitted.insert 现在只对 Basic/Copy 插入。
 - 避免结构化块（WhileDo）被直接 insert 到 emitted 而不被 emit。
-- 验证：176/176 测试。curl 24/24 gcc（5 while）。httpd 29/29 gcc（20 while）。
+- 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（续）：BlockIf else-body empty 路径 emitted.insert 加 Basic-only 守卫
 
@@ -512,7 +512,7 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 ### 2026-06-26（续）：force-emit WhileDo/DoWhile 块（fresh emitted set）
 
 - 2d 遍历：用 fresh emitted set 强制 emit 所有 WhileDo/DoWhile 块，绕过 stale emitted 条目。
-- 大幅增加循环恢复：curl 15 while（从 5），httpd 40 while（从 20）。
+- 大幅增加循环恢复
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
 
 ### 2026-06-26（varmap 集成）：ScopeLocal 接入 get_stack_variable_name
@@ -566,10 +566,10 @@ curl 24/24 gcc，101 if。httpd 29/29 gcc，108 if，0 goto。
 **修复**：在 emit_inline_expr 的 match 开头添加 CPUI_COPY 分支：
 ```rust
 OpCode::CPUI_COPY => {
-    if !def_op.inrefs.is_empty() {
-        self.push_input(def_op, 0);  // COPY(x) → 内联 x
-        return;
-    }
+ if !def_op.inrefs.is_empty() {
+ self.push_input(def_op, 0); // COPY(x) → 内联 x
+ return;
+ }
 }
 ```
 COPY 是语义上的 no-op 赋值，内联其源始终正确。
