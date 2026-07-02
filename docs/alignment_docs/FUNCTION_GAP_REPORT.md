@@ -240,3 +240,35 @@ RUGRA:  long GetStr(long param_1,long param_2){ long bVar2; long lVar1; int * pi
 2. **reg-leak (195)** — varmap/HighVariable 提升寄存器 varnode (大工程, SSA 层)
 3. **selfxor V^V (17)** — ActionReturnRecovery 移植 (大工程, ParamActive 基础设施)
 4. **struct -> 访问 (−96)** — struct/pointer 类型恢复 (R60/R61, 大工程)
+
+---
+
+## Correction (2026-07-02 21:50): param_N is NOT a naming bug
+
+Verified via Ghidra golden inspection: `param_N` is Ghidra's OWN default
+parameter name (database.cc:2481 `s << "param_" << dec << index`). Ghidra
+golden uses `param_N` 11× (in lib stubs). So `param_N` is a CORRECT Ghidra
+name, not a Rugra-specific placeholder. The 74 occurrences in Rugra's curl
+are not a naming-counter bug — they reflect that Rugra's USER functions fail
+to recover symbolic parameter names (string/value/argc/argv) that Ghidra
+recovers via `ActionNameVars::lookForFuncParamNames` (coreaction.cc:2858,
+propagating callee param names up the call graph) + name recommendations
+from the binary's symbol table. **Zero Ghidra user functions use param_N** —
+they all have real names. So param_N reduction requires call-graph/signature
+recovery (R8/R77), NOT a rename fix. Removed from the naming-fix scope.
+
+## Phase 2 summary (naming alignment, 2026-07-02)
+
+Two defect classes eliminated via faithful Ghidra alignment:
+1. **per-prefix numbering** (181538f bug) → shared `int4 base` (commit 084e9aa)
+2. **StackX_ placeholders** (102 occurrences) → iVar/lVar/bVar shared-base names (commit 81d7b9e)
+
+Both commits passed 铁律 10 Alignment Evidence (4/4 decisive-semantics) and the
+differential-test gate (961/961 lib tests, output still compiles, 0 undeclared).
+
+**func_gap_audit EXACT remains 0/24** because each function still has multiple
+non-naming differences (reg-leak 195, selfxor V^V 17, struct access −96, missing
+calls, param-N symbolic-name recovery). These are deeper infrastructure gaps
+(varmap/HighVariable register promotion, ActionReturnRecovery, struct type
+recovery, call-graph signature propagation) that cannot be closed by printc
+naming changes alone. The naming layer is now faithful to Ghidra's model.
