@@ -252,8 +252,21 @@ impl PrintC {
                         .map(|b| b.get_output()).unwrap_or_default()
                 };
                 let t = text.trim();
+                // Same malformed-condition guard as emit_block_condition: detect
+                // cast-concat and variable-name-concat (BOOL_OR/AND operator dropped
+                // during emit_condition's nested emit-swap). Fall back to `1`.
+                let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
+                    + t.matches("(char)").count() + t.matches("(bool)").count()
+                    + t.matches("(short)").count();
+                let has_bool_op = t.contains(" || ") || t.contains(" && ") || t.contains(" == ")
+                    || t.contains(" != ") || t.contains(" < ") || t.contains(" > ")
+                    || t.contains(" <= ") || t.contains(" >= ");
+                let has_concat_cast = cast_count >= 2 && !has_bool_op;
+                let has_concat_varname = Self::regex_concat_varname(t);
                 let looks_valid = !t.is_empty()
-                    && t.chars().any(|c| c.is_alphanumeric() || c == '_');
+                    && t.chars().any(|c| c.is_alphanumeric() || c == '_')
+                    && !has_concat_cast
+                    && !has_concat_varname;
                 if looks_valid {
                     self.emit.print(&text);
                 } else {
@@ -2524,25 +2537,30 @@ impl PrintC {
         // (Audit: R50.)
         let produced = self.capture_block_condition(block_arc);
         let t = produced.trim();
-        // Detect malformed conditions: concatenated casts like `(long)bVar1(long)bVar12`
-        // (BOOL_OR/BOOL_AND whose operator was dropped during the nested capture/emit
-        // swap in emit_condition's BOOL_OR path). The signature is two `(type)`
-        // casts with no operator between them: `<cast>ident<cast>` or `<cast>(<cast>`.
-        // Emitting these verbatim is a gcc syntax error ("expected expression before
-        // 'long'"). Fall back to `1` (always-true) — valid C, matches the existing
-        // malformed-condition policy (R50). The underlying operator-drop is a
-        // separate emit-path bug; this guard keeps the output compilable.
+        // Detect malformed conditions where BOOL_OR/BOOL_AND's operator was
+        // dropped during the nested capture/emit swap in emit_condition's
+        // BOOL_OR path. Two failure modes observed:
+        //   1. Concatenated casts: `(long)bVar1(long)bVar12` (≥2 casts, no op).
+        //   2. Concatenated variable names: `bVar1bVar12` (two Var names merged
+        //      into one undeclared token, no cast, no op).
+        // Both are gcc errors. Fall back to `1` (always-true) — valid C, matches
+        // the existing malformed-condition policy (R50). The underlying
+        // operator-drop (nested emit-swap bug) is tracked separately.
         let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
             + t.matches("(char)").count() + t.matches("(bool)").count()
             + t.matches("(short)").count();
-        // Two casts with no boolean/comparison operator between them => malformed.
         let has_bool_op = t.contains(" || ") || t.contains(" && ") || t.contains(" == ")
             || t.contains(" != ") || t.contains(" < ") || t.contains(" > ")
             || t.contains(" <= ") || t.contains(" >= ");
         let has_concat_cast = cast_count >= 2 && !has_bool_op;
+        // Variable-name concatenation: a token like `bVar1bVar12` (one
+        // identifier containing two Var-prefix+number runs). Detected by
+        // regex: an identifier with two `Var<digits>` segments.
+        let has_concat_varname = Self::regex_concat_varname(t);
         let looks_valid = !t.is_empty()
             && t.chars().any(|c| c.is_alphanumeric() || c == '_')
-            && !has_concat_cast;
+            && !has_concat_cast
+            && !has_concat_varname;
         if looks_valid {
             self.emit.print(&produced);
         } else {
@@ -2626,6 +2644,47 @@ impl PrintC {
             let lhs = t[..idx].trim();
             let rhs = t[idx + 3..].trim();
             return !lhs.is_empty() && lhs == rhs;
+        }
+        false
+    }
+
+    /// Detect a concatenated variable name like `bVar1bVar12` — a single
+    /// identifier token containing two `Var<digits>` runs. This is the
+    /// signature of a BOOL_OR/BOOL_AND whose operator was dropped during
+    /// the nested capture/emit swap (same root cause as cast-concat), with
+    /// non-cast operands. Such a token is undeclared => gcc error. Used by
+    /// emit_block_condition's malformed-condition guard.
+    // RUGRA-GLUE: print-time textual predicate (no Ghidra counterpart;
+    // Ghidra never produces operator-less binary conditions).
+    fn regex_concat_varname(text: &str) -> bool {
+        // Scan tokens (maximal [A-Za-z_][A-Za-z0-9_] runs) and check if any
+        // single token contains two Var-prefix+number segments, e.g. bVar1bVar12.
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                let tok = &text[start..i];
+                // Count occurrences of "Var" followed by digits within the token.
+                let mut var_runs = 0;
+                let mut j = 0;
+                let tb = tok.as_bytes();
+                while j + 3 <= tb.len() {
+                    if &tb[j..j+3] == b"Var" {
+                        let mut k = j + 3;
+                        let digit_start = k;
+                        while k < tb.len() && tb[k].is_ascii_digit() { k += 1; }
+                        if k > digit_start { var_runs += 1; j = k; continue; }
+                    }
+                    j += 1;
+                }
+                if var_runs >= 2 { return true; }
+            } else {
+                i += 1;
+            }
         }
         false
     }

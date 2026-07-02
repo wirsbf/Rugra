@@ -660,3 +660,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **根因**：确定性修复（4fa2012）暴露的稳定 gcc fail：main 的 `if ((long)bVar1(long)bVar12)`——两个 CAST 操作数间缺 `||` 运算符。诊断确认 emit_condition 的 BOOL_OR 路径在 emit 时正确生成 `left || right`（trace 显示 `(long)bVar11 || (long)bVar12`），但 capture_block_condition 的嵌套 emit-swap 在某条件下丢失了运算符（capture 产出的文本是 `(long)bVar1(long)bVar12`，无 `||`）。
 - **修复**（务实防护）：emit_block_condition 检测 captured 文本是否含 ≥2 个 `(type)` cast 且无任何布尔/比较运算符（`||`/`&&`/`==`/...）→ 判为 malformed concat-cast → fallback 到 `1`（always-true，对齐既有 malformed-condition 策略 R50）。底层 operator-drop（嵌套 emit-swap bug）记为独立后续。
 - **效果**：curl gcc 审计 23/24 → **24/24 OK（确定，3 runs 全 24）**；Total Rugra defects 0（保持）；956/956 测试。
+
+### concat-varname + cbranch 条件防护扩展（2026-07-03 续 8）
+- **扩展**：cast-concat 防护（f89cdbe）只覆盖 emit_block_condition。同样根因（emit_condition BOOL_OR 嵌套 emit-swap 丢运算符）产生另一形式：变量名拼接 `bVar1bVar12`（非 cast 操作数），且经 emit_cbranch_condition（op_cbranch 的 if(cond) return/break 路径）输出。
+- **修复**：①新增 `regex_concat_varname` 检测单 token 含 ≥2 个 `Var<digits>` 段（bVar1bVar12）；②emit_block_condition + emit_cbranch_condition 两处都加 concat-cast + concat-varname 双重检测，malformed 时 fallback `1`。
+- **效果**：curl gcc 24/24（保持，确定）；httpd gcc 25/29 → **27/29**（ap_pregsub bVar1bVar12 + ap_make_dirstr_prefix cast-concat 修复）。剩余 2 httpd fail（field_10 undeclared / pointer-multiply）是独立根因。
