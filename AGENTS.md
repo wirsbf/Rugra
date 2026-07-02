@@ -162,23 +162,29 @@ Rugra: <file>:<line> <对应函数>
 - `src/blockaction.rs`、`src/coreaction.rs`（控制流结构化、Actions 影响输出）
 - `src/ruleaction.rs`（Rules 影响 IR 形态）
 
-**门禁流程**：
+**度量**（`tools/compare_ghidra.py`，2026-07-02 重写，替代旧 if/while 计数）：
+
+工具做两类对比，**都不是纯计数**（计数是错误度量，已废弃）：
+
+1. **归一化结构骨架 diff**（`--mode skeleton`）：变量名→V、字面量→LIT 后，比较控制流骨架。屏蔽命名差异（Rugra `StackX_N` 与 Ghidra 类型化变量是两套坐标系，不重叠），露出真实缺陷：空 `else{}`、丢失的函数调用、寄存器泄漏、结构差异。
+2. **编号连续性检查**（`--mode numbering`）：不比较跨坐标系（不要求 `iVar1==iVar1`），只验证"同前缀内编号单调不倒退 + 无大跳号"不变量。直接检测 181538f 类 bug（per-prefix 计数 + push 顺序 → `bVar1→bVar10→bVar2`）。
 
 ```bash
-# 1. 维护黄金输出集: tests/golden/ghidra/<bin>_<func>.c
-#    (从真实 Ghidra 跑出来, 人工核定正确, 入库)
+# 门禁流程
+# 1. 黄金输出集: tests/golden/ghidra_<bin>.c (从真实 Ghidra 跑出, 入库)
 # 2. 改动后跑差分
-python tools/diff_against_ghidra.py \
-  --bin tests/fixtures/mini.c \
-  --func '*' \
-  --mode varnames   # 或 controlflow / full
+python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --summary-only
+python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --func <改动函数> -v
 ```
 
 **判定**：
-- **0 diff**：完全对齐，可提交。
-- **有 diff**：commit message 必须含 `## Differential` 块，逐处解释每个 diff 的性质（对齐缺陷 / Ghidra 本身可接受的差异 / 待修）。**未解释的 diff = 不可提交。**
+- **defects=0 + numbering=0**：该函数无真实缺陷，可提交。
+- **defects>0 或 numbering>0**：commit message 必须含 `## Differential` 块，逐处解释每个缺陷的性质（对齐缺陷 / 已知限制 / 待修）。**未解释的缺陷 = 不可提交。**
+- **skeleton diff>0**：不一定是对齐缺陷（for↔while 等价变换），但需在 `## Differential` 块说明。
 
-**为什么这条必要**：`181538f` 的 `test_compact_name_for` 单元测试验证的是"我的 per-prefix 逻辑自洽"，验证不了"和 Ghidra 的单一 base 共享计数一致"。只有逐位 diff Ghidra 输出才能抓到编号顺序错位。自洽性测试是必要非充分条件。
+**为什么不用旧 if/while 计数**：计数是极度有损投影。计数相同 ≠ 结构对齐（for↔while），计数不同 ≠ 不对齐（等价变换）。实测 curl 17/24 函数有空 else/寄存器泄漏/调用丢失，旧计数全报 0——制造虚假对齐感。编号连续性检查能抓到 181538f 单元测试抓不到的编号顺序错位。
+
+**变量名逐位 diff 的启用条件**：需等 181538f（assignDefaultNames 编号模型）修复、Rugra 命名对齐到 Ghidra 的 `iVar/lVar/单一共享 base` 体系后，才能在 `compare_ghidra.py` 增加 `--mode varnames-exact` 模式。当前阶段用编号连续性检查替代（间接验证编号不变量）。
 
 ### 12. 🔴 强制独立复核（Cross-Review）— 核心算法必走双 Agent
 
