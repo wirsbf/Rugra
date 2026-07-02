@@ -606,7 +606,7 @@ impl PrintC {
                     let if_body_empty = self.is_block_body_empty(&if_data.if_body);
                     let else_body_empty = if_data.else_body.as_ref()
                         .map_or(true, |eb| self.is_block_body_empty(eb));
-                    
+
                     if if_body_empty && else_body_empty {
                         // Both bodies empty — skip entire if/else, just emit condition block's ops
                         let ibt = if_data.if_body.read().unwrap().get_type();

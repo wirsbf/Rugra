@@ -95,6 +95,10 @@ raw semantics / P-code-like IR
 - **修复**：`is_raw_register_name` 先剥掉尾部 `_<digits>` SSA 消歧后缀（`rsplit_once('_')` + 全数字尾校验），再查寄存器名集合。`RAX_7`→`RAX`、`RAX_71`→`RAX`、`R8B`/`uVar12` 不受影响。剥后缀后路由到既有的 raw-register → `<prefix>_<offset>:hex` → `compact_name_for` 重编号链，与无后缀的 `RAX` 走同一条路径（对齐 Ghidra `buildVariableName` 局部分支 database.cc:2501-2504 + `assignDefaultNames` database.cc:2862 的单一共享 base）。
 - **效果**：curl 寄存器名泄漏 177→0；defect 函数 17/24→7/24（剩余 7 个全是 empty-else body-collapse，独立根因）。
 
+### 诊断桩清理（2026-07-03 续）
+- 移除 body-collapse 诊断期间临时加入的 `[DBG-DISPATCH]`/`[DBG-BASICIF]`/`[DBG-IFEMPTY]`/`[DBG-EMITOP]` eprintln 桩（违反临时 TAG 铁律）。诊断证据已落入 coreaction.md 的 ActionDeadCode CALL 保护条目（body-collapse 真正根因是 DCE 杀 CALL，非 printc）。
+
+
 
 ---
 

@@ -320,6 +320,13 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionDeadCode**：实现 `push_consumed`（consumed 位掩码 OR + worklist 管理）和 `propagate_consumed`（向后传播 consumed 位到定义 op 的输入，处理 INT_MULT/INT_ADD/INT_SUB/SUBPIECE/default 情况）。apply() 保留简化版（检查无后继输出），完整版待 VarnodeLocSet 迭代。
 - 13 个 coreaction Actions 现在有真实算法逻辑（4 完整 + 9 框架级，3 个有实际辅助函数）。
 
+## 2026-07-03：ActionDeadCode CALL 保护（对齐 coreaction.cc:4038-4044）
+
+- **根因**：Step 4（移除 consume==0 的输出 op）对所有 op 一律 `mark_dead`。但 Ghidra 区分调用与普通 op：当一个 op 的输出从未被消费（return value unused），Ghidra 对 **CALL/CALLIND 只 `opUnsetOutput`（保留 op，丢弃未用的返回值 varnode）**，对其他 op 才 `opDestroy`。Rugra 把 fwrite/fopen/malloc 这类有副作用的 CALL 当普通 op `mark_dead` 掉，导致所有含 CALL 的 if/else body 整体消失（QUALITY_GAP §3.2 body-collapse）。
+- **修复**：Step 4 分两路——CALL/CALLIND 进 `calls_to_unset` → `fd.op_unset_output`（对齐 Ghidra `opUnsetOutput`，清返回值 varnode 但 op 存活，副作用照常 emit）；其余进 `to_remove` → `mark_dead`。
+- **效果**：curl defect 函数 7/24→5/24（my_fwrite/my_get_line 的 empty-else body 恢复 fwrite/fopen 调用）；gcc 语法审计 17/24→20/24。剩余 defect 是独立的 empty-else（非 CALL 引起）。
+
+
 ## 2026-06-27（续 11）：ActionNameVars 算法逻辑
 
 - **ActionNameVars**：完整算法文档——linkSymbols（equate/spacebase 符号链接）+ lookForFuncParamNames（被调函数参数名传播）+ buildDefaultName（默认名生成）+ assignDefaultNames。待 VarnodeLocSet + HighVariable + Scope + FuncCallSpecs 集成。

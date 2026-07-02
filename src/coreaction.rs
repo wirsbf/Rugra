@@ -245,19 +245,41 @@ impl Action for ActionDeadCode {
         }
 
         // Step 4: Remove dead ops (output consume == 0 and not input).
+        // Ghidra: coreaction.cc:4038-4044 — when an op's output is never
+        // consumed (!vacflag), Ghidra distinguishes calls from other ops:
+        //   if (op->isCall()) data.opUnsetOutput(op);  // keep the CALL (side effects!), drop only the unused return value
+        //   else               data.opDestroy(op);      // completely remove the op
+        // A CALL has side effects (it writes memory / does I/O), so it must
+        // NEVER be removed just because its return value is unused. Previously
+        // Rugra mark_dead'd calls with dead outputs, which killed fwrite/fopen/
+        // malloc/etc. wholesale and collapsed every if/else body containing a
+        // call — the §3.2 body-collapse root cause.
         let mut to_remove = Vec::new();
+        let mut calls_to_unset = Vec::new();
         for op_ref in &fd.obank.alivelist {
             let op_rg = op_ref.0.read().unwrap();
             if let Some(out) = &op_rg.output {
                 let out_rg = out.read().unwrap();
                 if out_rg.get_consume() == 0 && !out_rg.is_input() {
-                    to_remove.push(op_ref.clone());
+                    if matches!(op_rg.opcode, crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND) {
+                        // Faithful to Ghidra: keep the call, drop only its dead output.
+                        calls_to_unset.push(op_ref.clone());
+                    } else {
+                        to_remove.push(op_ref.clone());
+                    }
                 }
             }
         }
 
         for op_ref in to_remove {
             fd.obank.mark_dead(op_ref);
+            changed += 1;
+        }
+        // Calls: unset output (clears the unused return-value varnode) but the
+        // op stays alive so its side effects still emit. opUnsetOutput also
+        // detaches the varnode's def back-edge (funcdata.cc opUnsetOutput).
+        for op_ref in calls_to_unset {
+            fd.op_unset_output(&op_ref);
             changed += 1;
         }
 
