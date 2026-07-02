@@ -96,7 +96,12 @@ raw semantics / P-code-like IR
 - **效果**：curl 寄存器名泄漏 177→0；defect 函数 17/24→7/24（剩余 7 个全是 empty-else body-collapse，独立根因）。
 
 ### 诊断桩清理（2026-07-03 续）
-- 移除 body-collapse 诊断期间临时加入的 `[DBG-DISPATCH]`/`[DBG-BASICIF]`/`[DBG-IFEMPTY]`/`[DBG-EMITOP]` eprintln 桩（违反临时 TAG 铁律）。诊断证据已落入 coreaction.md 的 ActionDeadCode CALL 保护条目（body-collapse 真正根因是 DCE 杀 CALL，非 printc）。
+- 移除 body-collapse 诊断期间临时加入的 `[DBG-DISPATCH]`/`[DBG-BASICIF]`/`[DBG-IFEMPTY]`/`[DBG-EMITOP]` eprintln 桩（违反临时 TAG 铁律）。诊断证据已落入 coreaction.md 的 ActionDeadCode CALL 保护条目（body-collapse 真根因之一是 DCE 杀 CALL，非 printc）。
+
+### is_block_body_empty 对齐 emit_block_ops 跳过逻辑（2026-07-03 续 2）
+- **根因**：`is_block_body_empty` 与 `emit_block_ops` 的 op-跳过逻辑不一致。前者对"末尾 op 是 CBRANCH/BRANCH/RETURN/CALL"的块一律判为非空（提前 return false），但末尾分支是控制流转移，不是 body 语句——Ghidra 在 `emitBlockIf`（printc.cc:2895）用 `setMod(no_branch)` 抑制它。结果：只含 dead 计算 op + 末尾 CBRANCH 的块被判为"非空"，但 `emit_block_ops` 实际什么也不输出 → 产生 `if (cond) {} else {}` 空括号（Ghidra 永不产生此形式）。同时 is_block_body_empty 未检查 `is_implied()` 输出（emit_block_ops:334-338 跳过这些），进一步放大分歧。
+- **修复**：删除"末尾分支 → 非空"的提前 return；改为逐 op 扫描，精确镜像 `emit_block_ops` 的跳过集——CBRANCH/BRANCH/BRANCHIND/COPY/MULTIEQUAL/INDIRECT（emit_block_ops:315-323）、`is_implied()` 输出（emit_block_ops:334-338）、RIP-relative、stack-setup、inlined_ops、dead-output 纯计算 op。CALL/CALLIND 不在跳过集里，所以真正含 call 的 body 仍正确判为非空。
+- **效果**：curl defect 12（5/24 函数）→ 0（0/24 函数）；curl+httpd 空 else{} 均为 0；main defect 7→0、glob_word 2→0、getparameter/next_url/match_url 各 1→0。剩余 numbering/expression 问题是独立根因。
 
 
 

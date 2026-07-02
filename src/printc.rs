@@ -396,26 +396,36 @@ impl PrintC {
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
 
-        // A block ending in CBRANCH/BRANCH/RETURN/CALL is NOT empty — it has
-        // control flow that must be emitted. Without this, the block's
-        // branch logic (and everything after it) gets silently dropped.
-        if let Some(last_op_ref) = ops.last() {
-            let last_op = last_op_ref.0.read().unwrap();
-            if matches!(last_op.opcode,
-                OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND
-                | OpCode::CPUI_RETURN | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND)
-            {
-                return false;
-            }
-        }
+        // Faithful to Ghidra's model: a block's BODY is its non-terminal ops.
+        // The terminal CBRANCH/BRANCH/RETURN is the control-flow transfer that
+        // the structurer consumes (printc.cc:2895 setMod(no_branch) suppresses
+        // it when emitting a condition block) — it is NOT a body statement.
+        // Previously this method returned false (non-empty) whenever the LAST
+        // op was CBRANCH/BRANCH/RETURN/CALL, which mis-classified blocks whose
+        // only live op was the terminal branch (all real body ops dead) as
+        // non-empty. That made emit_structured_basic emit `if (cond) {} else {}`
+        // with genuinely-empty braces — a form Ghidra's emitBlockIf never
+        // produces (printc.cc:2878 always emits the block's actual content).
+        // Now we fall through to the per-op scan, which mirrors emit_block_ops:
+        // it skips branches/dead/pure-computation ops and reports empty only
+        // when nothing emittable remains. CALL/CALLIND with live side effects
+        // are still caught below (they are not in the skip set), so a block
+        // whose body is a real call is correctly non-empty.
 
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
-            // Skip branches, COPY, phi-nodes, and dead ops — same logic as emit_block_ops
+            // Skip branches, COPY, phi-nodes — same skip set as emit_block_ops
+            // (emit_block_ops:315-323 skips CBRANCH/BRANCH/BRANCHIND/COPY/MULTIEQUAL/INDIRECT).
             match op.opcode {
                 OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND
                 | OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT => continue,
                 _ => {}
+            }
+            // Skip ops whose output is implied — emit_block_ops:334-338 skips
+            // these (the def expression is inlined at the read site, so the op
+            // is not emitted as a standalone statement).
+            if let Some(ref out_arc) = op.output {
+                if out_arc.read().unwrap().is_implied() { continue; }
             }
             // Skip RIP-relative
             if self.get_rip_relative_operand(&op).is_some() { continue; }
