@@ -2539,6 +2539,48 @@ impl PrintC {
             .map(|b| b.get_output()).unwrap_or_default()
     }
 
+    /// Render an op's inline expression (RHS, no `out =`) to a String by
+    /// swapping in a capture emit buffer. Used by op_return's RAX-writer
+    /// reconstruction to inspect the inlined return-value text.
+    // RUGRA-GLUE: Rust-side capture helper (capture-emit-swap pattern).
+    fn capture_inline_expr_text(&mut self, op: &PcodeOp) -> String {
+        // Save the emit buffer AND inline-state that emit_inline_expr mutates
+        // (inline_depth, inlined_ops), so this dry-run capture has no visible
+        // side effects on the main emission pass. Without restoring these, a
+        // capture here would leave inlined_ops populated / inline_depth bumped
+        // and corrupt subsequent varnode rendering (observed: bVarbVar2 name
+        // concatenation in next_url).
+        let orig_emit = std::mem::replace(&mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let saved_depth = self.inline_depth;
+        let saved_inlined_ops = self.inlined_ops.clone();
+        let saved_lhs = self.is_lhs;
+        self.is_lhs = false;
+        self.emit_inline_expr(op);
+        let buf = std::mem::replace(&mut self.emit, orig_emit);
+        self.inline_depth = saved_depth;
+        self.inlined_ops = saved_inlined_ops;
+        self.is_lhs = saved_lhs;
+        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output()).unwrap_or_default()
+    }
+
+    /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
+    /// Used to fold the canonical `xor eax,eax; ret` zero-return idiom to 0
+    // RUGRA-GLUE: print-time textual predicate (no direct Ghidra counterpart;
+    // Ghidra folds INT_XOR(x,x)->0 at the RuleTrivialArith op layer). Exists
+    // because Rugra's late/dead self-XORs escape op-layer folding and reach
+    // print, where text-level detection is the practical equivalent.
+    fn is_textual_self_xor(text: &str) -> bool {
+        let t = text.trim();
+        if let Some(idx) = t.find(" ^ ") {
+            let lhs = t[..idx].trim();
+            let rhs = t[idx + 3..].trim();
+            return !lhs.is_empty() && lhs == rhs;
+        }
+        false
+    }
+
     fn emit_block_condition_inner(
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -4353,10 +4395,25 @@ impl PrintLanguage for PrintC {
                                 && out_vn.get_size() >= 4
                             {
                                 drop(out_vn);
-                                drop(o);
-                                self.emit.print(" ");
+                                // `xor eax,eax; ret` is the canonical zero-return
+                                // idiom. The comment above promises to reconstruct
+                                // it as `return 0`. Ghidra's RuleTrivialArith folds
+                                // INT_XOR(x,x)->COPY(0) before print, but Rugra's
+                                // XOR may be dead by cleanup-pool time while its
+                                // expression still inlines here (via COPY chains /
+                                // copy-prop). Capture the inlined return-value text;
+                                // if it is a self-XOR `X ^ X` (syntactically), emit
+                                // 0 — matching Ghidra's fold and avoiding the
+                                // illegal-on-pointers `piVar ^ piVar` gcc error.
                                 let o2 = op_ref.0.read().unwrap();
-                                self.emit_inline_expr(&o2);
+                                let inline_text = self.capture_inline_expr_text(&o2);
+                                drop(o2);
+                                self.emit.print(" ");
+                                if Self::is_textual_self_xor(&inline_text) {
+                                    self.emit.print("0");
+                                } else {
+                                    self.emit.print(&inline_text);
+                                }
                                 return;
                             }
                         }

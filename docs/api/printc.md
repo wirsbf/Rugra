@@ -640,3 +640,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **根因**：`op_store` 的 `base + const_offset` 路径直接 `push_varnode(base)` 后追加 `->field_XX`。当 `base` 经 copy-prop 解析为复合表达式（如 `piVar13 + lVar11 * *(long *)(...)`），输出 `piVar13 + lVar11 * ...->field_50` 既是语法错误又非左值；gcc 报 `lvalue required as left operand of assignment`。对照 Ghidra `opStore`（printc.cc:500-518）：STORE 地址**永远**在一元解引用 `*` 下输出，保证 LHS 是合法左值。
 - **修复**：新增 `capture_varnode_text` 把 base varnode 渲染到临时缓冲；若 base 是裸标识符（全字母数字+下划线），用 `base->field_XX`；否则用 `*(long *)(<复合表达式> + 0xNN)`（整体解引用，左值合法）。
 - **效果**：curl gcc 审计 21/24→22/24 OK（glob_set 的 lvalue 错误消除）。
+
+### op_return self-XOR 折叠（2026-07-03 续 4）
+- **根因**：myprogress 的 `return piVar5 ^ piVar5;`（gcc: invalid operands to binary ^）。RETURN 无显式 in(1) 时，op_return 向上扫描同 block 的 RAX/EAX 写入者，`emit_inline_expr` 渲染其表达式。`xor eax,eax; ret`（标准 zero-return 惯用法）的 RAX 写入者是 COPY(xor_result)，xor_result=INT_XOR(x,x)。该 INT_XOR 在 cleanup-pool 时已 dead（def=None），RuleTrivialArith 无法折叠，emit_inline_expr 经 copy-prop 渲染出 `piVar5 ^ piVar5`（指针自异或，非法 C）。
+- **修复**：op_return RAX 写入者路径改为 capture_inline_expr_text 捕获渲染文本，is_textual_self_xor 检测 `X ^ X` 形式 → 输出 `0`（对齐 Ghidra RuleTrivialArith INT_XOR(x,x)->0，ruleaction.cc:2413；也匹配 op_return 注释承诺的 "xor eax,eax; ret → return 0"）。capture_inline_expr_text 保存/恢复 emit + inline_depth + inlined_ops + is_lhs，避免 dry-run 污染主流。
+- **效果**：myprogress `return piVar5 ^ piVar5` → `return 0`，gcc 审计 myprogress 通过。
