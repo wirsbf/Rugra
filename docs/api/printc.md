@@ -5,6 +5,7 @@
 ## 文档状态
 
 - **状态**: 🔧 **L2→L3 迁移中（2026-07-02）**——printc 当前依赖 `emitted: HashSet<usize>`（key=Arc 指针身份）做去重，是 CFT 树遍历尚未完成的临时补丁。正在按 `beginBlock/endBlock` 对齐计划迁移到 Ghidra 的 `emitBlockGraph` 树遍历（block.cc:960 identifyInternal 物理移除子块 + printc.cc:2746 单次遍历），届时 emitted HashSet 全家桶（emitted/dry_emitted/discovery_emitted/fresh_emitted）将删除。doc_all_proto 已实现，PrintC 覆盖全部 Ghidra emitBlock* 方法。5 单元测试。
+- **2026-07-02 修复（R50+R51）**: `op_multiequal`/`op_indirect` 改为 no-op（对齐 Ghidra printc.hh:331,332 `{}`，消除非 C 的 `phi(...)`/`(indirect)` 语句）；`op_cbranch`/`emit_block_condition` 增加条件输出捕获——当 `emit_condition` 产出无效条件（空串、` == `、`!()` 等缺操作数的垃圾）时回退为 `1`（always-true），消除 `if () goto ;`/`if () {`/`if (!())` 语法错误。curl 的 6 处语法错误全部清零。
 - **可信度**: 高
 - **对应源码**: 当前 `rugra/src/printc.rs`
 - **文档目标**: 说明 `PrintC` 在当前 Rugra 架构中的职责、输入依赖与输出边界

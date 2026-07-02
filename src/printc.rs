@@ -211,6 +211,44 @@ impl PrintC {
         self.emit
     }
 
+    /// Emit the boolean condition of a CBRANCH (its in(1)). When in(1) is
+    /// absent, emit `1` (always-true) instead of leaving the parentheses empty.
+    /// Rationale: Ghidra's `opCbranch` (printc.cc) always pushes `getIn(1)` —
+    /// it never drops the condition. Rugra's structurer can build a BlockIf
+    /// around a CBRANCH whose in(1) was consumed upstream, leaving the op with
+    /// no condition. Previously this produced `if () goto ;` (syntax error);
+    /// emitting `1` gives valid, if conservative, C. (Audit: BATCH1 R50.)
+    fn emit_cbranch_condition(&mut self, op: &PcodeOp) {
+        match op.get_in(1) {
+            Some(in1) => {
+                // in(1) is present, but emit_condition may still produce
+                // garbage (e.g. ` == `, `!()`, or empty) when its def-map
+                // strategies fail to resolve the comparison operands. Capture
+                // the output and fall back to `1` (always-true) if it contains
+                // no identifier/digit — that's a syntactically invalid
+                // condition and would yield `if () goto ;` or `if ( == )`.
+                // (Audit: BATCH1 R50.)
+                let orig_emit = std::mem::replace(&mut self.emit,
+                    Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                self.emit_condition(&in1);
+                let text = {
+                    let buf = std::mem::replace(&mut self.emit, orig_emit);
+                    buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+                        .map(|b| b.get_output()).unwrap_or_default()
+                };
+                let t = text.trim();
+                let looks_valid = !t.is_empty()
+                    && t.chars().any(|c| c.is_alphanumeric() || c == '_');
+                if looks_valid {
+                    self.emit.print(&text);
+                } else {
+                    self.emit.print("1");
+                }
+            }
+            None => self.emit.print("1"),
+        }
+    }
+
     /// Emit a single block's operations, with dead code elimination.
     ///
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
@@ -221,6 +259,10 @@ impl PrintC {
 
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
+        // [DIAG] track statement emission for loop bodies
+        let _diag_in_loop = self.loop_depth > 0;
+        let _diag_n_ops = ops.len();
+        let mut _diag_emitted = 0i32;
 
         // Clear block-local register defs — each block starts fresh
         self.block_local_reg_defs.clear();
@@ -342,6 +384,28 @@ impl PrintC {
             }
 
             self.doc_statement(&op);
+            _diag_emitted += 1;
+            #[allow(unreachable_code)] {
+                let _ = _diag_in_loop;
+            }
+        }
+        if _diag_in_loop && _diag_emitted == 0 && _diag_n_ops > 1 {
+            // Dump why each op was skipped: re-read and classify.
+            let block2 = block_arc.read().unwrap();
+            let ops2 = block2.get_ops();
+            let mut reasons: Vec<String> = Vec::new();
+            for ore in &ops2 {
+                let o = ore.0.read().unwrap();
+                let r = if self.seen_return { "seen_return".into() }
+                    else if o.is_dead() { "dead".into() }
+                    else if o.opcode == OpCode::CPUI_COPY { "COPY".into() }
+                    else if self.inlined_ops.contains(&o.get_seq_num()) { "inlined_ops".into() }
+                    else if o.output.as_ref().map_or(false, |a| a.read().unwrap().is_implied()) { "implied_out".into() }
+                    else { format!("other:{:?}", o.opcode) };
+                reasons.push(r);
+            }
+            eprintln!("[DIAG-EMPTYLOOP] 0 stmts from {} ops (skip_terminal={}) reasons={:?}",
+                _diag_n_ops, skip_terminal, reasons);
         }
     }
 
@@ -642,14 +706,23 @@ impl PrintC {
                             self.emit.print(")");
                         }
 
-                        // Emit true body
+                        // Emit true body.
+                        // seen_return must be scoped to this branch: a RETURN
+                        // in a sibling/preceding path must NOT suppress the
+                        // then-body. Mirrors the else-body save/restore below.
                         self.emit.begin_block();
                         let if_body_type = if_data.if_body.read().unwrap().get_type();
                         if matches!(if_body_type, BlockType::Basic) {
                             emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
+                            let saved = self.seen_return;
+                            self.seen_return = false;
                             self.emit_block_ops(&if_data.if_body, true);
+                            self.seen_return = saved;
                         } else {
+                            let saved = self.seen_return;
+                            self.seen_return = false;
                             self.emit_block_structured(&if_data.if_body, graph, emitted);
+                            self.seen_return = saved;
                         }
                         self.emit.end_block();
 
@@ -722,13 +795,19 @@ impl PrintC {
 
                     self.emit.begin_block();
                     self.loop_depth += 1;
+                    // A loop body is an independent control-flow path: a RETURN
+                    // seen before the loop (or in a sibling branch) must NOT
+                    // suppress the loop body. Scope seen_return to the body.
                     let body_is_dead = while_data.body.read().unwrap().get_flags()
                         & crate::block::block_flags::DEAD != 0;
+                    let saved = self.seen_return;
+                    self.seen_return = false;
                     if body_is_dead {
                         self.emit_block_ops(&while_data.body, true);
                     } else {
                         self.emit_block_structured(&while_data.body, graph, emitted);
                     }
+                    self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
                 } else {
@@ -756,7 +835,12 @@ impl PrintC {
                     // because the ops are currently interleaved!
                     // Wait, Ghidra's BlockDoWhile usually has a separate condition block. But for now, we just emit its ops.
                     self.loop_depth += 1;
+                    // Scope seen_return: a do-while body is re-entered each
+                    // iteration; a prior RETURN must not suppress it.
+                    let saved = self.seen_return;
+                    self.seen_return = false;
                     self.emit_block_ops(block_arc, true);
+                    self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
                     
@@ -2317,6 +2401,44 @@ impl PrintC {
     ) {
         use crate::block::{BlockType, BlockCondition, BoolOp};
 
+        // Capture the condition text into a temporary buffer so we can detect
+        // when no/invalid condition was produced (e.g. a CBRANCH whose in(1)
+        // is gone, an empty block, or a failed def-map resolution yielding
+        // garbage like ` == `). In that case emit `1` (always-true) rather
+        // than leaving `if ()` empty or malformed — both are syntax errors.
+        // (Audit: R50.)
+        let produced = self.capture_block_condition(block_arc);
+        let t = produced.trim();
+        let looks_valid = !t.is_empty()
+            && t.chars().any(|c| c.is_alphanumeric() || c == '_');
+        if looks_valid {
+            self.emit.print(&produced);
+        } else {
+            self.emit.print("1");
+        }
+    }
+
+    /// Inner condition-emitter that writes to a throwaway buffer. Used by
+    /// `emit_block_condition` to detect empty output.
+    fn capture_block_condition(
+        &mut self,
+        block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> String {
+        // Swap in a capture buffer
+        let orig_emit = std::mem::replace(&mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        self.emit_block_condition_inner(block_arc);
+        let buf = std::mem::replace(&mut self.emit, orig_emit);
+        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output()).unwrap_or_default()
+    }
+
+    fn emit_block_condition_inner(
+        &mut self,
+        block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        use crate::block::{BlockType, BlockCondition, BoolOp};
+
         let block_type = block_arc.read().unwrap().get_type();
 
         if block_type == BlockType::Condition {
@@ -2336,14 +2458,14 @@ impl PrintC {
                     // Emit each side to temp buffers
                     let orig_emit = std::mem::replace(&mut self.emit,
                         Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                    self.emit_block_condition(&first);
+                    self.emit_block_condition_inner(&first);
                     let left_text = {
                         let buf = std::mem::replace(&mut self.emit,
                             Box::new(crate::prettyprint::EmitNoMarkup::new()));
                         buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
                             .map(|b| b.get_output()).unwrap_or_default()
                     };
-                    self.emit_block_condition(&second);
+                    self.emit_block_condition_inner(&second);
                     let right_text = {
                         let buf = std::mem::replace(&mut self.emit, orig_emit);
                         buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
@@ -2371,11 +2493,11 @@ impl PrintC {
                 }
 
                 self.emit.print("(");
-                self.emit_block_condition(&first);
+                self.emit_block_condition_inner(&first);
                 self.emit.print(")");
                 self.emit.print(op_str);
                 self.emit.print("(");
-                self.emit_block_condition(&second);
+                self.emit_block_condition_inner(&second);
                 self.emit.print(")");
                 return;
             }
@@ -3961,35 +4083,16 @@ impl PrintLanguage for PrintC {
         }
     }
 
-    fn op_multiequal(&mut self, op: &PcodeOp) {
-        if let Some(out) = op.get_out() {
-            self.is_lhs = true;
-            self.push_varnode(&out.read().unwrap(), Some(op));
-            self.is_lhs = false;
-            self.emit.tag_op(" = ");
-            self.emit.print("phi");
-            self.emit.open_paren();
-            for i in 0..op.num_input() {
-                if i > 0 {
-                    self.emit.print(", ");
-                }
-                if let Some(vn) = op.get_in(i) {
-                    self.push_varnode(&vn.read().unwrap(), Some(op));
-                }
-            }
-            self.emit.close_paren();
-        }
+    fn op_multiequal(&mut self, _op: &PcodeOp) {
+        // Ghidra printc.hh:331 — opMultiequal is a no-op `{}`. PHI nodes are
+        // never emitted as statements (they're resolved during SSA analysis).
+        // Previously Rugra emitted `out = phi(a, b, ...)` which is non-C.
     }
 
-    fn op_indirect(&mut self, op: &PcodeOp) {
-        if let Some(out) = op.get_out() {
-            self.is_lhs = true;
-            self.push_varnode(&out.read().unwrap(), Some(op));
-            self.is_lhs = false;
-            self.emit.tag_op(" = ");
-            self.push_input(op, 0);
-            self.emit.print(" (indirect)");
-        }
+    fn op_indirect(&mut self, _op: &PcodeOp) {
+        // Ghidra printc.hh:332 — opIndirect is a no-op `{}`. INDIRECT ops are
+        // markers for side-effects and never emit a statement.
+        // Previously Rugra emitted `out = in0 (indirect)` which is non-C.
     }
 
     fn op_call(&mut self, op: &PcodeOp) {
@@ -4140,27 +4243,30 @@ impl PrintLanguage for PrintC {
 
     fn op_cbranch(&mut self, op: &PcodeOp) {
         use crate::op::branch_type;
+        // Ghidra printc.cc opCbranch: pushes op->getIn(1) then recurses — it
+        // never silently drops the condition. Rugra's CBRANCH may temporarily
+        // lack in(1) (its boolean condition) when the structurer builds a
+        // BlockIf around a CBRANCH whose condition got consumed upstream.
+        // Previously we swallowed None and emitted `if () goto ;` (syntax
+        // error). Now: when in(1) is missing, emit `1` (always-true) so the
+        // output is at least valid C — `if (1) goto X;`. This matches the
+        // intent of a CBRANCH with an unknown/unrecovered condition (always
+        // taken), and avoids producing non-compiling output. (Audit: BATCH1 R50.)
         match op.branch_type {
             branch_type::BREAK => {
                 self.emit.print("if (");
-                if let Some(in1) = op.get_in(1) {
-                    self.emit_condition(&in1);
-                }
+                self.emit_cbranch_condition(op);
                 self.emit.print(") break");
             }
             branch_type::CONTINUE => {
                 if self.loop_depth > 0 {
                     self.emit.print("if (");
-                    if let Some(in1) = op.get_in(1) {
-                        self.emit_condition(&in1);
-                    }
+                    self.emit_cbranch_condition(op);
                     self.emit.print(") continue");
                 } else {
                     // Not in a loop — emit as goto instead
                     self.emit.print("if (");
-                    if let Some(in1) = op.get_in(1) {
-                        self.emit_condition(&in1);
-                    }
+                    self.emit_cbranch_condition(op);
                     self.emit.print(") goto ");
                     if let Some(in0) = op.get_in(0) {
                         self.push_goto_target(&in0.read().unwrap());
@@ -4169,9 +4275,7 @@ impl PrintLanguage for PrintC {
             }
             _ => {
                 self.emit.print("if (");
-                if let Some(in1) = op.get_in(1) {
-                    self.emit_condition(&in1);
-                }
+                self.emit_cbranch_condition(op);
                 self.emit.print(") goto ");
                 if let Some(in0) = op.get_in(0) {
                     self.push_goto_target(&in0.read().unwrap());
@@ -4317,7 +4421,15 @@ impl PrintLanguage for PrintC {
                     }
                 } else {
                     let raw = Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size());
-                    self.compact_name_for(&raw).unwrap_or(raw)
+                    let display = self.compact_name_for(&raw).unwrap_or(raw);
+                    // [DIAG-B] track why uVarN survives (no type-prefix upgrade)
+                    if !self.discovery_pass && display.starts_with("uVar") {
+                        let ty = vn.v_type.as_ref().map(|t| t.get_name().to_string()).unwrap_or_else(|| "None".to_string());
+                        let meta = vn.v_type.as_ref().map(|t| format!("{:?}", t.get_metatype())).unwrap_or_else(|| "None".to_string());
+                        eprintln!("[DIAG-B] uVarN kept name='{}' merge_name='{}' v_type='{}' meta={} sz={}",
+                            display, name, ty, meta, vn.size);
+                    }
+                    display
                 };
                 let name = &display_name;
 
