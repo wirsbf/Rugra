@@ -1,0 +1,29 @@
+#!/bin/sh
+# Git pre-commit hook — 强制检查 docs/api/ 文档同步 + Ghidra 对齐注释
+# 安装: git config core.hooksPath rugra/.githooks
+# 跳过: git commit --no-verify
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# 铁律 4: 文档同步
+python "$REPO_ROOT/rugra/tools/check_doc_sync.py" --staged
+DOC_RC=$?
+if [ $DOC_RC -ne 0 ]; then exit $DOC_RC; fi
+
+# 铁律 9 / 5.5: Ghidra 对齐注释门禁
+# --staged: 只检查本次提交改动的函数 (增量门禁, 不被历史 4560 个未注释函数阻塞)
+# 全库审计用 `python tools/check_ghidra_annotations.py --all` 手动跑 / CI 跑。
+# (此前 hook 跑 --all, 每次提交都被历史违规阻塞 → 所有 commit 被迫 --no-verify,
+#  门禁形同虚设。改为 --staged 让门禁真正生效在新增/修改的函数上。)
+python "$REPO_ROOT/rugra/tools/check_ghidra_annotations.py" --staged
+ANNO_RC=$?
+if [ $ANNO_RC -ne 0 ]; then exit $ANNO_RC; fi
+
+# 铁律 5.5/10 兜底: // Ghidra: 引用的 file:line 必须真实存在
+# (运行时 PreToolUse hook 在 .zcode/align_gate.py 强制"编辑前重读",
+#  此处为 commit 时静态校验引用有效性, 抓"行号漂移/伪造引用"类对齐自欺。
+#  advisory 模式: 报告但不阻断; 改 --strict 升级为硬门禁。)
+python "$REPO_ROOT/rugra/tools/check_ghidra_refs.py" --staged
+# advisory: 不检查退出码, 让报告通过
+
+exit 0

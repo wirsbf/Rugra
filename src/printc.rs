@@ -265,10 +265,6 @@ impl PrintC {
 
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
-        // [DIAG] track statement emission for loop bodies
-        let _diag_in_loop = self.loop_depth > 0;
-        let _diag_n_ops = ops.len();
-        let mut _diag_emitted = 0i32;
 
         // Clear block-local register defs — each block starts fresh
         self.block_local_reg_defs.clear();
@@ -390,28 +386,6 @@ impl PrintC {
             }
 
             self.doc_statement(&op);
-            _diag_emitted += 1;
-            #[allow(unreachable_code)] {
-                let _ = _diag_in_loop;
-            }
-        }
-        if _diag_in_loop && _diag_emitted == 0 && _diag_n_ops > 1 {
-            // Dump why each op was skipped: re-read and classify.
-            let block2 = block_arc.read().unwrap();
-            let ops2 = block2.get_ops();
-            let mut reasons: Vec<String> = Vec::new();
-            for ore in &ops2 {
-                let o = ore.0.read().unwrap();
-                let r = if self.seen_return { "seen_return".into() }
-                    else if o.is_dead() { "dead".into() }
-                    else if o.opcode == OpCode::CPUI_COPY { "COPY".into() }
-                    else if self.inlined_ops.contains(&o.get_seq_num()) { "inlined_ops".into() }
-                    else if o.output.as_ref().map_or(false, |a| a.read().unwrap().is_implied()) { "implied_out".into() }
-                    else { format!("other:{:?}", o.opcode) };
-                reasons.push(r);
-            }
-            eprintln!("[DIAG-EMPTYLOOP] 0 stmts from {} ops (skip_terminal={}) reasons={:?}",
-                _diag_n_ops, skip_terminal, reasons);
         }
     }
 
@@ -1776,8 +1750,31 @@ impl PrintC {
         name.to_string()
     }
 
+    /// Check if a name is a raw x86-64 register name (possibly with an SSA
+    /// disambiguation suffix like `RAX_7`), i.e. a name that must NOT be
+    /// emitted verbatim into the C output. Faithful to Ghidra's
+    /// `ScopeInternal::buildVariableName` local-variable case (database.cc:2501-
+    /// 2504): a HighVariable that only carries a register-derived name must be
+    /// renamed to `<printNameBase>Var<index>` — here we route it to a size-based
+    /// local name (`<prefix>_<offset>`) that `compact_name_for` then renumbers
+    /// under the shared `compact_base` counter (Ghidra's single `int4 base`).
+    /// The trailing `_N` is Rugra's SSA-instance disambiguator produced by
+    /// `Merge::assign_names` (merge.rs:560-574); stripping it recovers the
+    /// underlying register name, matching Ghidra's one-name-per-HighVariable
+    /// model (the SSA instance count is irrelevant to the printed name).
+    // Ghidra: database.cc:2501 ScopeInternal::buildVariableName (local-var branch: ct->printNameBase; "Var" << index++)
     fn is_raw_register_name(name: &str) -> bool {
-        matches!(name,
+        // Strip a trailing `_<digits>` SSA disambiguation suffix, so `RAX_7`
+        // is recognised the same as `RAX`. A suffix is only `_<digits>`; names
+        // like `uVar12` (no underscore) or `R8B` (not all-digit tail) are left
+        // untouched.
+        let base = match name.rsplit_once('_') {
+            Some((head, tail)) if !head.is_empty()
+                && !tail.is_empty()
+                && tail.chars().all(|c| c.is_ascii_digit()) => head,
+            _ => name,
+        };
+        matches!(base,
             "RAX" | "EAX" | "AX" | "AL" | "AH"
             | "RCX" | "ECX" | "CX" | "CL"
             | "RDX" | "EDX" | "DX" | "DL"
@@ -4503,15 +4500,7 @@ impl PrintLanguage for PrintC {
                     }
                 } else {
                     let raw = Self::maybe_apply_type_prefix(name, &vn.v_type, vn.get_size());
-                    let display = self.compact_name_for(&raw).unwrap_or(raw);
-                    // [DIAG-B] track why uVarN survives (no type-prefix upgrade)
-                    if !self.discovery_pass && display.starts_with("uVar") {
-                        let ty = vn.v_type.as_ref().map(|t| t.get_name().to_string()).unwrap_or_else(|| "None".to_string());
-                        let meta = vn.v_type.as_ref().map(|t| format!("{:?}", t.get_metatype())).unwrap_or_else(|| "None".to_string());
-                        eprintln!("[DIAG-B] uVarN kept name='{}' merge_name='{}' v_type='{}' meta={} sz={}",
-                            display, name, ty, meta, vn.size);
-                    }
-                    display
+                    self.compact_name_for(&raw).unwrap_or(raw)
                 };
                 let name = &display_name;
 

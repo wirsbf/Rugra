@@ -85,6 +85,41 @@ def get_staged_rs_files() -> list[str]:
     return out
 
 
+def _staged_added_line_numbers(rs_rel: str) -> set[int]:
+    """Return the set of 1-based line numbers that are ADDED or MODIFIED in
+    the staged version of `rs_rel` (relative to its staged parent). Used by
+    --staged mode to limit annotation violations to fns actually touched by
+    this commit, so the gate is incremental rather than paralyzed by
+    pre-existing un-annotated fns elsewhere in the same file."""
+    out: set[int] = set()
+    # diff staged (index vs working tree is NOT what we want; we want HEAD vs
+    # index for an amended-commit-style view, but for a normal commit the
+    # staged set is index-vs-HEAD). Use --cached (== --staged) against HEAD.
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--unified=0", "--", rs_rel],
+        capture_output=True, text=True, cwd=PROJECT_ROOT
+    )
+    cur = 0
+    for line in result.stdout.splitlines():
+        if line.startswith("@@"):
+            # @@ -a,b +c,d @@  -> new hunk starts at line c
+            m = re.search(r"\+(\d+)", line)
+            if m:
+                cur = int(m.group(1))
+            else:
+                cur = 0
+        elif line.startswith("+") and not line.startswith("+++"):
+            if cur > 0:
+                out.add(cur)
+            cur += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            # deletion: doesn't advance the new-file line counter
+            pass
+        else:
+            cur += 1
+    return out
+
+
 def get_all_rs_files() -> list[str]:
     out = []
     for root, _, files in os.walk(SRC_DIR):
@@ -234,6 +269,17 @@ def main():
     else:
         rs_files = get_all_rs_files()
 
+    # In --staged mode, only flag fns whose definition line is part of the
+    # staged diff (added/modified fn). This makes the gate INCREMENTAL: it
+    # blocks new/changed un-annotated fns without being paralyzed by the
+    # pre-existing 4560 historical un-annotated fns (which `--all` would
+    # surface). `--all` mode remains a full-repo audit. This realises the
+    # gate's stated intent: "无注释 = 自创函数 = 拒绝" applied to NEW work.
+    staged_added_lines: dict[str, set[int]] = {}
+    if mode == "--staged":
+        for f in rs_files:
+            staged_added_lines[f] = _staged_added_line_numbers(f)
+
     total_violations = 0
     file_count = 0
     for rs_rel in rs_files:
@@ -242,6 +288,11 @@ def main():
             continue
         file_count += 1
         vios = find_fn_violations(rs_abs)
+        if mode == "--staged":
+            added = staged_added_lines.get(rs_rel, set())
+            # Only keep violations whose fn definition line was added/modified
+            # in this staged diff. (line_no is 1-based; added lines are 1-based)
+            vios = [v for v in vios if v[0] in added]
         if vios:
             total_violations += len(vios)
             print(f"\n❌ {rs_rel}  ({len(vios)} 个违规)")

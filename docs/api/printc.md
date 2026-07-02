@@ -90,6 +90,11 @@ raw semantics / P-code-like IR
 - **修复**：Priority 2 Unique 分支加 `!self.is_lhs` 守卫（对齐 Ghidra `pushSymbolDetail`/`pushUnnamedLocation`：赋值目标永远解析为命名位置，`recurse()` 内联只发生在读取侧）。Priority 2 Register 分支此前已有该守卫，Unique 分支遗漏，现已一致。
 - **效果**：curl gcc 审计 9/24 → 17/24。剩余 6 个失败为独立输出 bug（地址含嵌套 CALL、void 返回值赋值、类型推断 `int *` 误用于位运算），非 lhs-inlining。
 
+### is_raw_register_name 识别 SSA 后缀（2026-07-03）
+- **根因**：`is_raw_register_name` 只精确匹配 `"RAX"`，但 `Merge::assign_names`（merge.rs:560-574）为同名寄存器的不同 SSA 版本生成 `RAX_7`、`RDI_6`、`EAX_13` 这类带 `_<digit>` 后缀的 HighVariable 名。`is_raw_register_name("RAX_7")` 返回 false → 原始 SSA 寄存器名直接泄漏进 C 输出（curl 全量 177 处：RAX_65、EAX_29、EDX_40、…）。
+- **修复**：`is_raw_register_name` 先剥掉尾部 `_<digits>` SSA 消歧后缀（`rsplit_once('_')` + 全数字尾校验），再查寄存器名集合。`RAX_7`→`RAX`、`RAX_71`→`RAX`、`R8B`/`uVar12` 不受影响。剥后缀后路由到既有的 raw-register → `<prefix>_<offset>:hex` → `compact_name_for` 重编号链，与无后缀的 `RAX` 走同一条路径（对齐 Ghidra `buildVariableName` 局部分支 database.cc:2501-2504 + `assignDefaultNames` database.cc:2862 的单一共享 base）。
+- **效果**：curl 寄存器名泄漏 177→0；defect 函数 17/24→7/24（剩余 7 个全是 empty-else body-collapse，独立根因）。
+
 
 ---
 
