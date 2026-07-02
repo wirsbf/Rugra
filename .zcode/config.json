@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PreToolUse": [
+        {
+          "matcher": "Edit|Write|MultiEdit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python D:/ghidra/rugra/.zcode/align_gate.py"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Read",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python D:/ghidra/rugra/.zcode/record_receipt.py"
+            }
+          ]
+        }
+      ],
+      "SessionStart": [
+        {
+          "matcher": "startup|clear|compact",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python D:/ghidra/rugra/.zcode/align_gate.py --session-start"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

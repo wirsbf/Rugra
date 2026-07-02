@@ -250,6 +250,27 @@ APPROVE → 合并
 
 **自查执行**：提交前作者通读自己的 diff + message，命中任一 Red Flag → 强制回到铁律 1（读 Ghidra 源码对应行）→ 补齐 Alignment Evidence 块（铁律 10）。命中不处理直接提交 = 违反铁律。
 
+### 14. 🔴 编辑前重读 Ghidra — PreToolUse hook 强制（铁律 5.5/6 的机器强制版）
+
+**修改任何 `src/*.rs` 函数的代码前，必须在本 session 内重新读过该函数对应的 Ghidra 函数代码。** 这是铁律 5.5/6 的**机器强制**实现，不靠 agent 自觉。
+
+**机制**（详见 `docs/alignment_docs/HOOK_GUIDE.md`）：
+- **PreToolUse hook** (`.zcode/config.json` → `.zcode/align_gate.py`): 每次 Edit/Write/MultiEdit 拦截 `src/*.rs`，找到受影响 fn 的 `// Ghidra: <file>:<line>` 引用（上方规范注释或 body 内联引用），要求 `.alignment_receipts.json` 里有该 Ghidra 文件**本 session 内**的 read 回执。无回执 → **deny**（编辑被拒，附 Ghidra 文件:行提示）。
+- **PostToolUse hook** (`.zcode/record_receipt.py`): agent 每读一个 `ghidra/.../cpp/*.cc|*.hh` 文件，自动写回执。
+- **commit 兜底** (`tools/check_ghidra_refs.py`): commit 时校验所有 `// Ghidra:` 引用的 `file:line` 真实存在，抓"行号漂移/伪造引用"。
+
+**回执新鲜度**：session 级 —— 一次 read 覆盖该 fn 本 session 内所有后续编辑（强制每个新 session 重读，防 Ghidra 记忆跨 session 陈旧；但不折磨单 session 内多次相关编辑）。
+
+**agent 操作准则**：
+1. 改任何 `src/*.rs` fn 前，**先 Read** 其 `// Ghidra:` 注释指向的 Ghidra 源文件（PostToolUse 自动记回执）。
+2. 若 hook deny 提示某 Ghidra 文件，**先 Read 那个 Ghidra 文件**再重试编辑 —— 不是"我记得它长啥样"。
+3. 手动补回执（PostToolUse 未生效时）: `python .zcode/record_receipt.py <ghidra_file> <line_start> <line_end>`。
+4. 紧急逃生 `ZCODE_ALIGN_GATE=0`（必须记录理由）。
+
+**⚠ 配置仅在新 session 加载**：`.zcode/config.json` 在 session 创建时读一次，session 中途改不生效，需重启 session / clear / compact。
+
+**为什么需要机器强制**：铁律 5.5/6 的"先读 Ghidra"长期靠自觉执行，`181538f` 事故证明自觉不够 —— commit message 引用了正确行号但实质没核对该行语义。本 hook 把"读"变成可观测的回执，未读就改不了代码。
+
 ## 📋 L1/L2/L3 路线图
 
 详见 `ALIGNMENT_ROADMAP.md`。当前状态：

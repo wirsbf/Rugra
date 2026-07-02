@@ -52,5 +52,14 @@ Thumbs.db
 .agents/
 .githooks/
 
+# Align-gate runtime state (see docs/alignment_docs/HOOK_GUIDE.md)
+.alignment_receipts.json
+.alignment_session_start
+.zcode/align_gate.log
+
+# python pycache
+.zcode/__pycache__/
+tools/__pycache__/
+
 # Vendored Ghidra source (reference only, do not commit; huge tree)
 /ghidra/
