@@ -206,6 +206,27 @@ Rugra 漏了这个分支，把 fwrite/fopen 等 CALL 当普通 op 杀掉 → 所
 
 剩余 5 个 defect 函数（main×7/glob_word×2/getparameter/next_url/match_url 各 1）的 empty-else 是**非 CALL 根因**（已确认 my_fwrite 的 CALL 已存活但仍可能有其他结构化问题）。下一轮对齐目标。
 
+### 8.2.2 empty-else 根因 #3 已修：is_block_body_empty 对齐 emit_block_ops（commit 2cca0ea）
+
+**真根因**：`is_block_body_empty` 与 `emit_block_ops` 的 op 跳过逻辑不一致。前者对"末尾 op 是 CBRANCH/BRANCH/RETURN/CALL"的块一律判非空，但末尾分支是控制流转移（Ghidra `emitBlockIf` printc.cc:2895 用 `setMod(no_branch)` 抑制），不是 body 语句。只含 dead 计算 op + 末尾 CBRANCH 的块被误判为"非空"，但 `emit_block_ops` 实际什么也不输出 → 产生 `if (cond) {} else {}` 空括号。同时未检查 `is_implied()` 输出（emit_block_ops:334-338 跳过）。
+
+**修复**：删除"末尾分支 → 非空"提前返回；逐 op 扫描精确镜像 `emit_block_ops` 跳过集（CBRANCH/BRANCH/COPY/MULTIEQUAL/INDIRECT + is_implied + RIP-rel + stack-setup + inlined + dead-output 纯计算 op）。CALL/CALLIND 不在跳过集，真正含 call 的 body 仍正确判非空。
+
+**量化效果**（`compare_ghidra.py`，§2 致命缺陷类全部清零）：
+
+| 指标 | §8.2.1 后 | 2cca0ea 后 |
+|---|---|---|
+| Total Rugra defects | 12（5/24 函数） | **0（0/24 函数）** ✅ |
+| main defect | 7 | **0** |
+| glob_word defect | 2 | **0** |
+| getparameter/next_url/match_url | 各 1 | 各 **0** |
+| curl 空 else{} | 多处 | **0** |
+| httpd 空 else{} | 多处 | **0** |
+| 寄存器名泄漏 | 0 | 0（保持） |
+
+**§2 的 10 类致命缺陷现状**（对照 Ghidra 全为 0）：
+- `if () goto ;` 语法错误、`if ()` 空条件、`uVar_<hex>` 占位名、`uVar_<字母>`、`uVar_uVar_` 嵌套、`StackX_*`、`param_N`、空 while body、`else {}`、`switch(自异或)` → **命名类已全消（寄存器泄漏+compact 重编号），空 else/空 body 已消（is_block_body_empty 对齐）**。剩余 §2 之外的问题：numbering 顺序（§8.3）、表达式优先级（`(long)x & -33 != '['`，独立根因）。
+
 ### 8.3 number 计数说明
 
 numbering issues 408→597 的增量**不是新引入的编号 bug**，而是：
