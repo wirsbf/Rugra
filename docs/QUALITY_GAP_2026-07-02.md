@@ -234,3 +234,12 @@ numbering issues 408→597 的增量**不是新引入的编号 bug**，而是：
 2. 既有的声明非单调序（lVar 声明顺序与编号不一致）—— §P3 body 问题的一部分，非本次命名改动引入。
 
 my_fwrite 内部无真重复声明（bVar4/lVar1/lVar2/lVar3/lVar5/lVar6 各一次）。
+
+### 8.2.3 gcc 语法审计 17/24 → 23/24（commits 6ce06f8, 6ab6c43）
+
+本轮修了 3 类 gcc 语法错误，把 gcc 审计从 17/24 推到 **23/24 OK**：
+- **glob_set lvalue**（6ce06f8）：`piVar13 + lVar11 * ... = 1`（复合表达式赋值，非法左值）→ `*(long *)(piVar10 + lVar14*8 + 0x50) = 1`（整体解引用，合法左值）。对齐 Ghidra `opStore`（printc.cc:500-518）永远把 STORE 地址包在一元 `*` 下。新增 `capture_varnode_text` 判断 base 是裸标识符还是复合表达式。
+- **myprogress self-XOR**（6ab6c43）：`return piVar5 ^ piVar5`（指针自异或，非法）→ `return 0`。根因是 `xor eax,eax; ret`（zero-return 惯用法）的 INT_XOR 在 cleanup-pool 时已 dead，RuleTrivialArith 折叠不到，print-time RETURN 重构经 copy-prop 渲染出非法 XOR。新增 `capture_inline_expr_text` + `is_textual_self_xor` 在 print-time 把 `X ^ X` 文本折成 `0`（对齐 Ghidra RuleTrivialArith ruleaction.cc:2413）。
+- **cleanup pool 加 RuleTrivialArith**（6ce06f8）：Rugra-local，对齐 Ghidra mainloop repeatapply 对 late-created op 的再简化效果。
+
+剩余 1/24 fail：main 的 "expected expression before ','"（CALL 参数 emit 问题，独立根因）。
