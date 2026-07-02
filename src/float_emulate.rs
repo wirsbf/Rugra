@@ -56,7 +56,7 @@ impl FloatFormat {
                 exp_pos: 23,
                 exp_size: 8,
                 bias: 127,
-                max_exponent: 254,
+                max_exponent: 255, // (1<<exp_size)-1 — float.cc:59
                 jbit_implied: true,
             },
             8 => Self {
@@ -67,7 +67,7 @@ impl FloatFormat {
                 exp_pos: 52,
                 exp_size: 11,
                 bias: 1023,
-                max_exponent: 2046,
+                max_exponent: 2047, // (1<<exp_size)-1 — float.cc:59
                 jbit_implied: true,
             },
             _ => panic!("Unsupported float size: {}", size),
