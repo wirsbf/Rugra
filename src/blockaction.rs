@@ -682,7 +682,17 @@ impl<'a> CollapseStructure<'a> {
             // cat/proper_if/if_else/while_do/do_while. This lets loop/if structuring
             // consume blocks before switch detection, producing if/while instead of
             // switch when the control flow is structurable.
-            self.collapse_cbranch_cascades();
+            //
+            // R15 (2026-07-02): `collapse_cbranch_cascades` DISABLED. It was
+            // fabricated logic with NO Ghidra counterpart — Ghidra's
+            // ruleBlockSwitch (blockaction.cc:1649) fires ONLY on isSwitchOut()
+            // blocks, and f_switch_out is set exclusively by CPUI_BRANCHIND
+            // (block.cc:2286). Ghidra NEVER forms a switch from CBRANCH
+            // if/else-if chains. Rugra's cascade function did, producing ~16/18
+            // spurious switches (curl: switch 18 vs Ghidra's 2). The CBRANCH
+            // chains are now structured as nested BlockIf via the try_rule_*
+            // rules, exactly as Ghidra's collapseInternal does. (Audit: BATCH2 R15.)
+            // self.collapse_cbranch_cascades();
             self.collapse_case_fallthru();
             self.collapse_sequences();
             self.collapse_switches();
