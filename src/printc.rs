@@ -1325,6 +1325,36 @@ impl PrintC {
         Some(compact)
     }
 
+    /// Rename a varmap-generated `StackX_<hex>` / `Stack_<hex>` symbol name into
+    /// a Ghidra-style typed local name (`<printNameBase>Var<base>`), sharing the
+    /// SAME `compact_base` counter as `compact_name_for`. Faithful to Ghidra
+    /// `ActionNameVars::apply` (coreaction.cc:2988) which, after the per-Varnode
+    /// `namerec` loop, calls `scope->assignDefaultNames(base)` (database.cc:2850)
+    /// — renaming ALL remaining unnamed symbols (including the stack-local
+    /// `StackX_` fallback names produced by `ScopeLocal::buildVariableName`,
+    /// varmap.cc:548) under the single shared `int4 base`. The type prefix is
+    /// derived from the symbol's dtype via `var_prefix` (Rugra's printNameBase
+    /// equivalent), matching `ct->printNameBase(s)` at database.cc:2502.
+    fn rename_scope_symbol(&mut self, sym: &crate::varmap::LocalSymbol) -> String {
+        // Only rename the auto-generated Stack/StackX fallback names. Names that
+        // are already typed (iVar/lVar/etc.) or came from real symbols stay.
+        let raw = &sym.name;
+        let is_stack_fallback = raw.starts_with("StackX_") || raw.starts_with("Stack_");
+        if !is_stack_fallback {
+            return raw.clone();
+        }
+        // Cached: same raw name → same compact name (decl & use must agree).
+        if let Some(compact) = self.compact_rename.get(raw) {
+            return compact.clone();
+        }
+        let prefix = Self::var_prefix(&sym.dtype, sym.size.max(1) as usize);
+        let n = self.compact_base;
+        self.compact_base += 1;
+        let compact = format!("{}{}", prefix, n);
+        self.compact_rename.insert(raw.to_string(), compact.clone());
+        compact
+    }
+
     /// Emit variable declarations at the top of the function body.
     fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
         use std::collections::BTreeMap;
@@ -1442,19 +1472,45 @@ impl PrintC {
         // get_stack_variable_name's recording). The scope is the authoritative
         // set of this function's stack locals; any that the body references must
         // be declared.
+        //
+        // Route StackX_ fallback names through rename_scope_symbol (shared base,
+        // faithful to Ghidra assignDefaultNames) so decl & use agree. We rename
+        // ALL scope symbols up front into `renamed_map` to apply the shared base
+        // in a deterministic order, then declare by the renamed name.
+        let mut renamed_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if let Some(scope) = &self.scope {
+            // Snapshot raw names + size first (avoid holding scope borrow across
+            // the &mut self rename_scope_symbol calls).
+            let raw_syms: Vec<(String, i32)> = scope.symbols.iter()
+                .map(|s| (s.name.clone(), s.size))
+                .collect();
+            for (raw_name, size) in raw_syms {
+                if raw_name.starts_with("StackX_") || raw_name.starts_with("Stack_") {
+                    let renamed = self.rename_scope_symbol(&crate::varmap::LocalSymbol {
+                        name: raw_name.clone(),
+                        start: 0,
+                        size,
+                        dtype: None,
+                        unaliased: false,
+                        is_param: false,
+                    });
+                    renamed_map.insert(raw_name, renamed);
+                }
+            }
+        }
         if let Some(scope) = &self.scope {
             for sym in &scope.symbols {
-                // Conservatively declare every scope symbol: they are this
-                // function's stack locals by definition, and printc's discovery
-                // pass has known gaps where a referenced StackX_N name is emitted
-                // without being recorded in used_varnode_names (e.g. STORE LHS).
-                // Over-declaring only yields an unused-variable warning, never a
-                // compile error — far safer than an undeclared-identifier error.
-                if !declared.contains_key(&sym.name)
-                    && is_declarable(&sym.name, AddressSpace::Stack, 0, &self.call_targets)
+                // Use the renamed name if one was allocated (StackX_ → iVar/lVar),
+                // else the raw name. Conservatively declare every scope symbol:
+                // they are this function's stack locals by definition, and
+                // printc's discovery pass has known gaps where a referenced name
+                // is emitted without being recorded in used_varnode_names.
+                let name = renamed_map.get(&sym.name).cloned().unwrap_or_else(|| sym.name.clone());
+                if !declared.contains_key(&name)
+                    && is_declarable(&name, AddressSpace::Stack, 0, &self.call_targets)
                 {
                     let ty = if sym.size <= 4 { "int" } else { "long" };
-                    declared.insert(sym.name.clone(), ty.to_string());
+                    declared.insert(name, ty.to_string());
                 }
             }
         }
@@ -1793,7 +1849,7 @@ impl PrintC {
 
     /// Check if an INT_ADD op is RSP + const, and if so, return the stack variable name.
     /// Also handles uVar107 + offset where uVar107 = RSP - frame_size.
-    fn get_stack_variable_name(&self, op: &PcodeOp) -> Option<String> {
+    fn get_stack_variable_name(&mut self, op: &PcodeOp) -> Option<String> {
         if op.opcode != OpCode::CPUI_INT_ADD || op.inrefs.len() < 2 {
             return None;
         }
@@ -1828,13 +1884,23 @@ impl PrintC {
             // one covers this raw stack offset. Falls through to the heuristic
             // when the scope has no symbol here (common, since Rugra's lift does
             // not yet produce Stack-space varnodes for RSP-relative accesses).
-            if let Some(sym) = self.scope.as_ref().and_then(|s| s.find_symbol(offset)) {
-                // Record that this scope symbol was referenced, so it is
-                // guaranteed to be declared even if the general discovery/mark
-                // path (used_varnode_types) missed it (which happens for STORE
-                // address LHS). See doc_variable_decls_from_funcdata's safety net.
-                self.used_scope_symbols.borrow_mut().insert(sym.name.clone());
-                return Some(sym.name.clone());
+            // Clone the symbol data out of the scope borrow before calling the
+            // &mut self renamer (avoids self borrow conflict), and route StackX_
+            // fallback names through rename_scope_symbol (Ghidra assignDefaultNames).
+            let sym_opt = self.scope.as_ref().and_then(|s| s.find_symbol(offset)).map(|sym| {
+                (sym.name.clone(), sym.dtype.clone(), sym.size)
+            });
+            if let Some((raw_name, dtype, size)) = sym_opt {
+                let renamed = self.rename_scope_symbol(&crate::varmap::LocalSymbol {
+                    name: raw_name.clone(),
+                    start: offset,
+                    size,
+                    dtype,
+                    unaliased: false,
+                    is_param: false,
+                });
+                self.used_scope_symbols.borrow_mut().insert(renamed.clone());
+                return Some(renamed);
             }
             
             // Ghidra convention: local_XX where XX = frame_size - offset

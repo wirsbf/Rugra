@@ -613,3 +613,11 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **动机**：181538f 类红旗修正。Ghidra `ActionNameVars::apply`（coreaction.cc:2988）+ `assignDefaultNames(int4 &base)`（database.cc:2850）用**单一共享** `int4 base`（初值 1），非 per-prefix。此前 Rugra 用 per-prefix 计数器，产出 `bVar1,bVar2,lVar1,lVar2`（每前缀独立），而 Ghidra 产出 `...iVar4,lVar5...`（跨前缀共享编号）。
 - **实测**：glob_set 现产出 `bVar1,bVar4,bVar5,...,iVar3,iVar9,iVar10,...,lVar13,lVar14,piVar2,piVar8`（共享单调编号），符合 Ghidra 共享 base 语义。
 - **诚实限制**：EXACT 数仍为 0（仅编号模型对齐不够）。Ghidra 的具体编号顺序由 `nametree` 创建顺序（SymbolCompareName: name.compare() + nameDedup）决定，需复现 varmap/HighVariable 的符号创建顺序才能完全匹配；Rugra 当前用 lazy first-touch 顺序近似。另：StackX_ 占位名（87 处）走另一路径（get_stack_variable_name → scope.find_symbol），未受本次修复影响，需独立处理。测试 `test_compact_name_for` 已改为断言共享编号（bVar1→bVar2→lVar3）。
+
+### 2026-07-02（续）：StackX_ 符号接入共享 base 重命名 (StackX_ 102→0)
+- **变更**：新增 `rename_scope_symbol`（printc.rs，faithful to Ghidra `assignDefaultNames` 对 stack-local 符号的重命名）。两处接入：
+  1. `get_stack_variable_name`（INT_ADD(RSP,const) 路径）：scope.find_symbol 返回的 StackX_ 名经 rename_scope_symbol → iVar/lVar/bVar<base>。
+  2. `doc_variable_decls_from_funcdata`（声明路径）：scope.symbols 遍历时预先 rename 所有 StackX_/Stack_ 名到 renamed_map，保证声明名与使用名一致。
+- **动机**：Ghidra `ActionNameVars::apply` 末尾 `scope->assignDefaultNames(base)`（database.cc:2850）重命名所有未命名符号（含 varmap.cc:548 的 StackX_ fallback 名）。此前 Rugra 只在 iVar/lVar 路径（compact_name_for）走共享 base，StackX_ 走另一路径原样输出。
+- **实测**：curl StackX_ 占位名 102→0（21 个 distinct 全部转为 iVar/lVar/bVar），0 undeclared，输出仍可编译。961/961 测试。
+- **诚实限制**：func_gap_audit EXACT 仍 0（每函数仍有 reg-leak/struct 访问/selfxor 等其他差异），但消除了一整类命名占位缺陷。
