@@ -842,6 +842,11 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
         mainloop.add_action(Box::new(ActionDeadCode::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
+        // Faithful to coreaction.cc:5508: ActionInferTypes runs in mainloop
+        // after RestructureVarnode/Spacebase/NonzeroMask. Propagates Datatype
+        // across data-flow so HighVariables get typed prefixes (pcVar/iVar/...)
+        // instead of falling back to uVar. Self-limited to 7 passes.
+        mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
         mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
         mainloop.add_action(Box::new(ActionBlockStructure::new()));
 

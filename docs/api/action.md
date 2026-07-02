@@ -571,6 +571,13 @@ Funcdata ready
 
 - `ActionConditionalExe`（crate::condexe）注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionBlockStructure` 之前，对应 Ghidra coreaction.cc:5675 mainloop 顺序。条件执行消除（condexe.cc:712）在结构化前折叠冗余 CBRANCH 汇合。
 
+### 2026-07-02：ActionInferTypes 接入 mainloop（对齐 coreaction.cc:5508）
+
+- `ActionInferTypes`（coreaction.cc:5508 "typerecovery"）现注册在 mainloop 的 `ActionRestructureVarnode` 之后、`ActionConditionalExe` 之前，faithful to Ghidra 注册顺序。此前它**只有实现没有注册**，导致类型恢复从不执行，所有 Unique varnode 的 `vn.v_type = None`，`printc::maybe_apply_type_prefix` 无法升级前缀。
+- 效果（curl）：uVarN 453→0（全部升级为 lVar/iVar/sVar/bVar 等类型前缀），lVar_etc 346→474（接近 Ghidra 481）。pcVar_etc 81（Ghidra 246）—— 指针类型恢复仍弱，是类型系统下一步。
+- 自限 7 轮（coreaction.cc:5411 `local_count >= 7` 停止），无收敛警告，957/957 测试通过。
+- 依赖 `ActionStartTypes`（build_full_pipeline_actions，coreaction.cc:5687）先 `set_type_recovery_started()`，否则 InferTypes 立即 NO_CHANGE。
+
 ### 2026-06-27（会话3 续）：ActionRestructureVarnode 接入主管线
 
 - `ActionRestructureVarnode`（coreaction.cc:5505 "localrecovery"）现注册在 `decompile` group 的 `ActionDeadCode` 之后、`ActionConditionalExe` 之前。此前它**未接入**，导致 `fd.scope` 永远为 None，printc 的 `get_stack_variable_name` 永远找不到栈变量名 → uVar 碎片。接入后 scope 被构建，local_ 统计从 81→78（curl）。**G3 剩余**：多数函数 gather_spacebase 收集到 0 hints，根因是栈访问用 RBP/param 指针而非 RSP 直派，需扩展 spacebase 基址识别 + 修复 SSA def 断链。
