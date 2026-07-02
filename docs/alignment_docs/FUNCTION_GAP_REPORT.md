@@ -147,3 +147,45 @@ uncontaminated by library stubs.**
 2. **`StackX_` (87, pure naming)** — port varmap.cc:617-628 addSymbol writeback (R1).
 3. **`param_N` (72, pure naming)** — port ActionNameVars (R5) + fix InputPrototype (R77).
 4. **`->` access (−96)** — struct type recovery (R60/R61). Largest gap, harder.
+
+---
+
+## Phase 2 progress (2026-07-02 20:10)
+
+### Done
+- **R73** (commit `03734ee`): removed `perform`/`ActionGroup` iteration caps
+  (`iterations>1`/`>2` breaks) in action.rs, restored Ghidra's unbounded
+  `do-while` (action.cc:298-362). **Output-neutral** (0/24 EXACT unchanged) but
+  removes a convergence blocker; zero regressions, zero loops, glob_range
+  completes without stack overflow across 3 runs. Alignment Evidence block
+  verified 4/4 decisive-semantics classes.
+
+### Investigated, NOT the assumed root cause
+- **`return iVar1 ^ iVar1`** (main_init etc.): via `RUGRA_DBG_XOR` diagnostic,
+  confirmed ALL 48 XORs reaching the rule pool are `var ^ constant` (legit,
+  correctly NOT folded) — **none** are `xor eax,eax`. The `V^V` is synthesized
+  by the printc return-value heuristic (printc.rs:4211-4241) from an
+  **uninitialized** varnode. A single-instruction `xor eax,eax` lift test
+  (`test_xor_eax_eax_input_identity`) proves the lifter's varnode-identity
+  dedup is CORRECT (ptreq=true). So the real root cause is the missing
+  `ActionReturnRecovery::buildReturnOutput` (coreaction.cc:1836-1906) — RETURN
+  ops never get their return value attached as in(1), so the printc heuristic
+  fires on garbage. Faithful fix = port ActionReturnRecovery (heavy, needs
+  ParamActive/AncestorRealistic/deriveOutputMap infra).
+
+### Next highest-ROI (correct root cause, scope-bounded)
+- **StackX_ (87) + param_N (72)**: confirmed via Ghidra golden inspection that
+  Ghidra emits `iVar1`/`lVar2`/`cVar1`/`pCVar6` (typed-prefix names from
+  `Datatype::printNameBase` + shared `int4 base` counter), NOT `StackX_`. The
+  `StackX_` is Rugra's correct *fallback* default name (buildVariableName,
+  varmap.cc:548) — what's MISSING is `ActionNameVars` (coreaction.cc:2978-3000)
+  + `assignDefaultNames` (database.cc, the shared-`base` scheme that drove the
+  181538f bug). This is R5 — a 400+ line multi-file port (coreaction.rs +
+  database.rs + type printNameBase), gated by 铁律 10 Red Flags.
+- **`->` access (−96)**: struct/pointer type recovery (R60/R61). Largest gap.
+
+### Untouched pre-existing work
+- `src/ffi.rs` (CPUI_CAST round-trip) + `src/funcdata.rs` `op_set_opcode`
+  flag-sync were in the working tree before this session (not authored here).
+  Verified **output-neutral** (gap audit identical with/without). Left in place
+  per 铁律 §8; their owner should verify/commit.
