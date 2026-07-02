@@ -243,3 +243,17 @@ my_fwrite 内部无真重复声明（bVar4/lVar1/lVar2/lVar3/lVar5/lVar6 各一�
 - **cleanup pool 加 RuleTrivialArith**（6ce06f8）：Rugra-local，对齐 Ghidra mainloop repeatapply 对 late-created op 的再简化效果。
 
 剩余 1/24 fail：main 的 "expected expression before ','"（CALL 参数 emit 问题，独立根因）。
+
+### 8.2.4 gcc 审计 curl 24/24 — 全部 curl 函数可编译（commit 6432ce6）
+
+修了 main 的 `curl_easy_setopt(, ...)` 第一参数空渲染（gcc: expected expression before ','）。
+- **根因**：op_call 的参数解析（block_local_reg_defs / value_def_map / COPY-source 追踪 / inline）当 def op 已 dead 或解析到 inline-candidate Unique（push_varnode 返回 ""）时不输出 → `f(, arg)` 非法 C。
+- **修复**：把参数解析抽到 `emit_call_arg_text`（capture-emit-swap，保证返回非空 String）；空时 fallback `in_<offset>`（对齐 Ghidra buildVariableName 不规则输入分支 database.cc:2470）+ mark_variable_used 注册声明；DECL_PREFIXES 加 `in_` 让 `in_<hex>` 可声明。
+- **效果**：curl gcc 审计 **23/24 → 24/24 OK（全部 curl 函数可编译）**；Total Rugra defects 0（保持）；956/956 测试。
+
+**§2 致命缺陷现状**：寄存器泄漏 0、空 else 0、self-XOR return 0、空 if-body 0、lvalue 错误 0、CALL 空参数 0 — 可见 defect 类全部清零，且 curl **全函数 gcc 可编译**。
+
+剩余对齐维度（非"完全相同"）：
+- skeleton diff ~2700 行（变量名坐标系差异 StackX vs typed、控制流 for↔while 等价变换、结构体重建未完成）
+- numbering issues ~586（变量声明顺序/编号模型）
+- httpd gcc 3/29 fail（field_10 undeclared / pointer-multiply / "long" syntax，独立根因）
