@@ -126,7 +126,10 @@ pub fn map_ghidra_opcode(opcode: i32) -> Option<OpCode> {
         63 => Some(OpCode::CPUI_SUBPIECE),
 
         // === Type / Pointer ===
-        // 64 => CPUI_CAST (Rugra 暂无此变体)
+        64 => Some(OpCode::CPUI_CAST), // R37 (2026-07-02): uncommented — CPUI_CAST
+                                        // variant exists (opcodes.rs) and to_ghidra_opcode
+                                        // already maps it → Some(64). The round-trip
+                                        // was asymmetric: Ghidra→Rugra dropped it.
         65 => Some(OpCode::CPUI_PTRADD),
         66 => Some(OpCode::CPUI_PTRSUB),
         67 => Some(OpCode::CPUI_SEGMENTOP),

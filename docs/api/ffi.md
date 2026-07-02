@@ -92,3 +92,5 @@ Intercept and compare Transformation Actions
 `SUBPIECE(63)` 与 `PTRADD(65)` 之间的空缺。
 
  2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+
+**2026-07-02**：`map_ghidra_opcode(64)` Ghidra→Rugra 方向原被注释掉，与 `to_ghidra_opcode`（Rugra→Ghidra 已映射 CPUI_CAST→64）不对称，导入时丢失 CPUI_CAST。现已补回 `64 => Some(OpCode::CPUI_CAST)`，往返对称。

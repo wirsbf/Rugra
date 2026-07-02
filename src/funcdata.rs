@@ -513,7 +513,39 @@ impl Funcdata {
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
     pub fn op_set_opcode(&self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
-        op.0.write().unwrap().opcode = opc;
+        // Faithful to PcodeOp::setOpcode (op.cc:276): clear the opcode-derived
+        // flag bits, then set them from the new opcode's TypeOp flags. Ghidra
+        // gets these from TypeOp::getFlags() (registered per-opcode in
+        // typeop.cc); Rugra encodes the same mapping here. Without this, a
+        // CPUI_CALL op never had the CALL flag, so ActionMarkExplicit's
+        // baseExplicit `def->isCall()` guard failed to force CALL outputs
+        // explicit → ActionMarkImplied marked them implied → printc skipped
+        // the CALL statement entirely (130 vanished calls in curl).
+        use crate::op::pcodeop_flags as F;
+        use crate::opcodes::OpCode;
+        const OPC_FLAGS_MASK: u32 = F::BRANCH | F::CALL | F::CODEREF
+            | F::RETURNS | F::MARKER | F::HAS_CALLSPEC | F::RETURN_COPY;
+        let mut o = op.0.write().unwrap();
+        o.flags &= !OPC_FLAGS_MASK;
+        let extra = match opc {
+            OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND =>
+                F::SPECIAL | F::BRANCH | F::CODEREF | F::NOCOLLAPSE,
+            OpCode::CPUI_CBRANCH =>
+                F::SPECIAL | F::BRANCH | F::NOCOLLAPSE,
+            OpCode::CPUI_CALL =>
+                F::SPECIAL | F::CALL | F::HAS_CALLSPEC | F::CODEREF | F::NOCOLLAPSE,
+            OpCode::CPUI_CALLIND =>
+                F::SPECIAL | F::CALL | F::HAS_CALLSPEC | F::NOCOLLAPSE,
+            OpCode::CPUI_CALLOTHER | OpCode::CPUI_NEW =>
+                F::SPECIAL | F::CALL | F::NOCOLLAPSE,
+            OpCode::CPUI_RETURN =>
+                F::SPECIAL | F::RETURNS | F::NOCOLLAPSE | F::RETURN_COPY,
+            OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT =>
+                F::SPECIAL | F::MARKER | F::NOCOLLAPSE,
+            _ => 0,
+        };
+        o.flags |= extra;
+        o.opcode = opc;
     }
 
     /// Set a specific input operand for the given PcodeOp. Faithful to
@@ -1982,6 +2014,12 @@ impl Funcdata {
         let mut op_refs: Vec<PcodeOpRef> = Vec::with_capacity(raw_ops.len());
 
         for (raw_idx, raw) in raw_ops.iter().enumerate() {
+            // NOTE: raw.get_opcode() returns a RUST enum discriminant (the
+            // lifter in x86_lift.rs builds PcodeOpRaw via `OpCode::CPUI_X as
+            // i32`), NOT a Ghidra-native opcode int. So OpCode::from_i32 is
+            // correct here. map_ghidra_opcode is only for Ghidra-FFI ints.
+            // (Audit BATCH3 R37 was a false-positive for this call site; the
+            // real FFI mapping fix is in ffi.rs — CPUI_CAST now round-trips.)
             let opcode = match OpCode::from_i32(raw.get_opcode()) {
                 Some(opc) => opc,
                 None => {
@@ -4800,5 +4838,45 @@ mod tests {
         });
         assert!(has_new_add, "split_uses should create a duplicated INT_ADD op");
     }
+
+    /// Diagnostic (2026-07-02): does lifting `xor eax,eax; ret` produce the
+    /// SAME varnode for both XOR inputs? Ghidra's SSA identity model requires
+    /// all reads of the same register (before any write) to share ONE varnode,
+    /// so that `x^x→0` (RuleTrivialArith) can fold via Arc::ptr_eq. If this
+    /// FAILS (ptreq=false AND same_storage=false), it is the root cause of the
+    /// `return iVar1 ^ iVar1` defect in curl main_init.
+    #[test]
+    fn test_xor_eax_eax_input_identity() {
+        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        // 31 c0 = xor eax,eax ; c3 = ret
+        let code = vec![0x31, 0xc0, 0xc3];
+        let start = Address::new(0x1000);
+        let mut disasm = X86_64Disassembler::new();
+        let instructions = disasm.disassemble(&code, start).unwrap();
+        assert_eq!(instructions.len(), 2);
+        let mut lifter = X86Lifter::new();
+        let mut raw_ops = Vec::new();
+        for inst in &instructions { raw_ops.extend(lifter.lift(inst)); }
+        // xor→2(INT_XOR+COPY), ret→1(RETURN)
+        assert_eq!(raw_ops.len(), 3, "expected 3 raw ops, got {}", raw_ops.len());
+        let mut fd = Funcdata::new("xor_eax_eax", start, code.len() as i32);
+        fd.inject_raw_ops(&raw_ops);
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode == OpCode::CPUI_INT_XOR {
+                let i0 = &op.inrefs[0]; let i1 = &op.inrefs[1];
+                let v0 = i0.read().unwrap(); let v1 = i1.read().unwrap();
+                let ptreq = std::sync::Arc::ptr_eq(i0, i1);
+                let same_storage = v0.get_space()==v1.get_space()
+                    && v0.get_offset()==v1.get_offset() && v0.get_size()==v1.get_size();
+                eprintln!("XOR inputs: ptreq={} same_storage={} in0={:?}@0x{:x} sz{} written={} | in1={:?}@0x{:x} sz{} written={}",
+                    ptreq, same_storage,
+                    v0.get_space(), v0.get_offset(), v0.get_size(), v0.is_written(),
+                    v1.get_space(), v1.get_offset(), v1.get_size(), v1.is_written());
+            }
+        }
+    }
+
 }
+
 

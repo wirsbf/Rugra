@@ -613,7 +613,7 @@ PcodeOpRaw
 - `new_unique_out(s, op)` — `Funcdata::newUniqueOut` (281)
 - `new_constant(s, val)` — `Funcdata::newConstant` (283)
 - `new_unique(s)` — `Funcdata::newUnique` (288)
-- `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)
+- `op_set_opcode(op, opc)` — `Funcdata::opSetOpcode` (463)。**2026-07-02**：对齐 `PcodeOp::setOpcode` (op.cc:276) — 清除 opcode 派生 flag 位（CALL/BRANCH/RETURNS/MARKER/CODEREF/...）后按新 OpCode 重设。修复前 CPUI_CALL 的 output 永远不带 CALL flag → ActionMarkExplicit 的 `def->isCall()` 失败 → output 未被 force-explicit → ActionMarkImplied 标 implied → printc 跳过 CALL 语句（curl 丢失约 130 处调用）。
 - `op_set_input(op, vn, slot)` — `Funcdata::opSetInput` (467)，扩展 inrefs、维护 descend
 - `op_insert_input(op, vn, slot)` — `Funcdata::opInsertInput` (479)
 - `op_remove_input(op, slot)` — `Funcdata::opRemoveInput` (478)
