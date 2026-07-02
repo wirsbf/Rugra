@@ -2522,6 +2522,23 @@ impl PrintC {
             .map(|b| b.get_output()).unwrap_or_default()
     }
 
+    /// Render a single varnode to a String by swapping in a capture emit buffer.
+    /// Used to inspect whether a varnode copy-propagates to a bare identifier
+    /// or a compound expression, so callers can choose an lvalue-safe form
+    /// (faithful to Ghidra opStore always wrapping the STORE address in a
+    /// dereference, printc.cc:500-518).
+    // RUGRA-GLUE: Rust-side helper (capture-emit-swap pattern, mirrors the
+    // existing capture_block_condition at printc.rs:2512). No direct Ghidra
+    // counterpart; exists to support the opStore address-wrapping fix.
+    fn capture_varnode_text(&mut self, vn: &Varnode) -> String {
+        let orig_emit = std::mem::replace(&mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        self.push_varnode(vn, None);
+        let buf = std::mem::replace(&mut self.emit, orig_emit);
+        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output()).unwrap_or_default()
+    }
+
     fn emit_block_condition_inner(
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -3968,12 +3985,31 @@ impl PrintLanguage for PrintC {
                         drop(in1_vn);
 
                         if let (Some(base), Some(off)) = (base_vn, offset_val) {
-                            // Emit as: *(base + 0xNN) or base->field_XX for small offsets
-                            self.push_varnode(&base.read().unwrap(), None);
-                            if off <= 0xffff {
-                                self.emit.print(&format!("->field_{:x}", off));
+                            // Faithful to Ghidra opStore (printc.cc:500-518): the
+                            // STORE address is ALWAYS emitted under a unary
+                            // dereference so the LHS is a legal lvalue. For a
+                            // simple (base + const) we use `base->field_XX`, but
+                            // only when `base` resolves to a bare identifier.
+                            // When base copy-propagates to a compound expression
+                            // (e.g. `piVar13 + lVar11 * *(long *)(...)`), emitting
+                            // `<compound>->field_XX` is a syntax error and
+                            // `<compound> = val` is an lvalue error. So we capture
+                            // the base expression text: if it is a bare ident,
+                            // use `->field`; otherwise wrap as `*(long *)(<expr> + off)`.
+                            let base_text = self.capture_varnode_text(&base.read().unwrap());
+                            let is_bare_ident = base_text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !base_text.is_empty();
+                            if is_bare_ident {
+                                self.emit.print(&base_text);
+                                if off <= 0xffff {
+                                    self.emit.print(&format!("->field_{:x}", off));
+                                } else {
+                                    self.emit.print(&format!("->field_0x{:x}", off));
+                                }
                             } else {
-                                self.emit.print(&format!("->field_0x{:x}", off));
+                                // Compound base: wrap whole address in *(long *)( base + off )
+                                self.emit.print("*(long *)(");
+                                self.emit.print(&base_text);
+                                self.emit.print(&format!(" + 0x{:x})", off));
                             }
                         } else {
                             // Emit as *(long *)(a + b) — the cast makes it legal C

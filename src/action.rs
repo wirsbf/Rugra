@@ -698,6 +698,14 @@ pub fn build_cleanup_pool() -> ActionPool {
     // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
     pool.add_rule(Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
     pool.add_rule(Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
+    // Rugra-local: also fold late-created trivial arithmetic (e.g. self-XOR
+    // x^x→0 created by type-recovery / copy-prop / structuring passes that
+    // run AFTER simplifypool in the mainloop). Ghidra's mainloop repeats
+    // actprop (simplifypool) so late ops get re-simplified; Rugra's pipeline
+    // runs simplifypool once in stackstall, so we re-apply RuleTrivialArith
+    // here as a cleanup to catch trivially-foldable ops (self-XOR/AND/OR/
+    // EQUAL) introduced after simplifypool converged.
+    pool.add_rule(Box::new(RuleTrivialArith::new()));
     pool
 }
 

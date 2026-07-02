@@ -635,3 +635,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **动机**：Ghidra `ActionNameVars::apply` 末尾 `scope->assignDefaultNames(base)`（database.cc:2850）重命名所有未命名符号（含 varmap.cc:548 的 StackX_ fallback 名）。此前 Rugra 只在 iVar/lVar 路径（compact_name_for）走共享 base，StackX_ 走另一路径原样输出。
 - **实测**：curl StackX_ 占位名 102→0（21 个 distinct 全部转为 iVar/lVar/bVar），0 undeclared，输出仍可编译。961/961 测试。
 - **诚实限制**：func_gap_audit EXACT 仍 0（每函数仍有 reg-leak/struct 访问/selfxor 等其他差异），但消除了一整类命名占位缺陷。
+
+### STORE 复合基址左值修复（2026-07-03 续 3）
+- **根因**：`op_store` 的 `base + const_offset` 路径直接 `push_varnode(base)` 后追加 `->field_XX`。当 `base` 经 copy-prop 解析为复合表达式（如 `piVar13 + lVar11 * *(long *)(...)`），输出 `piVar13 + lVar11 * ...->field_50` 既是语法错误又非左值；gcc 报 `lvalue required as left operand of assignment`。对照 Ghidra `opStore`（printc.cc:500-518）：STORE 地址**永远**在一元解引用 `*` 下输出，保证 LHS 是合法左值。
+- **修复**：新增 `capture_varnode_text` 把 base varnode 渲染到临时缓冲；若 base 是裸标识符（全字母数字+下划线），用 `base->field_XX`；否则用 `*(long *)(<复合表达式> + 0xNN)`（整体解引用，左值合法）。
+- **效果**：curl gcc 审计 21/24→22/24 OK（glob_set 的 lvalue 错误消除）。

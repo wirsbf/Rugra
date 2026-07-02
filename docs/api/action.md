@@ -716,3 +716,6 @@ printc emit_block_structured +thread_local depth guard（>200 回退）。sblock
 
 ### 2026-07-01（续 16）：per-arm printc helpers + mainloop repeatapply 最终诊断（无限递归）
 printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply 测试 depth 20-200+256MB：全部溢出。最终诊断=不是栈帧大小而是 sblocks 重建后的真正无限递归。
+
+### cleanup pool 加 RuleTrivialArith（2026-07-03）
+- 在 `build_cleanup_pool` 末尾注册 `RuleTrivialArith`。Ghidra mainloop（coreaction.cc:5503）repeatapply `actprop`（含 RuleTrivialArith）会重简化新创建的 op；Rugra 的 simplifypool 在 stackstall 里只跑一次，mainloop 后期（type-recovery / copy-prop / structuring）创建的 trivially-foldable op（self-XOR x^x→0 等）无法被再简化。cleanup pool 在管线最末运行（universal post-fullloop，coreaction.cc:5694），补这一刀捕获后期 op。Rugra-local 决策（Ghidra 靠 mainloop repeatapply 达同等效果），注释说明。
