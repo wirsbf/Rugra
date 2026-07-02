@@ -7,9 +7,9 @@
 > 另有 6 个 Ghidra 不存在的自造 Action（simplify/typeinfer/copypropagate/typepropagate/inferparams/cse）是技术债。
 > P0 = 管线嵌套化改造 + 19 个未接入 Action 接线。
 >
-> 📌 **2026-07-01 更新**：并发移植 subflow.cc（SubvariableFlow + 8 Rule）、double.cc（SplitVarnode + 4 Rule）、ruleaction.cc 补 21 Rule + 修 RuleDivOpt。oppool1/cleanup 池大批补缺 Rule 已接入主管线。832/832 测试，curl 24/24 无回归。
+> 📌 **2026-07-01 更新**：并发移植 subflow.cc（SubvariableFlow + 8 Rule）、double.cc（SplitVarnode + 4 Rule）、ruleaction.cc 补 21 Rule + 修 RuleDivOpt。oppool1/cleanup 池大批补缺 Rule 已接入主管线。~~832/832 测试，curl 24/24 无回归~~（**2026-07-02 19:29 校对注**：测试数现 960/960，curl 当前 `switch` 已 18→0、`uVar` 已 0，但仍残留 2 个 `if (1) goto ;` 语法错误 + StackX/param 占位名；详见 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节）。
 
-**最后核实**: 2026-06-27（逐行核对 Rugra 源码 vs Ghidra 源码）
+**最后核实**: 2026-06-27（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-07-02 19:29 校对注**：此日期后已 **204 commit**（含 `docs/QUALITY_GAP_2026-07-02.md` 质量诊断 + `28f1cfe` 全量函数级审计），本文件中模块级 L1/L2/L3 逐行状态仍反映 06-27 核实结果，**输出质量/测试数等可实测项已过时**——以 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节及下方统计汇总表「2026-07-02 19:29 校对」注为准。模块级状态需重新逐行核实 Ghidra 源码后方可更新（铁律 10：禁止形式上改、实质没验证）。
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
 
 ## 图例
@@ -315,6 +315,8 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 ---
 
 ## 统计汇总（2026-06-29 依赖分析 + L2.5 细分）
+
+> ⚠️ **2026-07-02 19:29 校对注**：下表「数量」反映 **2026-06-27 模块级逐行核实 + 06-29 依赖分析**，此后虽 204 commit，但多为 Rule/Action 补全与输出质量修复，未推翻模块级 L 分级（需重新逐行读 Ghidra 方可升降级）。表中数字暂保留，**不代表测试数/输出质量**——后者见 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节（测试 960/960；curl goto=2 语法错 / httpd uVar=262）。
 
 | 级别 | 数量 | 说明 |
 |---|---|---|

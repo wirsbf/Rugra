@@ -259,8 +259,10 @@ APPROVE → 合并
 | ✅ L3 | 已完整实现 + **接入主管线** + 对齐验证 | 14 |
 | 🟢 L2.5 | 核心算法 1:1 移植完成 + 有测试，但**未接入主管线**（缺 Rule 包装器/被 Sleigh 阻塞/Ghidra 设计如此） | 9 |
 | 🔧 L2 | 核心算法缺失/未对齐 | 16 |
-| 📋 L1 | 完全缺失，需从零实现 | 6 |
+| 📋 L1 | 完全缺失，需从零实现 | ~30 |
 | ⚪ 无标记 | 表格行未标状态（需补） | 4 |
+
+（2026-07-02 19:29 校对：本表数字基于 2026-06-29 核实，与 `ALIGNMENT_ROADMAP.md` 统计汇总表一致。L1 此前误标 6，实为 ~30（signature/analyzesigs/flow/codedata/dynamic 等 + 部分 Rule/Action 缺失项），已修正。模块级 L1/L2/L3 逐行状态以 `ALIGNMENT_ROADMAP.md` 为准，该文件头部「最后核实」日期标注时效。）
 
 （2026-06-29 依赖分析：核实核心算法完整性后，将 9 个"代码完整但未接入"的模块从 L2 细分为 **L2.5**（区别于算法未完成的真 L2）。分三类：① 缺 Rule 包装器（subflow）；② Ghidra 设计上非 universalAction（callgraph/unify/float_emulate/grammar）；③ 被 Sleigh 架构初始化阻塞（userop/pcodeinject/pcodeparse/emulate/paramid）。最高 ROI 解锁路径：subflow 的 9 个 Rule 包装器。详见 `ALIGNMENT_ROADMAP.md` 依赖关系图。）
 
@@ -282,7 +284,7 @@ APPROVE → 合并
 
 ```bash
 cargo build --release                              # 构建
-cargo test                                         # 单元测试（736 个，2026-06-28 核实）
+cargo test                                         # 单元测试（960 个，2026-07-02 19:29 核实：cargo test --lib 全绿）
 cargo run --release --example curl_decompile       # curl 反编译
 cargo run --release --example httpd_decompile      # httpd 反编译
 python tools/audit_syntax.py result/curl_cur.c     # gcc 语法审计
@@ -309,9 +311,10 @@ core: implement ActionCast in coreaction pipeline
 fix: emit_block_structured preserves while loops after return
 ```
 
-## 🎯 当前反编译质量（2026-06-28 核实）
+## 🎯 当前反编译质量（2026-07-02 19:29 实测核实 `result/curl_cur.c` + `result/httpd_cur.c`）
 
-- **curl**: 22/24 函数通过 gcc 语法审计（glob_set 类型错误，CFG 修复暴露）。**结构骨架 diff（`tools/compare_ghidra.py`）实测 17/24 函数有真实缺陷**（空 else、寄存器泄漏、调用丢失）+ 332 个变量编号问题（181538f 类 bug）。0 goto，0 uVar。注：旧 while 计数 KPI 已废弃（见铁律 11）
-- **httpd**: 待重新核实（CFG 修复导致性能回归，需长超时），0 goto，0 uVar
-- **测试**: 736/736 通过（`cargo test --lib`；`cargo test` 默认含 examples，需先 `cargo build --examples`）
+- **curl**（`curl_cur.c`，1281 行）：`while`=39 / `for`=0 / `if`=149 / `switch`=0 ✅（`0fc0806` 把过度 switch 化从 18 降到 0）/ `goto`=2 ❌（仍是 `if (1) goto ;` 空目标**语法错误**）/ `uVar_<hex>`=0 ✅（07-02 差距报告里的 215 已修）/ `StackX_*`=98 次（19 个去重，仍残留）/ `param_N`=74 次（5 个去重）/ `memcpy`=0 ❌。结构骨架 diff 详见 `docs/QUALITY_GAP_2026-07-02.md`。
+- **httpd**（`httpd_cur.c`，Jun 30，1459 行）：`while`=58 / `for`=0 / `switch`=15 / `goto`=0 / `uVar_<hex>`=**262 次（56 个去重）❌** / `StackX_*`=49 / `param_N`=73。质量明显比 curl 差，此前文档「0 uVar」对 httpd 错误。
+- **测试**: **960/960 通过**（`cargo test --lib`，2026-07-02 19:29 核实；`cargo test` 默认含 examples，需先 `cargo build --examples`）。此前文档「736」过期。
+- 注：旧 while/if 计数 KPI 已废弃（见铁律 11）。本节数据基于 07-02 19:29 对 `result/*.c` 的实测，模块级算法对齐状态见 `ALIGNMENT_ROADMAP.md`（其「最后核实」标注时效，06-27 后已 204 commit，含 07-02 质量诊断 + 全量审计）。
 - **已完成的核心移植**: identifyInternal/selfIdentify, ruleBlockCat chain, ruleBlockGoto+clipExtraRoots, TraceDAG(BadEdgeScore+visit-count), structure_loops_first, **Datatype get_align_size/get_sub_type/get_hole_size/type_order**, **varmap RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐 + printc 集成 + Stack-spacebase**, **Varnode flag 访问器 + get_nz_mask + lone_descend/has_no_descend + get_consume/set_consume/get_nzm/set_nzm + is_boolean_value (varnode.hh)**, **PcodeOp::is_calculated_bool (op.hh:211)**, **Funcdata op-edit API (funcdata.hh:281-479) + op_swap_input + op_set_output + op_destroy + op_unset_input + op_unset_output + new_varnode_out + replace_lessequal + distribute_int_mult_add**, **get_booleanflip (opcodes.cc:94)**, **bit helpers signbit_negative/calc_mask/leastsigbit_set/mostsigbit_set + functional_equality (address.cc/expression.cc)**, **expression.rs: TermOrder/AdditiveEdge/AddExpression**, **ActionRestructureVarnode (coreaction.cc:2274)**, **Rules: ~100 个 struct 定义于 ruleaction.rs（含 NegateIdentity/NotDistribute/ConcatZero/XorCollapse/AddMultCollapse/...；完整列表见 `grep -oE 'struct Rule[A-Z][A-Za-z0-9_]*' src/ruleaction.rs`）**, **L1模块骨架(14): condexe/transform/subflow/unify/constseq/opbehavior(完整)/rangeutil(完整)/userop/mem-state/float_emulate(完整)/pcodeinject/emulate/callgraph(完整)/signature**, **jumptable.rs L1→L2 (LoadTable/PathMeld/GuardRecord/JumpValues(+Range/RangeDefault)/JumpModel trait/JumpModelTrivial/JumpBasic/JumpTable/EmulateFunction)**, **override_rs.rs L1→L2 (Override + FlowOverride 完整 in-memory)**, **arch.rs L1→L2 (Ghidra Architecture 配置容器 + ArchitectureCapability + CapabilityRegistry)**, **database.rs L1→L2 (SymbolEntry/Symbol/FunctionSymbol/EquateSymbol/LabSymbol/Scope/Database)**, **findSpanningTree DFS 边分类 (block.cc:1009-1110) + F_BACK_EDGE 循环回边检测 + 回边保护（对齐 TraceDAG 跳过 loop edges）**, **CFG 基本块划分修复（build_blocks_from_ops 跳转目标分裂点）→ curl while 4→26**
