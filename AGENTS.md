@@ -113,6 +113,137 @@ Rugra 要复刻的是 Ghidra **全部**算法——包括最难的：跳转表�
 
 **本轮根因**：用户反复纠正的就是这一条——遇到 Rule 池死循环就禁用 Rule、遇到 P-code op 缺失就绕过、遇到 flag 语义不明就猜……**全部都是畏惧困难的表现**。复杂度本身不可怕，可怕的是用简化绕开复杂度后留下的、会扩散到整个项目的对齐裂缝。
 
+---
+
+## 🛡 防漏机制（铁律 10-13 + Red Flags）
+
+> 本节由 2026-07-02 事故驱动设立：commit `181538f`（变量重编号）声称"faithful port of assignDefaultNames (database.cc:2862)"并引用了正确行号，但漏掉了 `int4 &base` 的引用语义（误做成 per-prefix 计数器）、`SymbolCompareName` 的字典序遍历、`printNameBase` 的动态前缀——**三处决定性语义都没去读对应行确认**，靠"前缀 scheme 看起来对"蒙混过关，单元测试全绿，4 天后才被发现。下列铁律专为防止此类"形式上读了、实质没验证"的对齐自欺。
+
+### 10. 🔴 对齐证据块（Alignment Evidence）— 每个"对齐"commit 必须附
+
+**任何 commit message 出现 `align`/`port`/`对齐`/`faithful` 字样时，message 体必须包含一个 `## Alignment Evidence` 块。**
+
+块格式：
+
+```
+## Alignment Evidence
+Ghidra: <file>:<line> <函数签名逐字摘录>
+  关键决定性语义（四类，逐条核对）:
+  - 引用/输出参数: <如 int4 &base 是引用 → 跨调用共享递增>
+  - 循环边界/遍历顺序: <如 nametree 按 SymbolCompareName 字典序>
+  - 计数器/累加器: <如 base=1 初值, 单调递增, 单一共享>
+  - 排序/比较键: <如 name.compare() + nameDedup>
+Rugra: <file>:<line> <对应函数>
+  - <逐条对应, 注明如何对齐上述每一类>
+四类决定性语义核对: [x]引用参数 [x]遍历顺序 [x]计数器 [x]排序键
+```
+
+**四类决定性语义**（必须在读 Ghidra 行时逐项确认，缺一项即为未读够）：
+
+1. **引用/输出参数**（`&` / `*` / 返回值 / out 参数）——是否跨调用共享状态？是拷贝还是引用？
+2. **循环边界与遍历顺序**——`begin()/end()` 是什么容器？排序键是什么？边界 `<` 还是 `<=`？
+3. **计数器/累加器的初值、增量时机、作用域**——是 per-X 独立还是全局共享？何时重置？
+4. **排序/比较键**——`operator()` / `compare()` 比的是什么字段？相等时 tie-break 是什么？
+
+**判定准则**：
+- 引用行号但没逐字摘录那一行的签名（含 `&`/`*`）= 未读够
+- 摘录了签名但没核对四类语义 = 未读够
+- 核对了但 Rugma 侧写"对齐"而实际用了不同机制 = 作弊
+
+**执行**：pre-commit hook 扫 message，命中 `align|port|对齐|faithful` 关键词但缺 `## Alignment Evidence` 块 → 拒绝提交。
+
+### 11. 🔴 差分测试门禁（Differential Test Gate）— 可见输出模块必跑
+
+**凡改动影响"可见输出"的模块，单元测试全绿不等于对齐。必须跑 Ghidra 黄金输出差分测试。**
+
+**白名单模块**（改动这些文件时触发门禁）：
+- `src/printc.rs`、`src/prettyprint.rs`（C 文本输出）
+- `src/varmap.rs`（变量命名/符号）
+- `src/blockaction.rs`、`src/coreaction.rs`（控制流结构化、Actions 影响输出）
+- `src/ruleaction.rs`（Rules 影响 IR 形态）
+
+**门禁流程**：
+
+```bash
+# 1. 维护黄金输出集: tests/golden/ghidra/<bin>_<func>.c
+#    (从真实 Ghidra 跑出来, 人工核定正确, 入库)
+# 2. 改动后跑差分
+python tools/diff_against_ghidra.py \
+  --bin tests/fixtures/mini.c \
+  --func '*' \
+  --mode varnames   # 或 controlflow / full
+```
+
+**判定**：
+- **0 diff**：完全对齐，可提交。
+- **有 diff**：commit message 必须含 `## Differential` 块，逐处解释每个 diff 的性质（对齐缺陷 / Ghidra 本身可接受的差异 / 待修）。**未解释的 diff = 不可提交。**
+
+**为什么这条必要**：`181538f` 的 `test_compact_name_for` 单元测试验证的是"我的 per-prefix 逻辑自洽"，验证不了"和 Ghidra 的单一 base 共享计数一致"。只有逐位 diff Ghidra 输出才能抓到编号顺序错位。自洽性测试是必要非充分条件。
+
+### 12. 🔴 强制独立复核（Cross-Review）— 核心算法必走双 Agent
+
+**核心算法模块的"对齐"改动，单 agent 自检不可信，必须由另一个 agent 独立复核。**
+
+**核心算法白名单**（高价值、紧耦合、错了扩散面大）：
+- `src/heritage*.rs`（SSA heritage / 多重 def 合并）
+- `src/jumptable.rs`（跳转表 switch 恢复）
+- `src/blockaction.rs`（控制流结构化：循环/switch/goto）
+- `src/condexe*.rs`（条件执行折叠）
+- `src/varmap.rs` 的核心算法层（RangeHint/AliasChecker/MapState/ScopeLocal）
+- `src/merge.rs`（HighVariable 合并）
+- 任何被 AGENTS.md 标注为"主管线 Action/Rule"的改动
+
+**双 Agent 流程**：
+
+```
+实现 Agent → 提交(commit 可临时, 不合并)
+                ↓
+复核 Agent（独立读 Ghidra 源码, 不看实现 Agent 的推理）
+  产出 ## Cross-Review 报告:
+    独立读 <Ghidra file>:<line> <函数>
+    四类决定性语义清单:
+      [ ] 引用参数: ... MISMATCH / OK
+      [ ] 遍历顺序: ... MISMATCH / OK
+      [ ] 计数器:    ... MISMATCH / OK
+      [ ] 排序键:    ... MISMATCH / OK
+    结论: APPROVE / REJECT (附理由)
+                ↓
+REJECT → 回实现 Agent 修 → 重新复核
+APPROVE → 合并
+```
+
+**复核 Agent 的独立性要求**：
+- 必须自己打开 Ghidra 源码读对应行，**不得直接采信实现 Agent 的 Alignment Evidence 块**（那只是声明，不是证据）
+- 必须独立列出四类语义清单再对比，不得"看着实现 Agent 的清单点头"
+- 发现任一 MISMATCH → REJECT，并指出 Rugra 行号 + Ghidra 行号 + 修正方向
+
+**判定准则**：核心算法白名单模块的 commit，若无 `## Cross-Review: APPROVE` 块，不得合并到主管线分支。
+
+### 13. 🔴 Red Flags 自查清单 — 命中即停
+
+**commit message 或代码出现以下信号时，作者必须立即停下手，回去重读 Ghidra 对应行的决定性语义。不得"先提交再说"。**
+
+🚩 **commit message 信号**：
+- `faithful port` / `对齐` / `aligns with` 但**没贴** Ghidra 关键行的逐字签名摘录
+- `Known limitation:` 后跟**作者自己归因**（常是误诊，如 "only numbering differs" 掩盖了计数器模型错位）
+- `scheme matches, only X differs`（局部正确掩盖整体错误的典型句式）
+- 引用行号（如 `database.cc:2862`）但**没引用那一行的语义细节**（`&` / `<` / 初值 / 边界）
+- 测试只列 `N/N pass` **没有 Ghidra 输出对比**
+
+🚩 **代码信号**：
+- `HashMap<&str, u32>` 当计数器，而 Ghidra 是单一 `int4 base`（暗示 per-X 独立 vs 全局共享，**必查**）
+- `per-prefix` / `each X` / `各自` 等暗示独立计数的措辞
+- 写死的字符串列表/枚举匹配，而 Ghidra 用 `virtual` 方法动态派发（如 `printNameBase` vs `PREFIXES` 数组）
+- 在 `print` / `emit` 阶段做 Ghidra 在 `Action` 阶段做的事（阶段错位）
+- Rust 侧有 `discovery_pass` / 两阶段 guard，而 Ghidra 单阶段确定性完成（暗示 Rugra 有非确定性，需查为何）
+
+🚩 **流程信号**：
+- 用"这个模块我先做了，那个以后再对齐"绕过当前模块的对齐（违反铁律 9）
+- 把 Ghidra 有的东西标 `// TODO` 或 `// simplified` 而无 ALIGNMENT_ROADMAP 记录
+- 测试通过就提交，没问自己"Ghidra 跑同一输入会得到一样的东西吗"
+
+**自查执行**：提交前作者通读自己的 diff + message，命中任一 Red Flag → 强制回到铁律 1（读 Ghidra 源码对应行）→ 补齐 Alignment Evidence 块（铁律 10）。命中不处理直接提交 = 违反铁律。
+
 ## 📋 L1/L2/L3 路线图
 
 详见 `ALIGNMENT_ROADMAP.md`。当前状态：
