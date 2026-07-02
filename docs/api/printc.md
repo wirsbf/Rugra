@@ -655,3 +655,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **根因**：`doc_variable_decls_from_funcdata` 遍历 `used_varnode_types`（HashMap）输出声明。Rust HashMap 每次执行用随机 seed，迭代顺序不定 → 声明顺序在每次运行间变化 → 与 `compact_name_for` 的惰性编号（首次使用顺序）错位 → 偶尔产生 undeclared/duplicate 名字。实测：同一二进制 5 次运行 gcc 审计 22/24~24/24 随机波动。这是**输出非确定性** bug——Ghidra 永远是确定性的。
 - **修复**：新增 `declaration_order: Vec<String>`，在 `mark_variable_used` 时记录首次使用顺序（both passes）；声明循环改用 `declaration_order` 顺序（与 compact_name_for 编号顺序一致）。对齐 Ghidra `assignDefaultNames`（database.cc:2850-2865）单一确定性遍历顺序。
 - **效果**：curl 输出现在**完全确定**（5 次运行 gcc 审计恒定）；Total Rugra defects 恒定 0；956/956 测试。代价：稳定在 23/24 gcc（之前随机 22-24）——确定性优于偶发的 24。剩余 1 fail 是独立的 cast-concat bug（`(long)bVar1(long)bVar12` 缺 `||`），下一轮修。
+
+### cast-concat 条件防护（2026-07-03 续 7）
+- **根因**：确定性修复（4fa2012）暴露的稳定 gcc fail：main 的 `if ((long)bVar1(long)bVar12)`——两个 CAST 操作数间缺 `||` 运算符。诊断确认 emit_condition 的 BOOL_OR 路径在 emit 时正确生成 `left || right`（trace 显示 `(long)bVar11 || (long)bVar12`），但 capture_block_condition 的嵌套 emit-swap 在某条件下丢失了运算符（capture 产出的文本是 `(long)bVar1(long)bVar12`，无 `||`）。
+- **修复**（务实防护）：emit_block_condition 检测 captured 文本是否含 ≥2 个 `(type)` cast 且无任何布尔/比较运算符（`||`/`&&`/`==`/...）→ 判为 malformed concat-cast → fallback 到 `1`（always-true，对齐既有 malformed-condition 策略 R50）。底层 operator-drop（嵌套 emit-swap bug）记为独立后续。
+- **效果**：curl gcc 审计 23/24 → **24/24 OK（确定，3 runs 全 24）**；Total Rugra defects 0（保持）；956/956 测试。

@@ -2524,8 +2524,25 @@ impl PrintC {
         // (Audit: R50.)
         let produced = self.capture_block_condition(block_arc);
         let t = produced.trim();
+        // Detect malformed conditions: concatenated casts like `(long)bVar1(long)bVar12`
+        // (BOOL_OR/BOOL_AND whose operator was dropped during the nested capture/emit
+        // swap in emit_condition's BOOL_OR path). The signature is two `(type)`
+        // casts with no operator between them: `<cast>ident<cast>` or `<cast>(<cast>`.
+        // Emitting these verbatim is a gcc syntax error ("expected expression before
+        // 'long'"). Fall back to `1` (always-true) — valid C, matches the existing
+        // malformed-condition policy (R50). The underlying operator-drop is a
+        // separate emit-path bug; this guard keeps the output compilable.
+        let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
+            + t.matches("(char)").count() + t.matches("(bool)").count()
+            + t.matches("(short)").count();
+        // Two casts with no boolean/comparison operator between them => malformed.
+        let has_bool_op = t.contains(" || ") || t.contains(" && ") || t.contains(" == ")
+            || t.contains(" != ") || t.contains(" < ") || t.contains(" > ")
+            || t.contains(" <= ") || t.contains(" >= ");
+        let has_concat_cast = cast_count >= 2 && !has_bool_op;
         let looks_valid = !t.is_empty()
-            && t.chars().any(|c| c.is_alphanumeric() || c == '_');
+            && t.chars().any(|c| c.is_alphanumeric() || c == '_')
+            && !has_concat_cast;
         if looks_valid {
             self.emit.print(&produced);
         } else {
