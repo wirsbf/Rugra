@@ -682,6 +682,15 @@ mainloop repeatapply 仍不启用：即使迭代式 apply + 256MB 栈仍溢出�
 ### 2026-07-01（续 10）：迭代式 ActionGroup.perform + mainloop repeatapply 最终根因
 ActionGroup.perform 重写为迭代式：循环调 self.apply()，不递归进默认 perform。cap=1+mainloop repeatapply→24/24 通过；cap=2→glob_range 栈溢出。
 
+### 2026-07-02：移除 perform/ActionGroup 迭代上限（R73 对齐 Ghidra，输出中性）
+- **变更**：`Action::perform` 删除 `if iterations > 1 { break; }`（action.rs:90-92），`ActionGroup::perform` 删除 `if iterations > 2 { break; }`（action.rs:270）。两者改为纯 `lcount >= count` 终止（与 Ghidra action.cc:298-362 的无界 do-while 一致）。
+- **动机**：audit R73。原上限是续 7/10 时期防 glob_range 栈溢出/死循环的安全阀；但续 9（迭代式 ActionGroup.apply）+ 续 10（迭代式 perform）已修复溢出根因（递归 perform→apply→child.perform 链），该上限已是冗余技术债，且静默禁用了 repeatapply 收敛（如 `V^V→0` 折叠后传播到 RETURN 的多轮简化）。
+- **验证（2026-07-02 19:50 实测）**：
+  - `cargo test --lib` 961/961 通过，零回归零挂起。
+  - curl_decompile 连跑 3 次：rc=0，1281 行，glob_range 函数体完整（1266 字符，以 `}` 收尾），**无栈溢出**。
+  - func_gap_audit（vs tests/golden/ghidra_curl.c）：0 EXACT / 24 DIFF — 与移除前**完全一致**（输出中性）。即此改动既未引入回归也未带来改善，但消除了收敛性阻塞，为后续 Rule 多轮简化生效扫清障碍。
+- **诚实声明**：本次改动对 curl 当前输出**无可见影响**（return-V^V 等缺陷未变）。其根因经诊断（RUGRA_DBG_XOR）证实不在迭代上限，而在更深处（main_init 的 `iVar1^iVar1` 中 iVar1 为未初始化 varnode，由 printc 返回值启发式合成，非真实 `xor eax,eax`）。单指令 `xor eax,eax` 提升测试（test_xor_eax_eax_input_identity）证明 lifter 的 varnode 身份 dedup 正确（ptreq=true），故 main_init 缺陷需在返回值恢复层（ActionReturnRecovery）继续追查。
+
 **最终根因**：mainloop repeatapply 重新运行 ActionHeritage（有深层递归 rename 逻辑 visit_rename_impl）。glob_range 有 17 bblocks，Heritage 的递归重命名在多轮 repeatapply 下累积递归深度，即使 256MB 栈也溢出。修复需要让 Heritage 的 rename 迭代化（非递归），或接受 Rugra 的 Actions 有内部循环不需要外部 repeatapply。
 
 ### 2026-07-01（续 11）：mainloop repeatapply 仍阻塞（迭代 Heritage 后 cap=1 仍溢出）

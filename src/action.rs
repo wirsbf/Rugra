@@ -84,12 +84,17 @@ pub trait Action {
         // count from prior iterations and breaking repeatapply convergence.
         state.count = 0;
         state.count_tests += 1;
-        let mut iterations = 0u32;
+        // Faithful to Action::perform (action.cc:298-362): an UNBOUNDED
+        // do-while that repeats only while this iteration made a change
+        // (lcount < count) AND repeatapply is set. The previous Rugra code
+        // hard-capped this to 1 iteration (`if iterations > 1 { break; }`),
+        // which silently disabled repeatapply convergence — so multi-round
+        // simplifications (e.g. fold `V^V→0` then propagate the `0` into a
+        // RETURN) never converged, leaking `return iVar1 ^ iVar1` into output.
+        // Per AGENTS.md §5, prior Rule-pool *cycles* were fixed by phase
+        // separation (actcleanup), NOT by this iteration cap; the cap was
+        // masking the real fix. Removed to match Ghidra (audit R73).
         loop {
-            iterations += 1;
-            if iterations > 1 {
-                break;
-            }
             // Snapshot count before apply (action.cc:314 lcount = count).
             state.lcount = state.count;
             let res = self.apply(fd)?;
@@ -256,15 +261,17 @@ impl Action for ActionGroup {
     /// Instead, we inline the repeatapply loop here: call self.apply() (which
     /// calls child.apply/perform), and repeat if the group has repeatapply.
     /// This keeps the stack depth O(1) per repeatapply iteration.
+    ///
+    /// Faithful to Ghidra ActionGroup (which inherits the base `perform`
+    /// do-while at action.cc:298-362): UNBOUNDED, terminating only when a
+    /// pass makes no change (lcount >= count) or repeatapply is unset. The
+    /// previous `iterations > 2` cap disabled group-level convergence
+    /// (audit R73) and is removed; the `lcount >= count` guard prevents
+    /// infinite loops for correctly-reporting Rules.
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
         state.count = 0;
         state.count_tests += 1;
-        let mut iterations = 0u32;
         loop {
-            iterations += 1;
-            if iterations > 2 {
-                break;
-            }
             state.lcount = state.count;
             let res = self.apply(fd)?;
             state.count += res;
