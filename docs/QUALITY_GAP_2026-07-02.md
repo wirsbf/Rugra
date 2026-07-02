@@ -183,6 +183,29 @@ diff <(grep -A100 'next_url' result/curl_cur.c) <(grep -A100 'next_url' result/g
 - 根因层：blockaction 结构化 + printc body emit（QUALITY_GAP §P3）。
 - 下一步对齐目标。
 
+### 8.2.1 body-collapse 根因 #2 已修：ActionDeadCode 杀 CALL（commit 981f412）
+
+**真根因**（比 §8.2 推测的"结构化"更深）：`ActionDeadCode::apply` Step 4（coreaction.rs:247）对所有"输出从未被消费"的 op 一律 `mark_dead`，**包括 CALL/CALLIND**。但 CALL 有副作用（fwrite/fopen/malloc 写内存/做 I/O），Ghidra 的 `ActionDeadCode`（coreaction.cc:4038-4044）明确区分：
+```c
+if (op->isCall()) data.opUnsetOutput(op);  // 保留 CALL，只丢未用的返回值
+else               data.opDestroy(op);      // 完全移除
+```
+Rugra 漏了这个分支，把 fwrite/fopen 等 CALL 当普通 op 杀掉 → 所有含 CALL 的 if/else body 整体消失。
+
+**修复**：Step 4 分两路——CALL/CALLIND 死输出 → `fd.op_unset_output`（对齐 `opUnsetOutput`）；其余 → `mark_dead`（不变）。
+
+**量化效果**（`compare_ghidra.py`）：
+
+| 指标 | 修前 (§8.1 后) | 修后 (981f412) |
+|---|---|---|
+| defect 函数数 | 7/24 | **5/24** |
+| my_fwrite defect | 1 (empty else) | **0**（else body 现含 fwrite 调用，if body 现含 fopen） |
+| my_get_line defect | 1 (empty else) | **0** |
+| main defect | 10 | **7** |
+| gcc 语法审计 OK | 17/24 | **20/24** |
+
+剩余 5 个 defect 函数（main×7/glob_word×2/getparameter/next_url/match_url 各 1）的 empty-else 是**非 CALL 根因**（已确认 my_fwrite 的 CALL 已存活但仍可能有其他结构化问题）。下一轮对齐目标。
+
 ### 8.3 number 计数说明
 
 numbering issues 408→597 的增量**不是新引入的编号 bug**，而是：
