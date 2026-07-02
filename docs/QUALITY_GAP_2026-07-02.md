@@ -1,0 +1,158 @@
+# Rugra vs Ghidra 反编译质量差距诊断（2026-07-02）
+
+> 对比基准：`result/curl_cur.c`（Rugra 最新输出）vs `result/ghidra_curl_ref.c`（Ghidra 参考）
+> 对象：curl 二进制的同一组用户函数
+
+## 1. 总体差距（量化）
+
+| 指标 | Rugra | Ghidra | 差距 |
+|---|---|---|---|
+| 输出行数 | 1596 | 3500 | 0.46× |
+| 用户函数数 | 24 | ~30 真实 | Rugra 还多出 4 个伪函数（见 §3.1） |
+| `while` | 39 | 34 | 接近 ✅ |
+| `for` | 0 | 4 | Rugra 一个都没有 ❌ |
+| `if` | 172 | 208 | 0.83× |
+| `switch` | 18 | 2 | **Rugra 过度 switch 化（9×）❌** |
+| `goto` | 2（且语法错误） | 61 | Rugra 结构化过度，但 goto 是坏的 |
+| 强制类型转换 cast | 114 | 339 | 0.34× |
+| `memcpy` | 0 | 6 | ❌ |
+
+**结论**：行数只有 Ghidra 的 46%，但不是因为 Rugra 更精炼——而是因为大量变量/表达式根本没正确解析，导致输出**残缺且语法错误**。
+
+## 2. 致命缺陷（Rugra 独有，Ghidra 完全没有）
+
+这些是**语法错误或语义垃圾**，Ghidra 输出里一个都没有：
+
+| 缺陷类型 | Rugra 出现次数 | 根因层 |
+|---|---|---|
+| `if () goto ;`（空条件 + 空 goto，**语法错误**） | 2 | 控制流结构化 + printc |
+| `if ()`（空条件括号） | 4 | printc 条件 emit |
+| `uVar_<十六进制>` 占位变量名（**215 次！**） | 215 | **varmap/HighVariable 缺失（见 §4）** |
+| `uVar_<字母>` 占位名 | 9 | 同上 |
+| `uVar_uVar_` 嵌套畸形名 | 1 | printc 字符串拼接 bug |
+| `StackX_*` 占位栈变量名 | 116 | varmap ScopeLocal 未真正映射 |
+| `param_N` 未命名参数 | 77 | 原型/参数识别未完成 |
+| `while (...) {}`（空循环体） | 7 | 控制流结构化 + body emit |
+| `else {}`（空 else） | 10 | 同上 |
+| `switch ((iVar1 ^ iVar1))`（自异或=0 的 switch） | 存在 | 表达式化简 Rule 缺失 |
+
+**Ghidra 对照**：以上 10 类缺陷在 `ghidra_curl_ref.c` 中**全部为 0**。
+
+## 3. 结构性差距
+
+### 3.1 函数级：Rugra 凭空多出 4 个伪函数
+
+Rugra 输出了 Ghidra 没有的：`SetHTTPrequest_part_0`、`file2string_part_0`、`getparameter_constprop_0`、`parseconfig_constprop_0`。
+
+`_part_0` / `_constprop_0` 后缀说明 Rugra 把**同一个函数的部分基本块**当成了独立函数——这是**控制流/调用图分析**的 bug：没有正确合并，或把函数内联展开后的副本当新函数。
+
+Ghidra 对应的 `file2string`/`parseconfig`/`getparameter`/`SetHTTPrequest` 是完整单函数。
+
+### 3.2 函数体大小：多个函数 Rugra 只有 Ghidra 的一半
+
+| 函数 | Rugra 行 | Ghidra 行 | ratio |
+|---|---|---|---|
+| next_url | 57 | 103 | 0.55 ❌ |
+| match_url | 44 | 82 | 0.54 ❌ |
+| my_get_token | 37 | 61 | 0.61 ❌ |
+| glob_set | 58 | 87 | 0.67 ❌ |
+
+这些函数 Rugra 严重"漏译"——大量语句没生成出来，因为变量没解析、表达式没化简、条件没重建。
+
+### 3.3 next_url 实例对照
+
+**Rugra**（残缺）：
+```c
+void next_url(void * param_1) {
+  byte bVar1;
+  ...
+  long uVar_1075;   // 占位名
+  ...
+  if (!((long)bVar1)) return;   // bVar1 从哪来？未初始化
+  __sprintf_chk((piVar1 + lVar1), 1, -1, ("%0*d"), lVar2);  // 参数类型全错
+  while (uVar_1075 == 0) { }    // 空循环体！
+  ...
+  switch ((long)((iVar1 ^ iVar1))) {   // switch(0) — 自异或未化简
+```
+
+**Ghidra**（正确）：
+```c
+char * next_url(URLGlob *glob) {   // 有真实参数类型
+  char cVar1;
+  ...
+  iVar4 = glob->size;              // 结构体成员访问
+  if (next_url::beenhere != 0) {   // 静态变量
+    iVar7 = iVar4 / 2;
+    if (1 < iVar4) {
+      ppcVar6 = glob->literal + (long)iVar7 * 3;
+      do { ... } while (...);      // 真实循环
+```
+
+差距根源：① 参数原型没识别（Ghidra 是 `URLGlob *glob`，Rugra 是 `void * param_1`）；② 结构体成员访问没恢复（`glob->size`）；③ 局部变量全是占位名；④ 循环体丢失。
+
+## 4. 根因分析（按层）
+
+### 🔴 根因 1：HighVariable / HighSymbol 链未建立（最严重）
+
+**证据**：
+- `src/varmap.rs`（1935 行）**完全不引用 `HighVariable`**（`grep -c HighVariable src/varmap.rs = 0`）
+- `src/variable.rs` 定义了 `HighVariable` 结构体，但 varmap 不构建它
+- `src/printc.rs:1483`：Unique 空间的 varnode 直接 fallback 到 `format!("uVar_{:x}", vn.get_offset())`
+
+**Ghidra 对照**：`varmap.cc`（1620 行）的核心就是 `HighVariable` ← `VarnodeLocDef` ← `SymbolEntry`/`HighSymbol` 链。每个 SSA varnode 通过 heritage 合并后归属到一个 HighVariable，HighVariable 再绑定到 HighSymbol（有真实名字如 `pcVar9`、`sVar2`），print 阶段查 HighSymbol 拿名字。
+
+**Rugra 现状**：heritage 跑了（1390 行），但产物没接到 HighVariable；printc 看到 Unique varnode 就生成 `uVar_<offset>`。这就是 215 个 `uVar_xxx` 的来源。
+
+**这是单一最大根因**——解决了它，§2 里 215+116 个占位名问题大部分消失。
+
+### 🔴 根因 2：参数原型 / Funcdata 输出签名未恢复
+
+**证据**：77 个 `param_N`、所有函数返回 `void`、参数类型几乎全是 `long`/`void *`。
+
+**Ghidra 对照**：`coreaction.cc` 的 `ActionPrototype*` 系列（ActionPrototypeTypes/ActionPrototypeWarnings/ActionActiveParam...）+ `paramid.cc` 推断参数个数/类型。Rugra 的 `paramid.rs` 是 L1 骨架（AGENTS.md 记录），未接入。
+
+### 🔴 根因 3：控制流结构化过度 switch 化 + 空 body
+
+**证据**：switch 18 vs 2（9×）；7 个空 while；10 个空 else；2 个 `if () goto ;`。
+
+**Ghidra 对照**：`blockaction.cc` 的结构化对 if/else/while/switch/do-while 有精确的多路判定。Rugra 倾向于把多分支 if-else 链误判成 switch，且 body emit 阶段会丢失语句（空循环体）。
+
+### 🔴 根因 4：表达式化简 Rule 缺失
+
+**证据**：`switch ((iVar1 ^ iVar1))`（XOR 自身 = 0 未化简）、`__sprintf_chk` 参数类型错乱。
+
+**Ghidra 对照**：`ruleaction.cc` 的 RuleXorCollapse / RuleSubCompares 等。Rugra ruleaction.rs 有 ~100 个 struct 定义，但接入主管线和实际触发的覆盖度不足。
+
+### 🔴 根因 5：结构体成员访问未恢复
+
+**证据**：Ghidra 输出 `glob->size`、`*(int *)(ppcVar6 + 7)`；Rugra 输出 `(piVar1 + lVar1)` 这种裸指针算术。
+
+**Ghidra 对照**：`varmap.cc` 的结构体重建 + type 系统的 `TypeStruct`。Rugra 类型系统对结构体推断未完成。
+
+## 5. 修复优先级（ROI 排序）
+
+| 优先级 | 任务 | 影响 | 对应 Ghidra 源 |
+|---|---|---|---|
+| P0 | 建立 HighVariable ← HighSymbol 链，接入 printc | 消除 215+116 占位名 | varmap.cc 全文 + variable.hh |
+| P1 | 参数原型恢复（ActionPrototype 系列） | 消除 77 个 param_N + void 返回 | coreaction.cc:4609+ |
+| P1 | 结构化 switch 过度化修正 | switch 18→~2 | blockaction.cc |
+| P2 | 表达式化简 Rule 接入 | 消除 switch(0) 等 | ruleaction.cc |
+| P2 | 结构体成员访问恢复 | glob->size 等 | type.cc + varmap.cc |
+| P3 | 空 body / 空 else / 空 if 修复 | 语法正确性 | blockaction.cc + printc.cc |
+
+## 6. 验证方法
+
+```bash
+# 重新生成 Rugra 输出
+cargo run --release --example curl_decompile > result/curl_cur.c 2>result/curl_cur.err
+
+# 对比指标
+python tools/audit_syntax.py result/curl_cur.c
+
+# 函数体对照
+diff <(grep -A100 'next_url' result/curl_cur.c) <(grep -A100 'next_url' result/ghidra_curl_ref.c)
+```
+
+## 7. 一句话总结
+
+**Rugra 的输出不是"差一点"，而是底层变量映射（HighVariable/HighSymbol）这条主干根本没接通**——heritage 产出了 SSA，但没向上汇聚成有名字的高级变量，导致 printc 层只能吐 `uVar_xxx` 占位符。这是 215 个垃圾变量名、77 个未命名参数、大量残缺语句的总根因。优先级 P0：把 varmap 的 HighVariable 链真正建立起来并接入 printc。
