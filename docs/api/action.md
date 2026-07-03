@@ -784,6 +784,12 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - spliceBlockBasic 修了 op-moving（ops 从 out_block 移到 bb），但还差 setOrder（seq_num 重置）。
 - RedundBranch 保持禁用，注释说明剩余缺口（BlockBasic::set_order 未实现）。
 
+### RedundBranch 启用（2026-07-03 续 10）
+- spliceBlockBasic 现在忠实对齐 `BlockGraph::spliceBlock`（block.cc:1597-1620）：moveOutEdge 循环 + flags 合并（f_unstructured_targ/f_entry_point/f_switch_out）。
+- ActionRedundBranch 重新接入主管线（action.rs:881，coreaction.cc:5658）。
+- 验证：curl 24/24 反编译，23/24 gcc 审计通过。唯一失败 `file2string_part_0` 的 `goto ;` 是**预先存在的**结构化 bug（branch op 的 in(0) 缺失），与 RedundBranch 无关——禁用时同样失败。见续 11。
+- 主管线覆盖率 81/85 → **82/85**（仅 NodeJoin/ReturnSplit 2 个 stub 禁用）。
+
 ### BlockBasic::set_order + RedundBranch（2026-07-03 续 9）
 - 新增 BlockBasic::set_order（block.rs:451）——重置 seq_num.order（Ghidra block.cc:2638）。
 - spliceBlockBasic 调用 set_order。但 RedundBranch 仍禁用：goto 目标引用未更新。

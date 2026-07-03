@@ -877,11 +877,10 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
         // but may be no-ops depending on implementation maturity.
-        // ActionRedundBranch (coreaction.cc:5658) — disabled: spliceBlockBasic
-        // moves ops + resets order (setOrder implemented), but removing a block
-        // that is a goto target leaves dangling `goto ;` references. Need to
-        // update goto targets when splicing (redirect to spliced block).
-        // mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new()));
+        // ActionRedundBranch (coreaction.cc:5658). Now enabled: spliceBlockBasic
+        // is faithful to BlockGraph::spliceBlock (flags merge + moveOutEdge),
+        // so goto targets survive block splicing.
+        mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new())); // :5658
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
         // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674 — stub, defer
         mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — stub, safe
