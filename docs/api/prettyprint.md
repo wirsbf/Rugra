@@ -231,3 +231,8 @@ Emitter that discards all output (used for discovery pass)
 - **指针运算 LHS 扫描**：`try_fix_one_ptr_arith` 从只扫描 RHS 改为扫描整行（LHS cast 表达式如 `*(long *)(ptrA + ptrB)` 中的 `ptr + ptr` 也被修复）。
 - **重复标签移除**：新增 `remove_duplicate_labels` pass，移除 splice 残留导致的重复 `LAB_` 定义（保留首次出现）。
 - 效果：gcc 审计从 23/24 提升到 **24/24**——所有函数通过 gcc 语法检查！
+
+### 2026-07-04（续 6）：移除 post_process pass 20+21（net-zero 互为反作用）
+- `canonicalize_struct_deref`（pass 20：`*(ptr+N)` → `ptr->field_N`）+ `rewrite_struct_deref`（pass 21：`ptr->field_N` → `*(long*)(ptr+N)`）已移除。
+- 这两个 pass 互为反作用，净效果为零。emit 层现在直接产出 `*(long*)(ptr+N)`（不产生 `->field_N`），所以两个 pass 都是无用的文本变换。
+- 移除后 post_process 从 27 趟降到 25 趟。gcc 24/24 不变。

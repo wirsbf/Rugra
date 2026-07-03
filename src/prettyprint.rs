@@ -1671,25 +1671,13 @@ impl EmitNoMarkup {
         }
         let output_final2 = no_empty_cases;
 
-        // Twentieth pass: text-level struct pointer dereference canonicalization.
-        // Converts `*(expr + N)` → `expr->field_N` and `*var + N == 0` → `var->field_N == 0`.
+        // Passes 20+21 (canonicalize_struct_deref + rewrite_struct_deref) REMOVED.
+        // These were mutual inverses: pass 20 converted *(ptr+N) → ptr->field_N,
+        // pass 21 converted ptr->field_N → *(long*)(ptr+N). Net effect was zero.
+        // Now that printc.rs emits *(long*)(ptr+N) directly (no ->field_N),
+        // both passes are no-ops. Removing them eliminates 2 rule-5.5 violations.
         let output_joined = output_final2.join("\n");
-        let struct_pass = Self::canonicalize_struct_deref(&output_joined);
-
-        // Twenty-first pass: rewrite `X->field_N` to `*(long *)(X + N)`.
-        //
-        // printc emits `ptr->field_N` at multiple sites (struct field access,
-        // LOAD/STORE of ptr+offset, binary operand folding) under the
-        // assumption that `ptr` has a known struct type. We do not track
-        // concrete struct layouts, so the emitted `->field_N` is only valid C
-        // when a matching struct declaration exists — which it usually does not.
-        //
-        // Rather than fabricate struct types, we normalize every `IDENT->field_N`
-        // (and `IDENT->field_0xN`) occurrence to the equivalent, always-legal
-        // `*(long *)(IDENT + 0xN)` cast form. This is semantically identical to
-        // what Ghidra emits for pointer arithmetic into unknown structs and
-        // removes the entire class of "invalid type argument of '->'" errors.
-        let struct_pass = Self::rewrite_struct_deref(&struct_pass);
+        let struct_pass = output_joined;
 
         // Twenty-second pass: fix declarations of variables dereferenced via `*X`.
         // printc emits `*param_N = val` for STORE when the address is a parameter.
