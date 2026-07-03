@@ -832,13 +832,13 @@ impl ActionDatabase {
         // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
-        // ActionUnreachable (coreaction.cc:5490) — disabled: Rugra's bblocks
-        // CFG construction doesn't connect all reachable blocks (jump tables,
-        // indirect branches missing edges), so BFS from entry flags large
-        // portions of function bodies as "unreachable" and removes them
-        // (getparameter: 84/133 blocks falsely unreachable). Entry detection
-        // fixed (size_in()==0 per Ghidra block.hh:325) but the root cause is
-        // incomplete CFG edges. Needs CFG construction fix before enabling.
+        // ActionUnreachable (coreaction.cc:5490) — disabled: even conservative
+        // removal (1 block in myprogress) corrupts function bodies. Root cause:
+        // CFG edges incomplete (BRANCHIND + some CBRANCH targets unresolved).
+        // The block removal logic + structure_reset also needs verification
+        // against Ghidra's branchRemoveInternal/blockRemoveInternal.
+        // Entry detection is fixed (size_in()==0) but the Action is not safe
+        // until the CFG is complete.
         // mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));

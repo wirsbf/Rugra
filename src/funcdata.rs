@@ -1218,6 +1218,17 @@ impl Funcdata {
         if unreachable.is_empty() {
             return false;
         }
+        // Conservative guard: if a large fraction of blocks are "unreachable",
+        // the CFG is likely incomplete (BRANCHIND/jump-table edges missing).
+        // Skip removal to avoid deleting reachable function body.
+        // Uses BOTH absolute (>=5) and relative (>5%) thresholds: small test
+        // CFGs with genuinely dead blocks still get cleaned, but real functions
+        // with incomplete CFGs (where many blocks are falsely unreachable)
+        // are protected.
+        // TODO: remove this guard once BRANCHIND edges are added to the CFG.
+        if unreachable.len() >= 5 && unreachable.len() * 20 > n {
+            return false;
+        }
         // Mark dead, remove their out-edges, then remove from the graph.
         let dead_arcs: Vec<_> = unreachable.iter()
             .filter_map(|&i| self.bblocks.get_block(i))

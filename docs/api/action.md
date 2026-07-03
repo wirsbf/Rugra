@@ -746,3 +746,8 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 ### ActionUnreachable 入口检测修复 + 禁用诊断（2026-07-03 续）
 - 修了 `remove_unreachable_blocks` 的入口检测：之前只查 `ENTRY_POINT` flag（从不设），改为查 `size_in()==0`（对齐 Ghidra block.hh:325）。
 - 但诊断发现根因：bblocks CFG 构建不完整（跳转表/间接分支边缺失），BFS 误判可达块。ActionUnreachable 保持禁用，注释说明根因 + 修复路径。
+
+### ActionUnreachable 深度诊断结果（2026-07-03 续 2）
+- 入口检测修复正确（size_in()==0），保守门禁（>=5 且 >5%）通过单元测试。
+- 但即使移除 1 块也破坏函数体（myprogress 24→18 函数）→ 根因是 block 移除逻辑（branchRemove + blockRemove + structure_reset）不对齐 Ghidra。
+- ActionUnreachable 保持禁用。修复路径：①CFG 边完整化（BRANCHIND）②block 移除逻辑对齐 Ghidra funcdata_block.cc。

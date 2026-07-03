@@ -802,3 +802,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 修了入口检测 bug：之前只查 `ENTRY_POINT` flag（Rugra CFG 构建从不设此 flag），回退到 block 0。改为查 `size_in()==0`（对齐 Ghidra `isEntryPoint()` block.hh:325）。
 - 但发现更深的根因：Rugra 的 bblocks CFG 构建不完整——跳转表/间接分支的边没全连上，导致 BFS 从入口可达的块远少于实际（getparameter: 49/133 块被误判可达，84 块误判不可达）。启用 ActionUnreachable 会删掉大部分函数体。
 - ActionUnreachable 保持禁用，注释说明根因（CFG 边不完整）+ 修复路径（CFG 构建需补全跳转表/间接分支边）。
+
+### remove_unreachable_blocks 保守门禁 + 深度诊断（2026-07-03 续 2）
+- 加了保守门禁：unreachable >= 5 且 > 5% 时跳过移除（防 CFG 不完整时误删可达块）。
+- 诊断：即使只移除 1 个"不可达"块（myprogress: 13 块中 1 块），也破坏了函数体 → block 移除逻辑（branchRemoveInternal/blockRemoveInternal）或 structure_reset 有 bug。
+- ActionUnreachable 保持禁用，注释说明：CFG 边不完整 + 块移除逻辑需验证。
