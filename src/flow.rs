@@ -83,18 +83,97 @@ impl<'a> FlowInfo<'a> {
 
     /// Generate P-code ops by following control flow from the entry point.
     /// Faithful to `FlowInfo::generateOps` (flow.cc:785-822).
-    /// **Simplified**: no jump-table recovery (tablelist loop omitted).
+    /// Phase 2: jump-table recovery via recoverJumpTables.
     // Ghidra: flow.cc:785 FlowInfo::generateOps
     pub fn generate_ops(&mut self, entry: Address) {
         // Seed with entry address (flow.cc:787).
         self.addrlist.push(entry);
 
-        // Phase 1: linear flow tracking (flow.cc:788).
+        // Phase 1: linear flow tracking (flow.cc:792-793).
         while !self.addrlist.is_empty() {
             self.fallthru();
         }
-        // Phase 2 (jump-table recovery) omitted — BRANCHIND targets will
-        // not be followed. This is a known limitation for switch statements.
+
+        // Phase 2: jump-table recovery (flow.cc:796-821).
+        // Collect BRANCHIND ops found during Phase 1, recover their jump
+        // tables, and push newly discovered addresses to addrlist.
+        loop {
+            // Collect all BRANCHIND ops currently alive.
+            let branchinds: Vec<crate::op::PcodeOpRef> = self.collect_branchinds();
+            if branchinds.is_empty() {
+                break;
+            }
+
+            // Recover jump tables for each BRANCHIND.
+            let mut new_addresses: Vec<Address> = Vec::new();
+            for bi_ref in &branchinds {
+                // Check if already has a jump table.
+                let bi_addr = bi_ref.0.read().unwrap().get_addr().as_u64();
+                let already = self.fd.jump_tables.iter().any(|jt| {
+                    jt.read().unwrap().get_op_address().as_u64() == bi_addr
+                });
+                if already {
+                    // Use existing table entries.
+                    if let Some(jt_arc) = self.fd.jump_tables.iter().find(|jt| {
+                        jt.read().unwrap().get_op_address().as_u64() == bi_addr
+                    }) {
+                        let jt = jt_arc.read().unwrap();
+                        for i in 0..jt.num_entries() {
+                            new_addresses.push(jt.get_address_by_index(i));
+                        }
+                    }
+                    continue;
+                }
+
+                // Try recovery (jumptable.rs::try_recover).
+                if let Some(jt) = crate::jumptable::try_recover(&bi_ref.0, self.fd) {
+                    let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(jt));
+                    let jt_copy = jt_arc.read().unwrap();
+                    for i in 0..jt_copy.num_entries() {
+                        new_addresses.push(jt_copy.get_address_by_index(i));
+                    }
+                    drop(jt_copy);
+                    self.fd.jump_tables.push(jt_arc);
+                }
+            }
+
+            // Push newly discovered addresses and trace them (flow.cc:806-809).
+            for addr in &new_addresses {
+                self.new_address(*addr);
+            }
+            while !self.addrlist.is_empty() {
+                self.fallthru();
+            }
+
+            // Check if any new BRANCHINDs appeared (multistage, flow.cc:814).
+            let new_branchinds = self.collect_branchinds();
+            if new_branchinds.len() <= branchinds.len() {
+                break; // No new indirect jumps → done.
+            }
+        }
+    }
+
+    // RUGRA-GLUE: 收集 alive BRANCHIND ops（Ghidra 内联在 generateOps 的 tablelist 循环中）。
+    /// Collect all alive BRANCHIND ops (for tablelist processing).
+    fn collect_branchinds(&self) -> Vec<crate::op::PcodeOpRef> {
+        self.fd.obank.alivelist.iter()
+            .filter(|r| r.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_BRANCHIND)
+            .map(|r| crate::op::PcodeOpRef(r.0.clone()))
+            .collect()
+    }
+
+    // Ghidra: flow.cc:198 FlowInfo::newAddress
+    /// Add a new address to the work-list (flow.cc newAddress, ~:198-215).
+    fn new_address(&mut self, addr: Address) {
+        // Only add if within flow range and not already visited.
+        let a = addr.as_u64();
+        if a < self.baddr || a >= self.eaddr {
+            return;
+        }
+        if self.visited.contains_key(&a) {
+            return;
+        }
+        self.addrlist.push(addr);
     }
 
     /// Process sequential instructions from addrlist until a terminator
