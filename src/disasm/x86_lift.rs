@@ -55,6 +55,12 @@ impl X86Lifter {
         Some(VarnodeRaw::new(AddressSpace::Register, offset, size))
     }
 
+    // RUGRA-GLUE: 寄存器名→偏移量映射（复用 get_register 的 match 表）。
+    /// Map register name to offset (shared with get_register).
+    fn reg_offset(name: &str) -> u64 {
+        Self::get_register(name, 8).map(|v| v.offset).unwrap_or(0)
+    }
+
     /// Parse an operand into a VarnodeRaw (emitting load from memory if necessary)
     fn parse_operand(
         &mut self,
@@ -399,10 +405,51 @@ impl X86Lifter {
             }
             "jmp" => {
                 if inst.operands.len() == 1 {
-                    if let crate::disasm::Operand::Immediate { value, .. } = inst.operands[0] {
-                        let mut op = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
-                        op.add_input(VarnodeRaw::new(AddressSpace::Ram, value as u64, 8));
-                        ops.push(op);
+                    match &inst.operands[0] {
+                        crate::disasm::Operand::Immediate { value, .. } => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, *value as u64, 8));
+                            ops.push(op);
+                        }
+                        // Indirect jump through register or memory → CPUI_BRANCHIND.
+                        // This enables switch/jump-table flow tracking.
+                        _ => {
+                            // For register operand, emit a LOAD from the register's
+                            // value. For memory operand, emit LOAD.
+                            // Simplified: just emit the raw register/memory varnode
+                            // as the BRANCHIND target. The jump-table recovery in
+                            // flow.rs will resolve it.
+                            let target_vn = match &inst.operands[0] {
+                                crate::disasm::Operand::Register { name, size } => {
+                                    let offset = Self::reg_offset(name);
+                                    VarnodeRaw::new(AddressSpace::Register, offset, *size)
+                                }
+                                crate::disasm::Operand::Memory { base, index, scale, displacement, size } => {
+                                    // For memory operands like jmp [rip+disp], emit a LOAD
+                                    // from the computed address. Simplified: just use the
+                                    // displacement as the address for now.
+                                    let addr_vn = if let Some(base_name) = base {
+                                        let base_off = Self::reg_offset(base_name);
+                                        let mut load_op = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+                                        load_op.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8)); // space const
+                                        load_op.add_input(VarnodeRaw::new(AddressSpace::Register, base_off, 8));
+                                        let tmp = self.alloc_tmp(*size);
+                                        load_op.set_output(tmp.clone());
+                                        ops.push(load_op);
+                                        tmp
+                                    } else {
+                                        VarnodeRaw::new(AddressSpace::Ram, *displacement as u64, *size)
+                                    };
+                                    addr_vn
+                                }
+                                _ => {
+                                    VarnodeRaw::new(AddressSpace::Unique, 0, 8)
+                                }
+                            };
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_BRANCHIND as i32);
+                            op.add_input(target_vn);
+                            ops.push(op);
+                        }
                     }
                 }
             }

@@ -47,3 +47,8 @@ BRANCHIND targets are not followed (flow stops) — needs x86_lift.rs fix.
 
 Verification: 952/952 tests pass, curl 24/24 gcc (unchanged — flow.rs
 not yet wired into main.rs; existing linear scan still active).
+
+### 2026-07-04（续）：BRANCHIND 发射 + Phase 1 无回归确认
+- x86_lift.rs 的 `jmp` 分支现在处理非 Immediate 操作数（Register/Memory）→ 发射 CPUI_BRANCHIND。
+- curl 的 24 个函数中无 switch/间接跳转（BRANCHIND count = 0），所以 Phase 2 跳转表恢复不会影响 curl 输出。
+- FlowInfo Phase 1 的 BRANCHIND 处理：当前标记为 non-fallthru（流停止），Phase 2 将添加跳转表恢复。
