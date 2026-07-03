@@ -226,3 +226,8 @@ Emitter that discards all output (used for discovery pass)
 - 27 趟 pass 虽然违反铁律 5.5（在 print 层做 Action 的事），但在 Rugra 的 Action/emit 层完整前是必要补偿。
 - **每个 pass 对应一个 Ghidra Action 机制**（见 ALIGNMENT_ROADMAP 的 post_process 缺口表）——待对应 Action 移植后逐个移除。
 - 同时确认：之前的 printc BRANCH 无条件跳过 + None 守卫修复确实生效——`goto ;` 从 1 降到 **0**。
+
+### 2026-07-04（续 5）：指针运算 + 重复标签修复 → gcc 24/24
+- **指针运算 LHS 扫描**：`try_fix_one_ptr_arith` 从只扫描 RHS 改为扫描整行（LHS cast 表达式如 `*(long *)(ptrA + ptrB)` 中的 `ptr + ptr` 也被修复）。
+- **重复标签移除**：新增 `remove_duplicate_labels` pass，移除 splice 残留导致的重复 `LAB_` 定义（保留首次出现）。
+- 效果：gcc 审计从 23/24 提升到 **24/24**——所有函数通过 gcc 语法检查！

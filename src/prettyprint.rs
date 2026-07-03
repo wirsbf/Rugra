@@ -1716,8 +1716,11 @@ impl EmitNoMarkup {
         // ->field access) and as an array index.
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
+        // Remove duplicate label definitions (splice residue can cause two
+        // blocks to share the same first-op address → duplicate LAB_ lines).
+        let after_dup_labels = Self::remove_duplicate_labels(&after_ptr_arith);
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
-        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
+        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_dup_labels);
         // Twenty-seventh pass: remove case labels outside switch bodies.
         let after_case = Self::remove_orphan_case_labels(&after_lvalue);
         // Struct field recovery (-> operator) requires struct type definitions
@@ -2026,6 +2029,25 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // RUGRA-GLUE: 移除重复 LAB_ 标签（splice 残留导致）。Ghidra 无此问题（块
+    // 地址唯一），Rugra 的 splice 可能留下重复首地址块。
+    /// Remove duplicate label definitions (keep first occurrence only).
+    fn remove_duplicate_labels(text: &str) -> String {
+        use std::collections::HashSet;
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut out: Vec<&str> = Vec::new();
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
+                if !seen.insert(t.to_string()) {
+                    continue; // Skip duplicate label definition
+                }
+            }
+            out.push(line);
+        }
+        out.join("\n")
+    }
+
     /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands
     /// are declared as pointer types, and cast the right operand to `(long)`.
     fn fix_pointer_arithmetic(text: &str) -> String {
@@ -2075,15 +2097,12 @@ impl EmitNoMarkup {
     }
 
     /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
-    /// if a fix was applied, None otherwise. Skips the LHS of assignments.
+    /// if a fix was applied, None otherwise. Scans the entire line (both LHS
+    /// cast expressions and RHS).
     fn try_fix_one_ptr_arith(line: &str, ptr_names: &std::collections::HashSet<String>) -> Option<String> {
-        // Don't touch the LHS of an assignment. Find the first " = " and only
-        // consider text after it (the RHS), or the whole line if no assignment.
-        let eq_pos = line.find(" = ");
-        let scan_start = match eq_pos {
-            Some(pos) => pos + 3,
-            None => 0,
-        };
+        // Scan the entire line (not just RHS) — pointer arithmetic in cast
+        // expressions like *(long *)(ptrA + ptrB) appears on the LHS.
+        let scan_start = 0;
         let bytes = line.as_bytes();
         let mut i = scan_start;
         while i + 2 < bytes.len() {
