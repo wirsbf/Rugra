@@ -832,13 +832,17 @@ impl ActionDatabase {
         // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
-        // ActionUnreachable (coreaction.cc:5490) — disabled: even conservative
-        // removal (1 block in myprogress) corrupts function bodies. Root cause:
-        // CFG edges incomplete (BRANCHIND + some CBRANCH targets unresolved).
-        // The block removal logic + structure_reset also needs verification
-        // against Ghidra's branchRemoveInternal/blockRemoveInternal.
-        // Entry detection is fixed (size_in()==0) but the Action is not safe
-        // until the CFG is complete.
+        // ActionUnreachable (coreaction.cc:5490) — disabled.
+        // Root cause (corrected): NOT BRANCHIND edges (curl has 0 BRANCHIND
+        // ops — confirmed). The real root cause is Rugra's block removal
+        // (remove_block_arc/remove_edge_blocks) does NOT patch up data-flow:
+        // Ghidra's blockRemoveInternal (funcdata_block.cc:255-335) removes
+        // MULTIEQUAL inputs from removed blocks, patches descendant Varnodes,
+        // and handles stranded references. Rugra just removes the CFG edges
+        // and block — leaving dangling phi-nodes and broken data-flow that
+        // corrupts the function body. Fix: port Ghidra's blockRemoveInternal
+        // (including MULTIEQUAL adjustment + descendantsOutside check).
+        // Entry detection is fixed (size_in()==0).
         // mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));

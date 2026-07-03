@@ -751,3 +751,8 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - 入口检测修复正确（size_in()==0），保守门禁（>=5 且 >5%）通过单元测试。
 - 但即使移除 1 块也破坏函数体（myprogress 24→18 函数）→ 根因是 block 移除逻辑（branchRemove + blockRemove + structure_reset）不对齐 Ghidra。
 - ActionUnreachable 保持禁用。修复路径：①CFG 边完整化（BRANCHIND）②block 移除逻辑对齐 Ghidra funcdata_block.cc。
+
+### ActionUnreachable 根因更正（2026-07-03 续 3）
+- **更正**：curl 的 24 个函数中 **0 个 BRANCHIND op**（之前误诊为 BRANCHIND 边缺失）。CFG 边对 BRANCH/CBRANCH 基本完整（仅 3 个目标因地址对齐偏移 3 字节未解析，不影响块可达性）。
+- **真根因**：Rugra 的块移除（remove_block_arc/remove_edge_blocks）**不修补数据流**。Ghidra 的 `blockRemoveInternal`（funcdata_block.cc:255-335）移除 MULTIEQUAL 输入、修补后代 Varnode、处理搁浅引用。Rugra 只删 CFG 边和块 → 留下悬空 phi-node 和断裂数据流 → 函数体损坏。
+- **修复路径**：移植 Ghidra `blockRemoveInternal`（含 MULTIEQUAL 调整 + descendantsOutside 检查）。
