@@ -821,3 +821,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 修复：spliceBlockBasic 现在把 out_block 的 ops 移到 bb 末尾（对齐 Ghidra funcdata_block.cc:940-947）。之前只重定向 CFG 边，ops 被孤立。
 - 还加了 MULTIEQUAL 检查（Ghidra :936 遇 phi 抛异常，Rugra 返回 false）。
 - 但仍需 setOrder（:948 重置 seq_num）——Rugra 的 BlockBasic::set_order 未实现。RedundBranch 保持禁用直到 setOrder 完成。
+
+### BlockBasic::set_order + spliceBlockBasic（2026-07-03 续 6）
+- 新增 `BlockBasic::set_order`（block.rs）——重置块内所有 op 的 seq_num.order，均匀分布（Ghidra block.cc:2638-2651）。
+- spliceBlockBasic 在 op-moving 后调用 set_order（Ghidra funcdata_block.cc:948）。
+- 但 RedundBranch 仍禁用：splice 移除块后，引用该块为 goto 目标的 op 留下 `goto ;` 空目标。需更新 goto 引用（重定向到拼接后的块）。

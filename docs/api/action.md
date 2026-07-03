@@ -783,3 +783,7 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 ### RedundBranch spliceBlockBasic op-moving（2026-07-03 续 8）
 - spliceBlockBasic 修了 op-moving（ops 从 out_block 移到 bb），但还差 setOrder（seq_num 重置）。
 - RedundBranch 保持禁用，注释说明剩余缺口（BlockBasic::set_order 未实现）。
+
+### BlockBasic::set_order + RedundBranch（2026-07-03 续 9）
+- 新增 BlockBasic::set_order（block.rs:451）——重置 seq_num.order（Ghidra block.cc:2638）。
+- spliceBlockBasic 调用 set_order。但 RedundBranch 仍禁用：goto 目标引用未更新。

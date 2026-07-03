@@ -1409,6 +1409,8 @@ impl Funcdata {
                     let insert_pos = bb_bb.ops.len();
                     bb_bb.insert_op(insert_pos, crate::op::PcodeOpRef(op_ref.0.clone()));
                 }
+                // Reset seq_num ordering on all ops in bb (Ghidra :948 setOrder).
+                bb_bb.set_order();
             }
         }
         // Move out_block's out-edges to bb, then remove out_block.

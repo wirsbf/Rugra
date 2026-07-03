@@ -878,10 +878,9 @@ impl ActionDatabase {
         // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
         // but may be no-ops depending on implementation maturity.
         // ActionRedundBranch (coreaction.cc:5658) — disabled: spliceBlockBasic
-        // now moves ops (fixed), but spliced output still has syntax errors
-        // (2 gcc fails). The seq_num ordering on moved ops needs reset
-        // (Ghidra does bl->setOrder() at funcdata_block.cc:948). Rugra's
-        // BlockBasic::set_order not yet implemented. Disable until fixed.
+        // moves ops + resets order (setOrder implemented), but removing a block
+        // that is a goto target leaves dangling `goto ;` references. Need to
+        // update goto targets when splicing (redirect to spliced block).
         // mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
         // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674 — stub, defer

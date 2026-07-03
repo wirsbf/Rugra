@@ -448,6 +448,22 @@ impl BlockBasic {
     pub fn first_op(&self) -> Option<PcodeOpRef> {
         self.ops.first().cloned()
     }
+
+    /// Reset the SeqNum::order field for all PcodeOps in this block,
+    /// distributing values evenly. Used by spliceBlockBasic after moving
+    /// ops from another block.
+    // Ghidra: block.cc:2638 BlockBasic::setOrder
+    pub fn set_order(&mut self) {
+        let n = self.ops.len();
+        if n == 0 { return; }
+        // Ghidra: step = (UINT_MAX / n) - 1, count += step each op.
+        let step = if n > 0 { (u32::MAX / n as u32).saturating_sub(1) } else { 0 };
+        let mut count = 0u32;
+        for op_ref in &self.ops {
+            count = count.saturating_add(step);
+            op_ref.0.write().unwrap().start.set_order(count);
+        }
+    }
 }
 
 impl FlowBlock for BlockBasic {

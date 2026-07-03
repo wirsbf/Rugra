@@ -896,3 +896,6 @@ build_dom_tree 开头 reindex 所有块到向量位置（防止 dead-flow 删块
 
 ### 2026-07-01（续 4）：JOINED_BLOCK flag + create_new_block
 block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
+
+### set_order（2026-07-03 续）
+- 新增 `BlockBasic::set_order`：重置块内所有 op 的 SeqNum::order，均匀分布。对齐 Ghidra block.cc:2638-2651。用于 spliceBlockBasic 后。
