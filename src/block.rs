@@ -26,33 +26,18 @@ pub enum BlockType {
 
 /// Flags for PcodeBlock properties (corresponds to Ghidra's FlowBlock::block_flags)
 pub mod block_flags {
-    pub const TERMINAL: u32 = 1 << 0;
-    pub const GOTO_TERMINAL: u32 = 1 << 1;
-    pub const RETURN_TERMINAL: u32 = 1 << 2;
-    pub const ENTRY_POINT: u32 = 1 << 3;
-    pub const DEAD: u32 = 1 << 4;
-    pub const MARK: u32 = 1 << 5;
-    /// Block is a switch case body (reached via cascade dispatch).
-    /// printc must not structurally extract it into a standalone `if(){}`,
-    /// or the emitted `case` label ends up outside the switch body.
-    pub const CASE_BODY: u32 = 1 << 6;
-    /// Out-edge[1] (taken edge) is marked as goto by selectGoto.
-    /// effective_size_out excludes this edge.
-    pub const GOTO_EDGE_1: u32 = 1 << 7;
-    /// Out-edge[0] (fallthrough) is marked as goto by selectGoto.
-    pub const GOTO_EDGE_0: u32 = 1 << 8;
-    /// Block is a joined block (created by nodeJoinCreateBlock).
-    /// Ghidra `f_joined_block` (block.hh:97).
-    pub const JOINED_BLOCK: u32 = 1 << 9;
-    /// Output is decided by switch. Ghidra `f_switch_out` (block.hh:92).
-    /// NOTE: Ghidra uses bit 0x10, but Rugra reuses 0x10 for DEAD. Bit value
-    /// diverges from Ghidra (technical debt — see ALIGNMENT_ROADMAP); the flag
-    /// *semantics* are what spliceBlockBasic merges on.
-    pub const SWITCH_OUT: u32 = 1 << 10;
-    /// Block is destination of unstructured goto.
-    /// Ghidra `f_unstructured_targ` (block.hh:93). Bit value diverges from
-    /// Ghidra's 0x20 (Rugra reuses 0x20 for MARK); semantics aligned.
-    pub const UNSTRUCTURED_TARG: u32 = 1 << 11;
+    // Ghidra-shared flags (exact bit values from block.hh:88-105)
+    pub const SWITCH_OUT: u32 = 0x10;       // f_switch_out (block.hh:92)
+    pub const UNSTRUCTURED_TARG: u32 = 0x20; // f_unstructured_targ (block.hh:93)
+    pub const MARK: u32 = 0x80;              // f_mark (block.hh:94)
+    pub const ENTRY_POINT: u32 = 0x200;      // f_entry_point (block.hh:96)
+    pub const DEAD: u32 = 0x4000;            // f_dead (block.hh:101)
+    pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
+    // Rugra-only flags (no Ghidra counterpart, placed at 0x80000+)
+    pub const RETURN_TERMINAL: u32 = 0x80000;
+    pub const CASE_BODY: u32 = 0x100000;
+    pub const GOTO_EDGE_0: u32 = 0x200000;
+    pub const GOTO_EDGE_1: u32 = 0x400000;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)

@@ -909,3 +909,9 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 ### 2026-07-04（续）：find_common_block_n + get_stop_addr
 - `BlockGraph::find_common_block_n(block_set)`（对齐 block.cc:796）：N-way 支配树 LCA，用 HashSet 模拟 mark。供 build_dominant_copy 使用。
 - `BlockBasic::get_stop_addr()`（近似 block.cc:2328 getStop）：用最后 op 地址近似块的结束地址（无 cover 系统）。
+
+### 2026-07-04：block_flags 位值完整对齐 Ghidra block.hh:88-105
+- 所有 Ghidra 共享 flags 用精确位值：SWITCH_OUT=0x10, UNSTRUCTURED_TARG=0x20, MARK=0x80, ENTRY_POINT=0x200, DEAD=0x4000, JOINED_BLOCK=0x20000。
+- Rugra 独有 flags 移到 0x80000+（避免与 Ghidra 未来 flags 冲突）：RETURN_TERMINAL=0x80000, CASE_BODY=0x100000, GOTO_EDGE_0=0x200000, GOTO_EDGE_1=0x400000。
+- 删除死代码 TERMINAL/GOTO_TERMINAL（从未被读取）。
+- 验证：所有 flag 访问通过命名的 `block_flags::*` 常量（无原始十六进制掩码），所以位值变更不影响任何调用点语义。952/952 测试通过，curl 无回归。
