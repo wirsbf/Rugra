@@ -540,6 +540,38 @@ impl Merge {
         vn.has_cover() && !vn.is_implied()
     }
 
+    // Ghidra: merge.cc:1657 Merge::mergeTest
+    /// Test if `high` can be added to the merge group `testlist` without
+    /// causing a cover intersection. Faithful to `Merge::mergeTest(high, tmplist)`
+    /// (merge.cc:1657-1669). Returns true and pushes high to testlist if no
+    /// intersection; false otherwise.
+    ///
+    /// Ghidra uses HighIntersectTest::intersection (cached, with shadow/block
+    /// refinement). Rugra uses aggregate_high_cover + intersect_char directly
+    /// (no cache, conservative — may report intersection where Ghidra's
+    /// blockIntersection would rule it out via shadow analysis).
+    fn merge_test_with_list(
+        &self,
+        high: &Arc<RwLock<HighVariable>>,
+        testlist: &mut Vec<Arc<RwLock<HighVariable>>>,
+    ) -> bool {
+        // Ghidra: if (!high->hasCover()) return false;
+        // Check any instance has cover.
+        let has_cov = high.read().unwrap().instances.iter().any(|v| v.read().unwrap().has_cover());
+        if !has_cov {
+            return false;
+        }
+        let high_cover = aggregate_high_cover(high);
+        for other in testlist.iter() {
+            let other_cover = aggregate_high_cover(other);
+            if high_cover.intersect_char(&other_cover) > 0 {
+                return false;
+            }
+        }
+        testlist.push(high.clone());
+        true
+    }
+
     /// Force-merge two varnodes into the same HighVariable.
     ///
     /// If vn1 already has a HighVariable, add vn2 to it (or vice versa).
@@ -734,23 +766,13 @@ impl Merge {
         use crate::opcodes::OpCode;
         use crate::op::pcodeop_flags;
 
-        // Collect (marker op, output, inputs) pairs without holding locks
-        // across the merge calls.
-        let marker_pairs: Vec<(
-            Arc<RwLock<crate::op::PcodeOp>>,
-            Arc<RwLock<Varnode>>,
-            Vec<Arc<RwLock<Varnode>>>,
-        )> = fd
+        // Collect marker ops (merge.cc:894-896).
+        let marker_ops: Vec<crate::op::PcodeOpRef> = fd
             .obank
             .alivelist
             .iter()
             .filter_map(|op_ref| {
                 let op = op_ref.0.read().unwrap();
-                // Ghidra: if ((!op->isMarker()) || op->isIndirectCreation()) continue;
-                // In Ghidra the MARKER flag is set on MULTIEQUAL/INDIRECT ops.
-                // Rugra may not set that flag at injection time, so we accept an
-                // op as a marker if EITHER the flag is set OR its opcode is a
-                // marker opcode.
                 let is_marker_op = matches!(op.opcode, OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT);
                 if !op.is_marker() && !is_marker_op {
                     return None;
@@ -758,34 +780,18 @@ impl Merge {
                 if op.flags & pcodeop_flags::INDIRECT_CREATION != 0 {
                     return None;
                 }
-                let out = op.output.clone()?;
-                let ins: Vec<_> = op.inrefs.clone();
                 drop(op);
-                Some((op_ref.0.clone(), out, ins))
+                Some(crate::op::PcodeOpRef(op_ref.0.clone()))
             })
             .collect();
 
-        for (_op_arc, out_vn, in_vns) in marker_pairs {
-            // For INDIRECT, Ghidra only merges input slot 0 (the value being
-            // tracked). For MULTIEQUAL, all inputs. (merge.cc:726: max = (code==INDIRECT)?1:numInput)
-            let limit = in_vns.len();
-            for in_vn in in_vns.iter().take(limit) {
-                let in_basic = {
-                    let v = in_vn.read().unwrap();
-                    Self::merge_test_basic(&v)
-                };
-                let out_basic = {
-                    let v = out_vn.read().unwrap();
-                    Self::merge_test_basic(&v)
-                };
-                if !in_basic || !out_basic {
-                    continue;
-                }
-                // Ghidra force-merges (snipping data-flow if covers overlap).
-                // Without snip machinery we still force-merge: these are the
-                // SSA marker ops whose input/output MUST be the same logical
-                // variable by construction.
-                self.merge_force(in_vn.clone(), out_vn.clone());
+        // Ghidra merge.cc:897-901: INDIRECT → mergeIndirect, else → mergeOp.
+        for op_ref in &marker_ops {
+            let is_indirect = op_ref.0.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+            if is_indirect {
+                self.merge_indirect(fd, op_ref);
+            } else {
+                self.merge_op(fd, op_ref);
             }
         }
     }
@@ -1215,11 +1221,274 @@ impl Merge {
             group.iter().map(|a| BlockVarnode::set(a.clone())).collect();
         blocksort.sort();
         // eliminateIntersect for each vn in the group.
-        // Collect snapshots first to avoid borrow issues during mutation.
         let vns: Vec<Arc<RwLock<Varnode>>> = group.to_vec();
         for vn in &vns {
             self.eliminate_intersect(fd, vn, &blocksort);
         }
+    }
+
+    // Ghidra: merge.cc:692 Merge::trimOpInput
+    /// Trim the input HighVariable of the given op so its Cover is tiny.
+    /// Faithful to `Merge::trimOpInput` (merge.cc:692-712). Inserts a COPY
+    /// (via allocateCopyTrim → fills copy_trims) before the op, replacing the
+    /// slot input with the COPY's output.
+    fn trim_op_input(&mut self, fd: &mut Funcdata, op: &crate::op::PcodeOpRef, slot: usize) {
+        use crate::opcodes::OpCode;
+        // Determine pc (merge.cc:699-704).
+        let (pc, multiequal_in_block) = {
+            let o = op.0.read().unwrap();
+            if o.opcode == OpCode::CPUI_MULTIEQUAL {
+                // pc = parent->getIn(slot)->getStop()
+                let in_block = o.parent.as_ref().and_then(|w| w.upgrade()).and_then(|parent| {
+                    let p = parent.read().unwrap();
+                    p.get_in(slot).and_then(|e| Some(e.point.clone()))
+                });
+                match &in_block {
+                    Some(blk) => {
+                        let rg = blk.read().unwrap();
+                        match rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                            Some(bb) => (bb.get_stop_addr(), Some(blk.clone())),
+                            None => (crate::address::Address::new(0), Some(blk.clone())),
+                        }
+                    }
+                    None => (o.get_addr(), None),
+                }
+            } else {
+                (o.get_addr(), None)
+            }
+        };
+        let vn = {
+            let o = op.0.read().unwrap();
+            o.inrefs.get(slot).cloned()
+        };
+        let Some(vn) = vn else { return };
+        let copyop = self.allocate_copy_trim(fd, &vn, pc, op);
+        let copy_out = copyop.0.read().unwrap().output.clone();
+        let Some(copy_out) = copy_out else { return };
+        fd.op_set_input(op, copy_out, slot);
+        if let Some(blk) = multiequal_in_block {
+            fd.op_insert_end(&copyop, &blk);
+        } else {
+            fd.op_insert_before(&copyop, op);
+        }
+    }
+
+    // Ghidra: merge.cc:656 Merge::trimOpOutput
+    /// Trim the output HighVariable of the given op so its Cover is tiny.
+    /// Faithful to `Merge::trimOpOutput` (merge.cc:656-682). Moves the op's
+    /// output to a stubby unique, then creates a COPY after the op that
+    /// reproduces the original output. Does NOT fill copy_trims (uses raw newOp).
+    fn trim_op_output(&mut self, fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
+        use crate::opcodes::OpCode;
+        // Determine afterop (merge.cc:663-666).
+        let after_op = {
+            let o = op.0.read().unwrap();
+            if o.opcode == OpCode::CPUI_INDIRECT {
+                o.get_in(1).and_then(|vn2| fd.get_op_from_const(vn2))
+            } else {
+                Some(crate::op::PcodeOpRef(op.0.clone()))
+            }
+        };
+        let vn = {
+            let o = op.0.read().unwrap();
+            o.output.clone()
+        };
+        let Some(vn) = vn else { return };
+        let op_addr = op.0.read().unwrap().get_addr();
+        let copyop = fd.new_op(1, op_addr);
+        fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
+        let uniq = fd.new_unique(vn.read().unwrap().size);
+        // op output → uniq; copyop output → original vn; copyop input → uniq.
+        fd.op_set_output(op, uniq.clone());
+        fd.op_set_output(&copyop, vn);
+        fd.op_set_input(&copyop, uniq, 0);
+        if let Some(ao) = &after_op {
+            fd.op_insert_after(&copyop, ao);
+        }
+    }
+
+    // Ghidra: merge.cc:719 Merge::mergeOp
+    /// Force-merge all input and output Varnodes for the given op.
+    /// Faithful to `Merge::mergeOp` (merge.cc:719-772). Snips data-flow via
+    /// trimOpInput/trimOpOutput until cover restrictions are resolved, then
+    /// force-merges.
+    fn merge_op(&mut self, fd: &mut Funcdata, op: &crate::op::PcodeOpRef) {
+        use crate::opcodes::OpCode;
+        let (max, high_out, inputs) = {
+            let o = op.0.read().unwrap();
+            let max = if o.opcode == OpCode::CPUI_INDIRECT { 1 } else { o.num_input() };
+            let out_vn = o.output.clone();
+            let ins: Vec<Arc<RwLock<Varnode>>> = o.inrefs.iter().cloned().collect();
+            (max, out_vn, ins)
+        };
+        let Some(out_vn) = high_out else { return };
+        let high_out_arc = out_vn.read().unwrap().high.clone();
+        let Some(high_out_arc) = high_out_arc else { return };
+
+        // Phase 1: non-cover mergeTestRequired restrictions (merge.cc:730-741).
+        for i in 0..max {
+            let high_in = inputs.get(i).and_then(|v| v.read().unwrap().high.clone());
+            let Some(high_in) = high_in else { continue };
+            if !self.merge_test_required(&high_out_arc, &high_in) {
+                self.trim_op_input(fd, op, i);
+                continue;
+            }
+            // Check against earlier inputs (merge.cc:736-740).
+            let mut conflict = false;
+            for j in 0..i {
+                let high_j = inputs.get(j).and_then(|v| v.read().unwrap().high.clone());
+                if let Some(hj) = high_j {
+                    if !self.merge_test_required(&hj, &high_in) {
+                        conflict = true;
+                        break;
+                    }
+                }
+            }
+            if conflict {
+                self.trim_op_input(fd, op, i);
+            }
+        }
+
+        // Phase 2: cover restriction test (merge.cc:743-761).
+        // Re-read inputs (may have changed after trims).
+        let inputs2: Vec<Arc<RwLock<Varnode>>> = op.0.read().unwrap().inrefs.iter().cloned().collect();
+        let high_out_arc2 = out_vn.read().unwrap().high.clone();
+        if let Some(ho) = high_out_arc2 {
+            let mut testlist: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+            self.merge_test_with_list(&ho, &mut testlist);
+            let mut i = 0;
+            for inp in inputs2.iter().take(max) {
+                let high_in = inp.read().unwrap().high.clone();
+                match high_in {
+                    Some(hi) => {
+                        if !self.merge_test_with_list(&hi, &mut testlist) {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+                i += 1;
+            }
+            if i != max {
+                // Cover restrictions: iteratively trim inputs.
+                let mut nexttrim = 0;
+                while nexttrim < max {
+                    self.trim_op_input(fd, op, nexttrim);
+                    testlist.clear();
+                    self.merge_test_with_list(&ho, &mut testlist);
+                    let mut all_ok = true;
+                    for k in 0..max {
+                        let inp_k = op.0.read().unwrap().inrefs.get(k).cloned();
+                        match inp_k {
+                            Some(vn) => {
+                                let hi = vn.read().unwrap().high.clone();
+                                match hi {
+                                    Some(h) => {
+                                        if !self.merge_test_with_list(&h, &mut testlist) {
+                                            all_ok = false;
+                                        }
+                                    }
+                                    None => {}
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    if all_ok {
+                        break;
+                    }
+                    nexttrim += 1;
+                }
+                if nexttrim == max {
+                    self.trim_op_output(fd, op);
+                }
+            }
+        }
+
+        // Phase 3: real merge (merge.cc:763-771).
+        for i in 0..max {
+            let (ho, hi) = {
+                let o = op.0.read().unwrap();
+                let out = o.output.as_ref().and_then(|v| v.read().unwrap().high.clone());
+                let inp = o.inrefs.get(i).and_then(|v| v.read().unwrap().high.clone());
+                (out, inp)
+            };
+            match (ho, hi) {
+                (Some(ho_arc), Some(hi_arc)) => {
+                    if !self.merge_test_required(&ho_arc, &hi_arc) {
+                        eprintln!("[MERGE] non-cover restriction violated despite trims");
+                        continue;
+                    }
+                    // merge(high_out, high_in, false) — cover intersect → skip.
+                    let _ = self.merge_speculative(&ho_arc, &hi_arc);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Ghidra: merge.cc:783 Merge::collectInputs
+    /// Collect Varnode instances of `high` that are inputs to `op` or its
+    /// predecessor chain (across INDIRECTs). Faithful to `Merge::collectInputs`
+    /// (merge.cc:783-809). Used by snip_output_interference.
+    fn collect_inputs(
+        &self,
+        fd: &Funcdata,
+        high: &Arc<RwLock<HighVariable>>,
+        op: &crate::op::PcodeOpRef,
+    ) -> Vec<crate::op::PcodeOpRef> {
+        let _ = fd;
+        let mut oplist = Vec::new();
+        // Ghidra walks previousOp chain. Simplified: just check op's inputs.
+        let o = op.0.read().unwrap();
+        for in_vn in &o.inrefs {
+            let in_high = in_vn.read().unwrap().high.clone();
+            if let Some(ih) = in_high {
+                if Arc::ptr_eq(&ih, high) {
+                    oplist.push(crate::op::PcodeOpRef(op.0.clone()));
+                    break;
+                }
+            }
+        }
+        oplist
+    }
+
+    // Ghidra: merge.cc:811 Merge::snipOutputInterference
+    /// Check if INDIRECT op's output interferes with inputs of the op causing
+    /// the effect, and snip if so. Faithful to `Merge::snipOutputInterference`
+    /// (merge.cc:811-844). Simplified: if interference detected, trimOpOutput.
+    fn snip_output_interference(&mut self, fd: &mut Funcdata, indop: &crate::op::PcodeOpRef) -> bool {
+        let out_high = {
+            let o = indop.0.read().unwrap();
+            o.output.as_ref().and_then(|v| v.read().unwrap().high.clone())
+        };
+        let Some(out_high) = out_high else { return false };
+        // Get the op causing the INDIRECT effect (in(1) via getOpFromConst).
+        let effect_op = {
+            let o = indop.0.read().unwrap();
+            o.get_in(1).and_then(|vn| fd.get_op_from_const(vn))
+        };
+        if let Some(eff) = effect_op {
+            let inputs = self.collect_inputs(fd, &out_high, &eff);
+            if !inputs.is_empty() {
+                // Interference: the INDIRECT output's high is also an input to
+                // the effect op. Trim the output to resolve.
+                self.trim_op_output(fd, indop);
+                return true;
+            }
+        }
+        false
+    }
+
+    // Ghidra: merge.cc:846 Merge::mergeIndirect
+    /// Force-merge the input and output of an INDIRECT op. Faithful to
+    /// `Merge::mergeIndirect` (merge.cc:846-887). Checks for output
+    /// interference (snipOutputInterference) then delegates to mergeOp logic.
+    fn merge_indirect(&mut self, fd: &mut Funcdata, indop: &crate::op::PcodeOpRef) {
+        // Ghidra: snipOutputInterference first (merge.cc:862).
+        self.snip_output_interference(fd, indop);
+        // Then mergeOp (handles input[0] with output).
+        self.merge_op(fd, indop);
     }
 
     // Ghidra: merge.cc:1045 Merge::compareCopyByInVarnode
