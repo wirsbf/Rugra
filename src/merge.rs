@@ -121,16 +121,18 @@ impl Merge {
         // required merges so the speculative passes see final instance sets.
         self.compute_varnode_covers(fd);
 
-        // Step 5 (Rugra's pre-existing cover-guarded COPY pass). Runs to a
-        // fixed point; equivalent to MergeCopy but iterated.
-        self.merge_by_cover(fd);
-
         // Step 4: MergeMultiEntry (faithful no-op without symbol machinery).
         self.merge_multi_entry(fd);
 
-        // Step 5/6 explicit: MergeCopy + DominantCopy.
-        self.merge_copy(fd);
-        self.dominant_copy(fd);
+        // Step 5: MergeCopy — mergeOpcode(CPUI_COPY) (coreaction.cc:5722).
+        // Required test + merge; cover intersection silently skips (no snip).
+        self.merge_opcode(fd, crate::opcodes::OpCode::CPUI_COPY);
+
+        // Step 6: DominantCopy — processCopyTrims (coreaction.cc:5723).
+        // Faithful no-op: copyTrims is never populated (Rugra lacks the
+        // snip/trim data-flow rewrite machinery that ActionMergeRequired's
+        // forced-merge path uses to fill it). See process_copy_trims.
+        self.process_copy_trims(fd);
 
         // Step 7: MergeAdjacent.
         self.merge_adjacent(fd);
@@ -389,50 +391,6 @@ impl Merge {
         true
     }
 
-    /// Like `merge_speculative` but exempts a single op point from the cover
-    /// intersection test. Faithful to the merge-point exemption used by
-    /// Ghidra's copy merge (the COPY/MULTIEQUAL op reads input and writes
-    /// output at one op, so their covers always overlap there).
-    fn merge_speculative_except(
-        &mut self,
-        high1: &Arc<RwLock<HighVariable>>,
-        high2: &Arc<RwLock<HighVariable>>,
-        exclude_block: i32,
-        exclude_order: u32,
-    ) -> bool {
-        if Arc::ptr_eq(high1, high2) {
-            return true;
-        }
-        let (cover1, cover2, instances1, instances2) = {
-            let h1 = high1.read().unwrap();
-            let h2 = high2.read().unwrap();
-            let c1 = aggregate_high_cover_from(&h1);
-            let c2 = aggregate_high_cover_from(&h2);
-            (c1, c2, h1.instances.clone(), h2.instances.clone())
-        };
-        if cover1.intersects_except_at(&cover2, exclude_block, exclude_order) {
-            return false;
-        }
-        let anchor = instances1
-            .into_iter()
-            .next()
-            .or_else(|| instances2.iter().next().cloned());
-        let Some(anchor) = anchor else {
-            return false;
-        };
-        for inst in instances2 {
-            let same = {
-                let i = inst.read().unwrap();
-                i.high.as_ref().map(|h| Arc::ptr_eq(h, high1)).unwrap_or(false)
-            };
-            if same {
-                continue;
-            }
-            self.merge_force(anchor.clone(), inst);
-        }
-        true
-    }
-
     /// Test whether two varnodes can be merged into the same HighVariable.
     ///
     /// Returns true if they share the same address space and size, and
@@ -450,6 +408,98 @@ impl Merge {
 
         // Must be same address space and size
         v1.address_space == v2.address_space && v1.size == v2.size
+    }
+
+    // Ghidra: merge.cc:102 Merge::mergeTestRequired
+    /// Required-merge test between two HighVariables.
+    /// Faithful to `Merge::mergeTestRequired` (merge.cc:102-166).
+    ///
+    /// This is a pure property test — it does NOT check Cover intersection
+    /// (that is done by `merge()` itself, which returns false on overlap).
+    /// It checks: typelock conflict, addrtied-different-address, input/persist
+    /// conflicts, extrout, protopartial conflicts.
+    ///
+    /// VariablesPiece-group and Symbol-mapping checks (merge.cc:147-164) are
+    /// omitted: Rugra has no VariablePiece/Symbol infrastructure yet. This is
+    /// a conservative subset — it may allow merges Ghidra forbids (rare), but
+    /// never forbids merges Ghidra allows based on the implemented checks.
+    pub fn merge_test_required(
+        &self,
+        high_out: &Arc<RwLock<HighVariable>>,
+        high_in: &Arc<RwLock<HighVariable>>,
+    ) -> bool {
+        let ho = high_out.read().unwrap();
+        let hi = high_in.read().unwrap();
+        if Arc::ptr_eq(high_out, high_in) {
+            return true; // Already merged
+        }
+        // typelock: if both locked, types must match (merge.cc:107-109)
+        if hi.is_type_locked() && ho.is_type_locked() {
+            if !Arc::ptr_eq(&hi.v_type, &ho.v_type) {
+                return false;
+            }
+        }
+        // addrtied: both addrtied but different address -> forbid (merge.cc:111-116)
+        if ho.is_addr_tied() && hi.is_addr_tied() {
+            // getTiedVarnode compare: representative instance loc (offset)
+            let addr_out = ho.instances.first().map(|v| v.read().unwrap().loc);
+            let addr_in = hi.instances.first().map(|v| v.read().unwrap().loc);
+            if let (Some(a_out), Some(a_in)) = (addr_out, addr_in) {
+                if a_out != a_in {
+                    return false;
+                }
+            }
+        }
+        // input/persist/extrout conflicts (merge.cc:118-134)
+        if hi.is_input() {
+            if ho.is_persist() {
+                return false;
+            }
+            if ho.is_addr_tied() && !hi.is_addr_tied() {
+                return false;
+            }
+        } else if hi.is_extra_out() {
+            return false;
+        }
+        if ho.is_input() {
+            if hi.is_persist() {
+                return false;
+            }
+            if hi.is_addr_tied() && !ho.is_addr_tied() {
+                return false;
+            }
+        } else if ho.is_extra_out() {
+            return false;
+        }
+        // protopartial conflicts (merge.cc:136-146)
+        if hi.is_proto_partial() {
+            if ho.is_proto_partial() {
+                return false;
+            }
+            if ho.is_input() {
+                return false;
+            }
+            if ho.is_addr_tied() {
+                return false;
+            }
+            if ho.is_persist() {
+                return false;
+            }
+        }
+        if ho.is_proto_partial() {
+            if hi.is_input() {
+                return false;
+            }
+            if hi.is_addr_tied() {
+                return false;
+            }
+            if hi.is_persist() {
+                return false;
+            }
+        }
+        // VariablePiece-group check (merge.cc:147-155) — omitted: no VariablePiece.
+        // Symbol-mapping check (merge.cc:157-164) — omitted: no Symbol on HighVariable.
+        true
     }
 
     /// Force-merge two varnodes into the same HighVariable.
@@ -799,54 +849,67 @@ impl Merge {
     /// For each alive COPY op, try to merge each input HighVariable with the
     /// output HighVariable. The merge is *required* (Ghidra calls
     /// `mergeTestRequired` then a non-speculative `merge`), but a cover
-    /// intersection causes the merge to be skipped rather than forcing a
-    /// data-flow snip (Rugra has no trim machinery).
+    // Ghidra: merge.cc:326 Merge::mergeOpcode
+    /// Try to merge the input and output Varnodes of every op with the given
+    /// opcode. Faithful to `Merge::mergeOpcode` (merge.cc:326-350).
     ///
-    /// Note: `merge_by_cover` (the Rugra pre-existing pass) already performs
-    /// the analogous cover-guarded COPY merge. This method exists so the
-    /// Ghidra step is explicitly represented in the pipeline.
-    pub fn merge_copy(&mut self, fd: &mut Funcdata) {
-        use crate::opcodes::OpCode;
-
-        // (in_vn, out_vn, op_arc) so we can compute the COPY's block/order
-        // and exempt that single point from the cover intersection test —
-        // the COPY op itself is the merge point, so input and output always
-        // overlap there.
-        let copy_pairs: Vec<(
-            Arc<RwLock<Varnode>>,
-            Arc<RwLock<Varnode>>,
-            Arc<RwLock<crate::op::PcodeOp>>,
-        )> = fd
-            .obank
-            .alivelist
-            .iter()
-            .filter_map(|op_ref| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    return None;
-                }
-                let out = op.output.clone()?;
-                let in_vn = op.inrefs.get(0).cloned()?;
-                drop(op);
-                Some((in_vn, out, op_ref.0.clone()))
-            })
-            .collect();
-
-        for (in_vn, out_vn, op_arc) in copy_pairs {
-            let (in_basic, out_basic) = {
-                let vi = in_vn.read().unwrap();
-                let vo = out_vn.read().unwrap();
-                (Self::merge_test_basic(&vi), Self::merge_test_basic(&vo))
+    /// Walks basic blocks in linear order; for each op matching `opc`, if
+    /// `mergeTestBasic` passes for output and each input, and
+    /// `mergeTestRequired` passes for their HighVariables, calls
+    /// `merge(high_out, high_in, false)`. Cover intersection causes the merge
+    /// to be silently skipped (merge() returns false) — NO snip, NO copyTrims.
+    pub fn merge_opcode(&mut self, fd: &mut Funcdata, opc: crate::opcodes::OpCode) {
+        let n_blocks = fd.bblocks.get_size();
+        for i in 0..n_blocks {
+            let bl = match fd.bblocks.get_block(i) {
+                Some(b) => b,
+                None => continue,
             };
-            if !in_basic || !out_basic {
-                continue;
-            }
-            // Required merge: exempt the COPY op's own block/order from the
-            // intersection test (that overlap IS the merge point).
-            if let Some((block, order)) = op_block_order(&op_arc) {
-                self.merge_speculative_by_vn_except(&in_vn, &out_vn, block, order);
-            } else {
-                self.merge_speculative_by_vn(&in_vn, &out_vn);
+            let ops: Vec<crate::op::PcodeOpRef> = {
+                let bl_rg = bl.read().unwrap();
+                bl_rg.get_ops()
+            };
+            for op_ref in &ops {
+                let (vn1_arc, inputs): (Option<Arc<RwLock<Varnode>>>, Vec<Arc<RwLock<Varnode>>>) = {
+                    let op = op_ref.0.read().unwrap();
+                    if op.opcode != opc {
+                        continue;
+                    }
+                    let out = op.output.clone();
+                    let ins: Vec<Arc<RwLock<Varnode>>> =
+                        op.inrefs.iter().cloned().collect();
+                    (out, ins)
+                };
+                let Some(vn1_arc) = vn1_arc else { continue };
+                // mergeTestBasic on output (merge.cc:341)
+                if !Self::merge_test_basic(&vn1_arc.read().unwrap()) {
+                    continue;
+                }
+                let high_out = {
+                    let vn1 = vn1_arc.read().unwrap();
+                    vn1.high.clone()
+                };
+                let Some(high_out) = high_out else { continue };
+                // For each input: mergeTestBasic + mergeTestRequired + merge
+                for vn2_arc in &inputs {
+                    if !Self::merge_test_basic(&vn2_arc.read().unwrap()) {
+                        continue;
+                    }
+                    let high_in = {
+                        let vn2 = vn2_arc.read().unwrap();
+                        vn2.high.clone()
+                    };
+                    let Some(high_in) = high_in else { continue };
+                    // mergeTestRequired — pure property test, no cover check
+                    if !self.merge_test_required(&high_out, &high_in) {
+                        continue;
+                    }
+                    // merge(high_out, high_in, false) — cover intersection
+                    // returns false (skip), never snips (merge.cc:1565-1575).
+                    // merge_speculative mirrors Merge::merge exactly:
+                    // ptr_eq->true, cover intersect->false(skip), else merge.
+                    let _ = self.merge_speculative(&high_out, &high_in);
+                }
             }
         }
     }
@@ -870,129 +933,27 @@ impl Merge {
         self.merge_speculative(&h1, &h2)
     }
 
-    /// Helper: like `merge_speculative_by_vn` but exempts a single op point
-    /// from the cover intersection test. Used by merge_copy, where the COPY
-    /// op itself reads the input and writes the output — their covers always
-    /// meet at that op, and that meeting is the merge point, not a real
-    /// simultaneity. Any OTHER overlap still blocks the merge.
-    fn merge_speculative_by_vn_except(
-        &mut self,
-        vn1: &Arc<RwLock<Varnode>>,
-        vn2: &Arc<RwLock<Varnode>>,
-        exclude_block: i32,
-        exclude_order: u32,
-    ) -> bool {
-        let (h1, h2) = {
-            let v1 = vn1.read().unwrap();
-            let v2 = vn2.read().unwrap();
-            (v1.high.clone(), v2.high.clone())
-        };
-        let (Some(h1), Some(h2)) = (h1, h2) else {
-            return false;
-        };
-        self.merge_speculative_except(&h1, &h2, exclude_block, exclude_order)
-    }
-
-    /// Step 6: ActionDominantCopy (coreaction.cc:4831 / coreaction.hh:1008).
-    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436) and its
-    /// delegate `Merge::processHighDominantCopy` (merge.cc:1316-1337).
+    // Ghidra: merge.cc:1415 Merge::processCopyTrims
+    /// Step 6: ActionDominantCopy (coreaction.cc:5723 / coreaction.hh:1008).
+    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
     ///
-    /// In Ghidra, `processCopyTrims` walks the `copyTrims` list — COPY ops
-    /// inserted by the earlier snip trims (`allocateCopyTrim`/`snipReads`,
-    /// merge.cc:411,443) — to find HighVariables that received ≥ 2 such COPYs
-    /// and calls `processHighDominantCopy(high)` to replace them with a single
-    /// dominant COPY (the one whose block dominates all the others). The output
-    /// Varnodes of the redundant COPYs are merged into the dominant COPY's
-    /// output High.
+    /// Walks the `copyTrims` list — COPY ops inserted by the earlier snip
+    /// trims (`allocateCopyTrim`/`snipReads`, merge.cc:411,443) — to find
+    /// HighVariables that received ≥ 2 such COPYs and calls
+    /// `processHighDominantCopy(high)` to replace them with a single
+    /// dominant COPY.
     ///
-    /// Rugra has no snip/trim machinery, so the literal `copyTrims` list is
-    /// always empty and the Ghidra path would be a no-op. The pragmatic
-    /// implementation here mirrors `merge_copy` but with the *dominant* anchor
-    /// chosen by cover extent: for each alive COPY whose input and output are
-    /// NOT yet in the same HighVariable, attempt a speculative
-    /// (cover-guarded) merge of the input and output HighVariables, with the
-    /// side holding the larger cover acting as the dominant anchor. When
-    /// several COPYs read the same source Varnode, this folds their outputs
-    /// into the source's HighVariable, achieving the dominant-copy
-    /// consolidation. This keeps the same safety contract as Ghidra's
-    /// `buildDominantCopy` (merge.cc:1207): a merge is skipped when it would
-    /// make two instances of one logical variable simultaneously live.
-    pub fn dominant_copy(&mut self, fd: &mut Funcdata) {
-        use crate::opcodes::OpCode;
-
-        // Gather (in_vn, out_vn, op_arc) for every alive COPY whose input and
-        // output are NOT already in the same HighVariable. This mirrors the
-        // `findAllIntoCopies` self-merge skip (merge.cc:1303: an internal copy
-        // whose input high == output high is already consolidated).
-        let copies: Vec<(
-            Arc<RwLock<Varnode>>,
-            Arc<RwLock<Varnode>>,
-            Arc<RwLock<crate::op::PcodeOp>>,
-        )> = fd
-            .obank
-            .alivelist
-            .iter()
-            .filter_map(|op_ref| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    return None;
-                }
-                let out = op.output.clone()?;
-                let in_vn = op.inrefs.get(0).cloned()?;
-                let same_high = {
-                    let o = out.read().unwrap();
-                    let i = in_vn.read().unwrap();
-                    match (o.high.as_ref(), i.high.as_ref()) {
-                        (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
-                        _ => false,
-                    }
-                };
-                if same_high {
-                    return None; // internal copy — already consolidated
-                }
-                drop(op);
-                Some((in_vn, out, op_ref.0.clone()))
-            })
-            .collect();
-
-        for (in_vn, out_vn, op_arc) in copies {
-            // Skip varnodes that fail the basic merge-eligibility test.
-            let (in_basic, out_basic) = {
-                let vi = in_vn.read().unwrap();
-                let vo = out_vn.read().unwrap();
-                (Self::merge_test_basic(&vi), Self::merge_test_basic(&vo))
-            };
-            if !in_basic || !out_basic {
-                continue;
-            }
-            // Choose the DOMINANT anchor: the side with the larger aggregate
-            // cover becomes the merge target. Faithful to Ghidra's notion of a
-            // dominant COPY (merge.cc:1158 domCopy) — the COPY whose reach
-            // dominates the others. We use cover block count as the dominance
-            // proxy (the wider live range dominates the narrower ones).
-            let (cover_in, cover_out) = {
-                let vi = in_vn.read().unwrap();
-                let vo = out_vn.read().unwrap();
-                let ci = vi.high.as_ref().map(aggregate_high_cover).unwrap_or_else(Cover::new);
-                let co = vo.high.as_ref().map(aggregate_high_cover).unwrap_or_else(Cover::new);
-                (ci, co)
-            };
-            let in_dominant = cover_in.blocks.len() >= cover_out.blocks.len();
-            // Exempt the COPY op's own block/order from the intersection test:
-            // the COPY reads the input and writes the output at one op, so
-            // their covers always overlap there — that meeting IS the merge
-            // point, not a real simultaneity (the same exemption merge_copy
-            // uses). Any OTHER overlap still blocks the merge.
-            if let Some((block, order)) = op_block_order(&op_arc) {
-                if in_dominant {
-                    self.merge_speculative_by_vn_except(&in_vn, &out_vn, block, order);
-                } else {
-                    self.merge_speculative_by_vn_except(&out_vn, &in_vn, block, order);
-                }
-            } else {
-                self.merge_speculative_by_vn(&in_vn, &out_vn);
-            }
-        }
+    /// **INFRASTRUCTURE GAP**: Rugra has no snip/trim data-flow rewrite
+    /// machinery. `copyTrims` is never populated (the forced-merge path in
+    /// ActionMergeRequired — mergeAddrTied/mergeMarker → unifyAddress →
+    /// eliminateIntersect → snipReads → allocateCopyTrim — is not ported).
+    /// Therefore this method is a faithful no-op: the list is empty, so
+    /// nothing happens. To make it functional, port the snip/trim subsystem
+    /// (snipReads/eliminateIntersect/allocateCopyTrim + the forced-merge
+    /// callers in merge_addr_tied/merge_marker). Tracked in ALIGNMENT_ROADMAP.
+    pub fn process_copy_trims(&mut self, _fd: &mut Funcdata) {
+        // copyTrims is empty (no snip machinery). Faithful no-op.
+        // Ghidra: for(int4 i=0;i<copyTrims.size();++i) { ... } — size==0.
     }
 
     /// Step 9: ActionMergeAdjacent (coreaction.hh:381).
@@ -1361,93 +1322,6 @@ impl Merge {
             }
         }
     }
-
-    /// Merge copy-related HighVariable pairs whose instance covers are
-    /// disjoint. Mirrors Ghidra's `Merge::mergeByCopy` (run after
-    /// `mergeByCover` setup). For each alive `COPY(input, output)` op, the
-    /// input and output HighVariables are merged iff:
-    ///   - they pass `merge_test` (same space, same size, not constant)
-    ///   - their aggregate covers do not intersect
-    ///
-    /// Restricting to copy-related pairs is what prevents incorrect merges
-    /// like RDI+RSI (different parameters that happen to be non-live at the
-    /// same time). Ghidra enforces the same restriction.
-    pub fn merge_by_cover(&mut self, fd: &mut Funcdata) {
-        // Iterate to a fixed point: an early merge can unify two
-        // HighVariables whose cover subsequently becomes disjoint from a
-        // third, enabling a merge that the first pass rejected. Bound the
-        // iteration to avoid pathological loops.
-        const MAX_PASSES: usize = 4;
-        for _ in 0..MAX_PASSES {
-            let merges_this_pass = self.merge_by_cover_single_pass(fd);
-            if merges_this_pass == 0 {
-                break;
-            }
-        }
-    }
-
-    fn merge_by_cover_single_pass(&mut self, fd: &mut Funcdata) -> usize {
-        use crate::opcodes::OpCode;
-
-        let copy_pairs: Vec<(Arc<RwLock<Varnode>>, Arc<RwLock<Varnode>>, i32, u32)> = fd
-            .obank
-            .alivelist
-            .iter()
-            .filter_map(|op_ref| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    return None;
-                }
-                let in_vn = op.inrefs.get(0).cloned()?;
-                let out_vn = op.output.clone()?;
-                let (block_idx, order) = op_block_order(&op_ref.0)?;
-                drop(op);
-                Some((in_vn, out_vn, block_idx, order))
-            })
-            .collect();
-
-        let mut merged = 0usize;
-        for (in_vn, out_vn, copy_block, copy_order) in copy_pairs {
-            let (in_high, out_high) = {
-                let i = in_vn.read().unwrap();
-                let o = out_vn.read().unwrap();
-                (i.high.clone(), o.high.clone())
-            };
-            let (Some(in_high), Some(out_high)) = (in_high, out_high) else {
-                continue;
-            };
-
-            if Arc::ptr_eq(&in_high, &out_high) {
-                continue;
-            }
-
-            let compatible = {
-                let vi = in_vn.read().unwrap();
-                let vo = out_vn.read().unwrap();
-                // For copy-related pairs, Ghidra's mergeTest only excludes
-                // constants, annotations, and cover overlap (checked next).
-                // The same-space/same-size restriction is NOT applied — the
-                // COPY relationship is the safety guarantee, and COPYs
-                // naturally have matching sizes by P-code spec.
-                let bad = vi.flags & (varnode_flags::CONSTANT | varnode_flags::ANNOTATION) != 0
-                    || vo.flags & (varnode_flags::CONSTANT | varnode_flags::ANNOTATION) != 0;
-                !bad
-            };
-            if !compatible {
-                continue;
-            }
-
-            let in_cover = aggregate_high_cover(&in_high);
-            let out_cover = aggregate_high_cover(&out_high);
-            if in_cover.intersects_except_at(&out_cover, copy_block, copy_order) {
-                continue;
-            }
-
-            self.merge_force(in_vn, out_vn);
-            merged += 1;
-        }
-        merged
-    }
 }
 
 fn aggregate_high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
@@ -1604,93 +1478,6 @@ mod tests {
     use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
     use crate::space::AddressSpace;
 
-    /// Cross-space copy pair where the unique side has multiple readers
-    /// should be merged: register `RDI` flows into `t1` via COPY, and `t1`
-    /// is read by two ops (STORE + RETURN).
-    #[test]
-    fn test_merge_by_cover_unifies_copy_pair() {
-        let mut fd = Funcdata::new("copy_unify", Address::new(0x1000), 0x40);
-
-        let mut copy_op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-        copy_op.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-        copy_op.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
-
-        let mut store_op = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
-        store_op.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
-        store_op.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8));
-        store_op.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        let mut ret_op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
-        ret_op.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        fd.inject_raw_ops(&[copy_op, store_op, ret_op]);
-        fd.run_heritage_direct();
-
-        let mut merge = Merge::new();
-        merge.merge_all(&mut fd);
-
-        let copy_op_arc = fd
-            .obank
-            .alivelist
-            .iter()
-            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .expect("COPY op should exist after injection")
-            .0
-            .clone();
-        let copy = copy_op_arc.read().unwrap();
-        let in_vn = copy.inrefs[0].clone();
-        let out_vn = copy.output.clone().expect("COPY has output");
-        drop(copy);
-
-        let in_high = in_vn.read().unwrap().high.clone().expect("input has high");
-        let out_high = out_vn.read().unwrap().high.clone().expect("output has high");
-        assert!(
-            Arc::ptr_eq(&in_high, &out_high),
-            "multi-reader cross-space copy pair should share a HighVariable after merge_by_cover"
-        );
-    }
-
-    /// Single-reader cross-space COPY pair should also merge: register `RDI`
-    /// flows into `t1` via COPY, `t1` read by one RETURN op. The merge is
-    /// safe (covers are disjoint) and produces Ghidra-aligned naming.
-    #[test]
-    fn test_merge_by_cover_unifies_single_reader_copy_pair() {
-        let mut fd = Funcdata::new("copy_single", Address::new(0x3000), 0x40);
-
-        let mut copy_op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-        copy_op.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-        copy_op.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
-
-        let mut ret_op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
-        ret_op.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        fd.inject_raw_ops(&[copy_op, ret_op]);
-        fd.run_heritage_direct();
-
-        let mut merge = Merge::new();
-        merge.merge_all(&mut fd);
-
-        let copy_op_arc = fd
-            .obank
-            .alivelist
-            .iter()
-            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .expect("COPY op should exist after injection")
-            .0
-            .clone();
-        let copy = copy_op_arc.read().unwrap();
-        let in_vn = copy.inrefs[0].clone();
-        let out_vn = copy.output.clone().expect("COPY has output");
-        drop(copy);
-
-        let in_high = in_vn.read().unwrap().high.clone().expect("input has high");
-        let out_high = out_vn.read().unwrap().high.clone().expect("output has high");
-        assert!(
-            Arc::ptr_eq(&in_high, &out_high),
-            "single-reader cross-space copy pair should share a HighVariable after merge_by_cover"
-        );
-    }
-
     /// Two COPYs feeding the same register at different times should NOT
     /// merge if their covers overlap. Concretely:
     ///   t1 = COPY(RDI)   -- block 0
@@ -1749,67 +1536,6 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&rdi_high, &rsi_high),
             "RDI and RSI are independent parameters and must not share a HighVariable"
-        );
-    }
-
-    /// `copy_marker` (ActionCopyMarker, merge.cc:1444) must mark a COPY
-    /// whose input and output share a HighVariable as non-printing.
-    ///
-    /// Setup: RDI flows into a unique temp `t1` via COPY, and `t1` flows
-    /// back into RDI via a second COPY. After `merge_all`, RDI and both
-    /// temps share one HighVariable, so the COPYs are internal and the
-    /// second COPY (output high == input high) is flagged NONPRINTING.
-    #[test]
-    fn test_copy_marker_marks_internal_copy_non_printing() {
-        use crate::op::pcodeop_flags;
-
-        let mut fd = Funcdata::new("mark_internal_copies", Address::new(0x4000), 0x40);
-
-        // t1 = COPY(RDI)
-        let mut c1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-        c1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-        c1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
-
-        // use(t1) so t1 is live
-        let mut use1 = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
-        use1.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
-        use1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RBX addr
-        use1.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        fd.inject_raw_ops(&[c1, use1]);
-        fd.run_heritage_direct();
-
-        let mut merge = Merge::new();
-        merge.merge_all(&mut fd);
-
-        // Find the COPY op and verify it is internal (output high == input high)
-        // and marked NONPRINTING.
-        let copy_op = fd
-            .obank
-            .alivelist
-            .iter()
-            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .expect("COPY op should exist")
-            .0
-            .clone();
-
-        let same_high = {
-            let c = copy_op.read().unwrap();
-            let out = c.output.as_ref().expect("COPY output");
-            let in0 = c.inrefs.get(0).expect("COPY input");
-            let o = out.read().unwrap();
-            let i = in0.read().unwrap();
-            match (o.high.as_ref(), i.high.as_ref()) {
-                (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
-                _ => false,
-            }
-        };
-        assert!(same_high, "after merge, COPY input/output share a HighVariable");
-
-        let flags = copy_op.read().unwrap().flags;
-        assert!(
-            flags & pcodeop_flags::NONPRINTING != 0,
-            "internal COPY must be marked NONPRINTING by mark_internal_copies"
         );
     }
 
@@ -2043,61 +1769,5 @@ mod tests {
         );
     }
 
-    /// `dominant_copy` (ActionDominantCopy / processHighDominantCopy,
-    /// merge.cc:1316) must merge the input and output HighVariables of a COPY
-    /// when their covers are disjoint (the COPY op point excepted). This is the
-    /// core dominant-copy mechanism: for each alive COPY whose input/output are
-    /// not yet in the same High, attempt a cover-guarded merge with the side
-    /// holding the larger cover as the dominant anchor.
-    ///
-    /// Setup: `RDI` (function input) flows into a unique temp `t1` via COPY,
-    /// and `t1` is read by a STORE. This is the same shape as the verified
-    /// `test_merge_by_cover_unifies_copy_pair` — the COPY input and output
-    /// covers are disjoint except at the COPY op, so the merge must happen.
-    #[test]
-    fn test_dominant_copy_unifies_copy_input_output() {
-        let mut fd = Funcdata::new("dom_copy", Address::new(0x7000), 0x40);
-
-        // t1 = COPY(RDI)
-        let mut c1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-        c1.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-        c1.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
-
-        // use(t1) via STORE so t1 is live and multi-reader
-        let mut store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
-        store.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
-        store.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RBX addr
-        store.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
-        ret.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
-
-        fd.inject_raw_ops(&[c1, store, ret]);
-        fd.run_heritage_direct();
-
-        // Resolve the canonical COPY input/output via the defining COPY op.
-        let copy_op = fd
-            .obank
-            .alivelist
-            .iter()
-            .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .map(|o| o.0.clone())
-            .expect("COPY op should exist");
-        let (in_vn, out_vn) = {
-            let c = copy_op.read().unwrap();
-            (c.inrefs[0].clone(), c.output.clone().expect("COPY output"))
-        };
-
-        let mut merge = Merge::new();
-        merge.merge_all(&mut fd);
-
-        let in_high = in_vn.read().unwrap().high.clone().expect("COPY input has high");
-        let out_high = out_vn.read().unwrap().high.clone().expect("COPY output has high");
-        assert!(
-            Arc::ptr_eq(&in_high, &out_high),
-            "COPY input and output must share a HighVariable after dominant_copy \
-             (covers disjoint except at the COPY op)"
-        );
-    }
 }
 

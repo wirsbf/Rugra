@@ -92,3 +92,7 @@ Get a specific instance
 *暂无代码注释*
 
 
+
+### 2026-07-04：HighVariable 新增 instance-delegated 访问器
+- 新增 `is_input`/`is_extra_out`/`is_proto_partial`（对齐 variable.hh:200/205/206）。Ghidra 通过 updateFlags() 聚合 instance Varnode flags；Rugra 遍历 instances 查任一 Varnode flag。
+- `is_persist`/`is_addr_tied` 增加 instance fallback（high_flags 位 + 任一 instance Varnode flag）。

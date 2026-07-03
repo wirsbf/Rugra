@@ -791,3 +791,7 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 ### 2026-07-03（续）：命名对齐 Ghidra Action 名
 - `ActionMergeCopy::get_name()` "merge_copy" → "mergecopy"（对齐 Ghidra Action 名 coreaction.hh:387，Ghidra 无下划线）。
 - `ActionCopyMarker::apply` 调用更新为 `mark_internal_copies`（配合 merge.rs 改名）。
+
+### 2026-07-04：ActionMergeCopy/ActionDominantCopy 对齐
+- `ActionMergeCopy::apply` 从 45 行内联逻辑改为纯委托 `merge.merge_opcode(fd, CPUI_COPY)`（对齐 coreaction.hh:392 `data.getMerge().mergeOpcode(CPUI_COPY)`）。
+- `ActionDominantCopy::apply` 调用 `process_copy_trims`（配合 merge.rs 改名）。

@@ -539,7 +539,10 @@ impl Action for ActionMergeAdjacent {
 
 /// Action for merging COPY varnodes
 ///
-/// Corresponds to Ghidra's `ActionMergeCopy`
+// Ghidra: coreaction.hh:385 ActionMergeCopy
+/// Try to merge the input and output Varnodes of a CPUI_COPY op.
+/// Faithful to `ActionMergeCopy` (coreaction.hh:385-393). Ghidra's apply is
+/// a pure one-line delegation: `data.getMerge().mergeOpcode(CPUI_COPY);`
 pub struct ActionMergeCopy;
 
 impl ActionMergeCopy {
@@ -550,44 +553,10 @@ impl ActionMergeCopy {
 
 impl Action for ActionMergeCopy {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to coreaction.hh:392: data.getMerge().mergeOpcode(CPUI_COPY);
         let mut merge = crate::merge::Merge::new();
-        let mut changed = 0;
-
-        // Walk all alive COPY ops and try to merge output with input
-        let copy_ops: Vec<_> = fd.obank.alivelist.iter()
-            .filter(|op_ref| op_ref.0.read().unwrap().opcode == OpCode::CPUI_COPY)
-            .cloned()
-            .collect();
-
-        for op_ref in &copy_ops {
-            let op = op_ref.0.read().unwrap();
-            let in_vn_arc = match op.inrefs.get(0) {
-                Some(vn) => vn.clone(),
-                None => continue,
-            };
-            let out_vn_arc = match &op.output {
-                Some(vn) => vn.clone(),
-                None => continue,
-            };
-            drop(op);
-
-            // Test if the two varnodes can merge
-            let can_merge = {
-                let v1 = in_vn_arc.read().unwrap();
-                let v2 = out_vn_arc.read().unwrap();
-                merge.merge_test(&v1, &v2)
-            };
-            if can_merge {
-                merge.merge_force(in_vn_arc, out_vn_arc);
-                changed += 1;
-            }
-        }
-
-        if changed > 0 {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        merge.merge_opcode(fd, crate::opcodes::OpCode::CPUI_COPY);
+        Ok(action_status::CHANGE)
     }
 
     fn get_name(&self) -> &str {
@@ -5896,10 +5865,10 @@ impl Action for ActionAssignHigh {
 /// Choose the dominant COPY in the merge phase (rule_onceperfunc).
 ///
 /// Faithful to `ActionDominantCopy` (coreaction.hh:1001). Ghidra's `apply`
-/// calls `data.getMerge().processCopyTrims()`, which walks the copy-trim
-/// list accumulated by speculative merging and rewrites the dominant COPY.
-/// Rugra's `Merge::dominant_copy` mirrors the empty-list path (no trims are
-/// accumulated, so no replacements are made).
+/// calls `data.getMerge().processCopyTrims()`, which walks the copyTrims
+/// list accumulated by the snip/trim machinery in ActionMergeRequired.
+/// Rugra's `Merge::process_copy_trims` is a faithful no-op: copyTrims is
+/// never populated (Rugra lacks the snip/trim data-flow rewrite subsystem).
 pub struct ActionDominantCopy;
 
 impl ActionDominantCopy {
@@ -5910,9 +5879,10 @@ impl ActionDominantCopy {
 
 impl Action for ActionDominantCopy {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra: data.getMerge().processCopyTrims();
+        // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims();
+        // copyTrims is empty in Rugra (no snip machinery) → faithful no-op.
         let mut merge = crate::merge::Merge::new();
-        merge.dominant_copy(fd);
+        merge.process_copy_trims(fd);
         Ok(action_status::NO_CHANGE)
     }
 

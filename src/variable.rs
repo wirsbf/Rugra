@@ -91,15 +91,64 @@ impl HighVariable {
     }
 
     /// Check if this variable is persistent (global/external).
-    /// Faithful to HighVariable::isPersist (variable.hh).
+    /// Faithful to HighVariable::isPersist (variable.hh:198).
+    /// Checks high_flags bit OR any instance Varnode carrying persist.
     pub fn is_persist(&self) -> bool {
-        self.flags & high_flags::PERSIST != 0
+        if self.flags & high_flags::PERSIST != 0 {
+            return true;
+        }
+        self.instances.iter().any(|vn| {
+            vn.read().unwrap().flags & crate::varnode::varnode_flags::PERSIST != 0
+        })
     }
 
     /// Check if this variable is address-tied (lives at a specific address).
-    /// Faithful to HighVariable::isAddrTied (variable.hh).
+    /// Faithful to HighVariable::isAddrTied (variable.hh:199).
+    ///
+    /// Ghidra's HighVariable::isAddrTied calls updateFlags() then checks
+    /// `flags & Varnode::addrtied`. updateFlags() recomputes the aggregated
+    /// flags from all instance Varnodes. Rugra has no updateFlags cache, so
+    /// we check the high_flags bit (set at HighVariable creation) OR any
+    /// instance Varnode carrying the addrtied flag.
     pub fn is_addr_tied(&self) -> bool {
-        self.flags & high_flags::ADDRTIED != 0
+        if self.flags & high_flags::ADDRTIED != 0 {
+            return true;
+        }
+        self.instances.iter().any(|vn| {
+            vn.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED != 0
+        })
+    }
+
+    // Ghidra: variable.hh:200 HighVariable::isInput
+    /// Check if this variable is an input variable.
+    /// Faithful to HighVariable::isInput (variable.hh:200).
+    /// Checks aggregated instance Varnode flags (Ghidra updateFlags model).
+    pub fn is_input(&self) -> bool {
+        self.instances.iter().any(|vn| {
+            vn.read().unwrap().is_input()
+        })
+    }
+
+    // Ghidra: variable.hh:205 HighVariable::isExtraOut
+    /// Check if this variable is an extra output (indirect_creation but not addrtied).
+    /// Faithful to HighVariable::isExtraOut (variable.hh:205):
+    ///   `(flags & (indirect_creation|addrtied)) == indirect_creation`
+    pub fn is_extra_out(&self) -> bool {
+        self.instances.iter().any(|vn| {
+            let f = vn.read().unwrap().flags;
+            let ic = crate::varnode::varnode_flags::INDIRECT_CREATION;
+            let at = crate::varnode::varnode_flags::ADDRTIED;
+            (f & (ic | at)) == ic
+        })
+    }
+
+    // Ghidra: variable.hh:206 HighVariable::isProtoPartial
+    /// Check if this variable is a proto-partial (CONCAT piece).
+    /// Faithful to HighVariable::isProtoPartial (variable.hh:206).
+    pub fn is_proto_partial(&self) -> bool {
+        self.instances.iter().any(|vn| {
+            vn.read().unwrap().is_proto_partial()
+        })
     }
 
     /// Check if this variable is a constant.
