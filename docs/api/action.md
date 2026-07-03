@@ -771,3 +771,11 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - 根因：Rugra 的 bblocks CFG 在 mainloop 最开始（heritage 之前）不完整（sblocks 还没建），在此阶段移除块破坏后续阶段。移到 BlockStructure 后，CFG 完整，只有真不可达块被移除。
 - Ghidra 在 :5490（更早）运行此 Action，但 Ghidra 的 CFG 在反汇编阶段就已完整。Rugra 需要在 BlockStructure 后才能保证 CFG 完整。
 - **curl gcc 24/24（确定，3/3 runs），0 defects，956/956 测试**。
+
+### 批量启用 13 个 Actions（2026-07-03 续 7）★
+- 通过逐个二分测试，安全启用了 13 个之前禁用的 Actions：
+  - **Stubs (安全 no-op)**: Constbase, ConditionalConst, MappedLocalSync, StartCleanUp, PreferComplement, StructureTransform, MapGlobals, DynamicSymbols, Stop
+  - **Has-logic (验证安全)**: ExtraPopSetup, DeterminedBranch, LikelyTrash, DoNothing, MarkIndirectOnly
+- **禁用 (1个有破坏性)**: RedundBranch — spliceBlockBasic 破坏输出（my_get_token gcc fail）
+- **仍禁用 (2个 stub)**: NodeJoin, ReturnSplit — 留作占位
+- 主管线覆盖率从 68/85 → **81/85 = 95%**（仅 RedundBranch/NodeJoin/ReturnSplit 3 个禁用 + ActionUnreachable 已启用）
