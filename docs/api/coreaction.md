@@ -783,3 +783,7 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 - 增强：新增 `Funcdata::set_high_level`（funcdata.rs）+ `funcdata_flags::HIGHLEVEL_ON`（对齐 Ghidra `highlevel_on` funcdata.hh:84）。
   set_high_level 设标志 + 遍历 loc_tree 给每个无 high 的 Varnode 分配 HighVariable（对齐 Ghidra `setHighLevel` funcdata_varnode.cc:595 + `assignHigh` :48-59）。
   幂等：HIGHLEVEL_ON 已设则直接返回（Ghidra 同样行为）。ActionAssignHigh::apply 现委托到 set_high_level（之前是内联重复逻辑）。
+
+### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
+- `build_local_types` → `build_localtypes`（对齐 `ActionInferTypes::buildLocaltypes` coreaction.cc:5008。注意 Ghidra 拼作 "Localtypes" 一个词，非 "LocalTypes"）。
+- `ensure_callspecs` → `setup_call_specs`（对齐 `FlowInfo::setupCallSpecs` flow.hh:129。Rugra 签名是批量 over fd，Ghidra 是 per-op，但命名对齐）。

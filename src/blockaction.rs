@@ -4020,7 +4020,12 @@ impl<'a> CollapseStructure<'a> {
     ///   Block C: cmp var, K3 → je case3, fallthrough D (default)
     ///   case1, case2, case3 all → merge_point
     ///
-    /// Corresponds to Ghidra's `ruleBlockSwitch` for CBRANCH cascades.
+    /// Fabricated logic with NO Ghidra counterpart. Ghidra's `ruleBlockSwitch`
+    /// (blockaction.cc:1649) fires ONLY on isSwitchOut() blocks (set by
+    /// CPUI_BRANCHIND), NEVER forming a switch from CBRANCH if/else-if chains.
+    /// This function did the latter and produced ~16/18 spurious switches.
+    /// DISABLED (blockaction.rs:695). Kept for reference; do not rename to
+    /// rule_block_switch — that would falsely imply Ghidra correspondence.
     fn collapse_cbranch_cascades(&mut self) {
         use crate::opcodes::OpCode;
 

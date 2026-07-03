@@ -707,3 +707,7 @@
 - `get_symbol_entry() -> Option<Arc<RwLock<SymbolEntry>>>`（varnode.hh:190）。
 - `get_structured_type() -> Option<Arc<Datatype>>`（varnode.cc:1137-1148）— 优先 mapentry 的 symbol 类型，否则 v_type；返回 piece-structured 类型。
 - `copy_symbol` 完善：现在复制 mapentry（不再退化）。
+
+### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
+- `contains_storage` → `contains`（对齐 `Varnode::contains` varnode.hh:226，返回 int4/i32 含5种关系码）。
+- 删除 `is_persist_global`：是 `is_persist`（:579）的死重复副本（两者都读 PERSIST flag）。Ghidra 只有一个 `isPersist`。

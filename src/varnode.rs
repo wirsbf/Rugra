@@ -671,12 +671,13 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.hh:226 Varnode::contains
     /// Determine containment relationship with another varnode.
     /// Faithful to `Varnode::contains` (varnode.cc:105-116).
     /// Returns: 0 = this fully contains op, -1 = op starts before this,
     ///          1 = op starts within but extends past this's end,
     ///          2 = op starts after this's end, 3 = different space.
-    pub fn contains_storage(&self, other: &Varnode) -> i32 {
+    pub fn contains(&self, other: &Varnode) -> i32 {
         if self.address_space != other.address_space {
             return 3;
         }
@@ -768,11 +769,6 @@ impl Varnode {
     /// `Varnode::isSpacebase` (varnode.hh, referenced by varmap/heritage).
     pub fn is_spacebase(&self) -> bool {
         (self.flags & varnode_flags::SPACEBASE) != 0
-    }
-
-    /// Is this a persistent (global) varnode? Faithful to `isPersist`.
-    pub fn is_persist_global(&self) -> bool {
-        (self.flags & varnode_flags::PERSIST) != 0
     }
 
     /// Return an iterator over the live descendant ops (ops that read this

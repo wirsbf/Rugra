@@ -2922,10 +2922,11 @@ fn ptr_to<'a>(
 }
 
 impl ActionInferTypes {
+    // Ghidra: coreaction.cc:5008 ActionInferTypes::buildLocaltypes
     /// Faithful to `ActionInferTypes::buildLocaltypes` (coreaction.cc:5008-5037).
     /// Collect local data-type information on each Varnode inferred from the
     /// PcodeOps that read/write it, storing results in the temp map.
-    fn build_local_types(
+    fn build_localtypes(
         &self,
         fd: &Funcdata,
         temps: &mut TempTypes,
@@ -3592,7 +3593,7 @@ impl Action for ActionInferTypes {
         };
         // 3. buildLocalTypes: seed temp types from op semantics.
         let mut temps: TempTypes = HashMap::new();
-        self.build_local_types(fd, &mut temps, &int_types, ptr_size);
+        self.build_localtypes(fd, &mut temps, &int_types, ptr_size);
 
         // 4. For each eligible varnode, propagate its type via DFS.
         let roots: Vec<_> = fd
@@ -4830,12 +4831,13 @@ pub struct ActionFuncLink;
 impl ActionFuncLink {
     pub fn new() -> Self { Self }
 
+    // Ghidra: flow.hh:129 FlowInfo::setupCallSpecs
     /// Build FuncCallSpecs for every CALL op that lacks one.
     /// Faithful to FlowInfo::setupCallSpecs (flow.cc:680-695): for each CALL
     /// op, create a FuncCallSpecs initialized from the call's target address
     /// (inrefs[0]), and store it in fd.callspecs. Rugra has no separate
     /// FlowInfo stage, so this runs as the first step of ActionFuncLink.
-    fn ensure_callspecs(&self, fd: &mut Funcdata) -> usize {
+    fn setup_call_specs(&self, fd: &mut Funcdata) -> usize {
         use crate::space::AddressSpace;
         // Collect CALL op addresses that already have a callspec.
         let existing: std::collections::HashSet<u64> =
@@ -5015,7 +5017,7 @@ impl Action for ActionFuncLink {
         // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586) +
         // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
         // stage, so we build FuncCallSpecs here (one per CALL op) before linking.
-        let n_new = self.ensure_callspecs(fd);
+        let n_new = self.setup_call_specs(fd);
         // Collect (callspec_index, op_ref) pairs so we can pass the CALL op to
         // funcLinkInput/funcLinkOutput without double-borrowing fd.
         let symbol_table = fd.symbol_table.clone();

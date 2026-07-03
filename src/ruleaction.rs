@@ -11378,7 +11378,7 @@ impl Rule for RulePullsubIndirect {
 /// op is dead, the INDIRECT output is totalReplace'd by its input and destroyed.
 ///
 /// NOTE: The iop-space coderef resolution (`get_op_from_const`), the
-/// COPY/SUBPIECE overlap-collapse via `characterize_overlap`/`contains_storage`,
+/// COPY/SUBPIECE overlap-collapse via `characterize_overlap`/`contains`,
 /// the `hasNoLocalAlias`/`noIndirectCollapse` guard, the STORE spacebase-guard
 /// branch, and the dead-indop `total_replace`+`op_destroy` path are all now
 /// implemented against Rugra's flag/op APIs.
@@ -11437,7 +11437,7 @@ impl Rule for RuleIndirectCollapse {
                     let cont = {
                         let v1 = vn1.read().unwrap();
                         let v2 = outvn.read().unwrap();
-                        v1.contains_storage(&v2)
+                        v1.contains(&v2)
                     };
                     if cont == 0 {
                         // trunc offset: big-endian vs little-endian.

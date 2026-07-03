@@ -730,3 +730,6 @@ BlockWhileDo 加 for_init/for_iter 字段（对齐 Ghidra iterateOp/initializeOp
 
 ### 2026-07-01（续 3）：ActionBlockStructure sblocks 失效重建
 ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current op count vs last：不同则 clear sblocks 重建（防止 bblocks 变化后 sblocks 不同步）。mainloop repeatapply 仍不启用：sblocks 重建后 printc 的 emit_block_structured 在新结构上仍递归溢出。修复 printc 迭代化是前置条件。
+
+### 2026-07-03：修正 collapse_cbranch_cascades 的错误注释
+- 该函数的注释曾错误声称 "Corresponds to Ghidra's ruleBlockSwitch"，但 Ghidra `ruleBlockSwitch`（blockaction.cc:1649）只对 `isSwitchOut()` 块触发（由 CPUI_BRANCHIND 设置 f_switch_out），从不从 CBRANCH if/else-if 链造 switch。此函数是 fabricated logic（无 Ghidra 对应），已修正注释明确说明。函数仍禁用（:695）。**未改名**为 rule_block_switch——那会给 fabricated logic 披上 Ghidra 对应的外衣。
