@@ -1844,6 +1844,84 @@ impl Funcdata {
         op.0.write().unwrap().flags |= crate::op::pcodeop_flags::NONPRINTING;
     }
 
+    // Ghidra: funcdata.hh:486 Funcdata::opMarkCalculatedBool
+    /// Mark PcodeOp as having boolean output. Faithful to
+    /// `Funcdata::opMarkCalculatedBool` (funcdata.hh:486).
+    pub fn op_mark_calculated_bool(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
+    }
+
+    // Ghidra: funcdata.hh:483 Funcdata::opMarkSpecialPrint
+    /// Mark PcodeOp as needing special printing. Faithful to
+    /// `Funcdata::opMarkSpecialPrint` (funcdata.hh:483).
+    pub fn op_mark_special_print(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().addlflags |= crate::op::op_addl_flags::SPECIAL_PRINT;
+    }
+
+    // Ghidra: funcdata.hh:484 Funcdata::opMarkNoCollapse
+    /// Mark PcodeOp as not collapsible. Faithful to
+    /// `Funcdata::opMarkNoCollapse` (funcdata.hh:484).
+    pub fn op_mark_no_collapse(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::NOCOLLAPSE;
+    }
+
+    // Ghidra: funcdata.hh:487 Funcdata::opMarkSpacebasePtr
+    /// Mark PcodeOp as LOAD/STORE from spacebase ptr. Faithful to
+    /// `Funcdata::opMarkSpacebasePtr` (funcdata.hh:487).
+    pub fn op_mark_spacebase_ptr(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::SPACEBASE_PTR;
+    }
+
+    // Ghidra: funcdata.hh:488 Funcdata::opClearSpacebasePtr
+    /// Unmark PcodeOp as using spacebase ptr. Faithful to
+    /// `Funcdata::opClearSpacebasePtr` (funcdata.hh:488).
+    pub fn op_clear_spacebase_ptr(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags &= !crate::op::pcodeop_flags::SPACEBASE_PTR;
+    }
+
+    // Ghidra: funcdata.hh:477 Funcdata::opSetAllInput
+    /// Set all input Varnodes for the given PcodeOp simultaneously.
+    /// Faithful to `Funcdata::opSetAllInput` (funcdata_op.cc:267-284).
+    pub fn op_set_all_input(&self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>]) {
+        // Unset all existing inputs (funcdata_op.cc:276-278).
+        let num = op.0.read().unwrap().num_input();
+        for i in 0..num {
+            self.op_unset_input(op, i);
+        }
+        // Resize input list (funcdata_op.cc:280).
+        op.0.write().unwrap().inrefs.resize(vvec.len(), std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(0, 0)
+        )));
+        // Set new inputs (funcdata_op.cc:282-283).
+        for (i, vn) in vvec.iter().enumerate() {
+            self.op_set_input(op, vn.clone(), i);
+        }
+    }
+
+    // Ghidra: funcdata.hh:451 Funcdata::markIndirectCreation
+    /// Convert CPUI_INDIRECT into an indirect creation. Faithful to
+    /// `Funcdata::markIndirectCreation` (funcdata_op.cc:736-748).
+    pub fn mark_indirect_creation(&self, indop: &crate::op::PcodeOpRef, possible_output: bool) {
+        let (out_vn, in0_is_const) = {
+            let o = indop.0.read().unwrap();
+            let out = o.output.clone();
+            let in0_const = o.get_in(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+            (out, in0_const)
+        };
+        indop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_CREATION;
+        if !in0_is_const {
+            eprintln!("[MERGE] Indirect creation not properly formed (in0 not constant)");
+        }
+        if !possible_output {
+            if let Some(in0) = indop.0.read().unwrap().get_in(0) {
+                in0.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
+            }
+        }
+        if let Some(out_vn) = out_vn {
+            out_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
+        }
+    }
+
     /// Get the input slot of `vn` within `op`. Faithful to `PcodeOp::getSlot`.
     /// Returns the slot index, or -1 if not found.
     pub fn op_get_slot(&self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {

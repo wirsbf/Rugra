@@ -843,3 +843,11 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 ### 2026-07-04（续）：op_insert_end + op_mark_non_printing
 - `op_insert_end(op, bb)`（对齐 funcdata.hh:461）：插到块末尾（op_insert_after(last_op)）。
 - `op_mark_non_printing(op)`（对齐 funcdata.hh:519）：设置 NONPRINTING flag。
+
+### 2026-07-04：移植高优先级缺失 Funcdata op-editing API
+- `op_set_all_input(op, vvec)`（funcdata.hh:477）：一次性设置所有输入（先 unset 全部，resize，再逐个 set）。
+- `op_mark_calculated_bool(op)`（funcdata.hh:486）：标记布尔输出。
+- `op_mark_special_print(op)`（funcdata.hh:483）：标记特殊打印。
+- `op_mark_no_collapse(op)`（funcdata.hh:484）：标记不可折叠。
+- `op_mark_spacebase_ptr(op)`（funcdata.hh:487）/ `op_clear_spacebase_ptr(op)`（funcdata.hh:488）。
+- `mark_indirect_creation(indop, possible_output)`（funcdata.hh:451）：把已存在的 INDIRECT op 标记为 indirect creation。
