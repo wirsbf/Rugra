@@ -733,3 +733,12 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - 按 Ghidra 顺序（coreaction.cc:5730-5731）在 MarkImplied 后、SetCasts 前注册。
   - ActionOutputPrototype：从 RETURN ops 推导返回类型（已由 ActionReturnRecovery 挂载返回值）。
   - ActionInputPrototype：从 input varnodes 推导参数个数/类型（已由 ActionInferParams 做初步检测）。
+
+### 主管线全量审计 + 注册（2026-07-03 续）
+- 审计了 Ghidra universalAction（coreaction.cc:5462-5738）的全部 72 个 Action，对比 Rugra 注册情况。
+- 发现 24 个 Ghidra Action 有 struct 定义但未注册。
+- **安全注册**了无害的：ActionPrototypeWarnings（:5737）。
+- **禁用**了导致回归的（注释说明原因）：ActionConstbase/ExtraPopSetup/Unreachable/RedundBranch/DeterminedBranch/NodeJoin/ConditionalConst/LikelyTrash/DoNothing/ReturnSplit/MappedLocalSync/StartCleanUp/PreferComplement/StructureTransform/MarkIndirectOnly/MapGlobals/DynamicSymbols/Stop。
+  - 这些 Action 的 apply() 有副作用（删 op/块），实现不够成熟，启用后导致函数体丢失（24→14 函数）。
+  - 需要逐个对照 Ghidra 源码验证其 apply 逻辑后才能安全启用。
+- curl gcc 24/24（保持），0 defects，956/956 测试。

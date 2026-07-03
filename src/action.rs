@@ -793,6 +793,7 @@ impl ActionDatabase {
 
         // --- Top-level Actions (coreaction.cc:5477-5485) ---
         universal.add_action(Box::new(ActionStart::new()));
+        // universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478 — disabled: causes function count regression
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
         // Wire in additional implemented Actions from coreaction (Ghidra
         // coreaction.cc:5479-5485: NormalizeSetup/DefaultParams/PrototypeTypes/
@@ -800,6 +801,7 @@ impl ActionDatabase {
         for extra in crate::coreaction::build_full_pipeline_actions() {
             universal.add_action(extra);
         }
+        // universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482 — disabled: causes regression
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
         // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
@@ -830,6 +832,7 @@ impl ActionDatabase {
         // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
+        // universal.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5490 — disabled: causes function count regression
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
         mainloop.add_action(Box::new(ActionStackPtrFlow::new()));
@@ -864,14 +867,26 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
         mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
         mainloop.add_action(Box::new(ActionBlockStructure::new()));
+        // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
+        // but may be no-ops depending on implementation maturity.
+        // mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new()));
+        // mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new()));
+        // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new()));
+        // mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new()));
 
         fullloop.add_action(Box::new(mainloop));
-        // fullloop post-mainloop Actions (coreaction.cc:5679-5688)
-        fullloop.add_action(Box::new(ActionDeadCode::new()));
+        // fullloop post-mainloop Actions (coreaction.cc:5679-5688) — registered
+        // but some may need maturity before enabling.
+        // fullloop.add_action(Box::new(crate::coreaction::ActionLikelyTrash::new()));
+        // fullloop.add_action(Box::new(crate::coreaction::ActionDoNothing::new()));
+        // fullloop.add_action(Box::new(crate::coreaction::ActionReturnSplit::new()));
+        fullloop.add_action(Box::new(ActionDeadCode::new())); // :5687
 
         universal.add_action(Box::new(fullloop));
 
         // --- Post-fullloop top-level (coreaction.cc:5691-5738) ---
+        // universal.add_action(Box::new(crate::coreaction::ActionMappedLocalSync::new())); // :5691 — disabled
+        // universal.add_action(Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692 — disabled
         // Cleanup pool (coreaction.cc:5694, repeatapply)
         universal.add_action(Box::new(build_cleanup_pool()));
         // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
@@ -879,22 +894,36 @@ impl ActionDatabase {
         // already registered in build_full_pipeline_actions (line ~7084), runs
         // before the merge actions, assigning HighVariables to all Varnodes.
         universal.add_action(Box::new(ActionMergeType::new()));
+        universal.add_action(Box::new(ActionNormalizeBranches::new()));
+        // Post-normalize structure Actions (coreaction.cc:5714-5715, 5724-5733)
+        // — disabled: cause regression. Need implementation maturity before enabling.
+        // universal.add_action(Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
+        // universal.add_action(Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
+        // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
+        // Merge::merge_all (see ActionMergeType). ActionAssignHigh (:5717) is
+        // already registered in build_full_pipeline_actions (line ~7084), runs
+        // before the merge actions, assigning HighVariables to all Varnodes.
+        universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
+        // universal.add_action(Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725 — disabled
         // ActionOutputPrototype + ActionInputPrototype (coreaction.cc:5730-5731)
         // — finalize the function prototype from RETURN ops (return type) and
         // input varnodes (param count/types). Run after merge + MarkExplicit/
         // Implied, before SetCasts (5735) and FinalStructure (5736).
         universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new()));
         universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new()));
+        // universal.add_action(Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732 — disabled
+        // universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733 — disabled
         // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
         // printer emits explicit C type casts. Runs after ActionInferTypes
         // (mainloop) and ActionMarkExplicit/Implied so input/output types are
         // settled. Faithful to Ghidra's order: ...MarkImplied → ...NameVars →
         // SetCasts → FinalStructure.
         universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
-        universal.add_action(Box::new(ActionNormalizeBranches::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
         universal.add_action(Box::new(ActionFinalStructure::new()));
+        // universal.add_action(Box::new(crate::coreaction::ActionStop::new())); // :5738 — disabled
 
         self.register_action(Box::new(universal));
     }
