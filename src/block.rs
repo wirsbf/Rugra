@@ -33,6 +33,8 @@ pub mod block_flags {
     pub const ENTRY_POINT: u32 = 0x200;      // f_entry_point (block.hh:96)
     pub const DEAD: u32 = 0x4000;            // f_dead (block.hh:101)
     pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
+    /// Ghidra f_duplicate_block = 0x40000 (block.hh:106). Duplicated block.
+    pub const DUPLICATE_BLOCK: u32 = 0x40000;
     // Rugra-only flags (no Ghidra counterpart, placed at 0x80000+)
     pub const RETURN_TERMINAL: u32 = 0x80000;
     pub const CASE_BODY: u32 = 0x100000;

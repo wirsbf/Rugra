@@ -857,3 +857,14 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `remove_do_nothing_block(bb)`（funcdata_block.cc:328）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
 - `node_join_create_block(...)`（funcdata_block.cc:790）：创建合并块（newBlockBasic + removeEdge + moveOutEdge + addEdge）。
 - 文件级 helper `find_out_index`（对应 FlowBlock::getOutIndex）。
+
+### 2026-07-04（续 3）：移植 nodeSplit + CloneBlockOps
+- `node_split(b, inedge)`（funcdata_block.cc:856）：分裂基本块，复制 p-code 到新块。
+- `node_split_block_edge`（funcdata_block.cc:835）：创建 DUPLICATE_BLOCK 块，重定向入边。
+- `switch_edge(in, outbefore, outafter)`（block.cc:1489）：重定向出边目标。
+- `CloneBlockOps` struct（funcdata_block.cc:962-1104）：完整 p-code 克隆逻辑：
+  - `build_op_clone`：克隆 op（复制 opcode + flag 子集，跳过 branch）。
+  - `build_varnode_output`：克隆输出 varnode（复制 flag 子集）。
+  - `clone_block`：遍历 ops 克隆 + patch_inputs。
+  - `patch_inputs`：MULTIEQUAL→COPY 转换 + 常量共享 + 克隆映射查找。
+- 新增 `block_flags::DUPLICATE_BLOCK`（f_duplicate_block=0x40000）。

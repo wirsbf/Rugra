@@ -919,3 +919,6 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 ### 2026-07-04（续）：移植 block-graph 重写方法
 - `set_default_switch(pos)`（block.cc:318）：标记出边为 switch 默认边（设 F_DEFAULTSWITCH_EDGE）。
 - 新增 `edge_flags::F_DEFAULTSWITCH_EDGE = 1<<7`（Ghidra f_defaultswitch_edge=4，Rugra 用新位避免与 F_GOTO_EDGE 冲突）。
+
+### 2026-07-04（续 2）：新增 DUPLICATE_BLOCK flag
+- `block_flags::DUPLICATE_BLOCK = 0x40000`（f_duplicate_block, block.hh:106）。nodeSplit 创建的重复块。

@@ -1160,6 +1160,80 @@ impl Funcdata {
         newblock
     }
 
+    // Ghidra: block.cc:1489 BlockGraph::switchEdge
+    /// Redirect the edge from `in`→`outbefore` to `in`→`outafter`.
+    /// Faithful to `BlockGraph::switchEdge` (block.cc:1489-1495).
+    pub fn switch_edge(
+        &mut self,
+        in_block: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        outbefore: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        outafter: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        // Find the out-edge slot from in_block pointing to outbefore, then
+        // redirect it to outafter (block.cc:1492-1494).
+        if let Some(slot) = find_out_index(in_block, outbefore) {
+            let mut in_rg = in_block.write().unwrap();
+            if let Some(bb) = in_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                bb.replace_out_edge_target(slot, outafter.clone());
+            }
+            // BlockGraph and other types: nodeSplit only operates on BlockBasic.
+        }
+    }
+
+    // Ghidra: funcdata_block.cc:835 Funcdata::nodeSplitBlockEdge
+    /// Create a duplicate block that inherits the same out-edges but only the
+    /// one indicated in-edge, which is moved from the original block.
+    /// Faithful to `Funcdata::nodeSplitBlockEdge` (funcdata_block.cc:835-848).
+    fn node_split_block_edge(
+        &mut self,
+        b: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        inedge: usize,
+    ) -> Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> {
+        let a = b.read().unwrap().get_in(inedge).map(|e| e.point.clone());
+        let Some(a) = a else {
+            return self.create_new_block();
+        };
+        let bprime = self.create_new_block();
+        bprime.write().unwrap().set_flags(crate::block::block_flags::DUPLICATE_BLOCK);
+        // copyRange(b) — Rugra blocks don't track address range; skip.
+        // switchEdge(a, b, bprime)
+        self.switch_edge(&a, b, &bprime);
+        // Add all of b's out-edges to bprime.
+        let outs: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+            let br = b.read().unwrap();
+            (0..br.size_out()).filter_map(|i| br.get_out(i).map(|e| e.point.clone())).collect()
+        };
+        for out in &outs {
+            self.bblocks.add_edge(bprime.clone(), out.clone());
+        }
+        bprime
+    }
+
+    // Ghidra: funcdata_block.cc:856 Funcdata::nodeSplit
+    /// Split control-flow into a basic block, duplicating its p-code into a
+    /// new block. Faithful to `Funcdata::nodeSplit` (funcdata_block.cc:856-882).
+    pub fn node_split(
+        &mut self,
+        b: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        inedge: usize,
+    ) {
+        // Preconditions (merge.cc:859-869).
+        if b.read().unwrap().size_out() != 0 {
+            eprintln!("[BLOCK] Cannot nodesplit block with out flow");
+            return;
+        }
+        if b.read().unwrap().size_in() <= 1 {
+            eprintln!("[BLOCK] Cannot nodesplit block with only 1 in edge");
+            return;
+        }
+        // Create duplicate block.
+        let bprime = self.node_split_block_edge(b, inedge);
+        // CloneBlockOps: clone all ops from b into bprime.
+        let mut cloner = CloneBlockOps::new();
+        cloner.clone_block(self, b, &bprime, inedge);
+        self.structure_reset();
+    }
+
     /// Synchronize varnodes with the local-variable scope symbols. Faithful to
     /// `Funcdata::syncVarnodesWithSymbols` (funcdata_varnode.cc:938-989).
     ///
@@ -5280,7 +5354,6 @@ mod tests {
 // RUGRA-GLUE: 在出边列表中查找指向目标块的索引。Ghidra 用 FlowBlock::getOutIndex
 // (block.hh:317)；Rugra 内联为文件级函数（需 downcast 到 BlockBasic/BlockGraph）。
 /// Find the index of the outgoing edge pointing to `target` in `src`.
-/// Returns None if not found.
 fn find_out_index(
     src: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -5295,6 +5368,199 @@ fn find_out_index(
         }
     }
     None
+}
+
+// Ghidra: funcdata_block.cc:962 CloneBlockOps
+/// Clone p-code ops from one basic block into another (for nodeSplit).
+/// Faithful to Ghidra's `CloneBlockOps` class (funcdata_block.cc:962-1104).
+struct CloneBlockOps {
+    /// (clone_op, orig_op) pairs, in clone order.
+    clone_list: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)>,
+    /// Map from orig op Arc ptr → clone op Arc.
+    orig_to_clone: std::collections::HashMap<usize, crate::op::PcodeOpRef>,
+}
+
+impl CloneBlockOps {
+    // RUGRA-GLUE: Rust 构造器（Ghidra CloneBlockOps 用 C++ 构造函数 + data 引用初始化）。
+    fn new() -> Self {
+        Self {
+            clone_list: Vec::new(),
+            orig_to_clone: std::collections::HashMap::new(),
+        }
+    }
+
+    // Ghidra: funcdata_block.cc:962 CloneBlockOps::buildOpClone
+    /// Clone a PcodeOp (copy opcode + flags). Skip branches (return None).
+    fn build_op_clone(&mut self, fd: &mut Funcdata, orig: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
+        let (is_branch, is_not_branch, num_input, addr, opcode, flags, addlflags) = {
+            let o = orig.0.read().unwrap();
+            let ib = o.is_branch();
+            let addr = o.get_addr();
+            let opcode = o.opcode;
+            let flags = o.flags;
+            let addlflags = o.addlflags;
+            (ib, ib && o.opcode != crate::opcodes::OpCode::CPUI_BRANCH, o.num_input(), addr, opcode, flags, addlflags)
+        };
+        if is_branch {
+            if is_not_branch {
+                eprintln!("[BLOCK] Cannot duplicate 2-way or n-way branch in nodesplit");
+            }
+            return None;
+        }
+        let dup = fd.new_op(num_input, addr);
+        fd.op_set_opcode(&dup, opcode);
+        // Copy flag subset (funcdata_block.cc:974-978).
+        let fl_mask = crate::op::pcodeop_flags::STARTBASIC
+            | crate::op::pcodeop_flags::NOCOLLAPSE
+            | crate::op::pcodeop_flags::STARTMARK
+            | crate::op::pcodeop_flags::NONPRINTING
+            | crate::op::pcodeop_flags::HALT
+            | crate::op::pcodeop_flags::BADINSTRUCTION
+            | crate::op::pcodeop_flags::UNIMPLEMENTED
+            | crate::op::pcodeop_flags::NORETURN
+            | crate::op::pcodeop_flags::MISSING
+            | crate::op::pcodeop_flags::INDIRECT_CREATION
+            | crate::op::pcodeop_flags::INDIRECT_STORE
+            | crate::op::pcodeop_flags::CALCULATED_BOOL
+            | crate::op::pcodeop_flags::PTRFLOW;
+        dup.0.write().unwrap().flags |= flags & fl_mask;
+        // Copy addlflag subset (funcdata_block.cc:979-980).
+        let afl_mask = crate::op::op_addl_flags::SPECIAL_PRINT
+            | crate::op::op_addl_flags::INCIDENTAL_COPY
+            | crate::op::op_addl_flags::IS_CPOOL_TRANSFORMED
+            | crate::op::op_addl_flags::STOP_TYPE_PROPAGATION
+            | crate::op::op_addl_flags::STORE_UNMAPPED;
+        dup.0.write().unwrap().addlflags |= addlflags & afl_mask;
+        // Record mappings.
+        self.clone_list.push((dup.clone(), orig.clone()));
+        self.orig_to_clone.insert(Arc::as_ptr(&orig.0) as usize, dup.clone());
+        Some(dup)
+    }
+
+    // Ghidra: funcdata_block.cc:992 CloneBlockOps::buildVarnodeOutput
+    /// Clone the output Varnode of an op into the clone op.
+    fn build_varnode_output(&self, fd: &mut Funcdata, orig_op: &crate::op::PcodeOpRef, clone_op: &crate::op::PcodeOpRef) {
+        let orig_out = orig_op.0.read().unwrap().output.clone();
+        let Some(orig_vn) = orig_out else { return };
+        let (size, addr) = {
+            let v = orig_vn.read().unwrap();
+            (v.size, v.loc)
+        };
+        let new_vn = fd.new_varnode_out(size, addr, clone_op);
+        // Copy varnode flag subset (funcdata_block.cc:1001-1004).
+        let orig_flags = orig_vn.read().unwrap().flags;
+        let vflag_mask = crate::varnode::varnode_flags::EXTERNREF
+            | crate::varnode::varnode_flags::VOLATIL
+            | crate::varnode::varnode_flags::INCIDENTAL_COPY
+            | crate::varnode::varnode_flags::READONLY
+            | crate::varnode::varnode_flags::PERSIST
+            | crate::varnode::varnode_flags::ADDRTIED
+            | crate::varnode::varnode_flags::ADDRFORCE
+            | crate::varnode::varnode_flags::NOLOCALALIAS
+            | crate::varnode::varnode_flags::SPACEBASE
+            | crate::varnode::varnode_flags::INDIRECT_CREATION
+            | crate::varnode::varnode_flags::RETURN_ADDRESS
+            | crate::varnode::varnode_flags::PRECISLO
+            | crate::varnode::varnode_flags::PRECISHI;
+        new_vn.write().unwrap().set_flags(orig_flags & vflag_mask);
+    }
+
+    // Ghidra: funcdata_block.cc:1015 CloneBlockOps::cloneBlock
+    /// Clone all ops from `b` into `bprime`, patching inputs.
+    fn clone_block(
+        &mut self,
+        fd: &mut Funcdata,
+        b: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        bprime: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        inedge: usize,
+    ) {
+        // Collect ops from b.
+        let ops: Vec<crate::op::PcodeOpRef> = {
+            let rg = b.read().unwrap();
+            if let Some(bb) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                bb.get_ops()
+            } else {
+                Vec::new()
+            }
+        };
+        for orig_ref in &ops {
+            if let Some(clone_ref) = self.build_op_clone(fd, orig_ref) {
+                self.build_varnode_output(fd, orig_ref, &clone_ref);
+                fd.op_insert_end(&clone_ref, bprime);
+            }
+        }
+        self.patch_inputs(fd, inedge);
+    }
+
+    // Ghidra: funcdata_block.cc:1058 CloneBlockOps::patchInputs
+    /// Patch cloned op inputs: MULTIEQUAL → COPY; constants shared; written
+    /// inputs mapped to clone outputs; others shared.
+    fn patch_inputs(&self, fd: &mut Funcdata, inedge: usize) {
+        use crate::opcodes::OpCode;
+        for (clone_ref, orig_ref) in &self.clone_list {
+            let opcode = orig_ref.0.read().unwrap().opcode;
+            match opcode {
+                OpCode::CPUI_MULTIEQUAL => {
+                    // cloneOp becomes a single-input COPY from orig's inedge slot.
+                    clone_ref.0.write().unwrap().inrefs.resize(1, std::sync::Arc::new(std::sync::RwLock::new(
+                        crate::varnode::Varnode::new_constant(0, 0)
+                    )));
+                    fd.op_set_opcode(clone_ref, OpCode::CPUI_COPY);
+                    let in_vn = orig_ref.0.read().unwrap().inrefs.get(inedge).cloned();
+                    if let Some(vn) = in_vn {
+                        fd.op_set_input(clone_ref, vn, 0);
+                    }
+                    // Remove inedge from original MULTIEQUAL (funcdata_block.cc:1068).
+                    fd.op_remove_input(orig_ref, inedge);
+                    if orig_ref.0.read().unwrap().num_input() == 1 {
+                        fd.op_set_opcode(orig_ref, OpCode::CPUI_COPY);
+                    }
+                }
+                OpCode::CPUI_INDIRECT => {
+                    eprintln!("[BLOCK] Can't clone INDIRECTs in nodesplit");
+                }
+                _ if orig_ref.0.read().unwrap().is_call() => {
+                    eprintln!("[BLOCK] Can't clone CALLs in nodesplit");
+                }
+                _ => {
+                    // Regular op: patch each input (funcdata_block.cc:1079-1101).
+                    let num_in = clone_ref.0.read().unwrap().num_input();
+                    for i in 0..num_in {
+                        let orig_vn = orig_ref.0.read().unwrap().inrefs.get(i).cloned();
+                        let Some(orig_vn) = orig_vn else { continue };
+                        let clone_vn = {
+                            let v = orig_vn.read().unwrap();
+                            if v.is_constant() {
+                                Some(orig_vn.clone())
+                            } else if v.is_annotation() {
+                                // data.newCodeRef — Rugra shares annotation varnodes.
+                                Some(orig_vn.clone())
+                            } else if v.is_free() {
+                                eprintln!("[BLOCK] Can't clone free varnode in nodesplit");
+                                None
+                            } else {
+                                // Check if orig_vn is defined by a cloned op.
+                                let def_op = v.def.as_ref().and_then(|w| w.upgrade());
+                                match def_op {
+                                    Some(def_arc) => {
+                                        let key = Arc::as_ptr(&def_arc) as usize;
+                                        match self.orig_to_clone.get(&key) {
+                                            Some(clone_op) => clone_op.0.read().unwrap().output.clone(),
+                                            None => Some(orig_vn.clone()),
+                                        }
+                                    }
+                                    None => Some(orig_vn.clone()),
+                                }
+                            }
+                        };
+                        if let Some(cv) = clone_vn {
+                            fd.op_set_input(clone_ref, cv, i);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 
