@@ -591,7 +591,7 @@ impl Action for ActionMergeCopy {
     }
 
     fn get_name(&self) -> &str {
-        "merge_copy"
+        "mergecopy"
     }
 }
 
@@ -5930,7 +5930,7 @@ impl Action for ActionDominantCopy {
 /// Faithful to `ActionCopyMarker` (coreaction.hh:1012). Ghidra's `apply`
 /// calls `data.getMerge().markInternalCopies()`, which sets the
 /// `nonprinting` flag on COPY ops whose input and output share a
-/// HighVariable. Rugra's `Merge::copy_marker` performs exactly this.
+/// HighVariable. Rugra's `Merge::mark_internal_copies` performs exactly this.
 pub struct ActionCopyMarker;
 
 impl ActionCopyMarker {
@@ -5943,7 +5943,7 @@ impl Action for ActionCopyMarker {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.getMerge().markInternalCopies();
         let mut merge = crate::merge::Merge::new();
-        merge.copy_marker(fd);
+        merge.mark_internal_copies(fd);
         Ok(action_status::CHANGE)
     }
 

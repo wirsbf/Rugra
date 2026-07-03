@@ -787,3 +787,7 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - `build_local_types` → `build_localtypes`（对齐 `ActionInferTypes::buildLocaltypes` coreaction.cc:5008。注意 Ghidra 拼作 "Localtypes" 一个词，非 "LocalTypes"）。
 - `ensure_callspecs` → `setup_call_specs`（对齐 `FlowInfo::setupCallSpecs` flow.hh:129。Rugra 签名是批量 over fd，Ghidra 是 per-op，但命名对齐）。
+
+### 2026-07-03（续）：命名对齐 Ghidra Action 名
+- `ActionMergeCopy::get_name()` "merge_copy" → "mergecopy"（对齐 Ghidra Action 名 coreaction.hh:387，Ghidra 无下划线）。
+- `ActionCopyMarker::apply` 调用更新为 `mark_internal_copies`（配合 merge.rs 改名）。

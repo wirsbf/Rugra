@@ -142,7 +142,7 @@ impl Merge {
         self.hide_shadows(fd);
 
         // Step 10: CopyMarker.
-        self.copy_marker(fd);
+        self.mark_internal_copies(fd);
 
         // Sync HighVariable covers from member Varnode covers. Must run AFTER
         // all speculative merges finalize the instance sets so each
@@ -1219,6 +1219,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.hh:1444 Merge::markInternalCopies
     /// Step 12: ActionCopyMarker (coreaction.hh:1019).
     /// Faithful to `Merge::markInternalCopies` (merge.cc:1444-1542).
     ///
@@ -1227,7 +1228,7 @@ impl Merge {
     /// *different* HighVariables where the output is a shadowed varnode with
     /// no descendants, the copy is also suppressed. PIECE/SUBPIECE handling
     /// (CONCAT reassembly) is omitted: Rugra has no VariablePiece machinery.
-    pub fn copy_marker(&mut self, fd: &mut Funcdata) {
+    pub fn mark_internal_copies(&mut self, fd: &mut Funcdata) {
         use crate::op::pcodeop_flags;
         use crate::opcodes::OpCode;
 
@@ -1762,7 +1763,7 @@ mod tests {
     fn test_copy_marker_marks_internal_copy_non_printing() {
         use crate::op::pcodeop_flags;
 
-        let mut fd = Funcdata::new("copy_marker", Address::new(0x4000), 0x40);
+        let mut fd = Funcdata::new("mark_internal_copies", Address::new(0x4000), 0x40);
 
         // t1 = COPY(RDI)
         let mut c1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -1808,7 +1809,7 @@ mod tests {
         let flags = copy_op.read().unwrap().flags;
         assert!(
             flags & pcodeop_flags::NONPRINTING != 0,
-            "internal COPY must be marked NONPRINTING by copy_marker"
+            "internal COPY must be marked NONPRINTING by mark_internal_copies"
         );
     }
 

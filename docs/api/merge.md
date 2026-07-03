@@ -164,3 +164,6 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - `merge_linear_speculative` → `merge_linear`（对齐 `Merge::mergeLinear` merge.hh:110。原 Rust 名多出 `_speculative` 后缀，Ghidra 方法名无此后缀）。
+
+### 2026-07-03（续）：命名对齐 Ghidra（camelCase→snake_case）
+- `copy_marker` → `mark_internal_copies`（对齐 `Merge::markInternalCopies` merge.hh:1444）。
