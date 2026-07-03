@@ -114,6 +114,7 @@ pub mod disasm;
 pub mod ffi;
 pub mod tracedag;
 pub mod varmap;
+pub mod flow; // ← flow.hh (FlowInfo reachability-based flow tracking)
 
 mod error;
 mod types;

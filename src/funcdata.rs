@@ -2477,6 +2477,48 @@ impl Funcdata {
     ///
     /// # Arguments
     /// * `raw_ops` - Vector of raw P-code operations in sequential order
+    /// Inject a single instruction's P-code ops (for FlowInfo process_instruction).
+    /// Does NOT call build_blocks_from_ops (that's done once after all flow is tracked).
+    // RUGRA-GLUE: 单指令注入（FlowInfo process_instruction 用）。Ghidra 内联在 oneInstruction/emitter 中。
+    pub fn inject_raw_ops_single(&mut self, raw_ops: &[PcodeOpRaw], base_addr: crate::address::Address) {
+        for (raw_idx, raw) in raw_ops.iter().enumerate() {
+            let opcode = match OpCode::from_i32(raw.get_opcode()) {
+                Some(opc) => opc,
+                None => continue,
+            };
+            let addr = raw.seq_num()
+                .map(|s| s.get_addr())
+                .unwrap_or(crate::address::Address::new(base_addr.as_u64() + raw_idx as u64 * 0x10));
+            let op_ref = self.obank.create(opcode, raw.num_input(), addr);
+            // Output varnode
+            if let Some(out_raw) = raw.output() {
+                let out_vn = self.vbank.create_with_space(out_raw.size, out_raw.space, out_raw.offset);
+                self.vbank.set_def(out_vn.clone(), std::sync::Arc::downgrade(&op_ref.0));
+                op_ref.0.write().unwrap().output = Some(out_vn);
+            }
+            // Input varnodes
+            for input_raw in raw.inputs() {
+                let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
+                    self.vbank.create_constant(input_raw.size, input_raw.offset)
+                } else {
+                    self.vbank.find_or_create_input_space(input_raw.size, input_raw.space, input_raw.offset)
+                };
+                op_ref.0.write().unwrap().inrefs.push(in_vn);
+            }
+            self.obank.mark_alive(op_ref);
+        }
+    }
+
+    /// Build basic blocks from ALL alive ops (called after flow tracking completes).
+    // RUGRA-GLUE: 从全部 alive ops 构建 CFG（FlowInfo 流追踪后调用）。
+    pub fn build_blocks_from_alive(&mut self) {
+        let op_refs: Vec<PcodeOpRef> = self.obank.alivelist.iter()
+            .map(|r| PcodeOpRef(r.0.clone()))
+            .collect();
+        self.build_blocks_from_ops(&op_refs);
+        eprintln!("[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size());
+    }
+
     pub fn inject_raw_ops(&mut self, raw_ops: &[PcodeOpRaw]) {
         if raw_ops.is_empty() {
             return;

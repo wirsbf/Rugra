@@ -591,3 +591,4 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ### 2026-06-27（会话3 L1）：dynamic 模块
 
 新增 `dynamic` 模块：动态哈希引擎（DynamicHash + ToOpEdge + translate_opcode）。
+### 2026-07-04: Added flow module
