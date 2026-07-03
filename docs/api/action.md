@@ -742,3 +742,7 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
   - 这些 Action 的 apply() 有副作用（删 op/块），实现不够成熟，启用后导致函数体丢失（24→14 函数）。
   - 需要逐个对照 Ghidra 源码验证其 apply 逻辑后才能安全启用。
 - curl gcc 24/24（保持），0 defects，956/956 测试。
+
+### ActionUnreachable 入口检测修复 + 禁用诊断（2026-07-03 续）
+- 修了 `remove_unreachable_blocks` 的入口检测：之前只查 `ENTRY_POINT` flag（从不设），改为查 `size_in()==0`（对齐 Ghidra block.hh:325）。
+- 但诊断发现根因：bblocks CFG 构建不完整（跳转表/间接分支边缺失），BFS 误判可达块。ActionUnreachable 保持禁用，注释说明根因 + 修复路径。

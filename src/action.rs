@@ -832,7 +832,14 @@ impl ActionDatabase {
         // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
-        // universal.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5490 — disabled: causes function count regression
+        // ActionUnreachable (coreaction.cc:5490) — disabled: Rugra's bblocks
+        // CFG construction doesn't connect all reachable blocks (jump tables,
+        // indirect branches missing edges), so BFS from entry flags large
+        // portions of function bodies as "unreachable" and removes them
+        // (getparameter: 84/133 blocks falsely unreachable). Entry detection
+        // fixed (size_in()==0 per Ghidra block.hh:325) but the root cause is
+        // incomplete CFG edges. Needs CFG construction fix before enabling.
+        // mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
         mainloop.add_action(Box::new(ActionStackPtrFlow::new()));

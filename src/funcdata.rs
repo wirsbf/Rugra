@@ -1178,11 +1178,18 @@ impl Funcdata {
         if n == 0 {
             return false;
         }
-        // Find the entry point: a block flagged ENTRY_POINT, else block 0.
+        // Find the entry point: a block with zero in-edges (no predecessors),
+        // matching Ghidra's isEntryPoint() (block.hh:325: size_in()==0 or
+        // explicitly flagged). Previously only checked the ENTRY_POINT flag
+        // which is never set during Rugra's CFG construction, causing the
+        // fallback to block 0 — which may not be the true entry, leading to
+        // false-positive "unreachable" detection and function-body loss.
         let entry = (0..n)
             .find(|&i| {
                 self.bblocks.get_block(i).map(|b| {
-                    (b.read().unwrap().get_flags() & crate::block::block_flags::ENTRY_POINT) != 0
+                    let bg = b.read().unwrap();
+                    bg.size_in() == 0
+                        || (bg.get_flags() & crate::block::block_flags::ENTRY_POINT) != 0
                 }).unwrap_or(false)
             })
             .unwrap_or(0);

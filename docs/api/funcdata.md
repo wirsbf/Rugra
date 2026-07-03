@@ -797,3 +797,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 ### set_high_level + HIGHLEVEL_ON（2026-07-03 续）
 - 新增 `Funcdata::set_high_level`（对齐 Ghidra `setHighLevel` funcdata_varnode.cc:595）：设 `HIGHLEVEL_ON` 标志（对齐 `highlevel_on` funcdata.hh:84）+ 遍历 loc_tree 给每个无 high 的 Varnode 分配 HighVariable。幂等。
 - 新增 `funcdata_flags::HIGHLEVEL_ON`。
+
+### remove_unreachable_blocks 入口检测修复（2026-07-03 续）
+- 修了入口检测 bug：之前只查 `ENTRY_POINT` flag（Rugra CFG 构建从不设此 flag），回退到 block 0。改为查 `size_in()==0`（对齐 Ghidra `isEntryPoint()` block.hh:325）。
+- 但发现更深的根因：Rugra 的 bblocks CFG 构建不完整——跳转表/间接分支的边没全连上，导致 BFS 从入口可达的块远少于实际（getparameter: 49/133 块被误判可达，84 块误判不可达）。启用 ActionUnreachable 会删掉大部分函数体。
+- ActionUnreachable 保持禁用，注释说明根因（CFG 边不完整）+ 修复路径（CFG 构建需补全跳转表/间接分支边）。
