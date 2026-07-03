@@ -879,8 +879,12 @@ impl ActionDatabase {
         universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
-        // NOTE: ActionSetCasts implemented but needs ActionInferTypes first.
-        // universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
+        // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
+        // printer emits explicit C type casts. Runs after ActionInferTypes
+        // (mainloop) and ActionMarkExplicit/Implied so input/output types are
+        // settled. Faithful to Ghidra's order: ...MarkImplied → ...NameVars →
+        // SetCasts → FinalStructure.
+        universal.add_action(Box::new(crate::coreaction::ActionSetCasts::new()));
         universal.add_action(Box::new(ActionNormalizeBranches::new()));
         universal.add_action(Box::new(ActionFinalStructure::new()));
 

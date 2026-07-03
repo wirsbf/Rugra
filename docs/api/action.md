@@ -719,3 +719,8 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 
 ### cleanup pool 加 RuleTrivialArith（2026-07-03）
 - 在 `build_cleanup_pool` 末尾注册 `RuleTrivialArith`。Ghidra mainloop（coreaction.cc:5503）repeatapply `actprop`（含 RuleTrivialArith）会重简化新创建的 op；Rugra 的 simplifypool 在 stackstall 里只跑一次，mainloop 后期（type-recovery / copy-prop / structuring）创建的 trivially-foldable op（self-XOR x^x→0 等）无法被再简化。cleanup pool 在管线最末运行（universal post-fullloop，coreaction.cc:5694），补这一刀捕获后期 op。Rugra-local 决策（Ghidra 靠 mainloop repeatapply 达同等效果），注释说明。
+
+### 启用 ActionSetCasts（2026-07-03 续）
+- `set_default_actions` 里 ActionSetCasts 之前被注释掉（注释说"需要 ActionInferTypes 先跑"）。ActionInferTypes 已在 mainloop（line 864）跑，所以条件满足。
+- 按 Ghidra 顺序（coreaction.cc:5735：MarkImplied → NameVars → SetCasts → FinalStructure）在 ActionMarkImplied 后、ActionNormalizeBranches 前启用。
+- 当前 castInput 只覆盖 integer binary/unary 路径（PTRADD/PTRSUB/resolveUnion/castOutput 待补），所以对当前输出影响小（类型系统还太松，cast 机会少），但这是把 SetCasts 接入主管线的正确步骤，后续补全 castInput 范围后会逐步产生 cast。
