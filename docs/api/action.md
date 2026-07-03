@@ -786,9 +786,18 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 
 ### RedundBranch 启用（2026-07-03 续 10）
 - spliceBlockBasic 现在忠实对齐 `BlockGraph::spliceBlock`（block.cc:1597-1620）：moveOutEdge 循环 + flags 合并（f_unstructured_targ/f_entry_point/f_switch_out）。
-- ActionRedundBranch 重新接入主管线（action.rs:881，coreaction.cc:5658）。
+- ActionRedundBranch 重新接入主管线（action.rs，coreaction.cc:5658）。
 - 验证：curl 24/24 反编译，23/24 gcc 审计通过。唯一失败 `file2string_part_0` 的 `goto ;` 是**预先存在的**结构化 bug（branch op 的 in(0) 缺失），与 RedundBranch 无关——禁用时同样失败。见续 11。
 - 主管线覆盖率 81/85 → **82/85**（仅 NodeJoin/ReturnSplit 2 个 stub 禁用）。
+
+### mainloop 顺序对齐：RedundBranch 移到 BlockStructure 之前（2026-07-03 续 11）★
+- Ghidra coreaction.cc:5658-5659 的精确顺序：`ActionRedundBranch("deadcontrolflow")` 在 `ActionBlockStructure("blockrecovery")` **之前**。死分支 splice 必须在结构化前 settle CFG。
+- Rugra 之前顺序反了（BlockStructure → Unreachable → RedundBranch），导致：结构化产出 sblocks 后，RedundBranch 改 bblocks → 下轮 mainloop 检测到 bblocks 变化清空 sblocks → 若 repeatapply 在重建前退出，print 时 sblocks=0 → 退化为 flat bblocks 遍历。
+- 修复后顺序（action.rs mainloop 尾段）：
+  `ConditionalExe → RedundBranch(:5658) → BlockStructure(:5659) → DeterminedBranch(:5672) → Unreachable(:5673) → ConditionalConst(:5676)`
+- 效果：之前 4 个函数（my_get_token/file2string/getparameter/glob_range）sblocks=0（flat 退化），现在**全部 sblocks>0**（正确结构化）。
+- 残留：`goto ;` 仍存在（1 处，file2string）——根因是结构化块 emit 时未跳过被消费的低层 branch op（Ghidra 用 no_branch mod）。这是 printc 的 emit 逻辑缺口，待续 12 处理。
+- 956/956 单元测试通过。curl gcc 审计维持 23/24（重排未引入新缺陷）。
 
 ### BlockBasic::set_order + RedundBranch（2026-07-03 续 9）
 - 新增 BlockBasic::set_order（block.rs:451）——重置 seq_num.order（Ghidra block.cc:2638）。

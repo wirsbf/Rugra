@@ -868,20 +868,18 @@ impl ActionDatabase {
         // instead of falling back to uVar. Self-limited to 7 passes.
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
         mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
-        mainloop.add_action(Box::new(ActionBlockStructure::new()));
-        // ActionUnreachable (coreaction.cc:5490,5658-5673) — moved here (after
-        // ActionBlockStructure) so bblocks CFG is fully constructed. Ghidra
-        // runs it earlier (:5490) but Rugra's CFG needs the full pipeline to
-        // be settled first. The descendantsOutside check + op-destruction
-        // make block removal safe for truly-unreachable blocks.
-        mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
-        // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
-        // but may be no-ops depending on implementation maturity.
-        // ActionRedundBranch (coreaction.cc:5658). Now enabled: spliceBlockBasic
-        // is faithful to BlockGraph::spliceBlock (flags merge + moveOutEdge),
-        // so goto targets survive block splicing.
+        // Ghidra coreaction.cc:5658-5659: ActionRedundBranch runs BEFORE
+        // ActionBlockStructure. The dead-branch splice must settle the CFG
+        // BEFORE structuring, otherwise structuring produces sblocks that
+        // immediately go stale when RedundBranch mutates bblocks afterwards
+        // (sblocks cleared on next mainloop iteration, never rebuilt before
+        // print → flat bblocks emission → dangling `goto ;`).
         mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new())); // :5658
+        mainloop.add_action(Box::new(ActionBlockStructure::new())); // :5659
+        // ActionUnreachable (coreaction.cc:5673) — runs AFTER BlockStructure,
+        // removing blocks that became unreachable after structuring.
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
+        mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
         // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674 — stub, defer
         mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — stub, safe
 
