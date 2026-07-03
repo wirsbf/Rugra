@@ -877,9 +877,11 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
         // but may be no-ops depending on implementation maturity.
-        // ActionRedundBranch (coreaction.cc:5658) — disabled: splices basic blocks
-        // via spliceBlockBasic which corrupts output (my_get_token gcc fail).
-        // Needs verification of splice logic against Ghidra funcdata_block.cc.
+        // ActionRedundBranch (coreaction.cc:5658) — disabled: spliceBlockBasic
+        // now moves ops (fixed), but spliced output still has syntax errors
+        // (2 gcc fails). The seq_num ordering on moved ops needs reset
+        // (Ghidra does bl->setOrder() at funcdata_block.cc:948). Rugra's
+        // BlockBasic::set_order not yet implemented. Disable until fixed.
         // mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
         // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674 — stub, defer

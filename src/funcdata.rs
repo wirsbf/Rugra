@@ -1364,6 +1364,53 @@ impl Funcdata {
                 self.op_destroy(&branch_op);
             }
         }
+        // Move out_block's ops into bb (faithful to Ghidra funcdata_block.cc:
+        // 940-947: bl->op.splice(bl->op.end(), outbl->op, ...)). This is the
+        // KEY step that was missing — without it, out_block's ops are orphaned
+        // when the block is removed, and printc can't find them.
+        {
+            // Check for MULTIEQUAL (phi) at start of out_block — Ghidra throws
+            // if found (funcdata_block.cc:936). We skip the splice in that case.
+            let has_phi = {
+                let out_rg = out_block.read().unwrap();
+                if let Some(out_bb) = out_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    out_bb.ops.first().map(|o| {
+                        o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL
+                    }).unwrap_or(false)
+                } else {
+                    false
+                }
+            };
+            if has_phi {
+                // Can't splice — out_block starts with a phi-node. Put the
+                // edge back and abort. Ghidra throws; we just return false.
+                self.bblocks.add_edge(bb.clone(), out_block.clone());
+                return false;
+            }
+
+            // Move ops from out_block to end of bb.
+            let moved_ops: Vec<crate::op::PcodeOpRef> = {
+                let mut out_rg = out_block.write().unwrap();
+                if let Some(out_bb) = out_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                    let ops = std::mem::take(&mut out_bb.ops);
+                    ops.into_iter().map(|o| crate::op::PcodeOpRef(o.0)).collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            // Set parent of moved ops to bb, and append to bb's ops.
+            let bb_weak = std::sync::Arc::downgrade(
+                &(bb.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
+            );
+            let mut bb_rg = bb.write().unwrap();
+            if let Some(bb_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                for op_ref in &moved_ops {
+                    op_ref.0.write().unwrap().parent = Some(bb_weak.clone());
+                    let insert_pos = bb_bb.ops.len();
+                    bb_bb.insert_op(insert_pos, crate::op::PcodeOpRef(op_ref.0.clone()));
+                }
+            }
+        }
         // Move out_block's out-edges to bb, then remove out_block.
         // Collect out_block's out-edge targets.
         let succ_targets: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {

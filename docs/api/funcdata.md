@@ -816,3 +816,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 ### remove_unreachable_blocks descendantsOutside 检查（2026-07-03 续 4）
 - Phase 2 改进：只 mark_dead 没有外部后代的 op（descendantsOutside 检查，对齐 Ghidra funcdata_block.cc:312）。有外部 phi-node 引用的 op 保持 alive（块标 DEAD 但 op 不删）。
 - 但 ActionUnreachable 仍禁用：根因更深——Action 在 mainloop 最开始运行，此时 bblocks CFG 可能不完整（sblocks 未建），移除块破坏后续阶段状态。需 pipeline 顺序调整或 CFG 完整化后才能安全启用。
+
+### spliceBlockBasic op-moving 修复（2026-07-03 续 5）
+- 修复：spliceBlockBasic 现在把 out_block 的 ops 移到 bb 末尾（对齐 Ghidra funcdata_block.cc:940-947）。之前只重定向 CFG 边，ops 被孤立。
+- 还加了 MULTIEQUAL 检查（Ghidra :936 遇 phi 抛异常，Rugra 返回 false）。
+- 但仍需 setOrder（:948 重置 seq_num）——Rugra 的 BlockBasic::set_order 未实现。RedundBranch 保持禁用直到 setOrder 完成。

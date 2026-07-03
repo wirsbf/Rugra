@@ -779,3 +779,7 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - **禁用 (1个有破坏性)**: RedundBranch — spliceBlockBasic 破坏输出（my_get_token gcc fail）
 - **仍禁用 (2个 stub)**: NodeJoin, ReturnSplit — 留作占位
 - 主管线覆盖率从 68/85 → **81/85 = 95%**（仅 RedundBranch/NodeJoin/ReturnSplit 3 个禁用 + ActionUnreachable 已启用）
+
+### RedundBranch spliceBlockBasic op-moving（2026-07-03 续 8）
+- spliceBlockBasic 修了 op-moving（ops 从 out_block 移到 bb），但还差 setOrder（seq_num 重置）。
+- RedundBranch 保持禁用，注释说明剩余缺口（BlockBasic::set_order 未实现）。
