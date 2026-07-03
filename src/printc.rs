@@ -328,6 +328,15 @@ impl PrintC {
                 continue;
             }
 
+            // Ghidra printc.cc:2701: CPUI_BRANCH is NEVER printed as a
+            // standalone statement — it is always rendered by the block/
+            // structure classes (emitBlockGoto etc). This is unconditional,
+            // independent of skip_terminal (unlike CBRANCH/BRANCHIND which
+            // are controlled by skip_terminal).
+            if op.opcode == OpCode::CPUI_BRANCH {
+                continue;
+            }
+
             if skip_terminal {
                 match op.opcode {
                     OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND => {
@@ -4611,19 +4620,21 @@ impl PrintLanguage for PrintC {
                     self.emit.print(") continue");
                 } else {
                     // Not in a loop — emit as goto instead
-                    self.emit.print("if (");
-                    self.emit_cbranch_condition(op);
-                    self.emit.print(") goto ");
                     if let Some(in0) = op.get_in(0) {
+                        self.emit.print("if (");
+                        self.emit_cbranch_condition(op);
+                        self.emit.print(") goto ");
                         self.push_goto_target(&in0.read().unwrap());
                     }
                 }
             }
             _ => {
-                self.emit.print("if (");
-                self.emit_cbranch_condition(op);
-                self.emit.print(") goto ");
+                // Only print goto if we have a valid target (Ghidra never
+                // produces `goto ;` — targets come from CFG out-edges).
                 if let Some(in0) = op.get_in(0) {
+                    self.emit.print("if (");
+                    self.emit_cbranch_condition(op);
+                    self.emit.print(") goto ");
                     self.push_goto_target(&in0.read().unwrap());
                 }
             }
@@ -4647,8 +4658,12 @@ impl PrintLanguage for PrintC {
                 }
             }
             _ => {
-                self.emit.print("goto ");
+                // Only print goto if we have a valid target. Ghidra never
+                // produces `goto ;` — targets come from CFG out-edges.
+                // If in(0) is None (data corruption / spliced op), skip
+                // the goto entirely rather than emit invalid C.
                 if let Some(in0) = op.get_in(0) {
+                    self.emit.print("goto ");
                     self.push_goto_target(&in0.read().unwrap());
                 }
             }

@@ -665,3 +665,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **扩展**：cast-concat 防护（f89cdbe）只覆盖 emit_block_condition。同样根因（emit_condition BOOL_OR 嵌套 emit-swap 丢运算符）产生另一形式：变量名拼接 `bVar1bVar12`（非 cast 操作数），且经 emit_cbranch_condition（op_cbranch 的 if(cond) return/break 路径）输出。
 - **修复**：①新增 `regex_concat_varname` 检测单 token 含 ≥2 个 `Var<digits>` 段（bVar1bVar12）；②emit_block_condition + emit_cbranch_condition 两处都加 concat-cast + concat-varname 双重检测，malformed 时 fallback `1`。
 - **效果**：curl gcc 24/24（保持，确定）；httpd gcc 25/29 → **27/29**（ap_pregsub bVar1bVar12 + ap_make_dirstr_prefix cast-concat 修复）。剩余 2 httpd fail（field_10 undeclared / pointer-multiply）是独立根因。
+
+### 2026-07-04：goto 解析对齐 Ghidra
+- `emit_block_ops`：CPUI_BRANCH 无条件跳过（对齐 Ghidra printc.cc:2701）。之前只在 skip_terminal=true 时跳过。
+- `op_branch`/`op_cbranch`：in(0) 为 None 时不打印 goto（消除 `goto ;` 空目标）。
+- **残留**：1 个 `if (1) goto ;`（file2string）仍在——in(0) 存在但 push_goto_target 输出似乎被丢弃。需进一步追踪 NullEmit/EmitNoMarkup 双 pass 一致性。
