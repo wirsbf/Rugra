@@ -826,3 +826,16 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 新增 `BlockBasic::set_order`（block.rs）——重置块内所有 op 的 seq_num.order，均匀分布（Ghidra block.cc:2638-2651）。
 - spliceBlockBasic 在 op-moving 后调用 set_order（Ghidra funcdata_block.cc:948）。
 - 但 RedundBranch 仍禁用：splice 移除块后，引用该块为 goto 目标的 op 留下 `goto ;` 空目标。需更新 goto 引用（重定向到拼接后的块）。
+
+### spliceBlockBasic CFG 对齐（2026-07-03 续 7）
+- 重写 `splice_block_basic` 的 CFG 边处理，忠实对齐 `BlockGraph::spliceBlock`（block.cc:1597-1620）。
+- 之前：手工 `remove_edge + add_edge` 拼接，丢失 moveOutEdge 的 reverse-index 重定向，且**完全丢弃 flags**。
+- 现在：
+  - 读取 `fl1 = bl.flags & (UNSTRUCTURED_TARG|ENTRY_POINT)`、`fl2 = outbl.flags & SWITCH_OUT`、`szout = outbl.size_out()`
+  - `remove_edge_blocks(bb, out_block)` = `removeOutEdge(0)`（block.cc:1612）
+  - `for _ in 0..szout { move_out_edge(&out_block, 0, bb) }` = `moveOutEdge` 循环（block.cc:1614-1616）
+  - `remove_block_arc(out_block)` = `removeBlock`（block.cc:1618）
+  - `bb.flags = fl1 | fl2` = Ghidra 的 `bl->flags = fl1 | fl2`（block.cc:1619，**直接赋值非 OR**）
+- `mergeRange`（funcdata_block.cc:953）暂缺：Rugra 无 Cover 系统，记录为已知基础设施缺口。
+- root cause：flags 丢失导致 `f_unstructured_targ` 丢失，printc 无法解析 goto 目标 → `goto ;`。
+- Alignment Evidence 见 commit message。

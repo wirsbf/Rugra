@@ -1413,21 +1413,47 @@ impl Funcdata {
                 bb_bb.set_order();
             }
         }
-        // Move out_block's out-edges to bb, then remove out_block.
-        // Collect out_block's out-edge targets.
-        let succ_targets: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
-            let rg = out_block.read().unwrap();
-            let nn = rg.size_out();
-            (0..nn).filter_map(|j| rg.get_out(j).map(|e| e.point)).collect()
+        // Splice the CFG edges, faithful to BlockGraph::spliceBlock
+        // (block.cc:1597-1620):
+        //   fl1 = bl->flags & (f_unstructured_targ | f_entry_point)   // keep from bl
+        //   fl2 = outbl->flags & f_switch_out                          // keep from outbl
+        //   bl->removeOutEdge(0)                                       // drop bl→outbl
+        //   for each out-edge of outbl: moveOutEdge(outbl, 0, bl)      // move outbl's edges to bl
+        //   removeBlock(outbl)
+        //   bl->flags = fl1 | fl2                                       // merge flags
+        let (fl1, fl2, szout) = {
+            let bl_rg = bb.read().unwrap();
+            let out_rg = out_block.read().unwrap();
+            let keep_from_bl = bl_rg.get_flags()
+                & (crate::block::block_flags::UNSTRUCTURED_TARG
+                    | crate::block::block_flags::ENTRY_POINT);
+            let keep_from_out = out_rg.get_flags()
+                & crate::block::block_flags::SWITCH_OUT;
+            (keep_from_bl, keep_from_out, out_rg.size_out())
         };
-        // Remove bb's single out-edge to out_block.
+        // Drop bb's single out-edge to out_block (block.cc:1612 removeOutEdge(0)).
         self.bblocks.remove_edge_blocks(bb, &out_block);
-        // Add edges from bb to each of out_block's successors.
-        for tgt in &succ_targets {
-            self.bblocks.add_edge(bb.clone(), tgt.clone());
+        // Move every out-edge of out_block to bb (block.cc:1614-1616).
+        // moveOutEdge(outbl, 0, bl) relocates edge 0's reverse-index entry on
+        // the destination to point at bl. We always move slot 0 because after
+        // each move the remaining edges shift down.
+        for _ in 0..szout {
+            self.move_out_edge(&out_block, 0, bb);
         }
-        // Remove out_block from the graph.
+        // Remove out_block from the graph (block.cc:1618 removeBlock).
         self.bblocks.remove_block_arc(&out_block);
+        // Merge flags: bl->flags = fl1 | fl2 (block.cc:1619).
+        // BlockBasic.flags is a public field; assign exactly as Ghidra does.
+        {
+            let mut bb_rg = bb.write().unwrap();
+            if let Some(bb_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                bb_bb.flags = fl1 | fl2;
+            }
+        }
+        // bl->mergeRange(outbl) (funcdata_block.cc:953) — update address cover.
+        // TODO: Rugra has no Cover system yet; address-cover merge is a known
+        // infrastructure gap (recorded in ALIGNMENT_ROADMAP). Does not affect
+        // correctness of CFG splice for current pipeline.
         self.structure_reset();
         true
     }

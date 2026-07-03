@@ -44,6 +44,15 @@ pub mod block_flags {
     /// Block is a joined block (created by nodeJoinCreateBlock).
     /// Ghidra `f_joined_block` (block.hh:97).
     pub const JOINED_BLOCK: u32 = 1 << 9;
+    /// Output is decided by switch. Ghidra `f_switch_out` (block.hh:92).
+    /// NOTE: Ghidra uses bit 0x10, but Rugra reuses 0x10 for DEAD. Bit value
+    /// diverges from Ghidra (technical debt — see ALIGNMENT_ROADMAP); the flag
+    /// *semantics* are what spliceBlockBasic merges on.
+    pub const SWITCH_OUT: u32 = 1 << 10;
+    /// Block is destination of unstructured goto.
+    /// Ghidra `f_unstructured_targ` (block.hh:93). Bit value diverges from
+    /// Ghidra's 0x20 (Rugra reuses 0x20 for MARK); semantics aligned.
+    pub const UNSTRUCTURED_TARG: u32 = 1 << 11;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)
