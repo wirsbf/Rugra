@@ -1717,42 +1717,18 @@ impl Merge {
     }
 
 
-    /// Step 11: ActionHideShadow (coreaction.hh:997 → coreaction.cc:4831).
-    /// Faithful to `Merge::hideShadows` (merge.cc:1070-1100).
+    // Ghidra: merge.cc:1070 Merge::hideShadows
+    /// Hide shadow varnodes for a single HighVariable by redirecting COPY
+    /// inputs. Faithful to `Merge::hideShadows(high)` (merge.cc:1070-1100).
+    /// Returns true if any data-flow rewrite was applied.
     ///
-    /// For each HighVariable, find instance Varnodes that are defined by a
-    /// COPY from *outside* the HighVariable. If two such Varnodes are
-    /// `copyShadow`s of each other (i.e. copied from the same ancestor) and
-    /// one's cover contains the other's definition, redirect the later
-    /// COPY to read from the earlier Varnode — consolidating the shadow
-    /// chain so both become instances of one variable.
-    ///
-    /// Rugra does not model the full data-flow rewrite (opSetInput), so this
-    /// performs the *analysis* (finding copy-shadow pairs) and is otherwise
-    /// a conservative no-op: it cannot currently rewrite COPY inputs.
-    pub fn hide_shadows(&mut self, fd: &mut Funcdata) {
-        // Gather distinct HighVariables (dedup by Arc pointer), as Ghidra
-        // iterates beginDef..endDef(written) marking each high once.
-        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut highs: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
-        for vn_ref in &fd.vbank.loc_tree {
-            let (written, high_arc) = {
-                let vn = vn_ref.0.read().unwrap();
-                (vn.is_written(), vn.high.clone())
-            };
-            if !written {
-                continue;
-            }
-            if let Some(ha) = high_arc {
-                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
-                if high_ptrs.insert(ptr) {
-                    highs.push(ha);
-                }
-            }
-        }
-
-        for high in highs {
-            // findSingleCopy: instances defined by a COPY whose input is NOT
+    /// For the given HighVariable, find instance Varnodes defined by a COPY
+    /// from *outside* the HighVariable. If two are copyShadow of each other
+    /// and one's cover contains the other's def, redirect the COPY input
+    /// (opSetInput) — consolidating the shadow chain.
+    pub fn hide_shadows_of(&mut self, fd: &mut Funcdata, high: &Arc<RwLock<HighVariable>>) -> bool {
+        let mut changed = false;
+        // findSingleCopy: instances defined by a COPY whose input is NOT
             // part of the same HighVariable (merge.cc:1021-1036).
             let singlelist: Vec<Arc<RwLock<Varnode>>> = {
                 let hg = high.read().unwrap();
@@ -1788,14 +1764,90 @@ impl Merge {
                 acc
             };
             if singlelist.len() <= 1 {
-                continue;
+                return false;
             }
             // hideShadows pairs: for vn1,vn2 that are copyShadow of each
-            // other, redirect one COPY's input to the other. Rugra lacks
-            // opSetInput, so this analysis is recorded but not applied.
-            // TODO: port Varnode::copyShadow + Cover::containVarnodeDef +
-            // Funcdata::opSetInput (merge.cc:1086-1096) to perform the rewrite.
-            let _ = singlelist;
+            // other, redirect one COPY's input to the other.
+            // Faithful to merge.cc:1080-1098.
+            let mut null_mask: Vec<bool> = vec![false; singlelist.len()];
+            for i in 0..singlelist.len().saturating_sub(1) {
+                if null_mask[i] {
+                    continue;
+                }
+                let vn1 = &singlelist[i];
+                for j in (i + 1)..singlelist.len() {
+                    if null_mask[j] {
+                        continue;
+                    }
+                    let vn2 = &singlelist[j];
+                    // vn1->copyShadow(vn2) (merge.cc:1086)
+                    let is_shadow = {
+                        let v1 = vn1.read().unwrap();
+                        let v2 = vn2.read().unwrap();
+                        v1.copy_shadow(&v2)
+                    };
+                    if !is_shadow {
+                        continue;
+                    }
+                    // vn2->getCover()->containVarnodeDef(vn1)==1 (merge.cc:1087)
+                    let (v1_blk, v1_ord, v1_is_input) = varnode_def_loc(&vn1.read().unwrap());
+                    let vn2_covers_vn1 = vn2.read().unwrap()
+                        .cover.as_ref().map(|c| c.contain_varnode_def_at(v1_is_input, v1_blk, v1_ord) == 1)
+                        .unwrap_or(false);
+                    if vn2_covers_vn1 {
+                        // data.opSetInput(vn1->getDef(), vn2, 0) (merge.cc:1088)
+                        let vn1_def = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+                        if let Some(def_op) = vn1_def {
+                            fd.op_set_input(&crate::op::PcodeOpRef(def_op), vn2.clone(), 0);
+                            changed = true;
+                        }
+                        break;
+                    }
+                    // vn1->getCover()->containVarnodeDef(vn2)==1 (merge.cc:1092)
+                    let (v2_blk, v2_ord, v2_is_input) = varnode_def_loc(&vn2.read().unwrap());
+                    let vn1_covers_vn2 = vn1.read().unwrap()
+                        .cover.as_ref().map(|c| c.contain_varnode_def_at(v2_is_input, v2_blk, v2_ord) == 1)
+                        .unwrap_or(false);
+                    if vn1_covers_vn2 {
+                        // data.opSetInput(vn2->getDef(), vn1, 0) (merge.cc:1093)
+                        let vn2_def = vn2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+                        if let Some(def_op) = vn2_def {
+                            fd.op_set_input(&crate::op::PcodeOpRef(def_op), vn1.clone(), 0);
+                            changed = true;
+                        }
+                        null_mask[j] = true; // singlelist[j] = null (merge.cc:1094)
+                    }
+                }
+            }
+        changed
+    }
+
+    // RUGRA-GLUE: 遍历所有 HighVariable 调 hide_shadows_of。Ghidra 在
+    // ActionHideShadow::apply (coreaction.cc:4831) 内联此遍历；Rugra 的
+    // merge_all 也调用此方法，故提取为函数。
+    /// Iterate all HighVariables and apply hide_shadows_of to each.
+    /// Used by merge_all (Ghidra's ActionHideShadow does this via its own
+    /// apply calling hideShadows per high).
+    pub fn hide_shadows(&mut self, fd: &mut Funcdata) {
+        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut highs: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let (written, high_arc) = {
+                let vn = vn_ref.0.read().unwrap();
+                (vn.is_written(), vn.high.clone())
+            };
+            if !written {
+                continue;
+            }
+            if let Some(ha) = high_arc {
+                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
+                if high_ptrs.insert(ptr) {
+                    highs.push(ha);
+                }
+            }
+        }
+        for high in highs {
+            self.hide_shadows_of(fd, &high);
         }
     }
 

@@ -2177,64 +2177,31 @@ impl ActionHideShadow {
 }
 impl Action for ActionHideShadow {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: iterate written Varnodes, find shadow
-        // copies (Varnodes that are COPY outputs of another Varnode with the
-        // same address), and mark them. Full Ghidra uses HighVariable +
-        // Merge::hideShadows; we do a simplified version based on address
-        // matching.
-        let mut change_count = 0;
-
-        let varnodes: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .collect();
-
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            // Skip non-written.
-            if !vn_rg.is_written() {
-                continue;
-            }
-            // Skip already marked (avoid reprocessing).
-            if vn_rg.is_mark() {
-                continue;
-            }
-
-            // Check if this Varnode is a shadow: defined by a COPY from
-            // another Varnode at the same address.
-            let is_shadow = if let Some(def) = vn_rg.get_def() {
-                let def_rg = def.read().unwrap();
-                if def_rg.opcode == crate::opcodes::OpCode::CPUI_COPY {
-                    if let Some(in_vn) = def_rg.get_in(0) {
-                        let in_rg = in_vn.read().unwrap();
-                        // Same address + same size = shadow copy.
-                        in_rg.get_addr() == vn_rg.get_addr()
-                            && in_rg.get_size() == vn_rg.get_size()
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
+        // Faithful to coreaction.cc:4831-4845: iterate each distinct
+        // HighVariable (dedup via mark) and call Merge::hideShadows(high).
+        let mut merge = crate::merge::Merge::new();
+        let mut high_ptrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut highs: Vec<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> = Vec::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let (written, high_arc) = {
+                let vn = vn_ref.0.read().unwrap();
+                (vn.is_written(), vn.high.clone())
             };
-
-            if is_shadow {
-                drop(vn_rg);
-                vn_arc.write().unwrap().set_mark();
-                change_count += 1;
+            if !written { continue; }
+            if let Some(ha) = high_arc {
+                let ptr = std::sync::Arc::as_ptr(&ha) as usize;
+                if high_ptrs.insert(ptr) {
+                    highs.push(ha);
+                }
             }
         }
-
-        // Clear all marks.
-        for vn_arc in &varnodes {
-            vn_arc.write().unwrap().clear_mark();
+        let mut count = 0;
+        for high in &highs {
+            if merge.hide_shadows_of(fd, high) {
+                count += 1;
+            }
         }
-
-        if change_count > 0 {
+        if count > 0 {
             Ok(action_status::CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)

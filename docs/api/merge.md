@@ -201,3 +201,8 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - 新增 `BlockBasic::get_stop_addr`（近似 block.cc:2328 getStop）。
 - 新增 `Funcdata::op_insert_end`（funcdata.hh:461）+ `op_mark_non_printing`（funcdata.hh:519）。
 - 新增 `Varnode::has_cover`（varnode.hh:284）。
+
+### 2026-07-04（续 4）：hide_shadows 重写 + ActionHideShadow 委托
+- `hide_shadows` 拆分为 `hide_shadows_of(fd, high) -> bool`（对齐 `Merge::hideShadows(high)` merge.cc:1070）+ `hide_shadows(fd)`（遍历所有 high）。
+- `hide_shadows_of` 现在真正应用 opSetInput 重写（之前只分析不重写）。用 copy_shadow + cover.contain_varnode_def_at + op_set_input。
+- `ActionHideShadow::apply` 从内联地址匹配逻辑改为委托 `Merge::hide_shadows_of(high)`（对齐 coreaction.cc:4831-4845 遍历 high + 调 hideShadows）。

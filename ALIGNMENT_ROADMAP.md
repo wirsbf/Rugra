@@ -335,7 +335,10 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
   - `build_dominant_copy` 的 union 解析路径（merge.cc:1170-1178）省略（无 union 基础设施）
   - `merge_range_must` (merge.cc:301) 用 merge_test_must + merge_force 近似（Ghidra 失败 throw，Rugra 跳过）
   - `find_piece_shadow` 无 MULTIEQUAL 递归（Ghidra 本身也无，对齐）
-  - `processHighRedundantCopy`/`markRedundantCopies`/`checkCopyPair`（merge.cc:1345/1249/1112）未移植（属 markInternalCopies 路径，非 dominant-copy）
+  - `processHighRedundantCopy`/`markRedundantCopies`/`checkCopyPair`/`shadowedVarnode`（merge.cc:1345/1249/1112/1271）未移植（属 markInternalCopies 路径，影响非打印 COPY 抑制，非正确性）
+- **2026-07-04 续 4 审计发现的 2 个高优先级缺口**（之前路线图低估）：
+  - **`mergeOp`/`mergeIndirect` + `trimOpOutput`/`trimOpInput`/`snipOutputInterference`/`collectInputs`**（merge.cc:719/846/656/692/811/783）— mergeMarker 的 per-op forced-merge 路径（ActionMergeRequired 主管线）。Rugra 的 `merge_marker` 用 merge_force 替代，缺 per-op snip（cover 相交时 Ghidra 切断数据流，Rugra 强制合并可能产生同时存活实例）。
+  - **`hideShadows` 重写未应用**（merge.cc:1070 + coreaction.cc:4841 ActionHideShadow）— ✅ **2026-07-04 续 4 已修复**：hide_shadows_of 现在真正应用 opSetInput 重写；ActionHideShadow::apply 改为委托 Merge::hide_shadows_of（对齐 coreaction.cc:4831-4845）。
 
 ---
 

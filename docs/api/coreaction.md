@@ -795,3 +795,6 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 ### 2026-07-04：ActionMergeCopy/ActionDominantCopy 对齐
 - `ActionMergeCopy::apply` 从 45 行内联逻辑改为纯委托 `merge.merge_opcode(fd, CPUI_COPY)`（对齐 coreaction.hh:392 `data.getMerge().mergeOpcode(CPUI_COPY)`）。
 - `ActionDominantCopy::apply` 调用 `process_copy_trims`（配合 merge.rs 改名）。
+
+### 2026-07-04（续 2）：ActionHideShadow 改为委托 Merge::hide_shadows_of
+- 从内联地址匹配 shadow 检测改为委托 `merge.hide_shadows_of(high)`（对齐 coreaction.cc:4831 遍历 high + 调 hideShadows）。
