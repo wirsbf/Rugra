@@ -81,6 +81,30 @@ impl CoverBlock {
         if self.end < other.end { self.end = other.end; }
     }
 
+    // Ghidra: cover.cc:59 CoverBlock::intersect
+    /// Characterize the intersection with another CoverBlock (non-destructive).
+    /// Faithful to `CoverBlock::intersect` (cover.cc:59-102). Returns:
+    ///   - 0 no intersection
+    ///   - 1 only boundary points intersect
+    ///   - 2 a whole interval intersects
+    pub fn intersect_char(&self, op2: &CoverBlock) -> i32 {
+        if self.empty() || op2.empty() {
+            return 0;
+        }
+        let ustart = self.start;
+        let ustop = self.end;
+        let u2start = op2.start;
+        let u2stop = op2.end;
+        // Both one-piece (cover.cc:73-79). Rugra models single intervals only.
+        if ustop <= u2start || u2stop <= ustart {
+            if ustart == u2stop || ustop == u2start {
+                return 1; // Boundary intersection
+            }
+            return 0; // No intersection
+        }
+        2 // Interval intersection
+    }
+
     /// Intersect another cover block with this one
     pub fn intersect(&mut self, other: &CoverBlock) {
         if self.start < other.start { self.start = other.start; }
@@ -209,6 +233,42 @@ impl Cover {
             }
         }
         false
+    }
+
+    // Ghidra: cover.cc:269 Cover::intersect
+    /// Characterize the intersection with another Cover (non-destructive).
+    /// Faithful to `Cover::intersect` (cover.cc:269-297). Returns:
+    ///   - 0 no intersection
+    ///   - 1 only boundary points intersect
+    ///   - 2 a whole interval intersects
+    pub fn intersect_char(&self, op2: &Cover) -> i32 {
+        let mut res = 0i32;
+        // Iterate both block maps in sorted order (BTreeMap iteration is sorted).
+        let mut iter = self.blocks.iter();
+        let mut iter2 = op2.blocks.iter();
+        let mut cur = iter.next();
+        let mut cur2 = iter2.next();
+        loop {
+            let (Some((k1, _)), Some((k2, _))) = (&cur, &cur2) else {
+                return res;
+            };
+            if *k1 < *k2 {
+                cur = iter.next();
+            } else if *k1 > *k2 {
+                cur2 = iter2.next();
+            } else {
+                // Same block in both covers.
+                let newres = cur.unwrap().1.intersect_char(cur2.unwrap().1);
+                if newres == 2 {
+                    return 2;
+                }
+                if newres == 1 {
+                    res = 1;
+                }
+                cur = iter.next();
+                cur2 = iter2.next();
+            }
+        }
     }
 
     /// Like `intersects`, but ignores overlap at one specific point. Used by

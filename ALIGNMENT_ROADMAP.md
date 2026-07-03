@@ -325,12 +325,17 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 - ✅ `eliminate_intersect` (merge.cc:489) — 检测 cover 相交并标记 snip（含 copy_shadow 检查）
 - ✅ `unify_address` (merge.cc:581) — 对同地址组消除相交
 - ✅ `merge_addr_tied` 接入 unify_address（forced merge 前 snip）
-- ✅ `process_copy_trims` 改为遍历 copy_trims + 按 high 计数 + 清空
-- 配套基础设施：`PcodeOp::slot_of_input`、`Cover::contain_varnode_def_at`/`CoverBlock::boundary`、`BlockVarnode`(Ord/set/find_front)、`Varnode::copy_shadow`/`partial_copy_shadow`
-- **剩余缺口**（不影响 copy_trims 填充，但影响 dominant-copy 替换）：
-  - `processHighDominantCopy` (merge.cc:1316) + `findAllIntoCopies` (merge.cc:1295) + `buildDominantCopy` (merge.cc:1151) — 真正的 dominant COPY 替换逻辑。当前 process_copy_trims 只计数，不替换。
-  - `partial_copy_shadow` 是保守 stub（返回 false），使部分重叠被当作真相交（安全但可能多 snip）
-  - `merge_range_must` (merge.cc:301) 未移植，当前用 merge_force 替代
+- ✅ `process_copy_trims` 改为遍历 copy_trims + 按 high 计数 + 调用 process_high_dominant_copy
+- 配套基础设施：`PcodeOp::slot_of_input`、`Cover::contain_varnode_def_at`/`CoverBlock::boundary`/`intersect_char`、`BlockGraph::find_common_block_n`、`BlockBasic::get_stop_addr`、`BlockVarnode`(Ord/set/find_front)、`Varnode::copy_shadow`/`partial_copy_shadow`/`has_cover`、`Funcdata::op_insert_end`/`op_mark_non_printing`、`Merge::merge_test_must`
+- **2026-07-04 续**：完整移植 dominant-copy 替换子系统：
+  - ✅ `process_high_dominant_copy` (merge.cc:1316) + `find_all_into_copies` (merge.cc:1295) + `compare_copy_by_in_varnode` (merge.cc:1045) + `build_dominant_copy` (merge.cc:1151) — 支配树 LCA 选 dominant COPY，cover 检查可替换性，totalReplace+opDestroy 替换。
+  - ✅ `partial_copy_shadow` 完整移植（findSubpieceShadow/findPieceShadow，varnode.cc:1006/1062）—— 不再是保守 stub。
+  - ✅ `merge_test_must` 门控接入 merge_addr_tied（对齐 mergeRangeMust 的 mergeTestMust 检查）。
+- **剩余已知简化**（非阻塞，记录为技术债）：
+  - `build_dominant_copy` 的 union 解析路径（merge.cc:1170-1178）省略（无 union 基础设施）
+  - `merge_range_must` (merge.cc:301) 用 merge_test_must + merge_force 近似（Ghidra 失败 throw，Rugra 跳过）
+  - `find_piece_shadow` 无 MULTIEQUAL 递归（Ghidra 本身也无，对齐）
+  - `processHighRedundantCopy`/`markRedundantCopies`/`checkCopyPair`（merge.cc:1345/1249/1112）未移植（属 markInternalCopies 路径，非 dominant-copy）
 
 ---
 

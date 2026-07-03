@@ -905,3 +905,7 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 - 对齐 Ghidra `f_switch_out`（block.hh:92）/`f_unstructured_targ`（block.hh:93）。
 - **位值偏离技术债**：Ghidra 用 0x10/0x20，但 Rugra 早期把 0x10/0x20 分配给了 DEAD/MARK。本次用新位 1<<10/1<<11，**语义对齐，位值待统一重排**。
 - 用于 `splice_block_basic` 的 flags 合并（block.cc:1609-1619）：splice 后 `bl->flags = (bl & (unstructured_targ|entry_point)) | (outbl & switch_out)`。
+
+### 2026-07-04（续）：find_common_block_n + get_stop_addr
+- `BlockGraph::find_common_block_n(block_set)`（对齐 block.cc:796）：N-way 支配树 LCA，用 HashSet 模拟 mark。供 build_dominant_copy 使用。
+- `BlockBasic::get_stop_addr()`（近似 block.cc:2328 getStop）：用最后 op 地址近似块的结束地址（无 cover 系统）。

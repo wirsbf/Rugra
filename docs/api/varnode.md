@@ -723,3 +723,6 @@
 - 新增 `find_piece_shadow`（对齐 varnode.cc:1062-1091）：递归 PIECE 影子判定。
 - 辅助函数 `copy_chain_hits`/`copy_chain_source_def`/`whole_terminal_offset`：沿 COPY 链遍历（借用安全）。
 - 这让 eliminate_intersect 的部分重叠判定忠实于 Ghidra（之前 stub 会把值包含误判为真相交，导致多余 snip）。
+
+### 2026-07-04（续 3）：新增 has_cover
+- `has_cover()`（对齐 varnode.hh:284）：`(flags & (constant|annotation|insert)) == insert`。供 merge_test_must 使用。

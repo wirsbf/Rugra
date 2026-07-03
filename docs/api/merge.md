@@ -189,3 +189,15 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - `process_copy_trims` 改为遍历 copy_trims + 按 high 计数 + 清空（对齐 merge.cc:1420-1434）。dominant-copy 替换（processHighDominantCopy）待移植。
 - 新增 Merge.copy_trims 字段（对齐 merge.hh:87）。
 - 基础设施：BlockVarnode 完善（Ord/set/find_front）、varnode_def_loc/op_loc helpers。
+
+### 2026-07-04（续 3）：完整移植 dominant-copy 替换子系统
+- 移植 `process_high_dominant_copy`（merge.cc:1316）：对收到 ≥2 trim COPY 的 high，按同源 Varnode 分组，对每组调 build_dominant_copy。
+- 移植 `find_all_into_copies`（merge.cc:1295）+ `compare_copy_by_in_varnode`（merge.cc:1045）：收集 high 的所有外来 COPY，按输入 Varnode + block index + order 排序。
+- 移植 `build_dominant_copy`（merge.cc:1151）：支配树 LCA 选 dominant block（find_common_block_n），cover 检查可替换性（intersect_char>1），totalReplace+opDestroy 替换冗余 COPY。
+- `process_copy_trims` 接入 process_high_dominant_copy（之前只计数，现在真正替换）。
+- 移植 `merge_test_must`（merge.cc:241）+ 接入 merge_addr_tied（对齐 mergeRangeMust 的 mergeTestMust 门控）。
+- 新增 `Cover::intersect_char`/`CoverBlock::intersect_char`（cover.cc:269/59）返回 0/1/2。
+- 新增 `BlockGraph::find_common_block_n`（block.cc:796）N-way 支配树 LCA。
+- 新增 `BlockBasic::get_stop_addr`（近似 block.cc:2328 getStop）。
+- 新增 `Funcdata::op_insert_end`（funcdata.hh:461）+ `op_mark_non_printing`（funcdata.hh:519）。
+- 新增 `Varnode::has_cover`（varnode.hh:284）。

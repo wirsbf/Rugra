@@ -839,3 +839,7 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `mergeRange`（funcdata_block.cc:953）暂缺：Rugra 无 Cover 系统，记录为已知基础设施缺口。
 - root cause：flags 丢失导致 `f_unstructured_targ` 丢失，printc 无法解析 goto 目标 → `goto ;`。
 - Alignment Evidence 见 commit message。
+
+### 2026-07-04（续）：op_insert_end + op_mark_non_printing
+- `op_insert_end(op, bb)`（对齐 funcdata.hh:461）：插到块末尾（op_insert_after(last_op)）。
+- `op_mark_non_printing(op)`（对齐 funcdata.hh:519）：设置 NONPRINTING flag。

@@ -274,13 +274,26 @@ impl Merge {
             // COPY trims (recorded in copy_trims for process_copy_trims).
             self.unify_address(fd, group);
             // Forced merge: merge all varnodes in the group pairwise.
-            // (Ghidra uses mergeRangeMust; Rugra uses merge_force — the
-            // required test is implicit since same-address varnodes must merge.)
+            // Ghidra uses mergeRangeMust (merge.cc:301), which calls
+            // mergeTestMust(vn) per varnode (hasCover && !isImplied) then
+            // merge(high, false). Rugra gates with merge_test_must, then
+            // merge_force (cover already resolved by unify_address).
             for i in 0..group.len() {
                 for j in i + 1..group.len() {
                     let vn1_arc = group[i].clone();
                     let vn2_arc = group[j].clone();
 
+                    // mergeTestMust gate (merge.cc:308,313): both must have
+                    // cover and not be implied, else skip (Ghidra throws;
+                    // Rugra logs and skips).
+                    let must_ok = {
+                        let v1 = vn1_arc.read().unwrap();
+                        let v2 = vn2_arc.read().unwrap();
+                        Self::merge_test_must(&v1) && Self::merge_test_must(&v2)
+                    };
+                    if !must_ok {
+                        continue;
+                    }
                     let can_merge = {
                         let v1 = vn1_arc.read().unwrap();
                         let v2 = vn2_arc.read().unwrap();
@@ -516,6 +529,15 @@ impl Merge {
         // VariablePiece-group check (merge.cc:147-155) — omitted: no VariablePiece.
         // Symbol-mapping check (merge.cc:157-164) — omitted: no Symbol on HighVariable.
         true
+    }
+
+    // Ghidra: merge.cc:241 Merge::mergeTestMust
+    /// Test if a Varnode that MUST be merged CAN be merged. Faithful to
+    /// `Merge::mergeTestMust` (merge.cc:241-247). Returns true if the Varnode
+    /// has a cover and is not implied (eligible for forced merge); false
+    /// otherwise. Ghidra throws on failure; Rugra returns false (caller logs).
+    fn merge_test_must(vn: &Varnode) -> bool {
+        vn.has_cover() && !vn.is_implied()
     }
 
     /// Force-merge two varnodes into the same HighVariable.
@@ -1200,6 +1222,298 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:1045 Merge::compareCopyByInVarnode
+    /// Sort comparator for COPY ops: by input Varnode (create index), then
+    /// by parent block index, then by seqnum order. Faithful to
+    /// `Merge::compareCopyByInVarnode` (merge.cc:1045-1057).
+    fn compare_copy_by_in_varnode(
+        op1: &crate::op::PcodeOpRef,
+        op2: &crate::op::PcodeOpRef,
+    ) -> std::cmp::Ordering {
+        let (in1_ci, in2_ci, idx1, idx2, ord1, ord2) = {
+            let a = op1.0.read().unwrap();
+            let b = op2.0.read().unwrap();
+            let in1 = a.get_in(0).map(|v| v.read().unwrap().create_index).unwrap_or(0);
+            let in2 = b.get_in(0).map(|v| v.read().unwrap().create_index).unwrap_or(0);
+            let i1 = a.parent.as_ref().and_then(|w| w.upgrade()).map(|p| p.read().unwrap().get_index()).unwrap_or(0);
+            let i2 = b.parent.as_ref().and_then(|w| w.upgrade()).map(|p| p.read().unwrap().get_index()).unwrap_or(0);
+            (in1, in2, i1, i2, a.get_seq_num().order, b.get_seq_num().order)
+        };
+        in1_ci.cmp(&in2_ci)
+            .then_with(|| idx1.cmp(&idx2))
+            .then_with(|| ord1.cmp(&ord2))
+    }
+
+    // Ghidra: merge.cc:1295 Merge::findAllIntoCopies
+    /// Collect all COPY ops whose output is an instance of `high` and whose
+    /// input comes from a different HighVariable. Faithful to
+    /// `Merge::findAllIntoCopies` (merge.cc:1295-1309). If `filter_temps`,
+    /// only COPYs whose output is in the internal (unique) space are kept.
+    /// Result is sorted by `compare_copy_by_in_varnode`.
+    fn find_all_into_copies(
+        &self,
+        high: &Arc<RwLock<HighVariable>>,
+        filter_temps: bool,
+    ) -> Vec<crate::op::PcodeOpRef> {
+        let h = high.read().unwrap();
+        let n = h.num_instances();
+        let mut copy_ins: Vec<crate::op::PcodeOpRef> = Vec::new();
+        for i in 0..n {
+            let vn_arc = match h.get_instance(i) { Some(a) => a, None => continue };
+            let (is_written, def_code_copy, in_high_diff, out_is_unique) = {
+                let vn = vn_arc.read().unwrap();
+                let def_arc = vn.def.as_ref().and_then(|w| w.upgrade());
+                match def_arc {
+                    Some(d) => {
+                        let def = d.read().unwrap();
+                        let code_copy = def.opcode == crate::opcodes::OpCode::CPUI_COPY;
+                        let in_high_diff = def.get_in(0).map(|inv| {
+                            let inv_h = inv.read().unwrap().high.clone();
+                            match inv_h {
+                                Some(ih) => !Arc::ptr_eq(&ih, high),
+                                None => true,
+                            }
+                        }).unwrap_or(true);
+                        let out_unique = vn.address_space == crate::space::AddressSpace::Unique;
+                        (true, code_copy, in_high_diff, out_unique)
+                    }
+                    None => (false, false, true, false),
+                }
+            };
+            if !is_written || !def_code_copy || !in_high_diff {
+                continue;
+            }
+            if filter_temps && !out_is_unique {
+                continue;
+            }
+            // Get the def op as PcodeOpRef.
+            let def_arc = vn_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade()).unwrap();
+            copy_ins.push(crate::op::PcodeOpRef(def_arc));
+        }
+        drop(h);
+        copy_ins.sort_by(Self::compare_copy_by_in_varnode);
+        copy_ins
+    }
+
+    // Ghidra: merge.cc:1151 Merge::buildDominantCopy
+    /// Replace a group of COPYs (from the same source) with a single dominant
+    /// COPY at the common dominator block. Faithful to `buildDominantCopy`
+    /// (merge.cc:1151-1238). Union-resolution path (:1170-1178) omitted.
+    ///
+    /// `high`: target HighVariable. `copy`: sorted COPY list. `pos`/`size`:
+    /// the group of COPYs sharing the same input Varnode.
+    fn build_dominant_copy(
+        &mut self,
+        fd: &mut Funcdata,
+        high: &Arc<RwLock<HighVariable>>,
+        copy: &[crate::op::PcodeOpRef],
+        pos: usize,
+        size: usize,
+    ) {
+        // Collect parent blocks of the COPY group.
+        let block_set: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = (0..size)
+            .filter_map(|i| {
+                let op = copy[pos + i].0.read().unwrap();
+                op.parent.as_ref().and_then(|w| w.upgrade())
+            })
+            .collect();
+        let Some(dom_bl) = crate::block::BlockGraph::find_common_block_n(&block_set) else {
+            return;
+        };
+        let dom_bl_bb = dom_bl.read().unwrap();
+        let dom_bl_any = dom_bl_bb.as_any().downcast_ref::<crate::block::BlockBasic>();
+        // domCopy = copy[pos]; rootVn = domCopy->getIn(0); domVn = domCopy->getOut()
+        let (root_vn, dom_copy_out, dom_copy_parent_ptr) = {
+            let dc = copy[pos].0.read().unwrap();
+            let rv = dc.get_in(0).cloned();
+            let dv = dc.output.clone();
+            let dp = dc.parent.as_ref().and_then(|w| w.upgrade());
+            (rv, dv, dp)
+        };
+        let Some(root_vn) = root_vn else { return };
+        // Determine if domCopy is already in domBl.
+        let dom_in_dombl = match (&dom_copy_parent_ptr, dom_bl_any) {
+            (Some(p), _) => Arc::ptr_eq(p, &dom_bl),
+            _ => false,
+        };
+        drop(dom_bl_bb);
+        let mut dom_copy_is_new = false;
+        let mut dom_vn = dom_copy_out;
+        let mut new_dom_copy: Option<crate::op::PcodeOpRef> = None;
+        if !dom_in_dombl {
+            // Build a new COPY at domBl (merge.cc:1167-1183).
+            dom_copy_is_new = true;
+            let stop_addr = {
+                let rg = dom_bl.read().unwrap();
+                match rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    Some(bb) => bb.get_stop_addr(),
+                    None => crate::address::Address::new(0),
+                }
+            };
+            let new_op = fd.new_op(1, stop_addr);
+            fd.op_set_opcode(&new_op, crate::opcodes::OpCode::CPUI_COPY);
+            let sz = root_vn.read().unwrap().size;
+            let uv = fd.new_unique(sz);
+            fd.op_set_output(&new_op, uv.clone());
+            fd.op_set_input(&new_op, root_vn.clone(), 0);
+            fd.op_insert_end(&new_op, &dom_bl);
+            dom_vn = Some(uv);
+            new_dom_copy = Some(new_op);
+        }
+        let Some(dom_vn) = dom_vn else { return };
+        // Build bCover = union of high's instances' covers, excluding COPY-from-shadow-of-rootVn.
+        let mut b_cover = Cover::new();
+        {
+            let h = high.read().unwrap();
+            for i in 0..h.num_instances() {
+                let Some(vn_arc) = h.get_instance(i) else { continue };
+                let skip = {
+                    let vn = vn_arc.read().unwrap();
+                    let def_arc = vn.def.as_ref().and_then(|w| w.upgrade());
+                    match def_arc {
+                        Some(d) => {
+                            let def = d.read().unwrap();
+                            if def.opcode == crate::opcodes::OpCode::CPUI_COPY {
+                                let in0 = def.get_in(0);
+                                match in0 {
+                                    Some(inv) => inv.read().unwrap().copy_shadow(&root_vn.read().unwrap()),
+                                    None => false,
+                                }
+                            } else { false }
+                        }
+                        None => false,
+                    }
+                };
+                if skip { continue; }
+                let vn = vn_arc.read().unwrap();
+                if let Some(c) = &vn.cover {
+                    b_cover.merge(c);
+                }
+            }
+        }
+        // For each non-dom COPY, check if removable (aCover vs bCover).
+        // Mark un-removable ones (Ghidra uses op->setMark).
+        let mut marked: Vec<bool> = vec![false; size];
+        let mut count = size as i32;
+        for i in 0..size {
+            let is_dom = match &new_dom_copy {
+                Some(nd) => Arc::ptr_eq(&nd.0, &copy[pos + i].0),
+                None => i == 0, // copy[pos] is the domCopy when not new
+            };
+            if is_dom { continue; }
+            let (out_vn_arc, descends) = {
+                let op = copy[pos + i].0.read().unwrap();
+                let ov = op.output.clone();
+                let ds: Vec<crate::op::PcodeOpRef> = if let Some(ref ova) = ov {
+                    ova.read().unwrap().descend.iter()
+                        .filter_map(|w| w.upgrade())
+                        .map(|a| crate::op::PcodeOpRef(a))
+                        .collect()
+                } else { Vec::new() };
+                (ov, ds)
+            };
+            let Some(out_vn_arc) = out_vn_arc else { continue };
+            // aCover: addDefPoint(domVn) + addRefPoint(each reader of outVn).
+            let mut a_cover = Cover::new();
+            // domVn def loc:
+            let (dvn_blk, dvn_ord, dvn_is_input) = varnode_def_loc(&dom_vn.read().unwrap());
+            if dvn_is_input {
+                a_cover.add_def_point(0, 2);
+            } else {
+                a_cover.add_def_point(dvn_blk, dvn_ord);
+            }
+            for d_ref in &descends {
+                let (rb, ro) = {
+                    let op = d_ref.0.read().unwrap();
+                    let blk = op.parent.as_ref().and_then(|w| w.upgrade()).map(|p| p.read().unwrap().get_index()).unwrap_or(0);
+                    (blk, op.get_seq_num().order)
+                };
+                a_cover.add_ref_point(rb, ro);
+            }
+            if b_cover.intersect_char(&a_cover) > 1 {
+                count -= 1;
+                marked[i] = true;
+            }
+        }
+        // If count <= 1, mark all to skip (and destroy new domCopy if new).
+        if count <= 1 {
+            for i in 0..size { marked[i] = true; }
+            count = 0;
+            if dom_copy_is_new {
+                if let Some(nd) = &new_dom_copy {
+                    fd.op_destroy(nd);
+                }
+            }
+        }
+        // Replace non-marked COPYs: totalReplace(outVn, domVn) + opDestroy.
+        for i in 0..size {
+            if marked[i] { continue; }
+            let (out_vn_arc, op_ref) = {
+                let op = copy[pos + i].0.read().unwrap();
+                (op.output.clone(), crate::op::PcodeOpRef(copy[pos + i].0.clone()))
+            };
+            if let Some(out_vn) = out_vn_arc {
+                // Skip if outVn == domVn.
+                let same = Arc::ptr_eq(&out_vn, &dom_vn);
+                if !same {
+                    // outVn->getHigh()->remove(outVn)
+                    let h_idx = out_vn.read().unwrap().high.as_ref().and_then(|h| {
+                        h.read().unwrap().instance_index(&out_vn)
+                    });
+                    if let Some(idx) = h_idx {
+                        out_vn.read().unwrap().high.as_ref().unwrap().write().unwrap().remove_instance(idx);
+                    }
+                    fd.total_replace(&out_vn, dom_vn.clone());
+                    fd.op_destroy(&op_ref);
+                }
+            }
+        }
+        // If count > 0 and domCopy is new, merge domVn's high into target.
+        if count > 0 && dom_copy_is_new {
+            let dom_high = dom_vn.read().unwrap().high.clone();
+            if let Some(dh) = dom_high {
+                // high->merge(domVn->getHigh(), nullptr, true)
+                // Use merge_speculative (cover-aware); domVn is a fresh temp.
+                let _ = self.merge_speculative(high, &dh);
+            }
+        }
+    }
+
+    // Ghidra: merge.cc:1316 Merge::processHighDominantCopy
+    /// For the given HighVariable, find groups of COPYs from the same source
+    /// and replace each group with a single dominant COPY. Faithful to
+    /// `processHighDominantCopy` (merge.cc:1316-1337).
+    fn process_high_dominant_copy(&mut self, fd: &mut Funcdata, high: &Arc<RwLock<HighVariable>>) {
+        let copy_ins = self.find_all_into_copies(high, true);
+        if copy_ins.len() < 2 {
+            return;
+        }
+        // Group by identical input Varnode (Arc ptr eq), call buildDominantCopy.
+        let mut pos = 0usize;
+        while pos < copy_ins.len() {
+            let in_vn = {
+                let op = copy_ins[pos].0.read().unwrap();
+                op.get_in(0).cloned()
+            };
+            let Some(in_vn) = in_vn else { break; };
+            let mut sz = 1usize;
+            while pos + sz < copy_ins.len() {
+                let next_in = {
+                    let op = copy_ins[pos + sz].0.read().unwrap();
+                    op.get_in(0).cloned()
+                };
+                match next_in {
+                    Some(ni) if Arc::ptr_eq(&ni, &in_vn) => sz += 1,
+                    _ => break,
+                }
+            }
+            if sz > 1 {
+                self.build_dominant_copy(fd, high, &copy_ins, pos, sz);
+            }
+            pos += sz;
+        }
+    }
+
     // Ghidra: merge.cc:1415 Merge::processCopyTrims
     /// Step 6: ActionDominantCopy (coreaction.cc:5723 / coreaction.hh:1008).
     /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
@@ -1230,31 +1544,34 @@ impl Merge {
         if self.copy_trims.is_empty() {
             return;
         }
-        // Count COPYs into each output HighVariable (merge.cc:1420-1428).
-        // Ghidra uses copy_in1/copy_in2 flags on HighVariable; we use a count map.
-        let mut counts: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+        // Ghidra merge.cc:1420-1428: count COPYs into each output HighVariable.
+        // Ghidra uses copy_in1/copy_in2 flags; we use a map keyed by HighVariable Arc ptr.
+        let mut counts: std::collections::HashMap<
+            usize,
+            (Arc<RwLock<HighVariable>>, u32),
+        > = std::collections::HashMap::new();
         for trim in &self.copy_trims {
             let out_high = {
                 let t = trim.0.read().unwrap();
-                t.output.as_ref().and_then(|o| o.read().unwrap().high.as_ref().map(|h| {
-                    std::sync::Arc::as_ptr(h) as usize
-                }))
+                t.output.as_ref().and_then(|o| {
+                    let ov = o.read().unwrap();
+                    ov.high.clone().map(|h| (std::sync::Arc::as_ptr(&h) as *const () as usize, h))
+                })
             };
-            if let Some(key) = out_high {
-                *counts.entry(key).or_insert(0) += 1;
+            if let Some((key, h)) = out_high {
+                counts.entry(key).or_insert_with(|| (h, 0)).1 += 1;
             }
         }
-        // HighVariables with ≥2 trim COPYs would trigger processHighDominantCopy
-        // (merge.cc:1432-1433). That logic (findAllIntoCopies/buildDominantCopy,
-        // merge.cc:1295/1151) is not yet ported. For now, record the count.
-        // TODO: port processHighDominantCopy + buildDominantCopy.
-        let multi: Vec<_> = counts.iter().filter(|(_, &c)| c >= 2).collect();
-        if !multi.is_empty() {
-            eprintln!("[MERGE] {} high(s) with ≥2 copy trims; dominant-copy replace not yet ported",
-                multi.len());
+        // Ghidra merge.cc:1430-1434: for each high with ≥2 COPYs, call processHighDominantCopy.
+        let multi: Vec<Arc<RwLock<HighVariable>>> = counts
+            .into_iter()
+            .filter_map(|(_, (h, c))| if c >= 2 { Some(h) } else { None })
+            .collect();
+        for high in &multi {
+            // Ghidra: high->hasCopyIn2() → processHighDominantCopy(high) (merge.cc:1432)
+            self.process_high_dominant_copy(fd, high);
         }
-        // Ghidra: copyTrims.clear(); (merge.cc:1429)
-        let _ = fd;
+        // Ghidra merge.cc:1429: copyTrims.clear()
         self.copy_trims.clear();
     }
 

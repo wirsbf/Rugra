@@ -453,6 +453,23 @@ impl BlockBasic {
         self.ops.last().cloned()
     }
 
+    // RUGRA-GLUE: 近似 Ghidra BlockBasic::getStop (block.cc:2328)。Ghidra 用块
+    // 的 cover 地址范围；Rugra 无 block cover，用最后 op 地址近似（仅 SeqNum 用）。
+    /// Approximation of Ghidra `BlockBasic::getStop` (block.cc:2328), which
+    /// returns the last address of the block's address cover. Rugra has no
+    /// block cover system, so we approximate with the address of the last op
+    /// (or the entry address if empty). This is used only as a SeqNum address
+    /// for newly inserted ops (e.g. in buildDominantCopy), not for control
+    /// flow, so the approximation is semantically safe.
+    pub fn get_stop_addr(&self) -> crate::address::Address {
+        if let Some(last) = self.ops.last() {
+            let op = last.0.read().unwrap();
+            op.get_addr()
+        } else {
+            self.start_addr
+        }
+    }
+
     /// Get the first operation in the block
     pub fn first_op(&self) -> Option<PcodeOpRef> {
         self.ops.first().cloned()
@@ -899,6 +916,63 @@ impl BlockGraph {
             b2 = match up2 { Some(u) => u, None => return None };
         }
         Some(b1)
+    }
+
+    // Ghidra: block.cc:796 FlowBlock::findCommonBlock
+    /// Find the common dominator of multiple blocks.
+    /// Faithful to `FlowBlock::findCommonBlock(vector<FlowBlock*>&)`
+    /// (block.cc:796-826). Used by `buildDominantCopy` to find the LCA of
+    /// all COPY ops' parent blocks.
+    ///
+    /// Algorithm: mark the dom-chain of blockSet[0]; for each subsequent
+    /// block, walk its dom-chain until hitting a marked block; track the
+    /// one with the smallest index (= highest in dom tree).
+    pub fn find_common_block_n(
+        block_set: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        if block_set.is_empty() {
+            return None;
+        }
+        // Use Arc pointer set as the mark (avoids &mut borrow across blocks).
+        let mut marked: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // Walk blockSet[0]'s dom chain, marking each.
+        let mut bl = block_set[0].clone();
+        let mut res = bl.clone();
+        let mut best_index = bl.read().unwrap().get_index();
+        loop {
+            marked.insert(std::sync::Arc::as_ptr(&bl) as *const () as usize);
+            let up = bl.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            match up {
+                Some(u) => bl = u,
+                None => break,
+            }
+        }
+        // For each subsequent block, walk until hitting a marked block.
+        for i in 1..block_set.len() {
+            if best_index == 0 {
+                break;
+            }
+            let mut cur = block_set[i].clone();
+            loop {
+                let ptr = std::sync::Arc::as_ptr(&cur) as *const () as usize;
+                if marked.contains(&ptr) {
+                    let idx = cur.read().unwrap().get_index();
+                    if idx < best_index {
+                        res = cur.clone();
+                        best_index = idx;
+                    }
+                    break;
+                }
+                marked.insert(ptr);
+                let up = cur.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                match up {
+                    Some(u) => cur = u,
+                    None => break,
+                }
+            }
+        }
+        // (Ghidra clears marks; our HashSet is local and dropped here.)
+        Some(res)
     }
 
     /// Remove the edge from `src` to `dst` by symmetrically deleting both

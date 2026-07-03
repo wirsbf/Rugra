@@ -1815,6 +1815,35 @@ impl Funcdata {
         self.obank.alivelist.insert(0, op.clone());
     }
 
+    // Ghidra: funcdata.hh:461 Funcdata::opInsertEnd
+    /// Insert `op` at the end of a basic block's op list. Faithful to
+    /// `Funcdata::opInsertEnd(op, bl)` (funcdata.hh:461). Equivalent to
+    /// inserting after the block's last op. Used by `buildDominantCopy`.
+    pub fn op_insert_end(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+        let last = {
+            let rg = bb.read().unwrap();
+            if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                bb2.last_op()
+            } else {
+                None
+            }
+        };
+        match last {
+            Some(last_op) => self.op_insert_after(op, &last_op),
+            None => {
+                // Empty block: append to alive list.
+                self.obank.alivelist.push(op.clone());
+            }
+        }
+    }
+
+    // Ghidra: funcdata.hh:519 Funcdata::opMarkNonPrinting
+    /// Mark `op` as non-printing (suppressed in C output). Faithful to
+    /// `Funcdata::opMarkNonPrinting` (funcdata.hh:519).
+    pub fn op_mark_non_printing(&self, op: &crate::op::PcodeOpRef) {
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::NONPRINTING;
+    }
+
     /// Get the input slot of `vn` within `op`. Faithful to `PcodeOp::getSlot`.
     /// Returns the slot index, or -1 if not found.
     pub fn op_get_slot(&self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {

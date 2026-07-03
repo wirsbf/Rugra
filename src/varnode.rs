@@ -352,6 +352,16 @@ impl Varnode {
         self.flags &= !varnode_flags::MARK;
     }
 
+    // Ghidra: varnode.hh:284 Varnode::hasCover
+    /// Return true if this Varnode has a Cover (participates in liveness).
+    /// Faithful to `Varnode::hasCover` (varnode.hh:284):
+    ///   (flags & (constant|annotation|insert)) == insert
+    pub fn has_cover(&self) -> bool {
+        (self.flags
+            & (varnode_flags::CONSTANT | varnode_flags::ANNOTATION | varnode_flags::INSERT))
+            == varnode_flags::INSERT
+    }
+
     /// Is this an implied variable? (varnode.hh:235)
     pub fn is_implied(&self) -> bool {
         (self.flags & varnode_flags::IMPLIED) != 0
