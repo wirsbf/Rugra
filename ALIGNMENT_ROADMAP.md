@@ -200,37 +200,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 `RuleLessEqual`(apply), `RuleRightShiftAnd`, `RuleHighOrderAnd`, `RuleAndZext`, `RuleZextSless`,
 `RuleScarry`(trivial), `RuleSborrow`(trivial)
 
-**剩余缺失（📋 L1，约 22 个）— 按 Ghidra ruleaction.cc 真实 `::applyOp` 名 + 依赖标注：**
-
-| Rule | 行号 | 依赖（Rugra 现状） |
-|---|---|---|
-| `RuleLeftRight` | 2030 | opUnsetInput/opUnsetOutput/newVarnodeOut/Address endian |
-| `RuleAndCommute` | 1532 | getNZMask(部分)/loneDescend ✅ |
-| `RuleAndPiece` | 1640 | getNZMask ✅ / isHeritageKnown |
-| `RuleAndDistribute` | 1260 | getNZMask ✅ |
-| `RuleOrConsume` | 353 | getConsume |
-| `RuleCollectTerms` | 107 | TermOrder/AdditiveEdge |
-| `RuleSelectCse` | 187 | ✅ **完整算法** — get_cse_hash + is_cse_match + cse_eliminate_list（ruleaction.cc:178-209） |
-| `RulePushMulti` | 1074 | ✅ **完整算法** — findSubstitute + functional_equality_level + op_uninsert/insert_before（ruleaction.cc:1060-1137） |
-| `RulePullsubMulti` | 880 | ✅ **完整算法** — minMaxUse/replaceDescendants/findSubpiece/buildSubpiece/applyOp（ruleaction.cc:678-952）；hasLoopIn/isPrecisLo/Hi/isJoin 用保守默认 |
-| `RulePullsubIndirect` | 962 | INDIRECT 处理 |
-| `RuleBooleanNegate` | 2969 | isBooleanValue/isTypeRecoveryOn |
-| `RuleBoolZext` | 3015 | ✅ **完整算法** — zext(bool)*-1 模式检测 + BOOL_NEGATE/比较/逻辑重写（ruleaction.cc:3000-3124）；is_type_recovery_on 已补 |
-| `RuleLogic2Bool` | 3138 | isBooleanValue |
-| `RuleIndirectCollapse` | 3177 | INDIRECT |
-| `RuleMultiCollapse` | 3254 | functionalEqualityLevel |
-| `RuleEarlyRemoval` | 25 | opDestroy/doesDeadcode/isAutoLive |
-| `RuleRangeMeld` | 1357 | ✅ **完整算法** — pullBack/intersect/union/translate_to_op（ruleaction.cc:1346-1437） |
-| `RuleFloatRange` | 1450 | ✅ **完整算法** — 浮点比较合并（ruleaction.cc:1439-1518） |
-| `RuleBitUndistribute` | 2634 | zext/sext 后代追踪 |
-| `RuleBooleanUndistribute` | 2731 | ✅ **完整算法** — BooleanMatch + op_bool_negate（ruleaction.cc:2700-2810） |
-| `RuleBooleanDedup` | 2852 | 后代追踪 |
-| `RuleScarry`/`RuleSborrow` 深层 | 3475+/3475+ | AddExpression/constantMatch |
-| `RuleSubfloatCpool`/`RuleFloatCpool` 等 | — | float/cpool |
-| `RuleLoadVarnode`/`RuleStoreVarnode` | — | LoadGuard/StoreGuard |
-| `RulePtrsubUndo`/`RulePtraddShift`/`RulePtraddPiece` | — | 指针类型 |
-
-**最易移植（依赖大部分就绪）**：`RuleAndDistribute`、`RuleAndPiece`、`RuleAndCommute`（均用 getNZMask+loneDescend，已就绪）。
+**✅ 全部已移植（2026-07-04 核实）** — 主管线 oppool1/oppool2/cleanup 的 Rule 差距为 0。
+之前此表标注的 22 个"缺失"Rule 经逐行对比 Ghidra coreaction.cc 注册列表 vs Rugra action.rs 注册列表，确认全部已移植并注册到主管线。
+（`RuleSubfloatCpool`/`RuleFloatCpool`/`RulePtraddShift`/`RulePtraddPiece` 在 Ghidra 中不存在——虚构条目。`RuleIndirectConcat` 在 Ghidra 中被注释掉。）
 
 ---
 
