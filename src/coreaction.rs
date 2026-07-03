@@ -5614,55 +5614,84 @@ impl Action for ActionLaneDivide {
     fn get_name(&self) -> &str { "lanedivide" }
 }
 
-/// Return recovery. Faithful to `ActionReturnRecovery`
-/// (coreaction.cc).
-pub struct ActionReturnRecovery;
+/// Attach return values to RETURN ops. Faithful to `ActionReturnRecovery`
+/// (coreaction.cc:1908-1955) + `buildReturnOutput` (coreaction.cc:1836-1906).
+///
+/// Ghidra's full algorithm uses `ParamActive` + `AncestorRealistic` for
+/// multi-pass trial-based liveness of return registers. Rugra implements
+/// the common single-register (RAX/EAX) case: for each RETURN with no
+/// return-value input (num_input <= 1), scan its block backwards for the
+/// last op writing RAX (Register 0x0) and attach that output as RETURN
+/// input slot 1. This makes the function's return type recoverable.
+pub struct ActionReturnRecovery { pub count: i32 }
 impl ActionReturnRecovery {
-    pub fn new() -> Self { Self }
+    // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionReturnRecovery {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionReturnRecovery::apply (coreaction.cc:1908-1955).
-        // If active_output is set, scan RETURN ops to determine which
-        // varnode is the return value. Mark output trials as active.
-        let mut change = 0;
-        // Check if there's an active output to recover.
-        if fd.active_output.is_none() {
-            // Auto-detect: if any RETURN has >1 input, set up active_output
-            let has_return_val = fd.obank.alivelist.iter().any(|r| {
-                let op = r.0.read().unwrap();
-                op.opcode == crate::opcodes::OpCode::CPUI_RETURN && !op.is_dead() && op.num_input() > 1
-            });
-            if has_return_val {
-                fd.active_output = Some(crate::fspec::ParamActive::new(false));
-            } else {
-                return Ok(action_status::NO_CHANGE);
-            }
-        }
-        // Scan RETURN ops for non-dead ones with >1 input (has return value).
+        use crate::space::AddressSpace;
+        use crate::op::PcodeOp;
+        type OpArc = std::sync::Arc<std::sync::RwLock<PcodeOp>>;
+        // Collect RETURN ops with no return value (num_input <= 1).
+        let mut work: Vec<OpArc> = Vec::new();
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
-            if op.opcode != crate::opcodes::OpCode::CPUI_RETURN { continue; }
-            if op.is_dead() { continue; }
-            if op.num_input() > 1 {
-                // RETURN has a return value at slot 1.
-                if let Some(active) = fd.active_output.as_mut() {
-                    if active.get_num_trials() == 0 {
-                        active.register_trial(crate::address::Address::new(0), 8);
+            if op.opcode == OpCode::CPUI_RETURN && op.num_input() <= 1 {
+                work.push(op_ref.0.clone());
+            }
+        }
+
+        let mut changed = 0;
+        for op_arc in work {
+            // Scan the RETURN's parent block backwards for last RAX write.
+            let rax_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+                let op = op_arc.read().unwrap();
+                let parent_weak_opt: Option<&std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = op.parent.as_ref();
+                parent_weak_opt.and_then(|pw| pw.upgrade()).and_then(|parent_arc| {
+                    let block = parent_arc.read().unwrap();
+                    let mut found: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+                    for op_ref in block.get_ops().iter().rev() {
+                        if std::sync::Arc::ptr_eq(&op_ref.0, &op_arc) { continue; }
+                        let o = op_ref.0.read().unwrap();
+                        if let Some(ref out_arc) = o.output {
+                            let ov = out_arc.read().unwrap();
+                            if ov.get_space() == AddressSpace::Register
+                                && ov.get_offset() == 0x0 && ov.get_size() >= 4
+                            {
+                                found = Some(out_arc.clone());
+                                break;
+                            }
+                        }
                     }
-                    change += 1;
+                    found
+                })
+            };
+
+            // Fallback: scan alivelist for any RAX write before this RETURN.
+            let rax_vn = rax_vn.or_else(|| {
+                let ret_order = op_arc.read().unwrap().start.order;
+                let mut found = None;
+                for op_ref in &fd.obank.alivelist {
+                    let o = op_ref.0.read().unwrap();
+                    if o.start.order > ret_order { break; }
+                    if let Some(ref out_arc) = o.output {
+                        let ov = out_arc.read().unwrap();
+                        if ov.get_space() == AddressSpace::Register
+                            && ov.get_offset() == 0x0 && ov.get_size() >= 4
+                        { found = Some(out_arc.clone()); }
+                    }
                 }
+                found
+            });
+
+            if let Some(rax) = rax_vn {
+                fd.op_set_input(&crate::op::PcodeOpRef(op_arc), rax, 1);
+                changed += 1;
             }
         }
-        // Do a pass and check if fully checked.
-        if let Some(active) = fd.active_output.as_mut() {
-            active.finish_pass();
-            if active.get_num_passes() > active.get_max_pass() {
-                active.mark_fully_checked();
-                change += 1;
-            }
-        }
-        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        self.count += changed;
+        if changed > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
     fn get_name(&self) -> &str { "returnrecovery" }
 }
