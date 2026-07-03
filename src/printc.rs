@@ -1944,9 +1944,9 @@ impl PrintC {
                         // Exact base: reference to the struct itself
                         return Some(ss.name.clone());
                     } else {
-                        // Field access: struct1->field_XX (IDA arrow notation)
+                        // Field access: *(long *)(structN + offset)
                         let field_offset = offset - ss.base_offset;
-                        return Some(format!("{}->field_{:x}", ss.name, field_offset));
+                        return Some(format!("*(long *)({} + 0x{:x})", ss.name, field_offset));
                     }
                 }
             }
@@ -2450,10 +2450,13 @@ impl PrintC {
                                 let offset = in1.get_offset();
                                 let ptr_arc = addr_def.inrefs[0].clone();
                                 drop(in0); drop(in1); drop(addr_def);
-                                // Emit: *ptr->field_XX  (dereference struct pointer field)
+                                // Emit: *(long *)(ptr + offset)  — avoids needing pointer type
+                                self.emit.print("*(long *)(");
                                 self.push_varnode(&ptr_arc.read().unwrap(), None);
                                 if !self.discovery_pass {
-                                    self.emit.print(&format!("->field_{:x}", offset));
+                                    self.emit.print(&format!(" + 0x{:x})", offset));
+                                } else {
+                                    self.emit.print(" + 0)");
                                 }
                                 emitted_as_field = true;
                             }
@@ -4288,12 +4291,9 @@ impl PrintLanguage for PrintC {
                             let base_text = self.capture_varnode_text(&base.read().unwrap());
                             let is_bare_ident = base_text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !base_text.is_empty();
                             if is_bare_ident {
+                                self.emit.print("*(long *)(");
                                 self.emit.print(&base_text);
-                                if off <= 0xffff {
-                                    self.emit.print(&format!("->field_{:x}", off));
-                                } else {
-                                    self.emit.print(&format!("->field_0x{:x}", off));
-                                }
+                                self.emit.print(&format!(" + 0x{:x})", off));
                             } else {
                                 // Compound base: wrap whole address in *(long *)( base + off )
                                 self.emit.print("*(long *)(");

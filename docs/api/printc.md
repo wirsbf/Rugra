@@ -686,3 +686,9 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - `op_call`：当 CALL op 的 in(0) 缺失（调用目标未知）时，之前产生 `();`（语法错误）。现在发 `FUN_unknown()` 作为占位符。
 - 效果：file2string_part_0 的 `expected expression before ')'` 错误消除。gcc 从 22/24 提升到 **23/24**。
 - 剩余 1 个 FAIL：getparameter_constprop_0 的 `invalid operands to binary +`（`_struct*` + `int*` 指针相乘）。这是 Action 层类型传播问题（PTRADD 应区分指针+整数 vs 指针+指针），需 ActionSetCasts/ActionInferTypes 修复，非 emit 层。
+
+### 2026-07-04（续 5）：emit 层消除 `->field_N` → 统一 `*(long *)(ptr + offset)`
+- 4 处 `->field_{:x}` 发射全部改为 `*(long *)(ptr + 0xN)` 形式。
+- 消除了 6 个函数的 `invalid type argument of '->'` gcc 错误。
+- noop 模式（post_process 禁用）从 5/24 提升到 6/24。
+- 此改动使 post_process 的 pass 20 (canonicalize_struct_deref) + pass 21 (rewrite_struct_deref) 成为纯粹的 no-op（它们互为反作用，现在 emit 层直接产出最终形式）。
