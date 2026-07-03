@@ -1059,6 +1059,107 @@ impl Funcdata {
         self.sblocks.clear();
     }
 
+    // Ghidra: funcdata_block.cc:688 Funcdata::installSwitchDefaults
+    /// Mark default switch edges for all jump tables. Faithful to
+    /// `Funcdata::installSwitchDefaults` (funcdata_block.cc:688-700).
+    pub fn install_switch_defaults(&mut self) {
+        for jt_arc in &self.jump_tables {
+            let jt = jt_arc.read().unwrap();
+            let default_block = jt.get_default_block();
+            if default_block < 0 {
+                continue;
+            }
+            let indop = jt.get_indirect_op();
+            let Some(indop_arc) = indop else { continue };
+            // indop->getParent() → the switch BlockBasic.
+            let parent = {
+                let op = indop_arc.read().unwrap();
+                op.parent.as_ref().and_then(|w| w.upgrade())
+            };
+            let Some(parent_blk) = parent else { continue };
+            parent_blk.write().unwrap().set_default_switch(default_block as usize);
+        }
+    }
+
+    // Ghidra: funcdata_block.cc:328 Funcdata::removeDoNothingBlock
+    /// Remove a basic block that does nothing (only marker ops + optional
+    /// single branch). Faithful to `Funcdata::removeDoNothingBlock`
+    /// (funcdata_block.cc:328-337).
+    pub fn remove_do_nothing_block(
+        &mut self,
+        bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        if bb.read().unwrap().size_out() > 1 {
+            eprintln!("[BLOCK] Cannot delete block with >1 out edge");
+            return;
+        }
+        bb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+        let ops_to_destroy: Vec<crate::op::PcodeOpRef> = {
+            let rg = bb.read().unwrap();
+            if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                bb2.get_ops()
+            } else {
+                Vec::new()
+            }
+        };
+        for op_ref in &ops_to_destroy {
+            self.op_destroy(op_ref);
+        }
+        self.bblocks.remove_block_arc(bb);
+        self.structure_reset();
+    }
+
+    // Ghidra: funcdata_block.cc:790 Funcdata::nodeJoinCreateBlock
+    /// Create a joined block from two blocks that share exit targets.
+    /// Faithful to `Funcdata::nodeJoinCreateBlock`
+    /// (funcdata_block.cc:790-826).
+    pub fn node_join_create_block(
+        &mut self,
+        block1: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        block2: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        exita: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        exitb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        fora_block1ishigh: bool,
+        forb_block1ishigh: bool,
+        addr: crate::address::Address,
+    ) -> Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> {
+        let newblock = self.create_new_block();
+        newblock.write().unwrap().set_flags(crate::block::block_flags::JOINED_BLOCK);
+        // setInitialRange(addr, addr) — Rugra's create_new_block uses Address(0);
+        // the range is informational only (used for cover/debug), so we skip it.
+
+        // Delete 2 of the original edges into exita and exitb (merge.cc:807-818).
+        let swapa = if fora_block1ishigh {
+            self.bblocks.remove_edge_blocks(block1, exita);
+            block2.clone()
+        } else {
+            self.bblocks.remove_edge_blocks(block2, exita);
+            block1.clone()
+        };
+        let swapb = if forb_block1ishigh {
+            self.bblocks.remove_edge_blocks(block1, exitb);
+            block2.clone()
+        } else {
+            self.bblocks.remove_edge_blocks(block2, exitb);
+            block1.clone()
+        };
+        // Move remaining edges to newblock (merge.cc:820-821).
+        // swapa->getOutIndex(exita) — find exita in swapa's outgoing.
+        let out_idx_a = find_out_index(&swapa, exita);
+        let out_idx_b = find_out_index(&swapb, exitb);
+        if let Some(idx_a) = out_idx_a {
+            self.move_out_edge(&swapa, idx_a, &newblock);
+        }
+        if let Some(idx_b) = out_idx_b {
+            self.move_out_edge(&swapb, idx_b, &newblock);
+        }
+        // Add edges from block1/block2 to newblock.
+        self.bblocks.add_edge(block1.clone(), newblock.clone());
+        self.bblocks.add_edge(block2.clone(), newblock.clone());
+        self.structure_reset();
+        newblock
+    }
+
     /// Synchronize varnodes with the local-variable scope symbols. Faithful to
     /// `Funcdata::syncVarnodesWithSymbols` (funcdata_varnode.cc:938-989).
     ///
@@ -5174,6 +5275,26 @@ mod tests {
         }
     }
 
+}
+
+// RUGRA-GLUE: 在出边列表中查找指向目标块的索引。Ghidra 用 FlowBlock::getOutIndex
+// (block.hh:317)；Rugra 内联为文件级函数（需 downcast 到 BlockBasic/BlockGraph）。
+/// Find the index of the outgoing edge pointing to `target` in `src`.
+/// Returns None if not found.
+fn find_out_index(
+    src: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+) -> Option<usize> {
+    let rg = src.read().unwrap();
+    let n = rg.size_out();
+    for i in 0..n {
+        if let Some(e) = rg.get_out(i) {
+            if Arc::ptr_eq(&e.point, target) {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 

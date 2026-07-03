@@ -66,6 +66,9 @@ pub mod edge_flags {
     /// Irreducible edge introduced by the structurer (Ghidra `f_irreducible`).
     /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
     pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
+    /// Default edge from switch block (Ghidra `f_defaultswitch_edge` = 4).
+    /// Rugra uses bit 7 (Ghidra's bit 2 is F_GOTO_EDGE in Rugra).
+    pub const F_DEFAULTSWITCH_EDGE: u32 = 1 << 7;
     // ---- Spanning-tree edge classification (Ghidra block.hh:108-118) ----
     // Set by findSpanningTree (block.cc:1041-1108). These mirror Ghidra's
     // f_tree_edge / f_forward_edge / f_cross_edge / f_loop_edge.
@@ -155,6 +158,15 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
             for e in bg.outgoing.iter_mut() { e.flags &= !mask; }
         }
+    }
+
+    // Ghidra: block.cc:318 FlowBlock::setDefaultSwitch
+    /// Mark an outgoing edge as the switch default edge.
+    /// Faithful to `FlowBlock::setDefaultSwitch` (block.cc:318-326).
+    /// Clears any previous default marking, then sets the given slot.
+    fn set_default_switch(&mut self, pos: usize) {
+        self.clear_edge_flags(edge_flags::F_DEFAULTSWITCH_EDGE);
+        self.set_out_edge_flag(pos, edge_flags::F_DEFAULTSWITCH_EDGE);
     }
 
     /// Is the `slot`-th outgoing edge a back edge?

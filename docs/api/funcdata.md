@@ -851,3 +851,9 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `op_mark_no_collapse(op)`（funcdata.hh:484）：标记不可折叠。
 - `op_mark_spacebase_ptr(op)`（funcdata.hh:487）/ `op_clear_spacebase_ptr(op)`（funcdata.hh:488）。
 - `mark_indirect_creation(indop, possible_output)`（funcdata.hh:451）：把已存在的 INDIRECT op 标记为 indirect creation。
+
+### 2026-07-04（续 2）：移植 block-graph 重写 API
+- `install_switch_defaults`（funcdata_block.cc:688）：遍历 jump_tables，标记每个 switch 块的默认边。
+- `remove_do_nothing_block(bb)`（funcdata_block.cc:328）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
+- `node_join_create_block(...)`（funcdata_block.cc:790）：创建合并块（newBlockBasic + removeEdge + moveOutEdge + addEdge）。
+- 文件级 helper `find_out_index`（对应 FlowBlock::getOutIndex）。

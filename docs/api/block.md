@@ -915,3 +915,7 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 - Rugra 独有 flags 移到 0x80000+（避免与 Ghidra 未来 flags 冲突）：RETURN_TERMINAL=0x80000, CASE_BODY=0x100000, GOTO_EDGE_0=0x200000, GOTO_EDGE_1=0x400000。
 - 删除死代码 TERMINAL/GOTO_TERMINAL（从未被读取）。
 - 验证：所有 flag 访问通过命名的 `block_flags::*` 常量（无原始十六进制掩码），所以位值变更不影响任何调用点语义。952/952 测试通过，curl 无回归。
+
+### 2026-07-04（续）：移植 block-graph 重写方法
+- `set_default_switch(pos)`（block.cc:318）：标记出边为 switch 默认边（设 F_DEFAULTSWITCH_EDGE）。
+- 新增 `edge_flags::F_DEFAULTSWITCH_EDGE = 1<<7`（Ghidra f_defaultswitch_edge=4，Rugra 用新位避免与 F_GOTO_EDGE 冲突）。
