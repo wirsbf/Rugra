@@ -219,3 +219,10 @@ Emitter that discards all output (used for discovery pass)
 - 全部 27 趟 pass（goto→break/return、goto→loop、变量内联、死代码移除、指针算术修正、struct deref 重写等）违反铁律 5.5（在 print 层做 Action 阶段的事），已移除。
 - 旧代码保留为 `post_process_output_legacy`（标记 `#[allow(dead_code)]`），供参考。
 - **验证**：移除后 curl 仍 24/24 反编译、23/24 gcc 审计——无回归。说明这些 pass 是净负债（处理的瑕疵要么不存在，要么重复）。
+
+### 2026-07-04（续 2）：恢复 post_process_output（emit 层不完整的必要补偿）
+- 之前将 post_process_output 改为空操作（input.to_string()），但**重新生成输出**后发现 gcc 审计从 23/24 降到 5/24——之前的 23/24 基于旧缓存。
+- 恢复 post_process_output 调用 post_process_output_legacy（27 趟文本后处理）。
+- 27 趟 pass 虽然违反铁律 5.5（在 print 层做 Action 的事），但在 Rugra 的 Action/emit 层完整前是必要补偿。
+- **每个 pass 对应一个 Ghidra Action 机制**（见 ALIGNMENT_ROADMAP 的 post_process 缺口表）——待对应 Action 移植后逐个移除。
+- 同时确认：之前的 printc BRANCH 无条件跳过 + None 守卫修复确实生效——`goto ;` 从 1 降到 **0**。

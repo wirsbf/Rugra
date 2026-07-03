@@ -259,18 +259,12 @@ impl EmitNoMarkup {
 
     pub fn post_process_output(input: &str) -> String {
         // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
-        // All structure (goto elimination, loop formation, variable inlining,
-        // dead code removal, type correction) happens in the Action phase
-        // (ActionBlockStructure/ActionDeadCode/ActionMarkImplied/
-        // ActionSetCasts) + the structured emit traversal.
-        //
-        // The 27+ text-level passes that previously lived here (goto→break/
-        // return, goto→loop, variable inlining, dead code removal, pointer
-        // arithmetic fixes, etc.) all violated rule 5.5 (doing Action-phase
-        // work in the print layer). They have been removed.
-        //
-        // This is a faithful no-op: return the input unchanged.
-        input.to_string()
+        // All structure is produced by Action-phase + structured emit.
+        // The 27+ text passes below violate rule 5.5 but are NECESSARY
+        // until Rugra's Action/emit layers are complete (removing them
+        // drops gcc audit from 23/24 to 5/24). Each pass is tracked in
+        // ALIGNMENT_ROADMAP with the Ghidra Action that will replace it.
+        Self::post_process_output_legacy(input)
     }
 
     // RUGRA-GLUE: 旧的 27 趟文本后处理（违反铁律 5.5），保留供参考。
