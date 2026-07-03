@@ -833,16 +833,13 @@ impl ActionDatabase {
         let mut mainloop = ActionGroup::new("mainloop");
 
         // ActionUnreachable (coreaction.cc:5490) — disabled.
-        // Root cause (corrected): NOT BRANCHIND edges (curl has 0 BRANCHIND
-        // ops — confirmed). The real root cause is Rugra's block removal
-        // (remove_block_arc/remove_edge_blocks) does NOT patch up data-flow:
-        // Ghidra's blockRemoveInternal (funcdata_block.cc:255-335) removes
-        // MULTIEQUAL inputs from removed blocks, patches descendant Varnodes,
-        // and handles stranded references. Rugra just removes the CFG edges
-        // and block — leaving dangling phi-nodes and broken data-flow that
-        // corrupts the function body. Fix: port Ghidra's blockRemoveInternal
-        // (including MULTIEQUAL adjustment + descendantsOutside check).
-        // Entry detection is fixed (size_in()==0).
+        // Op-destruction fix applied (dead block ops marked DEAD in obank),
+        // but full blockRemoveInternal still needed: MULTIEQUAL (phi) nodes
+        // in successor blocks reference removed block's varnodes, and those
+        // references become dangling. Ghidra patches this via opRemoveInput
+        // + opZeroMulti on MULTIEQUALs (funcdata_block.cc:278-294). Without
+        // that patching, removing even 1 block corrupts data-flow.
+        // Fix: port full blockRemoveInternal including MULTIEQUAL adjustment.
         // mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));

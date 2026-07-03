@@ -756,3 +756,8 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - **更正**：curl 的 24 个函数中 **0 个 BRANCHIND op**（之前误诊为 BRANCHIND 边缺失）。CFG 边对 BRANCH/CBRANCH 基本完整（仅 3 个目标因地址对齐偏移 3 字节未解析，不影响块可达性）。
 - **真根因**：Rugra 的块移除（remove_block_arc/remove_edge_blocks）**不修补数据流**。Ghidra 的 `blockRemoveInternal`（funcdata_block.cc:255-335）移除 MULTIEQUAL 输入、修补后代 Varnode、处理搁浅引用。Rugra 只删 CFG 边和块 → 留下悬空 phi-node 和断裂数据流 → 函数体损坏。
 - **修复路径**：移植 Ghidra `blockRemoveInternal`（含 MULTIEQUAL 调整 + descendantsOutside 检查）。
+
+### ActionUnreachable op-destruction + 仍禁用（2026-07-03 续 4）
+- remove_unreachable_blocks 新增 op 销毁（mark_dead）——正确的前提，但不够。
+- 仍需 MULTIEQUAL phi 修补（funcdata_block.cc:278-294 的 opRemoveInput+opZeroMulti）。
+- ActionUnreachable 保持禁用，注释更新。

@@ -807,3 +807,8 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 加了保守门禁：unreachable >= 5 且 > 5% 时跳过移除（防 CFG 不完整时误删可达块）。
 - 诊断：即使只移除 1 个"不可达"块（myprogress: 13 块中 1 块），也破坏了函数体 → block 移除逻辑（branchRemoveInternal/blockRemoveInternal）或 structure_reset 有 bug。
 - ActionUnreachable 保持禁用，注释说明：CFG 边不完整 + 块移除逻辑需验证。
+
+### remove_unreachable_blocks op-destruction（2026-07-03 续 3）
+- 新增 Phase 2：销毁死块的所有 op（mark_dead），从 obank.alivelist 移除。这是正确移除块的前提（之前 op 留在 alivelist → printc 打印已删块的内容 → 损坏输出）。
+- 但 ActionUnreachable 仍禁用：还需要 MULTIEQUAL (phi) 修补（Ghidra blockRemoveInternal :278-294 的 opRemoveInput+opZeroMulti），否则后继块的 phi-node 引用被删块 varnode 变悬空。
+- curl gcc 24/24（保持），956/956 测试。

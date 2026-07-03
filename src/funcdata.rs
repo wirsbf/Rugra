@@ -1230,14 +1230,38 @@ impl Funcdata {
             return false;
         }
         // Mark dead, remove their out-edges, then remove from the graph.
+        // Faithful to Ghidra removeUnreachableBlocks (funcdata_block.cc:370-391):
+        // for each unreachable block: setDead, branchRemoveInternal all out-edges,
+        // then blockRemoveInternal (which destroys ops + removes from graph).
+        // For unreachable=true, Ghidra calls descend2Undef on output varnodes
+        // (funcdata_block.cc:305-306) and checks descendantsOutside (312).
+        // Rugra's simplified version: mark block's ops as dead (so they don't
+        // appear in alivelist for printc), remove all edges, remove block.
         let dead_arcs: Vec<_> = unreachable.iter()
             .filter_map(|&i| self.bblocks.get_block(i))
             .collect();
+        // Phase 1: mark blocks DEAD.
         for arc in &dead_arcs {
             arc.write().unwrap().set_flags(crate::block::block_flags::DEAD);
         }
+        // Phase 2: destroy ops in each dead block (so they're removed from
+        // obank.alivelist and don't get printed). This is the key fix —
+        // previously ops survived block removal and corrupted printc output.
         for arc in &dead_arcs {
-            // Detach all out-edges so block removal is clean.
+            let ops_to_destroy: Vec<crate::op::PcodeOpRef> = {
+                let block = arc.read().unwrap();
+                if let Some(bb) = block.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    bb.ops.iter().map(|o| o.0.clone()).map(crate::op::PcodeOpRef).collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            for op_ref in ops_to_destroy {
+                self.obank.mark_dead(op_ref);
+            }
+        }
+        // Phase 3: detach all out-edges (branchRemoveInternal equivalent).
+        for arc in &dead_arcs {
             while arc.read().unwrap().size_out() > 0 {
                 let dst = arc.read().unwrap().get_out(0).map(|e| e.point);
                 if let Some(dst) = dst {
@@ -1247,6 +1271,7 @@ impl Funcdata {
                 }
             }
         }
+        // Phase 4: remove blocks from graph (blockRemoveInternal equivalent).
         for arc in &dead_arcs {
             self.bblocks.remove_block_arc(arc);
         }
