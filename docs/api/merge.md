@@ -167,3 +167,6 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 
 ### 2026-07-03（续）：命名对齐 Ghidra（camelCase→snake_case）
 - `copy_marker` → `mark_internal_copies`（对齐 `Merge::markInternalCopies` merge.hh:1444）。
+
+### 2026-07-03（续 2）：修正 Ghidra 引用行号
+- `mark_internal_copies` 的 `// Ghidra:` 注释行号从 merge.hh:1444（实为 merge.cc 行号）修正为 merge.hh:134（声明所在）。

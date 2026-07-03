@@ -1219,7 +1219,7 @@ impl Merge {
         }
     }
 
-    // Ghidra: merge.hh:1444 Merge::markInternalCopies
+    // Ghidra: merge.hh:134 Merge::markInternalCopies
     /// Step 12: ActionCopyMarker (coreaction.hh:1019).
     /// Faithful to `Merge::markInternalCopies` (merge.cc:1444-1542).
     ///

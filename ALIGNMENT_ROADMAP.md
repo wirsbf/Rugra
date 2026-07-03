@@ -93,7 +93,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 |---|---|---|---|---|---|
 | 11 | `action.cc` | `action.rs` | ✅ L3 | Action/ActionGroup/ActionDatabase 框架对齐 | `action.cc` |
 | 12 | `heritage.cc` | `heritage.rs` (620行) | ✅ **L3（2026-06-28 完整对齐）** | Heritage 覆盖核心 SSA 方法：LocationMap/SizePass + PriorityQueue（depth-based）+ HeritageInfo + LoadGuard + StackNode + heritage/place_multiequals/place_multiequals_direct/insert_multiequal/insert_multiequal_direct/rename/rename_direct/visit_rename/visit_rename_direct/visit_rename_impl + num_heritage_passes（cc:2793）/dead_removal_allowed（cc:2843）/set/get_dead_code_delay（cc:2829/2817）/seen_dead_code（cc:2805）+ heritage_flags。3 单元测试 | `heritage.cc` |
-| 13 | `merge.cc` | `merge.rs` | 🔧 L2 | Cover-based merge 已实现；缺少与 varmap 集成的完整 HighVariable 合并 | `merge.cc` |
+| 13 | `merge.cc` | `merge.rs` | 🔧 L2 | Cover-based merge 已实现；缺少与 varmap 集成的完整 HighVariable 合并。**2026-07-03 命名审计**：3 个方法无法 1:1 对齐 Ghidra（见下方「merge 命名对齐缺口」） | `merge.cc` |
 | 14 | `variable.cc` | `variable.rs` (175行) | ✅ **L3（2026-06-28 完整对齐）** | HighVariable 覆盖全部 Ghidra 方法：new/get/set name+type/add_instance/num_instances/get_instance + is_name_locked/is_type_locked/is_persist/is_addr_tied/is_constant/has_name（cc:718）/remove_instance（cc:515）/instance_index（cc:808）/merge_internal（cc:626）/get_type_representative（cc:377）/get_name_representative（cc:492）/strip_type（cc:302）+ high_flags（NAMELOCK/TYPELOCK/PERSIST/ADDRTIED/CONSTANT/EXTRA_FLAGS）。4 单元测试 | `variable.cc` |
 | 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | **RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐**；已接入 printc；**Stack-spacebase 解析**已实现（gather_spacebase 递归解析 RSP/frame_base 链）。**2026-06-29 重大进展**：ActionSpacebase 接入主管线（coreaction.cc:5506），标记 RSP 输入为 SPACEBASE → varmap/printc 正确识别栈指针 → **curl uVar 碎片 149→0**。**剩余**：alias_block_level、LoadGuard addGuard；部分 LOAD/STORE 为 RIP-relative 全局（非栈）仍需类型传播配合 | `varmap.cc` |
 | 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
@@ -308,6 +308,18 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 - Pass 20 和 21 **互为反作用**（20 引入 `->field_N`，21 又改回 `*(long *)(p+N)`）。两者同时存在，净效果是双重文本变换什么都没做。这是铁律 5.5 违规的教科书案例。
 - **goto/loop/label/死代码 pass（C 组前半）占大多数**，全部依赖 `ActionBlockStructure` 的结构恢复 + `ActionDeadCode`。这是 Rugra 当前最薄弱的子系统。
 - **对齐策略**：不能一次性移除（会破坏输出）。必须**自底向上**——先补齐对应 Action（让 P-code/CFG 层正确），再移除补偿 pass。每移除一个 pass 前先验证其对应的 Ghidra 机制已移植。
+
+### merge 命名对齐缺口（2026-07-03 深度分析）— `merge.rs`
+
+> 经逐行对比 Ghidra `merge.cc` + `coreaction.hh` 的 Merge 方法/Action 调用链，确认 3 个 Rugra 方法**无法 1:1 对齐** Ghidra 方法名，原因都是**语义/架构偏离**（非单纯命名问题）。
+
+| Rugra 方法 | 应对应的 Ghidra | 无法对齐的根因 |
+|---|---|---|
+| `Merge::merge_copy` (merge.rs:808) | `Merge::mergeOpcode(OpCode opc)` (merge.cc:326) | **签名+语义偏离**：Ghidra `mergeOpcode` 接受通用 `OpCode opc` 参数，遍历 bblocks→ops 用 `mergeTestRequired`+非投机`merge`；Rugra `merge_copy` 硬编码 CPUI_COPY，用 `merge_speculative`（投机）。且 `ActionMergeCopy::apply` **内联了逻辑**不调用它（Ghidra 是 `data.getMerge().mergeOpcode(CPUI_COPY)` 委托）。改名需先把签名改成 `merge_opcode(opc)` + 修正 Action 委托。 |
+| `Merge::dominant_copy` (merge.rs:920) | `Merge::processCopyTrims()` (merge.cc:1415) | **基础设施缺失**：Ghidra `processCopyTrims` 遍历 `copyTrims` 列表（由 trim/snip 机制填充），空列表时是 no-op。Rugra **无 trim/snip 机制**（merge.rs:908 自承），`copyTrims` 永远空，所以做了自创的 cover-extent dominant 合并替代。注释自承"pragmatic implementation"。要真正对齐需先补齐 trim 机制（`snipReads`/`eliminateIntersect`，merge.cc:443/489）。 |
+| `Merge::merge_by_cover` (merge.rs:1373) | **无 Ghidra 对应** | **Rugra 自创 pass**：多趟迭代 cover-guarded COPY 合并。Ghidra 的 merge 流程是 `mergeOpcode(CPUI_COPY)` 一次完成（required merge），不需要迭代。这个方法是 Rugra 因 dominant_copy/merge_copy 用投机合并（可能首次拒绝）而加的补偿。无 Ghidra 对应可对齐。 |
+
+**结论**：这 3 个方法的对齐需要**架构级修复**（补 trim 机制 + 改 Action 委托模型 + 移除自创 pass），不是命名改动能解决的。记录为 merge.rs L2 的已知缺口。
 
 ---
 
