@@ -1554,6 +1554,16 @@ impl PrintC {
         }
         let _ = fd;
 
+        // Declare stack_struct names (struct1, struct2, ...) that were detected
+        // during doc_function but may not have been registered in
+        // used_varnode_names. These are used as `*(long *)(structN + off)`
+        // and must be declared as `long`.
+        for ss in &self.stack_structs {
+            if !declared.contains_key(&ss.name) {
+                declared.insert(ss.name.clone(), "long".to_string());
+            }
+        }
+
         if !declared.is_empty() {
             for (name, type_name) in &declared {
                 self.emit.tag_line(0);

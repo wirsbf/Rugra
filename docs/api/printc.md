@@ -692,3 +692,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - 消除了 6 个函数的 `invalid type argument of '->'` gcc 错误。
 - noop 模式（post_process 禁用）从 5/24 提升到 6/24。
 - 此改动使 post_process 的 pass 20 (canonicalize_struct_deref) + pass 21 (rewrite_struct_deref) 成为纯粹的 no-op（它们互为反作用，现在 emit 层直接产出最终形式）。
+
+### 2026-07-04（续 7）：emit 层声明 stack_structs 变量
+- `doc_variable_decls_from_funcdata` 现在遍历 `stack_structs` 并声明每个 structN 为 `long structN;`。
+- 消除了 `struct7 undeclared` 等 3 个函数的 gcc 错误（noop 模式下）。
+- 此前 structN 名通过 stack_structs 检测产生，但未注册到 used_varnode_names，导致声明阶段遗漏。
