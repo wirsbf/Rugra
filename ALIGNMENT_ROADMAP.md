@@ -252,10 +252,62 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 |---|---|---|---|---|---|
 | 33 | `printc.cc` (~2500行) | `printc.rs` (4500行) | ✅ **L3（2026-06-28 完整对齐）** | PrintC 覆盖全部 Ghidra PrintC 方法：doc_function/doc_all_proto/doc_variable_decl/doc_variable_decls_from_funcdata + emit_block_structured/emit_block_ops + op emission（push_input/push_output/emit_inline_expr/emit_block_condition）+ varnode display name + type prefix + var_type_if_meaningful（LOAD 检测）+ mark_varnode_used + pointer_type_for + copy_map + get_stack_variable_name + try_fold_bool_comparison + is_stack_frame_setup + get_rip_relative_operand + emit_goto_target + extern 声明 + typedef。curl 24/24 + httpd 29/29 gcc 审计通过。5 单元测试 | `printc.cc` |
 | 34 | `printlanguage.cc` | `printlanguage.rs` (120行) | ✅ **L3（2026-06-28 完整对齐）** | PrintLanguage trait 覆盖全部 Ghidra PrintLanguage 虚方法（doc_function/doc_all_proto/doc_variable_decl/doc_statement/op_copy/load/store/binary/unary/multiequal/indirect/call/return/cbranch/branch/push_type/push_varnode + reset_defaults/clear/set_packed_output/set_flat/pop_scope/emit_line_comment）+ escape_character_data（cc:498）+ PrintLanguageCapability。2 单元测试 | `printlanguage.cc` |
-| 35 | `prettyprint.cc` | `prettyprint.rs` (3020行) | ✅ **L3（2026-06-28 完整对齐）** | Emit trait 覆盖全部 Ghidra Emit 虚方法（print/begin_block/end_block/open_paren/close_paren/begin_function/end_function/tag_type/tag_variable/tag_op/tag_field/tag_func_name/tag_comment/tag_label/tag_case_label/tag_line + begin/end Document/ReturnType/VarDecl/Statement/FuncProto）。EmitNoMarkup（完整 C 文本生成 + post_process 15 趟 + reconcile 函数）+ NullEmit + CaseDetectEmit + replace_word/count_word_occurrences 辅助。760 测试通过 | `prettyprint.cc` |
+| 35 | `prettyprint.cc` | `prettyprint.rs` (3020行) | 🔧 **L2（2026-07-03 降级，原误标 L3）** | **Emit trait 层已对齐**（print/begin_block/end_block/open_paren/close_paren/tag_* + begin/end Document/ReturnType/VarDecl/Statement/FuncProto，覆盖 Ghidra Emit 虚方法）。**但 `EmitNoMarkup::post_process_output` 含 27+ 趟文本级后处理，全部违反铁律 5.5（在 print 层做 Action 阶段的事）**。Ghidra 的 `prettyprint.cc` / `EmitMarkup` **零后处理**——所有结构化（goto 消除/loop 形成/变量内联/死代码移除/类型修正）在 Action 阶段（ActionBlockStructure/ActionDeadCode/ActionMarkImplied/ActionSetCasts）+ emit 阶段的正确结构化遍历完成。详见下方「post_process 对齐缺口」表。**这是项目最大对齐缺口之一**（原 2026-06-28 标注「post_process 15 趟 L3 完整对齐」严重失实，实际 27+ 趟且全违规） | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` (650行) | ✅ **L3（2026-06-28 完整对齐）** | **全部 FuncProto/FuncCallSpecs/ParamTrial/ParamActive 方法覆盖**：FuncProto（new/add_parameter/num_params/get_param/is_input_locked/set_input_lock/set_output_lock/copy_from/clear_unlocked_input/is_varargs/set_dotdotdot/get/set_model_name，对齐 fspec.cc:3572-3994）+ FuncCallSpecs（init_active_input/output/derive_input/output_map/build_input_from_trials/check_input_trial_use 等）+ ParamTrial（flags/split_hi/lo）+ ParamActive（register_trial/which_trial/split_trial/get_num_used）。ProtoModel 在 type_system/protomodel.rs。7 单元测试 | `fspec.cc` |
 | 37 | `options.cc` | `options.rs` | ✅ L3 | **完整实现**：ArchOption trait + OptionDatabase 分发器 + 37 个注册选项（9 个完全功能化）+ XML decode（decode_one/decode）。所有 L3 缺口已关闭 | `options.cc` |
 | 38 | `comment.cc` | `comment.rs` | ✅ L3 | **完整实现**：Comment + comment_type + CommentDatabaseInternal（add/clear/query/encode/decode）+ CommentSorter（find_position 完整基本块关联 via Funcdata op 遍历 + setup_function_list/setup_block_list/setup_op_list）。所有 L3 缺口已关闭 | `comment.cc` |
+
+### post_process 对齐缺口（2026-07-03 核实）— `prettyprint.rs::post_process_output`
+
+> **铁律 5.5 违反清单**：`EmitNoMarkup::post_process_output`（260-1714 行）含 27+ 趟文本级后处理。
+> Ghidra 的 `EmitMarkup`（prettyprint.cc）**零后处理**——所有语义在 Action 阶段 + emit 阶段正确遍历完成。
+> 逐 pass 按"对应的 Ghidra 正确机制"分组，按对齐难度排序。
+
+**A. 简单（纯 Rugra-Emit 输出瑕疵；Ghidra Emit 层从不产生，对齐 = 直接移除该 pass）**
+
+| Pass | 行 | 功能 | 移除条件 |
+|---|---|---|---|
+| 3 | 382 | 折叠连续空行 | Emit 层不该产生连续空行 |
+| 8 | 749 | 声明块内删空行 | Emit 层单遍发声明 |
+| 12 | 975 | `} else {` 后删空行 | Emit 层括号后无换行 |
+| 15 | 1029 | `func());`→`func();` 双括号修 | printc emitFuncCall 括号配对 bug，应在 emit 修 |
+| 19 | 1425 | 删多余 `}` | Rugra Emit 遍历括号不平衡（纯 Emit bug） |
+
+**B. 中等（局部类型/格式问题，需轻量分析但非完整 Action）**
+
+| Pass | 行 | 功能 | Ghidra 机制 |
+|---|---|---|---|
+| 7 | 640 | `*&x`→x / int-ptr 强转 / 常量折叠 / hex→char | ActionSetCasts + RuleCollapseConstants + printc char 格式化 |
+| 13 | 988 | `return func();`→`func(); return;`（void func） | FuncProto 返回类型（ActionActiveParam）+ printc emitReturn |
+| 26 | 1703 | 删非法左值赋值行 | printc STORE 地址必须合法左值（类型化后自然解决） |
+
+**C. 困难（直接补偿缺失的 Ghidra Action 子系统 — 核心违规）**
+
+| Pass | 行 | 功能 | 缺失的 Ghidra 机制 |
+|---|---|---|---|
+| 1 | 265 | goto→break/return、删冗余 goto | ActionBlockStructure(selectGoto/collapseInternal) + printc emitGotoStatement |
+| 2,5 | 362,533 | 删未引用标签 | 同上（结构化后无裸标签） |
+| 4 | 397 | 回边 goto→while/do-while | ActionBlockStructure 循环恢复(RuleWhileDo/RuleDoWhile) + printc emitWhileLoop |
+| 6 | 548 | 单用变量内联 | ActionMarkImplied + ActionCopyPropagate + ActionDeadCode |
+| 9 | 790 | if(1)→body / 恒真折叠 / 尾调用 | ActionDeadCode + RuleBoolNegate/RuleCondOr + 尾调用识别 |
+| 10,14 | 874,1011 | 删 return/break/goto 后死代码 | ActionDeadCode（P-code 级完全移除） |
+| 11 | 942 | 删未用变量声明 | ActionDeadCode + Varnode::isPrinted |
+| 16 | 1036 | 前向 goto→if 折叠 | ActionBlockStructure selectGoto + collapseInternal |
+| 17 | 1210 | 删孤立 break/continue / 多余 `}` | ActionBlockStructure 循环/switch 归属 |
+| 18 | 1351 | 删函数体首行 return | ActionDeadCode + 入口块正确性 |
+| while-break | 1506 | `while{...break}`→`if` | ActionBlockStructure 不把单次循环结构化成 while |
+| empty-switch | 1619 | 删空 case | ActionBlockStructure switch 结构化 |
+| 20,21 | 1658,1663 | `*(p+N)`↔`p->field_N`（**互为反作用**！） | ActionInferTypes + ActionSetCasts（类型系统解析结构体指针） |
+| 22 | 1678 | `*X` 解引用变量改声明为指针 | ActionInferTypes（STORE 地址类型化） |
+| 23 | 1685 | 补缺失 local 声明 | ActionHighSymbol 符号具体化 |
+| 24 | 1690 | 删循环外 break/continue | ActionBlockStructure 结构遍历固有属性 |
+| 25 | 1695 | 指针算术强转 | ActionInferTypes + ActionSetCasts |
+| 27 | 1705 | 删 switch 外 case 标签 | ActionBlockStructure 结构遍历固有属性 |
+
+**最关键观察**：
+- Pass 20 和 21 **互为反作用**（20 引入 `->field_N`，21 又改回 `*(long *)(p+N)`）。两者同时存在，净效果是双重文本变换什么都没做。这是铁律 5.5 违规的教科书案例。
+- **goto/loop/label/死代码 pass（C 组前半）占大多数**，全部依赖 `ActionBlockStructure` 的结构恢复 + `ActionDeadCode`。这是 Rugra 当前最薄弱的子系统。
+- **对齐策略**：不能一次性移除（会破坏输出）。必须**自底向上**——先补齐对应 Action（让 P-code/CFG 层正确），再移除补偿 pass。每移除一个 pass 前先验证其对应的 Ghidra 机制已移植。
 
 ---
 
