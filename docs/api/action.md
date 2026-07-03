@@ -727,3 +727,9 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 
 ### ActionAssignHigh 注册澄清（2026-07-03 续）
 - set_default_actions 里移除了重复的 ActionAssignHigh 注册——它已在 build_full_pipeline_actions（coreaction.rs:7084）注册，RULE_ONCEPERFUNC 保证幂等，无需在 universal 层重复。
+
+### ActionOutputPrototype + ActionInputPrototype 接入主管线（2026-07-03 续）
+- 两个 Action 之前已实现（coreaction.rs:4180/4254）但未在 set_default_actions 注册。
+- 按 Ghidra 顺序（coreaction.cc:5730-5731）在 MarkImplied 后、SetCasts 前注册。
+  - ActionOutputPrototype：从 RETURN ops 推导返回类型（已由 ActionReturnRecovery 挂载返回值）。
+  - ActionInputPrototype：从 input varnodes 推导参数个数/类型（已由 ActionInferParams 做初步检测）。

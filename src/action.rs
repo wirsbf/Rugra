@@ -881,6 +881,12 @@ impl ActionDatabase {
         universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
+        // ActionOutputPrototype + ActionInputPrototype (coreaction.cc:5730-5731)
+        // — finalize the function prototype from RETURN ops (return type) and
+        // input varnodes (param count/types). Run after merge + MarkExplicit/
+        // Implied, before SetCasts (5735) and FinalStructure (5736).
+        universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new()));
+        universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new()));
         // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
         // printer emits explicit C type casts. Runs after ActionInferTypes
         // (mainloop) and ActionMarkExplicit/Implied so input/output types are
