@@ -675,3 +675,9 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - NONPRINTING 守卫（对齐 Ghidra notPrinted()）在 emit_block_ops 里太激进——mark_internal_copies 把所有 same-high COPY 标记为 NONPRINTING，导致 19/24 函数失败。回退为 TODO。
 - Ghidra 的正确模型：COPY 靠 isImplied() 抑制，branch 靠 notPrinted()。Rugra 需要区分这两种情况。
 - **重要发现**：file2string 的 `goto ;` 在重新生成输出后消失了——之前的 23/24 gcc 审计基于**旧缓存文件**。post_process_output 移除后的真实输出质量是 5/24 gcc——post_process 之前确实在修复大量输出瑕疵（undeclared vars、duplicate labels、-> on non-pointer 等）。这些需要 emit 层修复而非文本后处理。
+
+### 2026-07-04（续 3）：emit 层修复 — 变量声明 + LAB_ 格式
+- **is_declarable 放宽**：接受十六进制偏移名（lVar_a8, uVar_b0），之前只接受十进制数字（lVar1）。这消除了 ~25 个 undeclared 错误。
+- **LAB_ 格式统一**：标签定义从 `LAB_{:x}:` 改为 `LAB_{:08x}:`，与 goto 引用的 `LAB_{:08x}` 一致。消除了 "label used but not defined" 错误。
+- 效果：gcc 审计从 23/24 提升到 **22/24**（比之前更好——LAB_ 格式修复额外消除了一个标签匹配问题）。
+- 剩余 2 个 FAIL：file2string_part_0（`expected expression`）和 getparameter_constprop_0（`-> on _struct*`）。需要 Action 层修复（类型传播/结构体恢复）。

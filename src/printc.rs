@@ -580,7 +580,7 @@ impl PrintC {
                 let addr = first_op.0.read().unwrap().start.addr.as_u64();
                 if self.goto_targets.contains(&addr) {
                     self.emit.tag_line(0);
-                    self.emit.print(&format!("LAB_{:x}:", addr));
+                    self.emit.print(&format!("LAB_{:08x}:", addr));
                 }
             }
         }
@@ -1432,7 +1432,10 @@ impl PrintC {
                 ];
                 let is_auto_local = DECL_PREFIXES.iter().any(|p| {
                     if let Some(rest) = name.strip_prefix(p) {
-                        rest.starts_with(|c: char| c.is_ascii_digit() || c == '_')
+                        // Accept hex offset names (lVar_a8, uVar_b0) as well as
+                        // decimal renumbered names (lVar1, iVar2). The display
+                        // name generator uses {:x} for offsets (printc.rs:1652).
+                        rest.starts_with(|c: char| c.is_ascii_hexdigit() || c == '_')
                     } else {
                         false
                     }
