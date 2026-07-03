@@ -5871,38 +5871,14 @@ impl Action for ActionAssignHigh {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Funcdata::setHighLevel (funcdata_varnode.cc:595):
         // assign a fresh HighVariable to each Varnode that does not already
-        // have one. We model `highlevel_on` by checking that every varnode
-        // already carries a `high`; idempotent on re-run.
-        use crate::type_system::datatype::{Datatype, TypeBase};
-        use crate::type_system::TypeMetatype;
-        use crate::variable::HighVariable;
-        use std::sync::{Arc, RwLock};
-
-        let mut changed = 0;
-        for vn_ref in &fd.vbank.loc_tree {
-            let needs_high = vn_ref.0.read().unwrap().high.is_none();
-            if !needs_high {
-                continue;
-            }
-            let vn = vn_ref.0.read().unwrap();
-            let dt = vn.v_type.clone().unwrap_or_else(|| {
-                Arc::new(Datatype::Base(TypeBase::new(
-                    "undefined".to_string(),
-                    vn.size,
-                    TypeMetatype::Unknown,
-                )))
-            });
-            drop(vn);
-
-            let high = Arc::new(RwLock::new(HighVariable::new(dt)));
-            high.write().unwrap().add_instance(vn_ref.0.clone());
-            vn_ref.0.write().unwrap().high = Some(high);
-            changed += 1;
-        }
-        if changed > 0 {
-            Ok(action_status::CHANGE)
-        } else {
+        // have one. Delegates to Funcdata::set_high_level which sets the
+        // HIGHLEVEL_ON flag (Ghidra highlevel_on) for idempotency.
+        let was_on = (fd.flags & crate::funcdata::funcdata_flags::HIGHLEVEL_ON) != 0;
+        fd.set_high_level();
+        if was_on {
             Ok(action_status::NO_CHANGE)
+        } else {
+            Ok(action_status::CHANGE)
         }
     }
 

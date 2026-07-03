@@ -793,3 +793,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 
 ### 2026-07-01（续 4）：create_new_block
 create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.cc newBlockBasic）。
+
+### set_high_level + HIGHLEVEL_ON（2026-07-03 续）
+- 新增 `Funcdata::set_high_level`（对齐 Ghidra `setHighLevel` funcdata_varnode.cc:595）：设 `HIGHLEVEL_ON` 标志（对齐 `highlevel_on` funcdata.hh:84）+ 遍历 loc_tree 给每个无 high 的 Varnode 分配 HighVariable。幂等。
+- 新增 `funcdata_flags::HIGHLEVEL_ON`。

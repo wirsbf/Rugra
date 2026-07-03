@@ -875,7 +875,9 @@ impl ActionDatabase {
         // Cleanup pool (coreaction.cc:5694, repeatapply)
         universal.add_action(Box::new(build_cleanup_pool()));
         // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
-        // Merge::merge_all (see ActionMergeType).
+        // Merge::merge_all (see ActionMergeType). ActionAssignHigh (:5717) is
+        // already registered in build_full_pipeline_actions (line ~7084), runs
+        // before the merge actions, assigning HighVariables to all Varnodes.
         universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
         universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));

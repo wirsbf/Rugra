@@ -724,3 +724,6 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - `set_default_actions` 里 ActionSetCasts 之前被注释掉（注释说"需要 ActionInferTypes 先跑"）。ActionInferTypes 已在 mainloop（line 864）跑，所以条件满足。
 - 按 Ghidra 顺序（coreaction.cc:5735：MarkImplied → NameVars → SetCasts → FinalStructure）在 ActionMarkImplied 后、ActionNormalizeBranches 前启用。
 - 当前 castInput 只覆盖 integer binary/unary 路径（PTRADD/PTRSUB/resolveUnion/castOutput 待补），所以对当前输出影响小（类型系统还太松，cast 机会少），但这是把 SetCasts 接入主管线的正确步骤，后续补全 castInput 范围后会逐步产生 cast。
+
+### ActionAssignHigh 注册澄清（2026-07-03 续）
+- set_default_actions 里移除了重复的 ActionAssignHigh 注册——它已在 build_full_pipeline_actions（coreaction.rs:7084）注册，RULE_ONCEPERFUNC 保证幂等，无需在 universal 层重复。

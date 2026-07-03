@@ -19,6 +19,10 @@ pub mod funcdata_flags {
     /// funcdata.hh:90). Set once ActionInferTypes begins, used by Rules to
     /// decide whether type-based guards apply.
     pub const TYPE_RECOVERY_START: u32 = 1 << 1;
+    /// HighVariable objects have been assigned to all Varnodes (Ghidra
+    /// `highlevel_on`, funcdata.hh:84 = 0x200). Set by ActionAssignHigh /
+    /// setHighLevel. Prevents re-assignment on subsequent passes.
+    pub const HIGHLEVEL_ON: u32 = 1 << 2;
     /// Double-precision recovery is active (Ghidra `double_precis_on`,
     /// funcdata.hh:85 = 0x2000).
     pub const DOUBLE_PRECIS_ON: u32 = 1 << 13;
@@ -368,6 +372,40 @@ impl Funcdata {
 
         self.vbank = vbank;
         self.obank = obank;
+    }
+
+    /// Assign a HighVariable to every Varnode that lacks one. Faithful to
+    /// `Funcdata::setHighLevel` (funcdata_varnode.cc:595-605) + the
+    /// `assignHigh` per-Varnode call (funcdata_varnode.cc:48-59). Sets the
+    /// `HIGHLEVEL_ON` flag (Ghidra `highlevel_on`) to make this idempotent.
+    /// Called by ActionAssignHigh (coreaction.hh:339-347) which runs BEFORE
+    /// the merge stage, so ActionMarkExplicit/Implied see HighVariables.
+    // Ghidra: funcdata_varnode.cc:595 Funcdata::setHighLevel
+    pub fn set_high_level(&mut self) {
+        use crate::variable::HighVariable;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        if (self.flags & funcdata_flags::HIGHLEVEL_ON) != 0 { return; }
+        self.flags |= funcdata_flags::HIGHLEVEL_ON;
+
+        let vn_arcs: Vec<Arc<RwLock<crate::varnode::Varnode>>> = self.vbank.loc_tree
+            .iter()
+            .filter(|r| r.0.read().unwrap().high.is_none())
+            .map(|r| r.0.clone())
+            .collect();
+
+        for vn_arc in vn_arcs {
+            let dt = {
+                let vn = vn_arc.read().unwrap();
+                vn.v_type.clone().unwrap_or_else(|| {
+                    Arc::new(Datatype::Base(TypeBase::new(
+                        "undefined".to_string(), vn.size, TypeMetatype::Unknown,
+                    )))
+                })
+            };
+            let high = Arc::new(RwLock::new(HighVariable::new(dt)));
+            high.write().unwrap().add_instance(vn_arc.clone());
+            vn_arc.write().unwrap().high = Some(high);
+        }
     }
 
     /// Get function name
