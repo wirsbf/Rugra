@@ -859,3 +859,6 @@ PcodeOpRaw
 ### 2026-07-01（续 2）：op_addl_flags mod + 访问器
 - `op_addl_flags` mod（op.hh:108-120）：SPECIAL_PRINT/MODIFIED/WARNING/INCIDENTAL_COPY/IS_CPOOL_TRANSFORMED/STOP_TYPE_PROPAGATION/HOLD_OUTPUT/CONCAT_ROOT/NO_INDIRECT_COLLAPSE/STORE_UNMAPPED。
 - `does_special_printing()`（op.hh:208）、`clear_stop_type_propagation()`/`stops_type_propagation()`（op.hh:217）、`no_indirect_collapse()`/`set_no_indirect_collapse()`（op.hh:223-224）。
+
+### 2026-07-04：新增 PcodeOp::slot_of_input
+- `slot_of_input(vn)`（对齐 op.hh:166 PcodeOp::getSlot）：线性搜索 inrefs 返回 vn 的槽位。供 snip_reads 使用。

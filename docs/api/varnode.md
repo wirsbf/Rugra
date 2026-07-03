@@ -711,3 +711,8 @@
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - `contains_storage` → `contains`（对齐 `Varnode::contains` varnode.hh:226，返回 int4/i32 含5种关系码）。
 - 删除 `is_persist_global`：是 `is_persist`（:579）的死重复副本（两者都读 PERSIST flag）。Ghidra 只有一个 `isPersist`。
+
+### 2026-07-04：新增 copy_shadow / partial_copy_shadow
+- `copy_shadow(op2)`（对齐 varnode.cc:977）：双向追踪 COPY 链判断是否同源。供 eliminate_intersect 使用。
+- `partial_copy_shadow(whole, rel_off)`（对齐 varnode.cc:1102）：**保守 stub**（返回 false）。完整 SUBPIECE 影子分析（findSubpieceShadow）待移植。
+- 文件级 helper `collect_copy_sources`：沿 COPY 链收集源 Arc，支持 copy_shadow 的双向比较。

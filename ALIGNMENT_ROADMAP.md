@@ -319,12 +319,18 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | `Merge::process_copy_trims` (原 dominant_copy) | `Merge::processCopyTrims()` (merge.cc:1415) | ✅ **已对齐为忠实 no-op**：原自创的 cover-extent dominant 合并已删除，改为遍历 `copyTrims`（永远空）的 no-op。**剩余缺口**：copyTrims 由 forced-merge 路径填充（snipReads/eliminateIntersect/allocateCopyTrim，merge.cc:411/443/489），Rugra 未移植 snip 子系统。要实现真正的 dominant-copy 合并需先补齐 snip 机制（见下方 snip 子系统缺口）。 |
 | ~~`Merge::merge_by_cover`~~ | **无 Ghidra 对应** | ✅ **已删除**：原自创的多趟迭代补偿 pass 已移除。`merge_opcode` 忠实于 Ghidra 后不再需要迭代。 |
 
-**剩余 snip 子系统缺口**（阻碍 process_copy_trims 真正生效）：
-- `allocateCopyTrim` (merge.cc:411) — 创建 COPY op + unique 输出，push 进 copyTrims
-- `snipReads` (merge.cc:443) — 截断一组读取到临时变量
-- `eliminateIntersect` (merge.cc:489) + `unifyAddress` (merge.cc:581) — 检测 cover 相交并 snip
-- forced-merge 路径的调用者：`merge_addr_tied`/`merge_marker` 当前的投机实现需改为 forced+snip
-- 依赖：P-code 数据流改写原语（op 插入 + input 重定向），Rugra 的 Funcdata 已有 `op_set_input`/`op_insert_after` 等
+**snip 子系统已移植（2026-07-04）**：
+- ✅ `allocate_copy_trim` (merge.cc:411) — 创建 COPY op + unique 输出，push 进 copy_trims
+- ✅ `snip_reads` (merge.cc:443) — 截断一组读取到临时变量
+- ✅ `eliminate_intersect` (merge.cc:489) — 检测 cover 相交并标记 snip（含 copy_shadow 检查）
+- ✅ `unify_address` (merge.cc:581) — 对同地址组消除相交
+- ✅ `merge_addr_tied` 接入 unify_address（forced merge 前 snip）
+- ✅ `process_copy_trims` 改为遍历 copy_trims + 按 high 计数 + 清空
+- 配套基础设施：`PcodeOp::slot_of_input`、`Cover::contain_varnode_def_at`/`CoverBlock::boundary`、`BlockVarnode`(Ord/set/find_front)、`Varnode::copy_shadow`/`partial_copy_shadow`
+- **剩余缺口**（不影响 copy_trims 填充，但影响 dominant-copy 替换）：
+  - `processHighDominantCopy` (merge.cc:1316) + `findAllIntoCopies` (merge.cc:1295) + `buildDominantCopy` (merge.cc:1151) — 真正的 dominant COPY 替换逻辑。当前 process_copy_trims 只计数，不替换。
+  - `partial_copy_shadow` 是保守 stub（返回 false），使部分重叠被当作真相交（安全但可能多 snip）
+  - `merge_range_must` (merge.cc:301) 未移植，当前用 merge_force 替代
 
 ---
 

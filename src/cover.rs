@@ -51,6 +51,29 @@ impl CoverBlock {
         point >= self.start && point <= self.end
     }
 
+    /// Characterize where a point falls on the cover boundary.
+    /// Faithful to `CoverBlock::boundary` (cover.cc:129-142).
+    /// Returns:
+    ///   - 0 if point not on boundary
+    // Ghidra: cover.cc:129 CoverBlock::boundary
+    ///   - 1 if on the tail (== stop)
+    ///   - 2 if on the defining point (== start, and start is a real def)
+    pub fn boundary(&self, point: u32) -> i32 {
+        if self.empty() {
+            return 0;
+        }
+        // Ghidra: if (getUIndex(start)==val) { if (start != 0) return 2; }
+        // Rugra: start==u32::MAX means "no real def" (input varnode); only
+        // return 2 (defining point) if start is a real op order.
+        if self.start == point && self.start != u32::MAX {
+            return 2;
+        }
+        if self.end == point {
+            return 1;
+        }
+        0
+    }
+
     /// Merge another cover block into this one
     pub fn merge(&mut self, other: &CoverBlock) {
         if other.empty() { return; }
@@ -108,6 +131,41 @@ impl Cover {
             cb.contain(point)
         } else {
             false
+        }
+    }
+
+    // Ghidra: cover.cc:441 Cover::containVarnodeDef
+    /// Characterize where a Varnode's definition point falls relative to
+    /// this cover. Faithful to `Cover::containVarnodeDef` (cover.cc:441-462).
+    ///
+    /// `is_input`: if true, the varnode has no defining op (it's a function
+    /// input) — Ghidra uses op=(PcodeOp*)2 sentinel, blk=0.
+    /// `block_idx`/`order`: the defining op's block and order (when not input).
+    ///
+    /// Returns:
+    ///   - 0 = not contained (or block absent)
+    ///   - 1 = contained, strictly internal (boundary==0)
+    ///   - 2 = contained, on the defining-point boundary (boundary==2)
+    ///   - 3 = contained, on the tail boundary (boundary==1)
+    pub fn contain_varnode_def_at(&self, is_input: bool, block_idx: i32, order: u32) -> i32 {
+        // Ghidra: if (op==0) { op=(PcodeOp*)2; blk=0; } else blk = op->getParent()->getIndex();
+        let (blk, point) = if is_input {
+            (0i32, 2u32) // sentinel: input varnode, treated as order 2 in block 0
+        } else {
+            (block_idx, order)
+        };
+        let Some(cb) = self.blocks.get(&blk) else {
+            return 0;
+        };
+        if cb.contain(point) {
+            let boundtype = cb.boundary(point);
+            match boundtype {
+                0 => 1,
+                2 => 2,
+                _ => 3, // boundary==1 (tail)
+            }
+        } else {
+            0
         }
     }
 

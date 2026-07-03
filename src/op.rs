@@ -134,6 +134,15 @@ impl PcodeOp {
         self.inrefs.get(slot)
     }
 
+    // Ghidra: op.hh:166 PcodeOp::getSlot
+    /// Return the input slot holding the given Varnode, or None if not found.
+    /// Faithful to `PcodeOp::getSlot(const Varnode *vn)` (op.hh:166):
+    ///   int4 i,n; n=inrefs.size(); for(i=0;i<n;++i) if (inrefs[i]==vn) break; return i;
+    /// Ghidra returns n (out-of-range) when not found; we return Option<usize>.
+    pub fn slot_of_input(&self, vn: &Arc<RwLock<Varnode>>) -> Option<usize> {
+        self.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, vn))
+    }
+
     pub fn get_out(&self) -> Option<&Arc<RwLock<Varnode>>> {
         self.output.as_ref()
     }
