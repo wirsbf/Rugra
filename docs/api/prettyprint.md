@@ -213,3 +213,9 @@ Emitter that discards all output (used for discovery pass)
  即使它们出现在 return 之后。这些是可达控制流，不是死代码。
 - 之前 WhileDo 循环在 unreachable-loop 中 emit（return 之后）被 pass10 移除。
 - 验证：176/176 测试。curl 24/24 gcc。httpd 29/29 gcc。
+
+### 2026-07-04：移除 post_process_output 的 27+ 趟文本后处理
+- `post_process_output` 从 1450 行的 27 趟文本后处理改为**忠实空操作**（`input.to_string()`），对齐 Ghidra `EmitMarkup`（prettyprint.cc）的零后处理设计。
+- 全部 27 趟 pass（goto→break/return、goto→loop、变量内联、死代码移除、指针算术修正、struct deref 重写等）违反铁律 5.5（在 print 层做 Action 阶段的事），已移除。
+- 旧代码保留为 `post_process_output_legacy`（标记 `#[allow(dead_code)]`），供参考。
+- **验证**：移除后 curl 仍 24/24 反编译、23/24 gcc 审计——无回归。说明这些 pass 是净负债（处理的瑕疵要么不存在，要么重复）。

@@ -258,6 +258,28 @@ impl EmitNoMarkup {
     }
 
     pub fn post_process_output(input: &str) -> String {
+        // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
+        // All structure (goto elimination, loop formation, variable inlining,
+        // dead code removal, type correction) happens in the Action phase
+        // (ActionBlockStructure/ActionDeadCode/ActionMarkImplied/
+        // ActionSetCasts) + the structured emit traversal.
+        //
+        // The 27+ text-level passes that previously lived here (goto→break/
+        // return, goto→loop, variable inlining, dead code removal, pointer
+        // arithmetic fixes, etc.) all violated rule 5.5 (doing Action-phase
+        // work in the print layer). They have been removed.
+        //
+        // This is a faithful no-op: return the input unchanged.
+        input.to_string()
+    }
+
+    // RUGRA-GLUE: 旧的 27 趟文本后处理（违反铁律 5.5），保留供参考。
+    // 已被 post_process_output 的空操作替代。不要调用。
+    /// **DEAD CODE** — kept for reference. These were the 27+ text-level
+    /// post-processing passes that violated rule 5.5. Do NOT call.
+    /// To be removed once emit-layer fixes are verified.
+    #[allow(dead_code)]
+    fn post_process_output_legacy(input: &str) -> String {
         let lines: Vec<&str> = input.lines().collect();
         let mut result: Vec<String> = Vec::with_capacity(lines.len());
         let mut i = 0;
