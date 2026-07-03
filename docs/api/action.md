@@ -761,3 +761,7 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - remove_unreachable_blocks 新增 op 销毁（mark_dead）——正确的前提，但不够。
 - 仍需 MULTIEQUAL phi 修补（funcdata_block.cc:278-294 的 opRemoveInput+opZeroMulti）。
 - ActionUnreachable 保持禁用，注释更新。
+
+### ActionUnreachable descendantsOutside（2026-07-03 续 5）
+- remove_unreachable_blocks 的 Phase 2 改进：descendantsOutside 检查（只销毁无外部后代的 op）。对齐 Ghidra funcdata_block.cc:312。
+- ActionUnreachable 仍禁用：根因是 pipeline 顺序——Action 在 mainloop 最开始运行时 bblocks 可能不完整。

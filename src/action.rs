@@ -832,14 +832,7 @@ impl ActionDatabase {
         // as a correctness improvement. Tracked as TODO.
         let mut mainloop = ActionGroup::new("mainloop");
 
-        // ActionUnreachable (coreaction.cc:5490) — disabled.
-        // Op-destruction fix applied (dead block ops marked DEAD in obank),
-        // but full blockRemoveInternal still needed: MULTIEQUAL (phi) nodes
-        // in successor blocks reference removed block's varnodes, and those
-        // references become dangling. Ghidra patches this via opRemoveInput
-        // + opZeroMulti on MULTIEQUALs (funcdata_block.cc:278-294). Without
-        // that patching, removing even 1 block corrupts data-flow.
-        // Fix: port full blockRemoveInternal including MULTIEQUAL adjustment.
+        // ActionUnreachable — disabled (see detailed comment below).
         // mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         mainloop.add_action(Box::new(ActionHeritage::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));

@@ -1244,11 +1244,19 @@ impl Funcdata {
         for arc in &dead_arcs {
             arc.write().unwrap().set_flags(crate::block::block_flags::DEAD);
         }
-        // Phase 2: destroy ops in each dead block (so they're removed from
-        // obank.alivelist and don't get printed). This is the key fix —
-        // previously ops survived block removal and corrupted printc output.
+        // Phase 2: destroy ops in each dead block. Faithful to Ghidra
+        // blockRemoveInternal funcdata_block.cc:300-319: for unreachable=true,
+        // Ghidra calls descend2Undef on output varnodes, then checks
+        // descendantsOutside. Rugra's approach: only mark_dead ops whose
+        // output has NO descendants outside the dead block set. Ops with
+        // external descendants are left alive (their block is DEAD-flagged so
+        // emit_block_ops skips them, but the op stays in alivelist so its
+        // output varnode remains valid for any phi-node that references it).
+        let dead_block_ptrs: std::collections::HashSet<usize> = dead_arcs.iter()
+            .map(|a| std::sync::Arc::as_ptr(a) as *const () as usize)
+            .collect();
         for arc in &dead_arcs {
-            let ops_to_destroy: Vec<crate::op::PcodeOpRef> = {
+            let ops_to_check: Vec<crate::op::PcodeOpRef> = {
                 let block = arc.read().unwrap();
                 if let Some(bb) = block.as_any().downcast_ref::<crate::block::BlockBasic>() {
                     bb.ops.iter().map(|o| o.0.clone()).map(crate::op::PcodeOpRef).collect()
@@ -1256,8 +1264,34 @@ impl Funcdata {
                     Vec::new()
                 }
             };
-            for op_ref in ops_to_destroy {
-                self.obank.mark_dead(op_ref);
+            for op_ref in ops_to_check {
+                // Check if output has descendants outside dead blocks.
+                let has_external_desc = {
+                    let op = op_ref.0.read().unwrap();
+                    if let Some(ref out_arc) = op.output {
+                        let out_vn = out_arc.read().unwrap();
+                        out_vn.descend.iter()
+                            .filter_map(|w| w.upgrade())
+                            .any(|desc_op| {
+                                let d = desc_op.read().unwrap();
+                                d.parent.as_ref()
+                                    .and_then(|pw| pw.upgrade())
+                                    .map(|parent| {
+                                        let p = std::sync::Arc::as_ptr(&parent) as *const () as usize;
+                                        !dead_block_ptrs.contains(&p)
+                                    })
+                                    .unwrap_or(true)
+                            })
+                    } else {
+                        false
+                    }
+                };
+                if !has_external_desc {
+                    self.obank.mark_dead(op_ref);
+                }
+                // Ops with external descendants are left alive — their block is
+                // DEAD-flagged (emit_block_ops checks is_dead) but the op
+                // remains valid for phi-node references.
             }
         }
         // Phase 3: detach all out-edges (branchRemoveInternal equivalent).

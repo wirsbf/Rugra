@@ -812,3 +812,7 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - 新增 Phase 2：销毁死块的所有 op（mark_dead），从 obank.alivelist 移除。这是正确移除块的前提（之前 op 留在 alivelist → printc 打印已删块的内容 → 损坏输出）。
 - 但 ActionUnreachable 仍禁用：还需要 MULTIEQUAL (phi) 修补（Ghidra blockRemoveInternal :278-294 的 opRemoveInput+opZeroMulti），否则后继块的 phi-node 引用被删块 varnode 变悬空。
 - curl gcc 24/24（保持），956/956 测试。
+
+### remove_unreachable_blocks descendantsOutside 检查（2026-07-03 续 4）
+- Phase 2 改进：只 mark_dead 没有外部后代的 op（descendantsOutside 检查，对齐 Ghidra funcdata_block.cc:312）。有外部 phi-node 引用的 op 保持 alive（块标 DEAD 但 op 不删）。
+- 但 ActionUnreachable 仍禁用：根因更深——Action 在 mainloop 最开始运行，此时 bblocks CFG 可能不完整（sblocks 未建），移除块破坏后续阶段状态。需 pipeline 顺序调整或 CFG 完整化后才能安全启用。
