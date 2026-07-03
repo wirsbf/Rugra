@@ -868,6 +868,12 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
         mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
         mainloop.add_action(Box::new(ActionBlockStructure::new()));
+        // ActionUnreachable (coreaction.cc:5490,5658-5673) — moved here (after
+        // ActionBlockStructure) so bblocks CFG is fully constructed. Ghidra
+        // runs it earlier (:5490) but Rugra's CFG needs the full pipeline to
+        // be settled first. The descendantsOutside check + op-destruction
+        // make block removal safe for truly-unreachable blocks.
+        mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new()));
         // Post-block-structure cleanup (coreaction.cc:5658-5676) — registered
         // but may be no-ops depending on implementation maturity.
         // mainloop.add_action(Box::new(crate::coreaction::ActionRedundBranch::new()));

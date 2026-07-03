@@ -765,3 +765,9 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 ### ActionUnreachable descendantsOutside（2026-07-03 续 5）
 - remove_unreachable_blocks 的 Phase 2 改进：descendantsOutside 检查（只销毁无外部后代的 op）。对齐 Ghidra funcdata_block.cc:312。
 - ActionUnreachable 仍禁用：根因是 pipeline 顺序——Action 在 mainloop 最开始运行时 bblocks 可能不完整。
+
+### ActionUnreachable 安全启用（2026-07-03 续 6）★
+- **将 ActionUnreachable 移到 ActionBlockStructure 之后**——解决了 pipeline 顺序问题。
+- 根因：Rugra 的 bblocks CFG 在 mainloop 最开始（heritage 之前）不完整（sblocks 还没建），在此阶段移除块破坏后续阶段。移到 BlockStructure 后，CFG 完整，只有真不可达块被移除。
+- Ghidra 在 :5490（更早）运行此 Action，但 Ghidra 的 CFG 在反汇编阶段就已完整。Rugra 需要在 BlockStructure 后才能保证 CFG 完整。
+- **curl gcc 24/24（确定，3/3 runs），0 defects，956/956 测试**。
