@@ -2120,57 +2120,252 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:1271 Merge::shadowedVarnode
+    /// Determine if the given Varnode is shadowed by another Varnode in the
+    /// same HighVariable. Faithful to `Merge::shadowedVarnode` (merge.cc:1271-1285).
+    /// Returns true if any other instance's cover fully intersects (==2) vn's cover.
+    fn shadowed_varnode(&self, vn: &Arc<RwLock<Varnode>>) -> bool {
+        let high = vn.read().unwrap().high.clone();
+        let Some(high) = high else { return false };
+        let vn_cover = match &vn.read().unwrap().cover {
+            Some(c) => c.clone(),
+            None => return false,
+        };
+        let h = high.read().unwrap();
+        for inst in &h.instances {
+            if Arc::ptr_eq(inst, vn) {
+                continue;
+            }
+            if let Some(ic) = &inst.read().unwrap().cover {
+                if vn_cover.intersect_char(ic) == 2 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    // Ghidra: merge.cc:1112 Merge::checkCopyPair
+    /// Check if the given COPY PcodeOps are redundant. Faithful to
+    /// `Merge::checkCopyPair` (merge.cc:1112-1136). domOp must dominate subOp's
+    /// block; constructs a range cover and checks for intervening writes.
+    fn check_copy_pair(
+        &self,
+        high: &Arc<RwLock<HighVariable>>,
+        dom_op: &crate::op::PcodeOpRef,
+        sub_op: &crate::op::PcodeOpRef,
+    ) -> bool {
+        // domBlock->dominates(subBlock) (merge.cc:1117)
+        let (dom_blk, sub_blk) = {
+            let d = dom_op.0.read().unwrap();
+            let s = sub_op.0.read().unwrap();
+            let db = d.parent.as_ref().and_then(|w| w.upgrade());
+            let sb = s.parent.as_ref().and_then(|w| w.upgrade());
+            (db, sb)
+        };
+        match (&dom_blk, &sub_blk) {
+            (Some(db), Some(sb)) => {
+                // Check db dominates sb (db is ancestor in dom tree).
+                if !db.read().unwrap().dominates(sb) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        // Build range cover: addDefPoint(domOp->getOut()) + addRefPoint(subOp, subOp->getIn(0)).
+        let (dom_out, sub_in0, in_vn) = {
+            let d = dom_op.0.read().unwrap();
+            let s = sub_op.0.read().unwrap();
+            (d.output.clone(), s.inrefs.get(0).cloned(), d.inrefs.get(0).cloned())
+        };
+        let mut range = Cover::new();
+        if let Some(dov) = &dom_out {
+            let (blk, ord, is_input) = varnode_def_loc(&dov.read().unwrap());
+            if is_input {
+                range.add_def_point(0, 2);
+            } else {
+                range.add_def_point(blk, ord);
+            }
+        }
+        if let Some(siv) = &sub_in0 {
+            // addRefPoint: sub_op reads sub_in0 at sub_op's loc.
+            let (s_blk, s_ord) = {
+                let s = sub_op.0.read().unwrap();
+                let blk = s.parent.as_ref().and_then(|w| w.upgrade())
+                    .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
+                (blk, s.get_seq_num().order)
+            };
+            range.add_ref_point(s_blk, s_ord);
+        }
+        // Look for high instances with intervening writes (merge.cc:1124-1134).
+        let h = high.read().unwrap();
+        for i in 0..h.num_instances() {
+            let Some(inst) = h.get_instance(i) else { continue };
+            let (written, def_code_copy, def_in_eq_invn, def_blk, def_ord) = {
+                let vn = inst.read().unwrap();
+                let def_arc = vn.def.as_ref().and_then(|w| w.upgrade());
+                match def_arc {
+                    Some(d) => {
+                        let def = d.read().unwrap();
+                        let cc = def.opcode == crate::opcodes::OpCode::CPUI_COPY;
+                        let eq = def.inrefs.get(0).map(|v| {
+                            match &in_vn {
+                                Some(iv) => Arc::ptr_eq(v, iv),
+                                None => false,
+                            }
+                        }).unwrap_or(false);
+                        let blk = def.parent.as_ref().and_then(|w| w.upgrade())
+                            .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
+                        (true, cc, eq, blk, def.get_seq_num().order)
+                    }
+                    None => (false, false, false, 0, 0),
+                }
+            };
+            if !written {
+                continue;
+            }
+            // If write is COPY from same Varnode as domOp → skip (merge.cc:1128-1130).
+            if def_code_copy && def_in_eq_invn {
+                continue;
+            }
+            // range.contain(op, 1) — check if def is in range (merge.cc:1131).
+            if range.contain(def_blk, def_ord) {
+                return false; // Intervening write → not redundant.
+            }
+        }
+        true
+    }
+
+    // Ghidra: merge.cc:1249 Merge::markRedundantCopies
+    /// Mark redundant COPY ops as non-printing. Faithful to
+    /// `Merge::markRedundantCopies` (merge.cc:1249-1265).
+    fn mark_redundant_copies(
+        &mut self,
+        fd: &mut Funcdata,
+        high: &Arc<RwLock<HighVariable>>,
+        copy: &[crate::op::PcodeOpRef],
+        pos: usize,
+        size: usize,
+    ) {
+        for i in (1..size).rev() {
+            let sub_op = &copy[pos + i];
+            if sub_op.0.read().unwrap().is_dead() {
+                continue;
+            }
+            for j in (0..i).rev() {
+                let dom_op = &copy[pos + j];
+                if dom_op.0.read().unwrap().is_dead() {
+                    continue;
+                }
+                if self.check_copy_pair(high, dom_op, sub_op) {
+                    fd.op_mark_non_printing(sub_op);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Ghidra: merge.cc:1345 Merge::processHighRedundantCopy
+    /// Mark COPY ops into the given HighVariable that are redundant.
+    /// Faithful to `Merge::processHighRedundantCopy` (merge.cc:1345-1367).
+    fn process_high_redundant_copy(&mut self, fd: &mut Funcdata, high: &Arc<RwLock<HighVariable>>) {
+        let copy_ins = self.find_all_into_copies(high, false);
+        if copy_ins.len() < 2 {
+            return;
+        }
+        let mut pos = 0usize;
+        while pos < copy_ins.len() {
+            let in_vn = copy_ins[pos].0.read().unwrap().inrefs.get(0).cloned();
+            let Some(in_vn) = in_vn else { break; };
+            let mut sz = 1usize;
+            while pos + sz < copy_ins.len() {
+                let next = copy_ins[pos + sz].0.read().unwrap().inrefs.get(0).cloned();
+                match next {
+                    Some(n) if Arc::ptr_eq(&n, &in_vn) => sz += 1,
+                    _ => break,
+                }
+            }
+            if sz > 1 {
+                self.mark_redundant_copies(fd, high, &copy_ins, pos, sz);
+            }
+            pos += sz;
+        }
+    }
+
     // Ghidra: merge.hh:134 Merge::markInternalCopies
     /// Step 12: ActionCopyMarker (coreaction.hh:1019).
     /// Faithful to `Merge::markInternalCopies` (merge.cc:1444-1542).
     ///
-    /// Walks all alive COPY ops and marks those whose output and input share
-    /// a HighVariable as *non-printing* (internal copies). For COPYs between
-    /// *different* HighVariables where the output is a shadowed varnode with
-    /// no descendants, the copy is also suppressed. PIECE/SUBPIECE handling
-    /// (CONCAT reassembly) is omitted: Rugra has no VariablePiece machinery.
+    /// Walks all alive ops:
+    /// - COPY: if output.high==input.high → nonprinting; else accumulate
+    ///   multi-copy highs + check shadowedVarnode for no-descend outputs.
+    /// - PIECE/SUBPIECE: VariablePiece CONCAT reassembly (omitted — no
+    ///   VariablePiece infrastructure).
+    /// Then processHighRedundantCopy for highs with ≥2 copy-ins.
     pub fn mark_internal_copies(&mut self, fd: &mut Funcdata) {
         use crate::op::pcodeop_flags;
         use crate::opcodes::OpCode;
 
-        // Collect (op, out_high == in_high) decisions without holding the
-        // op read-lock while we mutate op flags.
-        let decisions: Vec<(Arc<RwLock<crate::op::PcodeOp>>, bool)> = fd
-            .obank
-            .alivelist
-            .iter()
-            .filter_map(|op_ref| {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    return None;
-                }
-                let out = op.output.as_ref()?;
-                let in0 = op.inrefs.get(0)?;
-                let same_high = {
-                    let o = out.read().unwrap();
-                    let i = in0.read().unwrap();
-                    match (o.high.as_ref(), i.high.as_ref()) {
-                        (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
-                        _ => false,
-                    }
-                };
-                drop(op);
-                Some((op_ref.0.clone(), same_high))
-            })
+        // Ghidra merge.cc:1455-1532: iterate alive ops.
+        // Collect COPY decisions + track multi-copy highs.
+        let mut multi_copy: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        let mut multi_copy_seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let copy_ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.iter()
+            .map(|r| crate::op::PcodeOpRef(r.0.clone()))
             .collect();
-
-        for (op_arc, same_high) in decisions {
-            if same_high {
-                // Internal COPY: input and output are the same HighVariable.
-                // Mark non-printing (merge.cc:1461-1462).
-                op_arc.write().unwrap().flags |= pcodeop_flags::NONPRINTING;
-            } else {
-                // COPY between different HighVariables. Ghidra additionally
-                // suppresses shadowed assignments (v1->hasNoDescend() &&
-                // shadowedVarnode(v1)). Rugra does not track shadowing here,
-                // so this branch is a faithful no-op.
-                // TODO: port shadowedVarnode (merge.cc:1471) for full fidelity.
+        for op_ref in &copy_ops {
+            let opcode = op_ref.0.read().unwrap().opcode;
+            match opcode {
+                OpCode::CPUI_COPY => {
+                    let (out_vn, in_vn, same_high, out_high) = {
+                        let op = op_ref.0.read().unwrap();
+                        let out = op.output.clone();
+                        let in0 = op.inrefs.get(0).cloned();
+                        let (sh, oh) = match (&out, &in0) {
+                            (Some(o), Some(i)) => {
+                                let o_rg = o.read().unwrap();
+                                let i_rg = i.read().unwrap();
+                                let sh = match (&o_rg.high, &i_rg.high) {
+                                    (Some(ho), Some(hi)) => Arc::ptr_eq(ho, hi),
+                                    _ => false,
+                                };
+                                (sh, o_rg.high.clone())
+                            }
+                            _ => (false, None),
+                        };
+                        (out, in0, sh, oh)
+                    };
+                    if same_high {
+                        // merge.cc:1461-1462: internal COPY → nonprinting.
+                        fd.op_mark_non_printing(op_ref);
+                    } else if let Some(h1) = out_high {
+                        // merge.cc:1465-1470: accumulate multi-copy tracking.
+                        let ptr = Arc::as_ptr(&h1) as usize;
+                        if !multi_copy_seen.contains(&ptr) {
+                            multi_copy_seen.insert(ptr);
+                            multi_copy.push(h1.clone());
+                        }
+                        // merge.cc:1471-1475: shadowed no-descend output → nonprinting.
+                        if let Some(ov) = &out_vn {
+                            let no_descend = ov.read().unwrap().has_no_descend();
+                            if no_descend && self.shadowed_varnode(ov) {
+                                fd.op_mark_non_printing(op_ref);
+                            }
+                        }
+                    }
+                    let _ = in_vn;
+                }
+                // PIECE/SUBPIECE: VariablePiece CONCAT reassembly (merge.cc:1478-1528).
+                // Omitted — Rugra has no VariablePiece infrastructure.
+                _ => {}
             }
+        }
+        // merge.cc:1533-1538: processHighRedundantCopy for multi-copy highs.
+        // Ghidra checks hasCopyIn2 (≥2); we process all in multi_copy (they
+        // all had ≥1, and processHighRedundantCopy internally checks ≥2 via
+        // findAllIntoCopies + group size).
+        for high in &multi_copy {
+            self.process_high_redundant_copy(fd, high);
         }
     }
 

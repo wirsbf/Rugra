@@ -216,3 +216,11 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - `merge_indirect`（merge.cc:846）：snipOutputInterference + mergeOp。
 - `merge_test_with_list`（merge.cc:1657）：HighIntersectTest 替代（用 aggregate_high_cover + intersect_char）。
 - `merge_marker` 从 merge_force 改为委托 merge_op/merge_indirect（对齐 merge.cc:889-902）。
+
+### 2026-07-04（续 6）：移植 redundant-copy 标记子系统
+移植 Ghidra markInternalCopies 的冗余 COPY 标记路径（merge.cc:1112-1367）：
+- `shadowed_varnode`（merge.cc:1271）：判断 vn 是否被同 high 的另一个 instance 完全相交（intersect_char==2）。
+- `check_copy_pair`（merge.cc:1112）：domBlock 支配 subBlock + 构造 range cover + 检查中间写入。
+- `mark_redundant_copies`（merge.cc:1249）：从后往前对每个 subOp 找 domOp，checkCopyPair 通过则标记 nonprinting。
+- `process_high_redundant_copy`（merge.cc:1345）：findAllIntoCopies(filterTemps=false) + 按同源分组 + markRedundantCopies。
+- `mark_internal_copies` 重写为忠实 markInternalCopies（含 shadowedVarnode 无后代检查 + multi-copy 累积 + processHighRedundantCopy）。
