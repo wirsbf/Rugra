@@ -681,3 +681,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - **LAB_ 格式统一**：标签定义从 `LAB_{:x}:` 改为 `LAB_{:08x}:`，与 goto 引用的 `LAB_{:08x}` 一致。消除了 "label used but not defined" 错误。
 - 效果：gcc 审计从 23/24 提升到 **22/24**（比之前更好——LAB_ 格式修复额外消除了一个标签匹配问题）。
 - 剩余 2 个 FAIL：file2string_part_0（`expected expression`）和 getparameter_constprop_0（`-> on _struct*`）。需要 Action 层修复（类型传播/结构体恢复）。
+
+### 2026-07-04（续 4）：CALL in(0)=None 守卫
+- `op_call`：当 CALL op 的 in(0) 缺失（调用目标未知）时，之前产生 `();`（语法错误）。现在发 `FUN_unknown()` 作为占位符。
+- 效果：file2string_part_0 的 `expected expression before ')'` 错误消除。gcc 从 22/24 提升到 **23/24**。
+- 剩余 1 个 FAIL：getparameter_constprop_0 的 `invalid operands to binary +`（`_struct*` + `int*` 指针相乘）。这是 Action 层类型传播问题（PTRADD 应区分指针+整数 vs 指针+指针），需 ActionSetCasts/ActionInferTypes 修复，非 emit 层。

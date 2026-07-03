@@ -4522,9 +4522,6 @@ impl PrintLanguage for PrintC {
             drop(target_vn);
             if target_addr == 0 {
                 if !self.discovery_pass {
-                    // Indirect call via unresolved pointer (address 0). Emit a
-                    // function-pointer cast so the call is legal C regardless
-                    // of how the target was represented.
                     self.emit.tag_variable("(*(void(*)())0)", 0);
                 }
             } else if let Some(sym_name) = self.symbol_table.get(&target_addr) {
@@ -4534,6 +4531,13 @@ impl PrintLanguage for PrintC {
                 if !self.discovery_pass {
                     self.emit.tag_variable(&fun_name, 0);
                 }
+            }
+        } else {
+            // CALL with no in(0) — target unknown. Emit a placeholder so
+            // the output is valid C (Ghidra would have resolved the target
+            // via FuncCallSpecs; Rugra lacks this infrastructure).
+            if !self.discovery_pass {
+                self.emit.tag_variable("FUN_unknown", 0);
             }
         }
         self.emit.open_paren();
