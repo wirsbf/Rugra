@@ -182,3 +182,8 @@
 
 `src/bin/rugra.rs` 当前是一个**有意保持最小化的二进制入口**：它保留了可执行目标，但只负责提示 CLI 仍在重构/对齐过程中，**不应被当成 Rugra 当前完整可用的命令行产品接口**。
 ### 2026-07-01（管线改造）：get_action→get_action_mut + infer mut
+
+### 2026-07-04：follow_flow 接入 main.rs
+- 主反编译循环从三段式线性扫描（disassemble→lift→inject_raw_ops）改为 `follow_flow`（FlowInfo 可达性流追踪）。
+- 新增 `BufferLoadImage`：实现 LoadImage trait，通过 ELF section headers 将 vaddr→file offset→bytes。
+- prototype 发现阶段（第一循环）仍用线性扫描（需要所有指令不论可达性）。
