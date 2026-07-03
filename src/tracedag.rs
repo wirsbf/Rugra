@@ -67,9 +67,17 @@ pub struct TraceDAG<'a> {
     /// The likely goto edges discovered.
     pub likely_goto: Vec<FloatingEdge>,
     /// Visit-count tracking: block_idx → count of traced in-edges.
-    /// A node can be opened when visit_count == size_in (all in-edges traced).
+    /// Faithful to Ghidra's FlowBlock::visitcount (block.hh:125), only
+    /// incremented by remove_trace (matching removeTrace blockaction.cc:661).
     visit_count: HashMap<i32, i32>,
-    /// Set of blocks already opened (avoid re-opening).
+    /// Finish block: if set, only the root trace can open it (Ghidra
+    /// finishblock, blockaction.cc:822-823). Used by per-loop TraceDAG.
+    finish_block_idx: Option<i32>,
+    /// Set of blocks already opened (conservative re-entry guard).
+    /// Ghidra does NOT have this — it relies purely on visit-count for
+    /// termination. Rugra keeps it as a safety net because visit-count
+    /// termination has not been formally proven equivalent to Ghidra's.
+    /// TODO: remove once visit-count is verified to terminate correctly.
     opened: std::collections::HashSet<i32>,
 }
 
@@ -83,6 +91,7 @@ impl<'a> TraceDAG<'a> {
             roots: Vec::new(),
             likely_goto: Vec::new(),
             visit_count: HashMap::new(),
+            finish_block_idx: None,
             opened: std::collections::HashSet::new(),
         }
     }
@@ -119,11 +128,14 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
-    /// Is the i-th out-edge of `idx` NOT a loop-DAG edge? Faithful to Ghidra's
-    /// `isLoopDAGOut` (block.hh:342): returns false (skip) when the edge is
-    /// irreducible, a back-edge, a loop-exit edge, or a goto edge. TraceDAG must
-    /// not trace through these — they are bounded by LoopBody::setExitMarks and
-    /// selectGoto. Returns true (traceable) otherwise.
+    /// Is the i-th out-edge of `idx` a loop-DAG edge (traceable)?
+    /// Ghidra `isLoopDAGOut` (block.hh:342) checks only f_irreducible|f_goto_edge.
+    /// However, Rugra also excludes F_BACK_EDGE and F_LOOP_EXIT_EDGE to
+    /// prevent infinite tracing into cycles when visit-count termination
+    /// is incomplete (see check_open). This is a conservative superset —
+    /// it may mark some traceable edges as untraceable, but never allows
+    /// tracing into a cycle. Once check_open's visit-count is fully proven
+    /// to terminate, the F_BACK_EDGE|F_LOOP_EXIT_EDGE exclusion can be removed.
     fn is_loop_dag_out(&self, idx: i32, slot: usize) -> bool {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -133,6 +145,27 @@ impl<'a> TraceDAG<'a> {
         } else {
             false
         }
+    }
+
+    // Ghidra: block.hh:345 FlowBlock::isLoopDAGIn
+    /// Is the i-th in-edge of `idx` a loop-DAG edge?
+    /// See is_loop_dag_out for the F_BACK_EDGE|F_LOOP_EXIT_EDGE exclusion note.
+    fn is_loop_dag_in(&self, idx: i32, slot: usize) -> bool {
+        if let Some(b) = self.graph.get_block(idx as usize) {
+            let r = b.read().unwrap();
+            let flags = r.get_in(slot).map(|e| e.flags).unwrap_or(0);
+            use crate::block::edge_flags::*;
+            (flags & (F_IRREDUCIBLE_EDGE | F_BACK_EDGE | F_LOOP_EXIT_EDGE | F_GOTO_EDGE)) == 0
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: blockaction.cc:822 TraceDAG::finishblock
+    /// Set the finish block. Faithful to Ghidra TraceDAG::finishblock
+    /// (blockaction.cc:822). Only the root trace can open the finish block.
+    pub fn set_finish_block(&mut self, idx: i32) {
+        self.finish_block_idx = Some(idx);
     }
 
     /// Initialize: create root BranchPoint and traces for each root.
@@ -175,9 +208,9 @@ impl<'a> TraceDAG<'a> {
     }
 
     /// Check if a trace can push into its dest node.
-    /// A node can only be opened if all incoming edges have been traced
-    /// (visit_count == size_in) OR it was already opened. Uses the `opened`
-    /// set to track previously-opened nodes.
+    /// Faithful to `TraceDAG::checkOpen` (blockaction.cc:810-833).
+    /// A node is openable when the number of traced loop-DAG in-edges
+    /// (edgelump + visit_count) >= total loop-DAG in-edges.
     fn check_open(&self, trace_idx: usize) -> bool {
         let trace = &self.traces[trace_idx];
         if trace.terminal {
@@ -186,22 +219,34 @@ impl<'a> TraceDAG<'a> {
         let bp = &self.branch_points[trace.top_bp];
         let is_root = bp.depth == 0;
         if is_root && trace.bottom_block_idx < 0 {
-            return true; // Artificial root can always open first level
+            return true; // Artificial root (blockaction.cc:817)
         }
         let dest = trace.dest_block_idx;
         if dest < 0 {
             return false;
         }
-        // Already opened — allow re-entry
+        // Conservative re-entry guard (Ghidra does NOT have this; see field doc).
         if self.opened.contains(&dest) {
             return true;
         }
-        // Check visit-count: a node is openable when the number of traced
-        // in-edges (visit_count + edgelump) >= size_in of the dest block.
+        // finishblock guard (blockaction.cc:822-823): only root can open it.
+        if !is_root && self.finish_block_idx == Some(dest) {
+            return false;
+        }
+        // Count loop-DAG in-edges of dest (blockaction.cc:826-831).
         let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
         let ignore = trace.edgelump + vc;
-        let sin = self.size_in(dest) as i32;
-        ignore >= sin
+        let sin = self.size_in(dest);
+        let mut count = 0i32;
+        for i in 0..sin {
+            if self.is_loop_dag_in(dest, i) {
+                count += 1;
+                if count > ignore {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Check if a BranchPoint can be retired (all paths terminal or to same exit).
@@ -243,10 +288,11 @@ impl<'a> TraceDAG<'a> {
     }
 
     /// Open a branch: create new BranchPoint at dest node with sub-traces.
+    /// Faithful to Ghidra `BranchPoint::createTraces` (blockaction.cc:499-507)
+    /// + `openBranch` (blockaction.cc:839-858).
     fn open_branch(&mut self, trace_idx: usize) {
         let dest = self.traces[trace_idx].dest_block_idx;
-        // Mark this node as opened
-        self.opened.insert(dest);
+        self.opened.insert(dest); // Conservative re-entry guard.
         let top_bp = self.traces[trace_idx].top_bp;
         let parent_depth = self.branch_points[top_bp].depth;
         let parent_pathout = self.traces[trace_idx].pathout;
@@ -261,25 +307,16 @@ impl<'a> TraceDAG<'a> {
             paths: Vec::new(),
         });
 
-        // Create sub-traces for each out-edge of dest.
-        // Skip back-edges (target index < dest) and edges to already-opened nodes.
-        // The back-edge filter (target <= dest) prevents tracing into cycles
-        // which would cause infinite loops. This matches Ghidra's isLoopDAGOut
-        // which excludes edges that would create cycles in the trace DAG.
+        // createTraces (blockaction.cc:499-507): create sub-traces for each
+        // out-edge that is a loop-DAG edge (isLoopDAGOut). Skip non-DAG edges.
         let size_out = self.size_out(dest);
         for eo in 0..size_out {
+            // Ghidra: if (!top->isLoopDAGOut(i)) continue;
+            if !self.is_loop_dag_out(dest, eo) { continue; }
             if let Some(target) = self.get_out(dest, eo) {
-                // Skip back-edges (simple heuristic: target index <= dest)
-                if target <= dest { continue; }
-                // Skip edges to already-opened nodes (true cycles)
+                // Conservative: skip edges to already-opened nodes (prevents
+                // re-tracing into cycles). Ghidra does NOT need this.
                 if self.opened.contains(&target) { continue; }
-                // Skip loop-exit and goto edges: Ghidra's isLoopDAGOut excludes
-                // f_irreducible|f_back_edge|f_loop_exit_edge|f_goto_edge. These
-                // edges are bound by LoopBody::setExitMarks / selectGoto and
-                // should not be traced through (they are candidate gotos).
-                if self.is_loop_dag_out(dest, eo) { continue; }
-                // Increment visit_count for target (this edge is now traced)
-                *self.visit_count.entry(target).or_insert(0) += 1;
                 let new_trace_idx = self.traces.len();
                 self.traces.push(BlockTrace {
                     top_bp: new_bp_idx,

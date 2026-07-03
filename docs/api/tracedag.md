@@ -70,3 +70,10 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 **关键集成**：`CollapseStructure::apply_loop_exit_marks`（blockaction.cc setExitMarks 等价）将每个 LoopBody 的 exit_edges 标记为 `F_LOOP_EXIT_EDGE`，在 `order_loop_bodies` 后、`run_tracedag` 前调用。这样 TraceDAG 的追踪范围被 LoopBody 分析约束——这是 Ghidra `updateLoopBody` 的核心目的：LoopBody 分析结果实际驱动结构化。
 
 **验证**：curl switch 4→5（循环退出标记改变了结构化路径，证明 LoopBody 分析生效）；687/687 测试 + curl 24/24 + httpd 29/29 + 0 goto。
+
+### 2026-07-04：TraceDAG check_open 对齐 Ghidra blockaction.cc:810-833
+- 新增 `finish_block_idx`（对齐 Ghidra finishblock, blockaction.cc:822-823）：只有 root trace 能 open finish block。
+- `check_open` 分母从 `size_in`（所有入边）改为 loop-DAG 入边计数（对齐 blockaction.cc:826-831 遍历 isLoopDAGIn）。
+- `open_branch` 的 `is_loop_dag_out` 极性修正：从 `if is_loop_dag_out { continue }` 改为 `if !is_loop_dag_out { continue }`（对齐 createTraces :504 `if (!isLoopDAGOut) continue`）。
+- 新增 `is_loop_dag_in` helper（对齐 block.hh:345 isLoopDAGIn）。
+- `opened` 集合保留为保守安全网（Ghidra 无此机制，靠纯 visit-count 终止；Rugra 的 visit-count 终止性待验证后可移除）。
