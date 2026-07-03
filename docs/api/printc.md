@@ -670,3 +670,8 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - `emit_block_ops`：CPUI_BRANCH 无条件跳过（对齐 Ghidra printc.cc:2701）。之前只在 skip_terminal=true 时跳过。
 - `op_branch`/`op_cbranch`：in(0) 为 None 时不打印 goto（消除 `goto ;` 空目标）。
 - **残留**：1 个 `if (1) goto ;`（file2string）仍在——in(0) 存在但 push_goto_target 输出似乎被丢弃。需进一步追踪 NullEmit/EmitNoMarkup 双 pass 一致性。
+
+### 2026-07-04（续）：NONPRINTING 守卫分析 + goto ; 缓存发现
+- NONPRINTING 守卫（对齐 Ghidra notPrinted()）在 emit_block_ops 里太激进——mark_internal_copies 把所有 same-high COPY 标记为 NONPRINTING，导致 19/24 函数失败。回退为 TODO。
+- Ghidra 的正确模型：COPY 靠 isImplied() 抑制，branch 靠 notPrinted()。Rugra 需要区分这两种情况。
+- **重要发现**：file2string 的 `goto ;` 在重新生成输出后消失了——之前的 23/24 gcc 审计基于**旧缓存文件**。post_process_output 移除后的真实输出质量是 5/24 gcc——post_process 之前确实在修复大量输出瑕疵（undeclared vars、duplicate labels、-> on non-pointer 等）。这些需要 emit 层修复而非文本后处理。

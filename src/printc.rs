@@ -348,6 +348,19 @@ impl PrintC {
                 }
             }
 
+            // Ghidra printc.cc:2696: if (inst->notPrinted()) continue;
+            // Skip ops explicitly marked as non-printing. NOTE: in Ghidra,
+            // NONPRINTING is only set on branch ops consumed by the structurer
+            // and redundant internal COPYs. Rugra's mark_internal_copies sets
+            // it on same-high COPYs (which IS correct — they are internal).
+            // However, applying this unconditionally breaks output because
+            // many COPYs are marked NONPRINTING but still need to print as
+            // assignments. The correct Ghidra model uses isImplied() for
+            // COPY suppression, not NONPRINTING. So we skip this for now
+            // and rely on the COPY-skip + inlined_ops checks below.
+            // TODO: properly distinguish "structural non-printing" (branch)
+            // from "internal COPY non-printing" (handled by copy_map).
+
             // Skip COPY ops (folded via copy_map)
             if op.opcode == OpCode::CPUI_COPY {
                 continue;
