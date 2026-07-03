@@ -691,17 +691,44 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:1102 Varnode::partialCopyShadow
-    /// Check if this is a SUBPIECE truncation of `whole` by `rel_off` bytes.
-    /// Faithful to `Varnode::partialCopyShadow` (varnode.cc:1102), which uses
-    /// `findSubpieceShadow` (recursive MULTIEQUAL/COPY traversal).
-    ///
-    /// **Conservative stub**: returns false (i.e. "not a known shadow"). This
-    /// makes `eliminateIntersect` treat partial-overlap cases as real
-    /// intersections (snip them), which is safe — it may insert COPY trims
-    /// that Ghidra would have skipped, but never misses a real intersection.
-    /// Full SUBPIECE-shadow analysis (findSubpieceShadow, varnode.cc:1006)
-    /// is a future enhancement.
-    pub fn partial_copy_shadow(&self, _whole: &Varnode, _rel_off: i32) -> bool {
+    /// For this and `op2`, establish that either bigger=CONCAT(smaller,..)
+    /// or smaller=SUBPIECE(bigger). Faithful to `Varnode::partialCopyShadow`
+    /// (varnode.cc:1102-1131).
+    pub fn partial_copy_shadow(&self, op2: &Varnode, mut rel_off: i32) -> bool {
+        // Normalize direction: vn = smaller, op2 = bigger (varnode.cc:1107-1116).
+        let (vn, big): (&Varnode, &Varnode) = if self.size < op2.size {
+            (self, op2)
+        } else if self.size > op2.size {
+            (op2, self)
+        } else {
+            return false; // equal size → not a partial shadow
+        };
+        // Note: the reassignment of which is vn vs op2 flips rel_off sign.
+        if self.size > op2.size {
+            rel_off = -rel_off;
+        }
+        if rel_off < 0 {
+            return false; // not proper containment (varnode.cc:1117)
+        }
+        if (rel_off as usize) + vn.size > big.size {
+            return false; // not proper containment (varnode.cc:1119)
+        }
+        // big-endian leastByte computation (varnode.cc:1122-1123).
+        // Ghidra uses this->getSpace()->isBigEndian(); vn and big share space.
+        let big_endian = vn.address_space.is_big_endian();
+        let least_byte = if big_endian {
+            (big.size - vn.size) as i32 - rel_off
+        } else {
+            rel_off
+        };
+        // vn->findSubpieceShadow(leastByte, op2, 0) (varnode.cc:1124).
+        if find_subpiece_shadow(vn, least_byte, big, 0) {
+            return true;
+        }
+        // op2->findPieceShadow(leastByte, vn) (varnode.cc:1127).
+        if find_piece_shadow(big, least_byte, vn) {
+            return true;
+        }
         false
     }
 
@@ -1319,6 +1346,257 @@ fn collect_copy_sources(vn: &Varnode) -> Vec<std::sync::Arc<std::sync::RwLock<Va
         }
     }
     sources
+}
+
+/// Walk forward along COPY defs from `vn`, returning true if `target` (by
+/// pointer identity) appears anywhere along the chain. Faithful to the
+// RUGRA-GLUE: 沿 COPY 链逐步比较指针身份。Ghidra 用裸指针 while 循环
+// (varnode.cc:1010,1030)；Rugra 需 clone Arc + 释放 guard 逐层展开。
+/// `while(vn->isWritten() && vn->getDef()->code()==CPUI_COPY) { vn=...; if(vn==t) return true; }`
+/// pattern in findSubpieceShadow/findPieceShadow (varnode.cc:1010,1030).
+fn copy_chain_hits(vn: &Varnode, target: &Varnode) -> bool {
+    use crate::opcodes::OpCode;
+    if std::ptr::eq(vn as *const Varnode, target as *const Varnode) {
+        return true;
+    }
+    let mut cur_def = vn.def.as_ref().and_then(|w| w.upgrade());
+    let mut cur_vn_ptr: *const Varnode = vn as *const Varnode;
+    // We need to compare each Varnode along the COPY chain to target.
+    // Walk: at each step, if cur is defined by COPY, advance to in(0).
+    loop {
+        let def_arc = match cur_def.take() {
+            Some(a) => a,
+            None => return false,
+        };
+        let next = {
+            let def = def_arc.read().unwrap();
+            if def.opcode != OpCode::CPUI_COPY {
+                return false;
+            }
+            def.inrefs.get(0).cloned()
+        };
+        let Some(next_arc) = next else { return false };
+        // Compare next Varnode to target by pointer.
+        let hits = {
+            let n = next_arc.read().unwrap();
+            std::ptr::eq(&*n as *const Varnode, target as *const Varnode)
+        };
+        if hits {
+            return true;
+        }
+        // Set up for next iteration: cur_vn becomes next_arc's Varnode.
+        // Its def is next_arc.def.
+        let next_def = next_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let _ = cur_vn_ptr; // suppress unused
+        cur_def = next_def;
+    }
+}
+
+/// Resolve the COPY-chain source of `vn` and return it as a borrowed
+/// comparison target. Returns the def op + the advanced `vn` reference is
+/// implicit (caller re-reads). For findSubpieceShadow we need the terminal
+/// non-COPY-defined Varnode. Returns (def_op_arc, is_constant_terminal).
+/// Actually, to avoid lifetime issues, we return the source Varnode's def
+/// op Arc so the caller can inspect its opcode/inputs.
+// RUGRA-GLUE: 透传 COPY 链到终端 def op（非 COPY 定义或 unwritten）。
+// Ghidra 内联 while 循环；Rugra 提取为函数以避免跨层 RwLockReadGuard 冲突。
+/// Returns None if vn is not written.
+fn copy_chain_source_def(vn: &Varnode) -> Option<(std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, bool)> {
+    use crate::opcodes::OpCode;
+    // Walk COPY chain to the terminal def op.
+    let mut cur_def = vn.def.as_ref().and_then(|w| w.upgrade())?;
+    loop {
+        let (is_copy, next_def) = {
+            let d = cur_def.read().unwrap();
+            if d.opcode == OpCode::CPUI_COPY {
+                (true, d.inrefs.get(0).and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade())))
+            } else {
+                (false, None)
+            }
+        };
+        if !is_copy {
+            // cur_def is the terminal non-COPY def.
+            let written = true;
+            return Some((cur_def, written));
+        }
+        match next_def {
+            Some(nd) => cur_def = nd,
+            None => {
+                // COPY chain ends at an unwritten/input Varnode.
+                return Some((cur_def, false));
+            }
+        }
+    }
+}
+
+// Ghidra: varnode.cc:1006 Varnode::findSubpieceShadow
+/// Faithful to `Varnode::findSubpieceShadow` (varnode.cc:1006-1053).
+/// Establish that `vn` is produced from `whole` by SUBPIECE truncating
+/// `least_byte` low bytes (allowing COPY pass-through and 1 level of
+/// MULTIEQUAL recursion).
+fn find_subpiece_shadow(vn: &Varnode, least_byte: i32, whole: &Varnode, recurse: i32) -> bool {
+    use crate::opcodes::OpCode;
+    // Walk COPY chain from vn to its source.
+    let (def_arc, written) = match copy_chain_source_def(vn) {
+        Some(x) => x,
+        None => {
+            // vn not written at all.
+            if vn.is_constant() {
+                // Constant short-circuit (varnode.cc:1013-1020).
+                let whole_def = copy_chain_source_def(whole);
+                let whole_is_const = match &whole_def {
+                    Some((_, true)) => false,
+                    None => whole.is_constant(),
+                    Some((_, false)) => whole.is_constant(),
+                };
+                // Re-derive whole's terminal offset by walking its COPY chain.
+                if !whole_is_const {
+                    return false;
+                }
+                let whole_off = whole_terminal_offset(whole);
+                let off = whole_off >> (least_byte as u32 * 8);
+                let mask = crate::address::calc_mask(vn.size);
+                return (off & mask) == vn.get_offset();
+            }
+            return false;
+        }
+    };
+    if !written {
+        // vn's COPY chain ends at an unwritten (input) non-constant Varnode.
+        return false;
+    }
+    let def = def_arc.read().unwrap();
+    match def.opcode {
+        OpCode::CPUI_SUBPIECE => {
+            let tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false };
+            let off = match def.inrefs.get(1) { Some(a) => a.read().unwrap().get_offset() as i32, None => return false };
+            if off != least_byte {
+                return false;
+            }
+            let tmpvn_size = tmpvn_arc.read().unwrap().size;
+            if tmpvn_size != whole.size {
+                return false;
+            }
+            // if (tmpvn == whole) return true; + COPY chain check (varnode.cc:1029-1033)
+            let tmpvn = tmpvn_arc.read().unwrap();
+            return copy_chain_hits(&tmpvn, whole);
+        }
+        OpCode::CPUI_MULTIEQUAL => {
+            let new_recurse = recurse + 1;
+            if new_recurse > 1 {
+                return false; // Truncate recursion at max depth (varnode.cc:1037)
+            }
+            // Walk whole's COPY chain, require it to be defined by MULTIEQUAL.
+            let (whole_def_arc, whole_written) = match copy_chain_source_def(whole) {
+                Some(x) => x,
+                None => return false,
+            };
+            if !whole_written {
+                return false;
+            }
+            let small_op = def_arc.clone();
+            drop(def);
+            let big_op_def = whole_def_arc.read().unwrap();
+            if big_op_def.opcode != OpCode::CPUI_MULTIEQUAL {
+                return false;
+            }
+            // bigOp->getParent() != smallOp->getParent() check (varnode.cc:1044).
+            let same_parent = {
+                let big_p = big_op_def.parent.as_ref().and_then(|w| w.upgrade());
+                let small_p = small_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                match (big_p, small_p) {
+                    (Some(b), Some(s)) => std::sync::Arc::ptr_eq(&b, &s),
+                    _ => false,
+                }
+            };
+            if !same_parent {
+                return false;
+            }
+            let n = big_op_def.num_input();
+            // Collect input Arcs before recursing (avoid holding guards).
+            let pairs: Vec<(std::sync::Arc<std::sync::RwLock<Varnode>>, std::sync::Arc<std::sync::RwLock<Varnode>>)> = {
+                let small = small_op.read().unwrap();
+                (0..n).filter_map(|i| {
+                    let sin = small.inrefs.get(i).cloned();
+                    let bin = big_op_def.inrefs.get(i).cloned();
+                    match (sin, bin) { (Some(a), Some(b)) => Some((a, b)), _ => None }
+                }).collect()
+            };
+            drop(big_op_def);
+            for (s_arc, b_arc) in pairs {
+                let (s, b) = { (s_arc.read().unwrap(), b_arc.read().unwrap()) };
+                // Note: recursing with dropped guards — but we hold s,b here.
+                // find_subpiece_shadow only reads, so it's safe to pass &*s, &*b.
+                if !find_subpiece_shadow(&s, least_byte, &b, new_recurse) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        _ => return false,
+    }
+}
+
+// RUGRA-GLUE: 透传 whole 的 COPY 链取终端 offset（常量短路用）。
+// Ghidra 内联 while 循环 (varnode.cc:1014-1017)；Rugra 提取为函数。
+/// Get the terminal offset of a constant Varnode after walking its COPY
+/// chain. Used by findSubpieceShadow's constant short-circuit (varnode.cc:1017).
+fn whole_terminal_offset(whole: &Varnode) -> u64 {
+    use crate::opcodes::OpCode;
+    let mut off = whole.get_offset();
+    let mut cur = whole.def.as_ref().and_then(|w| w.upgrade());
+    while let Some(d_arc) = cur.take() {
+        let d = d_arc.read().unwrap();
+        if d.opcode != OpCode::CPUI_COPY {
+            break;
+        }
+        if let Some(next) = d.inrefs.get(0) {
+            off = next.read().unwrap().get_offset();
+            cur = next.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        } else {
+            break;
+        }
+    }
+    off
+}
+
+// Ghidra: varnode.cc:1062 Varnode::findPieceShadow
+/// Faithful to `Varnode::findPieceShadow` (varnode.cc:1062-1091).
+fn find_piece_shadow(vn: &Varnode, mut least_byte: i32, piece: &Varnode) -> bool {
+    use crate::opcodes::OpCode;
+    // Walk COPY chain.
+    let (def_arc, written) = match copy_chain_source_def(vn) {
+        Some(x) => x,
+        None => return false,
+    };
+    if !written {
+        return false;
+    }
+    let def = def_arc.read().unwrap();
+    if def.opcode != OpCode::CPUI_PIECE {
+        return false;
+    }
+    // tmpvn = getIn(1) (least significant part).
+    let mut tmpvn_arc = match def.inrefs.get(1) { Some(a) => a.clone(), None => return false };
+    let tmp_size = tmpvn_arc.read().unwrap().size;
+    if (least_byte as usize) >= tmp_size {
+        least_byte -= tmp_size as i32;
+        // tmpvn = getIn(0).
+        tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false };
+    } else {
+        let tmp_size2 = tmpvn_arc.read().unwrap().size;
+        if piece.size + (least_byte as usize) > tmp_size2 {
+            return false;
+        }
+    }
+    let tmp_size_final = tmpvn_arc.read().unwrap().size;
+    if least_byte == 0 && tmp_size_final == piece.size {
+        let tmpvn = tmpvn_arc.read().unwrap();
+        return copy_chain_hits(&tmpvn, piece);
+    }
+    // CPUI_PIECE input too big: recurse.
+    let tmpvn = tmpvn_arc.read().unwrap();
+    find_piece_shadow(&tmpvn, least_byte, piece)
 }
 
 #[cfg(test)]

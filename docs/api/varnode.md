@@ -716,3 +716,10 @@
 - `copy_shadow(op2)`（对齐 varnode.cc:977）：双向追踪 COPY 链判断是否同源。供 eliminate_intersect 使用。
 - `partial_copy_shadow(whole, rel_off)`（对齐 varnode.cc:1102）：**保守 stub**（返回 false）。完整 SUBPIECE 影子分析（findSubpieceShadow）待移植。
 - 文件级 helper `collect_copy_sources`：沿 COPY 链收集源 Arc，支持 copy_shadow 的双向比较。
+
+### 2026-07-04（续 2）：完整移植 SUBPIECE/PIECE 影子分析
+- `partial_copy_shadow` 从保守 stub（返回 false）改为完整实现（对齐 varnode.cc:1102-1131）。
+- 新增 `find_subpiece_shadow`（对齐 varnode.cc:1006-1053）：递归 SUBPIECE 影子判定，含 COPY 透传、常量短路、MULTIEQUAL 1 层递归（recurse 限 1）。
+- 新增 `find_piece_shadow`（对齐 varnode.cc:1062-1091）：递归 PIECE 影子判定。
+- 辅助函数 `copy_chain_hits`/`copy_chain_source_def`/`whole_terminal_offset`：沿 COPY 链遍历（借用安全）。
+- 这让 eliminate_intersect 的部分重叠判定忠实于 Ghidra（之前 stub 会把值包含误判为真相交，导致多余 snip）。
