@@ -63,7 +63,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 工具/测试（test/testfunction/filemanage/sleighexample/typegrp_ghidra/codedata/xml_arch/codedata） | ~7 | 按需 |
 
 **完全遗漏、需补入跟踪的核心文件**（此前路线图未提及）：
-- `flow.cc` — 控制流分析基础（已标 L1）
+- `flow.cc` — 控制流分析基础。**2026-07-04 核实**：FlowInfo 范式确实 L1（无忠实移植）。Rugra 用**线性扫描 + 离线 CFG 分割**（inject_raw_ops + build_blocks_from_ops）替代 Ghidra 的可达性流追踪（followFlow/generateOps）。对普通函数功能等价（curl 24/24 能反编译）。**真正缺失的 5 个子系统**：(1) 可达性流追踪（无法区分可达/不可达字节）；(2) 跳转表流内展开（跳转表目标不被流追踪）；(3) 截断流/部分 Funcdata 克隆（truncatedFlow）；(4) 子函数内联（inlineSubFunction/inlineFlow/EZ-model）；(5) 流内 P-code 注入（injectPcode/injectSubFunction）。CFG 构建（generateBlocks）有等价替代（build_blocks_from_ops, ~L2）。这是架构级迁移，需专门多轮 sessions。
 - `codedata.cc` — 代码数据分析（L1）
 - `printjava.cc` — Java 后端（远期）
 - 其余 slgh_*/ghidra_* 按上表战略排除
