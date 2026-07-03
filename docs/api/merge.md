@@ -161,3 +161,6 @@ merge_required(mergeAddrTied+groupPartials+mergeMarker)、merge_marker(MULTIEQUA
 
 ### 2026-07-01（续 2）：merge_multi_entry + dominant_copy
 merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入口符号合并。dominant_copy（merge.cc:1415-1436）：COPY 链 cover-guarded 合并选主导。3 新测试。9 步 merge 全部实装（仅 group_partials/allocateCopyTrim 是忠实 no-op）。
+
+### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
+- `merge_linear_speculative` → `merge_linear`（对齐 `Merge::mergeLinear` merge.hh:110。原 Rust 名多出 `_speculative` 后缀，Ghidra 方法名无此后缀）。

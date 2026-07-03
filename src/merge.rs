@@ -1091,10 +1091,11 @@ impl Merge {
             if group.len() < 2 {
                 continue;
             }
-            self.merge_linear_speculative(&group);
+            self.merge_linear(&group);
         }
     }
 
+    // Ghidra: merge.hh:110 Merge::mergeLinear
     /// Speculatively merge a list of same-type HighVariables as well as
     /// possible. Faithful to `Merge::mergeLinear` (merge.cc:272-292).
     ///
@@ -1102,7 +1103,7 @@ impl Merge {
     /// whose cover it does not intersect; if none is compatible it starts a
     /// new stack group. After a successful merge, the stacked head's cover
     /// snapshot is refreshed so subsequent tests reflect the union.
-    fn merge_linear_speculative(&mut self, highvec: &[Arc<RwLock<HighVariable>>]) {
+    fn merge_linear(&mut self, highvec: &[Arc<RwLock<HighVariable>>]) {
         if highvec.len() <= 1 {
             return;
         }
