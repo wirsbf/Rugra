@@ -849,7 +849,7 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 - `RulePtraddUndo`(6927) — 标 TODO（需 hasTypeRecoveryStarted + opUndoPtradd）
 - `RulePtrsubUndo`(7146) — **4 helper(getConstOffsetBack/getExtraOffset/removeLocalAddRecurse/removeLocalAdds) 1:1 完全移植**；applyOp 标 TODO（需 isPtrsubMatching）
 - `RuleSegment`(9013) — 标 TODO（需 SegmentOp/userops）
-- `RulePiecePathology`(10578) — 标 TODO（需 isInput/isPersist + bytes-consumed API）
+- `RulePiecePathology`(10578) — INDIRECT case wired via `fd.get_op_from_const` + `is_call()` (对齐 ruleaction.cc:10453-10464). 标 TODO（bytes-consumed API for tracePathologyForward）
 
 验证：832/832 测试（新增 13），curl 24/24 无回归。
 

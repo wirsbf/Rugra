@@ -2,10 +2,10 @@
 
 Faithful port of Ghidra's `database.hh` / `database.cc` (3430 lines).
 
-**Status:** L1 → L2. All public classes (`SymbolEntry`, `Symbol`,
-`FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `Scope`, `Database`) are present
-with full data structures and the in-memory query/insert algorithms. XML
-encode/decode is an L3 gap pending the Decoder/Encoder infrastructure.
+**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). All public classes (`SymbolEntry`,
+`Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `Scope`, `Database`)
+are present with full data structures, the in-memory query/insert algorithms,
+AND XML encode/decode via `marshal.rs`'s `Encoder`/`Decoder` traits.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/database.{hh,cc}`.

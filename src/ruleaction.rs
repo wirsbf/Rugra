@@ -10016,10 +10016,8 @@ impl Rule for RuleSubRight {
             if let Some(vn) = in0_vn {
                 if let Some(dt) = vn.read().unwrap().get_type_read_facing() {
                     if dt.is_piece_structured() {
-                        // Rugra has no Funcdata::opMarkSpecialPrint; set the
-                        // SPECIAL_PRINT addlflag bit directly (op.hh:140, value 0x2).
-                        let mut op = op_arc.write().unwrap();
-                        op.addlflags |= 0x2;
+                        // Faithful to `data.opMarkSpecialPrint(op)` (ruleaction.cc:7275).
+                        fd.op_mark_special_print(&crate::op::PcodeOpRef(op_arc.clone()));
                         return Ok(action_status::NO_CHANGE); // Print this as a field extraction
                     }
                 }
@@ -12919,32 +12917,24 @@ impl RulePiecePathology {
                         op_opt = None;
                     }
                     OpCode::CPUI_INDIRECT => {
-                        // Ghidra: if in(1) is an IOP-space const pointing at a
-                        // CALL op whose callspec has a non-active output, this
-                        // is pathology. Rugra has no getOpFromConst, so we
-                        // approximate: an INDIRECT around a call is detected
-                        // via the op's CALL flag is not set on INDIRECT; but a
-                        // call-result INDIRECT is one whose in(1) is IOP-space.
-                        // We conservatively only flag it when the underlying
-                        // IOP target is resolvable to a call — which we cannot
-                        // do without getOpFromConst, so we fall back to the
-                        // indirect_creation heuristic: if this INDIRECT was
-                        // produced by a call (indirect_creation flag), treat as
-                        // pathology when the call's output is not active.
+                        // Faithful to RulePiecePathology::isPathology CPUI_INDIRECT
+                        // case (ruleaction.cc:10453-10464): if in(1) is an IOP-space
+                        // const, resolve it to the referenced PcodeOp via
+                        // `PcodeOp::getOpFromConst` (op.hh:249), check it's a call,
+                        // and flag pathology if the call's output is not active.
                         let in1 = op.read().unwrap().get_in(1).cloned();
                         if let Some(iop_vn) = in1 {
                             let is_iop = iop_vn.read().unwrap().get_space()
                                 == crate::space::AddressSpace::Iop;
                             if is_iop {
-                                // Resolve the referenced op by scanning the op
-                                // bank for a CALL at the const address.
-                                let target_addr = iop_vn.read().unwrap().get_offset();
-                                if let Some(call_idx) =
-                                    Self::find_call_spec_by_addr(fd, target_addr)
-                                {
-                                    if let Some(fc) = fd.get_call_specs(call_idx) {
-                                        if !fc.is_output_active() {
-                                            res = true;
+                                if let Some(call_op) = fd.get_op_from_const(&iop_vn) {
+                                    if call_op.0.read().unwrap().is_call() {
+                                        if let Some(idx) = Self::find_call_spec_for_op(fd, &call_op.0) {
+                                            if let Some(fc) = fd.get_call_specs(idx) {
+                                                if !fc.is_output_active() {
+                                                    res = true;
+                                                }
+                                            }
                                         }
                                     }
                                 }

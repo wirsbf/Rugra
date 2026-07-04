@@ -741,7 +741,7 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 - ActionMapGlobals：**务实最小**。遍历 vbank，RAM+persist varnode 设 PERSIST+READONLY。
 - ActionPreferComplement：**务实最小**。遍历 sblocks 找 CBRANCH 候选，TODO: preferComplement flipInPlace。
 - ActionStructureTransform：**务实最小**。遍历 WhileDo 候选，TODO: finalTransform while→for。
-- ActionReturnSplit：**务实最小**。isSplittable 判定 + RETURN 候选检测，TODO: nodeSplit。
+- ActionReturnSplit：**goto 前驱创建 RETURN op**。isSplittable 判定 + RETURN 候选检测，`Funcdata::node_split` 已移植 (funcdata.rs:1215) 但调用会破坏 staged structurer 稳定索引不变量，故改用 op API 合成 RETURN。
 - ActionNodeJoin：**务实最小**。ConditionalJoin 候选检测，TODO: ConditionalJoin 类。
 2 新测试。
 

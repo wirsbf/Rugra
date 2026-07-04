@@ -6536,10 +6536,11 @@ impl Action for ActionStructureTransform {
 /// blockaction.cc:2212) and calls `data.nodeSplit(parent, slot)` per split
 /// edge so each goto source gets its own RETURN block.
 ///
-/// Rugra port: `Funcdata::nodeSplit` (funcdata_block.cc:856) is not ported,
-/// and a block split would break the staged structurer's stable-index
-/// invariant. We instead achieve the same per-branch RETURN using the existing
-/// op API without splitting any block: for each splittable multi-in-edge
+/// Rugra port: `Funcdata::nodeSplit` (funcdata_block.cc:856) IS ported at
+/// `funcdata.rs:1215` (`Funcdata::node_split`), but a real block split would
+/// break the staged structurer's stable-index invariant. We instead achieve
+/// the same per-branch RETURN using the existing op API without splitting any
+/// block: for each splittable multi-in-edge
 /// RETURN block, for each in-edge whose source is a goto predecessor (a block
 /// whose last op is a BRANCH/CBRANCH), we synthesize a new RETURN op at the
 /// predecessor's address, seed its input with the original RETURN's input
