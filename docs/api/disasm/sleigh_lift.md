@@ -13,3 +13,5 @@ wired into the main pipeline (x86_lift.rs is still the default lifter).
 - `map_space` — jingle_sleigh SpaceType → Rugra AddressSpace
 - `map_vn` — jingle_sleigh VarNode → Rugra VarnodeRaw
 - `opc_from` — jingle_sleigh OpCode → Rugra OpCode (by variant name)
+
+<!-- lift-instr: 1783181251.8037653 -->

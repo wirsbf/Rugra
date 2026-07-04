@@ -192,4 +192,9 @@ impl SleighLifter {
         }
         result
     }
+
+    // RUGRA-GLUE: lift a single instruction from raw bytes at offset 0
+    pub fn lift_instruction(code: &[u8], base_addr: u64) -> Vec<PcodeOpRaw> {
+        Self::lift(0, code)
+    }
 }
