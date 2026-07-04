@@ -225,7 +225,7 @@ pub fn to_ghidra_opcode(op: OpCode) -> Option<i32> {
         OpCode::CPUI_EXTRACT => Some(71),
         OpCode::CPUI_POPCOUNT => Some(72),
         OpCode::CPUI_LZCOUNT => Some(73),
-        OpCode::CPUI_TRUNC => Some(56), // Same as FLOAT_TRUNC in Ghidra
+        OpCode::CPUI_SUBPIECE => Some(56), // Same as FLOAT_TRUNC in Ghidra
         OpCode::CPUI_MAX => None,
     }
 }

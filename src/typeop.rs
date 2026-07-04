@@ -876,7 +876,7 @@ functional_unary_op!(
     typeop_flags::INHERITS_SIGN,
     "sext"
 );
-functional_unary_op!(TypeOpTrunc, CPUI_TRUNC, "TRUNC", 0, "trunc");
+functional_unary_op!(TypeOpTrunc, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece");
 
 // Floating Point Operations
 binary_op!(
@@ -1911,7 +1911,7 @@ impl TypeOpManager {
         // Extension
         ops[OpCode::CPUI_INT_ZEXT as usize] = Some(Box::new(TypeOpIntZext));
         ops[OpCode::CPUI_INT_SEXT as usize] = Some(Box::new(TypeOpIntSext));
-        ops[OpCode::CPUI_TRUNC as usize] = Some(Box::new(TypeOpTrunc));
+        ops[OpCode::CPUI_SUBPIECE as usize] = Some(Box::new(TypeOpTrunc));
 
         // Floating Point
         ops[OpCode::CPUI_FLOAT_ADD as usize] = Some(Box::new(TypeOpFloatAdd));

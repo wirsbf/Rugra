@@ -95,3 +95,4 @@ Intercept and compare Transformation Actions
 
 **2026-07-02**：`map_ghidra_opcode(64)` Ghidra→Rugra 方向原被注释掉，与 `to_ghidra_opcode`（Rugra→Ghidra 已映射 CPUI_CAST→64）不对称，导入时丢失 CPUI_CAST。现已补回 `64 => Some(OpCode::CPUI_CAST)`，往返对称。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- opcode-correct: 1783180039.0619004 -->

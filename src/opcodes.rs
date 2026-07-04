@@ -10,178 +10,84 @@ use std::fmt;
 /// This enum represents all possible P-code operations. Each operation
 /// has specific semantics for how it operates on its input and output varnodes.
 /// Prefixes match Ghidra's `CPUI_` naming convention.
+///
+/// Numeric values are 1:1 with Ghidra `opcodes.hh:37-130` (authoritative).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(i32)]
 #[allow(non_camel_case_types)]
 pub enum OpCode {
-    // ===== Data Movement =====
-    /// Copy value from input to output
     CPUI_COPY = 1,
-    /// Load from memory
     CPUI_LOAD = 2,
-    /// Store to memory
     CPUI_STORE = 3,
-
-    // ===== Arithmetic Operations =====
-    /// Integer addition
-    CPUI_INT_ADD = 4,
-    /// Integer subtraction
-    CPUI_INT_SUB = 5,
-    /// Integer multiplication
-    CPUI_INT_MULT = 6,
-    /// Unsigned integer division
-    CPUI_INT_DIV = 7,
-    /// Signed integer division
-    CPUI_INT_SDIV = 8,
-    /// Unsigned integer remainder/modulo
-    CPUI_INT_REM = 9,
-    /// Signed integer remainder/modulo
-    CPUI_INT_SREM = 10,
-    /// Integer negation
-    CPUI_INT_2COMP = 11,
-    /// Unsigned integer carry
-    CPUI_INT_CARRY = 12,
-    /// Signed integer carry
-    CPUI_INT_SCARRY = 13,
-    /// Signed integer borrow
-    CPUI_INT_SBORROW = 14,
-
-    // ===== Bitwise Operations =====
-    /// Bitwise AND
-    CPUI_INT_AND = 15,
-    /// Bitwise OR
-    CPUI_INT_OR = 16,
-    /// Bitwise XOR
-    CPUI_INT_XOR = 17,
-    /// Bitwise NOT
-    CPUI_INT_NEGATE = 18,
-    /// Left shift
-    CPUI_INT_LEFT = 19,
-    /// Logical right shift (zero-fill)
-    CPUI_INT_RIGHT = 20,
-    /// Arithmetic right shift (sign-extend)
-    CPUI_INT_SRIGHT = 21,
-
-    // ===== Comparison Operations =====
-    /// Integer equality
-    CPUI_INT_EQUAL = 22,
-    /// Integer inequality
-    CPUI_INT_NOTEQUAL = 23,
-    /// Unsigned less than
-    CPUI_INT_LESS = 24,
-    /// Signed less than
-    CPUI_INT_SLESS = 25,
-    /// Unsigned less than or equal
-    CPUI_INT_LESSEQUAL = 26,
-    /// Signed less than or equal
-    CPUI_INT_SLESSEQUAL = 27,
-
-    // ===== Extension and Truncation =====
-    /// Zero extension (unsigned)
-    CPUI_INT_ZEXT = 28,
-    /// Sign extension (signed)
-    CPUI_INT_SEXT = 29,
-    /// Truncation
-    CPUI_TRUNC = 30,
-
-    // ===== Floating Point Operations =====
-    /// Floating point addition
-    CPUI_FLOAT_ADD = 31,
-    /// Floating point subtraction
-    CPUI_FLOAT_SUB = 32,
-    /// Floating point multiplication
-    CPUI_FLOAT_MULT = 33,
-    /// Floating point division
-    CPUI_FLOAT_DIV = 34,
-    /// Floating point negation
-    CPUI_FLOAT_NEG = 35,
-    /// Floating point absolute value
-    CPUI_FLOAT_ABS = 36,
-    /// Floating point square root
-    CPUI_FLOAT_SQRT = 37,
-    /// Floating point equality
-    CPUI_FLOAT_EQUAL = 38,
-    /// Floating point inequality
-    CPUI_FLOAT_NOTEQUAL = 39,
-    /// Floating point less than
-    CPUI_FLOAT_LESS = 40,
-    /// Floating point less than or equal
-    CPUI_FLOAT_LESSEQUAL = 41,
-    /// Floating point NaN check
-    CPUI_FLOAT_NAN = 42,
-    /// Float to float conversion
-    CPUI_FLOAT_FLOAT2FLOAT = 43,
-    /// Integer to float conversion
-    CPUI_FLOAT_INT2FLOAT = 44,
-    /// Float to integer conversion (truncate)
-    CPUI_FLOAT_TRUNC = 45,
-    /// Float ceiling
-    CPUI_FLOAT_CEIL = 46,
-    /// Float floor
-    CPUI_FLOAT_FLOOR = 47,
-    /// Float round
-    CPUI_FLOAT_ROUND = 48,
-
-    // ===== Control Flow =====
-    /// Unconditional branch
-    CPUI_BRANCH = 49,
-    /// Conditional branch
-    CPUI_CBRANCH = 50,
-    /// Branch indirect (computed goto)
-    CPUI_BRANCHIND = 51,
-    /// Function call
-    CPUI_CALL = 52,
-    /// Indirect function call
-    CPUI_CALLIND = 53,
-    /// Return from function
-    CPUI_RETURN = 54,
-
-    // ===== Special Operations =====
-    /// Piece/concatenate values
-    CPUI_PIECE = 55,
-    /// Extract sub-piece
-    CPUI_SUBPIECE = 56,
-    /// Boolean AND
-    CPUI_BOOL_AND = 57,
-    /// Boolean OR
-    CPUI_BOOL_OR = 58,
-    /// Boolean XOR
-    CPUI_BOOL_XOR = 59,
-    /// Boolean NOT
-    CPUI_BOOL_NEGATE = 60,
-    /// Population count (count set bits)
-    CPUI_POPCOUNT = 61,
-    /// Count leading zeros
-    CPUI_LZCOUNT = 62,
-
-    // ===== Additional Special Ops (from Ghidra) =====
-    /// Function call with side-effects
-    CPUI_CALLOTHER = 63,
-    /// Phi-node for SSA
-    CPUI_MULTIEQUAL = 64,
-    /// Indirect reference/definition
-    CPUI_INDIRECT = 65,
-    /// Reference to constant pool
-    CPUI_CPOOLREF = 66,
-    /// Object creation
-    CPUI_NEW = 67,
-    /// Segmented address calculation
-    CPUI_SEGMENTOP = 68,
-    /// Pointer addition
-    CPUI_PTRADD = 69,
-    /// Pointer subtraction
-    CPUI_PTRSUB = 70,
-    /// Bit field extraction
+    CPUI_BRANCH = 4,
+    CPUI_CBRANCH = 5,
+    CPUI_BRANCHIND = 6,
+    CPUI_CALL = 7,
+    CPUI_CALLIND = 8,
+    CPUI_CALLOTHER = 9,
+    CPUI_RETURN = 10,
+    CPUI_INT_EQUAL = 11,
+    CPUI_INT_NOTEQUAL = 12,
+    CPUI_INT_SLESS = 13,
+    CPUI_INT_SLESSEQUAL = 14,
+    CPUI_INT_LESS = 15,
+    CPUI_INT_LESSEQUAL = 16,
+    CPUI_INT_ZEXT = 17,
+    CPUI_INT_SEXT = 18,
+    CPUI_INT_ADD = 19,
+    CPUI_INT_SUB = 20,
+    CPUI_INT_CARRY = 21,
+    CPUI_INT_SCARRY = 22,
+    CPUI_INT_SBORROW = 23,
+    CPUI_INT_2COMP = 24,
+    CPUI_INT_NEGATE = 25,
+    CPUI_INT_XOR = 26,
+    CPUI_INT_AND = 27,
+    CPUI_INT_OR = 28,
+    CPUI_INT_LEFT = 29,
+    CPUI_INT_RIGHT = 30,
+    CPUI_INT_SRIGHT = 31,
+    CPUI_INT_MULT = 32,
+    CPUI_INT_DIV = 33,
+    CPUI_INT_SDIV = 34,
+    CPUI_INT_REM = 35,
+    CPUI_INT_SREM = 36,
+    CPUI_BOOL_NEGATE = 37,
+    CPUI_BOOL_XOR = 38,
+    CPUI_BOOL_AND = 39,
+    CPUI_BOOL_OR = 40,
+    CPUI_FLOAT_EQUAL = 41,
+    CPUI_FLOAT_NOTEQUAL = 42,
+    CPUI_FLOAT_LESS = 43,
+    CPUI_FLOAT_LESSEQUAL = 44,
+    CPUI_FLOAT_NAN = 46,
+    CPUI_FLOAT_ADD = 47,
+    CPUI_FLOAT_DIV = 48,
+    CPUI_FLOAT_MULT = 49,
+    CPUI_FLOAT_SUB = 50,
+    CPUI_FLOAT_NEG = 51,
+    CPUI_FLOAT_ABS = 52,
+    CPUI_FLOAT_SQRT = 53,
+    CPUI_FLOAT_INT2FLOAT = 54,
+    CPUI_FLOAT_FLOAT2FLOAT = 55,
+    CPUI_FLOAT_TRUNC = 56,
+    CPUI_FLOAT_CEIL = 57,
+    CPUI_FLOAT_FLOOR = 58,
+    CPUI_FLOAT_ROUND = 59,
+    CPUI_MULTIEQUAL = 60,
+    CPUI_INDIRECT = 61,
+    CPUI_PIECE = 62,
+    CPUI_SUBPIECE = 63,
+    CPUI_CAST = 64,
+    CPUI_PTRADD = 65,
+    CPUI_PTRSUB = 66,
+    CPUI_SEGMENTOP = 67,
+    CPUI_CPOOLREF = 68,
+    CPUI_NEW = 69,
+    CPUI_INSERT = 70,
     CPUI_EXTRACT = 71,
-    /// Bit field insertion
-    CPUI_INSERT = 72,
-
-    /// Cast from one datatype to another (P-code annotation op).
-    /// Mirrors Ghidra opcodes.hh:119 CPUI_CAST. The bit pattern is preserved;
-    /// this op only annotates a metatype/size change. ActionSetCasts inserts
-    /// it at the P-code layer, the print layer renders the cast syntax.
-    CPUI_CAST = 73,
-
-    /// No operation / placeholder
+    CPUI_POPCOUNT = 72,
+    CPUI_LZCOUNT = 73,
     CPUI_MAX = 74,
 }
 
@@ -218,7 +124,8 @@ impl OpCode {
             OpCode::CPUI_INT_SLESSEQUAL => "INT_SLESSEQUAL",
             OpCode::CPUI_INT_ZEXT => "INT_ZEXT",
             OpCode::CPUI_INT_SEXT => "INT_SEXT",
-            OpCode::CPUI_TRUNC => "TRUNC",
+            // CPUI_TRUNC removed: was Rugra-only, not in Ghidra. Integer
+            // truncation uses CPUI_SUBPIECE; float uses CPUI_FLOAT_TRUNC.
             OpCode::CPUI_FLOAT_ADD => "FLOAT_ADD",
             OpCode::CPUI_FLOAT_SUB => "FLOAT_SUB",
             OpCode::CPUI_FLOAT_MULT => "FLOAT_MULT",
@@ -276,77 +183,75 @@ impl OpCode {
             1 => Some(OpCode::CPUI_COPY),
             2 => Some(OpCode::CPUI_LOAD),
             3 => Some(OpCode::CPUI_STORE),
-            4 => Some(OpCode::CPUI_INT_ADD),
-            5 => Some(OpCode::CPUI_INT_SUB),
-            6 => Some(OpCode::CPUI_INT_MULT),
-            7 => Some(OpCode::CPUI_INT_DIV),
-            8 => Some(OpCode::CPUI_INT_SDIV),
-            9 => Some(OpCode::CPUI_INT_REM),
-            10 => Some(OpCode::CPUI_INT_SREM),
-            11 => Some(OpCode::CPUI_INT_2COMP),
-            12 => Some(OpCode::CPUI_INT_CARRY),
-            13 => Some(OpCode::CPUI_INT_SCARRY),
-            14 => Some(OpCode::CPUI_INT_SBORROW),
-            15 => Some(OpCode::CPUI_INT_AND),
-            16 => Some(OpCode::CPUI_INT_OR),
-            17 => Some(OpCode::CPUI_INT_XOR),
-            18 => Some(OpCode::CPUI_INT_NEGATE),
-            19 => Some(OpCode::CPUI_INT_LEFT),
-            20 => Some(OpCode::CPUI_INT_RIGHT),
-            21 => Some(OpCode::CPUI_INT_SRIGHT),
-            22 => Some(OpCode::CPUI_INT_EQUAL),
-            23 => Some(OpCode::CPUI_INT_NOTEQUAL),
-            24 => Some(OpCode::CPUI_INT_LESS),
-            25 => Some(OpCode::CPUI_INT_SLESS),
-            26 => Some(OpCode::CPUI_INT_LESSEQUAL),
-            27 => Some(OpCode::CPUI_INT_SLESSEQUAL),
-            28 => Some(OpCode::CPUI_INT_ZEXT),
-            29 => Some(OpCode::CPUI_INT_SEXT),
-            30 => Some(OpCode::CPUI_TRUNC),
-            31 => Some(OpCode::CPUI_FLOAT_ADD),
-            32 => Some(OpCode::CPUI_FLOAT_SUB),
-            33 => Some(OpCode::CPUI_FLOAT_MULT),
-            34 => Some(OpCode::CPUI_FLOAT_DIV),
-            35 => Some(OpCode::CPUI_FLOAT_NEG),
-            36 => Some(OpCode::CPUI_FLOAT_ABS),
-            37 => Some(OpCode::CPUI_FLOAT_SQRT),
-            38 => Some(OpCode::CPUI_FLOAT_EQUAL),
-            39 => Some(OpCode::CPUI_FLOAT_NOTEQUAL),
-            40 => Some(OpCode::CPUI_FLOAT_LESS),
-            41 => Some(OpCode::CPUI_FLOAT_LESSEQUAL),
-            42 => Some(OpCode::CPUI_FLOAT_NAN),
-            43 => Some(OpCode::CPUI_FLOAT_FLOAT2FLOAT),
-            44 => Some(OpCode::CPUI_FLOAT_INT2FLOAT),
-            45 => Some(OpCode::CPUI_FLOAT_TRUNC),
-            46 => Some(OpCode::CPUI_FLOAT_CEIL),
-            47 => Some(OpCode::CPUI_FLOAT_FLOOR),
-            48 => Some(OpCode::CPUI_FLOAT_ROUND),
-            49 => Some(OpCode::CPUI_BRANCH),
-            50 => Some(OpCode::CPUI_CBRANCH),
-            51 => Some(OpCode::CPUI_BRANCHIND),
-            52 => Some(OpCode::CPUI_CALL),
-            53 => Some(OpCode::CPUI_CALLIND),
-            54 => Some(OpCode::CPUI_RETURN),
-            55 => Some(OpCode::CPUI_PIECE),
-            56 => Some(OpCode::CPUI_SUBPIECE),
-            57 => Some(OpCode::CPUI_BOOL_AND),
-            58 => Some(OpCode::CPUI_BOOL_OR),
-            59 => Some(OpCode::CPUI_BOOL_XOR),
-            60 => Some(OpCode::CPUI_BOOL_NEGATE),
-            61 => Some(OpCode::CPUI_POPCOUNT),
-            62 => Some(OpCode::CPUI_LZCOUNT),
-            63 => Some(OpCode::CPUI_CALLOTHER),
-            64 => Some(OpCode::CPUI_MULTIEQUAL),
-            65 => Some(OpCode::CPUI_INDIRECT),
-            66 => Some(OpCode::CPUI_CPOOLREF),
-            67 => Some(OpCode::CPUI_NEW),
-            68 => Some(OpCode::CPUI_SEGMENTOP),
-            69 => Some(OpCode::CPUI_PTRADD),
-            70 => Some(OpCode::CPUI_PTRSUB),
+            4 => Some(OpCode::CPUI_BRANCH),
+            5 => Some(OpCode::CPUI_CBRANCH),
+            6 => Some(OpCode::CPUI_BRANCHIND),
+            7 => Some(OpCode::CPUI_CALL),
+            8 => Some(OpCode::CPUI_CALLIND),
+            9 => Some(OpCode::CPUI_CALLOTHER),
+            10 => Some(OpCode::CPUI_RETURN),
+            11 => Some(OpCode::CPUI_INT_EQUAL),
+            12 => Some(OpCode::CPUI_INT_NOTEQUAL),
+            13 => Some(OpCode::CPUI_INT_SLESS),
+            14 => Some(OpCode::CPUI_INT_SLESSEQUAL),
+            15 => Some(OpCode::CPUI_INT_LESS),
+            16 => Some(OpCode::CPUI_INT_LESSEQUAL),
+            17 => Some(OpCode::CPUI_INT_ZEXT),
+            18 => Some(OpCode::CPUI_INT_SEXT),
+            19 => Some(OpCode::CPUI_INT_ADD),
+            20 => Some(OpCode::CPUI_INT_SUB),
+            21 => Some(OpCode::CPUI_INT_CARRY),
+            22 => Some(OpCode::CPUI_INT_SCARRY),
+            23 => Some(OpCode::CPUI_INT_SBORROW),
+            24 => Some(OpCode::CPUI_INT_2COMP),
+            25 => Some(OpCode::CPUI_INT_NEGATE),
+            26 => Some(OpCode::CPUI_INT_XOR),
+            27 => Some(OpCode::CPUI_INT_AND),
+            28 => Some(OpCode::CPUI_INT_OR),
+            29 => Some(OpCode::CPUI_INT_LEFT),
+            30 => Some(OpCode::CPUI_INT_RIGHT),
+            31 => Some(OpCode::CPUI_INT_SRIGHT),
+            32 => Some(OpCode::CPUI_INT_MULT),
+            33 => Some(OpCode::CPUI_INT_DIV),
+            34 => Some(OpCode::CPUI_INT_SDIV),
+            35 => Some(OpCode::CPUI_INT_REM),
+            36 => Some(OpCode::CPUI_INT_SREM),
+            37 => Some(OpCode::CPUI_BOOL_NEGATE),
+            38 => Some(OpCode::CPUI_BOOL_XOR),
+            39 => Some(OpCode::CPUI_BOOL_AND),
+            40 => Some(OpCode::CPUI_BOOL_OR),
+            41 => Some(OpCode::CPUI_FLOAT_EQUAL),
+            42 => Some(OpCode::CPUI_FLOAT_NOTEQUAL),
+            43 => Some(OpCode::CPUI_FLOAT_LESS),
+            44 => Some(OpCode::CPUI_FLOAT_LESSEQUAL),
+            46 => Some(OpCode::CPUI_FLOAT_NAN),
+            47 => Some(OpCode::CPUI_FLOAT_ADD),
+            48 => Some(OpCode::CPUI_FLOAT_DIV),
+            49 => Some(OpCode::CPUI_FLOAT_MULT),
+            50 => Some(OpCode::CPUI_FLOAT_SUB),
+            51 => Some(OpCode::CPUI_FLOAT_NEG),
+            52 => Some(OpCode::CPUI_FLOAT_ABS),
+            53 => Some(OpCode::CPUI_FLOAT_SQRT),
+            54 => Some(OpCode::CPUI_FLOAT_INT2FLOAT),
+            55 => Some(OpCode::CPUI_FLOAT_FLOAT2FLOAT),
+            56 => Some(OpCode::CPUI_FLOAT_TRUNC),
+            57 => Some(OpCode::CPUI_FLOAT_CEIL),
+            58 => Some(OpCode::CPUI_FLOAT_FLOOR),
+            59 => Some(OpCode::CPUI_FLOAT_ROUND),
+            60 => Some(OpCode::CPUI_MULTIEQUAL),
+            61 => Some(OpCode::CPUI_INDIRECT),
+            62 => Some(OpCode::CPUI_PIECE),
+            63 => Some(OpCode::CPUI_SUBPIECE),
+            64 => Some(OpCode::CPUI_CAST),
+            65 => Some(OpCode::CPUI_PTRADD),
+            66 => Some(OpCode::CPUI_PTRSUB),
+            67 => Some(OpCode::CPUI_SEGMENTOP),
+            68 => Some(OpCode::CPUI_CPOOLREF),
+            69 => Some(OpCode::CPUI_NEW),
+            70 => Some(OpCode::CPUI_INSERT),
             71 => Some(OpCode::CPUI_EXTRACT),
-            72 => Some(OpCode::CPUI_INSERT),
-            73 => Some(OpCode::CPUI_CAST),
-            74 => Some(OpCode::CPUI_MAX),
+            72 => Some(OpCode::CPUI_POPCOUNT),
+            73 => Some(OpCode::CPUI_LZCOUNT),
             _ => None,
         }
     }
@@ -424,7 +329,7 @@ impl OpCode {
                 // Extension/Truncation
                 | OpCode::CPUI_INT_ZEXT
                 | OpCode::CPUI_INT_SEXT
-                | OpCode::CPUI_TRUNC
+                | OpCode::CPUI_SUBPIECE
                 // Float arithmetic
                 | OpCode::CPUI_FLOAT_ADD
                 | OpCode::CPUI_FLOAT_SUB
