@@ -4340,6 +4340,8 @@ impl Action for ActionActiveParam {
         let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
         let has_active_output = fd.active_output.is_some();
         let n_calls = fd.num_calls();
+        let debug = std::env::var("RUGRA_DEBUG_ACTIVEPARAM").is_ok();
+        if debug && n_calls > 0 { eprintln!("[ACTIVEPARAM-DBG] {} n_calls={}", fd.name, n_calls); }
         for i in 0..n_calls {
             let is_input_active = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
             if !is_input_active { continue; }
@@ -5064,6 +5066,43 @@ impl Action for ActionFuncLink {
             if !known {
                 if let Some(fc) = fd.get_call_specs_mut(idx) {
                     fc.init_active_input();
+                    // Register trials for each CALL input that's a possible
+                    // input parameter. In Ghidra, this happens during
+                    // Heritage::guardCalls (heritage.cc:1496-1504) which runs
+                    // per-address-range during SSA heritage. Rugra centralizes
+                    // it here because Heritage::guard_calls is a stub.
+                    // Faithful to the guardCalls trial registration logic:
+                    //   if (fc->isInputActive() && tryregister) {
+                    //     if (characterizeAsInputParam == contains_justified)
+                    //       active->registerTrial(transAddr, size);
+                    if let Some(active) = fc.active_input.as_mut() {
+                        let inputs: Vec<(u64, i32, crate::space::AddressSpace)> = {
+                            let op = op_ref.0.read().unwrap();
+                            op.inrefs.iter().skip(1).filter_map(|vn| {
+                                let v = vn.read().unwrap();
+                                let space = v.get_space();
+                                if space == crate::space::AddressSpace::Register
+                                    || space == crate::space::AddressSpace::Stack
+                                {
+                                    Some((v.get_offset(), v.get_size() as i32, space))
+                                } else {
+                                    None
+                                }
+                            }).collect()
+                        };
+                        let model = fc.proto_model.clone();
+                        for (offset, size, space) in inputs {
+                            let addr = crate::address::Address::new(offset);
+                            // Check ProtoModel: only register if this address
+                            // is a possible input parameter slot.
+                            let is_param = model.as_ref()
+                                .map(|m| m.possible_input_param(offset, size, space))
+                                .unwrap_or(true);
+                            if is_param && active.which_trial(addr, size) < 0 {
+                                active.register_trial(addr, size);
+                            }
+                        }
+                    }
                 }
             }
         }
