@@ -870,7 +870,7 @@ impl ActionDatabase {
         // also recurses). Full diagnosis requires stack trace analysis tools
         // not available in this environment. The Arc::as_ptr fix is retained
         // as a correctness improvement. Tracked as TODO.
-        let mut mainloop = ActionGroup::new("mainloop");
+        let mut mainloop = ActionGroup::with_flags("mainloop", action_flags::RULE_REPEATAPPLY);
 
         // ActionUnreachable runs AFTER ActionBlockStructure (see below) where
         // the CFG is complete. It was moved from here (Ghidra :5490) to avoid

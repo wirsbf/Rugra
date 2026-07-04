@@ -804,3 +804,4 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 - spliceBlockBasic 调用 set_order。但 RedundBranch 仍禁用：goto 目标引用未更新。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- fullloop-repeatapply: 1783144461.7680526 -->
+<!-- mainloop-repeatapply: 1783144837.4436781 -->
