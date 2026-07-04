@@ -24,6 +24,15 @@ impl ActionHeritage {
 impl Action for ActionHeritage {
     // Ghidra: coreaction.hh:289 ActionHeritage::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Ghidra idempotency guard (heritage.cc:2698-2701): each space has a
+        // delay; Heritage::heritage() skips spaces where pass < delay. After
+        // pass 2, all spaces (register=0, unique=0, stack=1) are heritaged, so
+        // Heritage returns without doing anything. Without this guard, Rugra's
+        // 2-pass heritage runs unconditionally each mainloop iteration, creating
+        // new SSA temporaries every pass → never converges under repeatapply.
+        if fd.heritage.pass >= 2 {
+            return Ok(0);
+        }
         // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
         //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
         //   The rename in pass 1 connects the op graph (rewrites STORE input
@@ -473,14 +482,20 @@ impl ActionRestructureVarnode {
 impl Action for ActionRestructureVarnode {
     // Ghidra: coreaction.cc:2274 ActionRestructureVarnode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2295).
+        // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2294).
+        // Ghidra's return value is ALWAYS 0 (line 2294): restructureVarnode is
+        // a structural side-effect Action that does NOT drive repeatapply. The
+        // internal `count += 1` (line 2282) is for statistics/breakpoints only.
+        // Rugra previously returned CHANGE, which caused fullloop repeatapply
+        // to infinite-loop because every pass reported a change.
         let mut scope = crate::varmap::ScopeLocal::new();
         scope.restructure_varnode(fd);
         fd.scope = Some(scope);
         // syncVarnodesWithSymbols (coreaction.cc:2281): mark Stack-space
         // varnodes overlapping scope symbols as mapped.
         let _ = fd.sync_varnodes_with_symbols(false, false);
-        Ok(action_status::CHANGE)
+        self.numpass += 1;
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "restructure_varnode" mirrors ctor at coreaction.hh:855
@@ -7306,9 +7321,10 @@ mod tests {
         assert!(fd.scope.is_none(), "fresh Funcdata has no scope");
         let mut action = ActionRestructureVarnode::new();
         let status = action.apply(&mut fd).unwrap();
-        // restructure_varnode always returns CHANGE in our port (it rebuilds
-        // the scope unconditionally), matching Ghidra's always-rebuild design.
-        assert_eq!(status, action_status::CHANGE);
+        // Ghidra returns 0 (coreaction.cc:2294): restructureVarnode is a
+        // structural side-effect, NOT a change-counting action. It must not
+        // drive repeatapply convergence.
+        assert_eq!(status, action_status::NO_CHANGE);
         assert!(fd.scope.is_some(), "scope must be built after the action");
     }
 
@@ -7514,7 +7530,7 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let mut action = ActionRestructureVarnode::new();
         let status = action.apply(&mut fd).unwrap();
-        assert_eq!(status, action_status::CHANGE);
+        assert_eq!(status, action_status::NO_CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");
     }
 

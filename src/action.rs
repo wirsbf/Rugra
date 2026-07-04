@@ -851,7 +851,7 @@ impl ActionDatabase {
         // change every pass (non-idempotent). Reverted to keep the build/test
         // suite green. stackstall repeatapply is retained (its only child, the
         // simplify pool, is designed to converge to a fixed point).
-        let mut fullloop = ActionGroup::new("fullloop");
+        let mut fullloop = ActionGroup::with_flags("fullloop", action_flags::RULE_REPEATAPPLY);
 
         // --- mainloop (coreaction.cc:5489, repeatapply) ---
         // NOTE: mainloop repeatapply causes stack overflow even with iterative
