@@ -66,3 +66,4 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - mark_equate/mark_un_equate/is_equated（Rugra 私有 EQUATED 位，Ghidra 对应 EquateSymbol）。
 - type_flags 补齐 CHARTYPE/ENUMTYPE/UTF16/UTF32/HAS_STRIPPED/IS_PTRREL/TYPE_INCOMPLETE/NEEDS_RESOLUTION。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- printnamebase-port: 1783140112.9236958 -->

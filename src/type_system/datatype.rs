@@ -377,6 +377,35 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:273 Datatype::printNameBase
+    // Ghidra: type.hh:424 TypePointer::printNameBase
+    // Ghidra: type.hh:457 TypeArray::printNameBase
+    /// Write the type-indicator character(s) used to build variable name
+    /// prefixes (e.g. "i" for int → "iVar", "pi" for int* → "piVar").
+    /// Faithful to Ghidra's virtual dispatch:
+    ///   - Base class (type.hh:273): `if (!name.empty()) s << name[0];`
+    ///   - TypePointer (type.hh:424): `s << 'p'; ptrto->printNameBase(s);`
+    ///   - TypeArray (type.hh:457): `s << 'a'; arrayof->printNameBase(s);`
+    /// Rugra's enum dispatch mirrors the C++ virtual method resolution.
+    pub fn print_name_base(&self, out: &mut String) {
+        match self {
+            Datatype::Pointer(p) => {
+                out.push('p');
+                p.ptr_to.print_name_base(out);
+            }
+            Datatype::Array(a) => {
+                out.push('a');
+                a.array_of.print_name_base(out);
+            }
+            _ => {
+                let name = self.get_name();
+                if let Some(c) = name.chars().next() {
+                    out.push(c);
+                }
+            }
+        }
+    }
+
     // Ghidra: type.cc:227 Datatype::compareDependency
     /// Compare datatypes by dependency order.
     /// Faithful to Datatype::compareDependency (type.cc:227).
