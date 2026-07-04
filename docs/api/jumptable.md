@@ -225,3 +225,4 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 ### 2026-07-01：JumpTable 接入 Funcdata
 recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNorm 调用 recover_jump_tables。jump_tables 现可被填充，find_jump_table 返回非 None。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- ref-fix2: 1783141346.3299575 -->

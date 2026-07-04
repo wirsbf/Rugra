@@ -2157,13 +2157,13 @@ impl SplitVarnode {
 // double.cc:1104-1228 exactly.
 //
 // Helpers below are local to this file. `vn_slot_of` mirrors `PcodeOp::getSlot`
-// (op.hh:380) without needing a Funcdata, so `verify()` methods (which take
+// (op.hh:166) without needing a Funcdata, so `verify()` methods (which take
 // only a `PcodeOp*`, not `Funcdata&`) stay faithful.
 // ===========================================================================
 
-// RUGRA-GLUE: wraps PcodeOp::getSlot (op.hh:380); standalone form so verify() methods match Ghidra signature
+// RUGRA-GLUE: wraps PcodeOp::getSlot (op.hh:166); standalone form so verify() methods match Ghidra signature
 /// `PcodeOp::getSlot(vn)` — find the input slot holding `vn`, or -1.
-/// Faithful to Ghidra op.hh:380 / op.cc. Standalone (no Funcdata) so the
+/// Faithful to Ghidra op.hh:166 / op.cc. Standalone (no Funcdata) so the
 /// `verify()` methods, which take only a `PcodeOp *`, remain faithful.
 fn vn_slot_of(op: &OpArc, vn: &VnArc) -> i32 {
     let o = op.read().unwrap();

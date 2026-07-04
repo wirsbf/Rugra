@@ -2872,7 +2872,7 @@ impl JumpTable {
 
 /// Default upper bound on the number of entries a jump-table may hold when no
 /// `Architecture` is attached to the [`crate::funcdata::Funcdata`]. Faithful to
-/// the `max_jumptable_size` field of `Architecture` (arch.cc:383, default 1024).
+/// the `max_jumptable_size` field of `Architecture` (architecture.cc:1433, default 1024).
 pub const MAX_JUMPTABLE_SIZE: u32 = 1024;
 
 /// A light-weight emulator to calculate switch targets from switch variables.

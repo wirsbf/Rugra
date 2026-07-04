@@ -184,7 +184,7 @@ impl PcodeOp {
     }
 
     /// Does this op use a spacebase pointer? Faithful to `PcodeOp::usesSpacebasePtr`
-    /// (op.hh:432). Set by heritage's discoverIndexedStackPointers when a STORE
+    /// (op.hh:228). Set by heritage's discoverIndexedStackPointers when a STORE
     /// reads a stack-pointer-derived address. guardStores checks this to decide
     /// whether to build a Stack-space INDIRECT.
     // Ghidra: op.hh:228 PcodeOp::usesSpacebasePtr
