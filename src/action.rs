@@ -883,7 +883,10 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(ActionInferParams::new()));
         mainloop.add_action(Box::new(ActionConstantPtr::new()));
         mainloop.add_action(Box::new(ActionCse::new()));
-        mainloop.add_action(Box::new(ActionSimplify::new()));
+        // ActionSimplify DELETED: self-invented Action with no Ghidra counterpart.
+        // With mainloop+fullloop RULE_REPEATAPPLY enabled (commits 534642c/70ca7e6),
+        // oppool1 (simplifypool) + convergence handles all simplification.
+        // Verified redundant: cargo test 952/952, compare_ghidra defects=0.
 
         // --- stackstall (coreaction.cc:5509, repeatapply) ---
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);

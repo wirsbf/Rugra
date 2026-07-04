@@ -805,3 +805,4 @@ printc emit_block_structured 拆分 7 个 per-arm helpers。mainloop repeatapply
 <!-- annotation-pass: 2026-07-04 -->
 <!-- fullloop-repeatapply: 1783144461.7680526 -->
 <!-- mainloop-repeatapply: 1783144837.4436781 -->
+<!-- delete-simplify: 1783145834.634057 -->
