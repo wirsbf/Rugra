@@ -801,3 +801,4 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- fullloop-repeatapply: 1783144461.7826152 -->
 <!-- delete-simplify: 1783145834.621112 -->
+<!-- activeparam-port: 1783158350.9445786 -->

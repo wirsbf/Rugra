@@ -183,6 +183,22 @@ impl PcodeOp {
         (self.flags & pcodeop_flags::MARKER) != 0
     }
 
+    // Ghidra: op.hh:190 PcodeOp::isMark
+    /// Has this op been visited by the current algorithm? Faithful to
+    /// `PcodeOp::isMark` (op.hh:190). Used by ancestorOpUse to trim cycles in
+    /// MULTIEQUAL chains.
+    pub fn is_mark(&self) -> bool {
+        (self.flags & pcodeop_flags::MARK) != 0
+    }
+    // Ghidra: op.hh:234 PcodeOp::setMark
+    pub fn set_mark(&mut self) {
+        self.flags |= pcodeop_flags::MARK;
+    }
+    // Ghidra: op.hh:235 PcodeOp::clearMark
+    pub fn clear_mark(&mut self) {
+        self.flags &= !pcodeop_flags::MARK;
+    }
+
     /// Does this op use a spacebase pointer? Faithful to `PcodeOp::usesSpacebasePtr`
     /// (op.hh:228). Set by heritage's discoverIndexedStackPointers when a STORE
     /// reads a stack-pointer-derived address. guardStores checks this to decide
@@ -378,6 +394,46 @@ impl PcodeOp {
     // Ghidra: op.hh:224 PcodeOp::setNoIndirectCollapse
     pub fn set_no_indirect_collapse(&mut self) {
         self.addlflags |= op_addl_flags::NO_INDIRECT_COLLAPSE;
+    }
+
+    // Ghidra: op.hh:179 PcodeOp::isIndirectCreation
+    /// Return true if this op creates a varnode indirectly (an INDIRECT op
+    /// marked as indirect_creation). Faithful to `PcodeOp::isIndirectCreation`
+    /// (op.hh:179): `(flags & indirect_creation) != 0`.
+    /// Used by AncestorRealistic::enterNode (INDIRECT case) to detect call
+    /// output creation.
+    pub fn is_indirect_creation(&self) -> bool {
+        (self.flags & pcodeop_flags::INDIRECT_CREATION) != 0
+    }
+
+    // Ghidra: op.hh:180 PcodeOp::isIndirectStore
+    /// Return true if this INDIRECT is caused by a STORE. Faithful to
+    /// `PcodeOp::isIndirectStore` (op.hh:180):
+    ///   `(flags & indirect_store) != 0`.
+    /// Used by AncestorRealistic::enterNode (INDIRECT case) to distinguish
+    /// store-induced indirects from call-induced indirects.
+    pub fn is_indirect_store(&self) -> bool {
+        (self.flags & pcodeop_flags::INDIRECT_STORE) != 0
+    }
+
+    // Ghidra: op.hh:209 PcodeOp::isIncidentalCopy
+    /// Return true if this COPY is incidental (a side-effect of a call).
+    /// Faithful to `PcodeOp::isIncidentalCopy` (op.hh:209):
+    ///   `(addlflags & incidental_copy) != 0`.
+    /// Used by AncestorRealistic::enterNode (COPY/SUBPIECE cases) and
+    /// onlyOpUse to treat incidental copies as transparent.
+    pub fn is_incidental_copy(&self) -> bool {
+        (self.addlflags & op_addl_flags::INCIDENTAL_COPY) != 0
+    }
+
+    // Ghidra: op.hh:225 PcodeOp::isStoreUnmapped
+    /// Is this STORE location supposed to be unmapped? Faithful to
+    /// `PcodeOp::isStoreUnmapped` (op.hh:225):
+    ///   `(addlflags & store_unmapped) != 0`.
+    /// Used by AncestorRealistic::enterNode (COPY case) to reject stores
+    /// flagged as unmapped.
+    pub fn is_store_unmapped(&self) -> bool {
+        (self.addlflags & op_addl_flags::STORE_UNMAPPED) != 0
     }
 }
 

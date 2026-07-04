@@ -727,3 +727,4 @@
 ### 2026-07-04（续 3）：新增 has_cover
 - `has_cover()`（对齐 varnode.hh:284）：`(flags & (constant|annotation|insert)) == insert`。供 merge_test_must 使用。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- activeparam-port: 1783158350.9706767 -->

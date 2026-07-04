@@ -4332,44 +4332,80 @@ impl ActionActiveParam {
 impl Action for ActionActiveParam {
     // Ghidra: coreaction.cc:1725 ActionActiveParam::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionActiveParam::apply (coreaction.cc:1725-1771).
-        // For each call spec with active input recovery:
-        // 1. checkInputTrialUse — mark trials active/inactive via ProtoModel
-        // 2. finishPass — increment pass counter
-        // 3. If fully checked (max passes exceeded):
-        //    resolveModel + deriveInputMap (ProtoModel.fillinMap) + clear
-        let mut change = 0;
+        // Faithful 1:1 port of ActionActiveParam::apply (coreaction.cc:1725-1771).
+        let mut count = 0;
+        // Ghidra line 1730-1731: AliasChecker gather stack aliases.
+        let mut aliascheck = crate::varmap::AliasChecker::new(1);
+        aliascheck.gather_internal(fd);
+        let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
+        let has_active_output = fd.active_output.is_some();
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            let needs_work = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
-            if !needs_work { continue; }
-            // 1. checkInputTrialUse (ProtoModel-driven when model present)
-            if let Some(fc) = fd.get_call_specs_mut(i) {
-                fc.check_input_trial_use();
-            }
-            // 2. finishPass + check maxpass
-            let fully_done = {
-                if let Some(fc) = fd.get_call_specs_mut(i) {
-                    if let Some(active) = fc.active_input.as_mut() {
-                        active.finish_pass();
-                        active.get_num_passes() > active.get_max_pass()
-                    } else { false }
-                } else { false }
+            let is_input_active = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
+            if !is_input_active { continue; }
+            // Ghidra line 1741: trimmable = (numPasses>0) || (op is not CALLIND).
+            let op_ref = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd));
+            let (trimmable, fully_checked_before) = match fd.get_call_specs(i) {
+                Some(fc) => {
+                    let active = match fc.active_input.as_ref() { Some(a) => a, None => continue };
+                    let op_is_callind = op_ref.as_ref()
+                        .map(|o| o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_CALLIND)
+                        .unwrap_or(false);
+                    let trimmable = active.get_num_passes() > 0 || !op_is_callind;
+                    (trimmable, active.is_fully_checked())
+                }
+                None => continue,
             };
-            if fully_done {
-                // 3. Finalize: resolveModel → deriveInputMap → clear
-                if let Some(fc) = fd.get_call_specs_mut(i) {
-                    if let Some(active) = fc.active_input.as_mut() {
-                        active.mark_fully_checked();
+            // Ghidra line 1742-1743: checkInputTrialUse if !fullyChecked.
+            if !fully_checked_before {
+                if let (Some(op_ref), Some(fc)) = (&op_ref, fd.get_call_specs_mut(i)) {
+                    let replace_slots = fc.check_input_trial_use(
+                        op_ref, has_active_output, &aliascheck, maxancestor,
+                    );
+                    for (slot, vn_size) in replace_slots {
+                        let zero_vn = fd.new_constant(vn_size as usize, 0);
+                        fd.op_set_input(op_ref, zero_vn, slot as usize);
                     }
-                    fc.resolve_model();
-                    fc.derive_input_map();
-                    fc.clear_active_input();
                 }
             }
-            change += 1;
+            // Ghidra line 1744: finishPass.
+            // Ghidra line 1745-1748: maxPass check.
+            let (pass_exceeded, fully_checked_after) = match fd.get_call_specs_mut(i) {
+                Some(fc) => {
+                    if let Some(active) = fc.active_input.as_mut() {
+                        active.finish_pass();
+                        let exceeded = active.get_num_passes() > active.get_max_pass();
+                        if exceeded { active.mark_fully_checked(); }
+                        (exceeded, active.is_fully_checked())
+                    } else { (false, false) }
+                }
+                None => (false, false),
+            };
+            if !pass_exceeded {
+                // Ghidra line 1748: count a change (still have work to do).
+                count += 1;
+            }
+            // Ghidra line 1749-1757: finalize if trimmable && fullyChecked.
+            if trimmable && fully_checked_after {
+                let needs_final = fd.get_call_specs(i)
+                    .and_then(|fc| fc.active_input.as_ref())
+                    .map(|a| a.needs_final_check())
+                    .unwrap_or(false);
+                if needs_final {
+                    if let (Some(op_ref), Some(fc)) = (&op_ref, fd.get_call_specs_mut(i)) {
+                        fc.final_input_check(op_ref);
+                    }
+                }
+                if let Some(fc) = fd.get_call_specs_mut(i) {
+                    fc.resolve_model();
+                    fc.derive_input_map();
+                    let _params = fc.build_input_from_trials();
+                    fc.clear_active_input();
+                }
+                count += 1;
+            }
         }
-        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "activeparam" mirrors ctor at coreaction.hh:748
     fn get_name(&self) -> &str { "activeparam" }

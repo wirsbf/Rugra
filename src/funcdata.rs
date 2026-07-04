@@ -5499,6 +5499,775 @@ fn find_out_index(
     None
 }
 
+// Ghidra: funcdata.hh:655 AncestorRealistic
+/// Helper for determining if Varnodes can trace their value from a legitimate
+/// source. Faithful 1:1 port of `AncestorRealistic` (funcdata.hh:655-724 +
+/// funcdata_varnode.cc:1997-2237).
+///
+/// Tries to determine if a Varnode (a particular input to a CALL, CALLIND, or
+/// RETURN op) makes sense as parameter-passing/return storage by examining the
+/// Varnode's ancestors. If ancestors are \e unaffected, \e abnormal inputs, or
+/// \e killedbycall, the Varnode doesn't make a good parameter.
+///
+/// The traversal is a depth-first walk over ancestor Varnodes (following the
+/// def chain). The `State` stack holds the traversal frontier; each `State`
+/// records (op, slot, flags, offset). The `marked_vn` list tracks visited
+/// Varnodes so cycles are trimmed and marks can be cleared afterwards.
+pub struct AncestorRealistic {
+    state_stack: Vec<ArState>,
+    marked_vn: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    multi_depth: i32,
+    allow_failing_path: bool,
+    // Snapshot of trial->isKilledByCall() taken at execute() start, so the
+    // INDIRECT case can read it without &mut aliasing on ParamTrial.
+    trial_killed_by_call: bool,
+    // Snapshot of trial->getSize() taken at execute() start, so the PIECE
+    // case can compare stateVn->getSize() > trial->getSize() faithfully.
+    trial_size: i32,
+    // Deferred ParamTrial flag mutations (applied by execute() after the
+    // traversal). Ghidra mutates the trial pointer mid-traversal
+    // (setIndCreateFormed / setCondExeEffect); Rugra defers these to avoid
+    // &mut aliasing on ParamTrial during the self-referential traversal.
+    pending_ind_create_formed: bool,
+    pending_condexe_effect: bool,
+}
+
+// Ghidra: funcdata.hh:655 AncestorRealistic::State
+/// One node in the depth-first ancestor traversal. Faithful to the nested
+/// `AncestorRealistic::State` class (funcdata.hh:657-696).
+#[derive(Clone)]
+struct ArState {
+    /// Operation along the path to the Varnode. `vn = op.getIn(slot)`.
+    op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+    /// Input slot: `vn = op.getIn(slot)`.
+    slot: i32,
+    /// Boolean properties (seen_solid0 | seen_solid1 | seen_kill).
+    flags: u32,
+    /// Offset of the eventual trial value within a possibly larger register.
+    offset: i32,
+}
+
+// Ghidra: funcdata.hh:659 AncestorRealistic::State (anonymous enum)
+mod state_flags {
+    /// Solid movement into slot 0 seen on at least one path to MULTIEQUAL.
+    pub const SEEN_SOLID0: u32 = 1;
+    /// Solid movement into a slot other than 0 seen.
+    pub const SEEN_SOLID1: u32 = 2;
+    /// Killedbycall seen on at least one path to MULTIEQUAL.
+    pub const SEEN_KILL: u32 = 4;
+}
+
+// Ghidra: funcdata.hh:698 AncestorRealistic (anonymous enum)
+/// Depth-first traversal commands. Faithful to the anonymous enum in
+/// `AncestorRealistic` (funcdata.hh:698-704).
+mod ar_command {
+    /// Extending path into a new Varnode.
+    pub const ENTER_NODE: i32 = 0;
+    /// Backtracking, from a path that contained a reasonable ancestor.
+    pub const POP_SUCCESS: i32 = 1;
+    /// Backtracking, from a path with successful solid movement.
+    pub const POP_SOLID: i32 = 2;
+    /// Backtracking, from a path with a bad ancestor.
+    pub const POP_FAIL: i32 = 3;
+    /// Backtracking, from a path with a bad ancestor (specifically killedbycall).
+    pub const POP_FAILKILL: i32 = 4;
+}
+
+impl ArState {
+    // Ghidra: funcdata.hh:692 State::markSolid
+    /// Mark the given slot as having solid movement. Faithful to
+    /// `State::markSolid` (funcdata.hh:692).
+    fn mark_solid(&mut self, s: i32) {
+        self.flags |= if s == 0 { state_flags::SEEN_SOLID0 } else { state_flags::SEEN_SOLID1 };
+    }
+    // Ghidra: funcdata.hh:693 State::markKill
+    /// Mark killedbycall as seen. Faithful to `State::markKill` (funcdata.hh:693).
+    fn mark_kill(&mut self) {
+        self.flags |= state_flags::SEEN_KILL;
+    }
+    // Ghidra: funcdata.hh:694 State::seenSolid
+    /// Has solid movement been seen? Faithful to `State::seenSolid` (funcdata.hh:694).
+    fn seen_solid(&self) -> bool {
+        (self.flags & (state_flags::SEEN_SOLID0 | state_flags::SEEN_SOLID1)) != 0
+    }
+    // Ghidra: funcdata.hh:695 State::seenKill
+    /// Has killedbycall been seen? Faithful to `State::seenKill` (funcdata.hh:695).
+    fn seen_kill(&self) -> bool {
+        (self.flags & state_flags::SEEN_KILL) != 0
+    }
+    // Ghidra: funcdata.hh:691 State::getSolidSlot
+    /// Get the slot associated with solid movement. Faithful to
+    /// `State::getSolidSlot` (funcdata.hh:691).
+    fn get_solid_slot(&self) -> i32 {
+        if (self.flags & state_flags::SEEN_SOLID0) != 0 { 0 } else { 1 }
+    }
+}
+
+impl AncestorRealistic {
+    // RUGRA-GLUE: AncestorRealistic::new constructor (no Ghidra counterpart — Ghidra uses stack allocation)
+    /// Construct an empty ancestor-realistic checker.
+    pub fn new() -> Self {
+        Self {
+            state_stack: Vec::new(),
+            marked_vn: Vec::new(),
+            multi_depth: 0,
+            allow_failing_path: false,
+            trial_killed_by_call: false,
+            trial_size: 0,
+            pending_ind_create_formed: false,
+            pending_condexe_effect: false,
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1997 AncestorRealistic::checkConditionalExe
+    /// Check if the current Varnode was produced by conditional flow. Faithful
+    /// to `AncestorRealistic::checkConditionalExe` (funcdata_varnode.cc:1997-2022).
+    /// Returns true if there are two input flows and one is a normal solid flow
+    /// (the MULTIEQUAL block has exactly 2 inputs, and the solid-slot's source
+    /// block has exactly 1 out-edge).
+    fn check_conditional_exe(&self, state: &ArState) -> bool {
+        let parent_arc = {
+            let op_rg = state.op.read().unwrap();
+            op_rg.parent.as_ref().and_then(|w| w.upgrade())
+        };
+        let bl = match parent_arc { Some(b) => b, None => return false };
+        let (solid_point, size_in) = {
+            let bl_rg = bl.read().unwrap();
+            let solid_slot = state.get_solid_slot();
+            let point = bl_rg.get_in(solid_slot as usize).map(|e| e.point.clone());
+            (point, bl_rg.size_in())
+        };
+        if size_in != 2 { return false; }
+        match solid_point {
+            Some(sb) => sb.read().unwrap().size_out() == 1,
+            None => false,
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:2026 AncestorRealistic::enterNode
+    /// Analyze a newly-entered node during the depth-first traversal. Faithful
+    /// to `AncestorRealistic::enterNode` (funcdata_varnode.cc:2026-2136).
+    /// Returns the command for the next traversal step.
+    fn enter_node(&mut self) -> i32 {
+        use crate::opcodes::OpCode as OC;
+        let (op_arc, slot, state_offset) = {
+            let state = self.state_stack.last().unwrap();
+            (state.op.clone(), state.slot, state.offset)
+        };
+        // Resolve the Varnode being traversed: vn = op.getIn(slot)
+        let state_vn = {
+            let op_rg = op_arc.read().unwrap();
+            op_rg.get_in(slot as usize).cloned()
+        };
+        let state_vn = match state_vn {
+            Some(v) => v,
+            None => return ar_command::POP_FAIL,
+        };
+        // Truncate traversal on already-visited varnodes (cycle prevention).
+        let (is_mark, is_written) = {
+            let vn = state_vn.read().unwrap();
+            (vn.is_mark(), vn.is_written())
+        };
+        if is_mark { return ar_command::POP_SUCCESS; }
+        if !is_written {
+            let (is_input, is_unaffected, is_persist, is_direct_write) = {
+                let vn = state_vn.read().unwrap();
+                (vn.is_input(), vn.is_unaffected(), vn.is_persist(), vn.is_direct_write())
+            };
+            if is_input {
+                if is_unaffected { return ar_command::POP_FAIL; }
+                if is_persist { return ar_command::POP_SUCCESS; }
+                if !is_direct_write { return ar_command::POP_FAIL; }
+            }
+            return ar_command::POP_SUCCESS;
+        }
+        // Mark the varnode as visited.
+        {
+            let mut vn = state_vn.write().unwrap();
+            vn.set_mark();
+        }
+        self.marked_vn.push(state_vn.clone());
+        // Follow the defining op.
+        let def_arc = {
+            let vn = state_vn.read().unwrap();
+            vn.get_def()
+        };
+        let op_def = match def_arc {
+            Some(d) => d,
+            None => return ar_command::POP_FAIL,
+        };
+        let opcode = { op_def.read().unwrap().opcode };
+        match opcode {
+            OC::CPUI_INDIRECT => {
+                let (is_ind_create, is_ind_store, out_is_return, in0_indirect_zero) = {
+                    let d = op_def.read().unwrap();
+                    let out_is_ret = d.get_out().map(|v| v.read().unwrap().is_return_address()).unwrap_or(false);
+                    let in0_iz = d.get_in(0).map(|v| v.read().unwrap().is_indirect_zero()).unwrap_or(false);
+                    (d.is_indirect_creation(), d.is_indirect_store(), out_is_ret, in0_iz)
+                };
+                if is_ind_create {
+                    self.pending_ind_create_formed = true;
+                    if in0_indirect_zero {
+                        return ar_command::POP_FAILKILL;
+                    }
+                    return ar_command::POP_SUCCESS;
+                }
+                if !is_ind_store {
+                    // Ghidra: funcdata_varnode.cc:2052 "If flow goes THROUGH a call"
+                    if out_is_return { return ar_command::POP_FAIL; }
+                    if self.trial_killed_by_call { return ar_command::POP_FAIL; }
+                }
+                self.state_stack.push(ArState {
+                    op: op_def.clone(),
+                    slot: 0,
+                    flags: 0,
+                    offset: 0,
+                });
+                return ar_command::ENTER_NODE;
+            }
+            OC::CPUI_SUBPIECE => {
+                let (out_space_is_internal, is_incidental, in0_incidental, out_overlap_in0_eq_in1, new_offset) = {
+                    let d = op_def.read().unwrap();
+                    let out_vn = d.get_out().and_then(|v| Some(v.clone()));
+                    let in0 = d.get_in(0).and_then(|v| Some(v.clone()));
+                    let in1_off = d.get_in(1).and_then(|v| Some(v.clone()))
+                        .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let out_space = out_vn.as_ref().map(|v| v.read().unwrap().get_space());
+                    let out_overlap = match (&out_vn, &in0) {
+                        (Some(o), Some(i)) => o.read().unwrap().overlap(&i.read().unwrap()),
+                        _ => -1,
+                    };
+                    (
+                        out_space == Some(AddressSpace::Unique),
+                        d.is_incidental_copy(),
+                        in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false),
+                        out_overlap == in1_off as i32,
+                        state_offset + in1_off as i32,
+                    )
+                };
+                if out_space_is_internal || is_incidental || in0_incidental || out_overlap_in0_eq_in1 {
+                    self.state_stack.push(ArState {
+                        op: op_def.clone(),
+                        slot: 0,
+                        flags: 0,
+                        offset: new_offset,
+                    });
+                    return ar_command::ENTER_NODE;
+                }
+                // Ghidra: funcdata_varnode.cc:2069-2077 minimal traversal to
+                // rule out unaffected/invalid inputs (COPY/SUBPIECE chain).
+                let mut cur_op = op_def.clone();
+                loop {
+                    let (vn_mark, vn_input, vn_unaffected, vn_direct_write, next_def) = {
+                        let d = cur_op.read().unwrap();
+                        let vn = d.get_in(0).and_then(|v| Some(v.clone()));
+                        match vn {
+                            Some(v) => {
+                                let vr = v.read().unwrap();
+                                (vr.is_mark(), vr.is_input(), vr.is_unaffected(), vr.is_direct_write(), vr.get_def())
+                            }
+                            None => return ar_command::POP_FAIL,
+                        }
+                    };
+                    if !vn_mark && vn_input {
+                        if vn_unaffected || !vn_direct_write {
+                            return ar_command::POP_FAIL;
+                        }
+                    }
+                    match next_def {
+                        Some(nd) => {
+                            let next_code = nd.read().unwrap().opcode;
+                            if next_code == OC::CPUI_COPY || next_code == OC::CPUI_SUBPIECE {
+                                cur_op = nd;
+                            } else {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                return ar_command::POP_SOLID;
+            }
+            OC::CPUI_COPY => {
+                let (out_space_internal, is_incidental, in0_incidental, out_addr_eq_in0_addr) = {
+                    let d = op_def.read().unwrap();
+                    let out_vn = d.get_out().and_then(|v| Some(v.clone()));
+                    let in0 = d.get_in(0).and_then(|v| Some(v.clone()));
+                    let out_space = out_vn.as_ref().map(|v| v.read().unwrap().get_space());
+                    let out_addr = out_vn.as_ref().map(|v| v.read().unwrap().get_offset());
+                    let in0_addr = in0.as_ref().map(|v| v.read().unwrap().get_offset());
+                    (
+                        out_space == Some(AddressSpace::Unique),
+                        d.is_incidental_copy(),
+                        in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false),
+                        out_addr.is_some() && in0_addr.is_some() && out_addr == in0_addr,
+                    )
+                };
+                if out_space_internal || is_incidental || in0_incidental || out_addr_eq_in0_addr {
+                    self.state_stack.push(ArState {
+                        op: op_def.clone(),
+                        slot: 0,
+                        flags: 0,
+                        offset: 0,
+                    });
+                    return ar_command::ENTER_NODE;
+                }
+                // Ghidra: funcdata_varnode.cc:2090-2108 minimal traversal:
+                // follow COPY/SUBPIECE/PIECE chain checking input flags +
+                // store_unmapped. (op, vn) advance together.
+                let mut cur_op = op_def.clone();
+                let mut cur_vn = {
+                    let d = op_def.read().unwrap();
+                    d.get_in(0).and_then(|v| Some(v.clone()))
+                };
+                loop {
+                    let (vn_mark, vn_input, vn_direct_write) = match &cur_vn {
+                        Some(v) => {
+                            let vr = v.read().unwrap();
+                            (vr.is_mark(), vr.is_input(), vr.is_direct_write())
+                        }
+                        None => return ar_command::POP_FAIL,
+                    };
+                    if !vn_mark && vn_input {
+                        if !vn_direct_write { return ar_command::POP_FAIL; }
+                    }
+                    if cur_op.read().unwrap().is_store_unmapped() {
+                        return ar_command::POP_FAIL;
+                    }
+                    let next_def = match &cur_vn {
+                        Some(v) => v.read().unwrap().get_def(),
+                        None => break,
+                    };
+                    match next_def {
+                        Some(nd) => {
+                            let next_code = nd.read().unwrap().opcode;
+                            if next_code == OC::CPUI_COPY || next_code == OC::CPUI_SUBPIECE {
+                                cur_vn = nd.read().unwrap().get_in(0).cloned();
+                            } else if next_code == OC::CPUI_PIECE {
+                                // Follow least significant piece.
+                                cur_vn = nd.read().unwrap().get_in(1).cloned();
+                            } else {
+                                break;
+                            }
+                            cur_op = nd;
+                        }
+                        None => break,
+                    }
+                }
+                return ar_command::POP_SOLID;
+            }
+            OC::CPUI_MULTIEQUAL => {
+                self.multi_depth += 1;
+                self.state_stack.push(ArState {
+                    op: op_def.clone(),
+                    slot: 0,
+                    flags: 0,
+                    offset: 0,
+                });
+                return ar_command::ENTER_NODE;
+            }
+            OC::CPUI_PIECE => {
+                // Ghidra: funcdata_varnode.cc:2115-2132 PIECE case.
+                // stateVn is the PIECE output; compare its size to trial size.
+                let state_vn_size = state_vn.read().unwrap().get_size() as i32;
+                let (in1_size, in0_size, state_vn_is_spacebase) = {
+                    let d = op_def.read().unwrap();
+                    let in0 = d.get_in(0).and_then(|v| Some(v.clone()));
+                    let in1 = d.get_in(1).and_then(|v| Some(v.clone()));
+                    let state_vn_space = state_vn.read().unwrap().get_space();
+                    let in0_sz = in0.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                    let in1_sz = in1.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                    (in1_sz, in0_sz, state_vn_space == AddressSpace::Stack)
+                };
+                if state_vn_size > self.trial_size {
+                    if state_offset == 0 && in1_size <= self.trial_size {
+                        self.state_stack.push(ArState {
+                            op: op_def.clone(), slot: 1, flags: 0, offset: 0,
+                        });
+                        return ar_command::ENTER_NODE;
+                    } else if state_offset == in1_size && in0_size <= self.trial_size {
+                        self.state_stack.push(ArState {
+                            op: op_def.clone(), slot: 0, flags: 0, offset: 0,
+                        });
+                        return ar_command::ENTER_NODE;
+                    }
+                    if !state_vn_is_spacebase {
+                        return ar_command::POP_FAIL;
+                    }
+                }
+                return ar_command::POP_SOLID;
+            }
+            _ => {
+                // Any other LOAD or arithmetic/logical operation is solid movement.
+                return ar_command::POP_SOLID;
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:2141 AncestorRealistic::uponPop
+    /// Backtrack into a previously visited node. Faithful to
+    /// `AncestorRealistic::uponPop` (funcdata_varnode.cc:2141-2185).
+    fn upon_pop(&mut self, pop_command: i32) -> i32 {
+        use crate::opcodes::OpCode as OC;
+        let is_multiequal = {
+            let state = self.state_stack.last().unwrap();
+            state.op.read().unwrap().opcode == OC::CPUI_MULTIEQUAL
+        };
+        if is_multiequal {
+            let (cur_slot, cur_num_input) = {
+                let state = self.state_stack.last().unwrap();
+                let s = state.op.read().unwrap();
+                (state.slot, s.num_input() as i32)
+            };
+            if pop_command == ar_command::POP_FAIL {
+                self.multi_depth -= 1;
+                self.state_stack.pop();
+                return pop_command;
+            } else if pop_command == ar_command::POP_SOLID && self.multi_depth == 1 && cur_num_input == 2 {
+                let slot = self.state_stack.last().unwrap().slot;
+                let stack_len = self.state_stack.len();
+                if stack_len >= 2 {
+                    self.state_stack[stack_len - 2].mark_solid(slot);
+                }
+            } else if pop_command == ar_command::POP_FAILKILL {
+                let stack_len = self.state_stack.len();
+                if stack_len >= 2 {
+                    self.state_stack[stack_len - 2].mark_kill();
+                }
+            }
+            // state.slot += 1 (Ghidra funcdata_varnode.cc:2156)
+            self.state_stack.last_mut().unwrap().slot += 1;
+            let (new_slot, num_input) = {
+                let state = self.state_stack.last().unwrap();
+                let s = state.op.read().unwrap();
+                (state.slot, s.num_input() as i32)
+            };
+            if new_slot == num_input {
+                // All siblings traversed.
+                let (prev_seen_solid, prev_seen_kill) = if self.state_stack.len() >= 2 {
+                    let p = &self.state_stack[self.state_stack.len() - 2];
+                    (p.seen_solid(), p.seen_kill())
+                } else { (false, false) };
+                let mut final_cmd = pop_command;
+                if prev_seen_solid {
+                    final_cmd = ar_command::POP_SUCCESS;
+                    if prev_seen_kill {
+                        if self.allow_failing_path {
+                            // Re-read the current state for checkConditionalExe.
+                            let state_clone = self.state_stack.last().unwrap().clone();
+                            if !self.check_conditional_exe(&state_clone) {
+                                final_cmd = ar_command::POP_FAIL;
+                            } else {
+                                self.pending_condexe_effect = true;
+                            }
+                        } else {
+                            final_cmd = ar_command::POP_FAIL;
+                        }
+                    }
+                } else if prev_seen_kill {
+                    final_cmd = ar_command::POP_FAILKILL;
+                } else {
+                    final_cmd = ar_command::POP_SUCCESS;
+                }
+                self.multi_depth -= 1;
+                self.state_stack.pop();
+                return final_cmd;
+            }
+            return ar_command::ENTER_NODE;
+        } else {
+            self.state_stack.pop();
+            return pop_command;
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:2194 AncestorRealistic::execute
+    /// Perform a full ancestor check on a given parameter trial. Faithful to
+    /// `AncestorRealistic::execute` (funcdata_varnode.cc:2194-2237).
+    ///
+    /// Returns true if the varnode (op's input at `slot`) has realistic
+    /// ancestors for a parameter-passing location. Sets the trial's
+    /// ancestor_realistic / ancestor_solid / condexe_effect / ind_create_formed
+    /// flags as appropriate.
+    pub fn execute(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+        trial: &mut crate::fspec::ParamTrial,
+        allow_fail: bool,
+    ) -> bool {
+        self.allow_failing_path = allow_fail;
+        self.trial_killed_by_call = trial.is_killed_by_call();
+        self.trial_size = trial.get_size();
+        self.marked_vn.clear();
+        self.state_stack.clear();
+        self.multi_depth = 0;
+        self.pending_ind_create_formed = false;
+        self.pending_condexe_effect = false;
+        // If the parameter itself is an input, we don't consider this realistic
+        // (unless retesting for condexe).
+        let is_input = {
+            let op_rg = op.0.read().unwrap();
+            let vn = op_rg.get_in(slot as usize);
+            match vn {
+                Some(v) => v.read().unwrap().is_input(),
+                None => return false,
+            }
+        };
+        if is_input {
+            if !trial.has_condexe_effect() {
+                return false;
+            }
+        }
+        // Run the depth-first traversal.
+        let mut command = ar_command::ENTER_NODE;
+        self.state_stack.push(ArState {
+            op: op.0.clone(),
+            slot,
+            flags: 0,
+            offset: 0,
+        });
+        while !self.state_stack.is_empty() {
+            match command {
+                c if c == ar_command::ENTER_NODE => command = self.enter_node(),
+                _ => command = self.upon_pop(command),
+            }
+        }
+        // Clean up marks.
+        for vn_arc in &self.marked_vn {
+            vn_arc.write().unwrap().clear_mark();
+        }
+        // Apply deferred trial mutations.
+        if self.pending_ind_create_formed { trial.set_ind_create_formed(); }
+        if self.pending_condexe_effect { trial.set_condexe_effect(); }
+        if command == ar_command::POP_SUCCESS {
+            trial.set_ancestor_realistic();
+            return true;
+        } else if command == ar_command::POP_SOLID {
+            trial.set_ancestor_realistic();
+            trial.set_ancestor_solid();
+            return true;
+        }
+        false
+    }
+}
+
+// TraverseNode flags (expression.hh:62-68), used by onlyOpUse/ancestorOpUse.
+mod traverse_flags {
+    pub const ACTIONALT: u32 = 1;
+    pub const INDIRECT: u32 = 2;
+    pub const INDIRECTALT: u32 = 4;
+    pub const LSB_TRUNCATED: u32 = 8;
+    pub const CONCAT_HIGH: u32 = 0x10;
+}
+
+// Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
+/// Test if the given Varnode seems to only be used by a CALL/RETURN. Faithful
+/// to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904). Walks forward
+/// through descendants; if any descendent is a non-call use (BRANCH, LOAD,
+/// STORE, etc.) returns false. CALL/CALLIND descendants trigger
+/// checkCallDoubleUse (conservatively returns false — safe direction).
+fn only_op_use(
+    has_active_output: bool,
+    invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    opmatch: &crate::op::PcodeOpRef,
+    trial_slot: i32,
+    main_flags: u32,
+) -> bool {
+    use crate::opcodes::OpCode as OC;
+    use std::sync::{Arc, RwLock};
+    struct TNode {
+        vn: Arc<RwLock<crate::varnode::Varnode>>,
+        flags: u32,
+    }
+    let mut varlist: Vec<TNode> = Vec::with_capacity(64);
+    {
+        let mut vn = invn.write().unwrap();
+        vn.set_mark();
+    }
+    varlist.push(TNode { vn: invn.clone(), flags: main_flags });
+    let mut idx = 0;
+    let mut res = true;
+    while idx < varlist.len() {
+        let base_flags = varlist[idx].flags;
+        let vn_arc = varlist[idx].vn.clone();
+        let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> =
+            vn_arc.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+        for op_arc in descends {
+            let op_rg = op_arc.read().unwrap();
+            if Arc::ptr_eq(&op_arc, &opmatch.0) {
+                let trial_in = op_rg.get_in(trial_slot as usize);
+                if let Some(tiv) = trial_in {
+                    if Arc::ptr_eq(tiv, &vn_arc) { continue; }
+                }
+            }
+            let mut cur_flags = base_flags;
+            match op_rg.opcode {
+                OC::CPUI_BRANCH | OC::CPUI_CBRANCH | OC::CPUI_BRANCHIND
+                | OC::CPUI_LOAD | OC::CPUI_STORE => {
+                    res = false;
+                }
+                OC::CPUI_CALL | OC::CPUI_CALLIND => {
+                    let _ = &mut cur_flags;
+                    res = false;
+                }
+                OC::CPUI_INDIRECT => {
+                    cur_flags |= traverse_flags::INDIRECTALT;
+                }
+                OC::CPUI_COPY => {
+                    let out_internal = op_rg.get_out()
+                        .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
+                        .unwrap_or(false);
+                    let op_incidental = op_rg.is_incidental_copy();
+                    let vn_incidental = vn_arc.read().unwrap().is_incidental_copy();
+                    if !out_internal && !op_incidental && !vn_incidental {
+                        cur_flags |= traverse_flags::ACTIONALT;
+                    }
+                }
+                OC::CPUI_RETURN => {
+                    let opmatch_code = opmatch.0.read().unwrap().opcode;
+                    if opmatch_code == OC::CPUI_RETURN {
+                        let r_in = op_rg.get_in(trial_slot as usize);
+                        if let Some(riv) = r_in {
+                            if Arc::ptr_eq(riv, &vn_arc) { continue; }
+                        }
+                    } else if has_active_output {
+                        res = false;
+                    } else {
+                        res = false;
+                    }
+                }
+                _ => {}
+            }
+            if !res { break; }
+            if op_rg.opcode == OC::CPUI_INDIRECT || op_rg.opcode == OC::CPUI_COPY {
+                if let Some(out) = op_rg.get_out() {
+                    let out_clone = out.clone();
+                    if !out_clone.read().unwrap().is_mark() {
+                        out_clone.write().unwrap().set_mark();
+                        varlist.push(TNode { vn: out_clone, flags: cur_flags });
+                    }
+                }
+            }
+        }
+        if !res { break; }
+        idx += 1;
+    }
+    for t in &varlist {
+        t.vn.write().unwrap().clear_mark();
+    }
+    res
+}
+
+// Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
+/// Test if the given trial Varnode is likely only used for parameter passing.
+/// Faithful to `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994).
+pub fn ancestor_op_use(
+    has_active_output: bool,
+    maxlevel: i32,
+    invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    op: &crate::op::PcodeOpRef,
+    trial_slot: i32,
+    offset: i32,
+    main_flags: u32,
+) -> bool {
+    use crate::opcodes::OpCode as OC;
+    if maxlevel == 0 { return false; }
+    let (is_written, is_input, is_type_lock) = {
+        let vn = invn.read().unwrap();
+        (vn.is_written(), vn.is_input(), vn.is_type_lock())
+    };
+    if !is_written {
+        if !is_input { return false; }
+        if !is_type_lock { return false; }
+        return only_op_use(has_active_output, invn, op, trial_slot, main_flags);
+    }
+    let def_arc = { invn.read().unwrap().get_def() };
+    let def_arc = match def_arc { Some(d) => d, None => return false };
+    let opcode = def_arc.read().unwrap().opcode;
+    match opcode {
+        OC::CPUI_INDIRECT => {
+            if def_arc.read().unwrap().is_indirect_creation() { return false; }
+            let in0 = def_arc.read().unwrap().get_in(0).cloned();
+            match in0 {
+                Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset,
+                    main_flags | traverse_flags::INDIRECT),
+                None => false,
+            }
+        }
+        OC::CPUI_MULTIEQUAL => {
+            if def_arc.read().unwrap().is_mark() { return false; }
+            def_arc.write().unwrap().set_mark();
+            let num_input = def_arc.read().unwrap().num_input();
+            let mut result = false;
+            for i in 0..num_input {
+                let in_vn = def_arc.read().unwrap().get_in(i).cloned();
+                if let Some(v) = in_vn {
+                    if ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags) {
+                        result = true;
+                        break;
+                    }
+                }
+            }
+            def_arc.write().unwrap().clear_mark();
+            result
+        }
+        OC::CPUI_COPY => {
+            let out_internal = def_arc.read().unwrap().get_out()
+                .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
+                .unwrap_or(false);
+            let op_incidental = def_arc.read().unwrap().is_incidental_copy();
+            let in0 = def_arc.read().unwrap().get_in(0).cloned();
+            let in0_incidental = in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false);
+            if out_internal || op_incidental || in0_incidental {
+                match in0 {
+                    Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags),
+                    None => false,
+                }
+            } else {
+                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+            }
+        }
+        OC::CPUI_PIECE => {
+            let in0 = def_arc.read().unwrap().get_in(0).cloned();
+            let in1 = def_arc.read().unwrap().get_in(1).cloned();
+            let in1_size = in1.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+            if let Some(v0) = in0 {
+                if ancestor_op_use(has_active_output, maxlevel - 1, &v0, op, trial_slot, offset + in1_size,
+                    main_flags | traverse_flags::CONCAT_HIGH) {
+                    return true;
+                }
+            }
+            if let Some(v1) = in1 {
+                if ancestor_op_use(has_active_output, maxlevel - 1, &v1, op, trial_slot, offset, main_flags) {
+                    return true;
+                }
+            }
+            false
+        }
+        OC::CPUI_SUBPIECE => {
+            let out_internal = def_arc.read().unwrap().get_out()
+                .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
+                .unwrap_or(false);
+            let op_incidental = def_arc.read().unwrap().is_incidental_copy();
+            let in0 = def_arc.read().unwrap().get_in(0).cloned();
+            let in0_incidental = in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false);
+            let in1_off = def_arc.read().unwrap().get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
+            if (out_internal || op_incidental || in0_incidental) && (offset - in1_off) >= 0 {
+                match in0 {
+                    Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset - in1_off,
+                        main_flags | traverse_flags::LSB_TRUNCATED),
+                    None => false,
+                }
+            } else {
+                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+            }
+        }
+        OC::CPUI_CALL | OC::CPUI_CALLIND => false,
+        _ => only_op_use(has_active_output, invn, op, trial_slot, main_flags),
+    }
+}
+
 // Ghidra: funcdata_block.cc:962 CloneBlockOps
 /// Clone p-code ops from one basic block into another (for nodeSplit).
 /// Faithful to Ghidra's `CloneBlockOps` class (funcdata_block.cc:962-1104).

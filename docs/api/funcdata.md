@@ -869,4 +869,26 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
   - `patch_inputs`：MULTIEQUAL→COPY 转换 + 常量共享 + 克隆映射查找。
 - 新增 `block_flags::DUPLICATE_BLOCK`（f_duplicate_block=0x40000）。
 ### 2026-07-04: Added flow module (FlowInfo reachability tracking)
+
+### 2026-07-04（续 4）：AncestorRealistic + ancestorOpUse + onlyOpUse 移植
+
+**AncestorRealistic**（funcdata.hh:655-724 + funcdata_varnode.cc:1997-2237）：
+- `AncestorRealistic` 结构 + `ArState`（op: Arc<RwLock<PcodeOp>>, slot, flags, offset）
+- `state_flags` 模块：SEEN_SOLID0/SEEN_SOLID1/SEEN_KILL
+- `ar_command` 模块：ENTER_NODE/POP_SUCCESS/POP_SOLID/POP_FAIL/POP_FAILKILL
+- `execute(op: &PcodeOpRef, slot, trial: &mut ParamTrial, allow_fail) -> bool`
+- `enter_node` — 5 case switch：INDIRECT（isIndirectCreation/isIndirectStore/killedbycall）、SUBPIECE（overlap 检测 + minimal traversal）、COPY（internal/incidental + PIECE-following minimal traversal）、MULTIEQUAL（push + multiDepth++）、PIECE（trial_size 比较 + slot 选择）
+- `upon_pop` — MULTIEQUAL 回溯（markSolid/markKill + checkConditionalExe + seenSolid/seenKill 决策树）
+- `check_conditional_exe` — parent block size_in==2 + solid slot source size_out==1
+- Rust 适配：trial_killed_by_call/trial_size 快照字段 + pending_ind_create_formed/pending_condexe_effect 延迟应用
+
+**ancestorOpUse**（funcdata_varnode.cc:1917-1994）+ **onlyOpUse**（funcdata_varnode.cc:1805-1904）：
+- `pub fn ancestor_op_use(has_active_output, maxlevel, vn, op, trial_slot, offset, flags) -> bool`
+- 递归 def 链遍历（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE）+ only_op_use 回调
+- `only_op_use` — 前向 descend 迭代器遍历，检测 BRANCH/CBRANCH/BRANCHIND/LOAD/STORE/CALL/CALLIND/INDIRECT/COPY/RETURN
+- traverse_flags 模块：ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH
+- checkCallDoubleUse 保守端口（返回 false = 非合法双重使用 → 安全方向）
+
+**新增 PcodeOp mark 访问器**：is_mark/set_mark/clear_mark（op.hh:190/234/235，flags MARK=1<<13）
 <!-- annotation-pass: 2026-07-04 -->
+<!-- activeparam-port: 1783158350.9624996 -->

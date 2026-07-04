@@ -154,4 +154,39 @@ FuncCallSpecs 新增 `proto_model: Option<ProtoModel>` 字段 + 方法：
 ### 2026-07-01：bytes_consumed tracking
 FuncProto: +return_bytes_consumed 字段 + get/set（fspec.hh:1367/1429）。
 FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870）。
+
+### 2026-07-04：AncestorRealistic + finalInputCheck + checkInputTrialUse 1:1 对齐
+
+**AncestorRealistic**（funcdata.rs，移植自 funcdata.hh:655-724 + funcdata_varnode.cc:1997-2237）：
+- `AncestorRealistic` 结构 + `ArState`（op/slot/flags/offset）+ `state_flags`/`ar_command` 模块
+- `execute(op, slot, trial, allow_fail) -> bool` — 深度优先祖先遍历，检测 varnode 是否有 realistic 祖先
+- `enter_node` — 处理 INDIRECT/SUBPIECE/COPY/MULTIEQUAL/PIECE 5 个 case（全部分支）
+- `upon_pop` — MULTIEQUAL 回溯逻辑（seen_solid/seen_kill + checkConditionalExe）
+- `check_conditional_exe` — 条件执行路径验证（BlockBasic.size_in/get_in/size_out）
+- Rust 所有权适配：trial_killed_by_call/trial_size 快照 + 延迟 pending 标志（避免 &mut ParamTrial 别名）
+
+**finalInputCheck**（fspec.rs，移植自 fspec.cc:5564-5576）：
+- `final_input_check(op_ref)` — 对 hasCondExeEffect 的活跃试验重新运行 AncestorRealistic，失败→markNoUse
+
+**checkInputTrialUse 重写**（fspec.rs，移植自 fspec.cc:5585-5653）：
+- 签名改为 `check_input_trial_use(op_ref, has_active_output, aliascheck, maxancestor) -> Vec<(slot, vn_size)>`
+- Stack 空间试验：aliascheck.hasLocalAlias → markNoUse；否则 AncestorRealistic + ancestorOpUse
+- Register 空间试验：AncestorRealistic(allowFail=true) + ancestorOpUse + condexe 标记
+- 返回 definitelyNotUsed 试验的 (slot, size) 供调用者执行 opSetInput(newConstant)
+
+**ancestorOpUse + onlyOpUse**（funcdata.rs，移植自 funcdata_varnode.cc:1805-1994）：
+- `ancestor_op_use(has_active_output, maxlevel, vn, op, trial_slot, offset, flags) -> bool`
+- 递归跟随 def 链（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE），调用 only_op_use
+- `only_op_use` — 前向遍历 descend，检测 BRANCH/LOAD/STORE/CALL/RETURN 等"非参数使用"
+- TraverseNode flags（ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH）
+
+**ActionActiveParam::apply 1:1 重写**（coreaction.rs，移植自 coreaction.cc:1725-1771）：
+- AliasChecker gather → 每个活跃 callspec：trimmable 检查 → checkInputTrialUse → finishPass → maxPass 检查 → trimmable+fullyChecked 时 finalInputCheck → resolveModel → deriveInputMap → buildInputFromTrials → clearActiveInput
+
+**Varnode/PcodeOp 访问器补齐**：
+- Varnode: is_return_address/is_indirect_zero/is_incidental_copy/overlap（varnode.hh:257/271/277 + varnode.cc:178）
+- PcodeOp: is_indirect_creation/is_indirect_store/is_incidental_copy/is_store_unmarked/is_mark/set_mark/clear_mark（op.hh:179/180/209/225/190/234/235）
+
+**验证**：cargo test --lib 952/952 通过；curl 24/24 反编译；compare_ghidra defects=0（0/24 函数）。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- activeparam-port: 1783158350.9591746 -->

@@ -667,6 +667,59 @@ impl Varnode {
         (self.flags & varnode_flags::UNAFFECTED) != 0
     }
 
+    // Ghidra: varnode.hh:257 Varnode::isReturnAddress
+    /// Is this storage for a call's return address? Faithful to
+    /// `Varnode::isReturnAddress` (varnode.hh:257):
+    ///   `(flags & return_address) != 0`.
+    /// Used by AncestorRealistic::enterNode (INDIRECT case) to reject return
+    /// address storage as a parameter passing location.
+    pub fn is_return_address(&self) -> bool {
+        (self.flags & varnode_flags::RETURN_ADDRESS) != 0
+    }
+
+    // Ghidra: varnode.hh:271 Varnode::isIndirectZero
+    /// Is this an indirect creation that is also a constant (i.e. a possible
+    /// zero produced indirectly by a call)? Faithful to
+    /// `Varnode::isIndirectZero` (varnode.hh:271):
+    ///   `(flags & (indirect_creation|constant)) == (indirect_creation|constant)`.
+    /// Used by AncestorRealistic::enterNode (INDIRECT case) to detect a
+    /// killedbycall output that is definitely not a real parameter.
+    pub fn is_indirect_zero(&self) -> bool {
+        (self.flags
+            & (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT))
+            == (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT)
+    }
+
+    // Ghidra: varnode.hh:277 Varnode::isIncidentalCopy
+    /// Does this varnode get copied as a side-effect of a call (an
+    /// "incidental" COPY)? Faithful to `Varnode::isIncidentalCopy`
+    /// (varnode.hh:277): `(flags & incidental_copy) != 0`.
+    /// Used by AncestorRealistic::enterNode (COPY/SUBPIECE cases) to treat
+    /// incidental copies as transparent traversal nodes.
+    pub fn is_incidental_copy(&self) -> bool {
+        (self.flags & varnode_flags::INCIDENTAL_COPY) != 0
+    }
+
+    // Ghidra: varnode.cc:178 Varnode::overlap
+    /// Return the relative point of overlap between this Varnode and `other`,
+    /// or -1 if no overlap. Faithful to `Varnode::overlap` (varnode.cc:178).
+    /// For little-endian (Rugra's only supported case), this returns the byte
+    /// offset within `other` where this Varnode's low byte falls. Used by
+    /// AncestorRealistic::enterNode (SUBPIECE case) to detect a no-op
+    /// truncation extracting the same physical bytes.
+    pub fn overlap(&self, other: &Varnode) -> i32 {
+        if self.address_space != other.address_space {
+            return -1;
+        }
+        let off = other.get_offset() as i64;
+        let end = off + other.size as i64;
+        let my_off = self.get_offset() as i64;
+        if my_off < off || my_off >= end {
+            return -1;
+        }
+        (my_off - off) as i32
+    }
+
     // Ghidra: varnode.cc:578 Varnode::hasNoLocalAlias
     /// Does the high-level variable have no local alias? (varnode.hh:262)
     pub fn has_no_local_alias(&self) -> bool {

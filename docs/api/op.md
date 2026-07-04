@@ -864,3 +864,4 @@ PcodeOpRaw
 - `slot_of_input(vn)`（对齐 op.hh:166 PcodeOp::getSlot）：线性搜索 inrefs 返回 vn 的槽位。供 snip_reads 使用。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.3262112 -->
+<!-- activeparam-port: 1783158350.9670146 -->

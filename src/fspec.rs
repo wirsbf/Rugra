@@ -526,48 +526,134 @@ impl FuncCallSpecs {
         false
     }
 
-    // Ghidra: fspec.cc:5585 FuncCallSpecs::checkInputTrialUse
-    /// Check if trial slots have active data-flow usage. Faithful to
-    /// `FuncCallSpecs::checkInputTrialUse` (fspec.cc:5585-5653).
-    ///
-    /// When a ProtoModel is available, this uses the model's parameter-entry
-    /// matching to determine which trials are active parameters. When no model
-    /// is set, falls back to marking all trials active (the prior simplified
-    /// behavior).
-    pub fn check_input_trial_use(&mut self) {
-        if let Some(model) = &self.proto_model {
-            // ProtoModel-driven: mark trials whose address matches a parameter
-            // entry as active; others as no-use. This replaces the prior
-            // "mark all active" simplification with real model-based analysis.
-            if let Some(active) = self.active_input.as_mut() {
-                for i in 0..active.get_num_trials() {
-                    let trial = active.get_trial(i);
-                    if trial.is_checked() { continue; }
-                    let addr = trial.get_address().as_u64();
-                    let sz = trial.get_size();
-                    let space = trial.get_address();
-                    // Determine the space from the trial address. Rugra
-                    // represents addresses as offsets; we check both Register
-                    // and Stack spaces.
-                    let is_register = model.possible_input_param(addr, sz, crate::space::AddressSpace::Register);
-                    let is_stack = model.possible_input_param(addr, sz, crate::space::AddressSpace::Stack);
-                    if is_register || is_stack {
-                        active.get_trial_mut(i).mark_active();
-                    } else {
-                        active.get_trial_mut(i).mark_no_use();
-                    }
+    // Ghidra: fspec.hh FuncCallSpecs::getOp (via op_addr lookup)
+    /// Find the CALL/CALLIND PcodeOp for this call spec by matching op_addr
+    /// against the function's alive op list. Ghidra's FuncCallSpecs stores a
+    /// direct `PcodeOp *op` pointer; Rugra looks it up by address.
+    pub fn find_call_op(&self, fd: &crate::funcdata::Funcdata) -> Option<crate::op::PcodeOpRef> {
+        use crate::opcodes::OpCode;
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if (op_rg.opcode == OpCode::CPUI_CALL || op_rg.opcode == OpCode::CPUI_CALLIND)
+                && op_rg.get_addr() == self.op_addr
+            {
+                return Some(op_ref.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: fspec.cc:5564 FuncCallSpecs::finalInputCheck
+    /// Make final activity check on trials that might have been affected by
+    /// conditional execution. Faithful to `FuncCallSpecs::finalInputCheck`
+    /// (fspec.cc:5564-5576). Re-runs AncestorRealistic on trials flagged with
+    /// a condexe effect; trials that fail the recheck are marked no-use.
+    pub fn final_input_check(&mut self, op_ref: &crate::op::PcodeOpRef) {
+        let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
+        if let Some(active) = self.active_input.as_mut() {
+            // Collect indices of trials to recheck (isActive + hasCondExeEffect),
+            // then process them. Ghidra mutates trials in-place during iteration.
+            let mut recheck: Vec<usize> = Vec::new();
+            for i in 0..active.get_num_trials() {
+                let t = active.get_trial(i);
+                if t.is_active() && t.has_condexe_effect() {
+                    recheck.push(i);
                 }
             }
-        } else {
-            // No model: mark all unchecked trials as active (simplified).
-            if let Some(active) = self.active_input.as_mut() {
-                for i in 0..active.get_num_trials() {
-                    if !active.get_trial(i).is_checked() {
-                        active.get_trial_mut(i).mark_active();
-                    }
+            for i in recheck {
+                let slot = active.get_trial(i).get_slot();
+                let success = {
+                    let t = active.get_trial_mut(i);
+                    ancestor_real.execute(&op_ref, slot, t, false)
+                };
+                if !success {
+                    active.get_trial_mut(i).mark_no_use();
                 }
             }
         }
+    }
+
+    // Ghidra: fspec.cc:5585 FuncCallSpecs::checkInputTrialUse
+    /// Mark if input trials are being actively used. Faithful 1:1 port of
+    /// `FuncCallSpecs::checkInputTrialUse` (fspec.cc:5585-5653).
+    ///
+    /// For each unchecked trial, determines if the trial varnode has realistic
+    /// ancestors (via `AncestorRealistic`) and is only used for parameter
+    /// passing (via `ancestorOpUse`). Stack-space trials are additionally
+    /// checked against the alias checker and local range.
+    ///
+    /// Returns a list of (slot, varnode_size) pairs for trials that are
+    /// definitely-not-used and should have their op input replaced with a
+    /// constant (Ghidra's `data.opSetInput(op, newConstant(...), slot)`).
+    pub fn check_input_trial_use(
+        &mut self,
+        op_ref: &crate::op::PcodeOpRef,
+        has_active_output: bool,
+        aliascheck: &crate::varmap::AliasChecker,
+        maxancestor: i32,
+    ) -> Vec<(i32, i32)> {
+        let mut replace_slots: Vec<(i32, i32)> = Vec::new();
+        let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
+        let active = match self.active_input.as_mut() {
+            Some(a) => a,
+            None => return replace_slots,
+        };
+        let mut needs_final_check = false;
+        for i in 0..active.get_num_trials() {
+            if active.get_trial(i).is_checked() { continue; }
+            let slot = active.get_trial(i).get_slot();
+            // Resolve the trial varnode: vn = op.getIn(slot).
+            let vn_arc = {
+                let op_rg = op_ref.0.read().unwrap();
+                op_rg.get_in(slot as usize).cloned()
+            };
+            let vn = match vn_arc { Some(v) => v, None => continue };
+            let vn_space = vn.read().unwrap().get_space();
+            if vn_space == crate::space::AddressSpace::Stack {
+                // Ghidra fspec.cc:5615-5634 — stack spacebase varnode path.
+                if aliascheck.has_local_alias(&vn.read().unwrap()) {
+                    active.get_trial_mut(i).mark_no_use();
+                } else if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), false) {
+                    let ao_result = crate::funcdata::ancestor_op_use(
+                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                    );
+                    if ao_result {
+                        active.get_trial_mut(i).mark_active();
+                    } else {
+                        active.get_trial_mut(i).mark_inactive();
+                    }
+                } else {
+                    active.get_trial_mut(i).mark_no_use();
+                }
+            } else {
+                // Ghidra fspec.cc:5635-5648 — register / other space path.
+                if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), true) {
+                    let ao_result = crate::funcdata::ancestor_op_use(
+                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                    );
+                    if ao_result {
+                        active.get_trial_mut(i).mark_active();
+                        if active.get_trial(i).has_condexe_effect() {
+                            needs_final_check = true;
+                        }
+                    } else {
+                        active.get_trial_mut(i).mark_inactive();
+                    }
+                } else if vn.read().unwrap().is_input() {
+                    active.get_trial_mut(i).mark_inactive();
+                } else {
+                    active.get_trial_mut(i).mark_no_use();
+                }
+            }
+            if active.get_trial(i).is_definitely_not_used() {
+                let vn_size = vn.read().unwrap().get_size() as i32;
+                replace_slots.push((slot, vn_size));
+            }
+        }
+        if needs_final_check {
+            active.mark_needs_final_check();
+        }
+        replace_slots
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::initActiveOutput
