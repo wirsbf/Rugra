@@ -698,3 +698,4 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 - 消除了 `struct7 undeclared` 等 3 个函数的 gcc 错误（noop 模式下）。
 - 此前 structN 名通过 stack_structs 检测产生，但未注册到 used_varnode_names，导致声明阶段遗漏。
 <!-- annotation-pass: 2026-07-04 -->
+<!-- var-prefix-port: 1783140605.8637707 -->

@@ -1799,38 +1799,37 @@ impl PrintC {
         })))
     }
 
-    // RUGRA-GLUE: var_prefix (no Ghidra counterpart found)
-    /// Ghidra-style Hungarian notation prefix based on inferred datatype.
-    /// Falls back to size-based when no type info is available.
-    fn var_prefix(v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> &'static str {
-        use crate::type_system::{Datatype, TypeMetatype};
-        const CHARTYPE: u32 = 1 << 1;
+    // Ghidra: type.hh:273/424/457 Datatype::printNameBase (virtual dispatch via Datatype::print_name_base)
+    // Ghidra: varmap.cc:2486-2504 Funcdata::buildVariableName (local-var case: printNameBase + "Var")
+    /// Hungarian-notation variable-name prefix derived from `Datatype::print_name_base`
+    /// (faithful to Ghidra's printNameBase virtual dispatch at type.hh:273/424/457,
+    /// consumed by buildVariableName at varmap.cc:2486-2504 which appends "Var").
+    /// Returns e.g. "iVar" for int, "piVar" for int*, "pUVar" for pointer to a
+    /// struct named "URLGlob". Falls back to size-based dispatch when no Datatype
+    /// is available (Rugra-specific gap: Ghidra always has a Datatype object).
+    fn var_prefix(v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> String {
+        let mut base = String::new();
         match v_type {
-            Some(dt) => match &**dt {
-                Datatype::Pointer(ptr) => {
-                    let is_char = matches!(&*ptr.ptr_to, Datatype::Base(b) if (b.flags & CHARTYPE) != 0);
-                    if is_char { "pcVar" }
-                    else { match &*ptr.ptr_to {
-                        Datatype::Base(b) if b.metatype == TypeMetatype::Int || b.metatype == TypeMetatype::Uint => "piVar",
-                        Datatype::Struct(_) => "psVar",
-                        Datatype::Pointer(_) => "ppVar",
-                        _ => "pvVar",
-                    }}
-                }
-                Datatype::Base(b) => {
-                    let is_char = (b.flags & CHARTYPE) != 0;
-                    if is_char { "cVar" }
-                    else { match b.metatype {
-                        TypeMetatype::Float if size >= 8 => "dVar",
-                        TypeMetatype::Float => "fVar",
-                        TypeMetatype::Bool => "bVar",
-                        _ => Self::size_prefix(size),
-                    }}
-                }
-                _ => Self::size_prefix(size),
+            Some(dt) => dt.print_name_base(&mut base),
+            None => match size {
+                // Size-based fallback when no type info (Rugra-specific).
+                // Matches the size dispatch Ghidra uses in buildLocalName
+                // (varmap.cc:2501-2504) when no Datatype is attached.
+                8 => base.push('l'),
+                4 => base.push('i'),
+                2 => base.push('s'),
+                1 => base.push('b'),
+                _ => base.push('u'),
             },
-            None => Self::size_prefix(size),
         }
+        if base.is_empty() {
+            // Unnamed type — Ghidra's base printNameBase writes nothing for
+            // empty name; fall back to 'u' (undefined) so the variable still
+            // gets a non-empty prefix.
+            base.push('u');
+        }
+        base.push_str("Var");
+        base
     }
 
     // RUGRA-GLUE: size_prefix (no Ghidra counterpart found)
