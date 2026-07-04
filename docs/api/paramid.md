@@ -45,3 +45,4 @@ Parameter ID analysis for a function (paramid.hh:70).
 ## 2026-06-27（续）：ParamIDAnalysis::analyze — Funcdata 集成
 
 - **ParamIDAnalysis::analyze(fd)**：完整 Funcdata 集成——遍历 VarnodeBank 输入 Varnodes，为每个创建 ParamMeasure 并调用 calculate_rank 进行数据流分类。同时扫描 RETURN ops 的返回值创建 output ParamMeasure。不再是纯数据结构——现在可以在实际函数上执行参数识别分析。
+<!-- annotation-pass: 2026-07-04 -->

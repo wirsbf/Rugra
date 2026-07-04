@@ -59,12 +59,14 @@ pub struct CPoolRecord {
 }
 
 impl Default for CPoolRecord {
+    // Ghidra: cpool.hh:56 CPoolRecord::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl CPoolRecord {
+    // Ghidra: cpool.hh:56 CPoolRecord::new
     /// Construct an empty record. Faithful to the constructor (cpool.hh:83).
     pub fn new() -> Self {
         Self {
@@ -77,46 +79,55 @@ impl CPoolRecord {
         }
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getTag
     /// Get the type of record. Faithful to `getTag`.
     pub fn get_tag(&self) -> u32 {
         self.tag
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getToken
     /// Get name of method or data-type. Faithful to `getToken`.
     pub fn get_token(&self) -> &str {
         &self.token
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getByteData
     /// Get string literal byte data. Faithful to `getByteData`.
     pub fn get_byte_data(&self) -> Option<&[u8]> {
         self.byte_data.as_deref()
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getByteDataLength
     /// Number of bytes of string literal data. Faithful to `getByteDataLength`.
     pub fn get_byte_data_length(&self) -> usize {
         self.byte_data.as_ref().map_or(0, |d| d.len())
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getTypeName
     /// Get the data-type name. Faithful to `getType`.
     pub fn get_type_name(&self) -> &str {
         &self.type_name
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::getValue
     /// Get the constant value. Faithful to `getValue`.
     pub fn get_value(&self) -> u64 {
         self.value
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::isConstructor
     /// Is the object a constructor method? Faithful to `isConstructor`.
     pub fn is_constructor(&self) -> bool {
         (self.flags & cpool_flags::IS_CONSTRUCTOR) != 0
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::isDestructor
     /// Is the object a destructor method? Faithful to `isDestructor`.
     pub fn is_destructor(&self) -> bool {
         (self.flags & cpool_flags::IS_DESTRUCTOR) != 0
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::tagToString
     /// Convert a tag to its string name for encoding. Faithful to the
     /// encode logic (cpool.cc:36-51).
     pub fn tag_to_string(tag: u32) -> &'static str {
@@ -132,6 +143,7 @@ impl CPoolRecord {
         }
     }
 
+    // Ghidra: cpool.hh:56 CPoolRecord::stringToTag
     /// Convert a string name to a tag for decoding. Faithful to the decode
     /// logic (cpool.cc:99-115).
     pub fn string_to_tag(s: &str) -> u32 {
@@ -162,6 +174,7 @@ pub struct CheapSorter {
 }
 
 impl CheapSorter {
+    // Ghidra: cpool.hh:175 CheapSorter::fromRefs
     /// Construct from an array of reference integers. Faithful to the
     /// constructor (cpool.hh:181).
     pub fn from_refs(refs: &[u64]) -> Self {
@@ -171,6 +184,7 @@ impl CheapSorter {
         }
     }
 
+    // Ghidra: cpool.hh:175 CheapSorter::apply
     /// Convert the reference back to a formal array of integers. Faithful to
     /// `apply` (cpool.hh:195).
     pub fn apply(&self) -> Vec<u64> {
@@ -181,14 +195,17 @@ impl CheapSorter {
 /// An interface to the pool of constant objects for byte-code languages.
 /// Faithful to `ConstantPool` (cpool.hh:104).
 pub trait ConstantPool: Send + Sync {
+    // Ghidra: cpool.hh:175 CheapSorter::getRecord
     /// Retrieve a constant pool record given a reference. Faithful to
     /// `getRecord`.
     fn get_record(&self, refs: &[u64]) -> Option<&CPoolRecord>;
 
+    // Ghidra: cpool.hh:175 CheapSorter::createRecord
     /// Allocate a new CPoolRecord associated with the reference. Faithful to
     /// `createRecord`. Returns a mutable reference to the new record.
     fn create_record(&mut self, refs: &[u64]) -> Result<&mut CPoolRecord, String>;
 
+    // Ghidra: cpool.hh:175 CheapSorter::putRecord
     /// Add a new constant pool record. Faithful to `putRecord`
     /// (cpool.cc:157).
     fn put_record(&mut self, refs: &[u64], tag: u32, tok: &str, type_name: &str) {
@@ -204,9 +221,11 @@ pub trait ConstantPool: Send + Sync {
         }
     }
 
+    // Ghidra: cpool.hh:175 CheapSorter::isEmpty
     /// Is the container empty of records? Faithful to `empty`.
     fn is_empty(&self) -> bool;
 
+    // Ghidra: cpool.hh:175 CheapSorter::clear
     /// Release any (local) resources. Faithful to `clear`.
     fn clear(&mut self);
 }
@@ -219,12 +238,14 @@ pub struct ConstantPoolInternal {
 }
 
 impl Default for ConstantPoolInternal {
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl ConstantPoolInternal {
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::new
     /// Construct an empty constant pool.
     pub fn new() -> Self {
         Self {
@@ -232,16 +253,19 @@ impl ConstantPoolInternal {
         }
     }
 
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::numRecords
     /// Number of records in the pool.
     pub fn num_records(&self) -> usize {
         self.cpool_map.len()
     }
 
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::records
     /// Iterate over all (reference, record) pairs.
     pub fn records(&self) -> impl Iterator<Item = (&CheapSorter, &CPoolRecord)> {
         self.cpool_map.iter()
     }
 
+    // Ghidra: cpool.cc:218 ConstantPoolInternal::encode
     /// Encode all records to a stream. Faithful to `ConstantPoolInternal::encode`
     /// (cpool.cc:218). Emits `<constantpool>` with `<ref>` + `<cpoolrec>` children.
     pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
@@ -268,6 +292,7 @@ impl ConstantPoolInternal {
         encoder.close_element(&cp_elem);
     }
 
+    // Ghidra: cpool.cc:230 ConstantPoolInternal::decode
     /// Restore records from a stream. Faithful to `ConstantPoolInternal::decode`
     /// (cpool.cc:230).
     pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
@@ -336,11 +361,13 @@ impl ConstantPoolInternal {
 }
 
 impl ConstantPool for ConstantPoolInternal {
+    // Ghidra: cpool.cc:207 ConstantPoolInternal::getRecord
     fn get_record(&self, refs: &[u64]) -> Option<&CPoolRecord> {
         let sorter = CheapSorter::from_refs(refs);
         self.cpool_map.get(&sorter)
     }
 
+    // Ghidra: cpool.cc:196 ConstantPoolInternal::createRecord
     fn create_record(&mut self, refs: &[u64]) -> Result<&mut CPoolRecord, String> {
         let sorter = CheapSorter::from_refs(refs);
         if self.cpool_map.contains_key(&sorter) {
@@ -353,10 +380,12 @@ impl ConstantPool for ConstantPoolInternal {
         Ok(self.cpool_map.get_mut(&sorter).unwrap())
     }
 
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::isEmpty
     fn is_empty(&self) -> bool {
         self.cpool_map.is_empty()
     }
 
+    // Ghidra: cpool.hh:165 ConstantPoolInternal::clear
     fn clear(&mut self) {
         self.cpool_map.clear();
     }

@@ -798,3 +798,4 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 
 ### 2026-07-04（续 2）：ActionHideShadow 改为委托 Merge::hide_shadows_of
 - 从内联地址匹配 shadow 检测改为委托 `merge.hide_shadows_of(high)`（对齐 coreaction.cc:4831 遍历 high + 调 hideShadows）。
+<!-- annotation-pass: 2026-07-04 -->

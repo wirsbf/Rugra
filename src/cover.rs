@@ -17,6 +17,7 @@ pub struct CoverBlock {
 }
 
 impl CoverBlock {
+    // Ghidra: cover.hh:75 CoverBlock::new
     /// Create an empty cover block
     pub fn new() -> Self {
         Self {
@@ -25,27 +26,32 @@ impl CoverBlock {
         }
     }
 
+    // Ghidra: cover.hh:75 CoverBlock::clear
     /// Clear the cover block
     pub fn clear(&mut self) {
         self.start = u32::MAX;
         self.end = 0;
     }
 
+    // Ghidra: cover.hh:75 CoverBlock::setBegin
     /// Set the start of liveness
     pub fn set_begin(&mut self, s: u32) {
         self.start = s;
     }
 
+    // Ghidra: cover.hh:75 CoverBlock::setEnd
     /// Set the end of liveness
     pub fn set_end(&mut self, e: u32) {
         self.end = e;
     }
 
+    // Ghidra: cover.hh:75 CoverBlock::empty
     /// Check if the cover block is empty
     pub fn empty(&self) -> bool {
         self.start > self.end
     }
 
+    // Ghidra: cover.cc:107 CoverBlock::contain
     /// Check if the cover block contains a specific point
     pub fn contain(&self, point: u32) -> bool {
         point >= self.start && point <= self.end
@@ -74,6 +80,7 @@ impl CoverBlock {
         0
     }
 
+    // Ghidra: cover.cc:147 CoverBlock::merge
     /// Merge another cover block into this one
     pub fn merge(&mut self, other: &CoverBlock) {
         if other.empty() { return; }
@@ -105,6 +112,7 @@ impl CoverBlock {
         2 // Interval intersection
     }
 
+    // Ghidra: cover.cc:59 CoverBlock::intersect
     /// Intersect another cover block with this one
     pub fn intersect(&mut self, other: &CoverBlock) {
         if self.start < other.start { self.start = other.start; }
@@ -123,6 +131,7 @@ pub struct Cover {
 }
 
 impl Cover {
+    // Ghidra: cover.hh:36 Cover::new
     /// Create a new empty cover
     pub fn new() -> Self {
         Self {
@@ -130,17 +139,20 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.hh:36 Cover::clear
     /// Clear the cover
     pub fn clear(&mut self) {
         self.blocks.clear();
     }
 
+    // Ghidra: cover.cc:501 Cover::addDefPoint
     /// Add a definition point to the cover
     pub fn add_def_point(&mut self, block_idx: i32, point: u32) {
         let cb = self.blocks.entry(block_idx).or_insert_with(CoverBlock::new);
         cb.set_begin(point);
     }
 
+    // Ghidra: cover.cc:565 Cover::addRefPoint
     /// Add a reference point to the cover
     pub fn add_ref_point(&mut self, block_idx: i32, point: u32) {
         let cb = self.blocks.entry(block_idx).or_insert_with(CoverBlock::new);
@@ -149,6 +161,7 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.cc:413 Cover::contain
     /// Check if the cover contains a point within a block
     pub fn contain(&self, block_idx: i32, point: u32) -> bool {
         if let Some(cb) = self.blocks.get(&block_idx) {
@@ -193,6 +206,7 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.cc:465 Cover::merge
     /// Merge another cover into this one
     pub fn merge(&mut self, other: &Cover) {
         for (idx, other_cb) in &other.blocks {
@@ -201,6 +215,7 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.cc:269 Cover::intersect
     /// Intersect another cover with this one
     pub fn intersect(&mut self, other: &Cover) {
         let mut keys_to_remove = Vec::new();
@@ -219,6 +234,7 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.hh:36 Cover::intersects
     /// Non-mutating predicate: true iff this cover and `other` share at least
     /// one live point. Used by cover-based merging to decide whether two
     /// HighVariables are simultaneously live (and thus cannot share a name).
@@ -271,6 +287,7 @@ impl Cover {
         }
     }
 
+    // Ghidra: cover.hh:36 Cover::intersectsExceptAt
     /// Like `intersects`, but ignores overlap at one specific point. Used by
     /// copy-merge: the COPY op itself reads the input and writes the output,
     /// so their covers always overlap at that single op — that overlap is the
@@ -308,6 +325,7 @@ impl Cover {
 }
 
 impl fmt::Display for CoverBlock {
+    // Ghidra: cover.hh:36 Cover::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.empty() {
             write!(f, "[]")
@@ -318,6 +336,7 @@ impl fmt::Display for CoverBlock {
 }
 
 impl fmt::Display for Cover {
+    // Ghidra: cover.hh:36 Cover::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;
         for (i, (idx, cb)) in self.blocks.iter().enumerate() {

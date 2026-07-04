@@ -23,6 +23,7 @@ pub struct ActionBlockStructure {
 }
 
 impl ActionBlockStructure {
+    // Ghidra: blockaction.hh:311 ActionBlockStructure::new
     /// Create a new ActionBlockStructure instance
     pub fn new() -> Self {
         Self { last_op_count: 0 }
@@ -30,6 +31,7 @@ impl ActionBlockStructure {
 }
 
 impl Action for ActionBlockStructure {
+    // Ghidra: blockaction.cc:2169 ActionBlockStructure::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Check if bblocks changed since last structuring. If sblocks is
         // non-empty but the op count differs, bblocks was mutated (e.g. by
@@ -83,11 +85,13 @@ impl Action for ActionBlockStructure {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: blockaction.hh:311 ActionBlockStructure::getName
     fn get_name(&self) -> &str {
         "blockstructure"
     }
 }
 
+// Ghidra: blockaction.hh:311 ActionBlockStructure::buildCopy
 /// Build a copy of the basic block graph into the structure graph
 ///
 /// Corresponds to Ghidra's `BlockGraph::buildCopy`
@@ -172,6 +176,7 @@ pub struct LoopBody {
 }
 
 impl LoopBody {
+    // Ghidra: blockaction.hh:46 LoopBody::new
     pub fn new(head: i32, tail: i32) -> Self {
         Self {
             head,
@@ -184,10 +189,12 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::addTail
     pub fn add_tail(&mut self, tail: i32) {
         self.tails.push(tail);
     }
 
+    // Ghidra: blockaction.cc:119 LoopBody::findBase
     /// Collect all blocks reaching a tail without going through head.
     /// Faithful to `LoopBody::findBase` (blockaction.cc:119-144). Marks each
     /// collected block via set_mark. Returns the body block indices.
@@ -235,6 +242,7 @@ impl LoopBody {
         body
     }
 
+    // Ghidra: blockaction.cc:150 LoopBody::extend
     /// Extend the body to blocks reachable ONLY from head (dominated by the
     /// loop entry), excluding the exit block. Faithful to `LoopBody::extend`
     /// (blockaction.cc:150-176). Uses visit_count to count in-edges.
@@ -289,6 +297,7 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.cc:182 LoopBody::findExit
     /// Pick a single exit block. Faithful to `LoopBody::findExit`
     /// (blockaction.cc:182-239). Prefers exits from tails, then head, then
     /// middle body nodes. If there's a container, the exit must be in it.
@@ -360,6 +369,7 @@ impl LoopBody {
         self.exit_block = trial_exit[0];
     }
 
+    // Ghidra: blockaction.cc:245 LoopBody::orderTails
     /// Reorder tails so a tail with an edge to exit_block is first.
     /// Faithful to `LoopBody::orderTails` (blockaction.cc:245-264).
     pub fn order_tails(&mut self, graph: &BlockGraph) {
@@ -389,6 +399,7 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.cc:270 LoopBody::labelExitEdges
     /// Label edges leaving the body. Faithful to `LoopBody::labelExitEdges`
     /// (blockaction.cc:270-320). Priority: middle-exit edges first, then head,
     /// then tails (reverse), then edges-to-exitblock last.
@@ -479,6 +490,7 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.cc:327 LoopBody::labelContainments
     /// Record contained subloops and set depth/immed_container.
     /// Faithful to `LoopBody::labelContainments` (blockaction.cc:327-358).
     pub fn label_containments(
@@ -506,6 +518,7 @@ impl LoopBody {
         let _ = contain;
     }
 
+    // Ghidra: blockaction.cc:364 LoopBody::emitLikelyEdges
     /// Emit edges that exit this loop body to a likely-goto list, with proper
     /// priority: exit edges first (official exit edge held last among them),
     /// then back-edges (tails→head) in reverse tail order. Faithful to
@@ -550,6 +563,7 @@ impl LoopBody {
     }
 }
 
+// Ghidra: blockaction.cc:446 LoopBody::mergeIdenticalHeads
 /// Merge LoopBodies sharing the same head. Faithful to
 /// `LoopBody::mergeIdenticalHeads` (blockaction.cc:446-467). Bodies with the
 /// same head have their tails merged; subsumed bodies are marked (head=-1).
@@ -573,6 +587,7 @@ pub fn merge_identical_heads(loop_order: &mut Vec<LoopBody>) {
     loop_order.retain(|lb| lb.head != -1);
 }
 
+// Ghidra: blockaction.cc:1039 LoopBody::clearMarks
 /// Clear marks on a set of blocks. Faithful to `LoopBody::clearMarks`
 /// (blockaction.cc:1039).
 pub fn clear_marks(body: &[i32], graph: &BlockGraph) {
@@ -805,6 +820,7 @@ impl<'a> CollapseStructure<'a> {
         self.finalize_structure();
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::finalizeStructure
     /// Remove DEAD-flagged blocks from the top-level structure graph and
     /// re-index survivors. Faithful to Ghidra's identifyInternal list compaction
     /// (block.cc:953-960: `list = newlist`), applied as a single final sweep
@@ -835,6 +851,7 @@ impl<'a> CollapseStructure<'a> {
                   self.name, before, after, before_dead);
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::applyRulesToBlock
     /// Apply interleaved rules to a single block at graph index i.
     fn apply_rules_to_block(&mut self, i: usize) {
         // Skip blocks whose edges were already cleared by an earlier
@@ -866,6 +883,7 @@ impl<'a> CollapseStructure<'a> {
         if self.try_rule_do_while(i) { return; }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::applyRulesToChildren
     /// Apply interleaved rules recursively to children of a structured block.
     /// For each child: if it's Basic/Copy, find its graph index and apply rules.
     /// If it's BlockList, recurse into its children.
@@ -908,6 +926,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::runGotoCascade
     // Ghidra-style selectGoto loop
     fn run_goto_cascade(&mut self) {
         eprintln!("[COLLAPSE] {} goto cascade enabled", self.name);
@@ -1032,6 +1051,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::orderLoopBodies
     /// Identify all natural loops via back-edges and collect their body blocks.
     /// Mirrors Ghidra's labelLoops + orderLoopBodies (blockaction.cc:1126).
     /// A back-edge is an edge from block A to block B where B dominates A.
@@ -1122,6 +1142,7 @@ impl<'a> CollapseStructure<'a> {
         self.run_order_loop_bodies_pipeline(size);
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::runOrderLoopBodiesPipeline
     /// Run the full Ghidra LoopBody analysis pipeline on the detected
     /// back-edges. Faithful to `CollapseStructure::orderLoopBodies`
     /// (blockaction.cc:1148-1188).
@@ -1218,6 +1239,7 @@ impl<'a> CollapseStructure<'a> {
         );
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::applyLoopExitMarks
     /// Apply each LoopBody's exit-edge labels as `F_LOOP_EXIT_EDGE` marks on
     /// the graph. Faithful to Ghidra's `LoopBody::setExitMarks` /
     /// `CollapseStructure::updateLoopBody` (blockaction.cc:416-426, 1231):
@@ -1244,6 +1266,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collectLoopBody
     /// Collect all blocks in a natural loop body.
     /// Body = {head} + all blocks that can reach tail without going through head.
     fn collect_loop_body(&self, head: i32, tail: i32, size: usize) -> Vec<i32> {
@@ -1271,11 +1294,13 @@ impl<'a> CollapseStructure<'a> {
         body.into_iter().collect()
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::isInLoopBody
     /// Check if a block index is inside any identified loop body.
     fn is_in_loop_body(&self, idx: i32) -> bool {
         self.loop_bodies.iter().any(|(_, body)| body.contains(&idx))
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::structureLoopsFirst
     /// Structure detected WhileDo loops (innermost-first) BEFORE phase1 runs,
     /// so loop heads are preserved as BlockWhileDo instead of being consumed
     /// by phase1's collapse_conditions. Only the clean WhileDo pattern
@@ -1350,6 +1375,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::isStructuredChild
     /// Check if a block index is a sub-component of any structured block
     /// (BlockCondition.first/second, BlockIf.condition/if_body/else_body,
     /// BlockWhileDo.condition/body, etc.). These blocks should not be
@@ -1400,6 +1426,7 @@ impl<'a> CollapseStructure<'a> {
     }
 
 
+    // Ghidra: blockaction.hh:46 LoopBody::selectAndMarkGoto
     /// can be marked as goto to break irreducible CFG patterns.
     fn select_and_mark_goto(&mut self) -> bool {
         let size = self.graph.get_size();
@@ -1619,6 +1646,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::clipExtraRoots
     /// Ghidra's clipExtraRoots (blockaction.cc:1108): find distinct control-flow
     /// roots (size_in==0, index > 0), and for the subset of blocks ONLY reachable
     /// from that root, mark their exiting edges as goto. Handles irreducible
@@ -1699,6 +1727,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::runTracedag
     /// Run the TraceDAG algorithm (Ghidra's selectGoto main path) to find
     /// likely unstructured edges. When found, mark them as goto on the source
     /// block so try_rule_if_goto/try_rule_goto can consume them, allowing the
@@ -1765,6 +1794,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::findSpanningTree
     /// Compute immediate dominators using iterative dataflow (Cooper et al.
     /// 2001 simplified algorithm). Stores result in self.idom.
     /// DFS spanning-tree computation. Faithful to Ghidra's
@@ -1954,6 +1984,7 @@ impl<'a> CollapseStructure<'a> {
     }
 
 
+    // Ghidra: blockaction.hh:46 LoopBody::computeDominators
     fn compute_dominators(&mut self) {
         self.idom.clear();
         let size = self.graph.get_size();
@@ -2023,6 +2054,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::dominatesIdx
     /// Check if block index `a` dominates block index `b`.
     fn dominates_idx(&self, a: i32, b: i32) -> bool {
         if a == b { return true; }
@@ -2037,6 +2069,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::refreshSwitchCases
     /// Collect indices of all switch case body blocks. Scans both BlockSwitch
     /// nodes and CBRANCH cascade chains (which produce switch-like structures
     /// using BlockIf nodes). Interleaved rules use this to avoid pulling case
@@ -2150,6 +2183,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::identifyInternal
     /// Ghidra's identifyInternal: collapse consumed blocks into a structured block.
     /// Faithful port of BlockGraph::identifyInternal + selfIdentify (block.cc:940, 895).
     /// Steps:
@@ -2415,6 +2449,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleCat
     /// Ghidra's ruleBlockCat (blockaction.cc:1284): concatenate a chain of
     /// blocks into a single BlockList. Faithful port with chain extension.
     /// bl must have 1 out-edge to outblock, outblock has 1 in-edge, and bl must
@@ -2514,6 +2549,7 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::updateSwitchCaseReference
     /// Update any BlockSwitch that has `old_idx` as a case body to point to `new_block`.
     /// This ensures switch case bodies that get structured into BlockIf/BlockList
     /// are correctly referenced by their owning BlockSwitch.
@@ -2557,6 +2593,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::countNonStructuralInEdges
     /// Count in-edges that are NOT from switch dispatch blocks.
     /// Switch dispatch edges come from BlockSwitch nodes or CBRANCH cascade
     /// members (blocks whose taken edge targets a CASE_BODY block).
@@ -2589,6 +2626,7 @@ impl<'a> CollapseStructure<'a> {
         total - structural
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleProperIf
     /// ruleBlockProperIf: detect if-then pattern (generalized Triangle).
     /// A CBRANCH block with 2 out-edges, where one out-edge block (clause)
     /// has 1 in and 1 out, and its out-edge points to the other branch.
@@ -2675,6 +2713,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleIfNoExit
     /// ruleBlockIfNoExit: detect if-then where the clause has NO out-edge
     /// (ends with RETURN/exit). The clause doesn't merge back — it exits.
     /// Mirrors Ghidra's ruleBlockIfNoExit (blockaction.cc:1481).
@@ -2777,6 +2816,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleIfElse
     /// ruleBlockIfElse: detect if-then-else pattern.
     /// A CBRANCH block with 2 out-edges, both clause blocks have 1 in and
     /// 1 out, and both out-edges point to the same merge block.
@@ -2835,6 +2875,7 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleIfGoto
     /// ruleBlockIfGoto: when a CBRANCH block has GOTO_EDGE_1 set (taken edge
     /// marked as goto by selectGoto), structure it as if(cond) goto target.
     /// The remaining effective edge (fallthrough) becomes the if-body.
@@ -2914,6 +2955,7 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleGoto
     /// Ghidra ruleBlockGoto (blockaction.cc:1450), pure-goto branch (size_out==1).
     /// A block whose single out-edge is marked as goto (GOTO_EDGE_0) becomes a
     /// BlockGoto. This lets clip_extra_roots / select_and_mark_goto consumed:
@@ -2985,6 +3027,7 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleWhileDo
     /// ruleBlockWhileDo: detect while(cond) { body } pattern.
     /// A CBRANCH block with 2 out-edges, where one out-edge (clause) has
     /// size_in==1, size_out==1, and its single out-edge loops back to the
@@ -3038,6 +3081,7 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::tryRuleDoWhile
     /// ruleBlockDoWhile: detect do { body } while(cond) pattern.
     /// A CBRANCH block where one out-edge loops back to itself.
     /// Mirrors Ghidra's ruleBlockDoWhile (blockaction.cc:1555).
@@ -3080,6 +3124,7 @@ impl<'a> CollapseStructure<'a> {
     }
 
 
+    // Ghidra: blockaction.hh:46 LoopBody::dominates
     fn dominates(&self, dom: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, node: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
         let dom_idx = dom.read().unwrap().get_index();
         let mut curr = node.clone();
@@ -3104,6 +3149,7 @@ impl<'a> CollapseStructure<'a> {
     }
 
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
     fn collapse_loops(&mut self) {
         self.graph.build_dom_tree();
 
@@ -3453,6 +3499,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::ruleBlockWhileDo
     /// Try to structure a WhileDo loop at block index `i`. Faithful to
     /// `CollapseStructure::ruleBlockWhileDo` (blockaction.cc:1518-1549).
     ///
@@ -3545,6 +3592,7 @@ impl<'a> CollapseStructure<'a> {
         }
         false
     }
+    // Ghidra: blockaction.hh:46 LoopBody::collapseConditions
     ///
     /// **Triangle** (if-then, no else):
     /// ```text
@@ -3724,6 +3772,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseBoolConditions
     /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
     ///
     /// Implements Ghidra's `ruleBlockOr` from `blockaction.cc`.
@@ -3874,6 +3923,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseSequences
     /// Collapse linear sequences: when block A has exactly 1 out → block B,
     /// and B has exactly 1 in (from A), merge them into a `BlockList`.
     fn collapse_sequences(&mut self) {
@@ -3929,6 +3979,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseSwitches
     fn collapse_switches(&mut self) {
         let size = self.graph.get_size();
         let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
@@ -4008,6 +4059,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseCbranchCascades
     /// Collapse CBRANCH cascades into `BlockSwitch`.
     ///
     /// Detects chains of blocks where each block ends with CBRANCH comparing
@@ -4297,6 +4349,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::collapseCaseFallthru
     /// ruleCaseFallthru: absorb fallthrough successor blocks into switch case
     /// bodies. When a case body block doesn't end with RETURN/BREAK, its
     /// out-edge target is a "fallthrough" successor. If that successor has
@@ -4390,6 +4443,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::buildFallthroughChain
     fn build_fallthrough_chain(
         &self, start: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         size: usize, switch_idx: usize,
@@ -4420,6 +4474,7 @@ impl<'a> CollapseStructure<'a> {
         chain
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::getCbranchComparedVar
     ///
     /// Handles two patterns:
     /// 1. Direct: CBRANCH(_, INT_EQUAL(var, const))
@@ -4481,6 +4536,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::findSubSource
     /// Helper: find INT_SUB(var, const) producing target varnode, return (var_space, var_offset).
     fn find_sub_source(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<(crate::space::AddressSpace, u64)> {
         use crate::opcodes::OpCode;
@@ -4507,6 +4563,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::getCbranchCaseInfo
     /// Extract the constant case value from a CBRANCH comparison.
     fn get_cbranch_case_info(&self, ops: &[crate::op::PcodeOpRef]) -> Option<u64> {
         use crate::opcodes::OpCode;
@@ -4557,6 +4614,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::findSubConstant
     /// Helper: extract constant from INT_SUB producing target varnode.
     fn find_sub_constant(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<u64> {
         use crate::opcodes::OpCode;
@@ -4580,6 +4638,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::findComparedVarnode
     /// Find the actual varnode being compared for switch index display.
     ///
     /// Walks backwards from the CBRANCH's condition varnode. If the
@@ -4658,6 +4717,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::findSubVarVn
     /// Helper: find the non-const varnode input of INT_SUB producing target.
     fn find_sub_var_vn(&self, ops: &[crate::op::PcodeOpRef], ts: crate::space::AddressSpace, to: u64, tsz: usize) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
         use crate::opcodes::OpCode;
@@ -4686,6 +4746,7 @@ impl<'a> CollapseStructure<'a> {
         None
     }
 
+    // Ghidra: blockaction.hh:46 LoopBody::GetChangeCount
     fn _get_change_count(&self) -> i32 {
         self.change_count
     }
@@ -4699,12 +4760,14 @@ impl<'a> CollapseStructure<'a> {
 pub struct ActionFinalStructure;
 
 impl ActionFinalStructure {
+    // Ghidra: blockaction.hh:324 ActionFinalStructure::new
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionFinalStructure {
+    // Ghidra: blockaction.cc:2186 ActionFinalStructure::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
@@ -4771,6 +4834,7 @@ impl Action for ActionFinalStructure {
         }
     }
 
+    // Ghidra: blockaction.hh:324 ActionFinalStructure::getName
     fn get_name(&self) -> &str {
         "finalstructure"
     }
@@ -4782,6 +4846,7 @@ impl Action for ActionFinalStructure {
 pub struct ActionNormalizeBranches;
 
 impl ActionNormalizeBranches {
+    // Ghidra: blockaction.hh:284 ActionNormalizeBranches::new
     /// Create a new ActionNormalizeBranches instance
     pub fn new() -> Self {
         Self
@@ -4789,6 +4854,7 @@ impl ActionNormalizeBranches {
 }
 
 impl Action for ActionNormalizeBranches {
+    // Ghidra: blockaction.cc:2117 ActionNormalizeBranches::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
         let size = fd.sblocks.get_size();
@@ -4906,6 +4972,7 @@ impl Action for ActionNormalizeBranches {
         }
     }
 
+    // Ghidra: blockaction.hh:284 ActionNormalizeBranches::getName
     fn get_name(&self) -> &str {
         "normalizebranches"
     }
@@ -4917,6 +4984,7 @@ mod loopbody_tests {
     use crate::block::BlockBasic;
     use crate::address::Address;
 
+    // Ghidra: blockaction.hh:284 ActionNormalizeBranches::buildLoopCfg
     /// Build a tiny CFG: 0→1→2→1 (loop), with 2 also →3 (exit).
     /// head=1, tail=2, body={1,2}, exit=3.
     fn build_loop_cfg() -> BlockGraph {

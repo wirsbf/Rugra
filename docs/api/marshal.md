@@ -115,3 +115,4 @@ XmlDecode).
 - `new(input, registry)`。
 - open_element/close_element/peek_element/next_attribute_id/read_*/rewind_attributes。
 - 支持 BOOLEAN/SIGNEDINT_POSITIVE/NEGATIVE/UNSIGNEDINT/STRING 类型解码。
+<!-- annotation-pass: 2026-07-04 -->

@@ -53,3 +53,4 @@ Scores union fields for a specific access (unionresolve.hh:82).
 
 - **run_on_func(fd)**：新方法——扫描 Funcdata 的 PcodeOps 检测 union 字段访问模式（SUBPIECE 提取 + INT_AND 掩码），对匹配的字段加分。完成后调用 compute_best_index 选择最佳字段。
 - **run()**：保留独立版本（仅 compute_best_index）。
+<!-- annotation-pass: 2026-07-04 -->

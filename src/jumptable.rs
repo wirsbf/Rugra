@@ -53,16 +53,19 @@ pub struct LoadTable {
 }
 
 impl LoadTable {
+    // Ghidra: jumptable.hh:57 LoadTable::LoadTable(Address,int4)
     /// Construct a single-entry table.
     pub fn single(addr: Address, size: i32) -> Self {
         Self { addr, size, num: 1 }
     }
 
+    // Ghidra: jumptable.hh:58 LoadTable::LoadTable(Address,int4,int4)
     /// Construct a table with an explicit entry count.
     pub fn new(addr: Address, size: i32, num: i32) -> Self {
         Self { addr, size, num }
     }
 
+    // Ghidra: jumptable.cc:62 LoadTable::collapseTable
     /// Sort the entries and collapse any contiguous sequences into a single
     /// `LoadTable` entry. Faithful to `LoadTable::collapseTable`
     /// (jumptable.cc:60).
@@ -156,36 +159,43 @@ pub struct PathMeld {
 }
 
 impl PathMeld {
+    // Ghidra: jumptable.hh:95 PathMeld::numCommonVarnode
     /// Number of varnodes common to all paths. Faithful to `numCommonVarnode`.
     pub fn num_common_varnode(&self) -> usize {
         self.common_vn.len()
     }
 
+    // Ghidra: jumptable.hh:96 PathMeld::numOps
     /// Number of pcode ops across all paths. Faithful to `numOps`.
     pub fn num_ops(&self) -> usize {
         self.op_meld.len()
     }
 
+    // Ghidra: jumptable.hh:102 PathMeld::empty
     /// Return `true` if this container holds no paths.
     pub fn empty(&self) -> bool {
         self.common_vn.is_empty()
     }
 
+    // Ghidra: jumptable.hh:97 PathMeld::getVarnode
     /// Get the i-th common varnode.
     pub fn get_varnode(&self, i: usize) -> Arc<RwLock<Varnode>> {
         self.common_vn[i].clone()
     }
 
+    // Ghidra: jumptable.hh:99 PathMeld::getOp
     /// Get the i-th pcode op.
     pub fn get_op(&self, i: usize) -> Arc<RwLock<PcodeOp>> {
         self.op_meld[i].op.clone()
     }
 
+    // Ghidra: jumptable.hh:98 PathMeld::getOpParent
     /// Get the split-point varnode for the i-th pcode op.
     pub fn get_op_parent(&self, i: usize) -> Arc<RwLock<Varnode>> {
         self.common_vn[self.op_meld[i].root_vn as usize].clone()
     }
 
+    // Ghidra: jumptable.cc:1025 PathMeld::getEarliestOp
     /// Find the earliest pcode op (executed first) that has the i-th common
     /// varnode as input. Faithful to `getEarliestOp` (jumptable.cc:1025).
     pub fn get_earliest_op(&self, pos: usize) -> Option<Arc<RwLock<PcodeOp>>> {
@@ -197,6 +207,7 @@ impl PathMeld {
         None
     }
 
+    // Ghidra: jumptable.cc:1038 PathMeld::isLoadInPath
     /// Search for a varnode in the common path, prior to `i`, defined by a
     /// LOAD operation. Faithful to `isLoadInPath` (jumptable.cc:1038).
     pub fn is_load_in_path(&self, mut i: usize) -> bool {
@@ -216,12 +227,14 @@ impl PathMeld {
         false
     }
 
+    // Ghidra: jumptable.cc:915 PathMeld::set(const PathMeld&)
     /// Copy paths from another container. Faithful to `set(const PathMeld&)`.
     pub fn set_from(&mut self, op2: &PathMeld) {
         self.common_vn = op2.common_vn.clone();
         self.op_meld = op2.op_meld.clone();
     }
 
+    // Ghidra: jumptable.cc:924 PathMeld::set(const vector<PcodeOpNode>&)
     /// Initialize this container to a single path. The path is a list of
     /// `PcodeOpNode` edges in reverse execution order. Faithful to
     /// `set(const vector<PcodeOpNode>&)` (jumptable.cc:924).
@@ -242,6 +255,7 @@ impl PathMeld {
         }
     }
 
+    // Ghidra: jumptable.cc:937 PathMeld::set(PcodeOp*,Varnode*)
     /// Initialize this container to a single node "path".
     /// Faithful to `set(PcodeOp*, Varnode*)` (jumptable.cc:937).
     pub fn set_single(&mut self, op: Arc<RwLock<PcodeOp>>, vn: Arc<RwLock<Varnode>>) {
@@ -251,6 +265,7 @@ impl PathMeld {
         self.op_meld.push(RootedOp { op, root_vn: 0 });
     }
 
+    // Ghidra: jumptable.cc:949 PathMeld::append
     /// Append a new set of paths to this set of paths. Faithful to
     /// `append(const PathMeld&)` (jumptable.cc:949).
     pub fn append(&mut self, op2: &PathMeld) {
@@ -271,12 +286,14 @@ impl PathMeld {
         let _ = prepend_op;
     }
 
+    // Ghidra: jumptable.cc:959 PathMeld::clear
     /// Clear this container. Faithful to `clear()`.
     pub fn clear(&mut self) {
         self.common_vn.clear();
         self.op_meld.clear();
     }
 
+    // Ghidra: jumptable.cc:970 PathMeld::meld
     /// Add the new path, recalculating the set of varnodes common to all
     /// paths. Faithful to `meld()` (jumptable.cc:970).
     ///
@@ -356,6 +373,7 @@ impl PathMeld {
         path.truncate(cut_off_u);
     }
 
+    // Ghidra: jumptable.cc:834 PathMeld::meldOps
     /// Helper for `meld`: merge in new path ops up to `cut_off`, keeping
     /// `op_meld` ordered by execution order.
     fn meld_ops(&mut self, path: &[PcodeOpNode], cut_off: usize) {
@@ -393,6 +411,7 @@ impl PathMeld {
         self.op_meld = new_meld;
     }
 
+    // Ghidra: jumptable.cc:1002 PathMeld::markPaths
     /// Mark or unmark the pcode ops on the path from the start varnode index
     /// up to the BRANCHIND. Faithful to `markPaths` (jumptable.cc:1002).
     pub fn mark_paths(&self, val: bool, start_varnode: usize) {
@@ -448,6 +467,7 @@ pub struct GuardRecord {
 }
 
 impl GuardRecord {
+    // Ghidra: jumptable.cc:615 GuardRecord::GuardRecord
     /// Construct from the CBRANCH, the read op, the path, the range, the
     /// restricted varnode and the unrolled flag. Faithful to the
     /// `GuardRecord` constructor (jumptable.cc:615).
@@ -472,36 +492,43 @@ impl GuardRecord {
         }
     }
 
+    // Ghidra: jumptable.hh:149 GuardRecord::isUnrolled
     /// Is this guard duplicated across multiple blocks?
     pub fn is_unrolled(&self) -> bool {
         self.unrolled
     }
 
+    // Ghidra: jumptable.hh:150 GuardRecord::getBranch
     /// Get the CBRANCH associated with this guard, if not cleared.
     pub fn get_branch(&self) -> Option<Arc<RwLock<PcodeOp>>> {
         self.cbranch.clone()
     }
 
+    // Ghidra: jumptable.hh:151 GuardRecord::getReadOp
     /// Get the pcode op immediately causing the restriction.
     pub fn get_read_op(&self) -> Option<Arc<RwLock<PcodeOp>>> {
         self.read_op.clone()
     }
 
+    // Ghidra: jumptable.hh:152 GuardRecord::getPath
     /// Get the specific path index going towards the switch.
     pub fn get_path(&self) -> i32 {
         self.indpath
     }
 
+    // Ghidra: jumptable.hh:153 GuardRecord::getRange
     /// Get the range of values causing the switch path to be taken.
     pub fn get_range(&self) -> &CircleRange {
         &self.range
     }
 
+    // Ghidra: jumptable.hh:154 GuardRecord::clear
     /// Mark this guard as unused. Faithful to `clear()` (jumptable.hh:154).
     pub fn clear(&mut self) {
         self.cbranch = None;
     }
 
+    // Ghidra: jumptable.cc:639 GuardRecord::valueMatch
     /// Determine if this guard applies to the given varnode. Returns:
     /// - 0: the two varnodes do not clearly hold the same value;
     /// - 1: they clearly hold the same value;
@@ -535,6 +562,7 @@ impl GuardRecord {
     }
 }
 
+// Ghidra: jumptable.cc:721 GuardRecord::quasiCopy
 /// Compute the source of a quasi-COPY chain for the given varnode.
 ///
 /// A value is a quasi-copy if a sequence of pcode ops producing it always
@@ -646,6 +674,7 @@ pub fn quasi_copy(vn: &Arc<RwLock<Varnode>>) -> (Option<Arc<RwLock<Varnode>>>, i
     (Some(cur_vn), bits_preserved)
 }
 
+// Ghidra: jumptable.cc:686 GuardRecord::oneOffMatch
 /// Return 1 if the two given pcode ops produce exactly the same value, 0
 /// otherwise. Only one level of pcode-op calculation is considered and only
 /// for certain binary ops where the second parameter is a constant. Faithful
@@ -686,6 +715,7 @@ pub fn one_off_match(op1: &Arc<RwLock<PcodeOp>>, op2: &Arc<RwLock<PcodeOp>>) -> 
     0
 }
 
+// Ghidra: jumptable.cc:600 matching_constants (static free function)
 /// Check if the two given varnodes are matching constants.
 /// Faithful to `matching_constants` (jumptable.cc:600).
 fn matching_constants(
@@ -703,6 +733,7 @@ fn matching_constants(
     a_rg.get_offset() == b_rg.get_offset()
 }
 
+// RUGRA-GLUE: Rust helper for CircleRange::pullBack (rangeutil.cc:1022); free wrapper used by JumpBasic
 /// Pull-back this range through a given PcodeOp, returning the unknown input
 /// varnode whose range we now know. Faithful to `CircleRange::pullBack`
 /// (rangeutil.cc:1022).
@@ -793,25 +824,35 @@ pub fn pull_back_through_op(
 /// associated with a starting Varnode and PcodeOp in the function being
 /// emulated. Faithful to `JumpValues` (jumptable.hh:166).
 pub trait JumpValues: Send + Sync {
+    // Ghidra: jumptable.hh:169 JumpValues::truncate (pure virtual)
     /// Truncate the number of values to the given number.
     fn truncate(&mut self, nm: usize);
+    // Ghidra: jumptable.hh:170 JumpValues::getSize (pure virtual)
     /// Return the number of values the variables can take.
     fn get_size(&self) -> u64;
+    // Ghidra: jumptable.hh:171 JumpValues::contains (pure virtual)
     /// Return true if the given value is in the set of possible values.
     fn contains(&self, val: u64) -> bool;
+    // Ghidra: jumptable.hh:176 JumpValues::initializeForReading (pure virtual)
     /// Initialize this for iterating over the set of possible values. Returns
     /// true if there are any values to iterate over.
     fn initialize_for_reading(&self) -> bool;
+    // Ghidra: jumptable.hh:178 JumpValues::next (pure virtual)
     /// Advance the iterator, return true if there is another value.
     fn next(&mut self) -> bool;
+    // Ghidra: jumptable.hh:179 JumpValues::getValue (pure virtual)
     /// Get the current value.
     fn get_value(&self) -> u64;
+    // Ghidra: jumptable.hh:180 JumpValues::getStartVarnode (pure virtual)
     /// Get the varnode associated with the current value.
     fn get_start_varnode(&self) -> Option<Arc<RwLock<Varnode>>>;
+    // Ghidra: jumptable.hh:181 JumpValues::getStartOp (pure virtual)
     /// Get the pcode op associated with the current value.
     fn get_start_op(&self) -> Option<Arc<RwLock<PcodeOp>>>;
+    // Ghidra: jumptable.hh:182 JumpValues::isReversible (pure virtual)
     /// Return true if the current value can be reversed to get a label.
     fn is_reversible(&self) -> bool;
+    // Ghidra: jumptable.hh:183 JumpValues::clone (pure virtual)
     /// Clone this iterator into a boxed trait object.
     fn clone_boxed(&self) -> Box<dyn JumpValues>;
 }
@@ -831,6 +872,7 @@ pub struct JumpValuesRange {
 }
 
 impl Default for JumpValuesRange {
+    // RUGRA-GLUE: Rust Default trait impl for JumpValuesRange; Ghidra uses field init (jumptable.hh:188)
     fn default() -> Self {
         Self {
             range: CircleRange::empty(),
@@ -842,16 +884,19 @@ impl Default for JumpValuesRange {
 }
 
 impl JumpValuesRange {
+    // Ghidra: jumptable.hh:195 JumpValuesRange::setRange
     /// Set the range of values explicitly.
     pub fn set_range(&mut self, rng: CircleRange) {
         self.range = rng;
     }
 
+    // Ghidra: jumptable.hh:196 JumpValuesRange::setStartVn
     /// Set the normalized switch varnode explicitly.
     pub fn set_start_vn(&mut self, vn: Arc<RwLock<Varnode>>) {
         self.normqvn = Some(vn);
     }
 
+    // Ghidra: jumptable.hh:197 JumpValuesRange::setStartOp
     /// Set the starting pcode op explicitly.
     pub fn set_start_op(&mut self, op: Arc<RwLock<PcodeOp>>) {
         self.startop = Some(op);
@@ -859,6 +904,7 @@ impl JumpValuesRange {
 }
 
 impl JumpValues for JumpValuesRange {
+    // Ghidra: jumptable.cc:262 JumpValuesRange::truncate
     fn truncate(&mut self, nm: usize) {
         // Faithful to JumpValuesRange::truncate (jumptable.cc:262).
         let range_size = (64 - self.range.get_mask().leading_zeros()) >> 3;
@@ -868,14 +914,17 @@ impl JumpValues for JumpValuesRange {
         self.range = CircleRange::new(left, right, range_size as usize, step);
     }
 
+    // Ghidra: jumptable.cc:273 JumpValuesRange::getSize
     fn get_size(&self) -> u64 {
         self.range.get_size()
     }
 
+    // Ghidra: jumptable.cc:279 JumpValuesRange::contains
     fn contains(&self, val: u64) -> bool {
         self.range.contains_val(val)
     }
 
+    // Ghidra: jumptable.cc:285 JumpValuesRange::initializeForReading
     fn initialize_for_reading(&self) -> bool {
         if self.range.get_size() == 0 {
             return false;
@@ -885,26 +934,32 @@ impl JumpValues for JumpValuesRange {
         true
     }
 
+    // Ghidra: jumptable.cc:293 JumpValuesRange::next
     fn next(&mut self) -> bool {
         self.range.next(&mut self.curval)
     }
 
+    // Ghidra: jumptable.cc:299 JumpValuesRange::getValue
     fn get_value(&self) -> u64 {
         self.curval
     }
 
+    // Ghidra: jumptable.cc:305 JumpValuesRange::getStartVarnode
     fn get_start_varnode(&self) -> Option<Arc<RwLock<Varnode>>> {
         self.normqvn.clone()
     }
 
+    // Ghidra: jumptable.cc:311 JumpValuesRange::getStartOp
     fn get_start_op(&self) -> Option<Arc<RwLock<PcodeOp>>> {
         self.startop.clone()
     }
 
+    // Ghidra: jumptable.hh:206 JumpValuesRange::isReversible
     fn is_reversible(&self) -> bool {
         true
     }
 
+    // Ghidra: jumptable.cc:317 JumpValuesRange::clone
     fn clone_boxed(&self) -> Box<dyn JumpValues> {
         Box::new(self.clone())
     }
@@ -931,16 +986,19 @@ pub struct JumpValuesRangeDefault {
 }
 
 impl JumpValuesRangeDefault {
+    // Ghidra: jumptable.hh:220 JumpValuesRangeDefault::setExtraValue
     /// Set the extra value explicitly.
     pub fn set_extra_value(&mut self, val: u64) {
         self.extravalue = val;
     }
 
+    // Ghidra: jumptable.hh:221 JumpValuesRangeDefault::setDefaultVn
     /// Set the associated start varnode.
     pub fn set_default_vn(&mut self, vn: Arc<RwLock<Varnode>>) {
         self.extravn = Some(vn);
     }
 
+    // Ghidra: jumptable.hh:222 JumpValuesRangeDefault::setDefaultOp
     /// Set the associated start pcode op.
     pub fn set_default_op(&mut self, op: Arc<RwLock<PcodeOp>>) {
         self.extraop = Some(op);
@@ -948,14 +1006,17 @@ impl JumpValuesRangeDefault {
 }
 
 impl JumpValues for JumpValuesRangeDefault {
+    // RUGRA-GLUE: inherited from JumpValuesRange in Ghidra (jumptable.cc:262); Rust requires explicit trait impl
     fn truncate(&mut self, nm: usize) {
         self.base.truncate(nm);
     }
 
+    // Ghidra: jumptable.cc:327 JumpValuesRangeDefault::getSize
     fn get_size(&self) -> u64 {
         self.base.range.get_size() + 1
     }
 
+    // Ghidra: jumptable.cc:333 JumpValuesRangeDefault::contains
     fn contains(&self, val: u64) -> bool {
         if self.extravalue == val {
             return true;
@@ -963,6 +1024,7 @@ impl JumpValues for JumpValuesRangeDefault {
         self.base.range.contains_val(val)
     }
 
+    // Ghidra: jumptable.cc:341 JumpValuesRangeDefault::initializeForReading
     fn initialize_for_reading(&self) -> bool {
         // The iterator state is held in the cloned copy; here we just report
         // whether there are any values.
@@ -973,6 +1035,7 @@ impl JumpValues for JumpValuesRangeDefault {
         }
     }
 
+    // Ghidra: jumptable.cc:355 JumpValuesRangeDefault::next
     fn next(&mut self) -> bool {
         if self.lastvalue {
             return false;
@@ -985,10 +1048,12 @@ impl JumpValues for JumpValuesRangeDefault {
         true
     }
 
+    // RUGRA-GLUE: inherited from JumpValuesRange in Ghidra (jumptable.cc:299); Rust requires explicit trait impl
     fn get_value(&self) -> u64 {
         self.base.curval
     }
 
+    // Ghidra: jumptable.cc:366 JumpValuesRangeDefault::getStartVarnode
     fn get_start_varnode(&self) -> Option<Arc<RwLock<Varnode>>> {
         if self.lastvalue {
             self.extravn.clone()
@@ -997,6 +1062,7 @@ impl JumpValues for JumpValuesRangeDefault {
         }
     }
 
+    // Ghidra: jumptable.cc:372 JumpValuesRangeDefault::getStartOp
     fn get_start_op(&self) -> Option<Arc<RwLock<PcodeOp>>> {
         if self.lastvalue {
             self.extraop.clone()
@@ -1005,10 +1071,12 @@ impl JumpValues for JumpValuesRangeDefault {
         }
     }
 
+    // Ghidra: jumptable.hh:229 JumpValuesRangeDefault::isReversible
     fn is_reversible(&self) -> bool {
         !self.lastvalue
     }
 
+    // Ghidra: jumptable.cc:378 JumpValuesRangeDefault::clone
     fn clone_boxed(&self) -> Box<dyn JumpValues> {
         Box::new(self.clone())
     }
@@ -1027,6 +1095,7 @@ pub struct NormMax {
 }
 
 impl Default for NormMax {
+    // RUGRA-GLUE: Rust Default trait impl for NormMax; Ghidra uses fields on JumpTable (jumptable.hh:572)
     fn default() -> Self {
         Self {
             addsub: 1,
@@ -1041,11 +1110,14 @@ impl Default for NormMax {
 /// Holds details of the model and recovers these details in various stages.
 /// Faithful to `JumpModel` (jumptable.hh:243).
 pub trait JumpModel: Send + Sync {
+    // Ghidra: jumptable.hh:249 JumpModel::isOverride (pure virtual)
     /// Return true if this model was manually overridden.
     fn is_override(&self) -> bool;
+    // Ghidra: jumptable.hh:250 JumpModel::getTableSize (pure virtual)
     /// Return the number of entries in the address table.
     fn get_table_size(&self) -> usize;
 
+    // Ghidra: jumptable.hh:260 JumpModel::recoverModel (pure virtual)
     /// Attempt to recover details of the model, given a specific BRANCHIND.
     /// Returns true on success. Faithful to `recoverModel`.
     fn recover_model(
@@ -1056,6 +1128,7 @@ pub trait JumpModel: Send + Sync {
         maxtablesize: u32,
     ) -> bool;
 
+    // Ghidra: jumptable.hh:271 JumpModel::buildAddresses (pure virtual)
     /// Construct the explicit list of target addresses (the Address Table)
     /// from this model. Faithful to `buildAddresses`.
     fn build_addresses(
@@ -1067,9 +1140,11 @@ pub trait JumpModel: Send + Sync {
         loadcounts: Option<&mut Vec<i32>>,
     );
 
+    // Ghidra: jumptable.hh:281 JumpModel::findUnnormalized (pure virtual)
     /// Recover the unnormalized switch variable. Faithful to `findUnnormalized`.
     fn find_unnormalized(&mut self, maxaddsub: u32, maxleftright: u32, maxext: u32);
 
+    // Ghidra: jumptable.hh:293 JumpModel::buildLabels (pure virtual)
     /// Recover case labels associated with the address table. Faithful to
     /// `buildLabels`.
     fn build_labels(
@@ -1080,6 +1155,7 @@ pub trait JumpModel: Send + Sync {
         orig: &dyn JumpModel,
     );
 
+    // Ghidra: jumptable.hh:303 JumpModel::foldInNormalization (pure virtual)
     /// Do normalization of the given switch specific to this model. Returns
     /// the varnode holding the final unnormalized switch variable.
     /// Faithful to `foldInNormalization`.
@@ -1089,6 +1165,7 @@ pub trait JumpModel: Send + Sync {
         indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>>;
 
+    // Ghidra: jumptable.hh:310 JumpModel::foldInGuards (pure virtual)
     /// Eliminate any guard code involved in computing the switch destination.
     /// Faithful to `foldInGuards`.
     fn fold_in_guards(
@@ -1097,6 +1174,7 @@ pub trait JumpModel: Send + Sync {
         jump: &mut JumpTable,
     ) -> bool;
 
+    // Ghidra: jumptable.hh:325 JumpModel::sanityCheck (pure virtual)
     /// Perform a sanity check on recovered addresses. Returns true if there
     /// are at least some reasonable addresses in the table. Faithful to
     /// `sanityCheck`.
@@ -1109,9 +1187,11 @@ pub trait JumpModel: Send + Sync {
         loadcounts: Option<&mut Vec<i32>>,
     ) -> bool;
 
+    // Ghidra: jumptable.hh:328 JumpModel::clone (pure virtual)
     /// Clone this model.
     fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel>;
 
+    // Ghidra: jumptable.hh:331 JumpModel::clear
     /// Clear any non-permanent aspects of the model.
     fn clear(&mut self) {}
 }
@@ -1126,6 +1206,7 @@ pub struct JumpModelTrivial {
 }
 
 impl JumpModelTrivial {
+    // Ghidra: jumptable.hh:353 JumpModelTrivial::JumpModelTrivial
     /// Construct given a parent jump-table.
     pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
         Self {
@@ -1136,14 +1217,17 @@ impl JumpModelTrivial {
 }
 
 impl JumpModel for JumpModelTrivial {
+    // Ghidra: jumptable.hh:354 JumpModelTrivial::isOverride
     fn is_override(&self) -> bool {
         false
     }
 
+    // Ghidra: jumptable.hh:355 JumpModelTrivial::getTableSize
     fn get_table_size(&self) -> usize {
         self.size as usize
     }
 
+    // Ghidra: jumptable.cc:391 JumpModelTrivial::recoverModel
     fn recover_model(
         &mut self,
         _fd: &crate::funcdata::Funcdata,
@@ -1171,6 +1255,7 @@ impl JumpModel for JumpModelTrivial {
         (self.size != 0) && (self.size <= matchsize)
     }
 
+    // Ghidra: jumptable.cc:398 JumpModelTrivial::buildAddresses
     fn build_addresses(
         &self,
         _fd: &crate::funcdata::Funcdata,
@@ -1194,8 +1279,10 @@ impl JumpModel for JumpModelTrivial {
         }
     }
 
+    // Ghidra: jumptable.hh:359 JumpModelTrivial::findUnnormalized
     fn find_unnormalized(&mut self, _a: u32, _b: u32, _c: u32) {}
 
+    // Ghidra: jumptable.cc:409 JumpModelTrivial::buildLabels
     fn build_labels(
         &self,
         _fd: &crate::funcdata::Funcdata,
@@ -1209,6 +1296,7 @@ impl JumpModel for JumpModelTrivial {
         }
     }
 
+    // Ghidra: jumptable.hh:361 JumpModelTrivial::foldInNormalization
     fn fold_in_normalization(
         &mut self,
         _fd: &mut crate::funcdata::Funcdata,
@@ -1217,6 +1305,7 @@ impl JumpModel for JumpModelTrivial {
         None
     }
 
+    // Ghidra: jumptable.hh:362 JumpModelTrivial::foldInGuards
     fn fold_in_guards(
         &mut self,
         _fd: &mut crate::funcdata::Funcdata,
@@ -1225,6 +1314,7 @@ impl JumpModel for JumpModelTrivial {
         false
     }
 
+    // Ghidra: jumptable.hh:363 JumpModelTrivial::sanityCheck
     fn sanity_check(
         &mut self,
         _fd: &crate::funcdata::Funcdata,
@@ -1236,6 +1326,7 @@ impl JumpModel for JumpModelTrivial {
         true
     }
 
+    // Ghidra: jumptable.cc:416 JumpModelTrivial::clone
     fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
         let mut res = JumpModelTrivial::new(jt);
         res.size = self.size;
@@ -1270,6 +1361,7 @@ pub struct JumpBasic {
 }
 
 impl JumpBasic {
+    // Ghidra: jumptable.hh:410 JumpBasic::JumpBasic
     /// Construct given a parent jump-table.
     pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
         Self {
@@ -1283,16 +1375,19 @@ impl JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.hh:411 JumpBasic::getPathMeld
     /// Get the possible paths to the switch.
     pub fn get_path_meld(&self) -> &PathMeld {
         &self.path_meld
     }
 
+    // Ghidra: jumptable.hh:412 JumpBasic::getValueRange
     /// Get the normalized value iterator.
     pub fn get_value_range(&self) -> Option<&JumpValuesRange> {
         self.jrange.as_ref()
     }
 
+    // Ghidra: jumptable.cc:426 JumpBasic::isprune
     /// Do we prune here in our depth-first search for the normalized switch
     /// variable? Faithful to `isprune` (jumptable.cc:426).
     ///
@@ -1314,6 +1409,7 @@ impl JumpBasic {
         false
     }
 
+    // Ghidra: jumptable.cc:438 JumpBasic::ispoint
     /// Is it possible for the given varnode to be a switch variable? Faithful
     /// to `ispoint` (jumptable.cc:438).
     pub fn is_point(vn: &Varnode) -> bool {
@@ -1329,6 +1425,7 @@ impl JumpBasic {
         true
     }
 
+    // Ghidra: jumptable.cc:451 JumpBasic::getStride
     /// If some of the least-significant bits of the given varnode are known to
     /// be zero, translate this into a stride for the jump-table range. Faithful
     /// to `getStride` (jumptable.cc:451).
@@ -1345,6 +1442,7 @@ impl JumpBasic {
         stride
     }
 
+    // Ghidra: jumptable.cc:514 JumpBasic::getMaxValue
     /// Get maximum value associated with the given varnode. Faithful to
     /// `getMaxValue` (jumptable.cc:514). If the varnode has a restricted range
     /// due to masking via INT_AND, the maximum value of this range is
@@ -1409,6 +1507,7 @@ impl JumpBasic {
         max_value
     }
 
+    // Ghidra: jumptable.cc:474 JumpBasic::backup2Switch
     /// Back up the constant value in the output Varnode to the value in the
     /// input Varnode. This does the work of going from a normalized switch
     /// value to the unnormalized value. PcodeOps between the output and input
@@ -1503,6 +1602,7 @@ impl JumpBasic {
         Some(result)
     }
 
+    // Ghidra: jumptable.cc:1308 JumpBasic::duplicateVarnodes
     /// Return true if all array elements are the same varnode. Faithful to
     /// `duplicateVarnodes` (jumptable.cc:1308).
     pub fn duplicate_varnodes(arr: &[Arc<RwLock<Varnode>>]) -> bool {
@@ -1513,6 +1613,7 @@ impl JumpBasic {
         arr.iter().skip(1).all(|v| Arc::ptr_eq(v, first))
     }
 
+    // Ghidra: jumptable.cc:556 JumpBasic::findDeterminingVarnodes
     /// Calculate the initial set of varnodes that might be switch variables.
     /// Paths that terminate at the given pcode op are calculated and organized
     /// in a `PathMeld` object that determines varnodes common to all the paths.
@@ -1601,6 +1702,7 @@ impl JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1137 JumpBasic::calcRange
     /// Calculate the range of values in the given varnode that direct
     /// control-flow to the switch. Faithful to `calcRange`
     /// (jumptable.cc:1137).
@@ -1646,6 +1748,7 @@ impl JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1182 JumpBasic::findSmallestNormal
     /// Find the putative switch variable with the smallest range of values
     /// reaching the switch. Faithful to `findSmallestNormal`
     /// (jumptable.cc:1182).
@@ -1685,6 +1788,7 @@ impl JumpBasic {
         self.jrange = Some(jrange);
     }
 
+    // Ghidra: jumptable.cc:1258 JumpBasic::markFoldableGuards
     /// Mark the guard CBRANCHs that are truly part of the model. Faithful to
     /// `markFoldableGuards` (jumptable.cc:1258).
     pub fn mark_foldable_guards(&mut self) {
@@ -1700,6 +1804,7 @@ impl JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1273 JumpBasic::markModel
     /// Mark or unmark all pcode ops involved in the model. Faithful to
     /// `markModel` (jumptable.cc:1273).
     pub fn mark_model(&self, val: bool) {
@@ -1717,6 +1822,7 @@ impl JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1293 JumpBasic::flowsOnlyToModel
     /// Check if the given Varnode flows to anything other than this model.
     /// The PcodeOps in this model must have been previously marked with
     /// `mark_model(true)`. Faithful to `flowsOnlyToModel` (jumptable.cc:1293).
@@ -1739,6 +1845,7 @@ impl JumpBasic {
         true
     }
 
+    // Ghidra: jumptable.cc:1392 JumpBasic::foldInOneGuard
     /// Eliminate the given guard to this switch. We disarm the guard
     /// instructions by making the guard condition always false (or pushing the
     /// branch into the switch). Faithful to `foldInOneGuard`
@@ -1855,14 +1962,17 @@ impl JumpBasic {
 }
 
 impl JumpModel for JumpBasic {
+    // Ghidra: jumptable.hh:414 JumpBasic::isOverride
     fn is_override(&self) -> bool {
         false
     }
 
+    // Ghidra: jumptable.hh:415 JumpBasic::getTableSize
     fn get_table_size(&self) -> usize {
         self.jrange.as_ref().map_or(0, |j| j.get_size() as usize)
     }
 
+    // Ghidra: jumptable.cc:1437 JumpBasic::recoverModel
     fn recover_model(
         &mut self,
         fd: &crate::funcdata::Funcdata,
@@ -1896,6 +2006,7 @@ impl JumpModel for JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1453 JumpBasic::buildAddresses
     fn build_addresses(
         &self,
         fd: &crate::funcdata::Funcdata,
@@ -1963,6 +2074,7 @@ impl JumpModel for JumpBasic {
         let _ = indop;
     }
 
+    // Ghidra: jumptable.cc:1484 JumpBasic::findUnnormalized
     fn find_unnormalized(&mut self, maxaddsub: u32, _maxleftright: u32, maxext: u32) {
         // Faithful to JumpBasic::findUnnormalized (jumptable.cc:1484).
         let mut i = self.varnode_index as usize;
@@ -2034,6 +2146,7 @@ impl JumpModel for JumpBasic {
         self.mark_model(false);
     }
 
+    // Ghidra: jumptable.cc:1528 JumpBasic::buildLabels
     fn build_labels(
         &self,
         _fd: &crate::funcdata::Funcdata,
@@ -2081,6 +2194,7 @@ impl JumpModel for JumpBasic {
         }
     }
 
+    // Ghidra: jumptable.cc:1568 JumpBasic::foldInNormalization
     fn fold_in_normalization(
         &mut self,
         _fd: &mut crate::funcdata::Funcdata,
@@ -2101,6 +2215,7 @@ impl JumpModel for JumpBasic {
         None
     }
 
+    // Ghidra: jumptable.cc:1577 JumpBasic::foldInGuards
     fn fold_in_guards(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
@@ -2130,6 +2245,7 @@ impl JumpModel for JumpBasic {
         change
     }
 
+    // Ghidra: jumptable.cc:1594 JumpBasic::sanityCheck
     fn sanity_check(
         &mut self,
         _fd: &crate::funcdata::Funcdata,
@@ -2183,6 +2299,7 @@ impl JumpModel for JumpBasic {
         true
     }
 
+    // Ghidra: jumptable.cc:1635 JumpBasic::clone
     fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
         let mut res = JumpBasic::new(jt);
         res.jrange = self.jrange.clone();
@@ -2194,6 +2311,7 @@ impl JumpModel for JumpBasic {
         Box::new(res)
     }
 
+    // Ghidra: jumptable.cc:1643 JumpBasic::clear
     fn clear(&mut self) {
         self.jrange = None;
         self.path_meld.clear();
@@ -2204,6 +2322,7 @@ impl JumpModel for JumpBasic {
 }
 
 impl JumpBasic {
+    // Ghidra: jumptable.cc:1063 JumpBasic::analyzeGuards
     /// Analyze CBRANCHs leading up to the given basic-block as a potential
     /// switch guard. Faithful to `analyzeGuards` (jumptable.cc:1063).
     ///
@@ -2355,6 +2474,7 @@ pub struct IndexPair {
 }
 
 impl IndexPair {
+    // Ghidra: jumptable.hh:556 JumpTable::IndexPair::IndexPair
     pub fn new(pos: i32, index: i32) -> Self {
         Self {
             block_position: pos,
@@ -2362,6 +2482,7 @@ impl IndexPair {
         }
     }
 
+    // Ghidra: jumptable.hh:629 JumpTable::IndexPair::operator<
     /// Compare by position then by index. Faithful to `operator<`.
     pub fn less_than(&self, op2: &IndexPair) -> bool {
         if self.block_position != op2.block_position {
@@ -2370,6 +2491,7 @@ impl IndexPair {
         self.address_index < op2.address_index
     }
 
+    // Ghidra: jumptable.hh:639 JumpTable::IndexPair::compareByPosition
     /// Compare just by position. Faithful to `compareByPosition`.
     pub fn compare_by_position(op1: &IndexPair, op2: &IndexPair) -> bool {
         op1.block_position < op2.block_position
@@ -2417,6 +2539,7 @@ pub struct JumpTable {
 }
 
 impl std::fmt::Debug for JumpTable {
+    // RUGRA-GLUE: Rust Debug trait impl for JumpTable; no Ghidra counterpart (Ghidra uses encode/decode for serialization)
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JumpTable")
             .field("opaddress", &self.opaddress)
@@ -2428,6 +2551,7 @@ impl std::fmt::Debug for JumpTable {
 }
 
 impl JumpTable {
+    // Ghidra: jumptable.hh:587 JumpTable::JumpTable(Architecture*,Address)
     /// Construct given the address of the BRANCHIND.
     pub fn new(opaddress: Address) -> Self {
         Self {
@@ -2449,56 +2573,67 @@ impl JumpTable {
         }
     }
 
+    // Ghidra: jumptable.hh:590 JumpTable::isRecovered
     /// Return true if a model has been recovered.
     pub fn is_recovered(&self) -> bool {
         !self.addresstable.is_empty()
     }
 
+    // Ghidra: jumptable.hh:591 JumpTable::isLabelled
     /// Return true if case labels are computed.
     pub fn is_labelled(&self) -> bool {
         !self.label.is_empty()
     }
 
+    // Ghidra: jumptable.cc:2469 JumpTable::isOverride
     /// Return true if this table was manually overridden.
     pub fn is_override(&self) -> bool {
         self.jmodel.as_ref().map_or(false, |m| m.is_override())
     }
 
+    // Ghidra: jumptable.hh:593 JumpTable::isPartial
     /// Return true if this is a partial table needing more recovery.
     pub fn is_partial(&self) -> bool {
         self.partial_table
     }
 
+    // Ghidra: jumptable.hh:594 JumpTable::markComplete
     /// Mark whatever is recovered so far as the complete table.
     pub fn mark_complete(&mut self) {
         self.partial_table = false;
     }
 
+    // Ghidra: jumptable.hh:595 JumpTable::numEntries
     /// Return the size of the address table.
     pub fn num_entries(&self) -> usize {
         self.addresstable.len()
     }
 
+    // Ghidra: jumptable.hh:596 JumpTable::getSwitchVarConsume
     /// Get bits of switch variable consumed by this table.
     pub fn get_switch_var_consume(&self) -> u64 {
         self.switch_var_consume
     }
 
+    // Ghidra: jumptable.hh:597 JumpTable::getDefaultBlock
     /// Get the out-edge corresponding to the default switch destination.
     pub fn get_default_block(&self) -> i32 {
         self.default_block
     }
 
+    // Ghidra: jumptable.hh:598 JumpTable::getOpAddress
     /// Get the address of the BRANCHIND for the switch.
     pub fn get_op_address(&self) -> Address {
         self.opaddress
     }
 
+    // Ghidra: jumptable.hh:599 JumpTable::getIndirectOp
     /// Get the BRANCHIND pcode op.
     pub fn get_indirect_op(&self) -> Option<Arc<RwLock<PcodeOp>>> {
         self.indirect.clone()
     }
 
+    // Ghidra: jumptable.hh:600 JumpTable::setIndirectOp
     /// Set the BRANCHIND pcode op.
     pub fn set_indirect_op(&mut self, ind: Arc<RwLock<PcodeOp>>) {
         let addr = ind.read().unwrap().get_addr();
@@ -2506,6 +2641,7 @@ impl JumpTable {
         self.indirect = Some(ind);
     }
 
+    // Ghidra: jumptable.hh:601 JumpTable::setNormMax
     /// Set the switch-variable normalization restrictions.
     pub fn set_norm_max(&mut self, maddsub: u32, mleftright: u32, mext: u32) {
         self.norm_max = NormMax {
@@ -2515,41 +2651,49 @@ impl JumpTable {
         };
     }
 
+    // Ghidra: jumptable.hh:606 JumpTable::getAddressByIndex
     /// Get the i-th address table entry.
     pub fn get_address_by_index(&self, i: usize) -> Address {
         self.addresstable[i]
     }
 
+    // Ghidra: jumptable.cc:2524 JumpTable::setLastAsDefault
     /// Set the default jump-table target to be the last address in the table.
     pub fn set_last_as_default(&mut self) {
         self.default_block = self.last_block;
     }
 
+    // Ghidra: jumptable.hh:608 JumpTable::setDefaultBlock
     /// Set out-edge of the switch destination considered to be default.
     pub fn set_default_block(&mut self, bl: i32) {
         self.default_block = bl;
     }
 
+    // Ghidra: jumptable.hh:609 JumpTable::setLoadCollect
     /// Set whether LOAD records should be collected.
     pub fn set_load_collect(&mut self, val: bool) {
         self.collect_loads = val;
     }
 
+    // Ghidra: jumptable.hh:610 JumpTable::setFoldedDefault
     /// Mark that the default block is a folded CBRANCH target.
     pub fn set_folded_default(&mut self) {
         self.default_is_folded = true;
     }
 
+    // Ghidra: jumptable.hh:611 JumpTable::hasFoldedDefault
     /// Return true if the default block is a folded CBRANCH target.
     pub fn has_folded_default(&self) -> bool {
         self.default_is_folded
     }
 
+    // Ghidra: jumptable.hh:614 JumpTable::getLabelByIndex
     /// Given a case index, get its label.
     pub fn get_label_by_index(&self, index: usize) -> u64 {
         self.label[index]
     }
 
+    // Ghidra: jumptable.cc:2535 JumpTable::addBlockToSwitch
     /// Set the default block to the last address in the table (alias).
     pub fn add_block_to_switch(&mut self, bl_start: Address, lab: u64) {
         self.addresstable.push(bl_start);
@@ -2562,23 +2706,27 @@ impl JumpTable {
         self.label.push(lab);
     }
 
+    // Ghidra: jumptable.cc:2247 JumpTable::saveModel
     /// Save off current model (if any) and prepare for instantiating a new
     /// model. Faithful to `saveModel` (jumptable.cc:2247).
     pub fn save_model(&mut self) {
         self.origmodel = self.jmodel.take();
     }
 
+    // Ghidra: jumptable.cc:2256 JumpTable::restoreSavedModel
     /// Restore any saved model as the current model. Faithful to
     /// `restoreSavedModel` (jumptable.cc:2256).
     pub fn restore_saved_model(&mut self) {
         self.jmodel = self.origmodel.take();
     }
 
+    // Ghidra: jumptable.cc:2265 JumpTable::clearSavedModel
     /// Clear any saved model. Faithful to `clearSavedModel` (jumptable.cc:2265).
     pub fn clear_saved_model(&mut self) {
         self.origmodel = None;
     }
 
+    // Ghidra: jumptable.cc:2761 JumpTable::clear
     /// Clear instance-specific data for this jump-table. Faithful to `clear()`
     /// (jumptable.cc:2761).
     pub fn clear(&mut self) {
@@ -2602,6 +2750,7 @@ impl JumpTable {
         self.partial_table = false;
     }
 
+    // Ghidra: jumptable.cc:2276 JumpTable::recoverModel
     /// Recover a model for the switch. Faithful to `JumpTable::recoverModel`
     /// (jumptable.cc:2276).
     ///
@@ -2658,6 +2807,7 @@ impl JumpTable {
         false
     }
 
+    // Ghidra: jumptable.cc:2645 JumpTable::recoverAddresses
     /// Build the explicit address table from the recovered model. Faithful to
     /// `JumpTable::recoverAddresses` (jumptable.cc:2645).
     ///
@@ -2745,6 +2895,7 @@ pub struct EmulateFunction {
 }
 
 impl EmulateFunction {
+    // Ghidra: jumptable.cc:162 EmulateFunction::EmulateFunction
     /// Construct a fresh emulator.
     pub fn new() -> Self {
         Self {
@@ -2753,11 +2904,13 @@ impl EmulateFunction {
         }
     }
 
+    // Ghidra: jumptable.hh:123 EmulateFunction::setLoadCollect
     /// Set where/if we collect LOAD information. Faithful to `setLoadCollect`.
     pub fn set_load_collect(&mut self, val: Option<Vec<LoadTable>>) {
         self.loadpoints = val;
     }
 
+    // Ghidra: jumptable.cc:181 EmulateFunction::getVarnodeValue
     /// Get the value of a varnode in the syntax tree. Faithful to
     /// `getVarnodeValue` (jumptable.cc:181).
     pub fn get_varnode_value(&self, vn: &Arc<RwLock<Varnode>>) -> u64 {
@@ -2773,6 +2926,7 @@ impl EmulateFunction {
         0
     }
 
+    // Ghidra: jumptable.cc:196 EmulateFunction::setVarnodeValue
     /// Set the value of a varnode in the syntax tree. Faithful to
     /// `setVarnodeValue` (jumptable.cc:196).
     pub fn set_varnode_value(&mut self, vn: &Arc<RwLock<Varnode>>, val: u64) {
@@ -2780,6 +2934,7 @@ impl EmulateFunction {
         self.varnode_map.insert(key, val);
     }
 
+    // RUGRA-GLUE: Rust emulation dispatch combining Emulate::executeOp + executeLoad/executeBranchind (emulate.hh, not jumptable.cc); single-fn dispatch
     /// Execute a single pcode op, storing its result. Returns false if the op
     /// cannot be evaluated (e.g. LOAD without a loader, or unsupported opcode).
     /// Faithful to `EmulatePcodeOp::executeCurrentOp` for the subset of opcodes
@@ -2844,6 +2999,7 @@ impl EmulateFunction {
         }
     }
 
+    // Ghidra: jumptable.cc:218 EmulateFunction::emulatePath
     /// Execute from a given starting point and value to the common end-point of
     /// the path set. Flow the given value through all paths in the path
     /// container to produce the single output value. Faithful to `emulatePath`
@@ -2931,11 +3087,13 @@ impl EmulateFunction {
 }
 
 impl Default for EmulateFunction {
+    // RUGRA-GLUE: Rust Default trait impl for EmulateFunction; Ghidra uses explicit constructor (jumptable.cc:162)
     fn default() -> Self {
         Self::new()
     }
 }
 
+// RUGRA-GLUE: Rust entry point wiring JumpTable recovery; Ghidra does this inline in Funcdata::recoverJumpTable (funcdata_block.cc:640)
 /// Attempt to recover a single [`JumpTable`] for the BRANCHIND op `indop`.
 ///
 /// This is the Rust analogue of Ghidra's
@@ -2969,6 +3127,7 @@ pub fn try_recover(
     }
 }
 
+// RUGRA-GLUE: Rust per-BRANCHIND loop; Ghidra drives this from flow tracing (flow.cc/subflow.cc), not jumptable.cc
 /// Recover jump-tables for every BRANCHIND in `fd` and attach the successful
 /// ones to `fd.jump_tables`.
 ///

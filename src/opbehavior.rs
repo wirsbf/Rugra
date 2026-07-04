@@ -15,11 +15,13 @@
 
 use crate::opcodes::OpCode;
 
+// RUGRA-GLUE: mask (no Ghidra counterpart found)
 /// Mask of `bits` set bits.
 fn mask(bits: usize) -> u64 {
     if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 }
 }
 
+// RUGRA-GLUE: sign_extend (no Ghidra counterpart found)
 /// Sign-extend a value from `in_size` bytes to full u64.
 fn sign_extend(val: u64, in_size: usize) -> i64 {
     let bits = in_size * 8;
@@ -32,6 +34,7 @@ fn sign_extend(val: u64, in_size: usize) -> i64 {
     }
 }
 
+// RUGRA-GLUE: evaluate_unary (no Ghidra counterpart found)
 /// Evaluate a P-code operation on constant inputs.
 /// Returns the result as a u64 masked to `size_out` bytes.
 ///
@@ -62,6 +65,7 @@ pub fn evaluate_unary(opc: OpCode, size_out: usize, size_in: usize, in1: u64) ->
     Some(result & out_mask)
 }
 
+// RUGRA-GLUE: evaluate_binary (no Ghidra counterpart found)
 /// Evaluate a binary P-code operation on constant inputs.
 pub fn evaluate_binary(opc: OpCode, size_out: usize, size_in: usize, in1: u64, in2: u64) -> Option<u64> {
     let out_mask = mask(size_out * 8);
@@ -135,6 +139,7 @@ pub fn evaluate_binary(opc: OpCode, size_out: usize, size_in: usize, in1: u64, i
     Some(result & out_mask)
 }
 
+// RUGRA-GLUE: evaluate_ternary (no Ghidra counterpart found)
 /// Evaluate a ternary P-code operation on constant inputs.
 /// Corresponds to `OpBehavior::evaluateTernary`.
 pub fn evaluate_ternary(opc: OpCode, size_out: usize, size_in: usize, in1: u64, in2: u64, in3: u64) -> Option<u64> {
@@ -154,6 +159,7 @@ pub fn evaluate_ternary(opc: OpCode, size_out: usize, size_in: usize, in1: u64, 
     Some(result & out_mask)
 }
 
+// RUGRA-GLUE: recover_input_unary (no Ghidra counterpart found)
 /// Recover input for a unary op (inverse of evaluate_unary).
 /// Corresponds to `OpBehavior::recoverInputUnary`.
 pub fn recover_input_unary(opc: OpCode, size_out: usize, out: u64, size_in: usize) -> Option<u64> {
@@ -172,6 +178,7 @@ pub fn recover_input_unary(opc: OpCode, size_out: usize, out: u64, size_in: usiz
     Some(result)
 }
 
+// RUGRA-GLUE: recover_input_binary (no Ghidra counterpart found)
 /// Recover input for a binary op (inverse of evaluate_binary).
 /// Corresponds to `OpBehavior::recoverInputBinary`.
 pub fn recover_input_binary(opc: OpCode, slot: usize, size_out: usize, out: u64, size_in: usize, other: u64) -> Option<u64> {

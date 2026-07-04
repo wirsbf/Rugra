@@ -31,6 +31,7 @@ pub struct InjectParameter {
 }
 
 impl InjectParameter {
+    // Ghidra: pcodeinject.hh:55 InjectParameter::new
     pub fn new(name: String, size: u32) -> Self {
         Self { name, index: 0, size }
     }
@@ -71,6 +72,7 @@ pub struct InjectPayload {
 }
 
 impl InjectPayload {
+    // Ghidra: pcodeinject.hh:56 InjectPayload::new
     pub fn new(name: String, payload_type: InjectPayloadType) -> Self {
         Self {
             name,
@@ -83,27 +85,36 @@ impl InjectPayload {
         }
     }
 
+    // Ghidra: pcodeinject.hh:56 InjectPayload::getParamshift
     pub fn get_paramshift(&self) -> i32 { self.paramshift }
+    // Ghidra: pcodeinject.hh:56 InjectPayload::isDynamic
     pub fn is_dynamic(&self) -> bool { self.dynamic }
+    // Ghidra: pcodeinject.hh:56 InjectPayload::isIncidentalCopy
     pub fn is_incidental_copy(&self) -> bool { self.incidental_copy }
+    // Ghidra: pcodeinject.hh:56 InjectPayload::sizeInput
     pub fn size_input(&self) -> usize { self.input_list.len() }
+    // Ghidra: pcodeinject.hh:56 InjectPayload::sizeOutput
     pub fn size_output(&self) -> usize { self.output.len() }
 
+    // Ghidra: pcodeinject.hh:56 InjectPayload::addInput
     /// Add an input parameter to this payload.
     pub fn add_input(&mut self, name: String, size: u32) {
         self.input_list.push(InjectParameter::new(name, size));
     }
 
+    // Ghidra: pcodeinject.hh:56 InjectPayload::addOutput
     /// Add an output parameter to this payload.
     pub fn add_output(&mut self, name: String, size: u32) {
         self.output.push(InjectParameter::new(name, size));
     }
 
+    // Ghidra: pcodeinject.hh:56 InjectPayload::getInput
     /// Get an input parameter by index.
     pub fn get_input(&self, i: usize) -> Option<&InjectParameter> {
         self.input_list.get(i)
     }
 
+    // Ghidra: pcodeinject.hh:56 InjectPayload::getOutput
     /// Get an output parameter by index.
     pub fn get_output(&self, i: usize) -> Option<&InjectParameter> {
         self.output.get(i)
@@ -127,6 +138,7 @@ pub struct InjectContext {
 }
 
 impl InjectContext {
+    // Ghidra: pcodeinject.hh:79 InjectContext::new
     pub fn new() -> Self {
         Self {
             base_addr: 0,
@@ -137,6 +149,7 @@ impl InjectContext {
         }
     }
 
+    // Ghidra: pcodeinject.hh:79 InjectContext::clear
     pub fn clear(&mut self) {
         self.input_list.clear();
         self.output.clear();
@@ -146,6 +159,7 @@ impl InjectContext {
 /// A trait for emitting injected p-code operations.
 /// Corresponds to Ghidra's `PcodeEmit` callback.
 pub trait PcodeEmit {
+    // Ghidra: pcodeinject.hh:79 InjectContext::dump
     /// Emit a single p-code operation.
     fn dump(&mut self, addr: u64, opc: crate::opcodes::OpCode, inputs: &[(u32, u64, u32)], output: Option<(u32, u64, u32)>);
 }
@@ -157,12 +171,16 @@ pub struct PcodeEmitArray {
 }
 
 impl PcodeEmitArray {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new() -> Self { Self { ops: Vec::new() } }
+    // RUGRA-GLUE: len (no Ghidra counterpart found)
     pub fn len(&self) -> usize { self.ops.len() }
+    // RUGRA-GLUE: is_empty (no Ghidra counterpart found)
     pub fn is_empty(&self) -> bool { self.ops.is_empty() }
 }
 
 impl PcodeEmit for PcodeEmitArray {
+    // RUGRA-GLUE: dump (no Ghidra counterpart found)
     fn dump(&mut self, addr: u64, opc: crate::opcodes::OpCode, inputs: &[(u32, u64, u32)], output: Option<(u32, u64, u32)>) {
         self.ops.push((addr, opc, inputs.to_vec(), output));
     }
@@ -186,6 +204,7 @@ pub struct PcodeInjectLibrary {
 }
 
 impl PcodeInjectLibrary {
+    // Ghidra: pcodeinject.hh:187 PcodeInjectLibrary::new
     pub fn new() -> Self {
         Self {
             payloads: HashMap::new(),
@@ -197,6 +216,7 @@ impl PcodeInjectLibrary {
         }
     }
 
+    // Ghidra: pcodeinject.hh:187 PcodeInjectLibrary::registerPayload
     /// Register a payload, returning its numeric id.
     pub fn register_payload(&mut self, payload: InjectPayload) -> i32 {
         let id = self.next_id;
@@ -206,19 +226,23 @@ impl PcodeInjectLibrary {
         id
     }
 
+    // Ghidra: pcodeinject.hh:187 PcodeInjectLibrary::getPayload
     /// Get a payload by name.
     pub fn get_payload(&self, name: &str) -> Option<&InjectPayload> {
         self.payloads.get(name)
     }
 
+    // Ghidra: pcodeinject.hh:187 PcodeInjectLibrary::getId
     /// Get a payload id by name.
     pub fn get_id(&self, name: &str) -> Option<i32> {
         self.name_to_id.get(name).copied()
     }
 
+    // Ghidra: pcodeinject.hh:187 PcodeInjectLibrary::numPayloads
     /// Get the number of registered payloads.
     pub fn num_payloads(&self) -> usize { self.payloads.len() }
 
+    // Ghidra: pcodeinject.cc:220 PcodeInjectLibrary::registerCallFixup
     /// Register a call fixup payload and return its inject id.
     /// Faithful to Ghidra PcodeInjectLibrary::registerCallFixup (pcodeinject.cc:220).
     pub fn register_call_fixup(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
@@ -227,6 +251,7 @@ impl PcodeInjectLibrary {
         id
     }
 
+    // Ghidra: pcodeinject.cc:236 PcodeInjectLibrary::registerCallOtherFixup
     /// Register a CALLOTHER fixup payload and return its inject id.
     /// Faithful to Ghidra PcodeInjectLibrary::registerCallOtherFixup (pcodeinject.cc:236).
     pub fn register_call_other_fixup(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
@@ -235,6 +260,7 @@ impl PcodeInjectLibrary {
         id
     }
 
+    // Ghidra: pcodeinject.cc:252 PcodeInjectLibrary::registerCallMechanism
     /// Register a call mechanism payload and return its inject id.
     /// Faithful to Ghidra PcodeInjectLibrary::registerCallMechanism (pcodeinject.cc:252).
     pub fn register_call_mechanism(&mut self, fixup_name: &str, payload: InjectPayload) -> i32 {
@@ -243,6 +269,7 @@ impl PcodeInjectLibrary {
         id
     }
 
+    // Ghidra: pcodeinject.cc:285 PcodeInjectLibrary::getPayloadId
     /// Get the payload id for a given type and name.
     /// Faithful to Ghidra PcodeInjectLibrary::getPayloadId (pcodeinject.cc:285).
     pub fn get_payload_id(&self, inject_type: InjectPayloadType, nm: &str) -> Option<i32> {

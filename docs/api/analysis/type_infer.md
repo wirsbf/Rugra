@@ -15,3 +15,4 @@ COPY/LOAD(force_override)/INT_ZEXT/INT_SEXT/INT_ADD/INT_SUB。
 
 ### 已知限制
 piVar92=*(int*)(piVar89+0x128) 仍显示 int* —— 变量名在声明阶段生成，使用不同的类型查找路径。
+<!-- annotation-pass: 2026-07-04 -->

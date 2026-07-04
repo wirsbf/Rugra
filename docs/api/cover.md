@@ -91,3 +91,4 @@ Intersect another cover with this one
 ### 2026-07-04（续）：新增 intersect_char（非破坏性相交特征）
 - `CoverBlock::intersect_char(op2)`（对齐 cover.cc:59）：返回 0/1/2（无/边界/区间相交）。
 - `Cover::intersect_char(op2)`（对齐 cover.cc:269）：遍历两个 cover 的 block map，对共同 block 调 CoverBlock::intersect_char。返回 0/1/2。
+<!-- annotation-pass: 2026-07-04 -->

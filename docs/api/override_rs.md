@@ -73,3 +73,4 @@ single function. Faithful to `Override` (override.hh:50).
 辅助函数：`read_one_addr(decoder) -> Option<Address>` + `read_two_addrs(decoder)`。
 
 测试：新增 2 个（encode/decode round-trip + empty encode）。override.rs 所有 L3 缺口已关闭。
+<!-- annotation-pass: 2026-07-04 -->

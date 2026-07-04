@@ -168,6 +168,7 @@ pub struct Decompiler {
 }
 
 impl Decompiler {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create a new decompiler for the specified architecture
     ///
     /// # Arguments
@@ -186,6 +187,7 @@ impl Decompiler {
         })
     }
 
+    // RUGRA-GLUE: load_binary (no Ghidra counterpart found)
     /// Load a binary file for analysis
     ///
     /// # Arguments
@@ -201,6 +203,7 @@ impl Decompiler {
         Ok(())
     }
 
+    // RUGRA-GLUE: decompile_function (no Ghidra counterpart found)
     /// Decompile a function at the given address
     ///
     /// # Arguments
@@ -238,6 +241,7 @@ impl Decompiler {
         Ok(c_code)
     }
 
+    // RUGRA-GLUE: get_functions (no Ghidra counterpart found)
     /// Get list of all functions in the binary
     ///
     /// # Returns
@@ -249,22 +253,26 @@ impl Decompiler {
         Ok(binary.get_functions())
     }
 
+    // RUGRA-GLUE: get_function_name (no Ghidra counterpart found)
     /// Get the name of a function at the given address
     pub fn get_function_name(&self, addr: Address) -> Option<String> {
         self.binary.as_ref()?.get_function_name(addr).cloned()
     }
 
+    // RUGRA-GLUE: architecture (no Ghidra counterpart found)
     /// Get the target architecture
     pub fn architecture(&self) -> Architecture {
         self.arch
     }
 
+    // RUGRA-GLUE: clear_cache (no Ghidra counterpart found)
     /// Clear all caches
     pub fn clear_cache(&mut self) {
         self.pcode_cache.clear();
         self.analysis_cache.clear();
     }
 
+    // RUGRA-GLUE: generate_pcode (no Ghidra counterpart found)
     // Private helper methods
 
     fn generate_pcode(&self, binary: &binary::Binary, addr: Address) -> Result<pcode::Program> {
@@ -299,6 +307,7 @@ impl Decompiler {
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// RUGRA-GLUE: version (no Ghidra counterpart found)
 /// Get the version string
 pub fn version() -> &'static str {
     VERSION

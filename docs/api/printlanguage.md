@@ -32,3 +32,4 @@ Capability object for registering language printers
 *暂无代码注释*
 
  
+<!-- annotation-pass: 2026-07-04 -->

@@ -96,18 +96,21 @@ pub enum Error {
 // Implement From for common error conversions
 
 impl From<goblin::error::Error> for Error {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(err: goblin::error::Error) -> Self {
         Error::BinaryParse(err.to_string())
     }
 }
 
 impl From<String> for Error {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(msg: String) -> Self {
         Error::Generic(msg)
     }
 }
 
 impl From<&str> for Error {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(msg: &str) -> Self {
         Error::Generic(msg.to_string())
     }
@@ -115,6 +118,7 @@ impl From<&str> for Error {
 
 #[cfg(feature = "capstone")]
 impl From<capstone::Error> for Error {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(err: capstone::Error) -> Self {
         Error::Capstone(err.to_string())
     }
@@ -122,9 +126,11 @@ impl From<capstone::Error> for Error {
 
 /// Helper trait for adding context to errors
 pub trait ErrorContext<T> {
+    // RUGRA-GLUE: context (no Ghidra counterpart found)
     /// Add context to an error
     fn context(self, msg: impl Into<String>) -> Result<T>;
 
+    // RUGRA-GLUE: with_context (no Ghidra counterpart found)
     /// Add context using a closure (lazy evaluation)
     fn with_context<F>(self, f: F) -> Result<T>
     where
@@ -135,6 +141,7 @@ impl<T, E> ErrorContext<T> for std::result::Result<T, E>
 where
     E: Into<Error>,
 {
+    // RUGRA-GLUE: context (no Ghidra counterpart found)
     fn context(self, msg: impl Into<String>) -> Result<T> {
         self.map_err(|e| {
             let base_error = e.into();
@@ -142,6 +149,7 @@ where
         })
     }
 
+    // RUGRA-GLUE: with_context (no Ghidra counterpart found)
     fn with_context<F>(self, f: F) -> Result<T>
     where
         F: FnOnce() -> String,

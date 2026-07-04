@@ -45,6 +45,7 @@ pub struct LanedRegister {
 }
 
 impl LanedRegister {
+    // Ghidra: transform.hh:94 LanedRegister::withSizes
     /// Construct with a whole size and an initial mask.
     pub fn with_sizes(sz: i32, mask: u32) -> Self {
         Self {
@@ -53,28 +54,33 @@ impl LanedRegister {
         }
     }
 
+    // Ghidra: transform.hh:94 LanedRegister::addLaneSize
     /// Add a new lane size to the allowed list. Faithful to `addLaneSize`
     /// (transform.hh:121).
     pub fn add_lane_size(&mut self, size: i32) {
         self.size_bit_mask |= 1u32 << size;
     }
 
+    // Ghidra: transform.hh:94 LanedRegister::allowedLane
     /// Is `size` among the allowed lane sizes? Faithful to `allowedLane`
     /// (transform.hh:122).
     pub fn allowed_lane(&self, size: i32) -> bool {
         ((self.size_bit_mask >> size) & 1) != 0
     }
 
+    // Ghidra: transform.hh:94 LanedRegister::getWholeSize
     /// Get the whole register size.
     pub fn get_whole_size(&self) -> i32 {
         self.whole_size
     }
 
+    // Ghidra: transform.hh:94 LanedRegister::getSizeBitMask
     /// Get the bit mask of possible lane sizes.
     pub fn get_size_bit_mask(&self) -> u32 {
         self.size_bit_mask
     }
 
+    // Ghidra: transform.cc:300 LanedRegister::parseSizes
     /// Collect specific lane sizes from a comma-separated string. Faithful to
     /// `parseSizes` (transform.cc:300-327).
     pub fn parse_sizes(&mut self, register_size: i32, lane_sizes: &str) {
@@ -95,6 +101,7 @@ impl LanedRegister {
         }
     }
 
+    // Ghidra: transform.hh:94 LanedRegister::laneSizes
     /// Iterate over all allowed lane sizes, smallest first. Mirrors
     /// `LanedIterator` (transform.hh:98-110 / transform.cc:284-295).
     pub fn lane_sizes(&self) -> Vec<i32> {
@@ -130,6 +137,7 @@ pub struct LaneDescription {
 }
 
 impl LaneDescription {
+    // Ghidra: transform.cc:24 LaneDescription::uniform
     /// Construct uniform lanes: split `orig_size` into lanes of size `sz`.
     /// Faithful to the constructor (transform.cc:35-48).
     pub fn uniform(orig_size: i32, sz: i32) -> Self {
@@ -149,6 +157,7 @@ impl LaneDescription {
         }
     }
 
+    // Ghidra: transform.cc:24 LaneDescription::twoLane
     /// Construct two lanes of arbitrary sizes (lo then hi). Faithful to the
     /// constructor (transform.cc:53-63).
     pub fn two_lane(orig_size: i32, lo: i32, hi: i32) -> Self {
@@ -159,6 +168,7 @@ impl LaneDescription {
         }
     }
 
+    // Ghidra: transform.cc:72 LaneDescription::subset
     /// Trim this description to a subrange. Faithful to `subset`
     /// (transform.cc:72-93). Returns false if the subrange splits any lane.
     pub fn subset(&mut self, lsb_offset: i32, size: i32) -> bool {
@@ -187,26 +197,31 @@ impl LaneDescription {
         true
     }
 
+    // Ghidra: transform.cc:24 LaneDescription::getNumLanes
     /// Get the number of lanes.
     pub fn get_num_lanes(&self) -> usize {
         self.lane_size.len()
     }
 
+    // Ghidra: transform.cc:24 LaneDescription::getSize
     /// Get the size of the i-th lane.
     pub fn get_size(&self, i: usize) -> i32 {
         self.lane_size[i]
     }
 
+    // Ghidra: transform.cc:24 LaneDescription::getPosition
     /// Get the position of the i-th lane.
     pub fn get_position(&self, i: usize) -> i32 {
         self.lane_position[i]
     }
 
+    // Ghidra: transform.cc:24 LaneDescription::getWholeSize
     /// Get the whole region size.
     pub fn get_whole_size(&self) -> i32 {
         self.whole_size
     }
 
+    // Ghidra: transform.cc:100 LaneDescription::getBoundary
     /// Map a byte position to the index of the lane starting there.
     /// Faithful to `getBoundary` (transform.cc:100-119). Returns -1 if the
     /// position is out of bounds or not on a lane boundary. Position equal to
@@ -236,6 +251,7 @@ impl LaneDescription {
         -1
     }
 
+    // Ghidra: transform.cc:133 LaneDescription::restriction
     /// Decide if a given truncation is natural for this description. Faithful
     /// to `restriction` (transform.cc:133-143). On success, returns
     /// `(num_lanes, skip_lanes)`; on failure, returns None.
@@ -263,6 +279,7 @@ impl LaneDescription {
         }
     }
 
+    // Ghidra: transform.cc:158 LaneDescription::extension
     /// Decide if a given subset of lanes can be extended naturally. Faithful
     /// to `extension` (transform.cc:158-168). On success, returns
     /// `(num_lanes, skip_lanes)`; on failure, returns None.
@@ -343,6 +360,7 @@ pub struct TransformVar {
 }
 
 impl TransformVar {
+    // Ghidra: transform.hh:203 TransformVar::initialize
     /// Initialize from raw data. Faithful to `initialize` (transform.hh:203-214).
     pub fn initialize(
         tp: TransformVarType,
@@ -363,6 +381,7 @@ impl TransformVar {
         }
     }
 
+    // Ghidra: transform.cc:175 TransformVar::createReplacement
     /// Create the Varnode object described by this placeholder. Faithful to
     /// `createReplacement` (transform.cc:175-220).
     pub fn create_replacement(&mut self, fd: &mut Funcdata, def_op: Option<&PcodeOpRef>) {
@@ -468,6 +487,7 @@ pub struct TransformOp {
 }
 
 impl TransformOp {
+    // Ghidra: transform.hh:26 TransformOp::empty
     /// Create an empty placeholder.
     fn empty() -> Self {
         Self {
@@ -481,6 +501,7 @@ impl TransformOp {
         }
     }
 
+    // Ghidra: transform.cc:254 TransformOp::attemptInsertion
     /// Try to put the new PcodeOp into its basic block. Faithful to
     /// `attemptInsertion` (transform.cc:254-269). Returns true if inserted or
     /// already inserted.
@@ -507,6 +528,7 @@ impl TransformOp {
         }
     }
 
+    // Ghidra: transform.cc:273 TransformOp::inheritIndirect
     /// Set indirect-creation flags based on the given INDIRECT op. Faithful to
     /// `inheritIndirect` (transform.cc:273-282).
     pub fn inherit_indirect(&mut self, ind_op: &PcodeOpRef) {
@@ -548,12 +570,14 @@ pub struct TransformManager {
 unsafe impl Send for TransformManager {}
 
 impl Default for TransformManager {
+    // Ghidra: transform.hh:32 TransformManager::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl TransformManager {
+    // Ghidra: transform.hh:32 TransformManager::new
     /// Construct an empty manager (no Funcdata binding yet).
     pub fn new() -> Self {
         Self {
@@ -564,6 +588,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.hh:32 TransformManager::init
     /// Bind to a Funcdata. Faithful to the constructor (transform.hh:169).
     pub fn init(&mut self, fd: &mut Funcdata) {
         self.fd = Some(fd as *mut Funcdata);
@@ -572,6 +597,7 @@ impl TransformManager {
         self.new_ops.clear();
     }
 
+    // Ghidra: transform.cc:348 TransformManager::preserveAddress
     /// Should the address of the given Varnode be preserved when constructing
     /// a piece? Faithful to `preserveAddress` (transform.cc:348-354). Returns
     /// false if the logical value is not byte-aligned or the Varnode is in the
@@ -584,6 +610,7 @@ impl TransformManager {
         vn_rg.space() != AddressSpace::Unique
     }
 
+    // Ghidra: transform.cc:356 TransformManager::clearVarnodeMarks
     /// Clear the mark for all Varnodes referenced by placeholders. Faithful to
     /// `clearVarnodeMarks` (transform.cc:356-366).
     pub fn clear_varnode_marks(&mut self) {
@@ -602,6 +629,7 @@ impl TransformManager {
 
     // ---- Placeholder creation (transform.cc:370-575) ----
 
+    // Ghidra: transform.cc:370 TransformManager::newPreexistingVarnode
     /// Make a placeholder for a preexisting Varnode. Faithful to
     /// `newPreexistingVarnode` (transform.cc:370-380). Returns the arena index.
     pub fn new_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
@@ -618,6 +646,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:384 TransformManager::newUnique
     /// Make a placeholder for a new unique-space Varnode. Faithful to
     /// `newUnique` (transform.cc:384-391).
     pub fn new_unique(&mut self, size: i32) -> usize {
@@ -627,6 +656,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:399 TransformManager::newConstant
     /// Make a placeholder for a constant Varnode. Faithful to `newConstant`
     /// (transform.cc:399-406). `lsb_offset` strips bits off the existing value.
     pub fn new_constant(&mut self, size: i32, lsb_offset: i32, val: u64) -> usize {
@@ -637,6 +667,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:411 TransformManager::newIop
     /// Make a placeholder for a special iop constant. Faithful to `newIop`
     /// (transform.cc:411-418).
     pub fn new_iop(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
@@ -650,6 +681,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:426 TransformManager::newPiece
     /// Make a placeholder for a piece of a Varnode. Faithful to `newPiece`
     /// (transform.cc:426-436).
     pub fn new_piece(&mut self, vn: Arc<RwLock<Varnode>>, bit_size: i32, lsb_offset: i32) -> usize {
@@ -668,6 +700,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:445 TransformManager::newSplit
     /// Make placeholders splitting a Varnode into all its lanes. Faithful to
     /// `newSplit` (transform.cc:445-470). Returns the start index of the lane
     /// array.
@@ -709,6 +742,7 @@ impl TransformManager {
         start
     }
 
+    // Ghidra: transform.hh:32 TransformManager::newSplitSubset
     /// Make placeholders splitting a Varnode into a subset of lanes. Faithful
     /// to `newSplit` (transform.cc:481-506). Returns the start index.
     pub fn new_split_subset(
@@ -754,6 +788,7 @@ impl TransformManager {
         start
     }
 
+    // Ghidra: transform.cc:515 TransformManager::newOpReplace
     /// Create a new placeholder op intended to replace an existing op. Faithful
     /// to `newOpReplace` (transform.cc:515-528).
     pub fn new_op_replace(&mut self, num_params: usize, opc: OpCode, replace: PcodeOpRef) -> usize {
@@ -767,6 +802,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:538 TransformManager::newOp
     /// Create a new placeholder op that will not replace an existing op.
     /// Faithful to `newOp` (transform.cc:538-551). `follow` is the placeholder
     /// for the op that follows the new op when it is created.
@@ -782,6 +818,7 @@ impl TransformManager {
         idx
     }
 
+    // Ghidra: transform.cc:562 TransformManager::newPreexistingOp
     /// Create a new placeholder op for an existing PcodeOp. Faithful to
     /// `newPreexistingOp` (transform.cc:562-575).
     pub fn new_preexisting_op(&mut self, num_params: usize, opc: OpCode, original: PcodeOpRef) -> usize {
@@ -797,6 +834,7 @@ impl TransformManager {
 
     // ---- Placeholder lookup (transform.cc:581-649) ----
 
+    // Ghidra: transform.cc:581 TransformManager::getPreexistingVarnode
     /// Get (or create) a placeholder for a preexisting Varnode. Faithful to
     /// `getPreexistingVarnode` (transform.cc:581-591).
     pub fn get_preexisting_varnode(&mut self, vn: Arc<RwLock<Varnode>>) -> usize {
@@ -814,6 +852,7 @@ impl TransformManager {
         self.new_preexisting_varnode(vn)
     }
 
+    // Ghidra: transform.cc:599 TransformManager::getPiece
     /// Find (or create) the placeholder for a logical piece of a Varnode.
     /// Faithful to `getPiece` (transform.cc:599-611).
     pub fn get_piece(&mut self, vn: Arc<RwLock<Varnode>>, bit_size: i32, lsb_offset: i32) -> usize {
@@ -830,6 +869,7 @@ impl TransformManager {
         self.new_piece(vn, bit_size, lsb_offset)
     }
 
+    // Ghidra: transform.cc:620 TransformManager::getSplit
     /// Find (or create) placeholders splitting a Varnode into its lanes.
     /// Faithful to `getSplit` (transform.cc:620-629).
     pub fn get_split(&mut self, vn: Arc<RwLock<Varnode>>, description: &LaneDescription) -> usize {
@@ -840,6 +880,7 @@ impl TransformManager {
         self.new_split(vn, description)
     }
 
+    // Ghidra: transform.hh:32 TransformManager::getSplitSubset
     /// Find (or create) placeholders splitting a Varnode into a subset of
     /// lanes. Faithful to `getSplit` (transform.cc:640-649).
     pub fn get_split_subset(
@@ -856,6 +897,7 @@ impl TransformManager {
         self.new_split_subset(vn, description, num_lanes, start_lane)
     }
 
+    // Ghidra: transform.hh:219 TransformManager::opSetInput
     /// Mark the given variable as input to the given op. Faithful to
     /// `opSetInput` (transform.hh:219-223).
     pub fn op_set_input(&mut self, rop_idx: usize, rvn_idx: usize, slot: usize) {
@@ -866,6 +908,7 @@ impl TransformManager {
         rop.input[slot] = Some(rvn_idx);
     }
 
+    // Ghidra: transform.hh:229 TransformManager::opSetOutput
     /// Mark the given variable as output of the given op. Faithful to
     /// `opSetOutput` (transform.hh:229-234).
     pub fn op_set_output(&mut self, rop_idx: usize, rvn_idx: usize) {
@@ -873,6 +916,7 @@ impl TransformManager {
         self.new_varnodes[rvn_idx].def = Some(rop_idx);
     }
 
+    // Ghidra: transform.hh:246 TransformManager::preexistingGuard
     /// Should `newPreexistingOp` be called? Faithful to `preexistingGuard`
     /// (transform.hh:246-253).
     pub fn preexisting_guard(slot: usize, rvn: &TransformVar) -> bool {
@@ -887,6 +931,7 @@ impl TransformManager {
 
     // ---- Apply lifecycle (transform.cc:651-766) ----
 
+    // Ghidra: transform.cc:654 TransformManager::specialHandling
     /// Handle special PcodeOp marking. Faithful to `specialHandling`
     /// (transform.cc:654-660).
     fn special_handling(&self, rop: &TransformOp) {
@@ -895,6 +940,7 @@ impl TransformManager {
         let _ = rop;
     }
 
+    // Ghidra: transform.hh:32 TransformManager::createOpReplacement
     /// Create a new PcodeOp or modify an existing one to match the placeholder
     /// at `op_idx`. Faithful to `TransformOp::createReplacement`
     /// (transform.cc:225-250). Handles output Varnode creation via the arena.
@@ -949,6 +995,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:665 TransformManager::createOps
     /// Create the actual PcodeOps from placeholders. Faithful to `createOps`
     /// (transform.cc:665-680).
     fn create_ops(&mut self) {
@@ -986,6 +1033,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:684 TransformManager::createVarnodes
     /// Create the actual Varnodes from placeholders. Faithful to
     /// `createVarnodes` (transform.cc:684-711). Collects input varnodes into
     /// `input_list`.
@@ -1057,6 +1105,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:713 TransformManager::removeOld
     /// Remove old preexisting PcodeOps that are now obsolete. Faithful to
     /// `removeOld` (transform.cc:713-724).
     fn remove_old(&mut self) {
@@ -1075,6 +1124,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:729 TransformManager::transformInputVarnodes
     /// Remove old input Varnodes and mark new ones as inputs. Faithful to
     /// `transformInputVarnodes` (transform.cc:729-738).
     fn transform_input_varnodes(&mut self, input_list: &[(usize, bool)]) {
@@ -1091,6 +1141,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:740 TransformManager::placeInputs
     /// Set input Varnodes for all new ops. Faithful to `placeInputs`
     /// (transform.cc:740-754).
     fn place_inputs(&mut self) {
@@ -1122,6 +1173,7 @@ impl TransformManager {
         }
     }
 
+    // Ghidra: transform.cc:756 TransformManager::apply
     /// Apply the full transform to the function. Faithful to `apply`
     /// (transform.cc:756-765).
     pub fn apply(&mut self, fd: &mut Funcdata) {

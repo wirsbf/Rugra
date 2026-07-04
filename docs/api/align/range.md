@@ -100,3 +100,4 @@ Verify that a Rugra RangeList aligns with Ghidra's representation
 
 Verify that contains() function aligns
 
+<!-- annotation-pass: 2026-07-04 -->

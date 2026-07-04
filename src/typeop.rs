@@ -35,18 +35,23 @@ pub mod typeop_flags {
 /// Corresponds to Ghidra's `TypeOp` class
 pub trait TypeOp {
     /// Get the opcode for this operation
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode;
 
     /// Get the name of the operation
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str;
 
     /// Get properties/flags for this operation
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32;
 
     /// Print the operation in a raw textual format
+    // Ghidra: typeop.hh:176 TypeOp::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String;
 
     /// Push the operation to a print language emitter
+    // Ghidra: typeop.hh:170 TypeOp::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         // Default implementation for basic ops
         match self.get_opcode() {
@@ -72,11 +77,13 @@ pub trait TypeOp {
 
     // Metadata methods
     /// Get the minimal (or suggested) data-type of an output to this op-code
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal
     fn get_output_local(&self, _op: &PcodeOp) -> Option<Arc<Datatype>> {
         None
     }
 
     /// Get the minimal (or suggested) data-type of an input to this op-code
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal
     fn get_input_local(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
         None
     }
@@ -86,6 +93,7 @@ pub trait TypeOp {
     /// Corresponds to Ghidra's `TypeOp::getOutputToken(op, castStrategy)`.
     /// The default returns `None`, meaning the output uses its local type
     /// (`outputTypeLocal`) with no token-level override.
+    // Ghidra: typeop.hh:155 TypeOp::getOutputToken
     fn get_output_token(&self, _op: &PcodeOp) -> Option<Arc<Datatype>> {
         None
     }
@@ -94,6 +102,7 @@ pub trait TypeOp {
     ///
     /// Corresponds to Ghidra's `TypeOp::getInputCast(op, slot, castStrategy)`.
     /// A `None` result indicates the input does not need a cast (the default).
+    // Ghidra: typeop.hh:158 TypeOp::getInputCast
     fn get_input_cast(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
         None
     }
@@ -104,6 +113,7 @@ pub trait TypeOp {
     /// inslot, outslot)`. `alt_type` is the incoming type; `inslot`/`outslot`
     /// are -1 for the output varnode and >=0 for an input slot. Returns the
     /// outgoing data-type or `None` to indicate no propagation (the default).
+    // Ghidra: typeop.hh:161 TypeOp::propagateType
     fn propagate_type(
         &self,
         _alt_type: &Arc<Datatype>,
@@ -117,6 +127,11 @@ pub trait TypeOp {
     /// Helper: the metatype assigned to an op's output for printing/token
     /// purposes. Mirrors Ghidra's per-opcode `metaout` metatype. Default
     /// `None` lets the caller fall back to the output varnode's own type.
+    // RUGRA-GLUE: Rust trait accessor for the per-subclass `metaout` field
+    //   cached by Ghidra's TypeOpBinary/TypeOpUnary/TypeOpFunc constructors
+    //   (typeop.hh:205 / :222 / :239). Ghidra has no virtual getOutputMetatype
+    //   method; the field is read directly by getOutputLocal (typeop.cc:326
+    //   etc.), so Rugra exposes it via this helper.
     fn get_output_metatype(&self) -> Option<TypeMetatype> {
         None
     }
@@ -132,16 +147,20 @@ pub struct TypeOpBinary {
 }
 
 impl TypeOp for TypeOpBinary {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode (inlined accessor; TypeOpBinary inherits)
     fn get_opcode(&self) -> OpCode {
         self.opcode
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName (inlined accessor; TypeOpBinary inherits)
     fn get_name(&self) -> &str {
         &self.name
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags (inlined accessor; TypeOpBinary inherits)
     fn get_flags(&self) -> u32 {
         self.flags
     }
 
+    // Ghidra: typeop.cc:335 TypeOpBinary::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -158,6 +177,9 @@ impl TypeOp for TypeOpBinary {
         format!("{} = {} {} {}", out, in0, self.get_name(), in1)
     }
 
+    // RUGRA-GLUE: generic binary push dispatch; Ghidra's TypeOpBinary does not
+    //   override push (pure virtual at typeop.hh:170), each concrete subclass
+    //   provides its own `lng->opXxx(op)`.
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_binary(op);
     }
@@ -171,16 +193,20 @@ pub struct TypeOpUnary {
 }
 
 impl TypeOp for TypeOpUnary {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode (inlined accessor; TypeOpUnary inherits)
     fn get_opcode(&self) -> OpCode {
         self.opcode
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName (inlined accessor; TypeOpUnary inherits)
     fn get_name(&self) -> &str {
         &self.name
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags (inlined accessor; TypeOpUnary inherits)
     fn get_flags(&self) -> u32 {
         self.flags
     }
 
+    // Ghidra: typeop.cc:357 TypeOpUnary::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -193,6 +219,9 @@ impl TypeOp for TypeOpUnary {
         format!("{} = {} {}", out, self.get_name(), in0)
     }
 
+    // RUGRA-GLUE: generic unary push dispatch; Ghidra's TypeOpUnary does not
+    //   override push (pure virtual at typeop.hh:170), each concrete subclass
+    //   provides its own `lng->opXxx(op)`.
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_unary(op);
     }
@@ -204,15 +233,19 @@ macro_rules! binary_op {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
         pub struct $struct_name;
         impl TypeOp for $struct_name {
+            // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
                 OpCode::$opcode
             }
+            // Ghidra: typeop.hh:70 TypeOp::getName
             fn get_name(&self) -> &str {
                 $name
             }
+            // Ghidra: typeop.hh:72 TypeOp::getFlags
             fn get_flags(&self) -> u32 {
                 $flags
             }
+            // Ghidra: typeop.cc:335 TypeOpBinary::printRaw
             fn print_raw(&self, op: &PcodeOp) -> String {
                 let out = op
                     .get_out()
@@ -228,12 +261,16 @@ macro_rules! binary_op {
                     .unwrap_or_else(|| "_".to_string());
                 format!("{} = {} {} {}", out, in0, $symbol, in1)
             }
+            // RUGRA-GLUE: macro-generated generic binary push; per-subclass push
+            //   is inlined in typeop.hh (e.g. TypeOpIntSub::push at :451).
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_binary(op);
             }
+            // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
                 op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
             }
+            // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal
             fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
                 op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
             }
@@ -245,15 +282,19 @@ macro_rules! unary_op {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
         pub struct $struct_name;
         impl TypeOp for $struct_name {
+            // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
                 OpCode::$opcode
             }
+            // Ghidra: typeop.hh:70 TypeOp::getName
             fn get_name(&self) -> &str {
                 $name
             }
+            // Ghidra: typeop.hh:72 TypeOp::getFlags
             fn get_flags(&self) -> u32 {
                 $flags
             }
+            // Ghidra: typeop.cc:357 TypeOpUnary::printRaw
             fn print_raw(&self, op: &PcodeOp) -> String {
                 let out = op
                     .get_out()
@@ -265,12 +306,16 @@ macro_rules! unary_op {
                     .unwrap_or_else(|| "_".to_string());
                 format!("{} = {}{}", out, $symbol, in0)
             }
+            // RUGRA-GLUE: macro-generated generic unary push; per-subclass push
+            //   is inlined in typeop.hh (e.g. TypeOpIntNegate::push at :491).
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_unary(op);
             }
+            // Ghidra: typeop.cc:345 TypeOpUnary::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
                 op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
             }
+            // Ghidra: typeop.cc:351 TypeOpUnary::getInputLocal
             fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
                 op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
             }
@@ -282,15 +327,19 @@ macro_rules! functional_unary_op {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr) => {
         pub struct $struct_name;
         impl TypeOp for $struct_name {
+            // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
                 OpCode::$opcode
             }
+            // Ghidra: typeop.hh:70 TypeOp::getName
             fn get_name(&self) -> &str {
                 $name
             }
+            // Ghidra: typeop.hh:72 TypeOp::getFlags
             fn get_flags(&self) -> u32 {
                 $flags
             }
+            // Ghidra: typeop.cc:377 TypeOpFunc::printRaw
             fn print_raw(&self, op: &PcodeOp) -> String {
                 let out = op
                     .get_out()
@@ -302,12 +351,16 @@ macro_rules! functional_unary_op {
                     .unwrap_or_else(|| "_".to_string());
                 format!("{} = {}({})", out, $func, in0)
             }
+            // RUGRA-GLUE: macro-generated generic functional push; per-subclass
+            //   push is inlined in typeop.hh (e.g. TypeOpIntCarry::push at :459).
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_unary(op);
             }
+            // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
                 op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
             }
+            // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
             fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
                 op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
             }
@@ -319,15 +372,19 @@ macro_rules! functional_binary_op {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $func:expr) => {
         pub struct $struct_name;
         impl TypeOp for $struct_name {
+            // Ghidra: typeop.hh:71 TypeOp::getOpcode
             fn get_opcode(&self) -> OpCode {
                 OpCode::$opcode
             }
+            // Ghidra: typeop.hh:70 TypeOp::getName
             fn get_name(&self) -> &str {
                 $name
             }
+            // Ghidra: typeop.hh:72 TypeOp::getFlags
             fn get_flags(&self) -> u32 {
                 $flags
             }
+            // Ghidra: typeop.cc:377 TypeOpFunc::printRaw
             fn print_raw(&self, op: &PcodeOp) -> String {
                 let out = op
                     .get_out()
@@ -343,12 +400,16 @@ macro_rules! functional_binary_op {
                     .unwrap_or_else(|| "_".to_string());
                 format!("{} = {}({}, {})", out, $func, in0, in1)
             }
+            // RUGRA-GLUE: macro-generated generic functional push; per-subclass
+            //   push is inlined in typeop.hh (e.g. TypeOpIntScarry::push at :467).
             fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
                 lng.op_binary(op);
             }
+            // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
             fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
                 op.get_in(0).and_then(|v| v.read().unwrap().v_type.clone())
             }
+            // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
             fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
                 op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
             }
@@ -359,16 +420,20 @@ macro_rules! functional_binary_op {
 /// CPUI_COPY implementation
 pub struct TypeOpCopy;
 impl TypeOp for TypeOpCopy {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_COPY
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "COPY"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
 
+    // Ghidra: typeop.cc:425 TypeOpCopy::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -381,15 +446,18 @@ impl TypeOp for TypeOpCopy {
         format!("{} = {}", out, in0)
     }
 
+    // Ghidra: typeop.hh:261 TypeOpCopy::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_copy(op);
     }
 
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Copy does not override)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         op.get_in(0)
             .and_then(|vn| vn.read().unwrap().v_type.clone())
     }
 
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (base; Copy does not override)
     fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
         op.get_out()
             .and_then(|vn| vn.read().unwrap().v_type.clone())
@@ -397,6 +465,7 @@ impl TypeOp for TypeOpCopy {
 
     /// The output token of a COPY is just the high type of its input.
     /// Faithful to `TypeOpCopy::getOutputToken` (typeop.cc:405-409).
+    // Ghidra: typeop.cc:405 TypeOpCopy::getOutputToken
     fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         op.get_in(0)
             .and_then(|vn| vn.read().unwrap().v_type.clone())
@@ -406,6 +475,7 @@ impl TypeOp for TypeOpCopy {
     /// (input<->output). One of the slots must be the output (-1). Spacebase
     /// inputs are rewrapped as a pointer to an unknown base type.
     /// Faithful to `TypeOpCopy::propagateType` (typeop.cc:411-423).
+    // Ghidra: typeop.cc:411 TypeOpCopy::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -438,16 +508,20 @@ impl TypeOp for TypeOpCopy {
 /// CPUI_LOAD implementation
 pub struct TypeOpLoad;
 impl TypeOp for TypeOpLoad {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_LOAD
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "LOAD"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
 
+    // Ghidra: typeop.cc:502 TypeOpLoad::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -464,10 +538,12 @@ impl TypeOp for TypeOpLoad {
         format!("{} = *({}){}", out, in0, in1)
     }
 
+    // Ghidra: typeop.hh:274 TypeOpLoad::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_load(op);
     }
 
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Load does not override)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         // Output type should be the base type of the pointer input (inrefs[1])
         op.get_in(1).and_then(|vn| {
@@ -485,6 +561,7 @@ impl TypeOp for TypeOpLoad {
     /// whose pointee matches the output size, the token is the pointee;
     /// otherwise fall back to the output varnode's high type.
     /// Faithful to `TypeOpLoad::getOutputToken` (typeop.cc:472-485).
+    // Ghidra: typeop.cc:472 TypeOpLoad::getOutputToken
     fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let out_size = op.get_out().map(|v| v.read().unwrap().get_size());
         if let Some(vn) = op.get_in(1) {
@@ -504,6 +581,7 @@ impl TypeOp for TypeOpLoad {
     /// input rewraps the type as a pointer (propagateToPointer); input-to-
     /// output unwraps it (propagateFromPointer).
     /// Faithful to `TypeOpLoad::propagateType` (typeop.cc:487-500).
+    // Ghidra: typeop.cc:487 TypeOpLoad::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -536,16 +614,20 @@ impl TypeOp for TypeOpLoad {
 /// CPUI_STORE implementation
 pub struct TypeOpStore;
 impl TypeOp for TypeOpStore {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_STORE
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "STORE"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
 
+    // Ghidra: typeop.cc:572 TypeOpStore::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -562,10 +644,12 @@ impl TypeOp for TypeOpStore {
         format!("*({}){} = {}", in0, in1, in2)
     }
 
+    // Ghidra: typeop.hh:286 TypeOpStore::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_store(op);
     }
 
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (base; Store does not override)
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         if slot == 2 {
             // The value being stored should match the base type of the pointer (inrefs[1])
@@ -588,6 +672,7 @@ impl TypeOp for TypeOpStore {
     /// (propagateFromPointer). Note STORE has no output varnode, so outslot is
     /// only ever an input slot.
     /// Faithful to `TypeOpStore::propagateType` (typeop.cc:557-570).
+    // Ghidra: typeop.cc:557 TypeOpStore::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -621,6 +706,7 @@ impl TypeOp for TypeOpStore {
 /// propagation). Mirrors Ghidra's `TypeOp::propagateToPointer`
 /// (typeop.cc:186-198): a pointer-to-pointer is collapsed to a pointer to an
 /// unknown base of the right size to avoid creating ptr->ptr.
+// Ghidra: typeop.cc:186 TypeOp::propagateToPointer
 fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
     use crate::type_system::datatype::TypePointer;
     let sz = alt_type.get_size();
@@ -649,6 +735,7 @@ fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
 /// propagation). Mirrors Ghidra's `TypeOp::propagateFromPointer`
 /// (typeop.cc:206-228): returns the pointee if `alt_type` is a pointer,
 /// otherwise `None`.
+// Ghidra: typeop.cc:206 TypeOp::propagateFromPointer
 fn propagate_from_pointer(alt_type: &Arc<Datatype>) -> Option<Arc<Datatype>> {
     match alt_type.as_ref() {
         Datatype::Pointer(ptr) => Some(ptr.ptr_to.clone()),
@@ -934,15 +1021,19 @@ functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount");
 // Control Flow Operations
 pub struct TypeOpBranch;
 impl TypeOp for TypeOpBranch {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_BRANCH
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "BRANCH"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:590 TypeOpBranch::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -954,15 +1045,19 @@ impl TypeOp for TypeOpBranch {
 
 pub struct TypeOpCbranch;
 impl TypeOp for TypeOpCbranch {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_CBRANCH
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "CBRANCH"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:621 TypeOpCbranch::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -978,15 +1073,19 @@ impl TypeOp for TypeOpCbranch {
 
 pub struct TypeOpBranchind;
 impl TypeOp for TypeOpBranchind {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_BRANCHIND
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "BRANCHIND"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:653 TypeOpBranchind::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -998,15 +1097,19 @@ impl TypeOp for TypeOpBranchind {
 
 pub struct TypeOpCall;
 impl TypeOp for TypeOpCall {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_CALL
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "CALL"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:667 TypeOpCall::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -1015,6 +1118,7 @@ impl TypeOp for TypeOpCall {
         format!("call {}", in0)
     }
 
+    // Ghidra: typeop.hh:319 TypeOpCall::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_call(op);
     }
@@ -1022,15 +1126,19 @@ impl TypeOp for TypeOpCall {
 
 pub struct TypeOpCallind;
 impl TypeOp for TypeOpCallind {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_CALLIND
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "CALLIND"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:791 TypeOpCallind::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let in0 = op
             .get_in(0)
@@ -1042,19 +1150,24 @@ impl TypeOp for TypeOpCallind {
 
 pub struct TypeOpReturn;
 impl TypeOp for TypeOpReturn {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_RETURN
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "RETURN"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:882 TypeOpReturn::printRaw
     fn print_raw(&self, _op: &PcodeOp) -> String {
         "return".to_string()
     }
 
+    // Ghidra: typeop.hh:350 TypeOpReturn::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_return(op);
     }
@@ -1062,15 +1175,19 @@ impl TypeOp for TypeOpReturn {
 
 pub struct TypeOpPtradd;
 impl TypeOp for TypeOpPtradd {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_PTRADD
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "PTRADD"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2283 TypeOpPtradd::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1091,12 +1208,14 @@ impl TypeOp for TypeOpPtradd {
         format!("{} = ptradd({}, {}, {})", out, in0, in1, in2)
     }
 
+    // Ghidra: typeop.cc:2238 TypeOpPtradd::getOutputLocal
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         // Output should be a pointer, matching the base pointer input (inrefs[0])
         op.get_in(0)
             .and_then(|vn| vn.read().unwrap().v_type.clone())
     }
 
+    // Ghidra: typeop.cc:2232 TypeOpPtradd::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         if slot == 0 {
             // Input 0 should match the output type
@@ -1110,15 +1229,19 @@ impl TypeOp for TypeOpPtradd {
 
 pub struct TypeOpPtrsub;
 impl TypeOp for TypeOpPtrsub {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_PTRSUB
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "PTRSUB"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2380 TypeOpPtrsub::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1135,6 +1258,7 @@ impl TypeOp for TypeOpPtrsub {
         format!("{} = {} + {}", out, in0, in1)
     }
 
+    // Ghidra: typeop.cc:2308 TypeOpPtrsub::getOutputLocal
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         // Ptrsub usually results in a pointer to a sub-field or element
         // For now, suggest the same type as input pointer if it's a pointer
@@ -1152,15 +1276,19 @@ impl TypeOp for TypeOpPtrsub {
 
 pub struct TypeOpMulti;
 impl TypeOp for TypeOpMulti {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_MULTIEQUAL
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "MULTIEQUAL"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:1967 TypeOpMulti::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1175,10 +1303,12 @@ impl TypeOp for TypeOpMulti {
         format!("{} = phi({})", out, inputs.join(", "))
     }
 
+    // Ghidra: typeop.hh:758 TypeOpMulti::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_multiequal(op);
     }
 
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Multi does not override)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         // Phi node output matches inputs. Pick first non-none.
         let mut i = 0;
@@ -1191,6 +1321,7 @@ impl TypeOp for TypeOpMulti {
         None
     }
 
+    // Ghidra: typeop.hh:152 TypeOp::getInputLocal (base; Multi does not override)
     fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
         // Inputs should match the output type
         op.get_out().and_then(|v| v.read().unwrap().v_type.clone())
@@ -1200,6 +1331,7 @@ impl TypeOp for TypeOpMulti {
     /// either direction (input<->output). One slot must be the output (-1).
     /// Spacebase inputs are rewrapped as a pointer to an unknown base type.
     /// Faithful to `TypeOpMulti::propagateType` (typeop.cc:1951-1965).
+    // Ghidra: typeop.cc:1951 TypeOpMulti::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -1230,15 +1362,19 @@ impl TypeOp for TypeOpMulti {
 
 pub struct TypeOpIndirect;
 impl TypeOp for TypeOpIndirect {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_INDIRECT
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "INDIRECT"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2022 TypeOpIndirect::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1255,10 +1391,12 @@ impl TypeOp for TypeOpIndirect {
         format!("{} = {}({})", out, in0, in1)
     }
 
+    // Ghidra: typeop.hh:769 TypeOpIndirect::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_indirect(op);
     }
 
+    // Ghidra: typeop.hh:149 TypeOp::getOutputLocal (base; Indirect does not override)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         // Indirect usually inherits type from its first input
         op.get_in(0)
@@ -1270,6 +1408,7 @@ impl TypeOp for TypeOpIndirect {
     /// indirect creation. Otherwise a type flows input<->output, with a
     /// spacebase rewrapped as a pointer to an unknown base type.
     /// Faithful to `TypeOpIndirect::propagateType` (typeop.cc:2005-2020).
+    // Ghidra: typeop.cc:2005 TypeOpIndirect::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -1303,15 +1442,19 @@ impl TypeOp for TypeOpIndirect {
 
 pub struct TypeOpSegment;
 impl TypeOp for TypeOpSegment {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_SEGMENTOP
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "SEGMENTOP"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2397 TypeOpSegment::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1329,15 +1472,19 @@ impl TypeOp for TypeOpSegment {
 
 pub struct TypeOpCpoolref;
 impl TypeOp for TypeOpCpoolref {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_CPOOLREF
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "CPOOLREF"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2471 TypeOpCpoolref::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1355,15 +1502,19 @@ impl TypeOp for TypeOpCpoolref {
 
 pub struct TypeOpNew;
 impl TypeOp for TypeOpNew {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_NEW
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "NEW"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:2511 TypeOpNew::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1381,15 +1532,19 @@ impl TypeOp for TypeOpNew {
 
 pub struct TypeOpCallother;
 impl TypeOp for TypeOpCallother {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_CALLOTHER
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "CALLOTHER"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         0
     }
+    // Ghidra: typeop.cc:818 TypeOpCallother::printRaw
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1421,15 +1576,19 @@ functional_binary_op!(TypeOpExtract, CPUI_EXTRACT, "EXTRACT", 0, "extract");
 /// + the transparent input<->output get_output_local/get_input_local).
 macro_rules! compare_op_common {
     ($struct_name:ident, $opcode:ident, $name:expr, $flags:expr, $symbol:expr) => {
+        // Ghidra: typeop.hh:71 TypeOp::getOpcode
         fn get_opcode(&self) -> OpCode {
             OpCode::$opcode
         }
+        // Ghidra: typeop.hh:70 TypeOp::getName
         fn get_name(&self) -> &str {
             $name
         }
+        // Ghidra: typeop.hh:72 TypeOp::getFlags
         fn get_flags(&self) -> u32 {
             $flags
         }
+        // Ghidra: typeop.cc:335 TypeOpBinary::printRaw (comparison ops inherit)
         fn print_raw(&self, op: &PcodeOp) -> String {
             let out = op
                 .get_out()
@@ -1445,9 +1604,11 @@ macro_rules! compare_op_common {
                 .unwrap_or_else(|| "_".to_string());
             format!("{} = {} {} {}", out, in0, $symbol, in1)
         }
+        // RUGRA-GLUE: macro-generated generic binary push for comparison ops.
         fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
             lng.op_binary(op);
         }
+        // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (metaout=TYPE_BOOL)
         fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
             // Comparisons produce a bool of the output's size.
             Some(Arc::new(Datatype::Base(crate::type_system::TypeBase::new(
@@ -1456,6 +1617,7 @@ macro_rules! compare_op_common {
                 TypeMetatype::Bool,
             ))))
         }
+        // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal
         fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
             op.get_in(slot)
                 .and_then(|vn| vn.read().unwrap().v_type.clone())
@@ -1474,6 +1636,8 @@ macro_rules! compare_op_impl {
             compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
 
             /// A comparison's output is boolean.
+            // RUGRA-GLUE: exposes the per-subclass `metaout` field
+            //   (typeop.hh:205 TYPE_BOOL set by TypeOpBinary ctor).
             fn get_output_metatype(&self) -> Option<TypeMetatype> {
                 Some(TypeMetatype::Bool)
             }
@@ -1484,6 +1648,7 @@ macro_rules! compare_op_impl {
             /// Faithful in spirit to `TypeOpEqual::getInputCast`
             /// (typeop.cc:932-943), which picks the more general of the two
             /// input types.
+            // Ghidra: typeop.cc:932 TypeOpEqual::getInputCast
             fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
                 let other = if slot == 0 { 1 } else { 0 };
                 op.get_in(other)
@@ -1495,6 +1660,7 @@ macro_rules! compare_op_impl {
             /// pointer to an unknown base type.
             /// Faithful to `TypeOpEqual::propagateAcrossCompare`
             /// (typeop.cc:963-986).
+            // Ghidra: typeop.cc:945 TypeOpEqual::propagateType
             fn propagate_type(
                 &self,
                 alt_type: &Arc<Datatype>,
@@ -1535,6 +1701,8 @@ macro_rules! signed_compare_op_impl {
             compare_op_common!($struct_name, $opcode, $name, $flags, $symbol);
 
             /// A signed comparison's output is boolean.
+            // RUGRA-GLUE: exposes the per-subclass `metaout` field
+            //   (typeop.hh:205 TYPE_BOOL set by TypeOpBinary ctor).
             fn get_output_metatype(&self) -> Option<TypeMetatype> {
                 Some(TypeMetatype::Bool)
             }
@@ -1543,6 +1711,7 @@ macro_rules! signed_compare_op_impl {
             /// across their inputs; nothing flows to/from the bool output.
             /// Faithful to `TypeOpIntSless::propagateType`
             /// (typeop.cc:1033-1039).
+            // Ghidra: typeop.cc:1033 TypeOpIntSless::propagateType
             fn propagate_type(
                 &self,
                 alt_type: &Arc<Datatype>,
@@ -1602,15 +1771,19 @@ signed_compare_op_impl!(
 /// Faithful to `TypeOpIntAdd` (typeop.cc:1167-1201).
 pub struct TypeOpIntAdd;
 impl TypeOp for TypeOpIntAdd {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
     fn get_opcode(&self) -> OpCode {
         OpCode::CPUI_INT_ADD
     }
+    // Ghidra: typeop.hh:70 TypeOp::getName
     fn get_name(&self) -> &str {
         "INT_ADD"
     }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
     fn get_flags(&self) -> u32 {
         typeop_flags::ARITHMETIC_OP
     }
+    // Ghidra: typeop.cc:335 TypeOpBinary::printRaw (IntAdd inherits)
     fn print_raw(&self, op: &PcodeOp) -> String {
         let out = op
             .get_out()
@@ -1626,13 +1799,16 @@ impl TypeOp for TypeOpIntAdd {
             .unwrap_or_else(|| "_".to_string());
         format!("{} = {} + {}", out, in0, in1)
     }
+    // Ghidra: typeop.hh:439 TypeOpIntAdd::push
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
         lng.op_binary(op);
     }
+    // Ghidra: typeop.cc:323 TypeOpBinary::getOutputLocal (inherited)
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         op.get_in(0)
             .and_then(|v| v.read().unwrap().v_type.clone())
     }
+    // Ghidra: typeop.cc:329 TypeOpBinary::getInputLocal (inherited)
     fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
         op.get_out()
             .and_then(|v| v.read().unwrap().v_type.clone())
@@ -1642,6 +1818,7 @@ impl TypeOp for TypeOpIntAdd {
     /// output varnode's own resolved high type.
     /// Faithful to `TypeOpIntAdd::getOutputToken` (typeop.cc:1175-1179), which
     /// returns `castStrategy->arithmeticOutputStandard(op)`.
+    // Ghidra: typeop.cc:1175 TypeOpIntAdd::getOutputToken
     fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         op.get_out()
             .and_then(|vn| vn.read().unwrap().v_type.clone())
@@ -1652,6 +1829,7 @@ impl TypeOp for TypeOpIntAdd {
     /// to slot 1. Pointers never propagate output->input. Anything else is
     /// blocked.
     /// Faithful to `TypeOpIntAdd::propagateType` (typeop.cc:1181-1201).
+    // Ghidra: typeop.cc:1181 TypeOpIntAdd::propagateType
     fn propagate_type(
         &self,
         alt_type: &Arc<Datatype>,
@@ -1687,6 +1865,10 @@ pub struct TypeOpManager {
 }
 
 impl TypeOpManager {
+    // RUGRA-GLUE: Rust manager ctor; mirrors Ghidra's
+    //   `TypeOp::registerInstructions(inst, tlst, trans)` (typeop.cc:24),
+    //   which allocates and registers one TypeOp subclass per op-code into the
+    //   `inst` vector. Rugra stores them in `Self::ops` keyed by OpCode.
     pub fn new() -> Self {
         let mut ops: Vec<Option<Box<dyn TypeOp>>> = Vec::new();
         ops.resize_with(256, || None); // Large enough for all opcodes
@@ -1786,6 +1968,10 @@ impl TypeOpManager {
         Self { ops }
     }
 
+    // RUGRA-GLUE: Rust accessor for the opcode→TypeOp table; in Ghidra the
+    //   table is `vector<TypeOp*> inst` indexed by OpCode and held by
+    //   TypeFactory (typeop.hh:186 registerInstructions). Lookups go through
+    //   PcodeOp::getOpcode (op.hh:232) → TypeOp*.
     pub fn get_op(&self, opcode: OpCode) -> Option<&dyn TypeOp> {
         self.ops[opcode as usize].as_ref().map(|o| o.as_ref())
     }
@@ -1793,6 +1979,9 @@ impl TypeOpManager {
 
 impl crate::op::PcodeOp {
     /// Push this operation to a language printer
+    // RUGRA-GLUE: convenience wrapper that dispatches by opcode; in Ghidra the
+    //   per-op push lives on the TypeOp subclass (typeop.hh:170 push), and
+    //   PcodeOp has no push method of its own (it forwards via opcode->push).
     pub fn push(&self, lng: &mut dyn PrintLanguage) {
         match self.opcode {
             OpCode::CPUI_COPY => lng.op_copy(self),

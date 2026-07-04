@@ -24,3 +24,4 @@ Main error type for Rugra
 
 Helper trait for adding context to errors
 
+<!-- annotation-pass: 2026-07-04 -->

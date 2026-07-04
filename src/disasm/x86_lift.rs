@@ -13,16 +13,19 @@ pub struct X86Lifter {
 }
 
 impl Default for X86Lifter {
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl X86Lifter {
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     pub fn new() -> Self {
         Self { uniq_base: 0x1000 }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Allocate a new unique temporary varnode
     fn alloc_tmp(&mut self, size: usize) -> VarnodeRaw {
         let offset = self.uniq_base;
@@ -30,6 +33,7 @@ impl X86Lifter {
         VarnodeRaw::new(AddressSpace::Unique, offset, size)
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Map a register name to a VarnodeRaw
     fn get_register(name: &str, size: usize) -> Option<VarnodeRaw> {
         let offset = match name {
@@ -61,6 +65,7 @@ impl X86Lifter {
         Self::get_register(name, 8).map(|v| v.offset).unwrap_or(0)
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Parse an operand into a VarnodeRaw (emitting load from memory if necessary)
     fn parse_operand(
         &mut self,
@@ -151,6 +156,7 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Retrieve the destination operand (for writing)
     fn parse_dest_operand(
         &mut self,
@@ -231,6 +237,7 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Create a store operation
     fn emit_store(
         &mut self,
@@ -250,6 +257,7 @@ impl X86Lifter {
         ops.push(op);
     }
 
+    // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Lift a single instruction to P-code
     pub fn lift(&mut self, inst: &Instruction) -> Vec<PcodeOpRaw> {
         let mut ops = Vec::new();

@@ -77,3 +77,4 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - `open_branch` 的 `is_loop_dag_out` 极性修正：从 `if is_loop_dag_out { continue }` 改为 `if !is_loop_dag_out { continue }`（对齐 createTraces :504 `if (!isLoopDAGOut) continue`）。
 - 新增 `is_loop_dag_in` helper（对齐 block.hh:345 isLoopDAGIn）。
 - `opened` 集合保留为保守安全网（Ghidra 无此机制，靠纯 visit-count 终止；Rugra 的 visit-count 终止性待验证后可移除）。
+<!-- annotation-pass: 2026-07-04 -->

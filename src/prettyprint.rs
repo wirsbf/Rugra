@@ -7,67 +7,97 @@
 /// This provides a generic interface for "printing" decompiled code,
 /// allowing for different output formats (plain text, XML, HTML with markup, etc.)
 pub trait Emit {
+    // RUGRA-GLUE: print (no Ghidra counterpart found)
     /// Emit raw text
     fn print(&mut self, text: &str);
 
+    // RUGRA-GLUE: begin_block (no Ghidra counterpart found)
     /// Start a new block (e.g., '{')
     fn begin_block(&mut self);
+    // RUGRA-GLUE: end_block (no Ghidra counterpart found)
     /// End a block (e.g., '}')
     fn end_block(&mut self);
 
+    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
     /// Emit an open parenthesis '('
     fn open_paren(&mut self);
+    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
     /// Emit a close parenthesis ')'
     fn close_paren(&mut self);
 
+    // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     /// Start a function definition
     fn begin_function(&mut self);
+    // RUGRA-GLUE: end_function (no Ghidra counterpart found)
     /// End a function definition
     fn end_function(&mut self);
 
+    // RUGRA-GLUE: tag_type (no Ghidra counterpart found)
     /// Tag a type name for markup
     fn tag_type(&mut self, text: &str, _id: u64);
+    // RUGRA-GLUE: tag_variable (no Ghidra counterpart found)
     /// Tag a variable name for markup
     fn tag_variable(&mut self, text: &str, _id: u64);
+    // RUGRA-GLUE: tag_op (no Ghidra counterpart found)
     /// Tag an operator for markup
     fn tag_op(&mut self, text: &str);
+    // RUGRA-GLUE: tag_field (no Ghidra counterpart found)
     /// Tag a field name for markup
     fn tag_field(&mut self, text: &str, _id: u64);
+    // RUGRA-GLUE: tag_func_name (no Ghidra counterpart found)
     /// Tag a function name for markup
     fn tag_func_name(&mut self, text: &str, _id: u64);
+    // RUGRA-GLUE: tag_comment (no Ghidra counterpart found)
     /// Tag a comment for markup
     fn tag_comment(&mut self, text: &str);
+    // RUGRA-GLUE: tag_label (no Ghidra counterpart found)
     /// Tag a label for markup
     fn tag_label(&mut self, text: &str);
+    // RUGRA-GLUE: tag_case_label (no Ghidra counterpart found)
     /// Tag a case label for markup
     fn tag_case_label(&mut self, text: &str);
 
+    // RUGRA-GLUE: tag_line (no Ghidra counterpart found)
     /// Tag a statement line
     fn tag_line(&mut self, _indent: i32) {}
 
+    // RUGRA-GLUE: begin_document (no Ghidra counterpart found)
     // --- Begin/end pairs (Ghidra Emit virtuals, prettyprint.hh:136-231) ---
     // These are no-ops in plain text mode. Markup emitters would emit XML tags.
     fn begin_document(&mut self) {}
+    // RUGRA-GLUE: end_document (no Ghidra counterpart found)
     fn end_document(&mut self) {}
+    // RUGRA-GLUE: begin_return_type (no Ghidra counterpart found)
     fn begin_return_type(&mut self) {}
+    // RUGRA-GLUE: end_return_type (no Ghidra counterpart found)
     fn end_return_type(&mut self) {}
+    // RUGRA-GLUE: begin_var_decl (no Ghidra counterpart found)
     fn begin_var_decl(&mut self) {}
+    // RUGRA-GLUE: end_var_decl (no Ghidra counterpart found)
     fn end_var_decl(&mut self) {}
+    // RUGRA-GLUE: begin_statement (no Ghidra counterpart found)
     fn begin_statement(&mut self) {}
+    // RUGRA-GLUE: end_statement (no Ghidra counterpart found)
     fn end_statement(&mut self) {}
+    // RUGRA-GLUE: begin_func_proto (no Ghidra counterpart found)
     fn begin_func_proto(&mut self) {}
+    // RUGRA-GLUE: end_func_proto (no Ghidra counterpart found)
     fn end_func_proto(&mut self) {}
 
+    // RUGRA-GLUE: emits_markup (no Ghidra counterpart found)
     /// Check if this emitter supports markup
     fn emits_markup(&self) -> bool { false }
 
+    // RUGRA-GLUE: into_any (no Ghidra counterpart found)
     /// Convert this emitter into a `Box<dyn Any>` for downcasting
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
 
+    // RUGRA-GLUE: as_any_mut (no Ghidra counterpart found)
     /// Get a mutable reference for downcasting
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
 }
 
+// RUGRA-GLUE: reconcile_pointer_arith (no Ghidra counterpart found)
 /// Reconcile `int - pointer` arithmetic (illegal in C) by casting the integer
 /// constant to a pointer type. Only acts on the pattern
 ///   <sep><int-literal> - <pointer-prefix>Var...
@@ -127,6 +157,7 @@ fn reconcile_pointer_arith(line: &str) -> String {
     line.to_string()
 }
 
+// RUGRA-GLUE: reconcile_int_times_string (no Ghidra counterpart found)
 /// Reconcile `X * "string"` — int * string-literal is illegal C. Cast the
 /// string literal to (long). Only matches quoted strings, never pointer vars.
 fn reconcile_int_times_string(line: &str) -> String {
@@ -141,6 +172,7 @@ fn reconcile_int_times_string(line: &str) -> String {
     line.to_string()
 }
 
+// RUGRA-GLUE: reconcile_int_minus_pointer (no Ghidra counterpart found)
 fn reconcile_int_minus_pointer(line: &str) -> String {
     let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
     let bytes = line.as_bytes();
@@ -212,12 +244,14 @@ pub struct EmitNoMarkup {
 }
 
 impl Default for EmitNoMarkup {
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl EmitNoMarkup {
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::new
     pub fn new() -> Self {
         Self {
             output: String::new(),
@@ -225,6 +259,7 @@ impl EmitNoMarkup {
         }
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugCountWhile
     /// Debug helper: count "while" and "\ndo " occurrences in the raw output.
     /// Used by RUGRA_LOOP_DEBUG diagnostics to track loop rendering.
     #[allow(dead_code)]
@@ -234,12 +269,14 @@ impl EmitNoMarkup {
         (w, d)
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugGetOutputRef
     /// Debug helper: borrow the raw output string for diagnostics.
     #[allow(dead_code)]
     pub fn debug_get_output_ref(&self) -> &str {
         &self.output
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::getOutput
     pub fn get_output(mut self) -> String {
         // Always run post-processing so callers that forget to invoke
         // post_process() still get the normalized output (struct deref rewrite,
@@ -250,6 +287,7 @@ impl EmitNoMarkup {
         self.output
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcess
     /// Post-process the output to eliminate redundant gotos and labels.
     /// P3: Remove `goto LAB_X;` when `LAB_X:` is on the immediately next non-empty line.
     /// Also removes labels that are never referenced by any goto.
@@ -257,6 +295,7 @@ impl EmitNoMarkup {
         self.output = Self::post_process_output(&self.output);
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcessOutput
     pub fn post_process_output(input: &str) -> String {
         // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
         // All structure is produced by Action-phase + structured emit.
@@ -1720,6 +1759,7 @@ impl EmitNoMarkup {
         after_case
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::recoverStructFieldsAnon
     /// Per-variable anonymous struct field recovery.
     /// Groups *(long *)(var + offset) patterns by variable, generates an
     /// anonymous struct with matching fields, declares var as struct *,
@@ -1859,6 +1899,7 @@ impl EmitNoMarkup {
         result
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanCaseLabels
     /// Remove `case N:` and `default:` lines that appear outside any switch
     /// statement. Uses a precise switch-depth tracker that counts `switch (...) {`
     /// openers and their matching `}` closers.
@@ -1917,6 +1958,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeIllegalLvalueAssignments
     /// Remove assignment lines whose left-hand side is not a valid C lvalue.
     /// Detects patterns like 'IDENT + ... = ' or 'IDENT * ... = ' at the start
     /// of a statement (not inside parens/casts).
@@ -2036,6 +2078,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixPointerArithmetic
     /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands
     /// are declared as pointer types, and cast the right operand to `(long)`.
     fn fix_pointer_arithmetic(text: &str) -> String {
@@ -2084,6 +2127,7 @@ impl EmitNoMarkup {
         out
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tryFixOnePtrArith
     /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
     /// if a fix was applied, None otherwise. Scans the entire line (both LHS
     /// cast expressions and RHS).
@@ -2125,6 +2169,7 @@ impl EmitNoMarkup {
         None
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanBreaks
     /// Remove `break;`/`continue;` statements not within any loop or switch.
     /// Uses a pre-scan to mark line ranges that fall inside a loop/switch body
     /// (via brace matching), which is more reliable than a line-level context
@@ -2264,6 +2309,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::backfillMissingLocals
     /// For each function, find `local_XX` identifiers used in the body but not
     /// declared, and insert `int local_XX;` declarations before the first
     /// non-declaration body line.
@@ -2407,6 +2453,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixUnaryDerefDeclarations
     /// Rewrite declarations of variables appearing in `*IDENT` unary dereference
     /// patterns to pointer type, so `*param_N` is legal C.
     fn fix_unary_deref_declarations(text: &str) -> String {
@@ -2504,6 +2551,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::rewriteStructDeref
     /// Rewrite every `IDENT->field_N` / `IDENT->field_0xN` to
     /// `*(long *)(IDENT + 0xN)`. Also handles `EXPR)->field_N` (grouped base).
     fn rewrite_struct_deref(text: &str) -> String {
@@ -2558,6 +2606,7 @@ impl EmitNoMarkup {
         out
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::canonicalizeStructDeref
     /// Convert `*(varname + N)` and `*varname + N` patterns to `varname->field_N` in C output text.
     fn canonicalize_struct_deref(text: &str) -> String {
         // First pass: *(expr + N) → expr->field_N
@@ -2666,6 +2715,7 @@ impl EmitNoMarkup {
         result2
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tryConvertPtrAdd
     /// Try to convert `expr + N` to `expr->field_N`.
     /// Returns Some if the pattern matches, None otherwise.
     fn try_convert_ptr_add(inner: &str) -> Option<String> {
@@ -2711,6 +2761,7 @@ impl EmitNoMarkup {
         // semantically equivalent to what Ghidra emits for unknown structs.
         Some(format!("*(long *)({} + 0x{:x})", base, offset))
     }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::hasEnclosingLoopCtx
     /// Scans backward through already-emitted lines.
     fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool {
         // Walk backward, tracking brace depth
@@ -2736,6 +2787,7 @@ impl EmitNoMarkup {
         false
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::negateSimpleCondition
     /// Negate a simple C condition expression for goto-to-if folding.
     /// Handles common patterns: ==, !=, <, >, <=, >=, and compound && / ||.
     fn negate_simple_condition(cond: &str) -> String {
@@ -2771,6 +2823,7 @@ impl EmitNoMarkup {
         format!("!({})", cond)
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::flushFuncRemoveUnused
     /// Remove unused variable declarations from a function's lines
     /// AND add missing declarations for uVarNNN that appear in body but have no declaration
     fn flush_func_remove_unused(func_lines: &[String], out: &mut Vec<String>) {
@@ -2856,17 +2909,20 @@ impl EmitNoMarkup {
         }
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::doIndent
     fn do_indent(&mut self) {
         for _ in 0..self.indent {
             self.output.push_str("  ");
         }
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::isWordBoundary
     /// Check if char is a word boundary (not alphanumeric or underscore)
     fn is_word_boundary(c: char) -> bool {
         !c.is_ascii_alphanumeric() && c != '_'
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::countWordOccurrences
     /// Count word-boundary-respecting occurrences of `word` in `text`
     fn count_word_occurrences(text: &str, word: &str) -> usize {
         let mut count = 0;
@@ -2886,6 +2942,7 @@ impl EmitNoMarkup {
         count
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::replaceWord
     /// Replace word-boundary-respecting occurrences of `word` with `replacement`
     fn replace_word(text: &str, word: &str, replacement: &str) -> String {
         let bytes = text.as_bytes();
@@ -2912,15 +2969,18 @@ impl EmitNoMarkup {
 }
 
 impl Emit for EmitNoMarkup {
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::print
     fn print(&mut self, text: &str) {
         self.output.push_str(text);
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::beginBlock
     fn begin_block(&mut self) {
         self.output.push_str(" {\n");
         self.indent += 1;
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::endBlock
     fn end_block(&mut self) {
         self.indent -= 1;
         self.output.push('\n');
@@ -2928,31 +2988,44 @@ impl Emit for EmitNoMarkup {
         self.output.push('}');
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::openParen
     fn open_paren(&mut self) {
         self.output.push('(');
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::closeParen
     fn close_paren(&mut self) {
         self.output.push(')');
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::beginFunction
     fn begin_function(&mut self) {
         // No-op for plain text
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::endFunction
     fn end_function(&mut self) {
         self.output.push('\n');
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagType
     fn tag_type(&mut self, text: &str, _id: u64) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagVariable
     fn tag_variable(&mut self, text: &str, _id: u64) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagOp
     fn tag_op(&mut self, text: &str) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagField
     fn tag_field(&mut self, text: &str, _id: u64) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagFuncName
     fn tag_func_name(&mut self, text: &str, _id: u64) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagComment
     fn tag_comment(&mut self, text: &str) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagLabel
     fn tag_label(&mut self, text: &str) { self.print(text); }
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagCaseLabel
     fn tag_case_label(&mut self, text: &str) { self.print(text); }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagLine
     fn tag_line(&mut self, _indent: i32) {
         // Skip leading newline if we just opened a block (output ends with \n)
         if !self.output.ends_with('\n') {
@@ -2961,10 +3034,12 @@ impl Emit for EmitNoMarkup {
         self.do_indent();
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::intoAny
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 
+    // Ghidra: prettyprint.hh:547 EmitNoMarkup::asAnyMut
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
@@ -2974,29 +3049,48 @@ impl Emit for EmitNoMarkup {
 pub struct NullEmit;
 
 impl NullEmit {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new() -> Self {
         NullEmit
     }
 }
 
 impl Emit for NullEmit {
+    // RUGRA-GLUE: print (no Ghidra counterpart found)
     fn print(&mut self, _text: &str) {}
+    // RUGRA-GLUE: begin_block (no Ghidra counterpart found)
     fn begin_block(&mut self) {}
+    // RUGRA-GLUE: end_block (no Ghidra counterpart found)
     fn end_block(&mut self) {}
+    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
     fn open_paren(&mut self) {}
+    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
     fn close_paren(&mut self) {}
+    // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     fn begin_function(&mut self) {}
+    // RUGRA-GLUE: end_function (no Ghidra counterpart found)
     fn end_function(&mut self) {}
+    // RUGRA-GLUE: tag_type (no Ghidra counterpart found)
     fn tag_type(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_variable (no Ghidra counterpart found)
     fn tag_variable(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_op (no Ghidra counterpart found)
     fn tag_op(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_field (no Ghidra counterpart found)
     fn tag_field(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_line (no Ghidra counterpart found)
     fn tag_line(&mut self, _indent: i32) {}
+    // RUGRA-GLUE: tag_func_name (no Ghidra counterpart found)
     fn tag_func_name(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_comment (no Ghidra counterpart found)
     fn tag_comment(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_label (no Ghidra counterpart found)
     fn tag_label(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_case_label (no Ghidra counterpart found)
     fn tag_case_label(&mut self, _text: &str) {}
+    // RUGRA-GLUE: as_any_mut (no Ghidra counterpart found)
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
+    // RUGRA-GLUE: into_any (no Ghidra counterpart found)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
 }
 
@@ -3008,42 +3102,62 @@ pub struct CaseDetectEmit {
 }
 
 impl CaseDetectEmit {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new() -> Self {
         Self { has_case: false }
     }
+    // RUGRA-GLUE: has_case (no Ghidra counterpart found)
     pub fn has_case(&self) -> bool {
         self.has_case
     }
 }
 
 impl Emit for CaseDetectEmit {
+    // RUGRA-GLUE: print (no Ghidra counterpart found)
     fn print(&mut self, text: &str) {
         if text.contains("case ") || text.contains("default:") {
             self.has_case = true;
         }
     }
+    // RUGRA-GLUE: begin_block (no Ghidra counterpart found)
     fn begin_block(&mut self) {}
+    // RUGRA-GLUE: end_block (no Ghidra counterpart found)
     fn end_block(&mut self) {}
+    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
     fn open_paren(&mut self) {}
+    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
     fn close_paren(&mut self) {}
+    // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     fn begin_function(&mut self) {}
+    // RUGRA-GLUE: end_function (no Ghidra counterpart found)
     fn end_function(&mut self) {}
+    // RUGRA-GLUE: tag_type (no Ghidra counterpart found)
     fn tag_type(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_variable (no Ghidra counterpart found)
     fn tag_variable(&mut self, text: &str, _id: u64) {
         if text.contains("case ") { self.has_case = true; }
     }
+    // RUGRA-GLUE: tag_op (no Ghidra counterpart found)
     fn tag_op(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_field (no Ghidra counterpart found)
     fn tag_field(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_line (no Ghidra counterpart found)
     fn tag_line(&mut self, _indent: i32) {}
+    // RUGRA-GLUE: as_any_mut (no Ghidra counterpart found)
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+    // RUGRA-GLUE: tag_func_name (no Ghidra counterpart found)
     fn tag_func_name(&mut self, _text: &str, _id: u64) {}
+    // RUGRA-GLUE: tag_comment (no Ghidra counterpart found)
     fn tag_comment(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_label (no Ghidra counterpart found)
     fn tag_label(&mut self, _text: &str) {}
+    // RUGRA-GLUE: tag_case_label (no Ghidra counterpart found)
     fn tag_case_label(&mut self, _text: &str) {
         self.has_case = true; // Any case_label tag = case label emitted
     }
+    // RUGRA-GLUE: into_any (no Ghidra counterpart found)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }

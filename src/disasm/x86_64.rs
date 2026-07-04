@@ -15,6 +15,7 @@ pub struct X86_64Disassembler {
 }
 
 impl X86_64Disassembler {
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Create a new x86-64 disassembler
     pub fn new() -> Self {
         X86_64Disassembler {
@@ -22,11 +23,13 @@ impl X86_64Disassembler {
         }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Create with custom decoder options
     pub fn with_options(options: u32) -> Self {
         X86_64Disassembler { options }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Convert iced-x86 instruction to our Instruction type
     fn convert_instruction(
         &self,
@@ -57,6 +60,7 @@ impl X86_64Disassembler {
         Ok(inst)
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Extract operands from iced instruction
     fn extract_operands(&self, inst: &IcedInstruction) -> Vec<Operand> {
         let mut operands = Vec::new();
@@ -118,6 +122,7 @@ impl X86_64Disassembler {
         operands
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Get the size of an immediate operand
     fn get_immediate_size(&self, op_kind: OpKind) -> usize {
         match op_kind {
@@ -129,6 +134,7 @@ impl X86_64Disassembler {
         }
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Build instruction metadata
     fn build_metadata(&self, inst: &IcedInstruction, address: Address) -> InstructionMetadata {
         let mut metadata = InstructionMetadata::default();
@@ -198,6 +204,7 @@ impl X86_64Disassembler {
         metadata
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     /// Get branch/call target address
     fn get_branch_target(&self, inst: &IcedInstruction, _current_addr: Address) -> Option<Address> {
         // Check if it's a near branch with immediate
@@ -216,12 +223,14 @@ impl X86_64Disassembler {
 }
 
 impl Default for X86_64Disassembler {
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Disassembler for X86_64Disassembler {
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     fn disassemble(&mut self, code: &[u8], start_address: Address) -> Result<Vec<Instruction>> {
         let mut decoder = Decoder::with_ip(64, code, start_address.as_u64(), self.options);
         let mut instructions = Vec::new();
@@ -242,6 +251,7 @@ impl Disassembler for X86_64Disassembler {
         Ok(instructions)
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     fn disassemble_one(&mut self, code: &[u8], address: Address) -> Result<(Instruction, usize)> {
         if code.is_empty() {
             return Err(Error::DisassemblyError("Empty code buffer".into()));
@@ -260,6 +270,7 @@ impl Disassembler for X86_64Disassembler {
         Ok((inst, length))
     }
 
+    // RUGRA-GLUE: src/disasm/x86_64.rs helper (no direct Ghidra counterpart)
     fn architecture(&self) -> Architecture {
         Architecture::X86_64
     }

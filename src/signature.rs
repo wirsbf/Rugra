@@ -27,7 +27,9 @@ pub struct Signature {
 }
 
 impl Signature {
+    // Ghidra: signature.hh:50 Signature::new
     pub fn new(hash: u32) -> Self { Self { hash } }
+    // Ghidra: signature.hh:50 Signature::getHash
     pub fn get_hash(&self) -> u32 { self.hash }
 }
 
@@ -43,6 +45,7 @@ pub struct SignatureFlags {
 }
 
 impl Default for SignatureFlags {
+    // RUGRA-GLUE: default (no Ghidra counterpart found)
     fn default() -> Self {
         Self { terminal: false, commutative: false, not_emitted: false, standalone: false, visited: false }
     }
@@ -61,32 +64,40 @@ pub struct SignatureEntry {
 }
 
 impl SignatureEntry {
+    // Ghidra: signature.cc:144 SignatureEntry::new
     pub fn new() -> Self {
         Self { hash: [0, 0], flags: SignatureFlags::default(), index: -1 }
     }
 
+    // Ghidra: signature.cc:144 SignatureEntry::isVisited
     /// Check if this node has been visited.
     pub fn is_visited(&self) -> bool { self.flags.visited }
 
+    // Ghidra: signature.cc:144 SignatureEntry::setVisited
     /// Mark that this node has been visited.
     pub fn set_visited(&mut self) { self.flags.visited = true; }
 
+    // Ghidra: signature.cc:144 SignatureEntry::setHash
     /// Set the current hash.
     pub fn set_hash(&mut self, h: u32) {
         self.hash[1] = self.hash[0];
         self.hash[0] = h;
     }
 
+    // Ghidra: signature.cc:144 SignatureEntry::getCurrentHash
     /// Get the current hash.
     pub fn get_current_hash(&self) -> u32 { self.hash[0] }
 
+    // Ghidra: signature.cc:144 SignatureEntry::getPreviousHash
     /// Get the previous hash.
     pub fn get_previous_hash(&self) -> u32 { self.hash[1] }
 
+    // Ghidra: signature.cc:144 SignatureEntry::hashChanged
     /// Check if the hash changed in the last iteration.
     pub fn hash_changed(&self) -> bool { self.hash[0] != self.hash[1] }
 }
 
+// Ghidra: signature.cc:144 SignatureEntry::hashOpcode
 /// Hash a single opcode for feature generation.
 /// Corresponds to Ghidra's `SignatureEntry::getOpHash`.
 pub fn hash_opcode(opc: crate::opcodes::OpCode, modifiers: u32) -> u32 {
@@ -94,11 +105,13 @@ pub fn hash_opcode(opc: crate::opcodes::OpCode, modifiers: u32) -> u32 {
     base.wrapping_mul(0x01000193).wrapping_add(modifiers)
 }
 
+// Ghidra: signature.cc:144 SignatureEntry::combineHashes
 /// Combine two hashes using Ghidra's mixing function.
 pub fn combine_hashes(a: u32, b: u32) -> u32 {
     a.rotate_left(5) ^ b.wrapping_mul(31)
 }
 
+// Ghidra: signature.cc:144 SignatureEntry::generateFeatures
 /// Generate a feature signature from a simple opcode sequence.
 /// This is a simplified version of Ghidra's iterative feature generation.
 pub fn generate_features(opcodes: &[crate::opcodes::OpCode]) -> Vec<Signature> {
@@ -122,10 +135,12 @@ pub struct SignatureDB {
 }
 
 impl SignatureDB {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new() -> Self {
         Self { signatures: HashMap::new(), hash_index: HashMap::new() }
     }
 
+    // RUGRA-GLUE: register_function (no Ghidra counterpart found)
     /// Register a set of signatures for a named function.
     pub fn register_function(&mut self, name: String, sigs: Vec<Signature>) {
         for sig in &sigs {
@@ -134,11 +149,13 @@ impl SignatureDB {
         self.signatures.insert(name, sigs);
     }
 
+    // RUGRA-GLUE: lookup_hash (no Ghidra counterpart found)
     /// Look up function name(s) by a single signature hash.
     pub fn lookup_hash(&self, hash: u32) -> &[String] {
         self.hash_index.get(&hash).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
+    // RUGRA-GLUE: num_functions (no Ghidra counterpart found)
     /// Get the number of registered functions.
     pub fn num_functions(&self) -> usize { self.signatures.len() }
 }

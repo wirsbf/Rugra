@@ -113,6 +113,7 @@ pub struct Varnode {
 }
 
 impl Varnode {
+    // Ghidra: varnode.cc:578 Varnode::new
     /// Create a new varnode (defaults to Ram space for backward compatibility)
     pub fn new(size: usize, loc: Address) -> Self {
         Self {
@@ -134,6 +135,7 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newWithSpace
     /// Create a new varnode with explicit address space
     pub fn new_with_space(size: usize, space: AddressSpace, offset: u64) -> Self {
         let mut vn = Self::new(size, Address::new(offset));
@@ -141,32 +143,39 @@ impl Varnode {
         vn
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getAddr
     pub fn get_addr(&self) -> &Address {
         &self.loc
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getSpace
     /// Get the address space this varnode belongs to
     pub fn get_space(&self) -> AddressSpace {
         self.address_space
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getOffset
     pub fn get_offset(&self) -> u64 {
         self.loc.into()
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getVal
     pub fn get_val(&self) -> u64 {
         self.loc.as_u64()
     }
 
     
+    // Ghidra: varnode.cc:578 Varnode::isUnique
     pub fn is_unique(&self) -> bool {
         self.get_space() == AddressSpace::Unique
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isRegister
     pub fn is_register(&self) -> bool {
         self.get_space() == AddressSpace::Register
     }
 
+    // Ghidra: varnode.cc:578 Varnode::constantValue
     pub fn constant_value(&self) -> Option<u64> {
         if self.is_constant() {
             Some(self.get_offset())
@@ -175,61 +184,75 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:578 Varnode::size
     pub fn size(&self) -> usize {
         self.get_size()
     }
 
+    // Ghidra: varnode.cc:578 Varnode::offset
     pub fn offset(&self) -> u64 {
         self.get_offset()
     }
 
+    // Ghidra: varnode.cc:578 Varnode::space
     pub fn space(&self) -> AddressSpace {
         self.get_space()
     }
 
+    // Ghidra: varnode.cc:578 Varnode::version
     pub fn version(&self) -> usize {
         0 // Add version support back if needed or mock it
     }
 
+    // Ghidra: varnode.cc:578 Varnode::withVersion
     pub fn with_version(self, _version: usize) -> Self {
         self // Mock
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newConstant
     pub fn new_constant(val: u64, size: usize) -> Self {
         let mut v = Self::new_with_space(size, AddressSpace::Const, val);
         v.set_flags(varnode_flags::CONSTANT);
         v
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newRegister
     pub fn new_register(offset: u64, size: usize) -> Self {
         Self::new_with_space(size, AddressSpace::Register, offset)
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newRam
     pub fn new_ram(offset: u64, size: usize) -> Self {
         Self::new_with_space(size, AddressSpace::Ram, offset)
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newStack
     pub fn new_stack(offset: u64, size: usize) -> Self {
         Self::new_with_space(size, AddressSpace::Stack, offset)
     }
 
+    // Ghidra: varnode.cc:578 Varnode::newUnique
     pub fn new_unique(offset: u64, size: usize) -> Self {
         Self::new_with_space(size, AddressSpace::Unique, offset)
     }
 
 
+    // Ghidra: varnode.cc:578 Varnode::getSize
     pub fn get_size(&self) -> usize {
         self.size
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getCreateIndex
     pub fn get_create_index(&self) -> u32 {
         self.create_index
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isConstant
     pub fn is_constant(&self) -> bool {
         (self.flags & varnode_flags::CONSTANT) != 0
     }
 
+    // Ghidra: varnode.cc:799 Varnode::isConstantExtended
     /// Check if this Varnode holds an extended constant, returning the
     /// 128-bit value. Faithful to `Varnode::isConstantExtended`
     /// (varnode.cc:799-840). Returns Some((lo, hi)) or None.
@@ -289,18 +312,22 @@ impl Varnode {
         None
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isInput
     pub fn is_input(&self) -> bool {
         (self.flags & varnode_flags::INPUT) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isWritten
     pub fn is_written(&self) -> bool {
         (self.flags & varnode_flags::WRITTEN) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isFree
     pub fn is_free(&self) -> bool {
         (self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN)) == 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isHeritageKnown
     /// Is this varnode already known to heritage? Faithful to
     /// `Varnode::isHeritageKnown` (varnode.hh:298):
     /// `flags & (insert | constant | annotation)`.
@@ -309,6 +336,7 @@ impl Varnode {
         (self.flags & (varnode_flags::INSERT | varnode_flags::CONSTANT | varnode_flags::ANNOTATION)) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isActiveHeritage
     /// Is this varnode actively being heritaged this round? Faithful to
     /// `Varnode::isActiveHeritage` (varnode.hh). Set by placeMultiequals/
     /// guardStores on varnodes that need rename this pass.
@@ -316,21 +344,25 @@ impl Varnode {
         (self.addlflags & addl_flags::ACTIVE_HERITAGE) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::setActiveHeritage
     /// Mark this varnode as actively being heritaged. Faithful to
     /// `Varnode::setActiveHeritage` (varnode.hh).
     pub fn set_active_heritage(&mut self) {
         self.addlflags |= addl_flags::ACTIVE_HERITAGE;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::clearActiveHeritage
     /// Clear active heritage flag. Faithful to `Varnode::clearActiveHeritage`.
     pub fn clear_active_heritage(&mut self) {
         self.addlflags &= !addl_flags::ACTIVE_HERITAGE;
     }
 
+    // Ghidra: varnode.cc:352 Varnode::setFlags
     pub fn set_flags(&mut self, f: u32) {
         self.flags |= f;
     }
 
+    // Ghidra: varnode.cc:365 Varnode::clearFlags
     pub fn clear_flags(&mut self, f: u32) {
         self.flags &= !f;
     }
@@ -339,14 +371,17 @@ impl Varnode {
     // These mirror the C++ inline methods used by the core Actions
     // (ActionMarkExplicit, ActionMarkImplied, ActionRestrictLocal, etc.).
 
+    // Ghidra: varnode.cc:578 Varnode::isMark
     /// Has this been visited by the current algorithm? (varnode.hh:263)
     pub fn is_mark(&self) -> bool {
         (self.flags & varnode_flags::MARK) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setMark
     /// Mark this Varnode for breadcrumb algorithms. (varnode.hh:303)
     pub fn set_mark(&mut self) {
         self.flags |= varnode_flags::MARK;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearMark
     /// Clear the mark on this Varnode. (varnode.hh:304)
     pub fn clear_mark(&mut self) {
         self.flags &= !varnode_flags::MARK;
@@ -362,24 +397,29 @@ impl Varnode {
             == varnode_flags::INSERT
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isImplied
     /// Is this an implied variable? (varnode.hh:235)
     pub fn is_implied(&self) -> bool {
         (self.flags & varnode_flags::IMPLIED) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setImplied
     /// Mark this as an implied variable in the final C source. (varnode.hh:309)
     pub fn set_implied(&mut self) {
         self.flags |= varnode_flags::IMPLIED;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearImplied
     /// Clear the implied mark. (varnode.hh:310)
     pub fn clear_implied(&mut self) {
         self.flags &= !varnode_flags::IMPLIED;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isExplicit
     /// Is this an explicitly printed variable? (varnode.hh:236)
     pub fn is_explicit(&self) -> bool {
         (self.flags & varnode_flags::EXPLICIT) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isAutoLive
     /// Is this varnode held alive automatically (AUTOLIVE_HOLD)? Faithful to
     /// `Varnode::isAutoLive` (varnode.hh). Currently always false — Rugra has
     /// not yet ported the machinery that SETS the auto-live flag (ActionCopyPropagate /
@@ -393,23 +433,28 @@ impl Varnode {
         // no varnode is auto-live.
         false
     }
+    // Ghidra: varnode.cc:578 Varnode::setExplicit
     /// Mark this as an explicit variable in the final C source. (varnode.hh:311)
     pub fn set_explicit(&mut self) {
         self.flags |= varnode_flags::EXPLICIT;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearExplicit
     /// Clear the explicit mark. (varnode.hh:312)
     pub fn clear_explicit(&mut self) {
         self.flags &= !varnode_flags::EXPLICIT;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isDirectWrite
     /// Is this value affected by a legitimate function input? (varnode.hh:247)
     pub fn is_direct_write(&self) -> bool {
         (self.flags & varnode_flags::DIRECTWRITE) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setDirectWrite
     /// Mark this as directly affected by a legal input. (varnode.hh:305)
     pub fn set_direct_write(&mut self) {
         self.flags |= varnode_flags::DIRECTWRITE;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearDirectWrite
     /// Mark this as not directly affected. (varnode.hh:306)
     pub fn clear_direct_write(&mut self) {
         self.flags &= !varnode_flags::DIRECTWRITE;
@@ -419,91 +464,111 @@ impl Varnode {
     // Flag constants already defined in varnode_flags/addl_flags above; these
     // are the missing accessor methods needed by ported Rules.
 
+    // Ghidra: varnode.cc:578 Varnode::isAddrForce
     /// Is this varnode forced to be treated as an address? (varnode.hh:251)
     pub fn is_addr_force(&self) -> bool {
         (self.flags & varnode_flags::ADDRFORCE) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setAddrForce
     /// Mark as address-forced. (varnode.hh:307)
     pub fn set_addr_force(&mut self) {
         self.flags |= varnode_flags::ADDRFORCE;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearAddrForce
     /// Clear address-forced. (varnode.hh:308)
     pub fn clear_addr_force(&mut self) {
         self.flags &= !varnode_flags::ADDRFORCE;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isTypeLock
     /// Is the type locked on this varnode? (varnode.hh:299)
     pub fn is_type_lock(&self) -> bool {
         (self.flags & varnode_flags::TYPELOCK) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isNameLock
     /// Is the name locked on this varnode? (varnode.hh:300)
     pub fn is_name_lock(&self) -> bool {
         (self.flags & varnode_flags::NAMELOCK) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isPrecisLo
     /// Is this the low half of a precise register pair? (varnode.hh:275)
     pub fn is_precis_lo(&self) -> bool {
         (self.flags & varnode_flags::PRECISLO) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::isPrecisHi
     /// Is this the high half of a precise register pair? (varnode.hh:276)
     pub fn is_precis_hi(&self) -> bool {
         (self.flags & varnode_flags::PRECISHI) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setPrecisLo
     /// Mark as precise low half. (varnode.hh:321)
     pub fn set_precis_lo(&mut self) {
         self.flags |= varnode_flags::PRECISLO;
     }
+    // Ghidra: varnode.cc:578 Varnode::setPrecisHi
     /// Mark as precise high half. (varnode.hh:322)
     pub fn set_precis_hi(&mut self) {
         self.flags |= varnode_flags::PRECISHI;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearPrecisLo
     /// Clear precise low half. (varnode.hh:323)
     pub fn clear_precis_lo(&mut self) {
         self.flags &= !varnode_flags::PRECISLO;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearPrecisHi
     /// Clear precise high half. (varnode.hh:324)
     pub fn clear_precis_hi(&mut self) {
         self.flags &= !varnode_flags::PRECISHI;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isProtoPartial
     /// Is this a partial prototype varnode? (varnode.hh:258)
     pub fn is_proto_partial(&self) -> bool {
         (self.flags & varnode_flags::PROTO_PARTIAL) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setProtoPartial
     /// Mark as proto-partial. (varnode.hh:329)
     pub fn set_proto_partial(&mut self) {
         self.flags |= varnode_flags::PROTO_PARTIAL;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearProtoPartial
     /// Clear proto-partial. (varnode.hh:330)
     pub fn clear_proto_partial(&mut self) {
         self.flags &= !varnode_flags::PROTO_PARTIAL;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isPtrFlow
     /// Is this varnode a pointer-flow tracking varnode? (varnode.hh:260)
     /// Uses addlflags (ptrflow), not the main flags field.
     pub fn is_ptr_flow(&self) -> bool {
         (self.addlflags & addl_flags::PTR_FLOW) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setPtrFlow
     /// Mark as pointer-flow. (varnode.hh:317)
     pub fn set_ptr_flow(&mut self) {
         self.addlflags |= addl_flags::PTR_FLOW;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearPtrFlow
     /// Clear pointer-flow. (varnode.hh:318)
     pub fn clear_ptr_flow(&mut self) {
         self.addlflags &= !addl_flags::PTR_FLOW;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isIndirectCreation
     /// Is this varnode marked as an indirect creation? (varnode.hh:248)
     pub fn is_indirect_creation(&self) -> bool {
         (self.flags & varnode_flags::INDIRECT_CREATION) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getType
     /// Get the datatype of this varnode. (varnode.hh:192)
     pub fn get_type(&self) -> Option<Arc<Datatype>> {
         self.v_type.clone()
     }
 
+    // Ghidra: varnode.cc:456 Varnode::updateType
     /// Set the type without locking. Faithful to `Varnode::updateType(Datatype*)`
     /// (varnode.cc:456-464). Returns true if the type was changed.
     pub fn update_type(&mut self, ct: Arc<Datatype>) -> bool {
@@ -515,6 +580,7 @@ impl Varnode {
         true
     }
 
+    // Ghidra: varnode.cc:578 Varnode::updateTypeLock
     /// Set the type with lock/override control. Faithful to
     /// `Varnode::updateType(Datatype*, bool, bool)` (varnode.cc:474-489).
     /// TYPE_UNKNOWN always forces lock=false. Returns true if changed.
@@ -539,6 +605,7 @@ impl Varnode {
         true
     }
 
+    // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
     /// Get the type as seen by a reading op. Faithful to
     /// `Varnode::getTypeReadFacing` (varnode.cc:639-645). For union types this
     /// resolves the field; Rugra has no union varnodes in Rule paths, so this
@@ -547,6 +614,7 @@ impl Varnode {
         self.v_type.clone()
     }
 
+    // Ghidra: varnode.cc:493 Varnode::copySymbol
     /// Copy symbol/type info from another varnode. Faithful to
     /// `Varnode::copySymbol` (varnode.cc:493-505). Copies type + mapentry +
     /// typelock/namelock flags.
@@ -558,12 +626,14 @@ impl Varnode {
         self.set_flags(inherit);
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getSymbolEntry
     /// Get the SymbolEntry (symbol mapping) of this varnode, if any.
     /// Faithful to `Varnode::getSymbolEntry` (varnode.hh:190).
     pub fn get_symbol_entry(&self) -> Option<Arc<RwLock<SymbolEntry>>> {
         self.mapentry.clone()
     }
 
+    // Ghidra: varnode.cc:1137 Varnode::getStructuredType
     /// Get the structured type of this varnode, preferring the symbol's type
     /// over the varnode's own type. Faithful to `Varnode::getStructuredType`
     /// (varnode.cc:1137-1148). Returns the type if it is piece-structured,
@@ -585,26 +655,32 @@ impl Varnode {
             == (varnode_flags::ADDRTIED | varnode_flags::INSERT)
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isPersist
     /// Does this storage location persist beyond the function? (varnode.hh:246)
     pub fn is_persist(&self) -> bool {
         (self.flags & varnode_flags::PERSIST) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isUnaffected
     /// Is this a value preserved across the function? (varnode.hh:255)
     pub fn is_unaffected(&self) -> bool {
         (self.flags & varnode_flags::UNAFFECTED) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::hasNoLocalAlias
     /// Does the high-level variable have no local alias? (varnode.hh:262)
     pub fn has_no_local_alias(&self) -> bool {
         (self.flags & varnode_flags::NOLOCALALIAS) != 0
     }
+    // Ghidra: varnode.cc:578 Varnode::setNoLocalAlias
     pub fn set_no_local_alias(&mut self) {
         self.flags |= varnode_flags::NOLOCALALIAS;
     }
+    // Ghidra: varnode.cc:578 Varnode::clearNoLocalAlias
     pub fn clear_no_local_alias(&mut self) {
         self.flags &= !varnode_flags::NOLOCALALIAS;
     }
+    // Ghidra: varnode.cc:578 Varnode::setUnaffected
     /// Mark Varnode as unaffected. (varnode.hh:167)
     pub fn set_unaffected(&mut self) {
         self.flags |= varnode_flags::UNAFFECTED;
@@ -617,6 +693,7 @@ impl Varnode {
             == varnode_flags::INPUT
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getNzMask
     /// Get the mask of bits known to be zero (non-zero mask).
     /// Faithful to Ghidra's `Varnode::getNZMask` (varnode.hh:231). In Ghidra
     /// this field (`nzm`) is maintained by Heritage/Cover. Until Rugra wires
@@ -636,6 +713,7 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:578 Varnode::hasNoDescend
     /// Return true if no live op reads this varnode. Faithful to
     /// `Varnode::hasNoDescend`. Used by several Rules (RuleXorCollapse,
     /// RuleSubZext) to check exclusive use.
@@ -643,6 +721,7 @@ impl Varnode {
         self.descend.iter().all(|w| w.upgrade().is_none())
     }
 
+    // Ghidra: varnode.cc:676 Varnode::loneDescend
     /// Return the single descendant op of this varnode, or None if there are
     /// zero or more than one. Faithful to `Varnode::loneDescend`.
     pub fn lone_descend(&self) -> Option<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> {
@@ -654,6 +733,7 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:155 Varnode::characterizeOverlap
     /// Characterize the storage overlap between this varnode and `op`.
     /// Faithful to `Varnode::characterizeOverlap` (varnode.cc:155-170).
     /// Returns: 0 = no overlap, 1 = partial overlap, 2 = identical storage.
@@ -761,18 +841,21 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getConsume
     /// Get the mask of consumed bits. Faithful to `Varnode::getConsume`
     /// (varnode.hh:205). Maintained by the dead-code algorithm.
     pub fn get_consume(&self) -> u64 {
         self.consumed
     }
 
+    // Ghidra: varnode.cc:578 Varnode::setConsume
     /// Set the mask of consumed bits. Faithful to `Varnode::setConsume`
     /// (varnode.hh:206).
     pub fn set_consume(&mut self, val: u64) {
         self.consumed = val;
     }
 
+    // Ghidra: varnode.cc:578 Varnode::getNzm
     /// Get the stored non-zero mask (the Heritage-maintained field).
     /// Faithful to accessing the `nzm` field directly. This is the raw stored
     /// value; prefer get_nz_mask for the conservative approximation.
@@ -780,11 +863,13 @@ impl Varnode {
         self.nzm
     }
 
+    // Ghidra: varnode.cc:578 Varnode::setNzm
     /// Set the stored non-zero mask.
     pub fn set_nzm(&mut self, val: u64) {
         self.nzm = val;
     }
 
+    // Ghidra: varnode.cc:942 Varnode::isBooleanValue
     /// Is this varnode known to hold a boolean (0 or 1) value? Faithful to
     /// `Varnode::isBooleanValue` (varnode.cc:942-953). If written, checks the
     /// defining op's isCalculatedBool flag. If an input, checks type annotation
@@ -811,6 +896,7 @@ impl Varnode {
 
     // --- Ghidra-faithful def / descend / flag accessors (varnode.hh:213-330) ---
 
+    // Ghidra: varnode.cc:578 Varnode::getDef
     /// Get the PcodeOp that defines this Varnode, or None if not written.
     /// Faithful to `Varnode::getDef` (varnode.hh:213). Upgrades the internal
     /// Weak to an Arc; returns None if the def has been dropped or was never
@@ -819,24 +905,28 @@ impl Varnode {
         self.def.as_ref().and_then(|w| w.upgrade())
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isReadOnly
     /// Is this Varnode's value read-only (from a read-only memory space)?
     /// Faithful to `Varnode::isReadOnly` (varnode.hh:243).
     pub fn is_read_only(&self) -> bool {
         (self.flags & varnode_flags::READONLY) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isAnnotation
     /// Is this an annotation varnode (inserted by the decompiler, not real
     /// code)? Faithful to `Varnode::isAnnotation` (varnode.hh:237).
     pub fn is_annotation(&self) -> bool {
         (self.flags & varnode_flags::ANNOTATION) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isSpacebase
     /// Is this a spacebase pointer varnode? Faithful to
     /// `Varnode::isSpacebase` (varnode.hh, referenced by varmap/heritage).
     pub fn is_spacebase(&self) -> bool {
         (self.flags & varnode_flags::SPACEBASE) != 0
     }
 
+    // Ghidra: varnode.cc:578 Varnode::descendIter
     /// Return an iterator over the live descendant ops (ops that read this
     /// Varnode). Faithful to `Varnode::beginDescend`/`endDescend`
     /// (varnode.hh:219-220). Filters out Weak refs whose target has been
@@ -845,18 +935,21 @@ impl Varnode {
         self.descend.iter().filter_map(|w| w.upgrade())
     }
 
+    // Ghidra: varnode.cc:578 Varnode::countDescends
     /// Count the live descendant ops. Useful for Rules that need the descend
     /// count without collecting into a Vec.
     pub fn count_descends(&self) -> usize {
         self.descend.iter().filter(|w| w.strong_count() > 0).count()
     }
 
+    // Ghidra: varnode.cc:330 Varnode::addDescend
     /// Add a descendant op reference. Faithful to `Varnode::addDescend`
     /// (varnode.hh:295).
     pub fn add_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         self.descend.push(std::sync::Arc::downgrade(op));
     }
 
+    // Ghidra: varnode.cc:578 Varnode::isBoolOutputDef
     /// Does the defining op of this Varnode have a boolean output? Faithful to
     /// checking `getDef()->isBoolOutput()` (used by JumpBasic::calcRange,
     /// jumptable.cc:1144). Returns false if not written or the def can't be
@@ -873,6 +966,7 @@ impl Varnode {
 }
 
 impl PartialEq for Varnode {
+    // Ghidra: varnode.cc:578 Varnode::eq
     fn eq(&self, other: &Self) -> bool {
         self.loc == other.loc && self.size == other.size && self.create_index == other.create_index
     }
@@ -881,12 +975,14 @@ impl PartialEq for Varnode {
 impl Eq for Varnode {}
 
 impl PartialOrd for Varnode {
+    // Ghidra: varnode.cc:578 Varnode::partialCmp
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl std::cmp::Ord for Varnode {
+    // Ghidra: varnode.cc:578 Varnode::cmp
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Mimic VarnodeCompareLocDef logic from Ghidra
         match self.loc.cmp(&other.loc) {
@@ -908,6 +1004,7 @@ impl std::cmp::Ord for Varnode {
 pub struct VarnodeLocRef(pub Arc<RwLock<Varnode>>);
 
 impl PartialEq for VarnodeLocRef {
+    // RUGRA-GLUE: eq (no Ghidra counterpart found)
     fn eq(&self, other: &Self) -> bool {
         if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
@@ -917,12 +1014,14 @@ impl PartialEq for VarnodeLocRef {
 impl Eq for VarnodeLocRef {}
 
 impl PartialOrd for VarnodeLocRef {
+    // RUGRA-GLUE: partial_cmp (no Ghidra counterpart found)
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for VarnodeLocRef {
+    // RUGRA-GLUE: cmp (no Ghidra counterpart found)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
@@ -979,6 +1078,7 @@ impl Ord for VarnodeLocRef {
 pub struct VarnodeDefRef(pub Arc<RwLock<Varnode>>);
 
 impl PartialEq for VarnodeDefRef {
+    // RUGRA-GLUE: eq (no Ghidra counterpart found)
     fn eq(&self, other: &Self) -> bool {
         if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
@@ -988,12 +1088,14 @@ impl PartialEq for VarnodeDefRef {
 impl Eq for VarnodeDefRef {}
 
 impl PartialOrd for VarnodeDefRef {
+    // RUGRA-GLUE: partial_cmp (no Ghidra counterpart found)
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for VarnodeDefRef {
+    // RUGRA-GLUE: cmp (no Ghidra counterpart found)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
@@ -1023,6 +1125,7 @@ pub struct VarnodeData {
 }
 
 impl VarnodeData {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new(space: AddressSpace, offset: u64, size: usize) -> Self {
         Self {
             space,
@@ -1033,6 +1136,7 @@ impl VarnodeData {
 }
 
 impl From<&Varnode> for VarnodeData {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(vn: &Varnode) -> Self {
         VarnodeData {
             space: vn.get_space(),
@@ -1061,6 +1165,7 @@ pub struct VarnodeBank {
 }
 
 impl VarnodeBank {
+    // Ghidra: varnode.cc:1218 VarnodeBank::new
     pub fn new() -> Self {
         Self {
             loc_tree: BTreeSet::new(),
@@ -1071,6 +1176,7 @@ impl VarnodeBank {
         }
     }
 
+    // Ghidra: varnode.cc:1250 VarnodeBank::create
     /// Create a new free varnode
     pub fn create(&mut self, size: usize, loc: Address) -> Arc<RwLock<Varnode>> {
         // Faithful to VarnodeBank::create (varnode.cc:1250-1258): does NOT
@@ -1087,6 +1193,7 @@ impl VarnodeBank {
         rc
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::createWithSpace
     /// Create a new varnode with explicit address space
     pub fn create_with_space(&mut self, size: usize, space: AddressSpace, offset: u64) -> Arc<RwLock<Varnode>> {
         let vn_arc = self.create(size, Address::new(offset));
@@ -1094,6 +1201,7 @@ impl VarnodeBank {
         vn_arc
     }
 
+    // Ghidra: varnode.cc:1265 VarnodeBank::createUnique
     /// Create a new unique varnode
     pub fn create_unique(&mut self, size: usize) -> Arc<RwLock<Varnode>> {
         let addr = Address::new(self.uniqid);
@@ -1103,6 +1211,7 @@ impl VarnodeBank {
         vn_arc
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::createConstant
     /// Create a new constant varnode
     pub fn create_constant(&mut self, size: usize, val: u64) -> Arc<RwLock<Varnode>> {
         let addr = Address::new(val);
@@ -1115,6 +1224,7 @@ impl VarnodeBank {
         vn
     }
 
+    // Ghidra: varnode.cc:1358 VarnodeBank::setInput
     /// Mark a varnode as an input
     /// Mark a varnode as a function input. Faithful to Ghidra's
     /// VarnodeBank::makeInput which re-inserts via xref (sets INSERT).
@@ -1128,6 +1238,7 @@ impl VarnodeBank {
         self.def_tree.insert(VarnodeDefRef(vn.clone()));
     }
 
+    // Ghidra: varnode.cc:1380 VarnodeBank::setDef
     /// Mark a varnode as defined by an operation
     /// Set the defining op of a varnode. Faithful to Ghidra's model where
     /// createDef (varnode.cc:1411) calls xref which sets INSERT.
@@ -1145,6 +1256,7 @@ impl VarnodeBank {
         self.def_tree.insert(VarnodeDefRef(vn.clone()));
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::destroyVarnode
     /// Remove a varnode from both trees. Faithful to `VarnodeBank::destroy`.
     /// The varnode is detached from the bank; if no other Arc holds it, it
     /// is dropped.
@@ -1153,6 +1265,7 @@ impl VarnodeBank {
         self.def_tree.remove(&VarnodeDefRef(vn.clone()));
     }
 
+    // Ghidra: varnode.cc:1230 VarnodeBank::clear
     pub fn clear(&mut self) {
         self.loc_tree.clear();
         self.def_tree.clear();
@@ -1161,43 +1274,52 @@ impl VarnodeBank {
     }
 
     
+    // Ghidra: varnode.cc:1316 VarnodeBank::makeFree
     pub fn make_free(&mut self, vn: &mut Varnode) {
         vn.flags &= !varnode_flags::INPUT;
         vn.flags &= !varnode_flags::WRITTEN;
         vn.def = None;
     }
 
+    // Ghidra: varnode.cc:1332 VarnodeBank::replace
     pub fn replace(&mut self, vn1: &mut Varnode, vn2: &mut Varnode) {
         vn2.size = vn1.size;
         vn2.loc = vn1.loc;
     }
 
+    // Ghidra: varnode.cc:1831 VarnodeBank::beginDef
     pub fn begin_def(&self) -> std::collections::btree_set::Iter<'_, VarnodeDefRef> {
         self.def_tree.iter()
     }
 
+    // Ghidra: varnode.cc:1560 VarnodeBank::beginLoc
     pub fn begin_loc(&self) -> std::collections::btree_set::Iter<'_, VarnodeLocRef> {
         self.loc_tree.iter()
     }
 
+    // Ghidra: varnode.cc:1536 VarnodeBank::hasInputIntersection
     pub fn has_input_intersection(&self) -> bool {
         false // Placeholder for structure alignment
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::numVarnodes
     pub fn num_varnodes(&self) -> usize {
         self.loc_tree.len()
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::getCreateIndex
     pub fn get_create_index(&self) -> u32 {
         self.create_index
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::findFree
     /// Find a free varnode at a specific location and size
     pub fn find_free(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
         let search_vn = Arc::new(RwLock::new(Varnode::new(size, loc)));
         self.loc_tree.get(&VarnodeLocRef(search_vn)).map(|v| v.0.clone())
     }
 
+    // Ghidra: varnode.cc:1465 VarnodeBank::findInput
     /// Find an input varnode at the given size and location. Faithful to
     /// `VarnodeBank::findInput` (varnode.hh). Used by ActionRestrictLocal
     /// and AncestorRealistic to find specific register inputs.
@@ -1210,6 +1332,7 @@ impl VarnodeBank {
             .map(|v| v.0.clone())
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::findOrCreateInputSpace
     /// Find or create an input varnode at (space, offset, size).
     /// Faithful to Ghidra's `Funcdata::newVarnode` (funcdata_varnode.cc:148):
     /// creates a FREE varnode (no def). Same-location free/input varnodes are
@@ -1237,6 +1360,7 @@ impl VarnodeBank {
         self.create_with_space(size, space, offset)
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::findByLoc
     /// Find any varnode at (size, loc), regardless of create_index.
     ///
     /// `find_free` requires an exact (loc, size, create_index) match, so it
@@ -1260,6 +1384,7 @@ impl VarnodeBank {
         best
     }
 
+    // Ghidra: varnode.cc:1218 VarnodeBank::iterSpace
     /// Iterate all varnodes in a given address space, in sorted order.
     /// Faithful to Ghidra's `beginLoc(size, addr, space, size4)` /
     /// `endLoc` range iteration (varnode.hh). With address_space now part of
@@ -1279,12 +1404,14 @@ impl VarnodeBank {
 }
 
 impl fmt::Display for Varnode {
+    // Ghidra: varnode.cc:1218 VarnodeBank::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.loc, self.size)
     }
 }
 
 impl Default for VarnodeBank {
+    // Ghidra: varnode.cc:1218 VarnodeBank::default
     fn default() -> Self {
         Self::new()
     }

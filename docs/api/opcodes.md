@@ -67,3 +67,4 @@ SSA-internal ops (MULTIEQUAL, INDIRECT).
 - `FLOAT_EQUAL ↔ FLOAT_NOTEQUAL`、`FLOAT_LESS ↔ FLOAT_LESSEQUAL`
 非可翻 op 返回 `CPUI_MAX`。用于 RuleBoolNegate。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+<!-- annotation-pass: 2026-07-04 -->

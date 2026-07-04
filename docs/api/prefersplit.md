@@ -94,3 +94,4 @@ Manages splitting based on records (prefersplit.hh:33-72).
   Unique space, then runs `testTemporary` + `splitTemporary` on each candidate.
 - **Endianness** is read from the Varnode's space (`is_big_endian`); Rugra's
   `AddressSpace::is_big_endian` currently returns false (little-endian default).
+<!-- annotation-pass: 2026-07-04 -->

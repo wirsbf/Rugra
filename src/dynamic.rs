@@ -24,6 +24,7 @@ use crate::op::PcodeOp;
 use crate::varnode::Varnode;
 use std::sync::{Arc, RwLock};
 
+// RUGRA-GLUE: translate_opcode (no Ghidra counterpart found)
 /// Translation table: how to hash opcodes. Lumps variants (ADD/SUB) into
 /// the same hash. Zero = skip (CAST). Faithful to `DynamicHash::transtable`
 /// (dynamic.cc:24-63).
@@ -63,10 +64,12 @@ pub struct ToOpEdge {
 }
 
 impl ToOpEdge {
+    // Ghidra: dynamic.hh:32 ToOpEdge::new
     pub fn new(op: Arc<RwLock<PcodeOp>>, slot: usize) -> Self {
         Self { op, slot }
     }
 
+    // Ghidra: dynamic.hh:32 ToOpEdge::compare
     /// Compare edges for sorting. Faithful to `ToOpEdge::operator<`
     /// (dynamic.cc:69-81): by op address, then order, then slot.
     pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
@@ -79,6 +82,7 @@ impl ToOpEdge {
         self.slot.cmp(&other.slot)
     }
 
+    // Ghidra: dynamic.hh:32 ToOpEdge::hashInto
     /// Fold this edge into the hash accumulator. Faithful to `ToOpEdge::hash`
     /// (dynamic.cc:92-107).
     pub fn hash_into(&self, reg: u32) -> u32 {
@@ -121,6 +125,7 @@ pub struct DynamicHash {
 /// bit 58: is_not_attached flag
 
 impl DynamicHash {
+    // Ghidra: dynamic.hh:62 DynamicHash::new
     pub fn new() -> Self {
         Self {
             mark_op: Vec::new(),
@@ -132,6 +137,7 @@ impl DynamicHash {
         }
     }
 
+    // Ghidra: dynamic.cc:193 DynamicHash::clear
     /// Clear for a new hash calculation. Faithful to `DynamicHash::clear`
     /// (dynamic.cc:193-201).
     pub fn clear(&mut self) {
@@ -141,56 +147,67 @@ impl DynamicHash {
         self.op_edge.clear();
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::getHash
     /// Get the current hash value.
     pub fn get_hash(&self) -> u64 { self.hash }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::getAddress
     /// Get the current address.
     pub fn get_address(&self) -> Address { self.addr_result }
 
+    // Ghidra: dynamic.cc:707 DynamicHash::getSlotFromHash
     /// Extract the slot from a hash. Faithful to `getSlotFromHash`
     /// (dynamic.cc:707).
     pub fn get_slot_from_hash(h: u64) -> i32 {
         -1 // No slot encoding in Rugra's simplified hash yet
     }
 
+    // Ghidra: dynamic.cc:719 DynamicHash::getMethodFromHash
     /// Extract the method from a hash. Faithful to `getMethodFromHash`
     /// (dynamic.cc:719).
     pub fn get_method_from_hash(h: u64) -> u32 {
         ((h >> 32) & 0x3f) as u32
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::getOpcodeFromHash
     /// Extract the opcode from a hash. Faithful to `getOpCodeFromHash`
     /// (dynamic.cc:728).
     pub fn get_opcode_from_hash(h: u64) -> u32 {
         ((h >> 38) & 0x3f) as u32
     }
 
+    // Ghidra: dynamic.cc:737 DynamicHash::getPositionFromHash
     /// Extract the position from a hash. Faithful to `getPositionFromHash`
     /// (dynamic.cc:737).
     pub fn get_position_from_hash(h: u64) -> u32 {
         ((h >> 44) & 0x3ff) as u32
     }
 
+    // Ghidra: dynamic.cc:746 DynamicHash::getTotalFromHash
     /// Extract the collision total from a hash.
     pub fn get_total_from_hash(h: u64) -> u32 {
         ((h >> 54) & 0xf) as u32
     }
 
+    // Ghidra: dynamic.cc:755 DynamicHash::getIsNotAttached
     /// Extract the attachment flag.
     pub fn get_is_not_attached(h: u64) -> bool {
         (h >> 58) & 1 != 0
     }
 
+    // Ghidra: dynamic.cc:764 DynamicHash::clearTotalPosition
     /// Clear total+position fields within a hash.
     pub fn clear_total_position(h: &mut u64) {
         *h &= !((0x3ffu64 << 44) | (0xfu64 << 54));
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::getComparable
     /// Get only the formal hash for comparing.
     pub fn get_comparable(h: u64) -> u32 {
         h as u32
     }
 
+    // Ghidra: dynamic.cc:109 DynamicHash::buildVnUp
     /// Build edges from a Varnode upward to its defining op. Faithful to
     /// `buildVnUp` (dynamic.cc:109-122).
     fn build_vn_up(&mut self, vn: &Arc<RwLock<Varnode>>) {
@@ -207,6 +224,7 @@ impl DynamicHash {
         }
     }
 
+    // Ghidra: dynamic.cc:125 DynamicHash::buildVnDown
     /// Build edges from a Varnode downward to ops that read it. Faithful to
     /// `buildVnDown` (dynamic.cc:125-148).
     fn build_vn_down(&mut self, vn: &Arc<RwLock<Varnode>>) {
@@ -222,6 +240,7 @@ impl DynamicHash {
         }
     }
 
+    // Ghidra: dynamic.cc:152 DynamicHash::buildOpUp
     /// Stage input Varnodes of an op. Faithful to `buildOpUp` (dynamic.cc:152-159).
     fn build_op_up(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         for i in 0..op.read().unwrap().num_input() {
@@ -231,6 +250,7 @@ impl DynamicHash {
         }
     }
 
+    // Ghidra: dynamic.cc:162 DynamicHash::buildOpDown
     /// Stage the output Varnode of an op. Faithful to `buildOpDown`
     /// (dynamic.cc:162-166).
     fn build_op_down(&mut self, op: &Arc<RwLock<PcodeOp>>) {
@@ -239,6 +259,7 @@ impl DynamicHash {
         }
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::calcHashVn
     /// Calculate a hash for a given Varnode using the specified method.
     /// Faithful to `calcHash(Varnode*, uint4)` (dynamic.cc:268-321).
     /// Methods: 0=up-only, 1=down-only, 2=both-up-first, 3=both-down-first.
@@ -263,6 +284,7 @@ impl DynamicHash {
         self.piece_together_hash(root, method);
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::calcHashOp
     /// Calculate a hash for a given PcodeOp+slot. Faithful to
     /// `calcHash(PcodeOp*, int4, uint4)` (dynamic.cc:202-265).
     pub fn calc_hash_op(&mut self, op: &Arc<RwLock<PcodeOp>>, slot: i32, method: u32) {
@@ -286,6 +308,7 @@ impl DynamicHash {
         self.piece_together_hash_op(op, slot, method);
     }
 
+    // Ghidra: dynamic.cc:323 DynamicHash::pieceTogetherHash
     /// Assemble the final hash from the collected sub-graph. Faithful to
     /// `pieceTogetherHash` (dynamic.cc:323-380).
     fn piece_together_hash(&mut self, root: &Arc<RwLock<Varnode>>, method: u32) {
@@ -307,6 +330,7 @@ impl DynamicHash {
         self.addr_result = Address::new(root.read().unwrap().get_offset());
     }
 
+    // Ghidra: dynamic.hh:62 DynamicHash::pieceTogetherHashOp
     /// Assemble hash for an op-rooted calculation.
     fn piece_together_hash_op(&mut self, op: &Arc<RwLock<PcodeOp>>, slot: i32, method: u32) {
         self.op_edge.sort_by(|a, b| a.compare(b));

@@ -934,3 +934,4 @@ Ghidra 的 `hasTruncations` 检查 `glb->getDefaultDataSpace()->isTruncated()`�
 
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - 调用点 `v1.contains_storage(&v2)` → `v1.contains(&v2)`（配合 varnode.rs 的 `contains_storage`→`contains` 重命名，对齐 `Varnode::contains`）。
+<!-- annotation-pass: 2026-07-04 -->

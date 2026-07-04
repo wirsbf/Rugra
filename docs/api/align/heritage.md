@@ -14,3 +14,4 @@ Corresponds to Ghidra's `heritage.hh`
 *本模块暂无公开的结构体或函数，主要作为内部实现。*
 
  
+<!-- annotation-pass: 2026-07-04 -->

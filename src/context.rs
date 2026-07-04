@@ -38,6 +38,7 @@ pub struct ContextBitRange {
 }
 
 impl ContextBitRange {
+    // Ghidra: globalcontext.cc:33 ContextBitRange::new
     /// Construct a context value given an absolute bit range. Faithful to the
     /// constructor (globalcontext.cc:33). Bits within the whole blob are
     /// labeled starting with 0 as the MSB of the first word.
@@ -60,21 +61,25 @@ impl ContextBitRange {
         }
     }
 
+    // Ghidra: globalcontext.cc:33 ContextBitRange::getShift
     /// Return the shift-amount for this value. Faithful to `getShift`.
     pub fn get_shift(&self) -> u32 {
         self.shift
     }
 
+    // Ghidra: globalcontext.cc:33 ContextBitRange::getMask
     /// Return the mask for this value. Faithful to `getMask`.
     pub fn get_mask(&self) -> ContextWord {
         self.mask
     }
 
+    // Ghidra: globalcontext.cc:33 ContextBitRange::getWord
     /// Return the word index. Faithful to `getWord`.
     pub fn get_word(&self) -> usize {
         self.word
     }
 
+    // Ghidra: globalcontext.cc:33 ContextBitRange::setValue
     /// Set this value within a given context blob. Faithful to `setValue`
     /// (globalcontext.hh:57).
     pub fn set_value(&self, vec: &mut [ContextWord], val: ContextWord) {
@@ -84,6 +89,7 @@ impl ContextBitRange {
         vec[self.word] = newval;
     }
 
+    // Ghidra: globalcontext.cc:33 ContextBitRange::getValue
     /// Retrieve this value from a given context blob. Faithful to `getValue`
     /// (globalcontext.hh:68).
     pub fn get_value(&self, vec: &[ContextWord]) -> ContextWord {
@@ -119,6 +125,7 @@ pub struct ContextBlob {
 }
 
 impl ContextBlob {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct an empty blob of the given word size.
     pub fn new(size: usize) -> Self {
         Self {
@@ -127,6 +134,7 @@ impl ContextBlob {
         }
     }
 
+    // RUGRA-GLUE: reset (no Ghidra counterpart found)
     /// Resize the blob, preserving old values. Faithful to `reset`.
     pub fn reset(&mut self, size: usize) {
         self.array.resize(size, 0);
@@ -137,34 +145,43 @@ impl ContextBlob {
 /// An interface to a database of disassembly/decompiler context information.
 /// Faithful to `ContextDatabase` (globalcontext.hh:118).
 pub trait ContextDatabase: Send + Sync {
+    // RUGRA-GLUE: get_context (no Ghidra counterpart found)
     /// Retrieve the context blob of values associated with a given address.
     /// Faithful to `getContext`.
     fn get_context(&self, addr: Address) -> &[ContextWord];
 
+    // RUGRA-GLUE: get_tracked_set (no Ghidra counterpart found)
     /// Get the set of tracked register values associated with the given
     /// address. Faithful to `getTrackedSet`.
     fn get_tracked_set(&self, addr: Address) -> &TrackedSet;
 
+    // RUGRA-GLUE: create_set (no Ghidra counterpart found)
     /// Create a tracked register set valid over the given range. Faithful to
     /// `createSet`.
     fn create_set(&mut self, addr1: Address, addr2: Address) -> &mut TrackedSet;
 
+    // RUGRA-GLUE: get_tracked_default (no Ghidra counterpart found)
     /// Get the default tracked set. Faithful to `getTrackedDefault`.
     fn get_tracked_default(&self) -> &TrackedSet;
 
+    // RUGRA-GLUE: get_default_value (no Ghidra counterpart found)
     /// Get the default context blob. Faithful to `getDefaultValue`.
     fn get_default_value(&self) -> &[ContextWord];
 
+    // RUGRA-GLUE: get_default_value_mut (no Ghidra counterpart found)
     /// Get the default context blob (mutable). Faithful to `getDefaultValue`.
     fn get_default_value_mut(&mut self) -> &mut [ContextWord];
 
+    // RUGRA-GLUE: register_variable (no Ghidra counterpart found)
     /// Register a new named context variable. Faithful to `registerVariable`.
     fn register_variable(&mut self, nm: &str, sbit: i32, ebit: i32);
 
+    // RUGRA-GLUE: get_context_size (no Ghidra counterpart found)
     /// Retrieve the number of words in a context blob. Faithful to
     /// `getContextSize`.
     fn get_context_size(&self) -> usize;
 
+    // RUGRA-GLUE: get_tracked_value (no Ghidra counterpart found)
     /// Query the tracked value of a register at a given point. Faithful to
     /// `getTrackedValue` (globalcontext.hh:256).
     fn get_tracked_value(&self, offset: u64, size: u32, point: Address) -> u64 {
@@ -199,12 +216,14 @@ pub struct ContextInternal {
 }
 
 impl Default for ContextInternal {
+    // Ghidra: globalcontext.hh:264 ContextInternal::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl ContextInternal {
+    // Ghidra: globalcontext.hh:264 ContextInternal::new
     /// Construct an empty context database.
     pub fn new() -> Self {
         Self {
@@ -217,17 +236,20 @@ impl ContextInternal {
         }
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getVariableMut
     /// Get a mutable reference to a registered variable by name. Returns None
     /// if not found.
     pub fn get_variable_mut(&mut self, nm: &str) -> Option<&mut ContextBitRange> {
         self.variables.get_mut(nm)
     }
 
+    // Ghidra: globalcontext.cc:385 ContextInternal::getVariable
     /// Get a reference to a registered variable by name.
     pub fn get_variable(&self, nm: &str) -> Option<&ContextBitRange> {
         self.variables.get(nm)
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::setVariableDefault
     /// Set a context variable's default value. Faithful to
     /// `setVariableDefault` (globalcontext.cc:104).
     pub fn set_variable_default(&mut self, nm: &str, val: ContextWord) {
@@ -237,6 +259,7 @@ impl ContextInternal {
         }
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getDefaultValueFor
     /// Get a context variable's default value.
     pub fn get_default_value_for(&self, nm: &str) -> ContextWord {
         if let Some(var) = self.variables.get(nm) {
@@ -245,6 +268,7 @@ impl ContextInternal {
         0
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::setVariable
     /// Set a context value at the given address. Faithful to `setVariable`
     /// (globalcontext.cc:126).
     pub fn set_variable(&mut self, nm: &str, addr: Address, value: ContextWord) {
@@ -256,6 +280,7 @@ impl ContextInternal {
         bitrange.set_value(&mut blob.array, value);
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getVariableAt
     /// Get a context variable's value at a given address.
     pub fn get_variable_at(&self, nm: &str, addr: Address) -> ContextWord {
         let Some(bitrange) = self.variables.get(nm) else {
@@ -265,6 +290,7 @@ impl ContextInternal {
         bitrange.get_value(blob)
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::findBlob
     /// Find the context blob valid at the given address (or default).
     fn find_blob(&self, addr: Address) -> &[ContextWord] {
         for (start, blob) in self.database.iter().rev() {
@@ -275,6 +301,7 @@ impl ContextInternal {
         &self.default_blob.array
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getOrCreateBlobAt
     /// Get or create a blob at the given address.
     fn get_or_create_blob_at(&mut self, addr: Address) -> &mut ContextBlob {
         // Check if one already starts here (by index to satisfy borrow checker).
@@ -302,10 +329,12 @@ impl ContextInternal {
 }
 
 impl ContextDatabase for ContextInternal {
+    // Ghidra: globalcontext.cc:407 ContextInternal::getContext
     fn get_context(&self, addr: Address) -> &[ContextWord] {
         self.find_blob(addr)
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getTrackedSet
     fn get_tracked_set(&self, addr: Address) -> &TrackedSet {
         for (start, ts) in self.trackbase.iter().rev() {
             if addr.as_u64() >= start.as_u64() {
@@ -315,6 +344,7 @@ impl ContextDatabase for ContextInternal {
         &self.default_tracked
     }
 
+    // Ghidra: globalcontext.cc:470 ContextInternal::createSet
     fn create_set(&mut self, addr1: Address, _addr2: Address) -> &mut TrackedSet {
         // Create a new tracked set at addr1.
         self.trackbase.push((addr1, Vec::new()));
@@ -327,18 +357,22 @@ impl ContextDatabase for ContextInternal {
         unreachable!()
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getTrackedDefault
     fn get_tracked_default(&self) -> &TrackedSet {
         &self.default_tracked
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getDefaultValue
     fn get_default_value(&self) -> &[ContextWord] {
         &self.default_blob.array
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getDefaultValueMut
     fn get_default_value_mut(&mut self) -> &mut [ContextWord] {
         &mut self.default_blob.array
     }
 
+    // Ghidra: globalcontext.cc:368 ContextInternal::registerVariable
     fn register_variable(&mut self, nm: &str, sbit: i32, ebit: i32) {
         let bitrange = ContextBitRange::new(sbit, ebit);
         let needed_size = bitrange.word + 1;
@@ -349,12 +383,14 @@ impl ContextDatabase for ContextInternal {
         self.variables.insert(nm.to_string(), bitrange);
     }
 
+    // Ghidra: globalcontext.hh:264 ContextInternal::getContextSize
     fn get_context_size(&self) -> usize {
         self.size
     }
 }
 
 impl ContextInternal {
+    // Ghidra: globalcontext.hh:264 ContextInternal::getOrCreateBlobAtMut
     /// Get or create a context blob at the given address (mutable).
     fn get_or_create_blob_at_mut(&mut self, addr: Address) -> &mut ContextBlob {
         let existing = self.database.iter().position(|(a, _)| a.as_u64() == addr.as_u64());
@@ -376,6 +412,7 @@ impl ContextInternal {
         }
     }
 
+    // Ghidra: globalcontext.cc:478 ContextInternal::encode
     /// Encode all context and tracked data to a stream. Faithful to
     /// `ContextInternal::encode` (globalcontext.cc).
     pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
@@ -427,6 +464,7 @@ impl ContextInternal {
         encoder.close_element(&points_elem);
     }
 
+    // Ghidra: globalcontext.cc:500 ContextInternal::decode
     /// Restore context and tracked data from a stream. Faithful to
     /// `ContextInternal::decode` (globalcontext.cc).
     pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
@@ -537,6 +575,7 @@ pub struct ContextCache {
 }
 
 impl ContextCache {
+    // Ghidra: globalcontext.cc:556 ContextCache::new
     /// Construct given a context database. Faithful to the constructor.
     pub fn new(database: std::sync::Arc<std::sync::RwLock<dyn ContextDatabase>>) -> Self {
         Self {
@@ -545,17 +584,20 @@ impl ContextCache {
         }
     }
 
+    // Ghidra: globalcontext.cc:556 ContextCache::allowSet
     /// Toggle whether setContext calls are ignored.
     pub fn allow_set(&mut self, val: bool) {
         self.allow_set = val;
     }
 
+    // Ghidra: globalcontext.cc:568 ContextCache::getContext
     /// Retrieve the context blob for the given address. Faithful to
     /// `getContext`.
     pub fn get_context(&self, addr: Address) -> Vec<ContextWord> {
         self.database.read().unwrap().get_context(addr).to_vec()
     }
 
+    // Ghidra: globalcontext.cc:587 ContextCache::setContext
     /// Set context at an address. Faithful to `setContext`.
     pub fn set_context(&self, _addr: Address, _num: usize, _mask: ContextWord, _value: ContextWord) {
         if !self.allow_set {

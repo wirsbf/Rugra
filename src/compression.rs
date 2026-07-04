@@ -25,6 +25,7 @@ pub struct Compress {
 }
 
 impl Compress {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Initialize the deflate algorithm state. Faithful to the constructor
     /// (compression.hh:37).
     pub fn new(level: i32) -> Self {
@@ -34,12 +35,14 @@ impl Compress {
         }
     }
 
+    // RUGRA-GLUE: input (no Ghidra counterpart found)
     /// Provide the next sequence of bytes to be compressed. Faithful to
     /// `input` (compression.hh:44).
     pub fn input(&mut self, buffer: &[u8]) {
         self.input_buf.extend_from_slice(buffer);
     }
 
+    // RUGRA-GLUE: deflate (no Ghidra counterpart found)
     /// Deflate as much as possible into the given buffer. Faithful to
     /// `deflate` (compression.hh:48). Returns the number of compressed bytes
     /// written.
@@ -77,6 +80,7 @@ pub struct Decompress {
 }
 
 impl Decompress {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Initialize the inflate algorithm state. Faithful to the constructor
     /// (compression.hh:59).
     pub fn new() -> Self {
@@ -86,18 +90,21 @@ impl Decompress {
         }
     }
 
+    // RUGRA-GLUE: input (no Ghidra counterpart found)
     /// Provide the next sequence of compressed bytes. Faithful to `input`
     /// (compression.hh:66).
     pub fn input(&mut self, buffer: &[u8]) {
         self.input_buf.extend_from_slice(buffer);
     }
 
+    // RUGRA-GLUE: is_finished (no Ghidra counterpart found)
     /// Return true if the end of the compressed stream is reached. Faithful to
     /// `isFinished`.
     pub fn is_finished(&self) -> bool {
         self.stream_finished
     }
 
+    // RUGRA-GLUE: inflate (no Ghidra counterpart found)
     /// Inflate as much as possible into the given buffer. Faithful to
     /// `inflate` (compression.hh:72). Returns the number of decompressed bytes
     /// written.
@@ -130,11 +137,13 @@ impl Decompress {
 }
 
 impl Default for Decompress {
+    // RUGRA-GLUE: default (no Ghidra counterpart found)
     fn default() -> Self {
         Self::new()
     }
 }
 
+// RUGRA-GLUE: compress_all (no Ghidra counterpart found)
 /// One-shot deflate compression of a byte slice. Returns the compressed data.
 /// Uses flate2 zlib encoding.
 pub fn compress_all(data: &[u8], level: i32) -> Vec<u8> {
@@ -144,6 +153,7 @@ pub fn compress_all(data: &[u8], level: i32) -> Vec<u8> {
     encoder.finish().unwrap_or_else(|_| data.to_vec())
 }
 
+// RUGRA-GLUE: decompress_all (no Ghidra counterpart found)
 /// One-shot inflate decompression of a byte slice. Returns the decompressed
 /// data. Uses flate2 zlib decoding.
 pub fn decompress_all(data: &[u8]) -> Vec<u8> {

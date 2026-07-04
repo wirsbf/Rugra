@@ -87,6 +87,7 @@ pub type VnArc = Arc<RwLock<Varnode>>;
 /// Shared PcodeOp handle (`PcodeOp *` in Ghidra).
 pub type OpArc = Arc<RwLock<PcodeOp>>;
 
+// RUGRA-GLUE: bit-flag accessor wrapping Varnode::isPrecisLo (varnode.hh, not in double.cc)
 // ---------------------------------------------------------------------------
 // Precis flag helpers. Ghidra exposes `setPrecisLo`/`isPrecisLo` (and the hi
 // variants) on Varnode; Rugra stores these in `varnode_flags::PRECISLO`/`PRECISHI`
@@ -97,19 +98,23 @@ pub type OpArc = Arc<RwLock<PcodeOp>>;
 fn is_precis_lo(vn: &Varnode) -> bool {
     (vn.flags & varnode_flags::PRECISLO) != 0
 }
+// RUGRA-GLUE: bit-flag accessor wrapping Varnode::isPrecisHi (varnode.hh, not in double.cc)
 #[inline]
 fn is_precis_hi(vn: &Varnode) -> bool {
     (vn.flags & varnode_flags::PRECISHI) != 0
 }
+// RUGRA-GLUE: bit-flag mutator wrapping Varnode::setPrecisLo (varnode.hh, not in double.cc)
 #[inline]
 fn set_precis_lo(vn: &mut Varnode) {
     vn.flags |= varnode_flags::PRECISLO;
 }
+// RUGRA-GLUE: bit-flag mutator wrapping Varnode::setPrecisHi (varnode.hh, not in double.cc)
 #[inline]
 fn set_precis_hi(vn: &mut Varnode) {
     vn.flags |= varnode_flags::PRECISHI;
 }
 
+// RUGRA-GLUE: wraps Varnode::getSpaceFromConst (varnode.hh, not in double.cc); used by double.cc LOAD/STORE space-id recovery
 /// Read the address-space a LOAD/STORE space-id constant operand encodes.
 ///
 /// Ghidra stores the target address space in `op->getIn(0)` as a special
@@ -156,12 +161,14 @@ pub struct SplitVarnode {
 }
 
 impl Default for SplitVarnode {
+    // RUGRA-GLUE: Rust Default trait impl for SplitVarnode; Ghidra uses SplitVarnode(void) aggregate init (double.hh:44)
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl SplitVarnode {
+    // Ghidra: double.hh:44 SplitVarnode::SplitVarnode(void)
     /// Construct an uninitialized SplitVarnode (`SplitVarnode(void) {}`).
     pub fn new() -> Self {
         SplitVarnode {
@@ -175,6 +182,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:24 SplitVarnode::SplitVarnode(int4,uintb)
     /// Internally, the `lo` and `hi` Varnodes are set to null, and the `val`
     /// field holds the constant value. (`SplitVarnode(int4 sz,uintb v)`,
     /// double.cc:24)
@@ -184,6 +192,7 @@ impl SplitVarnode {
         s
     }
 
+    // Ghidra: double.hh:46 SplitVarnode::SplitVarnode(Varnode*,Varnode*)
     /// Construct from `lo` and `hi` piece
     /// (`SplitVarnode(Varnode *l,Varnode *h)` double.hh:46).
     pub fn from_pieces(l: VnArc, h: VnArc) -> Self {
@@ -193,6 +202,7 @@ impl SplitVarnode {
         s
     }
 
+    // Ghidra: double.cc:38 SplitVarnode::initPartial(int4,uintb)
     /// (Re)initialize `this` SplitVarnode as a constant
     /// (`initPartial(int4 sz,uintb v)`, double.cc:38).
     pub fn init_partial_const(&mut self, sz: usize, v: u64) {
@@ -205,6 +215,7 @@ impl SplitVarnode {
         self.defblock = None;
     }
 
+    // Ghidra: double.cc:56 SplitVarnode::initPartial(int4,Varnode*,Varnode*)
     /// (Re)initialize `this` SplitVarnode given Varnode pieces
     /// (`initPartial(int4 sz,Varnode *l,Varnode *h)`, double.cc:56). The pieces
     /// can be constant; the most-significant piece may be null (implied zero).
@@ -243,6 +254,7 @@ impl SplitVarnode {
         self.defblock = None;
     }
 
+    // Ghidra: double.cc:91 SplitVarnode::initAll
     /// Construct given Varnode pieces and a known `whole` Varnode
     /// (`initAll`, double.cc:91).
     pub fn init_all(&mut self, w: VnArc, l: VnArc, h: Option<VnArc>) {
@@ -254,40 +266,50 @@ impl SplitVarnode {
         self.defblock = None;
     }
 
+    // Ghidra: double.hh:55 SplitVarnode::isConstant
     /// Return true if `this` is a constant.
     pub fn is_constant(&self) -> bool {
         self.lo.is_none()
     }
 
+    // Ghidra: double.hh:56 SplitVarnode::hasBothPieces
     /// Return true if both pieces are initialized.
     pub fn has_both_pieces(&self) -> bool {
         self.hi.is_some() && self.lo.is_some()
     }
 
+    // Ghidra: double.hh:57 SplitVarnode::getSize
     /// Get the size of `this` SplitVarnode as a whole in bytes.
     pub fn get_size(&self) -> usize {
         self.wholesize
     }
 
+    // Ghidra: double.hh:58 SplitVarnode::getLo
     pub fn get_lo(&self) -> Option<&VnArc> {
         self.lo.as_ref()
     }
+    // Ghidra: double.hh:59 SplitVarnode::getHi
     pub fn get_hi(&self) -> Option<&VnArc> {
         self.hi.as_ref()
     }
+    // Ghidra: double.hh:60 SplitVarnode::getWhole
     pub fn get_whole(&self) -> Option<&VnArc> {
         self.whole.as_ref()
     }
+    // Ghidra: double.hh:61 SplitVarnode::getDefPoint
     pub fn get_def_point(&self) -> Option<&OpArc> {
         self.defpoint.as_ref()
     }
+    // Ghidra: double.hh:62 SplitVarnode::getDefBlock
     pub fn get_def_block(&self) -> Option<&BlockArc> {
         self.defblock.as_ref()
     }
+    // Ghidra: double.hh:63 SplitVarnode::getValue
     pub fn get_value(&self) -> u64 {
         self.val
     }
 
+    // Ghidra: double.cc:106 SplitVarnode::inHandHi
     /// Verify that the given most significant piece is formed via SUBPIECE and
     /// search for the least significant piece being formed as a SUBPIECE of the
     /// same whole. (`inHandHi`, double.cc:106) Returns true if the matching
@@ -357,6 +379,7 @@ impl SplitVarnode {
         false
     }
 
+    // Ghidra: double.cc:141 SplitVarnode::inHandLo
     /// Verify that the given least significant piece is formed via SUBPIECE and
     /// search for the most significant piece. (`inHandLo`, double.cc:141)
     pub fn in_hand_lo(&mut self, l: &VnArc) -> bool {
@@ -420,6 +443,7 @@ impl SplitVarnode {
         false
     }
 
+    // Ghidra: double.cc:178 SplitVarnode::inHandLoNoHi
     /// Like `in_hand_lo` but leaves most significant piece null when no
     /// companion is found. (`inHandLoNoHi`, double.cc:178)
     pub fn in_hand_lo_no_hi(&mut self, l: &VnArc) -> bool {
@@ -485,6 +509,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:212 SplitVarnode::inHandHiOut
     /// Initialize given the most significant piece, if it is concatenated
     /// immediately with its least significant piece via a unique PIECE.
     /// (`inHandHiOut`, double.cc:212)
@@ -522,6 +547,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:243 SplitVarnode::inHandLoOut
     /// Initialize given the least significant piece, if it is concatenated
     /// immediately with its most significant piece via a unique PIECE.
     /// (`inHandLoOut`, double.cc:243)
@@ -559,6 +585,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:273 SplitVarnode::findWholeSplitToPieces
     /// Look for SUBPIECE operations off of a common Varnode. (`findWholeSplitToPieces`,
     /// double.cc:273) Sets `whole` and fills in the definition point and block.
     pub fn find_whole_split_to_pieces(&mut self) -> bool {
@@ -667,6 +694,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:322 SplitVarnode::findDefinitionPoint
     /// Set the basic block `defblock` and PcodeOp `defpoint` where they are
     /// defined. (`findDefinitionPoint`, double.cc:322) Returns false if the
     /// SplitVarnode is only half constant or half input.
@@ -770,6 +798,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:380 SplitVarnode::findEarliestSplitPoint
     /// If both `lo` and `hi` pieces are written, the earlier of the two
     /// defining PcodeOps is returned. Otherwise None. (`findEarliestSplitPoint`,
     /// double.cc:380)
@@ -794,6 +823,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:397 SplitVarnode::findWholeBuiltFromPieces
     /// Scan for concatenations formed out of `hi` and `lo` in the correct
     /// significance order. (`findWholeBuiltFromPieces`, double.cc:397)
     pub fn find_whole_built_from_pieces(&mut self) -> bool {
@@ -867,6 +897,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:446 SplitVarnode::isWholeFeasible
     /// The whole Varnode must be defined or definable before the given PcodeOp.
     /// (`isWholeFeasible`, double.cc:446)
     pub fn is_whole_feasible(&mut self, existop: &OpArc) -> bool {
@@ -917,6 +948,7 @@ impl SplitVarnode {
         false
     }
 
+    // Ghidra: double.cc:473 SplitVarnode::isWholePhiFeasible
     /// Like `is_whole_feasible`, but the whole must be defined before the end
     /// of the given basic block. (`isWholePhiFeasible`, double.cc:473)
     pub fn is_whole_phi_feasible(&mut self, bl: Option<&BlockArc>) -> bool {
@@ -948,6 +980,7 @@ impl SplitVarnode {
         false
     }
 
+    // Ghidra: double.cc:498 SplitVarnode::findCreateWhole
     /// Assumes `is_whole_feasible` has been called and returned true. If the
     /// `whole` didn't already exist, it is created as the concatenation of its
     /// two pieces. (`findCreateWhole`, double.cc:498)
@@ -1041,6 +1074,7 @@ impl SplitVarnode {
         self.defblock = parent_block(&concatop.0).into();
     }
 
+    // Ghidra: double.cc:553 SplitVarnode::findCreateOutputWhole
     /// If the whole does not already exist, create it as a unique register that
     /// must later be set as the output of some PcodeOp.
     /// (`findCreateOutputWhole`, double.cc:553)
@@ -1057,6 +1091,7 @@ impl SplitVarnode {
         self.whole = Some(data.new_unique(self.wholesize));
     }
 
+    // Ghidra: double.cc:565 SplitVarnode::createJoinedWhole
     /// If the pieces can be treated as contiguous whole, use the same storage,
     /// otherwise use a join address. (`createJoinedWhole`, double.cc:565)
     pub fn create_joined_whole(&mut self, data: &mut Funcdata) {
@@ -1105,6 +1140,7 @@ impl SplitVarnode {
         self.whole = Some(whole);
     }
 
+    // Ghidra: double.cc:583 SplitVarnode::buildLoFromWhole
     /// Assume `lo` was initially defined in some other way but now needs to be
     /// defined as a split from a new `whole` Varnode. The original PcodeOp
     /// defining `lo` is transformed into a SUBPIECE. (`buildLoFromWhole`,
@@ -1167,6 +1203,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:621 SplitVarnode::buildHiFromWhole
     /// Like `build_lo_from_whole` for the `hi` piece. (`buildHiFromWhole`,
     /// double.cc:621)
     pub fn build_hi_from_whole(&self, data: &mut Funcdata) {
@@ -1225,6 +1262,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:687 SplitVarnode::findOutExist
     /// First PcodeOp where the output whole needs to exist, or None.
     /// (`findOutExist`, double.cc:687)
     pub fn find_out_exist(&mut self) -> Option<OpArc> {
@@ -1234,6 +1272,7 @@ impl SplitVarnode {
         self.find_earliest_split_point()
     }
 
+    // Ghidra: double.cc:698 SplitVarnode::exceedsConstPrecision
     /// True if `this` is a constant and too big to be represented internally.
     /// (`exceedsConstPrecision`, double.cc:698) Ghidra compares to sizeof(uintb)
     /// (8 bytes on 64-bit).
@@ -1245,6 +1284,7 @@ impl SplitVarnode {
     // Static helpers (double.cc:713-819)
     // -----------------------------------------------------------------
 
+    // Ghidra: double.cc:713 SplitVarnode::adjacentOffsets
     /// Return true if the values in `vn1` and `vn2` differ by the given size.
     /// (`adjacentOffsets`, double.cc:713) For constants the values are computed
     /// directly; otherwise both must be defined by INT_ADD from a common base.
@@ -1303,6 +1343,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:755 SplitVarnode::testContiguousPointers
     /// Verify the pointers into the given LOAD/STORE PcodeOps address
     /// contiguous memory. (`testContiguousPointers`, double.cc:755) On success
     /// returns (first, second, spc, sizeres) sorted into address order.
@@ -1375,6 +1416,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:789 SplitVarnode::isAddrTiedContiguous
     /// Return true if the given pieces can be melded into a contiguous storage
     /// location. (`isAddrTiedContiguous`, double.cc:789) On success returns the
     /// starting address of the contiguous range.
@@ -1382,6 +1424,7 @@ impl SplitVarnode {
         is_addr_tied_contiguous(lo, hi)
     }
 
+    // Ghidra: double.cc:828 SplitVarnode::wholeList
     /// Create a list of all possible pairs containing the same logical value as
     /// the given Varnode whole. (`wholeList`, double.cc:828)
     pub fn whole_list(w: &VnArc, splitvec: &mut Vec<SplitVarnode>) {
@@ -1436,6 +1479,7 @@ impl SplitVarnode {
         Self::find_copies(&basic_ref, splitvec);
     }
 
+    // Ghidra: double.cc:873 SplitVarnode::findCopies
     /// Find copies from (the pieces of) the given SplitVarnode.
     /// (`findCopies`, double.cc:873)
     pub fn find_copies(in_sv: &SplitVarnode, splitvec: &mut Vec<SplitVarnode>) {
@@ -1497,6 +1541,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:916 SplitVarnode::getTrueFalse
     /// For the given CBRANCH PcodeOp, pass back the true and false basic
     /// blocks. (`getTrueFalse`, double.cc:916)
     pub fn get_true_false(
@@ -1523,6 +1568,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:938 SplitVarnode::otherwiseEmpty
     /// Return true if the basic block containing the given CBRANCH performs no
     /// other operation. (`otherwiseEmpty`, double.cc:938)
     pub fn otherwise_empty(branchop: &OpArc) -> bool {
@@ -1559,6 +1605,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:965 SplitVarnode::verifyMultNegOne
     /// Verify the given PcodeOp is a CPUI_INT_MULT by -1. (`verifyMultNegOne`,
     /// double.cc:965)
     pub fn verify_mult_neg_one(op: &OpArc) -> bool {
@@ -1582,6 +1629,7 @@ impl SplitVarnode {
     // (double.cc:984-1431) These mirror Ghidra's static API exactly.
     // -----------------------------------------------------------------
 
+    // Ghidra: double.cc:984 SplitVarnode::prepareBinaryOp
     /// Check the most generic aspects of a binary double-precision operation.
     /// (`prepareBinaryOp`, double.cc:984) Returns the first PcodeOp where the
     /// output whole must exist, or None.
@@ -1601,6 +1649,7 @@ impl SplitVarnode {
         Some(existop)
     }
 
+    // Ghidra: double.cc:1005 SplitVarnode::createBinaryOp
     /// Rewrite a double precision binary operation. (`createBinaryOp`,
     /// double.cc:1005)
     pub fn create_binary_op(
@@ -1637,6 +1686,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:1037 SplitVarnode::prepareShiftOp
     /// Make sure input/output operands of a double precision shift are
     /// compatible. (`prepareShiftOp`, double.cc:1037)
     pub fn prepare_shift_op(
@@ -1650,6 +1700,7 @@ impl SplitVarnode {
         Some(existop)
     }
 
+    // Ghidra: double.cc:1058 SplitVarnode::createShiftOp
     /// Rewrite a double precision shift. (`createShiftOp`, double.cc:1058)
     pub fn create_shift_op(
         data: &mut Funcdata,
@@ -1688,6 +1739,7 @@ impl SplitVarnode {
         }
     }
 
+    // Ghidra: double.cc:1241 SplitVarnode::prepareBoolOp
     /// Make sure input operands of a double precision compare are compatible.
     /// (`prepareBoolOp`, double.cc:1241)
     pub fn prepare_bool_op(
@@ -1704,6 +1756,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:1259 SplitVarnode::replaceBoolOp
     /// Rewrite a double precision boolean operation by replacing the input
     /// pieces with unified Varnodes. (`replaceBoolOp`, double.cc:1259)
     pub fn replace_bool_op(
@@ -1723,6 +1776,7 @@ impl SplitVarnode {
         data.op_set_input(&follow, in2_whole, 1);
     }
 
+    // Ghidra: double.cc:1279 SplitVarnode::createBoolOp
     /// Create a new compare PcodeOp replacing the boolean Varnode taken as
     /// input by the given CBRANCH. (`createBoolOp`, double.cc:1279)
     pub fn create_bool_op(
@@ -1756,6 +1810,7 @@ impl SplitVarnode {
         data.op_set_input(&follow, newbool, 1); // CBRANCH now determined by new compare.
     }
 
+    // Ghidra: double.cc:1306 SplitVarnode::preparePhiOp
     /// Check that the logical version of a MULTIEQUAL can be created.
     /// (`preparePhiOp`, double.cc:1306)
     pub fn prepare_phi_op(
@@ -1781,6 +1836,7 @@ impl SplitVarnode {
         Some(existop)
     }
 
+    // Ghidra: double.cc:1331 SplitVarnode::createPhiOp
     /// Rewrite a double precision MULTIEQUAL. (`createPhiOp`, double.cc:1331)
     pub fn create_phi_op(
         data: &mut Funcdata,
@@ -1809,6 +1865,7 @@ impl SplitVarnode {
         out.build_hi_from_whole(data);
     }
 
+    // Ghidra: double.cc:1358 SplitVarnode::prepareIndirectOp
     /// Check that the logical version of an INDIRECT can be created.
     /// (`prepareIndirectOp`, double.cc:1358)
     pub fn prepare_indirect_op(in_sv: &mut SplitVarnode, affector: &OpArc) -> bool {
@@ -1818,6 +1875,7 @@ impl SplitVarnode {
         true
     }
 
+    // Ghidra: double.cc:1376 SplitVarnode::replaceIndirectOp
     /// Rewrite a double precision INDIRECT. (`replaceIndirectOp`,
     /// double.cc:1376)
     pub fn replace_indirect_op(
@@ -1844,6 +1902,7 @@ impl SplitVarnode {
         out.build_hi_from_whole(data);
     }
 
+    // Ghidra: double.cc:1402 SplitVarnode::replaceCopyForce
     /// Rewrite the double precision version of a COPY to an address forced
     /// Varnode. (`replaceCopyForce`, double.cc:1402)
     pub fn replace_copy_force(
@@ -1918,6 +1977,7 @@ impl SplitVarnode {
         data.op_destroy(&PcodeOpRef(copylo.clone()));
     }
 
+    // Ghidra: double.cc:1090 SplitVarnode::applyRuleIn
     /// Try to perform one transform on a logical double precision operation
     /// given a specific input. (`applyRuleIn`, double.cc:1090) Returns the
     /// count of transforms applied (0 or 1).
@@ -2067,6 +2127,7 @@ impl SplitVarnode {
         0
     }
 
+    // RUGRA-GLUE: Rust value-copy helper mirroring C++ implicit copy semantics for SplitVarnode (no explicit Ghidra fn)
     /// Clone the shared-state fields of this SplitVarnode (wholeList/findCopies
     /// build copies by value). Mirrors C++ value-copy semantics.
     fn clone_split(&self) -> SplitVarnode {
@@ -2100,6 +2161,7 @@ impl SplitVarnode {
 // only a `PcodeOp*`, not `Funcdata&`) stay faithful.
 // ===========================================================================
 
+// RUGRA-GLUE: wraps PcodeOp::getSlot (op.hh:380); standalone form so verify() methods match Ghidra signature
 /// `PcodeOp::getSlot(vn)` — find the input slot holding `vn`, or -1.
 /// Faithful to Ghidra op.hh:380 / op.cc. Standalone (no Funcdata) so the
 /// `verify()` methods, which take only a `PcodeOp *`, remain faithful.
@@ -2113,11 +2175,13 @@ fn vn_slot_of(op: &OpArc, vn: &VnArc) -> i32 {
     -1
 }
 
+// RUGRA-GLUE: wraps Varnode::loneDescend (varnode.hh) for OpArc ergonomics
 /// `Varnode::loneDescend()` wrapped for `OpArc` ergonomics.
 fn lone_descend(vn: &VnArc) -> Option<OpArc> {
     vn.read().unwrap().lone_descend()
 }
 
+// RUGRA-GLUE: wraps BlockBasic::lastOp (block.hh) for dyn FlowBlock trait objects
 /// `FlowBlock::lastOp()` for the erased `dyn FlowBlock`. Ghidra's
 /// `BlockBasic::lastOp()` returns the terminal op; Rugra's `last_op` is only on
 /// the concrete `BlockBasic` struct, not the trait, so we implement it via the
@@ -2161,6 +2225,7 @@ pub struct AddForm {
 }
 
 impl AddForm {
+    // RUGRA-GLUE: AddForm default ctor (double.hh:102; no explicit ctor, fields uninitialized, filled by verify)
     /// Construct an uninitialized AddForm (C++ class fields are unset).
     pub fn new() -> Self {
         AddForm {
@@ -2184,6 +2249,7 @@ impl AddForm {
         }
     }
 
+    // Ghidra: double.cc:1433 AddForm::checkForCarry
     /// If `op` matches a CARRY construction based on lo1 (i.e. CARRY(x,lo1)),
     /// set lo2 (and negconst if lo1 is a constant) to be the corresponding
     /// part of the carry and return true. (`checkForCarry`, double.cc:1433)
@@ -2351,6 +2417,7 @@ impl AddForm {
         }
     }
 
+    // Ghidra: double.cc:1515 AddForm::verify
     /// (`verify`, double.cc:1515-1587) Returns true on success, filling the
     /// recovered fields (lo2, hi2, reshi, reslo).
     fn verify(&mut self, h: &VnArc, l: &VnArc, op: &OpArc) -> bool {
@@ -2526,6 +2593,7 @@ impl AddForm {
         false
     }
 
+    // Ghidra: double.cc:1589 AddForm::applyRule
     /// (`applyRule`, double.cc:1589-1607)
     pub fn apply_rule(
         &mut self,
@@ -2609,6 +2677,7 @@ pub struct SubForm {
 }
 
 impl SubForm {
+    // RUGRA-GLUE: SubForm default ctor (double.hh:119; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         SubForm {
             in_sv: SplitVarnode::new(),
@@ -2634,6 +2703,7 @@ impl SubForm {
         }
     }
 
+    // Ghidra: double.cc:1616 SubForm::verify
     /// (`verify`, double.cc:1616-1681)
     fn verify(&mut self, h: &VnArc, l: &VnArc, op: &OpArc) -> bool {
         self.hi1 = Some(h.clone());
@@ -2831,6 +2901,7 @@ impl SubForm {
         false
     }
 
+    // Ghidra: double.cc:1683 SubForm::applyRule
     /// (`applyRule`, double.cc:1683-1702)
     pub fn apply_rule(
         &mut self,
@@ -2902,6 +2973,7 @@ pub struct LogicalForm {
 }
 
 impl LogicalForm {
+    // RUGRA-GLUE: LogicalForm default ctor (double.hh:135; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         LogicalForm {
             in_sv: SplitVarnode::new(),
@@ -2917,6 +2989,7 @@ impl LogicalForm {
         }
     }
 
+    // Ghidra: double.cc:1704 LogicalForm::findHiMatch
     /// (`findHiMatch`, double.cc:1704-1779). Returns 0 if found, -1 if can't
     /// find an op, -2 if no op exists.
     fn find_hi_match(&mut self) -> i32 {
@@ -3034,6 +3107,7 @@ impl LogicalForm {
         }
     }
 
+    // Ghidra: double.cc:1787 LogicalForm::verify
     /// (`verify`, double.cc:1787-1803)
     fn verify(&mut self, h: &VnArc, l: &VnArc, lop: &OpArc) -> bool {
         self.loop_ = Some(lop.clone());
@@ -3075,6 +3149,7 @@ impl LogicalForm {
         false
     }
 
+    // Ghidra: double.cc:1805 LogicalForm::applyRule
     /// (`applyRule`, double.cc:1805-1825)
     pub fn apply_rule(
         &mut self,
@@ -3154,6 +3229,7 @@ pub struct Equal1Form {
 }
 
 impl Equal1Form {
+    // RUGRA-GLUE: Equal1Form default ctor (double.hh:148; no explicit ctor, fields filled by applyRule)
     pub fn new() -> Self {
         Equal1Form {
             in1: SplitVarnode::new(),
@@ -3174,6 +3250,7 @@ impl Equal1Form {
         }
     }
 
+    // Ghidra: double.cc:1836 Equal1Form::applyRule
     /// (`applyRule`, double.cc:1836-1916)
     pub fn apply_rule(
         &mut self,
@@ -3355,6 +3432,7 @@ pub struct Equal2Form {
 }
 
 impl Equal2Form {
+    // RUGRA-GLUE: Equal2Form default ctor (double.hh:161; no explicit ctor, fields filled by applyRule)
     pub fn new() -> Self {
         Equal2Form {
             in_sv: SplitVarnode::new(),
@@ -3367,6 +3445,7 @@ impl Equal2Form {
         }
     }
 
+    // Ghidra: double.cc:1918 Equal2Form::replace
     /// (`replace`, double.cc:1918-1934)
     fn replace(&mut self, data: &mut Funcdata, bool_and_or: &OpArc) -> bool {
         let lo1 = self.lo1.clone().unwrap();
@@ -3403,6 +3482,7 @@ impl Equal2Form {
         }
     }
 
+    // Ghidra: double.cc:1942 Equal2Form::applyRule
     /// (`applyRule`, double.cc:1942-1982)
     pub fn apply_rule(
         &mut self,
@@ -3515,6 +3595,7 @@ pub struct Equal3Form {
 }
 
 impl Equal3Form {
+    // RUGRA-GLUE: Equal3Form default ctor (double.hh:171; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         Equal3Form {
             in_sv: SplitVarnode::new(),
@@ -3526,6 +3607,7 @@ impl Equal3Form {
         }
     }
 
+    // Ghidra: double.cc:1984 Equal3Form::verify
     /// (`verify`, double.cc:1984-2002)
     fn verify(&mut self, h: &VnArc, l: &VnArc, aop: &OpArc) -> bool {
         if aop.read().unwrap().opcode != OpCode::CPUI_INT_AND {
@@ -3570,6 +3652,7 @@ impl Equal3Form {
         true
     }
 
+    // Ghidra: double.cc:2009 Equal3Form::applyRule
     /// (`applyRule`, double.cc:2009-2024)
     pub fn apply_rule(
         &mut self,
@@ -3630,6 +3713,7 @@ pub struct LessConstForm {
 }
 
 impl LessConstForm {
+    // RUGRA-GLUE: LessConstForm default ctor (double.hh:218; no explicit ctor, fields filled by applyRule)
     pub fn new() -> Self {
         LessConstForm {
             in_sv: SplitVarnode::new(),
@@ -3642,6 +3726,7 @@ impl LessConstForm {
         }
     }
 
+    // Ghidra: double.cc:2505 LessConstForm::applyRule
     /// (`applyRule`, double.cc:2505-2548)
     pub fn apply_rule(
         &mut self,
@@ -3764,6 +3849,7 @@ pub struct ShiftForm {
 }
 
 impl ShiftForm {
+    // RUGRA-GLUE: ShiftForm default ctor (double.hh:228; no explicit ctor, fields filled by verifyLeft/verifyRight)
     pub fn new() -> Self {
         ShiftForm {
             in_sv: SplitVarnode::new(),
@@ -3786,6 +3872,7 @@ impl ShiftForm {
         }
     }
 
+    // Ghidra: double.cc:2550 ShiftForm::mapLeft
     /// (`mapLeft`, double.cc:2550-2582)
     fn map_left(&mut self, lo: &VnArc, hi: &VnArc) -> bool {
         let reslo = self.reslo.clone().unwrap();
@@ -3871,6 +3958,7 @@ impl ShiftForm {
         true
     }
 
+    // Ghidra: double.cc:2584 ShiftForm::mapRight
     /// (`mapRight`, double.cc:2584-2616)
     fn map_right(&mut self, lo: &VnArc, hi: &VnArc) -> bool {
         let reslo = self.reslo.clone().unwrap();
@@ -3955,6 +4043,7 @@ impl ShiftForm {
         true
     }
 
+    // Ghidra: double.cc:2618 ShiftForm::verifyShiftAmount
     /// (`verifyShiftAmount`, double.cc:2618-2630)
     fn verify_shift_amount(&self, lo: &VnArc) -> bool {
         let salo = match &self.salo {
@@ -3992,6 +4081,7 @@ impl ShiftForm {
         true
     }
 
+    // Ghidra: double.cc:2632 ShiftForm::verifyLeft
     /// (`verifyLeft`, double.cc:2632-2664)
     fn verify_left(&mut self, h: &VnArc, l: &VnArc, loop_: &OpArc) -> bool {
         self.hi = Some(h.clone());
@@ -4029,6 +4119,7 @@ impl ShiftForm {
         false
     }
 
+    // Ghidra: double.cc:2666 ShiftForm::verifyRight
     /// (`verifyRight`, double.cc:2666-2697)
     fn verify_right(&mut self, h: &VnArc, l: &VnArc, hiop: &OpArc) -> bool {
         self.hi = Some(h.clone());
@@ -4066,6 +4157,7 @@ impl ShiftForm {
         false
     }
 
+    // Ghidra: double.cc:2699 ShiftForm::applyRuleLeft
     /// (`applyRuleLeft`, double.cc:2699-2715)
     pub fn apply_rule_left(
         &mut self,
@@ -4102,6 +4194,7 @@ impl ShiftForm {
         true
     }
 
+    // Ghidra: double.cc:2717 ShiftForm::applyRuleRight
     /// (`applyRuleRight`, double.cc:2717-2733)
     pub fn apply_rule_right(
         &mut self,
@@ -4171,6 +4264,7 @@ pub struct MultForm {
 }
 
 impl MultForm {
+    // RUGRA-GLUE: MultForm default ctor (double.hh:248; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         MultForm {
             in_sv: SplitVarnode::new(),
@@ -4195,6 +4289,7 @@ impl MultForm {
         }
     }
 
+    // Ghidra: double.cc:2735 MultForm::mapResHiSmallConst
     /// (`mapResHiSmallConst`, double.cc:2735-2763)
     fn map_res_hi_small_const(&mut self, rhi: &VnArc) -> bool {
         self.reshi = Some(rhi.clone());
@@ -4259,6 +4354,7 @@ impl MultForm {
         true
     }
 
+    // Ghidra: double.cc:2765 MultForm::mapResHi
     /// (`mapResHi`, double.cc:2765-2822)
     fn map_res_hi(&mut self, rhi: &VnArc) -> bool {
         self.reshi = Some(rhi.clone());
@@ -4352,6 +4448,7 @@ impl MultForm {
         true
     }
 
+    // Ghidra: double.cc:2824 MultForm::findLoFromInSmallConst
     /// (`findLoFromInSmallConst`, double.cc:2824-2838)
     fn find_lo_from_in_small_const(&mut self, hi1: &VnArc) -> bool {
         let multhi1 = self.multhi1.clone().unwrap();
@@ -4384,6 +4481,7 @@ impl MultForm {
         true
     }
 
+    // Ghidra: double.cc:2840 MultForm::findLoFromIn
     /// (`findLoFromIn`, double.cc:2840-2868)
     fn find_lo_from_in(&mut self, hi1: &VnArc, lo1: &VnArc) -> bool {
         let mut multhi1 = self.multhi1.clone().unwrap();
@@ -4445,6 +4543,7 @@ impl MultForm {
         true
     }
 
+    // Ghidra: double.cc:2870 MultForm::zextOf
     /// (`zextOf`, double.cc:2870-2893)
     fn zext_of(big: &VnArc, small: &VnArc) -> bool {
         if small.read().unwrap().is_constant() {
@@ -4498,6 +4597,7 @@ impl MultForm {
         false
     }
 
+    // Ghidra: double.cc:2895 MultForm::verifyLo
     /// (`verifyLo`, double.cc:2895-2909)
     fn verify_lo(&self, lo1: &VnArc, lo2: &VnArc) -> bool {
         let subhi = self.subhi.clone().unwrap();
@@ -4522,6 +4622,7 @@ impl MultForm {
         false
     }
 
+    // Ghidra: double.cc:2911 MultForm::findResLo
     /// (`findResLo`, double.cc:2911-2946)
     fn find_res_lo(&mut self, lo1: &VnArc, lo2: &VnArc) -> bool {
         let midtmp = self.midtmp.clone().unwrap();
@@ -4583,6 +4684,7 @@ impl MultForm {
         false
     }
 
+    // Ghidra: double.cc:2948 MultForm::mapFromInSmallConst
     /// (`mapFromInSmallConst`, double.cc:2948-2956)
     fn map_from_in_small_const(&mut self, rhi: &VnArc, hi1: &VnArc, lo1: &VnArc, lo2: &VnArc) -> bool {
         if !self.map_res_hi_small_const(rhi) {
@@ -4597,6 +4699,7 @@ impl MultForm {
         self.find_res_lo(lo1, lo2)
     }
 
+    // Ghidra: double.cc:2958 MultForm::mapFromIn
     /// (`mapFromIn`, double.cc:2958-2966)
     fn map_from_in(&mut self, rhi: &VnArc, hi1: &VnArc, lo1: &VnArc, lo2: &VnArc, hi2: &VnArc) -> bool {
         if !self.map_res_hi(rhi) {
@@ -4611,6 +4714,7 @@ impl MultForm {
         self.find_res_lo(lo1, lo2)
     }
 
+    // Ghidra: double.cc:2968 MultForm::replace
     /// (`replace`, double.cc:2968-2980)
     fn replace(&mut self, data: &mut Funcdata) -> bool {
         let size = self.in_sv.get_size();
@@ -4640,6 +4744,7 @@ impl MultForm {
         true
     }
 
+    // Ghidra: double.cc:2982 MultForm::verify
     /// (`verify`, double.cc:2982-3010)
     fn verify(&mut self, h: &VnArc, l: &VnArc, hop: &OpArc) -> bool {
         self.hi1 = Some(h.clone());
@@ -4691,6 +4796,7 @@ impl MultForm {
         false
     }
 
+    // Ghidra: double.cc:3012 MultForm::applyRule
     /// (`applyRule`, double.cc:3012-3024)
     pub fn apply_rule(
         &mut self,
@@ -4739,6 +4845,7 @@ pub struct PhiForm {
 }
 
 impl PhiForm {
+    // RUGRA-GLUE: PhiForm default ctor (double.hh:274; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         PhiForm {
             in_sv: SplitVarnode::new(),
@@ -4753,6 +4860,7 @@ impl PhiForm {
         }
     }
 
+    // Ghidra: double.cc:3028 PhiForm::verify
     /// (`verify`, double.cc:3028-3052)
     fn verify(&mut self, h: &VnArc, l: &VnArc, hphi: &OpArc) -> bool {
         self.hibase = Some(h.clone());
@@ -4795,6 +4903,7 @@ impl PhiForm {
         false
     }
 
+    // Ghidra: double.cc:3054 PhiForm::applyRule
     /// (`applyRule`, double.cc:3054-3078)
     pub fn apply_rule(
         &mut self,
@@ -4868,6 +4977,7 @@ pub struct IndirectForm {
 }
 
 impl IndirectForm {
+    // RUGRA-GLUE: IndirectForm default ctor (double.hh:287; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         IndirectForm {
             in_sv: SplitVarnode::new(),
@@ -4882,6 +4992,7 @@ impl IndirectForm {
         }
     }
 
+    // Ghidra: double.cc:3080 IndirectForm::verify
     /// (`verify`, double.cc:3080-3112)
     fn verify(&mut self, data: &Funcdata, h: &VnArc, l: &VnArc, ind: &OpArc) -> bool {
         self.hi = Some(h.clone());
@@ -4952,6 +5063,7 @@ impl IndirectForm {
         false
     }
 
+    // Ghidra: double.cc:3114 IndirectForm::applyRule
     /// (`applyRule`, double.cc:3114-3129)
     pub fn apply_rule(
         &mut self,
@@ -5005,6 +5117,7 @@ pub struct CopyForceForm {
 }
 
 impl CopyForceForm {
+    // RUGRA-GLUE: CopyForceForm default ctor (double.hh:303; no explicit ctor, fields filled by verify)
     pub fn new() -> Self {
         CopyForceForm {
             in_sv: SplitVarnode::new(),
@@ -5016,6 +5129,7 @@ impl CopyForceForm {
         }
     }
 
+    // Ghidra: double.cc:3137 CopyForceForm::verify
     /// (`verify`, double.cc:3137-3180)
     fn verify(&mut self, h: &VnArc, l: &VnArc, w: Option<&VnArc>, cpy: &OpArc) -> bool {
         let _w = match w {
@@ -5123,6 +5237,7 @@ impl CopyForceForm {
         false
     }
 
+    // Ghidra: double.cc:3186 CopyForceForm::applyRule
     /// (`applyRule`, double.cc:3186-3196)
     pub fn apply_rule(
         &mut self,
@@ -5211,6 +5326,7 @@ pub struct LessThreeWay {
 }
 
 impl LessThreeWay {
+    // RUGRA-GLUE: LessThreeWay default ctor (double.hh:182; no explicit ctor, fields filled by verify/mapBlocks)
     pub fn new() -> Self {
         LessThreeWay {
             in_sv: SplitVarnode::new(),
@@ -5261,6 +5377,7 @@ impl LessThreeWay {
         }
     }
 
+    // Ghidra: double.cc:2026 LessThreeWay::mapBlocksFromLow
     /// (`mapBlocksFromLow`, double.cc:2026-2039)
     fn map_blocks_from_low(&mut self, lobl: BlockArc) -> bool {
         self.lolessbl = Some(lobl.clone());
@@ -5297,6 +5414,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2041 LessThreeWay::mapOpsFromBlocks
     /// (`mapOpsFromBlocks`, double.cc:2041-2146)
     fn map_ops_from_blocks(&mut self) -> bool {
         // double.cc:2044-2052: pull the three terminal CBRANCHes.
@@ -5461,6 +5579,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2148 LessThreeWay::checkSignedness
     /// (`checkSignedness`, double.cc:2148-2155)
     fn check_signedness(&self) -> bool {
         if self.midlessform && self.midsigncompare != self.signcompare {
@@ -5469,6 +5588,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2157 LessThreeWay::normalizeHi
     /// (`normalizeHi`, double.cc:2157-2202)
     fn normalize_hi(&mut self) -> bool {
         let hiless = self.hiless.clone().unwrap();
@@ -5528,6 +5648,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2204 LessThreeWay::normalizeMid
     /// (`normalizeMid`, double.cc:2204-2259)
     fn normalize_mid(&mut self) -> bool {
         let hiequal = self.hiequal.clone().unwrap();
@@ -5596,6 +5717,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2261 LessThreeWay::normalizeLo
     /// (`normalizeLo`, double.cc:2261-2306)
     fn normalize_lo(&mut self) -> bool {
         let loless = self.loless.clone().unwrap();
@@ -5641,6 +5763,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2308 LessThreeWay::checkBlockForm
     /// (`checkBlockForm`, double.cc:2308-2329)
     fn check_block_form(&self) -> bool {
         let (hilesstrue, hilessfalse) =
@@ -5658,6 +5781,7 @@ impl LessThreeWay {
             && SplitVarnode::otherwise_empty(&self.lolessbool.clone().unwrap())
     }
 
+    // Ghidra: double.cc:2331 LessThreeWay::checkOpForm
     /// (`checkOpForm`, double.cc:2331-2401)
     fn check_op_form(&mut self) -> bool {
         let lo = self.in_sv.lo.clone();
@@ -5796,6 +5920,7 @@ impl LessThreeWay {
         false
     }
 
+    // Ghidra: double.cc:2403 LessThreeWay::setOpCode
     /// (`setOpCode`, double.cc:2403-2414)
     fn set_op_code(&mut self) {
         // double.cc:2406-2409
@@ -5819,6 +5944,7 @@ impl LessThreeWay {
         }
     }
 
+    // Ghidra: double.cc:2416 LessThreeWay::setBoolOp
     /// (`setBoolOp`, double.cc:2416-2428)
     fn set_bool_op(&mut self) -> bool {
         let in_sv = self.in_sv.clone_split();
@@ -5831,6 +5957,7 @@ impl LessThreeWay {
         }
     }
 
+    // Ghidra: double.cc:2430 LessThreeWay::mapFromLow
     /// (`mapFromLow`, double.cc:2430-2445)
     fn map_from_low(&mut self, op: &OpArc) -> bool {
         let op_out = match op.read().unwrap().get_out() {
@@ -5873,6 +6000,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2447 LessThreeWay::testReplace
     /// (`testReplace`, double.cc:2447-2460)
     fn test_replace(&mut self) -> bool {
         self.set_op_code();
@@ -5900,6 +6028,7 @@ impl LessThreeWay {
         true
     }
 
+    // Ghidra: double.cc:2476 LessThreeWay::applyRule
     /// (`applyRule`, double.cc:2476-2496)
     pub fn apply_rule(
         &mut self,
@@ -5956,10 +6085,12 @@ impl LessThreeWay {
 /// Helper trait so ported Form classes can mutate a cloned SplitVarnode while
 /// the originals stay usable. This mirrors C++ pass-by-reference semantics.
 trait CloneMut {
+    // RUGRA-GLUE: Rust trait decl for mutable-clone helper (mirrors C++ pass-by-reference semantics, no Ghidra fn)
     fn clone_mut(&self) -> SplitVarnode;
 }
 
 impl CloneMut for SplitVarnode {
+    // RUGRA-GLUE: Rust trait impl for mutable-clone helper (mirrors C++ pass-by-reference semantics, no Ghidra fn)
     fn clone_mut(&self) -> SplitVarnode {
         SplitVarnode {
             lo: self.lo.clone(),
@@ -5977,6 +6108,7 @@ impl CloneMut for SplitVarnode {
 // Local helpers for the static-ish methods that take/return Option<VnArc>.
 // ---------------------------------------------------------------------------
 
+// RUGRA-GLUE: Option-friendly pointer equality for VnArc (Rust Arc plumbing, no Ghidra fn)
 /// `Option`-friendly pointer equality against a borrowed `&VnArc`.
 fn arc_eq_option(opt: Option<&VnArc>, target: &VnArc) -> bool {
     match opt {
@@ -5985,6 +6117,7 @@ fn arc_eq_option(opt: Option<&VnArc>, target: &VnArc) -> bool {
     }
 }
 
+// Ghidra: double.cc:789 SplitVarnode::isAddrTiedContiguous
 /// `isAddrTiedContiguous` core (double.cc:789-819) returning the start address.
 fn is_addr_tied_contiguous(lo: &VnArc, hi: &VnArc) -> Option<Address> {
     if !lo.read().unwrap().is_addr_tied() {
@@ -6038,6 +6171,7 @@ fn is_addr_tied_contiguous(lo: &VnArc, hi: &VnArc) -> Option<Address> {
 
 // Block-related helpers. Ghidra uses BlockBasic*; Rugra uses Option<Arc<...>>.
 
+// RUGRA-GLUE: wraps PcodeOp::getParent (op.hh) returning Option<BlockArc> for weak-ref upgrade
 /// Get the parent block of an op as `Option<BlockArc>`.
 fn parent_block(op: &OpArc) -> Option<BlockArc> {
     op.read()
@@ -6047,6 +6181,7 @@ fn parent_block(op: &OpArc) -> Option<BlockArc> {
         .and_then(|w| w.upgrade())
 }
 
+// RUGRA-GLUE: wraps FlowBlock::getImmedDom (block.hh) for curbl->getImmedDom() loops in double.cc
 /// Step to the immediate dominator (FlowBlock::getImmedDom), faithul to
 /// double.cc's `curbl = curbl->getImmedDom()` loops.
 fn step_immed_dom(bl: &Option<BlockArc>) -> Option<BlockArc> {
@@ -6056,6 +6191,7 @@ fn step_immed_dom(bl: &Option<BlockArc>) -> Option<BlockArc> {
     immed.upgrade()
 }
 
+// RUGRA-GLUE: pointer-equality on erased Option<BlockArc> (Rust Arc plumbing, no Ghidra fn)
 /// Equality on the erased `Option<BlockArc>` form.
 fn same_block(a: &Option<BlockArc>, b: &Option<BlockArc>) -> bool {
     match (a, b) {
@@ -6065,11 +6201,13 @@ fn same_block(a: &Option<BlockArc>, b: &Option<BlockArc>) -> bool {
     }
 }
 
+// RUGRA-GLUE: wraps PcodeOp::getSeqNum().getOrder() (op.hh) for op ordering comparisons
 /// `op->getSeqNum().getOrder()`.
 fn order_of(op: &OpArc) -> u32 {
     op.read().unwrap().get_seq_num().get_order()
 }
 
+// RUGRA-GLUE: combines Funcdata::opSetOpcode + opSetInput (funcdata.hh); Rugra lacks op_set_all_input
 /// Set opcode and all inputs of an op (Funcdata has op_set_all_input missing;
 /// emulate by clearing inrefs and pushing in order).
 fn set_opcode_and_inputs(
@@ -6116,6 +6254,7 @@ pub struct SplitDatatype {
 }
 
 impl SplitDatatype {
+    // RUGRA-GLUE: SplitDatatype ctor; Ghidra's SplitDatatype lives in subflow.hh (not double.cc), placeholder hook
     /// Construct a split datatype for a whole of the given byte size. The two
     /// pieces are always equal halves (matching the "exactly half" invariant
     /// used by `RuleDoubleIn::attemptMarking`, double.cc:3228).
@@ -6127,11 +6266,13 @@ impl SplitDatatype {
         }
     }
 
+    // RUGRA-GLUE: SplitDatatype accessor; type lives in subflow.hh (not double.cc), placeholder hook
     /// The most-significant piece offset (in bytes) within the whole.
     pub fn hi_offset(&self) -> usize {
         self.piece_size
     }
 
+    // RUGRA-GLUE: SplitDatatype accessor; type lives in subflow.hh (not double.cc), placeholder hook
     /// The least-significant piece offset (in bytes) within the whole (always 0).
     pub fn lo_offset(&self) -> usize {
         0
@@ -6154,10 +6295,12 @@ use crate::action::Rule;
 pub struct RuleDoubleIn;
 
 impl RuleDoubleIn {
+    // Ghidra: double.hh:324 RuleDoubleIn::RuleDoubleIn
     pub fn new() -> Self {
         Self
     }
 
+    // Ghidra: double.cc:3198 RuleDoubleIn::reset
     /// Mark that we are doing double precision recovery. (`reset`,
     /// double.cc:3198-3202)
     pub fn reset(&self, data: &mut Funcdata) {
@@ -6165,6 +6308,7 @@ impl RuleDoubleIn {
         data.set_double_precis_recovery(true);
     }
 
+    // Ghidra: double.cc:3218 RuleDoubleIn::attemptMarking
     /// Determine if the given Varnode from a SUBPIECE should be marked as a
     /// double precision piece. (`attemptMarking`, double.cc:3218) Returns 1 if
     /// the pieces are marked, 0 otherwise.
@@ -6254,6 +6398,7 @@ impl RuleDoubleIn {
 }
 
 impl Rule for RuleDoubleIn {
+    // Ghidra: double.cc:3259 RuleDoubleIn::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDoubleIn::applyOp (double.cc:3259-3279).
         let op_arc = op_arc.clone();
@@ -6291,10 +6436,12 @@ impl Rule for RuleDoubleIn {
         Ok(NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Rule trait name accessor; Ghidra Rule::getName inherited, name set in RuleDoubleIn ctor (double.hh:324)
     fn get_name(&self) -> &str {
         "doublein"
     }
 
+    // Ghidra: double.cc:3204 RuleDoubleIn::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE]
     }
@@ -6310,10 +6457,12 @@ impl Rule for RuleDoubleIn {
 pub struct RuleDoubleOut;
 
 impl RuleDoubleOut {
+    // Ghidra: double.hh:338 RuleDoubleOut::RuleDoubleOut
     pub fn new() -> Self {
         Self
     }
 
+    // Ghidra: double.cc:3295 RuleDoubleOut::attemptMarking
     /// Determine if the given inputs to a PIECE should be marked as double
     /// precision pieces. (`attemptMarking`, double.cc:3295) Returns 1 if
     /// marked, 0 otherwise.
@@ -6367,6 +6516,7 @@ impl RuleDoubleOut {
 }
 
 impl Rule for RuleDoubleOut {
+    // Ghidra: double.cc:3332 RuleDoubleOut::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDoubleOut::applyOp (double.cc:3332-3355).
         let op_arc = op_arc.clone();
@@ -6403,10 +6553,12 @@ impl Rule for RuleDoubleOut {
         }
     }
 
+    // RUGRA-GLUE: Rust Rule trait name accessor; Ghidra Rule::getName inherited, name set in RuleDoubleOut ctor (double.hh:338)
     fn get_name(&self) -> &str {
         "doubleout"
     }
 
+    // Ghidra: double.cc:3281 RuleDoubleOut::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -6422,10 +6574,12 @@ impl Rule for RuleDoubleOut {
 pub struct RuleDoubleLoad;
 
 impl RuleDoubleLoad {
+    // Ghidra: double.hh:350 RuleDoubleLoad::RuleDoubleLoad
     pub fn new() -> Self {
         Self
     }
 
+    // Ghidra: double.cc:3370 RuleDoubleLoad::noWriteConflict
     /// Scan for conflicts between two LOADs or STOREs that would prevent them
     /// from being combined. (`noWriteConflict`, double.cc:3370) Returns the
     /// later of the two PcodeOps if combinable, otherwise None.
@@ -6566,6 +6720,7 @@ impl RuleDoubleLoad {
 }
 
 impl Rule for RuleDoubleLoad {
+    // Ghidra: double.cc:3442 RuleDoubleLoad::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDoubleLoad::applyOp (double.cc:3442-3505).
         let op_arc = op_arc.clone();
@@ -6660,10 +6815,12 @@ impl Rule for RuleDoubleLoad {
         Ok(CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Rule trait name accessor; Ghidra Rule::getName inherited, name set in RuleDoubleLoad ctor (double.hh:350)
     fn get_name(&self) -> &str {
         "doubleload"
     }
 
+    // Ghidra: double.cc:3436 RuleDoubleLoad::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -6679,10 +6836,12 @@ impl Rule for RuleDoubleLoad {
 pub struct RuleDoubleStore;
 
 impl RuleDoubleStore {
+    // Ghidra: double.hh:363 RuleDoubleStore::RuleDoubleStore
     pub fn new() -> Self {
         Self
     }
 
+    // Ghidra: double.cc:3578 RuleDoubleStore::testIndirectUse
     /// Test if output Varnodes from a list of PcodeOps are used anywhere within
     /// a range of PcodeOps. (`testIndirectUse`, double.cc:3578) Returns true if
     /// no output in the list is used in the range.
@@ -6742,6 +6901,7 @@ impl RuleDoubleStore {
         true
     }
 
+    // Ghidra: double.cc:3622 RuleDoubleStore::reassignIndirects
     /// Reassign INDIRECTs to a new given STORE. (`reassignIndirects`,
     /// double.cc:3622)
     pub fn reassign_indirects(data: &mut Funcdata, new_store: &OpArc, indirects: &[OpArc]) {
@@ -6787,6 +6947,7 @@ impl RuleDoubleStore {
 }
 
 impl Rule for RuleDoubleStore {
+    // Ghidra: double.cc:3513 RuleDoubleStore::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDoubleStore::applyOp (double.cc:3513-3568).
         let op_arc = op_arc.clone();
@@ -6901,10 +7062,12 @@ impl Rule for RuleDoubleStore {
         Ok(NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Rule trait name accessor; Ghidra Rule::getName inherited, name set in RuleDoubleStore ctor (double.hh:363)
     fn get_name(&self) -> &str {
         "doublestore"
     }
 
+    // Ghidra: double.cc:3507 RuleDoubleStore::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_STORE]
     }
@@ -6918,6 +7081,7 @@ impl Rule for RuleDoubleStore {
 // so we enumerate the categorization faithfully (see typeop.cc / opcodes.hh).
 // ---------------------------------------------------------------------------
 
+// RUGRA-GLUE: wraps TypeOp::isArithmeticOp (typeop.hh, not double.cc); opcode categorization
 /// `TypeOp::isArithmeticOp()` — opcodes whose result is an arithmetic function
 /// of integer operands. (typeop.hh / typeop.cc) Enumerated explicitly against
 /// Rugra's `OpCode` variants.
@@ -6947,6 +7111,7 @@ fn is_arithmetic_op(opc: OpCode) -> bool {
     )
 }
 
+// RUGRA-GLUE: wraps TypeOp::isFloatingPointOp (typeop.hh, not double.cc); opcode categorization
 /// `TypeOp::isFloatingPointOp()` — opcodes operating on floating-point values.
 /// (typeop.hh / typeop.cc) Enumerated explicitly against Rugra's `OpCode`
 /// variants. NOTE: Rugra's enum currently omits `CPUI_FLOAT_ZEXT`/`SEXT`
@@ -6977,6 +7142,7 @@ fn is_floating_point_op(opc: OpCode) -> bool {
     )
 }
 
+// RUGRA-GLUE: wraps Funcdata::newVarnodeSpace (funcdata.hh:286, not double.cc); space-id constant creation
 /// Create the space-id Varnode for a LOAD/STORE's first input.
 /// Faithful to Ghidra `Funcdata::newVarnodeSpace(spc)` (funcdata.hh:286),
 /// which the header documents as "create a constant Varnode referring to an

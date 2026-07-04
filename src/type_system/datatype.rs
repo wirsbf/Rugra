@@ -77,6 +77,7 @@ pub struct TypeBase {
 }
 
 impl TypeBase {
+    // Ghidra: type.hh:332 TypeBase::new
     pub fn new(name: String, size: usize, metatype: TypeMetatype) -> Self {
         Self {
             name,
@@ -105,6 +106,7 @@ pub enum Datatype {
 }
 
 impl Datatype {
+    // Ghidra: type.hh:165 Datatype::getName
     /// Get the name of the data type
     pub fn get_name(&self) -> &str {
         match self {
@@ -120,6 +122,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::getSize
     /// Get the size of the data type in bytes
     pub fn get_size(&self) -> usize {
         match self {
@@ -135,6 +138,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::getMetatype
     /// Get the metatype of the data type
     pub fn get_metatype(&self) -> TypeMetatype {
         match self {
@@ -150,6 +154,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::getId
     /// Get the unique ID of the data type
     pub fn get_id(&self) -> u64 {
         match self {
@@ -165,16 +170,19 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::isCoretype
     /// Returns true if this is a core type
     pub fn is_coretype(&self) -> bool {
         (self.get_flags() & type_flags::CORETYPE) != 0
     }
 
+    // Ghidra: type.hh:165 Datatype::isVariableLength
     /// Returns true if this type has a variable length
     pub fn is_variable_length(&self) -> bool {
         (self.get_flags() & type_flags::VARLENGTH) != 0
     }
 
+    // Ghidra: type.hh:165 Datatype::isCharPrint
     /// Should this type be printed as a character/string type?
     /// Faithful to `Datatype::isCharPrint` (type.hh:218). Ghidra checks
     /// flags (chartype|utf16|utf32|opaque_string). Rugra maps opaque_string
@@ -185,6 +193,7 @@ impl Datatype {
             != 0
     }
 
+    // Ghidra: type.hh:929 Datatype::isPieceStructured
     /// Is this a structured type composed of pieces (struct/union/array)?
     /// Faithful to `Datatype::isPieceStructured` (type.hh:929-935). Ghidra
     /// checks `metatype <= TYPE_ARRAY`; Rugra's enum values differ so we use
@@ -196,6 +205,7 @@ impl Datatype {
         )
     }
 
+    // Ghidra: type.hh:165 Datatype::getFlags
     /// Get the internal flags of the data type
     pub fn get_flags(&self) -> u32 {
         match self {
@@ -211,6 +221,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::getAlignment
     /// Get the expected byte alignment of this data-type.
     /// Corresponds to Ghidra's `Datatype::getAlignment` (type.hh:241).
     ///
@@ -225,6 +236,7 @@ impl Datatype {
         primitive_alignment(self.get_size())
     }
 
+    // Ghidra: type.hh:165 Datatype::getAlignSize
     /// Get the size rounded up to a multiple of the alignment.
     /// Corresponds to Ghidra's `Datatype::getAlignSize` (type.hh:240) and
     /// `TypeFactory::getPrimitiveAlignSize` (type.cc:3312).
@@ -238,6 +250,7 @@ impl Datatype {
         calc_align_size(sz, align)
     }
 
+    // Ghidra: type.cc:174 Datatype::getSubType
     /// Recover the component data-type one level down at the given offset.
     /// Corresponds to Ghidra's `Datatype::getSubType` (type.hh:247).
     ///
@@ -281,6 +294,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::getHoleSize
     /// For the given offset, return the number of bytes at that offset that are
     /// padding / a "hole". Corresponds to Ghidra's `Datatype::getHoleSize`.
     ///
@@ -306,6 +320,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.hh:165 Datatype::typeOrder
     /// Order this data-type with `other`. Negative if `self < other`,
     /// zero if equal, positive if `self > other`.
     /// Corresponds to Ghidra's `Datatype::typeOrder` (type.hh:283), which is a
@@ -329,6 +344,7 @@ impl Datatype {
         (sb as i32) - (sa as i32)
     }
 
+    // Ghidra: type.hh:916 Datatype::typeOrderBool
     /// Like `type_order` but treat Bool specially (never prefer bool).
     /// Corresponds to Ghidra's `Datatype::typeOrderBool` (type.hh:916).
     pub fn type_order_bool(&self, other: &Datatype) -> i32 {
@@ -344,6 +360,7 @@ impl Datatype {
         self.type_order(other)
     }
 
+    // Ghidra: type.cc:212 Datatype::compare
     /// Compare two datatypes for structural equality.
     /// Faithful to Datatype::compare (type.cc:212).
     pub fn compare(&self, other: &Datatype) -> i32 {
@@ -360,12 +377,14 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.cc:227 Datatype::compareDependency
     /// Compare datatypes by dependency order.
     /// Faithful to Datatype::compareDependency (type.cc:227).
     pub fn compare_dependency(&self, other: &Datatype) -> i32 {
         self.compare(other)
     }
 
+    // Ghidra: type.cc:561 Datatype::getStripped
     /// Get the "stripped" version (removes typedef wrappers).
     /// Faithful to Datatype::getStripped (type.cc:561-565). The base class
     /// returns null (here: `None`); the various overrides (TypePointerRel,
@@ -375,6 +394,7 @@ impl Datatype {
     /// "no stripped form" by returning the type itself.
     pub fn get_stripped(&self) -> &Datatype { self }
 
+    // Ghidra: type.hh:165 Datatype::needsResolution
     /// Return `true` if this data-type is a union or a pointer to a union
     /// (or otherwise needs resolution before propagation).
     /// Faithful to `Datatype::needsResolution` (type.hh:231).
@@ -382,6 +402,7 @@ impl Datatype {
         (self.get_flags() & type_flags::NEEDS_RESOLUTION) != 0
     }
 
+    // Ghidra: type.hh:165 Datatype::isEnumType
     /// Is this an enumerated type?
     /// Faithful to `Datatype::isEnumType` (type.hh:219): checks the
     /// `enumtype` flag. Note this is flag-based, not metatype-based, because
@@ -391,12 +412,14 @@ impl Datatype {
         (self.get_flags() & type_flags::ENUMTYPE) != 0
     }
 
+    // Ghidra: type.hh:165 Datatype::hasStripped
     /// Has a stripped form for formal declarations?
     /// Faithful to `Datatype::hasStripped` (type.hh:229).
     pub fn has_stripped(&self) -> bool {
         (self.get_flags() & type_flags::HAS_STRIPPED) != 0
     }
 
+    // Ghidra: type.cc:586 Datatype::findResolve
     /// The constant version of `resolve_in_flow`. If a resulting sub-type has
     /// already been calculated for the particular read (`slot >= 0`) or write
     /// (`slot == -1`), then return it; otherwise return the original
@@ -413,6 +436,7 @@ impl Datatype {
         self
     }
 
+    // Ghidra: type.hh:165 Datatype::markEquate
     /// Mark/unmark this data-type as equated. Ghidra has no
     /// `Datatype::markEquate`; equates are represented as `EquateSymbol`
     /// objects in a `Scope` (database.hh:302). Rugra mirrors the intent with
@@ -423,29 +447,34 @@ impl Datatype {
         self.set_flags_mut(type_flags::EQUATED);
     }
 
+    // Ghidra: type.hh:165 Datatype::markUnEquate
     /// Clear the equate marker. See `mark_equate`.
     pub fn mark_un_equate(&mut self) {
         self.clear_flags_mut(type_flags::EQUATED);
     }
 
+    // Ghidra: type.hh:165 Datatype::isEquated
     /// Has this data-type been marked equated? (Rugra-private, no Ghidra
     /// counterpart — see `mark_equate`.)
     pub fn is_equated(&self) -> bool {
         (self.get_flags() & type_flags::EQUATED) != 0
     }
 
+    // Ghidra: type.hh:165 Datatype::setFlagsMut
     /// Internal: OR flags into the variant's `TypeBase.flags`.
     fn set_flags_mut(&mut self, bits: u32) {
         let f = self.base_mut();
         *f |= bits;
     }
 
+    // Ghidra: type.hh:165 Datatype::clearFlagsMut
     /// Internal: AND-NOT flags out of the variant's `TypeBase.flags`.
     fn clear_flags_mut(&mut self, bits: u32) {
         let f = self.base_mut();
         *f &= !bits;
     }
 
+    // Ghidra: type.hh:165 Datatype::baseMut
     /// Internal: mutable access to the underlying `TypeBase.flags` regardless
     /// of which variant `self` is.
     fn base_mut(&mut self) -> &mut u32 {
@@ -462,6 +491,7 @@ impl Datatype {
         }
     }
 
+    // Ghidra: type.cc:501 Datatype::isPrimitiveWhole
     /// Check if this type occupies a whole primitive value.
     /// Faithful to Datatype::isPrimitiveWhole (type.cc:501).
     pub fn is_primitive_whole(&self) -> bool {
@@ -470,6 +500,7 @@ impl Datatype {
             | TypeMetatype::Float)
     }
 
+    // Ghidra: type.cc:139 Datatype::printRaw
     /// Print a raw representation for debugging.
     /// Faithful to Datatype::printRaw (type.cc:139).
     pub fn print_raw(&self) -> String {
@@ -492,6 +523,7 @@ impl Datatype {
     }
 }
 
+// Ghidra: type.cc:536 Datatype::calcAlignSize
 /// Round `sz` up to a multiple of `align`. Corresponds to Ghidra's
 /// `Datatype::calcAlignSize` (type.cc:536).
 pub fn calc_align_size(sz: usize, align: usize) -> usize {
@@ -506,6 +538,7 @@ pub fn calc_align_size(sz: usize, align: usize) -> usize {
     }
 }
 
+// Ghidra: type.hh:165 Datatype::primitiveAlignment
 /// Default primitive alignment for a given size, from Ghidra's
 /// `setDefaultAlignmentMap` (type.cc:4649).
 pub fn primitive_alignment(size: usize) -> usize {
@@ -519,6 +552,7 @@ pub fn primitive_alignment(size: usize) -> usize {
     }
 }
 
+// Ghidra: type.hh:165 Datatype::structGetFieldIter
 /// Find the field index in a struct containing `off`, or None if `off` is not
 /// inside any field. Corresponds to Ghidra's `TypeStruct::getFieldIter`
 /// (type.cc:1580). Fields are assumed sorted by offset.
@@ -538,6 +572,7 @@ fn struct_get_field_iter(s: &TypeStruct, off: i64) -> Option<usize> {
     best
 }
 
+// Ghidra: type.hh:165 Datatype::structGetSubType
 /// Struct subtype lookup. Corresponds to `TypeStruct::getSubType`
 /// (type.cc:1640).
 fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
@@ -550,6 +585,7 @@ fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
     }
 }
 
+// Ghidra: type.hh:165 Datatype::structGetHoleSize
 /// Struct hole size. Corresponds to `TypeStruct::getHoleSize` (type.cc:1652).
 fn struct_get_hole_size(s: &TypeStruct, off: i64) -> i64 {
     if off < 0 {

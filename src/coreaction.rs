@@ -15,12 +15,14 @@ use std::sync::Arc;
 pub struct ActionHeritage;
 
 impl ActionHeritage {
+    // Ghidra: coreaction.hh:284 ActionHeritage (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionHeritage {
+    // Ghidra: coreaction.hh:289 ActionHeritage::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
         //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
@@ -62,6 +64,7 @@ impl Action for ActionHeritage {
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; string "heritage" mirrors ctor at coreaction.hh:284
     fn get_name(&self) -> &str {
         "heritage"
     }
@@ -82,6 +85,7 @@ impl Action for ActionHeritage {
 pub struct ActionDeadCode;
 
 impl ActionDeadCode {
+    // Ghidra: coreaction.hh:552 ActionDeadCode (constructor mirror)
     pub fn new() -> Self {
         Self
     }
@@ -90,6 +94,7 @@ impl ActionDeadCode {
     /// (coreaction.cc). This is the full Ghidra algorithm, ready for
     /// integration when VarnodeLocSet iteration is available.
     #[allow(dead_code)]
+    // Ghidra: coreaction.cc:3556 ActionDeadCode::pushConsumed
     fn push_consumed(
         val: u64,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -112,6 +117,7 @@ impl ActionDeadCode {
     /// `propagateConsumed` (coreaction.cc). Handles INT_MULT, INT_ADD,
     /// INT_SUB, SUBPIECE, and defaults to full mask for other ops.
     #[allow(dead_code)]
+    // Ghidra: coreaction.cc:3576 ActionDeadCode::propagateConsumed
     fn propagate_consumed(
         worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     ) {
@@ -169,6 +175,7 @@ impl ActionDeadCode {
 }
 
 impl Action for ActionDeadCode {
+    // Ghidra: coreaction.cc:3925 ActionDeadCode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Full Ghidra consumed-bit propagation algorithm, driven by
         // iterating Funcdata's varnode bank + op bank.
@@ -290,6 +297,7 @@ impl Action for ActionDeadCode {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "deadcode" mirrors ctor at coreaction.hh:552
     fn get_name(&self) -> &str {
         "deadcode"
     }
@@ -301,12 +309,14 @@ impl Action for ActionDeadCode {
 pub struct ActionConstantPtr;
 
 impl ActionConstantPtr {
+    // Ghidra: coreaction.hh:188 ActionConstantPtr (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionConstantPtr {
+    // Ghidra: coreaction.cc:1167 ActionConstantPtr::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
 
@@ -340,6 +350,7 @@ impl Action for ActionConstantPtr {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "constantptr" mirrors ctor at coreaction.hh:188
     fn get_name(&self) -> &str {
         "constantptr"
     }
@@ -351,12 +362,14 @@ impl Action for ActionConstantPtr {
 pub struct ActionCse;
 
 impl ActionCse {
+    // Ghidra: coreaction.cc:708 ActionCse (historical; apply body commented out in current Ghidra)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionCse {
+    // Ghidra: coreaction.cc:708 ActionCse::apply (historical; commented out / removed in current Ghidra)
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Build a hash map: (opcode, sorted-input-pointer-list) -> first op
         // If two alive ops share the same key, redirect the second op's
@@ -430,6 +443,7 @@ impl Action for ActionCse {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "cse" mirrors the historical ActionCse at coreaction.cc:708
     fn get_name(&self) -> &str {
         "cse"
     }
@@ -450,12 +464,14 @@ pub struct ActionRestructureVarnode {
 }
 
 impl ActionRestructureVarnode {
+    // Ghidra: coreaction.hh:854 ActionRestructureVarnode (constructor mirror)
     pub fn new() -> Self {
         Self { numpass: 0 }
     }
 }
 
 impl Action for ActionRestructureVarnode {
+    // Ghidra: coreaction.cc:2274 ActionRestructureVarnode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2295).
         let mut scope = crate::varmap::ScopeLocal::new();
@@ -467,6 +483,7 @@ impl Action for ActionRestructureVarnode {
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "restructure_varnode" mirrors ctor at coreaction.hh:855
     fn get_name(&self) -> &str {
         "restructureVarnode"
     }
@@ -476,16 +493,19 @@ impl Action for ActionRestructureVarnode {
 pub struct ActionStart;
 
 impl ActionStart {
+    // Ghidra: coreaction.hh:36 ActionStart (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionStart {
+    // Ghidra: coreaction.hh:41 ActionStart::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "start" mirrors ctor at coreaction.hh:36
     fn get_name(&self) -> &str {
         "start"
     }
@@ -497,18 +517,21 @@ impl Action for ActionStart {
 pub struct ActionMergeRequired;
 
 impl ActionMergeRequired {
+    // Ghidra: coreaction.hh:364 ActionMergeRequired (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMergeRequired {
+    // Ghidra: coreaction.hh:369 ActionMergeRequired::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_addr_tied(fd);
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mergerequired" mirrors ctor at coreaction.hh:364
     fn get_name(&self) -> &str {
         "merge_required"
     }
@@ -520,18 +543,21 @@ impl Action for ActionMergeRequired {
 pub struct ActionMergeAdjacent;
 
 impl ActionMergeAdjacent {
+    // Ghidra: coreaction.hh:376 ActionMergeAdjacent (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMergeAdjacent {
+    // Ghidra: coreaction.hh:381 ActionMergeAdjacent::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_adjacent(fd);
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mergeadjacent" mirrors ctor at coreaction.hh:376
     fn get_name(&self) -> &str {
         "merge_adjacent"
     }
@@ -546,12 +572,14 @@ impl Action for ActionMergeAdjacent {
 pub struct ActionMergeCopy;
 
 impl ActionMergeCopy {
+    // Ghidra: coreaction.hh:387 ActionMergeCopy (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMergeCopy {
+    // Ghidra: coreaction.hh:392 ActionMergeCopy::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to coreaction.hh:392: data.getMerge().mergeOpcode(CPUI_COPY);
         let mut merge = crate::merge::Merge::new();
@@ -559,6 +587,7 @@ impl Action for ActionMergeCopy {
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mergecopy" mirrors ctor at coreaction.hh:387
     fn get_name(&self) -> &str {
         "mergecopy"
     }
@@ -570,18 +599,21 @@ impl Action for ActionMergeCopy {
 pub struct ActionMergeMultiEntry;
 
 impl ActionMergeMultiEntry {
+    // Ghidra: coreaction.hh:398 ActionMergeMultiEntry (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMergeMultiEntry {
+    // Ghidra: coreaction.hh:403 ActionMergeMultiEntry::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_multi_entry(fd);
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mergemultientry" mirrors ctor at coreaction.hh:398
     fn get_name(&self) -> &str {
         "merge_multientry"
     }
@@ -593,18 +625,21 @@ impl Action for ActionMergeMultiEntry {
 pub struct ActionMergeType;
 
 impl ActionMergeType {
+    // Ghidra: coreaction.hh:409 ActionMergeType (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMergeType {
+    // Ghidra: coreaction.hh:414 ActionMergeType::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_all(fd);
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mergetype" mirrors ctor at coreaction.hh:409
     fn get_name(&self) -> &str {
         "merge_type"
     }
@@ -620,12 +655,14 @@ impl Action for ActionMergeType {
 pub struct ActionSimplify;
 
 impl ActionSimplify {
+    // RUGRA-GLUE: Rugra-specific peephole simplifier; no single Ghidra Action counterpart (Ghidra folds these via Rule pool in ruleaction.cc)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionSimplify {
+    // RUGRA-GLUE: Rugra-specific peephole simplifier apply; no single Ghidra counterpart
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
 
@@ -744,6 +781,7 @@ impl Action for ActionSimplify {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionSimplify
     fn get_name(&self) -> &str {
         "simplify"
     }
@@ -756,12 +794,14 @@ impl Action for ActionSimplify {
 pub struct ActionCopyPropagate;
 
 impl ActionCopyPropagate {
+    // RUGRA-GLUE: Rugra-specific copy-propagation pass; no direct Ghidra Action counterpart
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionCopyPropagate {
+    // RUGRA-GLUE: Rugra-specific copy-propagation apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut changed = 0;
         let mut to_kill: Vec<crate::op::PcodeOpRef> = Vec::new();
@@ -856,6 +896,7 @@ impl Action for ActionCopyPropagate {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCopyPropagate
     fn get_name(&self) -> &str {
         "copy_propagate"
     }
@@ -883,6 +924,7 @@ const SYSV_ARG_REGS: [(u64, &str); 6] = [
 /// (the variadic args are handled separately).
 /// For unknown functions, returns 6 (all SysV AMD64 arg registers).
 /// This is the standard approach used by all decompilers (Ghidra .gdt, IDA .til).
+// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param count); no Ghidra counterpart (Ghidra uses FuncProto lock instead)
 fn known_param_count(func_name: Option<&str>) -> usize {
     // Normalize function name: replace '.' with '_' so that GCC-optimized
     // variants like "parseconfig.constprop.0" match "parseconfig_constprop_0".
@@ -957,6 +999,7 @@ fn known_param_count(func_name: Option<&str>) -> usize {
 /// Used by ActionInferParams to override the default size-based type inference
 /// with source-accurate pointer types. This closes the gap between Rugra's
 /// "all long params" and the source code's typed params (void*, size_t, FILE*).
+// RUGRA-GLUE: Rugra-specific ABI table (SysV known-callee param types)
 fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
     let normalized = func_name.map(|n| n.replace('.', "_"));
     let name = normalized.as_deref()?;
@@ -982,6 +1025,7 @@ fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
     }
 }
 
+// RUGRA-GLUE: Rugra-specific ABI table (known-callee predicate)
 fn is_known_function(func_name: Option<&str>) -> bool {
     known_param_count(func_name) != 6
 }
@@ -1006,6 +1050,7 @@ pub enum KnownReturn {
 
 /// Known callee return types. Mirrors the function names in `known_param_count`
 /// (coreaction.rs:894-961). libc signatures from the SysV ABI / glibc headers.
+// RUGRA-GLUE: Rugra-specific ABI table (known-callee return type)
 fn known_return_type(func_name: Option<&str>) -> Option<KnownReturn> {
     let name = func_name?.replace('.', "_");
     let name = name.as_str();
@@ -1045,12 +1090,14 @@ fn known_return_type(func_name: Option<&str>) -> Option<KnownReturn> {
 }
 
 impl ActionCallParams {
+    // RUGRA-GLUE: Rugra-specific param fill-in pass; no direct Ghidra Action counterpart
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionCallParams {
+    // RUGRA-GLUE: Rugra-specific param fill-in apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::AddressSpace;
         let mut changed = 0;
@@ -1278,6 +1325,7 @@ impl Action for ActionCallParams {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCallParams
     fn get_name(&self) -> &str {
         "call_params"
     }
@@ -1294,12 +1342,14 @@ impl Action for ActionCallParams {
 pub struct ActionInferParams;
 
 impl ActionInferParams {
+    // RUGRA-GLUE: Rugra-specific param inference pass; no direct Ghidra Action counterpart
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionInferParams {
+    // RUGRA-GLUE: Rugra-specific param inference apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::AddressSpace;
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
@@ -1604,6 +1654,7 @@ impl Action for ActionInferParams {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionInferParams
     fn get_name(&self) -> &str {
         "infer_params"
     }
@@ -1618,12 +1669,14 @@ impl Action for ActionInferParams {
 pub struct ActionTypeInfer;
 
 impl ActionTypeInfer {
+    // RUGRA-GLUE: Rugra-specific whole-function type inference; no direct Ghidra Action counterpart (Ghidra uses ActionInferTypes instead)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionTypeInfer {
+    // RUGRA-GLUE: Rugra-specific whole-function type inference apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
@@ -1894,11 +1947,13 @@ impl Action for ActionTypeInfer {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionTypeInfer
     fn get_name(&self) -> &str {
         "type_infer"
     }
 }
 
+// RUGRA-GLUE: helper mirroring TypePointer::getPtrTo (type.hh); used by Rugra type inference
 fn get_pointed_type(ptr_dt: &Arc<crate::type_system::datatype::Datatype>) -> Option<Arc<crate::type_system::datatype::Datatype>> {
     use crate::type_system::datatype::Datatype;
     match ptr_dt.as_ref() {
@@ -1907,6 +1962,7 @@ fn get_pointed_type(ptr_dt: &Arc<crate::type_system::datatype::Datatype>) -> Opt
     }
 }
 
+// RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh); used by Rugra type inference
 fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<crate::type_system::datatype::Datatype> {
     use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
     Arc::new(Datatype::Pointer(TypePointer {
@@ -1928,9 +1984,11 @@ fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<
 /// reachable blocks.
 pub struct ActionUnreachable { pub count: i32 }
 impl ActionUnreachable {
+    // Ghidra: coreaction.hh:493 ActionUnreachable (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionUnreachable {
+    // Ghidra: coreaction.cc:3457 ActionUnreachable::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464).
         if fd.remove_unreachable_blocks() {
@@ -1939,6 +1997,7 @@ impl Action for ActionUnreachable {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "unreachable" mirrors ctor at coreaction.hh:493
     fn get_name(&self) -> &str { "unreachable" }
 }
 
@@ -1949,9 +2008,11 @@ impl Action for ActionUnreachable {
 /// BRANCHIND, and contains only marker/branch ops (no substantive ops).
 pub struct ActionDoNothing { pub count: i32 }
 impl ActionDoNothing {
+    // Ghidra: coreaction.hh:504 ActionDoNothing (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDoNothing {
+    // Ghidra: coreaction.cc:3466 ActionDoNothing::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         let n = fd.bblocks.get_size();
@@ -2021,6 +2082,7 @@ impl Action for ActionDoNothing {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "donothing" mirrors ctor at coreaction.hh:504
     fn get_name(&self) -> &str { "donothing" }
 }
 
@@ -2035,9 +2097,11 @@ impl Action for ActionDoNothing {
 ///    via remove_branch.
 pub struct ActionRedundBranch { pub count: i32 }
 impl ActionRedundBranch {
+    // Ghidra: coreaction.hh:515 ActionRedundBranch (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionRedundBranch {
+    // Ghidra: coreaction.cc:3492 ActionRedundBranch::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let n = fd.bblocks.get_size();
         for i in 0..n {
@@ -2102,6 +2166,7 @@ impl Action for ActionRedundBranch {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "redundbranch" mirrors ctor at coreaction.hh:515
     fn get_name(&self) -> &str { "redundbranch" }
 }
 
@@ -2113,9 +2178,11 @@ impl Action for ActionRedundBranch {
 /// and remove the other branch.
 pub struct ActionDeterminedBranch { pub count: i32 }
 impl ActionDeterminedBranch {
+    // Ghidra: coreaction.hh:526 ActionDeterminedBranch (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeterminedBranch {
+    // Ghidra: coreaction.cc:3530 ActionDeterminedBranch::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         let n_blocks = fd.bblocks.get_size();
@@ -2163,6 +2230,7 @@ impl Action for ActionDeterminedBranch {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "determinedbranch" mirrors ctor at coreaction.hh:526
     fn get_name(&self) -> &str { "determinedbranch" }
 }
 
@@ -2173,9 +2241,11 @@ impl Action for ActionDeterminedBranch {
 /// representative.
 pub struct ActionHideShadow;
 impl ActionHideShadow {
+    // Ghidra: coreaction.hh:992 ActionHideShadow (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionHideShadow {
+    // Ghidra: coreaction.cc:4831 ActionHideShadow::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to coreaction.cc:4831-4845: iterate each distinct
         // HighVariable (dedup via mark) and call Merge::hideShadows(high).
@@ -2207,6 +2277,7 @@ impl Action for ActionHideShadow {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "hideshadow" mirrors ctor at coreaction.hh:992
     fn get_name(&self) -> &str { "hideshadow" }
 }
 
@@ -2217,9 +2288,11 @@ impl Action for ActionHideShadow {
 /// recover case labels, and fold in normalization code.
 pub struct ActionSwitchNorm { pub count: i32 }
 impl ActionSwitchNorm {
+    // Ghidra: coreaction.hh:609 ActionSwitchNorm (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionSwitchNorm {
+    // Ghidra: coreaction.cc:4548 ActionSwitchNorm::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Pre-pass: recover jump-tables for any BRANCHIND that doesn't already
         // have one. In full Ghidra this happens during flow tracing
@@ -2260,6 +2333,7 @@ impl Action for ActionSwitchNorm {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "switchnorm" mirrors ctor at coreaction.hh:609
     fn get_name(&self) -> &str { "switchnorm" }
 }
 
@@ -2270,9 +2344,11 @@ impl Action for ActionSwitchNorm {
 /// so that the model can be reevaluated during normalization.
 pub struct ActionNormalizeSetup;
 impl ActionNormalizeSetup {
+    // Ghidra: coreaction.hh:630 ActionNormalizeSetup (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNormalizeSetup {
+    // Ghidra: coreaction.cc:4567 ActionNormalizeSetup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: clear the Funcdata's scope to prepare
         // for re-normalization. Full Ghidra also clears FuncProto input
@@ -2288,6 +2364,7 @@ impl Action for ActionNormalizeSetup {
         let _ = proto; // Full: clearInput + setModelLock(false) + setOutputLock(false)
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "normalizesetup" mirrors ctor at coreaction.hh:630
     fn get_name(&self) -> &str { "normalizesetup" }
 }
 
@@ -2301,9 +2378,11 @@ impl Action for ActionNormalizeSetup {
 /// - Unknown calling convention model
 pub struct ActionPrototypeWarnings;
 impl ActionPrototypeWarnings {
+    // Ghidra: coreaction.hh:1047 ActionPrototypeWarnings (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeWarnings {
+    // Ghidra: coreaction.cc:4886 ActionPrototypeWarnings::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionPrototypeWarnings::apply (coreaction.cc:4886-4920).
         // Check prototype for errors/warnings and emit diagnostic messages.
@@ -2332,6 +2411,7 @@ impl Action for ActionPrototypeWarnings {
 
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "prototypewarnings" mirrors ctor at coreaction.hh:1047
     fn get_name(&self) -> &str { "prototypewarnings" }
 }
 
@@ -2348,6 +2428,7 @@ impl Action for ActionPrototypeWarnings {
 /// 3. Clear marks.
 pub struct ActionMarkExplicit { pub count: i32 }
 impl ActionMarkExplicit {
+    // Ghidra: coreaction.hh:427 ActionMarkExplicit (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 
     /// Check if a Varnode should be marked explicit. Faithful to
@@ -2356,6 +2437,7 @@ impl ActionMarkExplicit {
     /// - -2: explicit (NEW op, may need special printing)
     /// - 0: single descendant, not explicit
     /// - >0: number of descendants (potential implied)
+    // Ghidra: coreaction.cc:3007 ActionMarkExplicit::baseExplicit
     fn base_explicit(
         vn: &crate::varnode::Varnode,
         max_ref: i32,
@@ -2398,6 +2480,7 @@ impl ActionMarkExplicit {
     }
 }
 impl Action for ActionMarkExplicit {
+    // Ghidra: coreaction.cc:3237 ActionMarkExplicit::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let max_ref = 2; // arch.max_implied_ref default
         let mut change_count = 0;
@@ -2435,6 +2518,7 @@ impl Action for ActionMarkExplicit {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "markexplicit" mirrors ctor at coreaction.hh:427
     fn get_name(&self) -> &str { "markexplicit" }
 }
 
@@ -2448,12 +2532,14 @@ impl Action for ActionMarkExplicit {
 /// aliasing issues).
 pub struct ActionMarkImplied { pub count: i32 }
 impl ActionMarkImplied {
+    // Ghidra: coreaction.hh:449 ActionMarkImplied (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 
     /// Return false only if one Varnode is obtained by adding non-zero thing
     /// to another Varnode. Faithful to `isPossibleAliasStep`
     /// (coreaction.cc).
     #[allow(dead_code)] // reserved for full LOAD/STORE crossing check
+    // Ghidra: coreaction.cc:3279 ActionMarkImplied::isPossibleAliasStep
     fn is_possible_alias_step(
         vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -2499,6 +2585,7 @@ impl ActionMarkImplied {
     ///      of the def op, test if inflating it to cover `high` intersects a
     ///      sibling instance (Merge::inflateTest). This prevents two SSA
     ///      versions of one logical varnode being simultaneously live.
+    // Ghidra: coreaction.cc:3376 ActionMarkImplied::checkImpliedCover
     fn check_implied_cover(
         &self,
         fd: &mut Funcdata,
@@ -2605,6 +2692,7 @@ impl ActionMarkImplied {
     }
 }
 impl Action for ActionMarkImplied {
+    // Ghidra: coreaction.cc:3416 ActionMarkImplied::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra ActionMarkImplied::apply (coreaction.cc:3416).
         // Iterates all Varnodes; for each non-explicit/non-implied candidate,
@@ -2646,6 +2734,7 @@ impl Action for ActionMarkImplied {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "markimplied" mirrors ctor at coreaction.hh:449
     fn get_name(&self) -> &str { "markimplied" }
 }
 
@@ -2661,6 +2750,7 @@ impl Action for ActionMarkImplied {
 /// 5. Casts the output to its declared type
 pub struct ActionSetCasts { pub count: i32 }
 impl ActionSetCasts {
+    // Ghidra: coreaction.hh:330 ActionSetCasts (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 
     /// Expected input metatype for an op's input slot. Faithful to Ghidra
@@ -2670,6 +2760,7 @@ impl ActionSetCasts {
     /// metain=TYPE_INT; BOOL_* have metain=TYPE_BOOL. Returns None for ops
     /// with no fixed input metatype (LOAD/STORE/CALL/branch etc.), which
     /// Ghidra handles via op-specific getInputCast overrides not ported here.
+    // RUGRA-GLUE: helper mapping OpCode -> TypeMetatype for cast decisions; mirrors OpCode::getMetadata (typeop.cc)
     fn input_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::type_system::datatype::TypeMetatype;
         match opc {
@@ -2703,6 +2794,7 @@ impl ActionSetCasts {
     /// as `(reqtype)in`).
     ///
     /// Returns true if a cast was inserted.
+    // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput
     fn cast_input(
         &self,
         fd: &mut Funcdata,
@@ -2757,6 +2849,7 @@ impl ActionSetCasts {
     }
 }
 impl Action for ActionSetCasts {
+    // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionSetCasts::apply (coreaction.cc:2722-2774). Iterate
         // ops in basic-block/dominance order (Rugra iterates alivelist, which
@@ -2788,6 +2881,7 @@ impl Action for ActionSetCasts {
         }
         if count > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "setcasts" mirrors ctor at coreaction.hh:330
     fn get_name(&self) -> &str { "setcasts" }
 }
 
@@ -2809,6 +2903,7 @@ pub struct ActionInferTypes {
     pub local_count: i32,
 }
 impl ActionInferTypes {
+    // Ghidra: coreaction.hh:960 ActionInferTypes (constructor mirror)
     pub fn new() -> Self { Self { local_count: 0 } }
 }
 
@@ -2823,6 +2918,7 @@ type TempTypes = HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datat
 /// create_index with its size so that distinct overlapping varnodes don't
 /// collide. (Rugra varnodes are uniquely keyed by (loc, size, create_index).)
 #[inline]
+// RUGRA-GLUE: Rugra helper producing a stable u64 key for a Varnode (Rust borrow workaround)
 fn vn_id(vn: &crate::varnode::Varnode) -> u64 {
     // offset encodes the address+space identity; combine with size & create_index.
     let off = vn.get_offset();
@@ -2833,6 +2929,7 @@ fn vn_id(vn: &crate::varnode::Varnode) -> u64 {
 
 /// Build a pointer type to `base` with the architecture pointer size, using a
 /// fresh factory-free TypePointer. Faithful to `TypeFactory::getTypePointer`.
+// RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh)
 fn make_ptr(
     base: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ptr_size: usize,
@@ -2847,6 +2944,7 @@ fn make_ptr(
 }
 
 /// Resolve the pointed-to type of a (possibly pointer) type, or None.
+// RUGRA-GLUE: helper mirroring TypePointer::getPtrTo (type.hh)
 fn ptr_to<'a>(
     ct: &'a crate::type_system::datatype::Datatype,
 ) -> Option<&'a std::sync::Arc<crate::type_system::datatype::Datatype>> {
@@ -2989,6 +3087,7 @@ impl ActionInferTypes {
     /// `inslot` is the edge's input varnode slot (-1 = op output);
     /// `outslot` is the edge's output slot (-1 = op output).
     /// Returns the out varnode arc if the propagation changed its temp type.
+    // Ghidra: coreaction.cc:5074 ActionInferTypes::propagateTypeEdge
     fn propagate_type_edge(
         op: &crate::op::PcodeOp,
         temps: &TempTypes,
@@ -3066,6 +3165,7 @@ impl ActionInferTypes {
     /// Per-opcode `propagateType` dispatch. Faithful to
     /// `OpCode::propagateType` (typeop*.cc). Returns the type that the output
     /// varnode should take when `alttype` flows from `inslot` to `outslot`.
+    // RUGRA-GLUE: Rugra driver that folds ActionInferTypes::propagateOneType over the varnode set (coreaction.cc:5400-5405)
     fn propagate_type(
         op: &crate::op::PcodeOp,
         alttype: &std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -3216,6 +3316,7 @@ impl ActionInferTypes {
     /// Faithful to `ActionInferTypes::propagateOneType` (coreaction.cc:5172-5198).
     /// DFS from one varnode, pushing its temp type across every propagating
     /// edge. Each varnode is visited at most once per root propagation.
+    // Ghidra: coreaction.cc:5172 ActionInferTypes::propagateOneType
     fn propagate_one_type(
         &self,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -3342,6 +3443,7 @@ impl ActionInferTypes {
     /// Faithful to `ActionInferTypes::writeBack` (coreaction.cc:5043-5060).
     /// Copy temp types to the permanent v_type field (respecting locks).
     /// Returns true if any varnode changed.
+    // Ghidra: coreaction.cc:5043 ActionInferTypes::writeBack
     fn write_back(&self, fd: &Funcdata, temps: &TempTypes) -> bool {
         let mut changed = false;
         for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
@@ -3365,6 +3467,7 @@ impl ActionInferTypes {
     /// Faithful to `ActionInferTypes::propagateAcrossReturns`
     /// (coreaction.cc:5342-5372). Propagate the canonical return type to all
     /// other RETURN ops' input varnodes.
+    // Ghidra: coreaction.cc:5342 ActionInferTypes::propagateAcrossReturns
     fn propagate_across_returns(
         &self,
         fd: &Funcdata,
@@ -3457,6 +3560,7 @@ struct IntTypes {
 }
 
 impl IntTypes {
+    // RUGRA-GLUE: IntTypes helper; size->Datatype lookup mirroring TypeFactory base-type table
     fn sized(&self, sz: usize) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
         match sz {
             1 => self.int_1.clone(),
@@ -3468,6 +3572,7 @@ impl IntTypes {
 }
 
 impl Action for ActionInferTypes {
+    // Ghidra: coreaction.cc:5374 ActionInferTypes::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInferTypes::apply (coreaction.cc:5374-5416).
         // 1. If type recovery has not started, do nothing.
@@ -3558,6 +3663,7 @@ impl Action for ActionInferTypes {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "infertypes" mirrors ctor at coreaction.hh:960
     fn get_name(&self) -> &str { "infertypes" }
 }
 
@@ -3571,9 +3677,11 @@ impl Action for ActionInferTypes {
 /// 4. Scope default name assignment
 pub struct ActionNameVars;
 impl ActionNameVars {
+    // Ghidra: coreaction.hh:470 ActionNameVars (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNameVars {
+    // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra algorithm:
         // 1. linkSymbols(data, namerec):
@@ -3598,6 +3706,7 @@ impl Action for ActionNameVars {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "namevars" mirrors ctor at coreaction.hh:470
     fn get_name(&self) -> &str { "namevars" }
 }
 
@@ -3605,9 +3714,11 @@ impl Action for ActionNameVars {
 /// (coreaction.cc).
 pub struct ActionVarnodeProps;
 impl ActionVarnodeProps {
+    // Ghidra: coreaction.hh:222 ActionVarnodeProps (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionVarnodeProps {
+    // Ghidra: coreaction.cc:1282 ActionVarnodeProps::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation of ActionVarnodeProps (coreaction.cc).
         // The full Ghidra algorithm sets Varnode properties like readonly
@@ -3663,6 +3774,7 @@ impl Action for ActionVarnodeProps {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "varnodeprops" mirrors ctor at coreaction.hh:222
     fn get_name(&self) -> &str { "varnodeprops" }
 }
 
@@ -3677,9 +3789,11 @@ impl Action for ActionVarnodeProps {
 /// locations, which are temporary storage used by the compiler.
 pub struct ActionRestrictLocal;
 impl ActionRestrictLocal {
+    // Ghidra: coreaction.hh:813 ActionRestrictLocal (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionRestrictLocal {
+    // Ghidra: coreaction.cc:1957 ActionRestrictLocal::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestrictLocal::apply (coreaction.cc:1957-2001).
         // Collect all mark_not_mapped ranges first, then apply to scope
@@ -3743,6 +3857,7 @@ impl Action for ActionRestrictLocal {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "restrictlocal" mirrors ctor at coreaction.hh:813
     fn get_name(&self) -> &str { "restrictlocal" }
 }
 
@@ -3750,10 +3865,12 @@ impl Action for ActionRestrictLocal {
 /// `ActionMultiCse` (coreaction.cc).
 pub struct ActionMultiCse { pub count: i32 }
 impl ActionMultiCse {
+    // Ghidra: coreaction.hh:163 ActionMultiCse (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 
     /// Resolve a COPY chain: if `vn` is defined by a COPY, return its input.
     /// Otherwise return `vn` itself. Used to allow copy-propagation differences.
+    // RUGRA-GLUE: Rugra helper chasing COPY chains; Ghidra inlines this within ActionMultiCse::processBlock (coreaction.cc:790-810)
     fn resolve_copy(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let (is_written, is_copy, in0) = {
             let r = vn.read().unwrap();
@@ -3780,6 +3897,7 @@ impl ActionMultiCse {
     /// Prefer which of two outputs to keep. Faithful to `preferredOutput`
     /// (coreaction.cc:741-770). Returns true if out2 should be preferred over
     /// out1.
+    // Ghidra: coreaction.cc:741 ActionMultiCse::preferredOutput
     fn preferred_output(
         out1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         out2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -3821,6 +3939,7 @@ impl ActionMultiCse {
     /// and is functionally equivalent to `target`. Faithful to `findMatch`
     /// (coreaction.cc:777-815). Returns the matching op index in `block_ops`,
     /// or None.
+    // Ghidra: coreaction.cc:777 ActionMultiCse::findMatch
     fn find_match(
         block_ops: &[crate::op::PcodeOpRef],
         target_idx: usize,
@@ -3875,6 +3994,7 @@ impl ActionMultiCse {
 
     /// Process one basic block. Faithful to `processBlock`
     /// (coreaction.cc:822-877). Returns true if a MULTIEQUAL was deleted.
+    // Ghidra: coreaction.cc:822 ActionMultiCse::processBlock
     fn process_block(fd: &mut Funcdata, block_ops: &[crate::op::PcodeOpRef]) -> bool {
         use crate::opcodes::OpCode;
         use std::sync::Arc;
@@ -3942,6 +4062,7 @@ impl ActionMultiCse {
     }
 }
 impl Action for ActionMultiCse {
+    // Ghidra: coreaction.cc:879 ActionMultiCse::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionMultiCse::apply (coreaction.cc:879-890).
         use crate::block::BlockBasic;
@@ -3975,6 +4096,7 @@ impl Action for ActionMultiCse {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "multicse" mirrors ctor at coreaction.hh:163
     fn get_name(&self) -> &str { "multicse" }
 }
 
@@ -3996,9 +4118,11 @@ impl Action for ActionMultiCse {
 /// 4. Propagate direct-write through the worklist
 pub struct ActionDirectWrite;
 impl ActionDirectWrite {
+    // Ghidra: coreaction.hh:243 ActionDirectWrite (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDirectWrite {
+    // Ghidra: coreaction.cc:1350 ActionDirectWrite::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDirectWrite::apply (coreaction.cc:1350-1432).
         // Phase 1: Clear direct_write on all varnodes. Collect initial
@@ -4064,6 +4188,7 @@ impl Action for ActionDirectWrite {
 
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "directwrite" mirrors ctor at coreaction.hh:243
     fn get_name(&self) -> &str { "directwrite" }
 }
 
@@ -4075,9 +4200,11 @@ impl Action for ActionDirectWrite {
 /// the tracked value into the register's storage location.
 pub struct ActionConstbase;
 impl ActionConstbase {
+    // Ghidra: coreaction.hh:259 ActionConstbase (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionConstbase {
+    // Ghidra: coreaction.cc:678 ActionConstbase::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: get entry block and function address,
         // check for tracked context. Without ContextDatabase integration,
@@ -4109,6 +4236,7 @@ impl Action for ActionConstbase {
 
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "constbase" mirrors ctor at coreaction.hh:259
     fn get_name(&self) -> &str { "constbase" }
 }
 
@@ -4116,9 +4244,11 @@ impl Action for ActionConstbase {
 /// (coreaction.cc).
 pub struct ActionInputPrototype;
 impl ActionInputPrototype {
+    // Ghidra: coreaction.hh:892 ActionInputPrototype (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInputPrototype {
+    // Ghidra: coreaction.cc:4707 ActionInputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
         // If the function's input prototype is NOT locked, derive it from
@@ -4183,6 +4313,7 @@ impl Action for ActionInputPrototype {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "inputprototype" mirrors ctor at coreaction.hh:892
     fn get_name(&self) -> &str { "inputprototype" }
 }
 
@@ -4190,9 +4321,11 @@ impl Action for ActionInputPrototype {
 /// (coreaction.cc:4765-4782).
 pub struct ActionOutputPrototype;
 impl ActionOutputPrototype {
+    // Ghidra: coreaction.hh:903 ActionOutputPrototype (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionOutputPrototype {
+    // Ghidra: coreaction.cc:4765 ActionOutputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionOutputPrototype::apply (coreaction.cc:4765-4782).
         // If the return type is NOT locked, derive it from the first RETURN op.
@@ -4244,6 +4377,7 @@ impl Action for ActionOutputPrototype {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "outputprototype" mirrors ctor at coreaction.hh:903
     fn get_name(&self) -> &str { "outputprototype" }
 }
 
@@ -4251,9 +4385,11 @@ impl Action for ActionOutputPrototype {
 /// (coreaction.cc:4609-4651).
 pub struct ActionPrototypeTypes;
 impl ActionPrototypeTypes {
+    // Ghidra: coreaction.hh:643 ActionPrototypeTypes (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionPrototypeTypes {
+    // Ghidra: coreaction.cc:4609 ActionPrototypeTypes::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionPrototypeTypes::apply (coreaction.cc:4609-4651).
         // 1. Set evaluation prototype if not locked
@@ -4304,6 +4440,7 @@ impl Action for ActionPrototypeTypes {
 
         if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "prototypetypes" mirrors ctor at coreaction.hh:643
     fn get_name(&self) -> &str { "prototypetypes" }
 }
 
@@ -4311,9 +4448,11 @@ impl Action for ActionPrototypeTypes {
 /// (coreaction.cc).
 pub struct ActionActiveParam;
 impl ActionActiveParam {
+    // Ghidra: coreaction.hh:748 ActionActiveParam (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveParam {
+    // Ghidra: coreaction.cc:1725 ActionActiveParam::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveParam::apply (coreaction.cc:1725-1771).
         // For each call spec with active input recovery:
@@ -4354,6 +4493,7 @@ impl Action for ActionActiveParam {
         }
         if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "activeparam" mirrors ctor at coreaction.hh:748
     fn get_name(&self) -> &str { "activeparam" }
 }
 
@@ -4361,9 +4501,11 @@ impl Action for ActionActiveParam {
 /// (coreaction.cc).
 pub struct ActionActiveReturn;
 impl ActionActiveReturn {
+    // Ghidra: coreaction.hh:761 ActionActiveReturn (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionActiveReturn {
+    // Ghidra: coreaction.cc:1773 ActionActiveReturn::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveReturn::apply (coreaction.cc:1773-1792).
         // For each call spec with active output recovery:
@@ -4420,6 +4562,7 @@ impl Action for ActionActiveReturn {
         }
         if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "activereturn" mirrors ctor at coreaction.hh:761
     fn get_name(&self) -> &str { "activereturn" }
 }
 
@@ -4427,9 +4570,11 @@ impl Action for ActionActiveReturn {
 /// (coreaction.cc:2311-2337).
 pub struct ActionDefaultParams;
 impl ActionDefaultParams {
+    // Ghidra: coreaction.hh:659 ActionDefaultParams (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDefaultParams {
+    // Ghidra: coreaction.cc:2311 ActionDefaultParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDefaultParams::apply (coreaction.cc:2311-2337).
         // For each call without a model:
@@ -4456,6 +4601,7 @@ impl Action for ActionDefaultParams {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "defaultparams" mirrors ctor at coreaction.hh:659
     fn get_name(&self) -> &str { "defaultparams" }
 }
 
@@ -4463,9 +4609,11 @@ impl Action for ActionDefaultParams {
 /// (coreaction.cc).
 pub struct ActionParamDouble;
 impl ActionParamDouble {
+    // Ghidra: coreaction.hh:730 ActionParamDouble (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionParamDouble {
+    // Ghidra: coreaction.cc:1597 ActionParamDouble::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate callspecs, for each call with
         // stack-relative params, check if the input Varnode is defined by
@@ -4490,6 +4638,7 @@ impl Action for ActionParamDouble {
         let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "paramdouble" mirrors ctor at coreaction.hh:730
     fn get_name(&self) -> &str { "paramdouble" }
 }
 
@@ -4497,9 +4646,11 @@ impl Action for ActionParamDouble {
 /// (coreaction.cc).
 pub struct ActionUnjustifiedParams;
 impl ActionUnjustifiedParams {
+    // Ghidra: coreaction.hh:918 ActionUnjustifiedParams (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionUnjustifiedParams {
+    // Ghidra: coreaction.cc:4784 ActionUnjustifiedParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
         // Find input varnodes whose storage is not fully covered by the
@@ -4555,6 +4706,7 @@ impl Action for ActionUnjustifiedParams {
 
         if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "unjustifiedparams" mirrors ctor at coreaction.hh:918
     fn get_name(&self) -> &str { "unjustifiedparams" }
 }
 
@@ -4567,9 +4719,11 @@ impl Action for ActionUnjustifiedParams {
 /// false dependencies from trash registers.
 pub struct ActionLikelyTrash { pub count: i32 }
 impl ActionLikelyTrash {
+    // Ghidra: coreaction.hh:833 ActionLikelyTrash (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionLikelyTrash {
+    // Ghidra: coreaction.cc:2140 ActionLikelyTrash::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra algorithm:
         // 1. For each VarnodeData in funcProto.trashBegin..trashEnd:
@@ -4584,6 +4738,7 @@ impl Action for ActionLikelyTrash {
         let _ = proto; // Full: iterate proto.trashBegin/End
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "likelytrash" mirrors ctor at coreaction.hh:833
     fn get_name(&self) -> &str { "likelytrash" }
 }
 
@@ -4598,9 +4753,11 @@ pub struct ActionShadowVar {
     pub count: i32,
 }
 impl ActionShadowVar {
+    // Ghidra: coreaction.hh:177 ActionShadowVar (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionShadowVar {
+    // Ghidra: coreaction.cc:892 ActionShadowVar::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionShadowVar::apply (coreaction.cc:892-946).
         //
@@ -4734,11 +4891,13 @@ impl Action for ActionShadowVar {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "shadowvar" mirrors ctor at coreaction.hh:177
     fn get_name(&self) -> &str { "shadowvar" }
 }
 
 /// Helper: get the basic-block ops list containing the given op. Returns an
 /// empty Vec if the op is not in any BlockBasic.
+// RUGRA-GLUE: Rugra helper bridging PcodeOpRef -> parent BlockBasic ops list (Ghidra reaches this via PcodeOp::parent)
 fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef> {
     use crate::block::BlockBasic;
     for i in 0..fd.bblocks.get_size() {
@@ -4765,6 +4924,7 @@ fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::Pc
 /// prototypes, mark bool returns).
 pub struct ActionFuncLink;
 impl ActionFuncLink {
+    // Ghidra: coreaction.hh:697 ActionFuncLink (constructor mirror)
     pub fn new() -> Self { Self }
 
     // Ghidra: flow.hh:129 FlowInfo::setupCallSpecs
@@ -4863,6 +5023,7 @@ impl ActionFuncLink {
     /// param path (opStackLoad + spacebase placeholder) requires Funcdata
     /// op-edit pcode injection; the register-param trial registration is
     /// implemented here.
+    // Ghidra: coreaction.cc:1474 ActionFuncLink::funcLinkInput
     pub fn func_link_input(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -4912,6 +5073,7 @@ impl ActionFuncLink {
     /// The locked-stack-output path (setStackOutputLock) and the small-size
     /// extension path (assumedOutputExtension → SEXT/ZEXT/PIECE op) require
     /// Funcdata op-edit infrastructure beyond this pass and are deferred.
+    // Ghidra: coreaction.cc:1521 ActionFuncLink::funcLinkOutput
     pub fn func_link_output(fd: &mut Funcdata, fc_idx: usize, op: &crate::op::PcodeOpRef) {
         // (1) Remove any existing output (Ghidra coreaction.cc:1525-1537).
         {
@@ -4949,6 +5111,7 @@ impl ActionFuncLink {
     }
 }
 impl Action for ActionFuncLink {
+    // Ghidra: coreaction.cc:1575 ActionFuncLink::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionFuncLink::apply (coreaction.cc:1575-1586) +
         // FlowInfo::setupCallSpecs (flow.cc:680). Rugra has no separate FlowInfo
@@ -4996,6 +5159,7 @@ impl Action for ActionFuncLink {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "funclink" mirrors ctor at coreaction.hh:697
     fn get_name(&self) -> &str { "funclink" }
 }
 
@@ -5005,9 +5169,11 @@ impl Action for ActionFuncLink {
 /// Only calls funcLinkOutput for each call (input linking already done).
 pub struct ActionFuncLinkOutOnly;
 impl ActionFuncLinkOutOnly {
+    // Ghidra: coreaction.hh:715 ActionFuncLinkOutOnly (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionFuncLinkOutOnly {
+    // Ghidra: coreaction.cc:1588 ActionFuncLinkOutOnly::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionFuncLinkOutOnly::apply (coreaction.cc:1588-1595).
         let n_calls = fd.num_calls();
@@ -5032,6 +5198,7 @@ impl Action for ActionFuncLinkOutOnly {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "funclinkoutonly" mirrors ctor at coreaction.hh:715
     fn get_name(&self) -> &str { "funclinkoutonly" }
 }
 
@@ -5039,9 +5206,11 @@ impl Action for ActionFuncLinkOutOnly {
 /// (coreaction.cc).
 pub struct ActionDeindirect { pub count: i32 }
 impl ActionDeindirect {
+    // Ghidra: coreaction.hh:206 ActionDeindirect (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionDeindirect {
+    // Ghidra: coreaction.cc:1219 ActionDeindirect::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionDeindirect::apply (coreaction.cc:1219-1280).
         // For each CALLIND call site, trace the indirect target through COPY
@@ -5105,6 +5274,7 @@ impl Action for ActionDeindirect {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "deindirect" mirrors ctor at coreaction.hh:206
     fn get_name(&self) -> &str { "deindirect" }
 }
 
@@ -5113,6 +5283,7 @@ impl ActionDeindirect {
     /// address. Faithful to the while-loop in ActionDeindirect::apply
     /// (coreaction.cc:1231-1232). Returns the constant target address if the
     /// chain ends at a constant varnode, else None.
+    // RUGRA-GLUE: Rugra helper factoring out the CALLIND input(0) COPY-chain chase inlined at coreaction.cc:1231-1232
     fn trace_indirect_target(op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>) -> Option<crate::address::Address> {
         let vn = {
             let op = op_arc.read().unwrap();
@@ -5132,6 +5303,7 @@ impl ActionDeindirect {
 
     /// Helper: chase a COPY chain from `vn` to a constant, returning its
     /// address. Used by trace_indirect_target.
+    // RUGRA-GLUE: Rugra helper factoring out COPY-chain -> constant chase used by ActionDeindirect
     fn chase_copy_to_const(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::address::Address> {
         let mut cur = vn.clone();
         for _ in 0..20 {
@@ -5165,10 +5337,12 @@ impl ActionDeindirect {
 /// StackSolver + ProtoModel::extrapop infrastructure.
 pub struct ActionStackPtrFlow;
 impl ActionStackPtrFlow {
+    // Ghidra: coreaction.hh:89 ActionStackPtrFlow (constructor mirror)
     pub fn new() -> Self { Self }
 
     /// Is `vn` defined as `spcbasein + constant`? Returns the constant offset.
     /// Faithful to isStackRelative (coreaction.cc:329-344).
+    // Ghidra: coreaction.cc:329 ActionStackPtrFlow::isStackRelative
     fn is_stack_relative(
         spcbasein: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -5200,6 +5374,7 @@ impl ActionStackPtrFlow {
 
     /// Convert `loadop` into a COPY of the value stored by `storeop`.
     /// Faithful to adjustLoad (coreaction.cc:353-366).
+    // Ghidra: coreaction.cc:353 ActionStackPtrFlow::adjustLoad
     fn adjust_load(
         fd: &mut Funcdata,
         loadop: &crate::op::PcodeOpRef,
@@ -5234,6 +5409,7 @@ impl ActionStackPtrFlow {
     /// Conservative port of repair (coreaction.cc:378-422): scans the whole
     /// function's alivelist (respecting order) rather than walking back basic
     /// blocks, and stops at any call (aliasing barrier).
+    // Ghidra: coreaction.cc:378 ActionStackPtrFlow::repair
     fn repair(
         fd: &mut Funcdata,
         spcbasein: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -5285,6 +5461,7 @@ impl ActionStackPtrFlow {
     }
 }
 impl Action for ActionStackPtrFlow {
+    // Ghidra: coreaction.cc:481 ActionStackPtrFlow::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         // Locate the spacebase (stack-pointer) INPUT varnode: an input varnode
@@ -5362,6 +5539,7 @@ impl Action for ActionStackPtrFlow {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "stackptrflow" mirrors ctor at coreaction.hh:89
     fn get_name(&self) -> &str { "stackptrflow" }
 }
 
@@ -5376,13 +5554,16 @@ impl Action for ActionStackPtrFlow {
 /// the Stack address space.
 pub struct ActionSpacebase;
 impl ActionSpacebase {
+    // Ghidra: coreaction.hh:272 ActionSpacebase (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionSpacebase {
+    // Ghidra: coreaction.hh:277 ActionSpacebase::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         fd.spacebase();
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "spacebase" mirrors ctor at coreaction.hh:272
     fn get_name(&self) -> &str { "spacebase" }
 }
 
@@ -5390,9 +5571,11 @@ impl Action for ActionSpacebase {
 /// (coreaction.cc).
 pub struct ActionSegmentize;
 impl ActionSegmentize {
+    // Ghidra: coreaction.hh:128 ActionSegmentize (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionSegmentize {
+    // Ghidra: coreaction.cc:624 ActionSegmentize::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: scan for CALLOTHER ops that might be
         // segment operations. Full algorithm requires UserOpManage +
@@ -5410,6 +5593,7 @@ impl Action for ActionSegmentize {
         let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "segmentize" mirrors ctor at coreaction.hh:128
     fn get_name(&self) -> &str { "segmentize" }
 }
 
@@ -5417,9 +5601,11 @@ impl Action for ActionSegmentize {
 /// (coreaction.cc).
 pub struct ActionInternalStorage;
 impl ActionInternalStorage {
+    // Ghidra: coreaction.hh:1058 ActionInternalStorage (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInternalStorage {
+    // Ghidra: coreaction.cc:4938 ActionInternalStorage::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Partial implementation: iterate Varnodes and check if any match
         // internal storage locations declared in the FuncProto.
@@ -5441,6 +5627,7 @@ impl Action for ActionInternalStorage {
         let _ = change_count;
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "internalstorage" mirrors ctor at coreaction.hh:1058
     fn get_name(&self) -> &str { "internalstorage" }
 }
 
@@ -5448,9 +5635,11 @@ impl Action for ActionInternalStorage {
 /// (coreaction.cc).
 pub struct ActionExtraPopSetup;
 impl ActionExtraPopSetup {
+    // Ghidra: coreaction.hh:676 ActionExtraPopSetup (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionExtraPopSetup {
+    // Ghidra: coreaction.cc:1436 ActionExtraPopSetup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionExtraPopSetup::apply (coreaction.cc:1436-1466).
         // For each call with non-zero extraPop, create an INT_ADD op to
@@ -5461,6 +5650,7 @@ impl Action for ActionExtraPopSetup {
         // The infrastructure is ready for when extraPop tracking is added.
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "extrapopsetup" mirrors ctor at coreaction.hh:676
     fn get_name(&self) -> &str { "extrapopsetup" }
 }
 
@@ -5480,9 +5670,11 @@ impl Action for ActionExtraPopSetup {
 /// 4. Replace conditional-constant Varnodes with their values
 pub struct ActionConditionalConst { pub count: i32 }
 impl ActionConditionalConst {
+    // Ghidra: coreaction.hh:569 ActionConditionalConst (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionConditionalConst {
+    // Ghidra: coreaction.cc:4514 ActionConditionalConst::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::opcodes::OpCode;
         for op_ref in &fd.obank.alivelist {
@@ -5497,6 +5689,7 @@ impl Action for ActionConditionalConst {
         }
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "conditionalconst" mirrors ctor at coreaction.hh:569
     fn get_name(&self) -> &str { "conditionalconst" }
 }
 
@@ -5504,12 +5697,15 @@ impl Action for ActionConditionalConst {
 /// (coreaction.cc).
 pub struct ActionDynamicMapping;
 impl ActionDynamicMapping {
+    // Ghidra: coreaction.hh:1023 ActionDynamicMapping (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDynamicMapping {
+    // Ghidra: coreaction.cc:4852 ActionDynamicMapping::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "dynamicmapping" mirrors ctor at coreaction.hh:1023
     fn get_name(&self) -> &str { "dynamicmapping" }
 }
 
@@ -5517,12 +5713,15 @@ impl Action for ActionDynamicMapping {
 /// (coreaction.cc).
 pub struct ActionDynamicSymbols;
 impl ActionDynamicSymbols {
+    // Ghidra: coreaction.hh:1034 ActionDynamicSymbols (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionDynamicSymbols {
+    // Ghidra: coreaction.cc:4869 ActionDynamicSymbols::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "dynamicsymbols" mirrors ctor at coreaction.hh:1034
     fn get_name(&self) -> &str { "dynamicsymbols" }
 }
 
@@ -5530,12 +5729,15 @@ impl Action for ActionDynamicSymbols {
 /// (coreaction.cc).
 pub struct ActionMappedLocalSync;
 impl ActionMappedLocalSync {
+    // Ghidra: coreaction.hh:867 ActionMappedLocalSync (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionMappedLocalSync {
+    // Ghidra: coreaction.cc:2297 ActionMappedLocalSync::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "mappedlocalsync" mirrors ctor at coreaction.hh:867
     fn get_name(&self) -> &str { "mappedlocalsync" }
 }
 
@@ -5543,12 +5745,15 @@ impl Action for ActionMappedLocalSync {
 /// (coreaction.cc).
 pub struct ActionLaneDivide;
 impl ActionLaneDivide {
+    // Ghidra: coreaction.hh:113 ActionLaneDivide (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionLaneDivide {
+    // Ghidra: coreaction.cc:585 ActionLaneDivide::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "lanedivide" mirrors ctor at coreaction.hh:113
     fn get_name(&self) -> &str { "lanedivide" }
 }
 
@@ -5567,6 +5772,7 @@ impl ActionReturnRecovery {
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionReturnRecovery {
+    // Ghidra: coreaction.cc:1908 ActionReturnRecovery::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::AddressSpace;
         use crate::op::PcodeOp;
@@ -5631,6 +5837,7 @@ impl Action for ActionReturnRecovery {
         self.count += changed;
         if changed > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "returnrecovery" mirrors ctor at coreaction.hh:799
     fn get_name(&self) -> &str { "returnrecovery" }
 }
 
@@ -5641,9 +5848,11 @@ impl Action for ActionReturnRecovery {
 /// nonzeromask" refers to spacebase; nonzeromask runs after).
 pub struct ActionNonzeroMask;
 impl ActionNonzeroMask {
+    // Ghidra: coreaction.hh:295 ActionNonzeroMask (constructor mirror)
     pub fn new() -> Self { Self }
 }
 impl Action for ActionNonzeroMask {
+    // Ghidra: coreaction.hh:300 ActionNonzeroMask::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Funcdata::calcNZMask (funcdata_varnode.cc:856-930).
         // DFS traversal of ops: for each op, compute output NZM from input NZMs
@@ -5651,6 +5860,7 @@ impl Action for ActionNonzeroMask {
         fd.calc_nz_mask();
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "nonzeromask" mirrors ctor at coreaction.hh:295
     fn get_name(&self) -> &str { "nonzeromask" }
 }
 
@@ -5661,9 +5871,11 @@ impl Action for ActionNonzeroMask {
 /// Each override marks a specific branch as an unstructured goto.
 pub struct ActionForceGoto { pub count: i32 }
 impl ActionForceGoto {
+    // Ghidra: coreaction.hh:141 ActionForceGoto (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionForceGoto {
+    // Ghidra: coreaction.cc:671 ActionForceGoto::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.getOverride().applyForceGoto(data);
         // Our Override::apply_force_gotos calls fd.force_goto for each
@@ -5678,6 +5890,7 @@ impl Action for ActionForceGoto {
         // Full: fd.arch.overrides.apply_force_gotos(fd)
         Ok(action_status::NO_CHANGE)
     }
+    // RUGRA-GLUE: Rust Action trait get_name; "forcegoto" mirrors ctor at coreaction.hh:141
     fn get_name(&self) -> &str { "forcegoto" }
 }
 
@@ -5709,17 +5922,20 @@ impl Action for ActionForceGoto {
 pub struct ActionStartCleanUp;
 
 impl ActionStartCleanUp {
+    // Ghidra: coreaction.hh:60 ActionStartCleanUp (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionStartCleanUp {
+    // Ghidra: coreaction.hh:65 ActionStartCleanUp::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.startCleanUp();  // records clean_up_index
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "startcleanup" mirrors ctor at coreaction.hh:60
     fn get_name(&self) -> &str {
         "startcleanup"
     }
@@ -5737,17 +5953,20 @@ pub struct ActionStartTypes {
 }
 
 impl ActionStartTypes {
+    // Ghidra: coreaction.hh:76 ActionStartTypes (constructor mirror)
     pub fn new() -> Self {
         Self { count: 0 }
     }
 }
 
 impl Action for ActionStartTypes {
+    // Ghidra: coreaction.hh:77 ActionStartTypes::reset
     fn reset(&mut self, fd: &mut Funcdata) {
         // Ghidra: data.setTypeRecovery(true);
         fd.set_type_recovery_on(true);
     }
 
+    // Ghidra: coreaction.hh:82 ActionStartTypes::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: if (data.startTypeRecovery()) count += 1;
         // startTypeRecovery() returns true only on the first flip.
@@ -5758,6 +5977,7 @@ impl Action for ActionStartTypes {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "starttypes" mirrors ctor at coreaction.hh:76
     fn get_name(&self) -> &str {
         "starttypes"
     }
@@ -5772,17 +5992,20 @@ impl Action for ActionStartTypes {
 pub struct ActionStop;
 
 impl ActionStop {
+    // Ghidra: coreaction.hh:48 ActionStop (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionStop {
+    // Ghidra: coreaction.hh:53 ActionStop::apply
     fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.stopProcessing();
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "stop" mirrors ctor at coreaction.hh:48
     fn get_name(&self) -> &str {
         "stop"
     }
@@ -5800,12 +6023,14 @@ impl Action for ActionStop {
 pub struct ActionAssignHigh;
 
 impl ActionAssignHigh {
+    // Ghidra: coreaction.hh:341 ActionAssignHigh (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionAssignHigh {
+    // Ghidra: coreaction.hh:346 ActionAssignHigh::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Funcdata::setHighLevel (funcdata_varnode.cc:595):
         // assign a fresh HighVariable to each Varnode that does not already
@@ -5820,10 +6045,12 @@ impl Action for ActionAssignHigh {
         }
     }
 
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:341
     fn get_flags(&self) -> u32 {
         action_flags::RULE_ONCEPERFUNC
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "assignhigh" mirrors ctor at coreaction.hh:341
     fn get_name(&self) -> &str {
         "assignhigh"
     }
@@ -5839,12 +6066,14 @@ impl Action for ActionAssignHigh {
 pub struct ActionDominantCopy;
 
 impl ActionDominantCopy {
+    // Ghidra: coreaction.hh:1003 ActionDominantCopy (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionDominantCopy {
+    // Ghidra: coreaction.hh:1008 ActionDominantCopy::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims();
         // copyTrims is empty in Rugra (no snip machinery) → faithful no-op.
@@ -5853,10 +6082,12 @@ impl Action for ActionDominantCopy {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1003
     fn get_flags(&self) -> u32 {
         action_flags::RULE_ONCEPERFUNC
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "dominantcopy" mirrors ctor at coreaction.hh:1003
     fn get_name(&self) -> &str {
         "dominantcopy"
     }
@@ -5871,12 +6102,14 @@ impl Action for ActionDominantCopy {
 pub struct ActionCopyMarker;
 
 impl ActionCopyMarker {
+    // Ghidra: coreaction.hh:1014 ActionCopyMarker (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionCopyMarker {
+    // Ghidra: coreaction.hh:1019 ActionCopyMarker::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra: data.getMerge().markInternalCopies();
         let mut merge = crate::merge::Merge::new();
@@ -5884,10 +6117,12 @@ impl Action for ActionCopyMarker {
         Ok(action_status::CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1014
     fn get_flags(&self) -> u32 {
         action_flags::RULE_ONCEPERFUNC
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "copymarker" mirrors ctor at coreaction.hh:1014
     fn get_name(&self) -> &str {
         "copymarker"
     }
@@ -5904,6 +6139,7 @@ impl Action for ActionCopyMarker {
 pub struct ActionMarkIndirectOnly;
 
 impl ActionMarkIndirectOnly {
+    // Ghidra: coreaction.hh:352 ActionMarkIndirectOnly (constructor mirror)
     pub fn new() -> Self {
         Self
     }
@@ -5913,6 +6149,7 @@ impl ActionMarkIndirectOnly {
     /// `Funcdata::checkIndirectUse` (funcdata_varnode.cc:771-811): a non-
     /// qualifying op anywhere in the transitive closure → false. Uses the
     /// MARK flag for cycle avoidance, mirroring Ghidra's setMark/clearMark.
+    // RUGRA-GLUE: Rugra helper factoring out INDIRECT-only-use predicate used by Funcdata::markIndirectOnly() (invoked from coreaction.hh:358)
     fn check_indirect_use(start: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
         use crate::opcodes::OpCode;
         let mut stack: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = vec![start.clone()];
@@ -5957,6 +6194,7 @@ impl ActionMarkIndirectOnly {
 }
 
 impl Action for ActionMarkIndirectOnly {
+    // Ghidra: coreaction.hh:357 ActionMarkIndirectOnly::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (funcdata_varnode.cc:815-828): iterate all input varnodes;
         // for each illegal input whose only uses are INDIRECT ops, set the
@@ -5982,10 +6220,12 @@ impl Action for ActionMarkIndirectOnly {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:352
     fn get_flags(&self) -> u32 {
         action_flags::RULE_ONCEPERFUNC
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "markindirectonly" mirrors ctor at coreaction.hh:352
     fn get_name(&self) -> &str {
         "markindirectonly"
     }
@@ -6006,12 +6246,14 @@ impl Action for ActionMarkIndirectOnly {
 pub struct ActionMapGlobals;
 
 impl ActionMapGlobals {
+    // Ghidra: coreaction.hh:880 ActionMapGlobals (constructor mirror)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Action for ActionMapGlobals {
+    // Ghidra: coreaction.hh:885 ActionMapGlobals::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (funcdata_varnode.cc:1653-1719): vbank.beginLoc..endLoc;
         // skip free; skip non-persist; for each overlapping group build a
@@ -6051,10 +6293,12 @@ impl Action for ActionMapGlobals {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:880
     fn get_flags(&self) -> u32 {
         action_flags::RULE_ONCEPERFUNC
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "mapglobals" mirrors ctor at coreaction.hh:880
     fn get_name(&self) -> &str {
         "mapglobals"
     }
@@ -6099,6 +6343,7 @@ pub struct ActionPreferComplement {
 }
 
 impl ActionPreferComplement {
+    // Ghidra: blockaction.hh:300 ActionPreferComplement (constructor mirror)
     pub fn new() -> Self {
         Self { count: 0 }
     }
@@ -6115,6 +6360,7 @@ impl ActionPreferComplement {
     /// Returns `true` if the op-code was flipped (the comparison is now its
     /// complement), `false` if no complementing op-code exists for this
     /// comparison (the CBRANCH sense flip still happens regardless).
+    // RUGRA-GLUE: Rugra helper factoring out comparison-complement flip logic inlined in ActionPreferComplement::apply (blockaction.cc:2140-2167)
     fn flip_comparison(op_ref: &crate::op::PcodeOpRef) -> bool {
         use crate::op::pcodeop_flags;
         let opc_in = op_ref.0.read().unwrap().opcode;
@@ -6146,6 +6392,7 @@ impl ActionPreferComplement {
 }
 
 impl Action for ActionPreferComplement {
+    // Ghidra: blockaction.cc:2140 ActionPreferComplement::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (blockaction.cc:2140-2167): BFS over the structure tree;
         //   if (graph.getSize() == 0) return 0;
@@ -6242,6 +6489,7 @@ impl Action for ActionPreferComplement {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "prefercomplement" mirrors ctor at blockaction.hh:302
     fn get_name(&self) -> &str {
         "prefercomplement"
     }
@@ -6274,12 +6522,14 @@ pub struct ActionStructureTransform {
 }
 
 impl ActionStructureTransform {
+    // Ghidra: blockaction.hh:272 ActionStructureTransform (constructor mirror)
     pub fn new() -> Self {
         Self { count: 0 }
     }
 }
 
 impl Action for ActionStructureTransform {
+    // Ghidra: blockaction.cc:2110 ActionStructureTransform::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (blockaction.cc:2110-2115):
         //   data.getStructure().finalTransform(data); return 0;
@@ -6522,6 +6772,7 @@ impl Action for ActionStructureTransform {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "structuretransform" mirrors ctor at blockaction.hh:272
     fn get_name(&self) -> &str {
         "structuretransform"
     }
@@ -6552,6 +6803,7 @@ pub struct ActionReturnSplit {
 }
 
 impl ActionReturnSplit {
+    // Ghidra: blockaction.hh:337 ActionReturnSplit (constructor mirror)
     pub fn new() -> Self {
         Self { count: 0 }
     }
@@ -6560,6 +6812,7 @@ impl ActionReturnSplit {
     /// 2262): a RETURN block is splittable iff every op in it is a
     /// MULTIEQUAL, or a COPY/RETURN whose inputs are each constant,
     /// annotation, or (non-free) attached. Any other op → not splittable.
+    // Ghidra: blockaction.cc:2241 ActionReturnSplit::isSplittable
     fn is_splittable(ops: &[crate::op::PcodeOpRef]) -> bool {
         use crate::opcodes::OpCode;
         for op_ref in ops {
@@ -6593,6 +6846,7 @@ impl ActionReturnSplit {
 }
 
 impl Action for ActionReturnSplit {
+    // Ghidra: blockaction.cc:2264 ActionReturnSplit::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (blockaction.cc:2264-2324):
         //   if (data.getStructure().getSize() == 0) return 0;
@@ -6720,6 +6974,7 @@ impl Action for ActionReturnSplit {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "returnsplit" mirrors ctor at blockaction.hh:337
     fn get_name(&self) -> &str {
         "returnsplit"
     }
@@ -6752,12 +7007,14 @@ pub struct ActionNodeJoin {
 }
 
 impl ActionNodeJoin {
+    // Ghidra: blockaction.hh:350 ActionNodeJoin (constructor mirror)
     pub fn new() -> Self {
         Self { count: 0 }
     }
 }
 
 impl Action for ActionNodeJoin {
+    // Ghidra: blockaction.cc:2326 ActionNodeJoin::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra (blockaction.cc:2326-2364):
         //   const BlockGraph &graph(data.getBasicBlocks());
@@ -6939,6 +7196,7 @@ impl Action for ActionNodeJoin {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rust Action trait get_name; "nodejoin" mirrors ctor at blockaction.hh:350
     fn get_name(&self) -> &str {
         "nodejoin"
     }
@@ -6975,6 +7233,7 @@ impl Action for ActionNodeJoin {
 /// (action.rs). Each entry is a `Box<dyn Action>` ready to `add_action` into an
 /// `ActionGroup`. Already-registered Actions (those wired in by
 /// `set_default_actions`) are intentionally omitted to avoid double registration.
+// RUGRA-GLUE: Rugra pipeline builder; mirrors ActionDatabase::buildDefaultGroups (coreaction.cc:5419) but returns a Vec<Box<dyn Action>> for Rust ownership
 pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
     vec![
         // --- base group (coreaction.cc:5477-5485) ---

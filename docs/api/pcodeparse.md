@@ -35,3 +35,4 @@ P-code snippet compiler (pcodeparse.hh:72).
 - Full recursive-descent parser semantic actions (ConstructTpl assembly).
 - SLEIGH integration (SleighBase/SymbolTree).
 - PcodeCompile (pcodecompile.cc) — op compilation helpers.
+<!-- annotation-pass: 2026-07-04 -->

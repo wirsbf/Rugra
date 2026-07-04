@@ -95,19 +95,29 @@ pub mod edge_flags {
 ///
 /// Corresponds to Ghidra's `FlowBlock` base class
 pub trait FlowBlock: std::fmt::Debug + Send + Sync {
+    // RUGRA-GLUE: Rust trait-object downcast glue (no Ghidra counterpart)
     fn as_any(&self) -> &dyn std::any::Any;
+    // RUGRA-GLUE: Rust trait-object downcast glue (no Ghidra counterpart)
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32;
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private; set by buildCopy/orderBlocks)
     fn set_index(&mut self, i: i32);
+    // Ghidra: block.hh:184 FlowBlock::getType
     fn get_type(&self) -> BlockType;
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32;
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32);
 
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize;
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize;
 
     /// Number of out-edges excluding goto-marked edges.
     /// GOTO_EDGE_0 marks out[0] as goto, GOTO_EDGE_1 marks out[1].
+    // RUGRA-GLUE: Rugra helper for goto-aware out-edge counting (Ghidra uses raw sizeOut + edge flags)
     fn effective_size_out(&self) -> usize {
         let total = self.size_out();
         let flags = self.get_flags();
@@ -118,6 +128,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     }
 
     /// Get the i-th non-goto out-edge (skipping goto-marked edges).
+    // RUGRA-GLUE: Rugra helper for goto-aware out-edge access (no direct Ghidra counterpart)
     fn effective_get_out(&self, slot: usize) -> Option<BlockEdge> {
         let flags = self.get_flags();
         let total = self.size_out();
@@ -132,12 +143,15 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         None
     }
 
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge>;
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge>;
 
     /// OR-set edge flags on the `slot`-th outgoing edge.
     /// Faithful to Ghidra's `FlowBlock::setOutEdgeFlag` (block.hh:288).
     /// Used by `findSpanningTree` to label tree/back/forward/cross edges.
+    // Ghidra: block.cc:240 FlowBlock::setOutEdgeFlag
     fn set_out_edge_flag(&mut self, slot: usize, flag: u32) {
         // Default: try to downcast to the concrete block types that hold an
         // `outgoing: Vec<BlockEdge>` field. BlockGraph/BlockBasic/BlockCopy.
@@ -153,6 +167,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     /// Clear a mask of edge flags from ALL outgoing edges.
     /// Faithful to Ghidra's `FlowBlock::clearEdgeFlags` (block.cc).
+    // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags
     fn clear_edge_flags(&mut self, mask: u32) {
         let any = self.as_any_mut();
         if let Some(bb) = any.downcast_mut::<BlockBasic>() {
@@ -173,50 +188,69 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     /// Is the `slot`-th outgoing edge a back edge?
     /// Faithful to Ghidra's `FlowBlock::isBackEdgeOut` (block.hh:331).
+    // Ghidra: block.hh:331 FlowBlock::isBackEdgeOut
     fn is_back_edge_out(&self, slot: usize) -> bool {
         self.get_out(slot)
             .map(|e| e.flags & edge_flags::F_BACK_EDGE != 0)
             .unwrap_or(false)
     }
 
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge);
+    // RUGRA-GLUE: Rust edge-construction helper (Ghidra manages outofthis via friend addInEdge)
     fn add_out_edge(&mut self, edge: BlockEdge);
 
+    // RUGRA-GLUE: Rust helper returning Vec<PcodeOpRef> (Ghidra BlockBasic exposes begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         Vec::new()
     }
+    // Ghidra: block.hh:466 BlockBasic::insert
     fn add_op(&mut self, _op: PcodeOpRef) {}
+    // Ghidra: block.hh:466 BlockBasic::insert
     fn insert_op(&mut self, _index: usize, _op: PcodeOpRef) {}
 
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address {
         Address::new(0)
     }
 
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>>;
 
     // Dominance related methods
+    // Ghidra: block.hh:162 FlowBlock::getImmedDom
     fn get_immed_dom(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
         None
     }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::immed_dom is private; set by buildDomTree as friend)
     fn set_immed_dom(&mut self, _dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {}
+    // RUGRA-GLUE: Rugra-only dom-depth field (Ghidra computes depth via buildDomDepth into separate vec)
     fn get_dom_depth(&self) -> i32 {
         -1
     }
+    // RUGRA-GLUE: Rust mutator for dom_depth (Ghidra has no dom-depth field on FlowBlock)
     fn set_dom_depth(&mut self, _depth: i32) {}
+    // RUGRA-GLUE: Rugra-only dom-children field (Ghidra returns dom tree via buildDomTree(child) external vec)
     fn get_dom_children(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         Vec::new()
     }
+    // RUGRA-GLUE: Rust mutator for dom_children (Ghidra builds dom tree externally in BlockGraph::buildDomTree)
     fn add_dom_child(&mut self, _child: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {}
+    // RUGRA-GLUE: Rust mutator for dom_children (Ghidra has no dom-children field on FlowBlock)
     fn clear_dom_children(&mut self) {}
+    // RUGRA-GLUE: Rugra-only dom-frontier field (Ghidra has no dom-frontier field on FlowBlock)
     fn get_dom_frontier(&self) -> std::collections::HashSet<i32> {
         std::collections::HashSet::new()
     }
+    // RUGRA-GLUE: Rust mutator for dom_frontier (Ghidra has no dom-frontier field on FlowBlock)
     fn add_to_dom_frontier(&mut self, _idx: i32) {}
+    // RUGRA-GLUE: Rust mutator for dom_frontier (Ghidra has no dom-frontier field on FlowBlock)
     fn clear_dom_frontier(&mut self) {}
 
     /// Reverse-index of the given incoming edge slot — i.e. the index of
     /// `this` in the source block's outgoing list. Faithful to
     /// `FlowBlock::getInRevIndex` (block.hh:308).
+    // Ghidra: block.hh:306 FlowBlock::getInRevIndex
     fn get_in_rev_index(&self, _slot: usize) -> i32 {
         -1
     }
@@ -225,6 +259,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     /// Does this block dominate `other`? Walk `other`'s dominator chain up
     /// until we hit `self`. Faithful to `FlowBlock::dominates` (block.cc:386).
+    // Ghidra: block.cc:386 FlowBlock::dominates
     fn dominates(&self, other: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
         let self_idx = self.get_index();
         let mut cur = other.clone();
@@ -254,6 +289,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     /// Get the CBRANCH TRUE out-edge of this block, or None.
     /// `cbranch` is the block's terminal CBRANCH op.
+    // Ghidra: block.hh:300 FlowBlock::getTrueOut
     fn get_true_out(
         &self,
         cbranch: &PcodeOpRef,
@@ -266,6 +302,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     }
 
     /// Get the CBRANCH FALSE out-edge of this block, or None.
+    // Ghidra: block.hh:299 FlowBlock::getFalseOut
     fn get_false_out(
         &self,
         cbranch: &PcodeOpRef,
@@ -282,38 +319,49 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // These underpin LoopBody's body collection, exit detection, and TraceDAG
     // bounds. Defaults are no-ops; BlockBasic overrides them.
     /// Generic block mark (Ghidra `isMark`). Used by LoopBody::findBase etc.
+    // Ghidra: block.hh:286 FlowBlock::isMark
     fn is_mark(&self) -> bool {
         false
     }
+    // Ghidra: block.hh:287 FlowBlock::setMark
     fn set_mark(&mut self) {}
+    // Ghidra: block.hh:288 FlowBlock::clearMark
     fn clear_mark(&mut self) {}
     /// Scratch visit count (Ghidra `getVisitCount`/`setVisitCount`). Used by
     /// LoopBody::extend to count how many in-edges reach a candidate block.
+    // Ghidra: block.hh:283 FlowBlock::getVisitCount
     fn get_visit_count(&self) -> i32 {
         0
     }
+    // Ghidra: block.hh:282 FlowBlock::setVisitCount
     fn set_visit_count(&mut self, _c: i32) {}
     /// Is the i-th incoming edge a goto/irreducible edge? (Ghidra `isGotoIn`.)
+    // Ghidra: block.hh:346 FlowBlock::isGotoIn
     fn is_goto_in(&self, _i: usize) -> bool {
         false
     }
     /// Is the i-th outgoing edge a goto/irreducible edge? (Ghidra `isGotoOut`.)
+    // Ghidra: block.hh:347 FlowBlock::isGotoOut
     fn is_goto_out(&self, _i: usize) -> bool {
         false
     }
 
     /// Is this block the entry point of the function? (block.hh:325)
+    // Ghidra: block.hh:325 FlowBlock::isEntryPoint
     fn is_entry_point(&self) -> bool {
         (self.get_flags() & block_flags::ENTRY_POINT) != 0
     }
     /// Label the i-th out edge as a loop-exit edge (Ghidra `setLoopExit`).
+    // Ghidra: block.hh:294 FlowBlock::setLoopExit
     fn set_loop_exit(&mut self, _i: usize) {}
     /// Clear the loop-exit label on the i-th out edge (Ghidra `clearLoopExit`).
+    // Ghidra: block.hh:295 FlowBlock::clearLoopExit
     fn clear_loop_exit(&mut self, _i: usize) {}
     /// Remove the in-edge from a predecessor whose index matches one of
     /// `exclude_indices`. Faithful to Ghidra `removeEdge(begin, end)` which
     /// removes `begin` from `end`'s intothis list. Used by ruleBlockGoto
     /// consumption to make the goto source invisible to the target's sizeIn.
+    // RUGRA-GLUE: ruleBlockGoto consumption helper (Ghidra removes edges via FlowBlock::removeInEdge block.cc:130)
     fn remove_in_edge_from(&mut self, _exclude_indices: &[i32]) {}
 }
 
@@ -325,6 +373,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 /// block that dominates both. Returns `(cond_block, slot1)` where `slot1` is
 /// `bl1`'s rev-in-edge index into the condition block, or `None` if the paths
 /// don't share a single decision point.
+// Ghidra: block.cc:839 FlowBlock::findCondition
 pub fn find_condition(
     bl1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     edge1: usize,
@@ -425,6 +474,7 @@ pub struct BlockBasic {
 }
 
 impl BlockBasic {
+    // Ghidra: block.hh:473 BlockBasic::BlockBasic
     pub fn new(index: i32, start_addr: Address) -> Self {
         Self {
             index,
@@ -443,11 +493,13 @@ impl BlockBasic {
     }
 
     /// Add an operation to the end of the block
+    // Ghidra: block.hh:466 BlockBasic::insert
     pub fn add_op(&mut self, op: PcodeOpRef) {
         self.ops.push(op);
     }
 
     /// Get the last operation in the block
+    // Ghidra: block.hh:490 BlockBasic::lastOp
     pub fn last_op(&self) -> Option<PcodeOpRef> {
         self.ops.last().cloned()
     }
@@ -470,6 +522,7 @@ impl BlockBasic {
     }
 
     /// Get the first operation in the block
+    // Ghidra: block.hh:489 BlockBasic::firstOp
     pub fn first_op(&self) -> Option<PcodeOpRef> {
         self.ops.first().cloned()
     }
@@ -492,127 +545,163 @@ impl BlockBasic {
 }
 
 impl FlowBlock for BlockBasic {
+    // RUGRA-GLUE: Rust trait-object downcast glue (no Ghidra counterpart)
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    // RUGRA-GLUE: Rust trait-object downcast glue (no Ghidra counterpart)
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 {
         self.index
     }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) {
         self.index = i;
     }
+    // Ghidra: block.hh:480 BlockBasic::getType
     fn get_type(&self) -> BlockType {
         BlockType::Basic
     }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
         self.flags
     }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
     }
 
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
         self.incoming.len()
     }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize {
         self.outgoing.len()
     }
 
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> {
         self.incoming.get(slot).cloned()
     }
 
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> {
         self.outgoing.get(slot).cloned()
     }
 
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
         self.incoming.push(edge);
     }
 
+    // RUGRA-GLUE: Rust edge-construction helper (Ghidra manages outofthis via friend addInEdge)
     fn add_out_edge(&mut self, edge: BlockEdge) {
         self.outgoing.push(edge);
     }
 
+    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.ops.clone()
     }
 
+    // Ghidra: block.hh:466 BlockBasic::insert
     fn add_op(&mut self, op: PcodeOpRef) {
         self.ops.push(op);
     }
 
+    // Ghidra: block.hh:466 BlockBasic::insert
     fn insert_op(&mut self, index: usize, op: PcodeOpRef) {
         self.ops.insert(index, op);
     }
 
+    // Ghidra: block.hh:478 BlockBasic::getStart
     fn get_start_addr(&self) -> Address {
         self.start_addr
     }
 
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
 
+    // Ghidra: block.hh:162 FlowBlock::getImmedDom
     fn get_immed_dom(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.immed_dom.clone()
     }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::immed_dom is private)
     fn set_immed_dom(&mut self, dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {
         self.immed_dom = dom;
     }
+    // RUGRA-GLUE: Rugra-only dom_depth field
     fn get_dom_depth(&self) -> i32 {
         self.dom_depth
     }
+    // RUGRA-GLUE: Rust mutator for dom_depth
     fn set_dom_depth(&mut self, depth: i32) {
         self.dom_depth = depth;
     }
+    // RUGRA-GLUE: Rugra-only dom_children field
     fn get_dom_children(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.dom_children.clone()
     }
+    // RUGRA-GLUE: Rust mutator for dom_children
     fn add_dom_child(&mut self, child: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         self.dom_children.push(child);
     }
+    // RUGRA-GLUE: Rust mutator for dom_children
     fn clear_dom_children(&mut self) {
         self.dom_children.clear();
     }
+    // RUGRA-GLUE: Rugra-only dom_frontier field
     fn get_dom_frontier(&self) -> std::collections::HashSet<i32> {
         self.dom_frontier.clone()
     }
+    // RUGRA-GLUE: Rust mutator for dom_frontier
     fn add_to_dom_frontier(&mut self, idx: i32) {
         self.dom_frontier.insert(idx);
     }
+    // RUGRA-GLUE: Rust mutator for dom_frontier
     fn clear_dom_frontier(&mut self) {
         self.dom_frontier.clear();
     }
+    // Ghidra: block.hh:306 FlowBlock::getInRevIndex
     fn get_in_rev_index(&self, slot: usize) -> i32 {
         self.incoming.get(slot).map(|e| e.reverse_index).unwrap_or(-1)
     }
 
     // ---- LoopBody mark / visit-count / edge-flag overrides ----
+    // Ghidra: block.hh:286 FlowBlock::isMark
     fn is_mark(&self) -> bool {
         (self.flags & block_flags::MARK) != 0
     }
+    // Ghidra: block.hh:287 FlowBlock::setMark
     fn set_mark(&mut self) {
         self.flags |= block_flags::MARK;
     }
+    // Ghidra: block.hh:288 FlowBlock::clearMark
     fn clear_mark(&mut self) {
         self.flags &= !block_flags::MARK;
     }
+    // Ghidra: block.hh:283 FlowBlock::getVisitCount
     fn get_visit_count(&self) -> i32 {
         self.visit_count
     }
+    // Ghidra: block.hh:282 FlowBlock::setVisitCount
     fn set_visit_count(&mut self, c: i32) {
         self.visit_count = c;
     }
+    // Ghidra: block.hh:346 FlowBlock::isGotoIn
     fn is_goto_in(&self, i: usize) -> bool {
         // Goto-in: the i-th incoming edge is goto or irreducible (block.hh:346).
         self.incoming.get(i).map(|e| {
             (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
         }).unwrap_or(false)
     }
+    // Ghidra: block.hh:347 FlowBlock::isGotoOut
     fn is_goto_out(&self, i: usize) -> bool {
         // Goto-out: the i-th outgoing edge is goto or irreducible (block.hh:351).
         // Rugra marks gotos via block-level GOTO_EDGE_0/GOTO_EDGE_1 flags
@@ -629,16 +718,19 @@ impl FlowBlock for BlockBasic {
         };
         block_goto
     }
+    // Ghidra: block.hh:294 FlowBlock::setLoopExit
     fn set_loop_exit(&mut self, i: usize) {
         if let Some(e) = self.outgoing.get_mut(i) {
             e.flags |= edge_flags::F_LOOP_EXIT_EDGE;
         }
     }
+    // Ghidra: block.hh:295 FlowBlock::clearLoopExit
     fn clear_loop_exit(&mut self, i: usize) {
         if let Some(e) = self.outgoing.get_mut(i) {
             e.flags &= !edge_flags::F_LOOP_EXIT_EDGE;
         }
     }
+    // RUGRA-GLUE: ruleBlockGoto consumption helper (Ghidra removes edges via FlowBlock::removeInEdge block.cc:130)
     fn remove_in_edge_from(&mut self, exclude_indices: &[i32]) {
         self.incoming.retain(|e| {
             // Use try_read to avoid RwLock deadlock when e.point == self
@@ -650,12 +742,14 @@ impl FlowBlock for BlockBasic {
 
 /// BlockBasic-specific methods for edge manipulation (Ghidra identifyInternal support)
 impl BlockBasic {
+    // Ghidra: block.cc:178 FlowBlock::replaceOutEdge
     pub fn replace_out_edge_target(&mut self, slot: usize, new_target: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         if slot < self.outgoing.len() {
             self.outgoing[slot].point = new_target;
         }
     }
 
+    // Ghidra: block.cc:160 FlowBlock::replaceInEdge
     pub fn replace_in_edge_source(&mut self, slot: usize, new_source: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         if slot < self.incoming.len() {
             self.incoming[slot].point = new_source;
@@ -665,12 +759,14 @@ impl BlockBasic {
     /// Reverse-index of the given outgoing edge slot, i.e. the slot in
     /// `out[slot].point`'s incoming list that points back at us.
     /// Faithful to `FlowBlock::getOutRevIndex` (block.cc).
+    // Ghidra: block.hh:303 FlowBlock::getOutRevIndex
     pub fn get_out_rev_index(&self, slot: usize) -> i32 {
         self.outgoing[slot].reverse_index
     }
 
     /// Reverse-index of the given incoming edge slot. Faithful to
     /// `FlowBlock::getInRevIndex` (block.cc).
+    // Ghidra: block.hh:306 FlowBlock::getInRevIndex
     pub fn get_in_rev_index(&self, slot: usize) -> i32 {
         self.incoming[slot].reverse_index
     }
@@ -678,6 +774,7 @@ impl BlockBasic {
     /// Delete only the incoming half of an edge (our `intothis` entry),
     /// leaving the matching outgoing entry on the source block stale.
     /// Faithful to `FlowBlock::halfDeleteInEdge` (block.cc:140).
+    // Ghidra: block.cc:100 FlowBlock::halfDeleteInEdge
     pub fn half_delete_in_edge(&mut self, slot: usize) {
         self.incoming.remove(slot);
         // Reverse-indices of our remaining incoming edges that pointed past
@@ -691,6 +788,7 @@ impl BlockBasic {
 
     /// Delete only the outgoing half of an edge. Faithful to
     /// `FlowBlock::halfDeleteOutEdge` (block.cc:149).
+    // Ghidra: block.cc:115 FlowBlock::halfDeleteOutEdge
     pub fn half_delete_out_edge(&mut self, slot: usize) {
         self.outgoing.remove(slot);
         for e in self.outgoing.iter_mut() {
@@ -707,6 +805,7 @@ impl BlockBasic {
     /// Caller must hold NO lock on `self` while mutating the two peers; this
     /// method performs the writes directly on `self` then on the peers via
     /// their `as_any_mut()` downcasts.
+    // Ghidra: block.cc:198 FlowBlock::replaceEdgesThru
     pub fn replace_edges_thru(
         &mut self,
         in_slot: usize,
@@ -742,15 +841,18 @@ impl BlockBasic {
         self.half_delete_out_edge(out_slot);
     }
 
+    // RUGRA-GLUE: Rust helper clearing both edge lists (Ghidra clears via BlockGraph::clear block.cc:1239)
     pub fn clear_edges(&mut self) {
         self.incoming.clear();
         self.outgoing.clear();
     }
 
+    // RUGRA-GLUE: Rust accessor for outgoing edge slice (Ghidra exposes outofthis via getOut/sizeOut)
     pub fn get_outgoing(&self) -> &[BlockEdge] {
         &self.outgoing
     }
 
+    // RUGRA-GLUE: Rust accessor for incoming edge slice (Ghidra exposes intothis via getIn/sizeIn)
     pub fn get_incoming(&self) -> &[BlockEdge] {
         &self.incoming
     }
@@ -770,6 +872,7 @@ pub struct BlockEdge {
 }
 
 impl BlockEdge {
+    // RUGRA-GLUE: Rust constructor for BlockEdge (Ghidra BlockEdge is a struct, edges built via addInEdge)
     pub fn new(point: Arc<RwLock<dyn FlowBlock + Send + Sync>>, reverse_index: i32) -> Self {
         Self {
             point,
@@ -778,14 +881,17 @@ impl BlockEdge {
         }
     }
 
+    // RUGRA-GLUE: Rust accessor for f_break_edge flag (Ghidra checks label & f_break_edge inline)
     pub fn is_break(&self) -> bool {
         self.flags & edge_flags::F_BREAK_EDGE != 0
     }
 
+    // RUGRA-GLUE: Rust accessor for f_continue_edge flag (Ghidra checks label inline)
     pub fn is_continue(&self) -> bool {
         self.flags & edge_flags::F_CONTINUE_EDGE != 0
     }
 
+    // RUGRA-GLUE: Rust accessor for f_goto_edge flag (Ghidra checks label & f_goto_edge inline)
     pub fn is_goto(&self) -> bool {
         self.flags & edge_flags::F_GOTO_EDGE != 0
     }
@@ -796,6 +902,7 @@ impl BlockEdge {
 pub struct BlockRef(pub Arc<RwLock<dyn FlowBlock + Send + Sync>>);
 
 impl PartialEq for BlockRef {
+    // RUGRA-GLUE: Rust PartialEq for BlockRef (Ghidra compares FlowBlock* directly)
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -815,6 +922,7 @@ pub struct BlockGraph {
 }
 
 impl BlockGraph {
+    // RUGRA-GLUE: Rust BlockGraph constructor (Ghidra BlockGraph is constructed implicitly by Funcdata)
     pub fn new() -> Self {
         Self {
             index: -1,
@@ -826,14 +934,17 @@ impl BlockGraph {
         }
     }
 
+    // Ghidra: block.cc:862 BlockGraph::addBlock
     pub fn add_block(&mut self, bl: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         self.blocks.push(bl);
     }
 
+    // RUGRA-GLUE: Rust accessor (Ghidra uses list.size() inline)
     pub fn get_size(&self) -> usize {
         self.blocks.len()
     }
 
+    // RUGRA-GLUE: Rust accessor (Ghidra uses list[i] inline)
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
     }
@@ -841,6 +952,7 @@ impl BlockGraph {
     /// Get the entry (start) block of this graph. Faithful to
     /// `BlockGraph::getStartBlock` (block.cc:1649-1655): the first block
     /// carrying the `f_entry_point` flag.
+    // Ghidra: block.cc:1649 BlockGraph::getStartBlock
     pub fn get_start_block(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.iter().find(|b| b.read().unwrap().is_entry_point()).cloned()
     }
@@ -849,6 +961,7 @@ impl BlockGraph {
     /// Faithful to `BlockGraph::removeBlock` (block.cc:1517-1536). The block
     /// is removed from the `blocks` list but is NOT dropped (the caller may
     /// still hold an `Arc`).
+    // Ghidra: block.cc:1517 BlockGraph::removeBlock
     pub fn remove_block_arc(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
         // Detach all incoming edges (rip each source's out-edge to us).
         while bl.read().unwrap().size_in() > 0 {
@@ -884,6 +997,7 @@ impl BlockGraph {
     /// determine control-flow ordering of two ops in different blocks.
     ///
     /// Returns None if either block has no dominator info (e.g. unreachable).
+    // Ghidra: block.cc:736 FlowBlock::findCommonBlock
     pub fn find_common_block(
         bl1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         bl2: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -977,6 +1091,7 @@ impl BlockGraph {
     /// Remove the edge from `src` to `dst` by symmetrically deleting both
     /// halves. Faithful to `BlockGraph::removeEdge` (block.cc). Finds the
     /// matching slot on each side and removes it via the half-delete helpers.
+    // Ghidra: block.cc:1469 BlockGraph::removeEdge
     pub fn remove_edge_blocks(
         &mut self,
         src: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -1016,12 +1131,14 @@ impl BlockGraph {
         }
     }
 
+    // Ghidra: block.cc:1239 BlockGraph::clear
     pub fn clear(&mut self) {
         self.blocks.clear();
         self.incoming.clear();
         self.outgoing.clear();
     }
 
+    // Ghidra: block.cc:1439 BlockGraph::addEdge
     pub fn add_edge(
         &mut self,
         from: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -1049,6 +1166,7 @@ impl BlockGraph {
     /// Build the dominator tree for the graph
     ///
     /// Corresponds to Ghidra's `BlockGraph::buildDomTree`
+    // Ghidra: block.cc:2036 BlockGraph::buildDomTree
     pub fn build_dom_tree(&mut self) {
         // Re-index all blocks to match their current vector position. This is
         // essential after dead-flow Actions (ActionUnreachable/DoNothing/etc.)
@@ -1139,6 +1257,7 @@ impl BlockGraph {
         self.calc_dom_frontier();
     }
 
+    // RUGRA-GLUE: Cooper-Harvey-Kennedy intersect helper for buildDomTree (algorithmic glue; not a direct Ghidra method)
     fn intersect(&self, mut b1: i32, mut b2: i32, idom: &[i32], rpo: &[i32]) -> i32 {
         let max_iters = idom.len() * 2 + 10;
         let mut iters = 0;
@@ -1164,6 +1283,7 @@ impl BlockGraph {
     /// Build depth information based on the dominator tree
     ///
     /// Corresponds to Ghidra's `BlockGraph::buildDomDepth`
+    // Ghidra: block.cc:2056 BlockGraph::buildDomDepth
     pub fn build_dom_depth(&mut self) {
         let rpo = self.calc_rpo();
         for node_ref in &rpo {
@@ -1197,6 +1317,7 @@ impl BlockGraph {
     /// Build the dominator sub-tree relationships
     ///
     /// Corresponds to Ghidra's `BlockGraph::buildDomSubTree`
+    // Ghidra: block.cc:2080 BlockGraph::buildDomSubTree
     pub fn build_dom_subtree(&mut self) {
         // Clear existing children
         for node in &self.blocks {
@@ -1224,6 +1345,7 @@ impl BlockGraph {
     /// Calculate dominance frontiers for all blocks
     ///
     /// Corresponds to the algorithm in "A Simple, Fast Dominator Algorithm"
+    // RUGRA-GLUE: Rugra-only dom-frontier calculation (Ghidra has no dom-frontier field on FlowBlock)
     pub fn calc_dom_frontier(&mut self) {
         for i in 0..self.blocks.len() {
             let b_ref = self.blocks[i].clone();
@@ -1278,6 +1400,7 @@ impl BlockGraph {
     }
 
     /// Calculate Reverse Post-Order (RPO) of blocks
+    // RUGRA-GLUE: Rugra RPO calculation (Ghidra uses findSpanningTree + orderBlocks block.cc:1009)
     pub fn calc_rpo(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         let mut visited = std::collections::HashSet::new();
         let mut post_order = Vec::new();
@@ -1302,6 +1425,7 @@ impl BlockGraph {
         post_order
     }
 
+    // RUGRA-GLUE: Rugra DFS helper for calc_rpo (Ghidra uses findSpanningTree block.cc:1009)
     fn dfs_visit(
         &self,
         block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -1332,6 +1456,7 @@ impl BlockGraph {
     /// Structure a loop
     ///
     /// Corresponds to Ghidra's `BlockGraph::structureLoops`
+    // Ghidra: block.cc:2194 BlockGraph::structureLoops
     pub fn structure_loops(&mut self) -> bool {
         // Simple loop detection and structuring logic
         // Identifying back-edges and creating BlockWhileDo/BlockDoWhile
@@ -1341,6 +1466,7 @@ impl BlockGraph {
     /// Add a loop edge
     ///
     /// Corresponds to Ghidra's `BlockGraph::addLoopEdge`
+    // Ghidra: block.cc:1451 BlockGraph::addLoopEdge
     pub fn add_loop_edge(
         &mut self,
         from: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -1359,6 +1485,7 @@ impl BlockGraph {
     /// Calculate loops in the graph
     ///
     /// Corresponds to Ghidra's `BlockGraph::calcLoop`
+    // Ghidra: block.cc:2104 BlockGraph::calcLoop
     pub fn calc_loop(&mut self) {
         // Implement loop identification algorithm (e.g., Tarjan's or Johnson's)
     }
@@ -1367,12 +1494,14 @@ impl BlockGraph {
 impl Eq for BlockRef {}
 
 impl PartialOrd for BlockRef {
+    // RUGRA-GLUE: Rust PartialOrd for BlockRef (Ghidra sorts FlowBlock* via compareFinalOrder block.cc:709)
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for BlockRef {
+    // RUGRA-GLUE: Rust Ord for BlockRef (Ghidra sorts FlowBlock* via compareFinalOrder block.cc:709)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
@@ -1392,41 +1521,55 @@ pub struct BlockCopy {
 }
 
 impl FlowBlock for BlockCopy {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 {
         self.index
     }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) {
         self.index = i;
     }
+    // Ghidra: block.hh:525 BlockCopy::getType
     fn get_type(&self) -> BlockType {
         BlockType::Copy
     }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
         self.flags
     }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
     }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
         0
     }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize {
         0
     }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, _slot: usize) -> Option<BlockEdge> {
         None
     }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, _slot: usize) -> Option<BlockEdge> {
         None
     }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, _edge: BlockEdge) {}
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, _edge: BlockEdge) {}
 }
 
@@ -1444,43 +1587,57 @@ pub struct BlockGoto {
 }
 
 impl FlowBlock for BlockGoto {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 {
         self.index
     }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) {
         self.index = i;
     }
+    // Ghidra: block.hh:555 BlockGoto::getType
     fn get_type(&self) -> BlockType {
         BlockType::Goto
     }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
         self.flags
     }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) {
         self.flags |= f;
     }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
         self.incoming.len()
     }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize {
         self.outgoing.len()
     }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> {
         self.incoming.get(slot).cloned()
     }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> {
         self.outgoing.get(slot).cloned()
     }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
         self.incoming.push(edge);
     }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) {
         self.outgoing.push(edge);
     }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
@@ -1518,23 +1675,39 @@ pub struct BlockIf {
 }
 
 impl FlowBlock for BlockIf {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:666 BlockIf::getType
     fn get_type(&self) -> BlockType { BlockType::If }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         // Return condition block ops for the conditional test
         self.condition.read().unwrap().get_ops()
@@ -1563,23 +1736,39 @@ pub struct BlockWhileDo {
 }
 
 impl FlowBlock for BlockWhileDo {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:707 BlockWhileDo::getType
     fn get_type(&self) -> BlockType { BlockType::WhileDo }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.condition.read().unwrap().get_ops()
     }
@@ -1600,23 +1789,39 @@ pub struct BlockDoWhile {
 }
 
 impl FlowBlock for BlockDoWhile {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:723 BlockDoWhile::getType
     fn get_type(&self) -> BlockType { BlockType::DoWhile }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.condition.read().unwrap().get_ops()
     }
@@ -1638,6 +1843,7 @@ pub struct BlockList {
 
 impl BlockList {
     /// Create a new sequence block containing the given children in order.
+    // Ghidra: block.hh:420 BlockGraph::newBlockList
     pub fn new(index: i32, children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>) -> Self {
         Self {
             index,
@@ -1651,27 +1857,43 @@ impl BlockList {
 }
 
 impl FlowBlock for BlockList {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:602 BlockList::getType
     fn get_type(&self) -> BlockType { BlockType::List }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address {
         self.children.first()
             .map(|c| c.read().unwrap().get_start_addr())
             .unwrap_or_else(|| Address::new(0))
     }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         // Concatenate ops from all children in order
         let mut all_ops = Vec::new();
@@ -1730,23 +1952,39 @@ pub struct BlockCondition {
 }
 
 impl FlowBlock for BlockCondition {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:626 BlockCondition::getType
     fn get_type(&self) -> BlockType { BlockType::Condition }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address { self.first.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         // Concatenate ops from both condition blocks
         let mut ops = self.first.read().unwrap().get_ops();
@@ -1778,23 +2016,39 @@ pub struct BlockSwitch {
 }
 
 impl FlowBlock for BlockSwitch {
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
     fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:793 BlockSwitch::getType
     fn get_type(&self) -> BlockType { BlockType::Switch }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
     fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
     fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address { self.control.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.control.read().unwrap().get_ops()
     }

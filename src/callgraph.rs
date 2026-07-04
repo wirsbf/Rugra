@@ -41,9 +41,11 @@ pub struct CallGraphEdge {
 }
 
 impl CallGraphEdge {
+    // Ghidra: callgraph.hh:32 CallGraphEdge::new
     pub fn new(from: u64, to: u64, callsite: u64) -> Self {
         Self { from_addr: from, to_addr: to, callsite_addr: callsite, flags: 0 }
     }
+    // Ghidra: callgraph.hh:32 CallGraphEdge::isCycle
     pub fn is_cycle(&self) -> bool { self.flags & edge_flags::CYCLE != 0 }
 }
 
@@ -64,13 +66,18 @@ pub struct CallGraphNode {
 }
 
 impl CallGraphNode {
+    // Ghidra: callgraph.hh:26 CallGraphNode::new
     pub fn new(addr: u64, name: String) -> Self {
         Self { entry_addr: addr, name, in_edges: Vec::new(), out_edges: Vec::new(), flags: 0 }
     }
 
+    // Ghidra: callgraph.hh:26 CallGraphNode::numInEdge
     pub fn num_in_edge(&self) -> usize { self.in_edges.len() }
+    // Ghidra: callgraph.hh:26 CallGraphNode::numOutEdge
     pub fn num_out_edge(&self) -> usize { self.out_edges.len() }
+    // Ghidra: callgraph.hh:26 CallGraphNode::isMark
     pub fn is_mark(&self) -> bool { self.flags & node_flags::MARK != 0 }
+    // Ghidra: callgraph.hh:26 CallGraphNode::clearMark
     pub fn clear_mark(&mut self) { self.flags &= !node_flags::MARK; }
 }
 
@@ -84,26 +91,31 @@ pub struct CallGraph {
 }
 
 impl CallGraph {
+    // Ghidra: callgraph.hh:27 CallGraph::new
     pub fn new() -> Self {
         Self { nodes: BTreeMap::new(), seeds: Vec::new() }
     }
 
+    // Ghidra: callgraph.cc:207 CallGraph::addNode
     /// Add a node by address and name, returning the address.
     pub fn add_node(&mut self, addr: u64, name: String) -> u64 {
         self.nodes.entry(addr).or_insert_with(|| CallGraphNode::new(addr, name));
         addr
     }
 
+    // Ghidra: callgraph.cc:232 CallGraph::findNode
     /// Find a node by address.
     pub fn find_node(&self, addr: u64) -> Option<&CallGraphNode> {
         self.nodes.get(&addr)
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::findNodeMut
     /// Find a mutable node by address.
     pub fn find_node_mut(&mut self, addr: u64) -> Option<&mut CallGraphNode> {
         self.nodes.get_mut(&addr)
     }
 
+    // Ghidra: callgraph.cc:243 CallGraph::addEdge
     /// Add an edge from one function to another.
     pub fn add_edge(&mut self, from: u64, to: u64, callsite: u64) {
         // Ensure both nodes exist.
@@ -119,9 +131,11 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::numNodes
     /// Get the number of nodes.
     pub fn num_nodes(&self) -> usize { self.nodes.len() }
 
+    // Ghidra: callgraph.cc:182 CallGraph::clearMarks
     /// Clear all marks on all nodes.
     pub fn clear_marks(&mut self) {
         for node in self.nodes.values_mut() {
@@ -129,6 +143,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.cc:321 CallGraph::initLeafWalk
     /// Initialize a leaf walk: find the first leaf (no out-Edges).
     pub fn init_leaf_walk(&self) -> Option<u64> {
         for (&addr, node) in &self.nodes {
@@ -139,6 +154,7 @@ impl CallGraph {
         None
     }
 
+    // Ghidra: callgraph.cc:336 CallGraph::nextLeaf
     /// Get the next leaf in a depth-first leaf walk from the given node.
     /// Corresponds to Ghidra's `CallGraph::nextLeaf`.
     /// Returns the next leaf address, or None if done.
@@ -152,6 +168,7 @@ impl CallGraph {
         None
     }
 
+    // Ghidra: callgraph.cc:129 CallGraph::snipCycles
     /// Detect and snip cycles in the call graph using DFS.
     /// Corresponds to Ghidra's `CallGraph::snipCycles`.
     pub fn snip_cycles(&mut self) {
@@ -165,6 +182,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::snipCyclesDfs
     fn snip_cycles_dfs(&mut self, addr: u64, visited: &mut std::collections::HashSet<u64>, in_stack: &mut std::collections::HashSet<u64>) {
         if visited.contains(&addr) { return; }
         visited.insert(addr);
@@ -193,6 +211,7 @@ impl CallGraph {
         in_stack.remove(&addr);
     }
 
+    // Ghidra: callgraph.cc:92 CallGraph::findNoEntry
     /// Find all nodes that have no incoming edges (entry points).
     /// Corresponds to Ghidra's `CallGraph::findNoEntry`.
     pub fn find_no_entry(&self) -> Vec<u64> {
@@ -202,16 +221,19 @@ impl CallGraph {
             .collect()
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::allAddrs
     /// Get all node addresses in sorted order.
     pub fn all_addrs(&self) -> Vec<u64> {
         self.nodes.keys().copied().collect()
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::getOutEdges
     /// Get all out-edges from a node.
     pub fn get_out_edges(&self, addr: u64) -> &[CallGraphEdge] {
         self.nodes.get(&addr).map(|n| n.out_edges.as_slice()).unwrap_or(&[])
     }
 
+    // Ghidra: callgraph.cc:270 CallGraph::deleteInEdge
     /// Delete an in-edge from a node.
     pub fn delete_in_edge(&mut self, addr: u64, index: usize) {
         let from_addr = self.nodes.get(&addr).and_then(|n| n.in_edges.get(index)).map(|e| e.from_addr);
@@ -227,6 +249,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.cc:164 CallGraph::snipEdge
     /// Snip (mark as cycle) an edge from node at `addr`, edge index `i`.
     /// Faithful to Ghidra CallGraph::snipEdge (callgraph.cc:164).
     pub fn snip_edge(&mut self, addr: u64, i: usize) {
@@ -247,6 +270,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.cc:406 CallGraph::buildEdges
     /// Build call graph edges from a Funcdata's call specifications.
     /// Faithful to Ghidra CallGraph::buildEdges (callgraph.cc:406).
     pub fn build_edges(&mut self, fd: &crate::funcdata::Funcdata) {
@@ -277,6 +301,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.cc:352 CallGraph::cycleStructure
     /// Analyze cycle structure: identify strongly connected components.
     /// Faithful to Ghidra CallGraph::cycleStructure (callgraph.cc:352).
     /// After snip_cycles, this marks nodes that are part of cycles.
@@ -298,6 +323,7 @@ impl CallGraph {
         }
     }
 
+    // Ghidra: callgraph.hh:27 CallGraph::edges
     /// Get the call graph as a list of (caller, callee) pairs.
     pub fn edges(&self) -> Vec<(u64, u64)> {
         let mut result = Vec::new();

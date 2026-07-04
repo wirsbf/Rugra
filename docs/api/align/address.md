@@ -30,3 +30,4 @@ used to distinguish multiple P-code operations for a single instruction.
 Helper to convert Ghidra space ID to Rugra AddressSpace for verification
 
  
+<!-- annotation-pass: 2026-07-04 -->

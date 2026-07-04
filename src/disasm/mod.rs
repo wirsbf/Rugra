@@ -55,6 +55,7 @@ pub struct Instruction {
 }
 
 impl Instruction {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create a new instruction
     pub fn new(address: Address) -> Self {
         Instruction {
@@ -68,26 +69,31 @@ impl Instruction {
         }
     }
 
+    // RUGRA-GLUE: is_branch (no Ghidra counterpart found)
     /// Check if this is a branch instruction
     pub fn is_branch(&self) -> bool {
         self.metadata.is_branch
     }
 
+    // RUGRA-GLUE: is_call (no Ghidra counterpart found)
     /// Check if this is a call instruction
     pub fn is_call(&self) -> bool {
         self.metadata.is_call
     }
 
+    // RUGRA-GLUE: is_return (no Ghidra counterpart found)
     /// Check if this is a return instruction
     pub fn is_return(&self) -> bool {
         self.metadata.is_return
     }
 
+    // RUGRA-GLUE: next_address (no Ghidra counterpart found)
     /// Get the next instruction address (if not a branch)
     pub fn next_address(&self) -> Address {
         self.address.offset(self.length as i64)
     }
 
+    // RUGRA-GLUE: branch_target (no Ghidra counterpart found)
     /// Get the branch target (if this is a branch/call)
     pub fn branch_target(&self) -> Option<Address> {
         self.metadata.branch_target
@@ -95,6 +101,7 @@ impl Instruction {
 }
 
 impl fmt::Display for Instruction {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.text)
     }
@@ -124,6 +131,7 @@ pub enum Operand {
 }
 
 impl fmt::Display for Operand {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Operand::Register { name, .. } => write!(f, "{}", name),
@@ -197,6 +205,7 @@ pub struct InstructionMetadata {
 
 /// Trait for architecture-specific disassemblers
 pub trait Disassembler {
+    // RUGRA-GLUE: disassemble (no Ghidra counterpart found)
     /// Disassemble a block of code
     ///
     /// # Arguments
@@ -209,6 +218,7 @@ pub trait Disassembler {
     /// Vector of disassembled instructions
     fn disassemble(&mut self, code: &[u8], start_address: Address) -> Result<Vec<Instruction>>;
 
+    // RUGRA-GLUE: disassemble_one (no Ghidra counterpart found)
     /// Disassemble a single instruction
     ///
     /// # Arguments
@@ -221,10 +231,12 @@ pub trait Disassembler {
     /// Disassembled instruction and number of bytes consumed
     fn disassemble_one(&mut self, code: &[u8], address: Address) -> Result<(Instruction, usize)>;
 
+    // RUGRA-GLUE: architecture (no Ghidra counterpart found)
     /// Get the architecture this disassembler supports
     fn architecture(&self) -> Architecture;
 }
 
+// RUGRA-GLUE: create_disassembler (no Ghidra counterpart found)
 /// Create a disassembler for the given architecture
 pub fn create_disassembler(arch: Architecture) -> Result<Box<dyn Disassembler>> {
     match arch {

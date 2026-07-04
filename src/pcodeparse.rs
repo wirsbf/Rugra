@@ -62,6 +62,7 @@ pub struct PcodeLexer {
 }
 
 impl PcodeLexer {
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::new
     /// Construct an empty lexer.
     pub fn new() -> Self {
         Self {
@@ -72,6 +73,7 @@ impl PcodeLexer {
         }
     }
 
+    // Ghidra: pcodeparse.cc:3106 PcodeLexer::initialize
     /// Initialize the lexer with input text.
     pub fn initialize(&mut self, text: &str) {
         self.input = text.chars().collect();
@@ -80,28 +82,34 @@ impl PcodeLexer {
         self.cur_number = 0;
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::peek
     fn peek(&self) -> Option<char> {
         self.input.get(self.pos).copied()
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::nextChar
     fn next_char(&mut self) -> Option<char> {
         let c = self.peek()?;
         self.pos += 1;
         Some(c)
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::isIdentChar
     fn is_ident_char(c: char) -> bool {
         c.is_alphanumeric() || c == '_' || c == '.'
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::isHexChar
     fn is_hex_char(c: char) -> bool {
         c.is_ascii_hexdigit()
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::isDecChar
     fn is_dec_char(c: char) -> bool {
         c.is_ascii_digit()
     }
 
+    // Ghidra: pcodeparse.cc:3058 PcodeLexer::getNextToken
     /// Get the next token. Faithful to `getNextToken` (pcodeparse.cc).
     pub fn get_next_token(&mut self) -> PcodeToken {
         // Skip whitespace.
@@ -192,11 +200,13 @@ impl PcodeLexer {
         }
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::getIdentifier
     /// Get the current identifier.
     pub fn get_identifier(&self) -> &str {
         &self.cur_identifier
     }
 
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::getNumber
     /// Get the current number.
     pub fn get_number(&self) -> u64 {
         self.cur_number
@@ -204,6 +214,7 @@ impl PcodeLexer {
 }
 
 impl Default for PcodeLexer {
+    // Ghidra: pcodeparse.hh:31 PcodeLexer::default
     fn default() -> Self {
         Self::new()
     }
@@ -228,6 +239,7 @@ pub struct PcodeSnippet {
 }
 
 impl PcodeSnippet {
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::new
     /// Construct.
     pub fn new() -> Self {
         Self {
@@ -239,26 +251,31 @@ impl PcodeSnippet {
         }
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::setUniqueBase
     /// Set the unique base for temporary allocation.
     pub fn set_unique_base(&mut self, val: u64) {
         self.temp_base = val;
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::getUniqueBase
     /// Get the unique base.
     pub fn get_unique_base(&self) -> u64 {
         self.temp_base
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::hasErrors
     /// Check if there are parse errors.
     pub fn has_errors(&self) -> bool {
         self.error_count != 0
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::getErrorMessage
     /// Get the first error message.
     pub fn get_error_message(&self) -> &str {
         &self.first_error
     }
 
+    // Ghidra: pcodeparse.cc:3207 PcodeSnippet::reportError
     /// Report an error. Faithful to `reportError`.
     pub fn report_error(&mut self, msg: &str) {
         if self.error_count == 0 {
@@ -267,6 +284,7 @@ impl PcodeSnippet {
         self.error_count += 1;
     }
 
+    // Ghidra: pcodeparse.cc:3150 PcodeSnippet::clear
     /// Clear state for a new parse.
     pub fn clear(&mut self) {
         self.symbols.clear();
@@ -274,6 +292,7 @@ impl PcodeSnippet {
         self.first_error.clear();
     }
 
+    // Ghidra: pcodeparse.cc:3130 PcodeSnippet::allocateTemp
     /// Allocate a temporary varnode offset. Faithful to `allocateTemp`.
     pub fn allocate_temp(&mut self) -> u64 {
         let offset = self.temp_base;
@@ -281,27 +300,32 @@ impl PcodeSnippet {
         offset
     }
 
+    // Ghidra: pcodeparse.cc:3138 PcodeSnippet::addSymbol
     /// Add a symbol to the local scope. Faithful to `addSymbol`.
     pub fn add_symbol(&mut self, name: &str, offset: u64) {
         self.symbols.insert(name.to_string(), offset);
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::lookupSymbol
     /// Look up a symbol by name.
     pub fn lookup_symbol(&self, name: &str) -> Option<u64> {
         self.symbols.get(name).copied()
     }
 
+    // Ghidra: pcodeparse.cc:3285 PcodeSnippet::addOperand
     /// Add an operand reference (e.g., "$(1)"). Faithful to `addOperand`.
     pub fn add_operand(&mut self, name: &str, _index: i32) {
         // In full Ghidra, this adds a SleighSymbol for the operand.
         // Stored as a special symbol.
     }
 
+    // Ghidra: pcodeparse.cc:3215 PcodeSnippet::lex
     /// Lex function — delegates to the lexer. Faithful to `PcodeSnippet::lex`.
     pub fn lex(&mut self) -> PcodeToken {
         self.lexer.get_next_token()
     }
 
+    // Ghidra: pcodeparse.cc:3268 PcodeSnippet::parseStream
     /// Parse a p-code stream. Faithful to `parseStream`
     /// (pcodeparse.hh:96). Returns true on success.
     ///
@@ -328,12 +352,14 @@ impl PcodeSnippet {
         !self.has_errors()
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::resolveSymbol
     /// Resolve a symbol name to its unique offset.
     /// Faithful to PcodeCompile symbol resolution.
     pub fn resolve_symbol(&self, name: &str) -> Option<u64> {
         self.lookup_symbol(name)
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::addOpTemplate
     /// Add a set of p-code ops from a parsed template.
     /// In the full SLEIGH integration, this would assemble OpTpl objects.
     /// For Rugra's standalone use, this records that ops were added.
@@ -342,11 +368,13 @@ impl PcodeSnippet {
         // Each entry is (opcode_name, output_offset).
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::numSymbols
     /// Get the number of symbols defined so far.
     pub fn num_symbols(&self) -> usize {
         self.symbols.len()
     }
 
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::numErrors
     /// Get the number of errors encountered.
     pub fn num_errors(&self) -> i32 {
         self.error_count
@@ -354,6 +382,7 @@ impl PcodeSnippet {
 }
 
 impl Default for PcodeSnippet {
+    // Ghidra: pcodeparse.cc:3174 PcodeSnippet::default
     fn default() -> Self {
         Self::new()
     }

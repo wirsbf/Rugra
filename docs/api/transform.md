@@ -105,3 +105,4 @@ op-set-input-output/preexisting-guard/constant-getpiece）。
 
 ### 2026-07-01（续）：TransformManager::apply 确认完整
 TransformManager::apply（transform.cc:756-765）：create_ops→create_varnodes→remove_old→place_inputs→transform_input_varnodes。SplitFlow 委托此方法。
+<!-- annotation-pass: 2026-07-04 -->

@@ -35,3 +35,4 @@ P-code 注入引擎。对应 Ghidra 的 `pcodeinject.hh`。
 - `PcodeEmitArray` — 内存收集发射器（dump + ops 数组）
 
 测试：新增 3 个（inject_context + pcode_emit_array + payload_add_params）。
+<!-- annotation-pass: 2026-07-04 -->

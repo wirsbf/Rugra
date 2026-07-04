@@ -34,6 +34,7 @@ pub enum FlowOverride {
 }
 
 impl FlowOverride {
+    // RUGRA-GLUE: to_string (no Ghidra counterpart found)
     /// Convert a flow-override type to its string name. Faithful to
     /// `Override::typeToString` (override.cc:405).
     pub fn to_string(self) -> &'static str {
@@ -46,6 +47,7 @@ impl FlowOverride {
         }
     }
 
+    // RUGRA-GLUE: from_string (no Ghidra counterpart found)
     /// Convert a string name to a flow-override type. Faithful to
     /// `Override::stringToType` (override.cc:421).
     pub fn from_string(nm: &str) -> Self {
@@ -82,11 +84,13 @@ pub struct Override {
 }
 
 impl Override {
+    // Ghidra: override.hh:50 Override::new
     /// Create an empty override set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    // Ghidra: override.cc:29 Override::clear
     /// Clear the entire set of overrides. Faithful to `clear()`
     /// (override.cc:29).
     pub fn clear(&mut self) {
@@ -98,12 +102,14 @@ impl Override {
         self.flowoverride.clear();
     }
 
+    // Ghidra: override.cc:66 Override::insertForceGoto
     /// Force a specific branch instruction to be an unstructured goto.
     /// Faithful to `insertForceGoto` (override.cc:66).
     pub fn insert_force_goto(&mut self, targetpc: Address, destpc: Address) {
         self.forcegoto.insert(targetpc, destpc);
     }
 
+    // Ghidra: override.cc:79 Override::insertDeadcodeDelay
     /// Override the number of passes before dead-code elimination starts for an
     /// address space. Faithful to `insertDeadcodeDelay` (override.cc:79).
     ///
@@ -115,6 +121,7 @@ impl Override {
         self.deadcodedelay[space_index] = delay;
     }
 
+    // Ghidra: override.cc:92 Override::hasDeadcodeDelay
     /// Check if a delay override is already installed for an address space.
     /// Faithful to `hasDeadcodeDelay` (override.cc:92).
     ///
@@ -130,12 +137,14 @@ impl Override {
         val != current_delay
     }
 
+    // Ghidra: override.cc:109 Override::insertIndirectOverride
     /// Override an indirect call turning it into a direct call. Faithful to
     /// `insertIndirectOverride` (override.cc:109).
     pub fn insert_indirect_override(&mut self, callpoint: Address, directcall: Address) {
         self.indirectover.insert(callpoint, directcall);
     }
 
+    // Ghidra: override.cc:121 Override::insertProtoOverride
     /// Override the assumed function prototype at a specific call site.
     /// Faithful to `insertProtoOverride` (override.cc:121).
     ///
@@ -145,18 +154,21 @@ impl Override {
         self.protoover.insert(callpoint, true);
     }
 
+    // Ghidra: override.cc:137 Override::insertMultistageJump
     /// Flag an indirect jump for multistage analysis. Faithful to
     /// `insertMultistageJump` (override.cc:137).
     pub fn insert_multistage_jump(&mut self, addr: Address) {
         self.multistagejump.push(addr);
     }
 
+    // Ghidra: override.cc:148 Override::insertFlowOverride
     /// Mark a branch instruction with a different flow type. Faithful to
     /// `insertFlowOverride` (override.cc:148).
     pub fn insert_flow_override(&mut self, addr: Address, flow_type: FlowOverride) {
         self.flowoverride.insert(addr, flow_type);
     }
 
+    // Ghidra: override.hh:50 Override::queryForceGoto
     /// Look up the destination of a forced goto at the given branch address.
     /// Returns None if no force-goto override exists. (Derived from
     /// `applyForceGoto`, override.cc:204.)
@@ -164,11 +176,13 @@ impl Override {
         self.forcegoto.get(&targetpc).copied()
     }
 
+    // Ghidra: override.hh:50 Override::forceGotos
     /// Return an iterator over all force-goto overrides.
     pub fn force_gotos(&self) -> impl Iterator<Item = (&Address, &Address)> {
         self.forcegoto.iter()
     }
 
+    // Ghidra: override.hh:50 Override::applyForceGotos
     /// Push all the force-goto overrides into the function. Faithful to
     /// `applyForceGoto` (override.cc:204). Calls `fd.force_goto` for each
     /// stored (targetpc, destpc) pair. Returns the number of overrides applied.
@@ -182,6 +196,7 @@ impl Override {
         count
     }
 
+    // Ghidra: override.cc:177 Override::applyIndirect
     /// Apply destination overrides of indirect calls. Returns the overriding
     /// direct-call address for the given callpoint, if any. Faithful to
     /// `applyIndirect` (override.cc:177).
@@ -189,18 +204,21 @@ impl Override {
         self.indirectover.get(&callpoint).copied()
     }
 
+    // Ghidra: override.cc:160 Override::applyPrototype
     /// Check for a prototype override at the given callpoint. Faithful to
     /// `applyPrototype` (override.cc:160).
     pub fn apply_prototype(&self, callpoint: Address) -> bool {
         self.protoover.get(&callpoint).copied().unwrap_or(false)
     }
 
+    // Ghidra: override.cc:191 Override::queryMultistageJumptable
     /// Check for a multistage marker for a specific indirect jump. Faithful to
     /// `queryMultistageJumptable` (override.cc:191).
     pub fn query_multistage_jumptable(&self, addr: Address) -> bool {
         self.multistagejump.iter().any(|&a| a == addr)
     }
 
+    // Ghidra: override.hh:50 Override::getDeadcodeDelay
     /// Return the dead-code delay override for the given address-space index,
     /// or -1 if none. Faithful to `applyDeadCodeDelay` (override.cc:217).
     pub fn get_deadcode_delay(&self, space_index: usize) -> i32 {
@@ -210,6 +228,7 @@ impl Override {
         self.deadcodedelay[space_index]
     }
 
+    // Ghidra: override.hh:50 Override::deadcodeDelays
     /// Iterate over (space_index, delay) pairs for all dead-code delay
     /// overrides.
     pub fn deadcode_delays(&self) -> impl Iterator<Item = (usize, i32)> + '_ {
@@ -220,12 +239,14 @@ impl Override {
             .filter(|&(_, d)| d >= 0)
     }
 
+    // Ghidra: override.hh:50 Override::hasFlowOverride
     /// Are there any flow overrides? Faithful to `hasFlowOverride`
     /// (override.hh:84).
     pub fn has_flow_override(&self) -> bool {
         !self.flowoverride.is_empty()
     }
 
+    // Ghidra: override.cc:233 Override::getFlowOverride
     /// Return the particular flow override at a given address. Faithful to
     /// `getFlowOverride` (override.cc:233).
     pub fn get_flow_override(&self, addr: Address) -> FlowOverride {
@@ -235,11 +256,13 @@ impl Override {
             .unwrap_or(FlowOverride::None)
     }
 
+    // Ghidra: override.hh:50 Override::flowOverrides
     /// Iterate over all flow overrides.
     pub fn flow_overrides(&self) -> impl Iterator<Item = (&Address, &FlowOverride)> {
         self.flowoverride.iter()
     }
 
+    // Ghidra: override.hh:50 Override::isEmpty
     /// Are there any overrides at all?
     pub fn is_empty(&self) -> bool {
         self.forcegoto.is_empty()
@@ -250,12 +273,14 @@ impl Override {
             && self.flowoverride.is_empty()
     }
 
+    // Ghidra: override.cc:51 Override::generateDeadcodeDelayMessage
     /// Generate a dead-code delay warning message. Faithful to
     /// `generateDeadcodeDelayMessage` (override.cc:51).
     pub fn generate_deadcode_delay_message(space_name: &str) -> String {
         format!("Restarted to delay deadcode elimination for space: {space_name}")
     }
 
+    // Ghidra: override.cc:279 Override::generateOverrideMessages
     /// Generate warning messages describing current overrides. Faithful to
     /// `generateOverrideMessages` (override.cc:279).
     pub fn generate_override_messages(&self, space_names: &[String]) -> Vec<String> {
@@ -269,6 +294,7 @@ impl Override {
         messages
     }
 
+    // Ghidra: override.cc:248 Override::printRaw
     /// Dump a description of the overrides for debug. Faithful to `printRaw`
     /// (override.cc:248).
     pub fn print_raw(&self, space_names: &[String]) -> Vec<String> {
@@ -298,6 +324,7 @@ impl Override {
         lines
     }
 
+    // Ghidra: override.cc:294 Override::encode
     /// Encode the override commands to a stream. Faithful to
     /// `Override::encode` (override.cc:294). All commands are written as
     /// children of a root `<override>` element. If there are no overrides,
@@ -380,6 +407,7 @@ impl Override {
         encoder.close_element(&override_elem);
     }
 
+    // Ghidra: override.cc:356 Override::decode
     /// Parse an `<override>` element containing override commands. Faithful to
     /// `Override::decode` (override.cc:356).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
@@ -464,6 +492,7 @@ impl Override {
     }
 }
 
+// Ghidra: override.hh:50 Override::readOneAddr
 /// Read a single `<addr>` child element, returning its address offset.
 /// Returns None if no addr element is found.
 fn read_one_addr(decoder: &mut dyn Decoder) -> Option<Address> {
@@ -491,6 +520,7 @@ fn read_one_addr(decoder: &mut dyn Decoder) -> Option<Address> {
     Some(Address::new(offset))
 }
 
+// Ghidra: override.hh:50 Override::readTwoAddrs
 /// Read two consecutive `<addr>` child elements (e.g. for forcegoto/indirectoverride).
 fn read_two_addrs(decoder: &mut dyn Decoder) -> (Option<Address>, Option<Address>) {
     let first = read_one_addr(decoder);

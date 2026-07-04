@@ -46,6 +46,7 @@ pub struct Comment {
 }
 
 impl Comment {
+    // Ghidra: comment.cc:30 Comment::new
     /// Construct given properties, function address, comment address,
     /// uniqueness id, and text. Faithful to the constructor (comment.cc:30).
     pub fn new(tp: u32, fad: Address, ad: Address, uq: i32, txt: &str) -> Self {
@@ -59,6 +60,7 @@ impl Comment {
         }
     }
 
+    // Ghidra: comment.cc:30 Comment::newEmpty
     /// Construct an empty comment for use with decode.
     pub fn new_empty() -> Self {
         Self {
@@ -71,41 +73,49 @@ impl Comment {
         }
     }
 
+    // Ghidra: comment.cc:30 Comment::setEmitted
     /// Mark that this comment has been emitted. Faithful to `setEmitted`.
     pub fn set_emitted(&mut self, val: bool) {
         self.emitted = val;
     }
 
+    // Ghidra: comment.cc:30 Comment::isEmitted
     /// Return true if this comment is already emitted.
     pub fn is_emitted(&self) -> bool {
         self.emitted
     }
 
+    // Ghidra: comment.cc:30 Comment::getType
     /// Get the properties associated with the comment. Faithful to `getType`.
     pub fn get_type(&self) -> u32 {
         self.type_flags
     }
 
+    // Ghidra: comment.cc:30 Comment::getFuncAddr
     /// Get the address of the function containing the comment.
     pub fn get_func_addr(&self) -> Address {
         self.funcaddr
     }
 
+    // Ghidra: comment.cc:30 Comment::getAddr
     /// Get the address to which the instruction is attached.
     pub fn get_addr(&self) -> Address {
         self.addr
     }
 
+    // Ghidra: comment.cc:30 Comment::getUniq
     /// Get the sub-sorting index. Faithful to `getUniq`.
     pub fn get_uniq(&self) -> i32 {
         self.uniq
     }
 
+    // Ghidra: comment.cc:30 Comment::getText
     /// Get the body of the comment. Faithful to `getText`.
     pub fn get_text(&self) -> &str {
         &self.text
     }
 
+    // Ghidra: comment.cc:37 Comment::encode
     /// Encode the comment to a stream. Faithful to `Comment::encode`
     /// (comment.cc:37).
     pub fn encode(&self, encoder: &mut dyn Encoder) {
@@ -130,6 +140,7 @@ impl Comment {
         encoder.close_element(&comment_elem);
     }
 
+    // Ghidra: comment.cc:57 Comment::decode
     /// Decode the comment from a stream. Faithful to `Comment::decode`
     /// (comment.cc:57).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
@@ -172,6 +183,7 @@ impl Comment {
     }
 }
 
+// Ghidra: comment.cc:63 Comment::encodeCommentType
 /// Convert a name string to a comment property. Faithful to
 /// `encodeCommentType` (comment.cc:77). Returns 0 for unknown names.
 pub fn encode_comment_type(name: &str) -> u32 {
@@ -186,6 +198,7 @@ pub fn encode_comment_type(name: &str) -> u32 {
     }
 }
 
+// Ghidra: comment.cc:40 Comment::decodeCommentType
 /// Convert a comment property to its string representation. Faithful to
 /// `decodeCommentType` (comment.cc:97). Returns empty string for unknown.
 pub fn decode_comment_type(val: u32) -> String {
@@ -200,6 +213,7 @@ pub fn decode_comment_type(val: u32) -> String {
     }
 }
 
+// Ghidra: comment.cc:30 Comment::readAddrChild
 /// Read a single `<addr>` child element and return its address offset.
 fn read_addr_child(decoder: &mut dyn Decoder) -> Address {
     let sub_id = decoder.peek_element();
@@ -223,6 +237,7 @@ fn read_addr_child(decoder: &mut dyn Decoder) -> Address {
     Address::new(offset)
 }
 
+// Ghidra: comment.cc:30 Comment::commentSortKey
 /// A sorting key for comments: (funcaddr, addr, uniq). Comments are ordered
 /// first by function, then address, then the sub-sort index. Faithful to
 /// `CommentOrder` (comment.hh:80).
@@ -240,23 +255,27 @@ pub struct CommentDatabaseInternal {
 }
 
 impl CommentDatabaseInternal {
+    // Ghidra: comment.cc:134 CommentDatabaseInternal::new
     /// Construct an empty comment database.
     pub fn new() -> Self {
         Self::default()
     }
 
+    // Ghidra: comment.cc:134 CommentDatabaseInternal::sort
     /// Keep the comments vector sorted by (funcaddr, addr, uniq).
     fn sort(&mut self) {
         self.comments
             .sort_by(|a, b| comment_sort_key(a).cmp(&comment_sort_key(b)));
     }
 
+    // Ghidra: comment.cc:148 CommentDatabaseInternal::clear
     /// Clear all comments from this container. Faithful to `clear`
     /// (comment.cc:148).
     pub fn clear(&mut self) {
         self.comments.clear();
     }
 
+    // Ghidra: comment.cc:158 CommentDatabaseInternal::clearType
     /// Clear all comments matching (one of) the indicated types, restricted to
     /// a specific function. Faithful to `clearType` (comment.cc:158).
     pub fn clear_type(&mut self, fad: Address, tp: u32) {
@@ -265,6 +284,7 @@ impl CommentDatabaseInternal {
         });
     }
 
+    // Ghidra: comment.cc:178 CommentDatabaseInternal::addComment
     /// Add a new comment to the container. Faithful to `addComment`
     /// (comment.cc:178). The uniqueness id is auto-assigned.
     pub fn add_comment(&mut self, tp: u32, fad: Address, ad: Address, txt: &str) {
@@ -283,6 +303,7 @@ impl CommentDatabaseInternal {
         self.sort();
     }
 
+    // Ghidra: comment.cc:196 CommentDatabaseInternal::addCommentNoDuplicate
     /// Add a new comment, making sure there is no duplicate. Faithful to
     /// `addCommentNoDuplicate` (comment.cc:196). Returns true if a new Comment
     /// was created, false if there was a duplicate.
@@ -303,11 +324,13 @@ impl CommentDatabaseInternal {
         true
     }
 
+    // Ghidra: comment.cc:134 CommentDatabaseInternal::numComments
     /// Number of comments in the database.
     pub fn num_comments(&self) -> usize {
         self.comments.len()
     }
 
+    // Ghidra: comment.cc:134 CommentDatabaseInternal::commentsForFunction
     /// Iterate over all comments for a single function. Faithful to
     /// `beginComment`/`endComment`.
     pub fn comments_for_function(&self, fad: Address) -> impl Iterator<Item = &Comment> {
@@ -316,11 +339,13 @@ impl CommentDatabaseInternal {
             .filter(move |c| c.funcaddr == fad)
     }
 
+    // Ghidra: comment.cc:134 CommentDatabaseInternal::allComments
     /// Iterate over all comments.
     pub fn all_comments(&self) -> impl Iterator<Item = &Comment> {
         self.comments.iter()
     }
 
+    // Ghidra: comment.cc:242 CommentDatabaseInternal::encode
     /// Encode all comments to a stream. Faithful to `encode` (comment.cc:242).
     pub fn encode(&self, encoder: &mut dyn Encoder) {
         let db_elem = ElementId::new("commentdb", 0);
@@ -331,6 +356,7 @@ impl CommentDatabaseInternal {
         encoder.close_element(&db_elem);
     }
 
+    // Ghidra: comment.cc:253 CommentDatabaseInternal::decode
     /// Decode all comments from a `<commentdb>` element. Faithful to `decode`
     /// (comment.cc:253).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
@@ -371,6 +397,7 @@ pub struct Subsort {
 }
 
 impl Subsort {
+    // Ghidra: comment.hh:203 Subsort::setHeader
     /// Initialize a key for a header comment. Faithful to `setHeader`.
     pub fn set_header(header_type: u32) -> Self {
         Self {
@@ -380,6 +407,7 @@ impl Subsort {
         }
     }
 
+    // Ghidra: comment.hh:203 Subsort::setBlock
     /// Initialize a key for a basic block position. Faithful to `setBlock`.
     pub fn set_block(i: u32, ord: u32) -> Self {
         Self {
@@ -407,11 +435,13 @@ pub struct CommentSorter {
 }
 
 impl CommentSorter {
+    // Ghidra: comment.hh:195 CommentSorter::new
     /// Construct an empty sorter.
     pub fn new() -> Self {
         Self::default()
     }
 
+    // Ghidra: comment.cc:270 CommentSorter::findPosition
     /// Figure out the position of a Comment within the function's basic blocks.
     /// Faithful to `CommentSorter::findPosition` (comment.cc:270).
     ///
@@ -495,6 +525,7 @@ impl CommentSorter {
         false
     }
 
+    // Ghidra: comment.cc:334 CommentSorter::setupFunctionList
     /// Collect and sort comments specific to the given function. Faithful to
     /// `setupFunctionList` (comment.cc:334).
     ///
@@ -530,6 +561,7 @@ impl CommentSorter {
         }
     }
 
+    // Ghidra: comment.cc:379 CommentSorter::setupBlockList
     /// Prepare to walk comments from a single basic block. Faithful to
     /// `setupBlockList` (comment.cc:379). Returns the comments for the
     /// given block index.
@@ -541,6 +573,7 @@ impl CommentSorter {
             .collect()
     }
 
+    // Ghidra: comment.cc:362 CommentSorter::setupOpList
     /// Prepare to walk comments up to a specific op landmark. Faithful to
     /// `setupOpList` (comment.cc:362).
     pub fn setup_op_list(&self, block_index: u32, op_order: u32) -> Vec<&Comment> {
@@ -551,6 +584,7 @@ impl CommentSorter {
             .collect()
     }
 
+    // Ghidra: comment.cc:394 CommentSorter::setupHeader
     /// Prepare to walk comments in the header. Faithful to `setupHeader`
     /// (comment.cc:394).
     pub fn setup_header(&self, _header_type: u32) {
@@ -558,6 +592,7 @@ impl CommentSorter {
         // commmap already holds header comments.
     }
 
+    // Ghidra: comment.hh:195 CommentSorter::hasHeaderComments
     /// Return true if there are more comments to emit in the header.
     pub fn has_header_comments(&self) -> bool {
         self.commmap
@@ -565,6 +600,7 @@ impl CommentSorter {
             .any(|k| k.index == u32::MAX)
     }
 
+    // Ghidra: comment.hh:195 CommentSorter::headerComments
     /// Iterate over all header comments (basic + unplaced).
     pub fn header_comments(&self) -> impl Iterator<Item = &Comment> {
         self.commmap

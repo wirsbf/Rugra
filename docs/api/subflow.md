@@ -79,3 +79,4 @@ FLOAT_FLOAT2FLOAT 常量输入→op_float2_float fold→COPY(constant)（subflow
 
 ### 2026-07-01（续 5）：SubfloatConvert 非 const 精度追踪
 非 const 路径：widening→root=outvn+insize，narrowing→root=invn+outsize。update_type 标记有效精度 float 类型。5 新测试。
+<!-- annotation-pass: 2026-07-04 -->

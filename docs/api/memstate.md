@@ -32,3 +32,4 @@
 - `MemoryBank::insert_word/find_word/clear` — 字对齐访问 + 清空
 
 测试：新增 3 个（memory_image + page_overlay_write_read + page_overlay_with_underlie）。
+<!-- annotation-pass: 2026-07-04 -->

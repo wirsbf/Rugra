@@ -50,3 +50,4 @@ In-memory implementation (cpool.hh:165).
 **ConstantPoolInternal 新增方法**：
 - `encode(encoder)`（cpool.cc:218）：编码 `<constantpool>` + `<ref>` + `<cpoolrec>` 子元素。
 - `decode(decoder)`（cpool.cc:230）：解码恢复常量池记录。
+<!-- annotation-pass: 2026-07-04 -->

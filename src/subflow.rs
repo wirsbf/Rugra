@@ -122,6 +122,7 @@ pub struct ReplaceVarnode {
 }
 
 impl ReplaceVarnode {
+    // Ghidra: subflow.hh:45 ReplaceVarnode::new
     fn new() -> Self {
         Self { vn: None, replacement: None, mask: 0, val: 0, def: None }
     }
@@ -260,6 +261,7 @@ impl SubvariableFlow {
     // Static helpers (subflow.cc:21-53)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:26 SubvariableFlow::doesOrSet
     /// Return the slot of the constant if an INT_OR op sets all bits in `mask`,
     /// otherwise -1. Faithful to `SubvariableFlow::doesOrSet`
     /// (subflow.cc:26-36).
@@ -285,6 +287,7 @@ impl SubvariableFlow {
         }
     }
 
+    // Ghidra: subflow.cc:43 SubvariableFlow::doesAndClear
     /// Return the slot of the constant if an INT_AND op clears all bits in
     /// `mask`, otherwise -1. Faithful to `SubvariableFlow::doesAndClear`
     /// (subflow.cc:43-53).
@@ -310,6 +313,7 @@ impl SubvariableFlow {
         }
     }
 
+    // Ghidra: subflow.cc:1372 SubvariableFlow::isZeroExtended
     /// Reproduce `Varnode::isZeroExtended(int4 baseSize)` (varnode.cc:958-970).
     ///
     /// `Varnode::isZeroExtended` is not yet a first-class accessor on Rugra's
@@ -368,6 +372,7 @@ impl SubvariableFlow {
     // Constructor (subflow.cc:1366-1404)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1372 SubvariableFlow::new
     /// Construct the analysis.
     ///
     /// Faithful to `SubvariableFlow::SubvariableFlow(Funcdata*,Varnode*,uintb,
@@ -428,6 +433,7 @@ impl SubvariableFlow {
         s
     }
 
+    // Ghidra: subflow.cc:1372 SubvariableFlow::isNull
     /// Did the constructor short-circuit (equivalent to Ghidra's
     /// `fd==(Funcdata*)0`)? When true, [`do_trace`](Self::do_trace) will return
     /// false without doing anything.
@@ -439,6 +445,7 @@ impl SubvariableFlow {
     // setReplacement (subflow.cc:55-151)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:66 SubvariableFlow::setReplacement
     /// Add the given Varnode as a new node in the logical subgraph.
     ///
     /// Faithful to `SubvariableFlow::setReplacement` (subflow.cc:66-151).
@@ -608,6 +615,7 @@ impl SubvariableFlow {
     // createOp / createOpDown (subflow.cc:153-197)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:159 SubvariableFlow::createOp
     /// Create a logical subgraph operator node given its output variable node.
     /// Faithful to `SubvariableFlow::createOp` (subflow.cc:159-173).
     fn create_op(&mut self, opc: OpCode, numparam: usize, outrvn: usize) -> usize {
@@ -632,6 +640,7 @@ impl SubvariableFlow {
         rop_idx
     }
 
+    // Ghidra: subflow.cc:184 SubvariableFlow::createOpDown
     /// Create a logical subgraph operator node given one of its input variable
     /// nodes. Faithful to `SubvariableFlow::createOpDown` (subflow.cc:184-197).
     fn create_op_down(
@@ -664,6 +673,7 @@ impl SubvariableFlow {
     // tryInt2FloatPull (subflow.cc:199-367)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:208 SubvariableFlow::tryCallPull
     /// Determine if the given subgraph variable can act as a parameter to the
     /// given CALL op. Faithful to `SubvariableFlow::tryCallPull`
     /// (subflow.cc:208-228).
@@ -694,6 +704,7 @@ impl SubvariableFlow {
         false
     }
 
+    // Ghidra: subflow.cc:238 SubvariableFlow::tryReturnPull
     /// Determine if the given subgraph variable can act as return value for the
     /// given RETURN op. Faithful to `SubvariableFlow::tryReturnPull`
     /// (subflow.cc:238-284).
@@ -780,6 +791,7 @@ impl SubvariableFlow {
         true
     }
 
+    // Ghidra: subflow.cc:293 SubvariableFlow::tryCallReturnPush
     /// Determine if the given subgraph variable can act as a created value for
     /// the given INDIRECT op. Faithful to `SubvariableFlow::tryCallReturnPush`
     /// (subflow.cc:293-310).
@@ -809,6 +821,7 @@ impl SubvariableFlow {
         false
     }
 
+    // Ghidra: subflow.cc:319 SubvariableFlow::trySwitchPull
     /// Determine if the subgraph variable can act as a switch variable for the
     /// given BRANCHIND. Faithful to `SubvariableFlow::trySwitchPull`
     /// (subflow.cc:319-332).
@@ -837,6 +850,7 @@ impl SubvariableFlow {
         true
     }
 
+    // Ghidra: subflow.cc:1372 SubvariableFlow::tryInt2floatPull
     /// Determine if the subgraph variable flows naturally into a terminal
     /// FLOAT_INT2FLOAT operation. Faithful to `SubvariableFlow::tryInt2FloatPull`
     /// (subflow.cc:341-367).
@@ -895,6 +909,7 @@ impl SubvariableFlow {
     // traceForward (subflow.cc:369-659)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:373 SubvariableFlow::traceForward
     /// Try to trace the logical variable through descendant Varnodes, creating
     /// new nodes in the logical subgraph and updating the worklist. Faithful to
     /// `SubvariableFlow::traceForward` (subflow.cc:373-659).
@@ -1370,6 +1385,7 @@ impl SubvariableFlow {
     // traceBackward (subflow.cc:661-861)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:665 SubvariableFlow::traceBackward
     /// Trace the logical value backward through one PcodeOp adding new nodes to
     /// the logical subgraph and updating the worklist. Faithful to
     /// `SubvariableFlow::traceBackward` (subflow.cc:665-861).
@@ -1677,6 +1693,7 @@ impl SubvariableFlow {
     // traceForwardSext / traceBackwardSext (subflow.cc:863-1009)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:867 SubvariableFlow::traceForwardSext
     /// traceForward assuming sign-extensions. Faithful to
     /// `SubvariableFlow::traceForwardSext` (subflow.cc:867-954).
     fn trace_forward_sext(&mut self, fd: &Funcdata, rvn: usize) -> bool {
@@ -1823,6 +1840,7 @@ impl SubvariableFlow {
         true
     }
 
+    // Ghidra: subflow.cc:960 SubvariableFlow::traceBackwardSext
     /// traceBackward assuming sign-extensions. Faithful to
     /// `SubvariableFlow::traceBackwardSext` (subflow.cc:960-1009).
     fn trace_backward_sext(&mut self, rvn: usize) -> bool {
@@ -1903,6 +1921,7 @@ impl SubvariableFlow {
     // createLink / createCompareBridge (subflow.cc:1011-1071)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1022 SubvariableFlow::createLink
     /// Add a new variable to the logical subgraph as an input to the given
     /// operation. Faithful to `SubvariableFlow::createLink`
     /// (subflow.cc:1022-1044). `slot == -1` means the varnode is the op output.
@@ -1936,6 +1955,7 @@ impl SubvariableFlow {
         true
     }
 
+    // Ghidra: subflow.cc:1056 SubvariableFlow::createCompareBridge
     /// Extend the logical subgraph through a given comparison operator.
     /// Faithful to `SubvariableFlow::createCompareBridge`
     /// (subflow.cc:1056-1071).
@@ -1967,6 +1987,7 @@ impl SubvariableFlow {
     // addConstant / addNewConstant / createNewOut (subflow.cc:1073-1143)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1080 SubvariableFlow::addConstant
     /// Add a constant variable node to the logical subgraph. Faithful to
     /// `SubvariableFlow::addConstant` (subflow.cc:1080-1099).
     fn add_constant(
@@ -1997,6 +2018,7 @@ impl SubvariableFlow {
         idx
     }
 
+    // Ghidra: subflow.cc:1108 SubvariableFlow::addNewConstant
     /// Add a new constant variable node (not associated with an original
     /// constant). Faithful to `SubvariableFlow::addNewConstant`
     /// (subflow.cc:1108-1124).
@@ -2017,6 +2039,7 @@ impl SubvariableFlow {
         idx
     }
 
+    // Ghidra: subflow.cc:1132 SubvariableFlow::createNewOut
     /// Create a new, non-shadowing, subgraph variable node as an operation
     /// output. Faithful to `SubvariableFlow::createNewOut`
     /// (subflow.cc:1132-1143).
@@ -2038,6 +2061,7 @@ impl SubvariableFlow {
     // addExtensionPatch / addComparePatch (subflow.cc:1145-1250)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1151 SubvariableFlow::addPush
     /// Mark an operation where original data-flow is being pushed into a
     /// subgraph variable. Faithful to `SubvariableFlow::addPush`
     /// (subflow.cc:1151-1158). Push patches go to the FRONT of the list so
@@ -2057,6 +2081,7 @@ impl SubvariableFlow {
         self.push_front_count += 1;
     }
 
+    // Ghidra: subflow.cc:1167 SubvariableFlow::addTerminalPatch
     /// Mark an operation where a subgraph variable is naturally copied into the
     /// original data-flow. Faithful to `SubvariableFlow::addTerminalPatch`
     /// (subflow.cc:1167-1175).
@@ -2072,6 +2097,7 @@ impl SubvariableFlow {
         self.pullcount += 1; // a true terminal modification
     }
 
+    // Ghidra: subflow.cc:1185 SubvariableFlow::addTerminalPatchSameOp
     /// Mark an operation where a subgraph variable is pulled but the opcode
     /// does not change (only the input slot does). Faithful to
     /// `SubvariableFlow::addTerminalPatchSameOp` (subflow.cc:1185-1194).
@@ -2087,6 +2113,7 @@ impl SubvariableFlow {
         self.pullcount += 1; // a true terminal modification
     }
 
+    // Ghidra: subflow.cc:1203 SubvariableFlow::addBooleanPatch
     /// Mark a subgraph bit variable flowing into an operation taking a boolean
     /// input. Faithful to `SubvariableFlow::addBooleanPatch`
     /// (subflow.cc:1203-1212). This is NOT a true modification.
@@ -2101,6 +2128,7 @@ impl SubvariableFlow {
         });
     }
 
+    // Ghidra: subflow.cc:1221 SubvariableFlow::addExtensionPatch
     /// Mark a subgraph variable flowing to an operation that extends it by
     /// padding with zero bits. Faithful to `SubvariableFlow::addExtensionPatch`
     /// (subflow.cc:1221-1232). This is NOT a true modification.
@@ -2120,6 +2148,7 @@ impl SubvariableFlow {
         });
     }
 
+    // Ghidra: subflow.cc:1241 SubvariableFlow::addComparePatch
     /// Mark subgraph variables flowing into a comparison operation. Faithful to
     /// `SubvariableFlow::addComparePatch` (subflow.cc:1241-1250).
     fn add_compare_patch(&mut self, in1: usize, in2: usize, op: &Arc<RwLock<PcodeOp>>) {
@@ -2139,6 +2168,7 @@ impl SubvariableFlow {
     // getReplaceVarnode (subflow.cc:1252-1345)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1258 SubvariableFlow::replaceInput
     /// Replace an input Varnode in the subgraph with a temporary register.
     /// Faithful to `SubvariableFlow::replaceInput` (subflow.cc:1258-1266).
     fn replace_input(fd: &mut Funcdata, rvn: usize, newvarlist: &mut [ReplaceVarnode]) {
@@ -2158,6 +2188,7 @@ impl SubvariableFlow {
         newvarlist[rvn].vn = Some(newvn);
     }
 
+    // Ghidra: subflow.cc:1274 SubvariableFlow::useSameAddress
     /// Decide if we use the same memory range of the original Varnode for the
     /// logical replacement. Faithful to `SubvariableFlow::useSameAddress`
     /// (subflow.cc:1274-1291).
@@ -2186,6 +2217,7 @@ impl SubvariableFlow {
         mask == self.newvarlist[rvn].mask
     }
 
+    // Ghidra: subflow.cc:1297 SubvariableFlow::getReplacementAddress
     /// Calculate address of replacement Varnode for the given subgraph variable.
     /// Faithful to `SubvariableFlow::getReplacementAddress`
     /// (subflow.cc:1297-1308).
@@ -2205,6 +2237,7 @@ impl SubvariableFlow {
         addr.offset(sa)
     }
 
+    // Ghidra: subflow.cc:1316 SubvariableFlow::getReplaceVarnode
     /// Build the logical Varnode which will replace its original containing
     /// Varnode. Faithful to `SubvariableFlow::getReplaceVarnode`
     /// (subflow.cc:1316-1345).
@@ -2285,6 +2318,7 @@ impl SubvariableFlow {
     // processNextWork (subflow.cc:1347-1364)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1351 SubvariableFlow::processNextWork
     /// Extend the subgraph from the next node in the worklist. Faithful to
     /// `SubvariableFlow::processNextWork` (subflow.cc:1351-1364).
     fn process_next_work(&mut self, fd: &Funcdata) -> bool {
@@ -2306,6 +2340,7 @@ impl SubvariableFlow {
     // doTrace (subflow.cc:1406-1433)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1410 SubvariableFlow::doTrace
     /// Trace logical value through data-flow, constructing the transform.
     /// Faithful to `SubvariableFlow::doTrace` (subflow.cc:1410-1433).
     pub fn do_trace(&mut self, fd: &Funcdata) -> bool {
@@ -2342,6 +2377,7 @@ impl SubvariableFlow {
     // doReplacement (subflow.cc:1435-1545)
     // -----------------------------------------------------------------
 
+    // Ghidra: subflow.cc:1435 SubvariableFlow::doReplacement
     /// Perform the discovered transform, making logical values explicit.
     /// Faithful to `SubvariableFlow::doReplacement` (subflow.cc:1435-1545).
     pub fn do_replacement(&mut self, fd: &mut Funcdata) {
@@ -2487,18 +2523,22 @@ impl SubvariableFlow {
 
     // ---- small accessors used by tests / inspection ----
 
+    // Ghidra: subflow.cc:1372 SubvariableFlow::numNewVars
     /// Number of subgraph variable nodes.
     pub fn num_new_vars(&self) -> usize {
         self.newvarlist.len()
     }
+    // Ghidra: subflow.cc:1372 SubvariableFlow::numNewOps
     /// Number of subgraph op nodes.
     pub fn num_new_ops(&self) -> usize {
         self.oplist.len()
     }
+    // Ghidra: subflow.cc:1372 SubvariableFlow::numPatches
     /// Number of patch records.
     pub fn num_patches(&self) -> usize {
         self.patchlist.len()
     }
+    // Ghidra: subflow.cc:1372 SubvariableFlow::pullCount
     /// Current pull count.
     pub fn pull_count(&self) -> i32 {
         self.pullcount
@@ -2514,11 +2554,13 @@ impl SubvariableFlow {
 /// Faithful to Ghidra's `RuleSubvarAnd` (subflow.cc:133-142, 1547-1582).
 pub struct RuleSubvarAnd;
 impl RuleSubvarAnd {
+    // Ghidra: subflow.hh:133 RuleSubvarAnd::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubvarAnd {
+    // Ghidra: subflow.cc:1553 RuleSubvarAnd::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarAnd::applyOp (subflow.cc:1553-1582)
         let (in0, out_consume, in1_off, out_has_no_descend, in0_size) = {
@@ -2568,9 +2610,11 @@ impl Rule for RuleSubvarAnd {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:133 RuleSubvarAnd::getName
     fn get_name(&self) -> &str {
         "subvar_and"
     }
+    // Ghidra: subflow.cc:1547 RuleSubvarAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_AND]
     }
@@ -2580,11 +2624,13 @@ impl Rule for RuleSubvarAnd {
 /// Faithful to Ghidra's `RuleSubvarSubpiece` (subflow.cc:144-154, 1584-1619).
 pub struct RuleSubvarSubpiece;
 impl RuleSubvarSubpiece {
+    // Ghidra: subflow.hh:145 RuleSubvarSubpiece::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubvarSubpiece {
+    // Ghidra: subflow.cc:1590 RuleSubvarSubpiece::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarSubpiece::applyOp (subflow.cc:1590-1619)
         let (vn, flowsize, sa, in0_consume, out_has_no_descend, in0_size, lone_is_op, out_is_ptr_flow) = {
@@ -2642,9 +2688,11 @@ impl Rule for RuleSubvarSubpiece {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:145 RuleSubvarSubpiece::getName
     fn get_name(&self) -> &str {
         "subvar_subpiece"
     }
+    // Ghidra: subflow.cc:1584 RuleSubvarSubpiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE]
     }
@@ -2655,11 +2703,13 @@ impl Rule for RuleSubvarSubpiece {
 /// `RuleSubvarCompZero` (subflow.cc:156-171, 1621-1678).
 pub struct RuleSubvarCompZero;
 impl RuleSubvarCompZero {
+    // Ghidra: subflow.hh:162 RuleSubvarCompZero::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubvarCompZero {
+    // Ghidra: subflow.cc:1628 RuleSubvarCompZero::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarCompZero::applyOp (subflow.cc:1628-1678)
         let (vn, in1_off, out_has_no_descend, vn_written, def_code, def_in0, def_in0_size) = {
@@ -2729,9 +2779,11 @@ impl Rule for RuleSubvarCompZero {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:162 RuleSubvarCompZero::getName
     fn get_name(&self) -> &str {
         "subvar_compzero"
     }
+    // Ghidra: subflow.cc:1621 RuleSubvarCompZero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_NOTEQUAL, OpCode::CPUI_INT_EQUAL]
     }
@@ -2741,11 +2793,13 @@ impl Rule for RuleSubvarCompZero {
 /// Faithful to Ghidra's `RuleSubvarShift` (subflow.cc:173-186, 1680-1702).
 pub struct RuleSubvarShift;
 impl RuleSubvarShift {
+    // Ghidra: subflow.hh:178 RuleSubvarShift::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubvarShift {
+    // Ghidra: subflow.cc:1686 RuleSubvarShift::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarShift::applyOp (subflow.cc:1686-1702)
         let (vn, sa, mask, out_has_no_descend) = {
@@ -2776,9 +2830,11 @@ impl Rule for RuleSubvarShift {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:178 RuleSubvarShift::getName
     fn get_name(&self) -> &str {
         "subvar_shift"
     }
+    // Ghidra: subflow.cc:1680 RuleSubvarShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_RIGHT]
     }
@@ -2788,11 +2844,13 @@ impl Rule for RuleSubvarShift {
 /// Faithful to Ghidra's `RuleSubvarZext` (subflow.cc:188-198, 1704-1721).
 pub struct RuleSubvarZext;
 impl RuleSubvarZext {
+    // Ghidra: subflow.hh:190 RuleSubvarZext::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubvarZext {
+    // Ghidra: subflow.cc:1710 RuleSubvarZext::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarZext::applyOp (subflow.cc:1710-1721)
         let (vn, invn_size_mask, in_is_ptr_flow) = {
@@ -2813,9 +2871,11 @@ impl Rule for RuleSubvarZext {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:190 RuleSubvarZext::getName
     fn get_name(&self) -> &str {
         "subvar_zext"
     }
+    // Ghidra: subflow.cc:1704 RuleSubvarZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ZEXT]
     }
@@ -2829,11 +2889,13 @@ pub struct RuleSubvarSext {
     isaggressive: bool,
 }
 impl RuleSubvarSext {
+    // Ghidra: subflow.hh:202 RuleSubvarSext::new
     pub fn new() -> Self {
         Self { isaggressive: false }
     }
 }
 impl Rule for RuleSubvarSext {
+    // Ghidra: subflow.cc:1729 RuleSubvarSext::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubvarSext::applyOp (subflow.cc:1729-1740)
         let (vn, mask) = {
@@ -2850,14 +2912,17 @@ impl Rule for RuleSubvarSext {
         subflow.do_replacement(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:202 RuleSubvarSext::getName
     fn get_name(&self) -> &str {
         "subvar_sext"
     }
+    // Ghidra: subflow.cc:1723 RuleSubvarSext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SEXT]
     }
 }
 impl RuleSubvarSext {
+    // Ghidra: subflow.cc:1742 RuleSubvarSext::reset
     /// Reset the aggressiveness flag from the architecture's
     /// `aggressive_ext_trim` option. Faithful to `RuleSubvarSext::reset`
     /// (subflow.cc:1742-1746). The `Rule` trait has no reset hook in Rugra, so
@@ -2906,6 +2971,7 @@ pub struct SplitFlow {
 }
 
 impl SplitFlow {
+    // Ghidra: subflow.cc:1754 SplitFlow::setReplacement
     /// Find or build the placeholder objects for a Varnode that needs to be
     /// split. Mark the Varnode so it doesn't get revisited. Decide if the
     /// Varnode needs to go into the worklist. Faithful to `setReplacement`
@@ -2941,6 +3007,7 @@ impl SplitFlow {
         Some(res)
     }
 
+    // Ghidra: subflow.cc:1787 SplitFlow::addOp
     /// Split a given op into its lanes. The op is assumed to be a logical op,
     /// a COPY, or an INDIRECT, and must have an output. All inputs and output
     /// have their placeholders generated and added to the worklist if
@@ -3014,6 +3081,7 @@ impl SplitFlow {
         true
     }
 
+    // Ghidra: subflow.cc:1834 SplitFlow::traceForward
     /// Try to trace the pair of logical values forward, through ops that read
     /// them. Faithful to `traceForward` (subflow.cc:1834-1920).
     fn trace_forward(&mut self, rvn: usize) -> bool {
@@ -3147,6 +3215,7 @@ impl SplitFlow {
         true
     }
 
+    // Ghidra: subflow.cc:1927 SplitFlow::traceBackward
     /// Try to trace the pair of logical values backward, through the defining
     /// op. Create part of the transform related to the defining op, and update
     /// the worklist as necessary. Faithful to `traceBackward` (subflow.cc:1927-1997).
@@ -3270,6 +3339,7 @@ impl SplitFlow {
         true
     }
 
+    // Ghidra: subflow.cc:2000 SplitFlow::processNextWork
     /// Process the next logical value on the worklist. Faithful to
     /// `processNextWork` (subflow.cc:2000-2009). Returns true if the logical
     /// split was successfully pushed through its local operators.
@@ -3282,6 +3352,7 @@ impl SplitFlow {
         self.trace_forward(rvn)
     }
 
+    // Ghidra: subflow.cc:2011 SplitFlow::new
     /// Construct a SplitFlow on the given root Varnode. Faithful to the
     /// `SplitFlow` constructor (subflow.cc:2011-2016). `low_size` is the size
     /// of the low lane.
@@ -3299,6 +3370,7 @@ impl SplitFlow {
         sf
     }
 
+    // Ghidra: subflow.cc:2021 SplitFlow::doTrace
     /// Trace split through data-flow, constructing the transform. If at any
     /// point the split cannot be naturally pushed, return false. Faithful to
     /// `doTrace` (subflow.cc:2021-2037). Returns true if a full transform has
@@ -3318,6 +3390,7 @@ impl SplitFlow {
         retval
     }
 
+    // Ghidra: subflow.cc:2011 SplitFlow::apply
     /// Apply the full transform to the function. Faithful to the inherited
     /// `apply()` (transform.cc:756-765): `create_ops` -> `create_varnodes` ->
     /// `remove_old` -> `transform_input_varnodes` -> `place_inputs`.
@@ -3336,11 +3409,13 @@ impl SplitFlow {
 /// ported `TransformManager` machinery (transform.rs).
 pub struct RuleSplitFlow;
 impl RuleSplitFlow {
+    // Ghidra: subflow.hh:239 RuleSplitFlow::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSplitFlow {
+    // Ghidra: subflow.cc:2045 RuleSplitFlow::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSplitFlow::applyOp (subflow.cc:2045-2088)
         let (lo_size, vn_written, vn, concat_op) = {
@@ -3431,9 +3506,11 @@ impl Rule for RuleSplitFlow {
         split_flow.apply(fd);
         Ok(action_status::CHANGE)
     }
+    // Ghidra: subflow.hh:239 RuleSplitFlow::getName
     fn get_name(&self) -> &str {
         "splitflow"
     }
+    // Ghidra: subflow.cc:2039 RuleSplitFlow::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE]
     }
@@ -3506,6 +3583,7 @@ pub struct RootPointer {
 }
 
 impl RootPointer {
+    // Ghidra: subflow.hh:271 RootPointer::new
     /// Construct an empty RootPointer.
     pub fn new() -> Self {
         Self {
@@ -3518,6 +3596,7 @@ impl RootPointer {
 }
 
 impl<'a> SplitDatatype<'a> {
+    // Ghidra: subflow.hh:271 RootPointer::new
     /// Constructor. Faithful to `SplitDatatype::SplitDatatype(Funcdata&)`
     /// (subflow.cc:2701-2709). The `split_datatype_config` flags come from
     /// the Architecture's `OptionSplitDatatypes` options. Rugra does not yet
@@ -3536,6 +3615,7 @@ impl<'a> SplitDatatype<'a> {
         }
     }
 
+    // Ghidra: subflow.hh:271 RootPointer::splitCopy
     /// Split a COPY operation. Faithful to `SplitDatatype::splitCopy`
     /// (subflow.cc:2717-2747). Based on the input and output data-types,
     /// determine if and how the given COPY should be split into pieces, then —
@@ -3646,6 +3726,7 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
+    // Ghidra: subflow.hh:271 RootPointer::splitLoad
     /// Split a LOAD operation. Faithful to `SplitDatatype::splitLoad`
     /// (subflow.cc:2756-2800). Based on the LOAD data-type, determine if the
     /// LOAD can be split into smaller LOADs and, if so, perform the split.
@@ -3713,6 +3794,7 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
+    // Ghidra: subflow.hh:271 RootPointer::splitStore
     /// Split a STORE operation. Faithful to `SplitDatatype::splitStore`
     /// (subflow.cc:2808-2898). Based on the STORE data-type, determine if the
     /// STORE can be split into smaller STOREs and, if so, perform the split.
@@ -3779,6 +3861,7 @@ impl<'a> SplitDatatype<'a> {
         Ok(true)
     }
 
+    // Ghidra: subflow.hh:271 RootPointer::collectComponents
     /// Decompose a composite data-type into its top-level logical pieces.
     /// Returns a vector of `(byte offset within the whole, byte size)` pairs,
     /// or an empty vector if the type should not be split.
@@ -3818,6 +3901,7 @@ impl<'a> SplitDatatype<'a> {
     }
 }
 
+// Ghidra: subflow.hh:271 RootPointer::immediateOffsetAfter
 /// Extract the immediate constant offset applied to a pointer Varnode, if its
 /// defining op is an `INT_ADD`/`PTRSUB` with a constant second operand.
 /// Returns 0 otherwise. This is a partial port of Ghidra's
@@ -3845,6 +3929,7 @@ fn immediate_offset_after(ptr_vn: &Arc<RwLock<Varnode>>) -> i32 {
     r.get_offset() as i32
 }
 
+// Ghidra: subflow.hh:271 RootPointer::addPointer
 /// Build a `pointer + offset` INT_ADD op, inserted before `before`, returning
 /// the new pointer Varnode.
 fn add_pointer(
@@ -3864,6 +3949,7 @@ fn add_pointer(
     add_out
 }
 
+// Ghidra: subflow.hh:271 RootPointer::subpieceValue
 /// Extract a byte-range piece of `value_vn` via a SUBPIECE op inserted before
 /// `before`, returning the piece Varnode.
 fn subpiece_value(
@@ -3884,6 +3970,7 @@ fn subpiece_value(
     sub_out
 }
 
+// Ghidra: subflow.hh:271 RootPointer::reassembleViaPiece
 /// Reassemble a sequence of per-component output Varnodes (least-significant
 /// first) into `out_vn` via a left-leaning chain of PIECE ops, inserted before
 /// `before`. Mirrors Ghidra's `buildOutConcats` (subflow.cc:2548-2614).
@@ -3929,11 +4016,13 @@ fn reassemble_via_piece(
 /// `RuleSplitCopy` (subflow.hh:315-324, subflow.cc:2941-2962).
 pub struct RuleSplitCopy;
 impl RuleSplitCopy {
+    // Ghidra: subflow.hh:315 RuleSplitCopy::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSplitCopy {
+    // Ghidra: subflow.cc:2947 RuleSplitCopy::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSplitCopy::applyOp (subflow.cc:2947-2962): read in/out data-types
         // and only proceed when one side is PARTIALSTRUCT/ARRAY/STRUCT. Rugra has
@@ -3960,9 +4049,11 @@ impl Rule for RuleSplitCopy {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // Ghidra: subflow.hh:315 RuleSplitCopy::getName
     fn get_name(&self) -> &str {
         "splitcopy"
     }
+    // Ghidra: subflow.cc:2941 RuleSplitCopy::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_COPY]
     }
@@ -3972,11 +4063,13 @@ impl Rule for RuleSplitCopy {
 /// `RuleSplitLoad` (subflow.hh:330-339, subflow.cc:2964-2983).
 pub struct RuleSplitLoad;
 impl RuleSplitLoad {
+    // Ghidra: subflow.hh:330 RuleSplitLoad::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSplitLoad {
+    // Ghidra: subflow.cc:2970 RuleSplitLoad::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSplitLoad::applyOp (subflow.cc:2970-2983)
         let mut splitter = SplitDatatype::new(fd);
@@ -3986,9 +4079,11 @@ impl Rule for RuleSplitLoad {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // Ghidra: subflow.hh:330 RuleSplitLoad::getName
     fn get_name(&self) -> &str {
         "splitload"
     }
+    // Ghidra: subflow.cc:2964 RuleSplitLoad::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_LOAD]
     }
@@ -3998,11 +4093,13 @@ impl Rule for RuleSplitLoad {
 /// `RuleSplitStore` (subflow.hh:343-354, subflow.cc:2985-3004).
 pub struct RuleSplitStore;
 impl RuleSplitStore {
+    // Ghidra: subflow.hh:345 RuleSplitStore::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSplitStore {
+    // Ghidra: subflow.cc:2991 RuleSplitStore::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSplitStore::applyOp (subflow.cc:2991-3004)
         let mut splitter = SplitDatatype::new(fd);
@@ -4012,9 +4109,11 @@ impl Rule for RuleSplitStore {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // Ghidra: subflow.hh:345 RuleSplitStore::getName
     fn get_name(&self) -> &str {
         "splitstore"
     }
+    // Ghidra: subflow.cc:2985 RuleSplitStore::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_STORE]
     }
@@ -4063,11 +4162,13 @@ impl Rule for RuleSplitStore {
 ///    `TypeFactory` wired up) the rule defers (NO_CHANGE).
 pub struct RuleSubfloatConvert;
 impl RuleSubfloatConvert {
+    // Ghidra: subflow.hh:409 RuleSubfloatConvert::new
     pub fn new() -> Self {
         Self
     }
 }
 impl Rule for RuleSubfloatConvert {
+    // Ghidra: subflow.cc:3489 RuleSubfloatConvert::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507).
         // Constant inputs are folded (subflow.cc:3394-3403); non-constant inputs
@@ -4182,9 +4283,11 @@ impl Rule for RuleSubfloatConvert {
             Ok(action_status::NO_CHANGE)
         }
     }
+    // Ghidra: subflow.hh:409 RuleSubfloatConvert::getName
     fn get_name(&self) -> &str {
         "subfloat_convert"
     }
+    // Ghidra: subflow.cc:3483 RuleSubfloatConvert::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT]
     }
@@ -4206,10 +4309,12 @@ impl Rule for RuleSubfloatConvert {
 pub struct RuleDumptyHumpLate;
 
 impl RuleDumptyHumpLate {
+    // Ghidra: subflow.hh:363 RuleDumptyHumpLate::new
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleDumptyHumpLate {
+    // Ghidra: subflow.cc:3012 RuleDumptyHumpLate::applyOp
     fn apply_op(&self, op_arc: &Arc<RwLock<PcodeOp>>, data: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDumptyHumpLate::applyOp (subflow.cc:3012-3064).
         let op_ref = PcodeOpRef(op_arc.clone());
@@ -4373,7 +4478,9 @@ impl Rule for RuleDumptyHumpLate {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: subflow.hh:363 RuleDumptyHumpLate::getName
     fn get_name(&self) -> &str { "dumptyhump_late" }
+    // Ghidra: subflow.cc:3006 RuleDumptyHumpLate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 

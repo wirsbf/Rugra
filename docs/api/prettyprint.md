@@ -236,3 +236,4 @@ Emitter that discards all output (used for discovery pass)
 - `canonicalize_struct_deref`（pass 20：`*(ptr+N)` → `ptr->field_N`）+ `rewrite_struct_deref`（pass 21：`ptr->field_N` → `*(long*)(ptr+N)`）已移除。
 - 这两个 pass 互为反作用，净效果为零。emit 层现在直接产出 `*(long*)(ptr+N)`（不产生 `->field_N`），所以两个 pass 都是无用的文本变换。
 - 移除后 post_process 从 27 趟降到 25 趟。gcc 24/24 不变。
+<!-- annotation-pass: 2026-07-04 -->

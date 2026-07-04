@@ -89,6 +89,7 @@ pub struct SymbolEntry {
 }
 
 impl SymbolEntry {
+    // Ghidra: database.cc:50 SymbolEntry::newDynamic
     /// Construct a mapping for a Symbol without an address (dynamic).
     /// Faithful to the dynamic constructor (database.hh:140).
     pub fn new_dynamic(
@@ -110,6 +111,7 @@ impl SymbolEntry {
         }
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::newStatic
     /// Construct a static (address-based) SymbolEntry.
     pub fn new_static(
         symbol: Arc<RwLock<Symbol>>,
@@ -130,57 +132,68 @@ impl SymbolEntry {
         }
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::isPiece
     /// Is this a high or low piece of the whole Symbol? Faithful to `isPiece`.
     pub fn is_piece(&self) -> bool {
         // precislo | precishi — we approximate with offset != 0 or size < whole.
         self.offset != 0
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::isDynamic
     /// Is storage dynamic? Faithful to `isDynamic` (database.hh:142).
     pub fn is_dynamic(&self) -> bool {
         self.hash != 0
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::isInvalid
     /// Is this storage invalid? Faithful to `isInvalid` (database.hh:143).
     pub fn is_invalid(&self) -> bool {
         self.addr.as_u64() == 0 && self.hash == 0
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getOffset
     /// Get the offset of this within the Symbol. Faithful to `getOffset`.
     pub fn get_offset(&self) -> i32 {
         self.offset
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getFirst
     /// Get the first offset of this storage location. Faithful to `getFirst`.
     pub fn get_first(&self) -> u64 {
         self.addr.as_u64()
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getLast
     /// Get the last offset of this storage location. Faithful to `getLast`.
     pub fn get_last(&self) -> u64 {
         self.addr.as_u64() + self.size as u64 - 1
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getSymbol
     /// Get the Symbol associated with this. Faithful to `getSymbol`.
     pub fn get_symbol(&self) -> Arc<RwLock<Symbol>> {
         self.symbol.clone()
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getAddr
     /// Get the starting address of this storage. Faithful to `getAddr`.
     pub fn get_addr(&self) -> Address {
         self.addr
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getHash
     /// Get the hash used to identify this storage. Faithful to `getHash`.
     pub fn get_hash(&self) -> u64 {
         self.hash
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getSize
     /// Get the number of bytes consumed by this storage. Faithful to `getSize`.
     pub fn get_size(&self) -> i32 {
         self.size
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getAllFlags
     /// Get all Varnode flags for this storage. Faithful to `getAllFlags`
     /// (database.hh:271).
     pub fn get_all_flags(&self) -> u32 {
@@ -188,30 +201,35 @@ impl SymbolEntry {
         self.extraflags | sym_flags
     }
 
+    // Ghidra: database.cc:114 SymbolEntry::inUse
     /// Is this storage valid for the given code address? Faithful to `inUse`.
     pub fn in_use(&self, usepoint: Address) -> bool {
         // Empty uselimit = valid across all code.
         self.uselimit.empty() || self.uselimit.in_range(usepoint)
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::getUseLimit
     /// Get the set of valid code addresses for this storage. Faithful to
     /// `getUseLimit`.
     pub fn get_use_limit(&self) -> &RangeList {
         &self.uselimit
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::setUseLimit
     /// Set the range of code addresses where this is valid. Faithful to
     /// `setUseLimit`.
     pub fn set_use_limit(&mut self, uselim: RangeList) {
         self.uselimit = uselim;
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::isAddrTied
     /// Is this storage address tied? Faithful to `isAddrTied`
     /// (database.hh:275).
     pub fn is_addr_tied(&self) -> bool {
         (self.symbol.read().unwrap().flags & symbol_flags::ADDRTIED) != 0
     }
 
+    // Ghidra: database.cc:187 SymbolEntry::encode
     /// Encode this SymbolEntry to a stream. Faithful to `SymbolEntry::encode`
     /// (database.cc:187). Pieces are not saved.
     pub fn encode(&self, encoder: &mut dyn Encoder) {
@@ -232,6 +250,7 @@ impl SymbolEntry {
         self.encode_use_limit(encoder);
     }
 
+    // Ghidra: database.cc:50 SymbolEntry::encodeUseLimit
     /// Encode the use-limit ranges. A simplified form of RangeList::encode.
     fn encode_use_limit(&self, encoder: &mut dyn Encoder) {
         // Ghidra encodes <rangelist> with <range> children. We emit an empty
@@ -279,6 +298,7 @@ pub struct Symbol {
 }
 
 impl Symbol {
+    // Ghidra: database.hh:960 Symbol::new
     /// Construct given a name and data-type name. Faithful to the constructor
     /// (database.hh:220 / database.hh:960).
     pub fn new(scope_id: u64, nm: &str, type_name: &str) -> Self {
@@ -298,104 +318,124 @@ impl Symbol {
         }
     }
 
+    // Ghidra: database.hh:960 Symbol::newUnnamed
     /// Construct for use with decode (no name/type yet).
     pub fn new_unnamed(scope_id: u64) -> Self {
         Self::new(scope_id, "", "")
     }
 
+    // Ghidra: database.hh:960 Symbol::getName
     /// Get the local name of the symbol.
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: database.hh:960 Symbol::getDisplayName
     /// Get the name to display in output.
     pub fn get_display_name(&self) -> &str {
         &self.display_name
     }
 
+    // Ghidra: database.hh:960 Symbol::getTypeName
     /// Get the data-type name.
     pub fn get_type_name(&self) -> &str {
         &self.type_name
     }
 
+    // Ghidra: database.hh:960 Symbol::getType
     /// Get the resolved Datatype of this symbol. Faithful to
     /// `Symbol::getType` (database.hh:244).
     pub fn get_type(&self) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         self.dtype.clone()
     }
 
+    // Ghidra: database.hh:960 Symbol::setDtype
     /// Set the resolved Datatype.
     pub fn set_dtype(&mut self, dt: Arc<crate::type_system::datatype::Datatype>) {
         self.dtype = Some(dt);
     }
 
+    // Ghidra: database.hh:960 Symbol::getId
     /// Get a unique id for the symbol.
     pub fn get_id(&self) -> u64 {
         self.symbol_id
     }
 
+    // Ghidra: database.hh:960 Symbol::getFlags
     /// Get the boolean properties of the Symbol.
     pub fn get_flags(&self) -> u32 {
         self.flags
     }
 
+    // Ghidra: database.hh:960 Symbol::getDisplayFormat
     /// Get the format to display the Symbol in. Faithful to `getDisplayFormat`.
     pub fn get_display_format(&self) -> u32 {
         self.dispflags & display_flags::FORMAT_MASK
     }
 
+    // Ghidra: database.hh:960 Symbol::getCategory
     /// Get the Symbol category.
     pub fn get_category(&self) -> SymbolCategory {
         self.category
     }
 
+    // Ghidra: database.hh:960 Symbol::getCategoryIndex
     /// Get the position of the Symbol within its category.
     pub fn get_category_index(&self) -> u16 {
         self.catindex
     }
 
+    // Ghidra: database.hh:960 Symbol::isTypeLocked
     /// Is the Symbol type-locked? Faithful to `isTypeLocked`.
     pub fn is_type_locked(&self) -> bool {
         (self.flags & symbol_flags::TYPELOCK) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isNameLocked
     /// Is the Symbol name-locked? Faithful to `isNameLocked`.
     pub fn is_name_locked(&self) -> bool {
         (self.flags & symbol_flags::NAMELOCK) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isSizeTypeLocked
     /// Is the Symbol size type-locked? Faithful to `isSizeTypeLocked`.
     pub fn is_size_type_locked(&self) -> bool {
         (self.dispflags & display_flags::SIZE_TYPELOCK) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isVolatile
     /// Is the Symbol volatile? Faithful to `isVolatile`.
     pub fn is_volatile(&self) -> bool {
         (self.flags & symbol_flags::VOLATIL) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isThisPointer
     /// Is this the "this" pointer? Faithful to `isThisPointer`.
     pub fn is_this_pointer(&self) -> bool {
         (self.dispflags & display_flags::IS_THIS_PTR) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isIndirectStorage
     /// Is storage really a pointer to the true Symbol? Faithful to
     /// `isIndirectStorage`.
     pub fn is_indirect_storage(&self) -> bool {
         (self.flags & symbol_flags::INDIRECTSTORAGE) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isHiddenReturn
     /// Is this a reference to the function return value? Faithful to
     /// `isHiddenReturn`.
     pub fn is_hidden_return(&self) -> bool {
         (self.flags & symbol_flags::HIDDENRETPARM) != 0
     }
 
+    // Ghidra: database.hh:960 Symbol::isMultiEntry
     /// Does this have more than one entire mapping? Faithful to `isMultiEntry`.
     pub fn is_multi_entry(&self) -> bool {
         self.whole_count > 1
     }
 
+    // Ghidra: database.hh:262 Symbol::setDisplayFormat
     /// Set the display format for this Symbol. Faithful to `setDisplayFormat`
     /// (database.hh:262).
     pub fn set_display_format(&mut self, val: u32) {
@@ -403,6 +443,7 @@ impl Symbol {
         self.dispflags |= val & display_flags::FORMAT_MASK;
     }
 
+    // Ghidra: database.cc:255 Symbol::setIsolated
     /// Set whether this Symbol should be speculatively merged. Faithful to
     /// `setIsolated`.
     pub fn set_isolated(&mut self, val: bool) {
@@ -413,11 +454,13 @@ impl Symbol {
         }
     }
 
+    // Ghidra: database.hh:960 Symbol::isIsolated
     /// Return true if this is isolated from speculative merging.
     pub fn is_isolated(&self) -> bool {
         (self.dispflags & display_flags::ISOLATE) != 0
     }
 
+    // Ghidra: database.cc:235 Symbol::setThisPointer
     /// Toggle whether this is the "this" pointer. Faithful to `setThisPointer`.
     pub fn set_this_pointer(&mut self, val: bool) {
         if val {
@@ -427,6 +470,7 @@ impl Symbol {
         }
     }
 
+    // Ghidra: database.cc:363 Symbol::encodeHeader
     /// Encode basic Symbol properties as attributes. Faithful to
     /// `Symbol::encodeHeader` (database.cc:363).
     pub fn encode_header(&self, encoder: &mut dyn Encoder) {
@@ -474,6 +518,7 @@ impl Symbol {
         }
     }
 
+    // Ghidra: database.cc:394 Symbol::decodeHeader
     /// Decode basic Symbol properties from attributes. Faithful to
     /// `Symbol::decodeHeader` (database.cc:394).
     pub fn decode_header(&mut self, decoder: &mut dyn Decoder) {
@@ -581,6 +626,7 @@ impl Symbol {
         }
     }
 
+    // Ghidra: database.cc:466 Symbol::encodeBody
     /// Encode the data-type for the Symbol. Faithful to `encodeBody`
     /// (database.cc:466). Emits a `<type>` element with the type name.
     pub fn encode_body(&self, encoder: &mut dyn Encoder) {
@@ -589,6 +635,7 @@ impl Symbol {
         encoder.close_element(&ElementId::new("type", 0));
     }
 
+    // Ghidra: database.cc:473 Symbol::decodeBody
     /// Decode the data-type for the Symbol. Faithful to `decodeBody`
     /// (database.cc:473). Reads the `<type>` element's name attribute.
     pub fn decode_body(&mut self, decoder: &mut dyn Decoder) {
@@ -607,6 +654,7 @@ impl Symbol {
         decoder.close_element(type_id);
     }
 
+    // Ghidra: database.cc:481 Symbol::encode
     /// Encode this Symbol to a stream. Faithful to `Symbol::encode`
     /// (database.cc:481).
     pub fn encode(&self, encoder: &mut dyn Encoder) {
@@ -617,6 +665,7 @@ impl Symbol {
         encoder.close_element(&sym_elem);
     }
 
+    // Ghidra: database.cc:492 Symbol::decode
     /// Decode this Symbol from a stream. Faithful to `Symbol::decode`
     /// (database.cc:492).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
@@ -640,6 +689,7 @@ pub struct FunctionSymbol {
 }
 
 impl FunctionSymbol {
+    // Ghidra: database.cc:534 FunctionSymbol::new
     /// Construct given the name and consume size.
     pub fn new(scope_id: u64, nm: &str, size: i32, entry: Address) -> Self {
         Self {
@@ -649,12 +699,14 @@ impl FunctionSymbol {
         }
     }
 
+    // Ghidra: database.cc:534 FunctionSymbol::getBytesConsumed
     /// Get the number of bytes consumed within the address→symbol map.
     /// Faithful to `getBytesConsumed`.
     pub fn get_bytes_consumed(&self) -> i32 {
         self.consume_size
     }
 
+    // Ghidra: database.cc:534 FunctionSymbol::getEntry
     /// Get the entry address.
     pub fn get_entry(&self) -> Address {
         self.entry
@@ -672,6 +724,7 @@ pub struct EquateSymbol {
 }
 
 impl EquateSymbol {
+    // Ghidra: database.cc:624 EquateSymbol::new
     /// Construct given the name, format, and value.
     pub fn new(scope_id: u64, nm: &str, format: u32, value: u64) -> Self {
         let mut symbol = Symbol::new(scope_id, nm, "equ");
@@ -691,6 +744,7 @@ pub struct LabSymbol {
 }
 
 impl LabSymbol {
+    // Ghidra: database.cc:736 LabSymbol::new
     /// Construct given the name and address.
     pub fn new(scope_id: u64, nm: &str, addr: Address) -> Self {
         Self {
@@ -729,6 +783,7 @@ pub struct Scope {
 }
 
 impl Scope {
+    // Ghidra: database.hh:34 Scope::new
     /// Construct an empty scope, given an id, name and parent.
     /// Faithful to `Scope` constructor (database.hh:566).
     pub fn new(id: u64, nm: &str, parent_id: u64) -> Self {
@@ -747,38 +802,45 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::getName
     /// Get the name of the Scope.
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: database.hh:34 Scope::getDisplayName
     /// Get name displayed in output.
     pub fn get_display_name(&self) -> &str {
         &self.display_name
     }
 
+    // Ghidra: database.hh:34 Scope::getId
     /// Get the globally unique id.
     pub fn get_id(&self) -> u64 {
         self.unique_id
     }
 
+    // Ghidra: database.hh:34 Scope::isGlobal
     /// Is this scope global? (no owning function). Faithful to `isGlobal`.
     pub fn is_global(&self) -> bool {
         self.parent_id == 0
     }
 
+    // Ghidra: database.cc:1105 Scope::addRange
     /// Add a memory range to the ownership of this Scope. Faithful to
     /// `addRange` (database.hh:521).
     pub fn add_range(&mut self, rng: Range) {
         self.rangetree.insert_range(rng);
     }
 
+    // Ghidra: database.cc:1114 Scope::removeRange
     /// Remove a memory range from the ownership of this Scope. Faithful to
     /// `removeRange` (database.hh:522).
     pub fn remove_range(&mut self, rng: Range) {
         self.rangetree.remove_range(rng);
     }
 
+    // Ghidra: database.hh:34 Scope::inScope
     /// Query if the given range is owned by this Scope. Faithful to `inScope`
     /// (database.hh:597).
     pub fn in_scope(&self, addr: Address, size: i32) -> bool {
@@ -789,6 +851,7 @@ impl Scope {
         self.rangetree.in_range(addr) && self.rangetree.in_range(end)
     }
 
+    // Ghidra: database.cc:1510 Scope::addSymbol
     /// Add a new Symbol without mapping it to an address. Faithful to
     /// `addSymbol(name, type)` (database.hh:777). Returns the new symbol id.
     pub fn add_symbol(&mut self, nm: &str, type_name: &str) -> u64 {
@@ -799,6 +862,7 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.hh:34 Scope::addSymbolMapped
     /// Add a Symbol and map it to a specific address. Faithful to
     /// `addSymbol(nm, ct, addr, usepoint)` (database.hh:742).
     pub fn add_symbol_mapped(
@@ -824,6 +888,7 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.hh:34 Scope::allocateId
     /// Allocate a new unique symbol id.
     fn allocate_id(&mut self) -> u64 {
         let id = self.next_unique_id;
@@ -831,6 +896,7 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.hh:34 Scope::removeSymbol
     /// Remove the given Symbol from this Scope. Faithful to `removeSymbol`.
     pub fn remove_symbol(&mut self, symbol_id: u64) {
         self.symbols.remove(&symbol_id);
@@ -845,6 +911,7 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::renameSymbol
     /// Rename a Symbol within this Scope. Faithful to `renameSymbol`.
     pub fn rename_symbol(&mut self, symbol_id: u64, newname: &str) {
         if let Some(sym) = self.symbols.get(&symbol_id) {
@@ -854,6 +921,7 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::setAttribute
     /// Set boolean Varnode properties on a Symbol. Faithful to `setAttribute`.
     pub fn set_attribute(&mut self, symbol_id: u64, attr: u32) {
         if let Some(sym) = self.symbols.get(&symbol_id) {
@@ -861,6 +929,7 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::clearAttribute
     /// Clear boolean Varnode properties on a Symbol. Faithful to `clearAttribute`.
     pub fn clear_attribute(&mut self, symbol_id: u64, attr: u32) {
         if let Some(sym) = self.symbols.get(&symbol_id) {
@@ -868,6 +937,7 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::findAddr
     /// Find a Symbol at a given address. Faithful to `findAddr`
     /// (database.hh:621). Returns the matching SymbolEntry index or None.
     pub fn find_addr(&self, addr: Address) -> Option<&SymbolEntry> {
@@ -876,6 +946,7 @@ impl Scope {
             .find(|e| e.addr == addr && e.offset == 0)
     }
 
+    // Ghidra: database.hh:34 Scope::findContainer
     /// Find the smallest Symbol containing the given memory range. Faithful to
     /// `findContainer` (database.hh:629).
     pub fn find_container(&self, addr: Address, size: i32) -> Option<&SymbolEntry> {
@@ -886,6 +957,7 @@ impl Scope {
         }).min_by_key(|e| e.size)
     }
 
+    // Ghidra: database.hh:34 Scope::findOverlap
     /// Find first Symbol overlapping the given memory range. Faithful to
     /// `findOverlap` (database.hh:664).
     pub fn find_overlap(&self, addr: Address, size: i32) -> Option<&SymbolEntry> {
@@ -896,6 +968,7 @@ impl Scope {
         })
     }
 
+    // Ghidra: database.hh:34 Scope::findByName
     /// Find a Symbol by name within this Scope. Faithful to `findByName`
     /// (database.hh:671).
     pub fn find_by_name(&self, nm: &str) -> Vec<Arc<RwLock<Symbol>>> {
@@ -906,6 +979,7 @@ impl Scope {
             .collect()
     }
 
+    // Ghidra: database.hh:34 Scope::isNameUsed
     /// Check if the given name is used within this Scope. Faithful to
     /// `isNameUsed` (database.hh:680).
     pub fn is_name_used(&self, nm: &str) -> bool {
@@ -914,12 +988,14 @@ impl Scope {
             .any(|s| s.read().unwrap().name == nm)
     }
 
+    // Ghidra: database.hh:34 Scope::getCategorySize
     /// Get the number of Symbols in the given category. Faithful to
     /// `getCategorySize` (database.hh:726).
     pub fn get_category_size(&self, cat: i32) -> usize {
         self.categories.get(&cat).map_or(0, |v| v.len())
     }
 
+    // Ghidra: database.hh:34 Scope::setCategory
     /// Set the category and index for the given Symbol. Faithful to
     /// `setCategory` (database.hh:740).
     pub fn set_category(&mut self, symbol_id: u64, cat: i32, ind: u16) {
@@ -945,6 +1021,7 @@ impl Scope {
         self.categories.entry(cat).or_default().push(sym);
     }
 
+    // Ghidra: database.hh:34 Scope::clear
     /// Clear all symbols from this scope. Faithful to `clear`.
     pub fn clear(&mut self) {
         self.symbols.clear();
@@ -954,6 +1031,7 @@ impl Scope {
         self.next_unique_id = ID_BASE;
     }
 
+    // Ghidra: database.hh:34 Scope::clearUnlocked
     /// Clear all unlocked symbols from this scope. Faithful to `clearUnlocked`.
     pub fn clear_unlocked(&mut self) {
         let locked: Vec<u64> = self
@@ -976,6 +1054,7 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::attachChild
     /// Attach a child scope.
     pub fn attach_child(&mut self, child_id: u64) {
         if !self.children.contains(&child_id) {
@@ -983,16 +1062,19 @@ impl Scope {
         }
     }
 
+    // Ghidra: database.hh:34 Scope::detachChild
     /// Detach a child scope.
     pub fn detach_child(&mut self, child_id: u64) {
         self.children.retain(|&c| c != child_id);
     }
 
+    // Ghidra: database.hh:34 Scope::numSymbols
     /// Number of symbols in this scope.
     pub fn num_symbols(&self) -> usize {
         self.symbols.len()
     }
 
+    // Ghidra: database.cc:1371 Scope::encodeRecursive
     /// Encode this scope and all its children recursively. Faithful to
     /// `Scope::encodeRecursive` (database.cc:1371). Emits a `<scope>` element
     /// with attributes, then child scopes, then the symbol list.
@@ -1026,6 +1108,7 @@ impl Scope {
         encoder.close_element(&scope_elem);
     }
 
+    // Ghidra: database.hh:34 Scope::parentScopeLookup
     /// Placeholder for child-scope lookup (the Database owns the scope map).
     /// In a standalone Scope this returns None; the Database provides the real
     /// implementation via its encode method.
@@ -1033,6 +1116,7 @@ impl Scope {
         None
     }
 
+    // Ghidra: database.hh:34 Scope::decode
     /// Decode this scope from a `<scope>` element. Faithful to
     /// `ScopeInternal::decode` (database.cc). Reads the scope's symbols.
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
@@ -1096,12 +1180,14 @@ pub struct Database {
 }
 
 impl Default for Database {
+    // Ghidra: database.cc:2924 Database::default
     fn default() -> Self {
         Self::new(false)
     }
 }
 
 impl Database {
+    // Ghidra: database.cc:2924 Database::new
     /// Constructor. Faithful to `Database(Architecture*, bool)` (database.hh:928).
     /// `id_by_name` controls scope-id assignment strategy (currently unused).
     pub fn new(_id_by_name: bool) -> Self {
@@ -1117,16 +1203,19 @@ impl Database {
         }
     }
 
+    // Ghidra: database.cc:2924 Database::getGlobalScope
     /// Get the global Scope. Faithful to `getGlobalScope`.
     pub fn get_global_scope(&self) -> Option<&Scope> {
         self.scopes.get(&self.global_scope_id)
     }
 
+    // Ghidra: database.cc:2924 Database::getGlobalScopeMut
     /// Get the global Scope mutably.
     pub fn get_global_scope_mut(&mut self) -> Option<&mut Scope> {
         self.scopes.get_mut(&self.global_scope_id)
     }
 
+    // Ghidra: database.cc:2946 Database::attachScope
     /// Register a new Scope. Faithful to `attachScope` (database.hh:932).
     /// Returns the new scope id.
     pub fn attach_scope(&mut self, nm: &str, parent_id: u64) -> u64 {
@@ -1140,16 +1229,19 @@ impl Database {
         id
     }
 
+    // Ghidra: database.cc:3092 Database::resolveScope
     /// Look-up a Scope by id. Faithful to `resolveScope(uint8)`.
     pub fn resolve_scope(&self, id: u64) -> Option<&Scope> {
         self.scopes.get(&id)
     }
 
+    // Ghidra: database.cc:2924 Database::resolveScopeMut
     /// Look-up a Scope by id mutably.
     pub fn resolve_scope_mut(&mut self, id: u64) -> Option<&mut Scope> {
         self.scopes.get_mut(&id)
     }
 
+    // Ghidra: database.cc:3078 Database::findCreateScope
     /// Find (and if not found create) a specific subscope. Faithful to
     /// `findCreateScope` (database.hh:942).
     pub fn find_create_scope(&mut self, id: u64, nm: &str, parent_id: u64) -> u64 {
@@ -1167,6 +1259,7 @@ impl Database {
         id
     }
 
+    // Ghidra: database.cc:2985 Database::deleteScope
     /// Delete the given Scope and all its sub-scopes. Faithful to
     /// `deleteScope` (database.hh:933).
     pub fn delete_scope(&mut self, scope_id: u64) {
@@ -1197,6 +1290,7 @@ impl Database {
         }
     }
 
+    // Ghidra: database.cc:3003 Database::deleteSubScopes
     /// Delete all sub-scopes of the given Scope. Faithful to `deleteSubScopes`.
     pub fn delete_sub_scopes(&mut self, scope_id: u64) {
         let children: Vec<u64> = self
@@ -1209,6 +1303,7 @@ impl Database {
         }
     }
 
+    // Ghidra: database.cc:3036 Database::setRange
     /// Set the ownership range for a Scope. Faithful to `setRange`.
     pub fn set_range(&mut self, scope_id: u64, rlist: &RangeList) {
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
@@ -1223,6 +1318,7 @@ impl Database {
         }
     }
 
+    // Ghidra: database.cc:3050 Database::addRange
     /// Add an address range to the ownership of a Scope. Faithful to
     /// `addRange`.
     pub fn add_range(&mut self, scope_id: u64, rng: Range) {
@@ -1232,6 +1328,7 @@ impl Database {
         }
     }
 
+    // Ghidra: database.cc:3064 Database::removeRange
     /// Remove an address range from the ownership of a Scope. Faithful to
     /// `removeRange`.
     pub fn remove_range(&mut self, scope_id: u64, rng: Range) {
@@ -1242,6 +1339,7 @@ impl Database {
             .retain(|(r, sid)| !(*sid == scope_id && r.get_first() == rng.get_first() && r.get_last() == rng.get_last()));
     }
 
+    // Ghidra: database.cc:2924 Database::getProperty
     /// Get boolean properties at the given address. Faithful to `getProperty`.
     pub fn get_property(&self, addr: Address) -> u32 {
         let mut flags = 0u32;
@@ -1253,6 +1351,7 @@ impl Database {
         flags
     }
 
+    // Ghidra: database.cc:3220 Database::setPropertyRange
     /// Set boolean properties over a given memory range. Faithful to
     /// `setPropertyRange`.
     pub fn set_property_range(&mut self, flags: u32, range: Range) {
@@ -1261,6 +1360,7 @@ impl Database {
         self.flagbase.push((range, flags));
     }
 
+    // Ghidra: database.cc:3245 Database::clearPropertyRange
     /// Clear boolean properties over a given memory range. Faithful to
     /// `clearPropertyRange`.
     pub fn clear_property_range(&mut self, flags: u32, range: Range) {
@@ -1269,6 +1369,7 @@ impl Database {
         });
     }
 
+    // Ghidra: database.cc:3185 Database::mapScope
     /// Map a query point to the owning namespace Scope. Faithful to
     /// `mapScope` (database.hh:944).
     pub fn map_scope(&self, _qpoint: u64, addr: Address) -> u64 {
@@ -1281,11 +1382,13 @@ impl Database {
         self.global_scope_id
     }
 
+    // Ghidra: database.cc:2924 Database::numScopes
     /// Number of scopes.
     pub fn num_scopes(&self) -> usize {
         self.scopes.len()
     }
 
+    // Ghidra: database.cc:3270 Database::encode
     /// Encode the whole Database to a stream. Faithful to `Database::encode`
     /// (database.cc:3270). Emits a `<db>` element with property change-points
     /// and global scope.
@@ -1307,6 +1410,7 @@ impl Database {
         encoder.close_element(&db_elem);
     }
 
+    // Ghidra: database.cc:3314 Database::decode
     /// Decode the whole database from a `<db>` element. Faithful to
     /// `Database::decode` (database.cc:3314).
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {

@@ -73,23 +73,30 @@ pub struct UserPcodeOp {
 }
 
 impl UserPcodeOp {
+    // Ghidra: userop.hh:47 UserPcodeOp::new
     pub fn new(name: String, op_type: UserOpType, index: i32) -> Self {
         Self { name, op_type, userop_index: index, flags: 0 }
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::getName
     pub fn get_name(&self) -> &str { &self.name }
+    // Ghidra: userop.hh:47 UserPcodeOp::getType
     pub fn get_type(&self) -> UserOpType { self.op_type }
+    // Ghidra: userop.hh:47 UserPcodeOp::getIndex
     pub fn get_index(&self) -> i32 { self.userop_index }
+    // Ghidra: userop.hh:47 UserPcodeOp::getDisplay
     pub fn get_display(&self) -> u32 {
         self.flags & (userop_flags::ANNOTATION_ASSIGNMENT | userop_flags::NO_OPERATOR | userop_flags::DISPLAY_STRING)
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::getOperatorName
     /// Get the symbol representing this operation in decompiled code.
     /// Faithful to `UserPcodeOp::getOperatorName` (userop.hh:94-95).
     pub fn get_operator_name(&self, _op: &PcodeOp) -> String {
         self.name.clone()
     }
 
+    // Ghidra: userop.cc:37 UserPcodeOp::extractAnnotationSize
     /// Assign a size to an annotation input. Faithful to
     /// `UserPcodeOp::extractAnnotationSize` (userop.cc:37-41).
     /// Base class throws; subclasses override.
@@ -97,31 +104,37 @@ impl UserPcodeOp {
         panic!("Unexpected annotation input for CALLOTHER {}", self.name);
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isVolatileRead
     /// Check if this is a volatile read op.
     pub fn is_volatile_read(&self) -> bool {
         self.op_type == UserOpType::VolatileRead
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isVolatileWrite
     /// Check if this is a volatile write op.
     pub fn is_volatile_write(&self) -> bool {
         self.op_type == UserOpType::VolatileWrite
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isSegment
     /// Check if this is a segment op.
     pub fn is_segment(&self) -> bool {
         self.op_type == UserOpType::Segment
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isJumpAssist
     /// Check if this is a jump-assist op.
     pub fn is_jump_assist(&self) -> bool {
         self.op_type == UserOpType::JumpAssist
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isInjected
     /// Check if this is an injected op.
     pub fn is_injected(&self) -> bool {
         self.op_type == UserOpType::Injected
     }
 
+    // Ghidra: userop.hh:47 UserPcodeOp::isStringData
     /// Check if this is a string-data op.
     pub fn is_string_data(&self) -> bool {
         self.op_type == UserOpType::StringData
@@ -138,6 +151,7 @@ pub struct DatatypeUserOp {
 }
 
 impl DatatypeUserOp {
+    // Ghidra: userop.cc:55 DatatypeUserOp::new
     pub fn new(name: String, index: i32, out: Option<Arc<Datatype>>, ins: Vec<Option<Arc<Datatype>>>) -> Self {
         Self {
             base: UserPcodeOp::new(name, UserOpType::Datatype, index),
@@ -146,9 +160,11 @@ impl DatatypeUserOp {
         }
     }
 
+    // Ghidra: userop.cc:70 DatatypeUserOp::getOutputLocal
     /// Get the output data-type. Faithful to `DatatypeUserOp::getOutputLocal`.
     pub fn get_output_local(&self) -> Option<&Arc<Datatype>> { self.out_type.as_ref() }
 
+    // Ghidra: userop.cc:76 DatatypeUserOp::getInputLocal
     /// Get the input data-type at a given slot. Faithful to
     /// `DatatypeUserOp::getInputLocal` (userop.cc:76-83).
     pub fn get_input_local(&self, slot: i32) -> Option<&Arc<Datatype>> {
@@ -169,10 +185,12 @@ pub struct VolatileReadOp {
 }
 
 impl VolatileReadOp {
+    // Ghidra: userop.hh:188 VolatileReadOp::new
     pub fn new(name: String, index: i32) -> Self {
         Self { base: UserPcodeOp::new(name, UserOpType::VolatileRead, index) }
     }
 
+    // Ghidra: userop.cc:143 VolatileReadOp::extractAnnotationSize
     /// Extract the annotation size for a volatile read. Faithful to
     /// `VolatileReadOp::extractAnnotationSize` (userop.cc:143-170).
     pub fn extract_annotation_size(vn: &crate::varnode::Varnode) -> i32 {
@@ -187,10 +205,12 @@ pub struct VolatileWriteOp {
 }
 
 impl VolatileWriteOp {
+    // Ghidra: userop.hh:203 VolatileWriteOp::new
     pub fn new(name: String, index: i32) -> Self {
         Self { base: UserPcodeOp::new(name, UserOpType::VolatileWrite, index) }
     }
 
+    // Ghidra: userop.cc:174 VolatileWriteOp::extractAnnotationSize
     /// Extract the annotation size for a volatile write. Faithful to
     /// `VolatileWriteOp::extractAnnotationSize` (userop.cc:174-186).
     pub fn extract_annotation_size(vn: &crate::varnode::Varnode) -> i32 {
@@ -215,6 +235,7 @@ pub struct SegmentOp {
 }
 
 impl SegmentOp {
+    // Ghidra: userop.cc:183 SegmentOp::new
     pub fn new(name: String, index: i32) -> Self {
         Self {
             base: UserPcodeOp::new(name, UserOpType::Segment, index),
@@ -224,12 +245,14 @@ impl SegmentOp {
         }
     }
 
+    // Ghidra: userop.cc:183 SegmentOp::hasFarPointerSupport
     /// Return true if this op supports far pointers. Faithful to
     /// `SegmentOp::hasFarPointerSupport` (userop.hh:274).
     pub fn has_far_pointer_support(&self) -> bool {
         self.supports_far_pointer
     }
 
+    // Ghidra: userop.cc:218 SegmentOp::execute
     /// Constant-fold a SEGMENTOP given constant inputs.
     ///
     /// Faithful to `SegmentOp::execute` (userop.cc:218-223). Ghidra evaluates
@@ -276,6 +299,7 @@ pub struct JumpAssistOp {
 }
 
 impl JumpAssistOp {
+    // Ghidra: userop.cc:293 JumpAssistOp::new
     pub fn new(name: String, index: i32) -> Self {
         Self {
             base: UserPcodeOp::new(name, UserOpType::JumpAssist, index),
@@ -286,9 +310,13 @@ impl JumpAssistOp {
         }
     }
 
+    // Ghidra: userop.cc:293 JumpAssistOp::getIndex2case
     pub fn get_index2case(&self) -> i32 { self.index2case }
+    // Ghidra: userop.cc:293 JumpAssistOp::getIndex2addr
     pub fn get_index2addr(&self) -> i32 { self.index2addr }
+    // Ghidra: userop.cc:293 JumpAssistOp::getDefaultAddr
     pub fn get_default_addr(&self) -> i32 { self.defaultaddr }
+    // Ghidra: userop.cc:293 JumpAssistOp::getCalcSize
     pub fn get_calc_size(&self) -> i32 { self.calcsize }
 }
 
@@ -300,6 +328,7 @@ pub struct InternalStringOp {
 }
 
 impl InternalStringOp {
+    // Ghidra: userop.cc:355 InternalStringOp::new
     pub fn new(name: String, index: i32) -> Self {
         Self { base: UserPcodeOp::new(name, UserOpType::StringData, index) }
     }
@@ -322,6 +351,7 @@ pub struct UserOpManage {
 }
 
 impl UserOpManage {
+    // Ghidra: userop.cc:367 UserOpManage::new
     pub fn new() -> Self {
         Self {
             ops: Vec::new(),
@@ -331,12 +361,14 @@ impl UserOpManage {
         }
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::getSegmentOp
     /// Look up the SegmentOp for the given space index. Faithful to
     /// `UserOpManage::getSegmentOp` (userop.hh:347).
     pub fn get_segment_op(&self, space_idx: i32) -> Option<&SegmentOp> {
         self.segment_ops.get(&space_idx)
     }
 
+    // Ghidra: userop.cc:490 UserOpManage::registerOp
     /// Register a new user op, returning its index.
     pub fn register_op(&mut self, name: String, op_type: UserOpType) -> i32 {
         let index = self.ops.len() as i32;
@@ -345,6 +377,7 @@ impl UserOpManage {
         index
     }
 
+    // Ghidra: userop.cc:408 UserOpManage::getOp
     /// Get a user op by its CALLOTHER index.
     pub fn get_op(&self, index: i32) -> Option<&UserPcodeOp> {
         if index >= 0 && (index as usize) < self.ops.len() {
@@ -354,14 +387,17 @@ impl UserOpManage {
         }
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::getIndexByName
     /// Get a user op index by name.
     pub fn get_index_by_name(&self, name: &str) -> Option<i32> {
         self.name_map.get(name).copied()
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::numOps
     /// Get the number of registered ops.
     pub fn num_ops(&self) -> usize { self.ops.len() }
 
+    // Ghidra: userop.cc:367 UserOpManage::registerBuiltinById
     /// Ensure an active record exists for the given built-in op id. Faithful
     /// to Ghidra `UserOpManage::registerBuiltin(uint4)` (userop.cc:432-484).
     /// The built-in id (one of the `BUILTIN_*` constants) is stored in
@@ -385,6 +421,7 @@ impl UserOpManage {
         builtin_id
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::registerStringCopyOp
     /// Register the string-copy (`strncpy`/`wcsncpy`) CALLOTHER and return its
     /// CALLOTHER constant index. Used by RuleStringCopy. Faithful to the
     /// `glb->userops.registerBuiltin(BUILTIN_STRNCPY)` call embedded in
@@ -397,6 +434,7 @@ impl UserOpManage {
         self.register_builtin_by_id(builtin_id)
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::registerStringStoreOp
     /// Register the string-store (`memcpy`) CALLOTHER and return its CALLOTHER
     /// constant index. Used by RuleStringStore. Faithful to the
     /// `registerBuiltin(BUILTIN_MEMCPY)` call embedded in
@@ -405,6 +443,7 @@ impl UserOpManage {
         self.register_builtin_by_id(BUILTIN_MEMCPY)
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::getCallOtherName
     /// Look up the CALLOTHER name for a given constant id. Faithful to
     /// `UserOpManage::getOp(uint4)->getName()`. Checks built-ins first, then
     /// the by-index list.
@@ -417,6 +456,7 @@ impl UserOpManage {
         self.get_op(index as i32).map(|op| op.name.as_str())
     }
 
+    // Ghidra: userop.cc:432 UserOpManage::registerBuiltin
     /// Register a built-in op if not already present.
     pub fn register_builtin(&mut self, name: &str, builtin_id: u32) {
         if self.get_index_by_name(name).is_none() {
@@ -426,6 +466,7 @@ impl UserOpManage {
         self.register_builtin_by_id(builtin_id);
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::initializeBuiltins
     /// Initialize all built-in CALLOTHER ids.
     pub fn initialize_builtins(&mut self) {
         self.register_builtin("string_data", BUILTIN_STRINGDATA);
@@ -436,6 +477,7 @@ impl UserOpManage {
         self.register_builtin("wcsncpy", BUILTIN_WCSNCPY);
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::getOpMut
     /// Get a mutable user op by its CALLOTHER index.
     pub fn get_op_mut(&mut self, index: i32) -> Option<&mut UserPcodeOp> {
         if index >= 0 && (index as usize) < self.ops.len() {
@@ -445,16 +487,19 @@ impl UserOpManage {
         }
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::isVolatileRead
     /// Check if an index corresponds to a volatile read.
     pub fn is_volatile_read(&self, index: i32) -> bool {
         self.get_op(index).map(|op| op.op_type == UserOpType::VolatileRead).unwrap_or(false)
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::isVolatileWrite
     /// Check if an index corresponds to a volatile write.
     pub fn is_volatile_write(&self, index: i32) -> bool {
         self.get_op(index).map(|op| op.op_type == UserOpType::VolatileWrite).unwrap_or(false)
     }
 
+    // Ghidra: userop.cc:628 UserOpManage::manualCallOtherFixup
     /// Manually register a CALLOTHER fixup (replacement p-code for an
     /// unspecialized user op). Faithful to Ghidra
     /// UserOpManage::manualCallOtherFixup (userop.cc:628).
@@ -462,6 +507,7 @@ impl UserOpManage {
         self.register_op(userop_name.to_string(), UserOpType::Injected)
     }
 
+    // Ghidra: userop.cc:367 UserOpManage::getOpByName
     /// Get a UserPcodeOp by name. Faithful to Ghidra
     /// UserOpManage::getOp(string) (userop.cc:419).
     pub fn get_op_by_name(&self, name: &str) -> Option<&UserPcodeOp> {
@@ -470,36 +516,42 @@ impl UserOpManage {
     }
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createUnspecialized
 /// A user defined p-code op with no specialization.
 /// Corresponds to Ghidra's `UnspecializedPcodeOp` (userop.hh:130).
 pub fn create_unspecialized(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::Unspecialized, index)
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createInjected
 /// Create an injected user op placeholder.
 /// Corresponds to Ghidra's `InjectedUserOp`.
 pub fn create_injected(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::Injected, index)
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createVolatileRead
 /// Create a volatile read user op.
 /// Corresponds to Ghidra's `VolatileReadOp`.
 pub fn create_volatile_read(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::VolatileRead, index)
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createVolatileWrite
 /// Create a volatile write user op.
 /// Corresponds to Ghidra's `VolatileWriteOp`.
 pub fn create_volatile_write(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::VolatileWrite, index)
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createSegment
 /// Create a segment op user op.
 /// Corresponds to Ghidra's `SegmentOp`.
 pub fn create_segment(name: String, index: i32) -> UserPcodeOp {
     UserPcodeOp::new(name, UserOpType::Segment, index)
 }
 
+// Ghidra: userop.cc:367 UserOpManage::createJumpAssist
 /// Create a jump-table assist user op.
 /// Corresponds to Ghidra's `JumpAssistOp`.
 pub fn create_jump_assist(name: String, index: i32) -> UserPcodeOp {

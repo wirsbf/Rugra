@@ -48,3 +48,4 @@ C type declarator (grammar.hh:165).
 - Full `CParse` recursive-descent parser (grammar.cc state machine).
 - TypeFactory integration for `modType`/`buildType`.
 - `parse_protopieces`, `parse_C`, `parse_machaddr`, `parse_varnode`, `parse_op`.
+<!-- annotation-pass: 2026-07-04 -->

@@ -14,3 +14,4 @@ Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/crc32.{hh
 
 > Note: the non-Ghidra convenience wrappers `crc32` / `crc32_with_init` were
 > removed (they had no callers and were not part of `crc32.hh`/`.cc`).
+<!-- annotation-pass: 2026-07-04 -->

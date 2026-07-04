@@ -153,3 +153,4 @@ Get the total size of the struct
 Parse a C-style type string into a DataType
 
 
+<!-- annotation-pass: 2026-07-04 -->

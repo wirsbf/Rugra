@@ -31,3 +31,4 @@ IEEE754 浮点格式描述。对应 Ghidra `FloatFormat`。
 - 新增 op_div 测试 + 5 个新操作测试
 
 现在覆盖 Ghidra FloatFormat 的全部 17 个 op 方法。
+<!-- annotation-pass: 2026-07-04 -->

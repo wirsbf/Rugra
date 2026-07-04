@@ -21,3 +21,4 @@ Registry of extension point singletons (capability.cc:24).
 
 ## `global_registry()`
 Get the global singleton registry (replaces Ghidra's static `getList()`).
+<!-- annotation-pass: 2026-07-04 -->

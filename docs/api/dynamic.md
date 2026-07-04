@@ -29,3 +29,4 @@ opcode 翻译表：将变体（ADD/SUB）映射到同一哈希值。零=跳过�
 5 个单元测试。数据结构 + transtable + calcHash 核心逻辑 + CRC 哈希 + 边排序已移植。
 完整 BFS 子图扩展（gatherUnmarkedVn/gatherUnmarkedOp 多层）待后续。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+<!-- annotation-pass: 2026-07-04 -->

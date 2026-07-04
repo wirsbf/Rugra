@@ -37,6 +37,7 @@ use crate::op::{PcodeOp, PcodeOpRef};
 use crate::block::{BlockBasic, FlowBlock};
 use crate::varnode::Varnode;
 
+// RUGRA-GLUE: opref (no Ghidra counterpart found)
 /// Wrap a bare `Arc<RwLock<PcodeOp>>` into a `PcodeOpRef` for calling the
 /// Funcdata op-editing API (which takes `&PcodeOpRef`). This clones only the
 /// Arc, not the underlying op.
@@ -97,6 +98,7 @@ pub struct ConditionalExecution<'a> {
 }
 
 impl<'a> ConditionalExecution<'a> {
+    // Ghidra: condexe.cc:432 ConditionalExecution::new
     /// Constructor. Faithful to `ConditionalExecution::ConditionalExecution`
     /// (condexe.cc:432-437).
     pub fn new(fd: &'a mut Funcdata) -> Self {
@@ -124,6 +126,7 @@ impl<'a> ConditionalExecution<'a> {
         }
     }
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::blockAsBasic
     // ------------------------------------------------------------------
     // Graph helpers adapted to Rugra's dynamic-dispatch blocks.
     // ------------------------------------------------------------------
@@ -141,11 +144,13 @@ impl<'a> ConditionalExecution<'a> {
         rg.as_any().downcast_ref::<BlockBasic>().is_some()
     }
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::lastOp
     /// Last op of a block, or None.
     fn last_op(arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<PcodeOp>>> {
         arc.read().unwrap().get_ops().last().cloned().map(|r| r.0)
     }
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::ops
     /// Iterator over all ops of a block (excluding nothing).
     fn ops(arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Vec<Arc<RwLock<PcodeOp>>> {
         arc.read().unwrap().get_ops().into_iter().map(|r| r.0).collect()
@@ -155,6 +160,7 @@ impl<'a> ConditionalExecution<'a> {
     // testIBlock (condexe.cc:43-52)
     // ------------------------------------------------------------------
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::testIblock
     /// The iblock must have 2 in edges, 2 out edges, and a final CBRANCH.
     fn test_iblock(&mut self) -> bool {
         let ib = match &self.iblock { Some(b) => b.clone(), None => return false };
@@ -172,6 +178,7 @@ impl<'a> ConditionalExecution<'a> {
     // findInitPre (condexe.cc:55-75)
     // ------------------------------------------------------------------
 
+    // Ghidra: condexe.cc:55 ConditionalExecution::findInitPre
     /// Walk back from iblock's prea_inslot input to find the initblock. Also
     /// sets init2a_true.
     fn find_init_pre(&mut self) -> bool {
@@ -216,6 +223,7 @@ impl<'a> ConditionalExecution<'a> {
         true
     }
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::isTrueOutTo
     /// Return true if `src`'s TRUE out-edge flows (directly) to `dst`.
     /// Adapts Ghidra's getTrueOut to Rugra. We determine the true edge by
     /// examining the CBRANCH's boolean_flip flag:
@@ -246,6 +254,7 @@ impl<'a> ConditionalExecution<'a> {
     // verifySameCondition (condexe.cc:80-94) + BooleanExpressionMatch
     // ------------------------------------------------------------------
 
+    // Ghidra: condexe.cc:80 ConditionalExecution::verifySameCondition
     /// Verify initblock and iblock branch on the same (or complementary)
     /// condition. Faithful to `verifySameCondition` + `BooleanExpressionMatch`.
     fn verify_same_condition(&mut self) -> bool {
@@ -269,6 +278,7 @@ impl<'a> ConditionalExecution<'a> {
         true
     }
 
+    // Ghidra: condexe.cc:101 ConditionalExecution::testMultiRead
     // ------------------------------------------------------------------
     // testMultiRead (condexe.cc:101-113)
     // ------------------------------------------------------------------
@@ -294,6 +304,7 @@ impl<'a> ConditionalExecution<'a> {
         true
     }
 
+    // Ghidra: condexe.cc:120 ConditionalExecution::testOpRead
     // ------------------------------------------------------------------
     // testOpRead (condexe.cc:120-142)
     // ------------------------------------------------------------------
@@ -338,6 +349,7 @@ impl<'a> ConditionalExecution<'a> {
         false
     }
 
+    // Ghidra: condexe.cc:361 ConditionalExecution::testRemovability
     // ------------------------------------------------------------------
     // testRemovability (condexe.cc:361-397)
     // ------------------------------------------------------------------
@@ -383,6 +395,7 @@ impl<'a> ConditionalExecution<'a> {
         }
     }
 
+    // Ghidra: condexe.cc:402 ConditionalExecution::verify
     // ------------------------------------------------------------------
     // verify (condexe.cc:402-428)
     // ------------------------------------------------------------------
@@ -419,6 +432,7 @@ impl<'a> ConditionalExecution<'a> {
         true
     }
 
+    // Ghidra: condexe.cc:146 ConditionalExecution::findPullback
     // ------------------------------------------------------------------
     // Data-flow rewrite helpers (condexe.cc:146-357)
     // ------------------------------------------------------------------
@@ -430,6 +444,7 @@ impl<'a> ConditionalExecution<'a> {
         self.pullback[inbranch].clone()
     }
 
+    // Ghidra: condexe.cc:160 ConditionalExecution::pullbackOp
     /// pullbackOp (condexe.cc:160-190). Duplicate an iblock op into the
     /// predecessor block along `inbranch`, selecting the right MULTIEQUAL slot.
     fn pullback_op(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Option<Arc<RwLock<Varnode>>> {
@@ -484,10 +499,12 @@ impl<'a> ConditionalExecution<'a> {
         Some(new_out)
     }
 
+    // Ghidra: condexe.cc:432 ConditionalExecution::immedDomOf
     fn immed_dom_of(&self, b: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         b.read().unwrap().get_immed_dom().and_then(|w| w.upgrade())
     }
 
+    // Ghidra: condexe.cc:198 ConditionalExecution::getNewMulti
     /// getNewMulti (condexe.cc:198-217).
     fn get_new_multi(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
         let outvn_size = op.read().unwrap().output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
@@ -504,6 +521,7 @@ impl<'a> ConditionalExecution<'a> {
         Some(newoutvn)
     }
 
+    // Ghidra: condexe.cc:224 ConditionalExecution::resolveRead
     /// resolveRead (condexe.cc:224-237).
     fn resolve_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
         let sin = bl.read().unwrap().size_in();
@@ -523,6 +541,7 @@ impl<'a> ConditionalExecution<'a> {
         }
     }
 
+    // Ghidra: condexe.cc:242 ConditionalExecution::resolveIblockRead
     /// resolveIblockRead (condexe.cc:242-262).
     fn resolve_iblock_read(&mut self, op: &Arc<RwLock<PcodeOp>>, inbranch: usize) -> Option<Arc<RwLock<Varnode>>> {
         let opcode = op.read().unwrap().opcode;
@@ -555,6 +574,7 @@ impl<'a> ConditionalExecution<'a> {
         None
     }
 
+    // Ghidra: condexe.cc:270 ConditionalExecution::getMultiequalRead
     /// getMultiequalRead (condexe.cc:270-279).
     fn get_multiequal_read(&mut self, op: &Arc<RwLock<PcodeOp>>, readop: &Arc<RwLock<PcodeOp>>, slot: usize) -> Option<Arc<RwLock<Varnode>>> {
         let read_parent = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade())?;
@@ -574,6 +594,7 @@ impl<'a> ConditionalExecution<'a> {
         self.resolve_iblock_read(op, s as usize)
     }
 
+    // Ghidra: condexe.cc:291 ConditionalExecution::getReplacementRead
     /// getReplacementRead (condexe.cc:291-315).
     fn get_replacement_read(&mut self, op: &Arc<RwLock<PcodeOp>>, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Option<Arc<RwLock<Varnode>>> {
         let bl_idx = bl.read().unwrap().get_index();
@@ -606,6 +627,7 @@ impl<'a> ConditionalExecution<'a> {
         Some(res)
     }
 
+    // Ghidra: condexe.cc:320 ConditionalExecution::doReplacement
     /// doReplacement (condexe.cc:320-357).
     fn do_replacement(&mut self, op: &Arc<RwLock<PcodeOp>>) {
         self.replacement.clear();
@@ -681,6 +703,7 @@ impl<'a> ConditionalExecution<'a> {
     // trial / execute (condexe.cc:448-476)
     // ------------------------------------------------------------------
 
+    // Ghidra: condexe.cc:448 ConditionalExecution::trial
     /// Test whether the given block is a modifiable iblock.
     /// Faithful to `ConditionalExecution::trial` (condexe.cc:448-454).
     pub fn trial(&mut self, ib: Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
@@ -688,6 +711,7 @@ impl<'a> ConditionalExecution<'a> {
         self.verify()
     }
 
+    // Ghidra: condexe.cc:457 ConditionalExecution::execute
     /// Eliminate the unnecessary path join at iblock.
     /// Faithful to `ConditionalExecution::execute` (condexe.cc:457-476).
     pub fn execute(&mut self) {
@@ -716,6 +740,7 @@ impl<'a> ConditionalExecution<'a> {
 // BooleanMatch / BooleanExpressionMatch (expression.cc:57-232)
 // ======================================================================
 
+// Ghidra: condexe.cc:432 ConditionalExecution::varnodeSame
 /// `BooleanMatch::varnodeSame` (expression.cc:93-100).
 fn varnode_same(a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) -> bool {
     if Arc::ptr_eq(a, b) { return true; }
@@ -726,6 +751,7 @@ fn varnode_same(a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) -> bool {
     false
 }
 
+// Ghidra: condexe.cc:432 ConditionalExecution::sameOpComplement
 /// `BooleanMatch::sameOpComplement` (expression.cc:57-86). Only handles
 /// INT_LESS / INT_SLESS with a constant input.
 fn same_op_complement(bin1: &Arc<RwLock<PcodeOp>>, bin2: &Arc<RwLock<PcodeOp>>) -> bool {
@@ -762,6 +788,7 @@ fn same_op_complement(bin1: &Arc<RwLock<PcodeOp>>, bin2: &Arc<RwLock<PcodeOp>>) 
     true
 }
 
+// Ghidra: condexe.cc:432 ConditionalExecution::booleanMatchEvaluate
 /// `BooleanMatch::evaluate` (expression.cc:111-216). Returns SAME /
 /// COMPLEMENTARY / UNCORRELATED.
 fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>, depth: i32) -> i32 {
@@ -891,6 +918,7 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
     }
 }
 
+// Ghidra: condexe.cc:432 ConditionalExecution::booleanMatchVerifyCondition
 /// `BooleanExpressionMatch::verifyCondition` (expression.cc:220-232).
 /// Returns SAME / COMPLEMENTARY / UNCORRELATED.
 fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<PcodeOp>>) -> i32 {
@@ -906,6 +934,7 @@ fn boolean_match_verify_condition(op: &Arc<RwLock<PcodeOp>>, iop: &Arc<RwLock<Pc
     }
 }
 
+// Ghidra: condexe.cc:432 ConditionalExecution::verifyConditionWithFlip
 /// Like `boolean_match_verify_condition` but also returns the flip flag,
 /// mirroring `BooleanExpressionMatch::getFlip()` (expression.hh:102) which
 /// RuleOrPredicate consults (condexe.cc:678).
@@ -953,6 +982,7 @@ struct MultiPredicate {
 }
 
 impl MultiPredicate {
+    // Ghidra: condexe.hh:174 MultiPredicate::new
     fn new() -> Self {
         Self {
             op: None,
@@ -965,6 +995,7 @@ impl MultiPredicate {
         }
     }
 
+    // Ghidra: condexe.cc:509 MultiPredicate::discoverZeroSlot
     /// `MultiPredicate::discoverZeroSlot` (condexe.cc:509-529). Detect a
     /// 2-input MULTIEQUAL whose one input is COPY(#0) and store the other.
     fn discover_zero_slot(&mut self, vn: &Arc<RwLock<Varnode>>) -> bool {
@@ -999,6 +1030,7 @@ impl MultiPredicate {
         false
     }
 
+    // Ghidra: condexe.cc:539 MultiPredicate::discoverCbranch
     /// `MultiPredicate::discoverCbranch` (condexe.cc:539-567). Find the single
     /// CBRANCH controlling the MULTIEQUAL's two in-paths.
     fn discover_cbranch(&mut self) -> bool {
@@ -1046,6 +1078,7 @@ impl MultiPredicate {
         true
     }
 
+    // Ghidra: condexe.cc:572 MultiPredicate::discoverPathIsTrue
     /// `MultiPredicate::discoverPathIsTrue` (condexe.cc:572-582).
     fn discover_path_is_true(&mut self) {
         let cond_block = match &self.cond_block { Some(c) => c.clone(), None => return };
@@ -1077,6 +1110,7 @@ impl MultiPredicate {
         }
     }
 
+    // Ghidra: condexe.cc:590 MultiPredicate::discoverConditionalZero
     /// `MultiPredicate::discoverConditionalZero` (condexe.cc:590-615). Verify
     /// the CBRANCH boolean is (vn == 0) or (vn != 0), adjusting
     /// zero_path_is_true.
@@ -1126,12 +1160,15 @@ impl MultiPredicate {
 pub struct RuleOrPredicate;
 
 impl RuleOrPredicate {
+    // Ghidra: condexe.hh:172 RuleOrPredicate::new
     pub fn new() -> Self { Self }
 
+    // Ghidra: condexe.cc:617 RuleOrPredicate::getOpList
     pub fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
     }
 
+    // Ghidra: condexe.cc:638 RuleOrPredicate::checkSingle
     /// `RuleOrPredicate::checkSingle` (condexe.cc:638-652). The alternate form
     /// `tmp1 = (val2 == 0) ? val1 : 0; result = tmp1 | other` where `other`
     /// plays val2.
@@ -1164,6 +1201,7 @@ impl RuleOrPredicate {
         1
     }
 
+    // Ghidra: condexe.cc:654 RuleOrPredicate::applyOp
     /// `RuleOrPredicate::applyOp` (condexe.cc:654-710).
     pub fn apply_op(&self, op: &crate::op::PcodeOpRef, fd: &mut Funcdata) -> i32 {
         let in0 = op.0.read().unwrap().get_in(0).cloned();
@@ -1254,6 +1292,7 @@ impl RuleOrPredicate {
 /// action.cc:823-876), wrapping the inner op in a `PcodeOpRef` and mapping the
 /// raw `i32` result to the `Result<i32>` the pool expects.
 impl Rule for RuleOrPredicate {
+    // Ghidra: condexe.cc:654 RuleOrPredicate::applyOp
     fn apply_op(
         &self,
         op_arc: &Arc<RwLock<PcodeOp>>,
@@ -1263,8 +1302,10 @@ impl Rule for RuleOrPredicate {
         Ok(RuleOrPredicate::apply_op(self, &op_ref, fd))
     }
 
+    // Ghidra: condexe.hh:172 RuleOrPredicate::getName
     fn get_name(&self) -> &str { "or_predicate" }
 
+    // Ghidra: condexe.cc:617 RuleOrPredicate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Faithful to RuleOrPredicate::getOpList (condexe.cc:631-635).
         vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
@@ -1280,10 +1321,12 @@ impl Rule for RuleOrPredicate {
 pub struct ActionConditionalExe;
 
 impl ActionConditionalExe {
+    // Ghidra: condexe.hh:133 ActionConditionalExe::new
     pub fn new() -> Self { Self }
 }
 
 impl Action for ActionConditionalExe {
+    // Ghidra: condexe.cc:478 ActionConditionalExe::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Conditional execution elimination may not work with unreachable blocks.
         // (Rugra does not currently track reachability precisely; proceed.)
@@ -1320,6 +1363,7 @@ impl Action for ActionConditionalExe {
         if numhits > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
     }
 
+    // Ghidra: condexe.hh:133 ActionConditionalExe::getName
     fn get_name(&self) -> &str { "conditionalexe" }
 }
 

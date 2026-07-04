@@ -52,3 +52,4 @@
 ### 2026-07-01（续）：StringCopy/StringStore CALLOTHER 替换（非 stub）
 - userop.rs：BUILTIN 常量对齐 Ghidra（MEMCPY/STRNCPY/WCSNCPY），register_string_copy_op/register_string_store_op/register_builtin_by_id + builtin_map。
 - constseq.rs：select_string_copy_function（constseq.cc:161）+ build_string_copy（347-372）+ transform（453-461）。RuleStringCopy/Store 现在真正创建 CPUI_CALLOTHER op + op_destroy_recursive。2 新测试。
+<!-- annotation-pass: 2026-07-04 -->

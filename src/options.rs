@@ -11,6 +11,7 @@
 use crate::arch::Architecture;
 use std::collections::HashMap;
 
+// RUGRA-GLUE: on_or_off (no Ghidra counterpart found)
 /// Parse an "on" or "off" string into a boolean. Faithful to
 /// `ArchOption::onOrOff` (options.cc:69). An empty string defaults to true.
 pub fn on_or_off(p: &str) -> bool {
@@ -30,9 +31,11 @@ pub fn on_or_off(p: &str) -> bool {
 /// Base trait for options that affect Architecture configuration. Faithful to
 /// `ArchOption` (options.hh:75).
 pub trait ArchOption: Send + Sync {
+    // RUGRA-GLUE: name (no Ghidra counterpart found)
     /// Return the name of the option.
     fn name(&self) -> &str;
 
+    // RUGRA-GLUE: apply (no Ghidra counterpart found)
     /// Apply a configuration option to the Architecture. Returns a
     /// confirmation/failure message. Faithful to `apply`.
     fn apply(&self, arch: &mut Architecture, p1: &str, p2: &str, p3: &str) -> String;
@@ -45,9 +48,11 @@ pub trait ArchOption: Send + Sync {
 /// Set the `infer_pointers` flag. Faithful to `OptionInferConstPtr`.
 pub struct OptionInferConstPtr;
 impl ArchOption for OptionInferConstPtr {
+    // Ghidra: options.cc:276 OptionInferConstPtr::name
     fn name(&self) -> &str {
         "inferconstptr"
     }
+    // Ghidra: options.cc:281 OptionInferConstPtr::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val = on_or_off(p1);
         arch.infer_pointers = val;
@@ -62,9 +67,11 @@ impl ArchOption for OptionInferConstPtr {
 /// Set the `analyze_for_loops` flag. Faithful to `OptionForLoops`.
 pub struct OptionForLoops;
 impl ArchOption for OptionForLoops {
+    // Ghidra: options.cc:298 OptionForLoops::name
     fn name(&self) -> &str {
         "analyzeforloops"
     }
+    // Ghidra: options.cc:307 OptionForLoops::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         arch.analyze_for_loops = on_or_off(p1);
         format!("Recovery of for-loops is {p1}")
@@ -74,9 +81,11 @@ impl ArchOption for OptionForLoops {
 /// Set the `readonlypropagate` flag. Faithful to `OptionReadOnly`.
 pub struct OptionReadOnly;
 impl ArchOption for OptionReadOnly {
+    // Ghidra: options.cc:246 OptionReadOnly::name
     fn name(&self) -> &str {
         "readonly"
     }
+    // Ghidra: options.cc:251 OptionReadOnly::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         arch.readonlypropagate = on_or_off(p1);
         format!("Read-only propagation is {p1}")
@@ -86,9 +95,11 @@ impl ArchOption for OptionReadOnly {
 /// Set the `max_jumptable_size`. Faithful to `OptionJumpTableMax`.
 pub struct OptionJumpTableMax;
 impl ArchOption for OptionJumpTableMax {
+    // Ghidra: options.cc:826 OptionJumpTableMax::name
     fn name(&self) -> &str {
         "jumptablemax"
     }
+    // Ghidra: options.cc:833 OptionJumpTableMax::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val: u32 = p1.parse().unwrap_or(0);
         if val == 0 {
@@ -102,9 +113,11 @@ impl ArchOption for OptionJumpTableMax {
 /// Set the `max_instructions`. Faithful to `OptionMaxInstruction`.
 pub struct OptionMaxInstruction;
 impl ArchOption for OptionMaxInstruction {
+    // Ghidra: options.cc:934 OptionMaxInstruction::name
     fn name(&self) -> &str {
         "maxinstruction"
     }
+    // Ghidra: options.cc:938 OptionMaxInstruction::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         let val: u32 = p1.parse().unwrap_or(0);
         arch.max_instructions = val;
@@ -115,9 +128,11 @@ impl ArchOption for OptionMaxInstruction {
 /// Set the `alias_block_level`. Faithful to `OptionAliasBlock`.
 pub struct OptionAliasBlock;
 impl ArchOption for OptionAliasBlock {
+    // Ghidra: options.cc:903 OptionAliasBlock::name
     fn name(&self) -> &str {
         "aliasblock"
     }
+    // Ghidra: options.cc:913 OptionAliasBlock::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         if p1.is_empty() {
             return "Must specify alias block level".to_string();
@@ -136,9 +151,11 @@ impl ArchOption for OptionAliasBlock {
 /// Set NaN ignore flags. Faithful to `OptionNanIgnore`.
 pub struct OptionNanIgnore;
 impl ArchOption for OptionNanIgnore {
+    // Ghidra: options.cc:1022 OptionNanIgnore::name
     fn name(&self) -> &str {
         "nanignore"
     }
+    // Ghidra: options.cc:1030 OptionNanIgnore::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         match p1 {
             "all" => {
@@ -166,6 +183,7 @@ pub mod split_datatype_option {
     pub const OPTION_POINTER: u32 = 4;
 }
 
+// Ghidra: options.cc:1022 OptionNanIgnore::getSplitDatatypeBit
 /// Translate an option string to a split-datatype config bit. Faithful to
 /// `OptionSplitDatatypes::getOptionBit`.
 pub fn get_split_datatype_bit(val: &str) -> u32 {
@@ -180,9 +198,11 @@ pub fn get_split_datatype_bit(val: &str) -> u32 {
 /// Set the `split_datatype_config`. Faithful to `OptionSplitDatatypes`.
 pub struct OptionSplitDatatypes;
 impl ArchOption for OptionSplitDatatypes {
+    // Ghidra: options.cc:992 OptionSplitDatatypes::name
     fn name(&self) -> &str {
         "splitdatatype"
     }
+    // Ghidra: options.cc:999 OptionSplitDatatypes::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, p2: &str, p3: &str) -> String {
         arch.split_datatype_config =
             get_split_datatype_bit(p1) | get_split_datatype_bit(p2) | get_split_datatype_bit(p3);
@@ -193,9 +213,11 @@ impl ArchOption for OptionSplitDatatypes {
 /// Set the default prototype model name. Faithful to `OptionDefaultPrototype`.
 pub struct OptionDefaultPrototype;
 impl ArchOption for OptionDefaultPrototype {
+    // Ghidra: options.cc:262 OptionDefaultPrototype::name
     fn name(&self) -> &str {
         "defaultprototype"
     }
+    // Ghidra: options.cc:266 OptionDefaultPrototype::apply
     fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         if !p1.is_empty() {
             arch.set_default_model(p1);
@@ -207,9 +229,11 @@ impl ArchOption for OptionDefaultPrototype {
 /// Toggle warning generation. Faithful to `OptionWarning`.
 pub struct OptionWarning;
 impl ArchOption for OptionWarning {
+    // Ghidra: options.cc:368 OptionWarning::name
     fn name(&self) -> &str {
         "warning"
     }
+    // Ghidra: options.cc:373 OptionWarning::apply
     fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
         format!("Warning option: {p1}")
     }
@@ -221,9 +245,11 @@ macro_rules! toggle_option {
     ($struct_name:ident, $opt_name:expr, $field:ident, $desc:expr) => {
         pub struct $struct_name;
         impl ArchOption for $struct_name {
+            // Ghidra: options.cc:368 OptionWarning::name
             fn name(&self) -> &str {
                 $opt_name
             }
+            // Ghidra: options.cc:373 OptionWarning::apply
             fn apply(&self, arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
                 arch.$field = on_or_off(p1);
                 format!("{} is {}", $desc, p1)
@@ -239,9 +265,11 @@ macro_rules! stub_option {
     ($struct_name:ident, $opt_name:expr, $desc:expr) => {
         pub struct $struct_name;
         impl ArchOption for $struct_name {
+            // Ghidra: options.cc:368 OptionWarning::name
             fn name(&self) -> &str {
                 $opt_name
             }
+            // Ghidra: options.cc:373 OptionWarning::apply
             fn apply(&self, _arch: &mut Architecture, p1: &str, _p2: &str, _p3: &str) -> String {
                 format!("{}: {}", $desc, p1)
             }
@@ -290,12 +318,14 @@ pub struct OptionDatabase {
 }
 
 impl Default for OptionDatabase {
+    // Ghidra: options.cc:93 OptionDatabase::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl OptionDatabase {
+    // Ghidra: options.cc:93 OptionDatabase::new
     /// Construct and register all built-in options. Faithful to the
     /// `OptionDatabase` constructor (options.cc:93).
     pub fn new() -> Self {
@@ -306,6 +336,7 @@ impl OptionDatabase {
         db
     }
 
+    // Ghidra: options.cc:93 OptionDatabase::registerAll
     /// Register all built-in ArchOption objects.
     fn register_all(&mut self) {
         self.register(Box::new(OptionExtraPop));
@@ -348,12 +379,14 @@ impl OptionDatabase {
         self.register(Box::new(OptionNanIgnore));
     }
 
+    // Ghidra: options.cc:93 OptionDatabase::register
     /// Register a new ArchOption. Faithful to `registerOption`.
     fn register(&mut self, option: Box<dyn ArchOption>) {
         let name = option.name().to_string();
         self.optionmap.insert(name, option);
     }
 
+    // Ghidra: options.cc:150 OptionDatabase::set
     /// Issue an option command directly, given its name and optional
     /// parameters. Faithful to `OptionDatabase::set` (options.cc:150).
     /// Returns the confirmation/failure message.
@@ -371,21 +404,25 @@ impl OptionDatabase {
         }
     }
 
+    // Ghidra: options.cc:93 OptionDatabase::hasOption
     /// Check if an option is registered.
     pub fn has_option(&self, name: &str) -> bool {
         self.optionmap.contains_key(name)
     }
 
+    // Ghidra: options.cc:93 OptionDatabase::numOptions
     /// Number of registered options.
     pub fn num_options(&self) -> usize {
         self.optionmap.len()
     }
 
+    // Ghidra: options.cc:93 OptionDatabase::optionNames
     /// Get all registered option names.
     pub fn option_names(&self) -> Vec<&str> {
         self.optionmap.keys().map(|s| s.as_str()).collect()
     }
 
+    // Ghidra: options.cc:163 OptionDatabase::decodeOne
     /// Parse and execute a single option element from an `<optionslist>`.
     /// Faithful to `OptionDatabase::decodeOne` (options.cc:163).
     ///
@@ -456,6 +493,7 @@ impl OptionDatabase {
         self.set(arch, &elem_name, &params[0], &params[1], &params[2])
     }
 
+    // Ghidra: options.cc:192 OptionDatabase::decode
     /// Parse an `<optionslist>` element, executing each child as an option
     /// command. Faithful to `OptionDatabase::decode` (options.cc:192).
     pub fn decode(

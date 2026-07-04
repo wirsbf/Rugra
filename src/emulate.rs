@@ -55,6 +55,7 @@ pub struct Emulate {
 }
 
 impl Emulate {
+    // Ghidra: emulate.hh:27 Emulate::new
     pub fn new() -> Self {
         Self {
             mem_state: MemState::new(),
@@ -66,16 +67,19 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::setRegister
     /// Set a register value.
     pub fn set_register(&mut self, space: u64, offset: u64, val: u64) {
         self.registers.insert((space, offset), val);
     }
 
+    // Ghidra: emulate.hh:27 Emulate::getRegister
     /// Get a register value.
     pub fn get_register(&self, space: u64, offset: u64) -> u64 {
         self.registers.get(&(space, offset)).copied().unwrap_or(0)
     }
 
+    // Ghidra: emulate.hh:27 Emulate::getValue
     /// Resolve a Varnode to its current value. Faithful to
     /// `MemoryState::getValue` (memstate.cc): a constant yields its offset,
     /// any other (register/unique) varnode yields the stored register value
@@ -91,6 +95,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::setValue
     /// Write a value to a Varnode's storage. Faithful to
     /// `MemoryState::setValue` (memstate.cc): stores into the register file
     /// keyed by (space_id, offset).
@@ -99,6 +104,7 @@ impl Emulate {
         self.set_register(v.get_space().space_id() as u64, v.get_offset(), val);
     }
 
+    // Ghidra: emulate.cc:143 Emulate::executeCurrentOp
     /// Execute a single P-code op with full Ghidra `executeCurrentOp` dispatch
     /// (emulate.cc:143-216). Evaluates arithmetic ops via opbehavior, handles
     /// LOAD/STORE against MemState, and resolves control flow (branch/return).
@@ -188,6 +194,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::executeUnary
     /// Execute a unary arithmetic/logical op. Faithful to
     /// `EmulateMemory::executeUnary` (emulate.cc:218-225).
     fn execute_unary(&mut self, op: &Arc<RwLock<PcodeOp>>) {
@@ -206,6 +213,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::executeBinary
     /// Execute a binary arithmetic/logical op. Faithful to
     /// `EmulateMemory::executeBinary` (emulate.cc:227-235).
     fn execute_binary(&mut self, op: &Arc<RwLock<PcodeOp>>) {
@@ -226,6 +234,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::executeLoad
     /// Execute a LOAD op. Faithful to `EmulateMemory::executeLoad`
     /// (emulate.cc:237-246): reads `output.size` bytes from the space
     /// indicated by input(0) at the offset given by input(1)'s value.
@@ -245,6 +254,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::executeStore
     /// Execute a STORE op. Faithful to `EmulateMemory::executeStore`
     /// (emulate.cc:248-257): writes input(2)'s value at the offset given by
     /// input(1)'s value.
@@ -263,6 +273,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::execute
     /// Execute a sequence of P-code ops (the main `execute` loop). Faithful to
     /// the driver loop callers of Ghidra's `Emulate::executeCurrentOp`
     /// (emulate.hh:209): steps through ops in order, following branches only
@@ -283,6 +294,7 @@ impl Emulate {
         last
     }
 
+    // Ghidra: emulate.hh:27 Emulate::executeOp
     /// Execute a single PcodeOp, returning the behavior result.
     /// Uses opbehavior evaluate functions for constant emulation and
     /// integrates with MemState for LOAD/STORE.
@@ -363,6 +375,7 @@ impl Emulate {
         }
     }
 
+    // Ghidra: emulate.hh:27 Emulate::evaluate
     /// Evaluate a constant operation using opbehavior.
     fn evaluate(&self, op: &PcodeOp) -> Option<u64> {
         let size_out = op.output.as_ref()?.read().unwrap().get_size();

@@ -63,3 +63,4 @@ Clear all non-core types
 
 ### 2026-07-01（续）：补全 14 个 TypeFactory 工厂方法
 get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set_enum_values、get_type_code、get_type_pointer_rel、get_typedef、resize_pointer、find_by_id/find_by_id_local、concretize/deconcretize、hash_size。+rel_pointers/typedefs 侧表字段。18 新测试。
+<!-- annotation-pass: 2026-07-04 -->

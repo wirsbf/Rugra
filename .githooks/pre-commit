@@ -10,12 +10,12 @@ python "$REPO_ROOT/rugra/tools/check_doc_sync.py" --staged
 DOC_RC=$?
 if [ $DOC_RC -ne 0 ]; then exit $DOC_RC; fi
 
-# 铁律 9 / 5.5: Ghidra 对齐注释门禁
-# --staged: 只检查本次提交改动的函数 (增量门禁, 不被历史 4560 个未注释函数阻塞)
-# 全库审计用 `python tools/check_ghidra_annotations.py --all` 手动跑 / CI 跑。
-# (此前 hook 跑 --all, 每次提交都被历史违规阻塞 → 所有 commit 被迫 --no-verify,
-#  门禁形同虚设。改为 --staged 让门禁真正生效在新增/修改的函数上。)
-python "$REPO_ROOT/rugra/tools/check_ghidra_annotations.py" --staged
+# 铁律 9 / 5.5: Ghidra 对齐注释门禁 — 全库检查 (--all)
+# 全库门禁是项目"完整对齐 Ghidra"目标的根本保障。--staged 模式让历史违规
+# 永远不被抓，与铁律 9 "禁止简化版长期占据代码库"直接冲突，已废除此模式。
+# 若提交被此门禁阻塞，必须修复违规函数（添加 // Ghidra: <file>:<line> <fn>
+# 注释，并核实 4 类决定性语义），不得用 --no-verify 绕过。
+python "$REPO_ROOT/rugra/tools/check_ghidra_annotations.py" --all
 ANNO_RC=$?
 if [ $ANNO_RC -ne 0 ]; then exit $ANNO_RC; fi
 

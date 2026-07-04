@@ -93,6 +93,7 @@ impl FunctionSemanticSnapshot {
     /// Current schema version for function semantic snapshots.
     pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+    // RUGRA-GLUE: from_funcdata (no Ghidra counterpart found)
     /// Build a snapshot directly from a [`crate::Funcdata`].
     ///
     /// This is the main construction entrypoint for Rugra-side batch alignment
@@ -131,28 +132,33 @@ impl FunctionSemanticSnapshot {
         }
     }
 
+    // RUGRA-GLUE: with_tag (no Ghidra counterpart found)
     /// Attach a single tag and return the updated snapshot.
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
         self
     }
 
+    // RUGRA-GLUE: with_note (no Ghidra counterpart found)
     /// Attach a single note and return the updated snapshot.
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
         self
     }
 
+    // RUGRA-GLUE: to_pretty_json (no Ghidra counterpart found)
     /// Serialize this snapshot to pretty-printed JSON.
     pub fn to_pretty_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
 
+    // RUGRA-GLUE: from_json_str (no Ghidra counterpart found)
     /// Parse a snapshot from JSON text.
     pub fn from_json_str(json: &str) -> serde_json::Result<Self> {
         serde_json::from_str(json)
     }
 
+    // RUGRA-GLUE: write_json_file (no Ghidra counterpart found)
     /// Write this snapshot to a JSON file.
     pub fn write_json_file(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         let json = self
@@ -161,6 +167,7 @@ impl FunctionSemanticSnapshot {
         fs::write(path, json)
     }
 
+    // RUGRA-GLUE: read_json_file (no Ghidra counterpart found)
     /// Read a snapshot from a JSON file.
     pub fn read_json_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let json = fs::read_to_string(path)?;
@@ -363,6 +370,7 @@ pub struct FunctionSemanticCompareResult {
 }
 
 impl FunctionSemanticCompareResult {
+    // RUGRA-GLUE: match_result (no Ghidra counterpart found)
     /// Create a successful comparison result.
     pub fn match_result(snapshot: &FunctionSemanticSnapshot) -> Self {
         Self {
@@ -373,6 +381,7 @@ impl FunctionSemanticCompareResult {
         }
     }
 
+    // RUGRA-GLUE: mismatch_result (no Ghidra counterpart found)
     /// Create a mismatch result from collected mismatch records.
     pub fn mismatch_result(
         snapshot: &FunctionSemanticSnapshot,
@@ -386,6 +395,7 @@ impl FunctionSemanticCompareResult {
         }
     }
 
+    // RUGRA-GLUE: compare (no Ghidra counterpart found)
     /// Compare two function snapshots and return a per-function comparison result.
     pub fn compare(rugra: &FunctionSemanticSnapshot, reference: &FunctionSemanticSnapshot) -> Self {
         let mismatches = collect_snapshot_mismatches(rugra, reference);
@@ -418,6 +428,7 @@ pub struct BatchSemanticCompareReport {
 }
 
 impl BatchSemanticCompareReport {
+    // RUGRA-GLUE: from_results (no Ghidra counterpart found)
     /// Construct a batch report from per-function results.
     pub fn from_results(results: Vec<FunctionSemanticCompareResult>) -> Self {
         let total_functions = results.len();
@@ -432,6 +443,7 @@ impl BatchSemanticCompareReport {
         }
     }
 
+    // RUGRA-GLUE: from_rugra_snapshots (no Ghidra counterpart found)
     /// Build a batch report from Rugra-side function snapshots without requiring
     /// a Ghidra-side reference yet.
     ///
@@ -447,16 +459,19 @@ impl BatchSemanticCompareReport {
         Self::from_results(results)
     }
 
+    // RUGRA-GLUE: to_pretty_json (no Ghidra counterpart found)
     /// Serialize this batch report to pretty-printed JSON.
     pub fn to_pretty_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
 
+    // RUGRA-GLUE: from_json_str (no Ghidra counterpart found)
     /// Parse a batch report from JSON text.
     pub fn from_json_str(json: &str) -> serde_json::Result<Self> {
         serde_json::from_str(json)
     }
 
+    // RUGRA-GLUE: write_json_file (no Ghidra counterpart found)
     /// Write this batch report to a JSON file.
     pub fn write_json_file(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         let json = self
@@ -465,6 +480,7 @@ impl BatchSemanticCompareReport {
         fs::write(path, json)
     }
 
+    // RUGRA-GLUE: read_json_file (no Ghidra counterpart found)
     /// Read a batch report from a JSON file.
     pub fn read_json_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let json = fs::read_to_string(path)?;
@@ -472,6 +488,7 @@ impl BatchSemanticCompareReport {
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
     }
 
+    // RUGRA-GLUE: match_rate (no Ghidra counterpart found)
     /// Return the match rate as a percentage in the range `[0.0, 100.0]`.
     pub fn match_rate(&self) -> f64 {
         if self.total_functions == 0 {
@@ -481,6 +498,7 @@ impl BatchSemanticCompareReport {
         }
     }
 
+    // RUGRA-GLUE: mismatch_count_by_layer (no Ghidra counterpart found)
     /// Count mismatches by semantic layer.
     pub fn mismatch_count_by_layer(&self) -> BTreeMap<SnapshotSemanticLayer, usize> {
         let mut counts = BTreeMap::new();
@@ -496,17 +514,20 @@ impl BatchSemanticCompareReport {
 }
 
 impl Ord for SnapshotSemanticLayer {
+    // RUGRA-GLUE: cmp (no Ghidra counterpart found)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (*self as u8).cmp(&(*other as u8))
     }
 }
 
 impl PartialOrd for SnapshotSemanticLayer {
+    // RUGRA-GLUE: partial_cmp (no Ghidra counterpart found)
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+// RUGRA-GLUE: build_function_snapshots (no Ghidra counterpart found)
 /// Build Rugra-side semantic snapshots for a batch of functions.
 ///
 /// This helper is intentionally simple: it just maps each provided
@@ -520,6 +541,7 @@ pub fn build_function_snapshots(funcs: &[Funcdata]) -> Vec<FunctionSemanticSnaps
         .collect()
 }
 
+// RUGRA-GLUE: compare_function_snapshots (no Ghidra counterpart found)
 /// Compare a single Rugra-side snapshot against a reference snapshot.
 pub fn compare_function_snapshots(
     rugra: &FunctionSemanticSnapshot,
@@ -528,6 +550,7 @@ pub fn compare_function_snapshots(
     FunctionSemanticCompareResult::compare(rugra, reference)
 }
 
+// RUGRA-GLUE: compare_snapshot_batches (no Ghidra counterpart found)
 /// Compare Rugra-side snapshots against reference snapshots in batch.
 ///
 /// Snapshots are paired by function entry address. Any Rugra snapshot without a
@@ -600,6 +623,7 @@ pub fn compare_snapshot_batches(
     BatchSemanticCompareReport::from_results(results)
 }
 
+// RUGRA-GLUE: snapshots_to_pretty_json (no Ghidra counterpart found)
 /// Serialize a batch of function snapshots to pretty-printed JSON.
 pub fn snapshots_to_pretty_json(
     snapshots: &[FunctionSemanticSnapshot],
@@ -607,11 +631,13 @@ pub fn snapshots_to_pretty_json(
     serde_json::to_string_pretty(snapshots)
 }
 
+// RUGRA-GLUE: snapshots_from_json_str (no Ghidra counterpart found)
 /// Parse a batch of function snapshots from JSON text.
 pub fn snapshots_from_json_str(json: &str) -> serde_json::Result<Vec<FunctionSemanticSnapshot>> {
     serde_json::from_str(json)
 }
 
+// RUGRA-GLUE: write_snapshots_json_file (no Ghidra counterpart found)
 /// Write a batch of function snapshots to a JSON file.
 pub fn write_snapshots_json_file(
     snapshots: &[FunctionSemanticSnapshot],
@@ -622,6 +648,7 @@ pub fn write_snapshots_json_file(
     fs::write(path, json)
 }
 
+// RUGRA-GLUE: read_snapshots_json_file (no Ghidra counterpart found)
 /// Read a batch of function snapshots from a JSON file.
 pub fn read_snapshots_json_file(
     path: impl AsRef<Path>,
@@ -631,6 +658,7 @@ pub fn read_snapshots_json_file(
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
 
+// RUGRA-GLUE: collect_snapshot_mismatches (no Ghidra counterpart found)
 fn collect_snapshot_mismatches(
     rugra: &FunctionSemanticSnapshot,
     reference: &FunctionSemanticSnapshot,
@@ -718,6 +746,7 @@ fn collect_snapshot_mismatches(
     mismatches
 }
 
+// RUGRA-GLUE: diff_pcode_ops (no Ghidra counterpart found)
 /// Fine-grained P-code operation diff.
 ///
 /// Compares two P-code snapshots op-by-op. Reports:
@@ -838,6 +867,7 @@ fn diff_pcode_ops(
     mismatches
 }
 
+// RUGRA-GLUE: diff_cfg_blocks (no Ghidra counterpart found)
 /// Fine-grained CFG block diff.
 ///
 /// Compares two CFG snapshots block-by-block. Reports:
@@ -956,6 +986,7 @@ fn diff_cfg_blocks(
     mismatches
 }
 
+// RUGRA-GLUE: diff_ssa_varnodes (no Ghidra counterpart found)
 /// Fine-grained SSA varnode diff.
 ///
 /// Compares two SSA snapshots varnode-by-varnode. Reports:
@@ -1097,6 +1128,7 @@ fn diff_ssa_varnodes(
     mismatches
 }
 
+// RUGRA-GLUE: collect_pcode_ops (no Ghidra counterpart found)
 fn collect_pcode_ops(func: &Funcdata) -> Vec<PcodeOpSnapshot> {
     let mut ops: Vec<PcodeOpSnapshot> = func
         .obank
@@ -1140,6 +1172,7 @@ fn collect_pcode_ops(func: &Funcdata) -> Vec<PcodeOpSnapshot> {
     ops
 }
 
+// RUGRA-GLUE: collect_cfg_blocks (no Ghidra counterpart found)
 fn collect_cfg_blocks(func: &Funcdata) -> Vec<BasicBlockSnapshot> {
     let mut blocks = Vec::new();
 
@@ -1171,6 +1204,7 @@ fn collect_cfg_blocks(func: &Funcdata) -> Vec<BasicBlockSnapshot> {
     blocks
 }
 
+// RUGRA-GLUE: collect_block_edge_starts (no Ghidra counterpart found)
 fn collect_block_edge_starts(block: &dyn FlowBlock, incoming: bool) -> Vec<Address> {
     let size = if incoming {
         block.size_in()
@@ -1196,6 +1230,7 @@ fn collect_block_edge_starts(block: &dyn FlowBlock, incoming: bool) -> Vec<Addre
     addrs
 }
 
+// RUGRA-GLUE: collect_ssa_varnodes (no Ghidra counterpart found)
 fn collect_ssa_varnodes(func: &Funcdata) -> Vec<SsaVarnodeSnapshot> {
     let mut seen_keys = BTreeSet::new();
     let mut snapshots = Vec::new();
@@ -1252,6 +1287,7 @@ fn collect_ssa_varnodes(func: &Funcdata) -> Vec<SsaVarnodeSnapshot> {
     snapshots
 }
 
+// RUGRA-GLUE: iter_unique_varnodes (no Ghidra counterpart found)
 fn iter_unique_varnodes(func: &Funcdata) -> Vec<Arc<RwLock<crate::varnode::Varnode>>> {
     let mut seen_ptrs = BTreeSet::new();
     let mut result = Vec::new();

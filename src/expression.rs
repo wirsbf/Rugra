@@ -26,13 +26,18 @@ pub struct AdditiveEdge {
 }
 
 impl AdditiveEdge {
+    // Ghidra: expression.hh:106 AdditiveEdge::new
     pub fn new(op: Arc<RwLock<PcodeOp>>, slot: usize, mult: Option<Arc<RwLock<PcodeOp>>>) -> Self {
         let vn = op.read().unwrap().inrefs.get(slot).cloned().unwrap();
         Self { op, slot, vn, mult }
     }
+    // Ghidra: expression.hh:106 AdditiveEdge::getMultiplier
     pub fn get_multiplier(&self) -> &Option<Arc<RwLock<PcodeOp>>> { &self.mult }
+    // Ghidra: expression.hh:106 AdditiveEdge::getOp
     pub fn get_op(&self) -> &Arc<RwLock<PcodeOp>> { &self.op }
+    // Ghidra: expression.hh:106 AdditiveEdge::getSlot
     pub fn get_slot(&self) -> usize { self.slot }
+    // Ghidra: expression.hh:106 AdditiveEdge::getVarnode
     pub fn get_varnode(&self) -> &Arc<RwLock<Varnode>> { &self.vn }
 }
 
@@ -45,12 +50,15 @@ pub struct TermOrder {
 }
 
 impl TermOrder {
+    // Ghidra: expression.hh:124 TermOrder::new
     pub fn new(root: Arc<RwLock<PcodeOp>>) -> Self {
         Self { root, terms: Vec::new(), sorter: Vec::new() }
     }
 
+    // Ghidra: expression.hh:124 TermOrder::getSize
     pub fn get_size(&self) -> usize { self.terms.len() }
 
+    // Ghidra: expression.cc:236 TermOrder::collect
     /// Collect all the terms in the additive expression rooted at `root`.
     /// Faithful to `TermOrder::collect` (expression.cc:236-283).
     pub fn collect(&mut self) {
@@ -101,6 +109,7 @@ impl TermOrder {
         }
     }
 
+    // Ghidra: expression.cc:285 TermOrder::sortTerms
     /// Sort the terms using a comparison based on Varnode identity.
     /// Faithful to `TermOrder::sortTerms` (expression.cc:285-293).
     pub fn sort_terms(&mut self) {
@@ -120,9 +129,11 @@ impl TermOrder {
         });
     }
 
+    // Ghidra: expression.hh:124 TermOrder::getSort
     /// Get the sorted list of term indices.
     pub fn get_sort(&self) -> &[usize] { &self.sorter }
 
+    // Ghidra: expression.hh:124 TermOrder::getTerm
     /// Get a term by index.
     pub fn get_term(&self, idx: usize) -> Option<&AdditiveEdge> {
         self.terms.get(idx)
@@ -137,6 +148,7 @@ struct ExprTerm {
 }
 
 impl ExprTerm {
+    // RUGRA-GLUE: is_equivalent (no Ghidra counterpart found)
     fn is_equivalent(&self, op2: &ExprTerm) -> bool {
         if self.coeff != op2.coeff { return false; }
         functional_equality(&self.vn, &op2.vn)
@@ -152,10 +164,12 @@ pub struct AddExpression {
 }
 
 impl AddExpression {
+    // Ghidra: expression.hh:141 AddExpression::new
     pub fn new() -> Self {
         Self { constval: 0, num_terms: 0, terms: [None, None] }
     }
 
+    // Ghidra: expression.hh:141 AddExpression::add
     fn add(&mut self, vn: Arc<RwLock<Varnode>>, coeff: u64) {
         if self.num_terms < 2 {
             self.terms[self.num_terms] = Some(ExprTerm { vn, coeff });
@@ -163,6 +177,7 @@ impl AddExpression {
         }
     }
 
+    // Ghidra: expression.cc:333 AddExpression::gather
     /// Recursively collect terms. Faithful to `AddExpression::gather`
     /// (expression.cc:333-363).
     fn gather(&mut self, vn: &Arc<RwLock<Varnode>>, coeff: u64, depth: i32) {
@@ -205,6 +220,7 @@ impl AddExpression {
         self.add(vn.clone(), coeff);
     }
 
+    // Ghidra: expression.cc:368 AddExpression::gatherTwoTermsSubtract
     /// Gather terms from two roots being subtracted.
     pub fn gather_two_terms_subtract(&mut self, a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) {
         let depth = if a.read().unwrap().is_constant() || b.read().unwrap().is_constant() { 1 } else { 0 };
@@ -213,6 +229,7 @@ impl AddExpression {
         self.gather(b, calc_mask(b_size), depth);
     }
 
+    // Ghidra: expression.cc:379 AddExpression::gatherTwoTermsAdd
     /// Gather terms from two roots being added.
     pub fn gather_two_terms_add(&mut self, a: &Arc<RwLock<Varnode>>, b: &Arc<RwLock<Varnode>>) {
         let depth = if a.read().unwrap().is_constant() || b.read().unwrap().is_constant() { 1 } else { 0 };
@@ -220,11 +237,13 @@ impl AddExpression {
         self.gather(b, 1, depth);
     }
 
+    // Ghidra: expression.cc:389 AddExpression::gatherTwoTermsRoot
     /// Gather up to 2 terms from a single root.
     pub fn gather_two_terms_root(&mut self, root: &Arc<RwLock<Varnode>>) {
         self.gather(root, 1, 1);
     }
 
+    // Ghidra: expression.cc:309 AddExpression::isEquivalent
     /// Determine if two expressions are equivalent.
     pub fn is_equivalent(&self, op2: &AddExpression) -> bool {
         if self.constval != op2.constval { return false; }
@@ -258,6 +277,7 @@ pub mod boolean_match {
     pub const UNCORRELATED: i32 = 3;
 }
 
+// Ghidra: expression.hh:141 AddExpression::sameOpComplement
 /// Check if two comparison ops are complements via the `x < n, n-1 < x`
 /// pattern. Faithful to `BooleanMatch::sameOpComplement`
 /// (expression.cc:57-86).
@@ -312,6 +332,7 @@ fn same_op_complement(
     false
 }
 
+// Ghidra: expression.hh:141 AddExpression::varnodeSame
 /// Check if two Varnodes hold the same value. Faithful to
 /// `BooleanMatch::varnodeSame` (expression.cc:93-100).
 fn varnode_same(
@@ -329,6 +350,7 @@ fn varnode_same(
     false
 }
 
+// Ghidra: expression.hh:141 AddExpression::booleanMatchEvaluate
 /// Determine if two boolean Varnodes hold related values. Faithful to
 /// `BooleanMatch::evaluate` (expression.cc:111-216).
 ///
@@ -519,6 +541,7 @@ pub fn boolean_match_evaluate(
 // functionalEqualityLevel — expression.cc:404-512
 // ===========================================================================
 
+// Ghidra: expression.hh:141 AddExpression::functionalEqualityLevel0
 /// Level-0 functional equality test. Faithful to `functionalEqualityLevel0`
 /// (expression.cc:404-417). Returns:
 /// - 0 if vn1 and vn2 definitely hold the same value
@@ -558,6 +581,7 @@ pub struct FunctionalEqualityResult {
     pub pairs: Vec<(Arc<RwLock<Varnode>>, Arc<RwLock<Varnode>>)>,
 }
 
+// RUGRA-GLUE: functional_equality_level (no Ghidra counterpart found)
 /// Try to determine if vn1 and vn2 contain the same value. Faithful to
 /// `functionalEqualityLevel` (expression.cc:432-512).
 ///

@@ -61,3 +61,4 @@ lacks typedef chains, variable-length arrays, and per-pointer AddrSpace;
 those branches are faithful no-ops.
 
 
+<!-- annotation-pass: 2026-07-04 -->

@@ -55,3 +55,4 @@
 - **CircleRange::union** 返回码对齐 Ghidra circleUnion 语义：0=single range（在 self 中），1=two pieces（无法表示），2=full（覆盖全部）。
 - 新增相邻范围合并逻辑：`op2.left == self.right` 或 `self.left == op2.right` 时合并为单一范围。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
+<!-- annotation-pass: 2026-07-04 -->

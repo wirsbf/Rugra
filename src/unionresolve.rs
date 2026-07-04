@@ -23,6 +23,7 @@ pub struct ResolvedUnion {
 }
 
 impl ResolvedUnion {
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::newSelf
     /// Construct a data-type that resolves to itself. Faithful to the
     /// constructor (unionresolve.hh:46). `field_num` = -1.
     pub fn new_self(parent_name: &str) -> Self {
@@ -34,6 +35,7 @@ impl ResolvedUnion {
         }
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::newField
     /// Construct a reference to a specific field. Faithful to the constructor
     /// (unionresolve.hh:47).
     pub fn new_field(parent_name: &str, field_name: &str, fld_num: i32) -> Self {
@@ -45,26 +47,31 @@ impl ResolvedUnion {
         }
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::getDatatypeName
     /// Get the resolved data-type name. Faithful to `getDatatype`.
     pub fn get_datatype_name(&self) -> &str {
         &self.resolve_type_name
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::getBaseName
     /// Get the union or structure being referenced. Faithful to `getBase`.
     pub fn get_base_name(&self) -> &str {
         &self.base_type_name
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::getFieldNum
     /// Get the index of the resolved field or -1. Faithful to `getFieldNum`.
     pub fn get_field_num(&self) -> i32 {
         self.field_num
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::isLocked
     /// Is this locked against overrides? Faithful to `isLocked`.
     pub fn is_locked(&self) -> bool {
         self.lock
     }
 
+    // Ghidra: unionresolve.cc:25 ResolvedUnion::setLock
     /// Set whether this resolution is locked. Faithful to `setLock`.
     pub fn set_lock(&mut self, val: bool) {
         self.lock = val;
@@ -88,6 +95,7 @@ pub struct ResolveEdge {
 }
 
 impl ResolveEdge {
+    // Ghidra: unionresolve.cc:64 ResolveEdge::new
     /// Construct from components. Faithful to the constructor
     /// (unionresolve.hh:65).
     ///
@@ -134,6 +142,7 @@ pub struct Trial {
 }
 
 impl Trial {
+    // Ghidra: unionresolve.hh:84 Trial::newDown
     /// Construct a downward trial for a Varnode being read. Faithful to the
     /// downward constructor (unionresolve.hh:106).
     pub fn new_down(slot: i32, type_name: &str, index: i32, is_array: bool) -> Self {
@@ -146,6 +155,7 @@ impl Trial {
         }
     }
 
+    // Ghidra: unionresolve.hh:84 Trial::newUp
     /// Construct an upward trial for a Varnode being written. Faithful to the
     /// upward constructor (unionresolve.hh:115).
     pub fn new_up(type_name: &str, index: i32, is_array: bool) -> Self {
@@ -170,6 +180,7 @@ pub struct VisitMark {
 }
 
 impl VisitMark {
+    // Ghidra: unionresolve.hh:120 VisitMark::new
     /// Construct. Faithful to the constructor (unionresolve.hh:122).
     pub fn new(vn_id: u64, index: i32) -> Self {
         Self { vn_id, index }
@@ -211,6 +222,7 @@ pub struct ScoreUnionFields {
 }
 
 impl ScoreUnionFields {
+    // Ghidra: unionresolve.cc:990 ScoreUnionFields::new
     /// Construct given the parent type name and list of field names. The
     /// scores vector is initialized to zero for each field + 1 (whole union).
     pub fn new(parent_name: &str, field_names: &[String]) -> Self {
@@ -229,16 +241,19 @@ impl ScoreUnionFields {
         }
     }
 
+    // Ghidra: unionresolve.cc:990 ScoreUnionFields::getResult
     /// Get the resulting best field resolution. Faithful to `getResult`.
     pub fn get_result(&self) -> &ResolvedUnion {
         &self.result
     }
 
+    // Ghidra: unionresolve.cc:990 ScoreUnionFields::numFields
     /// Number of fields being scored (including the whole union at index 0).
     pub fn num_fields(&self) -> usize {
         self.fields.len()
     }
 
+    // Ghidra: unionresolve.cc:945 ScoreUnionFields::computeBestIndex
     /// Assuming scoring is complete, compute the best index. Faithful to
     /// `computeBestIndex` (unionresolve.cc). The best index is the one with
     /// the highest score; ties favor lower indices (whole union = 0).
@@ -262,6 +277,7 @@ impl ScoreUnionFields {
         }
     }
 
+    // Ghidra: unionresolve.cc:990 ScoreUnionFields::addScore
     /// Add a score to a specific field index. Used by the scoring algorithm.
     pub fn add_score(&mut self, index: usize, score: i32) {
         if index < self.scores.len() {
@@ -269,6 +285,7 @@ impl ScoreUnionFields {
         }
     }
 
+    // Ghidra: unionresolve.cc:990 ScoreUnionFields::runOnFunc
     /// Run the scoring algorithm against a Funcdata. Faithful to `run`
     /// (unionresolve.cc). This partial implementation scans the function's
     /// PcodeOps for ops that reference union-typed Varnodes (via
@@ -320,6 +337,7 @@ impl ScoreUnionFields {
         self.compute_best_index();
     }
 
+    // Ghidra: unionresolve.cc:963 ScoreUnionFields::run
     /// Run the scoring algorithm (standalone, no Funcdata). Faithful to
     /// `run` (unionresolve.cc). Computes best index from existing scores.
     pub fn run(&mut self) {

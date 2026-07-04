@@ -29,3 +29,4 @@
 ## 2026-06-27 移植状态
 
 5 个单元测试。**剩余**：ParamListRegister/Merged 变体、XML decode、JoinRecord。
+<!-- annotation-pass: 2026-07-04 -->

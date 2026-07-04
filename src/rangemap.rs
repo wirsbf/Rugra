@@ -28,8 +28,10 @@ use std::collections::BTreeMap;
 /// A record in a RangeMap, occupying the interval [first, last]. The user of
 /// RangeMap provides records that implement this trait.
 pub trait RangeRecord: Clone {
+    // RUGRA-GLUE: first (no Ghidra counterpart found)
     /// The start of the record's range.
     fn first(&self) -> u64;
+    // RUGRA-GLUE: last (no Ghidra counterpart found)
     /// The end of the record's range (inclusive).
     fn last(&self) -> u64;
 }
@@ -60,12 +62,14 @@ pub struct RangeMap<R: RangeRecord> {
 }
 
 impl<R: RangeRecord> Default for RangeMap<R> {
+    // RUGRA-GLUE: default (no Ghidra counterpart found)
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl<R: RangeRecord> RangeMap<R> {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create an empty range map.
     pub fn new() -> Self {
         Self {
@@ -74,22 +78,26 @@ impl<R: RangeRecord> RangeMap<R> {
         }
     }
 
+    // RUGRA-GLUE: is_empty (no Ghidra counterpart found)
     /// Is the container empty? Faithful to `empty`.
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
 
+    // RUGRA-GLUE: clear (no Ghidra counterpart found)
     /// Clear all records. Faithful to `clear`.
     pub fn clear(&mut self) {
         self.sub_ranges.clear();
         self.records.clear();
     }
 
+    // RUGRA-GLUE: len (no Ghidra counterpart found)
     /// Number of records.
     pub fn len(&self) -> usize {
         self.records.len()
     }
 
+    // RUGRA-GLUE: insert (no Ghidra counterpart found)
     /// Insert a new record into the container. Faithful to `insert`.
     /// The record occupies [a, b]. A sub-range entry is created and inserted
     /// in sorted position.
@@ -109,6 +117,7 @@ impl<R: RangeRecord> RangeMap<R> {
         self.records.push(record);
     }
 
+    // RUGRA-GLUE: find_overlap (no Ghidra counterpart found)
     /// Find the first record overlapping the given interval [point, end].
     /// Faithful to `find_overlap` (rangemap.hh:159). Returns the index of the
     /// overlapping record, or None.
@@ -122,6 +131,7 @@ impl<R: RangeRecord> RangeMap<R> {
         None
     }
 
+    // RUGRA-GLUE: find_at_point (no Ghidra counterpart found)
     /// Find all records overlapping the given point. Returns indices.
     /// Faithful to `find` (rangemap.hh:146).
     pub fn find_at_point(&self, point: u64) -> Vec<&R> {
@@ -132,6 +142,7 @@ impl<R: RangeRecord> RangeMap<R> {
             .collect()
     }
 
+    // RUGRA-GLUE: find_container (no Ghidra counterpart found)
     /// Find the smallest containing record for [point, size).
     /// Used by Scope::findContainer.
     pub fn find_container(&self, point: u64, size: u64) -> Option<&R> {
@@ -150,6 +161,7 @@ impl<R: RangeRecord> RangeMap<R> {
         best
     }
 
+    // RUGRA-GLUE: records (no Ghidra counterpart found)
     /// Iterate over all records.
     pub fn records(&self) -> &[R] {
         &self.records
@@ -174,6 +186,7 @@ pub struct PartMap<V: Clone> {
 }
 
 impl<V: Clone> PartMap<V> {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct with a default value.
     pub fn new(default_value: V) -> Self {
         Self {
@@ -182,6 +195,7 @@ impl<V: Clone> PartMap<V> {
         }
     }
 
+    // RUGRA-GLUE: get_value (no Ghidra counterpart found)
     /// Get the value at a point. Faithful to `getValue` (partmap.hh:82).
     /// Looks up the first split point <= pnt.
     pub fn get_value(&self, pnt: u64) -> &V {
@@ -191,6 +205,7 @@ impl<V: Clone> PartMap<V> {
         }
     }
 
+    // RUGRA-GLUE: get_value_mut (no Ghidra counterpart found)
     /// Get a mutable reference to the value at a point.
     pub fn get_value_mut(&mut self, pnt: u64) -> &mut V {
         // We need to handle the borrow checker carefully.
@@ -213,6 +228,7 @@ impl<V: Clone> PartMap<V> {
         }
     }
 
+    // RUGRA-GLUE: split (no Ghidra counterpart found)
     /// Introduce a new split point. Faithful to `split` (partmap.hh:117).
     /// Copies the current value at pnt into the new partition.
     pub fn split(&mut self, pnt: u64) -> &mut V {
@@ -227,6 +243,7 @@ impl<V: Clone> PartMap<V> {
         self.database.entry(pnt).or_insert(val)
     }
 
+    // RUGRA-GLUE: clear_range (no Ghidra counterpart found)
     /// Clear split points in a range. Faithful to `clearRange`
     /// (partmap.hh:144).
     /// Splits at pnt1 and pnt2, then removes all split points in between.
@@ -244,31 +261,37 @@ impl<V: Clone> PartMap<V> {
         }
     }
 
+    // RUGRA-GLUE: default_value (no Ghidra counterpart found)
     /// Get the default value. Faithful to `defaultValue`.
     pub fn default_value(&self) -> &V {
         &self.default_value
     }
 
+    // RUGRA-GLUE: default_value_mut (no Ghidra counterpart found)
     /// Get a mutable reference to the default value.
     pub fn default_value_mut(&mut self) -> &mut V {
         &mut self.default_value
     }
 
+    // RUGRA-GLUE: clear (no Ghidra counterpart found)
     /// Clear all split points. Faithful to `clear`.
     pub fn clear(&mut self) {
         self.database.clear();
     }
 
+    // RUGRA-GLUE: is_empty (no Ghidra counterpart found)
     /// Is the partition map empty of split points? Faithful to `empty`.
     pub fn is_empty(&self) -> bool {
         self.database.is_empty()
     }
 
+    // RUGRA-GLUE: num_splits (no Ghidra counterpart found)
     /// Number of split points.
     pub fn num_splits(&self) -> usize {
         self.database.len()
     }
 
+    // RUGRA-GLUE: bounds (no Ghidra counterpart found)
     /// Get the value and bounds at a point. Faithful to `bounds`
     /// (partmap.hh:172). Returns (value, before, after, valid_code):
     /// - 0 = both bounds apply
@@ -299,6 +322,7 @@ impl<V: Clone> PartMap<V> {
         }
     }
 
+    // RUGRA-GLUE: splits (no Ghidra counterpart found)
     /// Iterate over all split points.
     pub fn splits(&self) -> impl Iterator<Item = (&u64, &V)> {
         self.database.iter()

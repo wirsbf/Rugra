@@ -187,3 +187,4 @@
 - 主反编译循环从三段式线性扫描（disassemble→lift→inject_raw_ops）改为 `follow_flow`（FlowInfo 可达性流追踪）。
 - 新增 `BufferLoadImage`：实现 LoadImage trait，通过 ELF section headers 将 vaddr→file offset→bytes。
 - prototype 发现阶段（第一循环）仍用线性扫描（需要所有指令不论可达性）。
+<!-- annotation-pass: 2026-07-04 -->

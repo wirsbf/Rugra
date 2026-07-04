@@ -53,12 +53,14 @@ pub struct GrammarToken {
 }
 
 impl Default for GrammarToken {
+    // Ghidra: grammar.cc:2025 GrammarToken::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl GrammarToken {
+    // Ghidra: grammar.cc:2025 GrammarToken::new
     /// Construct an empty token. Faithful to the constructor.
     pub fn new() -> Self {
         Self {
@@ -71,36 +73,43 @@ impl GrammarToken {
         }
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getType
     /// Get the token type. Faithful to `getType`.
     pub fn get_type(&self) -> u32 {
         self.token_type
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getInteger
     /// Get the integer value. Faithful to `getInteger`.
     pub fn get_integer(&self) -> u64 {
         self.integer_value
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getString
     /// Get the string value. Faithful to `getString`.
     pub fn get_string(&self) -> &str {
         &self.string_value
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getLineNo
     /// Get the line number. Faithful to `getLineNo`.
     pub fn get_line_no(&self) -> i32 {
         self.lineno
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getColNo
     /// Get the column number. Faithful to `getColNo`.
     pub fn get_col_no(&self) -> i32 {
         self.colno
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::getFileNum
     /// Get the file number. Faithful to `getFileNum`.
     pub fn get_file_num(&self) -> i32 {
         self.filenum
     }
 
+    // Ghidra: grammar.cc:2025 GrammarToken::setPosition
     /// Set position. Faithful to `setPosition`.
     pub fn set_position(&mut self, file: i32, line: i32, col: i32) {
         self.filenum = file;
@@ -146,6 +155,7 @@ pub struct GrammarLexer {
 }
 
 impl GrammarLexer {
+    // Ghidra: grammar.cc:2035 GrammarLexer::new
     /// Construct given the maximum buffer size. Faithful to the constructor
     /// (grammar.hh:104).
     pub fn new(_max_buffer: i32) -> Self {
@@ -158,6 +168,7 @@ impl GrammarLexer {
         }
     }
 
+    // Ghidra: grammar.cc:2305 GrammarLexer::clear
     /// Clear the lexer state. Faithful to `clear`.
     pub fn clear(&mut self) {
         self.input.clear();
@@ -167,27 +178,32 @@ impl GrammarLexer {
         self.error.clear();
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::setInput
     /// Set the input text to lex.
     pub fn set_input(&mut self, text: &str) {
         self.clear();
         self.input = text.chars().collect();
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::getError
     /// Get the error message. Faithful to `getError`.
     pub fn get_error(&self) -> &str {
         &self.error
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::isEof
     /// Check if at end of file.
     pub fn is_eof(&self) -> bool {
         self.pos >= self.input.len()
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::peek
     /// Peek at the next character without consuming.
     fn peek(&self) -> Option<char> {
         self.input.get(self.pos).copied()
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::nextChar
     /// Consume and return the next character.
     fn next_char(&mut self) -> Option<char> {
         let c = self.peek()?;
@@ -198,6 +214,7 @@ impl GrammarLexer {
         Some(c)
     }
 
+    // Ghidra: grammar.cc:2362 GrammarLexer::getNextToken
     /// Get the next token from the input. Faithful to `getNextToken`
     /// (grammar.hh:110). Implements the state machine for tokenizing C
     /// declarations.
@@ -416,6 +433,7 @@ impl GrammarLexer {
         }
     }
 
+    // Ghidra: grammar.cc:2035 GrammarLexer::finalizeToken
     /// Finalize a token at end of input.
     fn finalize_token(
         &self,
@@ -440,6 +458,7 @@ impl GrammarLexer {
     }
 }
 
+// Ghidra: grammar.cc:2035 GrammarLexer::parseNumber
 /// Parse a number string (decimal or hex) into a u64.
 fn parse_number(s: &str) -> u64 {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
@@ -481,6 +500,7 @@ pub enum TypeModifier {
 }
 
 impl TypeModifier {
+    // Ghidra: grammar.hh:118 TypeModifier::kind
     /// Get the modifier kind. Faithful to `getType`.
     pub fn kind(&self) -> ModifierKind {
         match self {
@@ -490,6 +510,7 @@ impl TypeModifier {
         }
     }
 
+    // Ghidra: grammar.hh:118 TypeModifier::isValid
     /// Is this modifier valid? Faithful to `isValid`.
     pub fn is_valid(&self) -> bool {
         match self {
@@ -516,12 +537,14 @@ pub struct TypeDeclarator {
 }
 
 impl Default for TypeDeclarator {
+    // Ghidra: grammar.hh:116 TypeDeclarator::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl TypeDeclarator {
+    // Ghidra: grammar.hh:116 TypeDeclarator::new
     /// Construct an empty declarator. Faithful to the constructor.
     pub fn new() -> Self {
         Self {
@@ -533,6 +556,7 @@ impl TypeDeclarator {
         }
     }
 
+    // Ghidra: grammar.hh:116 TypeDeclarator::withName
     /// Construct with an identifier. Faithful to the constructor (grammar.hh:174).
     pub fn with_name(name: &str) -> Self {
         let mut d = Self::new();
@@ -540,27 +564,32 @@ impl TypeDeclarator {
         d
     }
 
+    // Ghidra: grammar.hh:116 TypeDeclarator::getBaseTypeName
     /// Get the base type name. Faithful to `getBaseType`.
     pub fn get_base_type_name(&self) -> &str {
         &self.base_type_name
     }
 
+    // Ghidra: grammar.hh:116 TypeDeclarator::numModifiers
     /// Number of modifiers. Faithful to `numModifiers`.
     pub fn num_modifiers(&self) -> usize {
         self.mods.len()
     }
 
+    // Ghidra: grammar.hh:116 TypeDeclarator::getIdentifier
     /// Get the identifier. Faithful to `getIdentifier`.
     pub fn get_identifier(&self) -> &str {
         &self.ident
     }
 
+    // Ghidra: grammar.hh:116 TypeDeclarator::hasProperty
     /// Has a property? Faithful to `hasProperty`.
     pub fn has_property(&self, mask: u32) -> bool {
         (self.flags & mask) != 0
     }
 }
 
+// Ghidra: grammar.hh:116 TypeDeclarator::parseType
 /// Parse a type from a string, returning the type name and identifier.
 /// Faithful to `parse_type` (grammar.hh:282). This is a simplified entry
 /// point; the full implementation uses CParse + TypeFactory.
@@ -585,6 +614,7 @@ pub fn parse_type(text: &str) -> Option<(String, String)> {
     Some((type_name, var_name))
 }
 
+// Ghidra: grammar.hh:116 TypeDeclarator::parseToSeparator
 /// Parse text up to the next separator (space, tab, comma, etc.). Faithful to
 /// `parse_toseparator` (grammar.hh:288).
 pub fn parse_to_separator(text: &str) -> String {

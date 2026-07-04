@@ -733,3 +733,4 @@ ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current o
 
 ### 2026-07-03：修正 collapse_cbranch_cascades 的错误注释
 - 该函数的注释曾错误声称 "Corresponds to Ghidra's ruleBlockSwitch"，但 Ghidra `ruleBlockSwitch`（blockaction.cc:1649）只对 `isSwitchOut()` 块触发（由 CPUI_BRANCHIND 设置 f_switch_out），从不从 CBRANCH if/else-if 链造 switch。此函数是 fabricated logic（无 Ghidra 对应），已修正注释明确说明。函数仍禁用（:695）。**未改名**为 rule_block_switch——那会给 fabricated logic 披上 Ghidra 对应的外衣。
+<!-- annotation-pass: 2026-07-04 -->

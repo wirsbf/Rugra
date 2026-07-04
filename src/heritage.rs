@@ -25,20 +25,24 @@ pub struct SizePass {
 }
 
 impl LocationMap {
+    // Ghidra: heritage.hh:38 LocationMap::new
     pub fn new() -> Self {
         Self {
             themap: BTreeMap::new(),
         }
     }
 
+    // Ghidra: heritage.cc:34 LocationMap::add
     pub fn add(&mut self, addr: Address, size: i32, pass: i32) {
         self.themap.insert(addr, SizePass { size, pass });
     }
 
+    // Ghidra: heritage.cc:91 LocationMap::findPass
     pub fn find_pass(&self, addr: Address) -> i32 {
         self.themap.get(&addr).map(|sp| sp.pass).unwrap_or(-1)
     }
 
+    // Ghidra: heritage.hh:38 LocationMap::clear
     pub fn clear(&mut self) {
         self.themap.clear();
     }
@@ -53,6 +57,7 @@ pub struct PriorityQueue {
 }
 
 impl PriorityQueue {
+    // Ghidra: heritage.hh:101 PriorityQueue::new
     pub fn new() -> Self {
         Self {
             queue: Vec::new(),
@@ -60,12 +65,14 @@ impl PriorityQueue {
         }
     }
 
+    // Ghidra: heritage.cc:142 PriorityQueue::reset
     pub fn reset(&mut self, maxdepth: usize) {
         self.queue.clear();
         self.queue.resize_with(maxdepth + 1, Vec::new);
         self.curdepth = -1;
     }
 
+    // Ghidra: heritage.cc:154 PriorityQueue::insert
     pub fn insert(&mut self, bl: Arc<RwLock<BlockBasic>>, depth: i32) {
         if depth > self.curdepth {
             self.curdepth = depth;
@@ -73,6 +80,7 @@ impl PriorityQueue {
         self.queue[depth as usize].push(bl);
     }
 
+    // Ghidra: heritage.cc:166 PriorityQueue::extract
     pub fn extract(&mut self) -> Option<Arc<RwLock<BlockBasic>>> {
         while self.curdepth >= 0 {
             if let Some(bl) = self.queue[self.curdepth as usize].pop() {
@@ -83,6 +91,7 @@ impl PriorityQueue {
         None
     }
 
+    // Ghidra: heritage.hh:101 PriorityQueue::empty
     pub fn empty(&self) -> bool {
         self.curdepth < 0
     }
@@ -102,6 +111,7 @@ pub struct HeritageInfo {
 }
 
 impl HeritageInfo {
+    // Ghidra: heritage.cc:180 HeritageInfo::new
     pub fn new(space: AddressSpace) -> Self {
         Self {
             space,
@@ -129,6 +139,7 @@ pub struct LoadGuard {
 }
 
 impl LoadGuard {
+    // Ghidra: heritage.cc:819 LoadGuard::isGuarded
     /// Does this guard apply to the given address (space + offset range)?
     /// Faithful to `LoadGuard::isGuarded` (heritage.cc:819-826).
     pub fn is_guarded(&self, space: &crate::space::AddressSpace, offset: u64) -> bool {
@@ -144,16 +155,19 @@ impl LoadGuard {
         true
     }
 
+    // Ghidra: heritage.hh:142 LoadGuard::getMinimum
     /// Get minimum offset of the guarded range. (heritage.hh:164)
     pub fn get_minimum(&self) -> u64 {
         self.minimum_offset
     }
 
+    // Ghidra: heritage.hh:142 LoadGuard::getMaximum
     /// Get maximum offset of the guarded range. (heritage.hh:165)
     pub fn get_maximum(&self) -> u64 {
         self.maximum_offset
     }
 
+    // Ghidra: heritage.hh:142 LoadGuard::getOp
     /// Get the guarded op. (heritage.hh:161)
     pub fn get_op(&self) -> Option<std::sync::Arc<std::sync::RwLock<PcodeOp>>> {
         self.op.upgrade()
@@ -184,6 +198,7 @@ impl LoadGuard {
         self.analysis_state = 0;
     }
 
+    // Ghidra: heritage.hh:142 LoadGuard::newUnanalyzed
     /// Build a fresh guard via `set` and return it. Convenience wrapper used
     /// by `guard_stores`/`guard_loads` (mirrors Ghidra's
     /// `loadGuard.emplace_back(); loadGuard.back().set(...)`).
@@ -197,6 +212,7 @@ impl LoadGuard {
         g
     }
 
+    // Ghidra: heritage.cc:741 LoadGuard::establishRange
     /// Convert a partial value-set analysis result into the guard range.
     /// Faithful to `LoadGuard::establishRange` (heritage.cc:741-786).
     ///
@@ -215,6 +231,7 @@ impl LoadGuard {
         self.analysis_state = 0;
     }
 
+    // Ghidra: heritage.cc:788 LoadGuard::finalizeRange
     /// Convert a final value-set analysis result into the guard range.
     /// Faithful to `LoadGuard::finalizeRange` (heritage.cc:788-814).
     ///
@@ -230,6 +247,7 @@ impl LoadGuard {
 }
 
 impl Default for LoadGuard {
+    // Ghidra: heritage.hh:142 LoadGuard::default
     fn default() -> Self {
         Self {
             op: Weak::default(),
@@ -243,6 +261,7 @@ impl Default for LoadGuard {
     }
 }
 
+// Ghidra: heritage.hh:142 LoadGuard::spaceHighest
 /// Conservative "highest addressable offset" for a space, standing in for
 /// Ghidra's `AddrSpace::getHighest()`. Rugra spaces are 64-bit addressable
 /// (`addr_size()==8`), so the all-ones value is the natural maximum and keeps
@@ -272,6 +291,7 @@ pub struct Heritage {
 }
 
 impl Heritage {
+    // Ghidra: heritage.cc:219 Heritage::new
     pub fn new() -> Self {
         Self {
             fd: None,
@@ -293,12 +313,14 @@ impl Heritage {
 }
 
 impl Default for Heritage {
+    // Ghidra: heritage.cc:219 Heritage::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Heritage {
+    // Ghidra: heritage.cc:219 Heritage::discoverAndGuardStackStoresFd
     /// Discover stack-pointer-relative STORE ops and build Stack-space INDIRECT
     /// ops for them. Faithful to Ghidra's discoverIndexedStackPointers
     /// (heritage.cc:985) + guardStores (heritage.cc:1539).
@@ -461,6 +483,7 @@ impl Heritage {
     /// conservative superset and never under-protects. The full-range
     /// INDIRECTs are produced by `discover_and_guard_stack_stores_fd`; here we
     /// only ensure each such STORE has a guard record.
+    // Ghidra: heritage.cc:1539 Heritage::guardStores
     pub fn guard_stores(&mut self, fd: &mut Funcdata) {
         // Snapshot of (op_arc, store_space, spc) for STOREs that need a guard
         // record. We collect under a read borrow so we can later mutate the
@@ -549,6 +572,7 @@ impl Heritage {
     /// (conservative superset) and defers the COPY insertion to a future
     /// per-range driver. Value-set analysis is not run yet, so each guard
     /// initially protects the whole stack space.
+    // Ghidra: heritage.cc:1571 Heritage::guardLoads
     pub fn guard_loads(&mut self, fd: &mut Funcdata) {
         // Prune stale load_guard records (heritage.cc:1581-1586 isValid check).
         self.load_guard.retain(|g| {
@@ -610,6 +634,7 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:1444 Heritage::guardCalls
     /// Guard CALL ops in preparation for renaming.
     ///
     /// Faithful in shape to `Heritage::guardCalls` (heritage.cc:1444-1528):
@@ -622,6 +647,7 @@ impl Heritage {
     /// TODO(call-analysis): wire effect characterization + INDIRECT creation.
     pub fn guard_calls(&mut self, _fd: &mut Funcdata) {}
 
+    // Ghidra: heritage.cc:1653 Heritage::guardReturns
     /// Guard RETURN ops in preparation for renaming.
     ///
     /// Faithful in shape to `Heritage::guardReturns` (heritage.cc:1653-1693):
@@ -632,6 +658,7 @@ impl Heritage {
     /// TODO(funcproto): wire return-value trials + COPY insertion.
     pub fn guard_returns(&mut self, _fd: &mut Funcdata) {}
 
+    // Ghidra: heritage.cc:219 Heritage::guardAll
     /// Run the four guard phases (calls, returns, stores, loads) against the
     /// whole stack space. This is the per-space analogue of the indirect half
     /// of Ghidra's `Heritage::guard` (heritage.cc:1189-1199), which Ghidra
@@ -647,6 +674,7 @@ impl Heritage {
         self.guard_loads(fd);
     }
 
+    // Ghidra: heritage.cc:2677 Heritage::heritage
     /// Main entry point for heritage (SSA construction)
     pub fn heritage(&mut self) {
         if self.fd.is_none() {
@@ -663,6 +691,7 @@ impl Heritage {
         self.pass += 1;
     }
 
+    // Ghidra: heritage.cc:2600 Heritage::placeMultiequals
     /// Insert Phi nodes (MULTIEQUAL)
     pub fn place_multiequals(&mut self) {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
@@ -678,6 +707,7 @@ impl Heritage {
         fd.obank = obank;
     }
 
+    // Ghidra: heritage.cc:219 Heritage::placeMultiequalsDirect
     /// Insert Phi nodes directly using bank references (avoids lock deadlocks)
     pub fn place_multiequals_direct(
         &mut self,
@@ -777,6 +807,7 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:219 Heritage::insertMultiequal
     /// Helper to insert a MULTIEQUAL (Phi) op into a block
     fn insert_multiequal(&mut self, fd: &mut Funcdata, space: AddressSpace, addr: Address, block_idx: i32) {
         let mut vbank = std::mem::take(&mut fd.vbank);
@@ -786,6 +817,7 @@ impl Heritage {
         fd.obank = obank;
     }
 
+    // Ghidra: heritage.cc:219 Heritage::insertMultiequalDirect
     fn insert_multiequal_direct(
         &mut self,
         vbank: &mut VarnodeBank,
@@ -847,6 +879,7 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:2588 Heritage::rename
     /// Perform SSA renaming
     pub fn rename(&mut self) {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
@@ -858,6 +891,7 @@ impl Heritage {
         fd.vbank = vbank;
     }
 
+    // Ghidra: heritage.cc:219 Heritage::renameDirect
     /// Perform SSA renaming directly using bank references
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
         // Mark all free varnodes as active heritage, faithful to Ghidra's
@@ -895,6 +929,7 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:219 Heritage::visitRename
     fn visit_rename(
         &mut self,
         fd: &mut Funcdata,
@@ -906,6 +941,7 @@ impl Heritage {
         fd.vbank = vbank;
     }
 
+    // Ghidra: heritage.cc:219 Heritage::visitRenameDirect
     fn visit_rename_direct(
         &mut self,
         _vbank: &mut VarnodeBank,
@@ -1055,40 +1091,47 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:219 Heritage::getPass
     pub fn get_pass(&self) -> i32 {
         self.pass
     }
 
+    // Ghidra: heritage.cc:2793 Heritage::numHeritagePasses
     /// Get the number of heritage passes performed for a space.
     /// Faithful to Heritage::numHeritagePasses (heritage.cc:2793).
     pub fn num_heritage_passes(&self, _space: AddressSpace) -> i32 {
         self.pass
     }
 
+    // Ghidra: heritage.cc:2843 Heritage::deadRemovalAllowed
     /// Check if dead code removal is allowed for a space.
     /// Faithful to Heritage::deadRemovalAllowed (heritage.cc:2843).
     pub fn dead_removal_allowed(&self, _space: AddressSpace) -> bool {
         true // Rugra allows dead code removal by default
     }
 
+    // Ghidra: heritage.cc:2829 Heritage::setDeadCodeDelay
     /// Set dead code delay for a space.
     /// Faithful to Heritage::setDeadCodeDelay (heritage.cc:2829).
     pub fn set_dead_code_delay(&mut self, _space: AddressSpace, _delay: i32) {
         // Rugra doesn't track per-space dead code delay yet
     }
 
+    // Ghidra: heritage.cc:2817 Heritage::getDeadCodeDelay
     /// Get dead code delay for a space.
     /// Faithful to Heritage::getDeadCodeDelay (heritage.cc:2817).
     pub fn get_dead_code_delay(&self, _space: AddressSpace) -> i32 {
         2 // Default delay
     }
 
+    // Ghidra: heritage.cc:2805 Heritage::seenDeadCode
     /// Mark that dead code was seen for a space.
     /// Faithful to Heritage::seenDeadCode (heritage.cc:2805).
     pub fn seen_dead_code(&mut self, _space: AddressSpace) {
         // Rugra doesn't track per-space dead code seen flag
     }
 
+    // Ghidra: heritage.cc:2869 Heritage::clear
     pub fn clear(&mut self) {
         self.globaldisjoint.clear();
         self.load_guard.clear();
@@ -1096,6 +1139,7 @@ impl Heritage {
         self.load_copy_ops.clear();
     }
 
+    // Ghidra: heritage.cc:2776 Heritage::getStoreGuard
     /// Find the STORE guard matching `op`. Faithful to
     /// `Heritage::getStoreGuard` (heritage.hh:338). Linear scan of store_guard.
     pub fn get_store_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
@@ -1105,6 +1149,7 @@ impl Heritage {
         })
     }
 
+    // Ghidra: heritage.cc:219 Heritage::getLoadGuard
     /// Find the LOAD guard matching `op`. Faithful to
     /// `Heritage::getLoadGuard` (heritage.hh:337).
     pub fn get_load_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
@@ -1115,6 +1160,7 @@ impl Heritage {
     }
 }
 
+// Ghidra: heritage.cc:219 Heritage::storeGuardPointerBase
 /// Compute the `pointerBase` (stack-pointer base offset) recorded for a STORE
 /// guard, mirroring the `StackNode.offset` that Ghidra's
 /// `discoverIndexedStackPointers` threads into `generateStoreGuard`
@@ -1138,6 +1184,7 @@ fn store_guard_pointer_base(
     trace_const_stack_offset(&ptr)
 }
 
+// Ghidra: heritage.cc:219 Heritage::loadGuardPointerBase
 /// Compute the `pointerBase` recorded for a LOAD guard. The LOAD pointer is
 /// `in[1]`; see `store_guard_pointer_base` for the tracing strategy.
 fn load_guard_pointer_base(
@@ -1153,6 +1200,7 @@ fn load_guard_pointer_base(
     trace_const_stack_offset(&ptr)
 }
 
+// Ghidra: heritage.cc:219 Heritage::traceConstStackOffset
 /// Follow INT_ADD(const)/INT_SUB(const)/COPY chains backward from a pointer
 /// varnode and accumulate the constant offset added to the stack pointer.
 /// Returns 0 if the offset cannot be resolved to a single constant (the

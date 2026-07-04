@@ -62,21 +62,25 @@ pub struct RangeHint {
 }
 
 impl RangeHint {
+    // Ghidra: varmap.hh:90 RangeHint::new
     pub fn new(start: u64, size: i32, sstart: i64, dtype: Option<Arc<Datatype>>,
                flags: u32, range_type: RangeType, high_ind: i32) -> Self {
         Self { start, size, sstart, dtype, flags, range_type, high_ind }
     }
 
+    // Ghidra: varmap.hh:90 RangeHint::isTypeLock
     pub fn is_type_lock(&self) -> bool {
         self.flags & range_flags::TYPE_LOCK != 0
     }
 
+    // Ghidra: varmap.hh:90 RangeHint::isCopyConstant
     /// Whether this is a constant-absorbable range (copy_constant flag).
     /// Faithful to Ghidra's `RangeHint::copy_constant` flag semantics.
     fn is_copy_constant(&self) -> bool {
         self.flags & range_flags::COPY_CONSTANT != 0
     }
 
+    // Ghidra: varmap.cc:30 RangeHint::isConstAbsorbable
     /// This is assumed to be open. If this is a primitive integer or float, and
     /// if the other range is just a constant being COPYed, return true, even if
     /// the constant is bigger. Corresponds to `RangeHint::isConstAbsorbable`
@@ -126,6 +130,7 @@ impl RangeHint {
         true
     }
 
+    // Ghidra: varmap.cc:62 RangeHint::reconcile
     /// Can the given intersecting RangeHint coexist with this at their given
     /// offsets? Faithful to `RangeHint::reconcile` (varmap.cc:62).
     pub fn reconcile(&self, b_in: &RangeHint) -> bool {
@@ -197,6 +202,7 @@ impl RangeHint {
             || b_meta == TypeMetatype::Uint
     }
 
+    // Ghidra: varmap.cc:109 RangeHint::contain
     /// Return true if this or the given range contains the other. Assumes this
     /// starts at least as early as b and that they intersect.
     /// Faithful to `RangeHint::contain` (varmap.cc:109).
@@ -208,6 +214,7 @@ impl RangeHint {
         (b.sstart + b.size as i64 - 1) <= (self.sstart + self.size as i64 - 1)
     }
 
+    // Ghidra: varmap.cc:126 RangeHint::preferred
     /// Is this range's data-type preferred over the other?
     /// Faithful to `RangeHint::preferred` (varmap.cc:126).
     pub fn preferred(&self, b: &RangeHint, reconcile: bool) -> bool {
@@ -252,6 +259,7 @@ impl RangeHint {
         }
     }
 
+    // Ghidra: varmap.cc:217 RangeHint::absorb
     /// Absorb details of the other RangeHint into this, except the data-type.
     /// Faithful to `RangeHint::absorb` (varmap.cc:217).
     pub fn absorb(&mut self, b: &RangeHint) {
@@ -298,6 +306,7 @@ impl RangeHint {
         }
     }
 
+    // Ghidra: varmap.hh:90 RangeHint::mergeWith
     /// Given that this and the other RangeHint intersect, redefine this so that
     /// it becomes the union of the two. Faithful to `RangeHint::merge`
     /// (varmap.cc:259). Returns true if there was a reconcilable overlap.
@@ -367,6 +376,7 @@ impl RangeHint {
         false
     }
 
+    // Ghidra: varmap.cc:321 RangeHint::compare
     /// Compare (signed) offset, size, RangeType, flags, high index — in that
     /// order. Datatype is NOT compared. Faithful to `RangeHint::compare`
     /// (varmap.cc:321).
@@ -390,6 +400,7 @@ impl RangeHint {
         std::cmp::Ordering::Equal
     }
 
+    // Ghidra: varmap.cc:170 RangeHint::attemptJoin
     /// If this is an array and the following RangeHint lines up, absorb it.
     /// Faithful to `RangeHint::attemptJoin` (varmap.cc:170). Returns true if b
     /// was absorbed into this.
@@ -512,6 +523,7 @@ impl AliasChecker {
     /// Ghidra initialises `localExtreme` from `space->getHighest()`.
     const LOCAL_EXTREME: u64 = u64::MAX;
 
+    // Ghidra: varmap.hh:137 AliasChecker::new
     pub fn new(direction: i32) -> Self {
         Self {
             aliases: Vec::new(),
@@ -523,6 +535,7 @@ impl AliasChecker {
         }
     }
 
+    // Ghidra: varmap.cc:633 AliasChecker::deriveBoundaries
     /// Configure local/parameter boundaries from a function prototype.
     /// Corresponds to `AliasChecker::deriveBoundaries` (varmap.cc ~590).
     /// For a negative-growing stack the locals occupy offsets below
@@ -531,6 +544,7 @@ impl AliasChecker {
         self.local_boundary = local_boundary;
     }
 
+    // Ghidra: varmap.cc:660 AliasChecker::gatherInternal
     /// If there is a stack (spacebase) pointer, find its input Varnode, and look
     /// for additive uses of it. Then calculate the offsets that start an aliased
     /// region. Faithful to `AliasChecker::gatherInternal` (varmap.cc:660).
@@ -575,6 +589,7 @@ impl AliasChecker {
         self.sort_aliases();
     }
 
+    // Ghidra: varmap.cc:741 AliasChecker::gatherAdditiveBase
     /// Gather result Varnodes for all sums that `startvn` is involved in.
     /// Faithful to `AliasChecker::gatherAdditiveBase` (varmap.cc:741).
     ///
@@ -689,10 +704,12 @@ impl AliasChecker {
         // Ghidra clears marks here; our HashSet is dropped at scope end.
     }
 
+    // Ghidra: varmap.hh:137 AliasChecker::sortAliases
     fn sort_aliases(&mut self) {
         self.aliases.sort();
     }
 
+    // Ghidra: varmap.cc:711 AliasChecker::hasLocalAlias
     /// Rough analysis of whether `vn` might be aliased by another pointer.
     /// Faithful to `AliasChecker::hasLocalAlias` (varmap.cc:711).
     pub fn has_local_alias(&self, vn: &Varnode) -> bool {
@@ -708,15 +725,18 @@ impl AliasChecker {
         vn.get_offset() >= self.alias_boundary
     }
 
+    // Ghidra: varmap.hh:137 AliasChecker::getAliases
     pub fn get_aliases(&self) -> &[u64] {
         &self.aliases
     }
 
+    // Ghidra: varmap.hh:137 AliasChecker::getAddBase
     pub fn get_add_base(&self) -> &[AddBase] {
         &self.add_base
     }
 }
 
+// Ghidra: varmap.hh:137 AliasChecker::findSpacebaseInput
 /// Find the stack-pointer input Varnode for a function (the spacebase).
 /// Corresponds to `Funcdata::findSpacebaseInput`. Rugra models RSP as the
 /// Register-space, offset 0x20, size-8 input varnode.
@@ -743,6 +763,7 @@ const RSP_SPACE: crate::space::AddressSpace = crate::space::AddressSpace::Regist
 const RSP_OFFSET: u64 = 0x20;
 const RSP_SIZE: usize = 8;
 
+// Ghidra: varmap.hh:137 AliasChecker::resolveRspOffset
 /// Resolve whether an address varnode is RSP-derived, returning the raw stack
 /// offset (relative to RSP) and whether the pointer was writable.
 ///
@@ -761,6 +782,7 @@ fn resolve_rsp_offset(addr: &Arc<RwLock<Varnode>>) -> Option<(u64, bool)> {
     resolve_rsp_offset_signed(addr).map(|(off, w)| (off as u64, w))
 }
 
+// Ghidra: varmap.hh:137 AliasChecker::resolveRspOffsetViaBank
 /// Like `resolve_rsp_offset`, but when the addr varnode's def chain is broken
 /// (def=None — inject creates fresh def-less input varnodes), fall back to a
 /// spatial lookup: find a def-carrying varnode at the same (space, offset) and
@@ -794,6 +816,7 @@ fn resolve_rsp_offset_via_bank(
     None
 }
 
+// Ghidra: varmap.hh:137 AliasChecker::resolveRspOffsetSigned
 /// Signed-offset variant: returns the offset relative to RSP as i64, then the
 /// caller masks to u64. This lets additive chains compose correctly.
 fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)> {
@@ -856,6 +879,7 @@ fn resolve_rsp_offset_signed(addr: &Arc<RwLock<Varnode>>) -> Option<(i64, bool)>
     }
 }
 
+// Ghidra: varmap.hh:137 AliasChecker::makeIntType
 /// Build a small unsigned int Datatype of the given size for RangeHint typing.
 /// Ghidra uses the TypeFactory to getBase(size, TYPE_UNKNOWN); we approximate
 /// with an Unknown-metatype base type so the size is preserved and varmap can
@@ -868,6 +892,7 @@ fn make_int_type(size: usize) -> Arc<Datatype> {
     )))
 }
 
+// Ghidra: varmap.cc:817 AliasChecker::gatherOffset
 /// If the given Varnode is a sum result, return the constant portion of the sum.
 /// Faithful to `AliasChecker::gatherOffset` (varmap.cc:817).
 ///
@@ -956,6 +981,7 @@ pub struct MapState {
 }
 
 impl MapState {
+    // Ghidra: varmap.cc:864 MapState::new
     pub fn new(local_start: u64, local_end: u64) -> Self {
         Self {
             maplist: Vec::new(),
@@ -966,6 +992,7 @@ impl MapState {
         }
     }
 
+    // Ghidra: varmap.cc:864 MapState::newWithDefault
     /// Construct with a default type used when a gathered varnode has no type.
     pub fn new_with_default(local_start: u64, local_end: u64,
                             default_type: Arc<Datatype>) -> Self {
@@ -978,6 +1005,7 @@ impl MapState {
         }
     }
 
+    // Ghidra: varmap.cc:896 MapState::addRange
     /// Add a range hint. Faithful to `MapState::addRange` (varmap.cc:896).
     /// `high_ind` is the biggest guaranteed index for open-range hints
     /// (-1 if not an array reference).
@@ -992,17 +1020,20 @@ impl MapState {
         self.maplist.push(RangeHint::new(start, size, sstart, dtype, flags, rt, high_ind));
     }
 
+    // Ghidra: varmap.cc:926 MapState::addFixedType
     /// Add a fixed type reference from a varnode.
     /// Corresponds to MapState::addFixedType (varmap.cc:926).
     pub fn add_fixed_type(&mut self, start: u64, dtype: Option<Arc<Datatype>>, flags: u32) {
         self.add_range(start, dtype, flags, RangeType::Fixed, -1);
     }
 
+    // Ghidra: varmap.cc:864 MapState::hintCount
     /// Number of RangeHints collected so far (diagnostic).
     pub fn hint_count(&self) -> usize {
         self.maplist.len()
     }
 
+    // Ghidra: varmap.cc:1088 MapState::isReadActive
     /// Filter out INDIRECT/MULTIEQUAL/PIECE ops that just copy between the same
     /// storage location. If another op actively reads `vn`, return true.
     /// Faithful to `MapState::isReadActive` (varmap.cc:1088).
@@ -1034,6 +1065,7 @@ impl MapState {
         false
     }
 
+    // Ghidra: varmap.cc:1124 MapState::gatherVarnodes
     /// Gather varnodes from the function's vbank.
     /// Faithful to `MapState::gatherVarnodes` (varmap.cc:1124).
     pub fn gather_varnodes(&mut self, fd: &crate::funcdata::Funcdata) {
@@ -1115,6 +1147,7 @@ impl MapState {
         }
     }
 
+    // Ghidra: varmap.cc:864 MapState::gatherSpacebase
     /// Gather stack-space references by promoting the stack spacebase.
     ///
     /// Rugra's x86 lift does not produce Stack-space varnodes: RSP-relative
@@ -1163,6 +1196,7 @@ impl MapState {
         }
     }
 
+    // Ghidra: varmap.cc:1211 MapState::gatherOpen
     /// Gather open (pointer-referenced) ranges. Faithful to
     /// `MapState::gatherOpen` (varmap.cc:1211): for each additive base root,
     /// if its type is a pointer, create an open RangeHint sized to the
@@ -1200,6 +1234,7 @@ impl MapState {
         // base trace above already captures the dominant alias sources.
     }
 
+    // Ghidra: varmap.cc:1063 MapState::initialize
     /// Initialize for restructuring: sort and add endpoint.
     /// Corresponds to MapState::initialize (varmap.cc:1063).
     pub fn initialize(&mut self) -> bool {
@@ -1215,26 +1250,31 @@ impl MapState {
         true
     }
 
+    // Ghidra: varmap.cc:864 MapState::nextHint
     /// Get next range hint (for restructuring iteration).
     pub fn next_hint(&self) -> Option<&RangeHint> {
         self.maplist.get(self.iter_pos)
     }
 
+    // Ghidra: varmap.cc:864 MapState::getNext
     /// Advance iterator and return true if there's another hint.
     pub fn get_next(&mut self) -> bool {
         self.iter_pos += 1;
         self.iter_pos < self.maplist.len()
     }
 
+    // Ghidra: varmap.cc:864 MapState::resetIter
     /// Reset iterator.
     pub fn reset_iter(&mut self) {
         self.iter_pos = 0;
     }
 
+    // Ghidra: varmap.cc:864 MapState::isEmpty
     pub fn is_empty(&self) -> bool {
         self.maplist.is_empty()
     }
 
+    // Ghidra: varmap.cc:864 MapState::len
     pub fn len(&self) -> usize {
         self.maplist.len()
     }
@@ -1271,6 +1311,7 @@ pub struct ScopeLocal {
 }
 
 impl ScopeLocal {
+    // Ghidra: varmap.cc:341 ScopeLocal::new
     pub fn new() -> Self {
         Self {
             symbols: Vec::new(),
@@ -1279,6 +1320,7 @@ impl ScopeLocal {
         }
     }
 
+    // Ghidra: varmap.cc:510 ScopeLocal::markNotMapped
     /// Mark a specific stack address range as not mapped. Faithful to
     /// `ScopeLocal::markNotMapped` (varmap.cc:510-546). Removes any symbols
     /// overlapping the given range. Used by ActionRestrictLocal to prevent
@@ -1295,6 +1337,7 @@ impl ScopeLocal {
         });
     }
 
+    // Ghidra: varmap.cc:341 ScopeLocal::hasOverlap
     /// Check if a stack address range overlaps any symbol. Used by
     /// ActionRestrictLocal to verify storage locations.
     pub fn has_overlap(&self, offset: u64, size: i32) -> bool {
@@ -1305,6 +1348,7 @@ impl ScopeLocal {
         })
     }
 
+    // Ghidra: varmap.cc:341 ScopeLocal::queryByAddr
     /// Find the LocalSymbol whose storage range contains `(offset, offset+size)`.
     /// Faithful to `ScopeLocal::queryByAddr` / `Scope::findContainer`.
     /// Returns the symbol and the offset within the symbol (for partial reads).
@@ -1319,6 +1363,7 @@ impl ScopeLocal {
         None
     }
 
+    // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode
     /// Restructure the stack frame from varnodes.
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
     /// (varmap.cc:1256).
@@ -1359,6 +1404,7 @@ impl ScopeLocal {
         self.fake_input_symbols(fd);
     }
 
+    // Ghidra: varmap.cc:1294 ScopeLocal::restructure
     /// Merge RangeHints into a definitive set of Symbols.
     /// Corresponds to ScopeLocal::restructure (varmap.cc:1294).
     fn restructure(&mut self, state: &mut MapState) -> bool {
@@ -1403,6 +1449,7 @@ impl ScopeLocal {
         overlap_problems
     }
 
+    // Ghidra: varmap.cc:587 ScopeLocal::adjustFit
     /// Shrink the RangeHint as necessary so it fits in the mapped region and
     /// does not overlap an existing Symbol. Faithful to
     /// `ScopeLocal::adjustFit` (varmap.cc:587). Returns true if a valid
@@ -1430,6 +1477,7 @@ impl ScopeLocal {
         true
     }
 
+    // Ghidra: varmap.cc:617 ScopeLocal::createEntry
     /// Create a symbol entry from a RangeHint.
     /// Corresponds to ScopeLocal::createEntry (varmap.cc:617).
     fn create_entry(&mut self, hint: &RangeHint) {
@@ -1448,6 +1496,7 @@ impl ScopeLocal {
         });
     }
 
+    // Ghidra: varmap.cc:548 ScopeLocal::buildVariableName
     /// Build a variable name from stack offset. Faithful to
     /// `ScopeLocal::buildVariableName` (varmap.cc:548).
     ///
@@ -1476,6 +1525,7 @@ impl ScopeLocal {
         name
     }
 
+    // Ghidra: varmap.cc:1332 ScopeLocal::markUnaliased
     /// Mark symbols as unaliased based on alias starting offsets.
     /// Faithful to `ScopeLocal::markUnaliased` (varmap.cc:1332).
     ///
@@ -1513,6 +1563,7 @@ impl ScopeLocal {
         }
     }
 
+    // Ghidra: varmap.cc:1392 ScopeLocal::fakeInputSymbols
     /// Create fake input symbols for stack-space input Varnodes that are not
     /// part of the formal prototype. Faithful to
     /// `ScopeLocal::fakeInputSymbols` (varmap.cc:1392).
@@ -1573,6 +1624,7 @@ impl ScopeLocal {
         }
     }
 
+    // Ghidra: varmap.cc:341 ScopeLocal::findSymbol
     /// Look up a symbol by stack offset.
     pub fn find_symbol(&self, offset: u64) -> Option<&LocalSymbol> {
         for sym in &self.symbols {

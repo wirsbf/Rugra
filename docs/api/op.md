@@ -862,3 +862,4 @@ PcodeOpRaw
 
 ### 2026-07-04：新增 PcodeOp::slot_of_input
 - `slot_of_input(vn)`（对齐 op.hh:166 PcodeOp::getSlot）：线性搜索 inrefs 返回 vn 的槽位。供 snip_reads 使用。
+<!-- annotation-pass: 2026-07-04 -->

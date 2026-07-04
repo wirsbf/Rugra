@@ -35,6 +35,7 @@ pub const PCODE_COMPARE_INPUT_COUNT_MISMATCH: i32 = 3;
 pub const PCODE_COMPARE_INPUT_MISMATCH: i32 = 4;
 pub const PCODE_COMPARE_MISSING_RUGRA_OP: i32 = 5;
 
+// RUGRA-GLUE: map_ghidra_opcode (no Ghidra counterpart found)
 /// Map Ghidra OpCode integers to Rugra PcodeOp enum
 /// Values are based on Ghidra's opcodes.hh
 pub fn map_ghidra_opcode(opcode: i32) -> Option<OpCode> {
@@ -144,6 +145,7 @@ pub fn map_ghidra_opcode(opcode: i32) -> Option<OpCode> {
     }
 }
 
+// RUGRA-GLUE: to_ghidra_opcode (no Ghidra counterpart found)
 /// Convert a Rugra OpCode enum to the corresponding Ghidra integer opcode value.
 ///
 /// This is the inverse of `map_ghidra_opcode`. It is needed by the verification
@@ -385,6 +387,7 @@ pub extern "C" fn rugra_version() -> *const c_char {
     VERSION_C.as_ptr() as *const c_char
 }
 
+// RUGRA-GLUE: set_current_program (no Ghidra counterpart found)
 /// Set the current program for comparison
 /// This is called by Rugra before starting the comparison with Ghidra
 pub fn set_current_program(program: Funcdata) {
@@ -484,6 +487,7 @@ pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: u
     // 100% parity in decompilation output for the 'curl' sample.
 }
 
+// RUGRA-GLUE: space_to_ffi_id (no Ghidra counterpart found)
 /// Convert Rugra AddressSpace to the FFI convention space_id.
 ///
 /// The FFI convention (used by VarnodeFFI) uses:

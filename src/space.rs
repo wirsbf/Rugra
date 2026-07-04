@@ -66,6 +66,7 @@ pub enum AddressSpace {
 }
 
 impl AddressSpace {
+    // RUGRA-GLUE: space_id (no Ghidra counterpart found)
     /// Get the space ID
     pub fn space_id(&self) -> SpaceId {
         match self {
@@ -81,6 +82,7 @@ impl AddressSpace {
         }
     }
 
+    // RUGRA-GLUE: from_id (no Ghidra counterpart found)
     /// Create from space ID
     pub fn from_id(id: SpaceId) -> Self {
         match id {
@@ -96,26 +98,31 @@ impl AddressSpace {
         }
     }
 
+    // RUGRA-GLUE: is_register (no Ghidra counterpart found)
     /// Check if this is a register space
     pub fn is_register(&self) -> bool {
         matches!(self, AddressSpace::Register)
     }
 
+    // RUGRA-GLUE: is_unique (no Ghidra counterpart found)
     /// Check if this is a temporary/unique space
     pub fn is_unique(&self) -> bool {
         matches!(self, AddressSpace::Unique)
     }
 
+    // RUGRA-GLUE: is_const (no Ghidra counterpart found)
     /// Check if this is a constant space
     pub fn is_const(&self) -> bool {
         matches!(self, AddressSpace::Const)
     }
 
+    // RUGRA-GLUE: is_ram (no Ghidra counterpart found)
     /// Check if this is RAM space
     pub fn is_ram(&self) -> bool {
         matches!(self, AddressSpace::Ram)
     }
 
+    // RUGRA-GLUE: is_stack (no Ghidra counterpart found)
     /// Check if this is stack space
     pub fn is_stack(&self) -> bool {
         matches!(self, AddressSpace::Stack)
@@ -127,12 +134,14 @@ impl AddressSpace {
         matches!(self, AddressSpace::Iop)
     }
 
+    // RUGRA-GLUE: is_big_endian (no Ghidra counterpart found)
     /// Check if this is a big-endian space
     pub fn is_big_endian(&self) -> bool {
         // Default to false, can be overridden per architecture
         false
     }
 
+    // RUGRA-GLUE: word_size (no Ghidra counterpart found)
     /// Get the word size for this space (in bytes)
     pub fn word_size(&self) -> usize {
         match self {
@@ -143,12 +152,14 @@ impl AddressSpace {
         }
     }
 
+    // RUGRA-GLUE: addr_size (no Ghidra counterpart found)
     /// Get the address size for this space (in bytes)
     pub fn addr_size(&self) -> usize {
         // Default to 8 bytes (64-bit), can be configured per architecture
         8
     }
 
+    // RUGRA-GLUE: name (no Ghidra counterpart found)
     /// Get the name of this space
     pub fn name(&self) -> &'static str {
         match self {
@@ -166,6 +177,7 @@ impl AddressSpace {
 }
 
 impl fmt::Display for AddressSpace {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AddressSpace::Ram => write!(f, "ram"),
@@ -191,6 +203,7 @@ pub struct ConstantSpace {
 }
 
 impl ConstantSpace {
+    // Ghidra: space.cc:356 ConstantSpace::new
     /// Create a new constant space
     pub fn new() -> Self {
         ConstantSpace {
@@ -198,23 +211,27 @@ impl ConstantSpace {
         }
     }
 
+    // Ghidra: space.cc:356 ConstantSpace::space
     /// Get the space type
     pub fn space(&self) -> AddressSpace {
         AddressSpace::Const
     }
 
+    // Ghidra: space.cc:380 ConstantSpace::decode
     /// Decode from string
     pub fn decode(s: &str) -> Option<Self> {
         let _id = s.parse::<SpaceId>().ok()?;
         Some(ConstantSpace::new())
     }
 
+    // Ghidra: space.cc:364 ConstantSpace::overlapJoin
     /// Check if this overlaps with a join space
     pub fn overlap_join(&self, _offset: u64, _size: usize) -> bool {
         // Constant space doesn't overlap with joins
         false
     }
 
+    // Ghidra: space.cc:372 ConstantSpace::printRaw
     /// Print raw representation
     pub fn print_raw(&self) -> String {
         format!("const_space[{}]", self.id)
@@ -222,6 +239,7 @@ impl ConstantSpace {
 }
 
 impl Default for ConstantSpace {
+    // Ghidra: space.cc:356 ConstantSpace::default
     fn default() -> Self {
         Self::new()
     }
@@ -239,6 +257,7 @@ pub struct UniqueSpace {
 }
 
 impl UniqueSpace {
+    // Ghidra: space.cc:427 UniqueSpace::new
     /// Create a new unique space
     pub fn new() -> Self {
         UniqueSpace {
@@ -247,11 +266,13 @@ impl UniqueSpace {
         }
     }
 
+    // Ghidra: space.cc:427 UniqueSpace::space
     /// Get the space type
     pub fn space(&self) -> AddressSpace {
         AddressSpace::Unique
     }
 
+    // Ghidra: space.cc:427 UniqueSpace::allocate
     /// Allocate a new unique offset
     pub fn allocate(&mut self, size: usize) -> u64 {
         let offset = self.next_offset;
@@ -259,6 +280,7 @@ impl UniqueSpace {
         offset
     }
 
+    // Ghidra: space.cc:427 UniqueSpace::reset
     /// Reset the allocator
     pub fn reset(&mut self) {
         self.next_offset = 0;
@@ -266,6 +288,7 @@ impl UniqueSpace {
 }
 
 impl Default for UniqueSpace {
+    // Ghidra: space.cc:427 UniqueSpace::default
     fn default() -> Self {
         Self::new()
     }
@@ -283,16 +306,19 @@ pub struct OtherSpace {
 }
 
 impl OtherSpace {
+    // Ghidra: space.cc:396 OtherSpace::new
     /// Create a new other space
     pub fn new(id: SpaceId, name: String) -> Self {
         OtherSpace { id, name }
     }
 
+    // Ghidra: space.cc:396 OtherSpace::space
     /// Get the space type
     pub fn space(&self) -> AddressSpace {
         AddressSpace::Other(self.id)
     }
 
+    // Ghidra: space.cc:410 OtherSpace::printRaw
     /// Print raw representation
     pub fn print_raw(&self) -> String {
         format!("other_space[{}]:'{}'", self.id, self.name)
@@ -322,6 +348,7 @@ pub struct JoinPiece {
 }
 
 impl JoinSpace {
+    // Ghidra: space.cc:446 JoinSpace::new
     /// Create a new join space
     pub fn new(pieces: Vec<JoinPiece>) -> Self {
         JoinSpace {
@@ -330,21 +357,25 @@ impl JoinSpace {
         }
     }
 
+    // Ghidra: space.cc:446 JoinSpace::space
     /// Get the space type
     pub fn space(&self) -> AddressSpace {
         AddressSpace::Join
     }
 
+    // Ghidra: space.cc:446 JoinSpace::size
     /// Get the total size of the join
     pub fn size(&self) -> usize {
         self.pieces.iter().map(|p| p.size).sum()
     }
 
+    // Ghidra: space.cc:446 JoinSpace::numPieces
     /// Get the number of pieces
     pub fn num_pieces(&self) -> usize {
         self.pieces.len()
     }
 
+    // Ghidra: space.cc:646 JoinSpace::decode
     /// Decode from string format
     pub fn decode(s: &str) -> Option<Self> {
         // Format: "piece1_space:offset:size,piece2_space:offset:size,..."
@@ -366,6 +397,7 @@ impl JoinSpace {
         Some(JoinSpace::new(pieces))
     }
 
+    // Ghidra: space.cc:539 JoinSpace::decodeAttributes
     /// Decode from attributes (XML-style)
     pub fn decode_attributes(attrs: &[(&str, &str)]) -> Option<Self> {
         let mut pieces = Vec::new();
@@ -394,6 +426,7 @@ impl JoinSpace {
         }
     }
 
+    // Ghidra: space.cc:502 JoinSpace::encodeAttributes
     /// Encode to attributes (XML-style)
     pub fn encode_attributes(&self) -> Vec<(String, String)> {
         self.pieces
@@ -408,6 +441,7 @@ impl JoinSpace {
             .collect()
     }
 
+    // Ghidra: space.cc:454 JoinSpace::overlapJoin
     /// Check if this overlaps with another join
     pub fn overlap_join(&self, offset: u64, size: usize) -> bool {
         let end = offset + size as u64;
@@ -415,6 +449,7 @@ impl JoinSpace {
         offset < self_size && end > 0
     }
 
+    // Ghidra: space.cc:590 JoinSpace::printRaw
     /// Print raw representation
     pub fn print_raw(&self) -> String {
         let pieces_str: Vec<String> = self
@@ -425,6 +460,7 @@ impl JoinSpace {
         format!("join_space[{}]", pieces_str.join(","))
     }
 
+    // Ghidra: space.cc:611 JoinSpace::read
     /// Read value from the joined pieces
     pub fn read(&self, _offset: u64, _size: usize) -> Vec<u8> {
         // Placeholder: would need actual memory context to read
@@ -446,6 +482,7 @@ pub struct OverlaySpace {
 }
 
 impl OverlaySpace {
+    // Ghidra: space.cc:654 OverlaySpace::new
     /// Create a new overlay space
     pub fn new(id: SpaceId, base_space: AddressSpace, name: String) -> Self {
         OverlaySpace {
@@ -455,16 +492,19 @@ impl OverlaySpace {
         }
     }
 
+    // Ghidra: space.cc:654 OverlaySpace::space
     /// Get the space type
     pub fn space(&self) -> AddressSpace {
         AddressSpace::Overlay
     }
 
+    // Ghidra: space.cc:654 OverlaySpace::base
     /// Get the base space
     pub fn base(&self) -> AddressSpace {
         self.base_space
     }
 
+    // Ghidra: space.cc:661 OverlaySpace::decode
     /// Decode from string format "id:base_space_id:name"
     pub fn decode(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();

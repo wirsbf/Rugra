@@ -154,3 +154,4 @@ FuncCallSpecs 新增 `proto_model: Option<ProtoModel>` 字段 + 方法：
 ### 2026-07-01：bytes_consumed tracking
 FuncProto: +return_bytes_consumed 字段 + get/set（fspec.hh:1367/1429）。
 FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870）。
+<!-- annotation-pass: 2026-07-04 -->

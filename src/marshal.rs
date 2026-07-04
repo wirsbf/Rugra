@@ -44,6 +44,7 @@ impl AttributeId {
         }
     }
 
+    // Ghidra: marshal.cc:45 AttributeId::new
     /// Construct at runtime.
     pub fn new(nm: &str, id: u32) -> Self {
         Self {
@@ -52,11 +53,13 @@ impl AttributeId {
         }
     }
 
+    // Ghidra: marshal.cc:45 AttributeId::getName
     /// Get the attribute's name.
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: marshal.cc:45 AttributeId::getId
     /// Get the attribute's id.
     pub fn get_id(&self) -> u32 {
         self.id
@@ -64,6 +67,7 @@ impl AttributeId {
 }
 
 impl PartialEq for AttributeId {
+    // Ghidra: marshal.cc:45 AttributeId::eq
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
@@ -80,6 +84,7 @@ pub struct ElementId {
 }
 
 impl ElementId {
+    // Ghidra: marshal.cc:87 ElementId::new
     /// Construct given a name and id.
     pub fn new(nm: &str, id: u32) -> Self {
         Self {
@@ -88,11 +93,13 @@ impl ElementId {
         }
     }
 
+    // Ghidra: marshal.cc:87 ElementId::getName
     /// Get the element's name.
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: marshal.cc:87 ElementId::getId
     /// Get the element's id.
     pub fn get_id(&self) -> u32 {
         self.id
@@ -100,6 +107,7 @@ impl ElementId {
 }
 
 impl PartialEq for ElementId {
+    // Ghidra: marshal.cc:87 ElementId::eq
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
@@ -119,6 +127,7 @@ pub struct IdRegistry {
 }
 
 impl IdRegistry {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create an empty registry with reserved ids 0 (UNKNOWN) and 1 (CONTENT).
     pub fn new() -> Self {
         let mut r = Self {
@@ -136,6 +145,7 @@ impl IdRegistry {
         r
     }
 
+    // RUGRA-GLUE: register_attribute (no Ghidra counterpart found)
     /// Register an attribute name, returning its id. If already registered,
     /// returns the existing id. Faithful to `AttributeId::find`.
     pub fn register_attribute(&mut self, nm: &str) -> u32 {
@@ -149,6 +159,7 @@ impl IdRegistry {
         id
     }
 
+    // RUGRA-GLUE: register_attribute_with_id (no Ghidra counterpart found)
     /// Register an attribute with an explicit id (for known marshaling ids).
     pub fn register_attribute_with_id(&mut self, nm: &str, id: u32) {
         self.attr_by_name.insert(nm.to_string(), id);
@@ -158,16 +169,19 @@ impl IdRegistry {
         }
     }
 
+    // RUGRA-GLUE: find_attribute (no Ghidra counterpart found)
     /// Look up an attribute id by name. Returns ATTRIB_UNKNOWN if not found.
     pub fn find_attribute(&self, nm: &str) -> u32 {
         self.attr_by_name.get(nm).copied().unwrap_or(ATTRIB_UNKNOWN)
     }
 
+    // RUGRA-GLUE: attribute_name (no Ghidra counterpart found)
     /// Look up an attribute name by id.
     pub fn attribute_name(&self, id: u32) -> Option<&str> {
         self.attr_by_id.get(&id).map(|s| s.as_str())
     }
 
+    // RUGRA-GLUE: register_element (no Ghidra counterpart found)
     /// Register an element name, returning its id. Faithful to
     /// `ElementId::find`.
     pub fn register_element(&mut self, nm: &str) -> u32 {
@@ -181,6 +195,7 @@ impl IdRegistry {
         id
     }
 
+    // RUGRA-GLUE: register_element_with_id (no Ghidra counterpart found)
     /// Register an element with an explicit id.
     pub fn register_element_with_id(&mut self, nm: &str, id: u32) {
         self.elem_by_name.insert(nm.to_string(), id);
@@ -190,11 +205,13 @@ impl IdRegistry {
         }
     }
 
+    // RUGRA-GLUE: find_element (no Ghidra counterpart found)
     /// Look up an element id by name.
     pub fn find_element(&self, nm: &str) -> u32 {
         self.elem_by_name.get(nm).copied().unwrap_or(ATTRIB_UNKNOWN)
     }
 
+    // RUGRA-GLUE: element_name (no Ghidra counterpart found)
     /// Look up an element name by id.
     pub fn element_name(&self, id: u32) -> Option<&str> {
         self.elem_by_id.get(&id).map(|s| s.as_str())
@@ -219,6 +236,7 @@ pub struct Element {
 }
 
 impl Element {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct an empty element.
     pub fn new() -> Self {
         Self {
@@ -230,42 +248,50 @@ impl Element {
         }
     }
 
+    // RUGRA-GLUE: set_name (no Ghidra counterpart found)
     /// Set the local name of the element. Faithful to `setName`.
     pub fn set_name(&mut self, nm: &str) {
         self.name = nm.to_string();
     }
 
+    // RUGRA-GLUE: add_content (no Ghidra counterpart found)
     /// Append character content. Faithful to `addContent`.
     pub fn add_content(&mut self, s: &str) {
         self.content.push_str(s);
     }
 
+    // RUGRA-GLUE: add_child (no Ghidra counterpart found)
     /// Add a child element. Faithful to `addChild`.
     pub fn add_child(&mut self, child: Arc<RwLock<Element>>) {
         self.children.push(child);
     }
 
+    // RUGRA-GLUE: add_attribute (no Ghidra counterpart found)
     /// Add a name/value attribute pair. Faithful to `addAttribute`.
     pub fn add_attribute(&mut self, nm: &str, vl: &str) {
         self.attr_names.push(nm.to_string());
         self.attr_values.push(vl.to_string());
     }
 
+    // RUGRA-GLUE: get_name (no Ghidra counterpart found)
     /// Get the local name. Faithful to `getName`.
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // RUGRA-GLUE: get_content (no Ghidra counterpart found)
     /// Get the character content. Faithful to `getContent`.
     pub fn get_content(&self) -> &str {
         &self.content
     }
 
+    // RUGRA-GLUE: get_children (no Ghidra counterpart found)
     /// Get the child elements. Faithful to `getChildren`.
     pub fn get_children(&self) -> &[Arc<RwLock<Element>>] {
         &self.children
     }
 
+    // RUGRA-GLUE: get_attribute_value (no Ghidra counterpart found)
     /// Get an attribute value by name. Returns None if not found. Faithful to
     /// `getAttributeValue` (which throws; we return Option).
     pub fn get_attribute_value(&self, nm: &str) -> Option<&str> {
@@ -277,16 +303,19 @@ impl Element {
         None
     }
 
+    // RUGRA-GLUE: get_num_attributes (no Ghidra counterpart found)
     /// Get the number of attributes. Faithful to `getNumAttributes`.
     pub fn get_num_attributes(&self) -> usize {
         self.attr_names.len()
     }
 
+    // RUGRA-GLUE: get_attribute_name (no Ghidra counterpart found)
     /// Get the name of the i-th attribute. Faithful to `getAttributeName`.
     pub fn get_attribute_name(&self, i: usize) -> &str {
         &self.attr_names[i]
     }
 
+    // RUGRA-GLUE: get_attribute_value_at (no Ghidra counterpart found)
     /// Get the value of the i-th attribute. Faithful to `getAttributeValue(i)`.
     pub fn get_attribute_value_at(&self, i: usize) -> &str {
         &self.attr_values[i]
@@ -294,6 +323,7 @@ impl Element {
 }
 
 impl Default for Element {
+    // RUGRA-GLUE: default (no Ghidra counterpart found)
     fn default() -> Self {
         Self::new()
     }
@@ -308,16 +338,19 @@ pub struct Document {
 }
 
 impl Document {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct an empty document.
     pub fn new() -> Self {
         Self { root: None }
     }
 
+    // RUGRA-GLUE: get_root (no Ghidra counterpart found)
     /// Get the root element. Faithful to `getRoot`.
     pub fn get_root(&self) -> Option<&Arc<RwLock<Element>>> {
         self.root.as_ref()
     }
 
+    // RUGRA-GLUE: set_root (no Ghidra counterpart found)
     /// Set the root element.
     pub fn set_root(&mut self, root: Arc<RwLock<Element>>) {
         self.root = Some(root);
@@ -327,18 +360,25 @@ impl Document {
 /// A class for writing structured data to a stream. Faithful to `Encoder`
 /// (marshal.hh). This trait mirrors the virtual methods of Ghidra's Encoder.
 pub trait Encoder {
+    // RUGRA-GLUE: open_element (no Ghidra counterpart found)
     /// Open a new element with the given id.
     fn open_element(&mut self, elem_id: &ElementId);
+    // RUGRA-GLUE: close_element (no Ghidra counterpart found)
     /// Close the current element.
     fn close_element(&mut self, elem_id: &ElementId);
+    // RUGRA-GLUE: write_bool (no Ghidra counterpart found)
     /// Write a boolean attribute.
     fn write_bool(&mut self, attrib_id: &AttributeId, val: bool);
+    // RUGRA-GLUE: write_signed_integer (no Ghidra counterpart found)
     /// Write a signed integer attribute.
     fn write_signed_integer(&mut self, attrib_id: &AttributeId, val: i64);
+    // RUGRA-GLUE: write_unsigned_integer (no Ghidra counterpart found)
     /// Write an unsigned integer attribute.
     fn write_unsigned_integer(&mut self, attrib_id: &AttributeId, val: u64);
+    // RUGRA-GLUE: write_string (no Ghidra counterpart found)
     /// Write a string attribute.
     fn write_string(&mut self, attrib_id: &AttributeId, val: &str);
+    // RUGRA-GLUE: write_string_indexed (no Ghidra counterpart found)
     /// Write an indexed string attribute.
     fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str);
 }
@@ -347,59 +387,76 @@ pub trait Encoder {
 /// (marshal.hh:99). The document is traversed depth-first via `open_element`/
 /// `close_element`, with attributes read via `read_*`.
 pub trait Decoder {
+    // RUGRA-GLUE: peek_element (no Ghidra counterpart found)
     /// Peek at the next child element id without traversing in. Returns 0 if
     /// none. Faithful to `peekElement`.
     fn peek_element(&self) -> u32;
 
+    // RUGRA-GLUE: open_element (no Ghidra counterpart found)
     /// Open (traverse into) the next child element. Returns the element id.
     /// Faithful to `openElement`.
     fn open_element(&mut self) -> u32;
 
+    // RUGRA-GLUE: open_element_matching (no Ghidra counterpart found)
     /// Open the next child element, which must match the given id.
     fn open_element_matching(&mut self, elem_id: &ElementId) -> u32;
 
+    // RUGRA-GLUE: close_element (no Ghidra counterpart found)
     /// Close the current element. Faithful to `closeElement`.
     fn close_element(&mut self, id: u32);
 
+    // RUGRA-GLUE: close_element_skipping (no Ghidra counterpart found)
     /// Close the current element, skipping unread children. Faithful to
     /// `closeElementSkipping`.
     fn close_element_skipping(&mut self, id: u32);
 
+    // RUGRA-GLUE: next_attribute_id (no Ghidra counterpart found)
     /// Get the next attribute id for the current element. Returns 0 when done.
     fn next_attribute_id(&mut self) -> u32;
 
+    // RUGRA-GLUE: attribute_name (no Ghidra counterpart found)
     /// Look up the name of an attribute id. Returns None if the id is not
     /// registered. This allows decode implementations to dispatch on attribute
     /// names without holding a separate registry reference.
     fn attribute_name(&self, id: u32) -> Option<String>;
 
+    // RUGRA-GLUE: element_name (no Ghidra counterpart found)
     /// Look up the name of an element id. Returns None if not registered.
     fn element_name(&self, id: u32) -> Option<String>;
 
+    // RUGRA-GLUE: rewind_attributes (no Ghidra counterpart found)
     /// Reset attribute traversal. Faithful to `rewindAttributes`.
     fn rewind_attributes(&mut self);
 
+    // RUGRA-GLUE: read_bool (no Ghidra counterpart found)
     /// Read the current attribute as a boolean.
     fn read_bool(&mut self) -> bool;
 
+    // RUGRA-GLUE: read_bool_attr (no Ghidra counterpart found)
     /// Read a specific attribute as a boolean.
     fn read_bool_attr(&mut self, attrib_id: &AttributeId) -> bool;
 
+    // RUGRA-GLUE: read_signed_integer (no Ghidra counterpart found)
     /// Read the current attribute as a signed integer.
     fn read_signed_integer(&mut self) -> i64;
 
+    // RUGRA-GLUE: read_signed_integer_attr (no Ghidra counterpart found)
     /// Read a specific attribute as a signed integer.
     fn read_signed_integer_attr(&mut self, attrib_id: &AttributeId) -> i64;
 
+    // RUGRA-GLUE: read_unsigned_integer (no Ghidra counterpart found)
     /// Read the current attribute as an unsigned integer.
     fn read_unsigned_integer(&mut self) -> u64;
 
+    // RUGRA-GLUE: read_unsigned_integer_attr (no Ghidra counterpart found)
     /// Read a specific attribute as an unsigned integer.
     fn read_unsigned_integer_attr(&mut self, attrib_id: &AttributeId) -> u64;
 
+    // RUGRA-GLUE: read_string (no Ghidra counterpart found)
     /// Read the current attribute as a string.
     fn read_string(&mut self) -> String;
 
+    // RUGRA-GLUE: read_string_attr (no Ghidra counterpart found)
     /// Read a specific attribute as a string.
     fn read_string_attr(&mut self, attrib_id: &AttributeId) -> String;
 }
@@ -417,6 +474,7 @@ pub struct TreeEncoder {
 }
 
 impl TreeEncoder {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct given a registry.
     pub fn new(registry: Arc<RwLock<IdRegistry>>) -> Self {
         Self {
@@ -426,11 +484,13 @@ impl TreeEncoder {
         }
     }
 
+    // RUGRA-GLUE: into_document (no Ghidra counterpart found)
     /// Consume the encoder and return the built document.
     pub fn into_document(self) -> Document {
         Document { root: self.root }
     }
 
+    // RUGRA-GLUE: root (no Ghidra counterpart found)
     /// Get the root element.
     pub fn root(&self) -> Option<Arc<RwLock<Element>>> {
         self.root.clone()
@@ -438,6 +498,7 @@ impl TreeEncoder {
 }
 
 impl Encoder for TreeEncoder {
+    // RUGRA-GLUE: open_element (no Ghidra counterpart found)
     fn open_element(&mut self, elem_id: &ElementId) {
         let mut elem = Element::new();
         elem.set_name(&elem_id.name);
@@ -450,10 +511,12 @@ impl Encoder for TreeEncoder {
         self.stack.push(elem_arc);
     }
 
+    // RUGRA-GLUE: close_element (no Ghidra counterpart found)
     fn close_element(&mut self, _elem_id: &ElementId) {
         self.stack.pop();
     }
 
+    // RUGRA-GLUE: write_bool (no Ghidra counterpart found)
     fn write_bool(&mut self, attrib_id: &AttributeId, val: bool) {
         if let Some(cur) = self.stack.last() {
             cur.write().unwrap().add_attribute(
@@ -463,6 +526,7 @@ impl Encoder for TreeEncoder {
         }
     }
 
+    // RUGRA-GLUE: write_signed_integer (no Ghidra counterpart found)
     fn write_signed_integer(&mut self, attrib_id: &AttributeId, val: i64) {
         if let Some(cur) = self.stack.last() {
             cur.write()
@@ -471,6 +535,7 @@ impl Encoder for TreeEncoder {
         }
     }
 
+    // RUGRA-GLUE: write_unsigned_integer (no Ghidra counterpart found)
     fn write_unsigned_integer(&mut self, attrib_id: &AttributeId, val: u64) {
         if let Some(cur) = self.stack.last() {
             cur.write()
@@ -479,12 +544,14 @@ impl Encoder for TreeEncoder {
         }
     }
 
+    // RUGRA-GLUE: write_string (no Ghidra counterpart found)
     fn write_string(&mut self, attrib_id: &AttributeId, val: &str) {
         if let Some(cur) = self.stack.last() {
             cur.write().unwrap().add_attribute(&attrib_id.name, val);
         }
     }
 
+    // RUGRA-GLUE: write_string_indexed (no Ghidra counterpart found)
     fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str) {
         let nm = format!("{}_{}", attrib_id.name, index);
         if let Some(cur) = self.stack.last() {
@@ -505,6 +572,7 @@ pub struct TreeDecoder {
 }
 
 impl TreeDecoder {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct given a document root and registry.
     pub fn new(root: Arc<RwLock<Element>>, registry: Arc<RwLock<IdRegistry>>) -> Self {
         Self {
@@ -514,6 +582,7 @@ impl TreeDecoder {
         }
     }
 
+    // RUGRA-GLUE: from_document (no Ghidra counterpart found)
     /// Construct from a document.
     pub fn from_document(doc: &Document, registry: Arc<RwLock<IdRegistry>>) -> Self {
         Self::new(
@@ -524,6 +593,7 @@ impl TreeDecoder {
 }
 
 impl Decoder for TreeDecoder {
+    // RUGRA-GLUE: peek_element (no Ghidra counterpart found)
     fn peek_element(&self) -> u32 {
         let Some((elem, child_idx, _)) = self.stack.last() else {
             // At the document level: peek the root.
@@ -545,6 +615,7 @@ impl Decoder for TreeDecoder {
         }
     }
 
+    // RUGRA-GLUE: open_element (no Ghidra counterpart found)
     fn open_element(&mut self) -> u32 {
         // If at document level with no stack, push the root.
         if self.stack.is_empty() {
@@ -578,6 +649,7 @@ impl Decoder for TreeDecoder {
         id
     }
 
+    // RUGRA-GLUE: open_element_matching (no Ghidra counterpart found)
     fn open_element_matching(&mut self, elem_id: &ElementId) -> u32 {
         let id = self.open_element();
         if id != elem_id.id {
@@ -587,14 +659,17 @@ impl Decoder for TreeDecoder {
         id
     }
 
+    // RUGRA-GLUE: close_element (no Ghidra counterpart found)
     fn close_element(&mut self, _id: u32) {
         self.stack.pop();
     }
 
+    // RUGRA-GLUE: close_element_skipping (no Ghidra counterpart found)
     fn close_element_skipping(&mut self, _id: u32) {
         self.stack.pop();
     }
 
+    // RUGRA-GLUE: next_attribute_id (no Ghidra counterpart found)
     fn next_attribute_id(&mut self) -> u32 {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return 0;
@@ -613,12 +688,14 @@ impl Decoder for TreeDecoder {
         }
     }
 
+    // RUGRA-GLUE: rewind_attributes (no Ghidra counterpart found)
     fn rewind_attributes(&mut self) {
         if let Some(last) = self.stack.last_mut() {
             last.2 = 0;
         }
     }
 
+    // RUGRA-GLUE: attribute_name (no Ghidra counterpart found)
     fn attribute_name(&self, id: u32) -> Option<String> {
         self.registry
             .read()
@@ -627,6 +704,7 @@ impl Decoder for TreeDecoder {
             .map(|s| s.to_string())
     }
 
+    // RUGRA-GLUE: element_name (no Ghidra counterpart found)
     fn element_name(&self, id: u32) -> Option<String> {
         self.registry
             .read()
@@ -635,6 +713,7 @@ impl Decoder for TreeDecoder {
             .map(|s| s.to_string())
     }
 
+    // RUGRA-GLUE: read_bool (no Ghidra counterpart found)
     fn read_bool(&mut self) -> bool {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return false;
@@ -647,6 +726,7 @@ impl Decoder for TreeDecoder {
         false
     }
 
+    // RUGRA-GLUE: read_bool_attr (no Ghidra counterpart found)
     fn read_bool_attr(&mut self, attrib_id: &AttributeId) -> bool {
         let Some((elem, _, _)) = self.stack.last() else {
             return false;
@@ -657,6 +737,7 @@ impl Decoder for TreeDecoder {
             .unwrap_or(false)
     }
 
+    // RUGRA-GLUE: read_signed_integer (no Ghidra counterpart found)
     fn read_signed_integer(&mut self) -> i64 {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return 0;
@@ -668,6 +749,7 @@ impl Decoder for TreeDecoder {
         0
     }
 
+    // RUGRA-GLUE: read_signed_integer_attr (no Ghidra counterpart found)
     fn read_signed_integer_attr(&mut self, attrib_id: &AttributeId) -> i64 {
         let Some((elem, _, _)) = self.stack.last() else {
             return 0;
@@ -678,6 +760,7 @@ impl Decoder for TreeDecoder {
             .unwrap_or(0)
     }
 
+    // RUGRA-GLUE: read_unsigned_integer (no Ghidra counterpart found)
     fn read_unsigned_integer(&mut self) -> u64 {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return 0;
@@ -689,6 +772,7 @@ impl Decoder for TreeDecoder {
         0
     }
 
+    // RUGRA-GLUE: read_unsigned_integer_attr (no Ghidra counterpart found)
     fn read_unsigned_integer_attr(&mut self, attrib_id: &AttributeId) -> u64 {
         let Some((elem, _, _)) = self.stack.last() else {
             return 0;
@@ -699,6 +783,7 @@ impl Decoder for TreeDecoder {
             .unwrap_or(0)
     }
 
+    // RUGRA-GLUE: read_string (no Ghidra counterpart found)
     fn read_string(&mut self) -> String {
         let Some((elem, _, attr_idx)) = self.stack.last().cloned() else {
             return String::new();
@@ -710,6 +795,7 @@ impl Decoder for TreeDecoder {
         String::new()
     }
 
+    // RUGRA-GLUE: read_string_attr (no Ghidra counterpart found)
     fn read_string_attr(&mut self, attrib_id: &AttributeId) -> String {
         let Some((elem, _, _)) = self.stack.last() else {
             return String::new();
@@ -754,16 +840,19 @@ pub struct PackedEncode {
 }
 
 impl PackedEncode {
+    // Ghidra: marshal.hh:579 PackedEncode::new
     /// Construct an empty encoder.
     pub fn new() -> Self {
         Self { out: Vec::new() }
     }
 
+    // Ghidra: marshal.hh:579 PackedEncode::intoBytes
     /// Consume and return the encoded bytes.
     pub fn into_bytes(self) -> Vec<u8> {
         self.out
     }
 
+    // Ghidra: marshal.hh:661 PackedEncode::writeHeader
     /// Write a header byte (element start/end or attribute) with an id.
     /// Faithful to `writeHeader` (marshal.hh inline).
     fn write_header(&mut self, header: u8, id: u32) {
@@ -778,6 +867,7 @@ impl PackedEncode {
         }
     }
 
+    // Ghidra: marshal.cc:1065 PackedEncode::writeInteger
     /// Write an integer value with the given type byte. Faithful to
     /// `writeInteger` (marshal.cc:1065).
     fn write_integer(&mut self, type_byte: u8, val: u64) {
@@ -822,20 +912,24 @@ impl PackedEncode {
 }
 
 impl Default for PackedEncode {
+    // Ghidra: marshal.hh:579 PackedEncode::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Encoder for PackedEncode {
+    // Ghidra: marshal.cc:1131 PackedEncode::openElement
     fn open_element(&mut self, elem_id: &ElementId) {
         self.write_header(packed_format::ELEMENT_START, elem_id.id);
     }
 
+    // Ghidra: marshal.cc:1137 PackedEncode::closeElement
     fn close_element(&mut self, elem_id: &ElementId) {
         self.write_header(packed_format::ELEMENT_END, elem_id.id);
     }
 
+    // Ghidra: marshal.cc:1143 PackedEncode::writeBool
     fn write_bool(&mut self, attrib_id: &AttributeId, val: bool) {
         use packed_format::*;
         self.write_header(ATTRIBUTE, attrib_id.id);
@@ -847,6 +941,7 @@ impl Encoder for PackedEncode {
         self.out.push(type_byte);
     }
 
+    // Ghidra: marshal.cc:1151 PackedEncode::writeSignedInteger
     fn write_signed_integer(&mut self, attrib_id: &AttributeId, val: i64) {
         use packed_format::*;
         self.write_header(ATTRIBUTE, attrib_id.id);
@@ -859,12 +954,14 @@ impl Encoder for PackedEncode {
         }
     }
 
+    // Ghidra: marshal.cc:1168 PackedEncode::writeUnsignedInteger
     fn write_unsigned_integer(&mut self, attrib_id: &AttributeId, val: u64) {
         use packed_format::*;
         self.write_header(ATTRIBUTE, attrib_id.id);
         self.write_integer(TYPECODE_UNSIGNEDINT << TYPECODE_SHIFT, val);
     }
 
+    // Ghidra: marshal.cc:1175 PackedEncode::writeString
     fn write_string(&mut self, attrib_id: &AttributeId, val: &str) {
         use packed_format::*;
         self.write_header(ATTRIBUTE, attrib_id.id);
@@ -872,6 +969,7 @@ impl Encoder for PackedEncode {
         self.out.extend_from_slice(val.as_bytes());
     }
 
+    // Ghidra: marshal.cc:1184 PackedEncode::writeStringIndexed
     fn write_string_indexed(&mut self, attrib_id: &AttributeId, index: u32, val: &str) {
         use packed_format::*;
         self.write_header(ATTRIBUTE, attrib_id.id + index);
@@ -904,6 +1002,7 @@ pub struct PackedDecode {
 }
 
 impl PackedDecode {
+    // Ghidra: marshal.hh:512 PackedDecode::new
     /// Construct from a byte vector and registry.
     pub fn new(input: Vec<u8>, registry: Arc<RwLock<IdRegistry>>) -> Self {
         Self {
@@ -917,6 +1016,7 @@ impl PackedDecode {
         }
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readByte
     /// Read the next byte.
     fn read_byte(&mut self) -> Option<u8> {
         let b = self.input.get(self.pos).copied()?;
@@ -924,6 +1024,7 @@ impl PackedDecode {
         Some(b)
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readHeader
     /// Read a header byte and extract the (record_type, id). Returns None at
     /// EOF.
     fn read_header(&mut self) -> Option<(u8, u32)> {
@@ -939,6 +1040,7 @@ impl PackedDecode {
         Some((header_type, id))
     }
 
+    // Ghidra: marshal.cc:603 PackedDecode::readInteger
     /// Read an encoded integer given its length in bytes.
     fn read_integer(&mut self, len: usize) -> u64 {
         let mut val = 0u64;
@@ -950,11 +1052,13 @@ impl PackedDecode {
         val
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::lengthCode
     /// Determine the length code from a type byte.
     fn length_code(type_byte: u8) -> u8 {
         type_byte & packed_format::LENGTHCODE_MASK
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::typeCode
     /// Determine the type code from a type byte.
     fn type_code(type_byte: u8) -> u8 {
         (type_byte >> packed_format::TYPECODE_SHIFT) & 0xf
@@ -962,6 +1066,7 @@ impl PackedDecode {
 }
 
 impl Decoder for PackedDecode {
+    // Ghidra: marshal.cc:716 PackedDecode::peekElement
     fn peek_element(&self) -> u32 {
         use packed_format::*;
         // Scan forward from current pos to find the next ELEMENT_START header.
@@ -1023,6 +1128,7 @@ impl Decoder for PackedDecode {
         0
     }
 
+    // Ghidra: marshal.cc:730 PackedDecode::openElement
     fn open_element(&mut self) -> u32 {
         use packed_format::*;
         loop {
@@ -1039,6 +1145,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::openElementMatching
     fn open_element_matching(&mut self, elem_id: &ElementId) -> u32 {
         let id = self.open_element();
         if id != elem_id.id {
@@ -1047,6 +1154,7 @@ impl Decoder for PackedDecode {
         id
     }
 
+    // Ghidra: marshal.cc:767 PackedDecode::closeElement
     fn close_element(&mut self, _id: u32) {
         // Read until we find the matching ELEMENT_END.
         use packed_format::*;
@@ -1083,10 +1191,12 @@ impl Decoder for PackedDecode {
         self.stack.pop();
     }
 
+    // Ghidra: marshal.cc:782 PackedDecode::closeElementSkipping
     fn close_element_skipping(&mut self, id: u32) {
         self.close_element(id);
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::nextAttributeId
     fn next_attribute_id(&mut self) -> u32 {
         use packed_format::*;
         if self.pos >= self.input.len() {
@@ -1131,6 +1241,7 @@ impl Decoder for PackedDecode {
         id
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::attributeName
     fn attribute_name(&self, id: u32) -> Option<String> {
         self.registry
             .read()
@@ -1139,6 +1250,7 @@ impl Decoder for PackedDecode {
             .map(|s| s.to_string())
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::elementName
     fn element_name(&self, id: u32) -> Option<String> {
         self.registry
             .read()
@@ -1147,12 +1259,14 @@ impl Decoder for PackedDecode {
             .map(|s| s.to_string())
     }
 
+    // Ghidra: marshal.cc:801 PackedDecode::rewindAttributes
     fn rewind_attributes(&mut self) {
         if let Some((_, start, _)) = self.stack.last_mut() {
             self.pos = *start;
         }
     }
 
+    // Ghidra: marshal.cc:831 PackedDecode::readBool
     fn read_bool(&mut self) -> bool {
         if let Some(tb) = self.pending_type.take() {
             (tb & packed_format::LENGTHCODE_MASK) != 0
@@ -1161,6 +1275,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readBoolAttr
     fn read_bool_attr(&mut self, attrib_id: &AttributeId) -> bool {
         // Rewind and find the attribute.
         self.rewind_attributes();
@@ -1174,6 +1289,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.cc:853 PackedDecode::readSignedInteger
     fn read_signed_integer(&mut self) -> i64 {
         let len = self.pending_int_len.take().unwrap_or(0);
         let val = self.read_integer(len);
@@ -1189,6 +1305,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readSignedIntegerAttr
     fn read_signed_integer_attr(&mut self, attrib_id: &AttributeId) -> i64 {
         self.rewind_attributes();
         loop {
@@ -1200,12 +1317,14 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.cc:921 PackedDecode::readUnsignedInteger
     fn read_unsigned_integer(&mut self) -> u64 {
         let len = self.pending_int_len.take().unwrap_or(0);
         let _ = self.pending_type.take();
         self.read_integer(len)
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readUnsignedIntegerAttr
     fn read_unsigned_integer_attr(&mut self, attrib_id: &AttributeId) -> u64 {
         self.rewind_attributes();
         loop {
@@ -1217,6 +1336,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.cc:951 PackedDecode::readString
     fn read_string(&mut self) -> String {
         if let Some(len) = self.pending_string_len.take() {
             let bytes = &self.input[self.pos..self.pos + len.min(self.input.len() - self.pos)];
@@ -1228,6 +1348,7 @@ impl Decoder for PackedDecode {
         }
     }
 
+    // Ghidra: marshal.hh:512 PackedDecode::readStringAttr
     fn read_string_attr(&mut self, attrib_id: &AttributeId) -> String {
         self.rewind_attributes();
         loop {

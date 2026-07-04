@@ -16,10 +16,12 @@ use crate::space::AddressSpace;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
+// RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
 fn sanitize_c_ident(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
 }
 
+// RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
 /// Escape a raw string from the binary into a C string literal.
 /// Converts control characters to their escape sequences:
 /// newline → \n, carriage return → \r, tab → \t, null → \0, etc.
@@ -176,6 +178,7 @@ pub struct PrintC {
 }
 
 impl PrintC {
+    // Ghidra: printc.cc:123 PrintC::new
     /// Create a new PrintC instance
     pub fn new(emit: Box<dyn Emit>) -> Self {
         Self {
@@ -219,6 +222,7 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:123 PrintC::takeEmit
     /// Take ownership of the internal emitter, consuming the printer.
     /// This allows callers to retrieve the buffered output from emitters
     /// like `EmitNoMarkup`.
@@ -226,6 +230,7 @@ impl PrintC {
         self.emit
     }
 
+    // Ghidra: printc.cc:123 PrintC::emitCbranchCondition
     /// Emit the boolean condition of a CBRANCH (its in(1)). When in(1) is
     /// absent, emit `1` (always-true) instead of leaving the parentheses empty.
     /// Rationale: Ghidra's `opCbranch` (printc.cc) always pushes `getIn(1)` —
@@ -277,6 +282,7 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:123 PrintC::emitBlockOps
     /// Emit a single block's operations, with dead code elimination.
     ///
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
@@ -433,6 +439,7 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:123 PrintC::isBlockBodyEmpty
     /// Check if a block body has no emittable ops (all ops are dead, skipped, or branch-only).
     /// Used to suppress empty `if () {} else {}` blocks.
     fn is_block_body_empty(&self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
@@ -507,6 +514,7 @@ impl PrintC {
         true
     }
 
+    // Ghidra: printc.cc:123 PrintC::emitBlockStructured
     /// Emit a block with structured control flow detection.
     ///
     /// Recursively walks structured block types (`BlockIf`, `BlockWhileDo`,
@@ -533,6 +541,7 @@ impl PrintC {
         // Ensure decrement happens on all exit paths via a scope guard.
         struct DepthDec;
         impl Drop for DepthDec {
+            // RUGRA-GLUE: drop (no Ghidra counterpart found)
             fn drop(&mut self) {
                 EMIT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
             }
@@ -597,6 +606,7 @@ impl PrintC {
             _ => self.emit_structured_basic(block_arc, graph, emitted),
         }
     }
+    // RUGRA-GLUE: emit_structured_if (no Ghidra counterpart found)
     fn emit_structured_if(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -796,6 +806,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_whiledo (no Ghidra counterpart found)
     fn emit_structured_whiledo(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -850,6 +861,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_dowhile (no Ghidra counterpart found)
     fn emit_structured_dowhile(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -893,6 +905,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_list (no Ghidra counterpart found)
     fn emit_structured_list(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -930,6 +943,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_condition (no Ghidra counterpart found)
     fn emit_structured_condition(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -955,6 +969,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_switch (no Ghidra counterpart found)
     fn emit_structured_switch(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -1136,6 +1151,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: emit_structured_basic (no Ghidra counterpart found)
     fn emit_structured_basic(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -1294,6 +1310,7 @@ impl PrintC {
     }
 
 
+    // RUGRA-GLUE: push_goto_target (no Ghidra counterpart found)
     /// Emit a goto label name. Uses `LAB_xxxx` for intra-function addresses,
     /// falls back to symbol lookup then `DAT_xxxx` for external addresses.
     fn push_goto_target(&mut self, vn: &Varnode) {
@@ -1306,6 +1323,7 @@ impl PrintC {
         self.emit.tag_variable(&label, 0);
     }
 
+    // RUGRA-GLUE: compact_name_for (no Ghidra counterpart found)
     /// Return the compact (renumbered) name for a raw variable name, or None
     /// if the name is not an auto-local that should be renumbered. Faithful
     /// to Ghidra's assignDefaultNames (database.cc:2862): variables are
@@ -1353,6 +1371,7 @@ impl PrintC {
         Some(compact)
     }
 
+    // RUGRA-GLUE: rename_scope_symbol (no Ghidra counterpart found)
     /// Rename a varmap-generated `StackX_<hex>` / `Stack_<hex>` symbol name into
     /// a Ghidra-style typed local name (`<printNameBase>Var<base>`), sharing the
     /// SAME `compact_base` counter as `compact_name_for`. Faithful to Ghidra
@@ -1383,6 +1402,7 @@ impl PrintC {
         compact
     }
 
+    // RUGRA-GLUE: doc_variable_decls_from_funcdata (no Ghidra counterpart found)
     /// Emit variable declarations at the top of the function body.
     fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
         use std::collections::BTreeMap;
@@ -1574,6 +1594,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: mark_variable_used (no Ghidra counterpart found)
     /// Mark a variable name as used, recording its space, offset, and type
     fn mark_variable_used(&mut self, name: String, space: crate::space::AddressSpace, offset: u64, type_name: String) {
         if name.is_empty() { return; }
@@ -1595,6 +1616,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: mark_varnode_used (no Ghidra counterpart found)
     /// Mark a varnode's display name as used, recording its space, offset, and type
     fn mark_varnode_used(&mut self, name: String, vn: &Varnode) {
         if name.is_empty() { return; }
@@ -1624,12 +1646,14 @@ impl PrintC {
         self.mark_variable_used(name, vn.get_space(), vn.get_offset(), type_name);
     }
 
+    // RUGRA-GLUE: get_varnode_display_name (no Ghidra counterpart found)
     /// Get the display name for a varnode without emitting it
     fn get_varnode_display_name(&mut self, vn: &Varnode) -> String {
         let raw = self.get_varnode_display_name_inner(vn);
         // Apply compact renumbering lazily (assignDefaultNames).
         self.compact_name_for(&raw).unwrap_or(raw)
     }
+    // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
 
@@ -1700,6 +1724,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: find_typed_instance (no Ghidra counterpart found)
     /// Check if a name is a raw x86-64 register name
     /// Scan all instances of a HighVariable for one with a meaningful
     /// (non-Unknown, non-undefined) type. ActionTypeInfer assigns types to
@@ -1718,6 +1743,7 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: vn_type_if_meaningful (no Ghidra counterpart found)
     fn vn_type_if_meaningful(vn: &crate::varnode::Varnode) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::TypeMetatype;
         // If this varnode is the output of a LOAD, it holds a loaded VALUE
@@ -1743,6 +1769,7 @@ impl PrintC {
             .cloned()
     }
 
+    // RUGRA-GLUE: pointer_type_for (no Ghidra counterpart found)
     fn pointer_type_for(&self, vn: &crate::varnode::Varnode) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         if self.pointer_varnodes.contains(&(vn.get_space(), vn.get_offset())) {
             return self.make_int_ptr();
@@ -1759,6 +1786,7 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: make_int_ptr (no Ghidra counterpart found)
     fn make_int_ptr(&self) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
         let int_type = std::sync::Arc::new(Datatype::Base(
@@ -1771,6 +1799,7 @@ impl PrintC {
         })))
     }
 
+    // RUGRA-GLUE: var_prefix (no Ghidra counterpart found)
     /// Ghidra-style Hungarian notation prefix based on inferred datatype.
     /// Falls back to size-based when no type info is available.
     fn var_prefix(v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> &'static str {
@@ -1804,6 +1833,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: size_prefix (no Ghidra counterpart found)
     fn size_prefix(size: usize) -> &'static str {
         match size {
             8 => "lVar",
@@ -1814,6 +1844,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: maybe_apply_type_prefix (no Ghidra counterpart found)
     fn maybe_apply_type_prefix(name: &str, v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> String {
         use crate::type_system::TypeMetatype;
         let suffix = ["uVar", "lVar", "iVar", "sVar", "bVar"]
@@ -1879,6 +1910,7 @@ impl PrintC {
         )
     }
 
+    // RUGRA-GLUE: resolve_varnode (no Ghidra counterpart found)
     /// Resolve a varnode through the copy propagation map.
     /// If this varnode is the output of a COPY op, return the root source.
     fn resolve_varnode(&self, vn_arc: &Arc<RwLock<Varnode>>) -> Option<Arc<RwLock<Varnode>>> {
@@ -1886,6 +1918,7 @@ impl PrintC {
         self.copy_map.get(&ptr).cloned()
     }
 
+    // RUGRA-GLUE: get_defining_op (no Ghidra counterpart found)
     /// Get the meaningful defining op for a varnode using the SSA def chain.
     /// Chases through COPY ops to find the non-trivial definition.
     /// This is the SSA-based replacement for ad-hoc map lookups.
@@ -1915,6 +1948,7 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: is_stack_frame_setup (no Ghidra counterpart found)
     /// Check if an op is INT_SUB(RSP, const) — the stack frame setup instruction.
     fn is_stack_frame_setup(&self, op: &PcodeOp) -> bool {
         if op.opcode != OpCode::CPUI_INT_SUB || op.inrefs.len() < 2 {
@@ -1928,6 +1962,7 @@ impl PrintC {
             && in1.get_offset() == self.stack_frame_size
     }
 
+    // RUGRA-GLUE: get_stack_variable_name (no Ghidra counterpart found)
     /// Check if an INT_ADD op is RSP + const, and if so, return the stack variable name.
     /// Also handles uVar107 + offset where uVar107 = RSP - frame_size.
     fn get_stack_variable_name(&mut self, op: &PcodeOp) -> Option<String> {
@@ -2023,6 +2058,7 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: is_complementary_condition (no Ghidra counterpart found)
     /// Check if two condition strings form a tautology when OR'd.
     /// Covers:
     /// - Complementary pairs: "X == Y" / "X != Y", "X < Y" / "X >= Y"
@@ -2061,6 +2097,7 @@ impl PrintC {
         false
     }
 
+    // RUGRA-GLUE: negate_condition_text (no Ghidra counterpart found)
     /// Try to negate a comparison expression textually.
     /// E.g., "X == 0" → "X != 0", "X < Y" → "X >= Y"
     /// Returns None if the text doesn't contain a recognized comparison operator.
@@ -2082,6 +2119,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: try_fold_bool_comparison (no Ghidra counterpart found)
     /// Try to fold a BOOL_OR/BOOL_AND of two comparisons into a single comparison.
     /// E.g., `BOOL_OR(INT_EQUAL(A,B), INT_LESS(A,B))` → emits `A <= B`
     /// Returns true if folding succeeded and the expression was emitted.
@@ -2260,6 +2298,7 @@ impl PrintC {
         true
     }
 
+    // RUGRA-GLUE: get_rip_relative_operand (no Ghidra counterpart found)
     /// Check if an op is `INT_ADD(RIP, x)` or `INT_ADD(x, RIP)` — a RIP-relative address.
     /// Returns the index of the non-RIP operand if matched.
     /// x86-64 PIC code uses `lea reg, [rip + offset]` which lifts to `INT_ADD(RIP, const)`.
@@ -2282,6 +2321,7 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: push_input (no Ghidra counterpart found)
     /// Push an op's input varnode, resolving through the copy chain.
     fn push_input(&mut self, op: &PcodeOp, index: usize) {
         if let Some(in_arc) = op.get_in(index) {
@@ -2290,6 +2330,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: push_output (no Ghidra counterpart found)
     /// Push an op's output varnode (no resolution needed for outputs).
     fn push_output(&mut self, op: &PcodeOp) {
         if let Some(out_arc) = op.get_out() {
@@ -2299,6 +2340,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: emit_inline_expr (no Ghidra counterpart found)
     /// Emit just the RHS expression of a defining op (for expression inlining).
     /// Emits the operation without the `output = ` prefix.
     fn emit_inline_expr(&mut self, def_op: &PcodeOp) {
@@ -2557,6 +2599,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: emit_block_condition (no Ghidra counterpart found)
     /// Emit a condition expression from a block that may be a `BlockCondition`.
     ///
     /// If the block is a `BlockCondition`, recursively emits `(a) && (b)` or `(a) || (b)`.
@@ -2606,6 +2649,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: capture_block_condition (no Ghidra counterpart found)
     /// Inner condition-emitter that writes to a throwaway buffer. Used by
     /// `emit_block_condition` to detect empty output.
     fn capture_block_condition(
@@ -2840,6 +2884,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: emit_block_condition_inner (no Ghidra counterpart found)
     fn emit_block_condition_inner(
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -2955,6 +3000,7 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: emit_condition (no Ghidra counterpart found)
     /// Emit a condition expression, inlining comparisons.
     ///
     /// Uses `def_map` to trace the defining op for any varnode (cross-block).
@@ -3246,14 +3292,17 @@ impl PrintC {
 }
 
 impl PrintLanguage for PrintC {
+    // Ghidra: printc.cc:123 PrintC::getEmit
     fn get_emit(&mut self) -> &mut dyn Emit {
         self.emit.as_mut()
     }
 
+    // Ghidra: printc.cc:123 PrintC::setEmit
     fn set_emit(&mut self, emit: Box<dyn Emit>) {
         self.emit = emit;
     }
 
+    // Ghidra: printc.cc:2641 PrintC::docFunction
     fn doc_function(&mut self, fd: &Funcdata) {
         use std::collections::HashSet;
 
@@ -4151,6 +4200,7 @@ impl PrintLanguage for PrintC {
     }
 
 
+    // Ghidra: printc.cc:123 PrintC::docAllProto
     fn doc_all_proto(&mut self, proto: &FuncProto) {
         // Emit a function prototype declaration.
         // Faithful to PrintC::docAllProto (printc.cc).
@@ -4169,6 +4219,7 @@ impl PrintLanguage for PrintC {
         self.emit.print(");");
     }
 
+    // Ghidra: printc.cc:123 PrintC::docVariableDecl
     fn doc_variable_decl(&mut self, vn: &Varnode) {
         if let Some(dt) = &vn.v_type {
             self.push_type(dt);
@@ -4181,12 +4232,14 @@ impl PrintLanguage for PrintC {
     }
 
 
+    // Ghidra: printc.cc:123 PrintC::docStatement
     fn doc_statement(&mut self, op: &PcodeOp) {
         self.emit.tag_line(0);
         op.push(self); // This will call the appropriate op_xxx method
         self.emit.print(";");
     }
 
+    // Ghidra: printc.cc:481 PrintC::opCopy
     // --- P-code Op-code specific emission ---
 
     fn op_copy(&mut self, op: &PcodeOp) {
@@ -4201,6 +4254,7 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:487 PrintC::opLoad
     fn op_load(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
             self.is_lhs = true;
@@ -4229,6 +4283,7 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:500 PrintC::opStore
     fn op_store(&mut self, op: &PcodeOp) {
         // Try to inline address computation: *(base + off) = val
         let mut inlined_addr = false;
@@ -4400,6 +4455,7 @@ impl PrintLanguage for PrintC {
         self.push_input(op, 2);
     }
 
+    // Ghidra: printc.cc:123 PrintC::opBinary
     fn op_binary(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
             // RIP-relative folding: INT_ADD(RIP, const) → the output is just a symbol alias.
@@ -4465,6 +4521,7 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:123 PrintC::opUnary
     fn op_unary(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
             self.is_lhs = true;
@@ -4507,18 +4564,21 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:123 PrintC::opMultiequal
     fn op_multiequal(&mut self, _op: &PcodeOp) {
         // Ghidra printc.hh:331 — opMultiequal is a no-op `{}`. PHI nodes are
         // never emitted as statements (they're resolved during SSA analysis).
         // Previously Rugra emitted `out = phi(a, b, ...)` which is non-C.
     }
 
+    // Ghidra: printc.cc:123 PrintC::opIndirect
     fn op_indirect(&mut self, _op: &PcodeOp) {
         // Ghidra printc.hh:332 — opIndirect is a no-op `{}`. INDIRECT ops are
         // markers for side-effects and never emit a statement.
         // Previously Rugra emitted `out = in0 (indirect)` which is non-C.
     }
 
+    // Ghidra: printc.cc:593 PrintC::opCall
     fn op_call(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
             self.is_lhs = true;
@@ -4571,6 +4631,7 @@ impl PrintLanguage for PrintC {
     }
 
 
+    // Ghidra: printc.cc:754 PrintC::opReturn
     fn op_return(&mut self, op: &PcodeOp) {
         self.emit.print("return");
         if op.num_input() > 1 {
@@ -4626,6 +4687,7 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:536 PrintC::opCbranch
     fn op_cbranch(&mut self, op: &PcodeOp) {
         use crate::op::branch_type;
         // Ghidra printc.cc opCbranch: pushes op->getIn(1) then recurses — it
@@ -4671,6 +4733,7 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:520 PrintC::opBranch
     fn op_branch(&mut self, op: &PcodeOp) {
         use crate::op::branch_type;
         match op.branch_type {
@@ -4700,10 +4763,12 @@ impl PrintLanguage for PrintC {
         }
     }
 
+    // Ghidra: printc.cc:1472 PrintC::pushType
     fn push_type(&mut self, dt: &Datatype) {
         self.emit.tag_type(dt.get_name(), dt.get_id());
     }
 
+    // Ghidra: printc.cc:123 PrintC::pushVarnode
     fn push_varnode(&mut self, vn: &Varnode, _op: Option<&PcodeOp>) {
         use crate::space::AddressSpace;
 

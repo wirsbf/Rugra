@@ -33,26 +33,31 @@ impl Address {
         self.0
     }
 
+    // Ghidra: address.cc:91 Address::offset
     /// Add an offset to the address
     pub fn offset(&self, offset: i64) -> Self {
         Address((self.0 as i64 + offset) as u64)
     }
 
+    // Ghidra: address.cc:91 Address::isNull
     /// Check if address is null (0x0)
     pub fn is_null(&self) -> bool {
         self.0 == 0
     }
 
+    // Ghidra: address.cc:91 Address::isAligned
     /// Check if address is aligned to the given boundary
     pub fn is_aligned(&self, alignment: u64) -> bool {
         self.0 % alignment == 0
     }
 
+    // Ghidra: address.cc:91 Address::next
     /// Get the next address
     pub fn next(&self) -> Self {
         Address(self.0.wrapping_add(1))
     }
 
+    // Ghidra: address.cc:91 Address::prev
     /// Get the previous address
     pub fn prev(&self) -> Self {
         Address(self.0.wrapping_sub(1))
@@ -60,30 +65,35 @@ impl Address {
 }
 
 impl fmt::Display for Address {
+    // Ghidra: address.cc:91 Address::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:x}", self.0)
     }
 }
 
 impl fmt::LowerHex for Address {
+    // Ghidra: address.cc:91 Address::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:x}", self.0)
     }
 }
 
 impl fmt::UpperHex for Address {
+    // Ghidra: address.cc:91 Address::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:X}", self.0)
     }
 }
 
 impl From<u64> for Address {
+    // Ghidra: address.cc:91 Address::from
     fn from(addr: u64) -> Self {
         Address(addr)
     }
 }
 
 impl From<Address> for u64 {
+    // Ghidra: address.cc:91 Address::from
     fn from(addr: Address) -> Self {
         addr.0
     }
@@ -104,11 +114,13 @@ pub struct SeqNum {
 }
 
 impl SeqNum {
+    // Ghidra: address.cc:54 SeqNum::new
     /// Create a new sequence number
     pub fn new(addr: Address, order: u32) -> Self {
         SeqNum { addr, order }
     }
 
+    // Ghidra: address.cc:54 SeqNum::next
     /// Get the next sequence number at the same address
     pub fn next(&self) -> Self {
         SeqNum {
@@ -117,21 +129,25 @@ impl SeqNum {
         }
     }
 
+    // Ghidra: address.cc:54 SeqNum::getAddr
     /// Get the address
     pub fn get_addr(&self) -> Address {
         self.addr
     }
 
+    // Ghidra: address.cc:54 SeqNum::getOrder
     /// Get the order/time
     pub fn get_order(&self) -> u32 {
         self.order
     }
 
+    // Ghidra: address.cc:54 SeqNum::setOrder
     /// Set the order/time
     pub fn set_order(&mut self, order: u32) {
         self.order = order;
     }
 
+    // Ghidra: address.cc:69 SeqNum::decode
     /// Decode from string format "addr:order"
     pub fn decode(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
@@ -143,6 +159,7 @@ impl SeqNum {
         Some(SeqNum::new(Address::new(addr), order))
     }
 
+    // Ghidra: address.cc:60 SeqNum::encode
     /// Encode to string format "addr:order"
     pub fn encode(&self) -> String {
         format!("{}:{}", self.addr, self.order)
@@ -150,6 +167,7 @@ impl SeqNum {
 }
 
 impl fmt::Display for SeqNum {
+    // Ghidra: address.cc:54 SeqNum::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.addr, self.order)
     }
@@ -167,6 +185,7 @@ pub struct Range {
 }
 
 impl Range {
+    // Ghidra: address.cc:236 Range::new
     /// Create a new range
     ///
     /// Returns `None` if first > last
@@ -178,58 +197,69 @@ impl Range {
         }
     }
 
+    // Ghidra: address.cc:236 Range::getFirst
     /// Get the first address
     pub fn get_first(&self) -> Address {
         self.first
     }
 
+    // Ghidra: address.cc:236 Range::getLast
     /// Get the last address
     pub fn get_last(&self) -> Address {
         self.last
     }
 
+    // Ghidra: address.cc:236 Range::getFirstAddr
     /// Get the first address (Ghidra naming)
     pub fn get_first_addr(&self) -> Address {
         self.first
     }
 
+    // Ghidra: address.cc:236 Range::getLastAddr
     /// Get the last address (Ghidra naming)
     pub fn get_last_addr(&self) -> Address {
         self.last
     }
 
+    // Ghidra: address.cc:265 Range::getLastAddrOpen
     /// Get the last address + 1 (open end)
     pub fn get_last_addr_open(&self) -> Address {
         self.last.next()
     }
 
+    // Ghidra: address.cc:236 Range::contains
     /// Check if an address is contained in this range
     pub fn contains(&self, addr: Address) -> bool {
         addr.as_u64() >= self.first.as_u64() && addr.as_u64() <= self.last.as_u64()
     }
 
+    // Ghidra: address.cc:236 Range::size
     /// Get the size of the range in bytes
     pub fn size(&self) -> u64 {
         self.last.as_u64().saturating_sub(self.first.as_u64()).saturating_add(1)
     }
 
+    // Ghidra: address.cc:236 Range::overlaps
     /// Check if this range overlaps with another
     pub fn overlaps(&self, other: &Range) -> bool {
         self.first.as_u64() <= other.last.as_u64()
             && other.first.as_u64() <= self.last.as_u64()
     }
 
+    // Ghidra: address.cc:236 Range::isAdjacent
     /// Check if this range is adjacent to another
     pub fn is_adjacent(&self, other: &Range) -> bool {
         self.last.as_u64().saturating_add(1) == other.first.as_u64()
             || other.last.as_u64().saturating_add(1) == self.first.as_u64()
     }
 
+    // Ghidra: address.cc:283 Range::printBounds
     /// Print bounds (for debugging)
     pub fn print_bounds(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}, {}]", self.first, self.last)
     }
 
+    // Ghidra: address.cc:304 Range::decode
     /// Decode from string format "first-last"
     pub fn decode(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('-').collect();
@@ -241,6 +271,7 @@ impl Range {
         Range::new(Address::new(first), Address::new(last))
     }
 
+    // Ghidra: address.cc:316 Range::decodeFromAttributes
     /// Decode from attributes (XML-style)
     pub fn decode_from_attributes(first: &str, last: &str) -> Option<Self> {
         let first_addr = u64::from_str_radix(first.trim_start_matches("0x"), 16).ok()?;
@@ -248,6 +279,7 @@ impl Range {
         Range::new(Address::new(first_addr), Address::new(last_addr))
     }
 
+    // Ghidra: address.cc:292 Range::encode
     /// Encode to string format "first-last"
     pub fn encode(&self) -> String {
         format!("{:x}-{:x}", self.first.as_u64(), self.last.as_u64())
@@ -255,6 +287,7 @@ impl Range {
 }
 
 impl fmt::Display for Range {
+    // Ghidra: address.cc:236 Range::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.print_bounds(f)
     }
@@ -270,11 +303,13 @@ pub struct RangeProperties {
 }
 
 impl RangeProperties {
+    // Ghidra: address.hh:170 RangeProperties::new
     /// Create new range properties
     pub fn new(flags: u32) -> Self {
         RangeProperties { flags }
     }
 
+    // Ghidra: address.cc:354 RangeProperties::decode
     /// Decode from string
     pub fn decode(s: &str) -> Option<Self> {
         let flags = s.parse().ok()?;
@@ -283,6 +318,7 @@ impl RangeProperties {
 }
 
 impl Default for RangeProperties {
+    // Ghidra: address.hh:170 RangeProperties::default
     fn default() -> Self {
         RangeProperties::new(0)
     }
@@ -298,11 +334,13 @@ pub struct RangeList {
 }
 
 impl RangeList {
+    // Ghidra: address.hh:174 RangeList::new
     /// Create a new empty range list
     pub fn new() -> Self {
         RangeList { ranges: Vec::new() }
     }
 
+    // Ghidra: address.cc:383 RangeList::insertRange
     /// Insert a range into the list, merging overlapping ranges
     pub fn insert_range(&mut self, new_range: Range) {
         if self.ranges.is_empty() {
@@ -338,6 +376,7 @@ impl RangeList {
         self.ranges.insert(insert_pos, merged);
     }
 
+    // Ghidra: address.cc:417 RangeList::removeRange
     /// Remove a range from the list
     pub fn remove_range(&mut self, to_remove: Range) {
         let mut new_ranges = Vec::new();
@@ -372,36 +411,43 @@ impl RangeList {
         self.ranges = new_ranges;
     }
 
+    // Ghidra: address.cc:468 RangeList::inRange
     /// Check if an address is in any range in the list
     pub fn in_range(&self, addr: Address) -> bool {
         self.ranges.iter().any(|r| r.contains(addr))
     }
 
+    // Ghidra: address.hh:174 RangeList::numRanges
     /// Get the number of ranges in the list
     pub fn num_ranges(&self) -> usize {
         self.ranges.len()
     }
 
+    // Ghidra: address.hh:174 RangeList::empty
     /// Check if the list is empty
     pub fn empty(&self) -> bool {
         self.ranges.is_empty()
     }
 
+    // Ghidra: address.hh:174 RangeList::ranges
     /// Get all ranges
     pub fn ranges(&self) -> &[Range] {
         &self.ranges
     }
 
+    // Ghidra: address.hh:174 RangeList::begin
     /// Get iterator to beginning
     pub fn begin(&self) -> std::slice::Iter<'_, Range> {
         self.ranges.iter()
     }
 
+    // Ghidra: address.hh:174 RangeList::end
     /// Get iterator to end
     pub fn end(&self) -> std::slice::Iter<'_, Range> {
         self.ranges.iter()
     }
 
+    // Ghidra: address.cc:451 RangeList::merge
     /// Merge another RangeList into this one
     pub fn merge(&mut self, other: &RangeList) {
         for range in &other.ranges {
@@ -409,11 +455,13 @@ impl RangeList {
         }
     }
 
+    // Ghidra: address.hh:174 RangeList::clear
     /// Clear all ranges
     pub fn clear(&mut self) {
         self.ranges.clear();
     }
 
+    // Ghidra: address.cc:512 RangeList::longestFit
     /// Find the longest fit for an address
     pub fn longest_fit(&self, addr: Address) -> Option<&Range> {
         self.ranges.iter()
@@ -421,6 +469,7 @@ impl RangeList {
             .max_by_key(|r| r.size())
     }
 
+    // Ghidra: address.cc:588 RangeList::printBounds
     /// Print bounds of all ranges
     pub fn print_bounds(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
@@ -433,6 +482,7 @@ impl RangeList {
         write!(f, "]")
     }
 
+    // Ghidra: address.cc:618 RangeList::decode
     /// Decode from string format (comma-separated ranges)
     pub fn decode(s: &str) -> Option<Self> {
         let mut list = RangeList::new();
@@ -446,6 +496,7 @@ impl RangeList {
         Some(list)
     }
 
+    // Ghidra: address.cc:604 RangeList::encode
     /// Encode to string format (comma-separated ranges)
     pub fn encode(&self) -> String {
         self.ranges
@@ -457,12 +508,14 @@ impl RangeList {
 }
 
 impl Default for RangeList {
+    // Ghidra: address.hh:174 RangeList::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl fmt::Display for RangeList {
+    // Ghidra: address.hh:174 RangeList::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.print_bounds(f)
     }
@@ -470,6 +523,7 @@ impl fmt::Display for RangeList {
 
 // --- Bit-level helpers (faithful to address.cc/address.hh:576-590) ---
 
+// Ghidra: address.hh:174 RangeList::signbitNegative
 /// Return true if the sign-bit of the sized value is set (negative).
 /// Faithful to `signbit_negative` (address.cc:641-647).
 pub fn signbit_negative(val: u64, size: usize) -> bool {
@@ -480,6 +534,7 @@ pub fn signbit_negative(val: u64, size: usize) -> bool {
     (val & mask) != 0
 }
 
+// Ghidra: address.hh:174 RangeList::calcMask
 /// Calculate an all-ones mask for the given byte size.
 /// Faithful to `calc_mask` (address.hh:577). Equivalent to the `calc_mask`
 /// already present in ruleaction.rs; centralised here for reuse.
@@ -491,6 +546,7 @@ pub fn calc_mask(size: usize) -> u64 {
     }
 }
 
+// Ghidra: address.hh:174 RangeList::countLeadingZeros
 /// Count leading zero bits in a 64-bit value. Faithful to
 /// `count_leading_zeros` (address.cc:773).
 pub fn count_leading_zeros(val: u64) -> i32 {
@@ -500,6 +556,7 @@ pub fn count_leading_zeros(val: u64) -> i32 {
     val.leading_zeros() as i32
 }
 
+// Ghidra: address.hh:174 RangeList::leastsigbitSet
 /// Return the index of the least-significant set bit, or -1 if val==0.
 /// Faithful to `leastsigbit_set` (address.cc:714). Uses trailing_zeros for
 /// an exact equivalent.
@@ -511,6 +568,7 @@ pub fn leastsigbit_set(val: u64) -> i32 {
     }
 }
 
+// Ghidra: address.hh:174 RangeList::mostsigbitSet
 /// Return the index of the most-significant set bit, or -1 if val==0.
 /// Faithful to `mostsigbit_set` (address.cc:735).
 pub fn mostsigbit_set(val: u64) -> i32 {
@@ -521,6 +579,7 @@ pub fn mostsigbit_set(val: u64) -> i32 {
     }
 }
 
+// Ghidra: address.hh:174 RangeList::coveringmask
 /// Return the mask covering all set bits of `val`. Faithful to
 /// `coveringmask` (address.cc:760). For val==0 returns 0; otherwise returns
 /// `(1 << (msb+1)) - 1`, i.e. all bits from the least significant up to and
@@ -537,12 +596,14 @@ pub fn coveringmask(val: u64) -> u64 {
     }
 }
 
+// Ghidra: address.hh:174 RangeList::minimalmask
 /// Return the minimal mask covering the set bits of `val` (alias for
 /// `coveringmask`, matching Ghidra's `minimalmask` in jumptable.cc).
 pub fn minimalmask(val: u64) -> u64 {
     coveringmask(val)
 }
 
+// Ghidra: address.hh:174 RangeList::functionalEquality
 /// Determine if two Varnodes hold the same value (immediate level).
 /// Faithful to Ghidra's `functionalEquality` (expression.cc:520-526), using
 /// only the level-0 test (expression.cc:404-417): identical varnode pointer,

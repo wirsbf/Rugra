@@ -36,6 +36,7 @@ pub struct MemoryBank {
 }
 
 impl MemoryBank {
+    // Ghidra: memstate.cc:75 MemoryBank::new
     pub fn new(space: AddressSpace, word_size: usize, page_size: usize) -> Self {
         Self {
             word_size,
@@ -46,9 +47,12 @@ impl MemoryBank {
         }
     }
 
+    // Ghidra: memstate.cc:75 MemoryBank::getWordSize
     pub fn get_word_size(&self) -> usize { self.word_size }
+    // Ghidra: memstate.cc:75 MemoryBank::getPageSize
     pub fn get_page_size(&self) -> usize { self.page_size }
 
+    // Ghidra: memstate.cc:182 MemoryBank::setValue
     /// Set the value of a (small) range of bytes.
     pub fn set_value(&mut self, offset: u64, size: usize, val: u64) {
         let bytes = Self::deconstruct_value(val, size);
@@ -57,6 +61,7 @@ impl MemoryBank {
         }
     }
 
+    // Ghidra: memstate.cc:252 MemoryBank::getValue
     /// Retrieve the value encoded in a (small) range of bytes.
     pub fn get_value(&self, offset: u64, size: usize) -> u64 {
         let mut buf = vec![0u8; size];
@@ -68,6 +73,7 @@ impl MemoryBank {
         Self::construct_value(&buf)
     }
 
+    // Ghidra: memstate.cc:302 MemoryBank::setChunk
     /// Set values of an arbitrary sequence of bytes.
     pub fn set_chunk(&mut self, offset: u64, val: &[u8]) {
         for (i, &b) in val.iter().enumerate() {
@@ -75,6 +81,7 @@ impl MemoryBank {
         }
     }
 
+    // Ghidra: memstate.cc:335 MemoryBank::getChunk
     /// Retrieve an arbitrary sequence of bytes.
     pub fn get_chunk(&self, offset: u64, size: usize) -> Vec<u8> {
         let mut result = vec![0u8; size];
@@ -86,6 +93,7 @@ impl MemoryBank {
         result
     }
 
+    // Ghidra: memstate.cc:27 MemoryBank::constructValue
     /// Decode bytes to a value (little-endian).
     pub fn construct_value(ptr: &[u8]) -> u64 {
         let mut val: u64 = 0;
@@ -95,6 +103,7 @@ impl MemoryBank {
         val
     }
 
+    // Ghidra: memstate.cc:53 MemoryBank::deconstructValue
     /// Encode a value to bytes (little-endian).
     pub fn deconstruct_value(val: u64, size: usize) -> Vec<u8> {
         let mut result = vec![0u8; size];
@@ -104,16 +113,19 @@ impl MemoryBank {
         result
     }
 
+    // Ghidra: memstate.cc:75 MemoryBank::insertWord
     /// Insert a word at an aligned location.
     pub fn insert_word(&mut self, addr: u64, val: u64) {
         self.words.insert(addr, val);
     }
 
+    // Ghidra: memstate.cc:75 MemoryBank::findWord
     /// Find a word at an aligned location.
     pub fn find_word(&self, addr: u64) -> Option<u64> {
         self.words.get(&addr).copied()
     }
 
+    // Ghidra: memstate.cc:75 MemoryBank::clear
     /// Clear all stored values.
     pub fn clear(&mut self) {
         self.words.clear();
@@ -131,10 +143,12 @@ pub struct MemoryImage {
 }
 
 impl MemoryImage {
+    // Ghidra: memstate.cc:407 MemoryImage::new
     pub fn new(base_addr: u64, data: Vec<u8>) -> Self {
         Self { data, base_addr }
     }
 
+    // Ghidra: memstate.cc:407 MemoryImage::read
     /// Read bytes from the image at the given offset.
     pub fn read(&self, offset: u64, size: usize) -> Vec<u8> {
         let start = (offset.saturating_sub(self.base_addr)) as usize;
@@ -147,15 +161,18 @@ impl MemoryImage {
         result
     }
 
+    // Ghidra: memstate.cc:407 MemoryImage::getValue
     /// Read a value from the image.
     pub fn get_value(&self, offset: u64, size: usize) -> u64 {
         let bytes = self.read(offset, size);
         MemoryBank::construct_value(&bytes)
     }
 
+    // Ghidra: memstate.cc:407 MemoryImage::len
     /// Get the size of the image.
     pub fn len(&self) -> usize { self.data.len() }
 
+    // Ghidra: memstate.cc:407 MemoryImage::isEmpty
     /// Check if the image is empty.
     pub fn is_empty(&self) -> bool { self.data.is_empty() }
 }
@@ -172,10 +189,12 @@ pub struct MemoryPageOverlay {
 }
 
 impl MemoryPageOverlay {
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::new
     pub fn new(page_size: usize, underlie: Option<Box<MemoryBank>>) -> Self {
         Self { underlie, pages: BTreeMap::new(), page_size }
     }
 
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::write
     /// Write bytes to the overlay.
     pub fn write(&mut self, offset: u64, data: &[u8]) {
         let page_num = offset / self.page_size as u64;
@@ -188,6 +207,7 @@ impl MemoryPageOverlay {
         }
     }
 
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::read
     /// Read bytes from the overlay.
     pub fn read(&self, offset: u64, size: usize) -> Vec<u8> {
         let page_num = offset / self.page_size as u64;
@@ -208,17 +228,20 @@ impl MemoryPageOverlay {
         result
     }
 
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::getValue
     /// Read a value from the overlay.
     pub fn get_value(&self, offset: u64, size: usize) -> u64 {
         let bytes = self.read(offset, size);
         MemoryBank::construct_value(&bytes)
     }
 
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::isPageOverlayed
     /// Check if a page is overlayed.
     pub fn is_page_overlayed(&self, page_num: u64) -> bool {
         self.pages.contains_key(&page_num)
     }
 
+    // Ghidra: memstate.cc:533 MemoryPageOverlay::numPages
     /// Get the number of overlayed pages.
     pub fn num_pages(&self) -> usize { self.pages.len() }
 }
@@ -231,25 +254,30 @@ pub struct MemState {
 }
 
 impl MemState {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new() -> Self {
         Self { banks: BTreeMap::new() }
     }
 
+    // RUGRA-GLUE: set_bank (no Ghidra counterpart found)
     /// Register a memory bank for an address space.
     pub fn set_bank(&mut self, space_name: String, bank: MemoryBank) {
         self.banks.insert(space_name, bank);
     }
 
+    // RUGRA-GLUE: get_bank (no Ghidra counterpart found)
     /// Get a memory bank by space name.
     pub fn get_bank(&self, space_name: &str) -> Option<&MemoryBank> {
         self.banks.get(space_name)
     }
 
+    // RUGRA-GLUE: get_bank_mut (no Ghidra counterpart found)
     /// Get a mutable memory bank by space name.
     pub fn get_bank_mut(&mut self, space_name: &str) -> Option<&mut MemoryBank> {
         self.banks.get_mut(space_name)
     }
 
+    // RUGRA-GLUE: set_value (no Ghidra counterpart found)
     /// Set a value in a specific address space.
     /// Faithful to Ghidra MemState::setValue (memstate.cc:652).
     pub fn set_value(&mut self, space_name: &str, offset: u64, size: usize, val: u64) {
@@ -258,12 +286,14 @@ impl MemState {
         }
     }
 
+    // RUGRA-GLUE: get_value (no Ghidra counterpart found)
     /// Get a value from a specific address space.
     /// Faithful to Ghidra MemState::getValue (memstate.cc:668).
     pub fn get_value(&self, space_name: &str, offset: u64, size: usize) -> Option<u64> {
         self.banks.get(space_name).map(|bank| bank.get_value(offset, size))
     }
 
+    // RUGRA-GLUE: set_chunk (no Ghidra counterpart found)
     /// Write a chunk of bytes to a specific address space.
     /// Faithful to Ghidra MemState::setChunk (memstate.cc:729).
     pub fn set_chunk(&mut self, space_name: &str, offset: u64, val: &[u8]) {
@@ -272,6 +302,7 @@ impl MemState {
         }
     }
 
+    // RUGRA-GLUE: get_chunk (no Ghidra counterpart found)
     /// Read a chunk of bytes from a specific address space.
     /// Faithful to Ghidra MemState::getChunk (memstate.cc:712).
     pub fn get_chunk(&self, space_name: &str, offset: u64, size: usize) -> Vec<u8> {

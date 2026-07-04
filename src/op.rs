@@ -101,6 +101,9 @@ pub struct PcodeOp {
 }
 
 impl PcodeOp {
+    // RUGRA-GLUE: Rust ctor; Ghidra's PcodeOp constructor is private and only
+    //   called via PcodeOpBank::create (op.hh:308). Rugra exposes PcodeOp::new
+    //   because we don't have the same friend-class relationship to the bank.
     pub fn new(start: SeqNum, opcode: OpCode) -> Self {
         Self {
             opcode,
@@ -114,22 +117,28 @@ impl PcodeOp {
         }
     }
 
+    // Ghidra: op.hh:233 PcodeOp::code (returns the OpCode enum; Ghidra's
+    //   getOpcode at :232 returns the TypeOp* behavior object).
     pub fn get_opcode(&self) -> OpCode {
         self.opcode
     }
 
+    // Ghidra: op.hh:160 PcodeOp::getAddr
     pub fn get_addr(&self) -> Address {
         self.start.get_addr()
     }
 
+    // Ghidra: op.hh:162 PcodeOp::getSeqNum
     pub fn get_seq_num(&self) -> &SeqNum {
         &self.start
     }
 
+    // Ghidra: op.hh:153 PcodeOp::numInput
     pub fn num_input(&self) -> usize {
         self.inrefs.len()
     }
 
+    // Ghidra: op.hh:156 PcodeOp::getIn
     pub fn get_in(&self, slot: usize) -> Option<&Arc<RwLock<Varnode>>> {
         self.inrefs.get(slot)
     }
@@ -143,14 +152,17 @@ impl PcodeOp {
         self.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, vn))
     }
 
+    // Ghidra: op.hh:154 PcodeOp::getOut
     pub fn get_out(&self) -> Option<&Arc<RwLock<Varnode>>> {
         self.output.as_ref()
     }
 
+    // Ghidra: op.hh:173 PcodeOp::isDead
     pub fn is_dead(&self) -> bool {
         (self.flags & pcodeop_flags::DEAD) != 0
     }
 
+    // Ghidra: op.hh:175 PcodeOp::isCall
     pub fn is_call(&self) -> bool {
         (self.flags & pcodeop_flags::CALL) != 0
     }
@@ -159,12 +171,14 @@ impl PcodeOp {
     /// that tracks a memory side-effect)? Faithful to `PcodeOp::isIndirectSource`
     /// (op.hh:180). RuleEarlyRemoval must not remove such ops, or the INDIRECT
     /// is left referencing a dead varnode.
+    // Ghidra: op.hh:202 PcodeOp::isIndirectSource
     pub fn is_indirect_source(&self) -> bool {
         (self.flags & pcodeop_flags::INDIRECT_SOURCE) != 0
     }
 
     /// Is this a marker op (MULTIEQUAL/INDIRECT)? Faithful to
     /// `PcodeOp::isMarker` (op.hh:185).
+    // Ghidra: op.hh:178 PcodeOp::isMarker
     pub fn is_marker(&self) -> bool {
         (self.flags & pcodeop_flags::MARKER) != 0
     }
@@ -173,18 +187,21 @@ impl PcodeOp {
     /// (op.hh:432). Set by heritage's discoverIndexedStackPointers when a STORE
     /// reads a stack-pointer-derived address. guardStores checks this to decide
     /// whether to build a Stack-space INDIRECT.
+    // Ghidra: op.hh:228 PcodeOp::usesSpacebasePtr
     pub fn uses_spacebase_ptr(&self) -> bool {
         (self.flags & pcodeop_flags::SPACEBASE_PTR) != 0
     }
 
     /// Mark this op as using a spacebase pointer. Faithful to
     /// `Funcdata::opMarkSpacebasePtr` (funcdata.hh:487).
+    // Ghidra: op.hh:138 PcodeOp::setFlag(spacebase_ptr) (called by Funcdata::opMarkSpacebasePtr)
     pub fn mark_spacebase_ptr(&mut self) {
         self.flags |= pcodeop_flags::SPACEBASE_PTR;
     }
 
     /// Is this op's output a boolean? Faithful to `PcodeOp::isBoolOutput`
     /// (op.hh:190).
+    // Ghidra: op.hh:184 PcodeOp::isBoolOutput
     pub fn is_bool_output(&self) -> bool {
         (self.flags & pcodeop_flags::BOOLOUTPUT) != 0
     }
@@ -192,6 +209,7 @@ impl PcodeOp {
     /// Is the CBRANCH's boolean sense flipped? Faithful to
     /// `PcodeOp::isBooleanFlip` (op.hh:210). When true, the CBRANCH takes
     /// the fallthru edge on a TRUE input (and branches on FALSE).
+    // Ghidra: op.hh:191 PcodeOp::isBooleanFlip
     pub fn is_boolean_flip(&self) -> bool {
         (self.flags & pcodeop_flags::BOOLEAN_FLIP) != 0
     }
@@ -199,6 +217,7 @@ impl PcodeOp {
     /// Compare the control-flow order of this op and `bop`. Returns -1 if
     /// this op comes before bop, 1 if after, 0 if unordered. Faithful to
     /// `PcodeOp::compareOrder` (op.cc:778-790).
+    // Ghidra: op.cc:778 PcodeOp::compareOrder
     pub fn compare_order(
         &self,
         bop: &PcodeOp,
@@ -224,6 +243,7 @@ impl PcodeOp {
 
     /// Get the evaluation type flags (unary/binary/special/ternary). Faithful
     /// to `PcodeOp::getEvalType` (op.hh:169).
+    // Ghidra: op.hh:169 PcodeOp::getEvalType
     pub fn get_eval_type(&self) -> u32 {
         self.flags
             & (pcodeop_flags::UNARY | pcodeop_flags::BINARY | pcodeop_flags::SPECIAL | pcodeop_flags::TERNARY)
@@ -232,6 +252,7 @@ impl PcodeOp {
     /// Compute a hash for common-subexpression detection. Faithful to
     /// `PcodeOp::getCseHash` (op.cc:130-147). Returns 0 for non-unary/binary
     /// ops or COPY ops.
+    // Ghidra: op.cc:130 PcodeOp::getCseHash
     pub fn get_cse_hash(&self) -> u64 {
         if (self.get_eval_type() & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) == 0 {
             return 0;
@@ -256,6 +277,7 @@ impl PcodeOp {
 
     /// Do these two ops represent a common subexpression? Faithful to
     /// `PcodeOp::isCseMatch` (op.cc:153-171).
+    // Ghidra: op.cc:153 PcodeOp::isCseMatch
     pub fn is_cse_match(&self, other: &PcodeOp) -> bool {
         if (self.get_eval_type() & (pcodeop_flags::UNARY | pcodeop_flags::BINARY)) == 0 {
             return false;
@@ -293,23 +315,27 @@ impl PcodeOp {
         true
     }
 
+    // Ghidra: op.hh:185 PcodeOp::isBranch
     pub fn is_branch(&self) -> bool {
         (self.flags & pcodeop_flags::BRANCH) != 0
     }
 
     /// Is this op's output a calculated boolean value? Faithful to
     /// `PcodeOp::isCalculatedBool` (op.hh:211).
+    // Ghidra: op.hh:211 PcodeOp::isCalculatedBool
     pub fn is_calculated_bool(&self) -> bool {
         (self.flags & (pcodeop_flags::CALCULATED_BOOL | pcodeop_flags::BOOLOUTPUT)) != 0
     }
 
     /// Does this op consume/produce a pointer? Faithful to
     /// `PcodeOp::isPtrFlow` (op.hh:205).
+    // Ghidra: op.hh:205 PcodeOp::isPtrFlow
     pub fn is_ptr_flow(&self) -> bool {
         (self.flags & pcodeop_flags::PTRFLOW) != 0
     }
     /// Mark this op as consuming/producing ptrs. Faithful to
     /// `PcodeOp::setPtrFlow` (op.hh:206).
+    // Ghidra: op.hh:206 PcodeOp::setPtrFlow
     pub fn set_ptr_flow(&mut self) {
         self.flags |= pcodeop_flags::PTRFLOW;
     }
@@ -317,32 +343,39 @@ impl PcodeOp {
     /// Has this cpool op been checked for transforms? Faithful to
     /// `PcodeOp::isCpoolTransformed` (op.hh:213). Uses addlflags bit 0x20
     /// (Ghidra `is_cpool_transformed = 0x20`, op.hh:114).
+    // Ghidra: op.hh:213 PcodeOp::isCpoolTransformed
     pub fn is_cpool_transformed(&self) -> bool {
         (self.addlflags & 0x20) != 0
     }
     /// Mark this cpool op as transformed. Faithful to
     /// `PcodeOp::setAdditionalFlag(is_cpool_transformed)` (op.hh:140/213).
+    // Ghidra: op.hh:140 PcodeOp::setAdditionalFlag(is_cpool_transformed)
     pub fn mark_cpool_transformed(&mut self) {
         self.addlflags |= 0x20;
     }
 
     /// Does this op require special printing? (op.hh:208, addlflags 0x2)
+    // Ghidra: op.hh:208 PcodeOp::doesSpecialPrinting
     pub fn does_special_printing(&self) -> bool {
         (self.addlflags & op_addl_flags::SPECIAL_PRINT) != 0
     }
 
     /// Clear the stop-type-propagation flag. (op.hh:217, addlflags 0x40)
+    // Ghidra: op.hh:217 PcodeOp::clearStopTypePropagation
     pub fn clear_stop_type_propagation(&mut self) {
         self.addlflags &= !op_addl_flags::STOP_TYPE_PROPAGATION;
     }
+    // Ghidra: op.hh:215 PcodeOp::stopsTypePropagation
     pub fn stops_type_propagation(&self) -> bool {
         (self.addlflags & op_addl_flags::STOP_TYPE_PROPAGATION) != 0
     }
 
     /// Is this op marked to never be indirect-collapsed? (op.hh:223, addlflags 0x200)
+    // Ghidra: op.hh:223 PcodeOp::noIndirectCollapse
     pub fn no_indirect_collapse(&self) -> bool {
         (self.addlflags & op_addl_flags::NO_INDIRECT_COLLAPSE) != 0
     }
+    // Ghidra: op.hh:224 PcodeOp::setNoIndirectCollapse
     pub fn set_no_indirect_collapse(&mut self) {
         self.addlflags |= op_addl_flags::NO_INDIRECT_COLLAPSE;
     }
@@ -350,6 +383,9 @@ impl PcodeOp {
 
 /// Comparison for sorting PcodeOps in the bank
 impl PartialEq for PcodeOp {
+    // RUGRA-GLUE: Rust PartialEq impl; Ghidra orders PcodeOps by SeqNum via
+    //   std::map<SeqNum,PcodeOp*> (PcodeOpTree, op.hh:280) and has no
+    //   operator== on PcodeOp.
     fn eq(&self, other: &Self) -> bool {
         self.start == other.start
     }
@@ -358,12 +394,15 @@ impl PartialEq for PcodeOp {
 impl Eq for PcodeOp {}
 
 impl PartialOrd for PcodeOp {
+    // RUGRA-GLUE: delegates to Ord (see below).
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for PcodeOp {
+    // RUGRA-GLUE: Rust Ord impl mirroring Ghidra's SeqNum ordering used by
+    //   PcodeOpTree (op.hh:280 std::map<SeqNum,PcodeOp*>).
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.start.cmp(&other.start)
     }
@@ -374,6 +413,8 @@ impl Ord for PcodeOp {
 pub struct PcodeOpRef(pub Arc<RwLock<PcodeOp>>);
 
 impl PartialEq for PcodeOpRef {
+    // RUGRA-GLUE: Rust PartialEq impl for the Arc wrapper; Ghidra has no
+    //   equivalent (uses raw PcodeOp* pointers).
     fn eq(&self, other: &Self) -> bool {
         if Arc::ptr_eq(&self.0, &other.0) { return true; }
         self.0.read().unwrap().eq(&other.0.read().unwrap())
@@ -383,12 +424,15 @@ impl PartialEq for PcodeOpRef {
 impl Eq for PcodeOpRef {}
 
 impl PartialOrd for PcodeOpRef {
+    // RUGRA-GLUE: delegates to Ord (see below).
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for PcodeOpRef {
+    // RUGRA-GLUE: Rust Ord impl for the Arc wrapper; delegates to the inner
+    //   PcodeOp Ord (SeqNum ordering).
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         self.0.read().unwrap().cmp(&other.0.read().unwrap())
@@ -404,6 +448,7 @@ pub struct PieceNode {
 }
 
 impl PieceNode {
+    // Ghidra: op.hh:268 PieceNode::PieceNode (ctor)
     pub fn new(op: Weak<RwLock<PcodeOp>>, slot: i32, offset: i32) -> Self {
         Self {
             piece_op: op,
@@ -413,14 +458,17 @@ impl PieceNode {
         }
     }
 
+    // Ghidra: op.hh:269 PieceNode::isLeaf
     pub fn is_leaf(&self) -> bool {
         self.leaf
     }
 
+    // Ghidra: op.hh:270 PieceNode::getTypeOffset
     pub fn get_type_offset(&self) -> i32 {
         self.type_offset
     }
 
+    // Ghidra: op.hh:271 PieceNode::getSlot
     pub fn get_slot(&self) -> i32 {
         self.slot
     }
@@ -443,6 +491,7 @@ pub struct PcodeOpBank {
 }
 
 impl PcodeOpBank {
+    // Ghidra: op.hh:304 PcodeOpBank::PcodeOpBank (ctor; uniqid = 0)
     pub fn new() -> Self {
         Self {
             optree: BTreeSet::new(),
@@ -453,6 +502,7 @@ impl PcodeOpBank {
     }
 
     /// Create a new P-code operation and add it to the bank
+    // Ghidra: op.hh:308 PcodeOpBank::create
     pub fn create(&mut self, opcode: OpCode, num_inputs: usize, addr: Address) -> PcodeOpRef {
         let seq = SeqNum::new(addr, self.uniqid);
         self.uniqid += 1;
@@ -467,6 +517,7 @@ impl PcodeOpBank {
         op_ref
     }
 
+    // Ghidra: op.hh:313 PcodeOpBank::markAlive
     pub fn mark_alive(&mut self, op: PcodeOpRef) {
         let mut op_borrow = op.0.write().unwrap();
         if (op_borrow.flags & pcodeop_flags::DEAD) != 0 {
@@ -477,6 +528,7 @@ impl PcodeOpBank {
         }
     }
 
+    // Ghidra: op.hh:314 PcodeOpBank::markDead
     pub fn mark_dead(&mut self, op: PcodeOpRef) {
         let mut op_borrow = op.0.write().unwrap();
         if (op_borrow.flags & pcodeop_flags::DEAD) == 0 {
@@ -487,11 +539,13 @@ impl PcodeOpBank {
         }
     }
 
+    // Ghidra: op.hh:312 PcodeOpBank::changeOpcode
     pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode) {
         let mut op_borrow = op.0.write().unwrap();
         op_borrow.opcode = new_opc;
     }
 
+    // Ghidra: op.hh:311 PcodeOpBank::destroyDead
     pub fn destroy_dead(&mut self) {
         for op in &self.deadlist {
             self.optree.remove(op);
@@ -499,6 +553,7 @@ impl PcodeOpBank {
         self.deadlist.clear();
     }
 
+    // Ghidra: op.hh:310 PcodeOpBank::destroy
     pub fn destroy(&mut self, op: PcodeOpRef) {
         self.optree.remove(&op);
         self.alivelist
@@ -507,6 +562,7 @@ impl PcodeOpBank {
             .retain(|x| Arc::as_ptr(&x.0) != Arc::as_ptr(&op.0));
     }
 
+    // Ghidra: op.hh:320 PcodeOpBank::findOp
     pub fn find_op(&self, seq: &SeqNum) -> Option<PcodeOpRef> {
         for op_ref in &self.optree {
             if &op_ref.0.read().unwrap().start == seq {
@@ -516,6 +572,7 @@ impl PcodeOpBank {
         None
     }
 
+    // Ghidra: op.hh:303 PcodeOpBank::clear
     pub fn clear(&mut self) {
         self.optree.clear();
         self.alivelist.clear();
@@ -523,20 +580,25 @@ impl PcodeOpBank {
         self.uniqid = 0;
     }
 
+    // Ghidra: op.hh:318 PcodeOpBank::empty
     pub fn is_empty(&self) -> bool {
         self.optree.is_empty()
     }
 
+    // Ghidra: op.hh:307 PcodeOpBank::getUniqId
     pub fn get_uniqid(&self) -> u32 {
         self.uniqid
     }
 
+    // Ghidra: op.hh:306 PcodeOpBank::setUniqId
     pub fn set_uniqid(&mut self, val: u32) {
         self.uniqid = val;
     }
 }
 
 impl Default for PcodeOpBank {
+    // RUGRA-GLUE: Rust Default impl; Ghidra has no Default concept but the
+    //   PcodeOpBank() ctor (op.hh:304) is the equivalent zero-initializer.
     fn default() -> Self {
         Self::new()
     }

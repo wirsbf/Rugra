@@ -31,6 +31,7 @@ pub struct Merge {
 }
 
 impl Merge {
+    // Ghidra: merge.hh:83 Merge::new
     /// Create a new Merge instance
     pub fn new() -> Self {
         Self {
@@ -40,6 +41,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:1580 Merge::clear
     /// Clear all existing HighVariables and reset merge state
     pub fn clear(&mut self, fd: &mut Funcdata) {
         for vn_ref in &fd.vbank.loc_tree {
@@ -49,6 +51,7 @@ impl Merge {
         self.copy_trims.clear();
     }
 
+    // Ghidra: merge.hh:83 Merge::liveVarnodeSet
     /// Decide whether a varnode should participate in merging.
     ///
     /// Faithful to the contract of Ghidra's merge: it operates on the
@@ -94,6 +97,7 @@ impl Merge {
         live
     }
 
+    // Ghidra: merge.hh:83 Merge::mergeAll
     /// Perform the full merging + naming pipeline.
     ///
     /// This mirrors the Ghidra merge action group (coreaction.cc:5718-5729)
@@ -166,6 +170,7 @@ impl Merge {
         self.assign_names(fd);
     }
 
+    // Ghidra: merge.hh:83 Merge::updateHighCovers
     /// Re-derive every HighVariable's internal cover from its member Varnodes.
     /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
     /// Collects the distinct HighVariables reachable from live varnodes (each
@@ -191,6 +196,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:1595 Merge::markImplied
     /// Mark a Varnode as implied. Faithful to Merge::markImplied (merge.cc:1595).
     /// In Ghidra this also sets coverdirty on the def op's inputs so their
     /// covers get recomputed; Rugra recomputes covers wholesale per merge_all,
@@ -199,6 +205,7 @@ impl Merge {
         vn.write().unwrap().set_implied();
     }
 
+    // Ghidra: merge.cc:1616 Merge::inflateTest
     /// Test if inflating a Varnode's Cover to cover `high` causes an intersection
     /// with any OTHER instance of the Varnode's own HighVariable.
     /// Faithful to Merge::inflateTest (merge.cc:1616).
@@ -238,6 +245,7 @@ impl Merge {
         false
     }
 
+    // Ghidra: merge.cc:609 Merge::mergeAddrTied
     /// Merge varnodes that are tied to the same address+size.
     ///
     /// This is the primary merge pass: varnodes at the same location
@@ -308,6 +316,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.hh:83 Merge::ensureAllHaveHigh
     /// Ensure every varnode in the bank has a HighVariable.
     /// Varnodes not merged by `merge_addr_tied` get their own singleton HighVariable.
     fn ensure_all_have_high(&mut self, fd: &mut Funcdata) {
@@ -341,6 +350,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:255 Merge::mergeTestBasic
     /// Test whether a single Varnode can ever participate in merging.
     /// Faithful to `Merge::mergeTestBasic` (merge.cc:255-264).
     ///
@@ -371,6 +381,7 @@ impl Merge {
         true
     }
 
+    // Ghidra: merge.hh:83 Merge::mergeSpeculative
     /// Speculatively merge two HighVariables iff their aggregate covers are
     /// disjoint. Faithful to `Merge::merge(high1, high2, isspeculative=true)`
     /// (merge.cc:1565-1575). This is the shared primitive behind merge_copy,
@@ -420,6 +431,7 @@ impl Merge {
         true
     }
 
+    // Ghidra: merge.cc:1657 Merge::mergeTest
     /// Test whether two varnodes can be merged into the same HighVariable.
     ///
     /// Returns true if they share the same address space and size, and
@@ -572,6 +584,7 @@ impl Merge {
         true
     }
 
+    // Ghidra: merge.hh:83 Merge::mergeForce
     /// Force-merge two varnodes into the same HighVariable.
     ///
     /// If vn1 already has a HighVariable, add vn2 to it (or vice versa).
@@ -619,6 +632,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.hh:83 Merge::assignNames
     /// Assign human-readable names to all HighVariables in the function.
     ///
     /// Naming follows Ghidra conventions:
@@ -724,6 +738,7 @@ impl Merge {
     // are invoked in order by `merge_all`.
     // ------------------------------------------------------------------
 
+    // Ghidra: merge.hh:83 Merge::mergeRequired
     /// Step 1: ActionMergeRequired (coreaction.hh:369).
     /// Faithful to `data.getMerge().mergeAddrTied(); groupPartials();
     /// mergeMarker();`. This is the initial *required* merge pass that
@@ -743,6 +758,7 @@ impl Merge {
         self.merge_marker(fd);
     }
 
+    // Ghidra: merge.cc:967 Merge::groupPartials
     /// Group CONCAT-piece roots. Faithful to `Merge::groupPartials`
     /// (merge.cc:967-976). Rugra has no `protoPartial` registry (CONCAT
     /// reconstruction is not ported), so there is nothing to group. Kept as
@@ -752,6 +768,7 @@ impl Merge {
         // machinery is available (merge.cc:967, groupPartialRoot at 1374).
     }
 
+    // Ghidra: merge.cc:889 Merge::mergeMarker
     /// Step 1c: Force-merge input and output of MULTIEQUAL and INDIRECT
     /// marker ops. Faithful to `Merge::mergeMarker` (merge.cc:889-902).
     ///
@@ -796,6 +813,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:908 Merge::mergeMultiEntry
     /// Step 4: ActionMergeMultiEntry (coreaction.hh:403).
     /// Faithful to `Merge::mergeMultiEntry` (merge.cc:908-963).
     ///
@@ -958,6 +976,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.hh:83 Merge::mergeSpeculativeByVn
     /// Helper: speculative (cover-guarded) merge of two Varnodes' HighVariables.
     /// Used by merge_copy / merge_marker where the merge is only attempted if
     /// the two resulting HighVariables would not be simultaneously live.
@@ -1844,6 +1863,7 @@ impl Merge {
         self.copy_trims.clear();
     }
 
+    // Ghidra: merge.cc:983 Merge::mergeAdjacent
     /// Step 9: ActionMergeAdjacent (coreaction.hh:381).
     /// Faithful to `Merge::mergeAdjacent` (merge.cc:983-1013).
     ///
@@ -1899,6 +1919,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.cc:359 Merge::mergeByDatatype
     /// Step 10: ActionMergeType (coreaction.hh:414).
     /// Faithful to `Merge::mergeByDatatype` (merge.cc:359-401).
     ///
@@ -2369,6 +2390,7 @@ impl Merge {
         }
     }
 
+    // Ghidra: merge.hh:83 Merge::computeVarnodeCovers
     /// Populate `vn.cover` for every writable varnode from its def op and
     /// reader ops. Mirrors Ghidra's `Varnode::calculateCover` /
     /// `HighVariable::updateCover`. Constants and annotations are skipped.
@@ -2459,11 +2481,13 @@ impl Merge {
     }
 }
 
+// Ghidra: merge.hh:83 Merge::aggregateHighCover
 fn aggregate_high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let h = high.read().unwrap();
     aggregate_high_cover_from(&h)
 }
 
+// Ghidra: merge.hh:83 Merge::aggregateHighCoverFrom
 /// Aggregate (union) the covers of every instance in a borrowed HighVariable.
 /// Used by the speculative-merge primitive and copy/adjacent/type passes to
 /// test whether two HighVariables are simultaneously live.
@@ -2477,6 +2501,7 @@ fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
     agg
 }
 
+// Ghidra: merge.hh:83 Merge::opBlockOrder
 fn op_block_order(op_arc: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<(i32, u32)> {
     let op = op_arc.read().unwrap();
     let order = op.start.get_order();
@@ -2488,6 +2513,7 @@ fn op_block_order(op_arc: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<(i32, u32)
     block_idx.map(|bi| (bi, order))
 }
 
+// Ghidra: merge.hh:83 Merge::propagateCoverThroughCfg
 /// Forward-propagate cover entries through the CFG. For each block whose
 /// cover extends to end-of-block (`end == u32::MAX`, meaning live-out),
 /// all successor blocks that don't already have a cover entry get filled
@@ -2561,6 +2587,7 @@ fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
     }
 }
 
+// Ghidra: merge.hh:83 Merge::registerName
 /// Map x86-64 register offset + size to a human-readable register name.
 ///
 /// Returns `None` for offsets that don't correspond to a known general-purpose register.

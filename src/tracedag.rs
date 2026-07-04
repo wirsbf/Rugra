@@ -73,15 +73,10 @@ pub struct TraceDAG<'a> {
     /// Finish block: if set, only the root trace can open it (Ghidra
     /// finishblock, blockaction.cc:822-823). Used by per-loop TraceDAG.
     finish_block_idx: Option<i32>,
-    /// Set of blocks already opened (conservative re-entry guard).
-    /// Ghidra does NOT have this — it relies purely on visit-count for
-    /// termination. Rugra keeps it as a safety net because visit-count
-    /// termination has not been formally proven equivalent to Ghidra's.
-    /// TODO: remove once visit-count is verified to terminate correctly.
-    opened: std::collections::HashSet<i32>,
 }
 
 impl<'a> TraceDAG<'a> {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new(graph: &'a BlockGraph) -> Self {
         Self {
             graph,
@@ -92,14 +87,15 @@ impl<'a> TraceDAG<'a> {
             likely_goto: Vec::new(),
             visit_count: HashMap::new(),
             finish_block_idx: None,
-            opened: std::collections::HashSet::new(),
         }
     }
 
+    // RUGRA-GLUE: add_root (no Ghidra counterpart found)
     pub fn add_root(&mut self, root_idx: i32) {
         self.roots.push(root_idx);
     }
 
+    // RUGRA-GLUE: size_out (no Ghidra counterpart found)
     /// Get the size_out of a block by graph index.
     fn size_out(&self, idx: i32) -> usize {
         if let Some(b) = self.graph.get_block(idx as usize) {
@@ -109,6 +105,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: get_out (no Ghidra counterpart found)
     /// Get out-edge target block index.
     fn get_out(&self, idx: i32, slot: usize) -> Option<i32> {
         if let Some(b) = self.graph.get_block(idx as usize) {
@@ -119,6 +116,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: size_in (no Ghidra counterpart found)
     /// Get size_in of a block.
     fn size_in(&self, idx: i32) -> usize {
         if let Some(b) = self.graph.get_block(idx as usize) {
@@ -128,14 +126,13 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: is_loop_dag_out (no Ghidra counterpart found)
     /// Is the i-th out-edge of `idx` a loop-DAG edge (traceable)?
-    /// Ghidra `isLoopDAGOut` (block.hh:342) checks only f_irreducible|f_goto_edge.
-    /// However, Rugra also excludes F_BACK_EDGE and F_LOOP_EXIT_EDGE to
-    /// prevent infinite tracing into cycles when visit-count termination
-    /// is incomplete (see check_open). This is a conservative superset —
-    /// it may mark some traceable edges as untraceable, but never allows
-    /// tracing into a cycle. Once check_open's visit-count is fully proven
-    /// to terminate, the F_BACK_EDGE|F_LOOP_EXIT_EDGE exclusion can be removed.
+    /// Faithful to Ghidra `FlowBlock::isLoopDAGOut` (block.hh:342):
+    ///   `(outofthis[i].label & (f_irreducible|f_back_edge|f_loop_exit_edge|f_goto_edge))==0`
+    /// An edge is traceable only if it is none of: irreducible, back-edge,
+    /// loop-exit-edge, or goto-edge. Back/loop-exit exclusion is what prevents
+    /// tracing into cycles, so termination follows structurally.
     fn is_loop_dag_out(&self, idx: i32, slot: usize) -> bool {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -149,7 +146,8 @@ impl<'a> TraceDAG<'a> {
 
     // Ghidra: block.hh:345 FlowBlock::isLoopDAGIn
     /// Is the i-th in-edge of `idx` a loop-DAG edge?
-    /// See is_loop_dag_out for the F_BACK_EDGE|F_LOOP_EXIT_EDGE exclusion note.
+    /// Faithful to Ghidra `FlowBlock::isLoopDAGIn` (block.hh:345): same
+    /// four-flag mask as isLoopDAGOut.
     fn is_loop_dag_in(&self, idx: i32, slot: usize) -> bool {
         if let Some(b) = self.graph.get_block(idx as usize) {
             let r = b.read().unwrap();
@@ -168,6 +166,7 @@ impl<'a> TraceDAG<'a> {
         self.finish_block_idx = Some(idx);
     }
 
+    // RUGRA-GLUE: initialize (no Ghidra counterpart found)
     /// Initialize: create root BranchPoint and traces for each root.
     pub fn initialize(&mut self) {
         // Root BranchPoint (virtual, no real block)
@@ -197,16 +196,19 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: insert_active (no Ghidra counterpart found)
     fn insert_active(&mut self, trace_idx: usize) {
         self.active_list.push(trace_idx);
         self.traces[trace_idx].active = true;
     }
 
+    // RUGRA-GLUE: remove_active (no Ghidra counterpart found)
     fn remove_active(&mut self, trace_idx: usize) {
         self.active_list.retain(|&i| i != trace_idx);
         self.traces[trace_idx].active = false;
     }
 
+    // RUGRA-GLUE: check_open (no Ghidra counterpart found)
     /// Check if a trace can push into its dest node.
     /// Faithful to `TraceDAG::checkOpen` (blockaction.cc:810-833).
     /// A node is openable when the number of traced loop-DAG in-edges
@@ -224,10 +226,6 @@ impl<'a> TraceDAG<'a> {
         let dest = trace.dest_block_idx;
         if dest < 0 {
             return false;
-        }
-        // Conservative re-entry guard (Ghidra does NOT have this; see field doc).
-        if self.opened.contains(&dest) {
-            return true;
         }
         // finishblock guard (blockaction.cc:822-823): only root can open it.
         if !is_root && self.finish_block_idx == Some(dest) {
@@ -249,6 +247,7 @@ impl<'a> TraceDAG<'a> {
         true
     }
 
+    // RUGRA-GLUE: check_retirement (no Ghidra counterpart found)
     /// Check if a BranchPoint can be retired (all paths terminal or to same exit).
     fn check_retirement(&self, trace_idx: usize) -> Option<i32> {
         let trace = &self.traces[trace_idx];
@@ -287,12 +286,12 @@ impl<'a> TraceDAG<'a> {
         Some(exit_block)
     }
 
+    // RUGRA-GLUE: open_branch (no Ghidra counterpart found)
     /// Open a branch: create new BranchPoint at dest node with sub-traces.
     /// Faithful to Ghidra `BranchPoint::createTraces` (blockaction.cc:499-507)
     /// + `openBranch` (blockaction.cc:839-858).
     fn open_branch(&mut self, trace_idx: usize) {
         let dest = self.traces[trace_idx].dest_block_idx;
-        self.opened.insert(dest); // Conservative re-entry guard.
         let top_bp = self.traces[trace_idx].top_bp;
         let parent_depth = self.branch_points[top_bp].depth;
         let parent_pathout = self.traces[trace_idx].pathout;
@@ -314,9 +313,6 @@ impl<'a> TraceDAG<'a> {
             // Ghidra: if (!top->isLoopDAGOut(i)) continue;
             if !self.is_loop_dag_out(dest, eo) { continue; }
             if let Some(target) = self.get_out(dest, eo) {
-                // Conservative: skip edges to already-opened nodes (prevents
-                // re-tracing into cycles). Ghidra does NOT need this.
-                if self.opened.contains(&target) { continue; }
                 let new_trace_idx = self.traces.len();
                 self.traces.push(BlockTrace {
                     top_bp: new_bp_idx,
@@ -347,6 +343,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: retire_branch (no Ghidra counterpart found)
     /// Retire a BranchPoint: update parent trace.
     fn retire_branch(&mut self, bp_idx: usize, exit_block: i32) {
         let parent_trace_idx;
@@ -397,6 +394,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: remove_trace (no Ghidra counterpart found)
     /// Remove a trace (mark its edge as goto).
     fn remove_trace(&mut self, trace_idx: usize) {
         let bottom = self.traces[trace_idx].bottom_block_idx;
@@ -431,6 +429,7 @@ impl<'a> TraceDAG<'a> {
         self.traces[trace_idx].terminal = true;
     }
 
+    // RUGRA-GLUE: select_bad_edge (no Ghidra counterpart found)
     /// Select the worst edge to mark as goto using BadEdgeScore.
     /// Scores: siblingedge (shared BranchPoint), terminal (dest has no out),
     /// distance (between branch points), depth. The highest score = most likely bad edge.
@@ -526,12 +525,45 @@ impl<'a> TraceDAG<'a> {
         scores[best].trace_idx
     }
 
+    // RUGRA-GLUE: push_branches (no Ghidra counterpart found)
     /// Main algorithm: push traces forward, marking bad edges as goto.
     pub fn push_branches(&mut self) {
         let mut missed = 0;
         let mut pos = 0usize;
+        // DIAGNOSTIC: hard ceiling to surface any non-termination cleanly.
+        // Ghidra's trace is structurally terminating (back/loop-exit edges
+        // excluded by isLoopDAGOut/In, plus the missed>=active_count bad-edge
+        // fallback removes one trace per pass). If this ceiling ever fires
+        // it indicates a flag-computation bug, not a missing guard.
+        let mut iter_guard = 0u64;
+        let iter_cap = 5000u64;
 
         while !self.active_list.is_empty() {
+            iter_guard += 1;
+            if iter_guard > iter_cap {
+                eprintln!(
+                    "[TRACEDAG] iter cap {} hit for graph size {} — investigate flag calc",
+                    iter_cap,
+                    self.graph.get_size()
+                );
+                // Dump active traces for diagnosis
+                for &ai in &self.active_list {
+                    let t = &self.traces[ai];
+                    let dest = t.dest_block_idx;
+                    let sin = if dest >= 0 { self.size_in(dest) } else { 0 };
+                    let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
+                    let mut loopdag_in = 0;
+                    for s in 0..sin {
+                        if self.is_loop_dag_in(dest, s) { loopdag_in += 1; }
+                    }
+                    let bp = &self.branch_points[t.top_bp];
+                    eprintln!(
+                        "[TRACEDAG]   trace#{} dest={} active={} terminal={} edgelump={} vc={} loopDAG_in={} total_in={} bp_depth={}",
+                        ai, dest, t.active, t.terminal, t.edgelump, vc, loopdag_in, sin, bp.depth
+                    );
+                }
+                break;
+            }
             if pos >= self.active_list.len() {
                 pos = 0;
             }
@@ -563,6 +595,7 @@ impl<'a> TraceDAG<'a> {
         }
     }
 
+    // RUGRA-GLUE: run (no Ghidra counterpart found)
     /// Run the full TraceDAG: initialize, push branches, return likely goto edges.
     pub fn run(mut self) -> Vec<FloatingEdge> {
         self.initialize();
@@ -571,6 +604,7 @@ impl<'a> TraceDAG<'a> {
     }
 }
 
+// RUGRA-GLUE: generate_likely_gotos (no Ghidra counterpart found)
 /// Generate likely goto edges for a function's control-flow graph.
 /// Returns a list of (source_block_idx, dest_block_idx) edges that should be
 /// marked as unstructured goto to allow structured recovery.

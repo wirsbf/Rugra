@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
+// RUGRA-GLUE: base_type_for (no Ghidra counterpart found)
 /// Build a base integer/unsigned type for a given size and metatype.
 /// Faithful to Ghidra `TypeFactory::getBase(size, metatype)` (type.cc) for
 /// the integer cases: size 1→char/byte, 2→short, 4→int, 8→long (signed) /
@@ -32,15 +33,19 @@ pub fn base_type_for(size: usize, meta: TypeMetatype) -> Arc<Datatype> {
 ///
 /// Corresponds to Ghidra's `CastStrategy` class.
 pub trait CastStrategy {
+    // RUGRA-GLUE: is_cast_implied (no Ghidra counterpart found)
     /// Decide if an explicit cast is required between two types
     fn is_cast_implied(&self, out_type: &Datatype, in_type: &Datatype) -> bool;
 
+    // RUGRA-GLUE: cast_standard (no Ghidra counterpart found)
     /// Get the type of a constant, given a specific size and output requirement
     fn cast_standard(&self, out_type: &Datatype, in_type: &Datatype) -> Option<Arc<Datatype>>;
 
+    // RUGRA-GLUE: check_int_promotion_for_extension (no Ghidra counterpart found)
     /// Determine if an integer promotion is required for an extension
     fn check_int_promotion_for_extension(&self, op_type: &Datatype) -> bool;
 
+    // RUGRA-GLUE: check_int_promotion_for_compare (no Ghidra counterpart found)
     /// Determine if an integer promotion is required for a comparison
     fn check_int_promotion_for_compare(&self, op_type: &Datatype) -> bool;
 }
@@ -54,20 +59,24 @@ pub struct CastStrategyC {
 }
 
 impl CastStrategyC {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     pub fn new(promote_size: usize) -> Self {
         Self { promote_size }
     }
 
+    // RUGRA-GLUE: is_char_type (no Ghidra counterpart found)
     /// Check if the type is a character type
     fn is_char_type(&self, dt: &Datatype) -> bool {
         // In Rugra, this would check the CHARTYPE flag in TypeBase
         (dt.get_flags() & crate::type_system::datatype::type_flags::CHARTYPE) != 0
     }
 
+    // RUGRA-GLUE: is_enum_type (no Ghidra counterpart found)
     /// Check if the type is an enumeration type
     fn is_enum_type(&self, dt: &Datatype) -> bool {
         matches!(dt.get_metatype(), TypeMetatype::Enum)
     }
+    // Ghidra: cast.cc:411 CastStrategyC::isSubpieceCast
     /// Check if a SUBPIECE op should be rendered as a cast.
     /// Faithful to Ghidra CastStrategyC::isSubpieceCast (cast.cc:411).
     pub fn is_subpiece_cast(&self, out_type: &Datatype, in_type: &Datatype, offset: u32) -> bool {
@@ -89,6 +98,7 @@ impl CastStrategyC {
         true
     }
 
+    // Ghidra: cast.cc:434 CastStrategyC::isSubpieceCastEndian
     /// Check if a SUBPIECE with endianness should be rendered as a cast.
     /// Faithful to Ghidra CastStrategyC::isSubpieceCastEndian (cast.cc:434).
     pub fn is_subpiece_cast_endian(&self, out_type: &Datatype, in_type: &Datatype, offset: u32, is_bigend: bool) -> bool {
@@ -96,6 +106,7 @@ impl CastStrategyC {
         self.is_subpiece_cast(out_type, in_type, tmpoff)
     }
 
+    // Ghidra: cast.cc:443 CastStrategyC::isSextCast
     /// Check if INT_SEXT should be rendered as a cast.
     /// Faithful to Ghidra CastStrategyC::isSextCast (cast.cc:443).
     pub fn is_sext_cast(&self, out_type: &Datatype, in_type: &Datatype) -> bool {
@@ -106,6 +117,7 @@ impl CastStrategyC {
         matches!(metain, TypeMetatype::Int | TypeMetatype::Bool)
     }
 
+    // Ghidra: cast.cc:457 CastStrategyC::isZextCast
     /// Check if INT_ZEXT should be rendered as a cast.
     /// Faithful to Ghidra CastStrategyC::isZextCast (cast.cc:457).
     pub fn is_zext_cast(&self, out_type: &Datatype, in_type: &Datatype) -> bool {
@@ -118,6 +130,7 @@ impl CastStrategyC {
 }
 
 impl CastStrategy for CastStrategyC {
+    // RUGRA-GLUE: is_cast_implied (no Ghidra counterpart found)
     fn is_cast_implied(&self, out_type: &Datatype, in_type: &Datatype) -> bool {
         if Arc::ptr_eq(&Arc::new(out_type.clone()), &Arc::new(in_type.clone())) {
             return true;
@@ -154,6 +167,7 @@ impl CastStrategy for CastStrategyC {
         false
     }
 
+    // Ghidra: cast.cc:300 CastStrategyC::castStandard
     fn cast_standard(&self, out_type: &Datatype, in_type: &Datatype) -> Option<Arc<Datatype>> {
         if self.is_cast_implied(out_type, in_type) {
             return None;
@@ -161,6 +175,7 @@ impl CastStrategy for CastStrategyC {
         Some(Arc::new(out_type.clone()))
     }
 
+    // Ghidra: cast.cc:126 CastStrategyC::checkIntPromotionForExtension
     fn check_int_promotion_for_extension(&self, op_type: &Datatype) -> bool {
         let size = op_type.get_size();
         if size >= self.promote_size {
@@ -171,6 +186,7 @@ impl CastStrategy for CastStrategyC {
         matches!(meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool | TypeMetatype::Enum)
     }
 
+    // Ghidra: cast.cc:107 CastStrategyC::checkIntPromotionForCompare
     fn check_int_promotion_for_compare(&self, op_type: &Datatype) -> bool {
         let size = op_type.get_size();
         if size >= self.promote_size {
@@ -183,6 +199,7 @@ impl CastStrategy for CastStrategyC {
 }
 
 impl CastStrategyC {
+    // RUGRA-GLUE: cast_standard_full (no Ghidra counterpart found)
     /// Faithful 1:1 port of Ghidra `CastStrategyC::castStandard`
     /// (cast.cc:300-392). Determines whether an explicit cast is required
     /// when a varnode of `curtype` feeds an op expecting `reqtype`.

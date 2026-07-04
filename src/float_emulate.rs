@@ -44,6 +44,7 @@ pub struct FloatFormat {
 }
 
 impl FloatFormat {
+    // Ghidra: float.cc:36 FloatFormat::new
     /// Construct default IEEE 754 standard settings for the given byte size.
     /// Supports size=4 (single) and size=8 (double).
     pub fn new(size: usize) -> Self {
@@ -74,9 +75,11 @@ impl FloatFormat {
         }
     }
 
+    // Ghidra: float.cc:36 FloatFormat::getSize
     /// Get the size of the encoding in bytes.
     pub fn get_size(&self) -> usize { self.size }
 
+    // Ghidra: float.cc:228 FloatFormat::getHostFloat
     /// Convert an encoding into the host's f64.
     pub fn get_host_float(&self, encoding: u64, ftype: &mut FloatClass) -> f64 {
         let sign = self.extract_sign(encoding);
@@ -112,6 +115,7 @@ impl FloatFormat {
         if sign { -val } else { val }
     }
 
+    // Ghidra: float.cc:293 FloatFormat::getEncoding
     /// Convert the host's f64 into this encoding.
     pub fn get_encoding(&self, host: f64) -> u64 {
         match self.size {
@@ -121,21 +125,25 @@ impl FloatFormat {
         }
     }
 
+    // Ghidra: float.cc:113 FloatFormat::extractFractionalCode
     /// Extract the fractional part of the encoding.
     pub fn extract_fractional_code(&self, x: u64) -> u64 {
         (x >> self.frac_pos) & ((1u64 << self.frac_size) - 1)
     }
 
+    // Ghidra: float.cc:123 FloatFormat::extractSign
     /// Extract the sign bit from the encoding.
     pub fn extract_sign(&self, x: u64) -> bool {
         (x >> self.signbit_pos) & 1 != 0
     }
 
+    // Ghidra: float.cc:132 FloatFormat::extractExponentCode
     /// Extract the exponent from the encoding.
     pub fn extract_exponent_code(&self, x: u64) -> u32 {
         ((x >> self.exp_pos) & ((1u64 << self.exp_size) - 1)) as u32
     }
 
+    // Ghidra: float.cc:144 FloatFormat::setFractionalCode
     /// Set the fractional code bits in the encoding.
     /// Faithful to Ghidra FloatFormat::setFractionalCode (float.cc:144).
     pub fn set_fractional_code(&self, x: u64, code: u64) -> u64 {
@@ -143,12 +151,14 @@ impl FloatFormat {
         (x & !mask) | ((code << self.frac_pos) & mask)
     }
 
+    // Ghidra: float.cc:158 FloatFormat::setSign
     /// Set the sign bit in the encoding.
     /// Faithful to Ghidra FloatFormat::setSign (float.cc:158).
     pub fn set_sign(&self, x: u64, sign: bool) -> u64 {
         if sign { x | (1u64 << self.signbit_pos) } else { x & !(1u64 << self.signbit_pos) }
     }
 
+    // Ghidra: float.cc:171 FloatFormat::setExponentCode
     /// Set the exponent bits in the encoding.
     /// Faithful to Ghidra FloatFormat::setExponentCode (float.cc:171).
     pub fn set_exponent_code(&self, x: u64, code: u32) -> u64 {
@@ -156,12 +166,14 @@ impl FloatFormat {
         (x & !mask) | (((code as u64) << self.exp_pos) & mask)
     }
 
+    // Ghidra: float.cc:181 FloatFormat::getZeroEncoding
     /// Get the encoding for zero (positive or negative).
     /// Faithful to Ghidra FloatFormat::getZeroEncoding (float.cc:181).
     pub fn get_zero_encoding(&self, sgn: bool) -> u64 {
         self.set_sign(0, sgn)
     }
 
+    // Ghidra: float.cc:193 FloatFormat::getInfinityEncoding
     /// Get the encoding for infinity (positive or negative).
     /// Faithful to Ghidra FloatFormat::getInfinityEncoding (float.cc:193).
     pub fn get_infinity_encoding(&self, sgn: bool) -> u64 {
@@ -169,6 +181,7 @@ impl FloatFormat {
         self.set_sign(self.set_fractional_code(0, 0) | (inf_exp << self.exp_pos), sgn)
     }
 
+    // Ghidra: float.cc:36 FloatFormat::getNanEncoding
     /// Get the encoding for NaN (positive or negative).
     /// Faithful to Ghidra FloatFormat::getNaNEncoding (float.cc:205).
     pub fn get_nan_encoding(&self, sgn: bool) -> u64 {
@@ -177,6 +190,7 @@ impl FloatFormat {
         self.set_sign(self.set_fractional_code(0, nan_frac) | (inf_exp << self.exp_pos), sgn)
     }
 
+    // Ghidra: float.cc:483 FloatFormat::opNotEqual
     /// Inequality comparison (!=)
     pub fn op_not_equal(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -186,6 +200,7 @@ impl FloatFormat {
         if va != vb { 1 } else { 0 }
     }
 
+    // Ghidra: float.cc:496 FloatFormat::opLess
     /// Less-than comparison (<)
     pub fn op_less(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -195,6 +210,7 @@ impl FloatFormat {
         if va < vb { 1 } else { 0 }
     }
 
+    // Ghidra: float.cc:509 FloatFormat::opLessEqual
     /// Less-than-or-equal comparison (<=)
     pub fn op_less_equal(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -204,6 +220,7 @@ impl FloatFormat {
         if va <= vb { 1 } else { 0 }
     }
 
+    // Ghidra: float.cc:631 FloatFormat::opTrunc
     /// Convert floating-point to integer (truncate toward zero)
     pub fn op_trunc(&self, a: u64, _size_out: usize) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -211,6 +228,7 @@ impl FloatFormat {
         va.trunc() as i64 as u64
     }
 
+    // Ghidra: float.cc:664 FloatFormat::opRound
     /// Round to nearest integer
     pub fn op_round(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -218,6 +236,7 @@ impl FloatFormat {
         self.get_encoding(va.round())
     }
 
+    // Ghidra: float.cc:622 FloatFormat::opFloat2Float
     /// Convert between floating-point precisions
     pub fn op_float2_float(&self, a: u64, outformat: &FloatFormat) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -225,6 +244,7 @@ impl FloatFormat {
         outformat.get_encoding(va)
     }
 
+    // Ghidra: float.cc:470 FloatFormat::opEqual
     /// Equality comparison (==)
     pub fn op_equal(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -234,6 +254,7 @@ impl FloatFormat {
         if va == vb { 1 } else { 0 }
     }
 
+    // Ghidra: float.cc:533 FloatFormat::opAdd
     /// Addition (+)
     pub fn op_add(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -243,6 +264,7 @@ impl FloatFormat {
         self.get_encoding(va + vb)
     }
 
+    // Ghidra: float.cc:569 FloatFormat::opSub
     /// Subtraction (-)
     pub fn op_sub(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -252,6 +274,7 @@ impl FloatFormat {
         self.get_encoding(va - vb)
     }
 
+    // Ghidra: float.cc:557 FloatFormat::opMult
     /// Multiplication (*)
     pub fn op_mult(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -261,6 +284,7 @@ impl FloatFormat {
         self.get_encoding(va * vb)
     }
 
+    // Ghidra: float.cc:545 FloatFormat::opDiv
     /// Division (/)
     pub fn op_div(&self, a: u64, b: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -270,6 +294,7 @@ impl FloatFormat {
         self.get_encoding(va / vb)
     }
 
+    // Ghidra: float.cc:580 FloatFormat::opNeg
     /// Unary negate
     pub fn op_neg(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -277,6 +302,7 @@ impl FloatFormat {
         self.get_encoding(-va)
     }
 
+    // Ghidra: float.cc:590 FloatFormat::opAbs
     /// Absolute value (abs)
     pub fn op_abs(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -284,6 +310,7 @@ impl FloatFormat {
         self.get_encoding(va.abs())
     }
 
+    // Ghidra: float.cc:600 FloatFormat::opSqrt
     /// Square root (sqrt)
     pub fn op_sqrt(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -291,6 +318,7 @@ impl FloatFormat {
         self.get_encoding(va.sqrt())
     }
 
+    // Ghidra: float.cc:654 FloatFormat::opFloor
     /// Floor
     pub fn op_floor(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -298,6 +326,7 @@ impl FloatFormat {
         self.get_encoding(va.floor())
     }
 
+    // Ghidra: float.cc:644 FloatFormat::opCeil
     /// Ceiling (ceil)
     pub fn op_ceil(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -305,6 +334,7 @@ impl FloatFormat {
         self.get_encoding(va.ceil())
     }
 
+    // Ghidra: float.cc:521 FloatFormat::opNan
     /// Test if Not-a-Number (NaN)
     pub fn op_nan(&self, a: u64) -> u64 {
         let mut ta = FloatClass::Zero;
@@ -312,6 +342,7 @@ impl FloatFormat {
         if ta == FloatClass::Nan { 1 } else { 0 }
     }
 
+    // Ghidra: float.cc:36 FloatFormat::opInt2float
     /// Convert integer to floating-point
     pub fn op_int2float(&self, a: u64, _size_in: usize) -> u64 {
         self.get_encoding(a as f64)

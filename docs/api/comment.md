@@ -67,3 +67,4 @@ Sorts comments into and within basic blocks (comment.hh:195).
 - **setup_block_list**：现返回指定块的注释列表（Vec<&Comment>）。
 - **setup_op_list**：现返回指定块中 op_order 之前的注释列表。
 - comment.rs 所有 L3 缺口已关闭。
+<!-- annotation-pass: 2026-07-04 -->

@@ -24,16 +24,19 @@ impl Address {
         self.0
     }
 
+    // RUGRA-GLUE: offset (no Ghidra counterpart found)
     /// Add an offset to the address
     pub fn offset(&self, offset: i64) -> Self {
         Address((self.0 as i64 + offset) as u64)
     }
 
+    // RUGRA-GLUE: is_null (no Ghidra counterpart found)
     /// Check if address is null (0x0)
     pub fn is_null(&self) -> bool {
         self.0 == 0
     }
 
+    // RUGRA-GLUE: is_aligned (no Ghidra counterpart found)
     /// Check if address is aligned to the given boundary
     pub fn is_aligned(&self, alignment: u64) -> bool {
         self.0 % alignment == 0
@@ -41,30 +44,35 @@ impl Address {
 }
 
 impl fmt::Display for Address {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:x}", self.0)
     }
 }
 
 impl fmt::LowerHex for Address {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:x}", self.0)
     }
 }
 
 impl fmt::UpperHex for Address {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:X}", self.0)
     }
 }
 
 impl From<u64> for Address {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(addr: u64) -> Self {
         Address(addr)
     }
 }
 
 impl From<Address> for u64 {
+    // RUGRA-GLUE: from (no Ghidra counterpart found)
     fn from(addr: Address) -> Self {
         addr.0
     }
@@ -153,6 +161,7 @@ impl Architecture {
 }
 
 impl fmt::Display for Architecture {
+    // Ghidra: type.hh:155 Architecture::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
     }
@@ -250,6 +259,7 @@ impl TypeKind {
 }
 
 impl fmt::Display for TypeKind {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             TypeKind::Void => "void",
@@ -295,6 +305,7 @@ pub enum CallingConvention {
 }
 
 impl fmt::Display for CallingConvention {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             CallingConvention::C => "cdecl",
@@ -329,6 +340,7 @@ impl Endianness {
 }
 
 impl fmt::Display for Endianness {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Endianness::Little => write!(f, "little"),
@@ -440,6 +452,7 @@ pub enum DataType {
 }
 
 impl DataType {
+    // RUGRA-GLUE: size (no Ghidra counterpart found)
     /// Get the size of the type in bytes
     pub fn size(&self) -> usize {
         match self {
@@ -454,21 +467,25 @@ impl DataType {
         }
     }
 
+    // RUGRA-GLUE: is_unknown (no Ghidra counterpart found)
     /// Check if this is an unknown type
     pub fn is_unknown(&self) -> bool {
         matches!(self, DataType::Unknown(_))
     }
 
+    // RUGRA-GLUE: is_pointer (no Ghidra counterpart found)
     /// Check if this is a pointer type
     pub fn is_pointer(&self) -> bool {
         matches!(self, DataType::Pointer(_, _))
     }
 
+    // RUGRA-GLUE: is_integer (no Ghidra counterpart found)
     /// Check if this is an integer type
     pub fn is_integer(&self) -> bool {
         matches!(self, DataType::Int(_, _))
     }
 
+    // RUGRA-GLUE: meet (no Ghidra counterpart found)
     /// The "meet" operation in the type lattice.
     /// Combines two types into their greatest lower bound.
     pub fn meet(&self, other: &DataType) -> DataType {
@@ -528,6 +545,7 @@ pub struct FieldDef {
 }
 
 impl StructDef {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create a new empty struct definition
     pub fn new(name: String) -> Self {
         StructDef {
@@ -536,6 +554,7 @@ impl StructDef {
         }
     }
 
+    // RUGRA-GLUE: add_field (no Ghidra counterpart found)
     /// Add a field to the struct
     pub fn add_field(&mut self, name: String, data_type: DataType, offset: usize) {
         self.fields.push(FieldDef { name, data_type, offset });
@@ -543,6 +562,7 @@ impl StructDef {
         self.fields.sort_by_key(|f| f.offset);
     }
 
+    // RUGRA-GLUE: size (no Ghidra counterpart found)
     /// Get the total size of the struct
     pub fn size(&self) -> usize {
         self.fields.iter()
@@ -552,6 +572,7 @@ impl StructDef {
     }
 }
 
+// RUGRA-GLUE: parse_type_string (no Ghidra counterpart found)
 /// Parse a C-style type string into a DataType
 pub fn parse_type_string(s: &str, size: usize) -> DataType {
     let s = s.trim();

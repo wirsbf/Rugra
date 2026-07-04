@@ -113,6 +113,7 @@ pub struct Funcdata {
 }
 
 impl Funcdata {
+    // Ghidra: funcdata.cc:34 Funcdata::new
     /// Create a new Funcdata instance
     pub fn new(name: &str, addr: Address, size: i32) -> Self {
         Self {
@@ -149,12 +150,14 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::isTypeRecoveryOn
     /// Is data-type analysis being performed? Faithful to
     /// `Funcdata::isTypeRecoveryOn` (funcdata.hh:150).
     pub fn is_type_recovery_on(&self) -> bool {
         (self.flags & funcdata_flags::TYPE_RECOVERY_ON) != 0
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::setTypeRecoveryOn
     /// Enable/disable type recovery. Faithful to `Funcdata::setTypeRecoveryOn`.
     pub fn set_type_recovery_on(&mut self, on: bool) {
         if on {
@@ -164,20 +167,24 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::hasTypeRecoveryStarted
     /// Has data-type analysis started? Faithful to
     /// `Funcdata::hasTypeRecoveryStarted` (funcdata.hh:151).
     pub fn has_type_recovery_started(&self) -> bool {
         (self.flags & funcdata_flags::TYPE_RECOVERY_START) != 0
     }
+    // Ghidra: funcdata.cc:34 Funcdata::setTypeRecoveryStarted
     /// Mark that type recovery has started.
     pub fn set_type_recovery_started(&mut self) {
         self.flags |= funcdata_flags::TYPE_RECOVERY_START;
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::isDoublePrecisOn
     /// Is double-precision recovery active? (funcdata.hh:167)
     pub fn is_double_precis_on(&self) -> bool {
         (self.flags & funcdata_flags::DOUBLE_PRECIS_ON) != 0
     }
+    // Ghidra: funcdata.cc:34 Funcdata::setDoublePrecisRecovery
     /// Set/clear double-precis recovery. (funcdata.hh:167)
     pub fn set_double_precis_recovery(&mut self, on: bool) {
         if on {
@@ -187,12 +194,14 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newVarnode
     /// Create a varnode of `size` bytes at a specific address. Faithful to
     /// `Funcdata::newVarnode(int4, const Address&)` (funcdata.hh:282).
     pub fn new_varnode(&mut self, size: usize, addr: crate::address::Address) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         self.vbank.create(size, addr)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::combineInputVarnodes
     /// Combine two contiguous input varnodes into one. Faithful to
     /// `Funcdata::combineInputVarnodes` (funcdata_varnode.cc:381-454).
     /// Replaces PIECE(hi,lo) ops with COPY of the combined varnode; creates
@@ -302,6 +311,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:135 Funcdata::warningHeader
     /// Attach a warning comment to this function. Faithful to
     /// `Funcdata::warningHeader` (funcdata.cc:135-145). Uses the arch's
     /// commentdb if available; otherwise eprintln as fallback.
@@ -321,36 +331,43 @@ impl Funcdata {
         eprintln!("[WARNING] {}: {}", self.name, msg);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getArch
     /// Get the Architecture configuration, if set.
     /// Faithful to `Funcdata::getArch` (funcdata.hh:144).
     pub fn get_arch(&self) -> Option<&Arc<crate::arch::Architecture>> {
         self.arch.as_ref()
     }
+    // Ghidra: funcdata.cc:34 Funcdata::setArch
     /// Set the Architecture reference (Ghidra sets it in the ctor from scope).
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
         self.arch = Some(arch);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::hasRestartPending
     /// Is a pipeline restart pending? Faithful to `Funcdata::hasRestartPending`.
     pub fn has_restart_pending(&self) -> bool {
         self.restart_pending
     }
+    // Ghidra: funcdata.cc:34 Funcdata::setRestartPending
     /// Request a pipeline restart (ActionRestartGroup will detect this).
     pub fn set_restart_pending(&mut self, v: bool) {
         self.restart_pending = v;
     }
+    // Ghidra: funcdata.cc:34 Funcdata::isJumptableRecoveryOn
     /// Is jumptable recovery currently active? Faithful to
     /// `Funcdata::isJumptableRecoveryOn`. Rugra has no jumptable recovery yet.
     pub fn is_jumptable_recovery_on(&self) -> bool {
         false
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::setSelfRef
     /// Set the self-reference after wrapping in Arc<RwLock>
     pub fn set_self_ref(&mut self, self_ref: Weak<RwLock<Funcdata>>) {
         self.self_ref = Some(self_ref.clone());
         self.heritage.fd = Some(self_ref);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::runHeritageDirect
     /// Safely run the SSA heritage pass directly, avoiding deadlocks.
     /// 
     /// The standard `heritage()` method attempts to acquire a write lock on `Funcdata`
@@ -408,11 +425,13 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getName
     /// Get function name
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::findVarnodeInput
     /// Find an input varnode of the given size at the given address.
     /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324).
     /// Used by ActionRestrictLocal and AncestorRealistic.
@@ -420,64 +439,76 @@ impl Funcdata {
         self.vbank.find_input(size, addr)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::addSymbol
     /// Register a symbol (function/global) at the given virtual address
     pub fn add_symbol(&mut self, addr: u64, name: String) {
         self.symbol_table.insert(addr, name);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::addString
     /// Register a string literal at the given virtual address
     pub fn add_string(&mut self, addr: u64, s: String) {
         self.string_table.insert(addr, s);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getSymbol
     /// Look up a symbol name by address
     pub fn get_symbol(&self, addr: u64) -> Option<&str> {
         self.symbol_table.get(&addr).map(|s| s.as_str())
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getString
     /// Look up a string literal by address
     pub fn get_string(&self, addr: u64) -> Option<&str> {
         self.string_table.get(&addr).map(|s| s.as_str())
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getAddress
     /// Get function base address
     pub fn get_address(&self) -> &Address {
         &self.baseaddr
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getSize
     /// Get function size
     pub fn get_size(&self) -> i32 {
         self.size
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::numCalls
     /// Number of call sites in this function. Faithful to
     /// `Funcdata::numCalls` (funcdata.hh).
     pub fn num_calls(&self) -> usize {
         self.callspecs.len()
     }
 
+    // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs
     /// Get call specs by index. Faithful to `Funcdata::getCallSpecs`
     /// (funcdata.hh).
     pub fn get_call_specs(&self, i: usize) -> Option<&crate::fspec::FuncCallSpecs> {
         self.callspecs.get(i)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getCallSpecsMut
     /// Get mutable call specs by index.
     pub fn get_call_specs_mut(&mut self, i: usize) -> Option<&mut crate::fspec::FuncCallSpecs> {
         self.callspecs.get_mut(i)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::addCallSpecs
     /// Add a new call specification. Returns the index.
     pub fn add_call_specs(&mut self, fc: crate::fspec::FuncCallSpecs) -> usize {
         self.callspecs.push(fc);
         self.callspecs.len() - 1
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getFuncProto
     /// Get the function prototype. Faithful to `Funcdata::getFuncProto`.
     pub fn get_func_proto(&self) -> &FuncProto {
         &self.funcp
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getFuncProtoMut
     /// Get mutable function prototype.
     pub fn get_func_proto_mut(&mut self) -> &mut FuncProto {
         &mut self.funcp
@@ -487,6 +518,7 @@ impl Funcdata {
     // These mirror Ghidra's Funcdata methods used by the rule/action transforms
     // to construct and edit P-code during analysis.
 
+    // Ghidra: funcdata.cc:34 Funcdata::newOp
     /// Allocate a new PcodeOp with `num_inputs` slots at the function's base
     /// address. Faithful to `Funcdata::newOp` (funcdata.hh:444).
     pub fn new_op(&mut self, num_inputs: usize, pc: crate::address::Address) -> crate::op::PcodeOpRef {
@@ -494,6 +526,7 @@ impl Funcdata {
         self.obank.create(crate::opcodes::OpCode::CPUI_COPY, num_inputs, pc)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newUniqueOut
     /// Create a new temporary output Varnode of size `s` for `op`.
     /// Faithful to `Funcdata::newUniqueOut` (funcdata.hh:281).
     pub fn new_unique_out(&mut self, s: usize, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
@@ -505,12 +538,14 @@ impl Funcdata {
         vn
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newConstant
     /// Create a new constant Varnode. Faithful to `Funcdata::newConstant`
     /// (funcdata.hh:283).
     pub fn new_constant(&mut self, s: usize, val: u64) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         self.vbank.create_constant(s, val)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newExtendedConstant
     /// Create a new (possibly extended) constant Varnode of size `s` from a
     /// 128-bit value `(lo, hi)`. Faithful to `Funcdata::newExtendedConstant`
     /// (funcdata_varnode.cc:462-484). For s≤8, creates a plain constant.
@@ -542,12 +577,14 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newUnique
     /// Create a new temporary Varnode (no defining op). Faithful to
     /// `Funcdata::newUnique` (funcdata.hh:288).
     pub fn new_unique(&mut self, s: usize) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         self.vbank.create_unique(s)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opSetOpcode
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
     pub fn op_set_opcode(&self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
@@ -586,6 +623,7 @@ impl Funcdata {
         o.opcode = opc;
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opSetInput
     /// Set a specific input operand for the given PcodeOp. Faithful to
     /// `Funcdata::opSetInput` (funcdata.hh:467). Extends inrefs if slot exceeds
     /// current length; updates the descend link on the new input.
@@ -601,6 +639,7 @@ impl Funcdata {
         o.inrefs[slot] = vn;
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opInsertInput
     /// Insert a new Varnode into the operand list at `slot`. Faithful to
     /// `Funcdata::opInsertInput` (funcdata.hh:479).
     pub fn op_insert_input(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
@@ -610,6 +649,7 @@ impl Funcdata {
         vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&op.0));
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opRemoveInput
     /// Remove a specific input slot. Faithful to `Funcdata::opRemoveInput`
     /// (funcdata.hh:478).
     pub fn op_remove_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
@@ -619,6 +659,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opSwapInput
     /// Swap two input operands. Faithful to `Funcdata::opSwapInput`
     /// (funcdata.hh). Used by RuleBoolNegate to reorder operands when flipping
     /// a comparison (e.g. `!(V < W) => W <= V`).
@@ -629,6 +670,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opSetOutput
     /// Set the output varnode for an op (replacing any existing output).
     /// Faithful to `Funcdata::opSetOutput`. Marks the varnode WRITTEN and sets
     /// its def link to this op; clears the old output's def if present.
@@ -643,6 +685,7 @@ impl Funcdata {
         o.output = Some(vn);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opDestroy
     /// Destroy an unused PcodeOp. Faithful to `Funcdata::opDestroy`
     /// (funcdata_op.cc:203-222). Clears the output's def, unsets all inputs,
     /// and marks the op dead in the obank. Only call when the output has no
@@ -665,6 +708,7 @@ impl Funcdata {
         self.obank.mark_dead(op.clone());
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opDestroyRecursive
     /// Recursively destroy an op and its now-dead defining ops. Faithful to
     /// `Funcdata::opDestroyRecursive` (funcdata_op.cc:228-247). Destroys the
     /// given op, then for each input Varnode that becomes dead (its only
@@ -713,6 +757,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::totalReplace
     /// Replace every read reference of `vn` with `newvn`. Faithful to
     /// `Funcdata::totalReplace` (funcdata_varnode.cc:1474-1487). Walks all
     /// descendant ops of `vn` and sets their input slot to `newvn`.
@@ -745,6 +790,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opUnsetInput
     /// Unset an input slot. Faithful to `Funcdata::opUnsetInput`
     /// (funcdata_op.cc). Removes the descend link from the input varnode and
     /// sets the slot to None (represented as removing from inrefs in Rugra).
@@ -757,6 +803,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opUnsetOutput
     /// Unset the output of an op. Faithful to `Funcdata::opUnsetOutput`
     /// (funcdata_op.cc). Clears the output's def link and removes the output
     /// from the op, making the old output a free varnode.
@@ -767,6 +814,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newVarnodeOut
     /// Create a new output varnode for an op at a given address+size.
     /// Faithful to `Funcdata::newVarnodeOut` (funcdata.hh). Creates a varnode
     /// in the register space at the given address and wires it as the op's
@@ -779,6 +827,7 @@ impl Funcdata {
         vn
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::pushBranch
     /// Push a conditional branch edge into a new destination, turning the
     /// CBRANCH into an unconditional BRANCH. Faithful to `Funcdata::pushBranch`
     /// (funcdata_block.cc:404).
@@ -837,6 +886,7 @@ impl Funcdata {
         Ok(())
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::moveOutEdge
     /// Move an out-edge of `bb` from its current destination to `bbnew`.
     /// Faithful to `BlockGraph::moveOutEdge` (block.cc). This redirects the
     /// edge by updating both the source's outgoing list and the old/new
@@ -911,6 +961,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::forceGoto
     /// Force a specific branch instruction to be an unstructured goto.
     /// Faithful to `Funcdata::forceGoto` (funcdata_block.cc:752).
     ///
@@ -964,6 +1015,7 @@ impl Funcdata {
         false
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::setGotoBranch
     /// Mark the j-th out-edge of a block as an unstructured goto. Faithful to
     /// `FlowBlock::setGotoBranch` (block.cc).
     pub fn set_goto_branch(
@@ -982,6 +1034,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::removeBranch
     /// Remove a branch edge from a basic block. Faithful to
     /// `Funcdata::removeBranch` / `branchRemoveInternal`
     /// (funcdata_block.cc). If the block has 2 out-edges (CBRANCH), the
@@ -1041,6 +1094,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::structureReset
     /// Recompute loop structure, dominance, and reset the structured-block
     /// hierarchy for the current CFG. Faithful to
     /// `Funcdata::structureReset` (funcdata_block.cc:705-735).
@@ -1234,6 +1288,7 @@ impl Funcdata {
         self.structure_reset();
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::syncVarnodesWithSymbols
     /// Synchronize varnodes with the local-variable scope symbols. Faithful to
     /// `Funcdata::syncVarnodesWithSymbols` (funcdata_varnode.cc:938-989).
     ///
@@ -1282,6 +1337,7 @@ impl Funcdata {
         updated
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::removeFromFlowSplit
     /// Remove a 2-in/2-out empty block, rejoining each in-edge to the
     /// corresponding out-edge. Faithful to `Funcdata::removeFromFlowSplit`
     /// (funcdata_block.cc:892-900) + `BlockGraph::removeFromFlowSplit`
@@ -1342,6 +1398,7 @@ impl Funcdata {
         Ok(())
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::removeUnreachableBlocks
     /// Remove any basic blocks not reachable from the entry point.
     /// Faithful to `Funcdata::removeUnreachableBlocks` (funcdata_block.cc:347-394).
     ///
@@ -1488,6 +1545,7 @@ impl Funcdata {
         true
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::createNewBlock
     /// Splice a 1-out basic block into its single successor.
     /// Faithful to `Funcdata::spliceBlockBasic` (funcdata_block.cc:919-956).
     ///
@@ -1505,6 +1563,7 @@ impl Funcdata {
         bb
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::spliceBlockBasic
     pub fn splice_block_basic(&mut self, bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
         let (out_block, out_has_single_in) = {
             let rg = bb.read().unwrap();
@@ -1633,6 +1692,7 @@ impl Funcdata {
         true
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::replaceLessequal
     /// Replace INT_LESSEQUAL/INT_SLESSEQUAL with INT_LESS/INT_SLESS:
     /// `V <= c => V < c+1`. Faithful to `Funcdata::replaceLessequal`
     /// (funcdata_op.cc:1029-1065).
@@ -1669,6 +1729,7 @@ impl Funcdata {
         true
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::distributeIntMultAdd
     /// Distribute INT_MULT coefficient through INT_ADD:
     /// `(V + W) * c => V*c + W*c`.
     /// Faithful to `Funcdata::distributeIntMultAdd` (funcdata_op.cc:1073-1118).
@@ -1737,6 +1798,7 @@ impl Funcdata {
         true
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opInsertBefore
     /// Insert `op` before `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertBefore` (funcdata.hh:454). Rugra's alive list is not
     /// strictly ordered per-block, but we insert before `follow` to preserve
@@ -1749,6 +1811,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newIndirectOp
     /// Build a CPUI_INDIRECT op that models an indirect effect on a Stack-space
     /// Varnode, caused by a STORE (or CALL) to memory via a spacebase pointer.
     /// Faithful to `Funcdata::newIndirectOp` (funcdata_op.cc:683-698).
@@ -1795,6 +1858,7 @@ impl Funcdata {
         newop
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newVarnodeIop
     /// Create a varnode in the iop address space referencing `op`.
     /// Faithful to `Funcdata::newVarnodeIop` (funcdata_varnode.cc:176-184).
     /// Ghidra encodes the raw op pointer as the iop-space offset; Rugra
@@ -1813,6 +1877,7 @@ impl Funcdata {
         vn
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getOpFromConst
     /// Resolve an iop-space constant varnode back to the PcodeOp it references.
     /// Faithful to `PcodeOp::getOpFromConst` (op.hh:249). Ghidra reinterprets
     /// the offset as an op pointer; Rugra reinterprets it back to the
@@ -1838,6 +1903,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opUndoPtradd
     /// Undo a PTRADD op, converting it back to INT_ADD/INT_MULT.
     /// Faithful to `Funcdata::opUndoPtradd` (funcdata_op.cc:579).
     pub fn op_undo_ptradd(&mut self, op: &crate::op::PcodeOpRef) {
@@ -1884,24 +1950,28 @@ impl Funcdata {
         self.op_set_input(op, mult_out, 1);
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opMarkCpoolTransformed
     /// Mark `op` as having been checked for cpool transforms.
     /// Faithful to `Funcdata::opMarkCpoolTransformed` (funcdata.hh:485).
     pub fn op_mark_cpool_transformed(&mut self, op: &crate::op::PcodeOpRef) {
         op.0.write().unwrap().mark_cpool_transformed();
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getStoreGuard
     /// Find the STORE guard for `op`. Faithful to
     /// `Funcdata::getStoreGuard` (funcdata.hh:270). Returns None if no guard.
     pub fn get_store_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
         self.heritage.get_store_guard(&op.0)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::getLoadGuard
     /// Find the LOAD guard for `op`. Faithful to
     /// `Funcdata::getLoadGuard` (funcdata.hh:269).
     pub fn get_load_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
         self.heritage.get_load_guard(&op.0)
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::newIndirectCreation
     /// Create an INDIRECT op with indirect_creation semantics. Faithful to
     /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728). Unlike
     /// `new_indirect_op`, the input is a constant zero, and both the op and
@@ -1944,6 +2014,7 @@ impl Funcdata {
         newop
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::findJumpTable
     /// Find the JumpTable whose indirect op is at the same address as `op`.
     /// Faithful to `Funcdata::findJumpTable` (funcdata_block.cc:446-457).
     pub fn find_jump_table(&self, op: &crate::op::PcodeOpRef) -> Option<&std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>> {
@@ -1954,6 +2025,7 @@ impl Funcdata {
         })
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::removeJumpTable
     /// Remove a JumpTable from this function. Faithful to
     /// `Funcdata::removeJumpTable` (funcdata_block.cc:65).
     pub fn remove_jump_table(&mut self, jt: &std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>) {
@@ -1962,6 +2034,7 @@ impl Funcdata {
     }
 
 
+    // Ghidra: funcdata.cc:34 Funcdata::opInsertAfter
     /// Insert `op` immediately after `follow` in the alive list. Faithful to
     /// `Funcdata::opInsertAfter` (funcdata.hh:456). Used by split transforms
     /// (prefersplit.cc) that create new ops adjacent to the original.
@@ -1973,6 +2046,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opUninsert
     /// Remove `op` from the alive list without destroying it. Faithful to
     /// `Funcdata::opUninsert` (funcdata.hh). The op is still alive (not dead)
     /// but temporarily detached from the ordered list, so it can be re-inserted
@@ -1983,6 +2057,7 @@ impl Funcdata {
             .retain(|r| !std::sync::Arc::ptr_eq(&r.0, &op.0));
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opInsertBegin
     /// Insert `op` at the beginning of a basic block's op list. Faithful to
     /// `Funcdata::opInsertBegin` (funcdata.hh:457). Rugra inserts at the start
     /// of the alive list (best-effort for block-begin placement).
@@ -2097,6 +2172,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opGetSlot
     /// Get the input slot of `vn` within `op`. Faithful to `PcodeOp::getSlot`.
     /// Returns the slot index, or -1 if not found.
     pub fn op_get_slot(&self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {
@@ -2109,6 +2185,7 @@ impl Funcdata {
         -1
     }
 
+    // Ghidra: funcdata.cc:230 Funcdata::spacebase
     /// Mark registers that map to a virtual address space (the stack
     /// spacebase). Faithful to `Funcdata::spacebase()` (funcdata.cc:230-269).
     ///
@@ -2174,6 +2251,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::calcNzMask
     /// Make all reads of the given Varnode unique. Faithful to
     /// `Funcdata::splitUses` (funcdata_varnode.cc:1540-1567).
     /// Calculate the non-zero mask (NZM) property on all Varnode objects.
@@ -2277,6 +2355,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::splitUses
     ///
     /// If `vn` is defined by an op (e.g. INT_ADD) and has multiple
     /// descendants, duplicate the defining op so each reader gets its own
@@ -2353,6 +2432,7 @@ impl Funcdata {
         // Dead-code actions should remove the original op if now unused.
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::cseElimination
     /// Eliminate a common subexpression between two ops. Faithful to
     /// `Funcdata::cseElimination` (funcdata_op.cc:1358-1398). Keeps the
     /// earlier-ordered op (by sequence number), total_replaces the other's
@@ -2379,6 +2459,7 @@ impl Funcdata {
         replace
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::cseEliminateList
     /// Perform CSE on a list of (hash, PcodeOp) pairs. Faithful to
     /// `Funcdata::cseEliminateList` (funcdata_op.cc:1420-1449). Sorts by hash,
     /// finds matching pairs via `is_cse_match`, eliminates duplicates.
@@ -2424,6 +2505,7 @@ impl Funcdata {
         outlist
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opBoolNegate
     /// Insert a BOOL_NEGATE (CPUI_BOOL_NEGATE in Rugra) of `vn`, returning the
     /// new output Varnode. Faithful to `Funcdata::opBoolNegate`
     /// (funcdata_op.cc:560-572). If `insert_after` is true, the negate op is
@@ -2447,6 +2529,7 @@ impl Funcdata {
         res_vn
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::opFlipCondition
     /// Flip the condition of a CBRANCH/comparison op. Faithful to
     /// `Funcdata::opFlipCondition` (funcdata_op.cc). Changes the comparison
     /// opcode to its flipped variant (INT_LESS <-> INT_LESSEQUAL,
@@ -2519,6 +2602,7 @@ impl Funcdata {
         eprintln!("[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size());
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::injectRawOps
     pub fn inject_raw_ops(&mut self, raw_ops: &[PcodeOpRaw]) {
         if raw_ops.is_empty() {
             return;
@@ -2663,6 +2747,7 @@ impl Funcdata {
         // to spacebase resolution only, avoiding the typeop interaction.
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::buildBlocksFromOps
     /// Build basic blocks from a linear sequence of PcodeOps
     ///
     /// Splits the op list at control flow terminators (BRANCH, CBRANCH, RETURN, CALL)
@@ -2840,6 +2925,7 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata.cc:84 Funcdata::clear
     /// Clear all analysis state
     pub fn clear(&mut self) {
         self.vbank.clear();
@@ -2849,6 +2935,7 @@ impl Funcdata {
         self.heritage.clear();
     }
 
+    // Ghidra: funcdata.cc:34 Funcdata::numHeritagePasses
     /// Get number of heritage passes completed
     pub fn num_heritage_passes(&self) -> i32 {
         self.heritage.get_pass()

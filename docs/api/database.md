@@ -117,3 +117,4 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
 ### 2026-07-01：Symbol dtype 字段 + get_type/set_dtype
 - Symbol 加 `dtype: Option<Arc<Datatype>>` 字段（database.hh `Symbol::type`）。
 - `get_type() -> Option<Arc<Datatype>>`（database.hh:244）+ `set_dtype(dt)`。
+<!-- annotation-pass: 2026-07-04 -->

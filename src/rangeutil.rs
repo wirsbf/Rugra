@@ -31,17 +31,20 @@ pub struct CircleRange {
 }
 
 impl CircleRange {
+    // Ghidra: rangeutil.cc:179 CircleRange::empty
     /// Construct an empty range.
     pub fn empty() -> Self {
         Self { left: 0, right: 0, mask: 0, isempty: true, step: 1 }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::full
     /// Construct a full range of the given byte size.
     pub fn full(size: usize) -> Self {
         let mask = Self::calc_mask(size);
         Self { left: 0, right: 0, mask, isempty: false, step: 1 }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::single
     /// Construct a range with a single value.
     pub fn single(val: u64, size: usize) -> Self {
         let mask = Self::calc_mask(size);
@@ -49,6 +52,7 @@ impl CircleRange {
         Self { left: val, right: (val + 1) & mask, mask, isempty: false, step: 1 }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::new
     /// Construct given specific boundaries [left, right) with step.
     pub fn new(left: u64, right: u64, size: usize, step: u64) -> Self {
         let mask = Self::calc_mask(size);
@@ -57,41 +61,51 @@ impl CircleRange {
         r
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::boolean
     /// Construct a boolean range (0 or 1).
     pub fn boolean(val: bool) -> Self {
         Self::single(if val { 1 } else { 0 }, 1)
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::calcMask
     /// Calculate mask for a given byte size.
     fn calc_mask(size: usize) -> u64 {
         if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::isEmpty
     /// Return true if the range is empty.
     pub fn is_empty(&self) -> bool { self.isempty }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::isFull
     /// Return true if this contains all possible values.
     pub fn is_full(&self) -> bool {
         !self.isempty && self.step == 1 && self.left == self.right
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::isSingle
     /// Return true if this contains a single value.
     pub fn is_single(&self) -> bool {
         !self.isempty && self.right == ((self.left + self.step) & self.mask)
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::getLeft
     /// Get the left boundary.
     pub fn get_left(&self) -> u64 { self.left }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::getRight
     /// Get the right boundary (exclusive).
     pub fn get_right(&self) -> u64 { self.right }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::getMask
     /// Get the mask.
     pub fn get_mask(&self) -> u64 { self.mask }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::getStep
     /// Get the step.
     pub fn get_step(&self) -> u64 { self.step }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::containsVal
     /// Check containment of a specific integer.
     pub fn contains_val(&self, val: u64) -> bool {
         if self.isempty { return false; }
@@ -107,6 +121,7 @@ impl CircleRange {
         }
     }
 
+    // Ghidra: rangeutil.cc:549 CircleRange::intersect
     /// Intersect this range with another.
     /// Returns: 0=empty result, 1=non-empty intersection, 2=this contains op2.
     pub fn intersect(&mut self, op2: &CircleRange) -> i32 {
@@ -137,6 +152,7 @@ impl CircleRange {
         1
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::union
     /// Union two ranges (circleUnion). Faithful to `CircleRange::circleUnion`
     /// (rangeutil.cc). Returns:
     /// - 0 = result fits in a single CircleRange (stored in `self`)
@@ -175,12 +191,14 @@ impl CircleRange {
         1
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::next
     /// Advance an integer within the range. Returns false when reaching the end.
     pub fn next(&self, val: &mut u64) -> bool {
         *val = (*val + self.step) & self.mask;
         *val != self.right
     }
 
+    // Ghidra: rangeutil.cc:256 CircleRange::getSize
     /// Get the size of this range (number of elements).
     pub fn get_size(&self) -> u64 {
         if self.isempty { return 0; }
@@ -194,6 +212,7 @@ impl CircleRange {
         }
     }
 
+    // Ghidra: rangeutil.cc:533 CircleRange::invert
     /// Convert to complementary range (invert).
     /// Corresponds to `CircleRange::invert` (rangeutil.cc).
     /// Returns the number of pieces: 0=full, 1=single range, 2=two pieces.
@@ -221,6 +240,7 @@ impl CircleRange {
         1
     }
 
+    // Ghidra: rangeutil.cc:245 CircleRange::setFull
     /// Set a completely full range.
     pub fn set_full(&mut self, size: usize) {
         self.mask = Self::calc_mask(size);
@@ -230,6 +250,7 @@ impl CircleRange {
         self.isempty = false;
     }
 
+    // Ghidra: rangeutil.cc:38 CircleRange::complement
     /// Take the complement of this range (only works if step is 1).
     /// Faithful to `CircleRange::complement` (rangeutil.cc:38).
     pub fn complement(&mut self) {
@@ -248,6 +269,7 @@ impl CircleRange {
         self.right = tmp;
     }
 
+    // Ghidra: rangeutil.cc:63 CircleRange::convertToBoolean
     /// Convert this range to a boolean range [0,2), [0,1), [1,2), or empty.
     /// Returns true if the range contains both 0 and 1.
     /// Faithful to `CircleRange::convertToBoolean` (rangeutil.cc:63).
@@ -278,6 +300,7 @@ impl CircleRange {
         false
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::setNzMask
     /// Build a range from an NZ mask. Returns false if the mask has too many
     /// bit transitions to form a valid range. Faithful to `setNZMask`
     /// (rangeutil.cc:672).
@@ -317,6 +340,7 @@ impl CircleRange {
         Some(r)
     }
 
+    // Ghidra: rangeutil.cc:728 CircleRange::pullBackUnary
     /// Pull-back this range through a unary operator. Faithful to
     /// `pullBackUnary` (rangeutil.cc:728). Returns true if the transform was
     /// possible.
@@ -386,6 +410,7 @@ impl CircleRange {
         true
     }
 
+    // Ghidra: rangeutil.cc:807 CircleRange::pullBackBinary
     /// Pull-back this range through a binary operator. Faithful to
     /// `pullBackBinary` (rangeutil.cc:807). Returns true if a valid range is
     /// formed.
@@ -517,6 +542,7 @@ impl CircleRange {
         true
     }
 
+    // Ghidra: rangeutil.cc:1093 CircleRange::pushForwardUnary
     /// Push-forward this range through a unary operator.
     /// Corresponds to `CircleRange::pushForwardUnary` (rangeutil.hh:94).
     /// Returns true if the transform was possible.
@@ -562,6 +588,7 @@ impl CircleRange {
         }
     }
 
+    // Ghidra: rangeutil.cc:1180 CircleRange::pushForwardBinary
     /// Push-forward this range through a binary operator.
     /// Corresponds to `CircleRange::pushForwardBinary` (rangeutil.hh:95).
     /// Returns true if the transform was possible.
@@ -603,6 +630,7 @@ impl CircleRange {
         }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::translateToOp
     /// Translate this range to a comparison op.
     /// Corresponds to `CircleRange::translate2Op` (rangeutil.hh:99).
     /// Returns Some((opcode, constant, slot)) if the range can be expressed as a comparison.
@@ -622,6 +650,7 @@ impl CircleRange {
         None
     }
 
+    // Ghidra: rangeutil.cc:25 CircleRange::normalize
     /// Normalize the range so that empty/full representation is canonical.
     /// Faithful to Ghidra CircleRange::normalize (rangeutil.cc:25).
     pub fn normalize(&mut self) {
@@ -635,6 +664,7 @@ impl CircleRange {
         }
     }
 
+    // Ghidra: rangeutil.cc:179 CircleRange::containsRange
     /// Check if this range contains another range.
     /// Faithful to Ghidra CircleRange::contains(CircleRange) (rangeutil.cc:301).
     pub fn contains_range(&self, op2: &CircleRange) -> bool {
@@ -651,6 +681,7 @@ impl CircleRange {
         self.contains_val(op2.left) && self.contains_val(op2.right.wrapping_sub(1).wrapping_add(1).wrapping_sub(1))
     }
 
+    // Ghidra: rangeutil.cc:1395 CircleRange::widen
     /// Widen this range to better match the containing range.
     /// Faithful to Ghidra CircleRange::widen (rangeutil.cc:1395).
     pub fn widen(&mut self, op2: &CircleRange, left_is_stable: bool) {
@@ -671,6 +702,7 @@ impl CircleRange {
         self.normalize();
     }
 
+    // Ghidra: rangeutil.cc:1381 CircleRange::pushForwardTrinary
     /// Push forward through a trinary op (PTRADD).
     /// Faithful to Ghidra CircleRange::pushForwardTrinary (rangeutil.cc:1381).
     pub fn push_forward_trinary(&mut self, opc: crate::opcodes::OpCode, in1: &CircleRange, in2: &CircleRange, in3: &CircleRange, in_size: usize, out_size: usize, max_step: i32) -> bool {
@@ -682,6 +714,7 @@ impl CircleRange {
         self.push_forward_binary(crate::opcodes::OpCode::CPUI_INT_ADD, in1, &tmp_range, in_size, out_size, max_step)
     }
 
+    // Ghidra: rangeutil.cc:280 CircleRange::getMaxInfo
     /// Get the maximum number of significant bits in the range.
     /// Faithful to Ghidra CircleRange::getMaxInfo (rangeutil.cc:280).
     pub fn get_max_info(&self) -> i32 {
@@ -702,6 +735,7 @@ impl CircleRange {
         (8 * std::mem::size_of::<u64>()) as i32 - (size_right.min(size_left))
     }
 
+    // Ghidra: rangeutil.cc:707 CircleRange::setStride
     /// Set the stride of this range.
     /// Faithful to Ghidra CircleRange::setStride (rangeutil.cc:707).
     pub fn set_stride(&mut self, new_step: u64, rem: u64) {
@@ -715,6 +749,7 @@ impl CircleRange {
     }
 }
 
+// Ghidra: rangeutil.cc:179 CircleRange::bitTransitions
 /// Calculate the number of bit transitions in the sized value. Faithful to
 /// `bit_transitions` (address.cc:818). Counts how many times consecutive bits
 /// differ (0→1 or 1→0), scanning from LSB upward, stopping once all remaining
@@ -737,9 +772,11 @@ pub fn bit_transitions(val: u64, size: usize) -> i32 {
     res
 }
 
+// Ghidra: rangeutil.cc:179 CircleRange::signExtendSize
 /// Sign-extend a value between two byte sizes. Faithful to `sign_extend(in,
 /// sizein, sizeout)` (address.cc:666).
 pub fn sign_extend_size(in_val: u64, size_in: usize, size_out: usize) -> u64 {
+    // Ghidra: rangeutil.cc:179 CircleRange::mask
     fn mask(size: usize) -> u64 {
         if size >= 8 {
             u64::MAX

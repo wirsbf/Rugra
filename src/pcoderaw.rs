@@ -30,6 +30,7 @@ pub struct VarnodeRaw {
 }
 
 impl VarnodeRaw {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create a new raw varnode
     pub fn new(space: AddressSpace, offset: u64, size: usize) -> Self {
         VarnodeRaw {
@@ -39,6 +40,7 @@ impl VarnodeRaw {
         }
     }
 
+    // RUGRA-GLUE: to_varnode_data (no Ghidra counterpart found)
     /// Convert to VarnodeData
     pub fn to_varnode_data(&self) -> VarnodeData {
         VarnodeData::new(self.space, self.offset, self.size)
@@ -46,6 +48,7 @@ impl VarnodeRaw {
 }
 
 impl fmt::Display for VarnodeRaw {
+    // RUGRA-GLUE: fmt (no Ghidra counterpart found)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:0x{:x}:{}", self.space, self.offset, self.size)
     }
@@ -72,6 +75,7 @@ pub struct PcodeOpRaw {
 }
 
 impl PcodeOpRaw {
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::new
     /// Create a new raw P-code operation
     pub fn new(opcode: i32) -> Self {
         PcodeOpRaw {
@@ -83,6 +87,7 @@ impl PcodeOpRaw {
         }
     }
 
+    // Ghidra: pcoderaw.hh:210 PcodeOpRaw::addInput
     /// Add an input varnode
     ///
     /// Corresponds to `addInput` in Ghidra
@@ -90,6 +95,7 @@ impl PcodeOpRaw {
         self.inputs.push(varnode);
     }
 
+    // Ghidra: pcoderaw.hh:218 PcodeOpRaw::clearInputs
     /// Clear all inputs
     ///
     /// Corresponds to `clearInputs` in Ghidra
@@ -97,6 +103,7 @@ impl PcodeOpRaw {
         self.inputs.clear();
     }
 
+    // Ghidra: pcoderaw.hh:154 PcodeOpRaw::getOpcode
     /// Get the opcode
     ///
     /// Corresponds to `getOpcode` in Ghidra
@@ -104,6 +111,7 @@ impl PcodeOpRaw {
         self.opcode
     }
 
+    // Ghidra: pcoderaw.hh:225 PcodeOpRaw::numInput
     /// Get the number of inputs
     ///
     /// Corresponds to `numInput` in Ghidra
@@ -111,11 +119,13 @@ impl PcodeOpRaw {
         self.inputs.len()
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::inputs
     /// Get the inputs
     pub fn inputs(&self) -> &[VarnodeRaw] {
         &self.inputs
     }
 
+    // Ghidra: pcoderaw.hh:193 PcodeOpRaw::setOutput
     /// Set the output varnode
     ///
     /// Corresponds to `setOutput` in Ghidra
@@ -123,11 +133,13 @@ impl PcodeOpRaw {
         self.output = Some(varnode);
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::output
     /// Get the output varnode
     pub fn output(&self) -> Option<&VarnodeRaw> {
         self.output.as_ref()
     }
 
+    // Ghidra: pcoderaw.hh:166 PcodeOpRaw::setSeqNum
     /// Set the sequence number
     ///
     /// Corresponds to `setSeqNum` in Ghidra
@@ -135,11 +147,13 @@ impl PcodeOpRaw {
         self.seqnum = Some(seqnum);
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::seqNum
     /// Get the sequence number
     pub fn seq_num(&self) -> Option<SeqNum> {
         self.seqnum
     }
 
+    // Ghidra: pcoderaw.hh:136 PcodeOpRaw::setBehavior
     /// Set the behavior flags
     ///
     /// Corresponds to `setBehavior` in Ghidra
@@ -147,11 +161,13 @@ impl PcodeOpRaw {
         self.behavior = behavior;
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::behavior
     /// Get the behavior flags
     pub fn behavior(&self) -> u32 {
         self.behavior
     }
 
+    // Ghidra: pcoderaw.cc:96 PcodeOpRaw::decode
     /// Decode from string format
     ///
     /// Corresponds to `decode` in Ghidra
@@ -189,6 +205,7 @@ impl PcodeOpRaw {
         Some(op)
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::parseVarnode
     /// Helper to parse a varnode from string "space:offset:size"
     fn parse_varnode(s: &str) -> Option<VarnodeRaw> {
         let parts: Vec<&str> = s.split(':').collect();
@@ -217,6 +234,7 @@ impl PcodeOpRaw {
         Some(VarnodeRaw::new(space, offset, size))
     }
 
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::encode
     /// Encode to string format
     pub fn encode(&self) -> String {
         let mut result = format!("{}", self.opcode);
@@ -234,6 +252,7 @@ impl PcodeOpRaw {
 }
 
 impl fmt::Display for PcodeOpRaw {
+    // Ghidra: pcoderaw.hh:110 PcodeOpRaw::fmt
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PcodeOpRaw[opcode={}]", self.opcode)?;
         if let Some(out) = &self.output {
@@ -256,6 +275,7 @@ pub struct PcodeOpRawBuilder {
 }
 
 impl PcodeOpRawBuilder {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Create a new builder
     pub fn new(opcode: i32) -> Self {
         PcodeOpRawBuilder {
@@ -263,30 +283,35 @@ impl PcodeOpRawBuilder {
         }
     }
 
+    // RUGRA-GLUE: output (no Ghidra counterpart found)
     /// Set output
     pub fn output(mut self, space: AddressSpace, offset: u64, size: usize) -> Self {
         self.op.set_output(VarnodeRaw::new(space, offset, size));
         self
     }
 
+    // RUGRA-GLUE: input (no Ghidra counterpart found)
     /// Add input
     pub fn input(mut self, space: AddressSpace, offset: u64, size: usize) -> Self {
         self.op.add_input(VarnodeRaw::new(space, offset, size));
         self
     }
 
+    // RUGRA-GLUE: seq_num (no Ghidra counterpart found)
     /// Set sequence number
     pub fn seq_num(mut self, addr: Address, order: u32) -> Self {
         self.op.set_seq_num(SeqNum::new(addr, order));
         self
     }
 
+    // RUGRA-GLUE: behavior (no Ghidra counterpart found)
     /// Set behavior
     pub fn behavior(mut self, behavior: u32) -> Self {
         self.op.set_behavior(behavior);
         self
     }
 
+    // RUGRA-GLUE: build (no Ghidra counterpart found)
     /// Build the PcodeOpRaw
     pub fn build(self) -> PcodeOpRaw {
         self.op

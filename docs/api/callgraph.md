@@ -35,3 +35,4 @@
 - `next_leaf(addr)` — 叶子序遍历下一节点
 - `clear_marks()` — 清除所有标记
 - `all_addrs()` / `get_out_edges(addr)` / `delete_in_edge(addr, index)`
+<!-- annotation-pass: 2026-07-04 -->

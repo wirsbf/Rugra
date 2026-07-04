@@ -63,58 +63,71 @@ pub mod section_flags {
 /// stored at a given address range. Properties other than the main data are
 /// intended to be read once during initialization.
 pub trait LoadImage: Send + Sync {
+    // Ghidra: loadimage.hh:46 LoadImageSection::getFilename
     /// Get the name of the load image file. Faithful to `getFileName`.
     fn get_filename(&self) -> &str;
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::loadFill
     /// Get data from the load image. This is the core routine. Given a
     /// particular address range, retrieves the exact byte values stored at
     /// that address. If the requested address range does not exist, returns
     /// an `Err(DataUnavailError)`. Faithful to `loadFill` (loadimage.hh:80).
     fn load_fill(&self, size: usize, addr: Address) -> Result<Vec<u8>, DataUnavailError>;
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::openSymbols
     /// Prepare to read symbols. Faithful to `openSymbols`. Default: no-op.
     fn open_symbols(&self) {}
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::closeSymbols
     /// Stop reading symbols. Faithful to `closeSymbols`. Default: no-op.
     fn close_symbols(&self) {}
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::getNextSymbol
     /// Get the next symbol record. Returns true if a record was filled in.
     /// Faithful to `getNextSymbol`. Default: no symbols.
     fn get_next_symbol(&self, _record: &mut LoadImageFunc) -> bool {
         false
     }
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::openSectionInfo
     /// Prepare to read section info. Faithful to `openSectionInfo`. Default: no-op.
     fn open_section_info(&self) {}
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::closeSectionInfo
     /// Stop reading section info. Faithful to `closeSectionInfo`. Default: no-op.
     fn close_section_info(&self) {}
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::getNextSection
     /// Get info on the next section. Returns true if a record was filled in.
     /// Faithful to `getNextSection`. Default: no sections.
     fn get_next_section(&self, _record: &mut LoadImageSection) -> bool {
         false
     }
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::getReadonly
     /// Return list of readonly address ranges. Faithful to `getReadonly`.
     /// Default: no readonly ranges.
     fn get_readonly(&self) -> RangeList {
         RangeList::new()
     }
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::getArchType
     /// Get a string indicating the architecture type. Faithful to
     /// `getArchType`.
     fn get_arch_type(&self) -> String;
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::adjustVma
     /// Adjust load addresses with a global offset. Faithful to `adjustVma`.
     fn adjust_vma(&mut self, adjust: i64);
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::load
     /// Load a chunk of image. Convenience method wrapping `load_fill`.
     /// Faithful to `LoadImage::load` (loadimage.cc:29).
     fn load(&self, size: usize, addr: Address) -> Result<Vec<u8>, DataUnavailError> {
         self.load_fill(size, addr)
     }
 
+    // Ghidra: loadimage.hh:46 LoadImageSection::loadValue
     /// Load a single value of a given byte size from the image at the given
     /// address. Returns the value as a `u64`. Used by `EmulateFunction` and
     /// `JumpBasic` for readonly memory lookups.
@@ -145,6 +158,7 @@ pub struct RawLoadImage {
 }
 
 impl RawLoadImage {
+    // Ghidra: loadimage.cc:39 RawLoadImage::new
     /// Construct given the filename. Faithful to the constructor
     /// (loadimage.cc:39).
     pub fn new(filename: &str) -> Self {
@@ -155,6 +169,7 @@ impl RawLoadImage {
         }
     }
 
+    // Ghidra: loadimage.cc:58 RawLoadImage::open
     /// Open the raw file for reading and read all data into memory. Faithful
     /// to `open` (loadimage.cc:58).
     pub fn open(&mut self) -> Result<(), String> {
@@ -165,6 +180,7 @@ impl RawLoadImage {
         Ok(())
     }
 
+    // Ghidra: loadimage.cc:39 RawLoadImage::fromBytes
     /// Construct from raw byte data (for testing).
     pub fn from_bytes(filename: &str, vma: u64, data: Vec<u8>) -> Self {
         Self {
@@ -174,6 +190,7 @@ impl RawLoadImage {
         }
     }
 
+    // Ghidra: loadimage.cc:39 RawLoadImage::fileSize
     /// Get the file size.
     pub fn file_size(&self) -> u64 {
         self.filedata.len() as u64
@@ -181,10 +198,12 @@ impl RawLoadImage {
 }
 
 impl LoadImage for RawLoadImage {
+    // Ghidra: loadimage.cc:39 RawLoadImage::getFilename
     fn get_filename(&self) -> &str {
         &self.filename
     }
 
+    // Ghidra: loadimage.cc:84 RawLoadImage::loadFill
     fn load_fill(&self, size: usize, addr: Address) -> Result<Vec<u8>, DataUnavailError> {
         let mut result = vec![0u8; size];
         let mut cur_addr = addr.as_u64();
@@ -215,10 +234,12 @@ impl LoadImage for RawLoadImage {
         Ok(result)
     }
 
+    // Ghidra: loadimage.cc:71 RawLoadImage::getArchType
     fn get_arch_type(&self) -> String {
         "unknown".to_string()
     }
 
+    // Ghidra: loadimage.cc:77 RawLoadImage::adjustVma
     fn adjust_vma(&mut self, adjust: i64) {
         self.vma = (self.vma as i64 + adjust) as u64;
     }
@@ -236,6 +257,7 @@ pub struct MemoryLoadImage {
 }
 
 impl MemoryLoadImage {
+    // RUGRA-GLUE: new (no Ghidra counterpart found)
     /// Construct from byte data at a base address.
     pub fn new(data: Vec<u8>, base_addr: u64, arch_type: &str) -> Self {
         Self {
@@ -247,10 +269,12 @@ impl MemoryLoadImage {
 }
 
 impl LoadImage for MemoryLoadImage {
+    // RUGRA-GLUE: get_filename (no Ghidra counterpart found)
     fn get_filename(&self) -> &str {
         "<memory>"
     }
 
+    // RUGRA-GLUE: load_fill (no Ghidra counterpart found)
     fn load_fill(&self, size: usize, addr: Address) -> Result<Vec<u8>, DataUnavailError> {
         let offset = addr.as_u64().saturating_sub(self.base_addr);
         if offset as usize + size > self.data.len() {
@@ -263,10 +287,12 @@ impl LoadImage for MemoryLoadImage {
         Ok(self.data[offset as usize..offset as usize + size].to_vec())
     }
 
+    // RUGRA-GLUE: get_arch_type (no Ghidra counterpart found)
     fn get_arch_type(&self) -> String {
         self.arch_type.clone()
     }
 
+    // RUGRA-GLUE: adjust_vma (no Ghidra counterpart found)
     fn adjust_vma(&mut self, adjust: i64) {
         self.base_addr = (self.base_addr as i64 + adjust) as u64;
     }

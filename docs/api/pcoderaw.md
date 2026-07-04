@@ -656,3 +656,4 @@ raw 层只解决“如何表达原始语义”，不解决后续 SSA、类型恢
 
 `pcoderaw.rs` 是 Rugra 当前主线中的 **raw p-code 桥接层**：  
 它用 `VarnodeRaw` 和 `PcodeOpRaw` 承接 lifting 阶段的原始语义结果，并把这些结果以可注入、可调试、可构造的形式送入 `Funcdata`，为后续正式图结构、分析动作和输出链路提供输入基础。
+<!-- annotation-pass: 2026-07-04 -->

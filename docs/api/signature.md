@@ -34,3 +34,4 @@
 - `SignatureEntry::set_hash/get_current_hash/get_previous_hash/hash_changed` — 迭代哈希追踪
 
 测试：新增 4 个（hash_opcode/combine_hashes/generate_features/signature_entry_hash）。
+<!-- annotation-pass: 2026-07-04 -->

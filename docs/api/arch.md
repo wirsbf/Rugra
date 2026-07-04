@@ -123,3 +123,4 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - `types: Option<Arc<RwLock<TypeFactory>>>` + `userops: Option<Arc<RwLock<UserOpManage>>>` 字段 + set_types/set_userops。
 - `get_base_type(size, metatype)` — 委托 TypeFactory::get_base。
 - `construct_join_address(hi,sz,lo,sz)`（translate.cc:817）— 桩：contiguous 早返回，否则 0。
+<!-- annotation-pass: 2026-07-04 -->

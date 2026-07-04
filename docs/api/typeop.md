@@ -164,3 +164,4 @@ Push this operation to a language printer
 ### 2026-07-01：getInputCast/getOutputToken/propagateType 补全
 TypeOp trait +get_output_token/get_input_cast/propagate_type/get_output_metatype（默认 None）。
 关键 op 实现：COPY（透明传播）、LOAD/STORE（指针↔值）、MULTIEQUAL/INDIRECT（透明）、INT_ADD（指针传播）、6 个比较 op（bool 输出+跨 input 传播）。+propagate_to_pointer/from_pointer 辅助。8 新测试。
+<!-- annotation-pass: 2026-07-04 -->

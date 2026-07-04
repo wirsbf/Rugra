@@ -36,3 +36,4 @@ Wrapper for the inflate algorithm (compression.hh:55).
 - **Decompress**：使用 flate2 ZlibDecoder 实现真实 inflate 解压。
 - **compress_all/decompress_all**：一次性压缩/解压，使用 flate2。
 - 所有 L3 缺口已关闭。
+<!-- annotation-pass: 2026-07-04 -->

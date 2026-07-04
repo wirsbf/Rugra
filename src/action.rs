@@ -55,6 +55,7 @@ pub mod break_flags {
 /// that drive the `perform()` state machine (repeatapply/onceperfunc). Rugra
 /// mirrors this via `ActionState`, stored alongside each Action in its container.
 pub trait Action {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Perform the action's work on the given function data.
     ///
     /// # Returns
@@ -62,17 +63,21 @@ pub trait Action {
     /// partial completion (breakpoint).
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32>;
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the name of the action
     fn get_name(&self) -> &str;
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Reset the action state for a new function. Faithful to
     /// `Action::reset` (action.cc:100-105). Default: clear status/count.
     fn reset(&mut self, _fd: &mut Funcdata) {}
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the rule flags (repeatapply / onceperfunc / etc). Default: 0
     /// (single-pass). Containers override to return their group's flags.
     fn get_flags(&self) -> u32 { 0 }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// The perform state machine. Faithful to `Action::perform`
     /// (action.cc:298-362). Drives repeatapply / onceperfunc semantics by
     /// looping apply() until no change (or once for onceperfunc).
@@ -144,6 +149,7 @@ pub struct ActionState {
 }
 
 impl ActionState {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new(flags: u32) -> Self {
         Self {
             status: status_flags::STATUS_START,
@@ -155,6 +161,7 @@ impl ActionState {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Resolve effective flags.
     pub fn get_flags_val(&self) -> u32 {
         self.flags
@@ -166,15 +173,18 @@ impl ActionState {
 /// Corresponds to Ghidra's `Rule` class. A rule typically targets a specific
 /// P-code opcode and performs a local simplification or optimization.
 pub trait Rule {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Apply the rule to a specific operation
     ///
     /// # Returns
     /// 0 if no change occurred, positive if changes were made
     fn apply_op(&self, op: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, fd: &mut Funcdata) -> Result<i32>;
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the name of the rule
     fn get_name(&self) -> &str;
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the opcodes this rule applies to
     fn get_opcodes(&self) -> Vec<crate::opcodes::OpCode>;
 }
@@ -196,10 +206,12 @@ pub struct ActionGroup {
 }
 
 impl ActionGroup {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new(name: &str) -> Self {
         Self::with_flags(name, 0)
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Create with explicit rule flags (e.g. rule_repeatapply for fullloop).
     pub fn with_flags(name: &str, flags: u32) -> Self {
         Self {
@@ -211,17 +223,21 @@ impl ActionGroup {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
         let child_flags = action.get_flags();
         self.actions.push(action);
         self.child_states.push(ActionState::new(child_flags));
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn get_name_str(&self) -> &str { &self.name }
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn num_actions(&self) -> usize { self.actions.len() }
 }
 
 impl Action for ActionGroup {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Run all child Actions' `apply()` in sequence. Faithful to
     /// `ActionGroup::apply` (action.cc:506-528). NOTE: we call `apply()`
     /// directly, NOT `perform()`. The repeatapply loop is driven by THIS
@@ -252,9 +268,12 @@ impl Action for ActionGroup {
         Ok(total)
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_name(&self) -> &str { &self.name }
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Override perform for ActionGroup to be **iterative** (not recursive).
     /// The default perform would call self.apply() in a loop, which calls
     /// child.perform() for repeatapply children — creating deep recursion.
@@ -293,6 +312,7 @@ impl Action for ActionGroup {
         Ok(state.count)
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn reset(&mut self, fd: &mut Funcdata) {
         self.state = 0;
         for i in 0..self.actions.len() {
@@ -331,12 +351,14 @@ impl ActionRestartGroup {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn add_action(&mut self, action: Box<dyn Action>) {
         self.group.add_action(action);
     }
 }
 
 impl Action for ActionRestartGroup {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Faithful to `ActionRestartGroup::apply` (action.cc:554-583).
     ///
     /// NOTE: Ghidra's ActionGroup::apply returns 0 on success (changes
@@ -381,13 +403,16 @@ impl Action for ActionRestartGroup {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_name(&self) -> &str {
         &self.name
     }
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 {
         self.flags
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn reset(&mut self, fd: &mut Funcdata) {
         self.curstart = 0;
         self.group.reset(fd);
@@ -413,6 +438,7 @@ pub struct ActionPool {
 }
 
 impl ActionPool {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -424,6 +450,7 @@ impl ActionPool {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Register a Rule. Faithful to `ActionPool::addRule` — the rule's
     /// opcodes are indexed for fast per-op dispatch.
     pub fn add_rule(&mut self, rule: Box<dyn Rule>) {
@@ -437,6 +464,7 @@ impl ActionPool {
 }
 
 impl Action for ActionPool {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Single-pass Rule application. Faithful to `ActionPool::apply`
     /// (action.cc:878-889) + `processOp` (action.cc:823-876). The parent
     /// `perform()` repeats this until no change (via rule_repeatapply).
@@ -494,15 +522,19 @@ impl Action for ActionPool {
         Ok(pass_changes)
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_name(&self) -> &str { &self.name }
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_flags(&self) -> u32 { self.flags }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn reset(&mut self, _fd: &mut Funcdata) {
         self.total = 0;
         self.rule_hits.clear();
     }
 }
 
+// RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build an `ActionPool` holding the core algebraic-simplification Rules.
 ///
 /// Mirrors Ghidra's `oppool1` / `oppool2` rule groups (coreaction.cc:5511+)
@@ -671,6 +703,7 @@ pub fn build_simplify_pool() -> ActionPool {
     pool
 }
 
+// RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the cleanup `ActionPool` mirroring Ghidra's `actcleanup`
 /// (coreaction.cc:5694-5710). Runs AFTER the main simplify pool so that
 /// canonical forms produced by oppool1 (e.g. INT_MULT(x,-1) from
@@ -715,6 +748,7 @@ pub struct ActionDatabase {
     all_actions: Vec<Box<dyn Action>>,
     current_group: Option<String>,
 }
+// RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
 /// (coreaction.cc:5662-5671). These are type-recovery / stack-variable Rules
 /// that run after oppool1 within the main loop.
@@ -730,6 +764,7 @@ pub fn build_oppool2() -> ActionPool {
 }
 
 impl ActionDatabase {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new() -> Self {
         Self {
             all_actions: Vec::new(),
@@ -737,10 +772,12 @@ impl ActionDatabase {
         }
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn register_action(&mut self, action: Box<dyn Action>) {
         self.all_actions.push(action);
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn get_action_mut(&mut self, name: &str) -> Option<&mut (dyn Action)> {
         for a in &mut self.all_actions {
             if a.get_name() == name {
@@ -750,12 +787,14 @@ impl ActionDatabase {
         None
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn get_action(&self, name: &str) -> Option<&dyn Action> {
         self.all_actions.iter()
             .find(|a| a.get_name() == name)
             .map(|a| a.as_ref())
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Run all registered actions on the given function data
     /// Run all registered actions on the given function data via perform().
     pub fn apply_all(&mut self, fd: &mut crate::funcdata::Funcdata) -> crate::error::Result<i32> {
@@ -770,6 +809,7 @@ impl ActionDatabase {
         Ok(total)
     }
 
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Set up default decompiler actions. Faithful to Ghidra's
     /// `universalAction` (coreaction.cc:5462-5738) — builds a nested tree:
     ///   ActionRestartGroup(universal)
@@ -944,14 +984,17 @@ impl ActionDatabase {
 pub struct ActionTypePropagate;
 
 impl ActionTypePropagate {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     pub fn new() -> Self { Self }
 }
 
 impl Action for ActionTypePropagate {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         crate::analysis::type_infer::propagate_types(fd);
         Ok(0)
     }
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     fn get_name(&self) -> &str { "typepropagate" }
 }
 

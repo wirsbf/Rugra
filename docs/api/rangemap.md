@@ -34,3 +34,4 @@ Partition map from linear space to values (partmap.hh:49).
   - valid: 0=both, 1=no lower, 2=no upper, 3=neither.
 - `default_value()`, `default_value_mut()`, `clear()`, `is_empty()`,
   `num_splits()`, `splits()`.
+<!-- annotation-pass: 2026-07-04 -->

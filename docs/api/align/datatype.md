@@ -40,3 +40,4 @@ Verify array type alignment
 
 Verify primitive type size alignment
 
+<!-- annotation-pass: 2026-07-04 -->

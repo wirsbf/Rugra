@@ -22,6 +22,7 @@ pub struct StringData {
     pub byte_data: Vec<u8>,
 }
 
+// Ghidra: stringmanage.hh:43 StringData::writeUtf8
 /// Write a unicode codepoint as UTF8 to a byte vector. Faithful to
 /// `StringManager::writeUtf8` (stringmanage.cc:124).
 pub fn write_utf8(out: &mut Vec<u8>, codepoint: i32) {
@@ -51,6 +52,7 @@ pub fn write_utf8(out: &mut Vec<u8>, codepoint: i32) {
     }
 }
 
+// Ghidra: stringmanage.hh:43 StringData::readUtf16
 /// Read a UTF16 code point from a 2-byte array. Faithful to
 /// `StringManager::readUtf16` (stringmanage.cc:297).
 pub fn read_utf16(buf: &[u8], bigend: bool) -> i32 {
@@ -61,6 +63,7 @@ pub fn read_utf16(buf: &[u8], bigend: bool) -> i32 {
     }
 }
 
+// Ghidra: stringmanage.hh:43 StringData::getCodepoint
 /// Extract the next unicode codepoint from a byte array. Faithful to
 /// `StringManager::getCodepoint` (stringmanage.cc:347).
 ///
@@ -165,6 +168,7 @@ pub fn get_codepoint(buf: &[u8], charsize: i32, bigend: bool) -> (i32, i32) {
     (codepoint, skip)
 }
 
+// Ghidra: stringmanage.hh:43 StringData::checkCharacters
 /// Check that the buffer contains valid bounded unicode. Faithful to
 /// `StringManager::checkCharacters` (stringmanage.cc:324).
 ///
@@ -186,6 +190,7 @@ pub fn check_characters(buf: &[u8], charsize: i32, bigend: bool) -> i32 {
     count
 }
 
+// Ghidra: stringmanage.hh:43 StringData::hasCharTerminator
 /// Check for a unicode string terminator (null char) in the buffer. Faithful
 /// to `StringManager::hasCharTerminator` (stringmanage.cc:277).
 pub fn has_char_terminator(buffer: &[u8], charsize: usize) -> bool {
@@ -206,6 +211,7 @@ pub fn has_char_terminator(buffer: &[u8], charsize: usize) -> bool {
     false
 }
 
+// Ghidra: stringmanage.hh:43 StringData::writeUnicode
 /// Write unicode buffer to UTF8 output. Faithful to
 /// `StringManager::writeUnicode` (stringmanage.cc:36).
 ///
@@ -237,6 +243,7 @@ pub fn write_unicode(
     true
 }
 
+// Ghidra: stringmanage.hh:43 StringData::assignStringData
 /// Assign string data. Faithful to `StringManager::assignStringData`
 /// (stringmanage.cc:66).
 pub fn assign_string_data(
@@ -271,6 +278,7 @@ pub struct StringManager {
 }
 
 impl StringManager {
+    // Ghidra: stringmanage.cc:108 StringManager::new
     /// Construct given the maximum number of characters. Faithful to the
     /// constructor (stringmanage.cc:108).
     pub fn new(max: i32) -> Self {
@@ -280,16 +288,19 @@ impl StringManager {
         }
     }
 
+    // Ghidra: stringmanage.cc:108 StringManager::clear
     /// Clear out any cached strings. Faithful to `clear`.
     pub fn clear(&mut self) {
         self.string_map.clear();
     }
 
+    // Ghidra: stringmanage.cc:108 StringManager::getMaximumChars
     /// Get the maximum character count.
     pub fn get_maximum_chars(&self) -> i32 {
         self.maximum_chars
     }
 
+    // Ghidra: stringmanage.cc:166 StringManager::isString
     /// Determine if data at the given address is a string. Faithful to
     /// `isString` (stringmanage.cc:166).
     pub fn is_string(&self, addr: Address) -> bool {
@@ -298,22 +309,26 @@ impl StringManager {
             .map_or(false, |d| !d.byte_data.is_empty())
     }
 
+    // Ghidra: stringmanage.cc:108 StringManager::getStringData
     /// Retrieve string data at the given address. Returns a clone of the
     /// cached data, or empty if not a string.
     pub fn get_string_data(&self, addr: Address) -> Option<&StringData> {
         self.string_map.get(&addr.as_u64())
     }
 
+    // Ghidra: stringmanage.cc:108 StringManager::insertStringData
     /// Insert string data at the given address.
     pub fn insert_string_data(&mut self, addr: Address, data: StringData) {
         self.string_map.insert(addr.as_u64(), data);
     }
 
+    // Ghidra: stringmanage.cc:108 StringManager::numStrings
     /// Number of cached strings.
     pub fn num_strings(&self) -> usize {
         self.string_map.len()
     }
 
+    // Ghidra: stringmanage.cc:203 StringManager::encode
     /// Encode cached strings to a stream. Faithful to `StringManager::encode`
     /// (stringmanage.cc:203). Emits `<stringmanage>` with `<string>` children.
     pub fn encode(&self, encoder: &mut dyn crate::marshal::Encoder) {
@@ -341,6 +356,7 @@ impl StringManager {
         encoder.close_element(&sm_elem);
     }
 
+    // Ghidra: stringmanage.cc:231 StringManager::decode
     /// Restore string cache from a stream. Faithful to `StringManager::decode`
     /// (stringmanage.cc:230).
     pub fn decode(&mut self, decoder: &mut dyn crate::marshal::Decoder) {
@@ -417,6 +433,7 @@ pub struct StringManagerUnicode {
 }
 
 impl StringManagerUnicode {
+    // Ghidra: stringmanage.cc:414 StringManagerUnicode::new
     /// Construct given a load image and maximum character count. Faithful to
     /// the constructor (stringmanage.cc:414).
     pub fn new(loader: Option<std::sync::Arc<dyn LoadImage>>, max: i32) -> Self {
@@ -426,6 +443,7 @@ impl StringManagerUnicode {
         }
     }
 
+    // Ghidra: stringmanage.cc:427 StringManagerUnicode::getStringData
     /// Retrieve string data at the given address, reading from the load image
     /// if not cached. Faithful to `StringManagerUnicode::getStringData`
     /// (stringmanage.cc:427).
@@ -476,6 +494,7 @@ impl StringManagerUnicode {
         result
     }
 
+    // Ghidra: stringmanage.cc:414 StringManagerUnicode::isString
     /// Check if the address contains a string, caching the result.
     pub fn is_string(&mut self, addr: Address, charsize: i32, bigend: bool) -> bool {
         let data = self.get_string_data(addr, charsize, bigend);

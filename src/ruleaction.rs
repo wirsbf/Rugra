@@ -16,12 +16,14 @@ use crate::action::action_status;
 pub struct RuleCollapseConstants;
 
 impl RuleCollapseConstants {
+    // Ghidra: ruleaction.cc:3872 RuleCollapseConstants
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleCollapseConstants {
+    // Ghidra: ruleaction.cc:3874 RuleCollapseConstants::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
 
@@ -60,10 +62,12 @@ impl Rule for RuleCollapseConstants {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3872 RuleCollapseConstants
     fn get_name(&self) -> &str {
         "collapse_constants"
     }
 
+    // Ghidra: ruleaction.cc:3872 RuleCollapseConstants
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_ADD,
@@ -83,12 +87,14 @@ impl Rule for RuleCollapseConstants {
 pub struct RuleTrivialBool;
 
 impl RuleTrivialBool {
+    // Ghidra: ruleaction.cc:2435 RuleTrivialBool
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleTrivialBool {
+    // Ghidra: ruleaction.cc:2451 RuleTrivialBool::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
         if op.inrefs.len() != 2 {
@@ -140,10 +146,12 @@ impl Rule for RuleTrivialBool {
         }
     }
 
+    // Ghidra: ruleaction.cc:2435 RuleTrivialBool
     fn get_name(&self) -> &str {
         "trivial_bool"
     }
 
+    // Ghidra: ruleaction.cc:2444 RuleTrivialBool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_BOOL_AND,
@@ -159,12 +167,14 @@ impl Rule for RuleTrivialBool {
 pub struct RulePropagateCopy;
 
 impl RulePropagateCopy {
+    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RulePropagateCopy {
+    // Ghidra: ruleaction.cc:3946 RulePropagateCopy::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let op = op_arc.read().unwrap();
         if op.opcode != OpCode::CPUI_COPY {
@@ -213,10 +223,12 @@ impl Rule for RulePropagateCopy {
         }
     }
 
+    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
     fn get_name(&self) -> &str {
         "propagate_copy"
     }
 
+    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_COPY]
     }
@@ -228,12 +240,14 @@ impl Rule for RulePropagateCopy {
 pub struct RuleZextEliminate;
 
 impl RuleZextEliminate {
+    // Ghidra: ruleaction.cc:2491 RuleZextEliminate
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleZextEliminate {
+    // Ghidra: ruleaction.cc:2507 RuleZextEliminate::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
         if op.opcode != OpCode::CPUI_INT_ZEXT {
@@ -258,10 +272,12 @@ impl Rule for RuleZextEliminate {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2491 RuleZextEliminate
     fn get_name(&self) -> &str {
         "zext_eliminate"
     }
 
+    // Ghidra: ruleaction.cc:2499 RuleZextEliminate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ZEXT]
     }
@@ -274,12 +290,14 @@ impl Rule for RuleZextEliminate {
 pub struct RuleSextEliminate;
 
 impl RuleSextEliminate {
+    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleSextEliminate {
+    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
         if op.opcode != OpCode::CPUI_INT_SEXT {
@@ -304,10 +322,12 @@ impl Rule for RuleSextEliminate {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
     fn get_name(&self) -> &str {
         "sext_eliminate"
     }
 
+    // RUGRA-GLUE: Rugra-specific RuleSextEliminate (no direct Ghidra counterpart)
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SEXT]
     }
@@ -336,12 +356,14 @@ impl Rule for RuleSextEliminate {
 pub struct RuleTrivialArith;
 
 impl RuleTrivialArith {
+    // Ghidra: ruleaction.cc:2359 RuleTrivialArith
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleTrivialArith {
+    // Ghidra: ruleaction.cc:2382 RuleTrivialArith::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra ruleaction.cc:2382-2433.
         use std::sync::Arc;
@@ -438,10 +460,12 @@ impl Rule for RuleTrivialArith {
         }
     }
 
+    // Ghidra: ruleaction.cc:2359 RuleTrivialArith
     fn get_name(&self) -> &str {
         "trivial_arith"
     }
 
+    // Ghidra: ruleaction.cc:2372 RuleTrivialArith::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Faithful to Ghidra ruleaction.cc:2372-2380 (16 opcodes).
         vec![
@@ -472,12 +496,14 @@ impl Rule for RuleTrivialArith {
 pub struct RuleShiftBitops;
 
 impl RuleShiftBitops {
+    // Ghidra: ruleaction.cc:476 RuleShiftBitops
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleShiftBitops {
+    // Ghidra: ruleaction.cc:490 RuleShiftBitops::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
         if op.inrefs.len() != 2 {
@@ -510,10 +536,12 @@ impl Rule for RuleShiftBitops {
         }
     }
 
+    // Ghidra: ruleaction.cc:476 RuleShiftBitops
     fn get_name(&self) -> &str {
         "shift_bitops"
     }
 
+    // Ghidra: ruleaction.cc:481 RuleShiftBitops::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_LEFT,
@@ -535,12 +563,14 @@ impl Rule for RuleShiftBitops {
 pub struct RuleNegateIdentity;
 
 impl RuleNegateIdentity {
+    // Ghidra: ruleaction.cc:444 RuleNegateIdentity
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleNegateIdentity {
+    // Ghidra: ruleaction.cc:452 RuleNegateIdentity::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // op is INT_NOT(V) -> outVn (~V). Walk outVn's descendants looking
         // for a logic op whose other input is V.
@@ -617,10 +647,12 @@ impl Rule for RuleNegateIdentity {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:444 RuleNegateIdentity
     fn get_name(&self) -> &str {
         "negate_identity"
     }
 
+    // Ghidra: ruleaction.cc:446 RuleNegateIdentity::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Ghidra INT_NEGATE == Rugra CPUI_INT_NEGATE
         vec![OpCode::CPUI_INT_NEGATE]
@@ -637,12 +669,14 @@ impl Rule for RuleNegateIdentity {
 pub struct RuleNotDistribute;
 
 impl RuleNotDistribute {
+    // Ghidra: ruleaction.cc:1139 RuleNotDistribute
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleNotDistribute {
+    // Ghidra: ruleaction.cc:1147 RuleNotDistribute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // op is BOOL_NEGATE(in0). in0 must be defined by a BOOL_AND/BOOL_OR.
         let compop_arc = {
@@ -703,10 +737,12 @@ impl Rule for RuleNotDistribute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1139 RuleNotDistribute
     fn get_name(&self) -> &str {
         "not_distribute"
     }
 
+    // Ghidra: ruleaction.cc:1141 RuleNotDistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_BOOL_NEGATE]
     }
@@ -720,12 +756,14 @@ impl Rule for RuleNotDistribute {
 pub struct RuleConcatZero;
 
 impl RuleConcatZero {
+    // Ghidra: ruleaction.cc:4977 RuleConcatZero
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleConcatZero {
+    // Ghidra: ruleaction.cc:4985 RuleConcatZero::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // in1 must be a constant == 0.
         let (in0, in1, out_size, pc) = {
@@ -772,10 +810,12 @@ impl Rule for RuleConcatZero {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4977 RuleConcatZero
     fn get_name(&self) -> &str {
         "concat_zero"
     }
 
+    // Ghidra: ruleaction.cc:4979 RuleConcatZero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -788,12 +828,14 @@ impl Rule for RuleConcatZero {
 pub struct RuleXorCollapse;
 
 impl RuleXorCollapse {
+    // Ghidra: ruleaction.cc:4058 RuleXorCollapse
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleXorCollapse {
+    // Ghidra: ruleaction.cc:4070 RuleXorCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // in1 must be a constant.
         let (in0, coeff1) = {
@@ -870,10 +912,12 @@ impl Rule for RuleXorCollapse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4058 RuleXorCollapse
     fn get_name(&self) -> &str {
         "xor_collapse"
     }
 
+    // Ghidra: ruleaction.cc:4063 RuleXorCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -891,12 +935,14 @@ impl Rule for RuleXorCollapse {
 pub struct RuleAddMultCollapse;
 
 impl RuleAddMultCollapse {
+    // Ghidra: ruleaction.cc:4099 RuleAddMultCollapse
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleAddMultCollapse {
+    // Ghidra: ruleaction.cc:4113 RuleAddMultCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // c[0] = in1 (must be constant), sub = in0.
         let (sub_arc, c0, opc) = {
@@ -967,16 +1013,19 @@ impl Rule for RuleAddMultCollapse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4099 RuleAddMultCollapse
     fn get_name(&self) -> &str {
         "add_mult_collapse"
     }
 
+    // Ghidra: ruleaction.cc:4106 RuleAddMultCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_MULT]
     }
 }
 
 /// All-ones mask for a given byte size (Ghidra's `calc_mask`).
+// Ghidra: address.hh:499 calc_mask
 fn calc_mask(size: usize) -> u64 {
     if size >= 8 {
         u64::MAX
@@ -996,12 +1045,14 @@ fn calc_mask(size: usize) -> u64 {
 pub struct RuleLess2Zero;
 
 impl RuleLess2Zero {
+    // Ghidra: ruleaction.cc:5557 RuleLess2Zero
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleLess2Zero {
+    // Ghidra: ruleaction.cc:5571 RuleLess2Zero::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
@@ -1050,10 +1101,12 @@ impl Rule for RuleLess2Zero {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5557 RuleLess2Zero
     fn get_name(&self) -> &str {
         "less2_zero"
     }
 
+    // Ghidra: ruleaction.cc:5565 RuleLess2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LESS]
     }
@@ -1070,12 +1123,14 @@ impl Rule for RuleLess2Zero {
 pub struct RuleLessEqual2Zero;
 
 impl RuleLessEqual2Zero {
+    // Ghidra: ruleaction.cc:5605 RuleLessEqual2Zero
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleLessEqual2Zero {
+    // Ghidra: ruleaction.cc:5619 RuleLessEqual2Zero::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
@@ -1124,10 +1179,12 @@ impl Rule for RuleLessEqual2Zero {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5605 RuleLessEqual2Zero
     fn get_name(&self) -> &str {
         "lessequal2_zero"
     }
 
+    // Ghidra: ruleaction.cc:5613 RuleLessEqual2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LESSEQUAL]
     }
@@ -1147,12 +1204,14 @@ impl Rule for RuleLessEqual2Zero {
 pub struct RuleBoolNegate;
 
 impl RuleBoolNegate {
+    // Ghidra: ruleaction.cc:5512 RuleBoolNegate
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleBoolNegate {
+    // Ghidra: ruleaction.cc:5529 RuleBoolNegate::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // op is BOOL_NOT(in0). in0 must be defined by a flippable comparison.
         let (flipop_arc, descend_vn) = {
@@ -1200,10 +1259,12 @@ impl Rule for RuleBoolNegate {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5512 RuleBoolNegate
     fn get_name(&self) -> &str {
         "bool_negate"
     }
 
+    // Ghidra: ruleaction.cc:5523 RuleBoolNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Ghidra BOOL_NEGATE == Rugra BOOL_NOT
         vec![OpCode::CPUI_BOOL_NEGATE]
@@ -1218,12 +1279,14 @@ impl Rule for RuleBoolNegate {
 pub struct RuleOrMask;
 
 impl RuleOrMask {
+    // Ghidra: ruleaction.cc:276 RuleOrMask
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleOrMask {
+    // Ghidra: ruleaction.cc:284 RuleOrMask::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (const_vn, size) = {
             let op = op_arc.read().unwrap();
@@ -1249,10 +1312,12 @@ impl Rule for RuleOrMask {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:276 RuleOrMask
     fn get_name(&self) -> &str {
         "or_mask"
     }
 
+    // Ghidra: ruleaction.cc:278 RuleOrMask::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_OR]
     }
@@ -1269,12 +1334,14 @@ impl Rule for RuleOrMask {
 pub struct RuleAndOrLump;
 
 impl RuleAndOrLump {
+    // Ghidra: ruleaction.cc:403 RuleAndOrLump
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleAndOrLump {
+    // Ghidra: ruleaction.cc:413 RuleAndOrLump::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (base_vn, opc) = {
             let op = op_arc.read().unwrap();
@@ -1335,10 +1402,12 @@ impl Rule for RuleAndOrLump {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:403 RuleAndOrLump
     fn get_name(&self) -> &str {
         "and_or_lump"
     }
 
+    // Ghidra: ruleaction.cc:405 RuleAndOrLump::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
     }
@@ -1353,12 +1422,14 @@ impl Rule for RuleAndOrLump {
 pub struct RulePiece2Zext;
 
 impl RulePiece2Zext {
+    // Ghidra: ruleaction.cc:211 RulePiece2Zext
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RulePiece2Zext {
+    // Ghidra: ruleaction.cc:219 RulePiece2Zext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let is_zero_high = {
             let op = op_arc.read().unwrap();
@@ -1379,10 +1450,12 @@ impl Rule for RulePiece2Zext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:211 RulePiece2Zext
     fn get_name(&self) -> &str {
         "piece2zext"
     }
 
+    // Ghidra: ruleaction.cc:213 RulePiece2Zext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -1397,12 +1470,14 @@ impl Rule for RulePiece2Zext {
 pub struct RulePiece2Sext;
 
 impl RulePiece2Sext {
+    // Ghidra: ruleaction.cc:232 RulePiece2Sext
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RulePiece2Sext {
+    // Ghidra: ruleaction.cc:240 RulePiece2Sext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         let matches = {
             let op = op_arc.read().unwrap();
@@ -1457,10 +1532,12 @@ impl Rule for RulePiece2Sext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:232 RulePiece2Sext
     fn get_name(&self) -> &str {
         "piece2sext"
     }
 
+    // Ghidra: ruleaction.cc:234 RulePiece2Sext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -1473,21 +1550,25 @@ impl Rule for RulePiece2Sext {
 pub struct RuleBxor2NotEqual;
 
 impl RuleBxor2NotEqual {
+    // Ghidra: ruleaction.cc:261 RuleBxor2NotEqual
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleBxor2NotEqual {
+    // Ghidra: ruleaction.cc:269 RuleBxor2NotEqual::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         op_arc.write().unwrap().opcode = OpCode::CPUI_INT_NOTEQUAL;
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:261 RuleBxor2NotEqual
     fn get_name(&self) -> &str {
         "bxor2notequal"
     }
 
+    // Ghidra: ruleaction.cc:263 RuleBxor2NotEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_BOOL_XOR]
     }
@@ -1501,12 +1582,14 @@ impl Rule for RuleBxor2NotEqual {
 pub struct RuleTermOrder;
 
 impl RuleTermOrder {
+    // Ghidra: ruleaction.cc:645 RuleTermOrder
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleTermOrder {
+    // Ghidra: ruleaction.cc:663 RuleTermOrder::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let should_swap = {
             let op = op_arc.read().unwrap();
@@ -1528,10 +1611,12 @@ impl Rule for RuleTermOrder {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:645 RuleTermOrder
     fn get_name(&self) -> &str {
         "term_order"
     }
 
+    // Ghidra: ruleaction.cc:650 RuleTermOrder::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // The full commutative list (ruleaction.cc:655).
         vec![
@@ -1557,12 +1642,14 @@ impl Rule for RuleTermOrder {
 pub struct RuleShift2Mult;
 
 impl RuleShift2Mult {
+    // Ghidra: ruleaction.cc:3724 RuleShift2Mult
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleShift2Mult {
+    // Ghidra: ruleaction.cc:3734 RuleShift2Mult::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // constvn (in1) must be a constant shift amount < 32.
         let (vn, val) = {
@@ -1618,10 +1705,12 @@ impl Rule for RuleShift2Mult {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3724 RuleShift2Mult
     fn get_name(&self) -> &str {
         "shift2mult"
     }
 
+    // Ghidra: ruleaction.cc:3728 RuleShift2Mult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT]
     }
@@ -1635,12 +1724,14 @@ impl Rule for RuleShift2Mult {
 pub struct RuleDoubleSub;
 
 impl RuleDoubleSub {
+    // Ghidra: ruleaction.cc:1798 RuleDoubleSub
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleDoubleSub {
+    // Ghidra: ruleaction.cc:1806 RuleDoubleSub::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // in0 must be defined by a SUBPIECE.
         let (base_vn, offset2) = {
@@ -1685,10 +1776,12 @@ impl Rule for RuleDoubleSub {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1798 RuleDoubleSub
     fn get_name(&self) -> &str {
         "double_sub"
     }
 
+    // Ghidra: ruleaction.cc:1800 RuleDoubleSub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE]
     }
@@ -1702,12 +1795,14 @@ impl Rule for RuleDoubleSub {
 pub struct RuleTrivialShift;
 
 impl RuleTrivialShift {
+    // Ghidra: ruleaction.cc:3516 RuleTrivialShift
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleTrivialShift {
+    // Ghidra: ruleaction.cc:3525 RuleTrivialShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (val, in0_size, is_sright) = {
             let op = op_arc.read().unwrap();
@@ -1741,10 +1836,12 @@ impl Rule for RuleTrivialShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3516 RuleTrivialShift
     fn get_name(&self) -> &str {
         "trivial_shift"
     }
 
+    // Ghidra: ruleaction.cc:3518 RuleTrivialShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
     }
@@ -1759,12 +1856,14 @@ impl Rule for RuleTrivialShift {
 pub struct RuleSlessToLess;
 
 impl RuleSlessToLess {
+    // Ghidra: ruleaction.cc:2548 RuleSlessToLess
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleSlessToLess {
+    // Ghidra: ruleaction.cc:2560 RuleSlessToLess::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (in0_nzm, in1_nzm, in0_size, is_sless) = {
             let op = op_arc.read().unwrap();
@@ -1807,10 +1906,12 @@ impl Rule for RuleSlessToLess {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2548 RuleSlessToLess
     fn get_name(&self) -> &str {
         "sless_to_less"
     }
 
+    // Ghidra: ruleaction.cc:2553 RuleSlessToLess::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL]
     }
@@ -1825,12 +1926,14 @@ impl Rule for RuleSlessToLess {
 pub struct RuleOrCollapse;
 
 impl RuleOrCollapse {
+    // Ghidra: ruleaction.cc:373 RuleOrCollapse
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleOrCollapse {
+    // Ghidra: ruleaction.cc:384 RuleOrCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (in0_nzm, const_val, size) = {
             let op = op_arc.read().unwrap();
@@ -1859,10 +1962,12 @@ impl Rule for RuleOrCollapse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:373 RuleOrCollapse
     fn get_name(&self) -> &str {
         "or_collapse"
     }
 
+    // Ghidra: ruleaction.cc:378 RuleOrCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_OR]
     }
@@ -1878,12 +1983,14 @@ impl Rule for RuleOrCollapse {
 pub struct RuleConcatLeftShift;
 
 impl RuleConcatLeftShift {
+    // Ghidra: ruleaction.cc:5004 RuleConcatLeftShift
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleConcatLeftShift {
+    // Ghidra: ruleaction.cc:5012 RuleConcatLeftShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // vn2 (in1) must be defined by INT_LEFT of a zext.
         let (vn1, b, sa_bytes, pc, out_size) = {
@@ -1974,10 +2081,12 @@ impl Rule for RuleConcatLeftShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5004 RuleConcatLeftShift
     fn get_name(&self) -> &str {
         "concat_leftshift"
     }
 
+    // Ghidra: ruleaction.cc:5006 RuleConcatLeftShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_PIECE]
     }
@@ -1992,12 +2101,14 @@ impl Rule for RuleConcatLeftShift {
 pub struct RuleDoubleShift;
 
 impl RuleDoubleShift {
+    // Ghidra: ruleaction.cc:1825 RuleDoubleShift
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleDoubleShift {
+    // Ghidra: ruleaction.cc:1842 RuleDoubleShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // in1 must be constant; in0 (secvn) must be defined by a shift/mult.
         let (opc1, sa1, secop_arc, size) = {
@@ -2100,10 +2211,12 @@ impl Rule for RuleDoubleShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1825 RuleDoubleShift
     fn get_name(&self) -> &str {
         "double_shift"
     }
 
+    // Ghidra: ruleaction.cc:1834 RuleDoubleShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_MULT]
     }
@@ -2117,12 +2230,14 @@ impl Rule for RuleDoubleShift {
 pub struct RuleIdentityEl;
 
 impl RuleIdentityEl {
+    // Ghidra: ruleaction.cc:3679 RuleIdentityEl
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleIdentityEl {
+    // Ghidra: ruleaction.cc:3696 RuleIdentityEl::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (val, opc) = {
             let op = op_arc.read().unwrap();
@@ -2157,10 +2272,12 @@ impl Rule for RuleIdentityEl {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3679 RuleIdentityEl
     fn get_name(&self) -> &str {
         "identity_el"
     }
 
+    // Ghidra: ruleaction.cc:3688 RuleIdentityEl::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB,
@@ -2178,12 +2295,14 @@ impl Rule for RuleIdentityEl {
 pub struct RuleSignShift;
 
 impl RuleSignShift {
+    // Ghidra: ruleaction.cc:3544 RuleSignShift
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleSignShift {
+    // Ghidra: ruleaction.cc:3555 RuleSignShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (in_vn, const_vn, size, pc) = {
             let op = op_arc.read().unwrap();
@@ -2252,10 +2371,12 @@ impl Rule for RuleSignShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3544 RuleSignShift
     fn get_name(&self) -> &str {
         "sign_shift"
     }
 
+    // Ghidra: ruleaction.cc:3549 RuleSignShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_RIGHT]
     }
@@ -2272,12 +2393,14 @@ impl Rule for RuleSignShift {
 pub struct RuleSubZext;
 
 impl RuleSubZext {
+    // Ghidra: ruleaction.cc:5044 RuleSubZext
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleSubZext {
+    // Ghidra: ruleaction.cc:5057 RuleSubZext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // in0 must be defined by a SUBPIECE; base size == op output size.
         let (basevn, trunc_offset, sub_size, subop_arc) = {
@@ -2352,10 +2475,12 @@ impl Rule for RuleSubZext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5044 RuleSubZext
     fn get_name(&self) -> &str {
         "sub_zext"
     }
 
+    // Ghidra: ruleaction.cc:5051 RuleSubZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_ZEXT]
     }
@@ -2369,12 +2494,14 @@ impl Rule for RuleSubZext {
 pub struct RuleConcatShift;
 
 impl RuleConcatShift {
+    // Ghidra: ruleaction.cc:1966 RuleConcatShift
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleConcatShift {
+    // Ghidra: ruleaction.cc:1979 RuleConcatShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (sa, shiftin, concat_arc, opc, pc) = {
             let op = op_arc.read().unwrap();
@@ -2440,10 +2567,12 @@ impl Rule for RuleConcatShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1966 RuleConcatShift
     fn get_name(&self) -> &str {
         "concat_shift"
     }
 
+    // Ghidra: ruleaction.cc:1972 RuleConcatShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
     }
@@ -2460,12 +2589,14 @@ impl Rule for RuleConcatShift {
 pub struct RuleShiftCompare;
 
 impl RuleShiftCompare {
+    // Ghidra: ruleaction.cc:2064 RuleShiftCompare
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleShiftCompare {
+    // Ghidra: ruleaction.cc:2077 RuleShiftCompare::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (shiftvn, constval, shiftop_arc) = {
             let op = op_arc.read().unwrap();
@@ -2558,10 +2689,12 @@ impl Rule for RuleShiftCompare {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2064 RuleShiftCompare
     fn get_name(&self) -> &str {
         "shift_compare"
     }
 
+    // Ghidra: ruleaction.cc:2070 RuleShiftCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -2575,12 +2708,14 @@ impl Rule for RuleShiftCompare {
 pub struct RuleAndCompare;
 
 impl RuleAndCompare {
+    // Ghidra: ruleaction.cc:1734 RuleAndCompare
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleAndCompare {
+    // Ghidra: ruleaction.cc:1745 RuleAndCompare::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (andvn) = {
             let op = op_arc.read().unwrap();
@@ -2673,10 +2808,12 @@ impl Rule for RuleAndCompare {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1734 RuleAndCompare
     fn get_name(&self) -> &str {
         "and_compare"
     }
 
+    // Ghidra: ruleaction.cc:1738 RuleAndCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -2693,12 +2830,14 @@ impl Rule for RuleAndCompare {
 pub struct RuleTestSign;
 
 impl RuleTestSign {
+    // Ghidra: ruleaction.cc:3602 RuleTestSign
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleTestSign {
+    // Ghidra: ruleaction.cc:3632 RuleTestSign::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // op is INT_SRIGHT(in_vn, const_vn). const must be 8*size-1.
         let (in_vn, out_vn) = {
@@ -2778,10 +2917,12 @@ impl Rule for RuleTestSign {
         }
     }
 
+    // Ghidra: ruleaction.cc:3602 RuleTestSign
     fn get_name(&self) -> &str {
         "test_sign"
     }
 
+    // Ghidra: ruleaction.cc:3604 RuleTestSign::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SRIGHT]
     }
@@ -2796,12 +2937,14 @@ impl Rule for RuleTestSign {
 pub struct RuleEquality;
 
 impl RuleEquality {
+    // Ghidra: ruleaction.cc:619 RuleEquality
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleEquality {
+    // Ghidra: ruleaction.cc:631 RuleEquality::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (equal, is_notequal) = {
             let op = op_arc.read().unwrap();
@@ -2828,10 +2971,12 @@ impl Rule for RuleEquality {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:619 RuleEquality
     fn get_name(&self) -> &str {
         "equality"
     }
 
+    // Ghidra: ruleaction.cc:624 RuleEquality::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -2844,12 +2989,14 @@ impl Rule for RuleEquality {
 pub struct RuleLessNotEqual;
 
 impl RuleLessNotEqual {
+    // Ghidra: ruleaction.cc:2310 RuleLessNotEqual
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleLessNotEqual {
+    // Ghidra: ruleaction.cc:2320 RuleLessNotEqual::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (vnout1, vnout2) = {
             let op = op_arc.read().unwrap();
@@ -2903,7 +3050,9 @@ impl Rule for RuleLessNotEqual {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2310 RuleLessNotEqual
     fn get_name(&self) -> &str { "less_notequal" }
+    // Ghidra: ruleaction.cc:2314 RuleLessNotEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND] }
 }
 
@@ -2917,12 +3066,14 @@ impl Rule for RuleLessNotEqual {
 pub struct RuleLessEqual;
 
 impl RuleLessEqual {
+    // Ghidra: ruleaction.cc:2250 RuleLessEqual
     pub fn new() -> Self {
         Self
     }
 }
 
 impl Rule for RuleLessEqual {
+    // Ghidra: ruleaction.cc:2262 RuleLessEqual::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (vnout1, vnout2) = {
             let op = op_arc.read().unwrap();
@@ -2985,7 +3136,9 @@ impl Rule for RuleLessEqual {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2250 RuleLessEqual
     fn get_name(&self) -> &str { "less_equal" }
+    // Ghidra: ruleaction.cc:2256 RuleLessEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR] }
 }
 
@@ -2998,10 +3151,12 @@ impl Rule for RuleLessEqual {
 pub struct RuleRightShiftAnd;
 
 impl RuleRightShiftAnd {
+    // Ghidra: ruleaction.cc:568 RuleRightShiftAnd
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleRightShiftAnd {
+    // Ghidra: ruleaction.cc:580 RuleRightShiftAnd::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (const_sa, in_vn) = {
             let op = op_arc.read().unwrap();
@@ -3040,7 +3195,9 @@ impl Rule for RuleRightShiftAnd {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:568 RuleRightShiftAnd
     fn get_name(&self) -> &str { "right_shift_and" }
+    // Ghidra: ruleaction.cc:573 RuleRightShiftAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -3052,10 +3209,12 @@ impl Rule for RuleRightShiftAnd {
 pub struct RuleHighOrderAnd;
 
 impl RuleHighOrderAnd {
+    // Ghidra: ruleaction.cc:1185 RuleHighOrderAnd
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleHighOrderAnd {
+    // Ghidra: ruleaction.cc:1196 RuleHighOrderAnd::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (cvn1_val, cvn1_size, addop_arc) = {
             let op = op_arc.read().unwrap();
@@ -3098,7 +3257,9 @@ impl Rule for RuleHighOrderAnd {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1185 RuleHighOrderAnd
     fn get_name(&self) -> &str { "high_order_and" }
+    // Ghidra: ruleaction.cc:1190 RuleHighOrderAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -3111,10 +3272,12 @@ impl Rule for RuleHighOrderAnd {
 pub struct RuleAndZext;
 
 impl RuleAndZext {
+    // Ghidra: ruleaction.cc:1696 RuleAndZext
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAndZext {
+    // Ghidra: ruleaction.cc:1706 RuleAndZext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (cvn1_val, otherop_arc) = {
             let op = op_arc.read().unwrap();
@@ -3150,7 +3313,9 @@ impl Rule for RuleAndZext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1696 RuleAndZext
     fn get_name(&self) -> &str { "and_zext" }
+    // Ghidra: ruleaction.cc:1700 RuleAndZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -3163,10 +3328,12 @@ impl Rule for RuleAndZext {
 pub struct RuleZextSless;
 
 impl RuleZextSless {
+    // Ghidra: ruleaction.cc:2575 RuleZextSless
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleZextSless {
+    // Ghidra: ruleaction.cc:2584 RuleZextSless::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (zextslot, otherslot, zext_arc, val, is_sless) = {
             let op = op_arc.read().unwrap();
@@ -3213,7 +3380,9 @@ impl Rule for RuleZextSless {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2575 RuleZextSless
     fn get_name(&self) -> &str { "zext_sless" }
+    // Ghidra: ruleaction.cc:2577 RuleZextSless::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL] }
 }
 
@@ -3227,10 +3396,12 @@ impl Rule for RuleZextSless {
 pub struct RuleScarry;
 
 impl RuleScarry {
+    // Ghidra: ruleaction.cc:3434 RuleScarry
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleScarry {
+    // Ghidra: ruleaction.cc:3450 RuleScarry::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let has_zero = {
             let op = op_arc.read().unwrap();
@@ -3251,7 +3422,9 @@ impl Rule for RuleScarry {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3434 RuleScarry
     fn get_name(&self) -> &str { "scarry" }
+    // Ghidra: ruleaction.cc:3444 RuleScarry::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SCARRY] }
 }
 
@@ -3263,10 +3436,12 @@ impl Rule for RuleScarry {
 pub struct RuleSborrow;
 
 impl RuleSborrow {
+    // Ghidra: ruleaction.cc:3365 RuleSborrow
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSborrow {
+    // Ghidra: ruleaction.cc:3381 RuleSborrow::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let b_zero = {
             let op = op_arc.read().unwrap();
@@ -3284,7 +3459,9 @@ impl Rule for RuleSborrow {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3365 RuleSborrow
     fn get_name(&self) -> &str { "sborrow" }
+    // Ghidra: ruleaction.cc:3375 RuleSborrow::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SBORROW] }
 }
 
@@ -3297,10 +3474,12 @@ impl Rule for RuleSborrow {
 pub struct RuleAndDistribute;
 
 impl RuleAndDistribute {
+    // Ghidra: ruleaction.cc:1252 RuleAndDistribute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAndDistribute {
+    // Ghidra: ruleaction.cc:1260 RuleAndDistribute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (size, pc, distribute_slot) = {
             let op = op_arc.read().unwrap();
@@ -3370,7 +3549,9 @@ impl Rule for RuleAndDistribute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1252 RuleAndDistribute
     fn get_name(&self) -> &str { "and_distribute" }
+    // Ghidra: ruleaction.cc:1254 RuleAndDistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -3382,10 +3563,12 @@ impl Rule for RuleAndDistribute {
 pub struct RuleLessOne;
 
 impl RuleLessOne {
+    // Ghidra: ruleaction.cc:1316 RuleLessOne
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleLessOne {
+    // Ghidra: ruleaction.cc:1325 RuleLessOne::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (val, opc, const_size) = {
             let op = op_arc.read().unwrap();
@@ -3411,7 +3594,9 @@ impl Rule for RuleLessOne {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1316 RuleLessOne
     fn get_name(&self) -> &str { "less_one" }
+    // Ghidra: ruleaction.cc:1318 RuleLessOne::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESS, OpCode::CPUI_INT_LESSEQUAL] }
 }
 
@@ -3423,10 +3608,12 @@ impl Rule for RuleLessOne {
 pub struct RuleAndPiece;
 
 impl RuleAndPiece {
+    // Ghidra: ruleaction.cc:1628 RuleAndPiece
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAndPiece {
+    // Ghidra: ruleaction.cc:1640 RuleAndPiece::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (size, pc) = {
             let op = op_arc.read().unwrap();
@@ -3489,7 +3676,9 @@ impl Rule for RuleAndPiece {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1628 RuleAndPiece
     fn get_name(&self) -> &str { "and_piece" }
+    // Ghidra: ruleaction.cc:1634 RuleAndPiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -3504,10 +3693,12 @@ impl Rule for RuleAndPiece {
 pub struct RuleAndCommute;
 
 impl RuleAndCommute {
+    // Ghidra: ruleaction.cc:1520 RuleAndCommute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAndCommute {
+    // Ghidra: ruleaction.cc:1532 RuleAndCommute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (size, pc) = {
             let op = op_arc.read().unwrap();
@@ -3588,7 +3779,9 @@ impl Rule for RuleAndCommute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1520 RuleAndCommute
     fn get_name(&self) -> &str { "and_commute" }
+    // Ghidra: ruleaction.cc:1526 RuleAndCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -3601,10 +3794,12 @@ impl Rule for RuleAndCommute {
 pub struct RuleOrConsume;
 
 impl RuleOrConsume {
+    // Ghidra: ruleaction.cc:344 RuleOrConsume
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleOrConsume {
+    // Ghidra: ruleaction.cc:353 RuleOrConsume::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (consume, in0_nzm, in1_nzm, size) = {
             let op = op_arc.read().unwrap();
@@ -3632,7 +3827,9 @@ impl Rule for RuleOrConsume {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:344 RuleOrConsume
     fn get_name(&self) -> &str { "or_consume" }
+    // Ghidra: ruleaction.cc:346 RuleOrConsume::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
@@ -3651,6 +3848,7 @@ impl Rule for RuleOrConsume {
 pub struct RuleEarlyRemoval;
 
 impl RuleEarlyRemoval {
+    // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
     pub fn new() -> Self { Self }
 
     /// Is `spc` a "memory" address space (where deadcode removal is gated)?
@@ -3660,6 +3858,7 @@ impl RuleEarlyRemoval {
     /// memory space, removal is only safe once `deadRemovalAllowedSeen` has fired
     /// (after heritage). Since Rugra has not ported that mechanism, we
     /// conservatively block removal of memory-space outputs entirely.
+    // RUGRA-GLUE: helper for RuleEarlyRemoval::applyOp (ruleaction.cc:25)
     fn is_memory_output_space(space: crate::space::AddressSpace) -> bool {
         // The constant and iop spaces never run deadcode (Ghidra doesDeadcode==false),
         // so outputs there are always removable. Everything else (RAM, register,
@@ -3669,6 +3868,7 @@ impl RuleEarlyRemoval {
 }
 
 impl Rule for RuleEarlyRemoval {
+    // Ghidra: ruleaction.cc:25 RuleEarlyRemoval::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Ghidra RuleEarlyRemoval::applyOp (ruleaction.cc:25-44).
         // Guard 1: isCall
@@ -3706,7 +3906,9 @@ impl Rule for RuleEarlyRemoval {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
     fn get_name(&self) -> &str { "early_removal" }
+    // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Applies to all ops; we register a representative set.
         vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB, OpCode::CPUI_INT_MULT,
@@ -3727,10 +3929,12 @@ impl Rule for RuleEarlyRemoval {
 pub struct RuleBooleanNegate;
 
 impl RuleBooleanNegate {
+    // Ghidra: ruleaction.cc:2957 RuleBooleanNegate
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleBooleanNegate {
+    // Ghidra: ruleaction.cc:2969 RuleBooleanNegate::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (opc, constval, subbool) = {
             let op = op_arc.read().unwrap();
@@ -3761,7 +3965,9 @@ impl Rule for RuleBooleanNegate {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2957 RuleBooleanNegate
     fn get_name(&self) -> &str { "boolean_negate" }
+    // Ghidra: ruleaction.cc:2962 RuleBooleanNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -3772,10 +3978,12 @@ impl Rule for RuleBooleanNegate {
 pub struct RuleLogic2Bool;
 
 impl RuleLogic2Bool {
+    // Ghidra: ruleaction.cc:3126 RuleLogic2Bool
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleLogic2Bool {
+    // Ghidra: ruleaction.cc:3138 RuleLogic2Bool::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (opc, in0, in1) = {
             let op = op_arc.read().unwrap();
@@ -3809,7 +4017,9 @@ impl Rule for RuleLogic2Bool {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3126 RuleLogic2Bool
     fn get_name(&self) -> &str { "logic2bool" }
+    // Ghidra: ruleaction.cc:3131 RuleLogic2Bool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
@@ -3823,10 +4033,12 @@ impl Rule for RuleLogic2Bool {
 pub struct RuleLeftRight;
 
 impl RuleLeftRight {
+    // Ghidra: ruleaction.cc:2016 RuleLeftRight
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleLeftRight {
+    // Ghidra: ruleaction.cc:2030 RuleLeftRight::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Phase 1: validate and extract raw values.
         let (sa, leftshift_arc, is_sright, shiftin_size, tsz) = {
@@ -3883,7 +4095,9 @@ impl Rule for RuleLeftRight {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2016 RuleLeftRight
     fn get_name(&self) -> &str { "left_right" }
+    // Ghidra: ruleaction.cc:2023 RuleLeftRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -3895,10 +4109,12 @@ impl Rule for RuleLeftRight {
 pub struct RuleIntLessEqual;
 
 impl RuleIntLessEqual {
+    // Ghidra: ruleaction.cc:602 RuleIntLessEqual
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleIntLessEqual {
+    // Ghidra: ruleaction.cc:611 RuleIntLessEqual::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         if fd.replace_lessequal(&crate::op::PcodeOpRef(op_arc.clone())) {
             Ok(action_status::CHANGE)
@@ -3907,7 +4123,9 @@ impl Rule for RuleIntLessEqual {
         }
     }
 
+    // Ghidra: ruleaction.cc:602 RuleIntLessEqual
     fn get_name(&self) -> &str { "int_lessequal" }
+    // Ghidra: ruleaction.cc:604 RuleIntLessEqual::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_LESSEQUAL, OpCode::CPUI_INT_SLESSEQUAL] }
 }
 
@@ -3922,10 +4140,12 @@ impl Rule for RuleIntLessEqual {
 pub struct RuleCollectTerms;
 
 impl RuleCollectTerms {
+    // Ghidra: ruleaction.cc:99 RuleCollectTerms
     pub fn new() -> Self { Self }
 
     /// Extract the multiplicative coefficient from a term vn.
     /// If vn is INT_MULT(V, c), return (V, c); else (vn, 1).
+    // Ghidra: ruleaction.cc:82 RuleCollectTerms::getMultCoeff
     fn get_mult_coeff(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64) {
         let is_written = vn.read().unwrap().is_written();
         if !is_written {
@@ -3945,6 +4165,7 @@ impl RuleCollectTerms {
 }
 
 impl Rule for RuleCollectTerms {
+    // Ghidra: ruleaction.cc:107 RuleCollectTerms::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Must not be feeding another INT_ADD (we want the root).
         let out_vn = op_arc.read().unwrap().output.as_ref().cloned();
@@ -4055,7 +4276,9 @@ impl Rule for RuleCollectTerms {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:99 RuleCollectTerms
     fn get_name(&self) -> &str { "collect_terms" }
+    // Ghidra: ruleaction.cc:101 RuleCollectTerms::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -4069,10 +4292,12 @@ impl Rule for RuleCollectTerms {
 pub struct RuleBitUndistribute;
 
 impl RuleBitUndistribute {
+    // Ghidra: ruleaction.cc:2620 RuleBitUndistribute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleBitUndistribute {
+    // Ghidra: ruleaction.cc:2634 RuleBitUndistribute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (opc_outer, vn1_def, vn2_def) = {
             let op = op_arc.read().unwrap();
@@ -4146,7 +4371,9 @@ impl Rule for RuleBitUndistribute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2620 RuleBitUndistribute
     fn get_name(&self) -> &str { "bit_undistribute" }
+    // Ghidra: ruleaction.cc:2627 RuleBitUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
 }
 
@@ -4161,10 +4388,12 @@ impl Rule for RuleBitUndistribute {
 pub struct RuleBooleanDedup;
 
 impl RuleBooleanDedup {
+    // Ghidra: ruleaction.cc:2812 RuleBooleanDedup
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleBooleanDedup {
+    // Ghidra: ruleaction.cc:2852 RuleBooleanDedup::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (central_opc, ins, opc0, opc1) = {
             let op = op_arc.read().unwrap();
@@ -4238,11 +4467,14 @@ impl Rule for RuleBooleanDedup {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2812 RuleBooleanDedup
     fn get_name(&self) -> &str { "boolean_dedup" }
+    // Ghidra: ruleaction.cc:2820 RuleBooleanDedup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR] }
 }
 
 /// Helper: exact varnode equality (same Arc pointer).
+// Ghidra: expression.cc:520 functionalEquality
 fn functional_equality_eq(
     a: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     b: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -4259,10 +4491,12 @@ fn functional_equality_eq(
 pub struct RuleAndMask;
 
 impl RuleAndMask {
+    // Ghidra: ruleaction.cc:302 RuleAndMask
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAndMask {
+    // Ghidra: ruleaction.cc:310 RuleAndMask::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         let (out_size, mask1, mask2, in0, in1, out_consume) = {
             let op = op_arc.read().unwrap();
@@ -4327,7 +4561,9 @@ impl Rule for RuleAndMask {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:302 RuleAndMask
     fn get_name(&self) -> &str { "and_mask" }
+    // Ghidra: ruleaction.cc:304 RuleAndMask::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -4342,11 +4578,13 @@ impl Rule for RuleAndMask {
 pub struct RuleBooleanUndistribute;
 
 impl RuleBooleanUndistribute {
+    // Ghidra: ruleaction.cc:2697 RuleBooleanUndistribute
     pub fn new() -> Self { Self }
 
     /// Check if two boolean Varnodes are correlated (same or complementary).
     /// Faithful to `RuleBooleanUndistribute::isMatch` (ruleaction.cc:2710-2729).
     /// Returns `Some(is_flip)` where `is_flip` is true for complementary.
+    // Ghidra: ruleaction.cc:2718 RuleBooleanUndistribute::isMatch
     fn is_match(
         left_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         right_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -4361,6 +4599,7 @@ impl RuleBooleanUndistribute {
 }
 
 impl Rule for RuleBooleanUndistribute {
+    // Ghidra: ruleaction.cc:2731 RuleBooleanUndistribute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleBooleanUndistribute::applyOp (ruleaction.cc:2731-2810).
         let (central_opc, ins) = {
@@ -4482,7 +4721,9 @@ impl Rule for RuleBooleanUndistribute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:2697 RuleBooleanUndistribute
     fn get_name(&self) -> &str { "boolean_undistribute" }
+    // Ghidra: ruleaction.cc:2703 RuleBooleanUndistribute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -4495,10 +4736,12 @@ impl Rule for RuleBooleanUndistribute {
 pub struct RuleBoolZext;
 
 impl RuleBoolZext {
+    // Ghidra: ruleaction.cc:3001 RuleBoolZext
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleBoolZext {
+    // Ghidra: ruleaction.cc:3015 RuleBoolZext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleBoolZext::applyOp (ruleaction.cc:3015-3124).
         let (bool_vn1, multop1_arc) = {
@@ -4657,7 +4900,9 @@ impl Rule for RuleBoolZext {
         }
     }
 
+    // Ghidra: ruleaction.cc:3001 RuleBoolZext
     fn get_name(&self) -> &str { "bool_zext" }
+    // Ghidra: ruleaction.cc:3009 RuleBoolZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -4671,10 +4916,12 @@ impl Rule for RuleBoolZext {
 pub struct RulePushMulti;
 
 impl RulePushMulti {
+    // Ghidra: ruleaction.cc:1062 RulePushMulti
     pub fn new() -> Self { Self }
 
     /// Find a substitute MULTIEQUAL in the block that already merges in1/in2.
     /// Faithful to `RulePushMulti::findSubstitute` (ruleaction.cc:1031-1060).
+    // Ghidra: ruleaction.cc:1031 RulePushMulti::findSubstitute
     fn find_substitute(
         in1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         in2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -4754,6 +5001,7 @@ impl RulePushMulti {
 }
 
 impl Rule for RulePushMulti {
+    // Ghidra: ruleaction.cc:1074 RulePushMulti::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePushMulti::applyOp (ruleaction.cc:1074-1137).
         use crate::expression::functional_equality_level;
@@ -4875,7 +5123,9 @@ impl Rule for RulePushMulti {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1062 RulePushMulti
     fn get_name(&self) -> &str { "push_multi" }
+    // Ghidra: ruleaction.cc:1068 RulePushMulti::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
@@ -4888,10 +5138,12 @@ impl Rule for RulePushMulti {
 pub struct RuleSelectCse;
 
 impl RuleSelectCse {
+    // Ghidra: ruleaction.cc:178 RuleSelectCse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSelectCse {
+    // Ghidra: ruleaction.cc:187 RuleSelectCse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSelectCse::applyOp (ruleaction.cc:187-209).
         let (opc, vn) = {
@@ -4927,7 +5179,9 @@ impl Rule for RuleSelectCse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:178 RuleSelectCse
     fn get_name(&self) -> &str { "select_cse" }
+    // Ghidra: ruleaction.cc:180 RuleSelectCse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -4936,10 +5190,12 @@ impl Rule for RuleSelectCse {
 pub struct RuleMultNegOne;
 
 impl RuleMultNegOne {
+    // Ghidra: ruleaction.cc:7171 RuleMultNegOne
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleMultNegOne {
+    // Ghidra: ruleaction.cc:7179 RuleMultNegOne::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleMultNegOne::applyOp (ruleaction.cc:7179-7190).
         // a * -1 -> -a
@@ -4961,7 +5217,9 @@ impl Rule for RuleMultNegOne {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7171 RuleMultNegOne
     fn get_name(&self) -> &str { "mult_neg_one" }
+    // Ghidra: ruleaction.cc:7173 RuleMultNegOne::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 
@@ -4973,10 +5231,12 @@ impl Rule for RuleMultNegOne {
 pub struct RuleSub2Add;
 
 impl RuleSub2Add {
+    // Ghidra: ruleaction.cc:4032 RuleSub2Add
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSub2Add {
+    // Ghidra: ruleaction.cc:4040 RuleSub2Add::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSub2Add::applyOp (ruleaction.cc:4040-4056).
         let vn = {
@@ -5001,7 +5261,9 @@ impl Rule for RuleSub2Add {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4032 RuleSub2Add
     fn get_name(&self) -> &str { "sub2_add" }
+    // Ghidra: ruleaction.cc:4034 RuleSub2Add::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SUB] }
 }
 
@@ -5013,10 +5275,12 @@ impl Rule for RuleSub2Add {
 pub struct RuleSubExtComm;
 
 impl RuleSubExtComm {
+    // Ghidra: ruleaction.cc:4405 RuleSubExtComm
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubExtComm {
+    // Ghidra: ruleaction.cc:4422 RuleSubExtComm::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubExtComm::applyOp (ruleaction.cc:4422-4461).
         let (base, ext_code, in_vn, subcut, out_size) = {
@@ -5073,7 +5337,9 @@ impl Rule for RuleSubExtComm {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4405 RuleSubExtComm
     fn get_name(&self) -> &str { "sub_ext_comm" }
+    // Ghidra: ruleaction.cc:4416 RuleSubExtComm::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -5082,10 +5348,12 @@ impl Rule for RuleSubExtComm {
 pub struct Rule2Comp2Mult;
 
 impl Rule2Comp2Mult {
+    // Ghidra: ruleaction.cc:3979 Rule2Comp2Mult
     pub fn new() -> Self { Self }
 }
 
 impl Rule for Rule2Comp2Mult {
+    // Ghidra: ruleaction.cc:3987 Rule2Comp2Mult::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Rule2Comp2Mult::applyOp (ruleaction.cc:3987-3995).
         // Ghidra INT_2COMP maps to Rugra INT_NEG (two's complement).
@@ -5104,7 +5372,9 @@ impl Rule for Rule2Comp2Mult {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3979 Rule2Comp2Mult
     fn get_name(&self) -> &str { "2comp2mult" }
+    // Ghidra: ruleaction.cc:3981 Rule2Comp2Mult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
@@ -5113,10 +5383,12 @@ impl Rule for Rule2Comp2Mult {
 pub struct Rule2Comp2Sub;
 
 impl Rule2Comp2Sub {
+    // Ghidra: ruleaction.cc:7234 Rule2Comp2Sub
     pub fn new() -> Self { Self }
 }
 
 impl Rule for Rule2Comp2Sub {
+    // Ghidra: ruleaction.cc:7242 Rule2Comp2Sub::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7242-7256).
         let in0 = {
@@ -5135,7 +5407,9 @@ impl Rule for Rule2Comp2Sub {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7234 Rule2Comp2Sub
     fn get_name(&self) -> &str { "2comp2sub" }
+    // Ghidra: ruleaction.cc:7236 Rule2Comp2Sub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
@@ -5144,10 +5418,12 @@ impl Rule for Rule2Comp2Sub {
 pub struct RuleCarryElim;
 
 impl RuleCarryElim {
+    // Ghidra: ruleaction.cc:3997 RuleCarryElim
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleCarryElim {
+    // Ghidra: ruleaction.cc:4008 RuleCarryElim::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleCarryElim::applyOp (ruleaction.cc:4008-4030).
         let (vn1, off, vn2_size) = {
@@ -5181,7 +5457,9 @@ impl Rule for RuleCarryElim {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3997 RuleCarryElim
     fn get_name(&self) -> &str { "carry_elim" }
+    // Ghidra: ruleaction.cc:4002 RuleCarryElim::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_CARRY] }
 }
 
@@ -5190,10 +5468,12 @@ impl Rule for RuleCarryElim {
 pub struct RuleConcatZext;
 
 impl RuleConcatZext {
+    // Ghidra: ruleaction.cc:4806 RuleConcatZext
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleConcatZext {
+    // Ghidra: ruleaction.cc:4814 RuleConcatZext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleConcatZext::applyOp (ruleaction.cc:4814-4842).
         let (hi, lo, addr) = {
@@ -5227,7 +5507,9 @@ impl Rule for RuleConcatZext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4806 RuleConcatZext
     fn get_name(&self) -> &str { "concat_zext" }
+    // Ghidra: ruleaction.cc:4808 RuleConcatZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -5236,10 +5518,12 @@ impl Rule for RuleConcatZext {
 pub struct RuleZextCommute;
 
 impl RuleZextCommute {
+    // Ghidra: ruleaction.cc:4844 RuleZextCommute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleZextCommute {
+    // Ghidra: ruleaction.cc:4852 RuleZextCommute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleZextCommute::applyOp (ruleaction.cc:4852-4875).
         let (zext_in, sa_vn, addr) = {
@@ -5272,7 +5556,9 @@ impl Rule for RuleZextCommute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4844 RuleZextCommute
     fn get_name(&self) -> &str { "zext_commute" }
+    // Ghidra: ruleaction.cc:4846 RuleZextCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -5283,10 +5569,12 @@ impl Rule for RuleZextCommute {
 pub struct RuleZextShiftZext;
 
 impl RuleZextShiftZext {
+    // Ghidra: ruleaction.cc:4877 RuleZextShiftZext
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleZextShiftZext {
+    // Ghidra: ruleaction.cc:4885 RuleZextShiftZext::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleZextShiftZext::applyOp (ruleaction.cc:4885-4919).
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -5351,7 +5639,9 @@ impl Rule for RuleZextShiftZext {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4877 RuleZextShiftZext
     fn get_name(&self) -> &str { "zext_shift_zext" }
+    // Ghidra: ruleaction.cc:4879 RuleZextShiftZext::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -5360,10 +5650,12 @@ impl Rule for RuleZextShiftZext {
 pub struct RuleShiftSub;
 
 impl RuleShiftSub {
+    // Ghidra: ruleaction.cc:5201 RuleShiftSub
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleShiftSub {
+    // Ghidra: ruleaction.cc:5209 RuleShiftSub::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleShiftSub::applyOp (ruleaction.cc:5209-5230).
         let (shiftop_arc, vn, n, c, out_size, in1_size) = {
@@ -5400,7 +5692,9 @@ impl Rule for RuleShiftSub {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5201 RuleShiftSub
     fn get_name(&self) -> &str { "shift_sub" }
+    // Ghidra: ruleaction.cc:5203 RuleShiftSub::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -5409,10 +5703,12 @@ impl Rule for RuleShiftSub {
 pub struct RuleHumptyDumpty;
 
 impl RuleHumptyDumpty {
+    // Ghidra: ruleaction.cc:5232 RuleHumptyDumpty
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleHumptyDumpty {
+    // Ghidra: ruleaction.cc:5243 RuleHumptyDumpty::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleHumptyDumpty::applyOp (ruleaction.cc:5243-5281).
         let (vn1, vn2, pos1, pos2, size1, size2, root) = {
@@ -5458,7 +5754,9 @@ impl Rule for RuleHumptyDumpty {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5232 RuleHumptyDumpty
     fn get_name(&self) -> &str { "humpty_dumpty" }
+    // Ghidra: ruleaction.cc:5237 RuleHumptyDumpty::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -5467,10 +5765,12 @@ impl Rule for RuleHumptyDumpty {
 pub struct RuleDumptyHump;
 
 impl RuleDumptyHump {
+    // Ghidra: ruleaction.cc:5283 RuleDumptyHump
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleDumptyHump {
+    // Ghidra: ruleaction.cc:5296 RuleDumptyHump::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDumptyHump::applyOp (ruleaction.cc:5296-5337).
         let (vn1, vn2, offset, out_size) = {
@@ -5519,7 +5819,9 @@ impl Rule for RuleDumptyHump {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5283 RuleDumptyHump
     fn get_name(&self) -> &str { "dumpty_hump" }
+    // Ghidra: ruleaction.cc:5290 RuleDumptyHump::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -5531,10 +5833,12 @@ impl Rule for RuleDumptyHump {
 pub struct RuleSubCancel;
 
 impl RuleSubCancel {
+    // Ghidra: ruleaction.cc:5120 RuleSubCancel
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubCancel {
+    // Ghidra: ruleaction.cc:5137 RuleSubCancel::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubCancel::applyOp (ruleaction.cc:5137-5199).
         let (ext_code, thru_vn, offset, out_size, in_size, far_in_size) = {
@@ -5608,7 +5912,9 @@ impl Rule for RuleSubCancel {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5120 RuleSubCancel
     fn get_name(&self) -> &str { "sub_cancel" }
+    // Ghidra: ruleaction.cc:5131 RuleSubCancel::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -5619,10 +5925,12 @@ impl Rule for RuleSubCancel {
 pub struct RuleHumptyOr;
 
 impl RuleHumptyOr {
+    // Ghidra: ruleaction.cc:5339 RuleHumptyOr
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleHumptyOr {
+    // Ghidra: ruleaction.cc:5350 RuleHumptyOr::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleHumptyOr::applyOp (ruleaction.cc:5350-5420).
         let (a, b, c) = {
@@ -5697,7 +6005,9 @@ impl Rule for RuleHumptyOr {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5339 RuleHumptyOr
     fn get_name(&self) -> &str { "humpty_or" }
+    // Ghidra: ruleaction.cc:5344 RuleHumptyOr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
@@ -5715,10 +6025,12 @@ impl Rule for RuleHumptyOr {
 pub struct RuleSLess2Zero;
 
 impl RuleSLess2Zero {
+    // Ghidra: ruleaction.cc:5684 RuleSLess2Zero
     pub fn new() -> Self { Self }
 
     /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
     /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
+    // Ghidra: ruleaction.cc:5659 RuleSLess2Zero::getHiBit
     fn get_hi_bit(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let o = op.read().unwrap();
         if !matches!(o.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
@@ -5742,6 +6054,7 @@ impl RuleSLess2Zero {
 }
 
 impl Rule for RuleSLess2Zero {
+    // Ghidra: ruleaction.cc:5711 RuleSLess2Zero::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5711-5840).
         let (lvn, rvn) = {
@@ -5876,7 +6189,9 @@ impl Rule for RuleSLess2Zero {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5684 RuleSLess2Zero
     fn get_name(&self) -> &str { "sless2zero" }
+    // Ghidra: ruleaction.cc:5705 RuleSLess2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SLESS] }
 }
 
@@ -5886,12 +6201,14 @@ impl Rule for RuleSLess2Zero {
 pub struct RulePopcountBoolXor;
 
 impl RulePopcountBoolXor {
+    // Ghidra: ruleaction.cc:10265 RulePopcountBoolXor
     pub fn new() -> Self { Self }
 
     /// Extract the boolean varnode producing a bit at the given position.
     /// Faithful to `getBooleanResult` (ruleaction.cc:10335-10419).
     /// Returns (Some(vn), const_res) if found, or (None, const_res) where
     /// const_res is -1 (not found), 0, or 1 (constant result).
+    // Ghidra: ruleaction.cc:10335 RulePopcountBoolXor::getBooleanResult
     fn get_boolean_result(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         mut bit_pos: i32,
@@ -5970,6 +6287,7 @@ impl RulePopcountBoolXor {
 }
 
 impl Rule for RulePopcountBoolXor {
+    // Ghidra: ruleaction.cc:10276 RulePopcountBoolXor::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePopcountBoolXor::applyOp (ruleaction.cc:10276-10321).
         // Find INT_AND(&1) descendants of the POPCOUNT output.
@@ -6028,7 +6346,9 @@ impl Rule for RulePopcountBoolXor {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10265 RulePopcountBoolXor
     fn get_name(&self) -> &str { "popcount_bool_xor" }
+    // Ghidra: ruleaction.cc:10270 RulePopcountBoolXor::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_POPCOUNT] }
 }
 
@@ -6037,10 +6357,12 @@ impl Rule for RulePopcountBoolXor {
 pub struct RuleEqual2Zero;
 
 impl RuleEqual2Zero {
+    // Ghidra: ruleaction.cc:5857 RuleEqual2Zero
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleEqual2Zero {
+    // Ghidra: ruleaction.cc:5868 RuleEqual2Zero::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleEqual2Zero::applyOp (ruleaction.cc:5868-5924).
         let (addvn, central_opc) = {
@@ -6131,7 +6453,9 @@ impl Rule for RuleEqual2Zero {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5857 RuleEqual2Zero
     fn get_name(&self) -> &str { "equal2zero" }
+    // Ghidra: ruleaction.cc:5861 RuleEqual2Zero::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -6143,10 +6467,12 @@ impl Rule for RuleEqual2Zero {
 pub struct RuleShiftAnd;
 
 impl RuleShiftAnd {
+    // Ghidra: ruleaction.cc:4921 RuleShiftAnd
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleShiftAnd {
+    // Ghidra: ruleaction.cc:4933 RuleShiftAnd::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleShiftAnd::applyOp (ruleaction.cc:4933-4975).
         use crate::address::leastsigbit_set;
@@ -6209,7 +6535,9 @@ impl Rule for RuleShiftAnd {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4921 RuleShiftAnd
     fn get_name(&self) -> &str { "shift_and" }
+    // Ghidra: ruleaction.cc:4925 RuleShiftAnd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT] }
 }
 
@@ -6221,10 +6549,12 @@ impl Rule for RuleShiftAnd {
 pub struct RuleCondNegate;
 
 impl RuleCondNegate {
+    // Ghidra: ruleaction.cc:5479 RuleCondNegate
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleCondNegate {
+    // Ghidra: ruleaction.cc:5492 RuleCondNegate::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleCondNegate::applyOp (ruleaction.cc:5492-5510).
         let is_flip = {
@@ -6248,7 +6578,9 @@ impl Rule for RuleCondNegate {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5479 RuleCondNegate
     fn get_name(&self) -> &str { "cond_negate" }
+    // Ghidra: ruleaction.cc:5486 RuleCondNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CBRANCH] }
 }
 
@@ -6257,10 +6589,12 @@ impl Rule for RuleCondNegate {
 pub struct RuleXorSwap;
 
 impl RuleXorSwap {
+    // Ghidra: ruleaction.cc:10614 RuleXorSwap
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleXorSwap {
+    // Ghidra: ruleaction.cc:10625 RuleXorSwap::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleXorSwap::applyOp (ruleaction.cc:10625-10650).
         let (othervn, match_vn) = {
@@ -6295,7 +6629,9 @@ impl Rule for RuleXorSwap {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10614 RuleXorSwap
     fn get_name(&self) -> &str { "xor_swap" }
+    // Ghidra: ruleaction.cc:10619 RuleXorSwap::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_XOR] }
 }
 
@@ -6307,10 +6643,12 @@ impl Rule for RuleXorSwap {
 pub struct RuleEqual2Constant;
 
 impl RuleEqual2Constant {
+    // Ghidra: ruleaction.cc:5926 RuleEqual2Constant
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleEqual2Constant {
+    // Ghidra: ruleaction.cc:5940 RuleEqual2Constant::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleEqual2Constant::applyOp (ruleaction.cc:5940-5990).
         let (cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a) = {
@@ -6359,7 +6697,9 @@ impl Rule for RuleEqual2Constant {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5926 RuleEqual2Constant
     fn get_name(&self) -> &str { "equal2constant" }
+    // Ghidra: ruleaction.cc:5933 RuleEqual2Constant::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL] }
 }
 
@@ -6371,10 +6711,12 @@ impl Rule for RuleEqual2Constant {
 pub struct RuleOrCompare;
 
 impl RuleOrCompare {
+    // Ghidra: ruleaction.cc:10803 RuleOrCompare
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleOrCompare {
+    // Ghidra: ruleaction.cc:10814 RuleOrCompare::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleOrCompare::applyOp (ruleaction.cc:10814-10872).
         let (central_opc, v, w, out_vn) = {
@@ -6435,7 +6777,9 @@ impl Rule for RuleOrCompare {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10803 RuleOrCompare
     fn get_name(&self) -> &str { "or_compare" }
+    // Ghidra: ruleaction.cc:10808 RuleOrCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR] }
 }
 
@@ -6447,10 +6791,12 @@ impl Rule for RuleOrCompare {
 pub struct RuleConcatCommute;
 
 impl RuleConcatCommute {
+    // Ghidra: ruleaction.cc:4675 RuleConcatCommute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleConcatCommute {
+    // Ghidra: ruleaction.cc:4687 RuleConcatCommute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleConcatCommute::applyOp (ruleaction.cc:4687-4748).
         let (opc, hi, lo, val, out_size) = {
@@ -6514,7 +6860,9 @@ impl Rule for RuleConcatCommute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4675 RuleConcatCommute
     fn get_name(&self) -> &str { "concat_commute" }
+    // Ghidra: ruleaction.cc:4681 RuleConcatCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -6529,10 +6877,12 @@ impl Rule for RuleConcatCommute {
 pub struct RuleSubCommute;
 
 impl RuleSubCommute {
+    // Ghidra: ruleaction.cc:4463 RuleSubCommute
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubCommute {
+    // Ghidra: ruleaction.cc:4534 RuleSubCommute::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubCommute::applyOp (ruleaction.cc:4534-4673).
         // This rule triggers on CPUI_SUBPIECE.
@@ -6719,7 +7069,9 @@ impl Rule for RuleSubCommute {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4463 RuleSubCommute
     fn get_name(&self) -> &str { "sub_commute" }
+    // Ghidra: ruleaction.cc:4470 RuleSubCommute::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -6729,10 +7081,12 @@ impl Rule for RuleSubCommute {
 pub struct RuleLzcountShiftBool;
 
 impl RuleLzcountShiftBool {
+    // Ghidra: ruleaction.cc:10652 RuleLzcountShiftBool
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleLzcountShiftBool {
+    // Ghidra: ruleaction.cc:10666 RuleLzcountShiftBool::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleLzcountShiftBool::applyOp (ruleaction.cc:10666-10712).
         use crate::utils::bits::popcount;
@@ -6789,7 +7143,9 @@ impl Rule for RuleLzcountShiftBool {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10652 RuleLzcountShiftBool
     fn get_name(&self) -> &str { "lzcount_shift_bool" }
+    // Ghidra: ruleaction.cc:10660 RuleLzcountShiftBool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LZCOUNT] }
 }
 
@@ -6802,11 +7158,13 @@ impl Rule for RuleLzcountShiftBool {
 pub struct RuleThreeWayCompare;
 
 impl RuleThreeWayCompare {
+    // Ghidra: ruleaction.cc:10126 RuleThreeWayCompare
     pub fn new() -> Self { Self }
 
     /// Check if two comparison ops are equivalent. Returns 0=correct, 1=swap,
     /// -1=not equivalent. Faithful to `testCompareEquivalence`
     /// (ruleaction.cc:9960-10034).
+    // Ghidra: ruleaction.cc:9960 RuleThreeWayCompare::testCompareEquivalence
     fn test_compare_equivalence(
         lessop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         lessequalop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -6849,6 +7207,7 @@ impl RuleThreeWayCompare {
     /// Detect a three-way comparison pattern rooted at `addop`. Returns the
     /// less-than op, or None. Faithful to `detectThreeWay`
     /// (ruleaction.cc:10035-10124).
+    // Ghidra: ruleaction.cc:10035 RuleThreeWayCompare::detectThreeWay
     fn detect_three_way(
         addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, bool)> {
@@ -6886,6 +7245,7 @@ impl RuleThreeWayCompare {
 }
 
 impl Rule for RuleThreeWayCompare {
+    // Ghidra: ruleaction.cc:10146 RuleThreeWayCompare::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleThreeWayCompare::applyOp (ruleaction.cc:10146-10263).
         let (const_slot, val, tmp_vn, op_code) = {
@@ -7004,7 +7364,9 @@ impl Rule for RuleThreeWayCompare {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10126 RuleThreeWayCompare
     fn get_name(&self) -> &str { "three_way_compare" }
+    // Ghidra: ruleaction.cc:10137 RuleThreeWayCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
     }
@@ -7019,10 +7381,12 @@ impl Rule for RuleThreeWayCompare {
 pub struct RuleMultiCollapse;
 
 impl RuleMultiCollapse {
+    // Ghidra: ruleaction.cc:3246 RuleMultiCollapse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleMultiCollapse {
+    // Ghidra: ruleaction.cc:3254 RuleMultiCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleMultiCollapse::applyOp (ruleaction.cc:3254-3363).
         use crate::expression::functional_equality_level;
@@ -7163,7 +7527,9 @@ impl Rule for RuleMultiCollapse {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3246 RuleMultiCollapse
     fn get_name(&self) -> &str { "multi_collapse" }
+    // Ghidra: ruleaction.cc:3248 RuleMultiCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
@@ -7172,10 +7538,12 @@ impl Rule for RuleMultiCollapse {
 pub struct RuleSignDiv2;
 
 impl RuleSignDiv2 {
+    // Ghidra: ruleaction.cc:8357 RuleSignDiv2
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignDiv2 {
+    // Ghidra: ruleaction.cc:8365 RuleSignDiv2::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignDiv2::applyOp (ruleaction.cc:8365-8408).
         let a = {
@@ -7223,7 +7591,9 @@ impl Rule for RuleSignDiv2 {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8357 RuleSignDiv2
     fn get_name(&self) -> &str { "sign_div2" }
+    // Ghidra: ruleaction.cc:8359 RuleSignDiv2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -7232,10 +7602,12 @@ impl Rule for RuleSignDiv2 {
 pub struct RuleDivChain;
 
 impl RuleDivChain {
+    // Ghidra: ruleaction.cc:8410 RuleDivChain
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleDivChain {
+    // Ghidra: ruleaction.cc:8419 RuleDivChain::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDivChain::applyOp (ruleaction.cc:8419-8455).
         let (opc2, vn, const_vn2_val) = {
@@ -7278,7 +7650,9 @@ impl Rule for RuleDivChain {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8410 RuleDivChain
     fn get_name(&self) -> &str { "div_chain" }
+    // Ghidra: ruleaction.cc:8412 RuleDivChain::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV] }
 }
 
@@ -7287,10 +7661,12 @@ impl Rule for RuleDivChain {
 pub struct RuleSignForm;
 
 impl RuleSignForm {
+    // Ghidra: ruleaction.cc:8463 RuleSignForm
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignForm {
+    // Ghidra: ruleaction.cc:8471 RuleSignForm::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignForm::applyOp (ruleaction.cc:8471-8492).
         let (a, a_size) = {
@@ -7316,7 +7692,9 @@ impl Rule for RuleSignForm {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8463 RuleSignForm
     fn get_name(&self) -> &str { "sign_form" }
+    // Ghidra: ruleaction.cc:8465 RuleSignForm::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -7325,10 +7703,12 @@ impl Rule for RuleSignForm {
 pub struct RuleSignForm2;
 
 impl RuleSignForm2 {
+    // Ghidra: ruleaction.cc:8494 RuleSignForm2
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignForm2 {
+    // Ghidra: ruleaction.cc:8505 RuleSignForm2::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignForm2::applyOp (ruleaction.cc:8505-8570).
         let (a, other_vn) = {
@@ -7382,7 +7762,9 @@ impl Rule for RuleSignForm2 {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8494 RuleSignForm2
     fn get_name(&self) -> &str { "sign_form2" }
+    // Ghidra: ruleaction.cc:8499 RuleSignForm2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -7392,10 +7774,12 @@ impl Rule for RuleSignForm2 {
 pub struct RulePositiveDiv;
 
 impl RulePositiveDiv {
+    // Ghidra: ruleaction.cc:7805 RulePositiveDiv
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RulePositiveDiv {
+    // Ghidra: ruleaction.cc:7817 RulePositiveDiv::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePositiveDiv::applyOp (ruleaction.cc:7817-7830).
         let (op_code, in0_nzm, in1_nzm, out_size) = {
@@ -7420,7 +7804,9 @@ impl Rule for RulePositiveDiv {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7805 RulePositiveDiv
     fn get_name(&self) -> &str { "positive_div" }
+    // Ghidra: ruleaction.cc:7810 RulePositiveDiv::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SDIV, OpCode::CPUI_INT_SREM] }
 }
 
@@ -7429,10 +7815,12 @@ impl Rule for RulePositiveDiv {
 pub struct RuleDoubleArithShift;
 
 impl RuleDoubleArithShift {
+    // Ghidra: ruleaction.cc:1932 RuleDoubleArithShift
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleDoubleArithShift {
+    // Ghidra: ruleaction.cc:1943 RuleDoubleArithShift::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDoubleArithShift::applyOp (ruleaction.cc:1943-1964).
         let (const_d, const_c, in_vn, out_size) = {
@@ -7473,7 +7861,9 @@ impl Rule for RuleDoubleArithShift {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1932 RuleDoubleArithShift
     fn get_name(&self) -> &str { "double_arith_shift" }
+    // Ghidra: ruleaction.cc:1937 RuleDoubleArithShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_SRIGHT] }
 }
 
@@ -7484,10 +7874,12 @@ impl Rule for RuleDoubleArithShift {
 pub struct RuleSignNearMult;
 
 impl RuleSignNearMult {
+    // Ghidra: ruleaction.cc:8551 RuleSignNearMult
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignNearMult {
+    // Ghidra: ruleaction.cc:8559 RuleSignNearMult::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignNearMult::applyOp (ruleaction.cc:8559-8610).
         let (x, const_val, x_size) = {
@@ -7562,7 +7954,9 @@ impl Rule for RuleSignNearMult {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8551 RuleSignNearMult
     fn get_name(&self) -> &str { "sign_near_mult" }
+    // Ghidra: ruleaction.cc:8553 RuleSignNearMult::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 
@@ -7576,10 +7970,12 @@ impl Rule for RuleSignNearMult {
 pub struct RuleFloatCast;
 
 impl RuleFloatCast {
+    // Ghidra: ruleaction.cc:9551 RuleFloatCast
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleFloatCast {
+    // Ghidra: ruleaction.cc:9560 RuleFloatCast::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleFloatCast::applyOp (ruleaction.cc:9560-9602).
         let (opc1, vn2, insize1, insize2, outsize) = {
@@ -7634,7 +8030,9 @@ impl Rule for RuleFloatCast {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9551 RuleFloatCast
     fn get_name(&self) -> &str { "float_cast" }
+    // Ghidra: ruleaction.cc:9553 RuleFloatCast::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_FLOAT2FLOAT, OpCode::CPUI_FLOAT_TRUNC] }
 }
 
@@ -7643,10 +8041,12 @@ impl Rule for RuleFloatCast {
 pub struct RuleSubNormal;
 
 impl RuleSubNormal {
+    // Ghidra: ruleaction.cc:7720 RuleSubNormal
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubNormal {
+    // Ghidra: ruleaction.cc:7732 RuleSubNormal::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubNormal::applyOp (ruleaction.cc:7732-7803).
         use crate::utils::bits::popcount;
@@ -7745,13 +8145,16 @@ impl Rule for RuleSubNormal {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7720 RuleSubNormal
     fn get_name(&self) -> &str { "sub_normal" }
+    // Ghidra: ruleaction.cc:7726 RuleSubNormal::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
 /// Verify that a Varnode is a sign extraction `V s>> (size*8-1)`.
 /// Returns the base Varnode, or None. Faithful to `checkSignExtraction`
 /// (ruleaction.cc:8776-8792).
+// Ghidra: ruleaction.cc:8776 RuleSignMod2nOpt::checkSignExtraction
 fn check_sign_extraction(
     out_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -7772,10 +8175,12 @@ fn check_sign_extraction(
 pub struct RuleSignMod2nOpt;
 
 impl RuleSignMod2nOpt {
+    // Ghidra: ruleaction.cc:8673 RuleSignMod2nOpt
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignMod2nOpt {
+    // Ghidra: ruleaction.cc:8683 RuleSignMod2nOpt::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignMod2nOpt::applyOp (ruleaction.cc:8683-8769).
         let (shift_amt, a, correct_vn, n, mask) = {
@@ -7896,7 +8301,9 @@ impl Rule for RuleSignMod2nOpt {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8673 RuleSignMod2nOpt
     fn get_name(&self) -> &str { "sign_mod2n_opt" }
+    // Ghidra: ruleaction.cc:8677 RuleSignMod2nOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -7906,10 +8313,12 @@ impl Rule for RuleSignMod2nOpt {
 pub struct RuleSignMod2Opt;
 
 impl RuleSignMod2Opt {
+    // Ghidra: ruleaction.cc:8794 RuleSignMod2Opt
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSignMod2Opt {
+    // Ghidra: ruleaction.cc:8805 RuleSignMod2Opt::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignMod2Opt::applyOp (ruleaction.cc:8805-8865).
         let (add_out_vn, _) = {
@@ -8041,7 +8450,9 @@ impl Rule for RuleSignMod2Opt {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8794 RuleSignMod2Opt
     fn get_name(&self) -> &str { "sign_mod2_opt" }
+    // Ghidra: ruleaction.cc:8799 RuleSignMod2Opt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND] }
 }
 
@@ -8051,10 +8462,12 @@ impl Rule for RuleSignMod2Opt {
 pub struct RuleShiftPiece;
 
 impl RuleShiftPiece {
+    // Ghidra: ruleaction.cc:3773 RuleShiftPiece
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleShiftPiece {
+    // Ghidra: ruleaction.cc:3791 RuleShiftPiece::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleShiftPiece::applyOp (ruleaction.cc:3791-3870).
         let (vn1_init, vn2_init) = {
@@ -8186,7 +8599,9 @@ impl Rule for RuleShiftPiece {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3773 RuleShiftPiece
     fn get_name(&self) -> &str { "shift_piece" }
+    // Ghidra: ruleaction.cc:3783 RuleShiftPiece::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD] }
 }
 
@@ -8198,10 +8613,12 @@ impl Rule for RuleShiftPiece {
 pub struct RuleDivOpt;
 
 impl RuleDivOpt {
+    // Ghidra: ruleaction.cc:8281 RuleDivOpt
     pub fn new() -> Self { Self }
 
     /// Detect the division-by-multiplication form. Faithful to `findForm`
     /// (ruleaction.cc:8069-8143). Returns (in_vn, n, y128, xsize, ext_opc).
+    // Ghidra: ruleaction.cc:8069 RuleDivOpt::findForm
     fn find_form(
         op: &crate::op::PcodeOpRef,
     ) -> Option<(
@@ -8298,6 +8715,7 @@ impl RuleDivOpt {
 
     /// Compute divisor from the multiplicative encoding. Faithful to
     /// `calcDivisor` (ruleaction.cc:8157-8198). Uses Rust's native u128.
+    // Ghidra: ruleaction.cc:8157 RuleDivOpt::calcDivisor
     fn calc_divisor(n: u64, y: u128, xsize: i32) -> u64 {
         if n > 127 || xsize > 64 { return 0; }
         let power = 1u128 << n;
@@ -8336,6 +8754,7 @@ impl RuleDivOpt {
 
     /// Check if a SUBPIECE form is contained in a superseding form.
     /// Faithful to `checkFormOverlap` (ruleaction.cc:8260-8279).
+    // Ghidra: ruleaction.cc:8260 RuleDivOpt::checkFormOverlap
     fn check_form_overlap(op: &crate::op::PcodeOpRef) -> bool {
         if op.0.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return false; }
         let vn = match op.0.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return false };
@@ -8359,6 +8778,7 @@ impl RuleDivOpt {
     /// `first_vn` (and, if `first_vn` is itself an INT_SRIGHT, the value it
     /// shifts) and rewrite any redundant sign-bit extraction
     /// `(V >> (size*8-1))` to read `replace_vn` instead.
+    // Ghidra: ruleaction.cc:8210 RuleDivOpt::moveSignBitExtraction
     fn move_sign_bit_extraction(
         first_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         replace_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -8416,6 +8836,7 @@ impl RuleDivOpt {
 /// Walks the second input of the shift op. If that input is itself written by a
 /// COPY, returns the copied value; if written by an `INT_AND(c0, c1)` (with `c1`
 /// constant and `c0 & c1 == c0`), returns `c0`; otherwise returns the input as-is.
+// Ghidra: ruleaction.cc:8210 RuleDivOpt::moveSignBitExtraction
 fn resolve_shift_const(
     shift_op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
 ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -8444,6 +8865,7 @@ fn resolve_shift_const(
 }
 
 impl Rule for RuleDivOpt {
+    // Ghidra: ruleaction.cc:8295 RuleDivOpt::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDivOpt::applyOp (ruleaction.cc:8295-8355).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -8542,7 +8964,9 @@ impl Rule for RuleDivOpt {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8281 RuleDivOpt
     fn get_name(&self) -> &str { "div_opt" }
+    // Ghidra: ruleaction.cc:8287 RuleDivOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
     }
@@ -8555,10 +8979,12 @@ impl Rule for RuleDivOpt {
 pub struct RuleModOpt;
 
 impl RuleModOpt {
+    // Ghidra: ruleaction.cc:8612 RuleModOpt
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleModOpt {
+    // Ghidra: ruleaction.cc:8621 RuleModOpt::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleModOpt::applyOp (ruleaction.cc:8621-8671).
         let (x_vn, div_vn, out_vn) = {
@@ -8659,7 +9085,9 @@ impl Rule for RuleModOpt {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8612 RuleModOpt
     fn get_name(&self) -> &str { "mod_opt" }
+    // Ghidra: ruleaction.cc:8614 RuleModOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV]
     }
@@ -8672,10 +9100,12 @@ impl Rule for RuleModOpt {
 pub struct RuleSignMod2nOpt2;
 
 impl RuleSignMod2nOpt2 {
+    // Ghidra: ruleaction.cc:8867 RuleSignMod2nOpt2
     pub fn new() -> Self { Self }
 
     /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
     /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
+    // Ghidra: ruleaction.cc:8928 RuleSignMod2nOpt2::checkSignExtForm
     fn check_sign_ext_form(addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         for slot in 0..2 {
             let minus_vn = {
@@ -8714,6 +9144,7 @@ impl RuleSignMod2nOpt2 {
 }
 
 impl Rule for RuleSignMod2nOpt2 {
+    // Ghidra: ruleaction.cc:8877 RuleSignMod2nOpt2::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSignMod2nOpt2::applyOp (ruleaction.cc:8877-8922).
         let (const_vn, and_out) = {
@@ -8792,7 +9223,9 @@ impl Rule for RuleSignMod2nOpt2 {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:8867 RuleSignMod2nOpt2
     fn get_name(&self) -> &str { "sign_mod2n_opt2" }
+    // Ghidra: ruleaction.cc:8871 RuleSignMod2nOpt2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_MULT] }
 }
 /// Simplify optimized division expressions. Faithful to `RuleDivTermAdd`
@@ -8802,11 +9235,13 @@ impl Rule for RuleSignMod2nOpt2 {
 pub struct RuleDivTermAdd;
 
 impl RuleDivTermAdd {
+    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
     pub fn new() -> Self { Self }
 
     /// Find SUBPIECE (high) form: SUB(V,c) or SUB(V,c)>>n. Returns
     /// (subpiece_op, total_truncation_bits, shift_opcode). Faithful to
     /// `findSubshift` (ruleaction.cc:7928-7953).
+    // Ghidra: ruleaction.cc:7928 RuleDivTermAdd::findSubshift
     fn find_subshift(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, i32, OpCode)> {
         let o = op.read().unwrap();
         let shiftopc = o.opcode;
@@ -8841,6 +9276,7 @@ impl RuleDivTermAdd {
 }
 
 impl Rule for RuleDivTermAdd {
+    // Ghidra: ruleaction.cc:7848 RuleDivTermAdd::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDivTermAdd::applyOp (ruleaction.cc:7848-7915).
         let (subop_arc, n, shiftopc) = match Self::find_subshift(op_arc) {
@@ -8946,7 +9382,9 @@ impl Rule for RuleDivTermAdd {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7832 RuleDivTermAdd
     fn get_name(&self) -> &str { "div_term_add" }
+    // Ghidra: ruleaction.cc:7840 RuleDivTermAdd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
     }
@@ -8959,10 +9397,12 @@ impl Rule for RuleDivTermAdd {
 pub struct RuleDivTermAdd2;
 
 impl RuleDivTermAdd2 {
+    // Ghidra: ruleaction.cc:7955 RuleDivTermAdd2
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleDivTermAdd2 {
+    // Ghidra: ruleaction.cc:7969 RuleDivTermAdd2::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleDivTermAdd2::applyOp (ruleaction.cc:7969-8046).
         // Guard: skip if input is a pointer type (prevents false-positive
@@ -9121,7 +9561,9 @@ impl Rule for RuleDivTermAdd2 {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7955 RuleDivTermAdd2
     fn get_name(&self) -> &str { "div_term_add2" }
+    // Ghidra: ruleaction.cc:7963 RuleDivTermAdd2::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT] }
 }
 
@@ -9136,10 +9578,12 @@ impl Rule for RuleDivTermAdd2 {
 pub struct RuleRangeMeld;
 
 impl RuleRangeMeld {
+    // Ghidra: ruleaction.cc:1348 RuleRangeMeld
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleRangeMeld {
+    // Ghidra: ruleaction.cc:1357 RuleRangeMeld::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         use crate::rangeutil::CircleRange;
 
@@ -9292,7 +9736,9 @@ impl Rule for RuleRangeMeld {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1348 RuleRangeMeld
     fn get_name(&self) -> &str { "range_meld" }
+    // Ghidra: ruleaction.cc:1341 RuleRangeMeld::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
@@ -9300,6 +9746,7 @@ impl Rule for RuleRangeMeld {
 /// `CircleRange::pullBack` (rangeutil.cc:1022-1073) simplified: returns the
 /// non-constant input Varnode that the range now applies to, or None if the
 /// op cannot be pulled back through. Does not track constMarkup or useNZMask.
+// Ghidra: rangeutil.cc:1022 CircleRange::pullBack
 fn pull_back_op(
     range: &mut crate::rangeutil::CircleRange,
     op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -9354,10 +9801,12 @@ fn pull_back_op(
 pub struct RuleFloatRange;
 
 impl RuleFloatRange {
+    // Ghidra: ruleaction.cc:1439 RuleFloatRange
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleFloatRange {
+    // Ghidra: ruleaction.cc:1450 RuleFloatRange::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Extract the two comparison sub-ops.
         let (central_opc, vn1, vn2) = {
@@ -9491,7 +9940,9 @@ impl Rule for RuleFloatRange {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:1439 RuleFloatRange
     fn get_name(&self) -> &str { "float_range" }
+    // Ghidra: ruleaction.cc:1443 RuleFloatRange::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
@@ -9502,11 +9953,13 @@ impl Rule for RuleFloatRange {
 pub struct RuleFloatSign;
 
 impl RuleFloatSign {
+    // Ghidra: ruleaction.cc:10714 RuleFloatSign
     pub fn new() -> Self { Self }
 
     /// Check if `op` is a sign-bit manipulation: INT_AND with clear-high-bit
     /// mask → FLOAT_ABS, or INT_XOR with sign-bit-only mask → FLOAT_NEG.
     /// Faithful to TypeOp::floatSignManipulation (typeop.cc:153-176).
+    // Ghidra: typeop.cc:153 TypeOp::floatSignManipulation
     fn float_sign_manipulation(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<OpCode> {
         let o = op.read().unwrap();
         match o.opcode {
@@ -9543,6 +9996,7 @@ impl RuleFloatSign {
 }
 
 impl Rule for RuleFloatSign {
+    // Ghidra: ruleaction.cc:10733 RuleFloatSign::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleFloatSign::applyOp (ruleaction.cc:10733-10777).
         // Check inputs of this float op: if an input is defined by a sign-bit
@@ -9617,7 +10071,9 @@ impl Rule for RuleFloatSign {
         Ok(res)
     }
 
+    // Ghidra: ruleaction.cc:10714 RuleFloatSign
     fn get_name(&self) -> &str { "float_sign" }
+    // Ghidra: ruleaction.cc:10723 RuleFloatSign::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         vec![
             OpCode::CPUI_FLOAT_EQUAL, OpCode::CPUI_FLOAT_NOTEQUAL,
@@ -9643,11 +10099,13 @@ impl Rule for RuleFloatSign {
 pub struct RulePullsubMulti;
 
 impl RulePullsubMulti {
+    // Ghidra: ruleaction.cc:872 RulePullsubMulti
     pub fn new() -> Self { Self }
 
     /// Compute the min/max byte range actually used by descendants of `vn`.
     /// Faithful to `minMaxUse` (ruleaction.cc:683-709). If any descendant is
     /// not a SUBPIECE, the full range is assumed.
+    // Ghidra: ruleaction.cc:977 RulePullsubMulti::minMaxUse
     fn min_max_use(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (i32, i32) {
         let in_size = vn.read().unwrap().get_size() as i32;
         let mut max_byte = -1i32;
@@ -9671,6 +10129,7 @@ impl RulePullsubMulti {
 
     /// Check if a size is a suitable truncation size. Faithful to
     /// `acceptableSize` (ruleaction.cc:758-766).
+    // Ghidra: ruleaction.cc:981 RulePullsubMulti::acceptableSize
     fn acceptable_size(size: i32) -> bool {
         if size == 0 { return false; }
         if size >= 8 { return true; }
@@ -9679,6 +10138,7 @@ impl RulePullsubMulti {
 
     /// Replace `orig_vn` with `new_vn` in all descendant ops. Faithful to
     /// `replaceDescendants` (ruleaction.cc:719-752).
+    // Ghidra: ruleaction.cc:1017 RulePullsubMulti::replaceDescendants
     fn replace_descendants(
         fd: &mut Funcdata,
         orig_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -9722,6 +10182,7 @@ impl RulePullsubMulti {
     /// Find a preexisting SUBPIECE of `base_vn` with the given size+shift.
     /// Faithful to `findSubpiece` (ruleaction.cc:849-870). Returns the output
     /// Varnode or None.
+    // Ghidra: ruleaction.cc:1005 RulePullsubMulti::findSubpiece
     fn find_subpiece(
         base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         out_size: u32,
@@ -9746,6 +10207,7 @@ impl RulePullsubMulti {
 
     /// Build a new SUBPIECE of `base_vn`. Faithful to `buildSubpiece`
     /// (ruleaction.cc:776-839). Returns the output Varnode.
+    // Ghidra: ruleaction.cc:1007 RulePullsubMulti::buildSubpiece
     fn build_subpiece(
         fd: &mut Funcdata,
         base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -9798,6 +10260,7 @@ impl RulePullsubMulti {
 }
 
 impl Rule for RulePullsubMulti {
+    // Ghidra: ruleaction.cc:880 RulePullsubMulti::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePullsubMulti::applyOp (ruleaction.cc:880-952).
         let vn = match op_arc.read().unwrap().get_in(0).cloned() {
@@ -9899,7 +10362,9 @@ impl Rule for RulePullsubMulti {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:872 RulePullsubMulti
     fn get_name(&self) -> &str { "pullsub_multi" }
+    // Ghidra: ruleaction.cc:874 RulePullsubMulti::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -9924,10 +10389,12 @@ impl Rule for RulePullsubMulti {
 pub struct RuleAddUnsigned;
 
 impl RuleAddUnsigned {
+    // Ghidra: ruleaction.cc:7192 RuleAddUnsigned
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleAddUnsigned {
+    // Ghidra: ruleaction.cc:7200 RuleAddUnsigned::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleAddUnsigned::applyOp (ruleaction.cc:7200-7249).
         let constvn = {
@@ -9977,7 +10444,9 @@ impl Rule for RuleAddUnsigned {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7192 RuleAddUnsigned
     fn get_name(&self) -> &str { "add_unsigned" }
+    // Ghidra: ruleaction.cc:7194 RuleAddUnsigned::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -9999,10 +10468,12 @@ impl Rule for RuleAddUnsigned {
 pub struct RuleSubRight;
 
 impl RuleSubRight {
+    // Ghidra: ruleaction.cc:7256 RuleSubRight
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubRight {
+    // Ghidra: ruleaction.cc:7269 RuleSubRight::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSubRight::applyOp (ruleaction.cc:7269-7339).
         // Ghidra: if (op->doesSpecialPrinting()) return 0 (7272-7273).
@@ -10106,7 +10577,9 @@ impl Rule for RuleSubRight {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7256 RuleSubRight
     fn get_name(&self) -> &str { "sub_right" }
+    // Ghidra: ruleaction.cc:7263 RuleSubRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -10116,10 +10589,12 @@ impl Rule for RuleSubRight {
 pub struct RuleNegateNegate;
 
 impl RuleNegateNegate {
+    // Ghidra: ruleaction.cc:9250 RuleNegateNegate
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleNegateNegate {
+    // Ghidra: ruleaction.cc:9258 RuleNegateNegate::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleNegateNegate::applyOp (ruleaction.cc:9258-9271).
         let vn1 = {
@@ -10145,7 +10620,9 @@ impl Rule for RuleNegateNegate {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9250 RuleNegateNegate
     fn get_name(&self) -> &str { "negate_negate" }
+    // Ghidra: ruleaction.cc:9252 RuleNegateNegate::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_NEGATE] }
 }
 
@@ -10158,11 +10635,13 @@ impl Rule for RuleNegateNegate {
 pub struct RuleFloatSignCleanup;
 
 impl RuleFloatSignCleanup {
+    // Ghidra: ruleaction.cc:10778 RuleFloatSignCleanup
     pub fn new() -> Self { Self }
 
     /// Faithful to `TypeOp::floatSignManipulation` (op.cc). Given the mask
     /// constant of an INT_AND/INT_XOR over a float-sized value, return the
     /// FLOAT_* opcode it represents, or CPUI_MAX.
+    // Ghidra: typeop.cc:153 TypeOp::floatSignManipulation
     fn float_sign_manipulation(mask_val: u64, size: usize, is_xor: bool) -> OpCode {
         // Sign bit is the most significant bit of the float-sized value.
         let sign_bit = if size >= 8 { 0x8000_0000_0000_0000u64 } else { 1u64 << (size * 8 - 1) };
@@ -10181,6 +10660,7 @@ impl RuleFloatSignCleanup {
 }
 
 impl Rule for RuleFloatSignCleanup {
+    // Ghidra: ruleaction.cc:10789 RuleFloatSignCleanup::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleFloatSignCleanup::applyOp (ruleaction.cc:10789-10802).
         let outvn = match op_arc.read().unwrap().output.clone() {
@@ -10217,7 +10697,9 @@ impl Rule for RuleFloatSignCleanup {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10778 RuleFloatSignCleanup
     fn get_name(&self) -> &str { "float_sign_cleanup" }
+    // Ghidra: ruleaction.cc:10782 RuleFloatSignCleanup::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_XOR] }
 }
 
@@ -10240,11 +10722,13 @@ impl Rule for RuleFloatSignCleanup {
 pub struct RulePtrsubCharConstant;
 
 impl RulePtrsubCharConstant {
+    // Ghidra: ruleaction.cc:7360 RulePtrsubCharConstant
     pub fn new() -> Self { Self }
 
     /// Faithful to `pushConstFurther` (ruleaction.cc:7341-7358). Given a
     /// descendant PTRADD of the collapsed constant, fold the PTRADD's constant
     /// index into the pointer value and turn the PTRADD into a COPY.
+    // Ghidra: ruleaction.cc:7341 RulePtrsubCharConstant::pushConstFurther
     fn push_const_further(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -10278,6 +10762,7 @@ impl RulePtrsubCharConstant {
 }
 
 impl Rule for RulePtrsubCharConstant {
+    // Ghidra: ruleaction.cc:7372 RulePtrsubCharConstant::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7372-7421).
         let (sb, vn1, outvn) = {
@@ -10343,7 +10828,9 @@ impl Rule for RulePtrsubCharConstant {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7360 RulePtrsubCharConstant
     fn get_name(&self) -> &str { "ptrsub_char_constant" }
+    // Ghidra: ruleaction.cc:7366 RulePtrsubCharConstant::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
 
@@ -10361,12 +10848,14 @@ impl Rule for RulePtrsubCharConstant {
 pub struct RuleExtensionPush;
 
 impl RuleExtensionPush {
+    // Ghidra: ruleaction.cc:7423 RuleExtensionPush
     pub fn new() -> Self { Self }
 
     /// Faithful to `RulePushPtr::duplicateNeed` (ruleaction.cc:6827-6855) plus
     /// `buildVarnodeOut` (ruleaction.cc:6783-6790). Duplicate the single-input
     /// extension op so each descendant gets its own copy, then destroy the
     /// original. We assume the op is INT_ZEXT/INT_SEXT (one input).
+    // Ghidra: ruleaction.cc:6827 RulePushPtr::duplicateNeed
     fn duplicate_need(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) {
         let op_ref = crate::op::PcodeOpRef(op.clone());
         let out_vn = match op.read().unwrap().output.clone() {
@@ -10417,6 +10906,7 @@ impl RuleExtensionPush {
 }
 
 impl Rule for RuleExtensionPush {
+    // Ghidra: ruleaction.cc:7435 RuleExtensionPush::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleExtensionPush::applyOp (ruleaction.cc:7435-7476).
         let (in_vn, out_vn) = {
@@ -10468,7 +10958,9 @@ impl Rule for RuleExtensionPush {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7423 RuleExtensionPush
     fn get_name(&self) -> &str { "extension_push" }
+    // Ghidra: ruleaction.cc:7428 RuleExtensionPush::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ZEXT, OpCode::CPUI_INT_SEXT] }
 }
 
@@ -10490,11 +10982,13 @@ impl Rule for RuleExtensionPush {
 pub struct RuleExpandLoad;
 
 impl RuleExpandLoad {
+    // Ghidra: ruleaction.cc:10927 RuleExpandLoad
     pub fn new() -> Self { Self }
 
     /// Faithful to `checkAndComparison` (ruleaction.cc:10878-10893). True iff
     /// every descendant of `vn` is `INT_AND vn const` whose sole descendant is a
     /// constant-comparison INT_EQUAL/INT_NOTEQUAL.
+    // Ghidra: ruleaction.cc:10878 RuleExpandLoad::checkAndComparison
     fn check_and_comparison(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
         let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
         if descends.is_empty() { return false; }
@@ -10516,6 +11010,7 @@ impl RuleExpandLoad {
     /// the constants in the `(V & C) == D` forms scanned by
     /// `check_and_comparison`: shift them left by `offset` bytes and point the
     /// AND at the new bigger variable `new_vn`.
+    // Ghidra: ruleaction.cc:10904 RuleExpandLoad::modifyAndComparison
     fn modify_and_comparison(
         fd: &mut Funcdata,
         old_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -10557,6 +11052,7 @@ impl RuleExpandLoad {
 }
 
 impl Rule for RuleExpandLoad {
+    // Ghidra: ruleaction.cc:10937 RuleExpandLoad::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleExpandLoad::applyOp (ruleaction.cc:10937-11013).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -10685,7 +11181,9 @@ impl Rule for RuleExpandLoad {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:10927 RuleExpandLoad
     fn get_name(&self) -> &str { "expand_load" }
+    // Ghidra: ruleaction.cc:10931 RuleExpandLoad::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
 
@@ -10709,15 +11207,20 @@ struct PieceNode {
 
 impl PieceNode {
     /// True if this node is a leaf of the CONCAT tree.
+    // Ghidra: op.hh:262 PieceNode
     fn is_leaf(&self) -> bool { self.leaf }
     /// Byte offset of this piece into the data-type.
+    // Ghidra: op.hh:262 PieceNode
     fn get_type_offset(&self) -> i32 { self.type_offset }
     /// The PIECE op reading this piece.
+    // Ghidra: op.hh:262 PieceNode
     fn get_op(&self) -> &std::sync::Arc<std::sync::RwLock<PcodeOp>> { &self.op }
     /// The input slot of this piece within its PIECE op.
+    // Ghidra: op.hh:271 PieceNode::getSlot
     fn get_slot(&self) -> usize { self.slot }
 
     /// The Varnode representing this piece (`op->getIn(slot)`).
+    // Ghidra: op.hh:262 PieceNode
     fn get_varnode(&self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         self.op.read().unwrap().inrefs.get(self.slot).cloned()
     }
@@ -10726,6 +11229,7 @@ impl PieceNode {
     /// offset `rel_offset` within the data-type, relative to the root's offset)
     /// is a leaf unless it is itself the output of a PIECE feeding a lone
     /// descendant with matching address bookkeeping.
+    // Ghidra: op.cc:801 PieceNode::isLeaf
     fn is_leaf_node(
         root_vn: &crate::varnode::Varnode,
         vn: &crate::varnode::Varnode,
@@ -10763,6 +11267,7 @@ impl PieceNode {
     /// backwards from the root through CPUI_PIECE ops, appending one node per
     /// input slot. Endianness determines the byte offset of each input: in a
     /// big-endian space, slot 1 (low half) sits at the higher offset.
+    // Ghidra: op.cc:865 PieceNode::gatherPieces
     fn gather_pieces(
         stack: &mut Vec<PieceNode>,
         root_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -10829,12 +11334,14 @@ impl PieceNode {
 pub struct RulePieceStructure;
 
 impl RulePieceStructure {
+    // Ghidra: ruleaction.cc:7613 RulePieceStructure
     pub fn new() -> Self { Self }
 
     /// Faithful to `determineDatatype` (ruleaction.cc:7481-7510). Returns the
     /// structured (struct/array/union) data-type the varnode is part of, plus
     /// the base offset. Uses `getStructuredType` and, for the partial case,
     /// resolves the byte offset via `SymbolEntry` then walks `getSubType`.
+    // Ghidra: ruleaction.cc:7481 RulePieceStructure::determineDatatype
     fn determine_datatype(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<(std::sync::Arc<crate::type_system::datatype::Datatype>, i32)> {
@@ -10879,6 +11386,7 @@ impl RulePieceStructure {
 
     /// Faithful to `spanningRange` (ruleaction.cc:7519-7541). True unless the
     /// range falls within a single non-structured element.
+    // Ghidra: ruleaction.cc:7519 RulePieceStructure::spanningRange
     fn spanning_range(
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         offset: i32,
@@ -10911,6 +11419,7 @@ impl RulePieceStructure {
     /// switched to CPUI_PIECE and the zero inserted at slot 0.
     /// `invn->getType()->needsResolution()` → `inheritResolution` (7561-7562) is
     /// not modelled in Rugra and is skipped.
+    // Ghidra: ruleaction.cc:7543 RulePieceStructure::convertZextToPiece
     fn convert_zext_to_piece(
         zext: &crate::op::PcodeOpRef,
         ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -10968,6 +11477,7 @@ impl RulePieceStructure {
     /// gathered CONCAT-tree nodes; for each INT_ZEXT leaf whose Varnode spans
     /// multiple structure elements, converts the ZEXT to a PIECE. Returns true
     /// if any conversion happened (so the caller rebuilds the tree).
+    // Ghidra: ruleaction.cc:7574 RulePieceStructure::findReplaceZext
     fn find_replace_zext(
         stack: &[PieceNode],
         structured_type: &std::sync::Arc<crate::type_system::datatype::Datatype>,
@@ -11002,6 +11512,7 @@ impl RulePieceStructure {
     /// root's, or if the root is not addr-tied, or if the leaf is proto-partial
     /// / defined by a marker / defined by a PIECE whose type is itself
     /// piece-structured.
+    // Ghidra: ruleaction.cc:7598 RulePieceStructure::separateSymbol
     fn separate_symbol(
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         leaf: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -11032,6 +11543,7 @@ impl RulePieceStructure {
     /// `get_sub_type` until the component exactly matches `(offset, size)`; if
     /// such an exact component exists return it, otherwise None. This replaces
     /// Ghidra's `data.getArch()->types->getExactPiece(ct, off, sz)`.
+    // Ghidra: type.cc:4090 TypeFactory::getExactPiece
     fn get_exact_piece(
         mut ct: &crate::type_system::datatype::Datatype,
         mut off: i64,
@@ -11057,6 +11569,7 @@ impl RulePieceStructure {
 }
 
 impl Rule for RulePieceStructure {
+    // Ghidra: ruleaction.cc:7625 RulePieceStructure::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7625-7718).
         // Ghidra's `op->isPartialRoot()` re-visit guard is not modelled in
@@ -11209,7 +11722,9 @@ impl Rule for RulePieceStructure {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:7613 RulePieceStructure
     fn get_name(&self) -> &str { "piece_structure" }
+    // Ghidra: ruleaction.cc:7618 RulePieceStructure::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE, OpCode::CPUI_INT_ZEXT] }
 }
 
@@ -11232,10 +11747,12 @@ impl Rule for RulePieceStructure {
 pub struct RulePullsubIndirect;
 
 impl RulePullsubIndirect {
+    // Ghidra: ruleaction.cc:954 RulePullsubIndirect
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RulePullsubIndirect {
+    // Ghidra: ruleaction.cc:962 RulePullsubIndirect::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePullsubIndirect::applyOp (ruleaction.cc:962-1014).
         let (vn, op_in1_offset) = {
@@ -11364,7 +11881,9 @@ impl Rule for RulePullsubIndirect {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:954 RulePullsubIndirect
     fn get_name(&self) -> &str { "pullsub_indirect" }
+    // Ghidra: ruleaction.cc:956 RulePullsubIndirect::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 
@@ -11383,10 +11902,12 @@ impl Rule for RulePullsubIndirect {
 pub struct RuleIndirectCollapse;
 
 impl RuleIndirectCollapse {
+    // Ghidra: ruleaction.cc:3169 RuleIndirectCollapse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleIndirectCollapse {
+    // Ghidra: ruleaction.cc:3177 RuleIndirectCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleIndirectCollapse::applyOp (ruleaction.cc:3177-3252).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -11518,7 +12039,9 @@ impl Rule for RuleIndirectCollapse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3169 RuleIndirectCollapse
     fn get_name(&self) -> &str { "indirect_collapse" }
+    // Ghidra: ruleaction.cc:3171 RuleIndirectCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INDIRECT] }
 }
 
@@ -11535,10 +12058,12 @@ impl Rule for RuleIndirectCollapse {
 pub struct RuleTransformCpool;
 
 impl RuleTransformCpool {
+    // Ghidra: ruleaction.cc:3904 RuleTransformCpool
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleTransformCpool {
+    // Ghidra: ruleaction.cc:3915 RuleTransformCpool::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleTransformCpool::applyOp (ruleaction.cc:3915-3940).
         if op_arc.read().unwrap().is_cpool_transformed() {
@@ -11608,7 +12133,9 @@ impl Rule for RuleTransformCpool {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:3904 RuleTransformCpool
     fn get_name(&self) -> &str { "transform_cpool" }
+    // Ghidra: ruleaction.cc:3909 RuleTransformCpool::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CPOOLREF] }
 }
 
@@ -11629,10 +12156,12 @@ impl Rule for RuleTransformCpool {
 pub struct RuleSwitchSingle;
 
 impl RuleSwitchSingle {
+    // Ghidra: ruleaction.cc:5422 RuleSwitchSingle
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSwitchSingle {
+    // Ghidra: ruleaction.cc:5430 RuleSwitchSingle::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSwitchSingle::applyOp (ruleaction.cc:5430-5477).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -11723,7 +12252,9 @@ impl Rule for RuleSwitchSingle {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:5422 RuleSwitchSingle
     fn get_name(&self) -> &str { "switch_single" }
+    // Ghidra: ruleaction.cc:5424 RuleSwitchSingle::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BRANCHIND] }
 }
 
@@ -11740,10 +12271,12 @@ impl Rule for RuleSwitchSingle {
 pub struct RuleFuncPtrEncoding;
 
 impl RuleFuncPtrEncoding {
+    // Ghidra: ruleaction.cc:9914 RuleFuncPtrEncoding
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleFuncPtrEncoding {
+    // Ghidra: ruleaction.cc:9926 RuleFuncPtrEncoding::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleFuncPtrEncoding::applyOp (ruleaction.cc:9926-9948).
         let align = match fd.get_arch() {
@@ -11780,7 +12313,9 @@ impl Rule for RuleFuncPtrEncoding {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9914 RuleFuncPtrEncoding
     fn get_name(&self) -> &str { "funcptr_encoding" }
+    // Ghidra: ruleaction.cc:9920 RuleFuncPtrEncoding::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_CALLIND] }
 }
 
@@ -11798,10 +12333,12 @@ impl Rule for RuleFuncPtrEncoding {
 pub struct RuleUnsigned2Float;
 
 impl RuleUnsigned2Float {
+    // Ghidra: ruleaction.cc:9784 RuleUnsigned2Float
     pub fn new() -> Self { Self }
 
     /// Approximation of `TypeOpFloatInt2Float::preferredZextSize` (see
     /// opfloat.cc). The reference returns base_size*2 for the relevant sizes.
+    // Ghidra: typeop.cc:1891 TypeOpFloatInt2Float::preferredZextSize
     fn preferred_zext_size(base_size: usize) -> usize {
         // Standard: 1→2, 2→4, 4→8. Cap at 8 bytes.
         if base_size >= 4 { 8 } else { base_size * 2 }
@@ -11809,6 +12346,7 @@ impl RuleUnsigned2Float {
 }
 
 impl Rule for RuleUnsigned2Float {
+    // Ghidra: ruleaction.cc:9795 RuleUnsigned2Float::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleUnsigned2Float::applyOp (ruleaction.cc:9795-9855).
         let invn = match op_arc.read().unwrap().get_in(0).cloned() {
@@ -11929,7 +12467,9 @@ impl Rule for RuleUnsigned2Float {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9784 RuleUnsigned2Float
     fn get_name(&self) -> &str { "unsigned_2_float" }
+    // Ghidra: ruleaction.cc:9789 RuleUnsigned2Float::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
 
@@ -11950,10 +12490,12 @@ impl Rule for RuleUnsigned2Float {
 pub struct RuleInt2FloatCollapse;
 
 impl RuleInt2FloatCollapse {
+    // Ghidra: ruleaction.cc:9851 RuleInt2FloatCollapse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleInt2FloatCollapse {
+    // Ghidra: ruleaction.cc:9863 RuleInt2FloatCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleInt2FloatCollapse::applyOp (ruleaction.cc:9863-9918).
         let in0 = match op_arc.read().unwrap().get_in(0).cloned() {
@@ -12067,7 +12609,9 @@ impl Rule for RuleInt2FloatCollapse {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9851 RuleInt2FloatCollapse
     fn get_name(&self) -> &str { "int_2_float_collapse" }
+    // Ghidra: ruleaction.cc:9857 RuleInt2FloatCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
 
@@ -12086,10 +12630,12 @@ impl Rule for RuleInt2FloatCollapse {
 pub struct RulePtraddUndo;
 
 impl RulePtraddUndo {
+    // Ghidra: ruleaction.cc:6915 RulePtraddUndo
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RulePtraddUndo {
+    // Ghidra: ruleaction.cc:6927 RulePtraddUndo::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtraddUndo::applyOp (ruleaction.cc:6927-6944).
         if !fd.has_type_recovery_started() {
@@ -12133,7 +12679,9 @@ impl Rule for RulePtraddUndo {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:6915 RulePtraddUndo
     fn get_name(&self) -> &str { "ptradd_undo" }
+    // Ghidra: ruleaction.cc:6921 RulePtraddUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRADD] }
 }
 
@@ -12155,6 +12703,7 @@ pub struct RulePtrsubUndo;
 
 impl RulePtrsubUndo {
     pub const DEPTH_LIMIT: i32 = 8;
+    // Ghidra: ruleaction.cc:6949 RulePtrsubUndo
     pub fn new() -> Self { Self }
 
     /// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005). If the
@@ -12165,6 +12714,7 @@ impl RulePtrsubUndo {
     /// Calls `nearest_arrayed_component_forward/backward` (type.cc:188-205
     /// base + 1669-1741 struct override) to find a component that is (or
     /// contains) an array near `off`.
+    // Ghidra: type.cc:990 TypePointer::testForArraySlack
     fn test_for_array_slack(
         dt: &crate::type_system::datatype::Datatype,
         off: i64,
@@ -12185,6 +12735,7 @@ impl RulePtrsubUndo {
     /// Find the first component data-type that is (or contains) an array
     /// starting at or after offset `off`, returning the component if found.
     /// Base/array/union/etc. return None (the base override returns null).
+    // Ghidra: type.cc:188 Datatype::nearestArrayedComponentForward
     fn nearest_arrayed_component_forward(
         dt: &crate::type_system::datatype::Datatype,
         off: i64,
@@ -12242,6 +12793,7 @@ impl RulePtrsubUndo {
     /// base + `TypeStruct::nearestArrayedComponentBackward` (type.cc:1669-1696).
     /// Find the last component data-type that is (or contains) an array
     /// starting before or at offset `off`, returning the component if found.
+    // Ghidra: type.cc:201 Datatype::nearestArrayedComponentBackward
     fn nearest_arrayed_component_backward(
         dt: &crate::type_system::datatype::Datatype,
         off: i64,
@@ -12280,6 +12832,7 @@ impl RulePtrsubUndo {
     /// Faithful to `TypeStruct::getLowerBoundField` (type.cc:1604-1622). Returns
     /// the index of the field with the greatest offset <= `off`, or -1 if none.
     /// Assumes `fields` is sorted ascending by offset (as in struct_get_sub_type).
+    // Ghidra: type.cc:1604 TypeStruct::getLowerBoundField
     fn get_lower_bound_field(
         s: &crate::type_system::datatype::TypeStruct,
         off: i64,
@@ -12306,6 +12859,7 @@ impl RulePtrsubUndo {
     /// matches the pointer's pointed-to type. wordsize defaults to 1
     /// (addressToByteInt is a no-op). When an out-of-bounds `extra` is found,
     /// `testForArraySlack` (type.cc:1134, 1157) is consulted before rejecting.
+    // Ghidra: type.cc:1123 TypePointer::isPtrsubMatching
     fn is_ptrsub_matching(
         dt: &std::sync::Arc<crate::type_system::datatype::Datatype>,
         off: i64,
@@ -12380,6 +12934,7 @@ impl RulePtrsubUndo {
     /// Faithful to `getConstOffsetBack` (ruleaction.cc:6970-7010). Returns the
     /// sum of constants in the additive tree rooted at `vn`, and the biggest
     /// constant multiplier in `multiplier` (0 if none).
+    // Ghidra: ruleaction.cc:6970 RulePtrsubUndo::getConstOffsetBack
     fn get_const_offset_back(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         multiplier: &mut i64,
@@ -12433,6 +12988,7 @@ impl RulePtrsubUndo {
     /// Faithful to `getExtraOffset` (ruleaction.cc:7011-7059). Walks the
     /// additive expression using `outvn`'s lone descendant, returning the extra
     /// constant offset and the biggest multiplier.
+    // Ghidra: ruleaction.cc:7011 RulePtrsubUndo::getExtraOffset
     fn get_extra_offset(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         multiplier: &mut i64,
@@ -12505,6 +13061,7 @@ impl RulePtrsubUndo {
     /// Faithful to `removeLocalAddRecurse` (ruleaction.cc:7061-7094). Converts
     /// INT_ADD-with-constant nodes in the additive tree into COPYs, returning
     /// the sum of removed constants.
+    // Ghidra: ruleaction.cc:7061 RulePtrsubUndo::removeLocalAddRecurse
     fn remove_local_add_recurse(
         op: &crate::op::PcodeOpRef,
         slot: usize,
@@ -12546,6 +13103,7 @@ impl RulePtrsubUndo {
     /// Faithful to `removeLocalAdds` (ruleaction.cc:7096-7143). Walks the
     /// additive chain rooted at `vn`, converting INT_ADD/PTRSUB/PTRADD constant
     /// contributions into COPYs / undoing PTRADDs, and returns the removed sum.
+    // Ghidra: ruleaction.cc:7096 RulePtrsubUndo::removeLocalAdds
     fn remove_local_adds(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         fd: &mut Funcdata,
@@ -12616,6 +13174,7 @@ impl RulePtrsubUndo {
 }
 
 impl Rule for RulePtrsubUndo {
+    // Ghidra: ruleaction.cc:7146 RulePtrsubUndo::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtrsubUndo::applyOp (ruleaction.cc:7146-7188).
         if !fd.has_type_recovery_started() {
@@ -12660,7 +13219,9 @@ impl Rule for RulePtrsubUndo {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:6949 RulePtrsubUndo
     fn get_name(&self) -> &str { "ptrsub_undo" }
+    // Ghidra: ruleaction.cc:6955 RulePtrsubUndo::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PTRSUB] }
 }
 
@@ -12680,10 +13241,12 @@ impl Rule for RulePtrsubUndo {
 pub struct RuleSegment;
 
 impl RuleSegment {
+    // Ghidra: ruleaction.cc:9005 RuleSegment
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSegment {
+    // Ghidra: ruleaction.cc:9013 RuleSegment::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleSegment::applyOp (ruleaction.cc:9013-9057).
         let (space_id_vn, vn1, vn2, out_size) = {
@@ -12758,7 +13321,9 @@ impl Rule for RuleSegment {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9005 RuleSegment
     fn get_name(&self) -> &str { "segment" }
+    // Ghidra: ruleaction.cc:9007 RuleSegment::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SEGMENTOP] }
 }
 
@@ -12768,6 +13333,7 @@ impl Rule for RuleSegment {
 /// written (not inputs), defined by SUBPIECE ops sharing the same source, with
 /// `vn2`'s sub-offset 0 (least-significant) and `vn1`'s sub-offset equal to
 /// `vn2`'s size (immediately contiguous high piece).
+// Ghidra: varnode.cc:2014 contiguous_test
 fn contiguous_test(
     vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -12820,6 +13386,7 @@ fn contiguous_test(
 ///
 /// Faithful to `findContiguousWhole` (varnode.cc:2045-2062): returns
 /// `vn1->getDef()->getIn(0)`, i.e. the SUBPIECE source of the high piece.
+// Ghidra: varnode.cc:2045 findContiguousWhole
 fn find_contiguous_whole(
     vn1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     _vn2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -12851,6 +13418,7 @@ fn find_contiguous_whole(
 pub struct RulePiecePathology;
 
 impl RulePiecePathology {
+    // Ghidra: ruleaction.cc:10561 RulePiecePathology
     pub fn new() -> Self { Self }
 
     /// Faithful to `RulePiecePathology::isPathology` (ruleaction.cc:10427-10505).
@@ -12861,6 +13429,7 @@ impl RulePiecePathology {
     /// ops on a worklist to explore all merge branches. Returns true as soon as
     /// a CALL/CALLIND (or INDIRECT-around-a-call) with a non-active output is
     /// reached, or the varnode is a plain function input.
+    // Ghidra: ruleaction.cc:10427 RulePiecePathology::isPathology
     fn is_pathology(
         start_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         fd: &Funcdata,
@@ -12994,6 +13563,7 @@ impl RulePiecePathology {
     /// `set_input_bytes_consumed`) or a RETURN (record
     /// `set_return_bytes_consumed`). Returns the number of new bytes labeled as
     /// unconsumed (a non-zero value signals a change).
+    // Ghidra: ruleaction.cc:10506 RulePiecePathology::tracePathologyForward
     fn trace_pathology_forward(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         fd: &mut Funcdata,
@@ -13097,6 +13667,7 @@ impl RulePiecePathology {
     /// address. Faithful to Ghidra's `Funcdata::getCallSpecs(PcodeOp*)`, which
     /// in C++ is a direct pointer/index lookup; Rugra stores callspecs by the
     /// CALL op's base address, so we match on that.
+    // Ghidra: funcdata.cc:484 Funcdata::getCallSpecs
     fn find_call_spec_for_op(
         fd: &Funcdata,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -13106,6 +13677,7 @@ impl RulePiecePathology {
     }
 
     /// Look up the FuncCallSpecs index whose `op_addr` matches `addr_u64`.
+    // RUGRA-GLUE: helper for Funcdata::getCallSpecs (funcdata.cc:484)
     fn find_call_spec_by_addr(fd: &Funcdata, addr_u64: u64) -> Option<usize> {
         for (i, fc) in fd.callspecs.iter().enumerate() {
             if fc.op_addr.as_u64() == addr_u64 {
@@ -13117,6 +13689,7 @@ impl RulePiecePathology {
 }
 
 impl Rule for RulePiecePathology {
+    // Ghidra: ruleaction.cc:10578 RulePiecePathology::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
         use crate::op::pcodeop_flags;
@@ -13193,7 +13766,9 @@ impl Rule for RulePiecePathology {
         Ok(if count > 0 { action_status::CHANGE } else { action_status::NO_CHANGE })
     }
 
+    // Ghidra: ruleaction.cc:10561 RulePiecePathology
     fn get_name(&self) -> &str { "piece_pathology" }
+    // Ghidra: ruleaction.cc:10572 RulePiecePathology::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_PIECE] }
 }
 
@@ -13217,11 +13792,13 @@ impl Rule for RulePiecePathology {
 pub struct RuleConditionalMove;
 
 impl RuleConditionalMove {
+    // Ghidra: ruleaction.cc:9361 RuleConditionalMove
     pub fn new() -> Self { Self }
 
     /// Faithful to `checkBoolean` (ruleaction.cc:9277-9303). Given a MULTIEQUAL
     /// input, return its boolean root if it is a boolean value (bool-output op
     /// or a COPY of a 0/1 constant), else None.
+    // Ghidra: ruleaction.cc:9277 RuleConditionalMove::checkBoolean
     fn check_boolean(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
@@ -13254,6 +13831,7 @@ impl RuleConditionalMove {
     /// op duplicator). Callers that get a non-empty `ops` therefore cannot build
     /// the cloned expression and must bail. The empty-list case — which covers
     /// values formed before the branch — works without cloning.
+    // Ghidra: ruleaction.cc:9305 RuleConditionalMove::gatherExpression
     fn gather_expression(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         ops: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
@@ -13317,6 +13895,7 @@ impl RuleConditionalMove {
     /// before `insertop`. Rugra has no such cross-block cloner, so:
     ///   - `ops` empty   → return `vn` itself (faithful, no cloning needed).
     ///   - `ops` non-empty → return None (cannot clone); caller bails.
+    // Ghidra: ruleaction.cc:9346 RuleConditionalMove::constructBool
     fn construct_bool(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
@@ -13332,6 +13911,7 @@ impl RuleConditionalMove {
 }
 
 impl Rule for RuleConditionalMove {
+    // Ghidra: ruleaction.cc:9390 RuleConditionalMove::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleConditionalMove::applyOp (ruleaction.cc:9390-9558).
         if op_arc.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
@@ -13551,7 +14131,9 @@ impl Rule for RuleConditionalMove {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:9361 RuleConditionalMove
     fn get_name(&self) -> &str { "conditional_move" }
+    // Ghidra: ruleaction.cc:9384 RuleConditionalMove::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_MULTIEQUAL] }
 }
 
@@ -13571,11 +14153,13 @@ impl Rule for RuleConditionalMove {
 pub struct RuleIgnoreNan;
 
 impl RuleIgnoreNan {
+    // Ghidra: ruleaction.cc:9604 RuleIgnoreNan
     pub fn new() -> Self { Self }
 
     /// Is `opc` a two-input floating-point comparison op?
     /// Faithful to `OpCode::isFloatingPointOp` combined with the
     /// `numInput()==2` guard in Ghidra's checkBackForCompare.
+    // Ghidra: typeop.hh:146 PcodeOp::isFloatingPointOp
     fn is_float_compare(opc: OpCode) -> bool {
         matches!(
             opc,
@@ -13592,6 +14176,7 @@ impl RuleIgnoreNan {
     /// comparison whose input is functionally equal to `float_var`. The root
     /// may be the direct output of a comparison, a BOOL_NEGATE of one, or a
     /// BOOL_AND/BOOL_OR combining a comparison output.
+    // Ghidra: ruleaction.cc:9622 RuleIgnoreNan::checkBackForCompare
     fn check_back_for_compare(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -13660,6 +14245,7 @@ impl RuleIgnoreNan {
     ///
     /// Test if `vn` is produced by a NaN operation (directly, or via a
     /// BOOL_NEGATE of a NaN output).
+    // Ghidra: ruleaction.cc:9664 RuleIgnoreNan::isAnotherNan
     fn is_another_nan(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -13694,6 +14280,7 @@ impl RuleIgnoreNan {
     /// the output varnode of `op` when `op`'s opcode equals `match_code` (so the
     /// caller can continue the chain), else None. Increments `count` on a real
     /// transformation.
+    // Ghidra: ruleaction.cc:9696 RuleIgnoreNan::testForComparison
     fn test_for_comparison(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -13746,6 +14333,7 @@ impl RuleIgnoreNan {
     /// is another CBRANCH reading (in slot 1) a comparison on `float_var`, and
     /// that block's other out-edge rejoins the sibling branch, replace the NaN
     /// input with a constant.
+    // Ghidra: ruleaction.cc:9722 RuleIgnoreNan::testForComparison
     fn try_cbranch_protection(
         float_var: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -13800,6 +14388,7 @@ impl RuleIgnoreNan {
 
     /// Find the input slot of `target_vn` within `op` (which input slot reads
     /// it). Faithful to Ghidra's `PcodeOp::getSlot(Varnode*)`.
+    // Ghidra: op.hh:166 PcodeOp::getSlot
     fn input_slot_of(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         target_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -13815,6 +14404,7 @@ impl RuleIgnoreNan {
 }
 
 impl Rule for RuleIgnoreNan {
+    // Ghidra: ruleaction.cc:9740 RuleIgnoreNan::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleIgnoreNan::applyOp (ruleaction.cc:9740-9787).
         if let Some(arch) = fd.get_arch() {
@@ -13890,7 +14480,9 @@ impl Rule for RuleIgnoreNan {
         Ok(if count > 0 { action_status::CHANGE } else { action_status::NO_CHANGE })
     }
 
+    // Ghidra: ruleaction.cc:9604 RuleIgnoreNan
     fn get_name(&self) -> &str { "ignore_nan" }
+    // Ghidra: ruleaction.cc:9609 RuleIgnoreNan::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_NAN] }
 }
 
@@ -13914,6 +14506,7 @@ impl Rule for RuleIgnoreNan {
 pub struct RuleLoadVarnode;
 
 impl RuleLoadVarnode {
+    // Ghidra: ruleaction.cc:4285 RuleLoadVarnode
     pub fn new() -> Self { Self }
 
     /// Faithful to `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4193-4204).
@@ -13929,6 +14522,7 @@ impl RuleLoadVarnode {
     /// `getContain` yet, so the non-constant spacebase-input branch returns
     /// `None`. The constant spacebase branch (used by global pseudo-spacebases)
     /// and the early `isSpacebase()` guard are fully faithful.
+    // Ghidra: ruleaction.cc:4193 RuleLoadVarnode::correctSpacebase
     fn correct_spacebase(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         spc: crate::space::AddressSpace,
@@ -13955,6 +14549,7 @@ impl RuleLoadVarnode {
     ///
     /// If `vn` is `spacebase + const`, pass back the constant offset in `val`
     /// and return the associated space; otherwise `None`.
+    // Ghidra: ruleaction.cc:4214 RuleLoadVarnode::vnSpacebase
     fn vn_spacebase(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         val: &mut u64,
@@ -14005,6 +14600,7 @@ impl RuleLoadVarnode {
     /// a constant-space varnode (the LOAD/STORE space-id operand, slot 0).
     /// Rugra encodes the space-id as a constant whose value is the space-id, so
     /// we decode it via `AddressSpace::from_id`.
+    // Ghidra: ruleaction.cc:4346 RuleLoadVarnode::checkSpacebase
     fn check_spacebase(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         offoff: &mut u64,
@@ -14056,6 +14652,7 @@ impl RuleLoadVarnode {
 }
 
 impl Rule for RuleLoadVarnode {
+    // Ghidra: ruleaction.cc:4297 RuleLoadVarnode::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleLoadVarnode::applyOp (ruleaction.cc:4297-4325).
         let mut offoff: u64 = 0;
@@ -14095,7 +14692,9 @@ impl Rule for RuleLoadVarnode {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4285 RuleLoadVarnode
     fn get_name(&self) -> &str { "load_varnode" }
+    // Ghidra: ruleaction.cc:4291 RuleLoadVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD] }
 }
 
@@ -14108,10 +14707,12 @@ impl Rule for RuleLoadVarnode {
 pub struct RuleStoreVarnode;
 
 impl RuleStoreVarnode {
+    // Ghidra: ruleaction.cc:4327 RuleStoreVarnode
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStoreVarnode {
+    // Ghidra: ruleaction.cc:4339 RuleStoreVarnode::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleStoreVarnode::applyOp (ruleaction.cc:4339-4361).
         let mut offoff: u64 = 0;
@@ -14158,7 +14759,9 @@ impl Rule for RuleStoreVarnode {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:4327 RuleStoreVarnode
     fn get_name(&self) -> &str { "store_varnode" }
+    // Ghidra: ruleaction.cc:4333 RuleStoreVarnode::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
 }
 
@@ -14181,6 +14784,7 @@ impl Rule for RuleStoreVarnode {
 pub struct RulePushPtr;
 
 impl RulePushPtr {
+    // Ghidra: ruleaction.cc:6852 RulePushPtr
     pub fn new() -> Self { Self }
 
     /// Faithful to `RulePushPtr::buildVarnodeOut` (ruleaction.cc:6783-6789).
@@ -14188,6 +14792,7 @@ impl RulePushPtr {
     /// Build a duplicate of `vn` as an output of `op`, preserving the storage
     /// address if possible. AddrTied / internal-space varnodes get a fresh
     /// unique; otherwise a new varnode-out at the original address.
+    // Ghidra: ruleaction.cc:6783 RulePushPtr::buildVarnodeOut
     fn build_varnode_out(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &crate::op::PcodeOpRef,
@@ -14208,6 +14813,7 @@ impl RulePushPtr {
     /// Walk back through the chain of ZEXT/SEXT/2COMP/INT_MULT(const) ops
     /// building the offset; any with a lone descendant must be duplicated when
     /// the pointer is pushed.
+    // Ghidra: ruleaction.cc:6798 RulePushPtr::collectDuplicateNeeds
     fn collect_duplicate_needs(
         reslist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
         mut vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -14252,6 +14858,7 @@ impl RulePushPtr {
     /// Duplicate the given PcodeOp so each output descendant gets its own copy
     /// inserted just before it, then destroy the original. Assumes the op has a
     /// single primary input (slot 0) and, optionally, a constant second input.
+    // Ghidra: ruleaction.cc:7469 RulePushPtr::duplicateNeed
     fn duplicate_need(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         fd: &mut Funcdata,
@@ -14316,6 +14923,7 @@ impl RulePushPtr {
 }
 
 impl Rule for RulePushPtr {
+    // Ghidra: ruleaction.cc:6863 RulePushPtr::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePushPtr::applyOp (ruleaction.cc:6863-6913).
         if !fd.has_type_recovery_started() {
@@ -14411,7 +15019,9 @@ impl Rule for RulePushPtr {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:6852 RulePushPtr
     fn get_name(&self) -> &str { "push_ptr" }
+    // Ghidra: ruleaction.cc:6857 RulePushPtr::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -14431,6 +15041,7 @@ impl Rule for RulePushPtr {
 pub struct RulePtrArith;
 
 impl RulePtrArith {
+    // Ghidra: ruleaction.cc:6629 RulePtrArith
     pub fn new() -> Self { Self }
 
     /// Faithful to `RulePtrArith::verifyPreferredPointer` (ruleaction.cc:6558-6572).
@@ -14438,6 +15049,7 @@ impl RulePtrArith {
     /// Tests whether the node immediately above the putative base pointer also
     /// looks like a base pointer. Returns true if `slot` holds the *preferred*
     /// pointer (i.e. there is no earlier pointer that should be pushed first).
+    // Ghidra: ruleaction.cc:6558 RulePtrArith::verifyPreferredPointer
     fn verify_preferred_pointer(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
@@ -14479,6 +15091,7 @@ impl RulePtrArith {
     ///   - 0 → no action (expression not fully linked / should not convert)
     ///   - 1 → a push action is needed first
     ///   - 2 → the conversion can proceed
+    // Ghidra: ruleaction.cc:6876 RulePtrArith::evaluatePointerExpression
     fn evaluate_pointer_expression(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
@@ -14555,6 +15168,7 @@ impl RulePtrArith {
 }
 
 impl Rule for RulePtrArith {
+    // Ghidra: ruleaction.cc:6654 RulePtrArith::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePtrArith::applyOp (ruleaction.cc:6654-6676).
         if !fd.has_type_recovery_started() {
@@ -14593,7 +15207,9 @@ impl Rule for RulePtrArith {
         Ok(action_status::NO_CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:6629 RulePtrArith
     fn get_name(&self) -> &str { "ptrarith" }
+    // Ghidra: ruleaction.cc:6648 RulePtrArith::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_ADD] }
 }
 
@@ -14633,6 +15249,7 @@ struct AddTreeState<'a> {
 
 impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::AddTreeState` ctor (ruleaction.cc:6036-6069).
+    // Ghidra: ruleaction.cc:6036 AddTreeState::AddTreeState
     fn new(data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize) -> Self {
         // ptr = op->getIn(slot). The caller guarantees slot is a pointer, so it
         // must exist; if not, fabricate a 1-byte const placeholder so the state
@@ -14704,6 +15321,7 @@ impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::clear` (ruleaction.cc:5992-6011). The
     /// pRelType/`nonmultsum = addressOffset` branch is omitted (no
     /// TypePointerRel in Rugra — pRelType is always null).
+    // Ghidra: ruleaction.cc:5992 AddTreeState::clear
     fn clear(&mut self) {
         self.multsum = 0;
         self.nonmultsum = 0;
@@ -14721,6 +15339,7 @@ impl<'a> AddTreeState<'a> {
 
     /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034).
     /// With no TypePointerRel, there is never an alternate form.
+    // Ghidra: ruleaction.cc:6017 AddTreeState::initAlternateForm
     fn init_alternate_form(&mut self) -> bool {
         false
     }
@@ -14730,6 +15349,7 @@ impl<'a> AddTreeState<'a> {
     /// Examine a CPUI_INT_MULT element mid-tree. Returns true if there are no
     /// multiples of the base size discovered (i.e. treated as a non-multiple
     /// leaf).
+    // Ghidra: ruleaction.cc:6136 AddTreeState::checkMultTerm
     fn check_mult_term(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -14793,6 +15413,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::checkTerm` (ruleaction.cc:6186-6231).
+    // Ghidra: ruleaction.cc:6186 AddTreeState::checkTerm
     fn check_term(
         &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -14853,6 +15474,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::spanAddTree` (ruleaction.cc:6244-6266).
+    // Ghidra: ruleaction.cc:6160 spanAddTree
     fn span_add_tree(
         &mut self,
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -14887,6 +15509,7 @@ impl<'a> AddTreeState<'a> {
     /// TypePointerRel `hasMatchingSubType` path for SPACEBASE/STRUCT needs
     /// `nearestArrayedComponent*` which Rugra lacks; we approximate with
     /// `get_sub_type`, mirroring the arrayHint==0 Ghidra path.
+    // Ghidra: ruleaction.cc:6270 AddTreeState::calcSubtype
     fn calc_subtype(&mut self) {
         let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
         if self.size == 0 || (tmpoff as i64) < self.size {
@@ -14966,6 +15589,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
+    // Ghidra: ruleaction.cc:6374 AddTreeState::buildMultiples
     fn build_multiples(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let smultsum = sign_extend_u64(self.multsum, self.ptrsize * 8);
         let const_coeff: u64 = if self.size == 0 { 0 } else { (signed_div(smultsum, self.size) as u64) & self.ptrmask };
@@ -15012,6 +15636,7 @@ impl<'a> AddTreeState<'a> {
     }
 
     /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
+    // Ghidra: ruleaction.cc:6408 AddTreeState::buildExtra
     fn build_extra(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let mut res_node: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
         // Snapshot the nonmult list to avoid borrow issues while we mutate.
@@ -15058,6 +15683,7 @@ impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::buildDegenerate` (ruleaction.cc:6441-6458).
     ///
     /// When the base data-type is unit-sized, every ADD becomes a PTRADD.
+    // Ghidra: ruleaction.cc:6441 AddTreeState::buildDegenerate
     fn build_degenerate(&mut self) -> bool {
         let (base_align_lt_wordsize, word_size, ct_size, out_is_ptr) = {
             let bt = match &self.base_type { Some(b) => b.clone(), None => return false };
@@ -15113,6 +15739,7 @@ impl<'a> AddTreeState<'a> {
     /// The `distributeIntMultAdd`/`collapseIntMultMult` loop (6475-6491) is now
     /// ported: `distribute_int_mult_add` lives on `Funcdata` (funcdata.rs) and
     /// `collapse_int_mult_mult` is implemented here (see below).
+    // Ghidra: ruleaction.cc:6461 AddTreeState::apply
     fn apply(&mut self) -> bool {
         if self.is_degenerate {
             return self.build_degenerate();
@@ -15181,6 +15808,7 @@ impl<'a> AddTreeState<'a> {
     /// `Funcdata` itself) because the only primitives it needs —
     /// `new_constant` and `op_set_input` — are already public on `Funcdata`.
     /// The op-mutation logic is a 1:1 port of Ghidra's funcdata_op.cc:1132-1153.
+    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
     fn collapse_int_mult_mult(
         data: &mut Funcdata,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -15215,6 +15843,7 @@ impl<'a> AddTreeState<'a> {
     /// calls are omitted (Rugra has no per-op type resolution propagation
     /// wired here). The structural PTRADD/PTRSUB/INT_ADD restructure is
     /// faithful.
+    // Ghidra: ruleaction.cc:6508 AddTreeState::buildTree
     fn build_tree(&mut self) {
         let mult_node = self.build_multiples();
         let extra_node = self.build_extra();
@@ -15296,10 +15925,12 @@ impl<'a> AddTreeState<'a> {
 pub struct RuleStructOffset0;
 
 impl RuleStructOffset0 {
+    // Ghidra: ruleaction.cc:6678 RuleStructOffset0
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStructOffset0 {
+    // Ghidra: ruleaction.cc:6693 RuleStructOffset0::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6693-6774).
         if !fd.has_type_recovery_started() {
@@ -15381,7 +16012,9 @@ impl Rule for RuleStructOffset0 {
         Ok(action_status::CHANGE)
     }
 
+    // Ghidra: ruleaction.cc:6678 RuleStructOffset0
     fn get_name(&self) -> &str { "struct_offset0" }
+    // Ghidra: ruleaction.cc:6686 RuleStructOffset0::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_LOAD, OpCode::CPUI_STORE] }
 }
 
@@ -15391,22 +16024,26 @@ impl Rule for RuleStructOffset0 {
 
 /// Faithful to Ghidra's `sign_extend` (address.hh). Sign-extend the low
 /// `bits` of `value` to an i64.
+// Ghidra: address.hh:555 sign_extend
 fn sign_extend_u64(value: u64, bits: usize) -> i64 {
     crate::utils::bits::sign_extend(value, bits)
 }
 
 /// Signed remainder faithful to Ghidra's `intb % size`.
+// RUGRA-GLUE: numeric helper for Ghidra intb arithmetic
 fn signed_rem(a: i64, size: i64) -> i64 {
     if size == 0 { a } else { a % size }
 }
 
 /// Signed division faithful to Ghidra's `intb / size`.
+// RUGRA-GLUE: numeric helper for Ghidra intb arithmetic
 fn signed_div(a: i64, size: i64) -> i64 {
     if size == 0 { 0 } else { a / size }
 }
 
 /// Faithful to Ghidra's `uintb_negate` (ruleaction.cc / pcoderaw). Negates the
 /// low `size_bytes`-worth of bits of `val`.
+// Ghidra: address.cc:654 uintb_negate
 fn uintb_negate(val: u64, size_bytes: usize) -> u64 {
     let mask = if size_bytes >= 8 { !0u64 } else { (1u64 << (size_bytes * 8)) - 1 };
     !val & mask
@@ -15414,6 +16051,7 @@ fn uintb_negate(val: u64, size_bytes: usize) -> u64 {
 
 /// Faithful to `AddrSpace::byteToAddressInt` (space.hh). Converts a byte count
 /// to address units: `val / word_size` (truncating).
+// Ghidra: space.hh AddrSpace::byteToAddressInt
 fn byte_to_address_int(val: i64, word_size: i64) -> i64 {
     if word_size <= 1 { val } else { val / word_size }
 }
@@ -15446,6 +16084,7 @@ impl RulePtrFlow {
     /// `glb->getDefaultDataSpace()->isTruncated()`. Rugra's Architecture has no
     /// `getDefaultDataSpace`/`isTruncated` yet, so we default to false — exactly
     /// matching Ghidra's behaviour for non-truncated architectures.
+    // Ghidra: ruleaction.cc:9056 RulePtrFlow::RulePtrFlow
     pub fn new() -> Self {
         Self { has_truncations: false }
     }
@@ -15453,6 +16092,7 @@ impl RulePtrFlow {
     /// Set \e ptrflow property on PcodeOp only if it is propagating. Returns
     /// true if the ptrflow property is newly set. Faithful to
     /// `RulePtrFlow::trialSetPtrFlow` (ruleaction.cc:9083-9099).
+    // Ghidra: ruleaction.cc:9083 RulePtrFlow::trialSetPtrFlow
     fn trial_set_ptr_flow(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> bool {
         let opc = op.read().unwrap().opcode;
         match opc {
@@ -15476,6 +16116,7 @@ impl RulePtrFlow {
     /// Propagate \e ptrflow property to given Varnode and the defining PcodeOp.
     /// Returns true if a change was made. Faithful to
     /// `RulePtrFlow::propagateFlowToDef` (ruleaction.cc:9108-9120).
+    // Ghidra: ruleaction.cc:9108 RulePtrFlow::propagateFlowToDef
     fn propagate_flow_to_def(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -15496,6 +16137,7 @@ impl RulePtrFlow {
     /// Propagate \e ptrflow property to given Varnode and to descendant
     /// PcodeOps. Returns true if a change was made. Faithful to
     /// `RulePtrFlow::propagateFlowToReads` (ruleaction.cc:9127-9145).
+    // Ghidra: ruleaction.cc:9127 RulePtrFlow::propagateFlowToReads
     fn propagate_flow_to_reads(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
@@ -15520,6 +16162,7 @@ impl RulePtrFlow {
     /// the given address space, and updates the PcodeOp input. Returns the new
     /// truncated Varnode. Faithful to `RulePtrFlow::truncatePointer`
     /// (ruleaction.cc:9154-9184).
+    // Ghidra: ruleaction.cc:9154 RulePtrFlow::truncatePointer
     fn truncate_pointer(
         spc: &crate::space::AddressSpace,
         op: &crate::op::PcodeOpRef,
@@ -15560,6 +16203,7 @@ impl RulePtrFlow {
 }
 
 impl Rule for RulePtrFlow {
+    // Ghidra: ruleaction.cc:9177 RulePtrFlow::applyOp
     fn apply_op(
         &self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
@@ -15691,8 +16335,10 @@ impl Rule for RulePtrFlow {
         Ok(made_change)
     }
 
+    // Ghidra: ruleaction.cc:9056 RulePtrFlow::RulePtrFlow
     fn get_name(&self) -> &str { "ptrflow" }
 
+    // Ghidra: ruleaction.cc:9063 RulePtrFlow::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
         // Faithful to RulePtrFlow::getOpList (ruleaction.cc:9063-9077):
         // "if (!hasTruncations) return; // Only stick ourselves into pool if

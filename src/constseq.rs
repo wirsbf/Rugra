@@ -45,6 +45,7 @@ pub struct WriteNode {
 }
 
 impl WriteNode {
+    // Ghidra: constseq.hh:34 WriteNode::new
     pub fn new(offset: u64, op: Arc<RwLock<PcodeOp>>, slot: i32) -> Self {
         Self { offset, op, slot }
     }
@@ -68,11 +69,13 @@ pub struct ArraySequence {
 }
 
 impl ArraySequence {
+    // Ghidra: constseq.cc:28 ArraySequence::isValid
     /// Return true if a valid sequence was found.
     pub fn is_valid(&self) -> bool {
         self.num_elements != 0
     }
 
+    // Ghidra: constseq.cc:42 ArraySequence::interfereBetween
     /// Check if there are interfering ops between two ops in the same block.
     /// Faithful to `ArraySequence::interfereBetween` (constseq.cc:42-58).
     /// Two ops interfere if there's another op between them that writes to
@@ -103,6 +106,7 @@ impl ArraySequence {
         false
     }
 
+    // Ghidra: constseq.cc:62 ArraySequence::checkInterference
     /// Find the maximal set of COPY ops with no interfering ops between them.
     /// Faithful to `ArraySequence::checkInterference` (constseq.cc:62-103).
     /// Collects COPYs from the same block writing constants to consecutive
@@ -167,6 +171,7 @@ impl ArraySequence {
         }
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::new
     /// Construct from a root op.
     pub fn new(root_op: Arc<RwLock<PcodeOp>>) -> Self {
         Self {
@@ -179,6 +184,7 @@ impl ArraySequence {
         }
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::sortOps
     /// Sort move_ops by their op's sequence order.
     pub fn sort_ops(&mut self) {
         self.move_ops.sort_by(|a, b| {
@@ -188,6 +194,7 @@ impl ArraySequence {
         });
     }
 
+    // Ghidra: constseq.cc:108 ArraySequence::formByteArray
     /// Form a byte array from constant COPYs in move_ops.
     /// Corresponds to `ArraySequence::formByteArray` (constseq.cc).
     pub fn form_byte_array(&mut self) -> i32 {
@@ -213,6 +220,7 @@ impl ArraySequence {
         self.byte_array.len() as i32
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::isValidString
     /// Check if the byte array represents a valid string (null-terminated).
     pub fn is_valid_string(&self) -> bool {
         if self.byte_array.is_empty() { return false; }
@@ -221,12 +229,14 @@ impl ArraySequence {
         self.byte_array.contains(&0)
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::getString
     /// Get the string content (up to first null).
     pub fn get_string(&self) -> Option<&[u8]> {
         let pos = self.byte_array.iter().position(|&b| b == 0)?;
         Some(&self.byte_array[..pos])
     }
 
+    // Ghidra: constseq.cc:161 ArraySequence::selectStringCopyFunction
     /// Select the appropriate string copy function based on the element
     /// (character) size, and pass back the length argument. Faithful to
     /// `ArraySequence::selectStringCopyFunction` (constseq.cc:161-175).
@@ -245,6 +255,7 @@ impl ArraySequence {
         }
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::buildStringCopy
     /// Build a CPUI_CALLOTHER op that performs the string copy. Faithful to
     /// `StringSequence::buildStringCopy` (constseq.cc:347-372) and
     /// `HeapSequence::buildStringCopy` (constseq.cc:698-762).
@@ -335,6 +346,7 @@ impl ArraySequence {
         Some(copy_op)
     }
 
+    // Ghidra: constseq.cc:28 ArraySequence::transform
     /// Replace the collected move ops with a CALLOTHER string copy.
     /// Faithful to `StringSequence::transform` (constseq.cc:453-461) and
     /// `HeapSequence::transform` (constseq.cc:927-940).
@@ -396,10 +408,12 @@ pub struct HeapSequence {
 pub struct RuleStringCopy;
 
 impl RuleStringCopy {
+    // Ghidra: constseq.cc:948 RuleStringCopy::new
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStringCopy {
+    // Ghidra: constseq.cc:954 RuleStringCopy::applyOp
     fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleStringCopy::applyOp (constseq.cc:954-1002).
         // Check if this COPY writes a constant into a character array.
@@ -448,7 +462,9 @@ impl Rule for RuleStringCopy {
         }
     }
 
+    // Ghidra: constseq.cc:948 RuleStringCopy::getName
     fn get_name(&self) -> &str { "string_copy" }
+    // Ghidra: constseq.cc:942 RuleStringCopy::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_COPY] }
 }
 
@@ -457,10 +473,12 @@ impl Rule for RuleStringCopy {
 pub struct RuleStringStore;
 
 impl RuleStringStore {
+    // Ghidra: constseq.cc:980 RuleStringStore::new
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleStringStore {
+    // Ghidra: constseq.cc:986 RuleStringStore::applyOp
     fn apply_op(&self, op: &Arc<RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RuleStringStore::applyOp (constseq.cc:986-1002). Given a
         // root STORE of a constant character, gather sibling STOREs in the
@@ -564,11 +582,14 @@ impl Rule for RuleStringStore {
         }
     }
 
+    // Ghidra: constseq.cc:980 RuleStringStore::getName
     fn get_name(&self) -> &str { "string_store" }
+    // Ghidra: constseq.cc:974 RuleStringStore::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_STORE] }
 }
 
 impl RuleStringStore {
+    // Ghidra: constseq.cc:980 RuleStringStore::ptrSharesBase
     /// Check whether a STORE pointer varnode `cand_ptr` derives from the same
     /// base pointer as `base_ptr`. This is a lightweight stand-in for
     /// HeapSequence::findBasePointer (constseq.cc:465-480): we accept the

@@ -869,3 +869,4 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
   - `patch_inputs`：MULTIEQUAL→COPY 转换 + 常量共享 + 克隆映射查找。
 - 新增 `block_flags::DUPLICATE_BLOCK`（f_duplicate_block=0x40000）。
 ### 2026-07-04: Added flow module (FlowInfo reachability tracking)
+<!-- annotation-pass: 2026-07-04 -->

@@ -23,3 +23,4 @@ This checks space, offset, and size parity.
 Verify a list of Varnodes (typically P-code operation inputs)
 
  
+<!-- annotation-pass: 2026-07-04 -->

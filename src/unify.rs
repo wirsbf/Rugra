@@ -41,6 +41,7 @@ type VnArc = Arc<RwLock<Varnode>>;
 
 /// `max(a,b)` helper standing in for the C++ ternary used in `maxnum`
 /// computations throughout unify.hh.
+// RUGRA-GLUE: free helper replacing C++ ternary max(a,b) used in maxnum computations
 fn imax(a: usize, b: usize) -> usize {
     if a > b { a } else { b }
 }
@@ -67,6 +68,7 @@ pub enum DatatypeKind {
 impl DatatypeKind {
     /// Base name used to synthesize slot variable names.
     /// Faithful to `UnifyDatatype::getBaseName` (unify.cc:128-143).
+    // Ghidra: unify.cc:128 UnifyDatatype::getBaseName
     pub fn base_name(self) -> &'static str {
         // unify.cc:128
         match self {
@@ -95,6 +97,7 @@ pub struct UnifyDatatype {
 
 impl Default for UnifyDatatype {
     /// Ghidra's default constructor sets `type = op_type` (unify.hh:39).
+    // RUGRA-GLUE: Rust Default trait impl; Ghidra uses default-constructed UnifyDatatype inline (unify.hh:39)
     fn default() -> Self {
         Self { kind: DatatypeKind::OpType, op: None, vn: None, cn: 0, bl: None }
     }
@@ -103,44 +106,55 @@ impl Default for UnifyDatatype {
 impl UnifyDatatype {
     /// Construct an empty slot of the given kind.
     /// Faithful to `UnifyDatatype(uint4 tp)` (unify.cc:21-36).
+    // Ghidra: unify.cc:21 UnifyDatatype::UnifyDatatype
     pub fn new(kind: DatatypeKind) -> Self {
         // unify.cc:21
         Self { kind, op: None, vn: None, cn: 0, bl: None }
     }
 
     /// Return this slot's kind. Faithful to `getType` (unify.hh:44).
+    // Ghidra: unify.hh:44 UnifyDatatype::getType
     pub fn get_type(&self) -> DatatypeKind { self.kind }
 
     /// Bind an op into this slot. Faithful to `setOp` (unify.hh:45).
+    // Ghidra: unify.hh:45 UnifyDatatype::setOp
     pub fn set_op(&mut self, o: OpArc) { self.op = Some(o); }
 
     /// Read the bound op. Faithful to `getOp` (unify.hh:46).
+    // Ghidra: unify.hh:46 UnifyDatatype::getOp
     pub fn get_op(&self) -> Option<OpArc> { self.op.clone() }
 
     /// Bind a varnode into this slot. Faithful to `setVarnode` (unify.hh:47).
+    // Ghidra: unify.hh:47 UnifyDatatype::setVarnode
     pub fn set_varnode(&mut self, v: VnArc) { self.vn = Some(v); }
 
     /// Read the bound varnode. Faithful to `getVarnode` (unify.hh:48).
+    // Ghidra: unify.hh:48 UnifyDatatype::getVarnode
     pub fn get_varnode(&self) -> Option<VnArc> { self.vn.clone() }
 
     /// Bind a block index into this slot. Faithful to `setBlock` (unify.hh:49).
+    // Ghidra: unify.hh:49 UnifyDatatype::setBlock
     pub fn set_block(&mut self, b: usize) { self.bl = Some(b); }
 
     /// Read the bound block. Faithful to `getBlock` (unify.hh:50).
+    // Ghidra: unify.hh:50 UnifyDatatype::getBlock
     pub fn get_block(&self) -> Option<usize> { self.bl }
 
     /// Bind a constant into this slot. Faithful to `setConstant`
     /// (unify.hh:51, unify.cc:100-104).
+    // Ghidra: unify.cc:100 UnifyDatatype::setConstant
     pub fn set_constant(&mut self, val: u64) {
         // unify.cc:100
         self.cn = val;
     }
 
     /// Read the bound constant. Faithful to `getConstant` (unify.hh:52).
+    // Ghidra: unify.hh:52 UnifyDatatype::getConstant
     pub fn get_constant(&self) -> u64 { self.cn }
 
     /// Emit a C variable declaration for this slot.
     /// Faithful to `UnifyDatatype::printVarDecl` (unify.cc:106-126).
+    // Ghidra: unify.cc:106 UnifyDatatype::printVarDecl
     pub fn print_var_decl(&self, s: &mut String, id: usize, printer: &UnifyCPrinter) {
         // unify.cc:106
         printer.print_indent(s);
@@ -164,14 +178,17 @@ impl UnifyDatatype {
 pub trait RHSConstant: Send + Sync {
     /// Evaluate this constant against the live match state.
     /// Faithful to `RHSConstant::getConstant` (unify.hh:63).
+    // Ghidra: unify.hh:63 RHSConstant::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64;
 
     /// Deep-clone this RHS expression. Faithful to `RHSConstant::clone`
     /// (unify.hh:62).
+    // Ghidra: unify.hh:62 RHSConstant::clone
     fn clone_box(&self) -> Box<dyn RHSConstant>;
 
     /// Render this expression as C source. Faithful to
     /// `RHSConstant::writeExpression` (unify.hh:64).
+    // Ghidra: unify.hh:64 RHSConstant::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter);
 }
 
@@ -181,16 +198,21 @@ pub trait RHSConstant: Send + Sync {
 pub struct ConstantNamed { constindex: usize }
 
 impl ConstantNamed {
+    // Ghidra: unify.hh:70 ConstantNamed::ConstantNamed
     pub fn new(id: usize) -> Self { Self { constindex: id } }
+    // Ghidra: unify.hh:71 ConstantNamed::getId
     pub fn get_id(&self) -> usize { self.constindex }
 }
 
 impl RHSConstant for ConstantNamed {
+    // Ghidra: unify.cc:145 ConstantNamed::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:145
         state.data(self.constindex).get_constant()
     }
+    // Ghidra: unify.hh:72 ConstantNamed::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:151 ConstantNamed::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:151
         s.push_str(&printer.get_name(self.constindex));
@@ -203,16 +225,21 @@ impl RHSConstant for ConstantNamed {
 pub struct ConstantAbsolute { val: u64 }
 
 impl ConstantAbsolute {
+    // Ghidra: unify.hh:80 ConstantAbsolute::ConstantAbsolute
     pub fn new(v: u64) -> Self { Self { val: v } }
+    // Ghidra: unify.hh:81 ConstantAbsolute::getVal
     pub fn get_val(&self) -> u64 { self.val }
 }
 
 impl RHSConstant for ConstantAbsolute {
+    // Ghidra: unify.cc:157 ConstantAbsolute::getConstant
     fn get_constant(&self, _state: &UnifyState) -> u64 {
         // unify.cc:157
         self.val
     }
+    // Ghidra: unify.hh:82 ConstantAbsolute::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:163 ConstantAbsolute::writeExpression
     fn write_expression(&self, s: &mut String, _printer: &UnifyCPrinter) {
         // unify.cc:163
         s.push_str(&format!("(uintb)0x{:x}", self.val));
@@ -227,12 +254,15 @@ pub struct ConstantNZMask { varindex: usize }
 impl ConstantNZMask { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantNZMask {
+    // Ghidra: unify.cc:169 ConstantNZMask::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:169
         state.data(self.varindex).get_varnode()
             .map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0)
     }
+    // Ghidra: unify.hh:91 ConstantNZMask::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:176 ConstantNZMask::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:176
         s.push_str(&printer.get_name(self.varindex));
@@ -248,12 +278,15 @@ pub struct ConstantConsumed { varindex: usize }
 impl ConstantConsumed { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantConsumed {
+    // Ghidra: unify.cc:182 ConstantConsumed::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:182
         state.data(self.varindex).get_varnode()
             .map(|v| v.read().unwrap().get_consume()).unwrap_or(0)
     }
+    // Ghidra: unify.hh:100 ConstantConsumed::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:189 ConstantConsumed::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:189
         s.push_str(&printer.get_name(self.varindex));
@@ -269,12 +302,15 @@ pub struct ConstantOffset { varindex: usize }
 impl ConstantOffset { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantOffset {
+    // Ghidra: unify.cc:195 ConstantOffset::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:195
         state.data(self.varindex).get_varnode()
             .map(|v| v.read().unwrap().get_offset()).unwrap_or(0)
     }
+    // Ghidra: unify.hh:109 ConstantOffset::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:202 ConstantOffset::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:202
         s.push_str(&printer.get_name(self.varindex));
@@ -290,13 +326,16 @@ pub struct ConstantIsConstant { varindex: usize }
 impl ConstantIsConstant { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantIsConstant {
+    // Ghidra: unify.cc:208 ConstantIsConstant::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:208
         state.data(self.varindex).get_varnode()
             .map(|v| if v.read().unwrap().is_constant() { 1 } else { 0 })
             .unwrap_or(0)
     }
+    // Ghidra: unify.hh:118 ConstantIsConstant::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:215 ConstantIsConstant::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:215
         s.push_str("(uintb)");
@@ -313,13 +352,16 @@ pub struct ConstantHeritageKnown { varindex: usize }
 impl ConstantHeritageKnown { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantHeritageKnown {
+    // Ghidra: unify.cc:221 ConstantHeritageKnown::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:221
         state.data(self.varindex).get_varnode()
             .map(|v| if is_heritage_known(&v.read().unwrap()) { 1 } else { 0 })
             .unwrap_or(0)
     }
+    // Ghidra: unify.hh:127 ConstantHeritageKnown::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:228 ConstantHeritageKnown::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:228
         s.push_str("(uintb)");
@@ -336,12 +378,15 @@ pub struct ConstantVarnodeSize { varindex: usize }
 impl ConstantVarnodeSize { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
 
 impl RHSConstant for ConstantVarnodeSize {
+    // Ghidra: unify.cc:234 ConstantVarnodeSize::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:234
         state.data(self.varindex).get_varnode()
             .map(|v| v.read().unwrap().get_size() as u64).unwrap_or(0)
     }
+    // Ghidra: unify.hh:136 ConstantVarnodeSize::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> { Box::new(self.clone()) }
+    // Ghidra: unify.cc:241 ConstantVarnodeSize::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:241
         s.push_str("(uintb)");
@@ -359,6 +404,7 @@ pub struct ConstantExpression {
 }
 
 impl Clone for ConstantExpression {
+    // Ghidra: unify.cc:255 ConstantExpression::clone
     fn clone(&self) -> Self {
         let e2 = self.expr2.as_ref().map(|e| e.clone_box());
         Self { expr1: self.expr1.clone_box(), expr2: e2, opc: self.opc }
@@ -366,6 +412,7 @@ impl Clone for ConstantExpression {
 }
 
 impl std::fmt::Debug for ConstantExpression {
+    // RUGRA-GLUE: Rust Debug impl for ConstantExpression; Ghidra uses print() instead
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConstantExpression").field("opc", &self.opc).finish()
     }
@@ -373,12 +420,14 @@ impl std::fmt::Debug for ConstantExpression {
 
 impl ConstantExpression {
     /// Construct a binary expression. `expr2 = None` denotes a unary op.
+    // Ghidra: unify.hh:145 ConstantExpression::ConstantExpression
     pub fn new(e1: Box<dyn RHSConstant>, e2: Option<Box<dyn RHSConstant>>, oc: OpCode) -> Self {
         Self { expr1: e1, expr2: e2, opc: oc }
     }
 }
 
 impl RHSConstant for ConstantExpression {
+    // Ghidra: unify.cc:265 ConstantExpression::getConstant
     fn get_constant(&self, state: &UnifyState) -> u64 {
         // unify.cc:265
         let c1 = self.expr1.get_constant(state);
@@ -390,11 +439,13 @@ impl RHSConstant for ConstantExpression {
             }
         }
     }
+    // Ghidra: unify.cc:255 ConstantExpression::clone
     fn clone_box(&self) -> Box<dyn RHSConstant> {
         // unify.cc:255
         let e2 = self.expr2.as_ref().map(|e| e.clone_box());
         Box::new(ConstantExpression::new(self.expr1.clone_box(), e2, self.opc))
     }
+    // Ghidra: unify.cc:284 ConstantExpression::writeExpression
     fn write_expression(&self, s: &mut String, printer: &UnifyCPrinter) {
         // unify.cc:284
         let (opname, is_func) = operator_syntax(self.opc);
@@ -427,6 +478,7 @@ impl RHSConstant for ConstantExpression {
 /// Returns `(operator_string, is_function_form)` for the CPrinter.
 /// Faithful to the switch in `ConstantExpression::writeExpression`
 /// (unify.cc:289-374).
+// RUGRA-GLUE: free helper used by ConstantExpression::writeExpression (unify.cc:284-375) for C-operator lookup
 fn operator_syntax(opc: OpCode) -> (&'static str, bool) {
     match opc {
         OpCode::CPUI_INT_ADD => (" + ", false),
@@ -455,6 +507,7 @@ fn operator_syntax(opc: OpCode) -> (&'static str, bool) {
 /// Ghidra's `Varnode::isHeritageKnown` (varnode.hh):
 /// `(flags & (insert|constant|annotation)) != 0`. Replicated locally because
 /// rugra's `Varnode` does not yet expose this accessor.
+// RUGRA-GLUE: free helper mirroring varnode.hh isHeritageKnown flag check
 fn is_heritage_known(vn: &Varnode) -> bool {
     let mask = varnode_flags::INSERT | varnode_flags::CONSTANT | varnode_flags::ANNOTATION;
     (vn.flags & mask) != 0
@@ -486,14 +539,18 @@ pub enum TraverseConstraint {
 pub struct TraverseCountState { state: i32, endstate: i32 }
 
 impl TraverseCountState {
+    // Ghidra: unify.hh:181 TraverseCountState::TraverseCountState
     pub fn new(_id: usize) -> Self { Self { state: -1, endstate: 0 } }
+    // Ghidra: unify.hh:182 TraverseCountState::getState
     pub fn get_state(&self) -> i32 { self.state }
     /// Faithful to `TraverseCountState::initialize` (unify.hh:183).
+    // Ghidra: unify.hh:183 TraverseCountState::initialize
     pub fn initialize(&mut self, end: i32) {
         // unify.hh:183
         self.state = -1; self.endstate = end;
     }
     /// Faithful to `TraverseCountState::step` (unify.hh:184).
+    // Ghidra: unify.hh:184 TraverseCountState::step
     pub fn step(&mut self) -> bool {
         // unify.hh:184
         self.state += 1;
@@ -512,11 +569,14 @@ pub struct TraverseDescendState {
 }
 
 impl TraverseDescendState {
+    // Ghidra: unify.hh:166 TraverseDescendState::TraverseDescendState
     pub fn new(_id: usize) -> Self { Self { onestep: false, descend_list: Vec::new(), index: 0 } }
     /// Current descendant op. Faithful to `getCurrentOp` (unify.hh:167).
+    // Ghidra: unify.hh:167 TraverseDescendState::getCurrentOp
     pub fn get_current_op(&self) -> OpArc { self.descend_list[self.index].clone() }
     /// Initialize from a varnode's descendant list. Faithful to `initialize`
     /// (unify.hh:168).
+    // Ghidra: unify.hh:168 TraverseDescendState::initialize
     pub fn initialize(&mut self, vn: &Varnode) {
         // unify.hh:168
         self.onestep = false;
@@ -524,6 +584,7 @@ impl TraverseDescendState {
         self.index = 0;
     }
     /// Advance to the next descendant. Faithful to `step` (unify.hh:169).
+    // Ghidra: unify.hh:169 TraverseDescendState::step
     pub fn step(&mut self) -> bool {
         // unify.hh:169
         if self.onestep { self.index += 1; } else { self.onestep = true; }
@@ -539,10 +600,15 @@ impl TraverseDescendState {
 pub struct TraverseGroupState { currentconstraint: i32, state: i32 }
 
 impl TraverseGroupState {
+    // Ghidra: unify.hh:192 TraverseGroupState::TraverseGroupState
     pub fn new(_id: usize) -> Self { Self { currentconstraint: 0, state: -1 } }
+    // Ghidra: unify.hh:195 TraverseGroupState::getCurrentIndex
     pub fn get_current_index(&self) -> i32 { self.currentconstraint }
+    // Ghidra: unify.hh:196 TraverseGroupState::setCurrentIndex
     pub fn set_current_index(&mut self, v: i32) { self.currentconstraint = v; }
+    // Ghidra: unify.hh:197 TraverseGroupState::getState
     pub fn get_state(&self) -> i32 { self.state }
+    // Ghidra: unify.hh:198 TraverseGroupState::setState
     pub fn set_state(&mut self, v: i32) { self.state = v; }
 }
 
@@ -561,27 +627,34 @@ impl TraverseGroupState {
 ///      `false` when exhausted.
 pub trait UnifyConstraint: Send + Sync {
     /// This constraint's unique traversal slot id (`uniqid`, unify.hh:204).
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize;
     /// Highest state-slot index this constraint touches (`maxnum`,
     /// unify.hh:205). Used to size the storemap.
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize;
     /// Assign sequential traversal ids, depth-first pre-order. Faithful to
     /// `setId` (unify.hh:215).
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, counter: &mut usize);
     /// Deep-clone into a boxed trait object. Faithful to `clone`
     /// (unify.hh:211).
+    // Ghidra: unify.hh:211 UnifyConstraint::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint>;
     /// Reset this constraint's iteration state for a fresh match. Default
     /// initializes a single-state counter (unify.cc:377-382).
+    // Ghidra: unify.cc:377 UnifyConstraint::initialize
     fn initialize(&self, state: &mut UnifyState) {
         // unify.cc:377
         state.count_initialize(self.uniqid(), 1);
     }
     /// Advance to the next candidate. Returns `false` when exhausted.
     /// Faithful to `step` (unify.hh:213).
+    // Ghidra: unify.hh:213 UnifyConstraint::step
     fn step(&self, state: &mut UnifyState) -> bool;
     /// Register this constraint's `TraverseConstraint` in the state. Default
     /// builds a `TraverseCountState` (unify.cc:384-391).
+    // Ghidra: unify.cc:384 UnifyConstraint::buildTraverseState
     fn build_traverse_state(&self, state: &mut UnifyState) {
         // unify.cc:384
         if self.uniqid() != state.num_traverse() {
@@ -591,19 +664,25 @@ pub trait UnifyConstraint: Send + Sync {
     }
     /// Declare which state-slot kinds this constraint uses. Default no-op
     /// (unify.hh:216).
+    // Ghidra: unify.hh:216 UnifyConstraint::collectTypes
     fn collect_types(&self, _typelist: &mut Vec<UnifyDatatype>) {}
     /// The "primary" slot this constraint produces, or -1 if none (unify.hh:217).
+    // Ghidra: unify.hh:217 UnifyConstraint::getBaseIndex
     fn get_base_index(&self) -> i32 { -1 }
     /// True for the placeholder dummy constraints (unify.hh:219).
+    // Ghidra: unify.hh:219 UnifyConstraint::isDummy
     fn is_dummy(&self) -> bool { false }
     /// Strip dummy subconstraints (unify.hh:220).
+    // Ghidra: unify.hh:220 UnifyConstraint::removeDummy
     fn remove_dummy(&mut self) {}
     /// Emit C source for this constraint. Faithful to `print` (unify.hh:218).
+    // Ghidra: unify.hh:218 UnifyConstraint::print
     fn print(&self, s: &mut String, printer: &mut UnifyCPrinter);
 }
 
 /// Helper: copy `uniqid`/`maxnum` from another constraint. Faithful to
 /// `UnifyConstraint::copyid` (unify.hh:206).
+// RUGRA-GLUE: free helper copying (uniqid,maxnum) between constraints (replaces Ghidra UnifyConstraint::copyid)
 fn copy_ids(tu: &mut usize, tm: &mut usize, src: &dyn UnifyConstraint) {
     *tu = src.uniqid(); *tm = src.maxnum();
 }
@@ -616,16 +695,25 @@ fn copy_ids(tu: &mut usize, tm: &mut usize, src: &dyn UnifyConstraint) {
 pub struct DummyOpConstraint { uniqid: usize, maxnum: usize, opindex: usize }
 impl DummyOpConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, opindex: ind } } }
 impl UnifyConstraint for DummyOpConstraint {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:227 DummyOpConstraint::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = DummyOpConstraint::new(self.opindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.hh:228 DummyOpConstraint::step
     fn step(&self, _s: &mut UnifyState) -> bool { true }
+    // Ghidra: unify.hh:229 DummyOpConstraint::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.hh:230 DummyOpConstraint::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.hh:232 DummyOpConstraint::isDummy
     fn is_dummy(&self) -> bool { true }
+    // Ghidra: unify.hh:231 DummyOpConstraint::print
     fn print(&self, _: &mut String, _: &mut UnifyCPrinter) {}
 }
 
@@ -635,16 +723,25 @@ impl UnifyConstraint for DummyOpConstraint {
 pub struct DummyVarnodeConstraint { uniqid: usize, maxnum: usize, varindex: usize }
 impl DummyVarnodeConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, varindex: ind } } }
 impl UnifyConstraint for DummyVarnodeConstraint {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:239 DummyVarnodeConstraint::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = DummyVarnodeConstraint::new(self.varindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.hh:240 DummyVarnodeConstraint::step
     fn step(&self, _s: &mut UnifyState) -> bool { true }
+    // Ghidra: unify.hh:241 DummyVarnodeConstraint::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType); }
+    // Ghidra: unify.hh:242 DummyVarnodeConstraint::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varindex as i32 }
+    // Ghidra: unify.hh:244 DummyVarnodeConstraint::isDummy
     fn is_dummy(&self) -> bool { true }
+    // Ghidra: unify.hh:243 DummyVarnodeConstraint::print
     fn print(&self, _: &mut String, _: &mut UnifyCPrinter) {}
 }
 
@@ -654,16 +751,25 @@ impl UnifyConstraint for DummyVarnodeConstraint {
 pub struct DummyConstConstraint { uniqid: usize, maxnum: usize, constindex: usize }
 impl DummyConstConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, constindex: ind } } }
 impl UnifyConstraint for DummyConstConstraint {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:251 DummyConstConstraint::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = DummyConstConstraint::new(self.constindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.hh:252 DummyConstConstraint::step
     fn step(&self, _s: &mut UnifyState) -> bool { true }
+    // Ghidra: unify.hh:253 DummyConstConstraint::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.constindex] = UnifyDatatype::new(DatatypeKind::ConstType); }
+    // Ghidra: unify.hh:254 DummyConstConstraint::getBaseIndex
     fn get_base_index(&self) -> i32 { self.constindex as i32 }
+    // Ghidra: unify.hh:256 DummyConstConstraint::isDummy
     fn is_dummy(&self) -> bool { true }
+    // Ghidra: unify.hh:255 DummyConstConstraint::print
     fn print(&self, _: &mut String, _: &mut UnifyCPrinter) {}
 }
 
@@ -673,24 +779,32 @@ impl UnifyConstraint for DummyConstConstraint {
 /// `ConstraintBoolean` (unify.hh:259-268, unify.cc:393-416).
 pub struct ConstraintBoolean { uniqid: usize, maxnum: usize, istrue: bool, expr: Box<dyn RHSConstant> }
 impl ConstraintBoolean {
+    // Ghidra: unify.hh:263 ConstraintBoolean::ConstraintBoolean
     pub fn new(ist: bool, ex: Box<dyn RHSConstant>) -> Self { Self { uniqid: 0, maxnum: 0, istrue: ist, expr: ex } }
 }
 impl Clone for ConstraintBoolean {
+    // Ghidra: unify.hh:265 ConstraintBoolean::clone
     fn clone(&self) -> Self { Self { uniqid: self.uniqid, maxnum: self.maxnum, istrue: self.istrue, expr: self.expr.clone_box() } }
 }
 impl UnifyConstraint for ConstraintBoolean {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:265 ConstraintBoolean::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintBoolean::new(self.istrue, self.expr.clone_box()); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:393 ConstraintBoolean::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:393
         if !state.count_step(self.uniqid) { return false; }
         let v = self.expr.get_constant(state);
         if self.istrue { v != 0 } else { v == 0 }
     }
+    // Ghidra: unify.cc:404 ConstraintBoolean::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:404
         p.print_indent(s); s.push_str("if (");
@@ -707,11 +821,13 @@ pub struct ConstraintVarConst {
     expr: Box<dyn RHSConstant>, exprsz: Option<Box<dyn RHSConstant>>,
 }
 impl ConstraintVarConst {
+    // Ghidra: unify.hh:275 ConstraintVarConst::ConstraintVarConst
     pub fn new(ind: usize, ex: Box<dyn RHSConstant>, sz: Option<Box<dyn RHSConstant>>) -> Self {
         Self { uniqid: 0, maxnum: ind, varindex: ind, expr: ex, exprsz: sz }
     }
 }
 impl Clone for ConstraintVarConst {
+    // Ghidra: unify.cc:426 ConstraintVarConst::clone
     fn clone(&self) -> Self {
         Self {
             uniqid: self.uniqid, maxnum: self.maxnum, varindex: self.varindex,
@@ -720,14 +836,19 @@ impl Clone for ConstraintVarConst {
     }
 }
 impl UnifyConstraint for ConstraintVarConst {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.cc:426 ConstraintVarConst::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let sz = self.exprsz.as_ref().map(|e| e.clone_box());
         let mut n = ConstraintVarConst::new(self.varindex, self.expr.clone_box(), sz);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:437 ConstraintVarConst::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:437
         if !state.count_step(self.uniqid) { return false; }
@@ -743,11 +864,14 @@ impl UnifyConstraint for ConstraintVarConst {
         }
         true
     }
+    // Ghidra: unify.cc:455 ConstraintVarConst::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         // unify.cc:455
         t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:280 ConstraintVarConst::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varindex as i32 }
+    // Ghidra: unify.cc:461 ConstraintVarConst::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:461
         p.print_indent(s); s.push_str(&p.get_name(self.varindex));
@@ -761,19 +885,26 @@ impl UnifyConstraint for ConstraintVarConst {
 /// `ConstraintNamedExpression` (unify.hh:284-295, unify.cc:477-500).
 pub struct ConstraintNamedExpression { uniqid: usize, maxnum: usize, constindex: usize, expr: Box<dyn RHSConstant> }
 impl ConstraintNamedExpression {
+    // Ghidra: unify.hh:288 ConstraintNamedExpression::ConstraintNamedExpression
     pub fn new(ind: usize, ex: Box<dyn RHSConstant>) -> Self { Self { uniqid: 0, maxnum: ind, constindex: ind, expr: ex } }
 }
 impl Clone for ConstraintNamedExpression {
+    // Ghidra: unify.hh:290 ConstraintNamedExpression::clone
     fn clone(&self) -> Self { Self { uniqid: self.uniqid, maxnum: self.maxnum, constindex: self.constindex, expr: self.expr.clone_box() } }
 }
 impl UnifyConstraint for ConstraintNamedExpression {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:290 ConstraintNamedExpression::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintNamedExpression::new(self.constindex, self.expr.clone_box());
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:477 ConstraintNamedExpression::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:477
         if !state.count_step(self.uniqid) { return false; }
@@ -781,11 +912,14 @@ impl UnifyConstraint for ConstraintNamedExpression {
         state.data_mut(self.constindex).set_constant(val);
         true
     }
+    // Ghidra: unify.cc:487 ConstraintNamedExpression::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         // unify.cc:493
         t[self.constindex] = UnifyDatatype::new(DatatypeKind::ConstType);
     }
+    // Ghidra: unify.hh:293 ConstraintNamedExpression::getBaseIndex
     fn get_base_index(&self) -> i32 { self.constindex as i32 }
+    // Ghidra: unify.cc:493 ConstraintNamedExpression::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:495
         p.print_indent(s); s.push_str(&p.get_name(self.constindex));
@@ -797,17 +931,23 @@ impl UnifyConstraint for ConstraintNamedExpression {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpCopy { uniqid: usize, maxnum: usize, oldopindex: usize, newopindex: usize }
 impl ConstraintOpCopy {
+    // Ghidra: unify.hh:301 ConstraintOpCopy::ConstraintOpCopy
     pub fn new(oldind: usize, newind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oldind), newind), oldopindex: oldind, newopindex: newind }
     }
 }
 impl UnifyConstraint for ConstraintOpCopy {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:302 ConstraintOpCopy::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpCopy::new(self.oldopindex, self.newopindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:502 ConstraintOpCopy::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:502
         if !state.count_step(self.uniqid) { return false; }
@@ -816,12 +956,15 @@ impl UnifyConstraint for ConstraintOpCopy {
             None => false,
         }
     }
+    // Ghidra: unify.cc:512 ConstraintOpCopy::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         // unify.cc:512
         t[self.oldopindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.newopindex] = UnifyDatatype::new(DatatypeKind::OpType);
     }
+    // Ghidra: unify.hh:305 ConstraintOpCopy::getBaseIndex
     fn get_base_index(&self) -> i32 { self.oldopindex as i32 }
+    // Ghidra: unify.cc:519 ConstraintOpCopy::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:519
         p.print_indent(s); s.push_str(&p.get_name(self.newopindex));
@@ -834,16 +977,23 @@ impl UnifyConstraint for ConstraintOpCopy {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpcode { uniqid: usize, maxnum: usize, opindex: usize, opcodes: Vec<OpCode> }
 impl ConstraintOpcode {
+    // Ghidra: unify.hh:313 ConstraintOpcode::ConstraintOpcode
     pub fn new(ind: usize, o: Vec<OpCode>) -> Self { Self { uniqid: 0, maxnum: ind, opindex: ind, opcodes: o } }
+    // Ghidra: unify.hh:314 ConstraintOpcode::getOpCodes
     pub fn get_opcodes(&self) -> &[OpCode] { &self.opcodes }
 }
 impl UnifyConstraint for ConstraintOpcode {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:315 ConstraintOpcode::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpcode::new(self.opindex, self.opcodes.clone()); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:526 ConstraintOpcode::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:526
         if !state.count_step(self.uniqid) { return false; }
@@ -852,8 +1002,11 @@ impl UnifyConstraint for ConstraintOpcode {
             None => false,
         }
     }
+    // Ghidra: unify.cc:537 ConstraintOpcode::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.hh:318 ConstraintOpcode::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:543 ConstraintOpcode::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:543
         p.print_indent(s); s.push_str("if (");
@@ -874,17 +1027,23 @@ impl UnifyConstraint for ConstraintOpcode {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpCompare { uniqid: usize, maxnum: usize, op1index: usize, op2index: usize, istrue: bool }
 impl ConstraintOpCompare {
+    // Ghidra: unify.hh:327 ConstraintOpCompare::ConstraintOpCompare
     pub fn new(op1ind: usize, op2ind: usize, val: bool) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, op1ind), op2ind), op1index: op1ind, op2index: op2ind, istrue: val }
     }
 }
 impl UnifyConstraint for ConstraintOpCompare {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:328 ConstraintOpCompare::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpCompare::new(self.op1index, self.op2index, self.istrue); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:562 ConstraintOpCompare::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:562
         if !state.count_step(self.uniqid) { return false; }
@@ -897,11 +1056,14 @@ impl UnifyConstraint for ConstraintOpCompare {
         };
         same == self.istrue
     }
+    // Ghidra: unify.cc:572 ConstraintOpCompare::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.op1index] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.op2index] = UnifyDatatype::new(DatatypeKind::OpType);
     }
+    // Ghidra: unify.hh:331 ConstraintOpCompare::getBaseIndex
     fn get_base_index(&self) -> i32 { self.op1index as i32 }
+    // Ghidra: unify.cc:579 ConstraintOpCompare::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:579
         p.print_indent(s); s.push_str("if ("); s.push_str(&p.get_name(self.op1index));
@@ -915,17 +1077,23 @@ impl UnifyConstraint for ConstraintOpCompare {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpInput { uniqid: usize, maxnum: usize, opindex: usize, varnodeindex: usize, slot: usize }
 impl ConstraintOpInput {
+    // Ghidra: unify.hh:340 ConstraintOpInput::ConstraintOpInput
     pub fn new(oind: usize, vind: usize, sl: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varnodeindex: vind, slot: sl }
     }
 }
 impl UnifyConstraint for ConstraintOpInput {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:341 ConstraintOpInput::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpInput::new(self.opindex, self.varnodeindex, self.slot); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:592 ConstraintOpInput::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:592
         if !state.count_step(self.uniqid) { return false; }
@@ -937,11 +1105,14 @@ impl UnifyConstraint for ConstraintOpInput {
             None => false,
         }
     }
+    // Ghidra: unify.cc:603 ConstraintOpInput::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varnodeindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:344 ConstraintOpInput::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varnodeindex as i32 }
+    // Ghidra: unify.cc:610 ConstraintOpInput::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:610
         p.print_indent(s); s.push_str(&p.get_name(self.varnodeindex)); s.push_str(" = ");
@@ -954,23 +1125,30 @@ impl UnifyConstraint for ConstraintOpInput {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpInputAny { uniqid: usize, maxnum: usize, opindex: usize, varnodeindex: usize }
 impl ConstraintOpInputAny {
+    // Ghidra: unify.hh:352 ConstraintOpInputAny::ConstraintOpInputAny
     pub fn new(oind: usize, vind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varnodeindex: vind }
     }
 }
 impl UnifyConstraint for ConstraintOpInputAny {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:353 ConstraintOpInputAny::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpInputAny::new(self.opindex, self.varnodeindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:618 ConstraintOpInputAny::initialize
     fn initialize(&self, state: &mut UnifyState) {
         // unify.cc:618 - initialize counter to the op's input count.
         let num = state.data(self.opindex).get_op()
             .map(|o| o.read().unwrap().num_input()).unwrap_or(0) as i32;
         state.count_initialize(self.uniqid(), num);
     }
+    // Ghidra: unify.cc:626 ConstraintOpInputAny::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:626
         if !state.count_step(self.uniqid) { return false; }
@@ -983,11 +1161,14 @@ impl UnifyConstraint for ConstraintOpInputAny {
             None => false,
         }
     }
+    // Ghidra: unify.cc:637 ConstraintOpInputAny::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varnodeindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:357 ConstraintOpInputAny::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varnodeindex as i32 }
+    // Ghidra: unify.cc:644 ConstraintOpInputAny::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:644
         let d = p.get_depth();
@@ -1004,17 +1185,23 @@ impl UnifyConstraint for ConstraintOpInputAny {
 #[derive(Debug, Clone)]
 pub struct ConstraintOpOutput { uniqid: usize, maxnum: usize, opindex: usize, varnodeindex: usize }
 impl ConstraintOpOutput {
+    // Ghidra: unify.hh:365 ConstraintOpOutput::ConstraintOpOutput
     pub fn new(oind: usize, vind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varnodeindex: vind }
     }
 }
 impl UnifyConstraint for ConstraintOpOutput {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:366 ConstraintOpOutput::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOpOutput::new(self.opindex, self.varnodeindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:656 ConstraintOpOutput::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:656
         if !state.count_step(self.uniqid) { return false; }
@@ -1026,11 +1213,14 @@ impl UnifyConstraint for ConstraintOpOutput {
             None => false,
         }
     }
+    // Ghidra: unify.cc:667 ConstraintOpOutput::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varnodeindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:369 ConstraintOpOutput::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varnodeindex as i32 }
+    // Ghidra: unify.cc:674 ConstraintOpOutput::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:674
         p.print_indent(s); s.push_str(&p.get_name(self.varnodeindex)); s.push_str(" = ");
@@ -1043,15 +1233,21 @@ impl UnifyConstraint for ConstraintOpOutput {
 #[derive(Debug, Clone)]
 pub struct ConstraintParamConstVal { uniqid: usize, maxnum: usize, opindex: usize, slot: usize, val: u64 }
 impl ConstraintParamConstVal {
+    // Ghidra: unify.hh:378 ConstraintParamConstVal::ConstraintParamConstVal
     pub fn new(oind: usize, sl: usize, v: u64) -> Self { Self { uniqid: 0, maxnum: oind, opindex: oind, slot: sl, val: v } }
 }
 impl UnifyConstraint for ConstraintParamConstVal {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:379 ConstraintParamConstVal::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintParamConstVal::new(self.opindex, self.slot, self.val); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:681 ConstraintParamConstVal::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:681
         if !state.count_step(self.uniqid) { return false; }
@@ -1067,7 +1263,9 @@ impl UnifyConstraint for ConstraintParamConstVal {
             None => false,
         }
     }
+    // Ghidra: unify.cc:693 ConstraintParamConstVal::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.cc:699 ConstraintParamConstVal::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:699
         let nm = p.get_name(self.opindex); let sl = self.slot.to_string();
@@ -1083,17 +1281,23 @@ impl UnifyConstraint for ConstraintParamConstVal {
 #[derive(Debug, Clone)]
 pub struct ConstraintParamConst { uniqid: usize, maxnum: usize, opindex: usize, slot: usize, constindex: usize }
 impl ConstraintParamConst {
+    // Ghidra: unify.hh:390 ConstraintParamConst::ConstraintParamConst
     pub fn new(oind: usize, sl: usize, cind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oind), cind), opindex: oind, slot: sl, constindex: cind }
     }
 }
 impl UnifyConstraint for ConstraintParamConst {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:391 ConstraintParamConst::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintParamConst::new(self.opindex, self.slot, self.constindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:712 ConstraintParamConst::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:712
         if !state.count_step(self.uniqid) { return false; }
@@ -1108,11 +1312,14 @@ impl UnifyConstraint for ConstraintParamConst {
             None => false,
         }
     }
+    // Ghidra: unify.cc:724 ConstraintParamConst::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.constindex] = UnifyDatatype::new(DatatypeKind::ConstType);
     }
+    // Ghidra: unify.hh:394 ConstraintParamConst::getBaseIndex
     fn get_base_index(&self) -> i32 { self.constindex as i32 }
+    // Ghidra: unify.cc:731 ConstraintParamConst::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:731
         let nm = p.get_name(self.opindex); let sl = self.slot.to_string();
@@ -1127,17 +1334,23 @@ impl UnifyConstraint for ConstraintParamConst {
 #[derive(Debug, Clone)]
 pub struct ConstraintVarnodeCopy { uniqid: usize, maxnum: usize, oldvarindex: usize, newvarindex: usize }
 impl ConstraintVarnodeCopy {
+    // Ghidra: unify.hh:402 ConstraintVarnodeCopy::ConstraintVarnodeCopy
     pub fn new(oldind: usize, newind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oldind), newind), oldvarindex: oldind, newvarindex: newind }
     }
 }
 impl UnifyConstraint for ConstraintVarnodeCopy {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:403 ConstraintVarnodeCopy::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintVarnodeCopy::new(self.oldvarindex, self.newvarindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:742 ConstraintVarnodeCopy::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:742
         if !state.count_step(self.uniqid) { return false; }
@@ -1146,11 +1359,14 @@ impl UnifyConstraint for ConstraintVarnodeCopy {
             None => false,
         }
     }
+    // Ghidra: unify.cc:752 ConstraintVarnodeCopy::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.oldvarindex] = UnifyDatatype::new(DatatypeKind::VarType);
         t[self.newvarindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:406 ConstraintVarnodeCopy::getBaseIndex
     fn get_base_index(&self) -> i32 { self.oldvarindex as i32 }
+    // Ghidra: unify.cc:759 ConstraintVarnodeCopy::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:759
         p.print_indent(s); s.push_str(&p.get_name(self.newvarindex));
@@ -1163,17 +1379,23 @@ impl UnifyConstraint for ConstraintVarnodeCopy {
 #[derive(Debug, Clone)]
 pub struct ConstraintVarCompare { uniqid: usize, maxnum: usize, var1index: usize, var2index: usize, istrue: bool }
 impl ConstraintVarCompare {
+    // Ghidra: unify.hh:415 ConstraintVarCompare::ConstraintVarCompare
     pub fn new(v1: usize, v2: usize, val: bool) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, v1), v2), var1index: v1, var2index: v2, istrue: val }
     }
 }
 impl UnifyConstraint for ConstraintVarCompare {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:416 ConstraintVarCompare::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintVarCompare::new(self.var1index, self.var2index, self.istrue); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:766 ConstraintVarCompare::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:766
         if !state.count_step(self.uniqid) { return false; }
@@ -1186,11 +1408,14 @@ impl UnifyConstraint for ConstraintVarCompare {
         };
         same == self.istrue
     }
+    // Ghidra: unify.cc:776 ConstraintVarCompare::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.var1index] = UnifyDatatype::new(DatatypeKind::VarType);
         t[self.var2index] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:419 ConstraintVarCompare::getBaseIndex
     fn get_base_index(&self) -> i32 { self.var1index as i32 }
+    // Ghidra: unify.cc:783 ConstraintVarCompare::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:783
         p.print_indent(s); s.push_str("if ("); s.push_str(&p.get_name(self.var1index));
@@ -1204,15 +1429,21 @@ impl UnifyConstraint for ConstraintVarCompare {
 #[derive(Debug, Clone)]
 pub struct ConstraintDef { uniqid: usize, maxnum: usize, opindex: usize, varindex: usize }
 impl ConstraintDef {
+    // Ghidra: unify.hh:427 ConstraintDef::ConstraintDef
     pub fn new(oind: usize, vind: usize) -> Self { Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varindex: vind } }
 }
 impl UnifyConstraint for ConstraintDef {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:428 ConstraintDef::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintDef::new(self.opindex, self.varindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:796 ConstraintDef::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:796
         if !state.count_step(self.uniqid) { return false; }
@@ -1224,11 +1455,14 @@ impl UnifyConstraint for ConstraintDef {
             None => false,
         }
     }
+    // Ghidra: unify.cc:808 ConstraintDef::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:431 ConstraintDef::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:815 ConstraintDef::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:815
         p.print_indent(s); s.push_str("if (!"); s.push_str(&p.get_name(self.varindex));
@@ -1243,20 +1477,27 @@ impl UnifyConstraint for ConstraintDef {
 #[derive(Debug, Clone)]
 pub struct ConstraintDescend { uniqid: usize, maxnum: usize, opindex: usize, varindex: usize }
 impl ConstraintDescend {
+    // Ghidra: unify.hh:439 ConstraintDescend::ConstraintDescend
     pub fn new(oind: usize, vind: usize) -> Self { Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varindex: vind } }
 }
 impl UnifyConstraint for ConstraintDescend {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:440 ConstraintDescend::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintDescend::new(self.opindex, self.varindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:825 ConstraintDescend::buildTraverseState
     fn build_traverse_state(&self, state: &mut UnifyState) {
         // unify.cc:825 - Descend uses a Descend traversal, not the Count default.
         if self.uniqid() != state.num_traverse() { panic!("Traverse id does not match index"); }
         state.register_traverse_constraint(TraverseConstraint::Descend(TraverseDescendState::new(self.uniqid())));
     }
+    // Ghidra: unify.cc:834 ConstraintDescend::initialize
     fn initialize(&self, state: &mut UnifyState) {
         // unify.cc:834
         match state.data(self.varindex).get_varnode() {
@@ -1264,17 +1505,21 @@ impl UnifyConstraint for ConstraintDescend {
             None => state.descend_initialize_empty(self.uniqid()),
         }
     }
+    // Ghidra: unify.cc:842 ConstraintDescend::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:842
         if !state.descend_step(self.uniqid) { return false; }
         let op = state.descend_get_current(self.uniqid);
         state.data_mut(self.opindex).set_op(op); true
     }
+    // Ghidra: unify.cc:852 ConstraintDescend::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:445 ConstraintDescend::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:859 ConstraintDescend::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:859
         let d = p.get_depth();
@@ -1292,15 +1537,21 @@ impl UnifyConstraint for ConstraintDescend {
 #[derive(Debug, Clone)]
 pub struct ConstraintLoneDescend { uniqid: usize, maxnum: usize, opindex: usize, varindex: usize }
 impl ConstraintLoneDescend {
+    // Ghidra: unify.hh:453 ConstraintLoneDescend::ConstraintLoneDescend
     pub fn new(oind: usize, vind: usize) -> Self { Self { uniqid: 0, maxnum: imax(imax(0, oind), vind), opindex: oind, varindex: vind } }
 }
 impl UnifyConstraint for ConstraintLoneDescend {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:454 ConstraintLoneDescend::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintLoneDescend::new(self.opindex, self.varindex); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:877 ConstraintLoneDescend::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:877
         if !state.count_step(self.uniqid) { return false; }
@@ -1311,11 +1562,14 @@ impl UnifyConstraint for ConstraintLoneDescend {
             None => false,
         }
     }
+    // Ghidra: unify.cc:889 ConstraintLoneDescend::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:457 ConstraintLoneDescend::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:896 ConstraintLoneDescend::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:896
         p.print_indent(s); s.push_str(&p.get_name(self.opindex)); s.push_str(" = ");
@@ -1328,6 +1582,7 @@ impl UnifyConstraint for ConstraintLoneDescend {
 /// Find the input-slot index holding varnode `vn` on op `op` (pointer
 /// identity). Stands in for Ghidra's `PcodeOp::getSlot(Varnode*)` which
 /// rugra's `PcodeOp` does not yet expose.
+// RUGRA-GLUE: free helper standing in for PcodeOp::getSlot(Varnode*) (op.hh) not yet exposed on rugra PcodeOp
 fn find_input_slot(op: &PcodeOp, vn: &VnArc) -> Option<usize> {
     for (i, input) in op.inrefs.iter().enumerate() {
         if Arc::ptr_eq(input, vn) { return Some(i); }
@@ -1340,17 +1595,23 @@ fn find_input_slot(op: &PcodeOp, vn: &VnArc) -> Option<usize> {
 #[derive(Debug, Clone)]
 pub struct ConstraintOtherInput { uniqid: usize, maxnum: usize, opindex: usize, varindex_in: usize, varindex_out: usize }
 impl ConstraintOtherInput {
+    // Ghidra: unify.hh:466 ConstraintOtherInput::ConstraintOtherInput
     pub fn new(oind: usize, v_in: usize, v_out: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(imax(0, oind), v_in), v_out), opindex: oind, varindex_in: v_in, varindex_out: v_out }
     }
 }
 impl UnifyConstraint for ConstraintOtherInput {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:468 ConstraintOtherInput::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintOtherInput::new(self.opindex, self.varindex_in, self.varindex_out); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:906 ConstraintOtherInput::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:906
         if !state.count_step(self.uniqid) { return false; }
@@ -1369,12 +1630,15 @@ impl UnifyConstraint for ConstraintOtherInput {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:918 ConstraintOtherInput::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varindex_in] = UnifyDatatype::new(DatatypeKind::VarType);
         t[self.varindex_out] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:469 ConstraintOtherInput::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varindex_out as i32 }
+    // Ghidra: unify.cc:926 ConstraintOtherInput::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:926
         p.print_indent(s); s.push_str(&p.get_name(self.varindex_out)); s.push_str(" = ");
@@ -1389,17 +1653,23 @@ impl UnifyConstraint for ConstraintOtherInput {
 #[derive(Debug, Clone)]
 pub struct ConstraintConstCompare { uniqid: usize, maxnum: usize, const1index: usize, const2index: usize, opc: OpCode }
 impl ConstraintConstCompare {
+    // Ghidra: unify.hh:480 ConstraintConstCompare::ConstraintConstCompare
     pub fn new(c1: usize, c2: usize, oc: OpCode) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, c1), c2), const1index: c1, const2index: c2, opc: oc }
     }
 }
 impl UnifyConstraint for ConstraintConstCompare {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:482 ConstraintConstCompare::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintConstCompare::new(self.const1index, self.const2index, self.opc); copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:934 ConstraintConstCompare::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:934
         if !state.count_step(self.uniqid) { return false; }
@@ -1408,11 +1678,14 @@ impl UnifyConstraint for ConstraintConstCompare {
         let res = crate::opbehavior::evaluate_binary(self.opc, 1, 8, c1, c2).unwrap_or(0);
         res != 0
     }
+    // Ghidra: unify.cc:947 ConstraintConstCompare::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.const1index] = UnifyDatatype::new(DatatypeKind::ConstType);
         t[self.const2index] = UnifyDatatype::new(DatatypeKind::ConstType);
     }
+    // Ghidra: unify.hh:485 ConstraintConstCompare::getBaseIndex
     fn get_base_index(&self) -> i32 { self.const1index as i32 }
+    // Ghidra: unify.cc:954 ConstraintConstCompare::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:954
         p.print_indent(s); s.push_str("if (");
@@ -1445,6 +1718,7 @@ pub struct ConstraintGroup {
 }
 
 impl Clone for ConstraintGroup {
+    // Ghidra: unify.cc:1016 ConstraintGroup::clone
     fn clone(&self) -> Self {
         let mut res = ConstraintGroup::new();
         for c in &self.constraintlist { res.constraintlist.push(c.clone_box()); }
@@ -1454,6 +1728,7 @@ impl Clone for ConstraintGroup {
 }
 
 impl std::fmt::Debug for ConstraintGroup {
+    // RUGRA-GLUE: Rust Debug impl for ConstraintGroup; Ghidra uses print() instead
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConstraintGroup")
             .field("uniqid", &self.uniqid)
@@ -1467,25 +1742,31 @@ impl Default for ConstraintGroup { fn default() -> Self { Self::new() } }
 
 impl ConstraintGroup {
     /// Faithful to `ConstraintGroup::ConstraintGroup` (unify.cc:960-979).
+    // Ghidra: unify.cc:974 ConstraintGroup::ConstraintGroup
     pub fn new() -> Self { Self { uniqid: 0, maxnum: 0, constraintlist: Vec::new() } }
 
     /// Faithful to `addConstraint` (unify.hh:498, unify.cc:988-995).
+    // Ghidra: unify.cc:988 ConstraintGroup::addConstraint
     pub fn add_constraint(&mut self, c: Box<dyn UnifyConstraint>) {
         if c.maxnum() > self.maxnum { self.maxnum = c.maxnum(); }
         self.constraintlist.push(c);
     }
 
     /// Number of subconstraints. Faithful to `numConstraints` (unify.hh:499).
+    // Ghidra: unify.hh:499 ConstraintGroup::numConstraints
     pub fn num_constraints(&self) -> usize { self.constraintlist.len() }
 
     /// Borrow a subconstraint. Faithful to `getConstraint` (unify.hh:497).
+    // Ghidra: unify.hh:497 ConstraintGroup::getConstraint
     pub fn get_constraint(&self, slot: usize) -> &dyn UnifyConstraint { self.constraintlist[slot].as_ref() }
 
     /// Faithful to `deleteConstraint` (unify.hh:500, unify.cc:997-1005).
+    // Ghidra: unify.cc:997 ConstraintGroup::deleteConstraint
     pub fn delete_constraint(&mut self, slot: usize) { self.constraintlist.remove(slot); }
 
     /// Move all subconstraints out of `b` into `self`. Faithful to `mergeIn`
     /// (unify.hh:501, unify.cc:1007-1014).
+    // Ghidra: unify.cc:1007 ConstraintGroup::mergeIn
     pub fn merge_in(&mut self, mut b: ConstraintGroup) {
         for c in b.constraintlist.drain(..) { self.add_constraint(c); }
     }
@@ -1493,6 +1774,7 @@ impl ConstraintGroup {
     /// Assign sequential traversal ids to the whole tree. Must be called once
     /// before constructing a `UnifyState`. Faithful to `setId`
     /// (unify.hh:507, unify.cc:1108-1114).
+    // Ghidra: unify.cc:1108 ConstraintGroup::setId
     pub fn assign_ids(&mut self) {
         let mut counter = 0usize;
         UnifyConstraint::assign_ids(self, &mut counter);
@@ -1500,13 +1782,17 @@ impl ConstraintGroup {
 }
 
 impl UnifyConstraint for ConstraintGroup {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1108 ConstraintGroup::setId
     fn assign_ids(&mut self, counter: &mut usize) {
         // unify.cc:1108
         self.uniqid = *counter; *counter += 1;
         for c in &mut self.constraintlist { c.assign_ids(counter); }
     }
+    // Ghidra: unify.cc:1016 ConstraintGroup::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         // unify.cc:1016
         let mut res = ConstraintGroup::new();
@@ -1514,10 +1800,12 @@ impl UnifyConstraint for ConstraintGroup {
         res.uniqid = self.uniqid; res.maxnum = self.maxnum;
         Box::new(res)
     }
+    // Ghidra: unify.cc:1028 ConstraintGroup::initialize
     fn initialize(&self, state: &mut UnifyState) {
         // unify.cc:1028
         state.group_set_state(self.uniqid, -1);
     }
+    // Ghidra: unify.cc:1035 ConstraintGroup::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1035 - backtracking depth-first search over the list.
         let max = self.constraintlist.len() as i32;
@@ -1554,19 +1842,23 @@ impl UnifyConstraint for ConstraintGroup {
         state.group_set(self.uniqid, 0, subindex);
         true
     }
+    // Ghidra: unify.cc:1085 ConstraintGroup::collectTypes
     fn collect_types(&self, typelist: &mut Vec<UnifyDatatype>) {
         // unify.cc:1085
         for c in &self.constraintlist { c.collect_types(typelist); }
     }
+    // Ghidra: unify.cc:1092 ConstraintGroup::buildTraverseState
     fn build_traverse_state(&self, state: &mut UnifyState) {
         // unify.cc:1092
         if self.uniqid != state.num_traverse() { panic!("Traverse id does not match index"); }
         state.register_traverse_constraint(TraverseConstraint::Group(TraverseGroupState::new(self.uniqid)));
         for c in &self.constraintlist { c.build_traverse_state(state); }
     }
+    // Ghidra: unify.hh:508 ConstraintGroup::getBaseIndex
     fn get_base_index(&self) -> i32 {
         self.constraintlist.last().map(|c| c.get_base_index()).unwrap_or(-1)
     }
+    // Ghidra: unify.cc:1123 ConstraintGroup::removeDummy
     fn remove_dummy(&mut self) {
         // unify.cc:1123
         let mut newlist: Vec<Box<dyn UnifyConstraint>> = Vec::new();
@@ -1576,6 +1868,7 @@ impl UnifyConstraint for ConstraintGroup {
         }
         self.constraintlist = newlist;
     }
+    // Ghidra: unify.cc:1116 ConstraintGroup::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1116
         for c in &self.constraintlist { c.print(s, p); }
@@ -1591,6 +1884,7 @@ pub struct ConstraintOr {
 }
 
 impl Clone for ConstraintOr {
+    // Ghidra: unify.cc:1141 ConstraintOr::clone
     fn clone(&self) -> Self {
         let mut res = ConstraintOr::new();
         for c in &self.constraintlist { res.constraintlist.push(c.clone_box()); }
@@ -1600,6 +1894,7 @@ impl Clone for ConstraintOr {
 }
 
 impl std::fmt::Debug for ConstraintOr {
+    // RUGRA-GLUE: Rust Debug impl for ConstraintOr; Ghidra uses print() instead
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConstraintOr")
             .field("uniqid", &self.uniqid)
@@ -1609,21 +1904,28 @@ impl std::fmt::Debug for ConstraintOr {
 }
 
 impl ConstraintOr {
+    // Ghidra: unify.cc:974 ConstraintGroup::ConstraintGroup
     pub fn new() -> Self { Self { uniqid: 0, maxnum: 0, constraintlist: Vec::new() } }
+    // Ghidra: unify.cc:988 ConstraintGroup::addConstraint
     pub fn add_constraint(&mut self, c: Box<dyn UnifyConstraint>) {
         if c.maxnum() > self.maxnum { self.maxnum = c.maxnum(); }
         self.constraintlist.push(c);
     }
+    // Ghidra: unify.hh:499 ConstraintGroup::numConstraints
     pub fn num_constraints(&self) -> usize { self.constraintlist.len() }
 }
 
 impl UnifyConstraint for ConstraintOr {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1108 ConstraintGroup::setId
     fn assign_ids(&mut self, counter: &mut usize) {
         self.uniqid = *counter; *counter += 1;
         for c in &mut self.constraintlist { c.assign_ids(counter); }
     }
+    // Ghidra: unify.cc:1141 ConstraintOr::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         // unify.cc:1141
         let mut res = ConstraintOr::new();
@@ -1631,10 +1933,12 @@ impl UnifyConstraint for ConstraintOr {
         res.uniqid = self.uniqid; res.maxnum = self.maxnum;
         Box::new(res)
     }
+    // Ghidra: unify.cc:1153 ConstraintOr::initialize
     fn initialize(&self, state: &mut UnifyState) {
         // unify.cc:1153
         state.count_initialize(self.uniqid, self.constraintlist.len() as i32);
     }
+    // Ghidra: unify.cc:1160 ConstraintOr::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1160
         let mut stateind = state.count_get_state(self.uniqid);
@@ -1651,14 +1955,18 @@ impl UnifyConstraint for ConstraintOr {
         }
         false
     }
+    // Ghidra: unify.cc:1184 ConstraintOr::buildTraverseState
     fn build_traverse_state(&self, state: &mut UnifyState) {
         // unify.cc:1184
         if self.uniqid != state.num_traverse() { panic!("Traverse id does not match index in or"); }
         state.register_traverse_constraint(TraverseConstraint::Count(TraverseCountState::new(self.uniqid)));
         for c in &self.constraintlist { c.build_traverse_state(state); }
     }
+    // Ghidra: unify.hh:521 ConstraintOr::getBaseIndex
     fn get_base_index(&self) -> i32 { -1 }
+    // Ghidra: unify.cc:1123 ConstraintGroup::removeDummy
     fn remove_dummy(&mut self) { for c in &mut self.constraintlist { c.remove_dummy(); } }
+    // Ghidra: unify.cc:1198 ConstraintOr::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1198
         let d = p.get_depth();
@@ -1692,18 +2000,24 @@ pub struct ConstraintNewOp {
     insertafter: bool, opc: OpCode, numparams: usize,
 }
 impl ConstraintNewOp {
+    // Ghidra: unify.cc:1219 ConstraintNewOp::ConstraintNewOp
     pub fn new(newind: usize, oldind: usize, oc: OpCode, iafter: bool, num: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, newind), oldind), newopindex: newind, oldopindex: oldind, insertafter: iafter, opc: oc, numparams: num }
     }
 }
 impl UnifyConstraint for ConstraintNewOp {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:535 ConstraintNewOp::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintNewOp::new(self.newopindex, self.oldopindex, self.opc, self.insertafter, self.numparams);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1230 ConstraintNewOp::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1230
         if !state.count_step(self.uniqid) { return false; }
@@ -1723,11 +2037,14 @@ impl UnifyConstraint for ConstraintNewOp {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1246 ConstraintNewOp::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.newopindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.oldopindex] = UnifyDatatype::new(DatatypeKind::OpType);
     }
+    // Ghidra: unify.hh:536 ConstraintNewOp::getBaseIndex
     fn get_base_index(&self) -> i32 { self.newopindex as i32 }
+    // Ghidra: unify.cc:1253 ConstraintNewOp::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1253
         p.print_indent(s); s.push_str(&p.get_name(self.newopindex));
@@ -1750,6 +2067,7 @@ impl ConstraintNewUniqueOut {
     /// `sizeind < 0` denotes a specific byte size; `>= 0` is a varnode slot
     /// whose size is used. Faithful to the constructor (unify.hh:547,
     /// unify.cc:1269-1278).
+    // Ghidra: unify.cc:1269 ConstraintNewUniqueOut::ConstraintNewUniqueOut
     pub fn new(oind: usize, newvarind: usize, sizeind: i32) -> Self {
         let mut m = imax(imax(0, oind), newvarind);
         if sizeind >= 0 { m = imax(m, sizeind as usize); }
@@ -1757,13 +2075,18 @@ impl ConstraintNewUniqueOut {
     }
 }
 impl UnifyConstraint for ConstraintNewUniqueOut {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:548 ConstraintNewUniqueOut::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintNewUniqueOut::new(self.opindex, self.newvarindex, self.sizevarindex);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1280 ConstraintNewUniqueOut::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1280
         if !state.count_step(self.uniqid) { return false; }
@@ -1785,12 +2108,15 @@ impl UnifyConstraint for ConstraintNewUniqueOut {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1299 ConstraintNewUniqueOut::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.newvarindex] = UnifyDatatype::new(DatatypeKind::VarType);
         if self.sizevarindex >= 0 { t[self.sizevarindex as usize] = UnifyDatatype::new(DatatypeKind::VarType); }
     }
+    // Ghidra: unify.hh:549 ConstraintNewUniqueOut::getBaseIndex
     fn get_base_index(&self) -> i32 { self.newvarindex as i32 }
+    // Ghidra: unify.cc:1308 ConstraintNewUniqueOut::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1308
         p.print_indent(s); s.push_str(&p.get_name(self.newvarindex)); s.push_str(" = data.newUniqueOut(");
@@ -1807,21 +2133,28 @@ pub struct ConstraintSetInput {
     slot: Box<dyn RHSConstant>, varindex: usize,
 }
 impl ConstraintSetInput {
+    // Ghidra: unify.hh:560 ConstraintSetInput::ConstraintSetInput
     pub fn new(oind: usize, sl: Box<dyn RHSConstant>, varind: usize) -> Self {
         Self { uniqid: 0, maxnum: imax(imax(0, oind), varind), opindex: oind, slot: sl, varindex: varind }
     }
 }
 impl Clone for ConstraintSetInput {
+    // Ghidra: unify.hh:562 ConstraintSetInput::clone
     fn clone(&self) -> Self { Self { uniqid: self.uniqid, maxnum: self.maxnum, opindex: self.opindex, slot: self.slot.clone_box(), varindex: self.varindex } }
 }
 impl UnifyConstraint for ConstraintSetInput {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:562 ConstraintSetInput::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintSetInput::new(self.opindex, self.slot.clone_box(), self.varindex);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1320 ConstraintSetInput::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1320
         if !state.count_step(self.uniqid) { return false; }
@@ -1837,11 +2170,14 @@ impl UnifyConstraint for ConstraintSetInput {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1333 ConstraintSetInput::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) {
         t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType);
         t[self.varindex] = UnifyDatatype::new(DatatypeKind::VarType);
     }
+    // Ghidra: unify.hh:563 ConstraintSetInput::getBaseIndex
     fn get_base_index(&self) -> i32 { self.varindex as i32 }
+    // Ghidra: unify.cc:1340 ConstraintSetInput::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1340
         p.print_indent(s); s.push_str("data.opSetInput("); s.push_str(&p.get_name(self.opindex)); s.push(',');
@@ -1856,11 +2192,13 @@ pub struct ConstraintSetInputConstVal {
     slot: Box<dyn RHSConstant>, val: Box<dyn RHSConstant>, exprsz: Option<Box<dyn RHSConstant>>,
 }
 impl ConstraintSetInputConstVal {
+    // Ghidra: unify.hh:575 ConstraintSetInputConstVal::ConstraintSetInputConstVal
     pub fn new(oind: usize, sl: Box<dyn RHSConstant>, v: Box<dyn RHSConstant>, sz: Option<Box<dyn RHSConstant>>) -> Self {
         Self { uniqid: 0, maxnum: oind, opindex: oind, slot: sl, val: v, exprsz: sz }
     }
 }
 impl Clone for ConstraintSetInputConstVal {
+    // Ghidra: unify.cc:1359 ConstraintSetInputConstVal::clone
     fn clone(&self) -> Self {
         Self {
             uniqid: self.uniqid, maxnum: self.maxnum, opindex: self.opindex,
@@ -1870,14 +2208,19 @@ impl Clone for ConstraintSetInputConstVal {
     }
 }
 impl UnifyConstraint for ConstraintSetInputConstVal {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.cc:1359 ConstraintSetInputConstVal::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let sz = self.exprsz.as_ref().map(|e| e.clone_box());
         let mut n = ConstraintSetInputConstVal::new(self.opindex, self.slot.clone_box(), self.val.clone_box(), sz);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1370 ConstraintSetInputConstVal::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1370
         if !state.count_step(self.uniqid) { return false; }
@@ -1896,7 +2239,9 @@ impl UnifyConstraint for ConstraintSetInputConstVal {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1388 ConstraintSetInputConstVal::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.cc:1395 ConstraintSetInputConstVal::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1395
         p.print_indent(s); s.push_str("data.opSetInput("); s.push_str(&p.get_name(self.opindex));
@@ -1910,19 +2255,26 @@ impl UnifyConstraint for ConstraintSetInputConstVal {
 /// (unify.hh:583-594, unify.cc:1416-1441).
 pub struct ConstraintRemoveInput { uniqid: usize, maxnum: usize, opindex: usize, slot: Box<dyn RHSConstant> }
 impl ConstraintRemoveInput {
+    // Ghidra: unify.hh:587 ConstraintRemoveInput::ConstraintRemoveInput
     pub fn new(oind: usize, sl: Box<dyn RHSConstant>) -> Self { Self { uniqid: 0, maxnum: oind, opindex: oind, slot: sl } }
 }
 impl Clone for ConstraintRemoveInput {
+    // Ghidra: unify.hh:589 ConstraintRemoveInput::clone
     fn clone(&self) -> Self { Self { uniqid: self.uniqid, maxnum: self.maxnum, opindex: self.opindex, slot: self.slot.clone_box() } }
 }
 impl UnifyConstraint for ConstraintRemoveInput {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:589 ConstraintRemoveInput::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintRemoveInput::new(self.opindex, self.slot.clone_box());
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1416 ConstraintRemoveInput::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1416
         if !state.count_step(self.uniqid) { return false; }
@@ -1937,8 +2289,11 @@ impl UnifyConstraint for ConstraintRemoveInput {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1428 ConstraintRemoveInput::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.hh:590 ConstraintRemoveInput::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:1434 ConstraintRemoveInput::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1434
         p.print_indent(s); s.push_str("data.opRemoveInput("); s.push_str(&p.get_name(self.opindex)); s.push(',');
@@ -1951,16 +2306,22 @@ impl UnifyConstraint for ConstraintRemoveInput {
 #[derive(Debug, Clone)]
 pub struct ConstraintSetOpcode { uniqid: usize, maxnum: usize, opindex: usize, opc: OpCode }
 impl ConstraintSetOpcode {
+    // Ghidra: unify.hh:600 ConstraintSetOpcode::ConstraintSetOpcode
     pub fn new(oind: usize, oc: OpCode) -> Self { Self { uniqid: 0, maxnum: oind, opindex: oind, opc: oc } }
 }
 impl UnifyConstraint for ConstraintSetOpcode {
+    // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
+    // Ghidra: unify.hh:210 UnifyConstraint::getMaxNum
     fn maxnum(&self) -> usize { self.maxnum }
+    // Ghidra: unify.cc:1111 UnifyConstraint::setId
     fn assign_ids(&mut self, c: &mut usize) { self.uniqid = *c; *c += 1; }
+    // Ghidra: unify.hh:601 ConstraintSetOpcode::clone
     fn clone_box(&self) -> Box<dyn UnifyConstraint> {
         let mut n = ConstraintSetOpcode::new(self.opindex, self.opc);
         copy_ids(&mut n.uniqid, &mut n.maxnum, self); Box::new(n)
     }
+    // Ghidra: unify.cc:1443 ConstraintSetOpcode::step
     fn step(&self, state: &mut UnifyState) -> bool {
         // unify.cc:1443
         if !state.count_step(self.uniqid) { return false; }
@@ -1974,8 +2335,11 @@ impl UnifyConstraint for ConstraintSetOpcode {
             _ => false,
         }
     }
+    // Ghidra: unify.cc:1454 ConstraintSetOpcode::collectTypes
     fn collect_types(&self, t: &mut Vec<UnifyDatatype>) { t[self.opindex] = UnifyDatatype::new(DatatypeKind::OpType); }
+    // Ghidra: unify.hh:602 ConstraintSetOpcode::getBaseIndex
     fn get_base_index(&self) -> i32 { self.opindex as i32 }
+    // Ghidra: unify.cc:1460 ConstraintSetOpcode::print
     fn print(&self, s: &mut String, p: &mut UnifyCPrinter) {
         // unify.cc:1460
         p.print_indent(s); s.push_str("data.opSetOpcode("); s.push_str(&p.get_name(self.opindex));
@@ -2002,6 +2366,7 @@ impl UnifyState {
     /// fills in slot kinds via `collectTypes`, and registers the traversal
     /// state for every constraint. Faithful to `UnifyState::UnifyState`
     /// (unify.cc:1467-1474).
+    // Ghidra: unify.cc:1467 UnifyState::UnifyState
     pub fn new(group: &ConstraintGroup) -> Self {
         // unify.cc:1467
         let maxop = group.maxnum();
@@ -2014,30 +2379,38 @@ impl UnifyState {
 
     /// Number of registered traversal states. Faithful to `numTraverse`
     /// (unify.hh:616).
+    // Ghidra: unify.hh:616 UnifyState::numTraverse
     pub fn num_traverse(&self) -> usize { self.traverselist.len() }
 
     /// Append a traversal state. Faithful to `registerTraverseConstraint`
     /// (unify.hh:617).
+    // Ghidra: unify.hh:617 UnifyState::registerTraverseConstraint
     pub fn register_traverse_constraint(&mut self, t: TraverseConstraint) { self.traverselist.push(t); }
 
     /// Borrow a slot value. Faithful to `data(int4)` (unify.hh:618).
+    // Ghidra: unify.hh:618 UnifyState::data
     pub fn data(&self, slot: usize) -> &UnifyDatatype { &self.storemap[slot] }
 
     /// Mutably borrow a slot value (for setters).
+    // RUGRA-GLUE: Rust mut accessor for storemap slot; complements UnifyState::data(int4) (unify.hh:618) on the mutable path
     pub fn data_mut(&mut self, slot: usize) -> &mut UnifyDatatype { &mut self.storemap[slot] }
 
     /// Funcdata accessor (for action constraints). Faithful to `getFunction`
     /// (unify.hh:620).
+    // Ghidra: unify.hh:620 UnifyState::getFunction
     pub fn get_function(&self) -> Option<&Arc<RwLock<Funcdata>>> { self.fd.as_ref() }
 
     /// Clone the Funcdata Arc out of the state.
+    // RUGRA-GLUE: Rust Arc-cloning accessor for the Funcdata field; complements getFunction (unify.hh:620)
     pub fn get_function_cloned(&self) -> Option<Arc<RwLock<Funcdata>>> { self.fd.clone() }
 
     /// Faithful to `setFunction` (unify.hh:622).
+    // Ghidra: unify.hh:622 UnifyState::setFunction
     pub fn set_function(&mut self, f: Arc<RwLock<Funcdata>>) { self.fd = Some(f); }
 
     /// Seed a varnode root. Faithful to `initialize(int4,Varnode*)`
     /// (unify.cc:1490-1494).
+    // Ghidra: unify.cc:1490 UnifyState::initialize
     pub fn initialize_vn(&mut self, id: usize, vn: VnArc) {
         // unify.cc:1490
         self.storemap[id].set_varnode(vn);
@@ -2045,6 +2418,7 @@ impl UnifyState {
 
     /// Seed an op root. Faithful to `initialize(int4,PcodeOp*)`
     /// (unify.cc:1496-1500).
+    // Ghidra: unify.cc:1496 UnifyState::initialize
     pub fn initialize_op(&mut self, id: usize, op: OpArc) {
         // unify.cc:1496
         self.storemap[id].set_op(op);
@@ -2052,41 +2426,52 @@ impl UnifyState {
 
     // Typed traversal accessors (downcast the TraverseConstraint enum).
 
+    // Ghidra: unify.hh:183 TraverseCountState::initialize
     pub fn count_initialize(&mut self, id: usize, end: i32) {
         if let TraverseConstraint::Count(t) = &mut self.traverselist[id] { t.initialize(end); }
     }
+    // Ghidra: unify.hh:184 TraverseCountState::step
     pub fn count_step(&mut self, id: usize) -> bool {
         if let TraverseConstraint::Count(t) = &mut self.traverselist[id] { t.step() } else { false }
     }
+    // Ghidra: unify.hh:182 TraverseCountState::getState
     pub fn count_get_state(&self, id: usize) -> i32 {
         if let TraverseConstraint::Count(t) = &self.traverselist[id] { t.get_state() } else { -1 }
     }
+    // Ghidra: unify.hh:168 TraverseDescendState::initialize
     pub fn descend_initialize(&mut self, id: usize, vn: &Varnode) {
         if let TraverseConstraint::Descend(t) = &mut self.traverselist[id] { t.initialize(vn); }
     }
+    // RUGRA-GLUE: Rust helper to reset TraverseDescendState (no direct Ghidra counterpart; Ghidra re-creates iterator)
     pub fn descend_initialize_empty(&mut self, id: usize) {
         if let TraverseConstraint::Descend(t) = &mut self.traverselist[id] {
             t.onestep = false; t.descend_list.clear(); t.index = 0;
         }
     }
+    // Ghidra: unify.hh:169 TraverseDescendState::step
     pub fn descend_step(&mut self, id: usize) -> bool {
         if let TraverseConstraint::Descend(t) = &mut self.traverselist[id] { t.step() } else { false }
     }
+    // Ghidra: unify.hh:167 TraverseDescendState::getCurrentOp
     pub fn descend_get_current(&self, id: usize) -> OpArc {
         if let TraverseConstraint::Descend(t) = &self.traverselist[id] { t.get_current_op() }
         else { panic!("traverse {} is not Descend", id) }
     }
+    // Ghidra: unify.hh:197 TraverseGroupState::getState
     pub fn group_get_state(&self, id: usize) -> i32 {
         if let TraverseConstraint::Group(t) = &self.traverselist[id] { t.get_state() }
         else { panic!("traverse {} is not Group", id) }
     }
+    // Ghidra: unify.hh:195 TraverseGroupState::getCurrentIndex
     pub fn group_get_current_index(&self, id: usize) -> i32 {
         if let TraverseConstraint::Group(t) = &self.traverselist[id] { t.get_current_index() }
         else { panic!("traverse {} is not Group", id) }
     }
+    // Ghidra: unify.hh:198 TraverseGroupState::setState
     pub fn group_set_state(&mut self, id: usize, st: i32) {
         if let TraverseConstraint::Group(t) = &mut self.traverselist[id] { t.set_state(st); }
     }
+    // Ghidra: unify.hh:198 TraverseGroupState::setState
     pub fn group_set(&mut self, id: usize, st: i32, ci: i32) {
         if let TraverseConstraint::Group(t) = &mut self.traverselist[id] { t.set_state(st); t.set_current_index(ci); }
     }
@@ -2111,6 +2496,7 @@ pub struct UnifyCPrinter {
 }
 
 impl Default for UnifyCPrinter {
+    // RUGRA-GLUE: Rust Default trait impl; Ghidra uses default-constructed UnifyDatatype inline (unify.hh:39)
     fn default() -> Self {
         // unify.hh:640
         Self {
@@ -2121,15 +2507,20 @@ impl Default for UnifyCPrinter {
 }
 
 impl UnifyCPrinter {
+    // Ghidra: unify.hh:641 UnifyCPrinter::getDepth
     pub fn get_depth(&self) -> i32 { self.depth }
+    // Ghidra: unify.hh:642 UnifyCPrinter::incDepth
     pub fn inc_depth(&mut self) { self.depth += 1; }
+    // Ghidra: unify.hh:643 UnifyCPrinter::decDepth
     pub fn dec_depth(&mut self) { self.depth -= 1; }
     /// Faithful to `printIndent` (unify.hh:644).
+    // Ghidra: unify.hh:644 UnifyCPrinter::printIndent
     pub fn print_indent(&self, s: &mut String) {
         for _ in 0..(self.depth + 1) { s.push_str("  "); }
     }
     /// Emit the abort statement (continue / return 0 / return false).
     /// Faithful to `printAbort` (unify.cc:1544-1559).
+    // Ghidra: unify.cc:1544 UnifyCPrinter::printAbort
     pub fn print_abort(&mut self, s: &mut String) {
         // unify.cc:1544
         self.depth += 1;
@@ -2142,6 +2533,7 @@ impl UnifyCPrinter {
     }
     /// Close nested blocks until `depth == newdepth`. Faithful to `popDepth`
     /// (unify.cc:1561-1569).
+    // Ghidra: unify.cc:1561 UnifyCPrinter::popDepth
     pub fn pop_depth(&mut self, s: &mut String, newdepth: i32) {
         // unify.cc:1561
         while self.depth != newdepth {
@@ -2151,11 +2543,14 @@ impl UnifyCPrinter {
         }
     }
     /// Faithful to `getName` (unify.hh:647).
+    // Ghidra: unify.hh:647 UnifyCPrinter::getName
     pub fn get_name(&self, id: usize) -> String { self.namemap[id].clone() }
     /// Faithful to `setClassName` (unify.hh:650).
+    // Ghidra: unify.hh:650 UnifyCPrinter::setClassName
     pub fn set_classname(&mut self, nm: &str) { self.classname = nm.to_string(); }
 
     /// Faithful to `initializeBase` (unify.cc:1502-1521).
+    // Ghidra: unify.cc:1502 UnifyCPrinter::initializeBase
     fn initialize_base(&mut self, g: ConstraintGroup) {
         // unify.cc:1502
         self.depth = 0;
@@ -2172,6 +2567,7 @@ impl UnifyCPrinter {
         self.grp = Some(g);
     }
     /// Faithful to `printGetOpList` (unify.cc:1523-1534).
+    // Ghidra: unify.cc:1523 UnifyCPrinter::printGetOpList
     fn print_get_op_list(&self, s: &mut String) {
         // unify.cc:1523
         s.push_str(&format!("void {}::getOpList(vector<uint4> &oplist) const\n\n{{\n", self.classname));
@@ -2179,6 +2575,7 @@ impl UnifyCPrinter {
         s.push_str("}\n\n");
     }
     /// Faithful to `printRuleHeader` (unify.cc:1536-1542).
+    // Ghidra: unify.cc:1536 UnifyCPrinter::printRuleHeader
     fn print_rule_header(&self, s: &mut String) {
         // unify.cc:1536
         s.push_str(&format!(
@@ -2187,6 +2584,7 @@ impl UnifyCPrinter {
         ));
     }
     /// Faithful to `printVarDecls` (unify.cc:1571-1580).
+    // Ghidra: unify.cc:1571 UnifyCPrinter::printVarDecls
     fn print_var_decls(&self, s: &mut String) {
         // unify.cc:1571
         for i in 0..self.namemap.len() {
@@ -2196,6 +2594,7 @@ impl UnifyCPrinter {
         if !self.namemap.is_empty() { s.push('\n'); }
     }
     /// Faithful to `initializeRuleAction` (unify.cc:1582-1591).
+    // Ghidra: unify.cc:1582 UnifyCPrinter::initializeRuleAction
     pub fn initialize_rule_action(&mut self, g: ConstraintGroup, opp: i32, oplist: Vec<OpCode>) {
         // unify.cc:1582
         self.initialize_base(g);
@@ -2205,6 +2604,7 @@ impl UnifyCPrinter {
         self.opcodelist = oplist;
     }
     /// Faithful to `initializeBasic` (unify.cc:1593-1599).
+    // Ghidra: unify.cc:1593 UnifyCPrinter::initializeBasic
     pub fn initialize_basic(&mut self, g: ConstraintGroup) {
         // unify.cc:1593
         self.initialize_base(g);
@@ -2212,6 +2612,7 @@ impl UnifyCPrinter {
         self.opparam = -1;
     }
     /// Faithful to `addNames` (unify.hh:651, unify.cc:1601-1612).
+    // Ghidra: unify.cc:1601 UnifyCPrinter::addNames
     pub fn add_names(&mut self, nmmap: &[(String, usize)]) {
         // unify.cc:1601
         for (name, slot) in nmmap {
@@ -2220,6 +2621,7 @@ impl UnifyCPrinter {
         }
     }
     /// Faithful to `print` (unify.cc:1614-1644). Produces the full rule body.
+    // Ghidra: unify.cc:1614 UnifyCPrinter::print
     pub fn print(&mut self, s: &mut String) {
         // unify.cc:1614
         if self.printingtype == 0 {
@@ -2260,13 +2662,16 @@ pub struct RuleMatcher { group: ConstraintGroup }
 
 impl RuleMatcher {
     /// Build a matcher from a constraint tree. `assign_ids` is applied here.
+    // RUGRA-GLUE: Rust constructor for RuleMatcher; Ghidra uses inline constructor
     pub fn new(mut group: ConstraintGroup) -> Self { group.assign_ids(); Self { group } }
 
     /// Borrow the underlying group.
+    // RUGRA-GLUE: Rust convenience method on RuleMatcher; Ghidra has no RuleMatcher class (drives inline)
     pub fn group(&self) -> &ConstraintGroup { &self.group }
 
     /// Run the matcher with `op` bound to slot `root_slot`. Returns whether at
     /// least one match exists.
+    // RUGRA-GLUE: Rust convenience method on RuleMatcher; Ghidra has no RuleMatcher class (drives inline)
     pub fn matches(&self, root_slot: usize, op: OpArc) -> bool {
         let mut state = UnifyState::new(&self.group);
         state.initialize_op(root_slot, op);
@@ -2276,6 +2681,7 @@ impl RuleMatcher {
     /// Enumerate up to `limit` distinct matches, calling `f` for each. The
     /// callback receives the state immediately after a match (so bound slots
     /// are readable). Stops early if `f` returns false.
+    // RUGRA-GLUE: Rust convenience method on RuleMatcher; Ghidra has no RuleMatcher class (drives inline)
     pub fn enumerate<F: FnMut(&UnifyState) -> bool>(
         &self, root_slot: usize, op: OpArc, limit: usize, mut f: F,
     ) -> usize {

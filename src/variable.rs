@@ -30,6 +30,7 @@ pub struct HighVariable {
 }
 
 impl HighVariable {
+    // Ghidra: variable.cc:220 HighVariable::new
     /// Create a new high-level variable
     pub fn new(v_type: Arc<Datatype>) -> Self {
         Self {
@@ -42,54 +43,64 @@ impl HighVariable {
         }
     }
 
+    // Ghidra: variable.cc:220 HighVariable::getName
     /// Get the name of the high variable
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // Ghidra: variable.cc:220 HighVariable::setName
     /// Set the name of the high variable
     pub fn set_name(&mut self, name: String) {
         self.name = name;
         self.flags |= high_flags::NAMELOCK;
     }
 
+    // Ghidra: variable.cc:220 HighVariable::getType
     /// Get the data type of the high variable
     pub fn get_type(&self) -> Arc<Datatype> {
         self.v_type.clone()
     }
 
+    // Ghidra: variable.cc:220 HighVariable::setType
     /// Set the data type of the high variable
     pub fn set_type(&mut self, v_type: Arc<Datatype>) {
         self.v_type = v_type;
     }
 
+    // Ghidra: variable.cc:220 HighVariable::addInstance
     /// Add a varnode instance to this high variable
     pub fn add_instance(&mut self, vn: Arc<RwLock<Varnode>>) {
         self.instances.push(vn);
     }
 
+    // Ghidra: variable.cc:220 HighVariable::numInstances
     /// Get the number of instances
     pub fn num_instances(&self) -> usize {
         self.instances.len()
     }
 
+    // Ghidra: variable.cc:220 HighVariable::getInstance
     /// Get a specific instance
     pub fn get_instance(&self, i: usize) -> Option<Arc<RwLock<Varnode>>> {
         self.instances.get(i).cloned()
     }
 
+    // Ghidra: variable.cc:220 HighVariable::isNameLocked
     /// Check if this variable has a locked name.
     /// Faithful to HighVariable::isNameLocked (variable.hh).
     pub fn is_name_locked(&self) -> bool {
         self.flags & high_flags::NAMELOCK != 0
     }
 
+    // Ghidra: variable.cc:220 HighVariable::isTypeLocked
     /// Check if this variable has a locked type.
     /// Faithful to HighVariable::isTypeLocked (variable.hh).
     pub fn is_type_locked(&self) -> bool {
         self.flags & high_flags::TYPELOCK != 0
     }
 
+    // Ghidra: variable.cc:220 HighVariable::isPersist
     /// Check if this variable is persistent (global/external).
     /// Faithful to HighVariable::isPersist (variable.hh:198).
     /// Checks high_flags bit OR any instance Varnode carrying persist.
@@ -102,6 +113,7 @@ impl HighVariable {
         })
     }
 
+    // Ghidra: variable.cc:220 HighVariable::isAddrTied
     /// Check if this variable is address-tied (lives at a specific address).
     /// Faithful to HighVariable::isAddrTied (variable.hh:199).
     ///
@@ -151,18 +163,21 @@ impl HighVariable {
         })
     }
 
+    // Ghidra: variable.cc:220 HighVariable::isConstant
     /// Check if this variable is a constant.
     /// Faithful to HighVariable::isConstant (variable.hh).
     pub fn is_constant(&self) -> bool {
         self.flags & high_flags::CONSTANT != 0
     }
 
+    // Ghidra: variable.cc:718 HighVariable::hasName
     /// Check if this variable has a name assigned.
     /// Faithful to HighVariable::hasName (variable.cc:718).
     pub fn has_name(&self) -> bool {
         !self.name.is_empty() || self.is_name_locked()
     }
 
+    // Ghidra: variable.cc:220 HighVariable::removeInstance
     /// Remove a varnode instance by index.
     /// Faithful to HighVariable::remove (variable.cc:515).
     pub fn remove_instance(&mut self, index: usize) {
@@ -171,12 +186,14 @@ impl HighVariable {
         }
     }
 
+    // Ghidra: variable.cc:808 HighVariable::instanceIndex
     /// Find the index of a specific varnode instance.
     /// Faithful to HighVariable::instanceIndex (variable.cc:808).
     pub fn instance_index(&self, vn: &Arc<RwLock<Varnode>>) -> Option<usize> {
         self.instances.iter().position(|v| Arc::ptr_eq(v, vn))
     }
 
+    // Ghidra: variable.cc:626 HighVariable::mergeInternal
     /// Merge another HighVariable's instances into this one.
     /// Faithful to HighVariable::mergeInternal (variable.cc:626).
     pub fn merge_internal(&mut self, other: &mut HighVariable) {
@@ -190,6 +207,7 @@ impl HighVariable {
         }
     }
 
+    // Ghidra: variable.cc:377 HighVariable::getTypeRepresentative
     /// Get the representative varnode for type queries.
     /// Faithful to HighVariable::getTypeRepresentative (variable.cc:377).
     pub fn get_type_representative(&self) -> Option<Arc<RwLock<Varnode>>> {
@@ -203,6 +221,7 @@ impl HighVariable {
         self.instances.first().cloned()
     }
 
+    // Ghidra: variable.cc:492 HighVariable::getNameRepresentative
     /// Get the representative varnode for name queries.
     /// Faithful to HighVariable::getNameRepresentative (variable.cc:492).
     pub fn get_name_representative(&self) -> Option<Arc<RwLock<Varnode>>> {
@@ -216,6 +235,7 @@ impl HighVariable {
         self.instances.first().cloned()
     }
 
+    // Ghidra: variable.cc:302 HighVariable::stripType
     /// Strip the type (set to unknown). Used when type propagation fails.
     /// Faithful to HighVariable::stripType (variable.cc:302).
     pub fn strip_type(&mut self, unknown_type: Arc<Datatype>) {
@@ -224,6 +244,7 @@ impl HighVariable {
         }
     }
 
+    // Ghidra: variable.cc:324 HighVariable::updateInternalCover
     /// Re-derive the internal cover from the member Varnodes.
     /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
     /// Clears the cover then merges every instance's cover. Skips

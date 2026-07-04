@@ -31,6 +31,7 @@ pub struct TypeFactory {
 }
 
 impl TypeFactory {
+    // Ghidra: type.cc:3106 TypeFactory::new
     /// Create a new TypeFactory and initialize core types
     ///
     /// # Arguments
@@ -47,6 +48,7 @@ impl TypeFactory {
         factory
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::initCoreTypes
     /// Initialize the fundamental core types
     fn init_core_types(&mut self) {
         // Void type
@@ -78,6 +80,7 @@ impl TypeFactory {
         self.add_core_type(f_type8);
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::addCoreType
     /// Internal helper to register a core type
     fn add_core_type(&mut self, mut dt: Arc<Datatype>) {
         if let Some(dt_mut) = Arc::get_mut(&mut dt) {
@@ -91,11 +94,13 @@ impl TypeFactory {
         self.types.insert(name, dt);
     }
 
+    // Ghidra: type.cc:3366 TypeFactory::findByName
     /// Find a type by name
     pub fn find_by_name(&self, name: &str) -> Option<Arc<Datatype>> {
         self.types.get(name).cloned()
     }
 
+    // Ghidra: type.cc:3631 TypeFactory::getBase
     /// Get a base scalar type of `size` bytes with metatype `m`. Faithful to
     /// `TypeFactory::getBase` (type.cc:3631-3660). For int/uint/float/bool,
     /// looks up the pre-generated core type by name; if not found, creates
@@ -127,6 +132,7 @@ impl TypeFactory {
         }
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::getPtr
     /// Get or create a pointer type to the given base type
     pub fn get_ptr(&mut self, ptr_to: Arc<Datatype>) -> Arc<Datatype> {
         let name = format!("{} *", ptr_to.get_name());
@@ -143,6 +149,7 @@ impl TypeFactory {
         ptr_type
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::getArray
     /// Get or create an array type
     pub fn get_array(&mut self, array_of: Arc<Datatype>, num_elements: usize) -> Arc<Datatype> {
         let name = format!("{}[{}]", array_of.get_name(), num_elements);
@@ -160,6 +167,7 @@ impl TypeFactory {
         array_type
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::createStruct
     /// Create a new structure type
     pub fn create_struct(&mut self, name: &str) -> Arc<Datatype> {
         // Note: Ghidra allows multiple structs with same name in different scopes,
@@ -172,6 +180,7 @@ impl TypeFactory {
         st_type
     }
 
+    // Ghidra: type.cc:3479 TypeFactory::setFields
     /// Set fields for an existing structure and update its size
     pub fn set_fields(&mut self, name: &str, fields: Vec<TypeField>) -> Option<Arc<Datatype>> {
         if let Some(dt) = self.types.get_mut(name) {
@@ -192,11 +201,13 @@ impl TypeFactory {
         None
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::numTypes
     /// Get the number of types currently managed
     pub fn num_types(&self) -> usize {
         self.types.len()
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::clearNonCore
     /// Clear all non-core types
     pub fn clear_non_core(&mut self) {
         self.types = self.core_types.clone();
@@ -210,6 +221,7 @@ impl TypeFactory {
     // the C++ `findAdd`, keyed on the type name in our flat map.
     // ---------------------------------------------------------------
 
+    // Ghidra: type.cc:3575 TypeFactory::getTypeVoid
     /// There should be exactly one "void" Datatype object.
     /// Faithful to `TypeFactory::getTypeVoid` (type.cc:3575-3588).
     /// Rugra creates the singleton void core-type in `init_core_types`, so
@@ -220,6 +232,7 @@ impl TypeFactory {
             .expect("void core type must exist")
     }
 
+    // Ghidra: type.cc:3593 TypeFactory::getTypeChar
     /// Create a 1-byte character data-type (UTF8). Faithful to
     /// `TypeFactory::getTypeChar(const string &n)` (type.cc:3593-3599), which
     /// builds a `TypeChar(n)` — a `TypeBase(1, TYPE_INT, n)` with the
@@ -240,6 +253,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3606 TypeFactory::getTypeUnicode
     /// Create a multi-byte unicode character data-type (UTF16/UTF32). Faithful
     /// to `TypeFactory::getTypeUnicode` (type.cc:3606-3612), which builds a
     /// `TypeUnicode(nm, sz, m)` — a base type with the `utf16`/`utf32` flag
@@ -261,6 +275,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3940 TypeFactory::getTypeUnion
     /// Create an incomplete union data-type with the given name. Faithful to
     /// `TypeFactory::getTypeUnion` (type.cc:3940-3948). Ghidra's
     /// `TypeUnion()` constructor (type.hh:551) sets `type_incomplete |
@@ -279,6 +294,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::setUnionFields
     /// Set the fields of an existing union, recomputing its size as the max
     /// field size (union members overlap at offset 0). Mirrors the union
     /// behaviour of `TypeUnion::setFields` used by `TypeFactory::setFields`.
@@ -302,6 +318,7 @@ impl TypeFactory {
         None
     }
 
+    // Ghidra: type.cc:3967 TypeFactory::getTypeEnum
     /// Create an enumeration data-type with no named values yet. Faithful to
     /// `TypeFactory::getTypeEnum` (type.cc:3967-3973). Ghidra builds it from
     /// `enumsize`/`enumtype` and sets the `enumtype` flag (type.hh:490-494);
@@ -320,6 +337,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3532 TypeFactory::setEnumValues
     /// Set the value→name map on an existing enumeration. Faithful to
     /// `TypeFactory::setEnumValues` (type.cc:3532-3538), which calls
     /// `te->setNameMap(nmap)` (re-hashing the type into the tree around it).
@@ -338,6 +356,7 @@ impl TypeFactory {
         None
     }
 
+    // Ghidra: type.cc:3692 TypeFactory::getTypeCode
     /// Retrieve or create the core "code" Datatype object with no prototype
     /// attached. Faithful to `TypeFactory::getTypeCode()` (type.cc:3692-3701),
     /// which builds a generic (complete) `TypeCode` and adds it. Rugra
@@ -353,6 +372,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:4016 TypeFactory::getTypePointerRel
     /// Find/create a relative pointer that points at a known byte offset
     /// within a containing data-type. Faithful to
     /// `TypeFactory::getTypePointerRel(TypePointer*, Datatype*, int4)`
@@ -384,6 +404,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3818 TypeFactory::getTypedef
     /// Create a typedef of `ct` under a new `name`. Faithful to
     /// `TypeFactory::getTypedef` (type.cc:3818-3840): clone the base type,
     /// give it a new name/id, clear `coretype`, and record the typedef target.
@@ -441,12 +462,14 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::getTypedefTarget
     /// Look up the typedef target (the stripped form) for a typedef name.
     /// Returns the aliased data-type, or `None` if `name` is not a typedef.
     pub fn get_typedef_target(&self, name: &str) -> Option<&Arc<Datatype>> {
         self.typedefs.get(name)
     }
 
+    // Ghidra: type.cc:4071 TypeFactory::resizePointer
     /// Build a new pointer to `ptr`'s pointee with a different size,
     /// preserving the wordsize. Faithful to
     /// `TypeFactory::resizePointer` (type.cc:4071-4079). Ghidra strips the
@@ -482,6 +505,7 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3326 TypeFactory::findByIdLocal
     /// Find a type by (name, id) within this factory only (no parent scope
     /// search). Faithful to `TypeFactory::findByIdLocal` (type.cc:3326-3344).
     /// A non-zero `id` requires an exact id match; an id of 0 matches by name
@@ -499,6 +523,7 @@ impl TypeFactory {
         }
     }
 
+    // Ghidra: type.cc:3354 TypeFactory::findById
     /// Find a type by (name, id, size). Faithful to
     /// `TypeFactory::findById` (type.cc:3354-3361). For variable-length base
     /// types a non-zero `sz` folds the size into the id via
@@ -517,6 +542,7 @@ impl TypeFactory {
             .cloned()
     }
 
+    // Ghidra: type.cc:4140 TypeFactory::concretize
     /// Concretize a possibly-abstract data-type into a representable one.
     /// Faithful to `TypeFactory::concretize` (type.cc:4140-4150): a TYPE_CODE
     /// of size 1 is replaced with a base TYPE_UNKNOWN of size 1; anything
@@ -535,6 +561,7 @@ impl TypeFactory {
         ct
     }
 
+    // Ghidra: type.cc:3106 TypeFactory::deconcretize
     /// Inverse of `concretize`. NOTE: Ghidra has **no** `TypeFactory::deconcretize`
     /// (verified absent across the whole `cpp/` tree). The decompiler only ever
     /// "concretizes" in one direction (varmap.cc:622). Rugra provides this as
@@ -559,6 +586,7 @@ impl TypeFactory {
     }
 }
 
+// Ghidra: type.cc:3106 TypeFactory::hashSize
 /// Reversibly hash a size into a data-type id. Faithful to
 /// `Datatype::hashSize` (type.hh:206). This is the inverse-stable
 /// `id*size + size` folding Ghidra uses for variable-length base ids.
@@ -566,6 +594,7 @@ pub fn hash_size(id: u64, sz: usize) -> u64 {
     (id << 8) | (sz as u64 & 0xff)
 }
 
+// Ghidra: type.cc:3106 TypeFactory::charNameForSize
 /// Produce the canonical name for a char type of `size` bytes. Mirrors
 /// Ghidra's `charcache` (1→"char", 2→"wchar2", 4→"wchar4").
 fn char_name_for_size(size: usize) -> String {
@@ -575,6 +604,7 @@ fn char_name_for_size(size: usize) -> String {
     }
 }
 
+// Ghidra: type.cc:3106 TypeFactory::unicodeNameForSize
 /// Produce the canonical name for a unicode char type of `size` bytes.
 fn unicode_name_for_size(size: usize) -> String {
     match size {

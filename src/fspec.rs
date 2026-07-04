@@ -38,17 +38,21 @@ pub struct EffectRecord {
 }
 
 impl EffectRecord {
+    // Ghidra: fspec.cc:2212 EffectRecord::new
     /// Create a new effect record. Faithful to `EffectRecord(const VarnodeData&, uint4)`.
     pub fn new(space: AddressSpace, offset: u64, size: i32, effect_type: EffectType) -> Self {
         Self { space, offset, size, effect_type }
     }
 
+    // Ghidra: fspec.cc:2212 EffectRecord::getType
     /// Get the type of effect. Faithful to `getType`.
     pub fn get_type(&self) -> EffectType { self.effect_type }
 
+    // Ghidra: fspec.cc:2212 EffectRecord::getOffset
     /// Get the starting address offset. Faithful to `getAddress`.
     pub fn get_offset(&self) -> u64 { self.offset }
 
+    // Ghidra: fspec.cc:2212 EffectRecord::getSize
     /// Get the size of the affected range. Faithful to `getSize`.
     pub fn get_size(&self) -> i32 { self.size }
 }
@@ -78,6 +82,7 @@ pub struct ProtoParameter {
 }
 
 impl ProtoParameter {
+    // Ghidra: fspec.hh:1100 ProtoParameter::new
     /// Create a new function parameter
     pub fn new(name: String, data_type: Arc<Datatype>, address: Address) -> Self {
         Self {
@@ -88,11 +93,13 @@ impl ProtoParameter {
         }
     }
 
+    // Ghidra: fspec.hh:1100 ProtoParameter::isThisPointer
     /// Returns true if this parameter is a "this" pointer
     pub fn is_this_pointer(&self) -> bool {
         (self.flags & protoparam_flags::THIS_POINTER) != 0
     }
 
+    // Ghidra: fspec.hh:1100 ProtoParameter::isTypeLocked
     /// Returns true if the type is locked (user-defined)
     pub fn is_type_locked(&self) -> bool {
         (self.flags & protoparam_flags::TYPE_LOCKED) != 0
@@ -134,6 +141,7 @@ pub struct FuncProto {
 }
 
 impl FuncProto {
+    // Ghidra: fspec.cc:3778 FuncProto::new
     /// Create a new function prototype
     pub fn new(name: String, return_type: Arc<Datatype>) -> Self {
         Self {
@@ -148,39 +156,46 @@ impl FuncProto {
         }
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::addParameter
     /// Add a parameter to the prototype
     pub fn add_parameter(&mut self, param: ProtoParameter) {
         self.parameters.push(param);
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::numParams
     /// Get the number of parameters
     pub fn num_params(&self) -> usize {
         self.parameters.len()
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::getParam
     /// Get a parameter by index
     pub fn get_param(&self, index: usize) -> Option<&ProtoParameter> {
         self.parameters.get(index)
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::effectIter
     /// Iterate effect records. Faithful to `FuncProto::effectBegin/effectEnd`
     /// (fspec.hh). Returns a slice of all EffectRecords for this prototype.
     pub fn effect_iter(&self) -> &[EffectRecord] {
         &self.effects
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::addEffect
     /// Add an effect record. Used during prototype analysis to record
     /// how registers/memory are affected by this function's calls.
     pub fn add_effect(&mut self, effect: EffectRecord) {
         self.effects.push(effect);
     }
 
+    // Ghidra: fspec.cc:3906 FuncProto::isInputLocked
     /// Check if input parameters are locked (type-locked).
     /// Faithful to FuncProto::isInputLocked (fspec.cc:3906).
     pub fn is_input_locked(&self) -> bool {
         self.parameters.iter().all(|p| p.is_type_locked())
     }
 
+    // Ghidra: fspec.cc:3921 FuncProto::setInputLock
     /// Set input lock state. When locked, parameters won't be
     /// overridden by active recovery.
     /// Faithful to FuncProto::setInputLock (fspec.cc:3921).
@@ -191,6 +206,7 @@ impl FuncProto {
         }
     }
 
+    // Ghidra: fspec.cc:3942 FuncProto::setOutputLock
     /// Set output lock state. When locked, the return value's presence and
     /// data-type will not be overridden by active recovery.
     /// Faithful to FuncProto::setOutputLock (fspec.cc:3942-3948).
@@ -198,6 +214,7 @@ impl FuncProto {
         self.output_type_locked = val;
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::isOutputLocked
     /// Is the output (return) data-type locked? Faithful to
     /// `FuncProto::isOutputLocked`. Used by `funcLinkOutput` to decide
     /// whether to build an output varnode immediately (locked) or defer to
@@ -206,6 +223,7 @@ impl FuncProto {
         self.output_type_locked
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::getReturnBytesConsumed
     /// Get the number of bytes of the return value consumed by callers.
     /// Faithful to `FuncProto::getReturnBytesConsumed` (fspec.hh:1429).
     /// A value of 0 means all bytes are presumed consumed.
@@ -213,6 +231,7 @@ impl FuncProto {
         self.return_bytes_consumed
     }
 
+    // Ghidra: fspec.cc:3954 FuncProto::setReturnBytesConsumed
     /// Set the hint for how many bytes of the return value are consumed.
     /// Faithful to `FuncProto::setReturnBytesConsumed` (fspec.cc:3954-3965).
     /// The smallest hint wins (the value can only shrink). Returns true if
@@ -228,6 +247,7 @@ impl FuncProto {
         false
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::copyFrom
     /// Copy from another FuncProto.
     /// Faithful to FuncProto::copy (fspec.cc:3789).
     pub fn copy_from(&mut self, other: &FuncProto) {
@@ -240,21 +260,26 @@ impl FuncProto {
         self.return_bytes_consumed = other.return_bytes_consumed;
     }
 
+    // Ghidra: fspec.cc:3994 FuncProto::clearUnlockedInput
     /// Clear unlocked input parameters.
     /// Faithful to FuncProto::clearUnlockedInput (fspec.cc:3994).
     pub fn clear_unlocked_input(&mut self) {
         self.parameters.retain(|p| p.is_type_locked());
     }
 
+    // Ghidra: fspec.cc:3778 FuncProto::isVarargs
     /// Check if this proto is variable-argument (...).
     pub fn is_varargs(&self) -> bool { self.is_dotdotdot }
 
+    // Ghidra: fspec.cc:3778 FuncProto::setDotdotdot
     /// Set variable-argument flag.
     pub fn set_dotdotdot(&mut self, val: bool) { self.is_dotdotdot = val; }
 
+    // Ghidra: fspec.cc:3778 FuncProto::getModelName
     /// Get the calling convention model name.
     pub fn get_model_name(&self) -> &str { &self.calling_convention }
 
+    // Ghidra: fspec.cc:3778 FuncProto::setModelName
     /// Set the calling convention model name.
     pub fn set_model_name(&mut self, name: &str) { self.calling_convention = name.to_string(); }
 }
@@ -301,6 +326,7 @@ pub struct FuncCallSpecs {
 pub const OFFSET_UNKNOWN: i64 = i64::MIN;
 
 impl FuncCallSpecs {
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::new
     /// Create a new call specification
     pub fn new(op_addr: Address, prototype: FuncProto) -> Self {
         Self {
@@ -316,6 +342,7 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::getSpacebaseOffset
     /// Get the stack-pointer relative offset at the point of this call site.
     /// Faithful to `FuncCallSpecs::getSpacebaseOffset` (fspec.hh:1689).
     /// Returns OFFSET_UNKNOWN if not resolved.
@@ -323,17 +350,20 @@ impl FuncCallSpecs {
         self.stackoffset
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::setSpacebaseOffset
     /// Set the stack-pointer relative offset. Used during call analysis
     /// to record the RSP value at the call site.
     pub fn set_spacebase_offset(&mut self, offset: i64) {
         self.stackoffset = offset;
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::hasSpacebaseOffset
     /// Is the spacebase offset known (not OFFSET_UNKNOWN)?
     pub fn has_spacebase_offset(&self) -> bool {
         self.stackoffset != OFFSET_UNKNOWN
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputLocked
     /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to
     /// `FuncCallSpecs::isInputLocked` — true if all params are type-locked.
     pub fn is_input_locked(&self) -> bool {
@@ -341,6 +371,7 @@ impl FuncCallSpecs {
             && self.prototype.parameters.iter().all(|p| p.is_type_locked())
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::isOutputLocked
     /// Is the output (return) locked? Faithful to `FuncCallSpecs::isOutputLocked`
     /// (delegates to FuncProto::isOutputLocked). A locked output means the
     /// return data-type (possibly void) is fixed; `funcLinkOutput` builds the
@@ -349,11 +380,13 @@ impl FuncCallSpecs {
         self.prototype.is_output_locked()
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::isDotdotdot
     /// Is this a varargs (...) prototype? Faithful to `FuncCallSpecs::isDotdotdot`.
     pub fn is_dotdotdot(&self) -> bool {
         self.prototype.is_dotdotdot
     }
 
+    // Ghidra: fspec.cc:5331 FuncCallSpecs::initActiveInput
     /// Initialize the active-input ParamActive container if not already present.
     /// Faithful to `FuncCallSpecs::initActiveInput`. Recovers sub-call prototypes.
     pub fn init_active_input(&mut self) {
@@ -362,17 +395,20 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::hasModel
     /// Does this call site have a calling-convention model? Faithful to
     /// `FuncCallSpecs::hasModel`.
     pub fn has_model(&self) -> bool {
         self.proto_model.is_some()
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::setModel
     /// Set the calling-convention model. Faithful to `FuncCallSpecs::setModel`.
     pub fn set_model(&mut self, model: crate::type_system::protomodel::ProtoModel) {
         self.proto_model = Some(model);
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::resolveModel
     /// Resolve the calling-convention model from the active trials. Faithful
     /// to `FuncProto::resolveModel` (fspec.cc:3767-3776). For a non-merged
     /// model (which Rugra uses), this is a no-op — resolution is only needed
@@ -384,6 +420,7 @@ impl FuncCallSpecs {
         // picks between alternatives — Rugra doesn't support that yet.
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::deriveInputMap
     /// Derive the input prototype from active trials using the model's
     /// fillinMap. Faithful to `ProtoModel::deriveInputMap` (fspec.hh:791-792).
     pub fn derive_input_map(&mut self) {
@@ -392,6 +429,7 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::deriveOutputMap
     /// Derive the output prototype from active trials. Faithful to
     /// `ProtoModel::deriveOutputMap` (fspec.hh:798-799).
     pub fn derive_output_map(&mut self) {
@@ -400,6 +438,7 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:5685 FuncCallSpecs::buildInputFromTrials
     /// Build the final input parameter list from the resolved trials. Faithful
     /// to `FuncCallSpecs::buildInputFromTrials` (fspec.cc:5685-5741).
     ///
@@ -427,30 +466,35 @@ impl FuncCallSpecs {
         result
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputActive
     /// Is the input currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isInputActive`.
     pub fn is_input_active(&self) -> bool {
         self.active_input.is_some()
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::isOutputActive
     /// Is the output currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isOutputActive`.
     pub fn is_output_active(&self) -> bool {
         self.active_output.is_some()
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::clearActiveInput
     /// Clear the active-input container (finalize recovery). Faithful to
     /// `FuncCallSpecs::clearActiveInput`.
     pub fn clear_active_input(&mut self) {
         self.active_input = None;
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::clearActiveOutput
     /// Clear the active-output container. Faithful to
     /// `FuncCallSpecs::clearActiveOutput`.
     pub fn clear_active_output(&mut self) {
         self.active_output = None;
     }
 
+    // Ghidra: fspec.cc:5870 FuncCallSpecs::getInputBytesConsumed
     /// Get the estimated number of bytes within the given parameter that are
     /// consumed. Faithful to `FuncCallSpecs::getInputBytesConsumed`
     /// (fspec.cc:5870-5882). A non-zero value means that many LSBs of the
@@ -463,6 +507,7 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:5887 FuncCallSpecs::setInputBytesConsumed
     /// Set the estimated number of bytes within the given parameter that are
     /// consumed. Faithful to `FuncCallSpecs::setInputBytesConsumed`
     /// (fspec.cc:5887-5906). Provides a hint to the dead-code consume
@@ -481,6 +526,7 @@ impl FuncCallSpecs {
         false
     }
 
+    // Ghidra: fspec.cc:5585 FuncCallSpecs::checkInputTrialUse
     /// Check if trial slots have active data-flow usage. Faithful to
     /// `FuncCallSpecs::checkInputTrialUse` (fspec.cc:5585-5653).
     ///
@@ -524,6 +570,7 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::initActiveOutput
     /// Initialize the active-output ParamActive container if not already present.
     /// Faithful to `FuncCallSpecs::initActiveOutput`.
     pub fn init_active_output(&mut self) {
@@ -532,11 +579,13 @@ impl FuncCallSpecs {
         }
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::getActiveInput
     /// Get the active-input trials (if initialized).
     pub fn get_active_input(&self) -> Option<&ParamActive> {
         self.active_input.as_ref()
     }
 
+    // Ghidra: fspec.cc:4924 FuncCallSpecs::getActiveOutput
     /// Get the active-output trials (if initialized).
     pub fn get_active_output(&self) -> Option<&ParamActive> {
         self.active_output.as_ref()
@@ -579,47 +628,80 @@ pub struct ParamTrial {
 }
 
 impl ParamTrial {
+    // Ghidra: fspec.hh:210 ParamTrial::new
     /// Construct from (address, size, slot). Faithful to the C++ constructor.
     pub fn new(addr: Address, sz: i32, sl: i32) -> Self {
         Self { flags: 0, addr, size: sz, slot: sl, offset: -1, fixed_position: -1 }
     }
+    // Ghidra: fspec.hh:210 ParamTrial::getAddress
     pub fn get_address(&self) -> Address { self.addr }
+    // Ghidra: fspec.hh:210 ParamTrial::getSize
     pub fn get_size(&self) -> i32 { self.size }
+    // Ghidra: fspec.hh:210 ParamTrial::getSlot
     pub fn get_slot(&self) -> i32 { self.slot }
+    // Ghidra: fspec.hh:210 ParamTrial::setSlot
     pub fn set_slot(&mut self, val: i32) { self.slot = val; }
+    // Ghidra: fspec.hh:210 ParamTrial::getOffset
     pub fn get_offset(&self) -> i32 { self.offset }
+    // Ghidra: fspec.hh:210 ParamTrial::setEntry
     pub fn set_entry(&mut self, off: i32) { self.offset = off; }
+    // Ghidra: fspec.hh:210 ParamTrial::setFixedPosition
     pub fn set_fixed_position(&mut self, pos: i32) { self.fixed_position = pos; }
+    // Ghidra: fspec.hh:210 ParamTrial::markUsed
     // --- flag accessors (fspec.hh:243-264) ---
     pub fn mark_used(&mut self) { self.flags |= param_trial_flags::USED; }
+    // Ghidra: fspec.hh:210 ParamTrial::markActive
     pub fn mark_active(&mut self) { self.flags |= param_trial_flags::ACTIVE | param_trial_flags::CHECKED; }
+    // Ghidra: fspec.hh:210 ParamTrial::markInactive
     pub fn mark_inactive(&mut self) { self.flags &= !param_trial_flags::ACTIVE; self.flags |= param_trial_flags::CHECKED; }
+    // Ghidra: fspec.hh:210 ParamTrial::markNoUse
     pub fn mark_no_use(&mut self) { self.flags &= !(param_trial_flags::ACTIVE | param_trial_flags::USED); self.flags |= param_trial_flags::CHECKED | param_trial_flags::DEFNOUSE; }
+    // Ghidra: fspec.hh:210 ParamTrial::markUnref
     pub fn mark_unref(&mut self) { self.flags |= param_trial_flags::UNREF | param_trial_flags::CHECKED; self.slot = -1; }
+    // Ghidra: fspec.hh:210 ParamTrial::markKilledByCall
     pub fn mark_killed_by_call(&mut self) { self.flags |= param_trial_flags::KILLEDBYCALL; }
+    // Ghidra: fspec.hh:210 ParamTrial::isChecked
     pub fn is_checked(&self) -> bool { self.flags & param_trial_flags::CHECKED != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::isActive
     pub fn is_active(&self) -> bool { self.flags & param_trial_flags::ACTIVE != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::isDefinitelyNotUsed
     pub fn is_definitely_not_used(&self) -> bool { self.flags & param_trial_flags::DEFNOUSE != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::isUsed
     pub fn is_used(&self) -> bool { self.flags & param_trial_flags::USED != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::isUnref
     pub fn is_unref(&self) -> bool { self.flags & param_trial_flags::UNREF != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::isKilledByCall
     pub fn is_killed_by_call(&self) -> bool { self.flags & param_trial_flags::KILLEDBYCALL != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setRemFormed
     pub fn set_rem_formed(&mut self) { self.flags |= param_trial_flags::REM_FORMED; }
+    // Ghidra: fspec.hh:210 ParamTrial::isRemFormed
     pub fn is_rem_formed(&self) -> bool { self.flags & param_trial_flags::REM_FORMED != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setIndCreateFormed
     pub fn set_ind_create_formed(&mut self) { self.flags |= param_trial_flags::INDCREATE_FORMED; }
+    // Ghidra: fspec.hh:210 ParamTrial::isIndCreateFormed
     pub fn is_ind_create_formed(&self) -> bool { self.flags & param_trial_flags::INDCREATE_FORMED != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setCondexeEffect
     pub fn set_condexe_effect(&mut self) { self.flags |= param_trial_flags::CONDEXE_EFFECT; }
+    // Ghidra: fspec.hh:210 ParamTrial::hasCondexeEffect
     pub fn has_condexe_effect(&self) -> bool { self.flags & param_trial_flags::CONDEXE_EFFECT != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setAncestorRealistic
     pub fn set_ancestor_realistic(&mut self) { self.flags |= param_trial_flags::ANCESTOR_REALISTIC; }
+    // Ghidra: fspec.hh:210 ParamTrial::hasAncestorRealistic
     pub fn has_ancestor_realistic(&self) -> bool { self.flags & param_trial_flags::ANCESTOR_REALISTIC != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setAncestorSolid
     pub fn set_ancestor_solid(&mut self) { self.flags |= param_trial_flags::ANCESTOR_SOLID; }
+    // Ghidra: fspec.hh:210 ParamTrial::hasAncestorSolid
     pub fn has_ancestor_solid(&self) -> bool { self.flags & param_trial_flags::ANCESTOR_SOLID != 0 }
+    // Ghidra: fspec.hh:210 ParamTrial::setAddress
     pub fn set_address(&mut self, ad: Address, sz: i32) { self.addr = ad; self.size = sz; }
 
+    // Ghidra: fspec.cc:1845 ParamTrial::splitHi
     /// Create a trial for the first `sz` bytes (high part). Faithful to
     /// `ParamTrial::splitHi` (fspec.cc:1845).
     pub fn split_hi(&self, sz: i32) -> ParamTrial {
         ParamTrial::new(self.addr, sz, self.slot)
     }
+    // Ghidra: fspec.cc:1856 ParamTrial::splitLo
     /// Create a trial for the last part after `sz` bytes (low part). Faithful
     /// to `ParamTrial::splitLo` (fspec.cc:1856).
     pub fn split_lo(&self, sz: i32) -> ParamTrial {
@@ -642,6 +724,7 @@ pub struct ParamActive {
 }
 
 impl ParamActive {
+    // Ghidra: fspec.cc:1936 ParamActive::new
     /// Construct empty. Faithful to `ParamActive(bool)` (fspec.cc:1936).
     pub fn new(recoversub: bool) -> Self {
         Self {
@@ -656,6 +739,7 @@ impl ParamActive {
             join_reverse: false,
         }
     }
+    // Ghidra: fspec.cc:1949 ParamActive::clear
     /// Reset to empty. Faithful to `ParamActive::clear` (fspec.cc:1949).
     pub fn clear(&mut self) {
         self.trial.clear();
@@ -665,28 +749,46 @@ impl ParamActive {
         self.isfullychecked = false;
         self.needsfinalcheck = false;
     }
+    // Ghidra: fspec.cc:1936 ParamActive::getNumTrials
     pub fn get_num_trials(&self) -> usize { self.trial.len() }
+    // Ghidra: fspec.cc:1936 ParamActive::getTrial
     pub fn get_trial(&self, i: usize) -> &ParamTrial { &self.trial[i] }
+    // Ghidra: fspec.cc:1936 ParamActive::getTrialMut
     pub fn get_trial_mut(&mut self, i: usize) -> &mut ParamTrial { &mut self.trial[i] }
+    // Ghidra: fspec.cc:1936 ParamActive::getSlotBase
     pub fn get_slot_base(&self) -> i32 { self.slotbase }
+    // Ghidra: fspec.cc:1936 ParamActive::setSlotBase
     pub fn set_slot_base(&mut self, val: i32) { self.slotbase = val; }
+    // Ghidra: fspec.cc:1936 ParamActive::getNumPasses
     pub fn get_num_passes(&self) -> i32 { self.numpasses }
+    // Ghidra: fspec.cc:1936 ParamActive::getMaxPass
     pub fn get_max_pass(&self) -> i32 { self.maxpass }
+    // Ghidra: fspec.cc:1936 ParamActive::setMaxPass
     pub fn set_max_pass(&mut self, val: i32) { self.maxpass = val; }
+    // Ghidra: fspec.cc:1936 ParamActive::isRecoverSubcall
     pub fn is_recover_subcall(&self) -> bool { self.recoversubcall }
+    // Ghidra: fspec.cc:1936 ParamActive::isJoinReverse
     pub fn is_join_reverse(&self) -> bool { self.join_reverse }
+    // Ghidra: fspec.cc:1936 ParamActive::setJoinReverse
     pub fn set_join_reverse(&mut self, val: bool) { self.join_reverse = val; }
+    // Ghidra: fspec.cc:1936 ParamActive::needsFinalCheck
     pub fn needs_final_check(&self) -> bool { self.needsfinalcheck }
+    // Ghidra: fspec.cc:1936 ParamActive::setNeedsFinalCheck
     pub fn set_needs_final_check(&mut self, val: bool) { self.needsfinalcheck = val; }
+    // Ghidra: fspec.cc:1936 ParamActive::markNeedsFinalCheck
     pub fn mark_needs_final_check(&mut self) { self.needsfinalcheck = true; }
 
+    // Ghidra: fspec.cc:1936 ParamActive::finishPass
     /// Increment pass counter. Faithful to `ParamActive::finishPass`.
     pub fn finish_pass(&mut self) { self.numpasses += 1; }
+    // Ghidra: fspec.cc:1936 ParamActive::isFullyChecked
     /// Have all passes been exhausted? Faithful to `isFullyChecked`.
     pub fn is_fully_checked(&self) -> bool { self.isfullychecked }
+    // Ghidra: fspec.cc:1936 ParamActive::markFullyChecked
     /// Mark all trials as fully checked. Faithful to `markFullyChecked`.
     pub fn mark_fully_checked(&mut self) { self.isfullychecked = true; }
 
+    // Ghidra: fspec.cc:1963 ParamActive::registerTrial
     /// Add a new trial at (addr, sz). Faithful to `registerTrial`
     /// (fspec.cc:1963). Slot is assigned as the current trial count.
     pub fn register_trial(&mut self, addr: Address, sz: i32) {
@@ -694,6 +796,7 @@ impl ParamActive {
         self.trial.push(ParamTrial::new(addr, sz, slot));
     }
 
+    // Ghidra: fspec.cc:1982 ParamActive::whichTrial
     /// Find the trial index matching (addr, sz), or -1. Faithful to
     /// `whichTrial` (fspec.cc:1982).
     pub fn which_trial(&self, addr: Address, sz: i32) -> i32 {
@@ -705,6 +808,7 @@ impl ParamActive {
         -1
     }
 
+    // Ghidra: fspec.cc:2033 ParamActive::splitTrial
     /// Split trial `i` at byte offset `sz`. Faithful to `splitTrial`
     /// (fspec.cc:2033): replaces trial i with its high part and inserts the
     /// low part at i+1.
@@ -715,6 +819,7 @@ impl ParamActive {
         self.trial.insert(i + 1, lo);
     }
 
+    // Ghidra: fspec.cc:2097 ParamActive::getNumUsed
     /// Count trials flagged USED. Faithful to `getNumUsed` (fspec.cc:2097).
     pub fn get_num_used(&self) -> usize {
         self.trial.iter().filter(|t| t.is_used()).count()

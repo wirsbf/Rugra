@@ -32,6 +32,7 @@ pub struct PreferSplitRecord {
 }
 
 impl PreferSplitRecord {
+    // Ghidra: prefersplit.hh:27 PreferSplitRecord::new
     /// Construct given storage details and split offset.
     pub fn new(offset: u64, space: AddressSpace, size: u32, splitoffset: i32) -> Self {
         Self {
@@ -42,6 +43,7 @@ impl PreferSplitRecord {
         }
     }
 
+    // Ghidra: prefersplit.hh:27 PreferSplitRecord::lessThan
     /// Compare two records for sorting. Faithful to `operator<`
     /// (prefersplit.cc:23-31). Orders by space index, then size (descending),
     /// then offset.
@@ -58,6 +60,7 @@ impl PreferSplitRecord {
     }
 }
 
+// Ghidra: prefersplit.hh:27 PreferSplitRecord::initialize
 /// Sort a vector of PreferSplitRecords. Faithful to `PreferSplitManager::initialize`
 /// (prefersplit.cc:552-556).
 pub fn initialize(records: &mut Vec<PreferSplitRecord>) {
@@ -90,6 +93,7 @@ pub struct SplitInstance {
 }
 
 impl std::fmt::Debug for SplitInstance {
+    // Ghidra: prefersplit.hh:34 SplitInstance::fmt
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SplitInstance")
             .field("splitoffset", &self.splitoffset)
@@ -101,6 +105,7 @@ impl std::fmt::Debug for SplitInstance {
 }
 
 impl SplitInstance {
+    // Ghidra: prefersplit.hh:34 SplitInstance::new
     /// Construct given the varnode reference and split offset. Faithful to the
     /// constructor (prefersplit.hh:41).
     pub fn new(vn: Arc<RwLock<Varnode>>, off: i32) -> Self {
@@ -132,12 +137,14 @@ pub struct PreferSplitManager {
 unsafe impl Send for PreferSplitManager {}
 
 impl Default for PreferSplitManager {
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::default
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl PreferSplitManager {
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::new
     /// Construct an empty manager.
     pub fn new() -> Self {
         Self {
@@ -147,6 +154,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:529 PreferSplitManager::init
     /// Bind this manager to a `Funcdata` and a records list. Faithful to
     /// `PreferSplitManager::init` (prefersplit.cc:529-534). The records are
     /// sorted via `initialize`.
@@ -157,6 +165,7 @@ impl PreferSplitManager {
         self.records = rec;
     }
 
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::setRecords
     /// Set/replace the records list (sorted). Used when the manager is bound
     /// to a Funcdata only at split time.
     pub fn set_records(&mut self, records: Vec<PreferSplitRecord>) {
@@ -165,16 +174,19 @@ impl PreferSplitManager {
         self.records = records;
     }
 
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::numRecords
     /// Number of split records.
     pub fn num_records(&self) -> usize {
         self.records.len()
     }
 
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::records
     /// Get all records.
     pub fn records(&self) -> &[PreferSplitRecord] {
         &self.records
     }
 
+    // Ghidra: prefersplit.hh:33 PreferSplitManager::findRecordVn
     /// Find the split record that applies to a varnode. Faithful to
     /// `findRecord(Varnode*)` (prefersplit.cc:536-550). Returns None if no
     /// matching record.
@@ -183,6 +195,7 @@ impl PreferSplitManager {
         self.find_record(vn_rg.space(), vn_rg.get_size() as u32, vn_rg.get_offset())
     }
 
+    // Ghidra: prefersplit.cc:536 PreferSplitManager::findRecord
     /// Find the split record by storage details. Binary-searches the sorted
     /// records vector. Faithful to the `lower_bound` in `findRecord`.
     pub fn find_record(
@@ -221,6 +234,7 @@ impl PreferSplitManager {
 
     // ---- Private helpers (faithful port of prefersplit.cc) ----
 
+    // Ghidra: prefersplit.cc:33 PreferSplitManager::fillinInstance
     /// Define the varnode pieces of `inst`. Faithful to `fillinInstance`
     /// (prefersplit.cc:33-67). Computes hi/lo pieces based on endianness and,
     /// for constants, splits the constant value.
@@ -295,6 +309,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:69 PreferSplitManager::createCopyOps
     /// Create COPY ops based on input `ininst` and output `outinst` to replace
     /// `op`. Faithful to `createCopyOps` (prefersplit.cc:69-87). Pushes the two
     /// new COPY ops onto `tempsplits`.
@@ -338,6 +353,7 @@ impl PreferSplitManager {
         self.tempsplits.push(loop_);
     }
 
+    // Ghidra: prefersplit.cc:89 PreferSplitManager::testDefiningCopy
     /// Check that `inst` defined by `def` (a COPY) is really splittable.
     /// Faithful to `testDefiningCopy` (prefersplit.cc:89-105). Returns
     /// `Some(istemp)` on success, `None` on failure.
@@ -364,6 +380,7 @@ impl PreferSplitManager {
         Some(istemp)
     }
 
+    // Ghidra: prefersplit.cc:107 PreferSplitManager::splitDefiningCopy
     /// Do split of a prefered split varnode that is defined by a COPY.
     /// Faithful to `splitDefiningCopy` (prefersplit.cc:107-116).
     fn split_defining_copy(&mut self, inst: &mut SplitInstance, def: &PcodeOpRef, istemp: bool) {
@@ -378,6 +395,7 @@ impl PreferSplitManager {
         self.create_copy_ops(&ininst, inst, def, istemp);
     }
 
+    // Ghidra: prefersplit.cc:118 PreferSplitManager::testReadingCopy
     /// Check that `inst` read by `readop` (a COPY) is really splittable.
     /// Faithful to `testReadingCopy` (prefersplit.cc:118-131).
     fn test_reading_copy(&self, inst: &SplitInstance, readop: &PcodeOpRef) -> Option<bool> {
@@ -395,6 +413,7 @@ impl PreferSplitManager {
         Some(istemp)
     }
 
+    // Ghidra: prefersplit.cc:133 PreferSplitManager::splitReadingCopy
     /// Do split of varnode that is read by a COPY. Faithful to
     /// `splitReadingCopy` (prefersplit.cc:133-142).
     fn split_reading_copy(&mut self, inst: &mut SplitInstance, readop: &PcodeOpRef, istemp: bool) {
@@ -409,6 +428,7 @@ impl PreferSplitManager {
         self.create_copy_ops(inst, &outinst, readop, istemp);
     }
 
+    // Ghidra: prefersplit.cc:144 PreferSplitManager::testZext
     /// Check that `inst` defined by ZEXT is really splittable. Faithful to
     /// `testZext` (prefersplit.cc:144-158).
     fn test_zext(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
@@ -430,6 +450,7 @@ impl PreferSplitManager {
         invn_rg.get_size() as i32 == losize
     }
 
+    // Ghidra: prefersplit.cc:160 PreferSplitManager::splitZext
     /// Split an INT_ZEXT-defined varnode. Faithful to `splitZext`
     /// (prefersplit.cc:160-188). The low piece is the ZEXT input (or the
     /// constant split); the high piece is a constant 0 (or the high bits of
@@ -468,6 +489,7 @@ impl PreferSplitManager {
         self.create_copy_ops(&ininst, inst, op, false);
     }
 
+    // Ghidra: prefersplit.cc:190 PreferSplitManager::testPiece
     /// Check that `inst` defined by PIECE is really splittable. Faithful to
     /// `testPiece` (prefersplit.cc:190-200).
     fn test_piece(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
@@ -491,6 +513,7 @@ impl PreferSplitManager {
         true
     }
 
+    // Ghidra: prefersplit.cc:202 PreferSplitManager::splitPiece
     /// Split a PIECE-defined varnode. Faithful to `splitPiece`
     /// (prefersplit.cc:202-227). The PIECE's two inputs already are the hi/lo
     /// pieces; we create COPY ops to forward them to the split outputs.
@@ -545,6 +568,7 @@ impl PreferSplitManager {
         fd.op_set_input(&loop_, loin_use, 0);
     }
 
+    // Ghidra: prefersplit.cc:229 PreferSplitManager::testSubpiece
     /// Check that `inst` read by SUBPIECE is really splittable. Faithful to
     /// `testSubpiece` (prefersplit.cc:229-246).
     fn test_subpiece(&self, inst: &SplitInstance, op: &PcodeOpRef) -> bool {
@@ -572,6 +596,7 @@ impl PreferSplitManager {
         true
     }
 
+    // Ghidra: prefersplit.cc:248 PreferSplitManager::splitSubpiece
     /// Rewrite a SUBPIECE that extracts a logical piece into a COPY. Faithful
     /// to `splitSubpiece` (prefersplit.cc:248-263).
     fn split_subpiece(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
@@ -598,12 +623,14 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:265 PreferSplitManager::testLoad
     /// Test if a LOAD-defined split is possible. Faithful to `testLoad`
     /// (prefersplit.cc:265-269), which always returns true.
     fn test_load(&self, _inst: &SplitInstance, _op: &PcodeOpRef) -> bool {
         true
     }
 
+    // Ghidra: prefersplit.cc:271 PreferSplitManager::splitLoad
     /// Split a LOAD that defines the varnode into two LOADs. Faithful to
     /// `splitLoad` (prefersplit.cc:271-314).
     fn split_load(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
@@ -668,12 +695,14 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:316 PreferSplitManager::testStore
     /// Test if a STORE reading the split varnode is splittable. Faithful to
     /// `testStore` (prefersplit.cc:316-320), which always returns true.
     fn test_store(&self, _inst: &SplitInstance, _op: &PcodeOpRef) -> bool {
         true
     }
 
+    // Ghidra: prefersplit.cc:322 PreferSplitManager::splitStore
     /// Split a STORE into two STOREs, one for each piece. Faithful to
     /// `splitStore` (prefersplit.cc:322-365).
     fn split_store(&mut self, inst: &mut SplitInstance, op: &PcodeOpRef) {
@@ -736,6 +765,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:367 PreferSplitManager::splitVarnode
     /// Test if `inst` can be readily split, and if so, do the split. Faithful
     /// to `splitVarnode` (prefersplit.cc:367-428). Returns true if split.
     fn split_varnode(&mut self, inst: &mut SplitInstance) -> bool {
@@ -832,6 +862,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:430 PreferSplitManager::splitRecord
     /// Apply a single split record. Faithful to `splitRecord`
     /// (prefersplit.cc:430-449). Iterates over all varnodes at the record's
     /// storage location, splitting each one. Ghidra re-iterates after each
@@ -869,6 +900,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:451 PreferSplitManager::testTemporary
     /// Test whether a temporary (defined via PIECE/LOAD/ZEXT and read via
     /// SUBPIECE/STORE) can be split as a unit. Faithful to `testTemporary`
     /// (prefersplit.cc:451-491).
@@ -923,6 +955,7 @@ impl PreferSplitManager {
         true
     }
 
+    // Ghidra: prefersplit.cc:493 PreferSplitManager::splitTemporary
     /// Split a temporary varnode. Faithful to `splitTemporary`
     /// (prefersplit.cc:493-527). Splits the defining op, then each reader.
     fn split_temporary(&mut self, inst: &mut SplitInstance) {
@@ -959,6 +992,7 @@ impl PreferSplitManager {
         fd.op_destroy(&def);
     }
 
+    // Ghidra: prefersplit.cc:558 PreferSplitManager::split
     /// The main split entry point. Faithful to `split`
     /// (prefersplit.cc:558-563). Applies every split record in turn.
     pub fn split(&mut self, fd: &mut Funcdata) {
@@ -970,6 +1004,7 @@ impl PreferSplitManager {
         }
     }
 
+    // Ghidra: prefersplit.cc:565 PreferSplitManager::splitAdditional
     /// Split additional temporaries connected to the COPYs created by `split`.
     /// Faithful to `splitAdditional` (prefersplit.cc:565-629).
     pub fn split_additional(&mut self, fd: &mut Funcdata) {
@@ -1099,6 +1134,7 @@ impl PreferSplitManager {
     }
 }
 
+// Ghidra: prefersplit.hh:33 PreferSplitManager::recreateIfFree
 /// Helper that re-creates a pointer varnode if it is free, mirroring Ghidra's
 /// `if (ptrvn->isFree()) ptrvn = data->newVarnode(...)` in splitLoad/splitStore.
 /// Rugra's `VarnodeBank::create_with_space` produces a fresh varnode at the

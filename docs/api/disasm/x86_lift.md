@@ -11,3 +11,4 @@
 - Register 操作数：直接用寄存器 varnode 作为 BRANCHIND 目标。
 - Memory 操作数：先 LOAD 再 BRANCHIND。
 - 新增 `reg_offset` helper（复用 get_register 的映射表）。
+<!-- annotation-pass: 2026-07-04 -->
