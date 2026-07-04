@@ -1800,10 +1800,10 @@ impl PrintC {
     }
 
     // Ghidra: type.hh:273/424/457 Datatype::printNameBase (virtual dispatch via Datatype::print_name_base)
-    // Ghidra: varmap.cc:2486-2504 Funcdata::buildVariableName (local-var case: printNameBase + "Var")
+    // Ghidra: database.cc:2485-2509 Funcdata::buildVariableName (local-var case: printNameBase + "Var")
     /// Hungarian-notation variable-name prefix derived from `Datatype::print_name_base`
     /// (faithful to Ghidra's printNameBase virtual dispatch at type.hh:273/424/457,
-    /// consumed by buildVariableName at varmap.cc:2486-2504 which appends "Var").
+    /// consumed by buildVariableName at database.cc:2485-2509 which appends "Var").
     /// Returns e.g. "iVar" for int, "piVar" for int*, "pUVar" for pointer to a
     /// struct named "URLGlob". Falls back to size-based dispatch when no Datatype
     /// is available (Rugra-specific gap: Ghidra always has a Datatype object).
@@ -1814,7 +1814,7 @@ impl PrintC {
             None => match size {
                 // Size-based fallback when no type info (Rugra-specific).
                 // Matches the size dispatch Ghidra uses in buildLocalName
-                // (varmap.cc:2501-2504) when no Datatype is attached.
+                // (database.cc:2501-2504) when no Datatype is attached.
                 8 => base.push('l'),
                 4 => base.push('i'),
                 2 => base.push('s'),
