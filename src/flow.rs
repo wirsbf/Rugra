@@ -316,8 +316,8 @@ impl<'a> FlowInfo<'a> {
         if a < self.minaddr { self.minaddr = a; }
         if a > self.maxaddr { self.maxaddr = a; }
 
-        // Lift to P-code ops (flow.cc:454 translate->oneInstruction).
-        let raw_ops = self.lifter.lift(&inst);
+        // Lift to P-code ops via SLEIGH (flow.cc:454 translate->oneInstruction).
+        let raw_ops = crate::disasm::sleigh_lift::SleighLifter::lift_instruction(&code[..step], addr.as_u64());
         let num_ops_before = self.fd.obank.alivelist.len();
 
         // Inject into Funcdata (reuse inject_raw_ops_single logic).

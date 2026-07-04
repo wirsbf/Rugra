@@ -60,3 +60,5 @@ not yet wired into main.rs; existing linear scan still active).
 - 多阶段检测：如果新 BRANCHIND 出现，循环继续（flow.cc:814 checkMultistageJumptables）。
 - curl 无间接跳转，无回归。Phase 2 对 switch/间接跳转函数生效。
 <!-- annotation-pass: 2026-07-04 -->
+
+<!-- sleigh-lift-pipeline: 1783181897.3074532 -->
