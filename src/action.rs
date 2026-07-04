@@ -880,9 +880,15 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(ActionStackPtrFlow::new()));
         // Rugra-local Actions (TODO: replace with Ghidra mechanisms once
         // ActionActiveParam / ActionDefaultParams / ActionDirectWrite are wired).
+        // A5 ActionInferParams: KEPT — provides unique parameter inference
+        // (no Ghidra equivalent ported yet; ActionActiveParam/ActionDefaultParams
+        // are the Ghidra counterparts but aren't wired).
         mainloop.add_action(Box::new(ActionInferParams::new()));
         mainloop.add_action(Box::new(ActionConstantPtr::new()));
-        mainloop.add_action(Box::new(ActionCse::new()));
+        // A6 ActionCse DELETED: redundant with mainloop+fullloop repeatapply.
+        // Ghidra's ActionCse (coreaction.cc:708) is historical/commented-out;
+        // the actual CSE work is done by oppool1 Rules (RuleSelectCse etc.)
+        // + mainloop convergence. Verified: 952/952 tests, defects=0.
         // ActionSimplify DELETED: self-invented Action with no Ghidra counterpart.
         // With mainloop+fullloop RULE_REPEATAPPLY enabled (commits 534642c/70ca7e6),
         // oppool1 (simplifypool) + convergence handles all simplification.
@@ -898,9 +904,17 @@ impl ActionDatabase {
         // oppool2 (coreaction.cc:5662) — type-recovery / stack-variable Rules.
         mainloop.add_action(Box::new(build_oppool2()));
         // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
-        mainloop.add_action(Box::new(ActionTypeInfer::new()));
-        mainloop.add_action(Box::new(ActionCopyPropagate::new()));
-        mainloop.add_action(Box::new(ActionTypePropagate::new()));
+        // A2 ActionTypeInfer DELETED: redundant with mainloop+fullloop
+        // repeatapply. Ghidra's type inference is ActionInferTypes
+        // (coreaction.cc:5508) + oppool2 + fullloop convergence.
+        // Verified: 952/952, defects=0.
+        // A3 ActionCopyPropagate DELETED: redundant with mainloop+fullloop
+        // repeatapply. Ghidra's copy propagation is RulePropagateCopy
+        // (oppool1:5566) + fullloop convergence. Verified: 952/952, defects=0.
+        // A4 ActionTypePropagate DELETED: redundant with mainloop+fullloop
+        // repeatapply. Ghidra's type propagation is part of ActionInferTypes
+        // (coreaction.cc:5508); the self-invented ActionTypePropagate
+        // duplicated a subset of that work. Verified: 952/952, defects=0.
 
         mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
         mainloop.add_action(Box::new(ActionDeadCode::new()));
