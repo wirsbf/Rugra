@@ -853,18 +853,26 @@ fn boolean_match_evaluate(vn1: &Arc<RwLock<Varnode>>, vn2: &Arc<RwLock<Varnode>>
                 let in1_1 = op1.read().unwrap().get_in(1).cloned();
                 let in2_0 = op2.read().unwrap().get_in(0).cloned();
                 let in2_1 = op2.read().unwrap().get_in(1).cloned();
+                // Faithful port of expression.cc:154-164 (BooleanMatch::evaluate
+                // commutative re-pairing). Previously this block had dead code
+                // (`match (a,d,c,b) { _ => {} }`) that never tried the swap,
+                // so any switch with swapped AND/OR operand order was
+                // misclassified UNCORRELATED, defeating condexe folding.
                 let (pair1, pair2) = match (in1_0, in2_0, in1_1, in2_1) {
                     (Some(a), Some(b), Some(c), Some(d)) => {
                         let p1 = boolean_match_evaluate(&a, &b, depth - 1);
                         if p1 == UNCORRELATED {
-                            // try commutative pairing a vs d
-                            match (a.clone(), d.clone(), c.clone(), b.clone()) {
-                                _ => {}
+                            // Try the commutative pairing (op1[0] vs op2[1])
+                            let p1_swap = boolean_match_evaluate(&a, &d, depth - 1);
+                            if p1_swap == UNCORRELATED {
+                                return UNCORRELATED;
                             }
-                            return UNCORRELATED;
+                            let p2_swap = boolean_match_evaluate(&c, &b, depth - 1);
+                            (p1_swap, p2_swap)
+                        } else {
+                            let p2 = boolean_match_evaluate(&c, &d, depth - 1);
+                            (p1, p2)
                         }
-                        let p2 = boolean_match_evaluate(&c, &d, depth - 1);
-                        (p1, p2)
                     }
                     _ => return UNCORRELATED,
                 };

@@ -54,7 +54,7 @@ postb），并通过把读推入正确路径来保留 MULTIEQUAL 数据流。
 
 ### BooleanMatch / BooleanExpressionMatch（expression.cc:57-232）
 
-- `boolean_match_evaluate` — `BooleanMatch::evaluate`（SAME/COMPLEMENTARY/UNCORRELATED）
+- `boolean_match_evaluate` — `BooleanMatch::evaluate`（SAME/COMPLEMENTARY/UNCORRELATED）。**2026-07-05 修正**：expression.cc:154-164 的 commutative re-pairing 之前是死代码（`match (a,d,c,b) { _ => {} }` 从未真正递归），导致 swapped-operand AND/OR 被误判 UNCORRELATED，condexe 折叠失效。现按 Ghidra 行 154-164 完整移植：`pair1==uncorrelated` 时尝试 `(in1[0],in2[1])`，仍 uncorrelated 才返回；否则计算 `(in1[1],in2[0])` 作为 pair2。
 - `same_op_complement` — `sameOpComplement`（INT_LESS/INT_SLESS 常量互补）
 - `varnode_same` — `varnodeSame`
 - `boolean_match_verify_condition` — `BooleanExpressionMatch::verifyCondition`
