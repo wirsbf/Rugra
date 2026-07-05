@@ -865,3 +865,8 @@ PcodeOpRaw
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.3262112 -->
 <!-- activeparam-port: 1783158350.9670146 -->
+ 
+
+### 2026-07-05: op.cc 缺失方法批量补齐
+- `is_assignment`/`is_flow_break`/`is_instruction_start`(op.hh inline)。
+- `is_collapsible`(cc:115)、`set_num_inputs`/`remove_input`/`insert_input_slot`(cc:290/301/311)、`get_repeat_slot`(cc:93)、`print_debug`(cc:376)。

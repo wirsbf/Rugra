@@ -716,3 +716,13 @@ place_multiequal_direct 的 block 查找从 .expect 改为优雅 return。
 ### 2026-07-01（续 3）：visit_rename 迭代化（消除递归栈深度）
 visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状态）。work stack 有 100000 上限防循环。消除 dominator-tree 递归深度。但 mainloop repeatapply 仍栈溢出（即使 cap=1+迭代 Heritage），根因待进一步调查。
 <!-- annotation-pass: 2026-07-04 -->
+ 
+
+### 2026-07-05: HeritageInfo + dead-code 时序对齐 Ghidra cc:180/2793/2843
+- `HeritageInfo::new` 全字段对齐:delay/deadcodedelay 从 `AddressSpace::get_delay()` 读(Stack=1,其他=0);deadremoved=0(was -1);loadGuardSearch=false(was true,反义);hasCallPlaceholders=is_stack。
+- `AddressSpace::get_delay/get_deadcode_delay/is_heritaged` 新增(space.hh)。
+- `Heritage::build_info_list`(cc:2664)/`get_info`(hh:257)新增。
+- `num_heritage_passes`(cc:2793): `pass - delay` (was `pass`)。
+- `dead_removal_allowed`(cc:2843): `pass > deadcodedelay` (was const true)。
+- `seen_dead_code`(cc:2805): 设 deadremoved=1 (was no-op)。
+- `set/get_dead_code_delay`(cc:2829/2817): 读写 infolist (was no-op/const 2)。

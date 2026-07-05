@@ -2165,7 +2165,7 @@ impl UnifyConstraint for ConstraintSetInput {
             (Some(fd), Some(o), Some(v)) => {
                 let slt = self.slot.get_constant(state) as usize;
                 let opref = PcodeOpRef(o.clone());
-                fd.read().unwrap().op_set_input(&opref, v, slt); true
+                fd.write().unwrap().op_set_input(&opref, v, slt); true
             }
             _ => false,
         }
@@ -2234,7 +2234,7 @@ impl UnifyConstraint for ConstraintSetInputConstVal {
                 ourconst &= calc_mask(sz);
                 let opref = PcodeOpRef(o.clone());
                 let cn = fd.write().unwrap().new_constant(sz, ourconst);
-                fd.read().unwrap().op_set_input(&opref, cn, slt); true
+                fd.write().unwrap().op_set_input(&opref, cn, slt); true
             }
             _ => false,
         }

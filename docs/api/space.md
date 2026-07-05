@@ -256,3 +256,9 @@ Decode from string format "id:base_space_id:name"
 <!-- annotation-pass: 2026-07-04 -->
 
 <!-- sleigh-fix: 1783218732.6904683 -->
+ 
+
+### 2026-07-05: AddressSpace delay/deadcodedelay/is_heritaged
+- `get_delay`(space.hh): Stack=1,其他=0(Ghidra .sla spec 默认)。
+- `get_deadcode_delay`: = get_delay。
+- `is_heritaged`: Const/Iop/Join 不 heritaged。

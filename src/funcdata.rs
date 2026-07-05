@@ -644,20 +644,72 @@ impl Funcdata {
         o.opcode = opc;
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opSetInput
+    // Ghidra: funcdata_op.cc:104 Funcdata::opSetInput
     /// Set a specific input operand for the given PcodeOp. Faithful to
-    /// `Funcdata::opSetInput` (funcdata.hh:467). Extends inrefs if slot exceeds
-    /// current length; updates the descend link on the new input.
-    pub fn op_set_input(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
+    /// `Funcdata::opSetInput` (funcdata_op.cc:104-125). Four decisive steps:
+    ///   (1) early-out if vn is already the input at slot
+    ///   (2) const dedup: if vn is constant AND has descend AND not spacebase,
+    ///       create a fresh constant copy (with copySymbol) and use that
+    ///   (3) opUnsetInput(op, slot) on the OLD input — erases op from old
+    ///       vn's descend list (Rugra's inrefs Vec can't hold null, so the
+    ///       "clearInput" half is implicit: inrefs[slot] gets overwritten
+    ///       below; the load-bearing part is erase_descend on the old vn)
+    ///   (4) vn->addDescend(op) + op->setInput(vn, slot)
+    ///
+    /// **2026-07-05 修正**:此前 Rugra 漏了 (1)(2)(3),直接 addDescend + 赋值,
+    /// 导致旧 vn 的 descend 列表残留当前 op 引用 → has_no_descend 永远返回
+    /// false → heritage rename 的 deleteVarnode (heritage.cc:2521) 永远不执行
+    /// → 死 varnode 累积污染后续 pass。同时 const 去重缺失导致同一常量 vn 被
+    /// 多个 op 引用,违反 Ghidra "constants should have only one descendant"
+    /// 不变量 (cc:108)。
+    pub fn op_set_input(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
         let mut o = op.0.write().unwrap();
+        // Extend inrefs if needed (Rugra Vec model; Ghidra's BehaviorList
+        // pre-allocates slots at op creation). Placeholder slots get a fresh
+        // sentinel varnode (NOT vn — using vn would trigger the early-out
+        // below and skip the addDescend, losing the descend link).
         while o.inrefs.len() <= slot {
-            o.inrefs.push(vn.clone());
+            let sentinel = self.vbank.create(1, crate::address::Address::new(u64::MAX));
+            o.inrefs.push(sentinel);
         }
-        // Maintain descend link on the input varnode.
-        vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&op.0));
-        // If replacing an existing input, clear the old descend link is skipped
-        // (Rugra does not track removal precisely; acceptable for rule transforms).
-        o.inrefs[slot] = vn;
+        // (1) Ghidra cc:107: if (vn == op->getIn(slot)) return;
+        if std::sync::Arc::ptr_eq(&vn, &o.inrefs[slot]) {
+            return;
+        }
+        // (2) Ghidra cc:108-115: const dedup. If vn is constant AND has
+        // descend AND not spacebase, create a fresh copy so each constant
+        // has only one descendant.
+        let vn_final = {
+            let vn_r = vn.read().unwrap();
+            let needs_dedup = vn_r.is_constant() && !vn_r.has_no_descend() && !vn_r.is_spacebase();
+            drop(vn_r);
+            if needs_dedup {
+                let (sz, off) = {
+                    let r = vn.read().unwrap();
+                    (r.size, r.loc.as_u64())
+                };
+                let cvn = self.new_constant(sz, off);
+                // Ghidra cc:112: cvn->copySymbol(vn);
+                let sym = vn.read().unwrap().mapentry.clone();
+                if sym.is_some() {
+                    cvn.write().unwrap().mapentry = sym;
+                }
+                cvn
+            } else {
+                vn.clone()
+            }
+        };
+        // (3) Ghidra cc:120-121: if (op->getIn(slot) != null) opUnsetInput(op, slot).
+        // opUnsetInput does vn->eraseDescend(op) + op->clearInput(slot).
+        // Rugra's clearInput half is implicit (inrefs[slot] overwritten below);
+        // the load-bearing half is erase_descend on the old vn.
+        {
+            let old_vn = o.inrefs[slot].clone();
+            old_vn.write().unwrap().erase_descend(&op.0);
+        }
+        // (4) Ghidra cc:123-124: vn->addDescend(op) + op->setInput(vn, slot).
+        vn_final.write().unwrap().add_descend(&op.0);
+        o.inrefs[slot] = vn_final;
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opInsertInput
@@ -783,7 +835,7 @@ impl Funcdata {
     /// `Funcdata::totalReplace` (funcdata_varnode.cc:1474-1487). Walks all
     /// descendant ops of `vn` and sets their input slot to `newvn`.
     pub fn total_replace(
-        &self,
+        &mut self,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         newvn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
@@ -815,13 +867,27 @@ impl Funcdata {
     /// Unset an input slot. Faithful to `Funcdata::opUnsetInput`
     /// (funcdata_op.cc). Removes the descend link from the input varnode and
     /// sets the slot to None (represented as removing from inrefs in Rugra).
+    // Ghidra: funcdata_op.cc:92 Funcdata::opUnsetInput
+    /// Unlink the input Varnode at `slot` from `op`. Faithful to
+    /// `Funcdata::opUnsetInput` (funcdata_op.cc:92-99):
+    ///   vn = op->getIn(slot);
+    ///   vn->eraseDescend(op);
+    ///   op->clearInput(slot);
+    /// Rugra's inrefs Vec cannot hold null, so the slot is left holding the
+    /// old Arc (clearInput is implicit — the slot will be overwritten by the
+    /// next op_set_input). The load-bearing half is erase_descend on the old
+    /// vn, which removes `op` from its descend list.
     pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
-        let in_vn = op.0.read().unwrap().inrefs.get(slot).cloned();
+        let in_vn = {
+            let o = op.0.read().unwrap();
+            o.inrefs.get(slot).cloned()
+        };
         if let Some(vn) = in_vn {
-            vn.write().unwrap().descend.retain(|w| {
-                w.upgrade().map(|a| !std::sync::Arc::ptr_eq(&a, &op.0)).unwrap_or(true)
-            });
+            vn.write().unwrap().erase_descend(&op.0);
         }
+        // Ghidra cc:98: op->clearInput(slot) — implicit in Rugra (Vec slot
+        // overwritten on next set; callers must set or remove before relying
+        // on inrefs[slot]).
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opUnsetOutput
@@ -2153,7 +2219,7 @@ impl Funcdata {
     // Ghidra: funcdata.hh:477 Funcdata::opSetAllInput
     /// Set all input Varnodes for the given PcodeOp simultaneously.
     /// Faithful to `Funcdata::opSetAllInput` (funcdata_op.cc:267-284).
-    pub fn op_set_all_input(&self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>]) {
+    pub fn op_set_all_input(&mut self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>]) {
         // Unset all existing inputs (funcdata_op.cc:276-278).
         let num = op.0.read().unwrap().num_input();
         for i in 0..num {

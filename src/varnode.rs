@@ -997,9 +997,42 @@ impl Varnode {
 
     // Ghidra: varnode.cc:330 Varnode::addDescend
     /// Add a descendant op reference. Faithful to `Varnode::addDescend`
-    /// (varnode.hh:295).
+    /// (varnode.hh:295). Per Ghidra cc:333-336, a free non-spacebase varnode
+    /// with existing descend throws LowlevelError; Rugra logs (eprintln) and
+    /// continues conservatively — IR construction should not panic on
+    /// transient inconsistency.
+    /// Also sets coverdirty (Ghidra cc:339); Rugra's cover system is simplified
+    /// (see merge.rs compute_varnode_covers) and does not track the coverdirty
+    /// flag — TODO tracked in ALIGNMENT_ROADMAP (cover.cc full port).
     pub fn add_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
+        if self.is_free() && !self.is_spacebase() {
+            if !self.descend.is_empty() {
+                eprintln!("[VN] WARN: free varnode space={:?} off={:#x} gets multiple descendants",
+                    self.address_space, self.loc.as_u64());
+            }
+        }
         self.descend.push(std::sync::Arc::downgrade(op));
+        // Ghidra cc:339: setFlags(Varnode::coverdirty) — omitted (coverdirty not modeled).
+    }
+
+    // Ghidra: varnode.cc:316 Varnode::eraseDescend
+    /// Erase a descendant op from this varnode's descend list. Faithful to
+    /// `Varnode::eraseDescend` (varnode.hh:175). Per Ghidra cc:321-324, finds
+    /// the op in the descend list and removes it; throws if not found.
+    /// Rugra uses retain (drops ALL matching weak refs to op, in case of
+    /// accidental duplicates) and logs if nothing was removed.
+    /// Also sets coverdirty (Ghidra cc:325); omitted (see add_descend note).
+    pub fn erase_descend(&mut self, op: &Arc<RwLock<PcodeOp>>) {
+        let target_ptr = std::sync::Arc::as_ptr(op) as *const ();
+        let before = self.descend.len();
+        self.descend.retain(|w| {
+            w.upgrade().map(|a| std::sync::Arc::as_ptr(&a) as *const () != target_ptr).unwrap_or(true)
+        });
+        if self.descend.len() == before {
+            eprintln!("[VN] WARN: erase_descend op={:p} not in descend list (space={:?} off={:#x})",
+                std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64());
+        }
+        // Ghidra cc:325: setFlags(Varnode::coverdirty) — omitted.
     }
 
     // Ghidra: varnode.cc:578 Varnode::isBoolOutputDef

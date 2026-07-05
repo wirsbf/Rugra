@@ -126,6 +126,38 @@ impl AddressSpace {
         matches!(self, AddressSpace::Stack)
     }
 
+    // Ghidra: space.hh AddrSpace::getDelay
+    /// Heritage delay for this space — number of heritage passes before
+    /// this space's varnodes are first heritaged. Faithful to
+    /// `AddrSpace::getDelay()` (space.hh). Ghidra reads this from the
+    /// .sla spec (space.cc:325); Rugra's simplified enum model uses the
+    /// Ghidra defaults: Stack=1 (so stack varnodes get a 2nd heritage pass
+    /// after register/unique), all others=0.
+    pub fn get_delay(&self) -> i32 {
+        match self {
+            AddressSpace::Stack => 1,
+            _ => 0,
+        }
+    }
+
+    // Ghidra: space.hh AddrSpace::getDeadcodeDelay
+    /// Dead-code delay — number of heritage passes before dead-code removal
+    /// is allowed on this space. Faithful to `AddrSpace::getDeadcodeDelay()`
+    /// (space.hh). Ghidra defaults deadcodedelay = delay if not specified
+    /// (space.cc:334-335).
+    pub fn get_deadcode_delay(&self) -> i32 {
+        self.get_delay()
+    }
+
+    // Ghidra: space.hh AddrSpace::isHeritaged
+    /// Is this space heritaged (subject to SSA phi-placement)? Faithful to
+    /// `AddrSpace::isHeritaged()` (space.hh). Ghidra's IPTR_CONSTANT,
+    /// IPTR_FSPEC, IPTR_IOP, IPTR_JOIN are not heritaged; all others are.
+    /// Rugra: Const/Iop/Join/Fspec(not modeled) are not heritaged.
+    pub fn is_heritaged(&self) -> bool {
+        !matches!(self, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Join)
+    }
+
     /// Check if this is the internal iop space (references a PcodeOp).
     /// Ghidra: `getSpaceType()==IPTR_IOP` (space.hh:35).
     pub fn is_iop(&self) -> bool {

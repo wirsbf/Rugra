@@ -233,3 +233,11 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNorm 调用 recover_jump_tables。jump_tables 现可被填充，find_jump_table 返回非 None。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.3299575 -->
+ 
+
+### 2026-07-05: JumpValues trait 多态 + JumpBasic2 修复 + find_normalized
+- `JumpBasic.jrange` 改 `Option<Box<dyn JumpValues>>`(Ghidra `JumpValues*` 多态)。
+- `JumpValues::clone_boxed_any_range` trait 辅助。
+- `JumpValuesRangeDefault::new/Default`。
+- `JumpBasic::find_normalized`(cc:1223)提取为独立方法。
+- `JumpBasic2` 修复 check_normal_dominance/find_unnormalized/recover_model 类型错误,recover_model 对齐 cc:1698-1734。

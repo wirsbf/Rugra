@@ -62,3 +62,4 @@ not yet wired into main.rs; existing linear scan still active).
 <!-- annotation-pass: 2026-07-04 -->
 
 <!-- sleigh-lift-pipeline: 1783181897.3074532 -->
+ 

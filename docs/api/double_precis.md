@@ -68,3 +68,4 @@ Ghidra `SplitVarnode` 类的 1:1 移植（~50 方法）。
 isEntryPoint/getStartBlock/opInsertBegin/constructJoinAddress/newVarnode/combine_input_varnodes/set_double_precis_recovery/isPrimitiveWhole/typelock/getTrueOut/getFalseOut/ReturnCopy/ordered getBasicIter 全部用真实基础设施填掉。删过期 TODO：isBigEndian/ordered iteration/newVarnodeSpace（实现已忠实）。仅剩 hasUnreachableBlocks 1 处（Funcdata 无只读查询，需加方法）。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- ref-fix2: 1783141346.313316 -->
+ 

@@ -898,3 +898,9 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 **新增 PcodeOp mark 访问器**：is_mark/set_mark/clear_mark（op.hh:190/234/235，flags MARK=1<<13）
 <!-- annotation-pass: 2026-07-04 -->
 <!-- activeparam-port: 1783158350.9624996 -->
+ 
+
+### 2026-07-05: op_set_input / op_unset_input / total_replace / op_set_all_input 签名改 &mut self
+- `op_set_input`(funcdata_op.cc:104): 改 `&mut self`,4 类语义全对齐(early-out / const dedup / opUnsetInput erase_descend / addDescend)。修了 placeholder bug(用 vn 当 resize 占位会触发 early-out)。
+- `op_unset_input`(cc:92): erase_descend + clearInput(隐式)。
+- `total_replace` / `op_set_all_input`: 改 `&mut self`(Ghidra 是 mutable)。

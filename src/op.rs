@@ -435,6 +435,130 @@ impl PcodeOp {
     pub fn is_store_unmapped(&self) -> bool {
         (self.addlflags & op_addl_flags::STORE_UNMAPPED) != 0
     }
+
+    // Ghidra: op.hh:174 PcodeOp::isAssignment
+    /// Return true if this op has an output (i.e. produces a value).
+    /// Faithful to `isAssignment` (op.hh:174).
+    pub fn is_assignment(&self) -> bool {
+        self.output.is_some()
+    }
+
+    // Ghidra: op.hh:189 PcodeOp::isFlowBreak
+    /// Return true if this op breaks the flow of a basic block (branch/return).
+    /// Faithful to `isFlowBreak` (op.hh:189).
+    pub fn is_flow_break(&self) -> bool {
+        (self.flags & (pcodeop_flags::BRANCH | pcodeop_flags::RETURNS)) != 0
+    }
+
+    // Ghidra: op.hh:195 PcodeOp::isInstructionStart
+    /// Return true if this op is the first in its machine instruction.
+    /// Faithful to `isInstructionStart` (op.hh:195).
+    pub fn is_instruction_start(&self) -> bool {
+        (self.flags & pcodeop_flags::STARTMARK) != 0
+    }
+
+    // Ghidra: op.cc:115 PcodeOp::isCollapsible
+    /// Can this op be collapsed to a copy of a constant? All inputs must be
+    /// constants, the op must be an assignment, must not be marked nocollapse,
+    /// and the output must fit in a uintb. Faithful to `isCollapsible`.
+    pub fn is_collapsible(&self) -> bool {
+        if (self.flags & pcodeop_flags::NOCOLLAPSE) != 0 {
+            return false;
+        }
+        if !self.is_assignment() {
+            return false;
+        }
+        if self.inrefs.is_empty() {
+            return false;
+        }
+        // All inputs must be constants.
+        for inref in &self.inrefs {
+            if !inref.read().unwrap().is_constant() {
+                return false;
+            }
+        }
+        // Output size must fit in u64 (sizeof(uintb) on 64-bit Ghidra).
+        if let Some(out) = &self.output {
+            if out.read().unwrap().get_size() > 8 {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: op.cc:290 PcodeOp::setNumInputs
+    /// Set the number of input slots. All slots are cleared (set to a sentinel).
+    /// Faithful to `setNumInputs` (op.cc:290-296). Note: Rugra's inrefs Vec
+    /// cannot hold null; we use a synthetic placeholder varnode via the caller
+    /// (Funcdata layer fills slots immediately after). At the PcodeOp level,
+    /// we resize and leave existing entries; callers must overwrite.
+    pub fn set_num_inputs(&mut self, num: usize) {
+        self.inrefs.resize(num, self.inrefs.get(0).cloned().unwrap_or_else(|| {
+            // Cannot create a null varnode; panic is consistent with Ghidra's
+            // contract that setNumInputs is followed by setInput on every slot.
+            panic!("PcodeOp::set_num_inputs to {} requires caller to fill all slots", num);
+        }));
+    }
+
+    // Ghidra: op.cc:301 PcodeOp::removeInput
+    /// Remove the input Varnode at `slot`. Subsequent slots shift down.
+    /// Faithful to `removeInput` (op.cc:301-307).
+    pub fn remove_input(&mut self, slot: usize) {
+        if slot < self.inrefs.len() {
+            self.inrefs.remove(slot);
+        }
+    }
+
+    // Ghidra: op.cc:311 PcodeOp::insertInput
+    /// Insert a new input slot at `slot`, shifting subsequent slots up.
+    /// The new slot holds a placeholder that the caller must fill.
+    /// Faithful to `insertInput` (op.cc:311-318). Same null-placeholder caveat
+    /// as `set_num_inputs`.
+    pub fn insert_input_slot(&mut self, slot: usize, placeholder: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        let slot = slot.min(self.inrefs.len());
+        self.inrefs.insert(slot, placeholder);
+    }
+
+    // Ghidra: op.cc:93 PcodeOp::getRepeatSlot
+    /// Given a Varnode that appears in multiple input slots, find the specific
+    /// slot corresponding to the `count`-th occurrence (1-based). Returns -1 if
+    /// not found. Faithful to `getRepeatSlot` (op.cc:93-111).
+    pub fn get_repeat_slot(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, first_slot: usize, count: usize) -> i32 {
+        // Walk input slots from first_slot+1, find the (count)-th occurrence.
+        let mut recount = 1;
+        for i in (first_slot + 1)..self.inrefs.len() {
+            if std::sync::Arc::ptr_eq(&self.inrefs[i], vn) {
+                recount += 1;
+                if recount == count {
+                    return i as i32;
+                }
+            }
+        }
+        -1
+    }
+
+    // Ghidra: op.cc:376 PcodeOp::printDebug
+    /// Print a debug representation (address + raw op) to a string.
+    /// Faithful to `printDebug` (op.cc:376-384). Rugra returns a String
+    /// instead of writing to ostream.
+    pub fn print_debug(&self) -> String {
+        let mut s = String::new();
+        s += &format!("{:?}: ", self.start);
+        if self.is_dead() || self.parent.is_none() {
+            s += "**";
+        } else {
+            s += &format!("{:?}", self.opcode);
+            if let Some(out) = &self.output {
+                let o = out.read().unwrap();
+                s += &format!(" v({:?},{:#x})", o.address_space, o.loc.as_u64());
+            }
+            for inref in &self.inrefs {
+                let i = inref.read().unwrap();
+                s += &format!(" ({:?},{:#x})", i.address_space, i.loc.as_u64());
+            }
+        }
+        s
+    }
 }
 
 /// Comparison for sorting PcodeOps in the bank

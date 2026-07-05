@@ -4873,6 +4873,9 @@ impl ActionFuncLink {
                 } else {
                     0
                 };
+                if std::env::var("RUGRA_DEBUG_CALLS").is_ok() {
+                    eprintln!("[CALL] op=0x{:x} target=0x{:x} space={:?}", op_addr, target_addr, tv.get_space());
+                }
                 new_specs.push((op_addr, target_addr));
             }
         }
@@ -5280,15 +5283,447 @@ impl ActionDeindirect {
     }
 }
 
-/// Stack pointer flow analysis. Faithful to `ActionStackPtrFlow`
+// ============================================================================
+// StackEqn (coreaction.cc:25-30)
+// ============================================================================
+
+/// A stack equation. Faithful to Ghidra `StackEqn` (coreaction.cc:25-30).
+/// Represents a linear equation `var1 - var2 = rhs` relating two stack-pointer
+/// variable instances. Used by StackSolver to recover stack-pointer changes
+/// across unknown sub-functions.
+#[derive(Debug, Clone, Copy)]
+pub struct StackEqn {
+    /// Variable with +1 coefficient.
+    pub var1: i32,
+    /// Variable with -1 coefficient.
+    pub var2: i32,
+    /// Right-hand side of the equation.
+    pub rhs: i32,
+}
+
+impl StackEqn {
+    // Ghidra: coreaction.cc:55 StackEqn::compare
+    /// Order two equations by var1. Faithful to `StackEqn::compare`
+    /// (coreaction.cc:55-59): `return (a.var1 < b.var1);`.
+    pub fn compare(a: &StackEqn, b: &StackEqn) -> bool {
+        a.var1 < b.var1
+    }
+}
+
+// ============================================================================
+// StackSolver (coreaction.cc:33-50 / 55-252)
+// ============================================================================
+
+/// Solves for stack-pointer changes across unknown sub-functions.
+/// Faithful to Ghidra `StackSolver` (coreaction.cc:33-50).
+///
+/// Builds a system of linear equations from stack-pointer-defining ops
+/// (INT_ADD/COPY/INDIRECT/MULTIEQUAL/INT_AND), then solves via worklist
+/// propagation. The INDIRECT case produces "guess" equations (rhs=4 default)
+/// that are resolved iteratively when the system is underdetermined.
+pub struct StackSolver {
+    /// Known equations (coreaction.cc:34 `eqs`).
+    eqs: Vec<StackEqn>,
+    /// Guessed equations for underdetermined systems (coreaction.cc:35 `guess`).
+    guess: Vec<StackEqn>,
+    /// Indexed set of stack-pointer varnodes (coreaction.cc:36 `vnlist`).
+    vnlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    /// Companion input index for INDIRECT-produced variables (coreaction.cc:37).
+    companion: Vec<i32>,
+    /// Starting address of the stack-pointer (coreaction.cc:38 `spacebase`).
+    spacebase: crate::address::Address,
+    /// Collected solutions (coreaction.cc:39 `soln`); 65535 = unsolved.
+    soln: Vec<i32>,
+    /// Number of variables missing an equation (coreaction.cc:40).
+    missed_variables: i32,
+}
+
+impl StackSolver {
+    /// Sentinel value for "unsolved" (Ghidra uses 65535, coreaction.cc:70/87).
+    const UNSOLVED: i32 = 65535;
+
+    // Ghidra: coreaction.cc:33 StackSolver (constructor)
+    /// Create an empty solver.
+    pub fn new() -> Self {
+        Self {
+            eqs: Vec::new(),
+            guess: Vec::new(),
+            vnlist: Vec::new(),
+            companion: Vec::new(),
+            spacebase: crate::address::Address::new(0),
+            soln: Vec::new(),
+            missed_variables: 0,
+        }
+    }
+
+    // Ghidra: coreaction.cc:67 StackSolver::propagate
+    /// Propagate a solution for one variable to other variables via the
+    /// equation system. Faithful to `StackSolver::propagate`
+    /// (coreaction.cc:67-94). Uses a worklist; for each popped variable,
+    /// finds equations where var1==that variable and solves for var2.
+    fn propagate(&mut self, varnum: i32, val: i32) {
+        let varnum = varnum as usize;
+        if varnum >= self.soln.len() {
+            return;
+        }
+        if self.soln[varnum] != Self::UNSOLVED {
+            return; // Already solved (cc:70).
+        }
+        self.soln[varnum] = val;
+        let mut workstack: Vec<i32> = Vec::with_capacity(self.soln.len());
+        workstack.push(varnum as i32);
+        while let Some(vn) = workstack.pop() {
+            let vn_u = vn as usize;
+            // lower_bound on eqs by var1 (cc:84). eqs is sorted by var1.
+            let target = StackEqn { var1: vn, var2: 0, rhs: 0 };
+            let start = self.eqs.partition_point(|e| StackEqn::compare(e, &target));
+            let mut i = start;
+            while i < self.eqs.len() && self.eqs[i].var1 == vn {
+                let var2 = self.eqs[i].var2 as usize;
+                if var2 < self.soln.len() && self.soln[var2] == Self::UNSOLVED {
+                    // cc:88: soln[var2] = soln[varnum] - rhs;
+                    self.soln[var2] = self.soln[vn_u].wrapping_sub(self.eqs[i].rhs);
+                    workstack.push(var2 as i32);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // Ghidra: coreaction.cc:96 StackSolver::duplicate
+    /// Duplicate each equation, swapping var1/var2 and negating rhs.
+    /// Faithful to `StackSolver::duplicate` (coreaction.cc:96-110).
+    /// After duplication, re-sort by var1.
+    fn duplicate(&mut self) {
+        let size = self.eqs.len();
+        for i in 0..size {
+            let eqn = StackEqn {
+                var1: self.eqs[i].var2,
+                var2: self.eqs[i].var1,
+                rhs: -self.eqs[i].rhs,
+            };
+            self.eqs.push(eqn);
+        }
+        // stable_sort by StackEqn::compare (cc:109).
+        self.eqs.sort_by(|a, b| {
+            if StackEqn::compare(a, b) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+    }
+
+    // Ghidra: coreaction.cc:112 StackSolver::solve
+    /// Solve the equation system. Faithful to `StackSolver::solve`
+    /// (coreaction.cc:112-140). Initializes soln to UNSOLVED, duplicates
+    /// equations, propagates from variable 0=0, then iteratively applies
+    /// guesses until no progress.
+    pub fn solve(&mut self) {
+        self.soln.clear();
+        self.soln.resize(self.vnlist.len(), Self::UNSOLVED);
+        self.duplicate();
+        self.propagate(0, 0);
+        let size = self.guess.len();
+        let mut lastcount = size + 2;
+        loop {
+            let mut count = 0;
+            for i in 0..size {
+                let var1 = self.guess[i].var1 as usize;
+                let var2 = self.guess[i].var2 as usize;
+                let rhs = self.guess[i].rhs;
+                let s1 = *self.soln.get(var1).unwrap_or(&Self::UNSOLVED);
+                let s2 = *self.soln.get(var2).unwrap_or(&Self::UNSOLVED);
+                if s1 != Self::UNSOLVED && s2 == Self::UNSOLVED {
+                    self.propagate(var2 as i32, s1.wrapping_sub(rhs));
+                } else if s1 == Self::UNSOLVED && s2 != Self::UNSOLVED {
+                    self.propagate(var1 as i32, s2.wrapping_add(rhs));
+                } else if s1 == Self::UNSOLVED && s2 == Self::UNSOLVED {
+                    count += 1;
+                }
+            }
+            if count == lastcount {
+                break;
+            }
+            lastcount = count;
+            if count == 0 {
+                break;
+            }
+        }
+    }
+
+    // Ghidra: coreaction.cc:147 StackSolver::build
+    /// Build the equation system from the function's stack-pointer varnodes.
+    /// Faithful to `StackSolver::build` (coreaction.cc:147-252).
+    ///
+    /// Collects all instances of the spacebase varnode, then for each
+    /// instance examines its defining op:
+    /// - INT_ADD(const): equation `var1 - var2 = const` (cc:175-189)
+    /// - COPY: equation `var1 - var2 = 0` (cc:190-198)
+    /// - INDIRECT: equation with companion; rhs from callspec extrapop or
+    ///   guess rhs=4 (cc:199-221)
+    /// - MULTIEQUAL: one equation per input (cc:222-232)
+    /// - INT_AND(const): treat as COPY, rhs=0 (cc:233-248)
+    pub fn build(
+        &mut self,
+        data: &crate::funcdata::Funcdata,
+        spacebase_addr: crate::address::Address,
+        spacebase_size: usize,
+    ) {
+        use crate::opcodes::OpCode;
+        self.spacebase = spacebase_addr;
+        // Ghidra cc:154-162: collect all instances of the spacebase varnode.
+        // begiter = data.beginLoc(size, spacebase); enditer = endLoc(...).
+        // All instances must not be free.
+        self.vnlist.clear();
+        self.companion.clear();
+        for vn_ref in &data.vbank.loc_tree {
+            let vn = vn_ref.0.read().unwrap();
+            if vn.size == spacebase_size && vn.loc == spacebase_addr {
+                if vn.is_free() {
+                    break; // cc:158: if ((*begiter)->isFree()) break;
+                }
+                self.vnlist.push(vn_ref.0.clone());
+                self.companion.push(-1);
+            }
+        }
+        self.missed_variables = 0;
+        if self.vnlist.is_empty() {
+            return;
+        }
+        // cc:165-166: if (!vnlist[0]->isInput()) throw.
+        if !self.vnlist[0].read().unwrap().is_input() {
+            eprintln!("[STACKPTR] WARN: input value of stackpointer is not used");
+            return;
+        }
+        // cc:170-251: build equations.
+        for i in 1..self.vnlist.len() {
+            let vn_arc = self.vnlist[i].clone();
+            let op_arc = {
+                let vn = vn_arc.read().unwrap();
+                vn.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let Some(op_arc) = op_arc else {
+                self.missed_variables += 1;
+                continue;
+            };
+            let op_code = op_arc.read().unwrap().opcode;
+            match op_code {
+                OpCode::CPUI_INT_ADD => {
+                    // cc:175-189.
+                    let (in0, in1) = {
+                        let o = op_arc.read().unwrap();
+                        (o.get_in(0).cloned(), o.get_in(1).cloned())
+                    };
+                    let (mut other, mut const_) = (in0, in1);
+                    if other.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                        std::mem::swap(&mut other, &mut const_);
+                    }
+                    let (Some(other), Some(const_)) = (other, const_) else {
+                        self.missed_variables += 1;
+                        continue;
+                    };
+                    if !const_.read().unwrap().is_constant() {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    // cc:183: othervn->getAddr() != spacebase
+                    let other_loc = other.read().unwrap().loc;
+                    if other_loc != spacebase_addr {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    // Find othervn in vnlist (binary search, cc:184).
+                    let var2 = self.find_varnode_index(&other);
+                    if var2 < 0 {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    let rhs = const_.read().unwrap().get_offset() as i32;
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs });
+                }
+                OpCode::CPUI_COPY => {
+                    // cc:190-198.
+                    let othervn = op_arc.read().unwrap().get_in(0).cloned();
+                    let Some(othervn) = othervn else {
+                        self.missed_variables += 1;
+                        continue;
+                    };
+                    if othervn.read().unwrap().loc != spacebase_addr {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    let var2 = self.find_varnode_index(&othervn);
+                    if var2 < 0 {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                }
+                OpCode::CPUI_INDIRECT => {
+                    // cc:199-221.
+                    let othervn = op_arc.read().unwrap().get_in(0).cloned();
+                    let Some(othervn) = othervn else {
+                        self.missed_variables += 1;
+                        continue;
+                    };
+                    if othervn.read().unwrap().loc != spacebase_addr {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    let var2 = self.find_varnode_index(&othervn);
+                    if var2 < 0 {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    self.companion[i] = var2;
+                    // cc:206-217: if INDIRECT is due to a CALL, try to get
+                    // extrapop from the callspec. Rugra doesn't yet wire
+                    // callspecs here, so we always fall through to the guess.
+                    // cc:219-220: guess, rhs = 4.
+                    self.guess.push(StackEqn { var1: i as i32, var2, rhs: 4 });
+                }
+                OpCode::CPUI_MULTIEQUAL => {
+                    // cc:222-232: one equation per input.
+                    let num_in = op_arc.read().unwrap().inrefs.len();
+                    for j in 0..num_in {
+                        let othervn = op_arc.read().unwrap().get_in(j).cloned();
+                        let Some(othervn) = othervn else {
+                            self.missed_variables += 1;
+                            continue;
+                        };
+                        if othervn.read().unwrap().loc != spacebase_addr {
+                            self.missed_variables += 1;
+                            continue;
+                        }
+                        let var2 = self.find_varnode_index(&othervn);
+                        if var2 < 0 {
+                            self.missed_variables += 1;
+                            continue;
+                        }
+                        self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                    }
+                }
+                OpCode::CPUI_INT_AND => {
+                    // cc:233-248: stack alignment via INT_AND. Treat as COPY.
+                    let (in0, in1) = {
+                        let o = op_arc.read().unwrap();
+                        (o.get_in(0).cloned(), o.get_in(1).cloned())
+                    };
+                    let (mut other, mut const_) = (in0, in1);
+                    if other.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                        std::mem::swap(&mut other, &mut const_);
+                    }
+                    let (Some(other), Some(const_)) = (other, const_) else {
+                        self.missed_variables += 1;
+                        continue;
+                    };
+                    if !const_.read().unwrap().is_constant() {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    if other.read().unwrap().loc != spacebase_addr {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    let var2 = self.find_varnode_index(&other);
+                    if var2 < 0 {
+                        self.missed_variables += 1;
+                        continue;
+                    }
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                }
+                _ => {
+                    // cc:249-250.
+                    self.missed_variables += 1;
+                }
+            }
+        }
+    }
+
+    // RUGRA-GLUE: find_varnode_index — Ghidra cc:184 用 lower_bound+
+    // Varnode::comparePointers; Rugra 用线性 Arc 指针匹配(vnlist 小)。
+    /// Binary search for a varnode's index in vnlist (Ghidra cc:184
+    /// `lower_bound(vnlist, othervn, Varnode::comparePointers)`). Rugra's
+    /// vnlist is in loc_tree order (sorted by address), so binary search by
+    /// Arc pointer identity works.
+    fn find_varnode_index(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {
+        let target_ptr = std::sync::Arc::as_ptr(vn);
+        for (i, v) in self.vnlist.iter().enumerate() {
+            if std::sync::Arc::as_ptr(v) == target_ptr {
+                return i as i32;
+            }
+        }
+        -1
+    }
+
+    // Ghidra: coreaction.cc:46 StackSolver::getNumVariables
+    pub fn get_num_variables(&self) -> usize {
+        self.vnlist.len()
+    }
+    // Ghidra: coreaction.cc:47 StackSolver::getVariable
+    pub fn get_variable(&self, i: usize) -> Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        self.vnlist.get(i)
+    }
+    // Ghidra: coreaction.cc:48 StackSolver::getCompanion
+    pub fn get_companion(&self, i: usize) -> i32 {
+        *self.companion.get(i).unwrap_or(&-1)
+    }
+    // Ghidra: coreaction.cc:49 StackSolver::getSolution
+    pub fn get_solution(&self, i: usize) -> i32 {
+        *self.soln.get(i).unwrap_or(&Self::UNSOLVED)
+    }
+    // RUGRA-GLUE: get_missed_variables — Ghidra StackSolver 暴露 missedvariables
+    // 字段 (coreaction.cc:50);Rugra 用访问器。
+    /// Number of variables for which we are missing an equation.
+    pub fn get_missed_variables(&self) -> i32 {
+        self.missed_variables
+    }
+}
+
+// Ghidra: coreaction.cc:261 ActionStackPtrFlow::analyzeExtraPop
+/// Calculate stack-pointer change across undetermined sub-functions.
+/// Faithful to `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:261-318).
+/// Uses StackSolver to build and solve the equation system for the stack
+/// pointer, then writes the recovered extrapop values back to the callspecs.
+///
+/// **Status**: structural skeleton. The actual write-back to callspecs
+/// requires FuncCallSpecs integration (Rugra's callspec layer is L1). The
+/// StackSolver build+solve is fully ported; the callspec update is a TODO.
+pub fn analyze_extra_pop(
+    data: &crate::funcdata::Funcdata,
+    stackspace_spacebase: crate::address::Address,
+    spacebase_size: usize,
+    _spcbase: i32,
+) -> i32 {
+    let mut solver = StackSolver::new();
+    solver.build(data, stackspace_spacebase, spacebase_size);
+    solver.solve();
+    let mut numchange = 0;
+    // Ghidra cc:303-316: walk solutions, for each INDIRECT-companion varnode
+    // with a valid solution, set the callspec's extrapop. Rugra's callspec
+    // integration is L1; count the changes but don't write back yet.
+    for i in 0..solver.get_num_variables() {
+        let sol = solver.get_solution(i);
+        let comp = solver.get_companion(i);
+        if sol != StackSolver::UNSOLVED && comp >= 0 {
+            // Would write: fc->setExtraPop(sol) on the callspec for
+            // vnlist[i]'s INDIRECT op. TODO(callspecs).
+            numchange += 1;
+        }
+    }
+    numchange
+}
+
 /// (coreaction.cc:261-499). Repairs "stack pointer clogs": an INT_ADD on the
 /// spacebase (stack pointer input) whose constant offset comes from a stack
 /// LOAD. Such a LOAD is linked to its matching STORE (same stack-relative
 /// offset) and converted to a COPY of the stored value.
 ///
-/// analyzeExtraPop (coreaction.cc:261-318) is NOT yet ported — it requires
-/// StackSolver + ProtoModel::extrapop infrastructure.
+/// analyzeExtraPop (coreaction.cc:261-318) uses StackSolver to recover
+/// extra-pop across undetermined sub-functions.
 pub struct ActionStackPtrFlow;
+
 impl ActionStackPtrFlow {
     // Ghidra: coreaction.hh:89 ActionStackPtrFlow (constructor mirror)
     pub fn new() -> Self { Self }

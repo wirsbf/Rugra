@@ -111,16 +111,40 @@ pub struct HeritageInfo {
 }
 
 impl HeritageInfo {
-    // Ghidra: heritage.cc:180 HeritageInfo::new
+    // Ghidra: heritage.cc:180 HeritageInfo::HeritageInfo
+    /// Construct per-space heritage info. Faithful to the Ghidra ctor
+    /// (heritage.cc:180-204):
+    ///   - delay/deadcodedelay from AddrSpace::getDelay()/getDeadcodeDelay()
+    ///   - hasCallPlaceholders = (space type == IPTR_SPACEBASE) [Stack]
+    ///   - deadremoved = 0
+    ///   - loadGuardSearch = false
+    /// Previously Rugra hard-coded delay=0/deadcodedelay=0/deadremoved=-1/
+    /// load_guard_search=true, which broke the per-space staggered heritage
+    /// timing (Stack delay=1) and inverted the loadGuardSearch flag
+    /// (Ghidra: false = search not yet performed).
     pub fn new(space: AddressSpace) -> Self {
+        let (delay, deadcodedelay, has_call_placeholders) = if space.is_heritaged() {
+            // Ghidra cc:195-199: space is heritaged.
+            (
+                space.get_delay(),
+                space.get_deadcode_delay(),
+                space.is_stack(), // IPTR_SPACEBASE → Stack
+            )
+        } else {
+            // Ghidra cc:189-193: space not heritaged (Const/Iop/Join/etc).
+            // delay/deadcodedelay still read from space, hasCallPlaceholders=false.
+            (space.get_delay(), space.get_deadcode_delay(), false)
+        };
         Self {
             space,
-            delay: 0,
-            deadcodedelay: 0,
-            deadremoved: -1,
-            load_guard_search: true,
+            delay,
+            deadcodedelay,
+            // Ghidra cc:201: deadremoved = 0 (was -1, broke removeRevisitedMarkers)
+            deadremoved: 0,
+            // Ghidra cc:203: loadGuardSearch = false (was true, inverted meaning)
+            load_guard_search: false,
             warning_issued: false,
-            has_call_placeholders: false,
+            has_call_placeholders,
         }
     }
 }
@@ -320,6 +344,49 @@ impl Default for Heritage {
 }
 
 impl Heritage {
+    // Ghidra: heritage.hh:257 Heritage::getInfo
+    /// Look up the HeritageInfo for `space`. Faithful to `getInfo`
+    /// (heritage.hh:257). Ghidra indexes infolist by spc->getIndex();
+    /// Rugra scans by space match (infolist is small, ~6 entries).
+    /// Auto-builds infolist if empty (buildInfoList cc:2664).
+    pub fn get_info(&mut self, space: AddressSpace) -> &HeritageInfo {
+        if self.infolist.is_empty() {
+            self.build_info_list();
+        }
+        let idx = self.infolist.iter().position(|i| i.space == space);
+        match idx {
+            Some(i) => &mut self.infolist[i],
+            None => {
+                // Space not in infolist (shouldn't happen after build_info_list).
+                // Append a fresh entry as fallback.
+                self.infolist.push(HeritageInfo::new(space));
+                self.infolist.last_mut().unwrap()
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:2664 Heritage::buildInfoList
+    /// Build the per-space HeritageInfo list. Faithful to `buildInfoList`
+    /// (heritage.cc:2664-2672). Ghidra iterates manage->numSpaces();
+    /// Rugra enumerates its fixed AddressSpace enum.
+    pub fn build_info_list(&mut self) {
+        if !self.infolist.is_empty() {
+            return;
+        }
+        let spaces = [
+            AddressSpace::Ram,
+            AddressSpace::Register,
+            AddressSpace::Unique,
+            AddressSpace::Const,
+            AddressSpace::Stack,
+            AddressSpace::Join,
+            AddressSpace::Iop,
+        ];
+        for sp in spaces {
+            self.infolist.push(HeritageInfo::new(sp));
+        }
+    }
+
     // Ghidra: heritage.cc:219 Heritage::discoverAndGuardStackStoresFd
     /// Discover stack-pointer-relative STORE ops and build Stack-space INDIRECT
     /// ops for them. Faithful to Ghidra's discoverIndexedStackPointers
@@ -1236,37 +1303,58 @@ impl Heritage {
 
     // Ghidra: heritage.cc:2793 Heritage::numHeritagePasses
     /// Get the number of heritage passes performed for a space.
-    /// Faithful to Heritage::numHeritagePasses (heritage.cc:2793).
-    pub fn num_heritage_passes(&self, _space: AddressSpace) -> i32 {
-        self.pass
+    /// Faithful to `numHeritagePasses` (heritage.cc:2793-2801):
+    ///   `return pass - info->delay;`
+    /// Previously Rugra returned `self.pass` (ignoring per-space delay),
+    /// which over-reported the pass count for Stack (delay=1).
+    pub fn num_heritage_passes(&self, space: AddressSpace) -> i32 {
+        let info = self.infolist.iter().find(|i| i.space == space);
+        let delay = info.map_or(0, |i| i.delay);
+        self.pass - delay
     }
 
     // Ghidra: heritage.cc:2843 Heritage::deadRemovalAllowed
     /// Check if dead code removal is allowed for a space.
-    /// Faithful to Heritage::deadRemovalAllowed (heritage.cc:2843).
-    pub fn dead_removal_allowed(&self, _space: AddressSpace) -> bool {
-        true // Rugra allows dead code removal by default
+    /// Faithful to `deadRemovalAllowed` (heritage.cc:2843-2855):
+    ///   `return pass > info->deadcodedelay;`
+    /// Previously Rugra returned const `true`, allowing dead-code removal
+    /// on every pass including pass 0 — exactly the "Heritage AFTER dead
+    /// removal" warning condition Ghidra prevents (cc:2728-2744).
+    pub fn dead_removal_allowed(&self, space: AddressSpace) -> bool {
+        let info = self.infolist.iter().find(|i| i.space == space);
+        let deadcodedelay = info.map_or(0, |i| i.deadcodedelay);
+        self.pass > deadcodedelay
     }
 
     // Ghidra: heritage.cc:2829 Heritage::setDeadCodeDelay
-    /// Set dead code delay for a space.
-    /// Faithful to Heritage::setDeadCodeDelay (heritage.cc:2829).
-    pub fn set_dead_code_delay(&mut self, _space: AddressSpace, _delay: i32) {
-        // Rugra doesn't track per-space dead code delay yet
+    /// Set dead code delay for a space. Faithful to `setDeadCodeDelay`
+    /// (heritage.cc:2829-2840). Used by bumpDeadcodeDelay to request a
+    /// restart with higher delay.
+    pub fn set_dead_code_delay(&mut self, space: AddressSpace, delay: i32) {
+        let idx = self.infolist.iter().position(|i| i.space == space);
+        if let Some(i) = idx {
+            self.infolist[i].deadcodedelay = delay;
+        }
     }
 
     // Ghidra: heritage.cc:2817 Heritage::getDeadCodeDelay
-    /// Get dead code delay for a space.
-    /// Faithful to Heritage::getDeadCodeDelay (heritage.cc:2817).
-    pub fn get_dead_code_delay(&self, _space: AddressSpace) -> i32 {
-        2 // Default delay
+    /// Get dead code delay for a space. Faithful to `getDeadCodeDelay`
+    /// (heritage.cc:2817-2827). Previously returned const 2.
+    pub fn get_dead_code_delay(&self, space: AddressSpace) -> i32 {
+        let info = self.infolist.iter().find(|i| i.space == space);
+        info.map_or(space.get_deadcode_delay(), |i| i.deadcodedelay)
     }
 
     // Ghidra: heritage.cc:2805 Heritage::seenDeadCode
-    /// Mark that dead code was seen for a space.
-    /// Faithful to Heritage::seenDeadCode (heritage.cc:2805).
-    pub fn seen_dead_code(&mut self, _space: AddressSpace) {
-        // Rugra doesn't track per-space dead code seen flag
+    /// Mark that dead code was seen (removed) for a space. Faithful to
+    /// `seenDeadCode` (heritage.cc:2805-2815): `info->deadremoved = 1`.
+    /// Previously Rugra was a no-op, so removeRevisitedMarkers/bumpDeadcodeDelay
+    /// warning paths could never trigger.
+    pub fn seen_dead_code(&mut self, space: AddressSpace) {
+        let idx = self.infolist.iter().position(|i| i.space == space);
+        if let Some(i) = idx {
+            self.infolist[i].deadremoved = 1;
+        }
     }
 
     // Ghidra: heritage.cc:2869 Heritage::clear
@@ -1434,10 +1522,17 @@ mod tests {
 
     #[test]
     fn test_heritage_creation() {
-        let h = Heritage::new();
+        let mut h = Heritage::new();
         assert_eq!(h.get_pass(), 0);
-        assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 2);
-        assert!(h.dead_removal_allowed(AddressSpace::Ram));
+        // After alignment with Ghidra cc:2817/2843: Ram delay=0/deadcodedelay=0.
+        // getDeadCodeDelay reads infolist; build_info_list populates it.
+        h.build_info_list();
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 0);
+        // deadRemovalAllowed = (pass > deadcodedelay) = (0 > 0) = false.
+        // (Ghidra prevents dead-code removal before any heritage pass.)
+        assert!(!h.dead_removal_allowed(AddressSpace::Ram));
+        // Stack has delay=1.
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Stack), 1);
     }
 
     /// Build a STORE op targeting the stack space, mark it spacebase, and

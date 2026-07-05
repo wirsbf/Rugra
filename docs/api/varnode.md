@@ -737,3 +737,8 @@
 - `has_cover()`（对齐 varnode.hh:284）：`(flags & (constant|annotation|insert)) == insert`。供 merge_test_must 使用。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- activeparam-port: 1783158350.9706767 -->
+ 
+
+### 2026-07-05: erase_descend 新增 + add_descend 补检查
+- `Varnode::erase_descend`(varnode.cc:316): 新增,retain 移除匹配 weak ref + free 多 descend 日志。
+- `Varnode::add_descend`(cc:330): 补 free 非 spacebase 多 descend 检查。

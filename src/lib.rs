@@ -111,6 +111,7 @@ pub mod varnode; // ← varnode.hh // ← blockaction.hh
 pub mod align;
 pub mod binary;
 pub mod disasm;
+pub mod sleigh_ffi;
 pub mod ffi;
 pub mod tracedag;
 pub mod varmap;

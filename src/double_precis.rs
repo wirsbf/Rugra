@@ -6211,7 +6211,7 @@ fn order_of(op: &OpArc) -> u32 {
 /// Set opcode and all inputs of an op (Funcdata has op_set_all_input missing;
 /// emulate by clearing inrefs and pushing in order).
 fn set_opcode_and_inputs(
-    data: &Funcdata,
+    data: &mut Funcdata,
     op: &PcodeOpRef,
     opc: OpCode,
     inlist: Vec<VnArc>,
