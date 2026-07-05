@@ -2028,15 +2028,39 @@ impl JumpModel for JumpBasic {
             emul.set_load_collect(Some(Vec::new()));
         }
 
-        // Function-pointer alignment mask (Ghidra: funcptr_align).
-        // We default to 0 (no alignment) since Architecture isn't wired here.
-        let mask = u64::MAX;
+        // Function-pointer alignment mask (jumptable.cc:1465-1469).
+        //   uintb mask = ~0;
+        //   int4 bit = fd->getArch()->funcptr_align;
+        //   if (bit != 0) mask = (mask >> bit) << bit;
+        // Previously this was hardcoded u64::MAX (no alignment), which diverged
+        // from Ghidra on any architecture with nonzero funcptr_align (most
+        // real-world binaries align function pointers to 4/8/16 bytes). With
+        // unaligned addresses, sanity_check's 0xffff diff cutoff truncates
+        // real switch tables → `switch=0` symptom.
+        let funcptr_align = fd.get_arch().map_or(0, |a| a.funcptr_align);
+        let mask = if funcptr_align != 0 {
+            (u64::MAX >> funcptr_align) << funcptr_align
+        } else {
+            u64::MAX
+        };
+
+        // Address space + wordSize for AddrSpace::addressToByte (jumptable.cc:1475).
+        //   addr = AddrSpace::addressToByte(addr, spc->getWordSize());
+        // Rugra's Address is currently single-space (no AddrSpace field), and
+        // the code space has wordSize==1, so addressToByte(addr, 1) == addr
+        // is a no-op. Documented divergence until Address gains a space field
+        // (P1 architectural item). The byte conversion would be:
+        //   addr = addr.wrapping_mul(word_size as u64);
+        let word_size: u64 = 1; // Rugra single-space model; x86 code space has wordSize=1
 
         let mut iter = jrange.clone();
         // Collect load counts into a local Vec, then merge at the end to avoid
         // moving the Option<&mut> in the loop.
         let mut local_loadcounts: Vec<i32> = Vec::new();
         if iter.initialize_for_reading() {
+            // Ghidra's initializeForReading sets curval=range.getMin() via
+            // `mutable curval` (jumptable.cc:289). Rugra's trait method takes
+            // &self so we set it here on the cloned iterator.
             iter.curval = jrange.range.get_left();
             loop {
                 let val = iter.get_value();
@@ -2044,7 +2068,11 @@ impl JumpModel for JumpBasic {
                 let start_vn = iter.get_start_varnode();
                 let addr = if let (Some(startop), Some(startvn)) = (start_op, start_vn) {
                     match emul.emulate_path(val, &self.path_meld, &startop, &startvn) {
-                        Some(a) => a & mask,
+                        Some(a) => {
+                            // addressToByte (no-op when word_size==1) then mask
+                            let byte_addr = a.wrapping_mul(word_size);
+                            byte_addr & mask
+                        }
                         None => 0,
                     }
                 } else {
@@ -2052,7 +2080,12 @@ impl JumpModel for JumpBasic {
                 };
                 addresstable.push(Address::new(addr));
                 if collect_loads {
-                    let n = emul.loadpoints.as_ref().map_or(0, |lp| lp.len());
+                    // Ghidra: loadcounts->push_back(loadpoints->size()) — the
+                    // cumulative count after this iteration. Rugra drains the
+                    // per-iteration collects into lp_vec, so the cumulative
+                    // count is lp_vec.len() + (current emul.loadpoints len).
+                    let n = lp_vec.len()
+                        + emul.loadpoints.as_ref().map_or(0, |lp| lp.len());
                     local_loadcounts.push(n as i32);
                     // Drain the collected loadpoints into the output.
                     if let Some(emul_lp) = emul.loadpoints.as_mut() {
@@ -2070,7 +2103,6 @@ impl JumpModel for JumpBasic {
         if let Some(out_lp) = loadpoints {
             *out_lp = lp_vec;
         }
-        let _ = fd;
         let _ = indop;
     }
 

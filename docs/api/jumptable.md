@@ -200,6 +200,7 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 - `emulate_path(val, path_meld, startop, startvn) -> Option<u64>`（jumptable.cc:218）：从起始值流过 pathMeld 的所有路径到 BRANCHIND，返回计算的目标地址。处理 MULTIEQUAL 起始特殊情况。
 
 **JumpBasic::build_addresses**：现使用 emulate_path 计算每个 switch 值的目标地址（jumptable.cc:1453），不再放置占位符。
+**2026-07-05 修正**：jumptable.cc:1465-1469 的 `funcptr_align` 掩码之前被硬编码为 `u64::MAX`（无对齐），与 Ghidra 在任何 `funcptr_align != 0` 的架构上分歧；并补上 jumptable.cc:1475 的 `AddrSpace::addressToByte(addr, spc->getWordSize())`（Rugra 单空间模型下 `wordSize==1`，no-op，已显式标注）。同时把 `loadcounts` 改为 Ghidra 的累计语义（`loadpoints->size()` 而非 per-iter 局部计数）。`curval` 重置（jumptable.cc:289 `mutable curval`）改为在 `build_addresses` 内重置克隆的迭代器，对齐 Ghidra 的 `initializeForReading` 副作用。
 
 测试：新增 2 个（emulate_path INT_ADD + COPY）。
 
