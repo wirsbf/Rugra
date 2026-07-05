@@ -1318,6 +1318,69 @@ impl VarnodeBank {
         self.def_tree.remove(&VarnodeDefRef(vn.clone()));
     }
 
+    // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode (vbank-level core)
+    /// Promote a varnode to a function input. Faithful to
+    /// `Funcdata::setInputVarnode` (funcdata_varnode.cc:340-373).
+    ///
+    /// Ghidra does: (1) early-out if already input, (2) overlap dedup
+    /// against existing inputs (return existing on exact match, throw on
+    /// partial overlap), (3) `vbank.setInput(vn)`, (4) ProtoModel effect
+    /// property setting (unaffected / return_address).
+    ///
+    /// Rugra ports (1)+(2)+(3) at the VarnodeBank level (the Funcdata
+    /// wrapper delegates here). Step (4) requires ProtoModel effect records
+    /// not yet wired; conservative subset — these properties affect later
+    /// type/recovery passes but not SSA correctness, so heritage rename
+    /// (heritage.cc:2502/2512) is unaffected.
+    pub fn set_input_varnode(
+        &mut self,
+        vn: Arc<RwLock<Varnode>>,
+    ) -> Arc<RwLock<Varnode>> {
+        // (1) Early-out if already an input.
+        if vn.read().unwrap().is_input() {
+            return vn;
+        }
+        // (2) Overlap dedup against existing inputs. Ghidra uses
+        // vbank.beginDef(Varnode::input, addr+size) then walks back; Rugra
+        // scans loc_tree for input varnodes overlapping [vn_addr, vn_end).
+        let (vn_addr, vn_size) = {
+            let r = vn.read().unwrap();
+            (r.loc, r.size)
+        };
+        let vn_end = vn_addr.as_u64().saturating_add(vn_size as u64);
+        let existing = {
+            let mut found: Option<Arc<RwLock<Varnode>>> = None;
+            for loc_ref in self.loc_tree.iter() {
+                let cand = loc_ref.0.clone();
+                let cr = cand.read().unwrap();
+                if !cr.is_input() { continue; }
+                let c_start = cr.loc.as_u64();
+                let c_end = c_start.saturating_add(cr.size as u64);
+                let overlaps = vn_addr.as_u64() < c_end && c_start < vn_end;
+                if overlaps {
+                    if cr.loc == vn_addr && cr.size == vn_size {
+                        // Exact match → return existing (Ghidra cc:356-357).
+                        found = Some(cand.clone());
+                        break;
+                    } else {
+                        // Partial overlap → Ghidra throws LowlevelError.
+                        // Rugra logs and falls through (conservative).
+                        eprintln!("[HERITAGE] WARN: overlapping input varnodes at {:x} (size {}) vs {:x} (size {})",
+                                  vn_addr.as_u64(), vn_size, c_start, cr.size);
+                    }
+                }
+            }
+            found
+        };
+        if let Some(existing) = existing {
+            return existing;
+        }
+        // (3) Mark as input via set_input (sets INPUT | INSERT, re-inserts).
+        self.set_input(vn.clone());
+        // (4) ProtoModel effect-property setting omitted (conservative subset).
+        vn
+    }
+
     // Ghidra: varnode.cc:1230 VarnodeBank::clear
     pub fn clear(&mut self) {
         self.loc_tree.clear();

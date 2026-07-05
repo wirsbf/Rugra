@@ -545,6 +545,18 @@ Heritage 过程往往并不是简单线性扫描，而是要考虑：
 - 控制底层 bank 访问顺序
 - 与当前图模型更紧密集成
 
+### 2026-07-05 对齐修正（visit_rename_direct 三个 load-bearing 语义）
+
+`visit_rename_direct` 此前声称对齐 Ghidra `renameRecurse`（heritage.cc:2480-2563），但漏掉了 3 个决定性语义：
+
+1. **empty-stack input promotion**（cc:2500-2503 / cc:2541-2544）—— 当 varstack 为空时，Ghidra 创建新 varnode 并 `setInputVarnode` 提升为函数输入。Rugra 此前静默跳过 → 自由读未被替换 → SSA 不完整。现移植：通过 `VarnodeBank::set_input_varnode`（对齐 `Funcdata::setInputVarnode` cc:340-373）。
+
+2. **INDIRECT same-time stack-deepening**（cc:2507-2518）—— 当栈顶 vnnew 是 INDIRECT 写且其 iop-const input(1) 指向当前 op 时，Ghidra 认为 "INDIRECT 和它的 op 同时发生"，深入栈一层（`stack[size-2]`）。Rugra 此前完全缺失 → 栈指针 INDIRECT 配对的 op 拿到错误的 SSA 名。现已按 cc:2509 比对 iop 偏移与当前 op 指针。
+
+3. **deleteVarnode of consumed frees**（cc:2520-2521 / cc:2549-2550）—— 替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。Rugra 此前从不删除 → 死 varnode 留在 loc_tree 污染后续 pass。现通过 `VarnodeBank::destroy_varnode` 移植。
+
+同时修正 `rename_direct` 开头的 marker：原来只对 `!is_heritage_known()` 的 varnode 设 `activeHeritage`（即只标 free，跳过 written），但 Ghidra `guard()`（cc:1175/1182）对 **read+write** 两个 list 都设。written varnode 漏标导致 rename 的 `if (!vnout->isActiveHeritage()) continue;`（cc:2527）跳过 push → stack 空 → empty-stack promotion 触发 → set_input_varnode 把多分支 input 去重成同一个 → diamond merge 丢失分支独立性。现按 Ghidra 语义对非常量/非 annotation 的所有 varnode（含 written）设 activeHeritage。
+
 ---
 
 ## `pub fn get_pass(&self) -> i32`

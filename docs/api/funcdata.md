@@ -620,6 +620,12 @@ PcodeOpRaw
 - `op_insert_before(op, follow)` — `Funcdata::opInsertBefore` (454)，alivelist 顺序
 - `op_insert_after(op, follow)` — `Funcdata::opInsertAfter` (456)，将 `op` 插入
   `follow` 之后。用于 prefersplit.cc 的 split 变换（在原 op 旁插入新 COPY/LOAD/STORE）
+- `set_input_varnode(vn)` — `Funcdata::setInputVarnode` (funcdata_varnode.cc:340)：将
+  varnode 提升为函数输入（overlap 去重 + `vbank.set_input`）。**2026-07-05 新增**，
+  用于 heritage rename 的 empty-stack promotion（heritage.cc:2502/2512）。委托给
+  `VarnodeBank::set_input_varnode`；保守子集（省略 ProtoModel 效果属性设置）。
+- `delete_varnode(vn)` — `Funcdata::deleteVarnode`：委托给 `VarnodeBank::destroy_varnode`。
+  **2026-07-05 新增**，用于 heritage rename 替换后的死 varnode 清理（heritage.cc:2521/2550）。
 
 **已知限制**：新建 op 仅进 alivelist，未挂到 BlockBasic.get_ops()（块编辑
 infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅保证数据流正确。

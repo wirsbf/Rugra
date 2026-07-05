@@ -702,6 +702,15 @@
 - `has_no_local_alias()/set_no_local_alias()/clear_no_local_alias()`（varnode.hh:262）— NOLOCALALIAS flag。
 - `VarnodeBank::destroy_varnode(&vn)`（varnode.hh）— 从 loc_tree/def_tree 移除。
 
+### 2026-07-05：VarnodeBank::set_input_varnode
+- `VarnodeBank::set_input_varnode(vn) -> Arc<Varnode>`（对齐 `Funcdata::setInputVarnode`
+  funcdata_varnode.cc:340-373 的 vbank-level 核心）。Ghidra 语义：(1) early-out if already
+  input，(2) overlap dedup against existing inputs（exact match 返回已存在的，partial overlap
+  Ghidra 抛 LowlevelError，Rugra log + 继续），(3) `vbank.set_input(vn)`（set INPUT|INSERT
+  并重新插入两棵树）。省略 (4) ProtoModel 效果属性（unaffected/return_address）—— 这些
+  不影响 SSA 正确性，只影响后续 type/recovery pass。**用于 heritage rename 的 empty-stack
+  promotion**（heritage.cc:2502/2512）。`Funcdata::set_input_varnode` 是 thin wrapper。
+
 ### 2026-07-01（续 4）：SymbolEntry 统一 + get_symbol_entry + get_structured_type
 - 移除 stub SymbolEntry，改用 database.rs 的真实 SymbolEntry。mapentry 字段现在持有真实符号映射。
 - `get_symbol_entry() -> Option<Arc<RwLock<SymbolEntry>>>`（varnode.hh:190）。

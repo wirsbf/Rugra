@@ -201,6 +201,27 @@ impl Funcdata {
         self.vbank.create(size, addr)
     }
 
+    // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode
+    /// Promote a varnode to a function input. Faithful to
+    /// `Funcdata::setInputVarnode` (funcdata_varnode.cc:340-373).
+    ///
+    /// Thin wrapper over `VarnodeBank::set_input_varnode` which ports
+    /// steps (1)+(2)+(3) of Ghidra (early-out / overlap dedup / setInput).
+    /// Step (4) ProtoModel effect properties omitted (conservative subset).
+    pub fn set_input_varnode(
+        &mut self,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        self.vbank.set_input_varnode(vn)
+    }
+
+    // Ghidra: funcdata_varnode.cc Funcdata::deleteVarnode
+    /// Remove a varnode from both loc/def trees. Faithful to
+    /// `Funcdata::deleteVarnode` (which delegates to VarnodeBank::destroy).
+    pub fn delete_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        self.vbank.destroy_varnode(vn);
+    }
+
     // Ghidra: funcdata.cc:34 Funcdata::combineInputVarnodes
     /// Combine two contiguous input varnodes into one. Faithful to
     /// `Funcdata::combineInputVarnodes` (funcdata_varnode.cc:381-454).

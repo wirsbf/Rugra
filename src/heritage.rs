@@ -885,23 +885,40 @@ impl Heritage {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
         let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
         let mut fd = fd_arc.write().unwrap();
-        
         let mut vbank = std::mem::take(&mut fd.vbank);
         self.rename_direct(&mut vbank, &fd.bblocks);
         fd.vbank = vbank;
     }
 
     // Ghidra: heritage.cc:219 Heritage::renameDirect
-    /// Perform SSA renaming directly using bank references
+    /// Perform SSA renaming directly using bank references.
+    /// `vbank` is taken by &mut because heritage.cc:2502/2512 calls
+    /// `fd->setInputVarnode` and cc:2521/2550 calls `fd->deleteVarnode`,
+    /// both of which mutate the bank. Rugra ports these as
+    /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
-        // Mark all free varnodes as active heritage, faithful to Ghidra's
-        // guard() (heritage.cc:1175/1182) which calls setActiveHeritage on
-        // all read/write varnodes in the ranges being heritaged this pass.
-        // Free varnodes (no INSERT flag, created by newVarnode→create) need
-        // this flag so rename's isActiveHeritage check lets them through.
+        // Mark all read+write varnodes as active heritage, faithful to
+        // Ghidra's guard() (heritage.cc:1175/1182) which calls
+        // setActiveHeritage on every varnode in the read AND write lists
+        // of the disjoint ranges being heritaged this pass.
+        //
+        // Ghidra's read/write lists (from collect()) include both free
+        // varnodes AND written varnodes at heritaged addresses — a written
+        // varnode is a def that rename must push onto the stack (cc:2527
+        // pushes vnout if isActiveHeritage). Without activeHeritage on
+        // writes, rename skips pushing them → stack stays empty → empty-stack
+        // input promotion (cc:2500-2503) creates a single shared input →
+        // diamond merges lose per-branch distinctness.
+        //
+        // Rugra approximates Ghidra's per-range guard by marking every
+        // non-constant, non-annotation varnode in the bank (free + written
+        // + input). Inputs are harmless to mark because rename's
+        // isHeritageKnown check (cc:2496/2539) skips them before checking
+        // isActiveHeritage.
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
-            if !vn.is_heritage_known() {
+            let is_known_side_effect = vn.is_constant() || vn.is_annotation();
+            if !is_known_side_effect {
                 vn.set_active_heritage();
             }
         }
@@ -941,10 +958,25 @@ impl Heritage {
         fd.vbank = vbank;
     }
 
-    // Ghidra: heritage.cc:219 Heritage::visitRenameDirect
+    // Ghidra: heritage.cc:2480 Heritage::renameRecurse
+    /// Faithful port of `Heritage::renameRecurse(BlockBasic *bl, VariableStack &varstack)`
+    /// (heritage.cc:2480-2563), structured as an iterative dominator-tree walk.
+    ///
+    /// **2026-07-05 修正**：补齐 3 个 load-bearing 语义（audit P0-4）：
+    ///   (1) **empty-stack input promotion** (cc:2500-2503 / cc:2541-2544) —
+    ///       当 stack 为空时，Ghidra 创建新 varnode 并 `setInputVarnode` 提升为
+    ///       函数输入，push 到 stack。Rugra 此前静默跳过 → 自由读未被替换 →
+    ///       SSA 不完整。
+    ///   (2) **INDIRECT same-time stack-deepening** (cc:2507-2518) — 当 stack
+    ///       顶的 vnnew 是 INDIRECT 写且其 target op 是当前 op 时，Ghidra 认为
+    ///       "INDIRECT 和它的 op 同时发生"，深入 stack 一层（stack[size-2]）。
+    ///       Rugra 此前完全缺失 → 栈指针 INDIRECT 配对的 op 得到错误的 SSA 名。
+    ///   (3) **deleteVarnode of consumed frees** (cc:2520-2521 / cc:2549-2550) —
+    ///       替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。
+    ///       Rugra 此前从不删除 → 死 varnode 留在 loc_tree，污染后续 pass。
     fn visit_rename_direct(
         &mut self,
-        _vbank: &mut VarnodeBank,
+        vbank: &mut VarnodeBank,
         block_arc: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         stacks: &mut BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>>,
     ) {
@@ -978,22 +1010,31 @@ impl Heritage {
 
                     let mut defined_here: Vec<(AddressSpace, Address)> = Vec::new();
 
-                    // 1. Process Phis (MULTIEQUAL) - only their outputs
+                    // 1. Process Phis (MULTIEQUAL) - only their outputs.
+                    // Ghidra cc:2525-2530: push output if isActiveHeritage, clear flag.
                     let ops = block_arc.read().unwrap().get_ops();
                     for op_ref in &ops {
                         let op = op_ref.0.write().unwrap();
                         if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
                             if let Some(out_vn) = &op.output {
-                                let vn_read = out_vn.read().unwrap();
-                                let key = (vn_read.address_space, vn_read.loc);
-                                drop(vn_read);
-                                stacks.entry(key).or_default().push(out_vn.clone());
-                                defined_here.push(key);
+                                let should_push = {
+                                    let vn_read = out_vn.read().unwrap();
+                                    vn_read.is_active_heritage()
+                                };
+                                if should_push {
+                                    out_vn.write().unwrap().clear_active_heritage();
+                                    let vn_read = out_vn.read().unwrap();
+                                    let key = (vn_read.address_space, vn_read.loc);
+                                    drop(vn_read);
+                                    stacks.entry(key).or_default().push(out_vn.clone());
+                                    defined_here.push(key);
+                                }
                             }
                         }
                     }
 
-                    // 2. Process regular Ops
+                    // 2. Process regular Ops: replace reads, then push writes.
+                    // Ghidra cc:2490-2531.
                     for op_ref in &ops {
                         let mut op = op_ref.0.write().unwrap();
                         if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
@@ -1008,33 +1049,106 @@ impl Heritage {
                             if should_skip {
                                 continue;
                             }
+                            // Ghidra cc:2498: vnin->clearActiveHeritage();
+                            let vnin_arc = op.inrefs[i].clone();
+                            vnin_arc.write().unwrap().clear_active_heritage();
+                            // Ghidra cc:2499: vector<Varnode *> &stack(varstack[vnin->getAddr()]);
                             let key = {
-                                let vn_read = op.inrefs[i].read().unwrap();
+                                let vn_read = vnin_arc.read().unwrap();
                                 (vn_read.address_space, vn_read.loc)
                             };
-                            op.inrefs[i].write().unwrap().clear_active_heritage();
-                            if let Some(stack) = stacks.get(&key) {
-                                if let Some(new_vn) = stack.last() {
-                                    op.inrefs[i] = new_vn.clone();
-                                    new_vn
-                                        .write()
-                                        .unwrap()
-                                        .descend
-                                        .push(Arc::downgrade(&op_ref.0));
+                            let stack = stacks.entry(key).or_default();
+                            // Ghidra cc:2500-2506: empty-stack → promote to input.
+                            // (SEMANTIC #1)
+                            let mut vnnew: Arc<RwLock<Varnode>>;
+                            if stack.is_empty() {
+                                let (vnin_size, vnin_space, vnin_off) = {
+                                    let r = vnin_arc.read().unwrap();
+                                    (r.size, r.address_space, r.loc.as_u64())
+                                };
+                                let new_vn = vbank.create_with_space(vnin_size, vnin_space, vnin_off);
+                                let promoted = vbank.set_input_varnode(new_vn);
+                                stack.push(promoted.clone());
+                                vnnew = promoted;
+                            } else {
+                                vnnew = stack.last().unwrap().clone();
+                            }
+                            // Ghidra cc:2507-2518: INDIRECT same-time deepening.
+                            // (SEMANTIC #2) — vnnew is written by an INDIRECT
+                            // whose iop-const input(1) points at the current op.
+                            let indirect_target_is_cur = {
+                                let vnnew_r = vnnew.read().unwrap();
+                                let mut hit = false;
+                                if vnnew_r.is_written() {
+                                    if let Some(def_weak) = vnnew_r.def.as_ref().and_then(|w| w.upgrade()) {
+                                        let def_r = def_weak.read().unwrap();
+                                        if def_r.opcode == crate::opcodes::OpCode::CPUI_INDIRECT {
+                                            if let Some(iop_vn) = def_r.get_in(1) {
+                                                let iv = iop_vn.read().unwrap();
+                                                if iv.get_space() == AddressSpace::Iop {
+                                                    let ptr_addr = iv.get_offset() as usize;
+                                                    let raw = ptr_addr as *const std::sync::RwLock<crate::op::PcodeOp>;
+                                                    if raw as *const () == std::sync::Arc::as_ptr(&op_ref.0) as *const () {
+                                                        hit = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
+                                hit
+                            };
+                            if indirect_target_is_cur {
+                                if stack.len() == 1 {
+                                    // cc:2510-2513: stack has only the INDIRECT entry;
+                                    // create new input and insert at bottom.
+                                    let (vnin_size, vnin_space, vnin_off) = {
+                                        let r = vnin_arc.read().unwrap();
+                                        (r.size, r.address_space, r.loc.as_u64())
+                                    };
+                                    let new_vn = vbank.create_with_space(vnin_size, vnin_space, vnin_off);
+                                    let promoted = vbank.set_input_varnode(new_vn);
+                                    stack.insert(0, promoted.clone());
+                                    vnnew = promoted;
+                                } else {
+                                    // cc:2515-2516: vnnew = stack[stack.size()-2]
+                                    vnnew = stack[stack.len() - 2].clone();
+                                }
+                            }
+                            // Ghidra cc:2519: fd->opSetInput(op, vnnew, slot);
+                            op.inrefs[i] = vnnew.clone();
+                            vnnew
+                                .write()
+                                .unwrap()
+                                .descend
+                                .push(Arc::downgrade(&op_ref.0));
+                            // Ghidra cc:2520-2521: if (vnin->hasNoDescend()) fd->deleteVarnode(vnin);
+                            // (SEMANTIC #3)
+                            if vnin_arc.read().unwrap().has_no_descend() {
+                                vbank.destroy_varnode(&vnin_arc);
                             }
                         }
 
+                        // Ghidra cc:2524-2530: push output if activeHeritage.
                         if let Some(out_vn) = &op.output {
-                            let vn_read = out_vn.read().unwrap();
-                            let key = (vn_read.address_space, vn_read.loc);
-                            drop(vn_read);
-                            stacks.entry(key).or_default().push(out_vn.clone());
-                            defined_here.push(key);
+                            let should_push = {
+                                let vn_read = out_vn.read().unwrap();
+                                vn_read.is_active_heritage()
+                            };
+                            if should_push {
+                                out_vn.write().unwrap().clear_active_heritage();
+                                let vn_read = out_vn.read().unwrap();
+                                let key = (vn_read.address_space, vn_read.loc);
+                                drop(vn_read);
+                                stacks.entry(key).or_default().push(out_vn.clone());
+                                defined_here.push(key);
+                            }
                         }
                     }
 
-                    // 3. Fill Phi inputs in successors
+                    // 3. Fill Phi inputs in successors.
+                    // Ghidra cc:2532-2553: for each out-edge, walk successor's
+                    // leading MULTIEQUALs and replace the matching input slot.
                     let size_out = block_arc.read().unwrap().size_out();
                     for i in 0..size_out {
                         if let Some(edge) = block_arc.read().unwrap().get_out(i) {
@@ -1044,27 +1158,51 @@ impl Heritage {
                             let succ_ops = succ_arc.read().unwrap().get_ops();
                             for op_ref in succ_ops {
                                 let mut op = op_ref.0.write().unwrap();
-                                if op.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL {
-                                    if let Some(out_vn) = &op.output {
-                                        let key = {
-                                            let vn_read = out_vn.read().unwrap();
-                                            (vn_read.address_space, vn_read.loc)
-                                        };
-                                        if let Some(stack) = stacks.get(&key) {
-                                            if let Some(new_vn) = stack.last() {
-                                                if my_in_idx < op.inrefs.len() {
-                                                    op.inrefs[my_in_idx] = new_vn.clone();
-                                                    new_vn
-                                                        .write()
-                                                        .unwrap()
-                                                        .descend
-                                                        .push(Arc::downgrade(&op_ref.0));
-                                                }
-                                            }
-                                        }
-                                    }
+                                if op.opcode != crate::opcodes::OpCode::CPUI_MULTIEQUAL {
+                                    break; // Ghidra cc:2537: stop at first non-MULTIEQUAL
+                                }
+                                if my_in_idx >= op.inrefs.len() {
+                                    continue;
+                                }
+                                let vnin_arc = op.inrefs[my_in_idx].clone();
+                                let should_skip = {
+                                    let vn_read = vnin_arc.read().unwrap();
+                                    vn_read.is_heritage_known()
+                                };
+                                if should_skip {
+                                    continue;
+                                }
+                                // Ghidra cc:2540-2547: empty-stack → input promotion.
+                                // (SEMANTIC #1, phi-input variant)
+                                let key = {
+                                    let vn_read = vnin_arc.read().unwrap();
+                                    (vn_read.address_space, vn_read.loc)
+                                };
+                                let stack = stacks.entry(key).or_default();
+                                let vnnew: Arc<RwLock<Varnode>>;
+                                if stack.is_empty() {
+                                    let (vnin_size, vnin_space, vnin_off) = {
+                                        let r = vnin_arc.read().unwrap();
+                                        (r.size, r.address_space, r.loc.as_u64())
+                                    };
+                                    let new_vn = vbank.create_with_space(vnin_size, vnin_space, vnin_off);
+                                    let promoted = vbank.set_input_varnode(new_vn);
+                                    stack.push(promoted.clone());
+                                    vnnew = promoted;
                                 } else {
-                                    break;
+                                    vnnew = stack.last().unwrap().clone();
+                                }
+                                // Ghidra cc:2548: opSetInput(multiop, vnnew, slot)
+                                op.inrefs[my_in_idx] = vnnew.clone();
+                                vnnew
+                                    .write()
+                                    .unwrap()
+                                    .descend
+                                    .push(Arc::downgrade(&op_ref.0));
+                                // Ghidra cc:2549-2550: deleteVarnode if no descend.
+                                // (SEMANTIC #3, phi-input variant)
+                                if vnin_arc.read().unwrap().has_no_descend() {
+                                    vbank.destroy_varnode(&vnin_arc);
                                 }
                             }
                         }
@@ -1080,7 +1218,7 @@ impl Heritage {
                     }
                 }
                 WorkItem::Leave(defined_here) => {
-                    // 5. Pop stacks
+                    // 5. Pop stacks (Ghidra cc:2558-2562).
                     for key in defined_here {
                         if let Some(stack) = stacks.get_mut(&key) {
                             stack.pop();
