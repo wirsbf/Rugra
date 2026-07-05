@@ -21,6 +21,8 @@ extern "C" {
     fn rugra_sleigh_create(sla_path: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
     // RUGRA-GLUE: rugra_sleigh_set_image — FFI helper
     fn rugra_sleigh_set_image(handle: *mut std::ffi::c_void, bytes: *const u8, len: u64, base_addr: u64);
+    // RUGRA-GLUE: rugra_sleigh_set_context — FFI helper
+    fn rugra_sleigh_set_context(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, val: i32);
     // RUGRA-GLUE: rugra_sleigh_decode — FFI helper
     fn rugra_sleigh_decode(
         handle: *mut std::ffi::c_void,
@@ -89,6 +91,27 @@ impl SleighCtx {
     // RUGRA-GLUE: set_image — set binary image bytes for SLEIGH decoding
     pub fn set_image(&mut self, bytes: &[u8], base_addr: u64) {
         unsafe { rugra_sleigh_set_image(self.handle, bytes.as_ptr(), bytes.len() as u64, base_addr) }
+    }
+
+    // RUGRA-GLUE: set_context — set context variable default
+    pub fn set_context(&mut self, name: &str, val: i32) {
+        let c_name = std::ffi::CString::new(name).unwrap();
+        unsafe { rugra_sleigh_set_context(self.handle, c_name.as_ptr(), val) }
+    }
+
+    // RUGRA-GLUE: load_pspec — parse .pspec XML and set context defaults
+    pub fn load_pspec(&mut self, pspec_path: &str) {
+        let xml = match std::fs::read_to_string(pspec_path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for cap in simple_xml_find(&xml, "set") {
+            if let (Some(name), Some(val)) = (get_attr(&cap, "name"), get_attr(&cap, "val")) {
+                if let Ok(v) = val.parse::<i32>() {
+                    self.set_context(&name, v);
+                }
+            }
+        }
     }
 
     // RUGRA-GLUE: decode — decode instruction at address, return p-code ops
@@ -165,4 +188,36 @@ fn cstr_to_string(buf: &[i8]) -> Option<String> {
         .map(|&c| c as u8)
         .collect();
     if bytes.is_empty() { None } else { Some(String::from_utf8_lossy(&bytes).into_owned()) }
+}
+
+// RUGRA-GLUE: simple_xml_find — Ghidra 的 Sleigh 编译器用 C++ 的 xml.cc
+// (ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/xml.cc) 的
+// `Element *Document::getRoot()` + `Element::getChild(string)` 解析 SLEIGH
+// spec 输出。Rugra 在 sleigh_ffi 边界拿到的是 raw XML 字符串（Sleigh 编译器
+// 以子进程方式运行），需自己解析。这个轻量字符串扫描替代 Ghidra 的
+// Document/Element 树，只取所需 `<tag ...>` 起标签。无 1:1 对应。
+fn simple_xml_find(xml: &str, tag: &str) -> Vec<String> {
+    let open = format!("<{}", tag);
+    let mut results = Vec::new();
+    let mut pos = 0;
+    while let Some(start) = xml[pos..].find(&open) {
+        let abs = pos + start;
+        if let Some(end) = xml[abs..].find('>') {
+            results.push(xml[abs..abs+end+1].to_string());
+            pos = abs + end + 1;
+        } else { break; }
+    }
+    results
+}
+
+// RUGRA-GLUE: get_attr — 同上，对应 xml.cc `Element::getAttributeValue(name)`
+// (`const string &Element::getAttributeValue(const string &nm) const`)。
+// Ghidra 在 Element 树上查属性值；Rugra 在原始 tag 字符串里扫 `attr="..."`。
+// 行为等价但 API 形态不同（Ghidra 树 vs Rugra 字符串扫描）。
+fn get_attr(tag_str: &str, attr: &str) -> Option<String> {
+    let needle = format!("{}=\"", attr);
+    let start = tag_str.find(&needle)? + needle.len();
+    let rest = &tag_str[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }

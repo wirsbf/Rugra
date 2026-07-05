@@ -511,8 +511,10 @@ pub struct AliasChecker {
     /// The lowest alias offset seen (varmap.cc `aliasBoundary`), initialised to
     /// `local_extreme` and shrunk toward the locals region.
     alias_boundary: u64,
-    /// Stack growth direction: 1 for negative growth (x86), -1 otherwise.
-    /// Matches Ghidra's convention where direction==1 is the normal case.
+    /// Stack growth direction following Ghidra's convention (varmap.cc:700):
+    /// `direction = stackGrowsNegative() ? 1 : -1`. **`direction==1` is the
+    /// normal negative-growth (x86) case.** This matches Ghidra exactly;
+    /// `has_local_alias` (varmap.cc:721) returns false on `direction==-1`.
     direction: i32,
     /// Whether the alias calculation has been performed.
     calculated: bool,
@@ -1306,17 +1308,25 @@ pub struct ScopeLocal {
     pub symbols: Vec<LocalSymbol>,
     /// Whether restructuring had overlap problems
     pub overlap_problems: bool,
-    /// Stack growth direction (-1 = grows down, typical x86-64)
+    /// Stack growth direction following Ghidra's convention (varmap.cc:700):
+    /// `direction = stackGrowsNegative() ? 1 : -1`. So `1` = negative growth
+    /// (typical x86-64), `-1` = positive growth. **This field's sign matches
+    /// Ghidra's `AliasChecker::direction` exactly — do not flip it.**
     pub stack_direction: i32,
 }
 
 impl ScopeLocal {
     // Ghidra: varmap.cc:341 ScopeLocal::new
+    // Per varmap.cc:700 (`direction = stackGrowsNegative() ? 1 : -1`), the
+    // default for a typical x86-64 binary is negative growth → direction == 1.
+    // Previously this was -1, which inverted Ghidra's convention and made
+    // `has_local_alias` (varmap.cc:721) always return false on x86, silently
+    // disabling alias analysis. See docs/alignment_audit/INDEX.md P0-1.
     pub fn new() -> Self {
         Self {
             symbols: Vec::new(),
             overlap_problems: false,
-            stack_direction: -1,
+            stack_direction: 1,
         }
     }
 
@@ -1511,7 +1521,8 @@ impl ScopeLocal {
         let mut start = offset as i64;
         // Treat as signed within 64 bits; for negative growth, locals live at
         // high (unsigned) offsets which become small negatives.
-        if self.stack_direction == -1 {
+        // Per varmap.cc:700, `direction==1` is the negative-growth case.
+        if self.stack_direction == 1 {
             // stackGrowsNegative → start = -start
             start = -start;
         }
@@ -1786,7 +1797,7 @@ mod tests {
 
     #[test]
     fn test_build_variable_name_negative_stack() {
-        let scope = ScopeLocal::new(); // stack_direction == -1
+        let scope = ScopeLocal::new(); // stack_direction == 1 (negative growth, x86)
         // For a negative-growing stack, a high unsigned offset (a local) maps
         // to a negative signed value, which is negated to positive magnitude.
         // offset = 0xfffffffffffffff0 → sign-extended -16 → negated +16 → "Stack_10".
@@ -1800,7 +1811,7 @@ mod tests {
     #[test]
     fn test_build_variable_name_positive() {
         let mut scope = ScopeLocal::new();
-        scope.stack_direction = 1; // positive growth → no negation
+        scope.stack_direction = -1; // positive growth → no negation
         // offset 0x10 → start = 0x10 > 0 → plain "Stack_10".
         let name = scope.build_variable_name(0x10);
         assert_eq!(name, "Stack_10");

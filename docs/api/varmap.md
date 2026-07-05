@@ -32,12 +32,18 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 ### `pub struct AliasChecker`
 栈指针别名分析器。对应 Ghidra AliasChecker。
-**2026-06-26 完整对齐**（此前为简化版，仅扫描 STORE）：
+**2026-06-26 完整对齐**（此前为简化版，仅扫描 STORE）。
+**2026-07-05 方向约定修正**：`direction` 字段遵循 Ghidra 约定
+（`varmap.cc:700` `direction = stackGrowsNegative() ? 1 : -1`），
+即 `1` = 负向增长（x86）、`-1` = 正向增长。此前 `ScopeLocal::new`
+误初始化为 `-1`，导致 `has_local_alias` 在 x86 上恒返回 false，静默
+关闭了别名分析（P0-1，详见 `docs/alignment_audit/INDEX.md`）。
 - `pub aliases: Vec<u64>` — 排序的别名偏移（varmap.cc `alias`）
 - `pub add_base: Vec<AddBase>` — 加法基根（base + index）
+- `direction: i32` — 方向：`1`=负向增长(x86)，`-1`=正向增长（与 Ghidra `AliasChecker::direction` 同号）
 - `gather_internal(&mut self, fd)` — `AliasChecker::gatherInternal` (varmap.cc:660)
 - `gather_additive_base(&mut self, startvn)` — `AliasChecker::gatherAdditiveBase` (varmap.cc:741)，递归 BFS 追踪 INT_ADD/INT_SUB/PTRADD/PTRSUB/SEGMENTOP/COPY 后继
-- `has_local_alias(&self, vn)` — `AliasChecker::hasLocalAlias` (varmap.cc:711)
+- `has_local_alias(&self, vn)` — `AliasChecker::hasLocalAlias` (varmap.cc:711)；`direction==-1`（正向增长）时返回 false
 - `derive_boundaries(&mut self, local_boundary)` — `AliasChecker::deriveBoundaries`
 
 辅助函数：
