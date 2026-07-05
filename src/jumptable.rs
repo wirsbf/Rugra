@@ -16,6 +16,7 @@ use crate::opcodes::OpCode;
 use crate::rangeutil::CircleRange;
 use crate::varnode::Varnode;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Sentinel used to indicate a jump-table entry that has no case label.
 /// Faithful to `JumpValues::NO_LABEL` (jumptable.cc:36).
@@ -859,7 +860,7 @@ pub trait JumpValues: Send + Sync {
 
 /// A single-entry switch variable that can take a range of values.
 /// Faithful to `JumpValuesRange` (jumptable.hh:188).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct JumpValuesRange {
     /// Acceptable range of values for the normalized switch variable.
     pub range: CircleRange,
@@ -868,7 +869,32 @@ pub struct JumpValuesRange {
     /// First pcode op in the jump-table calculation.
     pub startop: Option<Arc<RwLock<PcodeOp>>>,
     /// The current value pointed to by the iterator.
-    pub curval: u64,
+    /// Interior-mutable (AtomicU64) to faithfully model Ghidra's
+    /// `mutable curval` in `JumpValuesRange::initializeForReading`
+    /// (jumptable.cc:289) and `next()` (jumptable.cc:295), which are
+    /// `const` methods that mutate curval. Without interior mutability,
+    /// the `&self` trait methods could not set curval, and callers had
+    /// to remember to reset it manually — fragile and easy to forget
+    /// (audit P0-3b). AtomicU64 (not Cell) because JumpValuesRange is
+    /// held behind Arc/RwLock in some call paths and must be Sync.
+    pub curval: AtomicU64,
+}
+
+// RUGRA-GLUE: impl Clone for JumpValuesRange — Ghidra 的 JumpValuesRange 是
+// C++ 可拷贝类，拷贝语义由 `JumpValues *JumpValuesRange::clone(void) const`
+// (jumptable.cc:317) 提供，拷贝所有字段。Rugra 因 curval 用 AtomicU64（非
+// Clone）必须手写 Clone impl；行为等价于 Ghidra 的拷贝构造（逐字段拷贝，
+// Atomic 取当前快照值）。
+impl Clone for JumpValuesRange {
+    // RUGRA-GLUE: 手写 Clone（AtomicU64 非 Clone）— Ghidra 等价：JumpValuesRange::clone (jumptable.cc:317)
+    fn clone(&self) -> Self {
+        Self {
+            range: self.range.clone(),
+            normqvn: self.normqvn.clone(),
+            startop: self.startop.clone(),
+            curval: AtomicU64::new(self.curval.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl Default for JumpValuesRange {
@@ -878,7 +904,7 @@ impl Default for JumpValuesRange {
             range: CircleRange::empty(),
             normqvn: None,
             startop: None,
-            curval: 0,
+            curval: AtomicU64::new(0),
         }
     }
 }
@@ -929,19 +955,29 @@ impl JumpValues for JumpValuesRange {
         if self.range.get_size() == 0 {
             return false;
         }
-        // curval is mutable; we mutate via interior mutability of the cloned
-        // iterator. For the trait version, callers obtain a fresh clone.
+        // Ghidra: `curval = range.getMin();` (jumptable.cc:289). The `mutable
+        // curval` in Ghidra lets a const method mutate; AtomicU64 does the
+        // same in Rust. Setting it here means callers no longer need to
+        // remember to reset curval manually (audit P0-3b).
+        self.curval.store(self.range.get_left(), Ordering::Relaxed);
         true
     }
 
     // Ghidra: jumptable.cc:293 JumpValuesRange::next
     fn next(&mut self) -> bool {
-        self.range.next(&mut self.curval)
+        // Ghidra: `if (!range.getNext(curval)) return false;` (jumptable.cc:295)
+        let mut v = self.curval.load(Ordering::Relaxed);
+        if self.range.next(&mut v) {
+            self.curval.store(v, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
-    // Ghidra: jumptable.cc:299 JumpValuesRange::getValue
+    // Ghidra: jumptable.hh:183 JumpValuesRange::getValue
     fn get_value(&self) -> u64 {
-        self.curval
+        self.curval.load(Ordering::Relaxed)
     }
 
     // Ghidra: jumptable.cc:305 JumpValuesRange::getStartVarnode
@@ -971,7 +1007,7 @@ impl JumpValues for JumpValuesRange {
 /// and adds a second entry point that takes only a single value. This value
 /// comes last in the iteration. Faithful to `JumpValuesRangeDefault`
 /// (jumptable.hh:214).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct JumpValuesRangeDefault {
     /// The base range.
     pub base: JumpValuesRange,
@@ -982,7 +1018,26 @@ pub struct JumpValuesRangeDefault {
     /// The starting pcode op associated with the extra value.
     pub extraop: Option<Arc<RwLock<PcodeOp>>>,
     /// True if the extra value has been visited by the iterator.
-    pub lastvalue: bool,
+    /// Interior-mutable (AtomicBool) to faithfully model Ghidra's
+    /// `mutable bool lastvalue` (jumptable.cc:346,350), which is mutated by
+    /// the `const` methods `initializeForReading` (cc:341) and `next` (cc:355).
+    pub lastvalue: AtomicBool,
+}
+
+// RUGRA-GLUE: impl Clone for JumpValuesRangeDefault — 同 JumpValuesRange，
+// Ghidra 由 `JumpValues *JumpValuesRangeDefault::clone(void) const`
+// (jumptable.cc:378) 提供。Rugra 因 lastvalue 用 AtomicBool 必须手写。
+impl Clone for JumpValuesRangeDefault {
+    // RUGRA-GLUE: 手写 Clone（AtomicBool 非 Clone）— Ghidra 等价：JumpValuesRangeDefault::clone (jumptable.cc:378)
+    fn clone(&self) -> Self {
+        Self {
+            base: self.base.clone(),
+            extravalue: self.extravalue,
+            extravn: self.extravn.clone(),
+            extraop: self.extraop.clone(),
+            lastvalue: AtomicBool::new(self.lastvalue.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl JumpValuesRangeDefault {
@@ -1026,36 +1081,43 @@ impl JumpValues for JumpValuesRangeDefault {
 
     // Ghidra: jumptable.cc:341 JumpValuesRangeDefault::initializeForReading
     fn initialize_for_reading(&self) -> bool {
-        // The iterator state is held in the cloned copy; here we just report
-        // whether there are any values.
+        // Faithful to jumptable.cc:344-352:
+        //   if (range.getSize()==0) { curval = extravalue; lastvalue = true; }
+        //   else                    { curval = range.getMin(); lastvalue = false; }
+        //   return true;
         if self.base.range.get_size() == 0 {
-            true
+            self.base.curval.store(self.extravalue, Ordering::Relaxed);
+            self.lastvalue.store(true, Ordering::Relaxed);
         } else {
-            true
+            self.base.curval.store(self.base.range.get_left(), Ordering::Relaxed);
+            self.lastvalue.store(false, Ordering::Relaxed);
         }
+        true
     }
 
     // Ghidra: jumptable.cc:355 JumpValuesRangeDefault::next
     fn next(&mut self) -> bool {
-        if self.lastvalue {
+        if self.lastvalue.load(Ordering::Relaxed) {
             return false;
         }
-        if self.base.range.next(&mut self.base.curval) {
+        let mut v = self.base.curval.load(Ordering::Relaxed);
+        if self.base.range.next(&mut v) {
+            self.base.curval.store(v, Ordering::Relaxed);
             return true;
         }
-        self.lastvalue = true;
-        self.base.curval = self.extravalue;
+        self.lastvalue.store(true, Ordering::Relaxed);
+        self.base.curval.store(self.extravalue, Ordering::Relaxed);
         true
     }
 
     // RUGRA-GLUE: inherited from JumpValuesRange in Ghidra (jumptable.cc:299); Rust requires explicit trait impl
     fn get_value(&self) -> u64 {
-        self.base.curval
+        self.base.curval.load(Ordering::Relaxed)
     }
 
     // Ghidra: jumptable.cc:366 JumpValuesRangeDefault::getStartVarnode
     fn get_start_varnode(&self) -> Option<Arc<RwLock<Varnode>>> {
-        if self.lastvalue {
+        if self.lastvalue.load(Ordering::Relaxed) {
             self.extravn.clone()
         } else {
             self.base.normqvn.clone()
@@ -1064,7 +1126,7 @@ impl JumpValues for JumpValuesRangeDefault {
 
     // Ghidra: jumptable.cc:372 JumpValuesRangeDefault::getStartOp
     fn get_start_op(&self) -> Option<Arc<RwLock<PcodeOp>>> {
-        if self.lastvalue {
+        if self.lastvalue.load(Ordering::Relaxed) {
             self.extraop.clone()
         } else {
             self.base.startop.clone()
@@ -1073,7 +1135,7 @@ impl JumpValues for JumpValuesRangeDefault {
 
     // Ghidra: jumptable.hh:229 JumpValuesRangeDefault::isReversible
     fn is_reversible(&self) -> bool {
-        !self.lastvalue
+        !self.lastvalue.load(Ordering::Relaxed)
     }
 
     // Ghidra: jumptable.cc:378 JumpValuesRangeDefault::clone
@@ -2058,10 +2120,8 @@ impl JumpModel for JumpBasic {
         // moving the Option<&mut> in the loop.
         let mut local_loadcounts: Vec<i32> = Vec::new();
         if iter.initialize_for_reading() {
-            // Ghidra's initializeForReading sets curval=range.getMin() via
-            // `mutable curval` (jumptable.cc:289). Rugra's trait method takes
-            // &self so we set it here on the cloned iterator.
-            iter.curval = jrange.range.get_left();
+            // initialize_for_reading now sets curval=range.getMin() itself
+            // via AtomicU64 (matches Ghidra's `mutable curval`, jumptable.cc:289).
             loop {
                 let val = iter.get_value();
                 let start_op = iter.get_start_op();
@@ -2204,7 +2264,7 @@ impl JumpModel for JumpBasic {
         };
         let mut iter = jrange.clone();
         if iter.initialize_for_reading() {
-            iter.curval = jrange.range.get_left();
+            // curval reset happens inside initialize_for_reading (AtomicU64, jumptable.cc:289)
             loop {
                 let val = iter.get_value();
                 let switchval = if iter.is_reversible() {
@@ -3270,7 +3330,7 @@ mod tests {
         let mut r = JumpValuesRange::default();
         r.set_range(CircleRange::new(0, 4, 4, 1));
         assert_eq!(r.get_size(), 4);
-        r.curval = 0;
+        r.curval.store(0, Ordering::Relaxed);
         assert!(r.contains(2));
         assert!(!r.contains(5));
     }
@@ -3284,14 +3344,14 @@ mod tests {
             extravalue: 99,
             extravn: None,
             extraop: None,
-            lastvalue: false,
+            lastvalue: AtomicBool::new(false),
         };
         assert_eq!(r.get_size(), 4); // 3 + 1 extra
         assert!(r.contains(2));
         assert!(r.contains(99));
         assert!(!r.contains(50));
         // Iterate: 0, 1, 2, then extra 99.
-        r.base.curval = 0;
+        r.base.curval.store(0, Ordering::Relaxed);
         assert!(r.next());
         assert!(r.next());
         // After the range is exhausted, the extra value should appear.

@@ -108,6 +108,12 @@ A jump-table execution model (jumptable.hh:243).
 ## `JumpValuesRange` / `JumpValuesRangeDefault`
 Implementations of `JumpValues` for a single-entry range / a range plus an
 extra default value (jumptable.hh:188 / 214).
+**2026-07-05 修正**：`curval`/`lastvalue` 改为 `AtomicU64`/`AtomicBool`（对应
+Ghidra `mutable curval`/`mutable bool lastvalue`），使 `&self` 的
+`initialize_for_reading` 能像 Ghidra `const` 方法一样产生设置 curval 的副作用
+（jumptable.cc:289 / 341-353）。Default 变体之前两分支都返回 true 且不设
+`curval`/`lastvalue`，现已按 Ghidra cc:344-352 正确分支。手动 `Clone` impl
+（Atomic 类型非 Clone）。
 
 ## Model implementations
 
