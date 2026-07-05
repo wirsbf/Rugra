@@ -15,3 +15,5 @@ wired into the main pipeline (x86_lift.rs is still the default lifter).
 - `opc_from` — jingle_sleigh OpCode → Rugra OpCode (by variant name)
 
 <!-- lift-instr: 1783181251.8037653 -->
+
+<!-- sleigh-fix: 1783218732.6945384 -->

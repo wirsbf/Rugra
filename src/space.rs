@@ -19,17 +19,16 @@ use std::fmt;
 /// Address space identifier
 pub type SpaceId = u8;
 
-// Standard space IDs (matching Ghidra conventions)
-pub const SPACEID_RAM: SpaceId = 0;
-pub const SPACEID_REGISTER: SpaceId = 1;
+// Space IDs matching SLEIGH .sla spec space indices (space.hh getIndex()).
+// SLEIGH x86-64 spec: 0=const, 1=OTHER, 2=unique, 3=ram, 4=register.
+// Rugra extends past index 4 for its own spaces (Stack, Join, Iop).
+pub const SPACEID_CONST: SpaceId = 0;
+pub const SPACEID_OTHER: SpaceId = 1;
 pub const SPACEID_UNIQUE: SpaceId = 2;
-pub const SPACEID_CONST: SpaceId = 3;
-pub const SPACEID_STACK: SpaceId = 4;
-pub const SPACEID_JOIN: SpaceId = 5;
-pub const SPACEID_OVERLAY: SpaceId = 6;
-/// Internal "iop" space: varnodes that reference another PcodeOp (Ghidra
-/// `IPTR_IOP`, space.hh:35). Used by INDIRECT creation to point at the
-/// effect-producing op.
+pub const SPACEID_RAM: SpaceId = 3;
+pub const SPACEID_REGISTER: SpaceId = 4;
+pub const SPACEID_STACK: SpaceId = 5;
+pub const SPACEID_JOIN: SpaceId = 6;
 pub const SPACEID_IOP: SpaceId = 7;
 
 /// Address space in which a varnode resides
@@ -77,28 +76,27 @@ impl AddressSpace {
             AddressSpace::Stack => SPACEID_STACK,
             AddressSpace::Join => SPACEID_JOIN,
             AddressSpace::Iop => SPACEID_IOP,
-            AddressSpace::Overlay => SPACEID_OVERLAY,
+            AddressSpace::Overlay => SPACEID_OTHER,
             AddressSpace::Other(id) => *id,
         }
     }
 
-    // RUGRA-GLUE: from_id (no Ghidra counterpart found)
-    /// Create from space ID
+    // Ghidra: space.hh:31 spacetype
     pub fn from_id(id: SpaceId) -> Self {
         match id {
+            SPACEID_CONST => AddressSpace::Const,
+            SPACEID_OTHER => AddressSpace::Other(id),
+            SPACEID_UNIQUE => AddressSpace::Unique,
             SPACEID_RAM => AddressSpace::Ram,
             SPACEID_REGISTER => AddressSpace::Register,
-            SPACEID_UNIQUE => AddressSpace::Unique,
-            SPACEID_CONST => AddressSpace::Const,
             SPACEID_STACK => AddressSpace::Stack,
             SPACEID_JOIN => AddressSpace::Join,
             SPACEID_IOP => AddressSpace::Iop,
-            SPACEID_OVERLAY => AddressSpace::Overlay,
             id => AddressSpace::Other(id),
         }
     }
 
-    // RUGRA-GLUE: is_register (no Ghidra counterpart found)
+    // RUGRA-GLUE: is_register
     /// Check if this is a register space
     pub fn is_register(&self) -> bool {
         matches!(self, AddressSpace::Register)
@@ -612,7 +610,7 @@ mod tests {
     #[test]
     fn test_constant_space_methods() {
         let const_space = ConstantSpace::new();
-        assert_eq!(const_space.print_raw(), "const_space[3]");
+        assert_eq!(const_space.print_raw(), "const_space[0]");
         assert!(!const_space.overlap_join(0, 100));
     }
 
@@ -647,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_overlay_space_decode() {
-        let overlay = OverlaySpace::decode("10:0:test_overlay").unwrap();
+        let overlay = OverlaySpace::decode("10:3:test_overlay").unwrap();
         assert_eq!(overlay.id, 10);
         assert_eq!(overlay.base(), AddressSpace::Ram);
         assert_eq!(overlay.name, "test_overlay");

@@ -254,3 +254,5 @@ Decode from string format "id:base_space_id:name"
 ### 2026-07-01：Iop 地址空间（Ghidra IPTR_IOP）
 - 新增 `AddressSpace::Iop` 变体 + `SPACEID_IOP=7` + `is_iop()`。Ghidra `IPTR_IOP`（space.hh:35）用于让 varnode 引用另一个 PcodeOp（INDIRECT creation 的 iop 输入）。是 `new_varnode_iop` + `get_op_from_const` 的前置。
 <!-- annotation-pass: 2026-07-04 -->
+
+<!-- sleigh-fix: 1783218732.6904683 -->
