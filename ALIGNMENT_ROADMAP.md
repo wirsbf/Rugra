@@ -600,9 +600,9 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - **P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。
 - **P6**: switch 加 `(long)` cast（Ghidra 无）；case 用 char 字面量（Ghidra 用 pushConstant 数值）；break 抑制逻辑不同；无 fallthrough 处理。
 - **P7**: ~~缺 BlockInfLoop~~ **已修复（c77a545）**：emit_structured_infloop 输出 `do { } while(true);`。剩余 overflow_syntax while 形式（while(true) { if(cb) break; }）未实现。
-- **P8**: emitBlockCondition 复合 &&/|| 发射为独立语句非合并条件。
-- **P9**: 无 else if 链化（pending_brace）；总是 `else { if... }`。
-- **P10**: doc_statement 无条件加 `;`；无 comma_separate。
+- ~~**P8**: emitBlockCondition 复合 &&/|| 发射为独立语句非合并条件。~~ **已修复（1f24f18）**：emit_structured_condition 对顶层 BlockCondition 现发射 `if (left && right) {}`，capture_block_condition 递归处理嵌套。
+- **P9**: 无 else if 链化（pending_brace）；总是 `else { if... }`。（mod-stack 基础设施已就绪，PENDING_BRACE 常量已加）
+- ~~**P10**: doc_statement 无条件加 `;`；无 comma_separate。~~ **已修复（1f24f18）**：print_mods 模块 + mods/mod_stack 字段 + is_set/push_mod/pop_mod/set_mod/unset_mod；doc_statement 按 `!is_set(COMMA_SEPARATE)` 条件输出 `;`。
 
 ### op/varnode 死代码（已标注，低优先级直到接入）
 
