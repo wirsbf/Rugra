@@ -173,6 +173,19 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         // spanning-tree labels in Rugra's structurer.
     }
 
+    // Ghidra: block.hh:289 FlowBlock::clearOutEdgeFlag
+    /// Clear a flag from a single outgoing edge. Faithful to Ghidra's
+    /// `FlowBlock::clearOutEdgeFlag` (block.hh:289). Counterpart to
+    /// `set_out_edge_flag`. Used by LoopBody::clearExitMarks.
+    fn clear_out_edge_flag(&mut self, slot: usize, flag: u32) {
+        let any = self.as_any_mut();
+        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
+            if slot < bb.outgoing.len() { bb.outgoing[slot].flags &= !flag; }
+        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
+            if slot < bg.outgoing.len() { bg.outgoing[slot].flags &= !flag; }
+        }
+    }
+
     /// Clear a mask of edge flags from ALL outgoing edges.
     /// Faithful to Ghidra's `FlowBlock::clearEdgeFlags` (block.cc).
     // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags

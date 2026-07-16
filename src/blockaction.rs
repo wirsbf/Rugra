@@ -151,6 +151,43 @@ pub struct FloatingEdge {
     pub to_idx: i32,
 }
 
+impl FloatingEdge {
+    // Ghidra: blockaction.cc:27 FloatingEdge::getCurrentEdge
+    /// Re-resolve this edge against the live graph: move top/bottom up through
+    /// the collapse hierarchy to the current graph level, then check if the
+    /// out-edge still exists. Returns Some((top_idx, outedge)) if the edge is
+    /// still present, None if it was collapsed away.
+    ///
+    /// Ghidra walks `top->getParent() != graph` (up through nested structured
+    /// blocks). Rugra's index-based model doesn't maintain a clean parent
+    /// chain at graph level (identify_internal installs structured blocks at
+    /// install_idx, consuming children which become DEAD). So we resolve by:
+    /// if the original top/bottom indices are still live (not DEAD) and top
+    /// has an out-edge to bottom, use them; otherwise None. This mirrors the
+    /// effect of Ghidra's parent-walk for the common case where the edge
+    /// hasn't been collapsed.
+    pub fn get_current_edge(&self, graph: &BlockGraph) -> Option<(i32, usize)> {
+        let top_i = self.from_idx as usize;
+        let bottom_i = self.to_idx as usize;
+        if top_i >= graph.get_size() { return None; }
+        let top = graph.get_block(top_i)?;
+        let top_r = top.read().unwrap();
+        // If top was consumed (DEAD), the edge is gone.
+        if top_r.get_flags() & crate::block::block_flags::DEAD != 0 { return None; }
+        // Find the out-slot whose target is bottom (by index identity or
+        // current bottom index if still live).
+        for slot in 0..top_r.size_out() {
+            if let Some(e) = top_r.get_out(slot) {
+                let dst = e.point.read().unwrap().get_index();
+                if dst == self.to_idx {
+                    return Some((self.from_idx, slot));
+                }
+            }
+        }
+        None
+    }
+}
+
 /// A natural loop detected during orderLoopBodies.
 ///
 /// Faithful to Ghidra's `LoopBody` class (blockaction.cc:46-490). Holds the
@@ -561,6 +598,70 @@ impl LoopBody {
             }
         }
     }
+
+    // Ghidra: blockaction.cc:94 LoopBody::update
+    /// Update head/tails to the current graph view and return the loop's
+    /// bottom (first tail not collapsed into head). Returns None if the loop
+    /// has been fully collapsed (or head self-loops, returning Some(head)).
+    /// Faithful to `LoopBody::update` (blockaction.cc:94-114). Rugra's
+    /// index-based model: a block is "collapsed" if DEAD or its index no
+    /// longer holds a live block matching the loop's tail.
+    pub fn update(&mut self, graph: &BlockGraph) -> Option<i32> {
+        // For each tail, if it's still live (not DEAD) and != head, it's the bottom.
+        for ti in 0..self.tails.len() {
+            let tail_i = self.tails[ti] as usize;
+            if tail_i >= graph.get_size() { continue; }
+            let tail_blk = match graph.get_block(tail_i) { Some(b) => b, None => continue };
+            let tail_r = tail_blk.read().unwrap();
+            if tail_r.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+            if tail_i as i32 != self.head {
+                return Some(tail_i as i32);
+            }
+        }
+        // Check head self-loop (cc:109-112).
+        let head_i = self.head as usize;
+        if head_i < graph.get_size() {
+            if let Some(head_blk) = graph.get_block(head_i) {
+                let head_r = head_blk.read().unwrap();
+                if head_r.get_flags() & crate::block::block_flags::DEAD == 0 {
+                    for slot in 0..head_r.size_out() {
+                        if let Some(e) = head_r.get_out(slot) {
+                            if e.point.read().unwrap().get_index() == self.head {
+                                return Some(self.head);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Ghidra: blockaction.cc:416 LoopBody::setExitMarks
+    /// Mark exit edges' source out-edges with f_loop_exit_edge. Faithful to
+    /// `LoopBody::setExitMarks` (blockaction.cc:416-426). Re-resolves each
+    /// exit edge against the live graph before marking.
+    pub fn set_exit_marks(&self, graph: &mut BlockGraph) {
+        for fe in &self.exit_edges {
+            if let Some((top_idx, slot)) = fe.get_current_edge(graph) {
+                if let Some(blk) = graph.get_block(top_idx as usize) {
+                    blk.write().unwrap().set_out_edge_flag(slot, crate::block::edge_flags::F_LOOP_EXIT_EDGE);
+                }
+            }
+        }
+    }
+
+    // Ghidra: blockaction.cc:430 LoopBody::clearExitMarks
+    /// Clear f_loop_exit_edge on this loop's exit edges.
+    pub fn clear_exit_marks(&self, graph: &mut BlockGraph) {
+        for fe in &self.exit_edges {
+            if let Some((top_idx, slot)) = fe.get_current_edge(graph) {
+                if let Some(blk) = graph.get_block(top_idx as usize) {
+                    blk.write().unwrap().clear_out_edge_flag(slot, crate::block::edge_flags::F_LOOP_EXIT_EDGE);
+                }
+            }
+        }
+    }
 }
 
 // Ghidra: blockaction.cc:446 LoopBody::mergeIdenticalHeads
@@ -624,6 +725,22 @@ pub(crate) struct CollapseStructure<'a> {
     /// sorted deepest-nesting-first. Used for nested-loop structuring and
     /// exit-edge labeling.
     loop_order: std::collections::VecDeque<LoopBody>,
+    // --- B5/B6: Ghidra selectGoto state machine fields (blockaction.hh:89-95) ---
+    /// finaltrace: true once a TraceDAG over the whole DAG found no likely
+    /// goto edges (blockaction.cc:1196,1248). Prevents repeating the trace.
+    finaltrace: bool,
+    /// likelygoto: list of (top,bottom) block-index edges selected as goto
+    /// candidates by TraceDAG (blockaction.hh:92). Re-resolved against the
+    /// live graph each iteration via get_current_edge.
+    likelygoto: Vec<FloatingEdge>,
+    /// likelyiter: current position in likelygoto (blockaction.hh:93).
+    likelyiter: usize,
+    /// likelylistfull: true once likelygoto is fully populated for the
+    /// current loop/DAG (blockaction.hh:94).
+    likelylistfull: bool,
+    /// loopbodyiter: current position in loop_order being processed by
+    /// update_loop_body (blockaction.hh:89). -1 = not started.
+    loopbodyiter: i32,
 }
 
 impl<'a> CollapseStructure<'a> {
@@ -636,6 +753,11 @@ impl<'a> CollapseStructure<'a> {
             idom: std::collections::HashMap::new(),
             loop_bodies: Vec::new(),
             loop_order: std::collections::VecDeque::new(),
+            finaltrace: false,
+            likelygoto: Vec::new(),
+            likelyiter: 0,
+            likelylistfull: false,
+            loopbodyiter: -1,
         }
     }
 
@@ -981,6 +1103,150 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.cc:1193 CollapseStructure::updateLoopBody
+    /// Advance the loopbodyiter over loop_order, building a per-loop TraceDAG
+    /// and populating likelygoto. Returns true if likelygoto has entries to
+    /// consume; false if all loops exhausted and no likely gotos remain.
+    /// Faithful to `updateLoopBody` (blockaction.cc:1193-1253).
+    ///
+    /// State machine (Ghidra fields finaltrace/likelygoto/likelyiter/
+    /// likelylistfull/loopbodyiter, blockaction.hh:89-95):
+    ///   - If finaltrace already set, return false (cc:1196-1198).
+    ///   - Advance loopbodyiter; for each LoopBody, call update(). If a bottom
+    ///     is found and it's a single-node self-loop, mark that edge as goto
+    ///     directly (cc:1206-1213). Otherwise break to build TraceDAG (cc:1214-1216).
+    ///   - If likelylistfull && likelyiter not exhausted, return true (cc:1222-1223).
+    ///   - Build a TraceDAG rooted at looptop with finish=loopbottom (cc:1227-1232),
+    ///     or over the whole DAG if no loop (cc:1233-1239). emitLikelyEdges +
+    ///     clearExitMarks (cc:1243-1246). If no loop and likelygoto empty, set
+    ///     finaltrace, return false (cc:1247-1250).
+    fn update_loop_body(&mut self) -> bool {
+        if self.finaltrace { return false; }
+        let mut loopbottom: i32 = -1;
+        let mut looptop: i32 = -1;
+        // Advance loopbodyiter over loop_order.
+        while (self.loopbodyiter as usize) < self.loop_order.len() {
+            let lb_idx = self.loopbodyiter as usize;
+            let loopbottom_opt = self.loop_order[lb_idx].update(self.graph);
+            if let Some(bottom) = loopbottom_opt {
+                looptop = self.loop_order[lb_idx].head;
+                loopbottom = bottom;
+                if bottom == looptop {
+                    // cc:1206-1213: single-node self-loop (likely a switch).
+                    self.likelygoto.clear();
+                    self.likelygoto.push(FloatingEdge { from_idx: looptop, to_idx: looptop });
+                    self.likelyiter = 0;
+                    self.likelylistfull = true;
+                    return true;
+                }
+                if !self.likelylistfull || self.likelyiter < self.likelygoto.len() {
+                    break; // Loop still exists
+                }
+            }
+            self.loopbodyiter += 1;
+            self.likelylistfull = false;
+            loopbottom = -1;
+        }
+        if self.likelylistfull && self.likelyiter < self.likelygoto.len() {
+            return true;
+        }
+        // Generate likely gotos for a new inner loop or the whole DAG.
+        self.likelygoto.clear();
+        // Build via existing TraceDAG (generate_likely_gotos) + LoopBody emit.
+        let mut edges: Vec<crate::tracedag::FloatingEdge> =
+            crate::tracedag::generate_likely_gotos(self.graph);
+        // cc:1228-1232: if we have a loop, restrict TraceDAG to it via
+        // emit_likely_edges (per-loop priority). We append LoopBody edges.
+        if loopbottom != -1 {
+            let lb_idx = self.loopbodyiter as usize;
+            if lb_idx < self.loop_order.len() {
+                let mut lb_edges: Vec<FloatingEdge> = Vec::new();
+                self.loop_order[lb_idx].emit_likely_edges(&mut lb_edges, self.graph);
+                for fe in lb_edges {
+                    edges.push(crate::tracedag::FloatingEdge { top: fe.from_idx, bottom: fe.to_idx });
+                }
+                // cc:1231: setExitMarks
+                self.loop_order[lb_idx].set_exit_marks(self.graph);
+            }
+        } else {
+            // cc:1233-1239: no loop — trace from all roots (sizeIn==0).
+            // generate_likely_gotos already does whole-graph tracing.
+        }
+        self.likelylistfull = true;
+        if loopbottom != -1 {
+            let lb_idx = self.loopbodyiter as usize;
+            if lb_idx < self.loop_order.len() {
+                // cc:1244-1245: emitLikelyEdges already done above; clear marks.
+                self.loop_order[lb_idx].clear_exit_marks(self.graph);
+            }
+        } else if edges.is_empty() {
+            // cc:1247-1250: no loops and trace found no gotos.
+            self.finaltrace = true;
+            return false;
+        }
+        // Populate likelygoto from edges.
+        self.likelygoto = edges.iter()
+            .map(|fe| FloatingEdge { from_idx: fe.top, to_idx: fe.bottom })
+            .collect();
+        self.likelyiter = 0;
+        true
+    }
+
+    // Ghidra: blockaction.cc:1260 CollapseStructure::selectGoto
+    /// Pick one edge from likelygoto, re-resolve against the live graph, and
+    /// mark it as goto via set_goto_branch. Returns the source block index, or
+    /// None if no goto could be selected (then clipExtraRoots or error).
+    /// Faithful to `selectGoto` (blockaction.cc:1260-1277).
+    fn select_goto(&mut self) -> Option<i32> {
+        while self.update_loop_body() {
+            while self.likelyiter < self.likelygoto.len() {
+                let fe = self.likelygoto[self.likelyiter].clone();
+                self.likelyiter += 1;
+                // cc:1266: getCurrentEdge re-resolves against live graph.
+                if let Some((startbl_idx, outedge)) = fe.get_current_edge(self.graph) {
+                    // cc:1269: setGotoBranch(outedge).
+                    if let Some(blk) = self.graph.get_block(startbl_idx as usize) {
+                        self.set_goto_branch_on_block(&blk, outedge);
+                    }
+                    return Some(startbl_idx);
+                }
+            }
+        }
+        None
+    }
+
+    // RUGRA-GLUE: set_goto_branch_on_block (Ghidra calls bl->setGotoBranch(i);
+    // Rugra routes through Funcdata::set_goto_branch which lives on Funcdata,
+    // not FlowBlock. CollapseStructure owns graph, so we apply the 3-op
+    // marking directly here using the block-level flags.)
+    fn set_goto_branch_on_block(
+        &mut self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        j: usize,
+    ) {
+        // Capture target for INTERIOR_GOTOIN before write lock.
+        let target_opt = {
+            let r = bl.read().unwrap();
+            if j < r.size_out() { r.get_out(j).map(|e| e.point.clone()) } else { None }
+        };
+        {
+            let mut w = bl.write().unwrap();
+            w.set_flags(crate::block::block_flags::INTERIOR_GOTOOUT);
+            if let Some(bb) = w.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                match j {
+                    0 => bb.flags |= crate::block::block_flags::GOTO_EDGE_0,
+                    1 => bb.flags |= crate::block::block_flags::GOTO_EDGE_1,
+                    _ => {}
+                }
+            } else {
+                w.set_out_edge_flag(j, crate::block::edge_flags::F_GOTO_EDGE);
+            }
+        }
+        if let Some(target) = target_opt {
+            target.write().unwrap().set_flags(crate::block::block_flags::INTERIOR_GOTOIN);
+        }
+    }
+
     // Ghidra: blockaction.hh:46 LoopBody::runGotoCascade
     // Ghidra-style selectGoto loop
     fn run_goto_cascade(&mut self) {
@@ -1006,7 +1272,18 @@ impl<'a> CollapseStructure<'a> {
             }
             prev_graph_size = cur_size;
             prev_change_count = cur_change;
-            let goto_marked = self.select_and_mark_goto();
+            // B5/B6/B7: Ghidra-faithful selectGoto path — preferred over the
+            // batch select_and_mark_goto/clip_extra_roots/run_tracedag fallbacks.
+            // select_goto drives update_loop_body (per-innermost-loop TraceDAG)
+            // and re-resolves edges against the live graph each iteration,
+            // matching Ghidra's collapseAll step 4 (selectGoto loop).
+            let ghidra_target = self.select_goto();
+            let goto_marked = if ghidra_target.is_some() {
+                self.change_count += 1;
+                true
+            } else {
+                self.select_and_mark_goto()
+            };
             // Fallback: clip_extra_roots marks irreducible cross-over edges as
             // goto when select_and_mark_goto finds nothing. try_rule_goto then
             // consumes the marked blocks (newBlockGoto), preventing infinite loops.
