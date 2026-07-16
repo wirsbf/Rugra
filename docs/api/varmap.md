@@ -135,3 +135,4 @@ my_fwrite 的 `LOAD@0x3475` 是 `INT_ADD(param_4=Register:0x8, 8)`——参数�
 ### 2026-07-01：query_by_addr
 - `ScopeLocal::query_by_addr(offset, size) -> Option<(&LocalSymbol, i32)>` — 查栈范围匹配符号，返回符号+偏移（partial read）。
 <!-- annotation-pass: 2026-07-04 -->
+ 

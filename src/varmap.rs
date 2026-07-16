@@ -1432,9 +1432,12 @@ impl ScopeLocal {
                 None => break,
             };
 
-            // Check if ranges intersect
-            let cur_end = current.start.wrapping_add(current.size as u64);
-            if next.start < cur_end {
+            // Check if ranges intersect — Ghidra cc:1308 uses SIGNED comparison
+            // (sstart is intb/int8). For negative stack offsets (x86 locals at
+            // high unsigned addresses = small negatives), unsigned comparison
+            // treats them as huge positives → wrong intersection decision.
+            let cur_end = current.sstart.wrapping_add(current.size as i64);
+            if next.sstart < cur_end {
                 // Ranges intersect — merge them
                 if current.merge_with(&next) {
                     overlap_problems = true;
