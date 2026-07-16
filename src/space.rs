@@ -355,6 +355,53 @@ impl OtherSpace {
     }
 }
 
+// Ghidra: translate.hh:196 JoinRecord
+/// A record describing how a join-space address maps to physical pieces.
+#[derive(Debug, Clone)]
+pub struct JoinRecord {
+    pub pieces: Vec<VarnodeData>,
+    pub unified: VarnodeData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarnodeData {
+    pub space: AddressSpace,
+    pub offset: u64,
+    pub size: usize,
+}
+
+impl JoinRecord {
+    // Ghidra: translate.hh:201 JoinRecord::numPieces
+    pub fn num_pieces(&self) -> usize { self.pieces.len() }
+    // Ghidra: translate.hh:202 JoinRecord::isFloatExtension
+    pub fn is_float_extension(&self) -> bool { self.pieces.len() == 1 }
+    // Ghidra: translate.hh:203 JoinRecord::getPiece
+    pub fn get_piece(&self, i: usize) -> &VarnodeData { &self.pieces[i] }
+    // Ghidra: translate.hh:204 JoinRecord::getUnified
+    pub fn get_unified(&self) -> &VarnodeData { &self.unified }
+}
+
+pub struct JoinDatabase {
+    pub records: Vec<JoinRecord>,
+}
+
+impl JoinDatabase {
+    // RUGRA-GLUE: Rust Default ctor (Ghidra uses AddrSpaceManager's vector)
+    pub fn new() -> Self { Self { records: Vec::new() } }
+    // Ghidra: translate.hh:232 AddrSpaceManager::findJoin
+    pub fn find_join(&self, offset: u64) -> Option<&JoinRecord> {
+        self.records.iter().find(|r| r.unified.offset == offset)
+    }
+    // Ghidra: translate.hh:234 AddrSpaceManager::addJoin
+    pub fn add_join(&mut self, pieces: Vec<VarnodeData>) -> u64 {
+        let offset = self.records.len() as u64;
+        let total_size: usize = pieces.iter().map(|p| p.size).sum();
+        let unified = VarnodeData { space: AddressSpace::Join, offset, size: total_size };
+        self.records.push(JoinRecord { pieces, unified });
+        offset
+    }
+}
+
 /// Join space (for combining multiple spaces)
 ///
 /// Corresponds to Ghidra's `JoinSpace` in space.hh

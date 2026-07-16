@@ -262,3 +262,4 @@ Decode from string format "id:base_space_id:name"
 - `get_delay`(space.hh): Stack=1,其他=0(Ghidra .sla spec 默认)。
 - `get_deadcode_delay`: = get_delay。
 - `is_heritaged`: Const/Iop/Join 不 heritaged。
+ 
