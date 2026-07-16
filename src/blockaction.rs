@@ -761,10 +761,153 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: blockaction.cc:1768 CollapseStructure::collapseInternal
+    /// Run the 8-rule fixpoint + IfNoExit/CaseFallthru second pass, optionally
+    /// targeting a single block (targetbl). Faithful to `collapseInternal`
+    /// (blockaction.cc:1768-1851): outer do-while(fullchange), inner fixpoint
+    /// do-while(change) running ruleBlockGoto/Cat/ProperIf/IfElse/WhileDo/
+    /// DoWhile/InfLoop/Switch per block, then second pass IfNoExit+CaseFallthru.
+    ///
+    /// When `target_idx` is Some, Ghidra runs the inner loop on just that block
+    /// (cc:1786-1791). When None, iterates all blocks (cc:1782-1785).
+    /// Returns isolated_count (blocks with sizeIn==0 && sizeOut==0).
+    fn collapse_internal(&mut self, target_idx: Option<i32>) -> i32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let max_iterations = self.graph.get_size() * 3 + 4;
+        let mut iterations = 0;
+        let mut isolated_count;
+        let has_switch = (0..self.graph.get_size()).any(|i| {
+            self.graph.get_block(i).map_or(false, |b| {
+                b.read().unwrap().get_type() == crate::block::BlockType::Switch
+            })
+        });
+        'fullchange: loop {
+            if std::time::Instant::now() > deadline { break; }
+            // Inner fixpoint: 8 rules per block until no change.
+            loop {
+                if std::time::Instant::now() > deadline { break; }
+                let change_before = self.change_count;
+                isolated_count = 0;
+                let size = self.graph.get_size();
+                let mut idx: usize = 0;
+                while idx < size {
+                    if std::time::Instant::now() > deadline { break; }
+                    // cc:1782-1791: targetbl selection.
+                    let i = if let Some(t) = target_idx {
+                        // Single targeted block; force a change and stop iterating.
+                        idx = size;
+                        t as usize
+                    } else {
+                        let cur = idx;
+                        idx += 1;
+                        cur
+                    };
+                    if i >= size { break; }
+                    let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+                    // cc:1792-1795: completely collapsed block → isolated_count.
+                    {
+                        let r = block.read().unwrap();
+                        if r.get_flags() & crate::block::block_flags::DEAD != 0 {
+                            isolated_count += 1;
+                            continue;
+                        }
+                        if r.size_in() == 0 && r.size_out() == 0 {
+                            isolated_count += 1;
+                            continue;
+                        }
+                    }
+                    // cc:1797-1828: the 8 rules in order.
+                    self.apply_rules_to_block(i);
+                }
+                self.refresh_switch_cases();
+                iterations += 1;
+                if self.change_count == change_before || iterations >= max_iterations {
+                    break;
+                }
+            }
+            // cc:1835-1848: second pass — IfNoExit + CaseFallthru.
+            let mut fullchange = false;
+            if std::time::Instant::now() <= deadline {
+                if !has_switch {
+                    let s2 = self.graph.get_size();
+                    for j in 0..s2 {
+                        if self.try_rule_if_no_exit(j) {
+                            fullchange = true;
+                            break;
+                        }
+                    }
+                }
+                if !fullchange && self.collapse_case_fallthru() {
+                    fullchange = true;
+                }
+            }
+            if !fullchange { break 'fullchange; }
+        }
+        // Final isolated_count.
+        let mut count = 0;
+        for i in 0..self.graph.get_size() {
+            if let Some(blk) = self.graph.get_block(i) {
+                let r = blk.read().unwrap();
+                if r.get_flags() & crate::block::block_flags::DEAD != 0 { count += 1; }
+                else if r.size_in() == 0 && r.size_out() == 0 { count += 1; }
+            }
+        }
+        count
+    }
+
+    // Ghidra: blockaction.cc:1877 CollapseStructure::collapseAll
+    /// Faithful 5-step rewrite of collapseAll (blockaction.cc:1877-1893):
+    ///   1. orderLoopBodies
+    ///   2. collapseConditions
+    ///   3. collapseInternal(NULL)
+    ///   4. while (isolated < graph.getSize()) { selectGoto; collapseInternal(targetbl) }
+    ///   5. (finalize — DEAD sweep)
+    /// Enabled via env var RUGRA_5STEP=1. The 7-phase collapse_all remains the
+    /// default until the 5-step path is verified against the differential gate.
+    pub(crate) fn collapse_all_5step(&mut self) {
+        // cc:1879: finaltrace = false; graph.clearVisitCount();
+        self.finaltrace = false;
+        self.likelygoto.clear();
+        self.likelyiter = 0;
+        self.likelylistfull = false;
+        self.loopbodyiter = -1;
+        // cc:S1: orderLoopBodies.
+        self.order_loop_bodies();
+        self.apply_loop_exit_marks();
+        // cc:S2: collapseConditions (fixpoint ruleBlockOr).
+        self.collapse_conditions();
+        // cc:S3: collapseInternal(NULL).
+        let mut isolated = self.collapse_internal(None);
+        // cc:S4: selectGoto loop.
+        let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while isolated < self.graph.get_size() as i32 {
+            if std::time::Instant::now() > goto_deadline { break; }
+            // cc:1263: selectGoto picks one edge and marks it goto; if it
+            // exhausts, clipExtraRoots (or throw in Ghidra).
+            let target = self.select_goto();
+            if target.is_none() {
+                // cc:1274: clipExtraRoots fallback.
+                if !self.clip_extra_roots() {
+                    eprintln!("[COLLAPSE] {} 5step: selectGoto exhausted, clipExtraRoots false", self.name);
+                    break;
+                }
+            }
+            isolated = self.collapse_internal(target);
+        }
+    }
+
     /// Collapse all structured patterns until fixpoint
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
     pub(crate) fn collapse_all(&mut self) {
+        // Feature flag: RUGRA_5STEP=1 routes to the literal Ghidra 5-step
+        // collapseAll (blockaction.cc:1877-1893). Default is the 7-phase path.
+        // The 5-step path uses collapseInternal (fixpoint+second-pass) +
+        // selectGoto (updateLoopBody state machine) — both B1-B9 prerequisites.
+        if std::env::var("RUGRA_5STEP").map(|v| v == "1").unwrap_or(false) {
+            self.collapse_all_5step();
+            return;
+        }
         // Step 1: Order loop bodies (Ghidra's orderLoopBodies)
         self.order_loop_bodies();
         // Step 1a: Apply LoopBody exit-edge marks (setExitMarks) so TraceDAG
