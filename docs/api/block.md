@@ -924,3 +924,4 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 - `block_flags::DUPLICATE_BLOCK = 0x40000`（f_duplicate_block, block.hh:106）。nodeSplit 创建的重复块。
 <!-- annotation-pass: 2026-07-04 -->
  
+ 

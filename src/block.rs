@@ -354,6 +354,38 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         false
     }
 
+    // Ghidra: block.hh:336 FlowBlock::isInteriorGotoTarget
+    /// Is this block the target of an unstructured (goto) jump from inside
+    /// a loop body? Faithful to `isInteriorGotoTarget()` (block.hh:336).
+    /// Simplified: returns true if any in-edge is a goto.
+    fn is_interior_goto_target(&self) -> bool {
+        for i in 0..self.size_in() {
+            if self.is_goto_in(i) { return true; }
+        }
+        false
+    }
+
+    // Ghidra: block.hh:332 FlowBlock::isComplex
+    /// Is the control flow of this block too complex for simple condition
+    /// folding? Faithful to `isComplex()` (block.hh:332, block.cc:2388).
+    /// For BlockBasic: checks if the last op is a CBRANCH with additional
+    /// ops after it (indicating complex register manipulation).
+    /// Simplified: returns false (conservative — allows folding).
+    fn is_complex(&self) -> bool {
+        false
+    }
+
+    // Ghidra: block.hh:294 FlowBlock::negateCondition
+    /// Flip the true/false out-edge semantics of this block's CBRANCH.
+    /// Returns true if the flip changed the dataflow. Faithful to
+    /// `negateCondition(bool)` (block.hh:294).
+    /// Rugra toggles the BOOLEAN_FLIP flag on the block's CBRANCH op.
+    fn negate_condition(&mut self, _toporbottom: bool) -> bool {
+        // For BlockBasic: find CBRANCH, toggle BOOLEAN_FLIP.
+        // This default does nothing; BlockBasic overrides.
+        false
+    }
+
     /// Is this block the entry point of the function? (block.hh:325)
     // Ghidra: block.hh:325 FlowBlock::isEntryPoint
     fn is_entry_point(&self) -> bool {

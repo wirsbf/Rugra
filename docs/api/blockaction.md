@@ -736,3 +736,4 @@ ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current o
 <!-- annotation-pass: 2026-07-04 -->
  
  
+ 

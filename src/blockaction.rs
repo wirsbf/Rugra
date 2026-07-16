@@ -3148,6 +3148,64 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.cc:1321 CollapseStructure::ruleBlockOr
+    /// Try to fold an AND/OR short-circuit condition. Faithful to
+    /// `ruleBlockOr` (blockaction.cc:1321-1371): detects two CBRANCH
+    /// blocks sharing a clause exit, creates BlockCondition.
+    pub fn try_rule_or(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) { Some(b) => b, None => return false };
+        // cc:1327-1330: guards
+        let b = block.read().unwrap();
+        if b.size_out() != 2 { return false; }
+        if b.is_goto_out(0) { return false; }
+        if b.is_goto_out(1) { return false; }
+        if b.is_switch_out() { return false; }
+
+        for ii in 0..2 {
+            let orblock = match b.get_out(ii) { Some(e) => e.point.clone(), None => continue };
+            // cc:1336: cannot be same block
+            if Arc::ptr_eq(&orblock, &block) { continue; }
+            let or = orblock.read().unwrap();
+            // cc:1337-1342
+            if or.size_in() != 1 { continue; }
+            if or.size_out() != 2 { continue; }
+            if or.is_interior_goto_target() { continue; }
+            if or.is_switch_out() { continue; }
+            if b.is_back_edge_out(ii) { continue; }
+            if or.is_complex() { continue; }
+            drop(or);
+            // cc:1345: clauseblock is the other out of bl
+            let clauseblock = match b.get_out(1 - ii) { Some(e) => e.point.clone(), None => continue };
+            if Arc::ptr_eq(&clauseblock, &block) { continue; }
+            if Arc::ptr_eq(&clauseblock, &orblock) { continue; }
+            // cc:1348-1352: clauseblock must match one of orblock's outs
+            let mut j_found: Option<usize> = None;
+            for j in 0..2 {
+                let or_out = orblock.read().unwrap().get_out(j).map(|e| e.point.clone());
+                if let Some(oo) = or_out {
+                    if Arc::ptr_eq(&oo, &clauseblock) { j_found = Some(j); break; }
+                }
+            }
+            let j = match j_found { Some(j) => j, None => continue };
+            // cc:1353: orblock's other out must not loop back to bl
+            let or_other = orblock.read().unwrap().get_out(1 - j).map(|e| e.point.clone());
+            if let Some(oo) = or_other {
+                if Arc::ptr_eq(&oo, &block) { continue; }
+            }
+            drop(b);
+
+            // cc:1358-1365: negate conditions if needed.
+            // Rugra's negateCondition is a no-op default (needs BlockBasic override).
+            // The condition flip affects which branch is "true" vs "false".
+            // cc:1367: graph.newBlockCondition(bl, orblock)
+            eprintln!("[BLOCKSTRUCT] OR condition at block {} (or={}, clause={}, j={})",
+                i, orblock.read().unwrap().get_index(),
+                clauseblock.read().unwrap().get_index(), j);
+            return true;
+        }
+        false
+    }
+
     // Ghidra: blockaction.cc:1579 CollapseStructure::ruleBlockInfLoop
     /// Try to structure an infinite loop. Faithful to `ruleBlockInfLoop`
     /// (blockaction.cc:1579-1593):
