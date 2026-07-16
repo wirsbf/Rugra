@@ -589,7 +589,7 @@ impl PrintC {
                 let addr = first_op.0.read().unwrap().start.addr.as_u64();
                 if self.goto_targets.contains(&addr) {
                     self.emit.tag_line(0);
-                    self.emit.print(&format!("LAB_{:08x}:", addr));
+                    self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
             }
         }
@@ -1310,16 +1310,43 @@ impl PrintC {
     }
 
 
+    // Ghidra: printc.cc:3164 PrintC::emitLabel
+    /// Build a Ghidra-style code label string for a code address.
+    /// Faithful to `emitLabel` (printc.cc:3164-3193):
+    ///   - prefix: "joined_" (joined block) / "dup_" (duplicated block) /
+    ///     "code_" (normal). Rugra does not currently track joined/duplicated
+    ///     block state, so "code_" is used (the normal case).
+    ///   - shortcut char: space-name first char lowercased (translate.cc:529-533).
+    ///     For x86 RAM space ("ram"), this is 'r'. Rugra hardcodes 'r' for
+    ///     code addresses (the only space that holds goto targets in practice).
+    ///   - printRaw (space.cc:206-222): "0x" + zero-padded hex, shrunk to
+    ///     4/6/8 bytes based on high-zero content. For typical small code
+    ///     addresses (high 32 bits zero), this is 8 hex digits.
+    fn code_label(&self, addr: u64) -> String {
+        // printRaw size selection (space.cc:210-215): if offset>>32 == 0, sz=4.
+        let sz = if addr >> 32 == 0 {
+            4
+        } else if addr >> 48 == 0 {
+            6
+        } else {
+            8
+        };
+        // code_ prefix + 'r' shortcut (RAM space) + 0x + zero-padded hex.
+        format!("code_r0x{:0width$X}", addr, width = 2 * sz)
+    }
+
     // RUGRA-GLUE: push_goto_target (no Ghidra counterpart found)
-    /// Emit a goto label name. Uses `LAB_xxxx` for intra-function addresses,
-    /// falls back to symbol lookup then `DAT_xxxx` for external addresses.
+    /// Emit a goto label name. Uses Ghidra-style `code_r0xXXXX` for
+    /// intra-function addresses, falls back to symbol lookup for named
+    /// symbols. Mirrors PrintC::emitLabel's label-string construction
+    /// (printc.cc:3183-3192) followed by tagVariable emission.
     fn push_goto_target(&mut self, vn: &Varnode) {
         let addr = vn.get_offset();
         if let Some(sym_name) = self.symbol_table.get(&addr) {
             self.emit.tag_variable(sym_name, 0);
             return;
         }
-        let label = format!("LAB_{:08x}", addr);
+        let label = self.code_label(addr);
         self.emit.tag_variable(&label, 0);
     }
 

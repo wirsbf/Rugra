@@ -4,6 +4,8 @@
 
 ## 文档状态
 
+- **状态**: 🔧 **L2→L3 迁移中（2026-07-16 label 格式已对齐）**
+- **2026-07-16 修复（label 格式）**: goto 标签从自创的 `LAB_{:08x}` 改为 Ghidra `emitLabel`（printc.cc:3164）格式 `code_r0xXXXX`。新增 `code_label(addr)` helper，镜像 Ghidra：prefix `code_`（joined_/dup_ 块状态未追踪）+ shortcut `'r'`（RAM space，translate.cc:529-533 space 名首字母小写）+ printRaw（space.cc:206-222，`0x` + 按 addr>>32/>>48 收缩的零填充 hex）。两处标签发射点（块入口 printc.rs:592 + push_goto_target printc.rs:1322）已更新。curl 语料无 unstructured goto 故 numbering 不变，但对有 goto 的二进制正确性已保证。
 - **状态**: 🔧 **L2→L3 迁移中（2026-07-02）**——printc 当前依赖 `emitted: HashSet<usize>`（key=Arc 指针身份）做去重，是 CFT 树遍历尚未完成的临时补丁。正在按 `beginBlock/endBlock` 对齐计划迁移到 Ghidra 的 `emitBlockGraph` 树遍历（block.cc:960 identifyInternal 物理移除子块 + printc.cc:2746 单次遍历），届时 emitted HashSet 全家桶（emitted/dry_emitted/discovery_emitted/fresh_emitted）将删除。doc_all_proto 已实现，PrintC 覆盖全部 Ghidra emitBlock* 方法。5 单元测试。
 - **2026-07-02 修复（R50+R51）**: `op_multiequal`/`op_indirect` 改为 no-op（对齐 Ghidra printc.hh:331,332 `{}`，消除非 C 的 `phi(...)`/`(indirect)` 语句）；`op_cbranch`/`emit_block_condition` 增加条件输出捕获——当 `emit_condition` 产出无效条件（空串、` == `、`!()` 等缺操作数的垃圾）时回退为 `1`（always-true），消除 `if () goto ;`/`if () {`/`if (!())` 语法错误。curl 的 6 处语法错误全部清零。
 - **可信度**: 高
