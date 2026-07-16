@@ -483,6 +483,36 @@
 
 ---
 
+### `pub fn is_moveable(&self, point: &PcodeOp, bank: &PcodeOpBank) -> bool`
+
+Ghidra: `op.cc:178 PcodeOp::isMoveable`。判断该操作是否可在所属基本块内移动越过 `point` 操作（同一父块内），不改变语义。
+
+#### 决定性语义
+- **引用/输出参数**: `&self` + `&point` + `&PcodeOpBank` 全程只读；`tied_list: Vec<Arc<RwLock<Varnode>>>` 共享所有权（等价 Ghidra `vector<const Varnode*>`）。
+- **遍历顺序**: 过滤 `bank.alivelist` 收集 same-parent 的块内 ops（保持 alive 顺序），从 `self` 之后步进到 `point`（含）。等价 Ghidra 的 `do { ++biter; } while(biter != point->basiciter)` block-local 遍历。
+- **计数器**: `cross_calls`（普通 op，输出+所有输入均非 addr-tied/persist 时 true）、`moving_load`（LOAD special op）、`tied_list`（addr-tied 输入集合）。
+- **排序/比较键**: `Arc::ptr_eq` 比对 parent 身份（替代 Ghidra 裸指针 `!=`）；`readOp->start.getOrder() <= point->start.getOrder()` 判输出被过早读；`op->getEvalType()==special` 后按 `op->code()` switch（LOAD/STORE/INDIRECT/SEGMENTOP/CPOOLREF/CALL/CALLIND/NEW）；`vn->overlap(*op_output)>=0 && op_output->overlap(*vn)>=0` 判 addr-tied 重叠。
+
+#### 跨越规则（switch 各 case）
+| 被 cross 的 op | 返回 false 的条件 |
+|---|---|
+| LOAD | 输出 addr-tied |
+| STORE (movingLoad) | 总是 false |
+| STORE (非 movingLoad) | tiedList 非空 OR 输出 addr-tied |
+| INDIRECT/SEGMENTOP/CPOOLREF | 通过 |
+| CALL/CALLIND/NEW | !crossCalls |
+| 其他 special | 总是 false |
+
+非 special op 的输出若 addr-tied 或与 tiedList 中某 vn 互含（overlap>=0），返回 false。
+
+#### 用途
+用于：
+- SSA 优化中操作重排
+- 跨操作 dead-code/merge 分析
+- INDIRECT 围绕操作的合法性判断
+
+---
+
 ## 5. `PcodeOpRef`
 
 ### `pub struct PcodeOpRef(pub Arc<RwLock<PcodeOp>>)`

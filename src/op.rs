@@ -538,6 +538,155 @@ impl PcodeOp {
         self.flags |= extra;
     }
 
+    // Ghidra: op.cc:178 PcodeOp::isMoveable
+    /// Can this op be moved past `point`? Faithful to `isMoveable`
+    /// (op.cc:178-274). Checks: same block, output not read before point,
+    /// address-tied crossing rules, CALL crossing restrictions.
+    pub fn is_moveable(&self, point: &PcodeOp, bank: &PcodeOpBank) -> bool {
+        if std::ptr::eq(self, point) { return true; }
+        let eval_type = self.get_eval_type();
+        // cc:183-187: special ops
+        let moving_load = if eval_type == pcodeop_flags::SPECIAL {
+            if self.opcode == OpCode::CPUI_LOAD {
+                true
+            } else {
+                return false;
+            }
+        } else {
+            false
+        };
+        // cc:189: same block check (Rugra: same parent)
+        let self_parent = self.parent.as_ref().and_then(|w| w.upgrade());
+        let point_parent = point.parent.as_ref().and_then(|w| w.upgrade());
+        match (&self_parent, &point_parent) {
+            (Some(a), Some(b)) => {
+                if !Arc::ptr_eq(a, b) { return false; }
+            }
+            _ => return false,
+        }
+        // cc:190-200: output cannot be read before point in same block
+        if let Some(out_vn) = &self.output {
+            let point_order = point.start.order;
+            for desc_weak in &out_vn.read().unwrap().descend {
+                if let Some(read_op) = desc_weak.upgrade() {
+                    let read_r = read_op.read().unwrap();
+                    // Same parent?
+                    let read_parent = read_r.parent.as_ref().and_then(|w| w.upgrade());
+                    let same_parent = match (&read_parent, &self_parent) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
+                    };
+                    if same_parent && read_r.start.order <= point_order {
+                        return false;
+                    }
+                }
+            }
+        }
+        // cc:202-216: crossCalls = a normal op whose output and all inputs are
+        // neither address-tied nor persist may be moved across a CALL.
+        let mut cross_calls = false;
+        if eval_type != pcodeop_flags::SPECIAL {
+            if let Some(out_vn) = &self.output {
+                let out_r = out_vn.read().unwrap();
+                if !out_r.is_addr_tied() && !out_r.is_persist() {
+                    let mut i = 0;
+                    while i < self.inrefs.len() {
+                        let vn = self.inrefs[i].read().unwrap();
+                        if vn.is_addr_tied() || vn.is_persist() { break; }
+                        i += 1;
+                    }
+                    if i == self.inrefs.len() { cross_calls = true; }
+                }
+            }
+        }
+        // cc:217-222: build tiedList = inputs that are address-tied.
+        let mut tied_list: Vec<Arc<RwLock<Varnode>>> = Vec::new(); // addr-tied inputs
+        for inref in &self.inrefs {
+            let vn = inref.read().unwrap();
+            if vn.is_addr_tied() { tied_list.push(inref.clone()); }
+        }
+        // cc:223-269: walk ops between self and point in the same block.
+        // Ghidra uses basiciter (block-local list position); Rugra filters
+        // alivelist by parent identity and walks from self+1 to point inclusive.
+        let self_seq = &self.start;
+        let point_seq = &point.start;
+        // Collect ops in the same parent block, in alive order.
+        let mut block_ops: Vec<PcodeOpRef> = Vec::new();
+        let mut found_self = false;
+        let mut found_point = false;
+        for op_ref in &bank.alivelist {
+            let op_r = op_ref.0.read().unwrap();
+            // Same parent?
+            let op_parent = op_r.parent.as_ref().and_then(|w| w.upgrade());
+            let same_parent = match (&op_parent, &self_parent) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            };
+            if !same_parent { continue; }
+            if &op_r.start == self_seq { found_self = true; }
+            if &op_r.start == point_seq { found_point = true; }
+            if found_self {
+                block_ops.push(op_ref.clone());
+                if found_point { break; }
+            }
+        }
+        // cc:224: do { ++biter; op = *biter; ... } while(biter != point->basiciter);
+        // First element is self itself (biter starts at self, then ++biter).
+        // Walk from index 1 (first op after self) until point.
+        for op_ref in block_ops.iter().skip(1) {
+            let op = op_ref.0.read().unwrap();
+            // cc:227-256: special op crossing rules
+            if op.get_eval_type() == pcodeop_flags::SPECIAL {
+                match op.opcode {
+                    OpCode::CPUI_LOAD => {
+                        // cc:229-233
+                        if let Some(out_vn) = &self.output {
+                            if out_vn.read().unwrap().is_addr_tied() { return false; }
+                        }
+                    }
+                    OpCode::CPUI_STORE => {
+                        // cc:234-243
+                        if moving_load {
+                            return false;
+                        } else {
+                            if !tied_list.is_empty() { return false; }
+                            if let Some(out_vn) = &self.output {
+                                if out_vn.read().unwrap().is_addr_tied() { return false; }
+                            }
+                        }
+                    }
+                    OpCode::CPUI_INDIRECT | OpCode::CPUI_SEGMENTOP | OpCode::CPUI_CPOOLREF => {
+                        // cc:244-247: let through
+                    }
+                    OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_NEW => {
+                        // cc:248-252
+                        if !cross_calls { return false; }
+                    }
+                    _ => {
+                        // cc:253-255
+                        return false;
+                    }
+                }
+            }
+            // cc:257-268: output of the op we're crossing over
+            if let Some(op_output) = &op.output {
+                let op_out = op_output.read().unwrap();
+                // cc:258-260
+                if moving_load && op_out.is_addr_tied() { return false; }
+                // cc:261-267
+                for tied_weak in &tied_list {
+                    let vn = tied_weak.read().unwrap();
+                    // vn.overlap(*op_output) >= 0 (does op_output contain a piece of vn?)
+                    if vn.overlap(&op_out) >= 0 { return false; }
+                    // op_output.overlap(*vn) >= 0 (does vn contain a piece of op_output?)
+                    if op_out.overlap(&vn) >= 0 { return false; }
+                }
+            }
+            if &op.start == point_seq { break; }
+        }
+        true
+    }
+
     // Ghidra: op.cc:389 PcodeOp::encode
     /// Encode this op as XML. Faithful to `encode` (op.cc:389-448).
     /// Rugra returns a String (no Encoder).
