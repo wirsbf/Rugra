@@ -122,6 +122,25 @@ pub mod optoken {
     }
 }
 
+// Ghidra: printlanguage.hh:144 PrintLanguage::modifiers
+/// Printing modification flags mirroring Ghidra's `modifiers` enum
+/// (printlanguage.hh:144-161). Stored in PrintC.mods as a bitmask.
+pub mod print_mods {
+    /// Do not print branch instruction (printlanguage.hh:152).
+    pub const NO_BRANCH: u32 = 0x80;
+    /// Print only the branch instruction (printlanguage.hh:153).
+    pub const ONLY_BRANCH: u32 = 0x100;
+    /// Statements within a condition (for-loop header parts separated by
+    /// ';' rather than ';'+newline). emitStatement suppresses the trailing
+    /// ';' when this is set (printc.cc:2291-2292).
+    pub const COMMA_SEPARATE: u32 = 0x200;
+    /// Do not print block structure (flat) (printlanguage.hh:155).
+    pub const FLAT: u32 = 0x400;
+    /// The current block may need to surround itself with additional braces
+    /// (printlanguage.hh:160). Enables `else if` collapsing.
+    pub const PENDING_BRACE: u32 = 0x8000;
+}
+
 // RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
 fn sanitize_c_ident(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
@@ -269,6 +288,12 @@ pub struct PrintC {
     /// Current loop nesting depth. >0 means we are inside a while/do-while body.
     /// Used to suppress `continue` statements in non-loop contexts.
     loop_depth: u32,
+    /// Printing modification flags (Ghidra `mods`, printlanguage.hh:144-161).
+    /// Tracks context-sensitive modifiers like comma_separate (for-loop header),
+    /// no_branch, only_branch. The mod_stack enables push/pop save-restore.
+    /// Faithful to PrintLanguage::mods + modstack (printlanguage.hh:284-290).
+    mods: u32,
+    mod_stack: Vec<u32>,
     /// Recursion depth guard for emit_block_structured. Prevents stack overflow
     /// on deeply nested structures (e.g. when mainloop repeatapply rebuilds
     /// sblocks with different nesting).
@@ -321,6 +346,8 @@ impl PrintC {
             stack_structs: Vec::new(),
             block_local_reg_defs: HashMap::new(),
             loop_depth: 0,
+            mods: 0,
+            mod_stack: Vec::new(),
             struct_emit_depth: 0,
             goto_targets: HashSet::new(),
             scope: None,
@@ -1094,17 +1121,41 @@ impl PrintC {
         emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
-                // BlockCondition at top level (not inside a BlockIf/BlockWhile) —
-                // Just emit the sub-block ops flat. The individual CBRANCH ops will
-                // produce proper `if (cond) goto` statements.
-                // Previously this incorrectly emitted `if (compound_cond)` without a body.
+                // P8 fix: BlockCondition at top level is a compound &&/|| condition.
+                // Ghidra's emitBlockCondition (printc.cc:2836) emits the combined
+                // condition `(sub0) && (sub1)` when only_branch/comma_separate are
+                // set. Previously Rugra emitted the two sub-blocks as independent
+                // statements, losing the &&/|| glue. Now capture each sub-condition
+                // and emit the combined form.
                 let block = block_arc.read().unwrap();
                 if let Some(cond_data) = block.as_any().downcast_ref::<BlockCondition>() {
+                    let op_str = match cond_data.op_type {
+                        crate::block::BoolOp::And => " && ",
+                        crate::block::BoolOp::Or => " || ",
+                    };
                     let first = cond_data.first.clone();
                     let second = cond_data.second.clone();
                     drop(block);
-                    self.emit_block_structured(&first, graph, emitted);
-                    self.emit_block_structured(&second, graph, emitted);
+                    // Capture each sub-condition's text (recursively handles
+                    // nested BlockCondition via emit_block_condition_inner).
+                    let left_text = self.capture_block_condition(&first);
+                    let right_text = self.capture_block_condition(&second);
+                    let lt = left_text.trim();
+                    let rt = right_text.trim();
+                    if !lt.is_empty() && !rt.is_empty() {
+                        self.emit.tag_line(0);
+                        self.emit.print("if (");
+                        self.emit.print(lt);
+                        self.emit.print(op_str);
+                        self.emit.print(rt);
+                        self.emit.print(")");
+                        self.emit.begin_block();
+                        self.emit.end_block();
+                    } else {
+                        // Fallback: emit sub-block ops flat (old behavior).
+                        self.emit_block_structured(&first, graph, emitted);
+                        self.emit_block_structured(&second, graph, emitted);
+                    }
                 } else {
                     drop(block);
                     self.emit_block_ops(block_arc, false);
@@ -1449,6 +1500,24 @@ impl PrintC {
                 }
     }
 
+    // Ghidra: printlanguage.hh:284 PrintLanguage::isSet
+    /// Is the given printing modification active? Faithful to
+    /// `PrintLanguage::isSet` (printlanguage.hh:284).
+    fn is_set(&self, m: u32) -> bool { (self.mods & m) != 0 }
+    // Ghidra: printlanguage.hh:287 PrintLanguage::pushMod
+    /// Push current mods onto the mod stack (save).
+    fn push_mod(&mut self) { self.mod_stack.push(self.mods); }
+    // Ghidra: printlanguage.hh:288 PrintLanguage::popMod
+    /// Pop to the previously saved mods (restore).
+    fn pop_mod(&mut self) {
+        if let Some(m) = self.mod_stack.pop() { self.mods = m; }
+    }
+    // Ghidra: printlanguage.hh:289 PrintLanguage::setMod
+    /// Activate the given modification.
+    fn set_mod(&mut self, m: u32) { self.mods |= m; }
+    // Ghidra: printlanguage.hh:290 PrintLanguage::unsetMod
+    /// Deactivate the given modification.
+    fn unset_mod(&mut self, m: u32) { self.mods &= !m; }
 
     // Ghidra: printc.cc:3164 PrintC::emitLabel
     /// Build a Ghidra-style code label string for a code address.
@@ -4435,11 +4504,17 @@ impl PrintLanguage for PrintC {
     }
 
 
-    // Ghidra: printc.cc:123 PrintC::docStatement
+    // Ghidra: printc.cc:2285 PrintC::emitStatement
+    /// Emit a statement: tagLine, emit the expression, then print ';' UNLESS
+    /// the comma_separate mod is active (for-loop header parts suppress the
+    /// trailing ';'). Faithful to `emitStatement` (printc.cc:2285-2293):
+    ///   emit->print(SEMICOLON) only `if (!isSet(comma_separate))`.
     fn doc_statement(&mut self, op: &PcodeOp) {
         self.emit.tag_line(0);
         op.push(self); // This will call the appropriate op_xxx method
-        self.emit.print(";");
+        if !self.is_set(print_mods::COMMA_SEPARATE) {
+            self.emit.print(";");
+        }
     }
 
     // Ghidra: printc.cc:481 PrintC::opCopy
