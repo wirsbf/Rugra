@@ -557,3 +557,53 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | G6 | `ruleaction` 缺失 30 Rule | ruleaction.cc | L2 | applyOp 1:1 + 测试 |
 | G7 | `emulate` execute 循环 | emulate.cc | L2 | 指令模拟闭环 |
 
+
+---
+
+## 2026-07-16 并发审计结果（blockaction + printc + op + varnode）
+
+来源：3 个 Explore agent 交叉审计 + 直接修复。
+
+### 已修复（已 commit）
+
+| commit | 文件 | 修复内容 | 根因 |
+|---|---|---|---|
+| d5de768 | op.rs | PcodeOp::isMoveable 完整移植（op.cc:178-271） | 此前是 stub（return true）；另修 Arc::as_ptr 对 dyn FlowBlock 的 cast 编译错误 |
+| deff71a | op.rs | opcode_flags 全量表 + 接入 create/change_opcode | set_opcode_flags 只处理 7 个 opcode 组，其余 fallthrough 到 0；且从未被调用 → get_eval_type() 对所有算术 op 返回 0 |
+| 61e916a | varnode.rs | contains + overlap 常量空间短路 | 缺 Ghidra IPTR_CONSTANT→3/-1 短路（varnode.cc:109 / address.cc:159） |
+| 220c14c | op.rs/opcodes.rs | INT_LEFT/INT_DIV 不可交换 + INT_CARRY/INT_SCARRY 可交换 | opcode_flags 表 + is_commutative 均误；typeop.cc:1505/1645/1335/1351 |
+| 6419b44 | varmap.rs | gatherVarnodes PIECE/SUBPIECE 分支 | 此前落入 default 无条件 addFixedType；varmap.cc:1165-1196 |
+| 34e6f9c | blockaction.rs | try_rule_or 调用 negate_condition | **B1：18 回归根因**。此前有注释但从未调用 → BlockCondition 极性错误 |
+| b4b4617 | printc.rs | goto 标签 LAB_ → code_r0xXXXX | 无 Ghidra 对应物；现镜像 emitLabel（printc.cc:3164） |
+
+### blockaction collapseAll 5-step 移植阻断清单（来自审计）
+
+Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → collapseConditions → collapseInternal(NULL) → selectGoto 循环 → collapseInternal(targetbl)。Rugra 当前是 7-phase。**B1（try_rule_or negateCondition）已修复**，剩余阻断：
+
+- **B2**: 缺 `new_block_condition`/`new_block_if`/etc. 工厂层（Ghidra block.cc:1785）。各 try_rule_* 内联手搓 BlockCondition。
+- **B3**: `try_rule_inf_loop`（blockaction.rs:3261）不创建 BlockInfLoop（只 eprintln）。缺 BlockInfLoop struct。
+- **B4**: `set_goto_branch` 不完整（block.cc:305-314 三件事：边 GOTO flag + source f_interior_gotoout + target f_interior_gotoin）。Rugra 只设 source 的 GOTO_EDGE。
+- **B5**: 缺 `update_loop_body` 状态机（cc:1193-1253）+ loopbodyiter 推进。
+- **B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。
+- **B7**: TraceDAG 边一次性快照，非 Ghidra 的每轮重新解析（getCurrentEdge）。
+- **B8**: collapse_conditions 单遍非 fixpoint（cc:1858-1864 是 do-while）；collapse_bool_conditions 是重复实现应删除。
+- **B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。
+
+**最小路径**：B1（已修）→ B2-B4（基础设施）→ B8（fixpoint）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
+
+### printc 对齐缺口（来自审计，按影响排序）
+
+- **P1（最高潜在缺陷）**: 无 OpToken 优先级引擎 / 无括号化。Ghidra printlanguage.cc:269 parentheses + emitOp。Rugra op_binary/op_unary 直接拼 infix 串，嵌套表达式可能语义错误（如 `a + b << c`、`x && y == z`）。curl 语料未触发但风险高。
+- **P2**: goto/label 发射在 op 层非 block 层；无 flat/no_branch/only_branch mod 栈。
+- **P3（已修）**: 标签格式 LAB_ vs code_r0xXXXX。✅ b4b4617
+- **P4**: 变量声明/编号顺序用 op 遍历首次触及顺序，非 Ghidra nametree 顺序。是 numbering diff 的主因。
+- **P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。
+- **P6**: switch 加 `(long)` cast（Ghidra 无）；case 用 char 字面量（Ghidra 用 pushConstant 数值）；break 抑制逻辑不同；无 fallthrough 处理。
+- **P7**: 缺 BlockInfLoop + overflow_syntax while 形式。
+- **P8**: emitBlockCondition 复合 &&/|| 发射为独立语句非合并条件。
+- **P9**: 无 else if 链化（pending_brace）；总是 `else { if... }`。
+- **P10**: doc_statement 无条件加 `;`；无 comma_separate。
+
+### op/varnode 死代码（已标注，低优先级直到接入）
+
+`update_cover`（cover->rebuild 是 no-op TODO）、`set_num_inputs`（保留已有 slot 非 Ghidra 全清零）、`next_op_in_flow`/`previous_op_in_block`/`target_sp`（全局 alivelist 扫描非 block-local）、`print_info`/`print_cover`（debug 用，无调用者）。均为零调用者，待接入主管线时再对齐。
