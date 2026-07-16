@@ -1440,10 +1440,30 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2869 Heritage::clear
+    /// Clear all non-permanent state. Faithful to `clear`
+    /// (heritage.cc:2869-2884):
+    ///   disjoint/globaldisjoint/domchild/augment/flags/depth/merge.clear()
+    ///   clearInfoList(); loadGuard/storeGuard.clear();
+    ///   maxdepth = -1; pass = 0;
     pub fn clear(&mut self) {
+        // Ghidra cc:2872-2878
         self.globaldisjoint.clear();
+        self.domchild.clear();
+        self.augment.clear();
+        self.flags.clear();
+        self.depth.clear();
+        self.merge.clear();
+        // Ghidra cc:2879: clearInfoList()
+        self.infolist.clear();
+        // Ghidra cc:2880-2881
         self.load_guard.clear();
         self.store_guard.clear();
+        // Ghidra cc:2882: maxdepth = -1
+        self.maxdepth = -1;
+        // Ghidra cc:2883: pass = 0
+        self.pass = 0;
+        // load_copy_ops is Rugra-specific (Ghidra's loadCopyOps, cleared
+        // in handleNewLoadCopies, not in clear()). Keep cleared for safety.
         self.load_copy_ops.clear();
     }
 

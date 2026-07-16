@@ -728,3 +728,4 @@ visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状
 - `set/get_dead_code_delay`(cc:2829/2817): 读写 infolist (was no-op/const 2)。
  
  
+ 
