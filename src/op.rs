@@ -538,6 +538,27 @@ impl PcodeOp {
         self.flags |= extra;
     }
 
+    // Ghidra: op.cc:389 PcodeOp::encode
+    /// Encode this op as XML. Faithful to `encode` (op.cc:389-448).
+    /// Rugra returns a String (no Encoder).
+    pub fn encode(&self) -> String {
+        let mut s = format!("<op code=\"{:?}\">", self.opcode);
+        s += &format!("<seqnum>{:?}</seqnum>", self.start);
+        if let Some(out) = &self.output {
+            s += &format!("<addr ref=\"{}\"/>", out.read().unwrap().create_index);
+        } else {
+            s += "<void/>";
+        }
+        for vn in &self.inrefs {
+            s += &format!("<addr ref=\"{}\"/>", vn.read().unwrap().create_index);
+        }
+        s += "</op>";
+        s
+    }
+
+    // Ghidra: op.cc:376 PcodeOp::printDebug
+    // Already implemented above as print_debug()
+
     // Ghidra: op.cc:323 PcodeOp::nextOp
     pub fn next_op_in_flow(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
         let self_seq = &self.start;
