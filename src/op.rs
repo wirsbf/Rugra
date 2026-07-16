@@ -559,6 +559,164 @@ impl PcodeOp {
         }
         s
     }
+
+    // Ghidra: op.cc:450 PcodeOp::collapse
+    /// Collapse constant inputs into a single result. Faithful to
+    /// `collapse` (op.cc:450-472). Uses opbehavior evaluate methods.
+    /// Returns Some(result) or None if not collapsible.
+    pub fn collapse(&self) -> Option<(u64, bool)> {
+        use crate::opbehavior::{evaluate_unary, evaluate_binary};
+        let eval_type = self.get_eval_type();
+        let vn0 = self.inrefs.get(0)?;
+        let vn0_r = vn0.read().unwrap();
+        let marked_input = vn0_r.get_symbol_entry().is_some();
+        let out_size = self.output.as_ref()?.read().unwrap().get_size();
+        let vn0_size = vn0_r.get_size();
+        let vn0_offset = vn0_r.get_offset();
+        drop(vn0_r);
+        match eval_type {
+            x if (x & pcodeop_flags::UNARY) != 0 => {
+                evaluate_unary(self.opcode, out_size, vn0_size, vn0_offset)
+                    .map(|r| (r, marked_input))
+            }
+            x if (x & pcodeop_flags::BINARY) != 0 => {
+                let vn1 = self.inrefs.get(1)?;
+                let vn1_r = vn1.read().unwrap();
+                let vn1_size = vn1_r.get_size();
+                let vn1_offset = vn1_r.get_offset();
+                let marked2 = vn1_r.get_symbol_entry().is_some();
+                drop(vn1_r);
+                evaluate_binary(self.opcode, out_size, vn0_size, vn0_offset, vn1_offset)
+                    .map(|r| (r, marked_input || marked2))
+            }
+            _ => None,
+        }
+    }
+
+    // Ghidra: op.cc:478 PcodeOp::executeSimple
+    /// Execute the op on given input values. Faithful to `executeSimple`
+    /// (op.cc:478-498). Returns Some(result) or None on eval error.
+    pub fn execute_simple(&self, inputs: &[u64]) -> Option<u64> {
+        use crate::opbehavior::{evaluate_unary, evaluate_binary, evaluate_ternary};
+        let eval_type = self.get_eval_type();
+        let out_size = self.output.as_ref()?.read().unwrap().get_size();
+        let in0_size = self.inrefs.first()?.read().unwrap().get_size();
+        match eval_type {
+            x if (x & pcodeop_flags::UNARY) != 0 => {
+                evaluate_unary(self.opcode, out_size, in0_size, inputs.get(0).copied()?)
+            }
+            x if (x & pcodeop_flags::BINARY) != 0 => {
+                evaluate_binary(self.opcode, out_size, in0_size,
+                    inputs.get(0).copied()?, inputs.get(1).copied()?)
+            }
+            x if (x & pcodeop_flags::TERNARY) != 0 => {
+                evaluate_ternary(self.opcode, out_size, in0_size,
+                    inputs.get(0).copied()?, inputs.get(1).copied()?, inputs.get(2).copied()?)
+            }
+            _ => None,
+        }
+    }
+
+    // Ghidra: op.cc:547 PcodeOp::getNZMaskLocal
+    /// Compute non-zero mask for this op's output given input masks.
+    /// Faithful to `getNZMaskLocal` (op.cc:547-771). This is a large
+    /// switch on opcode. Rugra delegates to Funcdata::calc_nz_mask for
+    /// the per-opcode switch; this method is the per-op entry point.
+    pub fn get_nz_mask_local(&self, _cliploop: bool) -> u64 {
+        use crate::address::calc_mask;
+        let out_size = match &self.output {
+            Some(o) => o.read().unwrap().get_size(),
+            None => return u64::MAX,
+        };
+        let full_mask = calc_mask(out_size);
+        let get_in_nzm = |i: usize| -> u64 {
+            self.inrefs.get(i)
+                .map(|v| v.read().unwrap().get_nz_mask())
+                .unwrap_or(full_mask)
+        };
+        let get_in_const = |i: usize| -> Option<u64> {
+            let v = self.inrefs.get(i)?;
+            let r = v.read().unwrap();
+            if r.is_constant() { Some(r.get_offset()) } else { None }
+        };
+        match self.opcode {
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
+            | OpCode::CPUI_INT_SBORROW
+            | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+            | OpCode::CPUI_FLOAT_NAN => 1,
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT => get_in_nzm(0),
+            OpCode::CPUI_INT_SEXT => {
+                let in_sz = self.inrefs.first().map(|v| v.read().unwrap().get_size()).unwrap_or(out_size);
+                crate::rangeutil::sign_extend_size(get_in_nzm(0), in_sz, out_size)
+            }
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                let m = get_in_nzm(0);
+                if m != full_mask { m | get_in_nzm(1) } else { m }
+            }
+            OpCode::CPUI_INT_AND => {
+                let m = get_in_nzm(0);
+                if m != 0 { m & get_in_nzm(1) } else { 0 }
+            }
+            OpCode::CPUI_INT_LEFT => {
+                match get_in_const(1) {
+                    Some(sa) => {
+                        let m = get_in_nzm(0);
+                        m.wrapping_shl(sa as u32) & full_mask
+                    }
+                    None => full_mask,
+                }
+            }
+            OpCode::CPUI_INT_RIGHT => {
+                match get_in_const(1) {
+                    Some(sa) => get_in_nzm(0).wrapping_shr(sa as u32),
+                    None => full_mask,
+                }
+            }
+            OpCode::CPUI_INT_SRIGHT => {
+                match get_in_const(1) {
+                    Some(sa) if out_size <= 8 => {
+                        let m = get_in_nzm(0);
+                        m.wrapping_shr(sa as u32)
+                    }
+                    _ => full_mask,
+                }
+            }
+            OpCode::CPUI_SUBPIECE => {
+                let sz1 = get_in_const(1).unwrap_or(0) as usize;
+                let m = get_in_nzm(0);
+                if sz1 < 8 { m.wrapping_shr((sz1 * 8) as u32) & full_mask } else { 0 }
+            }
+            OpCode::CPUI_PIECE => {
+                let sa = self.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                let m0 = get_in_nzm(0);
+                let shifted = if sa < 8 { m0 << (sa * 8) } else { 0 };
+                shifted | get_in_nzm(1)
+            }
+            OpCode::CPUI_INT_ADD => {
+                let m = get_in_nzm(0);
+                if m != full_mask {
+                    (m | get_in_nzm(1) | (m << 1)) & full_mask
+                } else { m }
+            }
+            OpCode::CPUI_MULTIEQUAL => {
+                if self.inrefs.is_empty() { full_mask }
+                else {
+                    let mut r = 0u64;
+                    for i in 0..self.inrefs.len() {
+                        r |= get_in_nzm(i);
+                    }
+                    r
+                }
+            }
+            _ => full_mask,
+        }
+    }
 }
 
 /// Comparison for sorting PcodeOps in the bank
