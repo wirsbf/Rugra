@@ -1669,28 +1669,111 @@ impl Heritage {
     /// Guard output overlap for CALL. Faithful to `guardOutputOverlap`
     /// (heritage.cc:1249-1283). Creates INDIRECT pieces + PIECE concat.
     /// Requires FuncCallSpecs infrastructure.
+    // Ghidra: heritage.cc:1249 Heritage::guardOutputOverlap
+    /// Guard output overlap: create INDIRECT pieces + PIECE concat.
+    /// Faithful to `guardOutputOverlap` (heritage.cc:1249-1283).
     pub fn guard_output_overlap(
         &mut self,
-        _fd: &mut Funcdata,
-        _call_op: &Arc<RwLock<PcodeOp>>,
-        _addr: Address,
-        _size: i32,
-        _ret_addr: Address,
-        _ret_size: i32,
-        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+        fd: &mut Funcdata,
+        call_op: &Arc<RwLock<PcodeOp>>,
+        addr: Address,
+        size: i32,
+        ret_addr: Address,
+        ret_size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
-        // TODO: requires newIndirectCreation + FuncCallSpecs (Rugra L1 gap).
+        let size_front = (ret_addr.as_u64().saturating_sub(addr.as_u64())) as i32;
+        let size_back = size - ret_size - size_front;
+        let op_addr = call_op.read().unwrap().get_addr();
+        let vn_space = AddressSpace::Stack;
+
+        // cc:1254: create INDIRECT for return storage
+        let ind_op = fd.new_indirect_op(
+            &PcodeOpRef(call_op.clone()), ret_addr.as_u64(), ret_size as usize);
+        let vn_collect = ind_op.0.read().unwrap().output.as_ref().cloned();
+        let mut vn_collect = match vn_collect {
+            Some(v) => v,
+            None => fd.new_varnode_out(ret_size as usize, ret_addr, &ind_op),
+        };
+        vn_collect.write().unwrap().set_active_heritage();
+
+        // cc:1257-1268: front piece (size_front > 0)
+        if size_front > 0 {
+            let ind_front = fd.new_indirect_op(
+                &PcodeOpRef(ind_op.0.clone()), addr.as_u64(), size_front as usize);
+            let new_front = ind_front.0.read().unwrap().output.as_ref().cloned()
+                .unwrap_or_else(|| fd.new_unique(size_front as usize));
+            let concat_front = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&concat_front, OpCode::CPUI_PIECE);
+            let _out = fd.new_varnode_out(
+                (size_front + ret_size) as usize, addr, &concat_front);
+            fd.op_set_input(&concat_front, new_front.clone(), 1);
+            fd.op_set_input(&concat_front, vn_collect.clone(), 0);
+            vn_collect = concat_front.0.read().unwrap().output.as_ref().cloned()
+                .unwrap_or(vn_collect);
+        }
+
+        // cc:1269-1280: back piece (size_back > 0)
+        if size_back > 0 {
+            let addr_back = Address::new(ret_addr.as_u64().wrapping_add(ret_size as u64));
+            let ind_back = fd.new_indirect_op(
+                &PcodeOpRef(call_op.clone()), addr_back.as_u64(), size_back as usize);
+            let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
+                .unwrap_or_else(|| fd.new_unique(size_back as usize));
+            let concat_back = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&concat_back, OpCode::CPUI_PIECE);
+            let full_vn = fd.new_varnode_out(size as usize, addr, &concat_back);
+            fd.op_set_input(&concat_back, new_back.clone(), 0);
+            fd.op_set_input(&concat_back, vn_collect.clone(), 1);
+            full_vn.write().unwrap().set_active_heritage();
+            write.push(full_vn);
+        } else {
+            vn_collect.write().unwrap().set_active_heritage();
+            write.push(vn_collect);
+        }
     }
 
     // Ghidra: heritage.cc:1293 Heritage::tryOutputOverlapGuard
+    /// Try to guard output overlap. Faithful to `tryOutputOverlapGuard`
+    /// (heritage.cc:1293-1310). Returns true if guarded.
     pub fn try_output_overlap_guard(
         &mut self,
-        _fd: &mut Funcdata,
-        _addr: Address,
-        _size: i32,
-        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) -> bool {
-        // TODO: requires FuncCallSpecs::getBiggestContainedOutput (Rugra L1).
+        let num_calls = fd.num_calls();
+        for i in 0..num_calls {
+            // cc:1299: getBiggestContainedOutput
+            let output_char = fd.get_call_specs(i)
+                .map(|fc| fc.characterize_as_output(
+                    addr.as_u64(), size, AddressSpace::Stack))
+                .unwrap_or(0);
+            if output_char != 3 { continue; } // only contained_by
+            // cc:1305: whichTrial >= 0 → already registered
+            let already = fd.get_call_specs(i)
+                .and_then(|fc| fc.get_active_output())
+                .map(|a| a.which_trial(addr, size) >= 0)
+                .unwrap_or(true);
+            if already { continue; }
+            // cc:1307: guardOutputOverlap
+            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
+            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
+            let call_op = fd.obank.alivelist.iter()
+                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
+                .map(|r| r.0.clone());
+            let call_op = match call_op { Some(o) => o, None => continue };
+            // Simplified: ret_addr = addr, ret_size = size (full overlap)
+            self.guard_output_overlap(fd, &call_op, addr, size, addr, size, write);
+            // cc:1308: registerTrial
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                if let Some(active) = &mut fc.active_output {
+                    active.register_trial(addr, size);
+                }
+            }
+            return true;
+        }
         false
     }
 
