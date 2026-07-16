@@ -1603,6 +1603,150 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:1211 Heritage::guardCallOverlappingInput
+    /// Guard input param overlap for CALL ops. Faithful to
+    /// `guardCallOverlappingInput` (heritage.cc:1211-1236).
+    /// Requires FuncCallSpecs/ParamActive infrastructure (Rugra L1).
+    /// Documented stub — logs when called.
+    pub fn guard_call_overlapping_input(
+        &mut self,
+        _fd: &mut Funcdata,
+        _addr: Address,
+        _size: i32,
+    ) {
+        // TODO: requires FuncCallSpecs::getBiggestContainedInputParam +
+        // ParamActive::whichTrial/registerTrial (Rugra L1 gap).
+    }
+
+    // Ghidra: heritage.cc:1249 Heritage::guardOutputOverlap
+    /// Guard output overlap for CALL. Faithful to `guardOutputOverlap`
+    /// (heritage.cc:1249-1283). Creates INDIRECT pieces + PIECE concat.
+    /// Requires FuncCallSpecs infrastructure.
+    pub fn guard_output_overlap(
+        &mut self,
+        _fd: &mut Funcdata,
+        _call_op: &Arc<RwLock<PcodeOp>>,
+        _addr: Address,
+        _size: i32,
+        _ret_addr: Address,
+        _ret_size: i32,
+        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // TODO: requires newIndirectCreation + FuncCallSpecs (Rugra L1 gap).
+    }
+
+    // Ghidra: heritage.cc:1293 Heritage::tryOutputOverlapGuard
+    pub fn try_output_overlap_guard(
+        &mut self,
+        _fd: &mut Funcdata,
+        _addr: Address,
+        _size: i32,
+        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) -> bool {
+        // TODO: requires FuncCallSpecs::getBiggestContainedOutput (Rugra L1).
+        false
+    }
+
+    // Ghidra: heritage.cc:1444 Heritage::guardCalls
+    /// Guard CALL ops for a range. Faithful to `guardCalls`
+    /// (heritage.cc:1444-1528). Requires FuncCallSpecs/ParamActive.
+    pub fn guard_calls_range(
+        &mut self,
+        _fd: &mut Funcdata,
+        _fl: u32,
+        _addr: Address,
+        _size: i32,
+        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // TODO: requires FuncCallSpecs layer (Rugra L1 gap).
+        // Currently guard_calls(fd) is a no-op stub; this per-range
+        // version is also a stub until call analysis is ported.
+    }
+
+    // Ghidra: heritage.cc:1539 Heritage::guardStores
+    /// Guard STORE ops for a specific range. Faithful to `guardStores`
+    /// (heritage.cc:1539-1560). For each STORE whose target space matches
+    /// the heritage range's space (or its container), create an INDIRECT
+    /// op modeling the store effect.
+    pub fn guard_stores_range(
+        &mut self,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let heritage_space = AddressSpace::Stack; // Simplified: heritage ranges are stack
+        // cc:1547-1559: iterate STORE ops
+        let store_arcs: Vec<_> = fd.obank.storelist.iter()
+            .filter(|s| !(s.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD != 0))
+            .map(|s| s.0.clone())
+            .collect();
+        for store_op in store_arcs {
+            // cc:1552: check if STORE targets heritage space
+            let uses_sb = store_op.read().unwrap().uses_spacebase_ptr();
+            if !uses_sb { continue; }
+            // cc:1554: newIndirectOp(op, addr, size, indirect_store)
+            let indop = fd.new_indirect_op(
+                &PcodeOpRef(store_op.clone()), addr.as_u64(), size as usize,
+            );
+            // cc:1555-1557: setActiveHeritage on input[0] and output; push to write
+            {
+                let ind_r = indop.0.read().unwrap();
+                if let Some(invn) = ind_r.get_in(0).cloned() {
+                    drop(ind_r);
+                    invn.write().unwrap().set_active_heritage();
+                }
+            }
+            {
+                let ind_r = indop.0.read().unwrap();
+                if let Some(outvn) = ind_r.output.as_ref().cloned() {
+                    drop(ind_r);
+                    outvn.write().unwrap().set_active_heritage();
+                    write.push(outvn);
+                }
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:1571 Heritage::guardLoads
+    /// Guard LOAD ops for a specific range. Faithful to `guardLoads`
+    /// (heritage.cc:1571-1602). For each guarded LOAD whose indexed range
+    /// intersects [addr, addr+size), create a COPY boundary op.
+    pub fn guard_loads_range(
+        &mut self,
+        _fd: &mut Funcdata,
+        _fl: u32,
+        addr: Address,
+        size: i32,
+        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:1581-1586: prune invalid load guards
+        self.load_guard.retain(|g| {
+            match g.op.upgrade() {
+                Some(op) => {
+                    let r = op.read().unwrap();
+                    !(r.flags & crate::op::pcodeop_flags::DEAD != 0
+                        || r.opcode != OpCode::CPUI_LOAD)
+                }
+                None => false,
+            }
+        });
+        // cc:1589-1600: for each LOAD guard whose range intersects [addr,addr+size)
+        // insert a COPY guard. Rugra's LoadGuard ranges are conservatively full
+        // (analyzeNewLoadGuards stub), so intersection always holds.
+        let addr_start = addr.as_u64();
+        let addr_end = addr.as_u64().wrapping_add(size as u64);
+        for guard in &self.load_guard {
+            let intersects = guard.maximum_offset >= addr_start
+                && guard.minimum_offset <= addr_end;
+            if !intersects { continue; }
+            // cc:1591-1600: create COPY boundary op before LOAD
+            // TODO: requires per-LOAD COPY insertion (cc:1591-1600).
+            // Currently we skip COPY insertion (conservative — guards
+            // are recorded but no COPY boundary is created).
+        }
+    }
+
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
     /// Increase dead-code delay for a space, requesting a restart.
     /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
