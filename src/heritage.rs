@@ -382,8 +382,8 @@ fn space_highest(_spc: AddressSpace) -> u64 {
 pub struct Heritage {
     pub fd: Option<Weak<RwLock<Funcdata>>>,
     pub globaldisjoint: LocationMap,
-    pub domchild: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
-    pub augment: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
+    pub domchild: Vec<Vec<i32>>,
+    pub augment: Vec<Vec<i32>>,
     pub flags: Vec<u32>,
     pub depth: Vec<i32>,
     pub maxdepth: i32,
@@ -467,6 +467,147 @@ impl Heritage {
         for sp in spaces {
             self.infolist.push(HeritageInfo::new(sp));
         }
+    }
+
+    // Ghidra: heritage.cc:2317 Heritage::buildADT
+    /// Build the Augmented Dominator Tree. Faithful to `buildADT`
+    /// (heritage.cc:2317-2386). Assumes dom tree is already built and
+    /// nodes are in DFS order.
+    ///
+    /// Algorithm:
+    ///   1. Build domchild from idom (cc:2335)
+    ///   2. Find up-edges (non-tree edges) and count b[]/t[] (cc:2340-2354)
+    ///   3. Bottom-up pass: compute a[]/z[], mark boundary nodes (cc:2355-2368)
+    ///   4. Top-down pass: propagate z[] through boundary chains (cc:2369-2376)
+    ///   5. Build augment[] from up-edges (cc:2377-2385)
+    pub fn build_adt(&mut self) {
+        let fd_arc = match &self.fd { Some(w) => match w.upgrade() { Some(a) => a, None => return } , None => return };
+        let fd = fd_arc.read().unwrap();
+        let bblocks = &fd.bblocks;
+        let size = bblocks.get_size();
+        if size == 0 { return; }
+
+        // cc:2330-2333: clear + resize
+        self.augment.clear();
+        self.augment.resize(size, Vec::new());
+        self.flags.clear();
+        self.flags.resize(size, 0);
+        self.domchild.clear();
+        self.domchild.resize(size, Vec::new());
+
+        // cc:2335: buildDomTree(domchild) — populate domchild from idom.
+        // Rugra's dom tree is stored per-block via get_dom_children.
+        // Build index-level domchild: domchild[i] = list of child indices.
+        let mut domchild_idx: Vec<Vec<i32>> = vec![Vec::new(); size];
+        for i in 0..size {
+            let block = match bblocks.get_block(i) { Some(b) => b, None => continue };
+            let children = block.read().unwrap().get_dom_children();
+            for child in children {
+                let cidx = child.read().unwrap().get_index() as usize;
+                if cidx < size {
+                    domchild_idx[i].push(cidx as i32);
+                }
+            }
+        }
+
+        // cc:2339: buildDomDepth(depth)
+        let mut depth = vec![0i32; size];
+        // Simple BFS from root (index 0): depth[child] = depth[parent]+1.
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(0i32);
+        while let Some(idx) = queue.pop_front() {
+            let i = idx as usize;
+            for &cidx in &domchild_idx[i] {
+                depth[cidx as usize] = depth[i] + 1;
+                queue.push_back(cidx);
+            }
+        }
+        self.depth = depth;
+        self.maxdepth = *self.depth.iter().max().unwrap_or(&0);
+
+        // cc:2340-2354: find up-edges + count b[]/t[].
+        let mut b_count = vec![0i32; size]; // up-edges ending at node
+        let mut t_count = vec![0i32; size]; // up-edges starting under node
+        let mut upstart = Vec::new(); // up-edge source indices
+        let mut upend = Vec::new();   // up-edge target indices
+
+        for i in 0..size {
+            let x = match bblocks.get_block(i) { Some(b) => b, None => continue };
+            for &cidx in &domchild_idx[i] {
+                let v = match bblocks.get_block(cidx as usize) { Some(b) => b, None => continue };
+                let v_idom = v.read().unwrap().get_immed_dom()
+                    .and_then(|w| w.upgrade())
+                    .map(|dom| dom.read().unwrap().get_index());
+                let v_sin = v.read().unwrap().size_in();
+                for k in 0..v_sin {
+                    let u = match v.read().unwrap().get_in(k) { Some(e) => e.point.clone(), None => continue };
+                    let u_idx = u.read().unwrap().get_index();
+                    let is_tree_edge = Some(u_idx) == v_idom;
+                    if !is_tree_edge {
+                        // Up-edge: u -> v
+                        upstart.push(u_idx);
+                        upend.push(cidx);
+                        b_count[u_idx as usize] += 1;
+                        t_count[i] += 1;
+                    }
+                }
+            }
+        }
+
+        // cc:2355-2368: bottom-up a[]/z[] + boundary marking.
+        let mut a_count = vec![0i32; size];
+        let mut z = vec![0i32; size];
+        for i in (0..size).rev() {
+            let mut k_sum = 0i32;
+            let mut l_sum = 0i32;
+            for &cidx in &domchild_idx[i] {
+                k_sum += a_count[cidx as usize];
+                l_sum += z[cidx as usize];
+            }
+            a_count[i] = b_count[i] - t_count[i] + k_sum;
+            z[i] = 1 + l_sum;
+            if domchild_idx[i].is_empty() || z[i] > a_count[i] + 1 {
+                self.flags[i] |= heritage_flags::BOUNDARY_NODE;
+                z[i] = 1;
+            }
+        }
+
+        // cc:2369: z[0] = -1
+        if !z.is_empty() { z[0] = -1; }
+
+        // cc:2370-2376: propagate z through boundary chains.
+        for i in 1..size {
+            let block = match bblocks.get_block(i) { Some(b) => b, None => continue };
+            let j = match block.read().unwrap().get_immed_dom().and_then(|w| w.upgrade()) {
+                Some(dom) => dom.read().unwrap().get_index() as usize,
+                None => continue,
+            };
+            if (self.flags[j] & heritage_flags::BOUNDARY_NODE) != 0 {
+                z[i] = j as i32;
+            } else {
+                z[i] = z[j];
+            }
+        }
+
+        // cc:2377-2385: build augment[] from up-edges.
+        for idx in 0..upstart.len() {
+            let v_idx = upend[idx];
+            let v_block = match bblocks.get_block(v_idx as usize) { Some(b) => b, None => continue };
+            let mut j = v_block.read().unwrap().get_immed_dom()
+                .and_then(|w| w.upgrade())
+                .map(|dom| dom.read().unwrap().get_index())
+                .unwrap_or(0);
+            let mut k = upstart[idx];
+            while j < k {
+                if (k as usize) < self.augment.len() {
+                    self.augment[k as usize].push(v_idx);
+                }
+                k = z[k as usize];
+            }
+        }
+
+        // Store domchild as indices (for visitIncr/calcMultiequals).
+        self.domchild = domchild_idx;
     }
 
     // Ghidra: heritage.cc:219 Heritage::discoverAndGuardStackStoresFd
