@@ -1938,10 +1938,25 @@ impl Funcdata {
     /// relative ordering where it matters for emit.
     pub fn op_insert_before(&mut self, op: &crate::op::PcodeOpRef, follow: &crate::op::PcodeOpRef) {
         let pos = self.obank.alivelist.iter().position(|r| std::sync::Arc::ptr_eq(&r.0, &follow.0));
-        match pos {
-            Some(idx) => self.obank.alivelist.insert(idx, op.clone()),
-            None => self.obank.alivelist.push(op.clone()),
-        }
+        let insert_idx = match pos {
+            Some(mut idx) => {
+                // Ghidra cc:351-362: if op is not INDIRECT, skip preceding
+                // INDIRECTs (they stay grouped before their associated op).
+                let op_is_indirect = op.0.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+                if !op_is_indirect {
+                    while idx > 0 {
+                        let prev = &self.obank.alivelist[idx - 1];
+                        if prev.0.read().unwrap().opcode != OpCode::CPUI_INDIRECT {
+                            break;
+                        }
+                        idx -= 1;
+                    }
+                }
+                idx
+            }
+            None => self.obank.alivelist.len(),
+        };
+        self.obank.alivelist.insert(insert_idx, op.clone());
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::newIndirectOp
