@@ -1747,6 +1747,82 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:2119 Heritage::splitJoinRead
+    /// Split a free join-space Varnode into PIECE expressions.
+    /// Faithful to `splitJoinRead` (heritage.cc:2119-2163).
+    /// Requires JoinRecord (join offset → piece mapping).
+    /// Rugra lacks JoinRecord infrastructure; documented stub.
+    pub fn split_join_read(
+        &mut self,
+        _fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+    ) {
+        // cc:2122: vn is free, loneDescend must be non-null
+        let _op = vn.read().unwrap().lone_descend();
+        // cc:2128-2162: iterative splitJoinLevel + PIECE chain creation
+        // TODO: requires JoinRecord::numPieces + splitJoinLevel
+        // (heritage.cc:2068 splitJoinLevel + architecture.cc JoinRecord)
+        eprintln!("[HERITAGE] splitJoinRead: join varnode at {:?} (JoinRecord infra TODO)",
+            vn.read().unwrap().loc);
+    }
+
+    // Ghidra: heritage.cc:2172 Heritage::splitJoinWrite
+    /// Split a written join-space Varnode into SUBPIECE expressions.
+    /// Faithful to `splitJoinWrite` (heritage.cc:2172-2227).
+    /// Requires JoinRecord infrastructure.
+    pub fn split_join_write(
+        &mut self,
+        _fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+    ) {
+        // cc:2175: vn is written, get def op
+        let _def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        // cc:2181-2226: iterative splitJoinLevel + SUBPIECE chain
+        // TODO: requires JoinRecord::numPieces + splitJoinLevel
+        eprintln!("[HERITAGE] splitJoinWrite: join varnode at {:?} (JoinRecord infra TODO)",
+            vn.read().unwrap().loc);
+    }
+
+    // Ghidra: heritage.cc:2068 Heritage::splitJoinLevel
+    /// One level of Varnode splitting to match a JoinRecord.
+    /// Faithful to `splitJoinLevel` (heritage.cc:2068-2118).
+    /// TODO: requires JoinRecord piece specifications.
+    pub fn split_join_level(
+        &mut self,
+        _fd: &mut Funcdata,
+        _lastcombo: &[Arc<RwLock<Varnode>>],
+        _nextlev: &mut Vec<Option<Arc<RwLock<Varnode>>>>,
+    ) {
+        // TODO: requires JoinRecord (architecture.cc JoinRecord).
+    }
+
+    // Ghidra: heritage.cc:2236 Heritage::floatExtensionRead
+    /// Create float extension from a free join-space Varnode.
+    /// Faithful to `floatExtensionRead` (heritage.cc:2236-2255).
+    pub fn float_extension_read(
+        &mut self,
+        _fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+    ) {
+        // cc:2237: JoinRecord must be float extension
+        // TODO: requires JoinRecord::isFloatExtension + piece info
+        eprintln!("[HERITAGE] floatExtensionRead: {:?} (JoinRecord infra TODO)",
+            vn.read().unwrap().loc);
+    }
+
+    // Ghidra: heritage.cc:2256 Heritage::floatExtensionWrite
+    /// Create float truncation from a written join-space Varnode.
+    /// Faithful to `floatExtensionWrite` (heritage.cc:2256-2281).
+    pub fn float_extension_write(
+        &mut self,
+        _fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+    ) {
+        // TODO: requires JoinRecord::isFloatExtension + piece info
+        eprintln!("[HERITAGE] floatExtensionWrite: {:?} (JoinRecord infra TODO)",
+            vn.read().unwrap().loc);
+    }
+
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
     /// Increase dead-code delay for a space, requesting a restart.
     /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
