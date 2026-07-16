@@ -581,7 +581,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → collapseConditions → collapseInternal(NULL) → selectGoto 循环 → collapseInternal(targetbl)。Rugra 当前是 7-phase。**B1（try_rule_or negateCondition）已修复**。**B2（new_block_condition/if/if_else 工厂层）已修复（37f99a2）**。**B4（set_goto_branch 3-op 完整化）已修复（0377b4c）**。**B8（collapse_conditions fixpoint + 删除 collapse_bool_conditions）已修复（18d227a）**。剩余阻断：
 
 - ~~**B2**: 缺 `new_block_condition`/`new_block_if`/etc. 工厂层~~ **已修复（37f99a2）**。
-- **B3**: `try_rule_inf_loop`（blockaction.rs:3261）不创建 BlockInfLoop（只 eprintln）。缺 BlockInfLoop struct。
+- ~~**B3**: `try_rule_inf_loop`（blockaction.rs:3261）不创建 BlockInfLoop（只 eprintln）。缺 BlockInfLoop struct。~~ **已修复（c77a545）**：新增 BlockInfLoop struct + new_block_inf_loop 工厂 + try_rule_inf_loop 真正创建节点 + printc emit_structured_infloop。
 - ~~**B4**: `set_goto_branch` 不完整~~ **已修复（0377b4c）**：现做 Ghidra 3 件事（edge flag + source INTERIOR_GOTOOUT + target INTERIOR_GOTOIN）。
 - **B5**: 缺 `update_loop_body` 状态机（cc:1193-1253）+ loopbodyiter 推进。
 - **B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。
@@ -589,7 +589,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
 - **B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。
 
-**最小路径**：B1（已修）→ ~~B2/B4/B8~~（已修）→ B3（BlockInfLoop）→ B9（apply_rules_to_block 补规则）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
+**最小路径**：B1（已修）→ ~~B2/B3/B4/B8~~（已修）→ B9（apply_rules_to_block 补规则）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
@@ -599,7 +599,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - **P4**: 变量声明/编号顺序用 op 遍历首次触及顺序，非 Ghidra nametree 顺序。是 numbering diff 的主因。
 - **P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。
 - **P6**: switch 加 `(long)` cast（Ghidra 无）；case 用 char 字面量（Ghidra 用 pushConstant 数值）；break 抑制逻辑不同；无 fallthrough 处理。
-- **P7**: 缺 BlockInfLoop + overflow_syntax while 形式。
+- **P7**: ~~缺 BlockInfLoop~~ **已修复（c77a545）**：emit_structured_infloop 输出 `do { } while(true);`。剩余 overflow_syntax while 形式（while(true) { if(cb) break; }）未实现。
 - **P8**: emitBlockCondition 复合 &&/|| 发射为独立语句非合并条件。
 - **P9**: 无 else if 链化（pending_brace）；总是 `else { if... }`。
 - **P10**: doc_statement 无条件加 `;`；无 comma_separate。
