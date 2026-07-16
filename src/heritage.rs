@@ -95,8 +95,33 @@ impl LocationMap {
     }
 
     // Ghidra: heritage.cc:91 LocationMap::findPass
+    /// Return the pass number when the given address was heritaged, or -1
+    /// if it was not heritaged. Faithful to `findPass` (heritage.cc:91-100):
+    /// upper_bound(addr), back up one, check overlap.
     pub fn find_pass(&self, addr: Address) -> i32 {
-        self.themap.get(&addr).map(|sp| sp.pass).unwrap_or(-1)
+        // Ghidra cc:94: upper_bound(addr) — first key > addr
+        let keys: Vec<&Address> = self.themap.keys().filter(|k| **k > addr).collect();
+        // Ghidra cc:95: if (iter == begin) return -1
+        let prev_key = if keys.is_empty() {
+            // No key > addr → use the last key (if any)
+            self.themap.keys().max().copied()
+        } else {
+            // The key just before the first key > addr
+            let first_after = keys[0];
+            self.themap.keys().filter(|k| **k < *first_after).max().copied()
+        };
+        // Ghidra cc:97-98: if overlap != -1 return pass
+        match prev_key {
+            Some(k) => {
+                let sp = self.themap.get(&k).copied().unwrap_or(SizePass { size: 0, pass: -1 });
+                if addr.overlap(0, k, sp.size) != -1 {
+                    sp.pass
+                } else {
+                    -1
+                }
+            }
+            None => -1,
+        }
     }
 
     // Ghidra: heritage.hh:38 LocationMap::clear
