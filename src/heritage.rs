@@ -1616,12 +1616,53 @@ impl Heritage {
     /// Documented stub — logs when called.
     pub fn guard_call_overlapping_input(
         &mut self,
-        _fd: &mut Funcdata,
-        _addr: Address,
-        _size: i32,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
     ) {
-        // TODO: requires FuncCallSpecs::getBiggestContainedInputParam +
-        // ParamActive::whichTrial/registerTrial (Rugra L1 gap).
+        // Ghidra cc:1216: fc->getBiggestContainedInputParam(transAddr, size, vData)
+        // Rugra lacks getBiggestContainedInputParam. Use characterizeAsInputParam
+        // to check containment, then create SUBPIECE if contained_by (3).
+        // Iterate all calls to find ones whose input contains this range.
+        let num_calls = fd.num_calls();
+        for i in 0..num_calls {
+            let input_char = fd.get_call_specs(i)
+                .map(|fc| fc.characterize_as_input_param(
+                    addr.as_u64(), size, AddressSpace::Stack))
+                .unwrap_or(0);
+            if input_char != 3 { continue; } // only contained_by
+            // cc:1217-1234: create SUBPIECE + register trial
+            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
+            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
+            // cc:1224-1231: create SUBPIECE op before the CALL
+            let subpiece = fd.new_op(2, call_op_addr);
+            fd.op_set_opcode(&subpiece, OpCode::CPUI_SUBPIECE);
+            let whole_vn = fd.vbank.create_with_space(
+                size as usize, AddressSpace::Stack, addr.as_u64());
+            whole_vn.write().unwrap().set_active_heritage();
+            fd.op_set_input(&subpiece, whole_vn, 0);
+            // cc:1222: truncateAmount = justifiedContain (simplified: 0)
+            let off_const = fd.new_constant(4, 0u64);
+            fd.op_set_input(&subpiece, off_const, 1);
+            // cc:1230: output = newVarnodeOut(size, truncAddr)
+            let out_vn = fd.new_varnode_out(size as usize, addr, &subpiece);
+            // cc:1231: opInsertBefore(subpiece, callOp)
+            // Find the CALL op in alivelist
+            let call_op = fd.obank.alivelist.iter()
+                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
+                .map(|r| r.0.clone());
+            if let Some(call_op) = call_op {
+                fd.op_insert_before(&subpiece, &PcodeOpRef(call_op));
+            }
+            // cc:1232: active->registerTrial(truncAddr, size)
+            if let Some(fc) = fd.get_call_specs_mut(i) {
+                if let Some(active) = &mut fc.active_input {
+                    if active.which_trial(addr, size) < 0 {
+                        active.register_trial(addr, size);
+                    }
+                }
+            }
+        }
     }
 
     // Ghidra: heritage.cc:1249 Heritage::guardOutputOverlap
