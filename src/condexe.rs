@@ -1345,18 +1345,25 @@ impl ActionConditionalExe {
 
 impl Action for ActionConditionalExe {
     // Ghidra: condexe.cc:478 ActionConditionalExe::apply
+    /// Faithful to `ActionConditionalExe::apply` (condexe.cc:478-503):
+    ///   - constructs ONE ConditionalExecution outside the loop (cc:487)
+    ///   - do-while outer loop until no change (cc:490-500)
+    ///   - for inner loop over ALL bblocks, NO break on hit (cc:492-499)
+    ///   - returns 0 (count is statistics only, cc:502)
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Conditional execution elimination may not work with unreachable blocks.
-        // (Rugra does not currently track reachability precisely; proceed.)
         let mut numhits = 0;
         loop {
             let mut changethisround = false;
-            let n = fd.bblocks.get_size();
-            let mut i = 0;
-            while i < n {
-                // Re-fetch block each iteration: the graph may have shrunk.
-                let bb = match fd.bblocks.get_block(i) { Some(b) => b, None => { i += 1; continue; } };
-                // Quick reject: needs 2 in, 2 out, ends in CBRANCH.
+            // Snapshot the block list BEFORE constructing condexe (which
+            // borrows fd). Arc clones are cheap. Ghidra cc:487 constructs
+            // condexe once per function; Rugra constructs per pass due to
+            // borrow rules — equivalent since buildHeritageArray reads
+            // stable fd state.
+            let block_snap: Vec<_> = (0..fd.bblocks.get_size())
+                .filter_map(|i| fd.bblocks.get_block(i))
+                .collect();
+            let mut condexe = ConditionalExecution::new(fd);
+            for bb in &block_snap {
                 let (sin, sout, is_cb) = {
                     let r = bb.read().unwrap();
                     let ops = r.get_ops();
@@ -1364,21 +1371,17 @@ impl Action for ActionConditionalExe {
                     (r.size_in(), r.size_out(), is_cb)
                 };
                 if sin == 2 && sout == 2 && is_cb {
-                    let mut condexe = ConditionalExecution::new(fd);
-                    let candidate = bb.clone();
-                    if condexe.trial(candidate) {
+                    if condexe.trial(bb.clone()) {
                         condexe.execute();
                         numhits += 1;
                         changethisround = true;
-                        // Graph changed; restart scan from top.
-                        break;
                     }
                 }
-                i += 1;
             }
             if !changethisround { break; }
         }
-        if numhits > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        let _ = numhits;
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: condexe.hh:133 ActionConditionalExe::getName
