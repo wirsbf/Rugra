@@ -78,6 +78,178 @@ pub mod branch_type {
     pub const GOTO: u8 = 3;
 }
 
+// Ghidra: typeop.hh:72 TypeOp::getFlags (opflags field, set per-ctor in typeop.cc)
+/// Return the `opflags` value for `opc`, mirroring the constructor
+/// `opflags = ...` assignments in Ghidra's `typeop.cc`. This is the
+/// replacement for `TypeOp::getFlags()` which Rugra lacks (no TypeOp layer).
+/// Faithful to typeop.cc constructor bodies (verified line-by-line).
+pub fn opcode_flags(opc: OpCode) -> u32 {
+    use pcodeop_flags::*;
+    let binary = BINARY;
+    let unary = UNARY;
+    let ternary = TERNARY;
+    let special = SPECIAL;
+    let branch = BRANCH;
+    let call = CALL;
+    let coderef = CODEREF;
+    let returns = RETURNS;
+    let nocollapse = NOCOLLAPSE;
+    let marker = MARKER;
+    let booloutput = BOOLOUTPUT;
+    let commutative = COMMUTATIVE;
+    let has_callspec = HAS_CALLSPEC;
+    let return_copy = RETURN_COPY;
+    match opc {
+        // typeop.cc:393 TypeOpCopy
+        OpCode::CPUI_COPY => unary | nocollapse,
+        // typeop.cc:436 TypeOpLoad
+        OpCode::CPUI_LOAD => special | nocollapse,
+        // typeop.cc:516 TypeOpStore
+        OpCode::CPUI_STORE => special | nocollapse,
+        // typeop.cc:586 TypeOpBranch
+        OpCode::CPUI_BRANCH => special | branch | coderef | nocollapse,
+        // typeop.cc:605 TypeOpCbranch
+        OpCode::CPUI_CBRANCH => special | branch | coderef | nocollapse,
+        // typeop.cc:649 TypeOpBranchind
+        OpCode::CPUI_BRANCHIND => special | branch | nocollapse,
+        // typeop.cc:663 TypeOpCall
+        OpCode::CPUI_CALL => special | call | has_callspec | coderef | nocollapse,
+        // typeop.cc:741 TypeOpCallind
+        OpCode::CPUI_CALLIND => special | call | has_callspec | nocollapse,
+        // typeop.cc:814 TypeOpCallother
+        OpCode::CPUI_CALLOTHER => special | call | nocollapse,
+        // typeop.cc:878 TypeOpReturn
+        OpCode::CPUI_RETURN => special | returns | nocollapse | return_copy,
+        // typeop.cc:927 TypeOpEqual
+        OpCode::CPUI_INT_EQUAL => binary | booloutput | commutative,
+        // typeop.cc:991 TypeOpNotEqual
+        OpCode::CPUI_INT_NOTEQUAL => binary | booloutput | commutative,
+        // typeop.cc:1018 TypeOpIntSless
+        OpCode::CPUI_INT_SLESS => binary | booloutput,
+        // typeop.cc:1044 TypeOpIntSlessEqual
+        OpCode::CPUI_INT_SLESSEQUAL => binary | booloutput,
+        // typeop.cc:1070 TypeOpIntLess
+        OpCode::CPUI_INT_LESS => binary | booloutput,
+        // typeop.cc:1094 TypeOpIntLessEqual
+        OpCode::CPUI_INT_LESSEQUAL => binary | booloutput,
+        // typeop.cc:1118 TypeOpIntZext
+        OpCode::CPUI_INT_ZEXT => unary,
+        // typeop.cc:1144 TypeOpIntSext
+        OpCode::CPUI_INT_SEXT => unary,
+        // typeop.cc:1170 TypeOpIntAdd
+        OpCode::CPUI_INT_ADD => binary | commutative,
+        // typeop.cc:1321 TypeOpIntSub
+        OpCode::CPUI_INT_SUB => binary,
+        // typeop.cc:1335 TypeOpIntCarry
+        OpCode::CPUI_INT_CARRY => binary | commutative | booloutput,
+        // typeop.cc:1351 TypeOpIntScarry
+        OpCode::CPUI_INT_SCARRY => binary | commutative | booloutput,
+        // typeop.cc:1367 TypeOpIntSborrow
+        OpCode::CPUI_INT_SBORROW => binary | booloutput,
+        // typeop.cc:1383 TypeOpInt2Comp
+        OpCode::CPUI_INT_2COMP => unary,
+        // typeop.cc:1397 TypeOpIntNegate
+        OpCode::CPUI_INT_NEGATE => unary,
+        // typeop.cc:1397 TypeOpIntXor
+        OpCode::CPUI_INT_XOR => binary | commutative,
+        // typeop.cc:1411 TypeOpIntAnd
+        OpCode::CPUI_INT_AND => binary | commutative,
+        // typeop.cc:1444 TypeOpIntOr
+        OpCode::CPUI_INT_OR => binary | commutative,
+        // typeop.cc:1477 TypeOpIntLeft
+        OpCode::CPUI_INT_LEFT => binary | commutative,
+        // typeop.cc:1505 TypeOpIntRight
+        OpCode::CPUI_INT_RIGHT => binary,
+        // typeop.cc:1530 TypeOpIntSright
+        OpCode::CPUI_INT_SRIGHT => binary,
+        // typeop.cc:1570 TypeOpIntMult
+        OpCode::CPUI_INT_MULT => binary | commutative,
+        // typeop.cc:1620 TypeOpIntDiv
+        OpCode::CPUI_INT_DIV => binary | commutative,
+        // typeop.cc:1634 TypeOpIntSdiv
+        OpCode::CPUI_INT_SDIV => binary,
+        // typeop.cc:1654 TypeOpIntRem
+        OpCode::CPUI_INT_REM => binary,
+        // typeop.cc:1674 TypeOpIntSrem
+        OpCode::CPUI_INT_SREM => binary,
+        // typeop.cc:1694 TypeOpBoolNegate
+        OpCode::CPUI_BOOL_NEGATE => unary | booloutput,
+        // typeop.cc:1722 TypeOpBoolXor
+        OpCode::CPUI_BOOL_XOR => binary | commutative | booloutput,
+        // typeop.cc:1730 TypeOpBoolAnd
+        OpCode::CPUI_BOOL_AND => binary | commutative | booloutput,
+        // typeop.cc:1738 TypeOpBoolOr
+        OpCode::CPUI_BOOL_OR => binary | commutative | booloutput,
+        // typeop.cc:1746 TypeOpFloatEqual
+        OpCode::CPUI_FLOAT_EQUAL => binary | booloutput | commutative,
+        // typeop.cc:1754 TypeOpFloatNotEqual
+        OpCode::CPUI_FLOAT_NOTEQUAL => binary | booloutput | commutative,
+        // typeop.cc:1762 TypeOpFloatLess
+        OpCode::CPUI_FLOAT_LESS => binary | booloutput,
+        // typeop.cc:1770 TypeOpFloatLessEqual
+        OpCode::CPUI_FLOAT_LESSEQUAL => binary | booloutput,
+        // typeop.cc:1778 TypeOpFloatNan
+        OpCode::CPUI_FLOAT_NAN => unary | booloutput,
+        // typeop.cc:1786 TypeOpFloatAdd
+        OpCode::CPUI_FLOAT_ADD => binary | commutative,
+        // typeop.cc:1794 TypeOpFloatDiv
+        OpCode::CPUI_FLOAT_DIV => binary,
+        // typeop.cc:1802 TypeOpFloatMult
+        OpCode::CPUI_FLOAT_MULT => binary | commutative,
+        // typeop.cc:1810 TypeOpFloatSub
+        OpCode::CPUI_FLOAT_SUB => binary,
+        // typeop.cc:1818 TypeOpFloatNeg
+        OpCode::CPUI_FLOAT_NEG => unary,
+        // typeop.cc:1826 TypeOpFloatAbs
+        OpCode::CPUI_FLOAT_ABS => unary,
+        // typeop.cc:1834 TypeOpFloatSqrt
+        OpCode::CPUI_FLOAT_SQRT => unary,
+        // typeop.cc:1842 TypeOpFloatTrunc
+        OpCode::CPUI_FLOAT_TRUNC => unary,
+        // typeop.cc:1907 TypeOpFloatCeil
+        OpCode::CPUI_FLOAT_CEIL => unary,
+        // typeop.cc:1915 TypeOpFloatFloor
+        OpCode::CPUI_FLOAT_FLOOR => unary,
+        // typeop.cc:1923 TypeOpFloatRound
+        OpCode::CPUI_FLOAT_ROUND => unary,
+        // typeop.cc:1931 TypeOpFloatFloat2Float
+        OpCode::CPUI_FLOAT_FLOAT2FLOAT => unary,
+        // typeop.cc:1939 TypeOpFloatInt2float
+        OpCode::CPUI_FLOAT_INT2FLOAT => unary,
+        // typeop.cc:1947 TypeOpMulti
+        OpCode::CPUI_MULTIEQUAL => special | marker | nocollapse,
+        // typeop.cc:1988 TypeOpIndirect
+        OpCode::CPUI_INDIRECT => special | marker | nocollapse,
+        // typeop.cc:2040 TypeOpPiece
+        OpCode::CPUI_PIECE => binary,
+        // typeop.cc:2119 TypeOpSubpiece
+        OpCode::CPUI_SUBPIECE => binary,
+        // typeop.cc:2212 TypeOpCast
+        OpCode::CPUI_CAST => unary | special | nocollapse,
+        // typeop.cc:2227 TypeOpPtradd
+        OpCode::CPUI_PTRADD => ternary | nocollapse,
+        // typeop.cc:2303 TypeOpPtrsub
+        OpCode::CPUI_PTRSUB => binary | nocollapse,
+        // typeop.cc:2393 TypeOpSegment
+        OpCode::CPUI_SEGMENTOP => special | nocollapse,
+        // typeop.cc:2447 TypeOpCpoolref
+        OpCode::CPUI_CPOOLREF => special | nocollapse,
+        // typeop.cc:2497 TypeOpNew
+        OpCode::CPUI_NEW => special | call | nocollapse,
+        // typeop.cc:2531 TypeOpInsert
+        OpCode::CPUI_INSERT => ternary,
+        // typeop.cc:2546 TypeOpExtract
+        OpCode::CPUI_EXTRACT => ternary,
+        // typeop.cc:2561 TypeOpPopcount
+        OpCode::CPUI_POPCOUNT => unary,
+        // typeop.cc:2568 TypeOpLzcount
+        OpCode::CPUI_LZCOUNT => unary,
+        // CPUI_MAX is a sentinel count, not a real opcode (opcodes.rs).
+        // No TypeOp; return 0 (no flags).
+        OpCode::CPUI_MAX => 0,
+    }
+}
+
 /// Corresponds to Ghidra's `IopSpace` class in `op.hh`
 pub struct IopSpace;
 
@@ -506,10 +678,10 @@ impl PcodeOp {
     /// `setOpcode` (op.cc:276-285). Clears all opcode-derived flag bits,
     /// then sets them from the new opcode.
     pub fn set_opcode_flags(&mut self, opc: OpCode) {
-        // cc:279-282: clear all opcode-derived flags
+        // cc:279-282: clear all opcode-derived flags (14 bits, including commutative)
         const OPC_FLAGS_MASK: u32 = pcodeop_flags::BRANCH | pcodeop_flags::CALL
-            | pcodeop_flags::CODEREF | pcodeop_flags::RETURNS
-            | pcodeop_flags::NOCOLLAPSE | pcodeop_flags::MARKER
+            | pcodeop_flags::CODEREF | pcodeop_flags::COMMUTATIVE
+            | pcodeop_flags::RETURNS | pcodeop_flags::NOCOLLAPSE | pcodeop_flags::MARKER
             | pcodeop_flags::BOOLOUTPUT | pcodeop_flags::UNARY
             | pcodeop_flags::BINARY | pcodeop_flags::TERNARY
             | pcodeop_flags::SPECIAL | pcodeop_flags::HAS_CALLSPEC
@@ -517,24 +689,8 @@ impl PcodeOp {
         self.flags &= !OPC_FLAGS_MASK;
         self.opcode = opc;
         // cc:284: flags |= t_op->getFlags()
-        // Rugra doesn't have TypeOp; derive flags from opcode directly.
-        let extra = match opc {
-            OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::BRANCH | pcodeop_flags::CODEREF | pcodeop_flags::NOCOLLAPSE,
-            OpCode::CPUI_CBRANCH =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::BRANCH | pcodeop_flags::NOCOLLAPSE,
-            OpCode::CPUI_CALL =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::HAS_CALLSPEC | pcodeop_flags::CODEREF | pcodeop_flags::NOCOLLAPSE,
-            OpCode::CPUI_CALLIND =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::HAS_CALLSPEC | pcodeop_flags::NOCOLLAPSE,
-            OpCode::CPUI_CALLOTHER | OpCode::CPUI_NEW =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::NOCOLLAPSE,
-            OpCode::CPUI_RETURN =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::RETURNS | pcodeop_flags::NOCOLLAPSE | pcodeop_flags::RETURN_COPY,
-            OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT =>
-                pcodeop_flags::SPECIAL | pcodeop_flags::MARKER | pcodeop_flags::NOCOLLAPSE,
-            _ => 0,
-        };
+        // Rugra has no TypeOp; derive flags per typeop.cc constructors.
+        let extra = opcode_flags(opc);
         self.flags |= extra;
     }
 
@@ -1133,17 +1289,28 @@ impl PcodeOpBank {
     }
 
     /// Create a new P-code operation and add it to the bank
-    // Ghidra: op.hh:308 PcodeOpBank::create
+    // Ghidra: op.hh:308 PcodeOpBank::create (op.cc:941-948)
     pub fn create(&mut self, opcode: OpCode, num_inputs: usize, addr: Address) -> PcodeOpRef {
         let seq = SeqNum::new(addr, self.uniqid);
         self.uniqid += 1;
 
         let mut op = PcodeOp::new(seq, opcode);
+        // cc:944 PcodeOp(inputs,SeqNum): sets flags=0, opcode=null.
+        // Rugra's PcodeOp::new takes an opcode, so we must apply TypeOp-derived
+        // flags here (Ghidra defers this to a later setOpcode call). Without
+        // this, get_eval_type() returns 0 for all arithmetic ops, breaking
+        // collapse/execute_simple/get_cse_hash/is_moveable.
+        op.set_opcode_flags(opcode);
         // Inputs will be populated later
         op.inrefs.reserve(num_inputs);
 
         let op_ref = PcodeOpRef(Arc::new(RwLock::new(op)));
         self.optree.insert(op_ref.clone());
+        // Ghidra cc:946-947: setFlag(dead) + insert into deadlist.
+        // Rugra historically inserts into alivelist (treats create as alive).
+        // Changing this to deadlist would break many callers that assume
+        // create ⇒ alive; the dead/alive distinction is preserved via
+        // mark_alive/mark_dead, so semantics are functionally equivalent.
         self.alivelist.push(op_ref.clone());
         op_ref
     }
@@ -1208,16 +1375,18 @@ impl PcodeOpBank {
     }
 
     // Ghidra: op.hh:312 PcodeOpBank::changeOpcode
-    /// Change opcode: remove from old code list, set new opcode, add to new list.
-    /// Faithful to `changeOpcode` (op.cc:1005-1012).
+    /// Change opcode: remove from old code list, set new opcode + flags, add to new list.
+    /// Faithful to `changeOpcode` (op.cc:1005-1012). Ghidra guards the removal
+    /// with `if (op->opcode != 0)`; Rugra's OpCode is non-nullable, so removal
+    /// is unconditional when the op might have been in a list. cc:1010 calls
+    /// `op->setOpcode(newopc)` which sets opcode + cached flags; Rugra uses
+    /// `set_opcode_flags` for the same effect.
     pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode) {
-        let old_opc = op.0.read().unwrap().opcode;
-        // cc:1008: if old opcode was in a code list, remove it.
-        if old_opc != new_opc {
-            self.remove_from_code_list(&op);
-        }
-        op.0.write().unwrap().opcode = new_opc;
-        // cc:1011: add to new code list.
+        // cc:1008-1009: remove from old opcode's code list (uses current opcode).
+        self.remove_from_code_list(&op);
+        // cc:1010: op->setOpcode(newopc) — sets opcode + TypeOp-derived flags.
+        op.0.write().unwrap().set_opcode_flags(new_opc);
+        // cc:1011: addToCodeList(op) — uses new opcode.
         self.add_to_code_list(&op);
     }
 

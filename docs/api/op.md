@@ -255,6 +255,37 @@
 
 ---
 
+### `pub fn opcode_flags(opc: OpCode) -> u32`
+
+Ghidra: `typeop.cc` 各 `TypeOpXxx::TypeOpXxxx` 构造函数体中的 `opflags = ...` 赋值（约 70 个 ctor）。Rugra 无 `TypeOp` 层，本函数作为 `TypeOp::getFlags()` 的等价替代。
+
+#### 语义
+对每个 `CPUI_*` 变体返回对应的 TypeOp 衍生标志位（`unary`/`binary`/`ternary`/`special`/`branch`/`call`/`coderef`/`returns`/`nocollapse`/`marker`/`booloutput`/`commutative`/`has_callspec`/`return_copy`）。每个 match arm 标注了对应 typeop.cc 的 ctor 行号。
+
+#### 示例映射
+| CPUI_* | opflags | 来源 |
+|---|---|---|
+| `CPUI_INT_ADD` | `binary | commutative` | typeop.cc:1170 |
+| `CPUI_INT_EQUAL` | `binary | booloutput | commutative` | typeop.cc:927 |
+| `CPUI_INT_ZEXT` | `unary` | typeop.cc:1118 |
+| `CPUI_BOOL_NEGATE` | `unary | booloutput` | typeop.cc:1694 |
+| `CPUI_CALL` | `special | call | has_callspec | coderef | nocollapse` | typeop.cc:663 |
+| `CPUI_MAX` | `0`（sentinel 非真实 opcode） | opcodes.rs:91 |
+
+#### 用途
+供 `set_opcode_flags`、`create`、`change_opcode` 在设置 opcode 时一次性写入所有 TypeOp 衍生标志，保证 `get_eval_type()` / `is_commutative()` / `is_bool_output()` 等下游查询正确。
+
+---
+
+### `pub fn set_opcode_flags(&mut self, opc: OpCode)`
+
+Ghidra: `op.cc:276 PcodeOp::setOpcode`。清空 14 位 opcode-衍生标志（含 `COMMUTATIVE`），然后 `flags |= opcode_flags(opc)`。同时设置 `self.opcode = opc`。
+
+#### 用途
+为给定 opcode 一次性设置所有衍生的标志位。Rugra 无 TypeOp 层，故将 Ghidra 的 `flags |= t_op->getFlags()` 替换为查表 `opcode_flags(opc)`。
+
+---
+
 ## 3. `IopSpace`
 
 ### `pub struct IopSpace`
