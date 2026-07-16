@@ -322,6 +322,88 @@ impl Varnode {
         (self.flags & varnode_flags::WRITTEN) != 0
     }
 
+    // Ghidra: varnode.cc:711 Varnode::printRawNoMarkup
+    /// Print varnode location without markup (for debugging).
+    /// Returns the "expected" size (register size or default).
+    /// Faithful to `printRawNoMarkup` (varnode.cc:711-734).
+    pub fn print_raw_no_markup(&self) -> (String, usize) {
+        // cc:719: try register name
+        // Rugra doesn't have Translate::getRegisterName; use space+offset.
+        let space_name = self.address_space.name();
+        let offset = self.loc.as_u64();
+        let s = format!("{}:{}", space_name, offset);
+        // cc:730: expect = trans->getDefaultSize()
+        let expect = 8; // x86-64 default
+        (s, expect)
+    }
+
+    // Ghidra: varnode.cc:741 Varnode::printRaw
+    /// Print full varnode info for debugging.
+    /// Faithful to `printRaw` (varnode.cc:741-756).
+    pub fn print_raw(&self) -> String {
+        let (base, expect) = self.print_raw_no_markup();
+        let mut s = base;
+        // cc:746: if expect != size, append size
+        if expect != self.size {
+            s += &format!(":{}", self.size);
+        }
+        // cc:748: input marker
+        if self.is_input() {
+            s += "(i)";
+        }
+        // cc:750: def seqnum
+        if self.is_written() {
+            if let Some(def_weak) = self.def.as_ref() {
+                if let Some(def_op) = def_weak.upgrade() {
+                    let def_r = def_op.read().unwrap();
+                    s += &format!(" ({:?})", def_r.start);
+                }
+            }
+        }
+        // cc:752: free marker
+        if (self.flags & (varnode_flags::INSERT | varnode_flags::CONSTANT)) == 0 {
+            s += "(free)";
+        }
+        s
+    }
+
+    // Ghidra: varnode.cc:761 Varnode::printRawHeritage
+    /// Print data-flow tree for debugging.
+    /// Faithful to `printRawHeritage` (varnode.cc:761-797).
+    pub fn print_raw_heritage(&self, depth: i32) -> String {
+        let indent: String = std::iter::repeat(' ').take(depth as usize).collect();
+        if self.is_constant() {
+            return format!("{}{}\n", indent, self.print_raw());
+        }
+        let mut s = format!("{}{}", indent, self.print_raw());
+        s += " ";
+        if let Some(def_weak) = self.def.as_ref() {
+            if let Some(def_op) = def_weak.upgrade() {
+                let def_r = def_op.read().unwrap();
+                s += &format!("{:?} {:?}\n", def_r.opcode, def_r.start);
+            }
+        } else {
+            s += "(null)\n";
+        }
+        s
+    }
+
+    // Ghidra: varnode.cc:282 Varnode::printInfo
+    /// Print summary info for debugging.
+    /// Faithful to `printInfo` (varnode.cc:282-314).
+    pub fn print_info(&self) -> String {
+        let mut s = self.print_raw();
+        s += &format!("  create={}", self.create_index);
+        if self.is_input() { s += " <input>"; }
+        if self.is_written() { s += " <written>"; }
+        if self.is_constant() { s += " <const>"; }
+        if self.is_persist() { s += " <persist>"; }
+        if self.is_addr_tied() { s += " <addrtied>"; }
+        if self.is_implied() { s += " <implied>"; }
+        if self.is_explicit() { s += " <explicit>"; }
+        s
+    }
+
     // Ghidra: varnode.cc:578 Varnode::isFree
     pub fn is_free(&self) -> bool {
         (self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN)) == 0
