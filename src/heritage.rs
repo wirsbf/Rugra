@@ -1658,15 +1658,90 @@ impl Heritage {
     /// (heritage.cc:1444-1528). Requires FuncCallSpecs/ParamActive.
     pub fn guard_calls_range(
         &mut self,
-        _fd: &mut Funcdata,
-        _fl: u32,
-        _addr: Address,
-        _size: i32,
-        _write: &mut Vec<Arc<RwLock<Varnode>>>,
+        fd: &mut Funcdata,
+        fl: u32,
+        addr: Address,
+        size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
-        // TODO: requires FuncCallSpecs layer (Rugra L1 gap).
-        // Currently guard_calls(fd) is a no-op stub; this per-range
-        // version is also a stub until call analysis is ported.
+        // Ghidra cc:1451: holdind = addrtied
+        let holdind = (fl & crate::varnode::varnode_flags::ADDRTIED) != 0;
+        let num_calls = fd.num_calls();
+        for i in 0..num_calls {
+            // cc:1453: fc = fd->getCallSpecs(i)
+            let call_op_arc = {
+                match fd.get_call_specs(i) {
+                    Some(fc) => {
+                        // cc:1454: if fc->getOp()->isAssignment()
+                        let _op_is_assignment = fc.is_output_active();
+                        let op_addr = fc.op_addr;
+                        // Get the CALL op from obank
+                        fd.obank.alivelist.iter()
+                            .find(|r| r.0.read().unwrap().get_addr() == op_addr)
+                            .map(|r| r.0.clone())
+                    }
+                    None => None,
+                }
+            };
+            let call_op = match call_op_arc { Some(o) => o, None => continue };
+
+            // cc:1458-1466: compute transAddr
+            let off = addr.as_u64();
+            let trans_addr = addr; // Simplified: no spacebase offset translation
+
+            // cc:1468: effecttype = fc->hasEffect(transAddr, size)
+            // Rugra lacks hasEffect; conservatively use unknown_effect.
+            let effecttype: u32 = 0; // 0 = unknown_effect
+
+            // cc:1470-1486: output trial registration
+            // Rugra's FuncCallSpecs has is_output_active + active_output
+            let is_output_active = fd.get_call_specs(i)
+                .map(|fc| fc.is_output_active()).unwrap_or(false);
+            if is_output_active {
+                // cc:1472: outputCharacter = characterizeAsOutput
+                // Rugra lacks characterizeAsOutput; skip trial registration.
+                // TODO: needs ProtoModel::characterizeAsOutput.
+            }
+
+            // cc:1496-1509: input trial registration
+            let is_input_active = fd.get_call_specs(i)
+                .map(|fc| fc.is_input_active()).unwrap_or(false);
+            if is_input_active {
+                // cc:1497: inputCharacter = characterizeAsInputParam
+                // Rugra lacks this; skip.
+            }
+
+            // cc:1512-1527: create INDIRECT based on effect type
+            // unknown_effect (0) → newIndirectOp
+            if effecttype == 0 {
+                // cc:1513: indop = newIndirectOp(fc->getOp(), addr, size, 0)
+                let indop = fd.new_indirect_op(
+                    &PcodeOpRef(call_op.clone()),
+                    addr.as_u64(), size as usize,
+                );
+                // cc:1514-1515: setActiveHeritage on in[0] and out
+                {
+                    let ind_r = indop.0.read().unwrap();
+                    if let Some(invn) = ind_r.get_in(0).cloned() {
+                        drop(ind_r);
+                        invn.write().unwrap().set_active_heritage();
+                    }
+                }
+                {
+                    let ind_r = indop.0.read().unwrap();
+                    if let Some(outvn) = ind_r.output.as_ref().cloned() {
+                        drop(ind_r);
+                        outvn.write().unwrap().set_active_heritage();
+                        // cc:1517-1518: if holdind, setAddrForce
+                        if holdind {
+                            outvn.write().unwrap().set_flags(
+                                crate::varnode::varnode_flags::ADDRFORCE);
+                        }
+                        write.push(outvn);
+                    }
+                }
+            }
+        }
     }
 
     // Ghidra: heritage.cc:1539 Heritage::guardStores
