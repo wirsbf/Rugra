@@ -552,9 +552,9 @@ curl 24/24 gcc。httpd 29/29 gcc，0 goto。
 
 **背景**：G3 def-linking 原型验证有效（helpf 解析出 10 个栈符号 StackX_0..48），printc 此前无法声明这些符号导致 undeclared。此增强声明它们。但 def-linking 与 jumptable/switch 交互（switch 表本身是 LOAD）导致 main 等函数 "switch quantity not an integer" 回归，故 def-linking 暂回退，本声明增强保留（正确且无害）。def-linking 重启需 jumptable/typeop 协调。
 
-### 2026-06-27（会话3 G3 续2）：switch 表达式 (long) cast
+### 2026-06-27（会话3 G3 续2）：~~switch 表达式 (long) cast~~（**2026-07-16 已移除**）
 
-- switch 控制表达式包裹 `switch ((long)(...))`。C 要求 switch 量为整数；当 varmap/typeop 把 switch index 推断为指针类型（_struct*），gcc 报 "switch quantity not an integer"。(long) cast 保证整数性——这镜像 Ghidra（将 switch 控制规范化为整数类型），且语义安全（switch index 按定义是整数）。
+- ~~switch 控制表达式包裹 `switch ((long)(...))`。~~ **2026-07-16 修复**：审计 P6 发现 Ghidra emitBlockSwitch（printc.cc:3313）发射 `switch (<expr>)` 无任何合成 cast —— Ghidra 通过 FuncProto/typelock 在上游规范化控制类型，从不在 print 阶段注入 cast。Rugra 的 `(long)(...)` 是无 Ghidra 对应物的自创。已改为 `switch (<expr>)`。当 varmap/typeop 把 switch index 推断为指针类型时仍可能 gcc 报错，但正确解法是上游 type 规范化（对齐 Ghidra），而非 print 阶段 cast。
 
 ### 2026-06-27（会话3 uVar 调查）：uVar_N 碎片根因深度诊断
 

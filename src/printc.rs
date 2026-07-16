@@ -984,17 +984,14 @@ impl PrintC {
                     self.emit_block_ops(&switch_data.control, true);
 
                     // Print switch header.
-                    // The switch control expression must be integral (C requires
-                    // an integer type). When varmap's def-linking links a switch
-                    // index varnode to a pointer-producing op, the inferred type
-                    // can be a pointer (e.g. _struct*), which GCC rejects as
-                    // 'switch quantity not an integer'. We cast the whole control
-                    // expression to `long` to guarantee integrality — this mirrors
-                    // Ghidra, which normalizes switch control to an integer type,
-                    // and is always semantically safe (a switch index is an
-                    // integer by definition).
+                    // Ghidra emitBlockSwitch (printc.cc:3313) emits `switch (<expr>)`
+                    // where <expr> is the raw switch control op (BRANCHIND input),
+                    // with NO synthetic cast. Rugra previously wrapped the control
+                    // expression in `(long)(...)` to force integrality, but Ghidra
+                    // never does this — it normalizes the type upstream via the
+                    // FuncProto/typelock. Emit the bare expression to match Ghidra.
                     self.emit.tag_line(0);
-                    self.emit.print("switch ((long)(");
+                    self.emit.print("switch (");
                     if let Some(ref idx_vn_arc) = switch_data.index_varnode {
                         let idx_vn = idx_vn_arc.read().unwrap();
                         let key = (idx_vn.get_space(), idx_vn.get_offset());
@@ -1067,7 +1064,7 @@ impl PrintC {
                             }
                         }
                     }
-                    self.emit.print("))");
+                    self.emit.print(")");
 
                     // Switch body block
                     self.emit.begin_block();
