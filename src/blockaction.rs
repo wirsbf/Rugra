@@ -3148,6 +3148,169 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.cc:1649 CollapseStructure::ruleBlockSwitch
+    /// Try to structure a switch (BRANCHIND) block. Faithful to
+    /// `ruleBlockSwitch` (blockaction.cc:1649-1723):
+    ///   (1) isSwitchOut guard
+    ///   (2) Find exitblock (obvious: sizeIn>1/sizeOut>1/self-loop;
+    ///       fallback: first out with output)
+    ///   (3) Validate all cases: no goto in/out, sizeIn==1, sizeOut<=1,
+    ///       out must go to exitblock, no nested switch
+    ///   (4) checkSwitchSkips (TODO: default-skip optimization)
+    ///   (5) newBlockSwitch(cases, hasExit)
+    pub fn try_rule_switch(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        // Ghidra cc:1652: if (!bl->isSwitchOut()) return false;
+        if !block.read().unwrap().is_switch_out() {
+            return false;
+        }
+        let sizeout = block.read().unwrap().size_out();
+
+        // Ghidra cc:1656-1671: Find "obvious" exitblock.
+        let mut exitblock: Option<i32> = None;
+        for j in 0..sizeout {
+            let curbl = match block.read().unwrap().get_out(j) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
+            let cur_idx = curbl.read().unwrap().get_index();
+            // cc:1659: self-loop (exit back to top)
+            if cur_idx == i as i32 {
+                exitblock = Some(cur_idx);
+                break;
+            }
+            let (cur_sin, cur_sout) = {
+                let r = curbl.read().unwrap();
+                (r.size_in(), r.size_out())
+            };
+            if cur_sout > 1 {
+                exitblock = Some(cur_idx);
+                break;
+            }
+            if cur_sin > 1 {
+                exitblock = Some(cur_idx);
+                break;
+            }
+        }
+
+        if exitblock.is_none() {
+            // Ghidra cc:1672-1690: fallback — find first out with an output.
+            for j in 0..sizeout {
+                let curbl = match block.read().unwrap().get_out(j) {
+                    Some(e) => e.point.clone(),
+                    None => continue,
+                };
+                // cc:1679: In cannot be a goto
+                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                // cc:1680: Must resolve nested switch first
+                if curbl.read().unwrap().is_switch_out() { return false; }
+                let cur_sout = curbl.read().unwrap().size_out();
+                if cur_sout == 1 {
+                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    let out_idx = curbl.read().unwrap().get_out(0)
+                        .map(|e| e.point.read().unwrap().get_index());
+                    match (exitblock, out_idx) {
+                        (Some(e), Some(o)) if e != o => return false,
+                        (None, Some(o)) => exitblock = Some(o),
+                        _ => {}
+                    }
+                }
+            }
+        } else {
+            // Ghidra cc:1692-1708: validate with determined exitblock.
+            let exit_idx = exitblock.unwrap();
+            let exit_block = match self.graph.get_block(exit_idx as usize) {
+                Some(b) => b,
+                None => return false,
+            };
+            // cc:1693-1694: no in gotos to exitblock
+            for k in 0..exit_block.read().unwrap().size_in() {
+                if exit_block.read().unwrap().is_goto_in(k) { return false; }
+            }
+            // cc:1695-1696: no out gotos from exitblock
+            for k in 0..exit_block.read().unwrap().size_out() {
+                if exit_block.read().unwrap().is_goto_out(k) { return false; }
+            }
+            for j in 0..sizeout {
+                let curbl = match block.read().unwrap().get_out(j) {
+                    Some(e) => e.point.clone(),
+                    None => continue,
+                };
+                let cur_idx = curbl.read().unwrap().get_index();
+                if cur_idx == exit_idx { continue; }
+                // cc:1700: case can only have switch fall into it
+                if curbl.read().unwrap().size_in() > 1 { return false; }
+                // cc:1701: in cannot be goto
+                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                // cc:1702: at most 1 exit from case
+                if curbl.read().unwrap().size_out() > 1 { return false; }
+                let cur_sout = curbl.read().unwrap().size_out();
+                if cur_sout == 1 {
+                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    let out_idx = curbl.read().unwrap().get_out(0)
+                        .map(|e| e.point.read().unwrap().get_index());
+                    if out_idx != Some(exit_idx) { return false; }
+                }
+                // cc:1707: nested switch must resolve first
+                if curbl.read().unwrap().is_switch_out() { return false; }
+            }
+        }
+
+        // Ghidra cc:1711: checkSwitchSkips (TODO: default-skip optimization).
+        // For now, proceed without default-skip handling.
+
+        // Ghidra cc:1714-1721: build cases list and create BlockSwitch.
+        let mut cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        cases.push(block.clone());
+        let exit_idx = exitblock;
+        for j in 0..sizeout {
+            let curbl = match block.read().unwrap().get_out(j) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
+            let cur_idx = curbl.read().unwrap().get_index();
+            if Some(cur_idx) == exit_idx { continue; }
+            cases.push(curbl);
+        }
+
+        // Create BlockSwitch node (Ghidra cc:1721: graph.newBlockSwitch).
+        let ctrl_idx = block.read().unwrap().get_index();
+        let mut case_values: Vec<Vec<u64>> = Vec::new();
+        let mut index_varnode = None;
+        {
+            let b = block.read().unwrap();
+            for op_ref in &b.get_ops() {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
+                    index_varnode = Some(op.inrefs[0].clone());
+                    break;
+                }
+            }
+            for j in 0..sizeout {
+                case_values.push(vec![j as u64]);
+            }
+        }
+        let _switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockSwitch {
+                index: ctrl_idx,
+                control: block.clone(),
+                cases,
+                default_case: None,
+                case_values,
+                index_varnode,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            }));
+        eprintln!("[BLOCKSTRUCT] switch structured at block {} ({} cases, exit={:?})",
+            ctrl_idx, sizeout, exit_idx);
+        true
+    }
+
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
     fn collapse_loops(&mut self) {

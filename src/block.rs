@@ -335,6 +335,14 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     }
     // Ghidra: block.hh:282 FlowBlock::setVisitCount
     fn set_visit_count(&mut self, _c: i32) {}
+
+    // Ghidra: block.hh:143 FlowBlock::isSwitchOut
+    /// Is this block a switch dispatch (BRANCHIND output)?
+    /// Faithful to `isSwitchOut()` (block.hh:143): `(flags & f_switch_out)!=0`.
+    fn is_switch_out(&self) -> bool {
+        (self.get_flags() & block_flags::SWITCH_OUT) != 0
+    }
+
     /// Is the i-th incoming edge a goto/irreducible edge? (Ghidra `isGotoIn`.)
     // Ghidra: block.hh:346 FlowBlock::isGotoIn
     fn is_goto_in(&self, _i: usize) -> bool {
