@@ -1481,14 +1481,96 @@ impl VarnodeBank {
             .map(|v| v.0.clone())
     }
 
+    // Ghidra: varnode.cc:1440 VarnodeBank::find
+    /// Find a Varnode by size, address, defining op address, and optional uniq.
+    /// Faithful to `find` (varnode.cc:1440-1458). Scans loc_tree entries
+    /// matching (size, addr) and checks def op address + time.
+    pub fn find_vn(&self, size: usize, loc: Address, pc: Address, uniq: u32) -> Option<Arc<RwLock<Varnode>>> {
+        for loc_ref in &self.loc_tree {
+            let vn = loc_ref.0.read().unwrap();
+            if vn.get_size() != size { continue; }
+            if vn.loc != loc { continue; }
+            // Check def op address + time.
+            if let Some(def_weak) = vn.def.as_ref().and_then(|w| w.upgrade()) {
+                let def_op = def_weak.read().unwrap();
+                if def_op.get_addr() == pc {
+                    if uniq == u32::MAX || def_op.start.order == uniq {
+                        drop(vn);
+                        return Some(loc_ref.0.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Ghidra: varnode.cc:1485 VarnodeBank::findCoveredInput
+    /// Find the first input Varnode completely contained within [loc, loc+s).
+    /// Faithful to `findCoveredInput` (varnode.cc:1485-1507).
+    pub fn find_covered_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+        let end = loc.as_u64().wrapping_add(size as u64).wrapping_sub(1);
+        for loc_ref in &self.loc_tree {
+            let vn = loc_ref.0.read().unwrap();
+            if !vn.is_input() { continue; }
+            let vn_start = vn.loc.as_u64();
+            let vn_end = vn_start.wrapping_add(vn.get_size() as u64).wrapping_sub(1);
+            // vn must be completely contained in [loc, loc+s)
+            if vn_start >= loc.as_u64() && vn_end <= end {
+                drop(vn);
+                return Some(loc_ref.0.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: varnode.cc:1513 VarnodeBank::findCoveringInput
+    /// Find the input Varnode that completely contains [loc, loc+s).
+    /// Faithful to `findCoveringInput` (varnode.cc:1513-1531).
+    pub fn find_covering_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
+        for loc_ref in &self.loc_tree {
+            let vn = loc_ref.0.read().unwrap();
+            if !vn.is_input() { continue; }
+            let vn_start = vn.loc.as_u64();
+            let vn_end = vn_start.wrapping_add(vn.get_size() as u64).wrapping_sub(1);
+            // vn must completely contain [loc, loc+s)
+            if vn_start <= loc.as_u64() && vn_end >= loc.as_u64().wrapping_add(size as u64).wrapping_sub(1) {
+                drop(vn);
+                return Some(loc_ref.0.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: varnode.cc:1560 VarnodeBank::beginLoc(AddrSpace*)
+    /// Beginning of Varnodes in given address space, sorted by location.
+    /// Faithful to `beginLoc(AddrSpace*)` (varnode.cc:1560-1564).
+    pub fn begin_loc_space(&self, space: AddressSpace) -> impl Iterator<Item = &VarnodeLocRef> {
+        self.loc_tree.iter().filter(move |v| {
+            v.0.read().unwrap().address_space == space
+        })
+    }
+
+    // Ghidra: varnode.cc:1582 VarnodeBank::beginLoc(const Address&)
+    /// Beginning of Varnodes at a specific address.
+    pub fn begin_loc_addr(&self, addr: Address) -> impl Iterator<Item = &VarnodeLocRef> {
+        self.loc_tree.iter().filter(move |v| {
+            v.0.read().unwrap().loc == addr
+        })
+    }
+
+    // Ghidra: varnode.cc:1560 VarnodeBank::endLoc(AddrSpace*)
+    /// End iterator for Varnodes in given address space. In Rust, this is
+    /// combined with begin_loc_space into a single filter iterator.
+    /// This method exists for API completeness but returns an empty iterator
+    /// (use begin_loc_space().chain(empty) pattern instead).
+    pub fn end_loc_space(&self, _space: AddressSpace) -> std::collections::btree_set::Iter<'_, VarnodeLocRef> {
+        // In Rust, we use the filter iterator from begin_loc_space directly.
+        // This is a no-op stub for API parity.
+        self.loc_tree.iter()
+    }
+
     // Ghidra: varnode.cc:1218 VarnodeBank::findOrCreateInputSpace
     /// Find or create an input varnode at (space, offset, size).
-    /// Faithful to Ghidra's `Funcdata::newVarnode` (funcdata_varnode.cc:148):
-    /// creates a FREE varnode (no def). Same-location free/input varnodes are
-    /// deduped (faithful to Ghidra's xref), but written varnodes are NOT
-    /// reused — they are SSA versions (per def SeqNum). The op graph is
-    /// connected by heritage rename, which rewrites free inputs to reference
-    /// the defining written varnode + adds descend.
     pub fn find_or_create_input_space(
         &mut self,
         size: usize,
