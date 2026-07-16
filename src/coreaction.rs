@@ -3565,27 +3565,30 @@ impl ActionNameVars {
 impl Action for ActionNameVars {
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra algorithm:
-        // 1. linkSymbols(data, namerec):
-        //    - Iterate constant-space Varnodes with SymbolEntry → linkSymbol
-        //    - Iterate all-space Varnodes → linkSpacebaseSymbol for spacebase
-        //    - For each HighVariable name representative → add to namerec
-        // 2. scope.recoverNameRecommendationsForSymbols()
-        // 3. lookForBadJumpTables(data)
-        // 4. lookForFuncParamNames(data, namerec):
-        //    - For each call, check if callee has named params
-        //    - Propagate parameter names to the calling function's inputs
-        // 5. For each Varnode in namerec:
-        //    - If symbol name is undefined: scope.buildDefaultName + renameSymbol
-        // 6. scope.assignDefaultNames(base)
+        // Ghidra cc:2983-2998: linkSymbols + assignDefaultNames.
+        // cc:2988: int4 base = 1 (single shared counter).
+        // cc:2998: scope->assignDefaultNames(base) — delegates to
+        // buildDefaultName for each unnamed symbol.
         //
-        let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            if vn_rg.is_input() {
-                // Potential param to name.
-            }
-        }
+        // Rugra's assign_names (Merge) already implements this logic
+        // (single shared base counter + Ghidra grammar + makeNameUnique).
+        // ActionNameVars calls assign_names here, which is the Rugra
+        // equivalent of Ghidra's linkSymbols + assignDefaultNames pipeline.
+        let mut merge = crate::merge::Merge::new();
+        merge.assign_names(fd);
+
+        // cc:2984: recoverNameRecommendationsForSymbols
+        // Rugra's ScopeLocal lacks this (needs Scope::recoverNameRecommendations).
+        // TODO: needs Scope layer.
+
+        // cc:2985: lookForBadJumpTables
+        // Rugra lacks this (needs jumptable recovery state).
+        // TODO.
+
+        // cc:2986: lookForFuncParamNames
+        // Rugra lacks FuncCallSpecs param name propagation.
+        // TODO.
+
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "namevars" mirrors ctor at coreaction.hh:470
