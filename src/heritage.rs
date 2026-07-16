@@ -1245,6 +1245,97 @@ impl Heritage {
     /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
     /// Ghidra architecture. This method is a documented stub that scans
     /// Join-space varnodes and logs them.
+    // Ghidra: heritage.cc:508 Heritage::concatPieces
+    /// Concatenate Varnode pieces into a PIECE chain. Faithful to
+    /// `concatPieces` (heritage.cc:508-551). Returns the final output.
+    pub fn concat_pieces(
+        &self,
+        fd: &mut Funcdata,
+        vnlist: &[Arc<RwLock<Varnode>>],
+        insert_op: Option<&PcodeOpRef>,
+        final_vn: &Arc<RwLock<Varnode>>,
+    ) -> Arc<RwLock<Varnode>> {
+        if vnlist.is_empty() { return final_vn.clone(); }
+        let mut preexist = vnlist[0].clone();
+        let is_bigendian = false; // Rugra: x86-64 is little-endian
+        let op_addr = match insert_op {
+            Some(op) => op.0.read().unwrap().get_addr(),
+            None => Address::new(0),
+        };
+        for i in 1..vnlist.len() {
+            let vn = &vnlist[i];
+            let newop = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+            let newvn = if i == vnlist.len() - 1 {
+                // Final piece uses final_vn as output
+                newop.0.write().unwrap().output = Some(final_vn.clone());
+                final_vn.clone()
+            } else {
+                let pre_size = preexist.read().unwrap().get_size();
+                let vn_size = vn.read().unwrap().get_size();
+                fd.new_unique_out(pre_size + vn_size, &newop)
+            };
+            if is_bigendian {
+                fd.op_set_input(&newop, preexist.clone(), 0);
+                fd.op_set_input(&newop, vn.clone(), 1);
+            } else {
+                fd.op_set_input(&newop, vn.clone(), 0);
+                fd.op_set_input(&newop, preexist.clone(), 1);
+            }
+            if let Some(ins_op) = insert_op {
+                fd.op_insert_before(&newop, ins_op);
+            } else {
+                fd.obank.alivelist.insert(0, newop);
+            }
+            preexist = newvn;
+        }
+        preexist
+    }
+
+    // Ghidra: heritage.cc:564 Heritage::splitPieces
+    /// Build SUBPIECE ops to define piece Varnodes from a whole-range Varnode.
+    /// Faithful to `splitPieces` (heritage.cc:564-605).
+    pub fn split_pieces(
+        &self,
+        fd: &mut Funcdata,
+        vnlist: &[Arc<RwLock<Varnode>>],
+        insert_op: Option<&PcodeOpRef>,
+        addr: Address,
+        size: i32,
+        start_vn: &Arc<RwLock<Varnode>>,
+    ) {
+        let is_bigendian = false;
+        let baseoff = if is_bigendian {
+            addr.as_u64().wrapping_add(size as u64)
+        } else {
+            addr.as_u64()
+        };
+        let op_addr = match insert_op {
+            Some(op) => op.0.read().unwrap().get_addr(),
+            None => Address::new(0),
+        };
+        for vn_arc in vnlist {
+            let vn_r = vn_arc.read().unwrap();
+            let diff = if is_bigendian {
+                baseoff.wrapping_sub(vn_r.loc.as_u64().wrapping_add(vn_r.get_size() as u64))
+            } else {
+                vn_r.loc.as_u64().wrapping_sub(baseoff)
+            };
+            drop(vn_r);
+            let newop = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+            fd.op_set_input(&newop, start_vn.clone(), 0);
+            let diff_const = fd.new_constant(4, diff);
+            fd.op_set_input(&newop, diff_const, 1);
+            newop.0.write().unwrap().output = Some(vn_arc.clone());
+            if let Some(ins_op) = insert_op {
+                fd.op_insert_before(&newop, ins_op);
+            } else {
+                fd.obank.alivelist.insert(0, newop);
+            }
+        }
+    }
+
     // Ghidra: heritage.cc:308 Heritage::collect
     /// Collect read/write/input varnodes for a memory range. Faithful to
     /// `collect` (heritage.cc:308-348). Returns max write size.
