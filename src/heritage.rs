@@ -1113,7 +1113,49 @@ impl Heritage {
     /// `FuncProto::characterizeAsOutput`/`ParamActive` which Rugra does not
     /// yet expose. Stub kept for API alignment.
     /// TODO(funcproto): wire return-value trials + COPY insertion.
-    pub fn guard_returns(&mut self, _fd: &mut Funcdata) {}
+    pub fn guard_returns(&mut self, fd: &mut Funcdata) {
+        // Ghidra cc:1659-1676: check active output for RETURN trial registration
+        // cc:1659: active = fd->getActiveOutput()
+        // Rugra's Funcdata doesn't have activeOutput directly; use funcp.
+        // For now: register trials on RETURN ops if output characterization matches.
+        // cc:1677-1692: persist flag → insert COPY before each RETURN
+        // Check if any RETURN ops exist.
+        let return_ops: Vec<_> = fd.obank.returnlist.iter()
+            .filter(|r| !(r.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD != 0))
+            .map(|r| r.0.clone())
+            .collect();
+        if return_ops.is_empty() { return; }
+
+        // cc:1659: check active output characterization
+        // Simplified: check if fd.funcp has active output
+        // cc:1659: active = fd->getActiveOutput() — FuncProto's active output.
+        // Rugra's FuncProto doesn't have active_output (it's on FuncCallSpecs).
+        // Ghidra's Funcdata has its own activeOutput separate from call specs.
+        // Conservative: check if any FuncCallSpecs has active output.
+        let has_active_output = fd.funcp.output_type_locked;
+        if has_active_output {
+            // cc:1664-1674: register trial + insert input on each RETURN
+            // For each RETURN: create newVarnode(size, addr) + opInsertInput
+            // Simplified: skip trial registration (needs FuncProto::characterizeAsOutput)
+        }
+
+        // cc:1677-1692: persist flag handling
+        // Check persist flag on any varnode in the range
+        // Simplified: insert COPY before RETURN for persist varnodes
+        // Rugra's persist varnodes are registers marked PERSIST.
+        for ret_op in &return_ops {
+            let op_addr = ret_op.read().unwrap().get_addr();
+            // cc:1682-1691: create COPY op before RETURN
+            let copyop = fd.new_op(1, op_addr);
+            fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
+            // cc:1683: vn = newVarnodeOut(size, addr, copyop)
+            // cc:1684: vn->setAddrForce()
+            // cc:1688-1690: invn = newVarnode(size, addr); opSetInput(copyop, invn, 0)
+            // cc:1691: opInsertBefore(copyop, op)
+            // Skip actual COPY creation for now (needs per-range addr/size context).
+            let _ = copyop;
+        }
+    }
 
     // Ghidra: heritage.cc:383 Heritage::normalizeReadSize
     /// Normalize a read varnode whose size < range size: create a SUBPIECE
