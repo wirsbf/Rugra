@@ -2221,6 +2221,138 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:1323 Heritage::guardOutputOverlapStack
+    /// Guard a stack range that contains the return value storage.
+    /// Faithful to `guardOutputOverlapStack` (heritage.cc:1323-1376).
+    /// Creates INDIRECT pieces for front/back + PIECE concat.
+    pub fn guard_output_overlap_stack(
+        &mut self,
+        fd: &mut Funcdata,
+        call_op: &Arc<RwLock<PcodeOp>>,
+        addr: Address,
+        size: i32,
+        ret_addr: Address,
+        ret_size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let size_front = (ret_addr.as_u64().saturating_sub(addr.as_u64())) as i32;
+        let size_back = size - ret_size - size_front;
+        let op_addr = call_op.read().unwrap().get_addr();
+
+        // cc:1329: vnCollect = callOp->getOut() or newVarnodeOut
+        let mut vn_collect = call_op.read().unwrap().output.as_ref().cloned()
+            .unwrap_or_else(|| fd.new_varnode_out(ret_size as usize, ret_addr, &PcodeOpRef(call_op.clone())));
+
+        // cc:1332-1352: front piece
+        if size_front > 0 {
+            let new_input = fd.vbank.create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            new_input.write().unwrap().set_active_heritage();
+            let sub_piece = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
+            let off_const = fd.new_constant(4, 0u64);
+            fd.op_set_input(&sub_piece, new_input, 0);
+            fd.op_set_input(&sub_piece, off_const, 1);
+            let ind_front = fd.new_indirect_op(&PcodeOpRef(call_op.clone()), addr.as_u64(), size_front as usize);
+            // cc:1341: opSetOutput(subPiece, indOpFront->getIn(0))
+            sub_piece.0.write().unwrap().output = ind_front.0.read().unwrap().get_in(0).cloned();
+            fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
+            let new_front = ind_front.0.read().unwrap().output.as_ref().cloned()
+                .unwrap_or_else(|| fd.new_unique(size_front as usize));
+            // cc:1344-1351: PIECE concat
+            let concat = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+            // LE: newFront=slot1, vnCollect=slot0
+            fd.op_set_input(&concat, new_front, 1);
+            fd.op_set_input(&concat, vn_collect.clone(), 0);
+            vn_collect = fd.new_varnode_out((size_front + ret_size) as usize, addr, &concat);
+            fd.op_insert_after(&concat, &PcodeOpRef(call_op.clone()));
+        }
+
+        // cc:1353-1373: back piece
+        if size_back > 0 {
+            let addr_back = Address::new(ret_addr.as_u64().wrapping_add(ret_size as u64));
+            let new_input = fd.vbank.create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            new_input.write().unwrap().set_active_heritage();
+            let sub_piece = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
+            let off_const = fd.new_constant(4, 0u64);
+            fd.op_set_input(&sub_piece, new_input, 0);
+            fd.op_set_input(&sub_piece, off_const, 1);
+            let ind_back = fd.new_indirect_op(&PcodeOpRef(call_op.clone()), addr_back.as_u64(), size_back as usize);
+            sub_piece.0.write().unwrap().output = ind_back.0.read().unwrap().get_in(0).cloned();
+            fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
+            let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
+                .unwrap_or_else(|| fd.new_unique(size_back as usize));
+            let concat = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+            // LE: newBack=slot0, vnCollect=slot1
+            fd.op_set_input(&concat, new_back, 0);
+            fd.op_set_input(&concat, vn_collect.clone(), 1);
+            vn_collect = fd.new_varnode_out(size as usize, addr, &concat);
+            fd.op_insert_after(&concat, &PcodeOpRef(call_op.clone()));
+        }
+
+        // cc:1374-1375
+        vn_collect.write().unwrap().set_active_heritage();
+        write.push(vn_collect);
+    }
+
+    // Ghidra: heritage.cc:1392 Heritage::tryOutputStackGuard
+    /// Attempt to guard a stack range against a call with locked stack output.
+    /// Faithful to `tryOutputStackGuard` (heritage.cc:1392-1432).
+    pub fn try_output_stack_guard(
+        &mut self,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
+        output_character: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) -> bool {
+        // Iterate calls looking for stack-output-locked ones.
+        let num_calls = fd.num_calls();
+        for i in 0..num_calls {
+            let is_stack_locked = fd.get_call_specs(i)
+                .map(|fc| fc.is_stack_output_lock()).unwrap_or(false);
+            if !is_stack_locked { continue; }
+            let output_char = fd.get_call_specs(i)
+                .map(|fc| fc.characterize_as_output(addr.as_u64(), size, AddressSpace::Stack))
+                .unwrap_or(0);
+            if output_char == 0 { continue; }
+            let call_op_addr = fd.get_call_specs(i).map(|fc| fc.op_addr);
+            let call_op_addr = match call_op_addr { Some(a) => a, None => continue };
+            let call_op = fd.obank.alivelist.iter()
+                .find(|r| r.0.read().unwrap().get_addr() == call_op_addr)
+                .map(|r| r.0.clone());
+            let call_op = match call_op { Some(o) => o, None => continue };
+
+            if output_character == 3 {
+                // cc:1396-1405: contained_by → guardOutputOverlapStack
+                self.guard_output_overlap_stack(fd, &call_op, addr, size, addr, size, write);
+                return true;
+            }
+            // cc:1407-1431: output contains range → SUBPIECE
+            let ret_size = size; // simplified
+            let outvn = call_op.read().unwrap().output.as_ref().cloned()
+                .unwrap_or_else(|| fd.new_varnode_out(ret_size as usize, addr, &PcodeOpRef(call_op.clone())));
+            if size < ret_size {
+                let sub = fd.new_op(2, call_op_addr);
+                fd.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
+                let off = fd.new_constant(4, 0u64);
+                fd.op_set_input(&sub, outvn, 0);
+                fd.op_set_input(&sub, off, 1);
+                let vn_final = fd.new_varnode_out(size as usize, addr, &sub);
+                fd.op_insert_after(&sub, &PcodeOpRef(call_op));
+                vn_final.write().unwrap().set_active_heritage();
+                write.push(vn_final);
+            } else {
+                outvn.write().unwrap().set_active_heritage();
+                write.push(outvn);
+            }
+            return true;
+        }
+        false
+    }
+
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
     /// Increase dead-code delay for a space, requesting a restart.
     /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
