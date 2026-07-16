@@ -605,6 +605,32 @@ impl Funcdata {
         self.vbank.create_unique(s)
     }
 
+    // Ghidra: funcdata_op.cc:37 Funcdata::opMarkHalt
+    /// Mark a CPUI_RETURN op as an artificial halt. Faithful to
+    /// `opMarkHalt` (funcdata_op.cc:37-48). Throws if op is not RETURN
+    /// or flag is invalid (Rugra logs + returns).
+    pub fn op_mark_halt(&self, op: &crate::op::PcodeOpRef, flag: u32) {
+        use crate::opcodes::OpCode;
+        use crate::op::pcodeop_flags;
+        // cc:40: if (op->code() != CPUI_RETURN) throw;
+        if op.0.read().unwrap().opcode != OpCode::CPUI_RETURN {
+            eprintln!("[FUNCDATA] WARN: opMarkHalt on non-RETURN op");
+            return;
+        }
+        // cc:42-44: flag &= (halt|badinstruction|unimplemented|noreturn|missing);
+        let mask = pcodeop_flags::HALT | pcodeop_flags::BADINSTRUCTION
+            | pcodeop_flags::UNIMPLEMENTED | pcodeop_flags::NORETURN
+            | pcodeop_flags::MISSING;
+        let masked = flag & mask;
+        // cc:45-46: if (flag == 0) throw;
+        if masked == 0 {
+            eprintln!("[FUNCDATA] WARN: opMarkHalt with bad flag {:#x}", flag);
+            return;
+        }
+        // cc:47: op->setFlag(flag);
+        op.0.write().unwrap().flags |= masked;
+    }
+
     // Ghidra: funcdata.cc:34 Funcdata::opSetOpcode
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
