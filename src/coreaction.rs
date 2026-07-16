@@ -2155,11 +2155,9 @@ impl Action for ActionHideShadow {
                 count += 1;
             }
         }
-        if count > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra cc:4845: count += num; return 0;
+        let _ = count;
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "hideshadow" mirrors ctor at coreaction.hh:992
     fn get_name(&self) -> &str { "hideshadow" }
