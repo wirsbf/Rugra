@@ -340,9 +340,28 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     // Ghidra: block.hh:143 FlowBlock::isSwitchOut
     /// Is this block a switch dispatch (BRANCHIND output)?
-    /// Faithful to `isSwitchOut()` (block.hh:143): `(flags & f_switch_out)!=0`.
     fn is_switch_out(&self) -> bool {
         (self.get_flags() & block_flags::SWITCH_OUT) != 0
+    }
+
+    // Ghidra: block.hh:316 FlowBlock::isLoopIn
+    fn is_loop_in(&self, i: usize) -> bool {
+        self.get_in(i).map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0).unwrap_or(false)
+    }
+
+    // Ghidra: block.hh:317 FlowBlock::isLoopOut
+    fn is_loop_out(&self, i: usize) -> bool {
+        self.get_out(i).map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0).unwrap_or(false)
+    }
+
+    // Ghidra: block.hh:320 FlowBlock::isDefaultBranch
+    fn is_default_branch(&self, i: usize) -> bool {
+        self.get_out(i).map(|e| (e.flags & edge_flags::F_DEFAULTSWITCH_EDGE) != 0).unwrap_or(false)
+    }
+
+    // Ghidra: block.hh:336 FlowBlock::isLoopExitOut
+    fn is_loop_exit_out(&self, i: usize) -> bool {
+        self.get_out(i).map(|e| (e.flags & edge_flags::F_LOOP_EXIT_EDGE) != 0).unwrap_or(false)
     }
 
     /// Is the i-th incoming edge a goto/irreducible edge? (Ghidra `isGotoIn`.)
