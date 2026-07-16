@@ -726,3 +726,4 @@ visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状
 - `dead_removal_allowed`(cc:2843): `pass > deadcodedelay` (was const true)。
 - `seen_dead_code`(cc:2805): 设 deadremoved=1 (was no-op)。
 - `set/get_dead_code_delay`(cc:2829/2817): 读写 infolist (was no-op/const 2)。
+ 

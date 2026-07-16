@@ -33,8 +33,65 @@ impl LocationMap {
     }
 
     // Ghidra: heritage.cc:34 LocationMap::add
-    pub fn add(&mut self, addr: Address, size: i32, pass: i32) {
+    /// Add a range to the disjoint cover, merging overlapping entries.
+    /// Faithful to `LocationMap::add` (heritage.cc:34-71).
+    /// Returns the intersect code:
+    ///   0 = no overlap with existing
+    ///   1 = partial overlap (merged)
+    ///   2 = completely contained in a previous (older) entry
+    pub fn add(&mut self, mut addr: Address, mut size: i32, mut pass: i32) -> i32 {
+        use crate::address::Address as A;
+        // Ghidra cc:37-41: find the first entry that might overlap.
+        // lower_bound(addr), back up one, then check overlap.
+        let mut intersect = 0;
+        let keys: Vec<Address> = self.themap.keys().cloned().collect();
+        let start_idx = match keys.iter().position(|k| *k >= addr) {
+            Some(i) => if i > 0 { i - 1 } else { 0 },
+            None => keys.len().saturating_sub(1),
+        };
+        // Ghidra cc:45-57: check if the starting entry overlaps.
+        let mut i = start_idx;
+        if i < keys.len() {
+            let (k_addr, k_sp) = (keys[i], self.themap[&keys[i]]);
+            let where_ = A::overlap(&addr, 0, k_addr, k_sp.size);
+            if where_ != -1 {
+                // Ghidra cc:46-49: completely contained?
+                if where_ + size <= k_sp.size {
+                    intersect = if k_sp.pass < pass { 2 } else { 0 };
+                    return intersect;
+                }
+                // Ghidra cc:50-56: merge — extend addr/size, take min pass.
+                addr = k_addr;
+                size = where_ + size;
+                if k_sp.pass < pass {
+                    intersect = 1;
+                    pass = k_sp.pass;
+                }
+                self.themap.remove(&keys[i]);
+                i += 1;
+            } else {
+                i += 1;
+            }
+        }
+        // Ghidra cc:58-66: continue merging subsequent overlapping entries.
+        while i < keys.len() {
+            let (k_addr, k_sp) = (keys[i], self.themap.get(&keys[i]).copied().unwrap_or(SizePass { size: 0, pass: 0 }));
+            if self.themap.get(&keys[i]).is_none() { i += 1; continue; }
+            let where_ = A::overlap(&k_addr, 0, addr, size);
+            if where_ == -1 { break; }
+            if where_ + k_sp.size > size {
+                size = where_ + k_sp.size;
+            }
+            if k_sp.pass < pass {
+                intersect = 1;
+                pass = k_sp.pass;
+            }
+            self.themap.remove(&keys[i]);
+            i += 1;
+        }
+        // Ghidra cc:67-70: insert merged entry.
         self.themap.insert(addr, SizePass { size, pass });
+        intersect
     }
 
     // Ghidra: heritage.cc:91 LocationMap::findPass

@@ -261,3 +261,4 @@ Encode to string format (comma-separated ranges)
 
 - `count_leading_zeros(val) -> i32` — `count_leading_zeros`（address.cc:773）：64 位前导零计数，val==0 返回 64。用 Rust `leading_zeros` 精确等价。被 RuleDivOpt::findForm 用于计算 numerand 的有效位数（xsize = 64 - clz(nz_mask)）。
 <!-- annotation-pass: 2026-07-04 -->
+ 

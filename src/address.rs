@@ -39,6 +39,19 @@ impl Address {
         Address((self.0 as i64 + offset) as u64)
     }
 
+    // Ghidra: address.cc:153 Address::overlap
+    /// If `self + skip` falls in the range `[op, op+size)`, return the
+    /// offset of `self+skip` relative to `op`. Otherwise return -1.
+    /// Faithful to `Address::overlap` (address.cc:153-165).
+    /// Rugra's single-space model skips the `base != op.base` check.
+    pub fn overlap(&self, skip: i64, op: Address, size: i32) -> i32 {
+        let dist = self.0.wrapping_add(skip as u64).wrapping_sub(op.0);
+        if dist >= size as u64 {
+            return -1;
+        }
+        dist as i32
+    }
+
     // Ghidra: address.cc:91 Address::isNull
     /// Check if address is null (0x0)
     pub fn is_null(&self) -> bool {
