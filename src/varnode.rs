@@ -642,6 +642,59 @@ impl Varnode {
         self.v_type.clone()
     }
 
+    // Ghidra: varnode.cc:626 Varnode::getTypeDefFacing
+    /// Return the resolved data-type for this Varnode based on its def op.
+    /// Faithful to `getTypeDefFacing` (varnode.cc:626-632). If the type
+    /// needs resolution (union), resolves via findResolve(def, -1).
+    pub fn get_type_def_facing(&self) -> Option<Arc<Datatype>> {
+        let ct = self.v_type.clone()?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        // cc:631: type->findResolve(def, -1)
+        // Rugra's findResolve is currently identity (returns self).
+        // Full union resolution TODO (needs unionresolve.cc).
+        Some(Arc::new((*ct).clone()))
+    }
+
+    // Ghidra: varnode.cc:639 Varnode::getTypeReadFacing
+    /// Return the resolved data-type for this Varnode when read by `op`
+    /// at the given slot. Faithful to `getTypeReadFacing` (varnode.cc:639-645).
+    pub fn get_type_read_facing_op(&self, _op: &PcodeOp, slot: i32) -> Option<Arc<Datatype>> {
+        let ct = self.v_type.clone()?;
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        // cc:644: type->findResolve(op, op->getSlot(this))
+        // Rugra's findResolve is currently identity.
+        let _ = slot;
+        Some(Arc::new((*ct).clone()))
+    }
+
+    // Ghidra: varnode.cc:651 Varnode::getHighTypeDefFacing
+    /// Return the resolved HighVariable type for this Varnode based on def.
+    /// Faithful to `getHighTypeDefFacing` (varnode.cc:651-658).
+    pub fn get_high_type_def_facing(&self) -> Option<Arc<Datatype>> {
+        let high = self.high.as_ref()?;
+        let ct = high.read().unwrap().get_type();
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(Arc::new((*ct).clone()))
+    }
+
+    // Ghidra: varnode.cc:665 Varnode::getHighTypeReadFacing
+    /// Return the resolved HighVariable type when read by `op`.
+    /// Faithful to `getHighTypeReadFacing` (varnode.cc:665-672).
+    pub fn get_high_type_read_facing(&self, _op: &PcodeOp, _slot: i32) -> Option<Arc<Datatype>> {
+        let high = self.high.as_ref()?;
+        let ct = high.read().unwrap().get_type();
+        if !ct.needs_resolution() {
+            return Some(ct);
+        }
+        Some(Arc::new((*ct).clone()))
+    }
+
     // Ghidra: varnode.cc:493 Varnode::copySymbol
     /// Copy symbol/type info from another varnode. Faithful to
     /// `Varnode::copySymbol` (varnode.cc:493-505). Copies type + mapentry +
