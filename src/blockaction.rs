@@ -3199,12 +3199,41 @@ impl<'a> CollapseStructure<'a> {
             drop(b);
 
             // cc:1358-1365: negate conditions if needed.
+            // i==1: orblock needs to be false out of bl → negate bl if i!=1.
+            // j==0: clauseblock needs to be true out of orblock → negate orblock if j!=0.
             // Rugra's negateCondition is a no-op default (needs BlockBasic override).
-            // The condition flip affects which branch is "true" vs "false".
-            // cc:1367: graph.newBlockCondition(bl, orblock)
-            eprintln!("[BLOCKSTRUCT] OR condition at block {} (or={}, clause={}, j={})",
-                i, orblock.read().unwrap().get_index(),
-                clauseblock.read().unwrap().get_index(), j);
+            // The BOOLEAN_FLIP flag on the CBRANCH op controls true/false edge mapping.
+
+            // cc:1367 + block.cc:1785: graph.newBlockCondition(bl, orblock)
+            // Determine AND vs OR: if bl's false-out == orblock → OR, else AND.
+            let bool_op = if ii == 1 { BoolOp::Or } else { BoolOp::And };
+
+            // Create BlockCondition node (block.cc:1786-1793).
+            let cond_idx = block.read().unwrap().get_index();
+            let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+                Arc::new(RwLock::new(BlockCondition {
+                    index: cond_idx,
+                    op_type: bool_op,
+                    first: block.clone(),
+                    second: orblock.clone(),
+                    incoming: Vec::new(),
+                    outgoing: Vec::new(),
+                    parent: None,
+                    flags: 0,
+                }));
+
+            // Mark the two consumed blocks as DEAD (identifyInternal removes them).
+            block.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+            orblock.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+
+            // Replace block[i] with the BlockCondition in the graph.
+            if i < self.graph.blocks.len() {
+                self.graph.blocks[i] = cond_block.clone();
+            }
+            self.change_count += 1;
+            eprintln!("[BLOCKSTRUCT] {:?} condition at block {} (or={}, clause={})",
+                bool_op, i, orblock.read().unwrap().get_index(),
+                clauseblock.read().unwrap().get_index());
             return true;
         }
         false
