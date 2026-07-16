@@ -130,3 +130,4 @@ rule_or_predicate_rejects_plain_input、rule_or_predicate_opcodes、compare_orde
 ### 2026-07-01：RuleOrPredicate impl Rule trait
 包装现有 apply_op 为 Rule trait（INT_OR/INT_XOR dispatch）。注册 oppool1:5631。
 <!-- annotation-pass: 2026-07-04 -->
+

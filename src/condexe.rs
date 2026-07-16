@@ -661,18 +661,28 @@ impl<'a> ConditionalExecution<'a> {
                     let rvn = if read_code == OpCode::CPUI_MULTIEQUAL {
                         self.get_multiequal_read(op, &readop, s)
                     } else if read_code == OpCode::CPUI_RETURN {
-                        // Cannot replace RETURN input directly; create a COPY.
+                        // Ghidra cc:339-349: Cannot replace RETURN input directly;
+                        // create a COPY to hold the input.
                         let retvn = readop.read().unwrap().get_in(1).cloned();
                         if let Some(retvn) = retvn {
                             let pc = readop.read().unwrap().get_addr();
-                            let size = retvn.read().unwrap().get_size();
+                            let (size, retvn_addr) = {
+                                let r = retvn.read().unwrap();
+                                (r.get_size(), r.loc)
+                            };
                             let newcopy = self.fd.new_op(1, pc);
                             self.fd.op_set_opcode(&newcopy, OpCode::CPUI_COPY);
-                            // Preserve the RETURN storage address on the COPY out.
-                            let _outvn = self.fd.new_varnode_out(size, pc, &newcopy);
+                            // Ghidra cc:343: outvn = newVarnodeOut(retvn->getSize(),
+                            //   retvn->getAddr(), newcopyop) — preserve RETURN storage addr.
+                            let outvn = self.fd.new_varnode_out(size, retvn_addr, &newcopy);
+                            // Ghidra cc:344: opSetInput(readop, outvn, 1) —
+                            // RETURN input[1] = COPY output (NOT retvn!).
                             let r_readop = opref(&readop);
-                            self.fd.op_set_input(&r_readop, retvn, 1);
-                            // Now replace the COPY's input 0.
+                            self.fd.op_set_input(&r_readop, outvn.clone(), 1);
+                            // Ghidra cc:345: opInsertBefore(newcopyop, readop).
+                            self.fd.op_insert_before(&newcopy, &r_readop);
+                            // Ghidra cc:346-348: readop = newcopyop; slot = 0;
+                            //   rvn = getReplacementRead(op, bl).
                             let rp = readop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
                             if let Some(rp) = rp {
                                 let rvn2 = self.get_replacement_read(op, &rp);
