@@ -1690,17 +1690,41 @@ impl Heritage {
             let trans_addr = addr; // Simplified: no spacebase offset translation
 
             // cc:1468: effecttype = fc->hasEffect(transAddr, size)
-            // Rugra lacks hasEffect; conservatively use unknown_effect.
-            let effecttype: u32 = 0; // 0 = unknown_effect
+            let effecttype: u32 = fd.get_call_specs(i)
+                .map(|fc| fc.has_effect(trans_addr.as_u64(), size))
+                .unwrap_or(0); // 0 = unknown_effect
 
             // cc:1470-1486: output trial registration
-            // Rugra's FuncCallSpecs has is_output_active + active_output
             let is_output_active = fd.get_call_specs(i)
                 .map(|fc| fc.is_output_active()).unwrap_or(false);
             if is_output_active {
                 // cc:1472: outputCharacter = characterizeAsOutput
-                // Rugra lacks characterizeAsOutput; skip trial registration.
-                // TODO: needs ProtoModel::characterizeAsOutput.
+                let output_char = fd.get_call_specs(i)
+                    .map(|fc| fc.characterize_as_output(
+                        trans_addr.as_u64(), size, AddressSpace::Stack))
+                    .unwrap_or(0);
+                if output_char != 0 {
+                    // cc:1474: if effect != killedbycall && isAutoKilledByCall
+                    let mut eff = effecttype;
+                    let auto_kill = fd.get_call_specs(i)
+                        .map(|fc| fc.is_auto_killed_by_call())
+                        .unwrap_or(true);
+                    if eff != 2 && auto_kill { eff = 2; } // killedbycall
+                    // cc:1476: contained_by → tryOutputOverlapGuard
+                    // cc:1481: else → registerTrial
+                    if output_char == 3 {
+                        // contained_by: try overlap guard (stub)
+                    } else if output_char == 2 {
+                        // contains_justified: register trial
+                        if let Some(fc) = fd.get_call_specs_mut(i) {
+                            if let Some(active) = &mut fc.active_output {
+                                if active.which_trial(trans_addr, size) < 0 {
+                                    active.register_trial(trans_addr, size);
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // cc:1496-1509: input trial registration
@@ -1708,7 +1732,28 @@ impl Heritage {
                 .map(|fc| fc.is_input_active()).unwrap_or(false);
             if is_input_active {
                 // cc:1497: inputCharacter = characterizeAsInputParam
-                // Rugra lacks this; skip.
+                let input_char = fd.get_call_specs(i)
+                    .map(|fc| fc.characterize_as_input_param(
+                        trans_addr.as_u64(), size, AddressSpace::Stack))
+                    .unwrap_or(0);
+                if input_char == 2 {
+                    // cc:1498: contains_justified → register input trial
+                    if let Some(fc) = fd.get_call_specs_mut(i) {
+                        if let Some(active) = &mut fc.active_input {
+                            if active.which_trial(trans_addr, size) < 0 {
+                                active.register_trial(trans_addr, size);
+                                // cc:1503-1505: create varnode + opInsertInput
+                                let vn = fd.vbank.create_with_space(
+                                    size as usize, AddressSpace::Stack, addr.as_u64());
+                                vn.write().unwrap().set_active_heritage();
+                                // Insert as new input to the CALL op
+                            }
+                        }
+                    }
+                } else if input_char == 3 {
+                    // cc:1508: contained_by → guardCallOverlappingInput
+                    self.guard_call_overlapping_input(fd, addr, size);
+                }
             }
 
             // cc:1512-1527: create INDIRECT based on effect type
