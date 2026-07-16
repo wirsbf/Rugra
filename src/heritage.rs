@@ -807,20 +807,91 @@ impl Heritage {
     /// TODO(funcproto): wire return-value trials + COPY insertion.
     pub fn guard_returns(&mut self, _fd: &mut Funcdata) {}
 
-    // Ghidra: heritage.cc:219 Heritage::guardAll
-    /// Run the four guard phases (calls, returns, stores, loads) against the
-    /// whole stack space. This is the per-space analogue of the indirect half
-    /// of Ghidra's `Heritage::guard` (heritage.cc:1189-1199), which Ghidra
-    /// invokes once per disjoint memory range during `placeMultiequals`.
+    // Ghidra: heritage.cc:1157 Heritage::guard
+    /// Guard a specific address range for heritage. Faithful to
+    /// `Heritage::guard` (heritage.cc:1157-1200):
+    ///   (1) For each read varnode: verify single descendent, normalizeReadSize,
+    ///       setActiveHeritage.
+    ///   (2) For each write varnode: normalizeWriteSize, setActiveHeritage.
+    ///   (3) If addIndirects: queryProperties + guardCalls/Returns/Stores/Loads.
     ///
-    /// Rugra's driver calls this once per heritage pass over the stack space;
-    /// the guard_stores/guard_loads implementations are range-agnostic (they
-    /// guard conservatively over the whole stack), so a single call suffices.
+    /// Steps 1/2 require the read/write lists from collect() (cc:308).
+    /// Rugra does not yet have collect(), so this method is called with
+    /// empty lists by guard_all. The setActiveHeritage on all free varnodes
+    /// is done separately by rename_direct's marker loop. When collect() is
+    /// implemented, this method will receive real read/write lists.
+    pub fn guard_range(
+        &mut self,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
+        add_indirects: bool,
+        read: &mut Vec<Arc<RwLock<Varnode>>>,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+        _inputvars: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // Ghidra cc:1165-1176: process read list.
+        for vn_arc in read.iter_mut() {
+            let descend_count: usize = {
+                let vn_r = vn_arc.read().unwrap();
+                vn_r.descend.iter().filter(|w| w.strong_count() > 0).count()
+            };
+            if descend_count == 0 {
+                continue; // cc:1168-1169: removed by removeRevisitedMarkers
+            }
+            // cc:1171-1172: free varnode with multiple reads = error.
+            // Rugra logs instead of throwing.
+            if descend_count > 1 {
+                eprintln!("[HERITAGE] WARN: free varnode with multiple reads");
+            }
+            // cc:1173-1174: normalizeReadSize if vn.size < size.
+            let vn_size = vn_arc.read().unwrap().get_size() as i32;
+            if vn_size < size {
+                // TODO: implement normalizeReadSize (creates SUBPIECE).
+                // Requires fd op-creation API in context. Tracked as gap.
+            }
+            // cc:1175: setActiveHeritage.
+            vn_arc.write().unwrap().set_active_heritage();
+        }
+        // Ghidra cc:1178-1183: process write list.
+        for vn_arc in write.iter_mut() {
+            let vn_size = vn_arc.read().unwrap().get_size() as i32;
+            if vn_size < size {
+                // TODO: implement normalizeWriteSize (creates PIECE).
+            }
+            vn_arc.write().unwrap().set_active_heritage();
+        }
+        // Ghidra cc:1189-1199: addIndirects.
+        if add_indirects {
+            // cc:1192: queryProperties (needs ScopeLocal).
+            // cc:1193-1198: guardCalls/guardReturns/guardStores/guardLoads.
+            // These are called per-range with addr/size in Ghidra.
+            // Rugra's guard_all calls them range-agnostically.
+            self.guard_calls(fd);
+            self.guard_returns(fd);
+            self.guard_stores(fd);
+            self.guard_loads(fd);
+        }
+    }
+
+    // Ghidra: heritage.cc:219 Heritage::guardAll (Rugra analogue)
+    /// Run the guard phases against the whole stack space. This is the
+    /// per-space analogue of Ghidra's guard() addIndirects half.
+    /// Calls guard_range with empty read/write lists (Rugra's
+    /// setActiveHeritage is done by rename_direct's marker).
     pub fn guard_all(&mut self, fd: &mut Funcdata) {
-        self.guard_calls(fd);
-        self.guard_returns(fd);
-        self.guard_stores(fd);
-        self.guard_loads(fd);
+        let mut empty_read = Vec::new();
+        let mut empty_write = Vec::new();
+        let mut empty_input = Vec::new();
+        self.guard_range(
+            fd,
+            Address::new(0),
+            0,
+            true,
+            &mut empty_read,
+            &mut empty_write,
+            &mut empty_input,
+        );
     }
 
     // Ghidra: heritage.cc:2677 Heritage::heritage
