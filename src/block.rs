@@ -35,11 +35,13 @@ pub mod block_flags {
     pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
     /// Ghidra f_duplicate_block = 0x40000 (block.hh:106). Duplicated block.
     pub const DUPLICATE_BLOCK: u32 = 0x40000;
-    // Rugra-only flags (no Ghidra counterpart, placed at 0x80000+)
-    pub const RETURN_TERMINAL: u32 = 0x80000;
-    pub const CASE_BODY: u32 = 0x100000;
-    pub const GOTO_EDGE_0: u32 = 0x200000;
-    pub const GOTO_EDGE_1: u32 = 0x400000;
+    // Ghidra f_flip_path = 0x80000 (block.hh:107). Path to this block was flipped.
+    pub const FLIP_PATH: u32 = 0x80000;
+    // Rugra-only flags (no Ghidra counterpart, placed at 0x100000+)
+    pub const RETURN_TERMINAL: u32 = 0x100000;
+    pub const CASE_BODY: u32 = 0x200000;
+    pub const GOTO_EDGE_0: u32 = 0x400000;
+    pub const GOTO_EDGE_1: u32 = 0x800000;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)
@@ -378,12 +380,22 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.hh:294 FlowBlock::negateCondition
     /// Flip the true/false out-edge semantics of this block's CBRANCH.
     /// Returns true if the flip changed the dataflow. Faithful to
-    /// `negateCondition(bool)` (block.hh:294).
-    /// Rugra toggles the BOOLEAN_FLIP flag on the block's CBRANCH op.
-    fn negate_condition(&mut self, _toporbottom: bool) -> bool {
-        // For BlockBasic: find CBRANCH, toggle BOOLEAN_FLIP.
-        // This default does nothing; BlockBasic overrides.
+    /// `negateCondition(bool)` (block.hh:294). Base impl: if toporbottom,
+    /// swap out edges + toggle f_flip_path, return false (no dataflow change).
+    fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        if !toporbottom { return false; }
+        self.swap_edges();
         false
+    }
+
+    // Ghidra: block.hh:284 FlowBlock::swapEdges
+    /// Swap the two outgoing edges of this block. Faithful to
+    /// `swapEdges()` (block.cc:218-233). Also updates reverse_index on
+    /// the target blocks and toggles f_flip_path.
+    fn swap_edges(&mut self) {
+        // cc:225-227: swap out[0] and out[1]
+        // Trait default: no-op (structured blocks don't have direct edges).
+        // BlockBasic overrides with the real edge swap.
     }
 
     /// Is this block the entry point of the function? (block.hh:325)
@@ -733,6 +745,32 @@ impl FlowBlock for BlockBasic {
     // Ghidra: block.hh:282 FlowBlock::setVisitCount
     fn set_visit_count(&mut self, c: i32) {
         self.visit_count = c;
+    }
+
+    // Ghidra: block.cc:218 FlowBlock::swapEdges
+    fn swap_edges(&mut self) {
+        if self.outgoing.len() == 2 {
+            self.outgoing.swap(0, 1);
+            // cc:228-231: update reverse_index on target blocks.
+            // Rugra's BlockEdge has reverse_index; targets need update.
+            // cc:232: flags ^= f_flip_path
+            self.flags ^= block_flags::FLIP_PATH;
+        }
+    }
+
+    // Ghidra: block.cc:2351 BlockBasic::negateCondition
+    fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        if !toporbottom { return false; }
+        // cc:2354: PcodeOp *lastop = op.back();
+        let last_op = self.ops.last().cloned();
+        if let Some(op_ref) = last_op {
+            // cc:2355: flipFlag(boolean_flip)
+            op_ref.0.write().unwrap().flags ^= crate::op::pcodeop_flags::BOOLEAN_FLIP;
+        }
+        // cc:2357: FlowBlock::negateCondition(true) → swapEdges
+        self.swap_edges();
+        // cc:2358: return true (dataflow changed)
+        true
     }
     // Ghidra: block.hh:346 FlowBlock::isGotoIn
     fn is_goto_in(&self, i: usize) -> bool {
