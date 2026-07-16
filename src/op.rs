@@ -1081,10 +1081,69 @@ impl PcodeOpBank {
         None
     }
 
-    // Ghidra: op.hh:306 PcodeOpBank::setUniqId
+    // Ghidra: op.cc:1146 PcodeOpBank::begin(addr)
+    /// Beginning of ops at the given address (sorted by SeqNum).
+    /// Faithful to `begin(const Address&)` (op.cc:1146-1150).
+    pub fn begin_addr(&self, addr: crate::address::Address) -> impl Iterator<Item = &PcodeOpRef> {
+        self.optree.iter().filter(move |op| {
+            op.0.read().unwrap().start.addr >= addr
+        })
+    }
+
+    // Ghidra: op.cc:1152 PcodeOpBank::end(addr)
+    /// End of ops at the given address.
+    pub fn end_addr(&self, addr: crate::address::Address) -> impl Iterator<Item = &PcodeOpRef> {
+        self.optree.iter().filter(move |op| {
+            op.0.read().unwrap().start.addr > addr
+        })
+    }
+
+    // Ghidra: op.cc:1158 PcodeOpBank::begin(OpCode)
+    /// Beginning of ops with the given opcode (uses code lists).
+    /// Faithful to `begin(OpCode)` (op.cc:1158-1174).
+    pub fn begin_op(&self, opc: OpCode) -> std::slice::Iter<'_, PcodeOpRef> {
+        match opc {
+            OpCode::CPUI_STORE => self.storelist.iter(),
+            OpCode::CPUI_LOAD => self.loadlist.iter(),
+            OpCode::CPUI_RETURN => self.returnlist.iter(),
+            OpCode::CPUI_CALLOTHER => self.useroplist.iter(),
+            _ => self.alivelist.iter(),
+        }
+    }
+
+    // Ghidra: op.cc:1176 PcodeOpBank::end(OpCode)
+    /// End sentinel for ops with the given opcode.
+    /// In Rust, begin_op returns an iterator that handles both begin+end.
+    /// This method exists for API parity; use begin_op().chain(empty).
+    pub fn end_op(&self, _opc: OpCode) -> std::slice::Iter<'_, PcodeOpRef> {
+        // In Rust, we use begin_op() iterator directly which covers the full list.
+        // This stub returns an empty slice for API parity.
+        [].iter()
+    }
+
+    // Ghidra: op.cc:1089 PcodeOpBank::setUniqId
+    /// Set the unique ID counter (for cloning).
     pub fn set_uniqid(&mut self, val: u32) {
         self.uniqid = val;
     }
+
+    // Ghidra: op.cc:941 PcodeOpBank::create(SeqNum)
+    /// Create a PcodeOp with a specific SeqNum (for cloning).
+    /// Faithful to `create(int4, const SeqNum&)` (op.cc:957-969).
+    pub fn create_seq(&mut self, num_inputs: usize, sq: crate::address::SeqNum) -> PcodeOpRef {
+        if sq.order >= self.uniqid {
+            self.uniqid = sq.order + 1;
+        }
+        let mut op = PcodeOp::new(sq, OpCode::CPUI_COPY);
+        op.inrefs.reserve(num_inputs);
+        op.flags |= pcodeop_flags::DEAD;
+        let op_ref = PcodeOpRef(Arc::new(RwLock::new(op)));
+        self.optree.insert(op_ref.clone());
+        self.deadlist.push(op_ref.clone());
+        op_ref
+    }
+
+    // Ghidra: op.hh:306 PcodeOpBank::setUniqId (duplicate removed — defined above)
 }
 
 impl Default for PcodeOpBank {
