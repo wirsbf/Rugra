@@ -271,6 +271,9 @@ Ghidra: `typeop.cc` 各 `TypeOpXxx::TypeOpXxxx` 构造函数体中的 `opflags =
 | `CPUI_BOOL_NEGATE` | `unary | booloutput` | typeop.cc:1694 |
 | `CPUI_CALL` | `special | call | has_callspec | coderef | nocollapse` | typeop.cc:663 |
 | `CPUI_MAX` | `0`（sentinel 非真实 opcode） | opcodes.rs:91 |
+| `CPUI_INT_LEFT` | `binary`（**非** commutative，易误判） | typeop.cc:1505 |
+| `CPUI_INT_DIV` | `binary`（**非** commutative，易误判） | typeop.cc:1645 |
+| `CPUI_INT_CARRY` | `binary | commutative | booloutput` | typeop.cc:1335 |
 
 #### 用途
 供 `set_opcode_flags`、`create`、`change_opcode` 在设置 opcode 时一次性写入所有 TypeOp 衍生标志，保证 `get_eval_type()` / `is_commutative()` / `is_bool_output()` 等下游查询正确。

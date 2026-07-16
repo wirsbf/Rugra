@@ -156,17 +156,17 @@ pub fn opcode_flags(opc: OpCode) -> u32 {
         OpCode::CPUI_INT_AND => binary | commutative,
         // typeop.cc:1444 TypeOpIntOr
         OpCode::CPUI_INT_OR => binary | commutative,
-        // typeop.cc:1477 TypeOpIntLeft
-        OpCode::CPUI_INT_LEFT => binary | commutative,
-        // typeop.cc:1505 TypeOpIntRight
+        // typeop.cc:1505 TypeOpIntLeft
+        OpCode::CPUI_INT_LEFT => binary,
+        // typeop.cc:1530 TypeOpIntRight
         OpCode::CPUI_INT_RIGHT => binary,
-        // typeop.cc:1530 TypeOpIntSright
+        // typeop.cc:1555 TypeOpIntSright
         OpCode::CPUI_INT_SRIGHT => binary,
-        // typeop.cc:1570 TypeOpIntMult
+        // typeop.cc:1595 TypeOpIntMult
         OpCode::CPUI_INT_MULT => binary | commutative,
-        // typeop.cc:1620 TypeOpIntDiv
-        OpCode::CPUI_INT_DIV => binary | commutative,
-        // typeop.cc:1634 TypeOpIntSdiv
+        // typeop.cc:1645 TypeOpIntDiv
+        OpCode::CPUI_INT_DIV => binary,
+        // typeop.cc:1659 TypeOpIntSdiv
         OpCode::CPUI_INT_SDIV => binary,
         // typeop.cc:1654 TypeOpIntRem
         OpCode::CPUI_INT_REM => binary,

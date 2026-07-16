@@ -268,8 +268,11 @@ impl OpCode {
         )
     }
 
-    // RUGRA-GLUE: is_commutative (no Ghidra counterpart found)
-    /// Check if this opcode is commutative (operand order doesn't matter)
+    // Ghidra: typeop.cc ctor bodies where `opflags = ... | PcodeOp::commutative`
+    /// Check if this opcode is commutative (operand order doesn't matter).
+    /// Mirrors the commutative flag set per-opcode in typeop.cc constructors
+    /// (the same set captured in op.rs::opcode_flags). Note INT_LEFT/INT_DIV
+    /// are NOT commutative in Ghidra despite being sometimes assumed so.
     pub fn is_commutative(&self) -> bool {
         matches!(
             self,
@@ -280,6 +283,8 @@ impl OpCode {
                 | OpCode::CPUI_INT_XOR
                 | OpCode::CPUI_INT_EQUAL
                 | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_CARRY
+                | OpCode::CPUI_INT_SCARRY
                 | OpCode::CPUI_BOOL_AND
                 | OpCode::CPUI_BOOL_OR
                 | OpCode::CPUI_BOOL_XOR

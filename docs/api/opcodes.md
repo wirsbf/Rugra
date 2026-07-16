@@ -46,7 +46,16 @@ Check if this opcode is a control flow terminator (ends a basic block)
 
 ### `pub fn is_commutative(&self) -> bool`
 
-Check if this opcode is commutative (operand order doesn't matter)
+Check if this opcode is commutative (operand order doesn't matter). 镜像
+Ghidra typeop.cc ctor bodies 中 \`opflags = ... | PcodeOp::commutative\` 的集合
+（与 op.rs::opcode_flags 的 COMMUTATIVE 位一致）。
+
+完整集合：INT_ADD, INT_MULT, INT_AND, INT_OR, INT_XOR, INT_EQUAL, INT_NOTEQUAL,
+**INT_CARRY, INT_SCARRY**, BOOL_AND, BOOL_OR, BOOL_XOR, FLOAT_ADD, FLOAT_MULT,
+FLOAT_EQUAL, FLOAT_NOTEQUAL。
+
+注意 INT_LEFT（左移）和 INT_DIV（无符号除）在 Ghidra 中**不**可交换
+（typeop.cc:1505/1645 opflags 仅 binary），尽管常被误判。
 
 ### `pub fn is_commutative_or_pure(&self) -> bool`
 
