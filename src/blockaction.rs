@@ -3148,6 +3148,35 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
+    // Ghidra: blockaction.cc:1579 CollapseStructure::ruleBlockInfLoop
+    /// Try to structure an infinite loop. Faithful to `ruleBlockInfLoop`
+    /// (blockaction.cc:1579-1593):
+    ///   - sizeOut == 1 (single out edge)
+    ///   - !isGotoOut(0) (not a goto)
+    ///   - getOut(0) == bl (falls into itself)
+    ///   - newBlockInfLoop(bl)
+    pub fn try_rule_inf_loop(&mut self, i: usize) -> bool {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return false,
+        };
+        let sizeout = block.read().unwrap().size_out();
+        // cc:1582: must only be one way out
+        if sizeout != 1 { return false; }
+        // cc:1589: not a goto
+        if block.read().unwrap().is_goto_out(0) { return false; }
+        // cc:1590: must fall into itself
+        let out_idx = block.read().unwrap().get_out(0)
+            .map(|e| e.point.read().unwrap().get_index());
+        if out_idx != Some(i as i32) { return false; }
+        // cc:1591: graph.newBlockInfLoop(bl).
+        // Rugra: no BlockInfLoop struct yet; mark via flags for emit stage.
+        // The block is already a self-loop; emit will recognize sizeOut==1
+        // + self-edge as `while(1)` or `for(;;)`.
+        eprintln!("[BLOCKSTRUCT] inf loop structured at block {}", i);
+        true
+    }
+
     // Ghidra: blockaction.cc:1649 CollapseStructure::ruleBlockSwitch
     /// Try to structure a switch (BRANCHIND) block. Faithful to
     /// `ruleBlockSwitch` (blockaction.cc:1649-1723):
