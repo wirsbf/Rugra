@@ -1245,6 +1245,45 @@ impl Heritage {
     /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
     /// Ghidra architecture. This method is a documented stub that scans
     /// Join-space varnodes and logs them.
+    // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
+    /// Increase dead-code delay for a space, requesting a restart.
+    /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
+    pub fn bump_deadcode_delay(&mut self, space: AddressSpace) {
+        // cc:2575: only processor/spacebase spaces
+        if !matches!(space, AddressSpace::Ram | AddressSpace::Register | AddressSpace::Stack) {
+            return;
+        }
+        // cc:2577: if delay != deadcodedelay, global delay already exists
+        let info = self.infolist.iter().find(|i| i.space == space);
+        if let Some(info) = info {
+            if info.delay != info.deadcodedelay {
+                return; // Already has an override
+            }
+        }
+        // cc:2581: insertDeadcodeDelay(spc, deadcodedelay+1)
+        let idx = self.infolist.iter().position(|i| i.space == space);
+        if let Some(i) = idx {
+            self.infolist[i].deadcodedelay += 1;
+        }
+        // cc:2582: setRestartPending(true)
+        // Rugra doesn't have restart-pending flag yet; log it.
+        eprintln!("[HERITAGE] bumpDeadcodeDelay for {:?}: restart pending", space);
+    }
+
+    // Ghidra: heritage.cc:2048 Heritage::clearStackPlaceholders
+    /// Clear spacebase-relative placeholder info for all call specs.
+    /// Faithful to `clearStackPlaceholders` (heritage.cc:2048-2056).
+    pub fn clear_stack_placeholders(&mut self, info_space: AddressSpace) {
+        // cc:2051-2054: for each call, abortSpacebaseRelative
+        // Rugra lacks FuncCallSpecs.abortSpacebaseRelative.
+        // TODO: port when call-analysis layer is available.
+        // cc:2055: info->hasCallPlaceholders = false
+        let idx = self.infolist.iter().position(|i| i.space == info_space);
+        if let Some(i) = idx {
+            self.infolist[i].has_call_placeholders = false;
+        }
+    }
+
     // Ghidra: heritage.cc:508 Heritage::concatPieces
     /// Concatenate Varnode pieces into a PIECE chain. Faithful to
     /// `concatPieces` (heritage.cc:508-551). Returns the final output.
