@@ -397,6 +397,34 @@ impl Varnode {
             == varnode_flags::INSERT
     }
 
+    // Ghidra: varnode.cc:233 Varnode::updateCover
+    /// Rebuild cover if dirty. Faithful to `updateCover` (varnode.cc:233-241).
+    pub fn update_cover(&mut self) {
+        if (self.flags & varnode_flags::COVERDIRTY) != 0 {
+            if self.has_cover() && self.cover.is_some() {
+                // Rugra's Cover::rebuild is simplified (merge.rs compute_varnode_covers).
+                // TODO: port full Cover::rebuild (cover.cc:477).
+            }
+            self.flags &= !varnode_flags::COVERDIRTY;
+        }
+    }
+
+    // Ghidra: varnode.cc:244 Varnode::clearCover
+    /// Delete the Cover object. Faithful to `clearCover` (varnode.cc:244-251).
+    pub fn clear_cover(&mut self) {
+        self.cover = None;
+    }
+
+    // Ghidra: varnode.cc:254 Varnode::calcCover
+    /// Initialize a new Cover and set dirty bit. Faithful to `calcCover`
+    /// (varnode.cc:254-263).
+    pub fn calc_cover(&mut self) {
+        if self.has_cover() {
+            self.cover = Some(Box::new(Cover::new()));
+            self.flags |= varnode_flags::COVERDIRTY;
+        }
+    }
+
     // Ghidra: varnode.cc:578 Varnode::isImplied
     /// Is this an implied variable? (varnode.hh:235)
     pub fn is_implied(&self) -> bool {
@@ -1012,7 +1040,8 @@ impl Varnode {
             }
         }
         self.descend.push(std::sync::Arc::downgrade(op));
-        // Ghidra cc:339: setFlags(Varnode::coverdirty) — omitted (coverdirty not modeled).
+        // Ghidra cc:339: setFlags(Varnode::coverdirty)
+        self.flags |= varnode_flags::COVERDIRTY;
     }
 
     // Ghidra: varnode.cc:316 Varnode::eraseDescend
@@ -1032,7 +1061,8 @@ impl Varnode {
             eprintln!("[VN] WARN: erase_descend op={:p} not in descend list (space={:?} off={:#x})",
                 std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64());
         }
-        // Ghidra cc:325: setFlags(Varnode::coverdirty) — omitted.
+        // Ghidra cc:325: setFlags(Varnode::coverdirty)
+        self.flags |= varnode_flags::COVERDIRTY;
     }
 
     // Ghidra: varnode.cc:578 Varnode::isBoolOutputDef
