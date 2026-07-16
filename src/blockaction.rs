@@ -3210,14 +3210,27 @@ impl<'a> CollapseStructure<'a> {
             }
             drop(b);
 
-            // cc:1358-1365: negate conditions if needed.
-            // i==1: orblock needs to be false out of bl → negate bl if i!=1.
-            // j==0: clauseblock needs to be true out of orblock → negate orblock if j!=0.
-            // Rugra's negateCondition is a no-op default (needs BlockBasic override).
-            // The BOOLEAN_FLIP flag on the CBRANCH op controls true/false edge mapping.
+            // cc:1358-1365: negate conditions to make OR pattern canonical.
+            //   i==1: orblock must be the FALSE out of bl → negate bl so its
+            //         true-out becomes the orblock edge.
+            //   j==0: clauseblock must be the TRUE out of orblock → negate orblock.
+            // negateCondition returns true when the underlying CBRANCH flip
+            // toggled (dataflow change) — Ghidra tallies dataflow_changecount;
+            // Rugra folds into change_count (same convergence-tracking role).
+            if ii == 1 {
+                if block.write().unwrap().negate_condition(true) {
+                    self.change_count += 1;
+                }
+            }
+            if j == 0 {
+                if orblock.write().unwrap().negate_condition(true) {
+                    self.change_count += 1;
+                }
+            }
 
             // cc:1367 + block.cc:1785: graph.newBlockCondition(bl, orblock)
-            // Determine AND vs OR: if bl's false-out == orblock → OR, else AND.
+            // After negation, ii==1 means bl's true-out is now orblock → OR;
+            // ii==0 (orblock was already false-out) → AND.
             let bool_op = if ii == 1 { BoolOp::Or } else { BoolOp::And };
 
             // Create BlockCondition node (block.cc:1786-1793).
