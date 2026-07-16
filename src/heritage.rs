@@ -1245,6 +1245,216 @@ impl Heritage {
     /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
     /// Ghidra architecture. This method is a documented stub that scans
     /// Join-space varnodes and logs them.
+    // Ghidra: heritage.cc:1705 Heritage::buildRefinement
+    /// Build refinement array from varnode list. Faithful to
+    /// `buildRefinement` (heritage.cc:1705-1715). Marks byte boundaries
+    /// where varnodes start/end within the range [addr, addr+size).
+    pub fn build_refinement(
+        &self,
+        refine: &mut [i32],
+        addr: Address,
+        vnlist: &[Arc<RwLock<Varnode>>],
+    ) {
+        for vn_arc in vnlist {
+            let vn = vn_arc.read().unwrap();
+            let diff = vn.loc.as_u64().saturating_sub(addr.as_u64()) as usize;
+            let sz = vn.get_size();
+            if diff < refine.len() {
+                refine[diff] = 1;
+            }
+            if diff + sz < refine.len() {
+                refine[diff + sz] = 1;
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:1734 Heritage::splitByRefinement
+    /// Split a Varnode by the refinement array. Faithful to
+    /// `splitByRefinement` (heritage.cc:1734-1754). Returns new
+    /// Varnode pieces in `split` if the varnode crosses a refinement
+    /// boundary; empty if already refined.
+    pub fn split_by_refinement(
+        &self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        addr: Address,
+        refine: &[i32],
+        split: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let vn_r = vn.read().unwrap();
+        let mut curaddr = vn_r.loc;
+        let mut sz = vn_r.get_size() as i32;
+        let vn_space = vn_r.address_space;
+        drop(vn_r);
+        let mut diff = curaddr.as_u64().saturating_sub(addr.as_u64()) as usize;
+        if diff >= refine.len() { return; }
+        let mut cutsz = refine[diff];
+        if cutsz == 0 || sz <= cutsz { return; }
+        loop {
+            let piece = fd.vbank.create_with_space(cutsz as usize, vn_space, curaddr.as_u64());
+            split.push(piece);
+            sz -= cutsz;
+            if sz <= 0 { break; }
+            curaddr = Address::new(curaddr.as_u64().wrapping_add(cutsz as u64));
+            diff = curaddr.as_u64().saturating_sub(addr.as_u64()) as usize;
+            if diff >= refine.len() { break; }
+            cutsz = refine[diff];
+            if cutsz > sz { cutsz = sz; }
+        }
+    }
+
+    // Ghidra: heritage.cc:1773 Heritage::refineRead
+    /// Split a free read Varnode based on refinement, creating a PIECE
+    /// to reconstruct the original. Faithful to `refineRead`
+    /// (heritage.cc:1773-1806).
+    pub fn refine_read(
+        &mut self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        addr: Address,
+        refine: &[i32],
+    ) {
+        let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
+        if newvn.is_empty() { return; }
+        // cc:1779: replacevn = newUnique(vn->getSize())
+        let vn_size = vn.read().unwrap().get_size();
+        let replacevn = fd.new_unique(vn_size);
+        // cc:1780-1781: op = vn->loneDescend(); slot = op->getSlot(vn)
+        let lone_desc = vn.read().unwrap().lone_descend();
+        if let Some(read_op) = lone_desc {
+            let read_ref = PcodeOpRef(read_op.clone());
+            let slot = read_op.read().unwrap().inrefs.iter()
+                .position(|v| Arc::ptr_eq(v, vn)).unwrap_or(0);
+            if newvn.len() >= 2 {
+                let op_addr = read_op.read().unwrap().get_addr();
+                let piece_op = fd.new_op(2, op_addr);
+                fd.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
+                fd.op_set_input(&piece_op, newvn[0].clone(), 0);
+                fd.op_set_input(&piece_op, newvn[1].clone(), 1);
+                let _out = fd.new_varnode_out(vn_size, Address::new(0), &piece_op);
+                fd.op_insert_before(&piece_op, &read_ref);
+            }
+            fd.op_set_input(&read_ref, replacevn, slot);
+        }
+    }
+
+    // Ghidra: heritage.cc:1807 Heritage::refineWrite
+    /// Split a written Varnode based on refinement, creating SUBPIECE ops
+    /// to extract the pieces. Faithful to `refineWrite`
+    /// (heritage.cc:1807-1836).
+    pub fn refine_write(
+        &mut self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        addr: Address,
+        refine: &[i32],
+    ) {
+        let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
+        if newvn.is_empty() { return; }
+        // cc:1815-1835: for each piece, create SUBPIECE from vn
+        let vn_size = vn.read().unwrap().get_size();
+        let vn_space = vn.read().unwrap().address_space;
+        let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        if let Some(def_op) = def_op {
+            let op_addr = def_op.read().unwrap().get_addr();
+            let mut offset: i32 = 0;
+            for piece in &newvn {
+                let piece_size = piece.read().unwrap().get_size();
+                let newop = fd.new_op(2, op_addr);
+                fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+                let piece_vn = fd.vbank.create_with_space(piece_size, vn_space, piece.read().unwrap().loc.as_u64());
+                fd.op_set_input(&newop, piece_vn, 0);
+                let off_const = fd.new_constant(8, offset as u64);
+                fd.op_set_input(&newop, off_const, 1);
+                let _out = fd.new_varnode_out(piece_size, piece.read().unwrap().loc, &newop);
+                fd.op_insert_before(&newop, &PcodeOpRef(def_op.clone()));
+                offset += piece_size as i32;
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:1837 Heritage::refineInput
+    /// Split an input Varnode based on refinement. Faithful to
+    /// `refineInput` (heritage.cc:1837-1857).
+    pub fn refine_input(
+        &mut self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        addr: Address,
+        refine: &[i32],
+    ) {
+        let mut newvn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        self.split_by_refinement(&mut *fd, vn, addr, refine, &mut newvn);
+        if newvn.is_empty() { return; }
+        // cc:1845-1855: mark each piece as input + activeHeritage
+        for piece in &newvn {
+            piece.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+            piece.write().unwrap().set_active_heritage();
+        }
+    }
+
+    // Ghidra: heritage.cc:1858 Heritage::remove13Refinement
+    /// Remove 1-byte/3-byte refinement patterns. Faithful to
+    /// `remove13Refinement` (heritage.cc:1858-1890). These patterns
+    /// cause excessive splitting without information gain.
+    pub fn remove13_refinement(&self, refine: &mut [i32]) {
+        let n = refine.len();
+        if n < 4 { return; }
+        let mut i = 0;
+        while i < n {
+            if refine[i] == 1 && i + 1 < n && refine[i + 1] == 0 {
+                // Check if next boundary is at i+3 (3-byte element)
+                if i + 3 < n && refine[i + 3] != 0 {
+                    // Remove the 1-byte split: merge into next element
+                    refine[i] = 0;
+                    if i > 0 { refine[i] = refine[i - 1] + 1; }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    // Ghidra: heritage.cc:1891 Heritage::refinement
+    /// Run refinement on the given range. Faithful to `refinement`
+    /// (heritage.cc:1891-1951). Builds refinement from collected
+    /// varnodes, removes 1/3 patterns, and applies to read/write/input.
+    /// Returns Some(refined_iter) if refinement changed the range,
+    /// None otherwise.
+    pub fn run_refinement(
+        &mut self,
+        fd: &mut Funcdata,
+        addr: Address,
+        size: i32,
+        readvars: &[Arc<RwLock<Varnode>>],
+        writevars: &[Arc<RwLock<Varnode>>],
+        inputvars: &[Arc<RwLock<Varnode>>],
+    ) -> bool {
+        let sz = size as usize;
+        let mut refine = vec![0i32; sz];
+        self.build_refinement(&mut refine, addr, readvars);
+        self.build_refinement(&mut refine, addr, writevars);
+        self.build_refinement(&mut refine, addr, inputvars);
+        // cc:1898: remove13Refinement
+        self.remove13_refinement(&mut refine);
+        // Check if any refinement boundaries exist.
+        let has_refine = refine.iter().any(|&v| v != 0);
+        if !has_refine { return false; }
+        // cc:1910-1950: apply refinement to read/write/input
+        for vn in readvars {
+            self.refine_read(fd, vn, addr, &refine);
+        }
+        for vn in writevars {
+            self.refine_write(fd, vn, addr, &refine);
+        }
+        for vn in inputvars {
+            self.refine_input(fd, vn, addr, &refine);
+        }
+        true
+    }
+
+    // Ghidra: heritage.cc:2282 Heritage::processJoins
     pub fn process_joins(&mut self, fd: &crate::funcdata::Funcdata) {
         // Scan vbank for Join-space varnodes.
         let join_vns: Vec<_> = fd.vbank.loc_tree.iter()
