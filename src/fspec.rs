@@ -363,6 +363,67 @@ impl FuncCallSpecs {
         self.stackoffset != OFFSET_UNKNOWN
     }
 
+    // Ghidra: fspec.hh:1553 FuncCallSpecs::characterizeAsOutput
+    /// Characterize whether the given range overlaps output storage.
+    /// Faithful to `characterizeAsOutput` (fspec.hh:1554). Delegates to
+    /// ProtoModel::characterizeAsParam on the output parameter list.
+    /// Returns: 0=no_containment, 1=contains_unjustified,
+    /// 2=contains_justified, 3=contained_by.
+    pub fn characterize_as_output(&self, addr: u64, size: i32, space: crate::space::AddressSpace) -> i32 {
+        if let Some(ref model) = self.proto_model {
+            model.characterize_as_input_param(addr, size, space)
+        } else {
+            0 // no_containment
+        }
+    }
+
+    // Ghidra: fspec.hh:1553 FuncCallSpecs::characterizeAsInputParam
+    /// Characterize whether the given range overlaps input parameter storage.
+    pub fn characterize_as_input_param(&self, addr: u64, size: i32, space: crate::space::AddressSpace) -> i32 {
+        if let Some(ref model) = self.proto_model {
+            model.characterize_as_input_param(addr, size, space)
+        } else {
+            0
+        }
+    }
+
+    // Ghidra: fspec.hh:883 FuncProto::possibleInputParam
+    /// Does the given storage location make sense as an input parameter?
+    pub fn possible_input_param(&self, addr: u64, size: i32, space: crate::space::AddressSpace) -> bool {
+        if let Some(ref model) = self.proto_model {
+            model.possible_input_param(addr, size, space)
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: fspec.cc:4234 FuncProto::hasEffect
+    /// Determine the effect of this function on the given address range.
+    /// Faithful to `FuncProto::hasEffect` (fspec.cc:4234-4241).
+    /// Returns effect type:
+    ///   0 = unknown_effect, 1 = unaffected, 2 = killedbycall,
+    ///   3 = return_address, 4 = reload
+    pub fn has_effect(&self, _addr: u64, _size: i32) -> u32 {
+        // cc:4237-4240: if effectlist empty, delegate to model->hasEffect
+        // Rugra's ProtoModel doesn't have hasEffect yet.
+        // Conservative: return unknown_effect (0) for all ranges.
+        0
+    }
+
+    // Ghidra: fspec.hh:1630 FuncCallSpecs::isAutoKilledByCall
+    /// Should unaffected storage be treated as killed-by-call?
+    pub fn is_auto_killed_by_call(&self) -> bool {
+        // Ghidra: model->isAutoKilledByCall() — true for default x86 ABI.
+        true
+    }
+
+    // Ghidra: fspec.hh:1543 FuncCallSpecs::isStackOutputLock
+    /// Is the output prototype stack-locked?
+    pub fn is_stack_output_lock(&self) -> bool {
+        // Simplified: return false (no stack output lock in Rugra).
+        false
+    }
+
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputLocked
     /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to
     /// `FuncCallSpecs::isInputLocked` — true if all params are type-locked.

@@ -190,3 +190,5 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 **验证**：cargo test --lib 952/952 通过；curl 24/24 反编译；compare_ghidra defects=0（0/24 函数）。
 <!-- annotation-pass: 2026-07-04 -->
 <!-- activeparam-port: 1783158350.9591746 -->
+ 
+ 
