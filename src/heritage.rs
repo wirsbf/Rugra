@@ -1245,6 +1245,138 @@ impl Heritage {
     /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
     /// Ghidra architecture. This method is a documented stub that scans
     /// Join-space varnodes and logs them.
+    // Ghidra: heritage.cc:619 Heritage::findAddressForces
+    /// Mark the boundary of artificial ops from copy sinks. Faithful to
+    /// `findAddressForces` (heritage.cc:619-667). Back-reachable COPY/
+    /// MULTIEQUAL/INDIRECT-store ops with same address are "artificial";
+    /// non-artificial ops are "forces" (address-forced boundary).
+    pub fn find_address_forces(
+        &self,
+        fd: &mut Funcdata,
+        copy_sinks: &mut Vec<Arc<RwLock<PcodeOp>>>,
+        forces: &mut Vec<Arc<RwLock<PcodeOp>>>,
+    ) {
+        // cc:622-626: mark all sinks
+        for op in copy_sinks.iter() {
+            op.write().unwrap().set_mark();
+        }
+        // cc:629-666: back-reachability BFS
+        let mut pos = 0;
+        while pos < copy_sinks.len() {
+            let op_arc = copy_sinks[pos].clone();
+            pos += 1;
+            let addr = match op_arc.read().unwrap().output.as_ref() {
+                Some(o) => o.read().unwrap().loc,
+                None => continue,
+            };
+            let num_in = op_arc.read().unwrap().num_input();
+            for i in 0..num_in {
+                let vn = match op_arc.read().unwrap().get_in(i) {
+                    Some(v) => v.clone(), None => continue,
+                };
+                if !vn.read().unwrap().is_written() { continue; }
+                // cc:638: skip already addrForce
+                // cc:640: skip already marked
+                let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(d) => d, None => continue,
+                };
+                if def_op.read().unwrap().is_mark() { continue; }
+                def_op.write().unwrap().set_mark();
+                let opc = def_op.read().unwrap().opcode;
+                let mut is_artificial = false;
+                if opc == OpCode::CPUI_COPY || opc == OpCode::CPUI_MULTIEQUAL {
+                    is_artificial = true;
+                    let n = def_op.read().unwrap().num_input();
+                    for j in 0..n {
+                        let in_vn = match def_op.read().unwrap().get_in(j) {
+                            Some(v) => v.clone(), None => { is_artificial = false; break; }
+                        };
+                        if in_vn.read().unwrap().loc != addr {
+                            is_artificial = false;
+                            break;
+                        }
+                    }
+                } else if opc == OpCode::CPUI_INDIRECT && def_op.read().unwrap().is_indirect_store() {
+                    let in_vn = match def_op.read().unwrap().get_in(0) {
+                        Some(v) => v.clone(), None => continue,
+                    };
+                    if in_vn.read().unwrap().loc == addr {
+                        is_artificial = true;
+                    }
+                }
+                if is_artificial {
+                    copy_sinks.push(def_op.clone());
+                } else {
+                    forces.push(def_op.clone());
+                }
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:675 Heritage::propagateCopyAway
+    /// Eliminate a COPY sink, propagating input to all readers.
+    /// Faithful to `propagateCopyAway` (heritage.cc:675-688).
+    pub fn propagate_copy_away(&self, fd: &mut Funcdata, op: &PcodeOpRef) {
+        // cc:678-685: follow COPY chain to earliest input
+        let mut in_vn = match op.0.read().unwrap().get_in(0) {
+            Some(v) => v.clone(), None => return,
+        };
+        loop {
+            let def_op = in_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            let def_op = match def_op { Some(d) => d, None => break };
+            if def_op.read().unwrap().opcode != OpCode::CPUI_COPY { break; }
+            let next_in = match def_op.read().unwrap().get_in(0) {
+                Some(v) => v.clone(), None => break,
+            };
+            if next_in.read().unwrap().loc != in_vn.read().unwrap().loc { break; }
+            in_vn = next_in;
+        }
+        // cc:686: totalReplace(op->getOut(), inVn)
+        let out_vn = match op.0.read().unwrap().output.as_ref() {
+            Some(o) => o.clone(), None => return,
+        };
+        fd.total_replace(&out_vn, in_vn);
+        // cc:687: opDestroy(op)
+        // Mark as dead for cleanup
+        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::DEAD;
+    }
+
+    // Ghidra: heritage.cc:696 Heritage::handleNewLoadCopies
+    /// Mark load guard COPY boundaries and eliminate artificial COPYs.
+    /// Faithful to `handleNewLoadCopies` (heritage.cc:696-731).
+    pub fn handle_new_load_copies(&mut self, fd: &mut Funcdata) {
+        if self.load_copy_ops.is_empty() { return; }
+        // Upgrade Weak to Arc
+        let sink_arcs: Vec<Arc<RwLock<PcodeOp>>> = self.load_copy_ops.iter()
+            .filter_map(|w| w.upgrade()).collect();
+        if sink_arcs.is_empty() { self.load_copy_ops.clear(); return; }
+        let copy_sink_size = sink_arcs.len();
+        let mut forces: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        let mut all_sinks = sink_arcs.clone();
+        self.find_address_forces(fd, &mut all_sinks, &mut forces);
+        for force_op in &forces {
+            if let Some(out_vn) = force_op.read().unwrap().output.as_ref() {
+                let vn_addr = out_vn.read().unwrap().loc.as_u64();
+                let in_range = self.load_guard.iter().any(|g| {
+                    vn_addr >= g.minimum_offset && vn_addr <= g.maximum_offset
+                });
+                if in_range {
+                    out_vn.write().unwrap().set_flags(
+                        crate::varnode::varnode_flags::ADDRFORCE);
+                }
+            }
+            force_op.write().unwrap().clear_mark();
+        }
+        for i in 0..copy_sink_size {
+            let op_ref = PcodeOpRef(sink_arcs[i].clone());
+            self.propagate_copy_away(fd, &op_ref);
+        }
+        for i in copy_sink_size..all_sinks.len() {
+            all_sinks[i].write().unwrap().clear_mark();
+        }
+        self.load_copy_ops.clear();
+    }
+
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
     /// Increase dead-code delay for a space, requesting a restart.
     /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
