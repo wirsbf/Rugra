@@ -765,6 +765,17 @@ impl<'a> CollapseStructure<'a> {
             }
             found
         };
+        // Ghidra collapseInternal (blockaction.cc:1776-1849): outer do-while
+        // (fullchange) wraps an inner fixpoint do-while (8 rules per block),
+        // then a second pass applies ruleBlockIfNoExit + ruleCaseFallthru
+        // (cc:1837-1848) — applied only after the inner loop converges, because
+        // "applying IfNoExit too early can cause other (preferable) rules to
+        // miss" (cc:1835). The second pass breaks on the first match and
+        // re-runs the inner loop. B9: wrap the inner interleaved loop in this
+        // outer fullchange loop + second pass.
+        let mut fullchange;
+        'fullchange: loop {
+            if std::time::Instant::now() > interleaved_deadline { break; }
         loop {
             if std::time::Instant::now() > interleaved_deadline { break; }
             let pre_count = self.change_count;
@@ -818,6 +829,33 @@ impl<'a> CollapseStructure<'a> {
             if self.change_count == pre_count || iterations >= max_iterations {
                 break;
             }
+        }
+        // cc:1835-1848: second pass — IfNoExit + CaseFallthru, applied only
+        // after the inner loop converged. Break on first match, re-run inner.
+        // "Applying IfNoExit rule too early can cause other (preferable) rules
+        // to miss. Only apply if nothing else can apply."
+        fullchange = false;
+        if std::time::Instant::now() <= interleaved_deadline {
+            // ruleBlockIfNoExit (cc:1840): per-block, break on first match.
+            // Skip when the function has switches: case-label extraction is
+            // unsafe mid-structuring (Rugra-specific guard, see has_switch).
+            if !has_switch {
+                let s2 = self.graph.get_size();
+                for j in 0..s2 {
+                    if self.try_rule_if_no_exit(j) {
+                        fullchange = true;
+                        break;
+                    }
+                }
+            }
+            // ruleCaseFallthru (cc:1844): Rugra's collapse_case_fallthru is
+            // batch (processes all switches at once); run it once here and
+            // treat any change as a fullchange trigger.
+            if !fullchange && self.collapse_case_fallthru() {
+                fullchange = true;
+            }
+        }
+        if !fullchange { break 'fullchange; }
         }
         eprintln!("[COLLAPSE] {} interleaved done blocks={} iter={}", self.name, self.graph.get_size(), iterations);
         self.run_goto_cascade();
@@ -4522,9 +4560,10 @@ impl<'a> CollapseStructure<'a> {
     /// out-edge target is a "fallthrough" successor. If that successor has
     /// a single in-edge (from this case body), merge it into a BlockList.
     /// Mirrors Ghidra's ruleCaseFallthru (blockaction.cc:1707).
-    fn collapse_case_fallthru(&mut self) {
+    fn collapse_case_fallthru(&mut self) -> bool {
         use crate::block::block_flags;
         let size = self.graph.get_size();
+        let mut any_change = false;
 
         for i in 0..size {
             let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
@@ -4557,6 +4596,7 @@ impl<'a> CollapseStructure<'a> {
                         Arc::new(RwLock::new(crate::block::BlockList::new(case_idx, chain)));
                     new_cases.push(Some(lb));
                     self.change_count += 1;
+                    any_change = true;
                 } else {
                     new_cases.push(None);
                 }
@@ -4573,6 +4613,7 @@ impl<'a> CollapseStructure<'a> {
                         let lb: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                             Arc::new(RwLock::new(crate::block::BlockList::new(di, chain)));
                         self.change_count += 1;
+                        any_change = true;
                         Some(lb)
                     } else { None }
                 } else { None }
@@ -4608,6 +4649,7 @@ impl<'a> CollapseStructure<'a> {
                 self.graph.blocks[i] = new_sw;
             }
         }
+        any_change
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::buildFallthroughChain
