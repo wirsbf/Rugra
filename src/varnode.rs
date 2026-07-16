@@ -887,6 +887,53 @@ impl Varnode {
         (self.flags & varnode_flags::UNAFFECTED) != 0
     }
 
+    // Ghidra: varnode.hh:247 Varnode::isVolatile
+    pub fn is_volatile(&self) -> bool {
+        (self.flags & varnode_flags::VOLATIL) != 0
+    }
+
+    // Ghidra: varnode.cc:1182 Varnode::encode
+    /// Encode this Varnode as XML attributes. Faithful to `encode`
+    /// (varnode.cc:1182-1201). Rugra returns a String (no Encoder).
+    pub fn encode(&self) -> String {
+        let mut s = format!("<addr space=\"{}\" offset=\"{:x}\" size=\"{}\" ref=\"{}\"",
+            self.address_space.name(), self.loc.as_u64(), self.size, self.create_index);
+        if self.is_persist() { s += " persists=\"true\""; }
+        if self.is_addr_tied() { s += " addrtied=\"true\""; }
+        if self.is_unaffected() { s += " unaff=\"true\""; }
+        if self.is_input() { s += " input=\"true\""; }
+        if self.is_volatile() { s += " volatile=\"true\""; }
+        s += "/>";
+        s
+    }
+
+    // Ghidra: varnode.cc:344 Varnode::destroyDescend
+    /// Clear all descend references. Faithful to `destroyDescend`
+    /// (varnode.cc:344-350).
+    pub fn destroy_descend(&mut self) {
+        self.descend.clear();
+    }
+
+    // Ghidra: varnode.cc:1153 Varnode::termOrder
+    /// Compare this varnode with another for term ordering (constants last).
+    /// Faithful to `termOrder` (varnode.cc:1153-1180). Used by
+    /// AddExpression to order commutative operands.
+    pub fn term_order(&self, op: &Varnode) -> i32 {
+        // cc:1156-1160: constants sort last
+        if self.is_constant() {
+            if !op.is_constant() { return 1; }
+        } else {
+            if op.is_constant() { return -1; }
+        }
+        // cc:1162-1168: unwrap INT_MULT by constant (find the non-const factor)
+        // cc:1170-1175: compare by size (smaller first)
+        if self.size != op.size {
+            return self.size as i32 - op.size as i32;
+        }
+        // cc:1176: compare by offset
+        self.loc.as_u64().cmp(&op.loc.as_u64()) as i32
+    }
+
     // Ghidra: varnode.hh:257 Varnode::isReturnAddress
     /// Is this storage for a call's return address? Faithful to
     /// `Varnode::isReturnAddress` (varnode.hh:257):
