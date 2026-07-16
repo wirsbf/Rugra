@@ -1310,6 +1310,39 @@ impl VarnodeBank {
         vn
     }
 
+    // Ghidra: varnode.cc:1411 VarnodeBank::createDef
+    /// Create a new Varnode with a defining op, already inserted in both trees.
+    /// Faithful to `createDef` (varnode.cc:1411-1418).
+    pub fn create_def(
+        &mut self,
+        size: usize,
+        loc: Address,
+        op: &Arc<RwLock<PcodeOp>>,
+    ) -> Arc<RwLock<Varnode>> {
+        let vn = self.create(size, loc);
+        vn.write().unwrap().def = Some(Arc::downgrade(op));
+        // Re-insert into def_tree with the def set (xref equivalent).
+        // create() already inserted into loc_tree + def_tree as free.
+        // set_def re-inserts with the def op assigned.
+        self.set_def(vn.clone(), Arc::downgrade(op));
+        vn
+    }
+
+    // Ghidra: varnode.cc:1426 VarnodeBank::createDefUnique
+    /// Create a unique-space Varnode with a defining op.
+    /// Faithful to `createDefUnique` (varnode.cc:1426-1432).
+    pub fn create_def_unique(
+        &mut self,
+        size: usize,
+        op: &Arc<RwLock<PcodeOp>>,
+    ) -> Arc<RwLock<Varnode>> {
+        let addr = Address::new(self.uniqid);
+        self.uniqid += size as u64;
+        let vn = self.create_def(size, addr, op);
+        vn.write().unwrap().address_space = AddressSpace::Unique;
+        vn
+    }
+
     // Ghidra: varnode.cc:1358 VarnodeBank::setInput
     /// Mark a varnode as an input
     /// Mark a varnode as a function input. Faithful to Ghidra's

@@ -743,3 +743,4 @@
 - `Varnode::erase_descend`(varnode.cc:316): 新增,retain 移除匹配 weak ref + free 多 descend 日志。
 - `Varnode::add_descend`(cc:330): 补 free 非 spacebase 多 descend 检查。
  
+ 
