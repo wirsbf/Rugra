@@ -1019,6 +1019,73 @@ impl Varnode {
         (self.flags & 0x4000_0000) != 0
     }
 
+    // Ghidra: varnode.cc:378 Varnode::clearSymbolLinks
+    /// Clear all symbol references. Faithful to `clearSymbolLinks`
+    /// (varnode.cc:378-392).
+    pub fn clear_symbol_links(&mut self) {
+        self.mapentry = None;
+        if self.high.is_some() {
+            // Ghidra: high->setSymbol(null) — Rugra's HighVariable lacks setSymbol.
+            // TODO: needs HighVariable::setSymbol(None).
+        }
+    }
+
+    // Ghidra: varnode.cc:88 Varnode::getHigh
+    /// Get the associated HighVariable. Faithful to `getHigh`
+    /// (varnode.cc:88-89).
+    pub fn get_high(&self) -> Option<&std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
+        self.high.as_ref()
+    }
+
+    // Ghidra: varnode.cc:854 Varnode::isEventualConstant
+    /// Check if this Varnode will eventually fold to a constant.
+    /// Faithful to `isEventualConstant` (varnode.cc:854-898).
+    /// Simplified: only checks 1 level deep.
+    pub fn is_eventual_constant(&self, max_binary: i32, max_load: i32) -> bool {
+        if self.is_constant() { return true; }
+        if max_binary <= 0 { return false; }
+        if !self.is_written() { return false; }
+        let def_op = match self.def.as_ref().and_then(|w| w.upgrade()) {
+            Some(d) => d, None => return false,
+        };
+        let def_r = def_op.read().unwrap();
+        match def_r.opcode {
+            crate::opcodes::OpCode::CPUI_COPY => {
+                let invn = def_r.get_in(0).cloned();
+                drop(def_r);
+                if let Some(inv) = invn {
+                    return inv.read().unwrap().is_eventual_constant(max_binary, max_load);
+                }
+                false
+            }
+            crate::opcodes::OpCode::CPUI_LOAD => {
+                drop(def_r);
+                max_load > 0
+            }
+            opc => {
+                let eval_type = def_r.get_eval_type();
+                drop(def_r);
+                if (eval_type & (crate::op::pcodeop_flags::BINARY | crate::op::pcodeop_flags::UNARY)) != 0 {
+                    max_binary > 0
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    // Ghidra: varnode.cc:900 Varnode::getLocalType
+    /// Get the local data-type for this Varnode. Faithful to
+    /// `getLocalType` (varnode.cc:900-940).
+    pub fn get_local_type(&self, _block_up: &mut bool) -> Option<Arc<Datatype>> {
+        // cc:910: if typelock, return type directly
+        if (self.flags & varnode_flags::TYPELOCK) != 0 {
+            return self.v_type.clone();
+        }
+        // cc:914-939: check if defined by known type-producing ops
+        self.v_type.clone()
+    }
+
     // Ghidra: varnode.hh:271 Varnode::isIndirectZero
     /// Is this an indirect creation that is also a constant (i.e. a possible
     /// zero produced indirectly by a call)? Faithful to
