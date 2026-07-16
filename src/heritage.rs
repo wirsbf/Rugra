@@ -1121,6 +1121,36 @@ impl Heritage {
         );
     }
 
+    // Ghidra: heritage.cc:2282 Heritage::processJoins
+    /// Process join-space varnodes: split PIECE/SUBPIECE on free join varnodes.
+    /// Faithful to `processJoins` (heritage.cc:2282-2314). Iterates Join-space
+    /// varnodes. For free ones, calls splitJoinRead (which creates the
+    /// piece varnodes in the real address space). For written ones whose
+    /// piece-space delay == pass, calls splitJoinWrite (which creates
+    /// SUBPIECE ops to reconstruct the join from pieces).
+    ///
+    /// Rugra's Join space is minimal (AddressSpace::Join enum, no JoinRecord
+    /// infrastructure). Full implementation needs JoinRecord/JoinSpace from
+    /// Ghidra architecture. This method is a documented stub that scans
+    /// Join-space varnodes and logs them.
+    pub fn process_joins(&mut self, fd: &crate::funcdata::Funcdata) {
+        // Scan vbank for Join-space varnodes.
+        let join_vns: Vec<_> = fd.vbank.loc_tree.iter()
+            .filter(|v| v.0.read().unwrap().address_space == AddressSpace::Join)
+            .map(|v| v.0.clone())
+            .collect();
+        if join_vns.is_empty() { return; }
+        // For each join varnode:
+        // - If free: splitJoinRead (creates piece reads in real space)
+        // - If written and delay matches: splitJoinWrite (creates SUBPIECE ops)
+        //
+        // Rugra lacks JoinRecord (the mapping from join offset to piece
+        // spaces+offsets). Without JoinRecord, we cannot split.
+        // TODO: port JoinRecord infrastructure (architecture.cc / space.cc).
+        eprintln!("[HERITAGE] process_joins: {} join-space varnodes found (JoinRecord infra TODO)",
+            join_vns.len());
+    }
+
     // Ghidra: heritage.cc:2677 Heritage::heritage
     /// Main entry point for heritage (SSA construction). Faithful to
     /// `Heritage::heritage` (heritage.cc:2677-2772):
@@ -1148,7 +1178,7 @@ impl Heritage {
         // Rugra's place_multiequals uses dom-frontier instead. Tracked gap.
 
         // Ghidra cc:2693: processJoins();
-        // TODO: processJoins (join-space handling, heritage.cc:2282).
+        self.process_joins(&fd);
 
         // Ghidra cc:2694-2697: if (pass == 0) { splitmanage.init/split(); }
         // TODO: PreferSplitManager (prefersplit.cc).
