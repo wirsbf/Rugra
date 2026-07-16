@@ -1495,24 +1495,46 @@ impl PartialOrd for VarnodeDefRef {
 }
 
 impl Ord for VarnodeDefRef {
-    // RUGRA-GLUE: cmp (no Ghidra counterpart found)
+    // Ghidra: varnode.cc:60 VarnodeCompareDefLoc::operator()
+    /// Compare by definition then by location. Faithful to
+    /// `VarnodeCompareDefLoc` (varnode.cc:60-79).
+    /// Uses (f-1) trick: written=0, input=1, free=2 (free last).
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if Arc::ptr_eq(&self.0, &other.0) { return std::cmp::Ordering::Equal; }
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
 
-        let a_cat = if a.is_input() { 0 } else if a.is_written() { 1 } else { 2 };
-        let b_cat = if b.is_input() { 0 } else if b.is_written() { 1 } else { 2 };
-
-        match a_cat.cmp(&b_cat) {
-            std::cmp::Ordering::Equal => {
-                match a.loc.cmp(&b.loc) {
-                    std::cmp::Ordering::Equal => a.create_index.cmp(&b.create_index),
-                    ord => ord,
-                }
-            }
-            ord => ord,
+        // cc:65-67: f1 = flags & (input|written); (f1-1) < (f2-1) forces free last
+        let f1 = a.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        let f2 = b.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        if f1 != f2 {
+            return (f1.wrapping_sub(1)).cmp(&(f2.wrapping_sub(1)));
         }
+        // cc:69-71: if written, compare def SeqNum
+        if f1 == varnode_flags::WRITTEN {
+            let a_seq = a.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            let b_seq = b.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            match a_seq.cmp(&b_seq) {
+                std::cmp::Ordering::Equal => {}
+                ord => return ord,
+            }
+        }
+        // cc:73-74: compare addr, then size
+        match a.loc.cmp(&b.loc) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        match a.size.cmp(&b.size) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        // cc:75-77: if both free, compare createIndex
+        if f1 == 0 {
+            return a.create_index.cmp(&b.create_index);
+        }
+        std::cmp::Ordering::Equal
     }
 }
 
