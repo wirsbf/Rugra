@@ -706,6 +706,7 @@ impl PrintC {
             BlockType::If => self.emit_structured_if(block_arc, graph, emitted),
             BlockType::WhileDo => self.emit_structured_whiledo(block_arc, graph, emitted),
             BlockType::DoWhile => self.emit_structured_dowhile(block_arc, graph, emitted),
+            BlockType::InfLoop => self.emit_structured_infloop(block_arc, graph, emitted),
             BlockType::List => self.emit_structured_list(block_arc, graph, emitted),
             BlockType::Condition => self.emit_structured_condition(block_arc, graph, emitted),
             BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted),
@@ -1008,6 +1009,42 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
+    }
+
+    // Ghidra: printc.cc:3097 PrintC::emitBlockInfLoop
+    /// Emit a BlockInfLoop as `do { <body> } while(true);`. Faithful to
+    /// emitBlockInfLoop (printc.cc:3097-3122): emitAnyLabelStatement, `do`,
+    /// open brace, emit body, close brace, ` while ( true );`.
+    fn emit_structured_infloop(
+        &mut self,
+        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        _graph: &crate::block::BlockGraph,
+        _emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        use crate::block::BlockInfLoop;
+        let block = block_arc.read().unwrap();
+        let inf_block = block.as_any().downcast_ref::<BlockInfLoop>();
+        if let Some(inf_data) = inf_block {
+            self.emit.tag_line(0);
+            self.emit.print("do ");
+            self.emit.begin_block();
+            self.loop_depth += 1;
+            // Scope seen_return: an inf-loop body is re-entered each
+            // iteration; a prior RETURN must not suppress it.
+            let saved = self.seen_return;
+            self.seen_return = false;
+            // Emit the body block's ops.
+            self.emit_block_ops(&inf_data.body, true);
+            self.seen_return = saved;
+            self.loop_depth -= 1;
+            self.emit.end_block();
+            // cc:3112-3120: ` while ( true );`
+            self.emit.print(" while (");
+            self.emit.print(" true");
+            self.emit.print(");");
+        } else {
+            self.emit_block_ops(block_arc, false);
+        }
     }
 
 

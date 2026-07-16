@@ -803,6 +803,11 @@ RPO 常用于：
 - `is_interior_goto_target` 先查 `INTERIOR_GOTOIN`（Ghidra 模型），回退 in-edge 扫描。
 - 新增 `has_interior_goto`（block.hh:324）查 `INTERIOR_GOTOOUT`。
 
+### 2026-07-16：B3 BlockInfLoop struct
+
+- 新增 `BlockInfLoop` struct（对齐 Ghidra `BlockInfLoop` block.hh:735）：包装单 body 块（自循环），incoming/outgoing/parent/flags。`get_type()` 返回 `BlockType::InfLoop`，`get_ops`/`get_start_addr` 委托 body。
+- printc `emit_structured_infloop` 输出 `do { <body> } while(true);`（对齐 emitBlockInfLoop printc.cc:3097）。
+
 ### 2026-06-25：is_consumed() + 对齐 Ghidra collapseInternal
 
 - FlowBlock::is_consumed() — DEAD flag 检查，对齐 Ghidra sizeIn==0&&sizeOut==0。

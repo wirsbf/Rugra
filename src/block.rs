@@ -1942,6 +1942,61 @@ impl FlowBlock for BlockDoWhile {
     }
 }
 
+/// An infinite loop (`do { ... } while(true);`).
+///
+/// Corresponds to Ghidra's `BlockInfLoop` (block.hh:735). Wraps a single
+/// body block that unconditionally branches back to itself. No condition.
+/// Emitted as `do { <body> } while(true);` (printc.cc:3097 emitBlockInfLoop).
+#[derive(Debug)]
+pub struct BlockInfLoop {
+    pub index: i32,
+    /// The loop body block (the self-looping block collapsed into this node).
+    pub body: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    pub flags: u32,
+}
+
+impl FlowBlock for BlockInfLoop {
+    // RUGRA-GLUE: Rust trait-object downcast glue
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
+    fn get_index(&self) -> i32 { self.index }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
+    fn set_index(&mut self, i: i32) { self.index = i; }
+    // RUGRA-GLUE: Rust trait-object downcast glue
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    // Ghidra: block.hh:737 BlockInfLoop::getType
+    fn get_type(&self) -> BlockType { BlockType::InfLoop }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
+    fn get_flags(&self) -> u32 { self.flags }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
+    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
+    fn size_in(&self) -> usize { self.incoming.len() }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
+    fn size_out(&self) -> usize { self.outgoing.len() }
+    // Ghidra: block.hh:304 FlowBlock::getIn
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    // Ghidra: block.hh:301 FlowBlock::getOut
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
+    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    // RUGRA-GLUE: Rust edge-construction helper
+    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    // Ghidra: block.hh:172 FlowBlock::getStart
+    fn get_start_addr(&self) -> Address { self.body.read().unwrap().get_start_addr() }
+    // Ghidra: block.hh:161 FlowBlock::getParent
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    // RUGRA-GLUE: Rust helper (structured blocks delegate ops to components)
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        self.body.read().unwrap().get_ops()
+    }
+}
+
 /// A structured sequence of blocks (linear fallthrough).
 ///
 /// Corresponds to Ghidra's `BlockList`. Represents blocks that execute

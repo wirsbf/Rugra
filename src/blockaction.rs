@@ -2386,6 +2386,8 @@ impl<'a> CollapseStructure<'a> {
                 bgt.incoming = new_in; bgt.outgoing = new_out;
             } else if let Some(bcond) = nref.downcast_mut::<crate::block::BlockCondition>() {
                 bcond.incoming = new_in; bcond.outgoing = new_out;
+            } else if let Some(binf) = nref.downcast_mut::<crate::block::BlockInfLoop>() {
+                binf.incoming = new_in; binf.outgoing = new_out;
             }
         }
 
@@ -2457,6 +2459,17 @@ impl<'a> CollapseStructure<'a> {
                         }
                     }
                     for e in bcond.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                } else if let Some(binf) = gref.downcast_mut::<crate::block::BlockInfLoop>() {
+                    for e in binf.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in binf.incoming.iter_mut() {
                         if std::sync::Arc::ptr_eq(&e.point, &old_block) {
                             e.point = new_block.clone();
                         }
@@ -2632,6 +2645,39 @@ impl<'a> CollapseStructure<'a> {
         self.update_switch_case_reference(cond_idx, &if_block);
         self.change_count += 1;
         if_block
+    }
+
+    // Ghidra: block.cc:1889 BlockGraph::newBlockInfLoop
+    /// Factory: build a BlockInfLoop collapsing a self-looping body block.
+    /// Mirrors Ghidra newBlockInfLoop (block.cc:1889-1898): identifyInternal
+    /// with nodes={body}, addBlock, NO forceOutputNum (inf loop has 0 out).
+    /// The body is consumed (moved into the BlockInfLoop). Installed at
+    /// install_idx (replacing body's slot).
+    fn new_block_inf_loop(
+        &mut self,
+        body: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        install_idx: usize,
+    ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        let body_idx = body.read().unwrap().get_index();
+        let inf_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(crate::block::BlockInfLoop {
+                index: body_idx,
+                body: body.clone(),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            }));
+        // cc:1895: identifyInternal(ret, {body}). body at install_idx.
+        // Pass empty consumed_indices: the body sits at install_idx and is
+        // handled by identify_internal's install_idx capture. No additional
+        // consumed blocks (the self-loop edge is internal).
+        self.identify_internal(&inf_block, &[], install_idx);
+        self.update_switch_case_reference(body_idx, &inf_block);
+        self.change_count += 1;
+        eprintln!("[BLOCKSTRUCT] inf loop at block {} (body={})",
+            install_idx, body.read().unwrap().get_index());
+        inf_block
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::tryRuleCat
@@ -3377,11 +3423,9 @@ impl<'a> CollapseStructure<'a> {
         let out_idx = block.read().unwrap().get_out(0)
             .map(|e| e.point.read().unwrap().get_index());
         if out_idx != Some(i as i32) { return false; }
-        // cc:1591: graph.newBlockInfLoop(bl).
-        // Rugra: no BlockInfLoop struct yet; mark via flags for emit stage.
-        // The block is already a self-loop; emit will recognize sizeOut==1
-        // + self-edge as `while(1)` or `for(;;)`.
-        eprintln!("[BLOCKSTRUCT] inf loop structured at block {}", i);
+        // cc:1591: graph.newBlockInfLoop(bl). Creates the BlockInfLoop node
+        // wrapping the self-looping body, installed at i.
+        self.new_block_inf_loop(&block, i);
         true
     }
 
