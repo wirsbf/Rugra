@@ -659,14 +659,20 @@ impl PieceNode {
 /// Corresponds to Ghidra's `PcodeOpBank` class in `op.hh`
 #[derive(Debug)]
 pub struct PcodeOpBank {
-    /// All operations sorted by sequence number
+    /// All operations sorted by sequence number (Ghidra optree).
     pub optree: BTreeSet<PcodeOpRef>,
-    /// List of operations considered "alive"
+    /// List of operations considered "alive" (Ghidra alivelist).
     pub alivelist: Vec<PcodeOpRef>,
-    /// List of operations considered "dead"
+    /// List of operations considered "dead" (Ghidra deadlist).
     pub deadlist: Vec<PcodeOpRef>,
+    /// Lists of ops by specific opcode (Ghidra op.hh:293-296).
+    /// Used for fast iteration over STORE/LOAD/RETURN/CALLOTHER ops.
+    pub storelist: Vec<PcodeOpRef>,
+    pub loadlist: Vec<PcodeOpRef>,
+    pub returnlist: Vec<PcodeOpRef>,
+    pub useroplist: Vec<PcodeOpRef>,
 
-    /// Internal unique ID counter for sequence numbers within a block
+    /// Internal unique ID counter for sequence numbers (Ghidra uniqid).
     uniqid: u32,
 }
 
@@ -677,6 +683,10 @@ impl PcodeOpBank {
             optree: BTreeSet::new(),
             alivelist: Vec::new(),
             deadlist: Vec::new(),
+            storelist: Vec::new(),
+            loadlist: Vec::new(),
+            returnlist: Vec::new(),
+            useroplist: Vec::new(),
             uniqid: 0,
         }
     }
@@ -719,10 +729,55 @@ impl PcodeOpBank {
         }
     }
 
+    // Ghidra: op.cc:881 PcodeOpBank::addToCodeList
+    /// Add op to opcode-specific list (STORE/LOAD/RETURN/CALLOTHER).
+    /// Faithful to `addToCodeList` (op.cc:881-900).
+    pub fn add_to_code_list(&mut self, op: &PcodeOpRef) {
+        let opc = op.0.read().unwrap().opcode;
+        match opc {
+            OpCode::CPUI_STORE => self.storelist.push(op.clone()),
+            OpCode::CPUI_LOAD => self.loadlist.push(op.clone()),
+            OpCode::CPUI_RETURN => self.returnlist.push(op.clone()),
+            OpCode::CPUI_CALLOTHER => self.useroplist.push(op.clone()),
+            _ => {}
+        }
+    }
+
+    // Ghidra: op.cc:905 PcodeOpBank::removeFromCodeList
+    /// Remove op from its opcode-specific list.
+    /// Faithful to `removeFromCodeList` (op.cc:905-924).
+    pub fn remove_from_code_list(&mut self, op: &PcodeOpRef) {
+        let opc = op.0.read().unwrap().opcode;
+        let ptr = Arc::as_ptr(&op.0);
+        match opc {
+            OpCode::CPUI_STORE => self.storelist.retain(|x| Arc::as_ptr(&x.0) != ptr),
+            OpCode::CPUI_LOAD => self.loadlist.retain(|x| Arc::as_ptr(&x.0) != ptr),
+            OpCode::CPUI_RETURN => self.returnlist.retain(|x| Arc::as_ptr(&x.0) != ptr),
+            OpCode::CPUI_CALLOTHER => self.useroplist.retain(|x| Arc::as_ptr(&x.0) != ptr),
+            _ => {}
+        }
+    }
+
+    // Ghidra: op.cc:926 PcodeOpBank::clearCodeLists
+    pub fn clear_code_lists(&mut self) {
+        self.storelist.clear();
+        self.loadlist.clear();
+        self.returnlist.clear();
+        self.useroplist.clear();
+    }
+
     // Ghidra: op.hh:312 PcodeOpBank::changeOpcode
+    /// Change opcode: remove from old code list, set new opcode, add to new list.
+    /// Faithful to `changeOpcode` (op.cc:1005-1012).
     pub fn change_opcode(&mut self, op: PcodeOpRef, new_opc: OpCode) {
-        let mut op_borrow = op.0.write().unwrap();
-        op_borrow.opcode = new_opc;
+        let old_opc = op.0.read().unwrap().opcode;
+        // cc:1008: if old opcode was in a code list, remove it.
+        if old_opc != new_opc {
+            self.remove_from_code_list(&op);
+        }
+        op.0.write().unwrap().opcode = new_opc;
+        // cc:1011: add to new code list.
+        self.add_to_code_list(&op);
     }
 
     // Ghidra: op.hh:311 PcodeOpBank::destroyDead
@@ -740,6 +795,7 @@ impl PcodeOpBank {
             .retain(|x| Arc::as_ptr(&x.0) != Arc::as_ptr(&op.0));
         self.deadlist
             .retain(|x| Arc::as_ptr(&x.0) != Arc::as_ptr(&op.0));
+        self.remove_from_code_list(&op);
     }
 
     // Ghidra: op.hh:320 PcodeOpBank::findOp
@@ -753,10 +809,12 @@ impl PcodeOpBank {
     }
 
     // Ghidra: op.hh:303 PcodeOpBank::clear
+    // Ghidra: op.cc:1194 PcodeOpBank::clear
     pub fn clear(&mut self) {
         self.optree.clear();
         self.alivelist.clear();
         self.deadlist.clear();
+        self.clear_code_lists();
         self.uniqid = 0;
     }
 
