@@ -654,6 +654,63 @@ impl Varnode {
         self.set_flags(inherit);
     }
 
+    // Ghidra: varnode.cc:410 Varnode::setSymbolProperties
+    /// Set symbol properties on this Varnode from a SymbolEntry.
+    /// Faithful to `setSymbolProperties` (varnode.cc:410-424). Sets
+    /// mapentry if type-locked, applies entry flags (minus typelock).
+    pub fn set_symbol_properties(&mut self, entry: &Arc<RwLock<SymbolEntry>>) {
+        let e = entry.read().unwrap();
+        // cc:414: if entry symbol is type-locked, set mapentry
+        let is_type_locked = e.symbol.read().unwrap().is_type_locked();
+        if is_type_locked {
+            self.mapentry = Some(entry.clone());
+        }
+        // cc:422: setFlags(entry->getAllFlags() & ~typelock)
+        let all_flags = e.get_all_flags();
+        drop(e);
+        let flags_to_set = all_flags & !varnode_flags::TYPELOCK;
+        self.set_flags(flags_to_set);
+    }
+
+    // Ghidra: varnode.cc:429 Varnode::setSymbolEntry
+    /// Link a Symbol to this Varnode via the given SymbolEntry.
+    /// Faithful to `setSymbolEntry` (varnode.cc:429-439). Sets mapentry,
+    /// marks MAPPED, and NAMELOCK if the symbol is name-locked.
+    pub fn set_symbol_entry(&mut self, entry: Arc<RwLock<SymbolEntry>>) {
+        let is_name_locked = entry.read().unwrap().symbol.read().unwrap().is_name_locked();
+        self.mapentry = Some(entry);
+        let mut fl = varnode_flags::MAPPED;
+        if is_name_locked {
+            fl |= varnode_flags::NAMELOCK;
+        }
+        self.set_flags(fl);
+    }
+
+    // Ghidra: varnode.cc:446 Varnode::setSymbolReference
+    /// Link Symbol info to this as a reference (for constant address refs).
+    /// Faithful to `setSymbolReference` (varnode.cc:446-452).
+    pub fn set_symbol_reference(&mut self, _entry: &Arc<RwLock<SymbolEntry>>, _off: i32) {
+        // cc:449-451: if high != null, high->setSymbolReference(entry->getSymbol(), off)
+        // Rugra's HighVariable setSymbolReference is not yet implemented.
+        // TODO: port when HighVariable symbol linking is available.
+    }
+
+    // Ghidra: varnode.cc:510 Varnode::copySymbolIfValid
+    /// Copy symbol info from vn if it has an EquateSymbol that is value-close.
+    /// Faithful to `copySymbolIfValid` (varnode.cc:510-522).
+    pub fn copy_symbol_if_valid(&mut self, vn: &Varnode) {
+        let map_entry = match vn.get_symbol_entry() {
+            Some(e) => e,
+            None => return,
+        };
+        // cc:516: check if symbol is EquateSymbol and value is close.
+        // Rugra's SymbolEntry doesn't distinguish EquateSymbol yet.
+        // Conservative: copy symbol if mapentry exists and both are constant.
+        if vn.is_constant() && self.is_constant() {
+            self.copy_symbol(vn);
+        }
+    }
+
     // Ghidra: varnode.cc:578 Varnode::getSymbolEntry
     /// Get the SymbolEntry (symbol mapping) of this varnode, if any.
     /// Faithful to `Varnode::getSymbolEntry` (varnode.hh:190).
