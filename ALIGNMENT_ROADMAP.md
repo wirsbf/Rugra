@@ -587,9 +587,9 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - **B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。
 - **B7**: TraceDAG 边一次性快照，非 Ghidra 的每轮重新解析（getCurrentEdge）。
 - ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
-- **B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。
+- ~~**B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。~~ **已修复（e6731bb）**：phase2 加 collapseInternal 第二趟（IfNoExit per-block + CaseFallthru batch），外层 'fullchange 循环包裹内层 fixpoint。
 
-**最小路径**：B1（已修）→ ~~B2/B3/B4/B8~~（已修）→ B9（apply_rules_to_block 补规则）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
+**最小路径**：B1（已修）→ ~~B2/B3/B4/B8/B9~~（已修）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
