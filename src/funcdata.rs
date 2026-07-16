@@ -598,6 +598,26 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata_op.cc:632 Funcdata::getFirstReturnOp
+    /// Return the first non-dead, non-halt CPUI_RETURN op, or None.
+    /// Faithful to `getFirstReturnOp` (funcdata_op.cc:632-644).
+    pub fn get_first_return_op(&self) -> Option<crate::op::PcodeOpRef> {
+        // Use returnlist (PcodeOpBank code list for RETURN ops).
+        for retop in &self.obank.returnlist {
+            let op = retop.0.read().unwrap();
+            if op.is_dead() { continue; }
+            // cc:640: getHaltType()!=0 → skip artificial halts.
+            let halt_mask = crate::op::pcodeop_flags::HALT
+                | crate::op::pcodeop_flags::BADINSTRUCTION
+                | crate::op::pcodeop_flags::UNIMPLEMENTED
+                | crate::op::pcodeop_flags::NORETURN
+                | crate::op::pcodeop_flags::MISSING;
+            if (op.flags & halt_mask) != 0 { continue; }
+            return Some(retop.clone());
+        }
+        None
+    }
+
     // Ghidra: funcdata.cc:34 Funcdata::newUnique
     /// Create a new temporary Varnode (no defining op). Faithful to
     /// `Funcdata::newUnique` (funcdata.hh:288).
