@@ -583,13 +583,13 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - ~~**B2**: 缺 `new_block_condition`/`new_block_if`/etc. 工厂层~~ **已修复（37f99a2）**。
 - ~~**B3**: `try_rule_inf_loop`（blockaction.rs:3261）不创建 BlockInfLoop（只 eprintln）。缺 BlockInfLoop struct。~~ **已修复（c77a545）**：新增 BlockInfLoop struct + new_block_inf_loop 工厂 + try_rule_inf_loop 真正创建节点 + printc emit_structured_infloop。
 - ~~**B4**: `set_goto_branch` 不完整~~ **已修复（0377b4c）**：现做 Ghidra 3 件事（edge flag + source INTERIOR_GOTOOUT + target INTERIOR_GOTOIN）。
-- **B5**: 缺 `update_loop_body` 状态机（cc:1193-1253）+ loopbodyiter 推进。
-- **B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。
-- **B7**: TraceDAG 边一次性快照，非 Ghidra 的每轮重新解析（getCurrentEdge）。
+- ~~**B5**: 缺 `update_loop_body` 状态机（cc:1193-1253）+ loopbodyiter 推进。~~ **已修复（952eeb7）**：update_loop_body + select_goto 状态机实现，接入 run_goto_cascade 为首选路径。
+- ~~**B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。~~ **已修复（952eeb7）**：5 个状态字段加入 CollapseStructure。
+- ~~**B7**: TraceDAG 边一次性快照，非 Ghidra 的每轮重新解析（getCurrentEdge）。~~ **已修复（952eeb7）**：FloatingEdge::get_current_edge 按轮重新解析。
 - ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
 - ~~**B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。~~ **已修复（e6731bb）**：phase2 加 collapseInternal 第二趟（IfNoExit per-block + CaseFallthru batch），外层 'fullchange 循环包裹内层 fixpoint。
 
-**最小路径**：B1（已修）→ ~~B2/B3/B4/B8/B9~~（已修）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
+**最小路径**：B1（已修）→ ~~B2/B3/B4/B5/B6/B7/B8/B9~~（**全部已修**）→ 重写 collapse_all 为 5 步（所有前置依赖就绪）。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
