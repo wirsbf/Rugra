@@ -482,18 +482,20 @@ impl ActionRestructureVarnode {
 impl Action for ActionRestructureVarnode {
     // Ghidra: coreaction.cc:2274 ActionRestructureVarnode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2294).
-        // Ghidra's return value is ALWAYS 0 (line 2294): restructureVarnode is
-        // a structural side-effect Action that does NOT drive repeatapply. The
-        // internal `count += 1` (line 2282) is for statistics/breakpoints only.
-        // Rugra previously returned CHANGE, which caused fullloop repeatapply
-        // to infinite-loop because every pass reported a change.
+        // Ghidra cc:2279: aliasyes = (numpass != 0).
+        // Alias calculations are not reliable on the first pass.
+        let aliasyes = self.numpass != 0;
         let mut scope = crate::varmap::ScopeLocal::new();
+        // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
+        // Rugra's restructure_varnode doesn't yet take aliasyes (the
+        // markUnaliased aliasyes gate is inside restructure, which is
+        // always-on in Rugra). TODO: thread aliasyes through.
         scope.restructure_varnode(fd);
         fd.scope = Some(scope);
-        // syncVarnodesWithSymbols (coreaction.cc:2281): mark Stack-space
-        // varnodes overlapping scope symbols as mapped.
-        let _ = fd.sync_varnodes_with_symbols(false, false);
+        // Ghidra cc:2281: data.syncVarnodesWithSymbols(l1, false, aliasyes).
+        let _ = fd.sync_varnodes_with_symbols(false, aliasyes);
+        // Ghidra cc:2284-2285: if (data.isJumptableRecoveryOn()) protectSwitchPaths(data).
+        // TODO: protectSwitchPaths needs jumptable recovery state tracking.
         self.numpass += 1;
         Ok(action_status::NO_CHANGE)
     }
