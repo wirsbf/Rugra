@@ -538,6 +538,41 @@ impl PcodeOp {
         self.flags |= extra;
     }
 
+    // Ghidra: op.cc:323 PcodeOp::nextOp
+    pub fn next_op_in_flow(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
+        let self_seq = &self.start;
+        let mut found = false;
+        for r in &bank.alivelist {
+            if found { return Some(r.clone()); }
+            if &r.0.read().unwrap().start == self_seq { found = true; }
+        }
+        None
+    }
+
+    // Ghidra: op.cc:344 PcodeOp::previousOp
+    pub fn previous_op_in_block(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
+        let self_seq = &self.start;
+        let mut prev: Option<PcodeOpRef> = None;
+        for r in &bank.alivelist {
+            if &r.0.read().unwrap().start == self_seq { return prev; }
+            prev = Some(r.clone());
+        }
+        None
+    }
+
+    // Ghidra: op.cc:360 PcodeOp::target
+    pub fn target_op(&self, bank: &PcodeOpBank) -> Option<PcodeOpRef> {
+        let self_seq = &self.start;
+        let mut found_self = false;
+        for r in &bank.alivelist {
+            if &r.0.read().unwrap().start == self_seq { found_self = true; }
+            if found_self && (r.0.read().unwrap().flags & pcodeop_flags::STARTMARK) != 0 {
+                return Some(r.clone());
+            }
+        }
+        None
+    }
+
     // Ghidra: op.cc:115 PcodeOp::isCollapsible
     pub fn is_collapsible(&self) -> bool {
         if (self.flags & pcodeop_flags::NOCOLLAPSE) != 0 {

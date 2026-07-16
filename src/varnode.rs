@@ -1126,6 +1126,33 @@ impl Varnode {
         }
     }
 
+    // Ghidra: varnode.cc:121 Varnode::intersects(const Varnode&)
+    /// Check if this Varnode intersects another. Faithful to
+    /// `intersects(const Varnode&)` (varnode.cc:121-134).
+    pub fn intersects(&self, op: &Varnode) -> bool {
+        if self.address_space != op.address_space { return false; }
+        if self.address_space == AddressSpace::Const { return false; }
+        let a = self.loc.as_u64();
+        let b = op.loc.as_u64();
+        if b < a {
+            return a < b.wrapping_add(op.size as u64);
+        }
+        b < a.wrapping_add(self.size as u64)
+    }
+
+    // Ghidra: varnode.cc:140 Varnode::intersects(const Address&, int4)
+    /// Check if this Varnode intersects the given Address range.
+    /// Faithful to `intersects(const Address&, int4)` (varnode.cc:140-153).
+    pub fn intersects_addr(&self, op2loc: Address, op2size: usize) -> bool {
+        if self.address_space == AddressSpace::Const { return false; }
+        let a = self.loc.as_u64();
+        let b = op2loc.as_u64();
+        if b < a {
+            return a < b.wrapping_add(op2size as u64);
+        }
+        b < a.wrapping_add(self.size as u64)
+    }
+
     // Ghidra: varnode.cc:977 Varnode::copyShadow
     /// Check if this Varnode and `op2` are copies of the same source.
     /// Faithful to `Varnode::copyShadow` (varnode.cc:977-995): trace both
