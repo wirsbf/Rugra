@@ -4047,9 +4047,12 @@ impl Action for ActionDirectWrite {
                     // COPY and STACK_STORE cases deferred (need is_stack_store infrastructure)
                 }
             } else if vn_rg.is_constant() {
-                drop(vn_rg);
-                vn_arc.write().unwrap().set_direct_write();
-                worklist.push(vn_arc.clone());
+                // Ghidra cc:1411: if (!vn->isIndirectZero())
+                if !vn_rg.is_indirect_zero() {
+                    drop(vn_rg);
+                    vn_arc.write().unwrap().set_direct_write();
+                    worklist.push(vn_arc.clone());
+                }
             }
         }
 
@@ -4065,7 +4068,17 @@ impl Action for ActionDirectWrite {
                 };
                 if !out_vn.read().unwrap().is_direct_write() {
                     out_vn.write().unwrap().set_direct_write();
-                    worklist.push(out_vn);
+                    // Ghidra cc:1428: for call-based INDIRECTs, output is marked
+                    // but does not propagate unless propagateIndirect || isIndirectStore.
+                    // Rugra lacks propagateIndirect flag (TODO); use conservative
+                    // true (propagate through INDIRECTs), which matches the
+                    // protorecovery_b registration (propagateIndirect=false would
+                    // stop propagation, but Rugra doesn't have the flag yet).
+                    let is_ind = desc_op_arc.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+                    let is_store = desc_op_arc.read().unwrap().is_indirect_store();
+                    if !is_ind || is_store {
+                        worklist.push(out_vn);
+                    }
                 }
             }
         }
