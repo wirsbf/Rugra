@@ -3865,166 +3865,24 @@ impl<'a> CollapseStructure<'a> {
     ///    \ /
     ///     D  (both B and C have 1 out → D)
     /// ```
+    // Ghidra: blockaction.cc:1854 CollapseStructure::collapseConditions
+    /// Run ruleBlockOr on every block. Faithful to `collapseConditions`
+    /// (blockaction.cc:1854-1865): simply iterates all blocks and calls
+    /// ruleBlockOr on each. Previously Rugra had a self-invented
+    /// triangle/diamond detection algorithm here.
     fn collapse_conditions(&mut self) {
-        // Collect candidate indices first to avoid borrow conflicts
         let size = self.graph.get_size();
-        let mut replacements: Vec<(usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
-
         for i in 0..size {
-            let block = match self.graph.get_block(i) {
-                Some(b) => b,
-                None => continue,
-            };
-
-            let b = block.read().unwrap();
-            if b.get_type() != crate::block::BlockType::Basic
-               && b.get_type() != crate::block::BlockType::Copy { continue; }
-            if b.size_out() != 2 {
-                continue;
-            }
-
-            // Check that this block ends with a CBRANCH
-            let ops = b.get_ops();
-            let has_cbranch = ops.last().map_or(false, |op_ref| {
-                let op = op_ref.0.read().unwrap();
-                op.opcode == OpCode::CPUI_CBRANCH
-            });
-            if !has_cbranch {
-                continue;
-            }
-
-            let true_edge = match b.get_out(0) { Some(e) => e, None => continue };
-            let false_edge = match b.get_out(1) { Some(e) => e, None => continue };
-            let true_block = true_edge.point.clone();
-            let false_block = false_edge.point.clone();
-            let true_idx = true_block.read().unwrap().get_index();
-            let false_idx = false_block.read().unwrap().get_index();
-            let cond_idx = b.get_index();
-            drop(b); // release read lock
-
-            // --- Try Triangle: true_block → false_block (if-then, no else) ---
-            {
-                let tb = true_block.read().unwrap();
-                if tb.size_out() == 1 && tb.size_in() == 1 {
-                    if let Some(edge) = tb.get_out(0) {
-                        let target_idx = edge.point.read().unwrap().get_index();
-                        if target_idx == false_idx {
-                            drop(tb);
-                            // Triangle match: condition=block, if_body=true_block, merge=false_block
-                            // CBRANCH out(0)=true edge → if_body is the taken branch → no negation
-                            // BlockIf's out-edge points to the merge block (false_block) itself,
-                            // so control flow continues to it after the if.
-                            let merge_outs: Vec<crate::block::BlockEdge> = vec![
-                                crate::block::BlockEdge::new(false_block.clone(), 0),
-                            ];
-                            let mut bif = BlockIf {
-                                index: cond_idx,
-                                condition: block.clone(),
-                                if_body: true_block.clone(),
-                                else_body: None,
-                                negated: false,
-                                incoming: Vec::new(),
-                                outgoing: merge_outs,
-                                parent: None,
-                                goto_target: None,
-                                flags: 0,
-                            };
-                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(bif));
-                            replacements.push((i, if_block));
-                            self.change_count += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            // --- Try Triangle reverse: false_block → true_block ---
-            {
-                let fb = false_block.read().unwrap();
-                if fb.size_out() == 1 && fb.size_in() == 1 {
-                    if let Some(edge) = fb.get_out(0) {
-                        let target_idx = edge.point.read().unwrap().get_index();
-                        if target_idx == true_idx {
-                            drop(fb);
-                            // Triangle-reverse: if_body is the FALSE edge block (out(1)).
-                            // The CBRANCH condition is written for the TRUE edge, so we must
-                            // negate it to correctly gate the false-edge body.
-                            // BlockIf's out-edge points to the merge block (true_block) itself.
-                            let merge_outs: Vec<crate::block::BlockEdge> = vec![
-                                crate::block::BlockEdge::new(true_block.clone(), 0),
-                            ];
-                            let mut bif = BlockIf {
-                                index: cond_idx,
-                                condition: block.clone(),
-                                if_body: false_block.clone(),
-                                else_body: None,
-                                negated: true,
-                                incoming: Vec::new(),
-                                outgoing: merge_outs,
-                                parent: None,
-                                goto_target: None,
-                                flags: 0,
-                            };
-                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(bif));
-                            replacements.push((i, if_block));
-                            self.change_count += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            // --- Try Diamond: both true_block and false_block → same merge block D ---
-            {
-                let tb = true_block.read().unwrap();
-                let fb = false_block.read().unwrap();
-                if tb.size_out() == 1 && fb.size_out() == 1
-                    && tb.size_in() == 1 && fb.size_in() == 1
-                {
-                    let t_target = tb.get_out(0).map(|e| e.point.read().unwrap().get_index());
-                    let f_target = fb.get_out(0).map(|e| e.point.read().unwrap().get_index());
-                    if let (Some(tt), Some(ft)) = (t_target, f_target) {
-                        if tt == ft {
-                            drop(tb);
-                            drop(fb);
-                            // Diamond match: if_body=true edge, else_body=false edge → no negation
-                            // BlockIf's out-edge points to the merge block (D) itself.
-                            let merge_blk = self.graph.get_block(tt as usize);
-                            let merge_outs: Vec<crate::block::BlockEdge> = if let Some(mb) = merge_blk {
-                                vec![crate::block::BlockEdge::new(mb, 0)]
-                            } else { Vec::new() };
-                            let mut bif = BlockIf {
-                                index: cond_idx,
-                                condition: block.clone(),
-                                if_body: true_block.clone(),
-                                else_body: Some(false_block.clone()),
-                                negated: false,
-                                incoming: Vec::new(),
-                                outgoing: merge_outs,
-                                parent: None,
-                                goto_target: None,
-                                flags: 0,
-                            };
-                            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                Arc::new(RwLock::new(bif));
-                            replacements.push((i, if_block));
-                            self.change_count += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Apply replacements
-        for (idx, replacement) in replacements {
-            if idx < self.graph.blocks.len() {
-                self.graph.blocks[idx] = replacement;
-            }
+            self.try_rule_or(i);
         }
     }
+
+    // Ghidra: blockaction.hh:46 LoopBody::collapseBoolConditions
+    /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
+    ///
+    /// Implements Ghidra's `ruleBlockOr` from `blockaction.cc`.
+    ///
+    /// AND: A→true→B, A→false→C, B→false→C  ==>  if(a && b)
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseBoolConditions
     /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
