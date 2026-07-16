@@ -690,8 +690,9 @@ impl<'a> CollapseStructure<'a> {
             }
             if std::time::Instant::now() > deadline { break; }
             self.collapse_conditions();
-            if std::time::Instant::now() > deadline { break; }
-            self.collapse_bool_conditions();
+            // collapse_bool_conditions removed (B8): it was a hand-rolled
+            // duplicate of ruleBlockOr (try_rule_or), which the fixpoint
+            // collapse_conditions above now handles correctly via the factory.
             // Ghidra collapseInternal rules (cc:1797-1828) — try per-block.
             // These are the Ghidra-faithful rule methods that eventually
             // replace the self-invented phase methods above.
@@ -4015,169 +4016,34 @@ impl<'a> CollapseStructure<'a> {
     /// (blockaction.cc:1854-1865): simply iterates all blocks and calls
     /// ruleBlockOr on each. Previously Rugra had a self-invented
     /// triangle/diamond detection algorithm here.
+    // Ghidra: blockaction.cc:1854 CollapseStructure::collapseConditions
+    /// Faithful to `collapseConditions` (blockaction.cc:1854-1865): a do-while
+    /// fixpoint loop that repeatedly scans all blocks calling ruleBlockOr
+    /// (try_rule_or) until no change. A single pass misses OR-chains of
+    /// length >2; the fixpoint ensures transitive collapsing
+    /// (e.g. ((a||b)||c) requires 2 passes).
     fn collapse_conditions(&mut self) {
-        let size = self.graph.get_size();
-        for i in 0..size {
-            self.try_rule_or(i);
+        loop {
+            let mut change = false;
+            let size = self.graph.get_size();
+            for i in 0..size {
+                if self.try_rule_or(i) {
+                    change = true;
+                }
+            }
+            if !change { break; }
         }
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::collapseBoolConditions
-    /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
-    ///
-    /// Implements Ghidra's `ruleBlockOr` from `blockaction.cc`.
-    ///
-    /// AND: A→true→B, A→false→C, B→false→C  ==>  if(a && b)
-
-    // Ghidra: blockaction.hh:46 LoopBody::collapseBoolConditions
-    /// Collapse boolean short-circuit patterns into `BlockCondition` (&&/||).
-    ///
-    /// Implements Ghidra's `ruleBlockOr` from `blockaction.cc`.
-    ///
-    /// AND: A→true→B, A→false→C, B→false→C  ==>  if(a && b)
-    /// OR:  A→false→B, A→true→C, B→true→C   ==>  if(a || b)
+    // RUGRA-GLUE: collapse_bool_conditions (superseded; was self-invented duplicate of ruleBlockOr)
+    /// DEPRECATED (B8): this was a hand-rolled duplicate of Ghidra's
+    /// ruleBlockOr (blockaction.cc:1321) implemented via raw edge inspection
+    /// and deferred replacement collection. It is now superseded by
+    /// collapse_conditions (the fixpoint ruleBlockOr loop) which uses the
+    /// new_block_condition factory for correct opc/edge handling. Kept as a
+    /// thin delegate so any future caller routes through the faithful path.
     fn collapse_bool_conditions(&mut self) {
-        let size = self.graph.get_size();
-        let mut replacements: Vec<(usize, usize, Arc<RwLock<dyn FlowBlock + Send + Sync>>)> = Vec::new();
-
-        for i in 0..size {
-            let block_a = match self.graph.get_block(i) {
-                Some(b) => b,
-                None => continue,
-            };
-
-            let a = block_a.read().unwrap();
-            if a.get_type() != crate::block::BlockType::Basic
-               && a.get_type() != crate::block::BlockType::Copy { continue; }
-            if a.size_out() != 2 {
-                continue;
-            }
-
-            // A must end with CBRANCH
-            let ops_a = a.get_ops();
-            let has_cbranch = ops_a.last().map_or(false, |op_ref| {
-                let op = op_ref.0.read().unwrap();
-                op.opcode == OpCode::CPUI_CBRANCH
-            });
-            if !has_cbranch {
-                continue;
-            }
-
-            // out(0) = true edge, out(1) = false edge (Ghidra convention)
-            let true_edge_a = match a.get_out(0) { Some(e) => e, None => continue };
-            let false_edge_a = match a.get_out(1) { Some(e) => e, None => continue };
-            let true_target_a = true_edge_a.point.clone();
-            let false_target_a = false_edge_a.point.clone();
-            let true_idx_a = true_target_a.read().unwrap().get_index();
-            let false_idx_a = false_target_a.read().unwrap().get_index();
-            let a_idx = a.get_index();
-            drop(a);
-
-            // Try AND pattern: A→true→B (B has CBRANCH, 1 in), A→false→C, B→false→C
-            {
-                let b_block = true_target_a.clone();
-                let b = b_block.read().unwrap();
-                if b.size_in() == 1 && b.size_out() == 2 {
-                    let b_ops = b.get_ops();
-                    let b_has_cbranch = b_ops.last().map_or(false, |op_ref| {
-                        let op = op_ref.0.read().unwrap();
-                        op.opcode == OpCode::CPUI_CBRANCH
-                    });
-                    if b_has_cbranch {
-                        let false_edge_b = b.get_out(1);
-                         if let Some(ref fe_b) = false_edge_b {
-                            let false_idx_b = fe_b.point.read().unwrap().get_index();
-                            if false_idx_b == false_idx_a {
-                                // AND match: both false edges → same target
-                                // Outgoing: out(0)=B's true target, out(1)=shared false target
-                                let true_edge_b = b.get_out(0);
-                                let b_idx = b.get_index();
-                                drop(b);
-                                let mut out_edges = Vec::new();
-                                if let Some(te_b) = true_edge_b {
-                                    out_edges.push(te_b);
-                                }
-                                out_edges.push(fe_b.clone());
-                                let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                    Arc::new(RwLock::new(BlockCondition {
-                                        index: a_idx,
-                                        op_type: BoolOp::And,
-                                        first: block_a.clone(),
-                                        second: b_block.clone(),
-                                        incoming: Vec::new(),
-                                        outgoing: out_edges,
-                                        parent: None,
-                                        flags: 0,
-                                    }));
-                                replacements.push((i, b_idx as usize, cond_block));
-                                self.change_count += 1;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                drop(b);
-            }
-
-            // Try OR pattern: A→false→B (B has CBRANCH, 1 in), A→true→C, B→true→C
-            {
-                let b_block = false_target_a.clone();
-                let b = b_block.read().unwrap();
-                if b.size_in() == 1 && b.size_out() == 2 {
-                    let b_ops = b.get_ops();
-                    let b_has_cbranch = b_ops.last().map_or(false, |op_ref| {
-                        let op = op_ref.0.read().unwrap();
-                        op.opcode == OpCode::CPUI_CBRANCH
-                    });
-                    if b_has_cbranch {
-                        let true_edge_b = b.get_out(0);
-                        if let Some(ref te_b) = true_edge_b {
-                            let true_idx_b = te_b.point.read().unwrap().get_index();
-                            if true_idx_b == true_idx_a {
-                                // OR match: both true edges → same target
-                                // Outgoing: out(0)=shared true target, out(1)=B's false target
-                                let false_edge_b = b.get_out(1);
-                                let b_idx = b.get_index();
-                                drop(b);
-                                let mut out_edges = Vec::new();
-                                out_edges.push(te_b.clone());
-                                if let Some(fe_b) = false_edge_b {
-                                    out_edges.push(fe_b);
-                                }
-                                let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                                    Arc::new(RwLock::new(BlockCondition {
-                                        index: a_idx,
-                                        op_type: BoolOp::Or,
-                                        first: block_a.clone(),
-                                        second: b_block.clone(),
-                                        incoming: Vec::new(),
-                                        outgoing: out_edges,
-                                        parent: None,
-                                        flags: 0,
-                                    }));
-                                replacements.push((i, b_idx as usize, cond_block));
-                                self.change_count += 1;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                drop(b);
-            }
-        }
-
-        // Apply replacements: replace A's slot, mark B's slot as absorbed
-        for (a_slot, b_idx, replacement) in replacements {
-            if a_slot < self.graph.blocks.len() {
-                self.graph.blocks[a_slot] = replacement;
-            }
-            // Mark B as absorbed by replacing with a dummy empty basic block
-            if (b_idx as usize) < self.graph.blocks.len() {
-                let dummy: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                    Arc::new(RwLock::new(BlockBasic::new(b_idx as i32, crate::address::Address::new(0))));
-                self.graph.blocks[b_idx as usize] = dummy;
-            }
-        }
+        self.collapse_conditions();
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseSequences
