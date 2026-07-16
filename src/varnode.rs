@@ -1805,7 +1805,65 @@ impl VarnodeBank {
         vn2.loc = vn1.loc;
     }
 
-    // Ghidra: varnode.cc:1831 VarnodeBank::beginDef
+    // Ghidra: varnode.cc:1831 VarnodeBank::beginDef(uint4 fl)
+    /// Beginning of defined Varnodes with given flags. Faithful to
+    /// `beginDef(uint4 fl)` (varnode.cc:1831-1867). Filters by flag class.
+    pub fn begin_def_fl(&self, fl: u32) -> impl Iterator<Item = &VarnodeDefRef> {
+        self.def_tree.iter().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            match fl {
+                0 => vn.is_input(),
+                1 => vn.is_written(),
+                _ => true,
+            }
+        })
+    }
+
+    // Ghidra: varnode.cc:1869 VarnodeBank::endDef(uint4 fl)
+    pub fn end_def_fl(&self, _fl: u32) -> std::collections::btree_set::Iter<'_, VarnodeDefRef> {
+        self.def_tree.iter()
+    }
+
+    // Ghidra: varnode.cc:1908 VarnodeBank::beginDef(uint4 fl, const Address&)
+    /// Beginning of defined Varnodes at a specific address.
+    pub fn begin_def_addr(&self, fl: u32, addr: Address) -> impl Iterator<Item = &VarnodeDefRef> {
+        self.def_tree.iter().filter(move |v| {
+            let vn = v.0.read().unwrap();
+            let flag_ok = match fl {
+                0 => vn.is_input(),
+                1 => vn.is_written(),
+                _ => true,
+            };
+            flag_ok && vn.loc.as_u64() >= addr.as_u64()
+        })
+    }
+
+    // Ghidra: varnode.cc:1942 VarnodeBank::endDef(uint4 fl, const Address&)
+    pub fn end_def_addr(&self, _fl: u32, addr: Address) -> impl Iterator<Item = &VarnodeDefRef> {
+        self.def_tree.iter().filter(move |v| {
+            v.0.read().unwrap().loc.as_u64() > addr.as_u64()
+        })
+    }
+
+    // Ghidra: varnode.cc:1791 VarnodeBank::overlapLoc
+    /// Find overlapping varnodes in loc_tree for a given iterator.
+    /// Faithful to `overlapLoc` (varnode.cc:1791-1830).
+    pub fn overlap_loc(&self, target_addr: Address, target_size: usize) -> Vec<Arc<RwLock<Varnode>>> {
+        let mut result = Vec::new();
+        let target_end = target_addr.as_u64().wrapping_add(target_size as u64);
+        for loc_ref in &self.loc_tree {
+            let vn = loc_ref.0.read().unwrap();
+            let vn_start = vn.loc.as_u64();
+            let vn_end = vn_start.wrapping_add(vn.get_size() as u64);
+            if vn_start < target_end && target_addr.as_u64() < vn_end {
+                drop(vn);
+                result.push(loc_ref.0.clone());
+            }
+        }
+        result
+    }
+
+    // Ghidra: varnode.cc:1831 VarnodeBank::beginDef (no-flag version)
     pub fn begin_def(&self) -> std::collections::btree_set::Iter<'_, VarnodeDefRef> {
         self.def_tree.iter()
     }
