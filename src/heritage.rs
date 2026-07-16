@@ -134,7 +134,7 @@ impl LocationMap {
 /// Corresponds to Ghidra's `PriorityQueue`
 #[derive(Debug)]
 pub struct PriorityQueue {
-    pub queue: Vec<Vec<Arc<RwLock<BlockBasic>>>>,
+    pub queue: Vec<Vec<i32>>,
     pub curdepth: i32,
 }
 
@@ -148,29 +148,31 @@ impl PriorityQueue {
     }
 
     // Ghidra: heritage.cc:142 PriorityQueue::reset
-    pub fn reset(&mut self, maxdepth: usize) {
+    pub fn reset(&mut self, maxdepth: i32) {
         self.queue.clear();
-        self.queue.resize_with(maxdepth + 1, Vec::new);
+        self.queue.resize_with((maxdepth + 1) as usize, Vec::new);
         self.curdepth = -1;
     }
 
     // Ghidra: heritage.cc:154 PriorityQueue::insert
-    pub fn insert(&mut self, bl: Arc<RwLock<BlockBasic>>, depth: i32) {
+    pub fn insert(&mut self, bl_idx: i32, depth: i32) {
         if depth > self.curdepth {
             self.curdepth = depth;
         }
-        self.queue[depth as usize].push(bl);
+        if depth >= 0 && (depth as usize) < self.queue.len() {
+            self.queue[depth as usize].push(bl_idx);
+        }
     }
 
     // Ghidra: heritage.cc:166 PriorityQueue::extract
-    pub fn extract(&mut self) -> Option<Arc<RwLock<BlockBasic>>> {
+    pub fn extract(&mut self) -> i32 {
         while self.curdepth >= 0 {
             if let Some(bl) = self.queue[self.curdepth as usize].pop() {
-                return Some(bl);
+                return bl;
             }
             self.curdepth -= 1;
         }
-        None
+        -1
     }
 
     // Ghidra: heritage.hh:101 PriorityQueue::empty
@@ -389,7 +391,7 @@ pub struct Heritage {
     pub maxdepth: i32,
     pub pass: i32,
     pub pq: PriorityQueue,
-    pub merge: Vec<Arc<RwLock<BlockBasic>>>,
+    pub merge: Vec<i32>,
     pub infolist: Vec<HeritageInfo>,
     pub load_guard: Vec<LoadGuard>,
     pub store_guard: Vec<LoadGuard>,
@@ -610,14 +612,97 @@ impl Heritage {
         self.domchild = domchild_idx;
     }
 
+    // Ghidra: heritage.cc:2395 Heritage::visitIncr
+    /// Recursive phi-node placement using the ADT. Faithful to
+    /// `visitIncr` (heritage.cc:2395-2429). Walks augment[vnode] and
+    /// recurses into dom children (unless boundary node).
+    pub fn visit_incr(&mut self, qnode_idx: i32, vnode_idx: i32) {
+        let i = vnode_idx as usize;
+        // cc:2404-2421: scan augment[i] for phi candidates.
+        let aug_snapshot = self.augment.get(i).cloned().unwrap_or_default();
+        for v_idx in aug_snapshot {
+            let v_idom = {
+                let fd_arc = self.fd.as_ref().and_then(|w| w.upgrade());
+                if let Some(fd_arc) = fd_arc {
+                    let fd = fd_arc.read().unwrap();
+                    fd.bblocks.get_block(v_idx as usize)
+                        .and_then(|b| b.read().unwrap().get_immed_dom())
+                        .and_then(|w| w.upgrade())
+                        .map(|dom| dom.read().unwrap().get_index())
+                } else { None }
+            };
+            // cc:2408: if idom(v) < qnode (strict ancestor)
+            if v_idom.map_or(false, |idom| idom < qnode_idx) {
+                let k = v_idx as usize;
+                if k < self.flags.len() {
+                    // cc:2410-2413: merge if not merged_node
+                    if (self.flags[k] & heritage_flags::MERGED_NODE) == 0 {
+                        self.merge.push(k as i32);
+                        self.flags[k] |= heritage_flags::MERGED_NODE;
+                    }
+                    // cc:2414-2417: mark + pq.insert if not mark_node
+                    if (self.flags[k] & heritage_flags::MARK_NODE) == 0 {
+                        self.flags[k] |= heritage_flags::MARK_NODE;
+                        self.pq.insert(v_idx, self.depth.get(k).copied().unwrap_or(0));
+                    }
+                }
+            } else {
+                break; // cc:2419-2420: augment is sorted, stop at first non-ancestor
+            }
+        }
+        // cc:2422-2428: if vnode is not boundary, recurse into dom children.
+        if i < self.flags.len() && (self.flags[i] & heritage_flags::BOUNDARY_NODE) == 0 {
+            let children = self.domchild.get(i).cloned().unwrap_or_default();
+            for child_idx in children {
+                let c = child_idx as usize;
+                if c < self.flags.len() && (self.flags[c] & heritage_flags::MARK_NODE) == 0 {
+                    self.visit_incr(qnode_idx, child_idx);
+                }
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:2440 Heritage::calcMultiequals
+    /// Calculate blocks that should contain MULTIEQUALs for one address range.
+    /// Faithful to `calcMultiequals` (heritage.cc:2440-2467).
+    /// After this executes, self.merge holds block indices that should
+    /// contain a MULTIEQUAL (phi node).
+    pub fn calc_multiequals(&mut self, write_blocks: &[i32]) {
+        // cc:2443: pq.reset(maxdepth)
+        self.pq.reset(self.maxdepth);
+        // cc:2444: merge.clear()
+        self.merge.clear();
+
+        // cc:2449-2455: place write blocks into pq.
+        for &blk_idx in write_blocks {
+            let j = blk_idx as usize;
+            if j < self.flags.len() && (self.flags[j] & heritage_flags::MARK_NODE) != 0 {
+                continue; // Already in
+            }
+            self.pq.insert(blk_idx, self.depth.get(j).copied().unwrap_or(0));
+            if j < self.flags.len() {
+                self.flags[j] |= heritage_flags::MARK_NODE;
+            }
+        }
+        // cc:2456-2459: ensure block 0 is in pq.
+        if !self.flags.is_empty() && (self.flags[0] & heritage_flags::MARK_NODE) == 0 {
+            self.pq.insert(0, self.depth.get(0).copied().unwrap_or(0));
+            self.flags[0] |= heritage_flags::MARK_NODE;
+        }
+
+        // cc:2461-2464: main loop.
+        while !self.pq.empty() {
+            let bl = self.pq.extract();
+            self.visit_incr(bl, bl);
+        }
+
+        // cc:2465-2466: clear marks.
+        for f in &mut self.flags {
+            *f &= !(heritage_flags::MARK_NODE | heritage_flags::MERGED_NODE);
+        }
+    }
+
     // Ghidra: heritage.cc:219 Heritage::discoverAndGuardStackStoresFd
-    /// Discover stack-pointer-relative STORE ops and build Stack-space INDIRECT
-    /// ops for them. Faithful to Ghidra's discoverIndexedStackPointers
-    /// (heritage.cc:985) + guardStores (heritage.cc:1539).
-    ///
-    /// From the RSP input varnode, forward-descend through INT_ADD(const)/
-    /// INT_SUB(const)/COPY chains. For each STORE reached, compute the stack
-    /// offset and build a Stack-space INDIRECT via new_indirect_op.
     pub fn discover_and_guard_stack_stores_fd(fd: &mut Funcdata) {
         let (sp_space, sp_offset, sp_size) = (
             fd.stack_pointer_space,
