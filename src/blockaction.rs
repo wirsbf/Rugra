@@ -2383,6 +2383,8 @@ impl<'a> CollapseStructure<'a> {
                 bdw.incoming = new_in; bdw.outgoing = new_out;
             } else if let Some(bgt) = nref.downcast_mut::<crate::block::BlockGoto>() {
                 bgt.incoming = new_in; bgt.outgoing = new_out;
+            } else if let Some(bcond) = nref.downcast_mut::<crate::block::BlockCondition>() {
+                bcond.incoming = new_in; bcond.outgoing = new_out;
             }
         }
 
@@ -2447,6 +2449,17 @@ impl<'a> CollapseStructure<'a> {
                             e.point = new_block.clone();
                         }
                     }
+                } else if let Some(bcond) = gref.downcast_mut::<crate::block::BlockCondition>() {
+                    for e in bcond.outgoing.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
+                    for e in bcond.incoming.iter_mut() {
+                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
+                            e.point = new_block.clone();
+                        }
+                    }
                 }
             }
         }
@@ -2463,6 +2476,161 @@ impl<'a> CollapseStructure<'a> {
                 b.set_flags(crate::block::block_flags::DEAD);
             }
         }
+    }
+
+    // Ghidra: block.cc:1780 BlockGraph::newBlockCondition
+    /// Factory: build a BlockCondition collapsing b1 (cond) + b2 (orblock),
+    /// mirroring Ghidra newBlockCondition (block.cc:1780-1794). Computes opc
+    /// from edge relation (b1's false-out == b2 → OR, else AND) exactly as
+    /// Ghidra does via getFalseOut(). Calls identifyInternal for edge
+    /// inheritance. The new block is installed at install_idx (replacing b1's
+    /// slot). Returns the new BlockCondition Arc.
+    ///
+    /// Key Ghidra semantics:
+    ///  - opc = (b1->getFalseOut() == b2) ? CPUI_INT_OR : CPUI_INT_AND
+    ///  - forceOutputNum(2) + forceFalseEdge(b2->getOut(0)) preserve the
+    ///    condition's 2 outputs with the false-edge being b2's fallthrough.
+    ///    Rugra's BlockCondition tracks false-edge as outgoing[0]; the
+    ///    identifyInternal boundary capture preserves this when b1's out[0]
+    ///    is b2 (the consumed orblock), and b2's out[0] (out0) becomes the
+    ///    condition's out[0].
+    fn new_block_condition(
+        &mut self,
+        b1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        b2: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        install_idx: usize,
+    ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        // cc:1783: const FlowBlock *out0 = b2->getOut(0);
+        let out0 = b2.read().unwrap().get_out(0).map(|e| e.point.clone());
+        // cc:1785: opc = (b1->getFalseOut() == b2) ? INT_OR : INT_AND
+        // Ghidra getFalseOut() = outofthis[0].point (edge 0 = false in Ghidra's
+        // convention). Rugra uses the OPPOSITE edge convention (edge 1 = false
+        // when BOOLEAN_FLIP unset, edge 0 = false when flipped), so we must use
+        // Rugra's CBRANCH-aware get_false_out(cbranch) instead of get_out(0).
+        // Find b1's terminal CBRANCH op.
+        let b1_cbranch = {
+            let b1r = b1.read().unwrap();
+            b1r.get_ops().last().filter(|op_ref| {
+                op_ref.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+            }).cloned()
+        };
+        let bool_op = match &b1_cbranch {
+            Some(cb) => {
+                let false_out = b1.read().unwrap().get_false_out(cb);
+                match false_out {
+                    Some(fb) if Arc::ptr_eq(&fb, b2) => BoolOp::Or,
+                    _ => BoolOp::And,
+                }
+            }
+            None => BoolOp::And, // No CBRANCH (structured block); default And.
+        };
+        let cond_idx = b1.read().unwrap().get_index();
+        let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockCondition {
+                index: cond_idx,
+                op_type: bool_op,
+                first: b1.clone(),
+                second: b2.clone(),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                flags: 0,
+            }));
+        let b2_idx = b2.read().unwrap().get_index();
+        // cc:1789: identifyInternal(ret, {b1, b2}). Rugra: b1 is at install_idx
+        // (handled by identify_internal's install_idx capture), b2 is consumed.
+        self.identify_internal(&cond_block, &[b2_idx], install_idx);
+        // cc:1791-1792: forceOutputNum(2) + forceFalseEdge(out0). Rugra's
+        // BlockCondition has exactly 2 outputs after identifyInternal; the
+        // false-edge (out[0]) should be out0 (b2's fallthrough). If identify
+        // didn't preserve it, fix up: ensure out[0] is out0.
+        if let Some(out0_ref) = &out0 {
+            let mut cb = cond_block.write().unwrap();
+            if let Some(bc) = cb.as_any_mut().downcast_mut::<BlockCondition>() {
+                // Ensure exactly 2 outputs; if out[0] isn't out0, swap.
+                if bc.outgoing.len() >= 1 {
+                    let out0_is_first = Arc::ptr_eq(&bc.outgoing[0].point, out0_ref);
+                    if !out0_is_first && bc.outgoing.len() >= 2 {
+                        // Swap so out0 is at index 0 (false edge).
+                        bc.outgoing.swap(0, 1);
+                    }
+                }
+            }
+        }
+        self.update_switch_case_reference(cond_idx, &cond_block);
+        self.change_count += 1;
+        eprintln!("[BLOCKSTRUCT] {:?} condition at block {} (b1={}, b2={})",
+            bool_op, install_idx, b1.read().unwrap().get_index(),
+            b2.read().unwrap().get_index());
+        cond_block
+    }
+
+    // Ghidra: block.cc:1822 BlockGraph::newBlockIf
+    /// Factory: build a BlockIf (if-then, no else) collapsing cond + tc.
+    /// Mirrors Ghidra newBlockIf (block.cc:1822-1833). identifyInternal +
+    /// forceOutputNum(1). Installed at install_idx (replacing cond).
+    fn new_block_if(
+        &mut self,
+        cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        tc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        negated: bool,
+        install_idx: usize,
+    ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        let cond_idx = cond.read().unwrap().get_index();
+        let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockIf {
+                index: cond_idx,
+                condition: cond.clone(),
+                if_body: tc.clone(),
+                else_body: None,
+                negated,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                goto_target: None,
+                flags: 0,
+            }));
+        let tc_idx = tc.read().unwrap().get_index();
+        // cc:1829: identifyInternal(ret, {cond, tc}). cond at install_idx.
+        self.identify_internal(&if_block, &[tc_idx], install_idx);
+        self.update_switch_case_reference(cond_idx, &if_block);
+        self.change_count += 1;
+        if_block
+    }
+
+    // Ghidra: block.cc:1840 BlockGraph::newBlockIfElse
+    /// Factory: build a Block If (if-then-else) collapsing cond + tc + fc.
+    /// Mirrors Ghidra newBlockIfElse (block.cc:1840-1852). identifyInternal +
+    /// forceOutputNum(1). Installed at install_idx (replacing cond).
+    fn new_block_if_else(
+        &mut self,
+        cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        tc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        fc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        negated: bool,
+        install_idx: usize,
+    ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        let cond_idx = cond.read().unwrap().get_index();
+        let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockIf {
+                index: cond_idx,
+                condition: cond.clone(),
+                if_body: tc.clone(),
+                else_body: Some(fc.clone()),
+                negated,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                parent: None,
+                goto_target: None,
+                flags: 0,
+            }));
+        let tc_idx = tc.read().unwrap().get_index();
+        let fc_idx = fc.read().unwrap().get_index();
+        // cc:1848: identifyInternal(ret, {cond, tc, fc}). cond at install_idx.
+        self.identify_internal(&if_block, &[tc_idx, fc_idx], install_idx);
+        self.update_switch_case_reference(cond_idx, &if_block);
+        self.change_count += 1;
+        if_block
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::tryRuleCat
@@ -2702,28 +2870,10 @@ impl<'a> CollapseStructure<'a> {
             drop(c);
             if target_idx != merge_idx { continue; }
 
-            // Match found: clause → merge. Create BlockIf.
+            // Match found: clause → merge. Create BlockIf via factory
+            // (block.cc:1822 newBlockIf). cond at install_idx=i, clause consumed.
             let negated = dir == 1; // if clause is the false edge, negate
-            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                Arc::new(RwLock::new(BlockIf {
-                    index: cond_idx,
-                    condition: block.clone(),
-                    if_body: clause.clone(),
-                    else_body: None,
-                    negated,
-                    incoming: Vec::new(),
-                    outgoing: Vec::new(),
-                    parent: None,
-                    goto_target: None,
-                    flags: 0,
-                }));
-            let clause_idx = clause.read().unwrap().get_index();
-            // self_identify captures the clause's boundary edges onto the new
-            // BlockIf (installed at i). We pass only the clause index (not cond),
-            // because cond sits at install_idx and is handled separately.
-            self.identify_internal(&if_block, &[clause_idx], i);
-            self.update_switch_case_reference(cond_idx, &if_block);
-            self.change_count += 1;
+            self.new_block_if(&block, &clause, negated, i);
             return true;
         }
         false
@@ -2809,24 +2959,8 @@ impl<'a> CollapseStructure<'a> {
             drop(c);
 
             let negated = dir == 1;
-            let clause_idx = clause.read().unwrap().get_index();
-            let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                Arc::new(RwLock::new(BlockIf {
-                    index: cond_idx,
-                    condition: block.clone(),
-                    if_body: clause.clone(),
-                    else_body: None,
-                    negated,
-                    incoming: Vec::new(),
-                    outgoing: Vec::new(),
-                    parent: None,
-                    goto_target: None,
-                    flags: 0,
-                }));
-            // self_identify captures the clause's boundary edges onto the new BlockIf.
-            self.identify_internal(&if_block, &[clause_idx], i);
-            self.update_switch_case_reference(cond_idx, &if_block);
-            self.change_count += 1;
+            // Create BlockIf via factory (block.cc:1822 newBlockIf).
+            self.new_block_if(&block, &clause, negated, i);
             return true;
         }
         false
@@ -2869,25 +3003,8 @@ impl<'a> CollapseStructure<'a> {
 
         if t_out != f_out { return false; } // both must merge to same block
 
-        let t_idx = true_block.read().unwrap().get_index();
-        let f_idx = false_block.read().unwrap().get_index();
-        let if_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-            Arc::new(RwLock::new(BlockIf {
-                index: cond_idx,
-                condition: block.clone(),
-                if_body: true_block.clone(),
-                else_body: Some(false_block.clone()),
-                negated: false,
-                incoming: Vec::new(),
-                outgoing: Vec::new(),
-                parent: None,
-                goto_target: None,
-                flags: 0,
-            }));
-        // self_identify captures both clauses' boundary edges onto the new BlockIf.
-        self.identify_internal(&if_block, &[t_idx, f_idx], i);
-        self.update_switch_case_reference(cond_idx, &if_block);
-        self.change_count += 1;
+        // Create BlockIf (if-then-else) via factory (block.cc:1840 newBlockIfElse).
+        self.new_block_if_else(&block, &true_block, &false_block, false, i);
         true
     }
 
@@ -3228,37 +3345,11 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
 
-            // cc:1367 + block.cc:1785: graph.newBlockCondition(bl, orblock)
-            // After negation, ii==1 means bl's true-out is now orblock → OR;
-            // ii==0 (orblock was already false-out) → AND.
-            let bool_op = if ii == 1 { BoolOp::Or } else { BoolOp::And };
-
-            // Create BlockCondition node (block.cc:1786-1793).
-            let cond_idx = block.read().unwrap().get_index();
-            let cond_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-                Arc::new(RwLock::new(BlockCondition {
-                    index: cond_idx,
-                    op_type: bool_op,
-                    first: block.clone(),
-                    second: orblock.clone(),
-                    incoming: Vec::new(),
-                    outgoing: Vec::new(),
-                    parent: None,
-                    flags: 0,
-                }));
-
-            // Mark the two consumed blocks as DEAD (identifyInternal removes them).
-            block.write().unwrap().set_flags(crate::block::block_flags::DEAD);
-            orblock.write().unwrap().set_flags(crate::block::block_flags::DEAD);
-
-            // Replace block[i] with the BlockCondition in the graph.
-            if i < self.graph.blocks.len() {
-                self.graph.blocks[i] = cond_block.clone();
-            }
-            self.change_count += 1;
-            eprintln!("[BLOCKSTRUCT] {:?} condition at block {} (or={}, clause={})",
-                bool_op, i, orblock.read().unwrap().get_index(),
-                clauseblock.read().unwrap().get_index());
+            // cc:1367 + block.cc:1780: graph.newBlockCondition(bl, orblock)
+            // The factory computes opc via getFalseOut()==b2 (block.cc:1785),
+            // matching the post-negation edge state. After our ii==1 negation
+            // of bl, bl's false-out (edge 0) is orblock → OR.
+            self.new_block_condition(&block, &orblock, i);
             return true;
         }
         false
