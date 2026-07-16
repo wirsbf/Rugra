@@ -1285,12 +1285,14 @@ impl Heritage {
         if add_indirects {
             // cc:1192: queryProperties (needs ScopeLocal).
             // cc:1193-1198: guardCalls/guardReturns/guardStores/guardLoads.
-            // These are called per-range with addr/size in Ghidra.
-            // Rugra's guard_all calls them range-agnostically.
-            self.guard_calls(fd);
+            // Now using per-range versions (addr/size) faithful to Ghidra.
+            self.guard_calls_range(fd, 0, addr, size, write);
+            // guardReturns per-range: Ghidra cc:1653 uses addr/size.
+            // Rugra's guardReturns is a stub (needs FuncProto).
             self.guard_returns(fd);
-            self.guard_stores(fd);
-            self.guard_loads(fd);
+            // Per-range guard stores/loads (cc:1539/1571).
+            self.guard_stores_range(fd, addr, size, write);
+            self.guard_loads_range(fd, 0, addr, size, write);
         }
     }
 
@@ -1300,6 +1302,10 @@ impl Heritage {
     /// Calls guard_range with empty read/write lists (Rugra's
     /// setActiveHeritage is done by rename_direct's marker).
     pub fn guard_all(&mut self, fd: &mut Funcdata) {
+        // Ghidra cc:1189-1198: guard(addr, size, addIndirects, ...) calls
+        // guardCalls, guardReturns, guardStores, guardLoads per-range.
+        // Rugra's guard_range delegates to the per-range versions:
+        // guard_stores_range / guard_loads_range / guard_calls_range.
         let mut empty_read = Vec::new();
         let mut empty_write = Vec::new();
         let mut empty_input = Vec::new();

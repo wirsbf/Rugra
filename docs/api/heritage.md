@@ -745,3 +745,4 @@ visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状
  
  
  
+ 
