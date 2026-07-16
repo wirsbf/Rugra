@@ -227,3 +227,4 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 <!-- annotation-pass: 2026-07-04 -->
  
  
+ 

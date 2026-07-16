@@ -644,25 +644,27 @@ impl Merge {
     /// - Unique temp → `uVarN`
     /// - RAM global → `DAT_XXXXXXXX`
     ///
-    /// For registers that are SysV AMD64 argument registers, the first occurrence
-    /// at function entry is named as a parameter (param_1, param_2, etc.).
+    /// Faithful to ScopeInternal::assignDefaultNames (database.cc:2850-2865).
+    /// Uses a single shared `base` counter (initial 1), incremented in-place
+    /// via `&index` reference. Names are built via buildVariableName logic
+    /// (database.cc:2434-2518): `printNameBase + "Var" + index++` for locals,
+    /// `param_N` for regular inputs, register names for persist, etc.
+    ///
+    /// **2026-07-05**: Previously used a per-prefix `var_counter` that reset
+    /// to 0 each call, with hardcoded name grammar (`local_`, `param_stack_`,
+    /// `DAT_`, `uVar`). This was an 181538f-class bug — Ghidra uses a single
+    /// shared counter threaded across the entire function, with
+    /// `printNameBase` (virtual, per-Datatype) for the prefix and
+    /// `makeNameUnique` for collision resolution.
     pub fn assign_names(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
 
-        self.var_counter = 0;
+        // Ghidra cc:2850: int4 &base — single shared counter, initial 1.
+        let mut base: i32 = 1;
         let mut named: HashSet<u64> = HashSet::new();
-        // Track which register names have been used to avoid duplicates
-        let mut used_reg_names: HashSet<String> = HashSet::new();
+        // Track all assigned names for makeNameUnique dedup.
+        let mut used_names: HashSet<String> = HashSet::new();
 
-        // Faithful to ActionNameVars::linkSymbols (coreaction.cc:2940-2976):
-        // iterate every Varnode in every space except const. Ghidra skips
-        // isFree() (coreaction.cc:2957) because its printc never emits a free
-        // Varnode (pushSymbolDetail routes to pushUnnamedLocation → raw addr).
-        // Rugra's printc currently still emits free Varnodes (SSA-completeness
-        // gap: some alive ops reference Varnodes whose def was dead-code-elim'd),
-        // so we name them too — otherwise they fall through to uVar_{offset}.
-        // TODO: once SSA completeness is fixed (no alive op refs a free
-        // Varnode), restore the is_free() skip to match Ghidra exactly.
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
             .filter(|r| {
@@ -683,47 +685,84 @@ impl Merge {
                 }
                 named.insert(high_ptr);
 
-                let name = match vn.address_space {
-                    AddressSpace::Stack => {
-                        let off = vn.get_offset();
-                        if off >= 0x8000_0000_0000_0000 {
-                            // Negative offset = local variable
-                            format!("local_{:x}h", (!off).wrapping_add(1))
-                        } else {
-                            format!("param_stack_{:x}h", off)
+                // Determine flags for buildVariableName (database.cc:2441-2517).
+                let is_input = vn.is_input();
+                let is_persist = vn.is_persist();
+                let is_addrtied = vn.is_addr_tied();
+                let is_unaffected = vn.is_unaffected();
+                let vn_size = vn.size;
+                let vn_space = vn.address_space;
+                let vn_offset = vn.get_offset();
+
+                // Ghidra database.cc:2501-2517: local variable naming.
+                // printNameBase(ct) + "Var" + index++
+                let name = if is_unaffected {
+                    // cc:2441-2453: unaff_ prefix
+                    let reg_name = register_name(vn_offset, vn_size);
+                    match reg_name {
+                        Some(rn) => format!("unaff_{}", rn),
+                        None => format!("unaff_{:08x}", vn_offset),
+                    }
+                } else if is_persist {
+                    // cc:2455-2468: persist → register name or printNameBase+Space+hex
+                    let reg_name = register_name(vn_offset, vn_size);
+                    match reg_name {
+                        Some(rn) => rn,
+                        None => {
+                            // cc:2463: Capitalize space name
+                            let space_name = vn_space.name();
+                            let cap: String = space_name.chars().next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default()
+                                + &space_name[1..];
+                            format!("{}{:02x}", cap, vn_offset)
                         }
                     }
-                    AddressSpace::Register => {
-                        // Use actual register name from the x86-64 offset table
-                        let reg_name = register_name(vn.get_offset(), vn.size);
-                        if let Some(name) = reg_name {
-                            if used_reg_names.contains(&name) {
-                                // Same register re-used (different SSA version),
-                                // append a counter suffix
-                                self.var_counter += 1;
-                                let suffixed = format!("{}_{}", name, self.var_counter);
-                                used_reg_names.insert(suffixed.clone());
-                                suffixed
-                            } else {
-                                used_reg_names.insert(name.clone());
-                                name
+                } else if is_input {
+                    // cc:2480-2482: regular parameter
+                    // param_N where N is the parameter index (based on offset)
+                    let param_idx = match vn_space {
+                        AddressSpace::Register => {
+                            // SysV AMD64 param register order: RDI=0, RSI=1, RDX=2, RCX=3, R8=4, R9=5
+                            match vn_offset {
+                                0x38 => 0, // RDI
+                                0x30 => 1, // RSI
+                                0x10 => 2, // RDX
+                                0x08 => 3, // RCX
+                                0x80 => 4, // R8
+                                0x88 => 5, // R9
+                                _ => { base += 1; (base - 1) }
                             }
-                        } else {
-                            self.var_counter += 1;
-                            format!("uVar{}", self.var_counter)
+                        }
+                        _ => { base += 1; (base - 1) }
+                    };
+                    format!("param_{}", param_idx)
+                } else if is_addrtied {
+                    // cc:2483-2490: addr-tied global
+                    let space_name = vn_space.name();
+                    let cap: String = space_name.chars().next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default()
+                        + &space_name[1..];
+                    format!("{}{:08x}", cap, vn_offset)
+                } else {
+                    // cc:2501-2517: local variable — printNameBase + "Var" + index++
+                    // Ghidra: ct->printNameBase(s); s << "Var" << dec << index++;
+                    // Rugra: printNameBase returns "" for most types (no per-type
+                    // prefix in simplified type system). So name = "Var" + base++.
+                    let prefix = ""; // TODO: printNameBase when Datatype supports it
+                    let candidate = format!("{}Var{}", prefix, base);
+                    base += 1;
+                    // cc:2505: makeNameUnique — try bumping index up to 10 times.
+                    let mut final_name = candidate.clone();
+                    if used_names.contains(&final_name) {
+                        for _ in 0..10 {
+                            let candidate2 = format!("{}Var{}", prefix, base);
+                            base += 1;
+                            if !used_names.contains(&candidate2) {
+                                final_name = candidate2;
+                                break;
+                            }
                         }
                     }
-                    AddressSpace::Unique => {
-                        self.var_counter += 1;
-                        format!("uVar{}", self.var_counter)
-                    }
-                    AddressSpace::Ram => {
-                        format!("DAT_{:08x}", vn.get_offset())
-                    }
-                    _ => {
-                        self.var_counter += 1;
-                        format!("uVar{}", self.var_counter)
-                    }
+                    used_names.insert(final_name.clone());
+                    final_name
                 };
 
                 let mut high = high_arc.write().unwrap();
