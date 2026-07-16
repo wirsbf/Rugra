@@ -292,6 +292,8 @@ pub struct Architecture {
     pub types: Option<std::sync::Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>>,
     /// User-defined op manager (faithful to Architecture `userops`). Optional.
     pub userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
+    /// Join record database (translate.hh AddrSpaceManager joinrecords).
+    pub join_db: crate::space::JoinDatabase,
     /// Comment database. Faithful to `commentdb`.
     pub commentdb: Option<std::sync::Arc<std::sync::RwLock<crate::comment::CommentDatabaseInternal>>>,
     /// String manager. Faithful to `stringManager`.
@@ -375,6 +377,7 @@ impl Architecture {
             type_factory_name: None,
             types: None,
             userops: None,
+            join_db: crate::space::JoinDatabase::new(),
             commentdb: None,
             string_manager: None,
             cpool: None,

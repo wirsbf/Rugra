@@ -263,3 +263,4 @@ Decode from string format "id:base_space_id:name"
 - `get_deadcode_delay`: = get_delay。
 - `is_heritaged`: Const/Iop/Join 不 heritaged。
  
+ 

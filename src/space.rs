@@ -381,6 +381,7 @@ impl JoinRecord {
     pub fn get_unified(&self) -> &VarnodeData { &self.unified }
 }
 
+#[derive(Clone)]
 pub struct JoinDatabase {
     pub records: Vec<JoinRecord>,
 }

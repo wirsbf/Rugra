@@ -1835,16 +1835,39 @@ impl Heritage {
     /// Rugra lacks JoinRecord infrastructure; documented stub.
     pub fn split_join_read(
         &mut self,
-        _fd: &mut Funcdata,
+        fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
     ) {
         // cc:2122: vn is free, loneDescend must be non-null
-        let _op = vn.read().unwrap().lone_descend();
-        // cc:2128-2162: iterative splitJoinLevel + PIECE chain creation
-        // TODO: requires JoinRecord::numPieces + splitJoinLevel
-        // (heritage.cc:2068 splitJoinLevel + architecture.cc JoinRecord)
-        eprintln!("[HERITAGE] splitJoinRead: join varnode at {:?} (JoinRecord infra TODO)",
-            vn.read().unwrap().loc);
+        let read_op = match vn.read().unwrap().lone_descend() {
+            Some(op) => op, None => return,
+        };
+        let vn_offset = vn.read().unwrap().loc.as_u64();
+        // Look up JoinRecord from Architecture before mutable borrow.
+        let join_rec = match fd.get_arch() {
+            Some(a) => a.join_db.find_join(vn_offset).cloned(),
+            None => None,
+        };
+        let join_rec = match join_rec { Some(r) => r, None => return };
+
+        // cc:2128-2162: iterative PIECE chain creation
+        // Simplified: for 2-piece joins, create a single PIECE.
+        if join_rec.num_pieces() == 2 {
+            let p0 = &join_rec.pieces[0];
+            let p1 = &join_rec.pieces[1];
+            let mosthalf = fd.vbank.create_with_space(p0.size, p0.space, p0.offset);
+            let leasthalf = fd.vbank.create_with_space(p1.size, p1.space, p1.offset);
+            let op_addr = read_op.read().unwrap().get_addr();
+            let concat = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+            concat.0.write().unwrap().output = Some(vn.clone());
+            fd.op_set_input(&concat, mosthalf.clone(), 0);
+            fd.op_set_input(&concat, leasthalf.clone(), 1);
+            let read_ref = PcodeOpRef(read_op.clone());
+            fd.op_insert_before(&concat, &read_ref);
+            mosthalf.write().unwrap().set_active_heritage();
+            leasthalf.write().unwrap().set_active_heritage();
+        }
     }
 
     // Ghidra: heritage.cc:2172 Heritage::splitJoinWrite
@@ -1853,15 +1876,45 @@ impl Heritage {
     /// Requires JoinRecord infrastructure.
     pub fn split_join_write(
         &mut self,
-        _fd: &mut Funcdata,
+        fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
     ) {
-        // cc:2175: vn is written, get def op
-        let _def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-        // cc:2181-2226: iterative splitJoinLevel + SUBPIECE chain
-        // TODO: requires JoinRecord::numPieces + splitJoinLevel
-        eprintln!("[HERITAGE] splitJoinWrite: join varnode at {:?} (JoinRecord infra TODO)",
-            vn.read().unwrap().loc);
+        let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            Some(op) => op, None => return,
+        };
+        let vn_offset = vn.read().unwrap().loc.as_u64();
+        // Look up JoinRecord from Architecture before mutable borrow.
+        let join_rec = match fd.get_arch() {
+            Some(a) => a.join_db.find_join(vn_offset).cloned(),
+            None => None,
+        };
+        let join_rec = match join_rec { Some(r) => r, None => return };
+
+        // cc:2187-2226: create SUBPIECE ops for each piece
+        if join_rec.num_pieces() == 2 {
+            let p0 = &join_rec.pieces[0];
+            let p1 = &join_rec.pieces[1];
+            let op_addr = def_op.read().unwrap().get_addr();
+            // SUBPIECE for most significant piece (offset = p1.size)
+            let split0 = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&split0, OpCode::CPUI_SUBPIECE);
+            split0.0.write().unwrap().output = Some(
+                fd.vbank.create_with_space(p0.size, p0.space, p0.offset));
+            fd.op_set_input(&split0, vn.clone(), 0);
+            let off_const0 = fd.new_constant(4, p1.size as u64);
+            fd.op_set_input(&split0, off_const0, 1);
+            let def_ref = PcodeOpRef(def_op.clone());
+            fd.op_insert_after(&split0, &def_ref);
+            // SUBPIECE for least significant piece (offset = 0)
+            let split1 = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&split1, OpCode::CPUI_SUBPIECE);
+            split1.0.write().unwrap().output = Some(
+                fd.vbank.create_with_space(p1.size, p1.space, p1.offset));
+            fd.op_set_input(&split1, vn.clone(), 0);
+            let off_const1 = fd.new_constant(4, 0u64);
+            fd.op_set_input(&split1, off_const1, 1);
+            fd.op_insert_after(&split1, &split0);
+        }
     }
 
     // Ghidra: heritage.cc:2068 Heritage::splitJoinLevel
