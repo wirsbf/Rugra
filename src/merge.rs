@@ -431,11 +431,13 @@ impl Merge {
         true
     }
 
-    // Ghidra: merge.cc:1657 Merge::mergeTest
-    /// Test whether two varnodes can be merged into the same HighVariable.
-    ///
-    /// Returns true if they share the same address space and size, and
-    /// neither is a constant or annotation (which should never be merged).
+    // RUGRA-GLUE: merge_test — 快速预检查两个 Varnode 是否可能合并。
+    /// 这是 mergeTestRequired (merge.cc:102) 的简化子集:只检查 space+size+
+    /// const/annotation。Ghidra 的 mergeTestRequired 还检查 typelock 冲突、
+    /// addrtied-different-address、input/persist/extrout、protopartial。
+    /// Rugra 缺这些检查(简化),可能在罕见情况下允许 Ghidra 禁止的合并。
+    /// 注意:此函数 NOT 对应 Ghidra merge.cc:1657 Merge::mergeTest(那是
+    /// cover-intersection 测试,Rugra 的 merge_test_with_list 才是它的 port)。
     pub fn merge_test(&self, v1: &Varnode, v2: &Varnode) -> bool {
         use crate::varnode::varnode_flags;
 

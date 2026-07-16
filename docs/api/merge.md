@@ -225,3 +225,4 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - `process_high_redundant_copy`（merge.cc:1345）：findAllIntoCopies(filterTemps=false) + 按同源分组 + markRedundantCopies。
 - `mark_internal_copies` 重写为忠实 markInternalCopies（含 shadowedVarnode 无后代检查 + multi-copy 累积 + processHighRedundantCopy）。
 <!-- annotation-pass: 2026-07-04 -->
+ 
