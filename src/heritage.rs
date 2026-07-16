@@ -1515,6 +1515,94 @@ impl Heritage {
         }
     }
 
+    // Ghidra: heritage.cc:1112 Heritage::reprocessFreeStores
+    /// Re-examine free STOREs after stack-pointer discovery. Faithful to
+    /// `reprocessFreeStores` (heritage.cc:1112-1142). Clears spacebase ptr
+    /// marks, re-runs discovery, then removes unnecessary INDIRECTs for
+    /// STOREs that turned out not to use a spacebase ptr.
+    pub fn reprocess_free_stores(
+        &mut self,
+        fd: &mut Funcdata,
+        space: AddressSpace,
+        free_stores: &[Arc<RwLock<PcodeOp>>],
+    ) {
+        // cc:1115-1116: clear spacebase ptr marks
+        for op_arc in free_stores {
+            op_arc.write().unwrap().flags &= !crate::op::pcodeop_flags::SPACEBASE_PTR;
+        }
+        // cc:1118: re-run discoverIndexedStackPointers
+        Heritage::discover_and_guard_stack_stores_fd(fd);
+        // cc:1120-1141: clean up unnecessary INDIRECTs
+        for op_arc in free_stores {
+            // cc:1125: if STORE still uses spacebase ptr, skip
+            if op_arc.read().unwrap().uses_spacebase_ptr() { continue; }
+            // cc:1128-1140: walk previous ops looking for INDIRECTs to remove
+            let prev = {
+                let op = op_arc.read().unwrap();
+                // Find previous op in alivelist
+                let op_ptr = Arc::as_ptr(&op_arc) as usize;
+                let mut prev_arc: Option<Arc<RwLock<PcodeOp>>> = None;
+                let mut found = false;
+                for r in &fd.obank.alivelist {
+                    if found { prev_arc = Some(r.0.clone()); break; }
+                    if Arc::as_ptr(&r.0) as usize == op_ptr { found = true; }
+                }
+                prev_arc
+            };
+            if let Some(ind_op) = prev {
+                let is_indirect = ind_op.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+                let ind_out_space = ind_op.read().unwrap().output.as_ref()
+                    .map(|o| o.read().unwrap().address_space);
+                if is_indirect && ind_out_space == Some(space) {
+                    // cc:1136-1137: totalReplace output with input, destroy
+                    let out_vn = ind_op.read().unwrap().output.as_ref().cloned();
+                    let in_vn = ind_op.read().unwrap().get_in(0).cloned();
+                    if let (Some(out), Some(inv)) = (out_vn, in_vn) {
+                        fd.total_replace(&out, inv);
+                    }
+                    let ind_ref = PcodeOpRef(ind_op);
+                    fd.obank.destroy(ind_ref);
+                }
+            }
+        }
+    }
+
+    // Ghidra: heritage.cc:835 Heritage::analyzeNewLoadGuards
+    /// Analyze new load/store guards using value-set analysis. Faithful to
+    /// `analyzeNewLoadGuards` (heritage.cc:835-901). Uses ValueSetSolver to
+    /// determine the range of possible addresses for guarded LOAD/STORE ops.
+    ///
+    /// Rugra lacks ValueSetSolver (rangeutil.cc ValueSetSolver). This method
+    /// is a documented stub that marks guards as analyzed (analysisState=1).
+    pub fn analyze_new_load_guards(&mut self) {
+        // cc:838-847: check if any unanalyzed guards exist
+        let has_unanalyzed_load = self.load_guard.iter()
+            .rev().take_while(|g| g.analysis_state == 0).count() > 0;
+        let has_unanalyzed_store = self.store_guard.iter()
+            .rev().take_while(|g| g.analysis_state == 0).count() > 0;
+        if !has_unanalyzed_load && !has_unanalyzed_store { return; }
+
+        // cc:871-874: ValueSetSolver establishValueSets + solve(10000, WidenerNone)
+        // TODO: port ValueSetSolver (rangeutil.cc ValueSetSolver). This is a
+        // complex value-set analysis engine (~600 lines in rangeutil.cc).
+        // For now, conservatively mark all guards as analyzed with full range.
+        for guard in &mut self.load_guard {
+            if guard.analysis_state == 0 {
+                guard.analysis_state = 1;
+                // cc:879: guard.establishRange — conservatively set full range
+                guard.minimum_offset = 0;
+                guard.maximum_offset = u64::MAX;
+            }
+        }
+        for guard in &mut self.store_guard {
+            if guard.analysis_state == 0 {
+                guard.analysis_state = 1;
+                guard.minimum_offset = 0;
+                guard.maximum_offset = u64::MAX;
+            }
+        }
+    }
+
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
     /// Increase dead-code delay for a space, requesting a restart.
     /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
