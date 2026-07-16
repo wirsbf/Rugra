@@ -904,3 +904,4 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `op_set_input`(funcdata_op.cc:104): 改 `&mut self`,4 类语义全对齐(early-out / const dedup / opUnsetInput erase_descend / addDescend)。修了 placeholder bug(用 vn 当 resize 占位会触发 early-out)。
 - `op_unset_input`(cc:92): erase_descend + clearInput(隐式)。
 - `total_replace` / `op_set_all_input`: 改 `&mut self`(Ghidra 是 mutable)。
+ 

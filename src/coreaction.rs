@@ -70,7 +70,7 @@ impl Action for ActionHeritage {
             heritage.pass += 1;
             fd.heritage = heritage;
         }
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; string "heritage" mirrors ctor at coreaction.hh:284
@@ -300,7 +300,7 @@ impl Action for ActionDeadCode {
         }
 
         if changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -353,7 +353,7 @@ impl Action for ActionConstantPtr {
         }
 
         if changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -446,7 +446,7 @@ impl Action for ActionCse {
         }
 
         if changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -543,7 +543,7 @@ impl Action for ActionMergeRequired {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_addr_tied(fd);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergerequired" mirrors ctor at coreaction.hh:364
@@ -569,7 +569,7 @@ impl Action for ActionMergeAdjacent {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_adjacent(fd);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergeadjacent" mirrors ctor at coreaction.hh:376
@@ -599,7 +599,7 @@ impl Action for ActionMergeCopy {
         // Faithful to coreaction.hh:392: data.getMerge().mergeOpcode(CPUI_COPY);
         let mut merge = crate::merge::Merge::new();
         merge.merge_opcode(fd, crate::opcodes::OpCode::CPUI_COPY);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergecopy" mirrors ctor at coreaction.hh:387
@@ -625,7 +625,7 @@ impl Action for ActionMergeMultiEntry {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_multi_entry(fd);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergemultientry" mirrors ctor at coreaction.hh:398
@@ -651,7 +651,7 @@ impl Action for ActionMergeType {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
         merge.merge_all(fd);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "mergetype" mirrors ctor at coreaction.hh:409
@@ -768,7 +768,7 @@ impl Action for ActionCopyPropagate {
         }
 
         if changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -1197,7 +1197,7 @@ impl Action for ActionCallParams {
         }
 
         if changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -1526,7 +1526,7 @@ impl Action for ActionInferParams {
         }
 
         if changed {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -1819,7 +1819,7 @@ impl Action for ActionTypeInfer {
         }
 
         if overall_changed > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -1870,7 +1870,7 @@ impl Action for ActionUnreachable {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464).
         if fd.remove_unreachable_blocks() {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -1955,7 +1955,7 @@ impl Action for ActionDoNothing {
             // Faithful to ActionDoNothing::apply (coreaction.cc:3466-3490):
             // splice the do-nothing block out of the CFG.
             if fd.splice_block_basic(&bl) {
-                return Ok(action_status::CHANGE);
+                return Ok(action_status::NO_CHANGE);
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -2014,7 +2014,7 @@ impl Action for ActionRedundBranch {
                 };
                 if should_splice {
                     if fd.splice_block_basic(&bl) {
-                        return Ok(action_status::CHANGE);
+                        return Ok(action_status::NO_CHANGE);
                     }
                 }
                 continue;
@@ -2040,7 +2040,7 @@ impl Action for ActionRedundBranch {
 
             // All exits go to the same block → remove the branch (edge 1).
             fd.remove_branch(&bl, 0); // Keep edge 0, remove edge 1.
-            return Ok(action_status::CHANGE);
+            return Ok(action_status::NO_CHANGE);
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -2150,7 +2150,7 @@ impl Action for ActionHideShadow {
             }
         }
         if count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -2206,7 +2206,7 @@ impl Action for ActionSwitchNorm {
         }
 
         if change_count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -2391,7 +2391,7 @@ impl Action for ActionMarkExplicit {
         }
 
         if change_count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -2607,7 +2607,7 @@ impl Action for ActionMarkImplied {
         }
 
         if change_count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -2757,7 +2757,7 @@ impl Action for ActionSetCasts {
                 }
             }
         }
-        if count > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "setcasts" mirrors ctor at coreaction.hh:330
     fn get_name(&self) -> &str { "setcasts" }
@@ -3647,7 +3647,7 @@ impl Action for ActionVarnodeProps {
         }
 
         if change_count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -3730,7 +3730,7 @@ impl Action for ActionRestrictLocal {
         }
 
         if change > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -3970,7 +3970,7 @@ impl Action for ActionMultiCse {
             }
         }
         if local_count > 0 {
-            return Ok(action_status::CHANGE);
+            return Ok(action_status::NO_CHANGE);
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -4316,7 +4316,7 @@ impl Action for ActionPrototypeTypes {
             }
         }
 
-        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "prototypetypes" mirrors ctor at coreaction.hh:643
     fn get_name(&self) -> &str { "prototypetypes" }
@@ -4476,7 +4476,7 @@ impl Action for ActionActiveReturn {
             }
             change += 1;
         }
-        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "activereturn" mirrors ctor at coreaction.hh:761
     fn get_name(&self) -> &str { "activereturn" }
@@ -4620,7 +4620,7 @@ impl Action for ActionUnjustifiedParams {
             }
         }
 
-        if change > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "unjustifiedparams" mirrors ctor at coreaction.hh:918
     fn get_name(&self) -> &str { "unjustifiedparams" }
@@ -4803,7 +4803,7 @@ impl Action for ActionShadowVar {
         }
 
         if local_count > 0 {
-            return Ok(action_status::CHANGE);
+            return Ok(action_status::NO_CHANGE);
         }
         Ok(action_status::NO_CHANGE)
     }
@@ -5110,7 +5110,7 @@ impl Action for ActionFuncLink {
             }
         }
         if n_new > 0 || n_calls > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -5225,7 +5225,7 @@ impl Action for ActionDeindirect {
         }
 
         if change_count > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -5922,7 +5922,7 @@ impl Action for ActionStackPtrFlow {
             }
         }
         if clogcount > 0 {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         } else {
             Ok(action_status::NO_CHANGE)
         }
@@ -6223,7 +6223,7 @@ impl Action for ActionReturnRecovery {
             }
         }
         self.count += changed;
-        if changed > 0 { Ok(action_status::CHANGE) } else { Ok(action_status::NO_CHANGE) }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "returnrecovery" mirrors ctor at coreaction.hh:799
     fn get_name(&self) -> &str { "returnrecovery" }
@@ -6429,7 +6429,7 @@ impl Action for ActionAssignHigh {
         if was_on {
             Ok(action_status::NO_CHANGE)
         } else {
-            Ok(action_status::CHANGE)
+            Ok(action_status::NO_CHANGE)
         }
     }
 
@@ -6502,7 +6502,7 @@ impl Action for ActionCopyMarker {
         // Ghidra: data.getMerge().markInternalCopies();
         let mut merge = crate::merge::Merge::new();
         merge.mark_internal_copies(fd);
-        Ok(action_status::CHANGE)
+        Ok(action_status::NO_CHANGE)
     }
 
     // RUGRA-GLUE: Rust Action trait get_flags; mirrors rule_onceperfunc bit set in ctor at coreaction.hh:1014
@@ -8068,7 +8068,8 @@ mod tests {
         assert!(vn.read().unwrap().high.is_none());
         let mut a = ActionAssignHigh::new();
         let status = a.apply(&mut fd).unwrap();
-        assert_eq!(status, action_status::CHANGE);
+        // Ghidra ActionAssignHigh returns 0 (count is statistics only).
+        assert_eq!(status, action_status::NO_CHANGE);
         assert!(
             vn.read().unwrap().high.is_some(),
             "varnode must have a HighVariable after assignhigh"

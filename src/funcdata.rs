@@ -5278,7 +5278,8 @@ mod tests {
         // Run ActionInferParams
         let mut action = ActionInferParams::new();
         let result = action.apply(&mut fd).unwrap();
-        assert!(result > 0, "ActionInferParams should report changes");
+        // Ghidra Actions return 0 (count is statistics only).
+        assert_eq!(result, 0, "ActionInferParams returns 0 (Ghidra convention)");
 
         // Verify parameters detected
         assert_eq!(fd.funcp.parameters.len(), 2, "Should detect 2 parameters");
