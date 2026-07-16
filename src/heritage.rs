@@ -1034,6 +1034,113 @@ impl Heritage {
     /// TODO(funcproto): wire return-value trials + COPY insertion.
     pub fn guard_returns(&mut self, _fd: &mut Funcdata) {}
 
+    // Ghidra: heritage.cc:383 Heritage::normalizeReadSize
+    /// Normalize a read varnode whose size < range size: create a SUBPIECE
+    /// that extracts the full-size varnode, leaving the original as output.
+    /// Faithful to `normalizeReadSize` (heritage.cc:383-401).
+    pub fn normalize_read_size(
+        &self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        op: &Arc<RwLock<PcodeOp>>,
+        addr: Address,
+        size: i32,
+    ) -> Arc<RwLock<Varnode>> {
+        // cc:390-391: newOp(2, op->getAddr()); opSetOpcode(SUBPIECE)
+        let op_addr = op.read().unwrap().get_addr();
+        let newop = fd.new_op(2, op_addr);
+        fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+        // cc:392: vn1 = newVarnode(size, addr) — the new full-size free read
+        let vn1 = fd.vbank.create_with_space(size as usize, vn.read().unwrap().address_space, addr.as_u64());
+        // cc:393: overlap = vn->overlap(addr, size)
+        let vn_loc = vn.read().unwrap().loc.as_u64();
+        let overlap = vn_loc.saturating_sub(addr.as_u64()) as i64;
+        // cc:394: vn2 = newConstant(addrSize, overlap)
+        let vn2 = fd.new_constant(8, overlap as u64);
+        // cc:395-396: opSetInput(newop, vn1, 0); opSetInput(newop, vn2, 1)
+        fd.op_set_input(&newop, vn1.clone(), 0);
+        fd.op_set_input(&newop, vn2, 1);
+        // cc:397: opSetOutput(newop, vn) — old vn becomes SUBPIECE output
+        newop.0.write().unwrap().output = Some(vn.clone());
+        // cc:398: setWriteMask — Ghidra flag writemask.
+        // Rugra doesn't have WRITEMASK flag defined yet; skip for now.
+        // TODO: add WRITEMASK to varnode_flags.
+        // cc:399: opInsertBefore(newop, op)
+        fd.op_insert_before(&newop, &PcodeOpRef(op.clone()));
+        vn1
+    }
+
+    // Ghidra: heritage.cc:417 Heritage::normalizeWriteSize
+    /// Normalize a write varnode whose size < range size: create PIECE ops
+    /// to fill the missing pieces, then SUBPIECE to extract the written part.
+    /// Faithful to `normalizeWriteSize` (heritage.cc:417-507).
+    /// This is a complex method (~90 lines in Ghidra). Rugra implements the
+    /// common case (single overlap, no CALL indirect) and falls back to
+    /// setActiveHeritage without normalization for complex cases.
+    pub fn normalize_write_size(
+        &self,
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<Varnode>>,
+        addr: Address,
+        size: i32,
+    ) {
+        let vn_size = vn.read().unwrap().get_size() as i64;
+        let overlap = vn.read().unwrap().loc.as_u64().saturating_sub(addr.as_u64()) as i64;
+        let mostsigsize = size as i64 - (overlap + vn_size);
+        let vn_space = vn.read().unwrap().address_space;
+
+        // cc:429-448: create "most significant" piece if needed.
+        if mostsigsize > 0 {
+            let piece_addr = addr.as_u64().wrapping_add((overlap + vn_size) as u64);
+            let piece_vn = fd.vbank.create_with_space(mostsigsize as usize, vn_space, piece_addr);
+            piece_vn.write().unwrap().set_active_heritage();
+            let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            if let Some(def_op) = def_op {
+                let op_addr = def_op.read().unwrap().get_addr();
+                let newop = fd.new_op(2, op_addr);
+                let _out_vn = fd.new_varnode_out(mostsigsize as usize, Address::new(piece_addr), &newop);
+                fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+                fd.op_set_input(&newop, piece_vn, 0);
+                let off_const = fd.new_constant(8, (overlap + vn_size) as u64);
+                fd.op_set_input(&newop, off_const, 1);
+                fd.op_insert_before(&newop, &PcodeOpRef(def_op));
+            }
+        }
+
+        // cc:450-479: create "least significant" piece if needed.
+        if overlap > 0 {
+            let piece_vn = fd.vbank.create_with_space(overlap as usize, vn_space, addr.as_u64());
+            piece_vn.write().unwrap().set_active_heritage();
+            let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+            if let Some(def_op) = def_op {
+                let op_addr = def_op.read().unwrap().get_addr();
+                let newop = fd.new_op(2, op_addr);
+                let _out_vn = fd.new_varnode_out(overlap as usize, addr, &newop);
+                fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
+                fd.op_set_input(&newop, piece_vn, 0);
+                let off_const = fd.new_constant(8, 0u64);
+                fd.op_set_input(&newop, off_const, 1);
+                fd.op_insert_before(&newop, &PcodeOpRef(def_op));
+            }
+        }
+
+        // cc:480-506: create the PIECE op that joins the pieces.
+        let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        if let Some(def_op) = def_op {
+            let op_addr = def_op.read().unwrap().get_addr();
+            let newop = fd.new_op(3, op_addr);
+            fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
+            let most_addr = addr.as_u64().wrapping_add((overlap + vn_size) as u64);
+            let most_vn = fd.vbank.create_with_space(size as usize, vn_space, most_addr);
+            let least_vn = fd.vbank.create_with_space(size as usize, vn_space, addr.as_u64());
+            fd.op_set_input(&newop, most_vn, 0);
+            fd.op_set_input(&newop, least_vn, 1);
+            let full_vn = fd.new_varnode_out(size as usize, addr, &newop);
+            full_vn.write().unwrap().set_active_heritage();
+            fd.op_insert_before(&newop, &PcodeOpRef(def_op));
+        }
+    }
+
     // Ghidra: heritage.cc:1157 Heritage::guard
     /// Guard a specific address range for heritage. Faithful to
     /// `Heritage::guard` (heritage.cc:1157-1200):
@@ -1074,8 +1181,12 @@ impl Heritage {
             // cc:1173-1174: normalizeReadSize if vn.size < size.
             let vn_size = vn_arc.read().unwrap().get_size() as i32;
             if vn_size < size {
-                // TODO: implement normalizeReadSize (creates SUBPIECE).
-                // Requires fd op-creation API in context. Tracked as gap.
+                // Ghidra cc:1174: normalizeReadSize(vn, op, addr, size)
+                let desc_op = vn_arc.read().unwrap().lone_descend();
+                if let Some(read_op) = desc_op {
+                    let new_vn = self.normalize_read_size(fd, vn_arc, &read_op, addr, size);
+                    *vn_arc = new_vn;
+                }
             }
             // cc:1175: setActiveHeritage.
             vn_arc.write().unwrap().set_active_heritage();
@@ -1084,7 +1195,8 @@ impl Heritage {
         for vn_arc in write.iter_mut() {
             let vn_size = vn_arc.read().unwrap().get_size() as i32;
             if vn_size < size {
-                // TODO: implement normalizeWriteSize (creates PIECE).
+                // Ghidra cc:1181: normalizeWriteSize(vn, addr, size)
+                self.normalize_write_size(fd, vn_arc, addr, size);
             }
             vn_arc.write().unwrap().set_active_heritage();
         }
