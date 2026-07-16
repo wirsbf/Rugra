@@ -404,6 +404,51 @@ impl Varnode {
         s
     }
 
+    // Ghidra: varnode.cc:533 Varnode::operator<
+    /// Ghidra's Varnode comparison for sorting (loc→size→flag→def SeqNum).
+    /// Faithful to `operator<` (varnode.cc:533-547). Used by VarnodeCompareLocDef.
+    /// Note: Rugra's Ord impl uses create_index (for BTreeSet identity);
+    /// this method implements Ghidra's operator< semantics.
+    pub fn ghidra_less(&self, other: &Varnode) -> bool {
+        if self.loc != other.loc { return self.loc < other.loc; }
+        if self.size != other.size { return self.size < other.size; }
+        let f1 = self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        let f2 = other.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        if f1 != f2 {
+            // cc:542: -1 forces free varnodes to come last
+            return (f1.wrapping_sub(1)) < (f2.wrapping_sub(1));
+        }
+        if f1 == varnode_flags::WRITTEN {
+            let self_seq = self.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            let other_seq = other.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            if self_seq != other_seq {
+                return self_seq < other_seq;
+            }
+        }
+        false
+    }
+
+    // Ghidra: varnode.cc:556 Varnode::operator==
+    /// Ghidra's Varnode equality (loc+size+flag+def SeqNum).
+    /// Faithful to `operator==` (varnode.cc:556-570).
+    pub fn ghidra_eq(&self, other: &Varnode) -> bool {
+        if self.loc != other.loc { return false; }
+        if self.size != other.size { return false; }
+        let f1 = self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        let f2 = other.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN);
+        if f1 != f2 { return false; }
+        if f1 == varnode_flags::WRITTEN {
+            let self_seq = self.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            let other_seq = other.def.as_ref().and_then(|w| w.upgrade())
+                .map(|op| op.read().unwrap().start.clone());
+            if self_seq != other_seq { return false; }
+        }
+        true
+    }
+
     // Ghidra: varnode.cc:578 Varnode::isFree
     pub fn is_free(&self) -> bool {
         (self.flags & (varnode_flags::INPUT | varnode_flags::WRITTEN)) == 0
