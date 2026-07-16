@@ -692,6 +692,18 @@ impl<'a> CollapseStructure<'a> {
             self.collapse_conditions();
             if std::time::Instant::now() > deadline { break; }
             self.collapse_bool_conditions();
+            // Ghidra collapseInternal rules (cc:1797-1828) — try per-block.
+            // These are the Ghidra-faithful rule methods that eventually
+            // replace the self-invented phase methods above.
+            let rule_size = self.graph.get_size();
+            for ri in 0..rule_size {
+                if std::time::Instant::now() > deadline { break; }
+                self.try_rule_or(ri);
+            }
+            for ri in 0..rule_size {
+                if std::time::Instant::now() > deadline { break; }
+                self.try_rule_inf_loop(ri);
+            }
             // Switch detection LAST (after loops/conditions/sequences), matching
             // Ghidra's collapseInternal order where ruleBlockSwitch runs after
             // cat/proper_if/if_else/while_do/do_while. This lets loop/if structuring
