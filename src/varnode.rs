@@ -1239,6 +1239,36 @@ impl Varnode {
     /// `Varnode::isBooleanValue` (varnode.cc:942-953). If written, checks the
     /// defining op's isCalculatedBool flag. If an input, checks type annotation
     /// (only when use_annotation is true).
+    // Ghidra: varnode.cc:696 Varnode::getUsePoint
+    /// Get the use-point address for this Varnode. Faithful to
+    /// `getUsePoint` (varnode.cc:696-703).
+    pub fn get_use_point(&self, _fd: &crate::funcdata::Funcdata) -> Address {
+        if self.is_written() {
+            if let Some(def_weak) = self.def.as_ref().and_then(|w| w.upgrade()) {
+                return def_weak.read().unwrap().get_addr();
+            }
+        }
+        Address::new(0)
+    }
+
+    // Ghidra: varnode.cc:958 Varnode::isZeroExtended
+    /// Check if this Varnode is a zero-extended form of a smaller value.
+    /// Faithful to `isZeroExtended` (varnode.cc:958-975).
+    pub fn is_zero_extended(&self, base_size: usize) -> bool {
+        if !self.is_written() { return false; }
+        let def = match self.def.as_ref().and_then(|w| w.upgrade()) {
+            Some(d) => d, None => return false,
+        };
+        let def_r = def.read().unwrap();
+        if def_r.opcode != crate::opcodes::OpCode::CPUI_INT_ZEXT { return false; }
+        let in_size = match def_r.get_in(0) {
+            Some(v) => v.read().unwrap().get_size(),
+            None => return false,
+        };
+        in_size == base_size
+    }
+
+    // Ghidra: varnode.cc:942 Varnode::isBooleanValue
     pub fn is_boolean_value(&self, use_annotation: bool) -> bool {
         if self.is_written() {
             if let Some(def) = self.def.as_ref().and_then(|w| w.upgrade()) {
@@ -2392,6 +2422,44 @@ fn find_piece_shadow(vn: &Varnode, mut least_byte: i32, piece: &Varnode) -> bool
     // CPUI_PIECE input too big: recurse.
     let tmpvn = tmpvn_arc.read().unwrap();
     find_piece_shadow(&tmpvn, least_byte, piece)
+}
+
+// Ghidra: varnode.cc:2014 contiguous_test
+/// Test if two Varnodes are contiguous pieces of a whole via SUBPIECE.
+/// Faithful to `contiguous_test` (varnode.cc:2014-2037).
+pub fn contiguous_test(vn1: &Varnode, vn2: &Varnode) -> bool {
+    use crate::opcodes::OpCode;
+    if vn1.is_input() || vn2.is_input() { return false; }
+    if !vn1.is_written() || !vn2.is_written() { return false; }
+    let def1 = match vn1.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false };
+    let def2 = match vn2.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false };
+    let d1 = def1.read().unwrap();
+    let d2 = def2.read().unwrap();
+    if d1.opcode != OpCode::CPUI_SUBPIECE || d2.opcode != OpCode::CPUI_SUBPIECE { return false; }
+    let vnwhole1 = match d1.get_in(0) { Some(v) => v.clone(), None => return false };
+    let vnwhole2 = match d2.get_in(0) { Some(v) => v.clone(), None => return false };
+    if !Arc::ptr_eq(&vnwhole1, &vnwhole2) { return false; }
+    // vn2 must be least significant (offset 0)
+    let off2 = match d2.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false };
+    if off2 != 0 { return false; }
+    // vn1 must be contiguous above vn2
+    let off1 = match d1.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false };
+    if off1 != vn2.size as u64 { return false; }
+    true
+}
+
+// Ghidra: varnode.cc:2045 findContiguousWhole
+/// Return the whole Varnode containing vn1+vn2 (assuming contiguous_test passed).
+/// Faithful to `findContiguousWhole` (varnode.cc:2045-2051).
+pub fn find_contiguous_whole(vn1: &Varnode) -> Option<Arc<RwLock<Varnode>>> {
+    if vn1.is_written() {
+        if let Some(def) = vn1.def.as_ref().and_then(|w| w.upgrade()) {
+            if def.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_SUBPIECE {
+                return def.read().unwrap().get_in(0).cloned();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
