@@ -1117,16 +1117,27 @@ impl Varnode {
     /// AncestorRealistic::enterNode (SUBPIECE case) to detect a no-op
     /// truncation extracting the same physical bytes.
     pub fn overlap(&self, other: &Varnode) -> i32 {
+        // cc:178-180 (little-endian): delegates to loc.overlap(0, op.loc, op.size)
+        // which is Address::overlap (address.cc:153-165).
+        // address.cc:158: base != op.base → -1
         if self.address_space != other.address_space {
             return -1;
         }
-        let off = other.get_offset() as i64;
-        let end = off + other.size as i64;
-        let my_off = self.get_offset() as i64;
-        if my_off < off || my_off >= end {
+        // address.cc:159: IPTR_CONSTANT → -1
+        if self.address_space == AddressSpace::Const {
             return -1;
         }
-        (my_off - off) as i32
+        // address.cc:161-164: dist = wrapOffset(offset + skip - op.offset);
+        //                    dist >= size → -1; else dist.
+        // skip=0 for little-endian.
+        let off = other.get_offset();
+        let my_off = self.get_offset();
+        // wrapOffset mimics modular arithmetic of uintb
+        let dist = my_off.wrapping_sub(off);
+        if dist >= other.get_size() as u64 {
+            return -1;
+        }
+        dist as i32
     }
 
     // Ghidra: varnode.cc:217 Varnode::overlap(const Address&, int4)
@@ -1329,11 +1340,17 @@ impl Varnode {
         false
     }
 
-    // Ghidra: varnode.hh:226 Varnode::contains
+    // Ghidra: varnode.cc:105 Varnode::contains
     pub fn contains(&self, other: &Varnode) -> i32 {
+        // cc:108: spaces differ
         if self.address_space != other.address_space {
             return 3;
         }
+        // cc:109: constant space short-circuit (this is a constant)
+        if self.address_space == AddressSpace::Const {
+            return 3;
+        }
+        // cc:110-115: offset range check (uintb = unsigned)
         let s_off = self.get_offset();
         let o_off = other.get_offset();
         let s_end = s_off.wrapping_add(self.get_size() as u64);

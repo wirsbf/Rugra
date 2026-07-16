@@ -690,7 +690,8 @@
 - `is_indirect_creation`（varnode.hh:248）— INDIRECT_CREATION flag 访问器。
 - `get_type`（varnode.hh:192）— 返回 v_type。解锁 RulePieceStructure 的 leaf->getType() 路径。
 - `characterize_overlap(&Varnode) -> i32`（varnode.cc:155-170）— 0=无重叠/1=部分/2=完全相同。解锁 RuleIndirectCollapse。
-- `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。
+- `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。含 `IPTR_CONSTANT → 3` 短路（cc:109）：当 `self` 处于常量空间时直接返回 3，等价 Ghidra `loc.getSpace()->getType()==IPTR_CONSTANT`。
+- `overlap(&Varnode) -> i32`（varnode.cc:178 + address.cc:153-165）— 返回 LSB 相对偏移。含 `IPTR_CONSTANT → -1` 短路（address.cc:159）：当 `self` 处于常量空间时直接返回 -1。范围算术用 unsigned `wrapping_sub` 模拟 Ghidra `wrapOffset`（address.cc:161），`dist >= size → -1`（cc:163）。
 
 ### 2026-07-01（续 2）：update_type + get_type_read_facing + copy_symbol（解锁 ~15 TODO）
 - `update_type(ct)`（varnode.cc:456-464）— 无锁设类型，typelock 时不改。
