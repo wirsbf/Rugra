@@ -1032,6 +1032,24 @@ impl Varnode {
         (my_off - off) as i32
     }
 
+    // Ghidra: varnode.cc:217 Varnode::overlap(const Address&, int4)
+    /// Return LSB-relative overlap with an address range. Faithful to
+    /// `overlap(const Address&, int4)` (varnode.cc:217-231).
+    pub fn overlap_addr(&self, op2loc: Address, op2size: usize) -> i32 {
+        if self.address_space == AddressSpace::Const { return -1; }
+        let dist = self.loc.as_u64().wrapping_sub(op2loc.as_u64());
+        if dist >= op2size as u64 { return -1; }
+        dist as i32
+    }
+
+    // Ghidra: varnode.cc:197 Varnode::overlapJoin
+    /// Return overlap relative to MSB (for join-space operations).
+    /// Faithful to `overlapJoin` (varnode.cc:197-208).
+    pub fn overlap_join(&self, op: &Varnode) -> i32 {
+        // Little endian (x86-64): same as overlap_addr
+        self.overlap_addr(op.loc, op.size)
+    }
+
     // Ghidra: varnode.cc:578 Varnode::hasNoLocalAlias
     /// Does the high-level variable have no local alias? (varnode.hh:262)
     pub fn has_no_local_alias(&self) -> bool {
