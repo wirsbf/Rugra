@@ -31,6 +31,12 @@ pub mod block_flags {
     pub const UNSTRUCTURED_TARG: u32 = 0x20; // f_unstructured_targ (block.hh:93)
     pub const MARK: u32 = 0x80;              // f_mark (block.hh:94)
     pub const ENTRY_POINT: u32 = 0x200;      // f_entry_point (block.hh:96)
+    /// Ghidra f_interior_gotoout = 0x400 (block.hh:97). Block has an unstructured
+    /// jump out of its interior. Set by setGotoBranch (block.cc:311).
+    pub const INTERIOR_GOTOOUT: u32 = 0x400;
+    /// Ghidra f_interior_gotoin = 0x800 (block.hh:98). Block is the target of an
+    /// unstructured jump to its interior. Set by setGotoBranch (block.cc:313).
+    pub const INTERIOR_GOTOIN: u32 = 0x800;
     pub const DEAD: u32 = 0x4000;            // f_dead (block.hh:101)
     pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
     /// Ghidra f_duplicate_block = 0x40000 (block.hh:106). Duplicated block.
@@ -378,12 +384,24 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.hh:336 FlowBlock::isInteriorGotoTarget
     /// Is this block the target of an unstructured (goto) jump from inside
     /// a loop body? Faithful to `isInteriorGotoTarget()` (block.hh:336).
-    /// Simplified: returns true if any in-edge is a goto.
+    /// Ghidra reads the f_interior_gotoin flag (set by setGotoBranch
+    /// block.cc:313). Rugra now sets that flag in set_goto_branch, so this
+    /// checks it directly. We also keep the in-edge goto check as a
+    /// fallback for edges marked GOTO via other paths.
     fn is_interior_goto_target(&self) -> bool {
+        if (self.get_flags() & block_flags::INTERIOR_GOTOIN) != 0 { return true; }
         for i in 0..self.size_in() {
             if self.is_goto_in(i) { return true; }
         }
         false
+    }
+
+    // Ghidra: block.hh:324 FlowBlock::hasInteriorGoto
+    /// Is there an unstructured goto out of this block's interior? Faithful
+    /// to `hasInteriorGoto()` (block.hh:324). Checks f_interior_gotoout
+    /// (set by setGotoBranch block.cc:311).
+    fn has_interior_goto(&self) -> bool {
+        (self.get_flags() & block_flags::INTERIOR_GOTOOUT) != 0
     }
 
     // Ghidra: block.hh:332 FlowBlock::isComplex

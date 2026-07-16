@@ -796,6 +796,13 @@ RPO 常用于：
 - FlowBlock 新增 `effective_size_out()`/`effective_get_out()`，排除 goto 标记边。
 - block_flags 新增 `GOTO_EDGE_0`/`GOTO_EDGE_1`。
 
+### 2026-07-16：B4 INTERIOR_GOTOOUT/GOTOIN flags + set_goto_branch 完整化
+
+- block_flags 新增 `INTERIOR_GOTOOUT`（0x400, block.hh:97）+ `INTERIOR_GOTOIN`（0x800, block.hh:98），匹配 Ghidra 位值。
+- `set_goto_branch(bl, j)` 对齐 Ghidra `FlowBlock::setGotoBranch`（block.cc:305-314）**三件事**：edge flag + source `INTERIOR_GOTOOUT` + target `INTERIOR_GOTOIN`。此前只设 source 的 GOTO_EDGE，target 侧 `is_interior_goto_target` 失效。
+- `is_interior_goto_target` 先查 `INTERIOR_GOTOIN`（Ghidra 模型），回退 in-edge 扫描。
+- 新增 `has_interior_goto`（block.hh:324）查 `INTERIOR_GOTOOUT`。
+
 ### 2026-06-25：is_consumed() + 对齐 Ghidra collapseInternal
 
 - FlowBlock::is_consumed() — DEAD flag 检查，对齐 Ghidra sizeIn==0&&sizeOut==0。

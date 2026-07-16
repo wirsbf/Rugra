@@ -1148,22 +1148,53 @@ impl Funcdata {
         false
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::setGotoBranch
+    // Ghidra: block.cc:305 FlowBlock::setGotoBranch
     /// Mark the j-th out-edge of a block as an unstructured goto. Faithful to
-    /// `FlowBlock::setGotoBranch` (block.cc).
+    /// `FlowBlock::setGotoBranch` (block.cc:305-314), which does THREE things:
+    ///   1. setOutEdgeFlag(j, f_goto_edge) — mark the edge as goto.
+    ///   2. flags |= f_interior_gotoout — mark that there's a goto OUT of this
+    ///      block's interior (read by hasInteriorGoto).
+    ///   3. outofthis[j].point->flags |= f_interior_gotoin — mark the TARGET
+    ///      block as a goto target (read by isInteriorGotoTarget).
+    /// Previously Rugra only did (1) for BlockBasic, so is_interior_goto_target
+    /// could not behave correctly for goto-marked targets.
     pub fn set_goto_branch(
         &mut self,
         bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         j: usize,
     ) {
-        let mut bl_rg = bl.write().unwrap();
-        if let Some(any) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-            // Use the GOTO_EDGE_0/GOTO_EDGE_1 flags to mark the edge.
-            match j {
-                0 => any.flags |= crate::block::block_flags::GOTO_EDGE_0,
-                1 => any.flags |= crate::block::block_flags::GOTO_EDGE_1,
-                _ => {} // Only edges 0 and 1 have dedicated flags.
+        // cc:307-310: bounds check + setOutEdgeFlag(j, f_goto_edge).
+        // Capture the target block for step (3) before taking the write lock.
+        let target_opt: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+            let bl_rg = bl.read().unwrap();
+            if j < bl_rg.size_out() {
+                bl_rg.get_out(j).map(|e| e.point.clone())
+            } else {
+                None
             }
+        };
+        {
+            let mut bl_rg = bl.write().unwrap();
+            // cc:311: flags |= f_interior_gotoout (source-side mark).
+            bl_rg.set_flags(crate::block::block_flags::INTERIOR_GOTOOUT);
+            // cc:308: setOutEdgeFlag(j, f_goto_edge). For BlockBasic we use the
+            // dedicated GOTO_EDGE_0/1 flags; for structured blocks we set the
+            // edge's F_GOTO_EDGE flag directly.
+            if let Some(any) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                match j {
+                    0 => any.flags |= crate::block::block_flags::GOTO_EDGE_0,
+                    1 => any.flags |= crate::block::block_flags::GOTO_EDGE_1,
+                    _ => {}
+                }
+            } else {
+                // Structured block: set F_GOTO_EDGE on the edge directly.
+                bl_rg.set_out_edge_flag(j, crate::block::edge_flags::F_GOTO_EDGE);
+            }
+        }
+        // cc:313: target->flags |= f_interior_gotoin (target-side mark).
+        if let Some(target) = target_opt {
+            let mut tg = target.write().unwrap();
+            tg.set_flags(crate::block::block_flags::INTERIOR_GOTOIN);
         }
     }
 

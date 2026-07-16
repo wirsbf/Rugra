@@ -673,7 +673,7 @@ infra 仍待补），故影响 emit 顺序的 Rule（需块内插入）目前仅
 
 - `push_branch(bb, slot, bbnew) -> Result<(), String>`（funcdata_block.cc:404）：将 CBRANCH 转为 BRANCH（移除条件输入 slot 1），重定向 out-edge 到 BRANCHIND 块。验证源是 CBRANCH（2 out-edges）+ 目标以 BRANCHIND 结尾。
 - `force_goto(pcop, pcdest) -> bool`（funcdata_block.cc:752）：遍历所有基本块，找到地址为 pcop 的最后 op，标记其指向 pcdest 的 out-edge 为非结构化 goto。
-- `set_goto_branch(bl, j)`：标记 out-edge j 为 goto（设置 GOTO_EDGE_0/1 标志）。
+- `set_goto_branch(bl, j)`：标记 out-edge j 为 goto，对齐 Ghidra `FlowBlock::setGotoBranch`（block.cc:305-314）**三件事**：(1) edge flag（BlockBasic 用 GOTO_EDGE_0/1，结构块用 F_GOTO_EDGE），(2) source `INTERIOR_GOTOOUT`（0x400，block.hh:97），(3) target `INTERIOR_GOTOIN`（0x800，block.hh:98）。此前只做 (1)，导致 `is_interior_goto_target` 对 goto 标记的目标块失效。**2026-07-16 B4 修复**。
 - `move_out_edge(bb, slot, bbnew)`：重定向 out-edge（BlockGraph::moveOutEdge 等价），更新源/旧目标/新目标的 edge 列表 + reverse_index。
 
 ## 2026-06-27（续 2）：remove_branch
