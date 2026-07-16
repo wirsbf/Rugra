@@ -2092,11 +2092,60 @@ impl Heritage {
     /// TODO: requires JoinRecord piece specifications.
     pub fn split_join_level(
         &mut self,
-        _fd: &mut Funcdata,
-        _lastcombo: &[Arc<RwLock<Varnode>>],
-        _nextlev: &mut Vec<Option<Arc<RwLock<Varnode>>>>,
+        fd: &mut Funcdata,
+        lastcombo: &[Arc<RwLock<Varnode>>],
+        nextlev: &mut Vec<Option<Arc<RwLock<Varnode>>>>,
+        joinrec: &crate::space::JoinRecord,
     ) {
-        // TODO: requires JoinRecord (architecture.cc JoinRecord).
+        use crate::space::VarnodeData;
+        let numpieces = joinrec.num_pieces();
+        let mut recnum = 0;
+        for curvn_arc in lastcombo {
+            let curvn_size = curvn_arc.read().unwrap().get_size();
+            // cc:2075: if size matches a single piece, pass through
+            if recnum < numpieces && curvn_size == joinrec.get_piece(recnum).size {
+                nextlev.push(Some(curvn_arc.clone()));
+                nextlev.push(None);
+                recnum += 1;
+            } else {
+                // cc:2081-2089: accumulate piece sizes to find j
+                let mut sizeaccum = 0;
+                let mut j = recnum;
+                while j < numpieces {
+                    sizeaccum += joinrec.get_piece(j).size;
+                    if sizeaccum == curvn_size {
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                // cc:2090: numinhalf = (j-recnum) / 2
+                let numinhalf = (j - recnum) / 2;
+                if numinhalf == 0 { continue; }
+                // cc:2091-2093: accumulate mosthalf size
+                let mut mh_size = 0;
+                for k in 0..numinhalf {
+                    mh_size += joinrec.get_piece(recnum + k).size;
+                }
+                // cc:2095-2104: create mosthalf and leasthalf
+                let mosthalf = if numinhalf == 1 {
+                    let p = joinrec.get_piece(recnum);
+                    fd.vbank.create_with_space(p.size, p.space, p.offset)
+                } else {
+                    fd.new_unique(mh_size)
+                };
+                let lh_size = curvn_size - mh_size;
+                let leasthalf = if j - recnum == 2 {
+                    let p = joinrec.get_piece(recnum + 1);
+                    fd.vbank.create_with_space(p.size, p.space, p.offset)
+                } else {
+                    fd.new_unique(lh_size)
+                };
+                nextlev.push(Some(mosthalf));
+                nextlev.push(Some(leasthalf));
+                recnum = j;
+            }
+        }
     }
 
     // Ghidra: heritage.cc:2236 Heritage::floatExtensionRead
