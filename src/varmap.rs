@@ -1141,6 +1141,70 @@ impl MapState {
                     let flags = if is_const { range_flags::COPY_CONSTANT } else { 0 };
                     self.add_fixed_type(offset, dtype, flags);
                 }
+                OpCode::CPUI_PIECE => {
+                    // cc:1165-1179: treat PIECE as two COPYs.
+                    // slot = addr.isBigEndian() ? 0 : 1  (Rugra x86 = little → slot 1)
+                    let in_first = def_op.inrefs.get(1).cloned();
+                    let in_second = def_op.inrefs.get(0).cloned();
+                    drop(def_op);
+                    if let Some(in_first) = &in_first {
+                        let iv = in_first.read().unwrap();
+                        let iv_space = iv.get_space();
+                        let iv_off = iv.get_offset();
+                        let iv_size = iv.get_size() as u64;
+                        let iv_dtype = iv.v_type.clone();
+                        // cc:1171: inFirst->getAddr() != addr
+                        let same_addr1 = iv_space == crate::space::AddressSpace::Stack
+                            && iv_off == offset;
+                        drop(iv);
+                        if !same_addr1 {
+                            self.add_fixed_type(iv_off, iv_dtype, 0);
+                        }
+                        // cc:1173: addr = addr + inFirst->getSize()
+                        let addr2 = offset.wrapping_add(iv_size);
+                        if let Some(in_second) = &in_second {
+                            let iv2 = in_second.read().unwrap();
+                            let iv2_space = iv2.get_space();
+                            let iv2_off = iv2.get_offset();
+                            let iv2_dtype = iv2.v_type.clone();
+                            // cc:1175: inSecond->getAddr() != addr
+                            let same_addr2 = iv2_space == crate::space::AddressSpace::Stack
+                                && iv2_off == addr2;
+                            drop(iv2);
+                            if !same_addr2 {
+                                self.add_fixed_type(iv2_off, iv2_dtype, 0);
+                            }
+                        }
+                    }
+                    if Self::is_read_active(&vn_arc.0) {
+                        self.add_fixed_type(offset, dtype, 0);
+                    }
+                }
+                OpCode::CPUI_SUBPIECE => {
+                    // cc:1181-1196: don't treat as active write if just copying
+                    // to same storage. trunc depends on endianness.
+                    // Little-endian (Rugra x86): trunc = (int4)op->getIn(1)->getOffset();
+                    let in0 = def_op.inrefs.first().cloned();
+                    let in1_const_off = def_op.inrefs.get(1)
+                        .map(|i| i.read().unwrap().get_offset())
+                        .unwrap_or(0);
+                    drop(def_op);
+                    if let Some(in0) = &in0 {
+                        let iv = in0.read().unwrap();
+                        let iv_space = iv.get_space();
+                        let iv_off = iv.get_offset();
+                        // little-endian: trunc = in1 offset; addr = iv_off + trunc
+                        let trunc = in1_const_off;
+                        let addr_off = iv_off.wrapping_add(trunc);
+                        drop(iv);
+                        // addr != vn->getAddr(): compare space + offset.
+                        let same_addr = iv_space == crate::space::AddressSpace::Stack
+                            && addr_off == offset;
+                        if !same_addr || Self::is_read_active(&vn_arc.0) {
+                            self.add_fixed_type(offset, dtype, 0);
+                        }
+                    }
+                }
                 _ => {
                     drop(def_op);
                     self.add_fixed_type(offset, dtype, 0);
