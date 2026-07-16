@@ -828,6 +828,101 @@ impl PcodeOpBank {
         self.uniqid
     }
 
+    // Ghidra: op.cc:1039 PcodeOpBank::insertAfterDead
+    /// Move op to right after prev in the dead list. Both must be dead.
+    /// Faithful to `insertAfterDead` (op.cc:1039-1048).
+    pub fn insert_after_dead(&mut self, op: &PcodeOpRef, prev: &PcodeOpRef) {
+        // cc:1042: verify both are dead.
+        if !op.0.read().unwrap().is_dead() || !prev.0.read().unwrap().is_dead() {
+            eprintln!("[OP] WARN: insertAfterDead on non-dead op");
+            return;
+        }
+        // Remove op from deadlist, reinsert after prev.
+        let op_ptr = Arc::as_ptr(&op.0);
+        let prev_pos = self.deadlist.iter().position(|r| Arc::as_ptr(&r.0) == Arc::as_ptr(&prev.0));
+        if let Some(prev_idx) = prev_pos {
+            self.deadlist.retain(|r| Arc::as_ptr(&r.0) != op_ptr);
+            self.deadlist.insert(prev_idx + 1, op.clone());
+        }
+    }
+
+    // Ghidra: op.cc:1056 PcodeOpBank::moveSequenceDead
+    /// Move a sequence of ops to right after prev in the dead list.
+    /// Faithful to `moveSequenceDead` (op.cc:1056-1065).
+    pub fn move_sequence_dead(&mut self, firstop: &PcodeOpRef, lastop: &PcodeOpRef, prev: &PcodeOpRef) {
+        let first_ptr = Arc::as_ptr(&firstop.0);
+        let last_ptr = Arc::as_ptr(&lastop.0);
+        let prev_ptr = Arc::as_ptr(&prev.0);
+
+        // Find positions.
+        let first_pos = self.deadlist.iter().position(|r| Arc::as_ptr(&r.0) == first_ptr);
+        let last_pos = self.deadlist.iter().position(|r| Arc::as_ptr(&r.0) == last_ptr);
+        let prev_pos = self.deadlist.iter().position(|r| Arc::as_ptr(&r.0) == prev_ptr);
+
+        if let (Some(first_idx), Some(last_idx), Some(prev_idx)) = (first_pos, last_pos, prev_pos) {
+            if last_idx < first_idx { return; } // Invalid range
+            // Extract the sequence.
+            let mut seq: Vec<PcodeOpRef> = self.deadlist.drain(first_idx..=last_idx).collect();
+            // Adjust prev_idx if it was after the removed range.
+            let prev_idx = if prev_idx > last_idx { prev_idx - (last_idx - first_idx + 1) } else { prev_idx };
+            // Reinsert after prev.
+            self.deadlist.splice(prev_idx + 1..prev_idx + 1, seq.drain(..));
+        }
+    }
+
+    // Ghidra: op.cc:1071 PcodeOpBank::markIncidentalCopy
+    /// Mark COPY ops in the dead list range [firstop, lastop] as incidental.
+    /// Faithful to `markIncidentalCopy` (op.cc:1071-1083).
+    pub fn mark_incidental_copy(&mut self, firstop: &PcodeOpRef, lastop: &PcodeOpRef) {
+        let first_ptr = Arc::as_ptr(&firstop.0);
+        let last_ptr = Arc::as_ptr(&lastop.0);
+        let mut in_range = false;
+        let mut done = false;
+        for op_ref in &self.deadlist {
+            let ptr = Arc::as_ptr(&op_ref.0);
+            if ptr == first_ptr { in_range = true; }
+            if in_range {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_COPY {
+                    drop(op);
+                    op_ref.0.write().unwrap().addlflags |= crate::op::op_addl_flags::INCIDENTAL_COPY;
+                }
+            }
+            if ptr == last_ptr { done = true; break; }
+        }
+        let _ = done;
+    }
+
+    // Ghidra: op.cc:1089 PcodeOpBank::target
+    /// Find the first PcodeOp at or after the given Address.
+    /// Faithful to `target` (op.cc:1089-1097).
+    pub fn target(&self, addr: crate::address::Address) -> Option<PcodeOpRef> {
+        for op_ref in &self.optree {
+            let op = op_ref.0.read().unwrap();
+            if op.start.addr >= addr {
+                return Some(op_ref.clone());
+            }
+        }
+        None
+    }
+
+    // Ghidra: op.cc:1110 PcodeOpBank::fallthru
+    /// Find the fall-through op (next op in alive list after the given op).
+    /// Faithful to `fallthru` (op.cc:1110-1144).
+    pub fn fallthru(&self, op: &PcodeOpRef) -> Option<PcodeOpRef> {
+        let op_ptr = Arc::as_ptr(&op.0);
+        let mut found = false;
+        for next_ref in &self.alivelist {
+            if found {
+                return Some(next_ref.clone());
+            }
+            if Arc::as_ptr(&next_ref.0) == op_ptr {
+                found = true;
+            }
+        }
+        None
+    }
+
     // Ghidra: op.hh:306 PcodeOpBank::setUniqId
     pub fn set_uniqid(&mut self, val: u32) {
         self.uniqid = val;

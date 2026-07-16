@@ -871,3 +871,4 @@ PcodeOpRaw
 - `is_assignment`/`is_flow_break`/`is_instruction_start`(op.hh inline)。
 - `is_collapsible`(cc:115)、`set_num_inputs`/`remove_input`/`insert_input_slot`(cc:290/301/311)、`get_repeat_slot`(cc:93)、`print_debug`(cc:376)。
  
+ 
