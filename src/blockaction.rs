@@ -881,6 +881,10 @@ impl<'a> CollapseStructure<'a> {
         if self.try_rule_if_else(i) { return; }
         if self.try_rule_while_do(i) { return; }
         if self.try_rule_do_while(i) { return; }
+        // Ghidra cc:1821: ruleBlockInfLoop (between do_while and switch)
+        if self.try_rule_inf_loop(i) { return; }
+        // Ghidra cc:1825: ruleBlockSwitch (last in collapseInternal)
+        if self.try_rule_switch(i) { return; }
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::applyRulesToChildren
