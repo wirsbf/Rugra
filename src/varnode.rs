@@ -989,6 +989,36 @@ impl Varnode {
         (self.flags & varnode_flags::RETURN_ADDRESS) != 0
     }
 
+    // Ghidra: varnode.hh:241 Varnode::setReturnAddress
+    pub fn set_return_address(&mut self) {
+        self.flags |= varnode_flags::RETURN_ADDRESS;
+    }
+
+    // Ghidra: varnode.hh:222 Varnode::isMapped
+    pub fn is_mapped(&self) -> bool {
+        (self.flags & varnode_flags::MAPPED) != 0
+    }
+
+    // Ghidra: varnode.hh:292 Varnode::setWriteMask
+    pub fn set_write_mask(&mut self) {
+        // WRITEMASK is not a Ghidra flag name; Ghidra uses writemask which
+        // maps to a separate field in TypeOp, not Varnode. In Ghidra's
+        // heritage.cc, vn->setWriteMask() sets the Varnode::writemask flag
+        // which is varnode_flags::WRITEMASK (not currently defined in Rugra).
+        // Using a reserved bit pattern.
+        self.flags |= 0x4000_0000; // Reserved for writemask
+    }
+
+    // Ghidra: varnode.hh:292 Varnode::clearWriteMask
+    pub fn clear_write_mask(&mut self) {
+        self.flags &= !0x4000_0000;
+    }
+
+    // Ghidra: varnode.hh:293 Varnode::isWriteMask
+    pub fn is_write_mask(&self) -> bool {
+        (self.flags & 0x4000_0000) != 0
+    }
+
     // Ghidra: varnode.hh:271 Varnode::isIndirectZero
     /// Is this an indirect creation that is also a constant (i.e. a possible
     /// zero produced indirectly by a call)? Faithful to
