@@ -540,9 +540,13 @@ impl ActionMergeRequired {
 
 impl Action for ActionMergeRequired {
     // Ghidra: coreaction.hh:369 ActionMergeRequired::apply
+    /// Faithful: data.getMerge().mergeAddrTied(); groupPartials(); mergeMarker();
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut merge = crate::merge::Merge::new();
+        // Ghidra coreaction.hh:370: three calls in sequence.
         merge.merge_addr_tied(fd);
+        merge.group_partials(fd);  // currently no-op (CONCAT infra TODO)
+        merge.merge_marker(fd);
         Ok(action_status::NO_CHANGE)
     }
 

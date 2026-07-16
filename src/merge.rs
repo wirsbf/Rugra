@@ -765,7 +765,7 @@ impl Merge {
     /// (merge.cc:967-976). Rugra has no `protoPartial` registry (CONCAT
     /// reconstruction is not ported), so there is nothing to group. Kept as
     /// a named no-op to preserve the step sequence.
-    fn group_partials(&mut self, _fd: &mut Funcdata) {
+    pub fn group_partials(&mut self, _fd: &mut Funcdata) {
         // TODO: port CONCAT partial-root grouping when PieceNode/VariablePiece
         // machinery is available (merge.cc:967, groupPartialRoot at 1374).
     }
