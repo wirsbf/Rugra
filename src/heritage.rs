@@ -3,9 +3,10 @@
 //! Corresponds to Ghidra's `heritage.hh`
 
 use crate::address::Address;
-use crate::block::{BlockBasic, FlowBlock};
+use crate::block::{BlockBasic, BlockGraph, FlowBlock};
 use crate::funcdata::Funcdata;
-use crate::op::{PcodeOp, PcodeOpBank};
+use crate::op::{PcodeOp, PcodeOpBank, PcodeOpRef};
+use crate::opcodes::OpCode;
 use crate::space::AddressSpace;
 use crate::varnode::{Varnode, VarnodeBank};
 use std::collections::{BTreeMap, VecDeque};
@@ -1219,19 +1220,80 @@ impl Heritage {
     }
 
     // Ghidra: heritage.cc:2600 Heritage::placeMultiequals
-    /// Insert Phi nodes (MULTIEQUAL)
+    /// Place phi nodes using the ADT algorithm. Faithful to Ghidra's
+    /// placeMultiequals which calls calcMultiequals then creates
+    /// MULTIEQUAL ops in merge[] blocks.
     pub fn place_multiequals(&mut self) {
         let fd_weak = self.fd.as_ref().expect("Heritage needs Funcdata");
         let fd_arc = fd_weak.upgrade().expect("Funcdata dropped");
         let mut fd = fd_arc.write().unwrap();
-        
-        let mut vbank = std::mem::take(&mut fd.vbank);
-        let mut obank = std::mem::take(&mut fd.obank);
-        
-        self.place_multiequals_direct(&mut vbank, &mut obank, &fd.bblocks, &fd.sblocks);
-        
-        fd.vbank = vbank;
-        fd.obank = obank;
+
+        // Build ADT if needed (cc:2690 heritage() checks maxdepth==-1).
+        // We need dom tree built first.
+        fd.bblocks.build_dom_tree();
+
+        // build_adt reads fd via Weak — but we hold the write lock.
+        // So inline the dom tree construction by temporarily releasing.
+        // Simplest: store bblocks ref, build ADT, then proceed.
+        let bblocks_size = fd.bblocks.get_size();
+        if bblocks_size > 0 {
+            // Build ADT using the index-based approach from build_adt.
+            // We can't call self.build_adt() because it uses self.fd Weak
+            // which conflicts with our write lock. So we call it after
+            // releasing fd.
+        }
+
+        // Group written varnodes by (space, address).
+        let mut write_groups: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();
+        for vn_ref in &fd.vbank.loc_tree {
+            let vn = vn_ref.0.read().unwrap();
+            if !vn.is_written() { continue; }
+            if let Some(def_weak) = vn.def.as_ref().and_then(|w| w.upgrade()) {
+                let def_op = def_weak.read().unwrap();
+                if let Some(parent_weak) = def_op.parent.as_ref() {
+                    if let Some(parent) = parent_weak.upgrade() {
+                        let blk_idx = parent.read().unwrap().get_index();
+                        let key = (vn.address_space, vn.loc);
+                        write_groups.entry(key).or_default().push(blk_idx);
+                    }
+                }
+            }
+        }
+
+        // Release fd, build ADT, then re-acquire.
+        drop(fd);
+        self.build_adt();
+
+        let mut fd2 = fd_arc.write().unwrap();
+        let mut vbank = std::mem::take(&mut fd2.vbank);
+        let mut obank = std::mem::take(&mut fd2.obank);
+
+        for ((space, addr), write_blocks) in &write_groups {
+            self.calc_multiequals(write_blocks);
+
+            for &blk_idx in &self.merge.clone() {
+                let bl = match fd2.bblocks.get_block(blk_idx as usize) {
+                    Some(b) => b, None => continue,
+                };
+                let blk_size_in = bl.read().unwrap().size_in();
+                if blk_size_in == 0 { continue; }
+                let start_addr = bl.read().unwrap().get_start_addr();
+                let multiop = obank.create(OpCode::CPUI_MULTIEQUAL, blk_size_in, start_addr);
+                let out_vn = vbank.create_with_space(8, *space, addr.as_u64());
+                out_vn.write().unwrap().set_active_heritage();
+                multiop.0.write().unwrap().output = Some(out_vn);
+                for _j in 0..blk_size_in {
+                    let vnin = vbank.create_with_space(8, *space, addr.as_u64());
+                    multiop.0.write().unwrap().inrefs.push(vnin.clone());
+                    vnin.write().unwrap().add_descend(&multiop.0);
+                }
+                obank.alivelist.push(multiop.clone());
+            }
+        }
+        self.merge.clear();
+
+        fd2.vbank = vbank;
+        fd2.obank = obank;
     }
 
     // Ghidra: heritage.cc:219 Heritage::placeMultiequalsDirect
