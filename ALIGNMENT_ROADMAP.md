@@ -578,18 +578,18 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 ### blockaction collapseAll 5-step 移植阻断清单（来自审计）
 
-Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → collapseConditions → collapseInternal(NULL) → selectGoto 循环 → collapseInternal(targetbl)。Rugra 当前是 7-phase。**B1（try_rule_or negateCondition）已修复**。**B2（new_block_condition/if/if_else 工厂层）已修复（37f99a2）**：3 个工厂方法对齐 block.cc:1780/1822/1840，转换 4 个 try_rule_* 调用点，修 identify_internal 缺 BlockCondition downcast。剩余阻断：
+Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → collapseConditions → collapseInternal(NULL) → selectGoto 循环 → collapseInternal(targetbl)。Rugra 当前是 7-phase。**B1（try_rule_or negateCondition）已修复**。**B2（new_block_condition/if/if_else 工厂层）已修复（37f99a2）**。**B4（set_goto_branch 3-op 完整化）已修复（0377b4c）**。**B8（collapse_conditions fixpoint + 删除 collapse_bool_conditions）已修复（18d227a）**。剩余阻断：
 
 - ~~**B2**: 缺 `new_block_condition`/`new_block_if`/etc. 工厂层~~ **已修复（37f99a2）**。
 - **B3**: `try_rule_inf_loop`（blockaction.rs:3261）不创建 BlockInfLoop（只 eprintln）。缺 BlockInfLoop struct。
-- **B4**: `set_goto_branch` 不完整（block.cc:305-314 三件事：边 GOTO flag + source f_interior_gotoout + target f_interior_gotoin）。Rugra 只设 source 的 GOTO_EDGE。
+- ~~**B4**: `set_goto_branch` 不完整~~ **已修复（0377b4c）**：现做 Ghidra 3 件事（edge flag + source INTERIOR_GOTOOUT + target INTERIOR_GOTOIN）。
 - **B5**: 缺 `update_loop_body` 状态机（cc:1193-1253）+ loopbodyiter 推进。
 - **B6**: 缺 `finaltrace`/`likelygoto`/`likelyiter`/`likelylistfull` 状态字段。
 - **B7**: TraceDAG 边一次性快照，非 Ghidra 的每轮重新解析（getCurrentEdge）。
-- **B8**: collapse_conditions 单遍非 fixpoint（cc:1858-1864 是 do-while）；collapse_bool_conditions 是重复实现应删除。
+- ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
 - **B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。
 
-**最小路径**：B1（已修）→ ~~B2~~（已修）→ B3-B4（基础设施）→ B8（fixpoint）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
+**最小路径**：B1（已修）→ ~~B2/B4/B8~~（已修）→ B3（BlockInfLoop）→ B9（apply_rules_to_block 补规则）→ B5-B7（selectGoto 状态机，最大块）→ 重写 collapse_all 为 5 步。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
