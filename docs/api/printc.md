@@ -4,7 +4,8 @@
 
 ## 文档状态
 
-- **状态**: 🔧 **L2→L3 迁移中（2026-07-16 P8/P10 已对齐）**
+- **状态**: 🔧 **L2→L3 迁移中（2026-07-16 P9 else-if 已对齐）**
+- **2026-07-16 修复（P9 else-if 链化）**: `emit_structured_if` 的 else 分支现检测 else_body 是否为 BlockIf——若是，发射 `else if (...)`（无外层大括号）而非 `else { if (...) }`（对齐 Ghidra emitBlockIf printc.cc:2928-2935 的 pending_brace 路径）。Rugra 无 PendingBrace/Emit 回调机制，故直接检测 else_body type==If 并递归 emit_structured_if，产生 `else if(cond){body}`。mod-stack（P10）就绪，PENDING_BRACE 常量保留供未来完整 PendingBrace 回调模型。
 - **2026-07-16 修复（P8 复合条件 + P10 mod-stack）**: P10: 新增 `print_mods` 模块（NO_BRANCH/ONLY_BRANCH/COMMA_SEPARATE/FLAT/PENDING_BRACE，printlanguage.hh:144-161）+ PrintC.mods/mod_stack 字段 + is_set/push_mod/pop_mod/set_mod/unset_mod 辅助（hh:284-290）。`doc_statement` 的 `;` 现按 `!is_set(COMMA_SEPARATE)` 条件输出（对齐 emitStatement printc.cc:2291）。是 P5（for 循环头）和 P9（else if pending_brace）的前置。P8: `emit_structured_condition` 对顶层 BlockCondition 现发射合并条件 `if (left && right) {}`（对齐 emitBlockCondition printc.cc:2836），此前把两个子块作为独立语句发射丢失 &&/||。capture_block_condition 递归处理嵌套 BlockCondition。
 - **2026-07-16 修复（P7 InfLoop emit）**: 新增 `emit_structured_infloop`（对齐 Ghidra `emitBlockInfLoop` printc.cc:3097-3122），输出 `do { <body> } while(true);`。`BlockType::InfLoop` 分发到该函数。此前 InfLoop 落入 `_ =>` basic 回退，输出裸 op + 无条件分支。配合 B3 的 `BlockInfLoop` struct + `try_rule_inf_loop` 工厂。
 - **2026-07-16 修复（P1 括号化 — 最高潜在缺陷风险）**: 实现 OpToken 优先级引擎与括号化，对齐 Ghidra `printlanguage.cc:269 parentheses` + `printc.cc:23-76` OpToken 静态实例表。此前 `op_binary`/`op_unary`/`emit_inline_expr` 直接拼 infix 串无括号化，嵌套表达式如 `a + (b << c)`、`a == (b && c)`、`a - (b - c)` 会语义错误。新增：`optoken` 模块（`binary_precedence`/`binary_associative` 表镜像 printc.cc 的 precedence/associative 字段）+ `child_needs_parens(parent, child, is_right)`（镜像 parentheses 的优先级比较）+ `push_input_parenthesized`（递归时按需包裹括号）。接入 `emit_inline_expr` 与 `op_binary` 两处二元路径。新增单元测试 `test_child_needs_parens_precedence` 覆盖 10 个教科书用例。curl 语料不触发嵌套二元内联故 numbering 不变，但正确性已保证。

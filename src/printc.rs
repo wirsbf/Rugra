@@ -908,22 +908,37 @@ impl PrintC {
                         // seen_return from the then-branch must NOT suppress the else.
                         if let Some(ref else_body) = if_data.else_body {
                             if !else_body_empty {
-                                self.emit.print(" else");
-                                self.emit.begin_block();
-                                let else_body_type = else_body.read().unwrap().get_type();
-                                if matches!(else_body_type, BlockType::Basic) {
-                                    emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
+                                // P9: else-if chaining (Ghidra emitBlockIf cc:2928-2935).
+                                // When the else body is itself a BlockIf, emit
+                                // `else if (...)` (no braces around the nested if)
+                                // instead of `else { if (...) }`. Ghidra does this
+                                // via the pending_brace mod + PendingBrace callback;
+                                // Rugra detects the BlockIf else body directly.
+                                let else_is_if = else_body.read().unwrap().get_type() == BlockType::If;
+                                if else_is_if {
+                                    self.emit.print(" else ");
                                     let saved = self.seen_return;
                                     self.seen_return = false;
-                                    self.emit_block_ops(else_body, true);
+                                    self.emit_structured_if(else_body, graph, emitted);
                                     self.seen_return = saved;
                                 } else {
-                                    let saved = self.seen_return;
-                                    self.seen_return = false;
-                                    self.emit_block_structured(else_body, graph, emitted);
-                                    self.seen_return = saved;
+                                    self.emit.print(" else");
+                                    self.emit.begin_block();
+                                    let else_body_type = else_body.read().unwrap().get_type();
+                                    if matches!(else_body_type, BlockType::Basic) {
+                                        emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
+                                        let saved = self.seen_return;
+                                        self.seen_return = false;
+                                        self.emit_block_ops(else_body, true);
+                                        self.seen_return = saved;
+                                    } else {
+                                        let saved = self.seen_return;
+                                        self.seen_return = false;
+                                        self.emit_block_structured(else_body, graph, emitted);
+                                        self.seen_return = saved;
+                                    }
+                                    self.emit.end_block();
                                 }
-                                self.emit.end_block();
                             } else {
                                 let ebt = else_body.read().unwrap().get_type();
                                 if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
