@@ -131,8 +131,89 @@ impl LocationMap {
     }
 }
 
-/// Priority queue for flow blocks during heritage
-/// Corresponds to Ghidra's `PriorityQueue`
+// Ghidra: heritage.hh:60 MemRange
+/// A single address range in the heritage disjoint list.
+/// Faithful to `MemRange` (heritage.hh:60-73).
+#[derive(Debug, Clone)]
+pub struct MemRange {
+    pub addr: Address,
+    pub size: i32,
+    pub flags: u32,
+}
+
+pub mod memrange_flags {
+    pub const NEW_ADDRESSES: u32 = 1;
+    pub const OLD_ADDRESSES: u32 = 2;
+}
+
+impl MemRange {
+    // Ghidra: heritage.hh:70 MemRange::newAddresses
+    pub fn new_addresses(&self) -> bool {
+        (self.flags & memrange_flags::NEW_ADDRESSES) != 0
+    }
+    // Ghidra: heritage.hh:71 MemRange::oldAddresses
+    pub fn old_addresses(&self) -> bool {
+        (self.flags & memrange_flags::OLD_ADDRESSES) != 0
+    }
+    // Ghidra: heritage.hh:72 MemRange::clearProperty
+    pub fn clear_property(&mut self, val: u32) {
+        self.flags &= !val;
+    }
+}
+
+// Ghidra: heritage.hh:80 TaskList
+/// A disjoint list of address ranges to be processed in SSA form.
+/// Faithful to `TaskList` (heritage.hh:80-93).
+pub struct TaskList {
+    pub tasklist: Vec<MemRange>,
+}
+
+impl TaskList {
+    // RUGRA-GLUE: Rust Default constructor for TaskList (Ghidra uses default list ctor)
+    pub fn new() -> Self {
+        Self { tasklist: Vec::new() }
+    }
+
+    // Ghidra: heritage.cc:109 TaskList::add
+    /// Add a range to the list. If it overlaps the last range, extend it.
+    /// Faithful to `add` (heritage.cc:109-124).
+    pub fn add(&mut self, addr: Address, size: i32, fl: u32) {
+        if let Some(last) = self.tasklist.last_mut() {
+            let over = Address::overlap(&addr, 0, last.addr, last.size);
+            if over >= 0 {
+                let relsize = size + over;
+                if relsize > last.size {
+                    last.size = relsize;
+                }
+                last.flags |= fl;
+                return;
+            }
+        }
+        self.tasklist.push(MemRange { addr, size, flags: fl });
+    }
+
+    // Ghidra: heritage.hh:89 TaskList::begin
+    pub fn begin(&self) -> std::slice::Iter<'_, MemRange> {
+        self.tasklist.iter()
+    }
+
+    // Ghidra: heritage.hh:90 TaskList::end
+    pub fn end(&self) -> std::slice::Iter<'_, MemRange> {
+        self.tasklist.iter()
+    }
+
+    // Ghidra: heritage.hh:91 TaskList::empty
+    pub fn empty(&self) -> bool {
+        self.tasklist.is_empty()
+    }
+
+    // Ghidra: heritage.hh:92 TaskList::clear
+    pub fn clear(&mut self) {
+        self.tasklist.clear();
+    }
+}
+
+// Ghidra: heritage.hh:101 PriorityQueue
 #[derive(Debug)]
 pub struct PriorityQueue {
     pub queue: Vec<Vec<i32>>,
@@ -1375,6 +1456,63 @@ impl Heritage {
             all_sinks[i].write().unwrap().clear_mark();
         }
         self.load_copy_ops.clear();
+    }
+
+    // Ghidra: heritage.cc:245 Heritage::removeRevisitedMarkers
+    /// Remove previously-heritaged markers and convert to SUBPIECE.
+    /// Faithful to `removeRevisitedMarkers` (heritage.cc:245-298).
+    pub fn remove_revisited_markers(
+        &mut self,
+        fd: &mut Funcdata,
+        remove: &[Arc<RwLock<Varnode>>],
+        addr: Address,
+        size: i32,
+    ) {
+        let space = remove.first()
+            .map(|v| v.read().unwrap().address_space)
+            .unwrap_or(AddressSpace::Register);
+        // cc:249: if deadremoved > 0, bump delay + warn
+        let info_idx = self.infolist.iter().position(|i| i.space == space);
+        if let Some(idx) = info_idx {
+            if self.infolist[idx].deadremoved > 0 {
+                self.bump_deadcode_delay(space);
+                if !self.infolist[idx].warning_issued {
+                    self.infolist[idx].warning_issued = true;
+                    eprintln!("[HERITAGE] WARN: Heritage AFTER dead removal at {:?}", addr);
+                }
+            }
+        }
+        for vn_arc in remove {
+            let vn_r = vn_arc.read().unwrap();
+            let def_op = match vn_r.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => continue,
+            };
+            let def_code = def_op.read().unwrap().opcode;
+            drop(vn_r);
+            if def_code == OpCode::CPUI_COPY {
+                // cc:282-285: unlink return-form COPY
+                let def_ref = PcodeOpRef(def_op);
+                fd.obank.destroy(def_ref);
+                continue;
+            }
+            // cc:286: offset = vn->overlap(addr, size)
+            let vn_loc = vn_arc.read().unwrap().loc.as_u64();
+            let offset = vn_loc.saturating_sub(addr.as_u64()) as i64;
+            let vn_space = vn_arc.read().unwrap().address_space;
+            // cc:287: opUninsert(op)
+            // cc:289-290: big = newVarnode(size, addr); setActiveHeritage
+            let big = fd.vbank.create_with_space(size as usize, vn_space, addr.as_u64());
+            big.write().unwrap().set_active_heritage();
+            // cc:293-294: opSetOpcode(SUBPIECE); opSetAllInput
+            def_op.write().unwrap().opcode = OpCode::CPUI_SUBPIECE;
+            def_op.write().unwrap().inrefs.clear();
+            def_op.write().unwrap().inrefs.push(big);
+            let off_const = fd.new_constant(4, offset as u64);
+            def_op.write().unwrap().inrefs.push(off_const);
+            def_op.write().unwrap().output = Some(vn_arc.clone());
+            // cc:296: setWriteMask
+            // TODO: WRITEMASK flag not defined yet
+        }
     }
 
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
