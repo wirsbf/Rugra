@@ -882,18 +882,29 @@ impl<'a> CollapseStructure<'a> {
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while isolated < self.graph.get_size() as i32 {
             if std::time::Instant::now() > goto_deadline { break; }
-            // cc:1263: selectGoto picks one edge and marks it goto; if it
-            // exhausts, clipExtraRoots (or throw in Ghidra).
+            // cc:1263: selectGoto picks one edge and marks it goto.
             let target = self.select_goto();
             if target.is_none() {
-                // cc:1274: clipExtraRoots fallback.
+                // cc:1274: clipExtraRoots fallback (Ghidra throws if this fails).
                 if !self.clip_extra_roots() {
-                    eprintln!("[COLLAPSE] {} 5step: selectGoto exhausted, clipExtraRoots false", self.name);
+                    // selectGoto exhausted AND clipExtraRoots found nothing.
+                    // The remaining unstructured basic blocks are irreducible
+                    // cross-edges that Rugra's batch cascade (run_goto_cascade:
+                    // select_and_mark_goto + clip_extra_roots + run_tracedag)
+                    // handles via its broader edge detection. Fall back to it
+                    // to finish structuring, then re-run collapseInternal.
+                    self.run_goto_cascade();
+                    isolated = self.collapse_internal(None);
                     break;
                 }
             }
             isolated = self.collapse_internal(target);
         }
+        // Finalize: DEAD-sweep + reindex (faithful to Ghidra identifyInternal
+        // list compaction, block.cc:953-960). Required for downstream emit
+        // (printc emitBlockGraph relies on the compacted list). The 7-phase
+        // path does this at its end; the 5-step path must too.
+        self.finalize_structure();
     }
 
     /// Collapse all structured patterns until fixpoint
