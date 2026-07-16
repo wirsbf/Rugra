@@ -589,7 +589,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
 - ~~**B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。~~ **已修复（e6731bb）**：phase2 加 collapseInternal 第二趟（IfNoExit per-block + CaseFallthru batch），外层 'fullchange 循环包裹内层 fixpoint。
 
-**最小路径**：B1（已修）→ ~~B2/B3/B4/B5/B6/B7/B8/B9~~（**全部已修**）→ 重写 collapse_all 为 5 步（所有前置依赖就绪）。
+**最小路径**：B1（已修）→ ~~B2/B3/B4/B5/B6/B7/B8/B9~~（**全部已修**）→ ~~重写 collapse_all 为 5 步~~ **已实现（76bbead）**：`collapse_internal(target_idx)` + `collapse_all_5step` 字面 5 步（orderLoopBodies→collapseConditions→collapseInternal(NULL)→selectGoto 循环→collapseInternal(target)），`RUGRA_5STEP=1` flag 路由。默认仍 7-phase（铁律 5）：5-step curl 19/24 干净，5 个函数 selectGoto 耗尽需 clipExtraRoots 回退（7-phase 有 Rugra-specific guards 如 cascade-member 检测、switch-case 提取保护，字面 5-step 尚未纳入，需进一步硬化才能成默认）。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
