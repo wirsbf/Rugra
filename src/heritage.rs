@@ -2153,26 +2153,72 @@ impl Heritage {
     /// Faithful to `floatExtensionRead` (heritage.cc:2236-2255).
     pub fn float_extension_read(
         &mut self,
-        _fd: &mut Funcdata,
+        fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
     ) {
-        // cc:2237: JoinRecord must be float extension
-        // TODO: requires JoinRecord::isFloatExtension + piece info
-        eprintln!("[HERITAGE] floatExtensionRead: {:?} (JoinRecord infra TODO)",
-            vn.read().unwrap().loc);
+        // cc:2239: op = vn->loneDescend()
+        let read_op = match vn.read().unwrap().lone_descend() {
+            Some(op) => op, None => return,
+        };
+        let vn_offset = vn.read().unwrap().loc.as_u64();
+        let join_rec = match fd.get_arch() {
+            Some(a) => a.join_db.find_join(vn_offset).cloned(),
+            None => None,
+        };
+        let join_rec = match join_rec { Some(r) => r, None => return };
+        if !join_rec.is_float_extension() { return; }
+        // cc:2241: vdata = joinrec->getPiece(0)
+        let vdata = join_rec.get_piece(0);
+        // cc:2240: trunc = newOp(1, op->getAddr())
+        let op_addr = read_op.read().unwrap().get_addr();
+        let trunc = fd.new_op(1, op_addr);
+        // cc:2242: bigvn = newVarnode(vdata.size, vdata.space, vdata.offset)
+        let bigvn = fd.vbank.create_with_space(vdata.size, vdata.space, vdata.offset);
+        // cc:2243: opSetOpcode(FLOAT_FLOAT2FLOAT)
+        fd.op_set_opcode(&trunc, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
+        // cc:2244: opSetOutput(trunc, vn)
+        trunc.0.write().unwrap().output = Some(vn.clone());
+        // cc:2245: opSetInput(trunc, bigvn, 0)
+        fd.op_set_input(&trunc, bigvn, 0);
+        // cc:2246: opInsertBefore(trunc, op)
+        fd.op_insert_before(&trunc, &PcodeOpRef(read_op));
     }
 
     // Ghidra: heritage.cc:2256 Heritage::floatExtensionWrite
-    /// Create float truncation from a written join-space Varnode.
-    /// Faithful to `floatExtensionWrite` (heritage.cc:2256-2281).
+    /// Create float extension from a lower precision join-space Varnode.
     pub fn float_extension_write(
         &mut self,
-        _fd: &mut Funcdata,
+        fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
     ) {
-        // TODO: requires JoinRecord::isFloatExtension + piece info
-        eprintln!("[HERITAGE] floatExtensionWrite: {:?} (JoinRecord infra TODO)",
-            vn.read().unwrap().loc);
+        let vn_offset = vn.read().unwrap().loc.as_u64();
+        let join_rec = match fd.get_arch() {
+            Some(a) => a.join_db.find_join(vn_offset).cloned(),
+            None => None,
+        };
+        let join_rec = match join_rec { Some(r) => r, None => return };
+        if !join_rec.is_float_extension() { return; }
+        // cc:2259: op = vn->getDef()
+        let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let vdata = join_rec.get_piece(0);
+        // cc:2261-2265: create ext op
+        let ext_addr = match &def_op {
+            Some(op) => op.read().unwrap().get_addr(),
+            None => Address::new(0),
+        };
+        let ext = fd.new_op(1, ext_addr);
+        // cc:2267: opSetOpcode(FLOAT_FLOAT2FLOAT)
+        fd.op_set_opcode(&ext, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
+        // cc:2268: newVarnodeOut(vdata.size, vdata.addr, ext)
+        let _out_vn = fd.new_varnode_out(vdata.size, Address::new(vdata.offset), &ext);
+        // cc:2269: opSetInput(ext, vn, 0)
+        fd.op_set_input(&ext, vn.clone(), 0);
+        // cc:2270-2273: insert
+        if let Some(def_op) = def_op {
+            fd.op_insert_after(&ext, &PcodeOpRef(def_op));
+        } else {
+            fd.obank.alivelist.insert(0, ext);
+        }
     }
 
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
