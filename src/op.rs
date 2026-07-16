@@ -461,6 +461,84 @@ impl PcodeOp {
     /// Can this op be collapsed to a copy of a constant? All inputs must be
     /// constants, the op must be an assignment, must not be marked nocollapse,
     /// and the output must fit in a uintb. Faithful to `isCollapsible`.
+    // Ghidra: op.cc:503 PcodeOp::collapseConstantSymbol
+    /// Propagate symbol markup from inputs to a collapsed constant output.
+    /// Faithful to `collapseConstantSymbol` (op.cc:503-540).
+    pub fn collapse_constant_symbol(&self, new_const: &Arc<RwLock<crate::varnode::Varnode>>) {
+        let copy_vn: Option<Arc<RwLock<crate::varnode::Varnode>>> = match self.opcode {
+            OpCode::CPUI_SUBPIECE => {
+                // cc:509: must be truncating from offset 0
+                let off = self.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
+                if off != 0 { return; }
+                self.inrefs.get(0).cloned()
+            }
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP => {
+                self.inrefs.get(0).cloned()
+            }
+            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+                self.inrefs.get(0).cloned()
+            }
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR => {
+                // cc:530: try in[0], fall back to in[1] if no symbol
+                let v0 = self.inrefs.get(0).cloned();
+                if let Some(v) = &v0 {
+                    if v.read().unwrap().get_symbol_entry().is_some() {
+                        v0
+                    } else {
+                        self.inrefs.get(1).cloned()
+                    }
+                } else {
+                    self.inrefs.get(1).cloned()
+                }
+            }
+            _ => return,
+        };
+        // cc:537: copyVn must have a symbol entry
+        if let Some(cv) = copy_vn {
+            if cv.read().unwrap().get_symbol_entry().is_some() {
+                new_const.write().unwrap().copy_symbol_if_valid(&cv.read().unwrap());
+            }
+        }
+    }
+
+    // Ghidra: op.cc:276 PcodeOp::setOpcode
+    /// Set opcode and update opcode-derived flags. Faithful to
+    /// `setOpcode` (op.cc:276-285). Clears all opcode-derived flag bits,
+    /// then sets them from the new opcode.
+    pub fn set_opcode_flags(&mut self, opc: OpCode) {
+        // cc:279-282: clear all opcode-derived flags
+        const OPC_FLAGS_MASK: u32 = pcodeop_flags::BRANCH | pcodeop_flags::CALL
+            | pcodeop_flags::CODEREF | pcodeop_flags::RETURNS
+            | pcodeop_flags::NOCOLLAPSE | pcodeop_flags::MARKER
+            | pcodeop_flags::BOOLOUTPUT | pcodeop_flags::UNARY
+            | pcodeop_flags::BINARY | pcodeop_flags::TERNARY
+            | pcodeop_flags::SPECIAL | pcodeop_flags::HAS_CALLSPEC
+            | pcodeop_flags::RETURN_COPY;
+        self.flags &= !OPC_FLAGS_MASK;
+        self.opcode = opc;
+        // cc:284: flags |= t_op->getFlags()
+        // Rugra doesn't have TypeOp; derive flags from opcode directly.
+        let extra = match opc {
+            OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::BRANCH | pcodeop_flags::CODEREF | pcodeop_flags::NOCOLLAPSE,
+            OpCode::CPUI_CBRANCH =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::BRANCH | pcodeop_flags::NOCOLLAPSE,
+            OpCode::CPUI_CALL =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::HAS_CALLSPEC | pcodeop_flags::CODEREF | pcodeop_flags::NOCOLLAPSE,
+            OpCode::CPUI_CALLIND =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::HAS_CALLSPEC | pcodeop_flags::NOCOLLAPSE,
+            OpCode::CPUI_CALLOTHER | OpCode::CPUI_NEW =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::CALL | pcodeop_flags::NOCOLLAPSE,
+            OpCode::CPUI_RETURN =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::RETURNS | pcodeop_flags::NOCOLLAPSE | pcodeop_flags::RETURN_COPY,
+            OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT =>
+                pcodeop_flags::SPECIAL | pcodeop_flags::MARKER | pcodeop_flags::NOCOLLAPSE,
+            _ => 0,
+        };
+        self.flags |= extra;
+    }
+
+    // Ghidra: op.cc:115 PcodeOp::isCollapsible
     pub fn is_collapsible(&self) -> bool {
         if (self.flags & pcodeop_flags::NOCOLLAPSE) != 0 {
             return false;
