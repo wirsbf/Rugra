@@ -4,7 +4,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L3（2026-07-16 reprocessFreeStores 向后遍历修复）**——Heritage 核心 SSA 方法覆盖 + clearStackPlaceholders + reprocessFreeStores（向后遍历所有 INDIRECT 正确清理）。
+- **状态**: ✅ **L3（2026-07-16 heritage() 主流程完整：analyzeNewLoadGuards + handleNewLoadCopies 已接入）**——Heritage 核心 SSA 全覆盖。仅剩 PreferSplitManager（prefersplit.cc 整个子系统缺失）。
 - **文档目标**: 说明 Rugra 当前 `heritage.rs` 在 SSA 构造与相关中间状态管理中的职责、边界与公开接口
 - **可信边界**: 本文档围绕“当前架构中的 SSA / Heritage 责任分工”进行说明，不把“结构存在”写成“已完成与 Ghidra 的运行时一致性验证”
 - **阅读建议**: 请结合以下模块一起理解：

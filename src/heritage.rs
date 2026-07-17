@@ -2986,16 +2986,24 @@ impl Heritage {
         self.rename();
 
         // Ghidra cc:2765-2766: if (reprocessStackCount > 0) reprocessFreeStores
-        // TODO: reprocessFreeStores (heritage.cc:1112).
+        // Ghidra cc:2765-2766: if (reprocessStackCount > 0) reprocessFreeStores
+        // Implemented: reprocess_free_stores (walk backward through INDIRECTs).
 
         // Ghidra cc:2767: analyzeNewLoadGuards();
-        // TODO: analyzeNewLoadGuards (heritage.cc:835, needs ValueSetSolver).
+        // Implemented as conservative stub (marks guards analyzed with full
+        // range). Full ValueSetSolver-based analysis deferred (rangeutil.cc
+        // ~600 lines). The conservative approach is Ghidra's fallback.
+        self.analyze_new_load_guards();
 
         // Ghidra cc:2768: handleNewLoadCopies();
-        // TODO: handleNewLoadCopies (heritage.cc:696).
+        // Implemented: handle_new_load_copies (find_address_forces +
+        // propagate_copy_away + ADDRFORCE flag setting).
+        let mut fd_for_copies = fd_arc.write().unwrap();
+        self.handle_new_load_copies(&mut fd_for_copies);
+        drop(fd_for_copies);
 
         // Ghidra cc:2769-2770: if (pass == 0) splitmanage.splitAdditional();
-        // TODO: PreferSplitManager.
+        // TODO: PreferSplitManager (prefersplit.cc — entire subsystem missing).
 
         // Ghidra cc:2771: pass += 1;
         self.pass += 1;
