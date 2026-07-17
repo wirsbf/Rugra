@@ -417,6 +417,15 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         (self.get_flags() & block_flags::INTERIOR_GOTOOUT) != 0
     }
 
+    // Ghidra: block.hh:297 FlowBlock::getFlipPath
+    /// Have out edges been flipped (swapped) since the last path trace?
+    /// Faithful to `getFlipPath()` (block.hh:297): checks f_flip_path flag.
+    /// Used by jumptable checkUnrolledGuard (jumptable.cc:1369) to determine
+    /// which in-edge index corresponds to the switch value.
+    fn get_flip_path(&self) -> bool {
+        (self.get_flags() & block_flags::FLIP_PATH) != 0
+    }
+
     // Ghidra: block.hh:332 FlowBlock::isComplex
     /// Is the control flow of this block too complex for simple condition
     /// folding? Faithful to `isComplex()` (block.hh:332, block.cc:2388).
@@ -592,6 +601,80 @@ impl BlockBasic {
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
         }
+    }
+
+    // Ghidra: block.cc:2802 BlockBasic::liftVerifyUnroll
+    /// Verify that all Varnodes in varArray are defined by the same opcode
+    /// with matching constant operand, then "unroll" by replacing each
+    /// varnode with its input at `slot`. Returns true if all match.
+    /// Faithful to `liftVerifyUnroll` (block.cc:2802-2832).
+    /// Used by jumptable checkUnrolledGuard to verify loop-unrolling guards.
+    pub fn lift_verify_unroll(
+        var_array: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>,
+        slot: usize,
+    ) -> bool {
+        if var_array.is_empty() { return false; }
+        // cc:2808: check first varnode's def op.
+        let vn0 = var_array[0].clone();
+        let (opc, cvn_opt): (crate::opcodes::OpCode, (Option<Arc<RwLock<crate::varnode::Varnode>>>, Option<Arc<RwLock<crate::varnode::Varnode>>>)) = {
+            let vn = vn0.read().unwrap();
+            if !vn.is_written() { return false; }
+            let def_arc = match vn.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => return false,
+            };
+            let def = def_arc.read().unwrap();
+            let opc = def.opcode;
+            let cvn: Option<Arc<RwLock<crate::varnode::Varnode>>> = if def.num_input() == 2 {
+                let other = def.get_in(1 - slot).cloned();
+                match &other {
+                    Some(v) if v.read().unwrap().is_constant() => other,
+                    _ => return false,
+                }
+            } else {
+                None
+            };
+            // cc:2817: varArray[0] = op->getIn(slot)
+            let new_vn = def.get_in(slot).cloned();
+            (opc, (cvn, new_vn))
+        };
+        // Replace var_array[0] with the slot input.
+        if let (_, Some(new_vn)) = &cvn_opt {
+            var_array[0] = new_vn.clone();
+        } else {
+            return false;
+        }
+        let cvn = cvn_opt.0;
+        // cc:2818-2830: check remaining varnodes.
+        let n = var_array.len();
+        for i in 1..n {
+            let vn = var_array[i].clone();
+            let new_vn = {
+                let vn_r = vn.read().unwrap();
+                if !vn_r.is_written() { return false; }
+                let def_arc = match vn_r.def.as_ref().and_then(|w| w.upgrade()) {
+                    Some(d) => d, None => return false,
+                };
+                let def = def_arc.read().unwrap();
+                if def.opcode != opc { return false; }
+                if let Some(ref cvn_arc) = cvn {
+                    let cvn2 = match def.get_in(1 - slot) {
+                        Some(v) => v.clone(),
+                        None => return false,
+                    };
+                    let cvn2_r = cvn2.read().unwrap();
+                    if !cvn2_r.is_constant() { return false; }
+                    let cvn_r = cvn_arc.read().unwrap();
+                    if cvn_r.get_size() != cvn2_r.get_size() { return false; }
+                    if cvn_r.get_offset() != cvn2_r.get_offset() { return false; }
+                }
+                def.get_in(slot).cloned()
+            };
+            match new_vn {
+                Some(v) => var_array[i] = v,
+                None => return false,
+            }
+        }
+        true
     }
 
     /// Add an operation to the end of the block

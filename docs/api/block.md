@@ -871,6 +871,8 @@ BlockGraph 新增：
 - `set_out_edge_flag(slot, flag)` — 对第 slot 条出边 OR-set 边 flag（Ghidra setOutEdgeFlag）。默认实现用 `as_any_mut` downcast 到 `BlockBasic`/`BlockGraph` 的 `outgoing` 字段。
 - `clear_out_edge_flag(slot, flag)` — 清除第 slot 条出边的 flag 位（Ghidra clearOutEdgeFlag block.hh:289，set_out_edge_flag 的配对）。**2026-07-16 B5 新增**，供 LoopBody::clearExitMarks。
 - `BlockWhileDo.overflow_syntax`（bool，对齐 hasOverflowSyntax block.hh:692）—— **2026-07-16 P7 新增**：条件块 isComplex 时设 true，printc 发射 while(true)+if(cond)break 形式（emitBlockWhileDo cc:3017-3044）。
+- `get_flip_path()`（block.hh:297）—— **2026-07-16 新增**：检查 FLIP_PATH flag，供 jumptable checkUnrolledGuard 使用。
+- `BlockBasic::lift_verify_unroll(var_array, slot)`（block.cc:2802）—— **2026-07-16 新增**：静态方法，验证 varArray 中所有 varnode 由相同 opcode + 匹配常量操作数定义，然后按 slot 展开。供 checkUnrolledGuard。
 - `clear_edge_flags(mask)` — 清除所有出边的 mask 位（Ghidra clearEdgeFlags）。
 - `is_back_edge_out(slot)` — 第 slot 条出边是否为回边（Ghidra isBackEdgeOut）。
 
