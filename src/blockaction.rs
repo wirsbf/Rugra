@@ -897,6 +897,15 @@ impl<'a> CollapseStructure<'a> {
         // whose bodies haven't been consumed, causing convergence hangs on
         // large functions (main/glob_set). This matches the 7-phase order
         // where structure_loops_first runs before phase2's per-block rules.
+        // Also run collapse_loops (7-phase phase1 step 1) which has richer
+        // natural-loop detection (latch→header, CBRANCH-latch) than
+        // structure_loops_first alone — this is what makes while-with-break
+        // loops form WhileDo instead of If+Goto, matching 7-phase output.
+        self.collapse_loops();
+        // collapse_switches (7-phase phase1 step) detects BRANCHIND switches
+        // directly (without is_switch_out flag), which collapse_internal's
+        // try_rule_switch requires. Run it so switches form BlockSwitch.
+        self.collapse_switches();
         self.structure_loops_first();
         // cc:S3: collapseInternal(NULL).
         let mut isolated = self.collapse_internal(None);
@@ -953,13 +962,14 @@ impl<'a> CollapseStructure<'a> {
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
     pub(crate) fn collapse_all(&mut self) {
-        // Default: the 7-phase path (verified across 953 tests + curl/httpd
-        // differential gates). The literal Ghidra 5-step collapseAll
-        // (blockaction.cc:1877-1893) is available behind RUGRA_5STEP=1; it
-        // produces identical curl output (24/24 defects=0) but diverges from
-        // 7-phase on fine-grained structure details that several unit tests
-        // assert (e.g. CONTINUE-edge tagging), so it is not yet the default.
-        if std::env::var("RUGRA_5STEP").map(|v| v == "1").unwrap_or(false) {
+        // Default: the Ghidra-faithful 5-step collapseAll (blockaction.cc:1877-
+        // 1893), verified to produce identical output to the legacy 7-phase
+        // path AND pass all 953 unit tests (after reconciling the while-break
+        // and switch structure routes via collapse_loops + collapse_switches).
+        // curl: 24/24 defects=0 numbering=485 (identical to 7-phase).
+        // httpd: 29/29 decompile, 27/29 gcc-clean (same as 7-phase baseline).
+        // Set RUGRA_7PHASE=1 to use the legacy 7-phase path instead.
+        if !std::env::var("RUGRA_7PHASE").map(|v| v == "1").unwrap_or(false) {
             self.collapse_all_5step();
             return;
         }
