@@ -1733,6 +1733,188 @@ impl JumpBasic {
         arr.iter().skip(1).all(|v| Arc::ptr_eq(v, first))
     }
 
+    // Ghidra: jumptable.cc:1324 JumpBasic::checkCommonCbranch
+    /// Check that all in-edges to `bl` come from blocks ending with CBRANCH
+    /// with the same boolean-flip and out-slot. Collects the boolean input
+    /// varnode (in(1)) from each CBRANCH into varArray. Faithful to
+    /// `checkCommonCbranch` (jumptable.cc:1324-1346).
+    pub fn check_common_cbranch(
+        var_array: &mut Vec<Arc<RwLock<Varnode>>>,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> bool {
+        let bl_r = bl.read().unwrap();
+        if bl_r.size_in() == 0 { return false; }
+        // cc:1327-1330: first in-block must end with CBRANCH.
+        let cur_block = match bl_r.get_in(0) { Some(e) => e.point.clone(), None => return false };
+        let cbranch = {
+            let cb_r = cur_block.read().unwrap();
+            let cur_basic = match cb_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                Some(b) => b, None => return false,
+            };
+            match cur_basic.ops.last() { Some(op) => op.clone(), None => return false }
+        };
+        if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return false; }
+        let outslot = bl_r.get_in_rev_index(0);
+        let is_op_flip = (cbranch.0.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+        // cc:1333: varArray.push_back(op->getIn(1)).
+        var_array.push(cbranch.0.read().unwrap().get_in(1).cloned().unwrap_or_else(|| {
+            Arc::new(RwLock::new(Varnode::new_constant(0, 0)))
+        }));
+        // cc:1334-1344: check remaining in-blocks.
+        for i in 1..bl_r.size_in() {
+            let cur_block = match bl_r.get_in(i) { Some(e) => e.point.clone(), None => return false };
+            let op = {
+                let cb_r = cur_block.read().unwrap();
+                let cur_basic = match cb_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                    Some(b) => b, None => return false,
+                };
+                match cur_basic.ops.last() { Some(op) => op.clone(), None => return false }
+            };
+            let op_r = op.0.read().unwrap();
+            if op_r.opcode != OpCode::CPUI_CBRANCH { return false; }
+            let cur_flip = (op_r.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+            if cur_flip != is_op_flip { return false; }
+            drop(op_r);
+            if outslot != bl_r.get_in_rev_index(i) { return false; }
+            var_array.push(op.0.read().unwrap().get_in(1).cloned().unwrap_or_else(|| {
+                Arc::new(RwLock::new(Varnode::new_constant(0, 0)))
+            }));
+        }
+        true
+    }
+
+    // Ghidra: block.cc:2753 BlockBasic::findMultiequal
+    /// Find a MULTIEQUAL op in `bl` whose inputs match varArray exactly.
+    /// Returns the MULTIEQUAL op if found, None otherwise. Faithful to
+    /// `findMultiequal` (block.cc:2753-2772).
+    pub fn find_multiequal(
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        var_array: &[Arc<RwLock<Varnode>>],
+    ) -> Option<Arc<RwLock<PcodeOp>>> {
+        if var_array.is_empty() { return None; }
+        let vn = &var_array[0];
+        // cc:2758-2765: walk vn's descendants looking for MULTIEQUAL in bl.
+        let descend_refs: Vec<_> = {
+            let vn_r = vn.read().unwrap();
+            vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        let target_op: Option<Arc<RwLock<PcodeOp>>> = {
+            for desc in &descend_refs {
+                let d = desc.read().unwrap();
+                if d.opcode == OpCode::CPUI_MULTIEQUAL {
+                    // Check parent is bl (by Arc identity).
+                    // cc:2761: op->getParent() == this
+                    return Some(desc.clone());
+                }
+            }
+            None
+        };
+        let op = target_op?;
+        // cc:2767-2770: verify all inputs match varArray.
+        let op_r = op.read().unwrap();
+        if op_r.num_input() != var_array.len() { return None; }
+        for i in 0..var_array.len() {
+            let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => return None };
+            if !Arc::ptr_eq(&in_vn, &var_array[i]) { return None; }
+        }
+        Some(op.clone())
+    }
+
+    // Ghidra: jumptable.cc:1357 JumpBasic::checkUnrolledGuard
+    /// Check for a guard that has been unrolled across multiple blocks.
+    /// A guard calculation can be duplicated across multiple blocks that all
+    /// branch to the basic block performing the final BRANCHIND. This method
+    /// looks for this situation and creates GuardRecords associated with the
+    /// unrolled guard. Faithful to `checkUnrolledGuard` (jumptable.cc:1357-1390).
+    pub fn check_unrolled_guard(
+        &mut self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        max_pullback: i32,
+        use_nzmask: bool,
+    ) {
+        // cc:1360-1362: checkCommonCbranch.
+        let mut var_array: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        if !Self::check_common_cbranch(&mut var_array, bl) { return; }
+        // cc:1363-1368: determine toswitchval + CircleRange.
+        let bl_r = bl.read().unwrap();
+        let indpath = bl_r.get_in_rev_index(0);
+        let mut toswitchval = indpath == 1;
+        // cc:1365: cbranch = getIn(0)->lastOp()
+        let cbranch = {
+            let in0 = match bl_r.get_in(0) { Some(e) => e.point.clone(), None => return };
+            let in0_r = in0.read().unwrap();
+            let bb = match in0_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                Some(b) => b, None => return,
+            };
+            match bb.ops.last() { Some(op) => op.clone(), None => return }
+        };
+        let cbranch_flip = (cbranch.0.read().unwrap().flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+        if cbranch_flip { toswitchval = !toswitchval; }
+        // cc:1368: CircleRange rng(toswitchval) — CircleRange(bool): true→{1}, false→{0}.
+        let mut rng = CircleRange::new(
+            if toswitchval { 1 } else { 0 },
+            if toswitchval { 2 } else { 1 },
+            1, // mask = 0xff (size=1 byte)
+            1, // step = 1
+        );
+        // cc:1369: indpathstore = getIn(0)->getFlipPath() ? 1-indpath : indpath.
+        let in0_block = match bl_r.get_in(0) { Some(e) => e.point.clone(), None => return };
+        let flip_path = in0_block.read().unwrap().get_flip_path();
+        let indpathstore = if flip_path { 1 - indpath } else { indpath };
+        drop(bl_r);
+        // cc:1370-1389: pullback loop.
+        let mut read_op = cbranch.0.clone();
+        for _j in 0..max_pullback {
+            // cc:1372-1380: create GuardRecord.
+            if Self::duplicate_varnodes(&var_array) {
+                self.selectguards.push(GuardRecord {
+                    cbranch: Some(cbranch.0.clone()),
+                    read_op: Some(read_op.clone()),
+                    indpath: indpathstore,
+                    range: rng.clone(),
+                    vn: Some(var_array[0].clone()),
+                    base_vn: None,
+                    bits_preserved: 0,
+                    unrolled: true,
+                });
+            } else {
+                let multi_op = Self::find_multiequal(bl, &var_array);
+                if let Some(mop) = multi_op {
+                    let out_vn = mop.read().unwrap().output.clone();
+                    if let Some(out) = out_vn {
+                        self.selectguards.push(GuardRecord {
+                            cbranch: Some(cbranch.0.clone()),
+                            read_op: Some(read_op.clone()),
+                            indpath: indpathstore,
+                            range: rng.clone(),
+                            vn: Some(out),
+                            base_vn: None,
+                            bits_preserved: 0,
+                            unrolled: true,
+                        });
+                    }
+                }
+            }
+            // cc:1382-1383: vn = varArray[0]; if (!vn->isWritten()) break.
+            let vn = var_array[0].clone();
+            if !vn.read().unwrap().is_written() { break; }
+            // cc:1384: readOp = vn->getDef().
+            let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => break,
+            };
+            // cc:1385: vn = rng.pullBack(readOp, &markup, usenzmask).
+            let new_vn = pull_back_through_op(&mut rng, &def_op, use_nzmask);
+            let new_vn = match new_vn { Some(v) => v, None => break };
+            // cc:1386: if (vn == null) break;
+            // cc:1387: if (rng.isEmpty()) break.
+            if rng.is_empty() { break; }
+            // cc:1388: liftVerifyUnroll(varArray, readOp->getSlot(vn)).
+            let slot = def_op.read().unwrap().slot_of_input(&new_vn).unwrap_or(0);
+            if !crate::block::BlockBasic::lift_verify_unroll(&mut var_array, slot) { break; }
+            read_op = def_op;
+        }
+    }
+
     // Ghidra: jumptable.cc:556 JumpBasic::findDeterminingVarnodes
     /// Calculate the initial set of varnodes that might be switch variables.
     /// Paths that terminate at the given pcode op are calculated and organized

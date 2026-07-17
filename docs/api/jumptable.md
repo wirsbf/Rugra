@@ -2,6 +2,12 @@
 
 Faithful port of Ghidra's `jumptable.hh` / `jumptable.cc` (2883 lines).
 
+## 2026-07-16：checkUnrolledGuard + checkCommonCbranch + findMultiequal
+
+- `check_unrolled_guard(bl, max_pullback, use_nzmask)`（jumptable.cc:1357-1390）：检测跨多块展开的守卫。使用 checkCommonCbranch + CircleRange pullBack + liftVerifyUnroll + duplicateVarnodes + findMultiequal 创建 GuardRecord。所有依赖（getFlipPath b661e5e、liftVerifyUnroll b661e5e、pullBack a962f29）已完成。
+- `check_common_cbranch(var_array, bl)`（jumptable.cc:1324-1346）：验证所有 in-edge 来自相同 boolean-flip/out-slot 的 CBRANCH 块，收集 boolean 输入 varnode。
+- `find_multiequal(bl, var_array)`（block.cc:2753-2772）：查找输入匹配 varArray 的 MULTIEQUAL op。
+
 **Status:** L1 → L2. All public classes present with full data structures; the
 data-flow / CFG-rewriting algorithms that depend on `Varnode::def`,
 `EmulateFunction`, and branch-editing primitives are documented as L3 gaps.
