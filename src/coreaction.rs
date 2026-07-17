@@ -6130,6 +6130,52 @@ impl Action for ActionExtraPopSetup {
 /// 3. Propagate constants through the block graph
 /// 4. Replace conditional-constant Varnodes with their values
 pub struct ActionConditionalConst { pub count: i32 }
+
+// Ghidra: coreaction.hh:571 ActionConditionalConst::ConstPoint
+/// A point in control-flow where a Varnode can propagate as a constant
+/// down a conditional branch. Faithful to `ConstPoint` (coreaction.hh:571-582).
+#[derive(Clone)]
+struct ConstPoint {
+    /// Varnode that is constant for some reads.
+    vn: Arc<RwLock<crate::varnode::Varnode>>,
+    /// Representative of the constant (may be None if constructed from value).
+    const_vn: Option<Arc<RwLock<crate::varnode::Varnode>>>,
+    /// The constant value.
+    value: u64,
+    /// Block index that dominates all reads where vn is constant.
+    const_block_idx: i32,
+    /// Input edge from condition block.
+    in_slot: i32,
+    /// True if block is dominated by constant path.
+    block_is_dom: bool,
+}
+
+impl ConstPoint {
+    // Ghidra: coreaction.hh:578 ConstPoint::ConstPoint(Varnode*,Varnode*,FlowBlock*,int4,bool)
+    /// Construct from a constant Varnode (coreaction.hh:578).
+    fn from_const_vn(
+        vn: Arc<RwLock<crate::varnode::Varnode>>,
+        const_vn: Arc<RwLock<crate::varnode::Varnode>>,
+        const_block_idx: i32,
+        in_slot: i32,
+        block_is_dom: bool,
+    ) -> Self {
+        let value = const_vn.read().unwrap().get_offset();
+        Self { vn, const_vn: Some(const_vn), value, const_block_idx, in_slot, block_is_dom }
+    }
+    // Ghidra: coreaction.hh:580 ConstPoint::ConstPoint(Varnode*,uintb,FlowBlock*,int4,bool)
+    /// Construct from a constant value (coreaction.hh:580).
+    fn from_value(
+        vn: Arc<RwLock<crate::varnode::Varnode>>,
+        value: u64,
+        const_block_idx: i32,
+        in_slot: i32,
+        block_is_dom: bool,
+    ) -> Self {
+        Self { vn, const_vn: None, value, const_block_idx, in_slot, block_is_dom }
+    }
+}
+
 impl ActionConditionalConst {
     // Ghidra: coreaction.hh:569 ActionConditionalConst (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -6271,6 +6317,130 @@ impl ActionConditionalConst {
             vn.write().unwrap().clear_mark();
         }
         found_path
+    }
+
+    // Ghidra: coreaction.cc:4261 ActionConditionalConst::pushConstant
+    /// Try to propagate a constant through an op. If all inputs are constant
+    /// (the front ConstPoint's value substituted for its vn, other inputs
+    /// already constant), compute the output via executeSimple and create a
+    /// new ConstPoint for the output. Faithful to `pushConstant` (cc:4261-4288).
+    fn push_constant(points: &mut Vec<ConstPoint>, op: &crate::op::PcodeOpRef) {
+        use crate::opcodes::OpCode;
+        let op_r = op.0.read().unwrap();
+        // cc:4264: skip special ops.
+        let eval_type = op_r.get_eval_type();
+        if (eval_type & crate::op::pcodeop_flags::SPECIAL) != 0 { return; }
+        // cc:4265: skip floating-point ops.
+        // (Rugra: check opcode for float ops.)
+        if matches!(op_r.opcode,
+            OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT | OpCode::CPUI_FLOAT_TRUNC | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR | OpCode::CPUI_FLOAT_ROUND
+            | OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_INT2FLOAT
+            | OpCode::CPUI_FLOAT_NAN | OpCode::CPUI_FLOAT_EQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
+            | OpCode::CPUI_FLOAT_LESSEQUAL
+        ) { return; }
+        let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => return };
+        if out_vn.read().unwrap().get_size() > 8 { return; }
+        // cc:4268-4269: get the varnode + slot from front ConstPoint.
+        if points.is_empty() { return; }
+        let front_vn = points[0].vn.clone();
+        let front_value = points[0].value;
+        let front_block = points[0].const_block_idx;
+        let front_slot = points[0].in_slot;
+        let front_dom = points[0].block_is_dom;
+        let slot = op_r.slot_of_input(&front_vn);
+        let slot = match slot { Some(s) => s, None => return };
+        // cc:4270-4282: build input values.
+        let n_in = op_r.num_input();
+        let mut inputs: Vec<u64> = Vec::with_capacity(n_in);
+        for i in 0..n_in {
+            if i == slot {
+                inputs.push(front_value);
+            } else {
+                let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => return };
+                if in_vn.read().unwrap().get_size() > 8 { return; }
+                if in_vn.read().unwrap().is_constant() {
+                    inputs.push(in_vn.read().unwrap().get_offset());
+                } else {
+                    return; // Not all inputs constant.
+                }
+            }
+        }
+        drop(op_r);
+        // cc:4284: executeSimple.
+        let outval = match op.0.read().unwrap().execute_simple(&inputs) {
+            Some(v) => v, None => return,
+        };
+        // cc:4287: create new ConstPoint for output.
+        points.push(ConstPoint::from_value(out_vn, outval, front_block, front_slot, front_dom));
+    }
+
+    // Ghidra: coreaction.cc:4478 ActionConditionalConst::findConstCompare
+    /// Examine a boolean varnode's definition for a comparison against a
+    /// constant. If found, create a ConstPoint for the variable down the
+    /// constant edge. Faithful to `findConstCompare` (cc:4478-4511).
+    fn find_const_compare(
+        points: &mut Vec<ConstPoint>,
+        bool_vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        bl_out: &[Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>; 2],
+        bl_out_rev_index: [i32; 2],
+        block_dom: [bool; 2],
+        mut flip_edge: bool,
+    ) {
+        use crate::opcodes::OpCode;
+        // cc:4481: boolVn must be written.
+        let mut cur_vn = bool_vn.clone();
+        let mut comp_op;
+        let mut opc;
+        loop {
+            let vn_r = cur_vn.read().unwrap();
+            if !vn_r.is_written() { return; }
+            let def_arc = match vn_r.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => return,
+            };
+            drop(vn_r);
+            comp_op = def_arc;
+            let comp_r = comp_op.read().unwrap();
+            opc = comp_r.opcode;
+            // cc:4484-4490: BOOL_NEGATE → flip edge, follow in(0).
+            if opc == OpCode::CPUI_BOOL_NEGATE {
+                flip_edge = !flip_edge;
+                let next = match comp_r.get_in(0) { Some(v) => v.clone(), None => return };
+                drop(comp_r);
+                cur_vn = next;
+                continue;
+            }
+            break;
+        }
+        // cc:4492-4497: determine constEdge from INT_EQUAL/INT_NOTEQUAL.
+        let const_edge = if opc == OpCode::CPUI_INT_EQUAL { 1 }
+                         else if opc == OpCode::CPUI_INT_NOTEQUAL { 0 }
+                         else { return; };
+        // cc:4499-4507: find variable and constant inputs.
+        let comp_r = comp_op.read().unwrap();
+        let mut var_vn = match comp_r.get_in(0) { Some(v) => v.clone(), None => return };
+        let mut const_vn = match comp_r.get_in(1) { Some(v) => v.clone(), None => return };
+        if !const_vn.read().unwrap().is_constant() {
+            if !var_vn.read().unwrap().is_constant() { return; }
+            std::mem::swap(&mut var_vn, &mut const_vn);
+        }
+        drop(comp_r);
+        // cc:4508: varVn must NOT have a lone descendant (else no phi to split).
+        if var_vn.read().unwrap().lone_descend().is_some() { return; }
+        // cc:4509-4510: flip edge if needed.
+        let const_edge = if flip_edge { 1 - const_edge } else { const_edge };
+        // cc:4511: create ConstPoint.
+        let out_block = match &bl_out[const_edge] { Some(b) => b.clone(), None => return };
+        let _ = bl_out_rev_index; // rev index not used in Rugra's block model
+        points.push(ConstPoint::from_const_vn(
+            var_vn, const_vn,
+            out_block.read().unwrap().get_index(),
+            const_edge as i32,
+            block_dom[const_edge],
+        ));
     }
 }
 impl Action for ActionConditionalConst {
