@@ -2285,18 +2285,16 @@ impl ActionNormalizeSetup {
 impl Action for ActionNormalizeSetup {
     // Ghidra: coreaction.cc:4567 ActionNormalizeSetup::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation: clear the Funcdata's scope to prepare
-        // for re-normalization. Full Ghidra also clears FuncProto input
-        // and model/output locks.
-        //
-        // In full Ghidra:
+        // cc:4569-4572: clear input params + unlock model/output.
         //   FuncProto &fp(data.getFuncProto());
         //   fp.clearInput();
         //   fp.setModelLock(false);
         //   fp.setOutputLock(false);
-        //
-        let proto = fd.get_func_proto();
-        let _ = proto; // Full: clearInput + setModelLock(false) + setOutputLock(false)
+        fd.funcp.clear_unlocked_input();
+        fd.funcp.set_output_lock(false);
+        // setModelLock(false): Rugra doesn't track model-lock state separately
+        // (calling_convention is a String, not locked). This is a no-op until
+        // model-lock tracking is added.
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "normalizesetup" mirrors ctor at coreaction.hh:630
