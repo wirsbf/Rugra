@@ -1896,7 +1896,7 @@ impl<'a> CollapseStructure<'a> {
                         incoming: Vec::new(),
                         outgoing: Vec::new(),
                         parent: None,
-                        flags: 0, for_init: None, for_iter: None,
+                        flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
                     }));
                 self.identify_internal(&while_block, &[body_idx], hi);
                 self.change_count += 1;
@@ -3753,6 +3753,10 @@ impl<'a> CollapseStructure<'a> {
             // Found while-do: cond block + clause (body) that loops back
             let negated = slot == 1; // If clause is on false edge, negate condition
             let clause_idx = clause.read().unwrap().get_index();
+            // cc:1538: bool overflow = bl->isComplex() — the condition block
+            // is too complex to print inline as while(cond), so use overflow
+            // syntax: while(true) { <cond body> if(cond) break; }.
+            let overflow = b.is_complex();
             let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(crate::block::BlockWhileDo {
                     index: cond_idx,
@@ -3762,6 +3766,7 @@ impl<'a> CollapseStructure<'a> {
                     outgoing: Vec::new(),
                     parent: None,
                     flags: 0, for_init: None, for_iter: None,
+                    overflow_syntax: overflow,
                 }));
             // Ghidra newBlockWhileDo: identifyInternal([cond, cl]) + forceOutputNum(1).
             // Consume the body clause; self_identify captures its boundary edges.
@@ -4211,7 +4216,7 @@ impl<'a> CollapseStructure<'a> {
                                             incoming: Vec::new(),
                                             outgoing: Vec::new(),
                                             parent: None,
-                                            flags: 0, for_init: None, for_iter: None,
+                                            flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
                                         }));
                                     replacements.push((i, while_block));
                                     self.change_count += 1;
@@ -4305,7 +4310,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
-                    flags: 0, for_init: None, for_iter: None,
+                    flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
                 }));
             replacements.push((header_idx as usize, while_block));
             self.change_count += 1;
@@ -4441,7 +4446,7 @@ impl<'a> CollapseStructure<'a> {
                             incoming: Vec::new(),
                             outgoing: Vec::new(),
                             parent: None,
-                            flags: 0, for_init: None, for_iter: None,
+                            flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
                         }));
                     replacements.push((header_idx as usize, while_block));
                     self.change_count += 1;
@@ -4537,7 +4542,7 @@ impl<'a> CollapseStructure<'a> {
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
-                    flags: 0, for_init: None, for_iter: None,
+                    flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
                 }));
             if i < self.graph.blocks.len() {
                 self.graph.blocks[i] = while_block.clone();

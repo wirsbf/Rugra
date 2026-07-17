@@ -1857,10 +1857,19 @@ pub struct BlockWhileDo {
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
     pub flags: u32,
     /// For-loop metadata set by ActionStructureTransform when the while-do
-    /// matches the canonical `for(init; cond; iterate)` pattern.
+    /// matches the canonical `for(init; cond, iterate)` pattern.
     /// Faithful to Ghidra's BlockWhileDo iterateOp/initializeOp (block.hh:690+).
+    /// Stores the init/iter expression text (rendered at detection time).
+    /// printc emits for(init;cond;iter) with the comma_separate mod active,
+    /// matching Ghidra emitForLoop (printc.cc:2957-2999).
     pub for_init: Option<String>,
     pub for_iter: Option<String>,
+    /// Overflow-syntax flag (Ghidra `hasOverflowSyntax()`, block.hh:692).
+    /// Set by ruleBlockWhileDo when `bl->isComplex()` (blockaction.cc:1538) —
+    /// the condition block is too complex to print inline as `while(cond)`.
+    /// When set, printc emits `while(true) { <cond body> if(cond) break; }`
+    /// instead of `while(cond) { ... }` (emitBlockWhileDo cc:3017-3044).
+    pub overflow_syntax: bool,
 }
 
 impl FlowBlock for BlockWhileDo {

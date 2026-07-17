@@ -971,6 +971,11 @@ impl PrintC {
                     // Check if this was identified as a for-loop by
                     // ActionStructureTransform (has init + iterate expressions).
                     let has_for = while_data.for_init.is_some() && while_data.for_iter.is_some();
+                    // Ghidra emitBlockWhileDo (printc.cc:3017): if
+                    // hasOverflowSyntax(), emit `while( true ) { <cond body>
+                    // if(cond) break; }` instead of `while(cond) { ... }`.
+                    // Set by ruleBlockWhileDo when bl->isComplex() (cc:1538).
+                    let overflow = while_data.overflow_syntax;
                     if has_for {
                         // Ghidra emitForLoop (printc.cc:2957-2999): emit
                         // `for (init; cond; iter)` with the comma_separate mod
@@ -985,6 +990,12 @@ impl PrintC {
                         self.emit.print(while_data.for_iter.as_ref().unwrap());
                         self.emit.print(")");
                         self.pop_mod();
+                    } else if overflow {
+                        // cc:3017-3044: overflow syntax — condition too complex
+                        // to print inline, so emit while(true) + explicit break.
+                        self.emit.print("while (");
+                        self.emit.print(" true");
+                        self.emit.print(")");
                     } else {
                         // Emit as while(cond)
                         self.emit.print("while (");
@@ -994,6 +1005,19 @@ impl PrintC {
 
                     self.emit.begin_block();
                     self.loop_depth += 1;
+                    // For overflow syntax, emit the condition body ops + the
+                    // explicit `if (cond) break;` BEFORE the loop body
+                    // (cc:3030-3043: condBlock emit with no_branch, then
+                    // only_branch condition, then break).
+                    if overflow {
+                        // Emit condition block's non-branch ops (no_branch).
+                        self.emit_block_ops(&while_data.condition, true);
+                        // cc:3035-3043: if (<condition>) break;
+                        self.emit.tag_line(0);
+                        self.emit.print("if (");
+                        self.emit_block_condition(&while_data.condition);
+                        self.emit.print(") break;");
+                    }
                     // A loop body is an independent control-flow path: a RETURN
                     // seen before the loop (or in a sibling branch) must NOT
                     // suppress the loop body. Scope seen_return to the body.
