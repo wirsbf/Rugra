@@ -675,6 +675,10 @@
 
 - `is_constant_extended() -> Option<(u64, u64)>` — `Varnode::isConstantExtended`（varnode.cc:799-840）：检测扩展常量，返回 128 位值 (lo, hi)。普通常量返回 (offset, 0)；INT_ZEXT/INT_SEXT/PIECE 链递归解析。被 RuleDivOpt::findForm 用于处理超过 64 位的乘法常量（除法乘法编码 c 可能 > 2^64）。
 
+### 2026-07-16：is_eventual_constant 完整递归（解锁 lastChanceLoad 依赖）
+
+- `is_eventual_constant(max_binary, max_load)` — 对齐 `Varnode::isEventualConstant`（varnode.cc:854-893）完整递归算法：COPY/ZEXT/SEXT 迭代跟随 in(0)；LOAD 递减 maxLoad 跟随 in(1)；INT_ADD/SUB/XOR/OR/AND 递减 maxBinary 递归两输入；INT_LEFT/RIGHT/SRIGHT/MULT 要求 in(1) 常量跟随 in(0)；其他返回 false。此前是简化 1 层检查。是 `ActionDeadCode::lastChanceLoad`（coreaction.cc:3916）的依赖。
+
 ### 2026-06-27（会话3 G3 诊断）：find_by_loc
 
 - `VarnodeBank::find_by_loc(size, loc) -> Option<Arc<Varnode>>` — 空间查找辅助：扫描 loc_tree 找任意 (size, loc) 匹配的 varnode（忽略 create_index），返回 create_index 最大者。用于 G3 诊断时桥接断链的 use-def（实验性，当前未被主管线调用）。

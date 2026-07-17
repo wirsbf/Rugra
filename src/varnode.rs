@@ -1038,39 +1038,78 @@ impl Varnode {
     }
 
     // Ghidra: varnode.cc:854 Varnode::isEventualConstant
-    /// Check if this Varnode will eventually fold to a constant.
-    /// Faithful to `isEventualConstant` (varnode.cc:854-898).
-    /// Simplified: only checks 1 level deep.
+    /// Check if this Varnode will eventually fold to a constant, with depth
+    /// limits. Faithful to `isEventualConstant` (varnode.cc:854-893):
+    ///   - Follows COPY/ZEXT/SEXT chains (in(0)) without depth limit.
+    ///   - LOAD: decrements maxLoad, follows in(1).
+    ///   - INT_ADD/SUB/XOR/OR/AND: decrements maxBinary, recursively checks
+    ///     both inputs (in(0) then in(1)).
+    ///   - INT_LEFT/RIGHT/SRIGHT/MULT: requires in(1) constant, follows in(0).
+    ///   - All other ops: false.
+    /// Previously this was a simplified 1-level check; now faithfully recurses.
     pub fn is_eventual_constant(&self, max_binary: i32, max_load: i32) -> bool {
-        if self.is_constant() { return true; }
-        if max_binary <= 0 { return false; }
-        if !self.is_written() { return false; }
-        let def_op = match self.def.as_ref().and_then(|w| w.upgrade()) {
-            Some(d) => d, None => return false,
-        };
-        let def_r = def_op.read().unwrap();
-        match def_r.opcode {
-            crate::opcodes::OpCode::CPUI_COPY => {
-                let invn = def_r.get_in(0).cloned();
-                drop(def_r);
-                if let Some(inv) = invn {
-                    return inv.read().unwrap().is_eventual_constant(max_binary, max_load);
+        use crate::opcodes::OpCode;
+        let mut cur_vn_offset = self.loc.as_u64();
+        let mut cur_vn_space = self.address_space;
+        let mut cur_vn_size = self.size;
+        let mut cur_def = self.def.clone();
+        let mut mb = max_binary;
+        let mut ml = max_load;
+        loop {
+            // Check if current varnode is constant.
+            if cur_vn_space == crate::space::AddressSpace::Const { return true; }
+            // Follow the def op.
+            let def_arc = match cur_def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => return false,
+            };
+            let def_r = def_arc.read().unwrap();
+            match def_r.opcode {
+                OpCode::CPUI_LOAD => {
+                    if ml == 0 { return false; }
+                    ml -= 1;
+                    // Follow in(1).
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    drop(def_r);
+                    let r = in1.read().unwrap();
+                    cur_vn_offset = r.loc.as_u64();
+                    cur_vn_space = r.address_space;
+                    cur_vn_size = r.size;
+                    cur_def = r.def.clone();
                 }
-                false
-            }
-            crate::opcodes::OpCode::CPUI_LOAD => {
-                drop(def_r);
-                max_load > 0
-            }
-            opc => {
-                let eval_type = def_r.get_eval_type();
-                drop(def_r);
-                if (eval_type & (crate::op::pcodeop_flags::BINARY | crate::op::pcodeop_flags::UNARY)) != 0 {
-                    max_binary > 0
-                } else {
-                    false
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_XOR
+                | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_AND => {
+                    if mb == 0 { return false; }
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    drop(def_r);
+                    if !in0.read().unwrap().is_eventual_constant(mb - 1, ml) { return false; }
+                    return in1.read().unwrap().is_eventual_constant(mb - 1, ml);
                 }
+                OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT | OpCode::CPUI_COPY => {
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
+                    drop(def_r);
+                    let r = in0.read().unwrap();
+                    cur_vn_offset = r.loc.as_u64();
+                    cur_vn_space = r.address_space;
+                    cur_vn_size = r.size;
+                    cur_def = r.def.clone();
+                }
+                OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
+                | OpCode::CPUI_INT_SRIGHT | OpCode::CPUI_INT_MULT => {
+                    // Requires in(1) constant, follow in(0).
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    if !in1.read().unwrap().is_constant() { return false; }
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
+                    drop(def_r);
+                    let r = in0.read().unwrap();
+                    cur_vn_offset = r.loc.as_u64();
+                    cur_vn_space = r.address_space;
+                    cur_vn_size = r.size;
+                    cur_def = r.def.clone();
+                }
+                _ => { return false; }
             }
+            let _ = (cur_vn_offset, cur_vn_size); // suppress unused
         }
     }
 
