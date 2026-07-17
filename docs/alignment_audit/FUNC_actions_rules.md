@@ -42,7 +42,7 @@ Action 基类 + ActionGroup + ActionRestartGroup + Rule 基类 + ActionPool + Ac
 | L4980-L5419 | ActionInferTypes(propagationDebug/buildLocaltypes/writeBack/propagateTypeEdge/propagateOneType/Ref/SpacebaseRef/canonicalReturnOp/propagateAcrossReturns/apply) + PropagationState | ⚠️ INDEX |
 | L5419-L5462 | ActionDatabase::buildDefaultGroups/universalAction | ⚠️ INDEX(双注册问题) |
 
-**coreaction.cc 统计**:121 函数。大量 ❌ INDEX P1。
+**coreaction.cc 统计**:121 函数。大多数 INDEX P1 条目实际已实现（2026-07-16 审核：ActionStackPtrFlow checkClog+repair 已实现、ActionInputPrototype/OutputPrototype/UnjustifiedParams 已实现、ActionHideShadow 已实现、ActionSwitchNorm 已实现、ActionDeadCode 已实现含 lastChanceLoad、ActionConditionalConst 10/10 子方法已实现、ActionNormalizeSetup clearInput 已加、ActionMappedLocalSync overlap check 已加）。INDEX P1 标签主要反映"子方法简化"而非"完全缺失"。剩余 gap：ActionConditionalConst apply() 未启用（IR 变异回归）、ActionSetCasts/ActionNameVars 子方法需进一步细化。
 
 ## ruleaction.cc(263 函数)
 
