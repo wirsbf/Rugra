@@ -58,7 +58,7 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L2113-L2247 | `JumpAssisted::*`(recoverModel/buildAddresses/buildLabels/foldInGuards) | `JumpAssisted` | 🔍 已实现 |
 | L2247-L2690 | JumpTable 系列(saveModel/restoreSavedModel/clearSavedModel/recoverModel/sanityCheck/block2Position/isReachable/numIndicesByBlock/isOverride/setOverride/getIndexByBlock/setLastAsDefault/addBlockToSwitch/switchOver/foldInNormalization/trivialSwitchOver/recoverAddresses/recoverMultistage/matchModel/recoverLabels/clear/encode/decode/checkForMultistage) | `JumpTable::*` | ⚠️ INDEX |
 
-**jumptable.cc 统计**:105 函数。多个 ❌ INDEX P0,3 类 MISSING(JumpBasic2/Override/Assisted)。
+**jumptable.cc 统计**:105 函数。JumpBasic2/Override/Assisted 三类均已实现（JumpAssisted::recover_model 保守返回 false 因 JumpAssistOp userop 未移植，匹配 Ghidra 无 jumpassist 二进制的行为）。checkUnrolledGuard 链已完成（e954c54）。
 
 ## condexe.cc(15 函数)
 
