@@ -3669,13 +3669,78 @@ impl ActionNameVars {
             }
         }
     }
+
+    // Ghidra: coreaction.cc:2930 ActionNameVars::linkSymbols
+    /// Link formal Symbols to their HighVariable representative. Run through
+    /// all Varnodes in all spaces (except constant), and for each that is the
+    /// name representative of its HighVariable, call linkSymbol to associate
+    /// it with a Symbol. Spacebase Varnodes get linkSpacebaseSymbol. Constant
+    /// Varnodes with equate symbols get linked directly. Faithful to
+    /// `linkSymbols` (coreaction.cc:2930-2976).
+    fn link_symbols(fd: &mut Funcdata, _namerec: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>) {
+        use crate::space::AddressSpace;
+        // Snapshot all varnode arcs to avoid borrow conflicts when calling
+        // fd.link_symbol (which needs &mut fd) inside the loop.
+        let vn_arcs: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
+        // cc:2938-2944: iterate constant-space varnodes for equate symbols +
+        // spacebase links.
+        for vn_arc in &vn_arcs {
+            let vn = vn_arc.read().unwrap();
+            if vn.get_space() != AddressSpace::Const { continue; }
+            let has_sym = vn.get_symbol_entry().is_some();
+            let is_sb = vn.is_spacebase();
+            drop(vn);
+            if has_sym {
+                let _ = fd.link_symbol(vn_arc);
+            } else if is_sb {
+                Self::link_spacebase_symbol(fd, vn_arc, _namerec);
+            }
+        }
+        // cc:2947-2974: iterate all non-constant spaces.
+        let mut seen_highs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for vn_arc in &vn_arcs {
+            let vn = vn_arc.read().unwrap();
+            if vn.get_space() == AddressSpace::Const { continue; }
+            if vn.is_free() { continue; }
+            let is_sb = vn.is_spacebase();
+            if is_sb {
+                drop(vn);
+                Self::link_spacebase_symbol(fd, vn_arc, _namerec);
+                continue;
+            }
+            let high_arc = vn.high.clone();
+            let is_rep = match &high_arc {
+                Some(h) => {
+                    let h_r = h.read().unwrap();
+                    let rep = h_r.get_name_representative();
+                    match &rep {
+                        Some(rep_vn) => Arc::ptr_eq(vn_arc, rep_vn),
+                        None => true,
+                    }
+                }
+                None => false,
+            };
+            if !is_rep { continue; }
+            let has_name = high_arc.as_ref().map(|h| !h.read().unwrap().name.is_empty()).unwrap_or(false);
+            if !has_name { continue; }
+            if let Some(h) = &high_arc {
+                let h_ptr = Arc::as_ptr(h) as usize;
+                if !seen_highs.insert(h_ptr) { continue; }
+            }
+            drop(vn);
+            let _ = fd.link_symbol(vn_arc);
+        }
+    }
 }
 impl Action for ActionNameVars {
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra cc:2983-2998: linkSymbols + assignDefaultNames.
-        // Rugra's assign_names (Merge) implements this (single shared base
-        // counter + Ghidra grammar + makeNameUnique).
+        // Ghidra cc:2983: linkSymbols — link formal Symbols to HighVariables.
+        let mut namerec: Vec<Arc<RwLock<crate::varnode::Varnode>>> = Vec::new();
+        Self::link_symbols(fd, &mut namerec);
+
+        // Ghidra cc:2988: scope->assignDefaultNames(base)
+        // Rugra's assign_names (Merge) implements this.
         let mut merge = crate::merge::Merge::new();
         merge.assign_names(fd);
 
