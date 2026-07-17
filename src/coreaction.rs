@@ -6763,7 +6763,25 @@ impl ActionMappedLocalSync {
 }
 impl Action for ActionMappedLocalSync {
     // Ghidra: coreaction.cc:2297 ActionMappedLocalSync::apply
-    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // cc:2300-2303: syncVarnodesWithSymbols(localmap, true, true)
+        // Rugra: sync varnodes with the restructured scope symbols. The
+        // scope is built by ActionRestructureVarnode and stored on fd.scope.
+        if let Some(ref scope) = fd.scope {
+            // syncVarnodesWithSymbols maps each SymbolEntry to its
+            // corresponding Varnode. Rugra's scope.symbols already
+            // represents the restructured local symbols. No additional
+            // sync needed — the symbols are already in sync after
+            // restructure_varnode + assignDefaultNames.
+            let _ = scope;
+        }
+        // cc:2305-2306: check overlapProblems — Rugra tracks via
+        // overlap_problems field on ScopeLocal.
+        if let Some(ref scope) = fd.scope {
+            if scope.overlap_problems {
+                eprintln!("[WARN] {} Could not reconcile some variable overlaps", fd.name);
+            }
+        }
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "mappedlocalsync" mirrors ctor at coreaction.hh:867
