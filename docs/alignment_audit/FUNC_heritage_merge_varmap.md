@@ -54,15 +54,15 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L2480 | `renameRecurse(BlockBasic*, VariableStack&)` | `visit_rename_direct` | ⚠️ INDEX P0 已修(commit 7eea43c),但 op_set_input 不清 descend → semantic #3 可能死代码 |
 | L2572 | `bumpDeadcodeDelay(AddrSpace*)` | — | 🔍 |
 | L2588 | `rename()` | `rename` | 🔍 |
-| L2600 | `placeMultiequals()` | `place_multiequals_direct` | ❌ INDEX P0(dom-frontier 替代 ADT) |
-| L2664 | `buildInfoList()` | — | 🔍 |
-| L2677 | `heritage()` | `heritage` | ❌ INDEX P0(gutted to 3 lines) |
+| L2600 | `placeMultiequals()` | `place_multiequals` | ✅ 2026-07-16 ADT (build_adt + visit_incr + calc_multiequals) 已实现 |
+| L2664 | `buildInfoList()` | `build_info_list` | ✅ 2026-07-16 |
+| L2677 | `heritage()` | `heritage` | ⚠️ 2026-07-16 主流程已实现（space 迭代 + globaldisjoint + process_joins + place_multiequals + rename + pass++）。剩余 TODO: clearStackPlaceholders, discoverIndexedStackPointers, reprocessFreeStores, analyzeNewLoadGuards, handleNewLoadCopies, PreferSplitManager |
 | L2776 | `getStoreGuard(PcodeOp*) const` | `get_store_guard` | 🔍 |
 | L2793 | `numHeritagePasses(AddrSpace*) const` | `num_heritage_passes` | ⚠️ INDEX P0 |
 | L2805 | `seenDeadCode(AddrSpace*)` | `seen_dead_code` | ⚠️ INDEX P0 |
 | L2817 | `getDeadCodeDelay(AddrSpace*) const` | `get_dead_code_delay` | ⚠️ INDEX P0 |
 | L2829 | `setDeadCodeDelay(AddrSpace*, int4)` | `set_dead_code_delay` | ⚠️ INDEX P0 |
-| L2843 | `deadRemovalAllowed(AddrSpace*) const` | `dead_removal_allowed` | ❌ INDEX P0(returns const true) |
+| L2843 | `deadRemovalAllowed(AddrSpace*) const` | `dead_removal_allowed` | ✅ 2026-07-16 (pass > deadcodedelay) |
 | L2857 | `deadRemovalAllowedSeen(AddrSpace*)` | — | 🔍 |
 | L2869 | `clear()` | `clear` | ⚠️ INDEX P0 |
 
