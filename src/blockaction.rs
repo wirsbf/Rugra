@@ -772,7 +772,7 @@ impl<'a> CollapseStructure<'a> {
     /// (cc:1786-1791). When None, iterates all blocks (cc:1782-1785).
     /// Returns isolated_count (blocks with sizeIn==0 && sizeOut==0).
     fn collapse_internal(&mut self, target_idx: Option<i32>) -> i32 {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
         let mut isolated_count;
@@ -816,8 +816,20 @@ impl<'a> CollapseStructure<'a> {
                             continue;
                         }
                     }
-                    // cc:1797-1828: the 8 rules in order.
-                    self.apply_rules_to_block(i);
+                    // cc:1797-1828: the 8 rules in order. Apply only to
+                    // non-structured blocks (Basic/Copy/Condition/InfLoop).
+                    // Structured List/Switch blocks are NOT recursed here —
+                    // their children were structured before the parent
+                    // collapsed them, and re-applying rules to children inside
+                    // collapseInternal causes infinite loops (e.g. InfLoop body
+                    // re-triggering try_rule_inf_loop). The 7-phase path's
+                    // phase2 recursion is a separate concern handled by the
+                    // outer 7-phase loop, not collapseInternal's per-block pass.
+                    let bt = block.read().unwrap().get_type();
+                    if bt == crate::block::BlockType::Basic
+                       || bt == crate::block::BlockType::Copy {
+                        self.apply_rules_to_block(i);
+                    }
                 }
                 self.refresh_switch_cases();
                 iterations += 1;
@@ -878,21 +890,41 @@ impl<'a> CollapseStructure<'a> {
         self.collapse_conditions();
         // cc:S3: collapseInternal(NULL).
         let mut isolated = self.collapse_internal(None);
-        // cc:S4: selectGoto loop.
+        // cc:S4: selectGoto loop. Bounded by rounds + progress to avoid
+        // infinite loops when select_goto keeps returning the same edge but
+        // isolated doesn't increase. Progress is measured by isolated count
+        // (NOT change_count, which increments per goto-mark even if the
+        // marked edge can't be structured).
         let goto_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let max_goto_rounds = 8;
+        let mut goto_rounds = 0;
+        let mut no_progress = 0;
+        let mut prev_isolated = isolated;
         while isolated < self.graph.get_size() as i32 {
             if std::time::Instant::now() > goto_deadline { break; }
+            if goto_rounds >= max_goto_rounds { break; }
+            goto_rounds += 1;
+            // Progress guard: if isolated hasn't increased for 3 consecutive
+            // rounds, selectGoto is spinning on un-structureable edges. Fall
+            // back to the batch cascade for irreducible remainders.
+            if isolated > prev_isolated {
+                no_progress = 0;
+            } else {
+                no_progress += 1;
+            }
+            prev_isolated = isolated;
+            if no_progress >= 3 {
+                self.run_goto_cascade();
+                isolated = self.collapse_internal(None);
+                break;
+            }
             // cc:1263: selectGoto picks one edge and marks it goto.
             let target = self.select_goto();
             if target.is_none() {
                 // cc:1274: clipExtraRoots fallback (Ghidra throws if this fails).
                 if !self.clip_extra_roots() {
                     // selectGoto exhausted AND clipExtraRoots found nothing.
-                    // The remaining unstructured basic blocks are irreducible
-                    // cross-edges that Rugra's batch cascade (run_goto_cascade:
-                    // select_and_mark_goto + clip_extra_roots + run_tracedag)
-                    // handles via its broader edge detection. Fall back to it
-                    // to finish structuring, then re-run collapseInternal.
+                    // Fall back to batch cascade to finish structuring.
                     self.run_goto_cascade();
                     isolated = self.collapse_internal(None);
                     break;
