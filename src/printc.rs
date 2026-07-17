@@ -972,7 +972,11 @@ impl PrintC {
                     // ActionStructureTransform (has init + iterate expressions).
                     let has_for = while_data.for_init.is_some() && while_data.for_iter.is_some();
                     if has_for {
-                        // Emit as for(init; cond; iter)
+                        // Ghidra emitForLoop (printc.cc:2957-2999): emit
+                        // `for (init; cond; iter)` with the comma_separate mod
+                        // active so doc_statement suppresses stray ';'.
+                        self.push_mod();
+                        self.set_mod(print_mods::COMMA_SEPARATE);
                         self.emit.print("for (");
                         self.emit.print(while_data.for_init.as_ref().unwrap());
                         self.emit.print("; ");
@@ -980,6 +984,7 @@ impl PrintC {
                         self.emit.print("; ");
                         self.emit.print(while_data.for_iter.as_ref().unwrap());
                         self.emit.print(")");
+                        self.pop_mod();
                     } else {
                         // Emit as while(cond)
                         self.emit.print("while (");
