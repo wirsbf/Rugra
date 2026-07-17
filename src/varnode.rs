@@ -582,11 +582,33 @@ impl Varnode {
     /// marked, isAutoLive returns false, matching Ghidra. The empty-varnode
     /// bug in RuleEarlyRemoval is fixed by the `is_indirect_source` guard, not
     /// this one; re-evaluate when auto-live setting is ported.
+    // Ghidra: varnode.hh:252 Varnode::isAutoLive
+    /// Is this varnode exempt from dead-code removal? True if addrforce or
+    /// autolive_hold flag is set. Faithful to `isAutoLive()` (varnode.hh:252).
     pub fn is_auto_live(&self) -> bool {
-        // addlflags is u16; AUTOLIVE_HOLD (1<<30) doesn't fit — the flag
-        // representation needs fixing when the setter is ported. Until then
-        // no varnode is auto-live.
-        false
+        (self.flags & (varnode_flags::ADDRFORCE | varnode_flags::AUTOLIVE_HOLD)) != 0
+    }
+    // Ghidra: varnode.hh:253 Varnode::isAutoLiveHold
+    pub fn is_auto_live_hold(&self) -> bool {
+        (self.flags & varnode_flags::AUTOLIVE_HOLD) != 0
+    }
+    // Ghidra: varnode.hh:327 Varnode::setAutoLiveHold
+    /// Place temporary hold on dead-code removal of this varnode.
+    pub fn set_auto_live_hold(&mut self) {
+        self.flags |= varnode_flags::AUTOLIVE_HOLD;
+    }
+    // Ghidra: varnode.hh:208 Varnode::isConsumeVacuous
+    /// Vacuous consume marker used by the dead-code algorithm.
+    pub fn is_consume_vacuous(&self) -> bool {
+        (self.addlflags & addl_flags::VAC_CONSUME) != 0
+    }
+    // Ghidra: varnode.hh:210 Varnode::setConsumeVacuous
+    pub fn set_consume_vacuous(&mut self) {
+        self.addlflags |= addl_flags::VAC_CONSUME;
+    }
+    // Ghidra: varnode.hh:212 Varnode::clearConsumeVacuous
+    pub fn clear_consume_vacuous(&mut self) {
+        self.addlflags &= !addl_flags::VAC_CONSUME;
     }
     // Ghidra: varnode.cc:578 Varnode::setExplicit
     /// Mark this as an explicit variable in the final C source. (varnode.hh:311)

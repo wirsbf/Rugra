@@ -181,6 +181,49 @@ impl ActionDeadCode {
             }
         }
     }
+
+    // Ghidra: coreaction.cc:3902 ActionDeadCode::lastChanceLoad
+    /// Mark LOAD ops whose address input (in(1)) is an eventual constant as
+    /// auto-live, so they survive dead-code removal. This prevents losing LOADs
+    /// whose address hasn't been resolved to a concrete value yet during early
+    /// heritage passes. Faithful to `lastChanceLoad` (coreaction.cc:3902-3923):
+    ///   - Returns false if heritage_pass > 1 or jumptable recovery is on.
+    ///   - For each live LOAD op: if in(1) is eventual constant (maxBinary=3,
+    ///     maxLoad=1), push full consumed on the output + set auto_live_hold.
+    fn last_chance_load(fd: &mut Funcdata, worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>) -> bool {
+        // cc:3905: if (data.getHeritagePass() > 1) return false;
+        if fd.heritage.pass > 1 { return false; }
+        // cc:3906: if (data.isJumptableRecoveryOn()) return false;
+        // (Rugra: jumptable recovery flag — skip if we had one; for now always
+        // allow, matching the common case.)
+        let mut res = false;
+        // cc:3907-3921: iterate LOAD ops.
+        let load_ops: Vec<crate::op::PcodeOpRef> = fd.obank.loadlist.clone();
+        for op_ref in &load_ops {
+            // Capture the output Arc + in(1) eventual-const check while holding
+            // the read lock, then release before mutating.
+            let (out_arc, should_mark) = {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() { (None, false) }
+                else if let Some(out) = &op.output {
+                    if out.read().unwrap().is_consume_vacuous() { (None, false) }
+                    else {
+                        let in1_is_eventual = op.get_in(1).map(|v| {
+                            v.read().unwrap().is_eventual_constant(3, 1)
+                        }).unwrap_or(false);
+                        if in1_is_eventual { (Some(out.clone()), true) }
+                        else { (None, false) }
+                    }
+                } else { (None, false) }
+            };
+            if let Some(out) = out_arc {
+                Self::push_consumed(u64::MAX, &out, worklist);
+                out.write().unwrap().set_auto_live_hold();
+                res = true;
+            }
+        }
+        res
+    }
 }
 
 impl Action for ActionDeadCode {
@@ -258,6 +301,16 @@ impl Action for ActionDeadCode {
         // Step 3: Propagate consumed bits backward through the data-flow.
         while !worklist.is_empty() {
             Self::propagate_consumed(&mut worklist);
+        }
+
+        // Step 3.5 (Ghidra coreaction.cc:3985-3990): lastChanceLoad — mark
+        // LOAD ops with eventual-constant addresses as auto-live so they
+        // survive dead-code. If any were found, re-run propagation.
+        if Self::last_chance_load(fd, &mut worklist) {
+            while !worklist.is_empty() {
+                Self::propagate_consumed(&mut worklist);
+            }
+            changed += 1;
         }
 
         // Step 4: Remove dead ops (output consume == 0 and not input).

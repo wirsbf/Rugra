@@ -678,6 +678,7 @@
 ### 2026-07-16：is_eventual_constant 完整递归（解锁 lastChanceLoad 依赖）
 
 - `is_eventual_constant(max_binary, max_load)` — 对齐 `Varnode::isEventualConstant`（varnode.cc:854-893）完整递归算法：COPY/ZEXT/SEXT 迭代跟随 in(0)；LOAD 递减 maxLoad 跟随 in(1)；INT_ADD/SUB/XOR/OR/AND 递减 maxBinary 递归两输入；INT_LEFT/RIGHT/SRIGHT/MULT 要求 in(1) 常量跟随 in(0)；其他返回 false。此前是简化 1 层检查。是 `ActionDeadCode::lastChanceLoad`（coreaction.cc:3916）的依赖。
+- **新增访问器**（2026-07-16）：`is_auto_live`（修复：现正确检查 ADDRFORCE|AUTOLIVE_HOLD）、`is_auto_live_hold`/`set_auto_live_hold`（varnode.hh:253/327）、`is_consume_vacuous`/`set_consume_vacuous`/`clear_consume_vacuous`（varnode.hh:208-212）。解锁 `ActionDeadCode::lastChanceLoad`。
 
 ### 2026-06-27（会话3 G3 诊断）：find_by_loc
 
