@@ -47,9 +47,9 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L426-L556 | `JumpBasic::isprune/ispoint/getStride/backup2Switch/getMaxValue/findDeterminingVarnodes` | `JumpBasic::*` | 🔍 |
 | L639/L686 | `GuardRecord::valueMatch/oneOffMatch` | `GuardRecord::value_match`/`one_off_match` | 🔍 |
 | L796-L1063 | PathMeld 系列(internalIntersect/meldOps/truncatePaths/set*/append/clear/meld/markPaths/isLoadInPath/getEarliestOp) | `PathMeld::*` | ⚠️ INDEX(meldOps 缺 SeqNum 排序) |
-| L1063 | `analyzeGuards(...)` | `analyze_guards` | ❌ INDEX P0(缺 checkUnrolledGuard/getFlipPath) |
+| L1063 | `analyzeGuards(...)` | `analyze_guards` | ⚠️ checkUnrolledGuard 已实现（e954c54），需接入 analyze_guards |
 | L1137 | `calcRange(...)` | `calc_range` | ⚠️ INDEX(value_match==2 缺) |
-| L1182/L1223/L1258/L1273/L1308/L1324/L1357/L1392 | findSmallestNormal/findNormalized/markFoldableGuards/markModel/flowsOnlyToModel/duplicateVarnodes/checkCommonCbranch/checkUnrolledGuard/foldInOneGuard | `find_smallest_normal`/`find_normalized`/`mark_foldable_guards`/`mark_model`/`flows_only_to_model`/`duplicate_varnodes` | ❌ INDEX P0(checkUnrolledGuard MISSING) |
+| L1182/L1223/L1258/L1273/L1308/L1324/L1357/L1392 | findSmallestNormal/findNormalized/markFoldableGuards/markModel/flowsOnlyToModel/duplicateVarnodes/checkCommonCbranch/checkUnrolledGuard/foldInOneGuard | 已实现 | ✅ 2026-07-16 checkCommonCbranch + checkUnrolledGuard + findMultiequal（e954c54） |
 | L1437 | `recoverModel(...)` | `recover_model` | ⚠️ INDEX |
 | L1453 | `buildAddresses(...)` | `build_addresses` | ❌ INDEX P0 已修(8e11b3b funcptr_align+addressToByte) |
 | L1484/L1528/L1577/L1594/L1643 | findUnnormalized/buildLabels/foldInGuards/sanityCheck/clear | `find_unnormalized`/`build_labels`/`sanity_check`/`clear` | ⚠️ INDEX |
