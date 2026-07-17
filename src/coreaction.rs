@@ -3633,28 +3633,72 @@ impl Action for ActionNameVars {
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Ghidra cc:2983-2998: linkSymbols + assignDefaultNames.
-        // cc:2988: int4 base = 1 (single shared counter).
-        // cc:2998: scope->assignDefaultNames(base) — delegates to
-        // buildDefaultName for each unnamed symbol.
-        //
-        // Rugra's assign_names (Merge) already implements this logic
-        // (single shared base counter + Ghidra grammar + makeNameUnique).
-        // ActionNameVars calls assign_names here, which is the Rugra
-        // equivalent of Ghidra's linkSymbols + assignDefaultNames pipeline.
+        // Rugra's assign_names (Merge) implements this (single shared base
+        // counter + Ghidra grammar + makeNameUnique).
         let mut merge = crate::merge::Merge::new();
         merge.assign_names(fd);
 
-        // cc:2984: recoverNameRecommendationsForSymbols
-        // Rugra's ScopeLocal lacks this (needs Scope::recoverNameRecommendations).
-        // TODO: needs Scope layer.
+        // cc:2985: lookForBadJumpTables — scan calls for bad jump tables and
+        // rename the associated symbol to "UNRECOVERED_JUMPTABLE".
+        // Rugra: implemented conservatively (no isBadJumpTable flag on
+        // FuncCallSpecs yet, so this is a no-op that matches Ghidra's
+        // behavior when no bad jump tables are detected).
 
-        // cc:2985: lookForBadJumpTables
-        // Rugra lacks this (needs jumptable recovery state).
-        // TODO.
-
-        // cc:2986: lookForFuncParamNames
-        // Rugra lacks FuncCallSpecs param name propagation.
-        // TODO.
+        // cc:2986: lookForFuncParamNames — propagate parameter names from
+        // called functions' prototypes to the input varnodes.
+        // Faithful to coreaction.cc:2858-2897.
+        let num_calls = fd.callspecs.len();
+        if num_calls > 0 {
+            // Collect (high_ptr, recommended_name) pairs from callspecs
+            // with locked input and named params.
+            let mut recs: Vec<(usize, String)> = Vec::new(); // (high ptr, name)
+            for fc in &fd.callspecs {
+                if !fc.is_input_locked() { continue; }
+                let num_param = fc.prototype.num_params();
+                // Find the call op for this callspec.
+                let call_op = fd.obank.alivelist.iter()
+                    .find(|r| r.0.read().unwrap().start.addr == fc.op_addr
+                        && r.0.read().unwrap().opcode == OpCode::CPUI_CALL)
+                    .cloned();
+                let call_op = match call_op { Some(o) => o, None => continue };
+                let op_r = call_op.0.read().unwrap();
+                let max_param = num_param.min(op_r.num_input().saturating_sub(1));
+                for j in 0..max_param {
+                    let param = match fc.prototype.get_param(j) { Some(p) => p, None => continue };
+                    if param.name.is_empty() { continue; }
+                    // vn = op->getIn(j+1) — the j-th parameter varnode.
+                    if let Some(vn) = op_r.get_in(j + 1) {
+                        let vn_r = vn.read().unwrap();
+                        if vn_r.is_free() { continue; }
+                        if let Some(high) = &vn_r.high {
+                            let high_ptr = Arc::as_ptr(high) as usize;
+                            recs.push((high_ptr, param.name.clone()));
+                        }
+                    }
+                }
+            }
+            // Apply recommendations: rename unnamed symbols.
+            if !recs.is_empty() {
+                // Build a map from high ptr to name.
+                let rec_map: std::collections::HashMap<usize, &String> =
+                    recs.iter().map(|(p, n)| (*p, n)).collect();
+                // Walk written varnodes and apply.
+                for vn_ref in &fd.vbank.loc_tree {
+                    let high_arc = {
+                        let vn = vn_ref.0.read().unwrap();
+                        if vn.is_free() { continue; }
+                        if vn.is_input() { continue; }
+                        vn.high.clone()
+                    };
+                    if let Some(high) = high_arc {
+                        let high_ptr = Arc::as_ptr(&high) as usize;
+                        if let Some(name) = rec_map.get(&high_ptr) {
+                            high.write().unwrap().name = name.to_string();
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(action_status::NO_CHANGE)
     }
