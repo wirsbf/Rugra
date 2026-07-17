@@ -2780,6 +2780,22 @@ impl ActionSetCasts {
         fd.op_insert_before(&new_op, op_ref);
         true
     }
+
+    // Ghidra: coreaction.cc:2469 ActionSetCasts::isOpIdentical
+    /// Check if two types are identical after unwrapping pointer layers and
+    /// typedef aliases. Faithful to `isOpIdentical` (cc:2469-2481).
+    fn is_op_identical(ct1: &Arc<crate::type_system::datatype::Datatype>, ct2: &Arc<crate::type_system::datatype::Datatype>) -> bool {
+        use crate::type_system::datatype::Datatype;
+        let mut t1 = ct1.clone();
+        let mut t2 = ct2.clone();
+        while matches!(t1.as_ref(), Datatype::Pointer(_)) && matches!(t2.as_ref(), Datatype::Pointer(_)) {
+            if let (Datatype::Pointer(p1), Datatype::Pointer(p2)) = (t1.as_ref(), t2.as_ref()) {
+                t1 = p1.ptr_to.clone();
+                t2 = p2.ptr_to.clone();
+            } else { break; }
+        }
+        Arc::ptr_eq(&t1, &t2)
+    }
 }
 impl Action for ActionSetCasts {
     // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
