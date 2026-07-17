@@ -6490,6 +6490,152 @@ impl ActionConditionalConst {
         }
         false
     }
+
+    // Ghidra: coreaction.cc:4201 ActionConditionalConst::placeCopy
+    /// Create a COPY op assigning `const_vn` at the bottom of block `bl`,
+    /// before any branch. Returns the output Varnode of the COPY.
+    fn place_copy(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
+    ) -> Arc<RwLock<crate::varnode::Varnode>> {
+        let addr = {
+            let bl_r = bl.read().unwrap();
+            let bb = match bl_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                Some(b) => b,
+                None => return fd.new_unique_out(const_vn.read().unwrap().get_size(), op),
+            };
+            if let Some(last_op) = bb.ops.last() {
+                last_op.0.read().unwrap().start.addr
+            } else {
+                op.0.read().unwrap().start.addr
+            }
+        };
+        let copy_op = fd.new_op(1, addr);
+        fd.op_set_opcode(&copy_op, crate::opcodes::OpCode::CPUI_COPY);
+        let out_vn = fd.new_unique_out(const_vn.read().unwrap().get_size(), &copy_op);
+        fd.op_set_input(&copy_op, const_vn.clone(), 0);
+        fd.obank.alivelist.push(copy_op.clone());
+        out_vn
+    }
+
+    // Ghidra: coreaction.cc:4299 ActionConditionalConst::handlePhiNodes
+    /// Replace MULTIEQUAL edges with constant if no alternate flow.
+    fn handle_phi_nodes(
+        &mut self,
+        fd: &mut Funcdata,
+        var_vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        phi_node_edges: &mut Vec<(usize, usize)>,
+    ) {
+        let mut alternate_flow: Vec<crate::op::PcodeOpRef> = Vec::new();
+        Self::collect_reachable(var_vn, phi_node_edges, &mut alternate_flow);
+        let mut results: Vec<i32> = vec![0; phi_node_edges.len()];
+        for (i, (op_ptr, _)) in phi_node_edges.iter().enumerate() {
+            let op_ref = fd.obank.alivelist.iter()
+                .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
+                .cloned();
+            if let Some(op_ref) = op_ref {
+                if !Self::flow_to_alternate_path(&op_ref) {
+                    results[i] = 1;
+                }
+            }
+        }
+        Self::clear_marks(&alternate_flow);
+        for (i, (op_ptr, slot)) in phi_node_edges.iter().enumerate() {
+            if results[i] != 1 { continue; }
+            let op_ref = fd.obank.alivelist.iter()
+                .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
+                .cloned();
+            if let Some(op_ref) = op_ref {
+                let bl_idx = {
+                    let op_r = op_ref.0.read().unwrap();
+                    if let Some(parent_weak) = op_r.parent.as_ref() {
+                        if let Some(parent) = parent_weak.upgrade() {
+                            parent.read().unwrap().get_in(*slot)
+                                .map(|e| e.point.read().unwrap().get_index())
+                                .unwrap_or(0)
+                        } else { 0 }
+                    } else { 0 }
+                };
+                let bl = match fd.bblocks.get_block(bl_idx as usize) {
+                    Some(b) => b, None => continue,
+                };
+                let out_vn = Self::place_copy(fd, &op_ref, &bl, const_vn);
+                fd.op_set_input(&op_ref, out_vn, *slot);
+                self.count += 1;
+            }
+        }
+    }
+
+    // Ghidra: coreaction.cc:4383 ActionConditionalConst::propagateConstant
+    /// Replace reads of the Varnode down the constant path with a constant.
+    fn propagate_constant(
+        &mut self,
+        fd: &mut Funcdata,
+        points: &mut Vec<ConstPoint>,
+        _use_multiequal: bool,
+    ) {
+        use crate::opcodes::OpCode;
+        let mut phi_node_edges: Vec<(usize, usize)> = Vec::new();
+        while !points.is_empty() {
+            let point = points.remove(0);
+            let var_vn = point.vn.clone();
+            let mut const_vn = point.const_vn.clone();
+            let const_block_idx = point.const_block_idx;
+            let descend_refs: Vec<_> = {
+                let vn_r = var_vn.read().unwrap();
+                vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for op_arc in &descend_refs {
+                let op_r = op_arc.read().unwrap();
+                let opc = op_r.opcode;
+                if opc == OpCode::CPUI_INDIRECT { continue; }
+                if opc == OpCode::CPUI_MULTIEQUAL { continue; }
+                if opc == OpCode::CPUI_COPY {
+                    let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => continue };
+                    let follow = out_vn.read().unwrap().lone_descend();
+                    match &follow {
+                        Some(f) => {
+                            let fr = f.read().unwrap();
+                            if fr.is_marker() || fr.opcode == OpCode::CPUI_COPY { continue; }
+                        }
+                        None => continue,
+                    }
+                }
+                if !point.block_is_dom { continue; }
+                let op_block_idx = op_r.parent.as_ref()
+                    .and_then(|w| w.upgrade())
+                    .map(|p| p.read().unwrap().get_index())
+                    .unwrap_or(-1);
+                drop(op_r);
+                if op_block_idx == const_block_idx {
+                    if const_vn.is_none() {
+                        let size = var_vn.read().unwrap().get_size();
+                        const_vn = Some(fd.new_constant(size, point.value));
+                    }
+                    let cvn = const_vn.clone().unwrap();
+                    if let Some(slot) = op_arc.read().unwrap().slot_of_input(&var_vn) {
+                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), cvn, slot);
+                        self.count += 1;
+                    }
+                } else {
+                    Self::push_constant(points, &crate::op::PcodeOpRef(op_arc.clone()));
+                }
+            }
+            if !phi_node_edges.is_empty() {
+                if const_vn.is_none() {
+                    let size = var_vn.read().unwrap().get_size();
+                    const_vn = Some(fd.new_constant(size, point.value));
+                }
+                let cvn = const_vn.unwrap();
+                let mut edges = phi_node_edges.clone();
+                self.handle_phi_nodes(fd, &var_vn, &cvn, &mut edges);
+                phi_node_edges.clear();
+            }
+        }
+    }
 }
 impl Action for ActionConditionalConst {
     // Ghidra: coreaction.cc:4514 ActionConditionalConst::apply
