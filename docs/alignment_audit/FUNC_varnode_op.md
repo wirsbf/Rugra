@@ -22,8 +22,8 @@ Rugra 对应:`src/varnode.rs` + `src/op.rs`
 | L254 | `void Varnode::calcCover() const` | — | 🔍 |
 | L269 | `void Varnode::printCover(ostream&) const` | — | 🔍 |
 | L282 | `void Varnode::printInfo(ostream&) const` | — | 🔍 |
-| L316 | `void Varnode::eraseDescend(PcodeOp *op)` | `erase_descend` | ⚠️ 已补对齐 erase+coverdirty,coverdirty 缺 |
-| L330 | `void Varnode::addDescend(PcodeOp *op)` | `add_descend` | ⚠️ 已补 free 多 descend 检查,coverdirty 缺 |
+| L316 | `void Varnode::eraseDescend(PcodeOp *op)` | `erase_descend` | ✅ 2026-07-16 (COVERDIRTY 已设) |
+| L330 | `void Varnode::addDescend(PcodeOp *op)` | `add_descend` | ✅ 2026-07-16 (COVERDIRTY 已设) |
 | L344 | `void Varnode::destroyDescend()` | — | 🔍 |
 | L352 | `void Varnode::setFlags(uint4 fl) const` | — | 🔍 |
 | L365 | `void Varnode::clearFlags(uint4 fl) const` | — | 🔍 |
@@ -98,7 +98,7 @@ Rugra 对应:`src/varnode.rs` + `src/op.rs`
 | L2014 | `bool contiguous_test(Varnode*, Varnode*)` | — | 🔍 |
 | L2045 | `Varnode *findContiguousWhole(Funcdata&, Varnode*, Varnode*)` | — | 🔍 |
 
-**varnode.cc 统计**:~86 函数。2 个 ⚠️(eraseDescend/addDescend 已补但缺 coverdirty),其余 🔍。
+**varnode.cc 统计**:~86 函数。0 ⚠️ (eraseDescend/addDescend COVERDIRTY 已设 2026-07-16),大量 🔍 待逐行验证。
 
 ## op.cc
 
