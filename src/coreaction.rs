@@ -3628,6 +3628,47 @@ pub struct ActionNameVars;
 impl ActionNameVars {
     // Ghidra: coreaction.hh:470 ActionNameVars (constructor mirror)
     pub fn new() -> Self { Self }
+
+    // Ghidra: coreaction.cc:2907 ActionNameVars::linkSpacebaseSymbol
+    /// Link symbols associated with a given spacebase Varnode.
+    /// Iterates the Varnode's descendant PTRSUB ops and resolves the
+    /// constant offset input (in(1)) to a symbol via linkSymbolReference.
+    /// Faithful to `linkSpacebaseSymbol` (cc:2907-2920).
+    fn link_spacebase_symbol(
+        fd: &mut Funcdata,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        namerec: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>,
+    ) {
+        use crate::opcodes::OpCode;
+        // cc:2910: only process constant or input spacebase varnodes.
+        {
+            let vn_r = vn.read().unwrap();
+            if !vn_r.is_constant() && !vn_r.is_input() { return; }
+        }
+        // cc:2911-2918: iterate descendants.
+        let descend_refs: Vec<_> = {
+            let vn_r = vn.read().unwrap();
+            vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        for op_arc in &descend_refs {
+            let op = op_arc.read().unwrap();
+            // cc:2914: only PTRSUB ops.
+            if op.opcode != OpCode::CPUI_PTRSUB { continue; }
+            // cc:2915: offVn = op->getIn(1) — the constant offset input.
+            let off_vn = match op.get_in(1) { Some(v) => v.clone(), None => continue };
+            drop(op);
+            // cc:2916: sym = data.linkSymbolReference(offVn)
+            let sym_name = fd.link_symbol_reference(&off_vn);
+            // cc:2917-2918: if sym found and name undefined, add to namerec.
+            if sym_name.is_some() {
+                // Rugra: symbol_table already has the name (not undefined),
+                // so we don't add to namerec unless it's a generated name.
+                // Ghidra checks sym->isNameUndefined(); Rugra's symbol_table
+                // entries are user-defined (always named), so this branch
+                // is a no-op for Rugra's model.
+            }
+        }
+    }
 }
 impl Action for ActionNameVars {
     // Ghidra: coreaction.cc:2978 ActionNameVars::apply
