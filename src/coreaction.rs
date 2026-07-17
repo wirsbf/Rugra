@@ -6442,6 +6442,54 @@ impl ActionConditionalConst {
             block_dom[const_edge],
         ));
     }
+
+    // Ghidra: coreaction.cc:4349 ActionConditionalConst::testAlternatePath
+    /// Test if we can reach the given Varnode via a path other than through
+    /// the immediate edge. Backtracks through MULTIEQUAL other slots (up to
+    /// depth) and checks INT_ADD/PTRSUB/PTRADD inputs. Faithful to
+    /// `testAlternatePath` (cc:4349-4371).
+    fn test_alternate_path(
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &Arc<RwLock<crate::op::PcodeOp>>,
+        slot: i32,
+        depth: i32,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        let op_r = op.read().unwrap();
+        let n_in = op_r.num_input();
+        for i in 0..n_in {
+            if i as i32 == slot { continue; }
+            let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => continue };
+            // cc:4355: direct match.
+            if Arc::ptr_eq(&in_vn, vn) { return true; }
+            // cc:4356-4367: check if inVn is written by ADD/PTRSUB/PTRADD/MULTIEQUAL.
+            let in_r = in_vn.read().unwrap();
+            if !in_r.is_written() { continue; }
+            let def_arc = match in_r.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d, None => continue,
+            };
+            drop(in_r);
+            let def_r = def_arc.read().unwrap();
+            let opc = def_r.opcode;
+            if opc == OpCode::CPUI_INT_ADD || opc == OpCode::CPUI_PTRSUB || opc == OpCode::CPUI_PTRADD {
+                // cc:4360-4361: check if vn is an input to the ADD/PTRSUB/PTRADD.
+                if let Some(in0) = def_r.get_in(0) {
+                    if Arc::ptr_eq(&in0, vn) { return true; }
+                }
+                if let Some(in1) = def_r.get_in(1) {
+                    if Arc::ptr_eq(&in1, vn) { return true; }
+                }
+            } else if opc == OpCode::CPUI_MULTIEQUAL {
+                // cc:4363-4367: recursive backtrack through MULTIEQUAL.
+                if depth == 0 { continue; }
+                drop(def_r);
+                if Self::test_alternate_path(vn, &def_arc, -1, depth - 1) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 impl Action for ActionConditionalConst {
     // Ghidra: coreaction.cc:4514 ActionConditionalConst::apply
