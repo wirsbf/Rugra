@@ -12,7 +12,7 @@ Rugra 对应:`src/funcdata.rs`
 | L52 | `void opUnsetOutput(PcodeOp*)` | `op_unset_output` | 🔍 |
 | L70 | `void opSetOutput(PcodeOp*, Varnode*)` | `op_set_output` | 🔍 |
 | L92 | `void opUnsetInput(PcodeOp*, int4 slot)` | `op_unset_input` | ⚠️ clearInput 隐式(Vec 模型) |
-| L104 | `void opSetInput(PcodeOp*, Varnode*, int4 slot)` | `op_set_input` | ❌ 重写未编译通过(&mut self + 608 调用者) |
+| L104 | `void opSetInput(PcodeOp*, Varnode*, int4 slot)` | `op_set_input` | ✅ 2026-07-16 (4-step: early-out/const dedup/opUnsetInput+erase_descend/addDescend) |
 | L131 | `void opSwapInput(PcodeOp*, int4, int4)` | `op_swap_input` | 🔍 |
 | L150 | `void opInsert(PcodeOp*, BlockBasic*, iterator)` | — | 🔍 |
 | L164 | `void opUninsert(PcodeOp*)` | `op_uninsert` | 🔍 |
@@ -56,7 +56,7 @@ Rugra 对应:`src/funcdata.rs`
 | L1420 | `void cseEliminateList(vector<pair<uintm,PcodeOp*>>&, vector<Varnode*>&)` | — | 🔍 |
 | L1459 | `bool moveRespectingCover(PcodeOp*, PcodeOp*)` | — | 🔍 |
 
-**funcdata_op.cc 统计**:47 函数。1 ❌(opSetInput), 1 ⚠️(opUnsetInput), 2 ➖。
+**funcdata_op.cc 统计**:47 函数。0 ❌(opSetInput 已修复 2026-07-16), 1 ⚠️(opUnsetInput), 2 ➖。
 
 ## funcdata.cc(41 函数)
 

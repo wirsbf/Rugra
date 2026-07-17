@@ -15,7 +15,7 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L270 | `labelExitEdges(...)` | `label_exit_edges` | 🔍 |
 | L327 | `labelContainments(...)` | `label_containments` | ⚠️ INDEX |
 | L364 | `emitLikelyEdges(...)` | `emit_likely_edges` | 🔍 |
-| L416/L430 | `setExitMarks/clearExitMarks` | `apply_loop_exit_marks` | 🔍 |
+| L416/L430 | `setExitMarks/clearExitMarks` | `set_exit_marks`/`clear_exit_marks` + `apply_loop_exit_marks` | ✅ 2026-07-16 B5 |
 | L446 | `mergeIdenticalHeads(...)` | `merge_identical_heads` | 🔍 |
 | L473/L489 | `compare_ends/compare_head` | `compare_ends` | 🔍 |
 | L656-L983 | TraceDAG 系列(removeTrace/processExitConflict/insertActive/removeActive/checkOpen/openBranch/checkRetirement/retireBranch/clearVisitCount/initialize/pushBranches) | (tracedag.rs) | 🔍 |
@@ -25,11 +25,11 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L1108 | `clipExtraRoots()` | `clip_extra_roots` | 🔍 |
 | L1126 | `labelLoops(...)` | — | 🔍 |
 | L1148 | `orderLoopBodies()` | `order_loop_bodies` | ⚠️ INDEX |
-| L1193 | `updateLoopBody()` | (run_tracedag) | ❌ INDEX P0 |
-| L1284-L1768 | ruleBlockCat/Or/ProperIf/IfElse/Goto/IfNoExit/WhileDo/DoWhile/InfLoop/Switch/CaseFallthru | `try_rule_*`/`collapse_*` | ❌ INDEX P0(多个 MISMATCH,switch MISSING) |
-| L1768 | `collapseInternal(FlowBlock*)` | `apply_rules_to_block` | ❌ INDEX P0 |
+| L1193 | `updateLoopBody()` | `update_loop_body` | ✅ 2026-07-16 B5/B6/B7 |
+| L1284-L1768 | ruleBlockCat/Or/ProperIf/IfElse/Goto/IfNoExit/WhileDo/DoWhile/InfLoop/Switch/CaseFallthru | `try_rule_*` (all 10) + factory `new_block_*` | ✅ 2026-07-16 B1-B9 (or negateCondition, new_block_condition/if/if_else/inf_loop, collapse_conditions fixpoint, collapse_internal second-pass) |
+| L1768 | `collapseInternal(FlowBlock*)` | `collapse_internal(target_idx)` + `apply_rules_to_block` | ✅ 2026-07-16 B9 |
 | L1854 | `collapseConditions()` | `collapse_conditions` | ⚠️ INDEX |
-| L1877 | `collapseAll()` | `collapse_all` | ❌ INDEX P0(7-phase 替代) |
+| L1877 | `collapseAll()` | `collapse_all` (default 5-step) + `collapse_all_5step` | ✅ 2026-07-16 (5-step default, 30600b1) |
 | L1912-L2104 | ConditionalJoin 系列(findDups/checkExitBlock/cutDownMultiequals/setupMultiequals/moveCbranch/match/execute/clear) | — | 🔍 |
 | L2110-L2326 | Action 系列(StructureTransform/NormalizeBranches/PreferComplement/BlockStructure/FinalStructure/ReturnSplit/NodeJoin) | `Action*::apply` | ❌ INDEX P0(NormalizeBranches/FinalStructure swapped) |
 
