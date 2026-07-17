@@ -589,7 +589,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - ~~**B8**: collapse_conditions 单遍非 fixpoint~~ **已修复（18d227a）**：现 do-while fixpoint，删除 collapse_bool_conditions 重复实现。
 - ~~**B9**: apply_rules_to_block 缺 try_rule_if_no_exit + try_rule_case_fallthru（cc:1840 第二内循环）。~~ **已修复（e6731bb）**：phase2 加 collapseInternal 第二趟（IfNoExit per-block + CaseFallthru batch），外层 'fullchange 循环包裹内层 fixpoint。
 
-**最小路径**：B1（已修）→ ~~B2/B3/B4/B5/B6/B7/B8/B9~~（**全部已修**）→ ~~重写 collapse_all 为 5 步~~ **已实现（76bbead）+ 硬化（7f3debf）+ 突破（413728c）**：`collapse_internal(target_idx)` + `collapse_all_5step` 字面 5 步，`RUGRA_5STEP=1` flag 路由。**突破**：collapseConditions 与 collapseInternal(NULL) 之间加 `structure_loops_first()` 后，curl 5-step 达 **24/24 defects=0 numbering=485（与 7-phase 完全一致）**，httpd 27/29（同 baseline）。根因：缺 structure_loops_first 导致 try_rule_while_do spin。**默认仍 7-phase（铁律 5）**：数个单元测试断言细粒度结构细节（如 CONTINUE-edge tagging），5-step 与 7-phase 在这些细节上不同（18 deterministic failures 单线程可复现），故默认保留。5-step 是 faithful、可用、curl 验证的备选；成默认需调和结构细节差异或更新测试。
+**最小路径**：B1（已修）→ ~~B2/B3/B4/B5/B6/B7/B8/B9~~（**全部已修**）→ ~~重写 collapse_all 为 5 步~~ **已实现（76bbead）+ 硬化（7f3debf）+ 突破（413728c）+ 默认切换（30600b1）**：`collapse_all_5step` 字面 5 步现是**默认**（`RUGRA_7PHASE=1` 回退 7-phase）。调和：collapse_loops + collapse_switches（7-phase phase1 方法）在 collapse_internal 前运行，消除 while-break→WhileDo + switch→BlockSwitch 分歧。**953/953 测试通过，curl 24/24 defects=0 numbering=485（与 7-phase 完全一致），httpd 27/29 gcc-clean（同 baseline）**。collapseAll 5-step 移植完成。
 
 ### printc 对齐缺口（来自审计，按影响排序）
 
