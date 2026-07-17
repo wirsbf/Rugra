@@ -597,7 +597,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 - **P2**: goto/label 发射在 op 层非 block 层；无 flat/no_branch/only_branch mod 栈。
 - **P3（已修）**: 标签格式 LAB_ vs code_r0xXXXX。✅ b4b4617
 - **P4**: 变量声明/编号顺序用 op 遍历首次触及顺序，非 Ghidra nametree 顺序。是 numbering diff 的主因。
-- **P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。
+- ~~**P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。~~ **部分修复（8277ce7）**：for-loop header 发射现激活 comma_separate mod（对齐 emitForLoop printc.cc:2973-2990）。init/iter 仍烘焙字符串（非 raw PcodeOp 重发），但 latent（curl 0 个 for 循环）。
 - **P6**: switch 加 `(long)` cast（Ghidra 无）；case 用 char 字面量（Ghidra 用 pushConstant 数值）；break 抑制逻辑不同；无 fallthrough 处理。
 - **P7**: ~~缺 BlockInfLoop~~ **已修复（c77a545）**：emit_structured_infloop 输出 `do { } while(true);`。剩余 overflow_syntax while 形式（while(true) { if(cb) break; }）未实现。
 - ~~**P8**: emitBlockCondition 复合 &&/|| 发射为独立语句非合并条件。~~ **已修复（1f24f18）**：emit_structured_condition 对顶层 BlockCondition 现发射 `if (left && right) {}`，capture_block_condition 递归处理嵌套。
