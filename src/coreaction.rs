@@ -6636,10 +6636,77 @@ impl ActionConditionalConst {
             }
         }
     }
+
+    // Ghidra: coreaction.cc:4236 ActionConditionalConst::placeMultipleConstants
+    /// Place a single COPY assignment shared by multiple MULTIEQUALs that
+    /// flow together. Find common ancestor block via findCommonBlock, place
+    /// COPY, replace all flowing-together edges. Faithful to cc:4236-4254.
+    fn place_multiple_constants(
+        fd: &mut Funcdata,
+        phi_node_edges: &[(usize, usize)],
+        marks: &[i32],
+        const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
+    ) {
+        // cc:4241-4247: collect blocks for edges with mark==2 (flowing together).
+        let mut blocks: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+        let mut first_op: Option<crate::op::PcodeOpRef> = None;
+        for (i, _) in phi_node_edges.iter().enumerate() {
+            if marks.get(i).copied().unwrap_or(0) != 2 { continue; }
+            let op_ptr = phi_node_edges[i].0;
+            for op_ref in &fd.obank.alivelist {
+                if Arc::as_ptr(&op_ref.0) as usize == op_ptr {
+                    first_op = Some(op_ref.clone());
+                    let op_r = op_ref.0.read().unwrap();
+                    if let Some(parent_weak) = op_r.parent.as_ref() {
+                        if let Some(parent) = parent_weak.upgrade() {
+                            let slot = phi_node_edges[i].1;
+                            if let Some(in_edge) = parent.read().unwrap().get_in(slot) {
+                                blocks.push(in_edge.point.clone());
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        if blocks.is_empty() { return; }
+        // cc:4248: findCommonBlock — Rugra uses find_common_block_n.
+        let root_block = match crate::block::BlockGraph::find_common_block_n(&blocks) {
+            Some(b) => b, None => return,
+        };
+        let op_ref = match first_op { Some(o) => o, None => return };
+        // cc:4249: placeCopy.
+        let out_vn = Self::place_copy(fd, &op_ref, &root_block, const_vn);
+        // cc:4250-4253: replace each flowing-together edge.
+        let alivelist_snapshot: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+        for (i, _) in phi_node_edges.iter().enumerate() {
+            if marks.get(i).copied().unwrap_or(0) != 2 { continue; }
+            let op_ptr = phi_node_edges[i].0;
+            let slot = phi_node_edges[i].1;
+            for op_ref in &alivelist_snapshot {
+                if Arc::as_ptr(&op_ref.0) as usize == op_ptr {
+                    fd.op_set_input(op_ref, out_vn.clone(), slot);
+                    break;
+                }
+            }
+        }
+    }
 }
 impl Action for ActionConditionalConst {
     // Ghidra: coreaction.cc:4514 ActionConditionalConst::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // All 10 sub-methods are implemented as ActionConditionalConst
+        // methods (clearMarks, collectReachable, flowToAlternatePath,
+        // pushConstant, findConstCompare, testAlternatePath, placeCopy,
+        // placeMultipleConstants, handlePhiNodes, propagateConstant).
+        // However, the full apply() orchestration is NOT yet enabled because
+        // propagateConstant mutates the IR (replacing varnodes with constants)
+        // in ways that the current Rugra pipeline isn't hardened against —
+        // it causes 12/24 curl functions to fail. The sub-methods are
+        // available infrastructure for future enablement.
+        //
+        // The detect-only stub below mirrors the original behavior (scan for
+        // CBRANCH with constant condition, but don't act on it).
         use crate::opcodes::OpCode;
         for op_ref in &fd.obank.alivelist {
             let op_rg = op_ref.0.read().unwrap();

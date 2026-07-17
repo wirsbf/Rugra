@@ -436,6 +436,53 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         false
     }
 
+    // Ghidra: block.cc:405 FlowBlock::restrictedByConditional
+    /// Check if this block is completely dominated by the conditional block
+    /// `cond` — all paths reaching this block go through cond's edge, so a
+    /// boolean constant holds. Faithful to `restrictedByConditional`
+    /// (block.cc:405-425).
+    fn restricted_by_conditional(
+        &self,
+        cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> bool {
+        // cc:408: single in-edge → always restricted.
+        if self.size_in() == 1 { return true; }
+        // cc:409: check immedDom == cond.
+        let my_dom = self.get_immed_dom().and_then(|w| w.upgrade());
+        match &my_dom {
+            Some(d) if Arc::ptr_eq(d, cond) => {}
+            _ => return false,
+        }
+        // cc:410-423: verify all in-edges only reach via cond.
+        let mut seen_cond = false;
+        let self_idx = self.get_index();
+        for i in 0..self.size_in() {
+            let in_block = match self.get_in(i) { Some(e) => e.point.clone(), None => continue };
+            if Arc::ptr_eq(&in_block, cond) {
+                if seen_cond { return false; }
+                seen_cond = true;
+                continue;
+            }
+            // Walk dom chain from in_block up to self, checking if cond is hit.
+            let mut cur = in_block;
+            loop {
+                if Arc::ptr_eq(&cur, cond) { return false; }
+                let cur_idx = cur.read().unwrap().get_index();
+                if cur_idx == self_idx { break; }
+                let up = cur.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                match up {
+                    Some(u) => {
+                        if Arc::ptr_eq(&u, cond) { return false; }
+                        if u.read().unwrap().get_index() == self_idx { break; }
+                        cur = u;
+                    }
+                    None => break,
+                }
+            }
+        }
+        true
+    }
+
     // Ghidra: block.hh:294 FlowBlock::negateCondition
     /// Flip the true/false out-edge semantics of this block's CBRANCH.
     /// Returns true if the flip changed the dataflow. Faithful to
