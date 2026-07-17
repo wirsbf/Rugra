@@ -2424,9 +2424,33 @@ impl Heritage {
     /// Clear spacebase-relative placeholder info for all call specs.
     /// Faithful to `clearStackPlaceholders` (heritage.cc:2048-2056).
     pub fn clear_stack_placeholders(&mut self, info_space: AddressSpace) {
-        // cc:2051-2054: for each call, abortSpacebaseRelative
-        // Rugra lacks FuncCallSpecs.abortSpacebaseRelative.
-        // TODO: port when call-analysis layer is available.
+        // cc:2051-2054: for each call, abortSpacebaseRelative.
+        let fd_arc = match &self.fd {
+            Some(w) => match w.upgrade() { Some(a) => a, None => return },
+            None => return,
+        };
+        let mut fd = fd_arc.write().unwrap();
+        let num_calls = fd.num_calls();
+        // Snapshot call op addresses first to avoid borrow conflicts.
+        let call_addrs: Vec<crate::address::Address> = (0..num_calls)
+            .map(|i| fd.callspecs[i].op_addr)
+            .collect();
+        // Take callspecs out to avoid double-mutable-borrow.
+        let mut callspecs = std::mem::take(&mut fd.callspecs);
+        for (i, call_addr) in call_addrs.iter().enumerate() {
+            let call_op = fd.obank.alivelist.iter()
+                .find(|op_ref| {
+                    let op = op_ref.0.read().unwrap();
+                    op.start.addr == *call_addr
+                        && (op.opcode == crate::opcodes::OpCode::CPUI_CALL
+                            || op.opcode == crate::opcodes::OpCode::CPUI_CALLIND)
+                })
+                .cloned();
+            if let Some(op_ref) = call_op {
+                callspecs[i].abort_spacebase_relative(&mut fd, &op_ref);
+            }
+        }
+        fd.callspecs = callspecs;
         // cc:2055: info->hasCallPlaceholders = false
         let idx = self.infolist.iter().position(|i| i.space == info_space);
         if let Some(i) = idx {

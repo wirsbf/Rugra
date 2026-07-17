@@ -319,6 +319,12 @@ pub struct FuncCallSpecs {
     /// (with slot 0 = the call target, parameters start at slot 1).
     /// Sparse — grown lazily by `set_input_bytes_consumed`.
     pub input_consume: Vec<u32>,
+    /// Stack placeholder slot for spacebase-relative parameter passing.
+    /// Faithful to `FuncCallSpecs::stackPlaceholderSlot` (fspec.hh:1653).
+    /// -1 = no placeholder; >=0 = the input slot holding the placeholder
+    /// varnode. Used by abortSpacebaseRelative to clean up placeholders
+    /// after heritage resolves the actual stack values.
+    pub stack_placeholder_slot: i32,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
@@ -339,6 +345,7 @@ impl FuncCallSpecs {
             proto_model: None,
             stackoffset: OFFSET_UNKNOWN,
             input_consume: Vec::new(),
+            stack_placeholder_slot: -1,
         }
     }
 
@@ -736,6 +743,47 @@ impl FuncCallSpecs {
     /// Get the active-output trials (if initialized).
     pub fn get_active_output(&self) -> Option<&ParamActive> {
         self.active_output.as_ref()
+    }
+
+    // Ghidra: fspec.cc:4910 FuncCallSpecs::abortSpacebaseRelative
+    /// Remove the stack placeholder input from the call op and clean up.
+    /// Faithful to `abortSpacebaseRelative` (fspec.cc:4910-4921). Called by
+    /// Heritage::clearStackPlaceholders when heritage resolves actual stack
+    /// values for this call's parameters.
+    pub fn abort_spacebase_relative(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+    ) {
+        if self.stack_placeholder_slot >= 0 {
+            let slot = self.stack_placeholder_slot as usize;
+            // cc:4914: vn = op->getIn(stackPlaceholderSlot).
+            let placeholder_vn = call_op.0.read().unwrap().get_in(slot).cloned();
+            // cc:4915: data.opRemoveInput(op, slot).
+            fd.op_remove_input(call_op, slot);
+            // cc:4916: clearStackPlaceholderSlot.
+            self.clear_stack_placeholder_slot();
+            // cc:4918-4919: if placeholder vn has no descend and is internal+
+            // written, destroy its defining op.
+            if let Some(vn) = placeholder_vn {
+                let vn_r = vn.read().unwrap();
+                let should_destroy = vn_r.has_no_descend()
+                    && vn_r.get_space() == crate::space::AddressSpace::Unique
+                    && vn_r.is_written();
+                drop(vn_r);
+                if should_destroy {
+                    if let Some(def_weak) = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                        fd.op_destroy(&crate::op::PcodeOpRef(def_weak));
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: fspec.hh:1654 FuncCallSpecs::clearStackPlaceholderSlot
+    /// Clear the stack placeholder slot index.
+    pub fn clear_stack_placeholder_slot(&mut self) {
+        self.stack_placeholder_slot = -1;
     }
 }
 
