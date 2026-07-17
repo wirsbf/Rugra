@@ -188,7 +188,7 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 ## 2026-06-27（续）：pullBack 守卫扩展 + backup2Switch + findUnnormalized
 
 **新增自由函数**：
-- `pull_back_through_op(rng, op, usenzmask) -> Option<Varnode>`（rangeutil.cc:1022）：通过 PcodeOp 反向范围，返回未知输入 varnode。处理一元/二元操作 + NZ 掩码交集。
+- `pull_back_through_op(rng, op, usenzmask) -> Option<Varnode>`（rangeutil.cc:1022）：通过 PcodeOp 反向范围，返回未知输入 varnode。处理一元/二元操作 + NZ 掩码交集 + SUBPIECE usenzmask 特殊情况（2026-07-16 补齐 rangeutil.cc:1053-1064）。
 
 **JumpBasic 新增/升级方法**：
 - `analyze_guards`：现执行完整 pullBack 扩展循环（jumptable.cc:1119），从布尔 varnode 反向最多 2 步，每步创建新 GuardRecord。

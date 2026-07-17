@@ -73,6 +73,13 @@ impl CircleRange {
         if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 }
     }
 
+    // Ghidra: rangeutil.cc:1060 (inline in pullBack SUBPIECE case)
+    /// Expand the mask to cover a larger size (used by pullBack SUBPIECE
+    /// usenzmask special case: keep the range but make the mask bigger).
+    pub fn expand_mask(&mut self, size: usize) {
+        self.mask = Self::calc_mask(size);
+    }
+
     // Ghidra: rangeutil.cc:179 CircleRange::isEmpty
     /// Return true if the range is empty.
     pub fn is_empty(&self) -> bool { self.isempty }

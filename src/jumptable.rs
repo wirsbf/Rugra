@@ -804,8 +804,22 @@ pub fn pull_back_through_op(
         let opc = op_rg.opcode;
         drop(op_rg);
         if !rng.pull_back_binary(opc, val, slot, in_size, out_size) {
-            // SUBPIECE special case handled in Ghidra; conservatively fail.
-            return None;
+            // cc:1053-1064: SUBPIECE usenzmask special case. If truncating
+            // bytes that are known to be zero (via NZMask), keep the range
+            // with a bigger mask (the nzmask intersection will trim it).
+            if usenzmask && opc == OpCode::CPUI_SUBPIECE && val == 0 {
+                let nz = res_arc.read().unwrap().get_nz_mask();
+                let msbset = mostsigbit_set(nz);
+                let msbset_bytes = (msbset + 8) / 8;
+                if out_size < msbset_bytes as usize {
+                    return None; // Some bytes being chopped might not be zero
+                } else {
+                    // Keep range but make mask bigger (input size).
+                    rng.expand_mask(in_size);
+                }
+            } else {
+                return None;
+            }
         }
         if usenzmask {
             let nz = res_arc.read().unwrap().get_nz_mask();

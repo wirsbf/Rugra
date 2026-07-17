@@ -50,6 +50,11 @@
 
 测试：新增 11 个（complement/convert_to_boolean/set_nz_mask/pull_back_unary/pull_back_binary_add/pull_back_binary_less/bit_transitions/sign_extend_size）。
 
+## 2026-07-16：expand_mask + pullBack SUBPIECE usenzmask 完整化
+
+- `expand_mask(size)`（rangeutil.cc:1060 内联）：设置 mask = calc_mask(size)，供 pullBack SUBPIECE 特殊情况使用。
+- `pull_back_through_op`（jumptable.rs）的 SUBPIECE usenzmask 特殊情况（rangeutil.cc:1053-1064）已补齐：当 pullBackBinary 对 SUBPIECE val==0 失败时，检查 NZMask 确认截断的字节是否为零，是则保留范围并扩展 mask。此前保守返回 None。
+
 ## 2026-06-27（续）：union 返回码修复
 
 - **CircleRange::union** 返回码对齐 Ghidra circleUnion 语义：0=single range（在 self 中），1=two pieces（无法表示），2=full（覆盖全部）。
