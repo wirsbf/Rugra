@@ -883,6 +883,13 @@ impl<'a> CollapseStructure<'a> {
         // cc:S1: orderLoopBodies.
         self.order_loop_bodies();
         self.apply_loop_exit_marks();
+        // Run TraceDAG BEFORE structure_loops_first (mirrors 7-phase step 1c):
+        // marks break/continue/goto edges so try_rule_while_do in
+        // structure_loops_first and collapse_internal can match loops with
+        // break edges. Without this, while-with-break loops structure as
+        // If+Goto instead of WhileDo, causing ActionNormalizeBranches to miss
+        // CONTINUE-edge tagging (test_normalize_branches_break_in_while_loop).
+        self.run_tracedag();
         // cc:S2: collapseConditions (fixpoint ruleBlockOr).
         self.collapse_conditions();
         // Pre-structure WhileDo loops (7-phase structure_loops_first): without
