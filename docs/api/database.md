@@ -2,7 +2,7 @@
 
 Faithful port of Ghidra's `database.hh` / `database.cc` (3430 lines).
 
-**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). All public classes (`SymbolEntry`,
+**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). 2026-07-16: Symbol::is_name_undefined added (database.cc:249). All public classes (`SymbolEntry`,
 `Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `Scope`, `Database`)
 are present with full data structures, the in-memory query/insert algorithms,
 AND XML encode/decode via `marshal.rs`'s `Encoder`/`Decoder` traits.

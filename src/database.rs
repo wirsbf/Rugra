@@ -397,6 +397,13 @@ impl Symbol {
         (self.flags & symbol_flags::NAMELOCK) != 0
     }
 
+    // Ghidra: database.cc:249 Symbol::isNameUndefined
+    /// Return true if this symbol's name is the auto-generated "$$undef"
+    /// placeholder. Faithful to `isNameUndefined` (database.cc:249).
+    pub fn is_name_undefined(&self) -> bool {
+        self.name.starts_with("$$undef")
+    }
+
     // Ghidra: database.hh:960 Symbol::isSizeTypeLocked
     /// Is the Symbol size type-locked? Faithful to `isSizeTypeLocked`.
     pub fn is_size_type_locked(&self) -> bool {
