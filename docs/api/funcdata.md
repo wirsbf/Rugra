@@ -1,7 +1,7 @@
 # `funcdata.rs` API Reference
 
 **源代码路径**: `src/funcdata.rs`
-**2026-07-16**: `link_symbol_reference` 已加（funcdata_varnode.cc:1193）。PTRSUB 常量输入解析为符号名。
+**2026-07-16**: `link_symbol` + `link_symbol_reference` 已加（funcdata_varnode.cc:1156/1193）。符号链接 + PTRSUB 常量解析。
 
 ## 文档状态
 

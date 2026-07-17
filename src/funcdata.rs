@@ -473,6 +473,44 @@ impl Funcdata {
     /// set the symbol reference on the Varnode and return the symbol name.
     /// Faithful to `linkSymbolReference` (funcdata_varnode.cc:1193-1213).
     /// Returns the symbol name if found, None otherwise.
+    // Ghidra: funcdata_varnode.cc:1156 Funcdata::linkSymbol
+    /// Link a Varnode to a Symbol in the local scope. If a Symbol already
+    /// overlaps the Varnode's address, link it. If not and the Varnode is
+    /// non-persistent, create a new local symbol entry. Faithful to
+    /// `linkSymbol` (funcdata_varnode.cc:1156-1184). Returns the symbol
+    /// name if linked/created, None otherwise.
+    pub fn link_symbol(
+        &mut self,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+    ) -> Option<String> {
+        // cc:1164: if high already has a symbol, return it.
+        // Rugra: check if vn already has a symbol_table entry.
+        let (vn_addr, vn_space, is_persist, is_addr_tied, vn_size) = {
+            let vn_r = vn.read().unwrap();
+            (
+                vn_r.get_offset(),
+                vn_r.get_space(),
+                vn_r.is_persist(),
+                vn_r.is_addr_tied(),
+                vn_r.get_size(),
+            )
+        };
+        // cc:1169: queryProperties — check if a symbol overlaps.
+        if let Some(name) = self.symbol_table.get(&vn_addr).cloned() {
+            return Some(name);
+        }
+        // cc:1173-1180: create new local symbol if not persistent.
+        if !is_persist {
+            // cc:1177: localmap->addSymbol("", type, addr, usepoint)
+            // Rugra: add to symbol_table with auto-generated name.
+            let auto_name = format!("local_{:x}", vn_addr);
+            self.symbol_table.insert(vn_addr, auto_name.clone());
+            return Some(auto_name);
+        }
+        None
+    }
+
+    // Ghidra: funcdata_varnode.cc:1193 Funcdata::linkSymbolReference
     pub fn link_symbol_reference(
         &mut self,
         vn: &Arc<RwLock<crate::varnode::Varnode>>,
