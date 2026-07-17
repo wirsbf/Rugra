@@ -594,7 +594,7 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 ### printc 对齐缺口（来自审计，按影响排序）
 
 - **P1（最高潜在缺陷）**: 无 OpToken 优先级引擎 / 无括号化。Ghidra printlanguage.cc:269 parentheses + emitOp。Rugra op_binary/op_unary 直接拼 infix 串，嵌套表达式可能语义错误（如 `a + b << c`、`x && y == z`）。curl 语料未触发但风险高。
-- **P2**: goto/label 发射在 op 层非 block 层；无 flat/no_branch/only_branch mod 栈。
+- ~~**P2**: goto/label 发射在 op 层非 block 层；无 flat/no_branch/only_branch mod 栈。~~ **已关闭（非活跃）**：分析发现 Rugra 的结构化输出已正确抑制分支——`emit_block_ops` 在结构化路径用 `skip_terminal=true` 跳过 CBRANCH/BRANCH/BRANCHIND（printc.rs:479-488），BRANCH 无条件跳过（:475）。curl 输出 0 个 `goto`/`if(...)goto`。op_cbranch/op_branch 仅在 skip_terminal=false 时调用（flat/非结构化回退），而 Rugra 不产 flat 输出，故 P2 非活跃缺口。Ghidra 的 flat-mod gating 在 Rugra 无对应输出模式，不需要。
 - **P3（已修）**: 标签格式 LAB_ vs code_r0xXXXX。✅ b4b4617
 - **P4**: 变量声明/编号顺序用 op 遍历首次触及顺序，非 Ghidra nametree 顺序。是 numbering diff 的主因。**分析（2026-07-16）**：Ghidra `assignDefaultNames`（database.cc:2850）遍历 `SymbolNameTree`（按 name 排序，tie-break `nameDedup`）。未命名符号共享 `$$undef` 前缀，故排序实际是 `nameDedup` = 符号创建顺序 = `ScopeLocal::restructure` 处理 RangeHint 顺序（按 stack offset 排序）。**Rugra 的栈变量路径已对齐**：`doc_variable_decls_from_funcdata` 按 `scope.symbols`（stack offset 顺序）遍历，`rename_scope_symbol` 按此序分配 `compact_base`，匹配 Ghidra。**剩余 gap 是寄存器派生的 auto-local**（不经过 scope.symbols，由 `compact_name_for` 在 op 遍历时首次触及编号）——这些是 op 遍历顺序非 stack offset 顺序。修复需把寄存器变量也按某种确定性顺序（如 def op 地址序）预分配 compact 名，而非懒首次触及。defects=0（仅 numbering 外观差异）。
 - ~~**P5**: for 循环 init/iter 是预算字符串非重发表达式；无 comma_separate。~~ **部分修复（8277ce7）**：for-loop header 发射现激活 comma_separate mod（对齐 emitForLoop printc.cc:2973-2990）。init/iter 仍烘焙字符串（非 raw PcodeOp 重发），但 latent（curl 0 个 for 循环）。
