@@ -1584,31 +1584,34 @@ impl Heritage {
         for op_arc in free_stores {
             // cc:1125: if STORE still uses spacebase ptr, skip
             if op_arc.read().unwrap().uses_spacebase_ptr() { continue; }
-            // cc:1128-1140: walk previous ops looking for INDIRECTs to remove
-            let prev = {
-                let op = op_arc.read().unwrap();
-                // Find previous op in alivelist
-                let op_ptr = Arc::as_ptr(&op_arc) as usize;
-                let mut prev_arc: Option<Arc<RwLock<PcodeOp>>> = None;
-                let mut found = false;
-                for r in &fd.obank.alivelist {
-                    if found { prev_arc = Some(r.0.clone()); break; }
-                    if Arc::as_ptr(&r.0) as usize == op_ptr { found = true; }
-                }
-                prev_arc
-            };
-            if let Some(ind_op) = prev {
+            // cc:1128-1140: walk backward through INDIRECTs looking for ones to remove
+            let op_ptr = Arc::as_ptr(op_arc) as usize;
+            let mut found_self = false;
+            let mut prev_ops: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+            for r in &fd.obank.alivelist {
+                if found_self { prev_ops.push(r.0.clone()); }
+                if Arc::as_ptr(&r.0) as usize == op_ptr { found_self = true; }
+            }
+            for ind_op in &prev_ops {
                 let is_indirect = ind_op.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+                if !is_indirect { break; } // cc:1130: stop at non-INDIRECT
+                // cc:1131-1133: verify iop varnode points back to our STORE
+                let iop_vn = ind_op.read().unwrap().get_in(1).cloned();
+                let matches = match &iop_vn {
+                    Some(v) => v.read().unwrap().get_space() == crate::space::AddressSpace::Iop,
+                    None => false,
+                };
+                if !matches { break; } // cc:1132-1133
+                // cc:1135-1138: if INDIRECT output is in our space, replace + destroy
                 let ind_out_space = ind_op.read().unwrap().output.as_ref()
                     .map(|o| o.read().unwrap().address_space);
-                if is_indirect && ind_out_space == Some(space) {
-                    // cc:1136-1137: totalReplace output with input, destroy
+                if ind_out_space == Some(space) {
                     let out_vn = ind_op.read().unwrap().output.as_ref().cloned();
                     let in_vn = ind_op.read().unwrap().get_in(0).cloned();
                     if let (Some(out), Some(inv)) = (out_vn, in_vn) {
                         fd.total_replace(&out, inv);
                     }
-                    let ind_ref = PcodeOpRef(ind_op);
+                    let ind_ref = PcodeOpRef(ind_op.clone());
                     fd.obank.destroy(ind_ref);
                 }
             }
