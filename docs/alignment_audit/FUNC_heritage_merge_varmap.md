@@ -35,7 +35,7 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L835 | `analyzeNewLoadGuards()` | — | 🔍 |
 | L910/L927 | `generateLoadGuard/generateStoreGuard` | — | 🔍 |
 | L945 | `protectFreeStores(...)` | — | 🔍 |
-| L987 | `discoverIndexedStackPointers(...)` | `discover_and_guard_stack_stores_fd` | ❌ INDEX P0 |
+| L987 | `discoverIndexedStackPointers(...)` | `discover_and_guard_stack_stores_fd` | ✅ 2026-07-16 BFS from RSP input, handles STORE/LOAD/ADD/SUB/COPY/MULTIEQUAL/INDIRECT, StackNode 已实现 |
 | L1112 | `reprocessFreeStores(...)` | — | 🔍 |
 | L1157 | `guard(...)` | — | 🔍 |
 | L1211-L1392 | guardCallOverlappingInput/guardOutputOverlap*/tryOutputOverlapGuard*/tryOutputStackGuard | — | 🔍 |
@@ -56,7 +56,7 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L2588 | `rename()` | `rename` | 🔍 |
 | L2600 | `placeMultiequals()` | `place_multiequals` | ✅ 2026-07-16 ADT (build_adt + visit_incr + calc_multiequals) 已实现 |
 | L2664 | `buildInfoList()` | `build_info_list` | ✅ 2026-07-16 |
-| L2677 | `heritage()` | `heritage` | ⚠️ 2026-07-16 主流程已实现（space 迭代 + globaldisjoint + process_joins + place_multiequals + rename + pass++）。剩余 TODO: clearStackPlaceholders, discoverIndexedStackPointers, reprocessFreeStores, analyzeNewLoadGuards, handleNewLoadCopies, PreferSplitManager |
+| L2677 | `heritage()` | `heritage` | ⚠️ 2026-07-16 主流程已实现。剩余 TODO: clearStackPlaceholders, reprocessFreeStores, analyzeNewLoadGuards, handleNewLoadCopies, PreferSplitManager（discoverIndexedStackPointers 已实现 ✅） |
 | L2776 | `getStoreGuard(PcodeOp*) const` | `get_store_guard` | 🔍 |
 | L2793 | `numHeritagePasses(AddrSpace*) const` | `num_heritage_passes` | ⚠️ INDEX P0 |
 | L2805 | `seenDeadCode(AddrSpace*)` | `seen_dead_code` | ⚠️ INDEX P0 |
