@@ -7,7 +7,7 @@ use crate::funcdata::Funcdata;
 use crate::opcodes::OpCode;
 use crate::error::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Action for performing SSA construction (Heritage)
 ///
@@ -6133,6 +6133,145 @@ pub struct ActionConditionalConst { pub count: i32 }
 impl ActionConditionalConst {
     // Ghidra: coreaction.hh:569 ActionConditionalConst (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
+
+    // Ghidra: coreaction.cc:4069 ActionConditionalConst::clearMarks
+    /// Clear the mark flag on all ops in the list. Faithful to `clearMarks`
+    /// (coreaction.cc:4069-4074).
+    fn clear_marks(op_list: &[crate::op::PcodeOpRef]) {
+        for op_ref in op_list {
+            op_ref.0.write().unwrap().flags &= !crate::op::pcodeop_flags::MARK;
+        }
+    }
+
+    // Ghidra: coreaction.cc:4083 ActionConditionalConst::collectReachable
+    /// Collect COPY, INDIRECT, and MULTIEQUAL ops reachable from the given
+    /// varnode, without going through excised phi-node edges. Faithful to
+    /// `collectReachable` (coreaction.cc:4083-4121).
+    /// Sets MARK on each collected op. `phi_node_edges` is a sorted list of
+    /// (op_ptr, slot) pairs to excise.
+    fn collect_reachable(
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        phi_node_edges: &mut Vec<(usize, usize)>,
+        reachable: &mut Vec<crate::op::PcodeOpRef>,
+    ) {
+        use crate::opcodes::OpCode;
+        phi_node_edges.sort();
+        let mut count = 0usize;
+        // cc:4088-4095: if vn is written by MULTIEQUAL, mark it reachable.
+        {
+            let vn_r = vn.read().unwrap();
+            if vn_r.is_written() {
+                if let Some(def_weak) = vn_r.def.as_ref().and_then(|w| w.upgrade()) {
+                    let def = def_weak.read().unwrap();
+                    if def.opcode == OpCode::CPUI_MULTIEQUAL {
+                        drop(def);
+                        def_weak.write().unwrap().flags |= crate::op::pcodeop_flags::MARK;
+                        reachable.push(crate::op::PcodeOpRef(def_weak.clone()));
+                    }
+                }
+            }
+        }
+        let mut cur_vn = vn.clone();
+        loop {
+            // cc:4099-4116: iterate descendants of cur_vn.
+            let descend_refs: Vec<_> = {
+                let vn_r = cur_vn.read().unwrap();
+                vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for op_arc in &descend_refs {
+                let op = op_arc.read().unwrap();
+                if (op.flags & crate::op::pcodeop_flags::MARK) != 0 { continue; }
+                let opc = op.opcode;
+                if opc == OpCode::CPUI_MULTIEQUAL {
+                    // cc:4104-4110: find incoming slot for current vn, check
+                    // if it's an excised edge.
+                    let op_ptr = Arc::as_ptr(op_arc) as usize;
+                    let mut found_slot = false;
+                    for slot in 0..op.num_input() {
+                        if let Some(in_vn) = op.get_in(slot) {
+                            if Arc::ptr_eq(&in_vn, &cur_vn) {
+                                // Check if this edge is excised.
+                                if phi_node_edges.binary_search(&(op_ptr, slot)).is_ok() {
+                                    continue; // excised — skip this slot
+                                }
+                                found_slot = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !found_slot { continue; } // was reached via excised edge only
+                    // cc:4110: if all slots excised → continue (not reached)
+                } else if opc != OpCode::CPUI_COPY && opc != OpCode::CPUI_INDIRECT {
+                    continue;
+                }
+                drop(op);
+                op_arc.write().unwrap().flags |= crate::op::pcodeop_flags::MARK;
+                reachable.push(crate::op::PcodeOpRef(op_arc.clone()));
+            }
+            // cc:4117: if count >= reachable.size() break.
+            if count >= reachable.len() { break; }
+            // cc:4118: vn = reachable[count]->getOut().
+            cur_vn = match reachable[count].0.read().unwrap().output.as_ref() {
+                Some(out) => out.clone(),
+                None => break,
+            };
+            count += 1;
+        }
+    }
+
+    // Ghidra: coreaction.cc:4129 ActionConditionalConst::flowToAlternatePath
+    /// Follow the output of `op` forward through MULTIEQUAL/INDIRECT/COPY ops.
+    /// If it hits a marked op (alternate flow), return true. Faithful to
+    /// `flowToAlternatePath` (coreaction.cc:4129-4160).
+    fn flow_to_alternate_path(op: &crate::op::PcodeOpRef) -> bool {
+        use crate::opcodes::OpCode;
+        // cc:4132: if op is already marked, it IS the alternate path.
+        if (op.0.read().unwrap().flags & crate::op::pcodeop_flags::MARK) != 0 { return true; }
+        let mut mark_set: Vec<Arc<RwLock<crate::varnode::Varnode>>> = Vec::new();
+        let vn = match op.0.read().unwrap().output.as_ref() {
+            Some(out) => out.clone(), None => return false,
+        };
+        mark_set.push(vn.clone());
+        vn.write().unwrap().set_mark();
+        let mut count = 0usize;
+        let mut found_path = false;
+        while count < mark_set.len() {
+            let cur_vn = mark_set[count].clone();
+            count += 1;
+            let descend_refs: Vec<_> = {
+                let vn_r = cur_vn.read().unwrap();
+                vn_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for next_op_arc in &descend_refs {
+                let next_op = next_op_arc.read().unwrap();
+                let opc = next_op.opcode;
+                if opc == OpCode::CPUI_MULTIEQUAL {
+                    // cc:4147-4149: if nextOp is marked, found alternate path.
+                    if (next_op.flags & crate::op::pcodeop_flags::MARK) != 0 {
+                        found_path = true;
+                        break;
+                    }
+                } else if opc != OpCode::CPUI_COPY && opc != OpCode::CPUI_INDIRECT {
+                    continue;
+                }
+                let out_vn = match next_op.output.as_ref() {
+                    Some(o) => o.clone(), None => continue,
+                };
+                if out_vn.read().unwrap().is_marked() { continue; }
+                out_vn.write().unwrap().set_mark();
+                mark_set.push(out_vn);
+            }
+            if found_path { break; }
+        }
+        // Clear marks on varnodes (Ghidra doesn't explicitly clear here —
+        // marks are cleared later by clearMarks on ops, not varnodes. But
+        // Varnode marks in Rugra use the same MARK bit as PcodeOp — we need
+        // to be careful. Ghidra uses separate mark bits for Varnode vs PcodeOp.)
+        for vn in &mark_set {
+            vn.write().unwrap().clear_mark();
+        }
+        found_path
+    }
 }
 impl Action for ActionConditionalConst {
     // Ghidra: coreaction.cc:4514 ActionConditionalConst::apply

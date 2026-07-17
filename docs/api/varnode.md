@@ -626,7 +626,7 @@
 新增与 Ghidra 一致的 Varnode flag 访问/设置方法，解锁 coreaction Action
 （ActionMarkExplicit/MarkImplied/RestrictLocal 等）：
 
-- `is_mark/set_mark/clear_mark` (varnode.hh:263,303,304)
+- `is_mark/set_mark/clear_mark` (varnode.hh:263,303,304) + `is_marked`/`clear_marks`（2026-07-16 新增，供 ActionConditionalConst flowToAlternatePath 使用）
 - `is_implied/set_implied/clear_implied` (varnode.hh:235,309,310)
 - `is_explicit/set_explicit/clear_explicit` (varnode.hh:236,311,312)
 - `is_direct_write/set_direct_write/clear_direct_write` (varnode.hh:247,305,306)

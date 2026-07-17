@@ -513,6 +513,19 @@ impl Varnode {
     pub fn clear_mark(&mut self) {
         self.flags &= !varnode_flags::MARK;
     }
+    // Ghidra: varnode.hh:302 Varnode::isMark
+    /// Is this Varnode marked?
+    pub fn is_marked(&self) -> bool {
+        (self.flags & varnode_flags::MARK) != 0
+    }
+    // RUGRA-GLUE: clear_marks (Rust helper for clearing marks on multiple
+    // Varnodes; Ghidra clears inline in collectReachable/flowToAlternatePath)
+    /// Clear mark on multiple Varnodes (helper for collectReachable cleanup).
+    pub fn clear_marks(vns: &[Arc<RwLock<Varnode>>]) {
+        for vn in vns {
+            vn.write().unwrap().clear_mark();
+        }
+    }
 
     // Ghidra: varnode.hh:284 Varnode::hasCover
     /// Return true if this Varnode has a Cover (participates in liveness).
