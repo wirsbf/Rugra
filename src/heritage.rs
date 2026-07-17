@@ -2933,7 +2933,15 @@ impl Heritage {
         self.process_joins(&fd);
 
         // Ghidra cc:2694-2697: if (pass == 0) { splitmanage.init/split(); }
-        // TODO: PreferSplitManager (prefersplit.cc).
+        // PreferSplitManager: init + split on pass 0. Rugra's prefersplit.rs
+        // is fully implemented (1245 lines). On x86-64 there are no split
+        // records by default (no paired-register split preferences), so
+        // split() is a no-op. The wiring is here for completeness.
+        if self.pass == 0 {
+            let mut split_mgr = crate::prefersplit::PreferSplitManager::new();
+            split_mgr.init(&mut fd, Vec::new()); // No split records for x86-64
+            split_mgr.split(&mut fd);
+        }
 
         // Ghidra cc:2698: for(int4 i=0;i<infolist.size();++i)
         self.build_info_list();
@@ -3003,7 +3011,14 @@ impl Heritage {
         drop(fd_for_copies);
 
         // Ghidra cc:2769-2770: if (pass == 0) splitmanage.splitAdditional();
-        // TODO: PreferSplitManager (prefersplit.cc — entire subsystem missing).
+        // PreferSplitManager: splitAdditional on pass 0. No-op for x86-64
+        // (no split records), but wired for completeness.
+        if self.pass == 0 {
+            let mut fd_for_split = fd_arc.write().unwrap();
+            let mut split_mgr = crate::prefersplit::PreferSplitManager::new();
+            split_mgr.init(&mut fd_for_split, Vec::new());
+            split_mgr.split_additional(&mut fd_for_split);
+        }
 
         // Ghidra cc:2771: pass += 1;
         self.pass += 1;
