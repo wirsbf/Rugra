@@ -1682,6 +1682,51 @@ impl PrintC {
         compact
     }
 
+    // Ghidra: database.cc:2850 ScopeInternal::assignDefaultNames (nametree order)
+    /// P4 fix: pre-allocate compact names for register-derived auto-locals in
+    /// def-op address order, matching Ghidra's nametree/nameDedup (symbol
+    /// creation) order. Ghidra traverses SymbolNameTree (sorted by name, tie-
+    /// break nameDedup = creation order). For register vars, the closest
+    /// analogue to creation order is the def-op's address order. This method
+    /// scans all ops, collects register-space output varnodes whose raw name
+    /// matches the auto-local pattern, sorts by def-op address, and pre-fills
+    /// compact_rename so compact_name_for finds cached names during emit.
+    fn preallocate_register_compact_names(&mut self, fd: &Funcdata) {
+        use crate::space::AddressSpace;
+        // Collect (raw_name, def_op_addr) for register auto-locals.
+        let mut candidates: Vec<(String, u64)> = Vec::new();
+        let mut seen_raw: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for op_ref in &fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if let Some(out_arc) = &op.output {
+                let vn = out_arc.read().unwrap();
+                if vn.get_space() != AddressSpace::Register { continue; }
+                // Skip params (they have their own names).
+                if self.param_names.contains_key(&vn.get_offset()) { continue; }
+                let raw = self.get_varnode_display_name_inner(&vn);
+                // Only auto-local names matching {prefix}_{hex} pattern.
+                if Self::is_raw_register_name(&raw) || raw.contains("Var_") {
+                    if seen_raw.insert(raw.clone()) {
+                        candidates.push((raw, op.start.addr.as_u64()));
+                    }
+                }
+            }
+        }
+        // Sort by def-op address (Ghidra nametree/nameDedup = creation order
+        // analogue). Stable sort preserves first-seen for same-address ties.
+        candidates.sort_by_key(|(_, addr)| *addr);
+        // Pre-allocate compact names in this order. compact_name_for will find
+        // these cached names during emit, so op-traversal order no longer
+        // matters for numbering.
+        for (raw, _) in &candidates {
+            // Temporarily force non-discovery to allow allocation.
+            let saved = self.discovery_pass;
+            self.discovery_pass = false;
+            let _ = self.compact_name_for(raw);
+            self.discovery_pass = saved;
+        }
+    }
+
     // RUGRA-GLUE: doc_variable_decls_from_funcdata (no Ghidra counterpart found)
     /// Emit variable declarations at the top of the function body.
     fn doc_variable_decls_from_funcdata(&mut self, fd: &Funcdata) {
@@ -4436,6 +4481,11 @@ impl PrintLanguage for PrintC {
         self.emit.begin_block();
 
         // 2a. Emit variable declarations (now pruned by used_varnode_names)
+        // P4: Pre-allocate compact names for register-derived auto-locals in
+        // def-op address order (matching Ghidra nametree/nameDedup = creation
+        // order). Without this, compact_name_for numbers them at op-traversal
+        // first-touch order, causing numbering diffs vs Ghidra.
+        self.preallocate_register_compact_names(fd);
         self.doc_variable_decls_from_funcdata(fd);
 
         // 2a.5: Collect goto targets for label emission
