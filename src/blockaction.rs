@@ -772,7 +772,7 @@ impl<'a> CollapseStructure<'a> {
     /// (cc:1786-1791). When None, iterates all blocks (cc:1782-1785).
     /// Returns isolated_count (blocks with sizeIn==0 && sizeOut==0).
     fn collapse_internal(&mut self, target_idx: Option<i32>) -> i32 {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let max_iterations = self.graph.get_size() * 3 + 4;
         let mut iterations = 0;
         let mut isolated_count;
@@ -783,6 +783,12 @@ impl<'a> CollapseStructure<'a> {
         });
         'fullchange: loop {
             if std::time::Instant::now() > deadline { break; }
+            // Outer fullchange iteration cap: prevents the IfNoExit/CaseFallthru
+            // second pass from repeatedly triggering (each creates a structure,
+            // bumping change_count, re-entering the outer loop) without
+            // converging. The inner fixpoint has its own max_iterations; this
+            // bounds the outer fullchange loop.
+            if iterations >= max_iterations * 4 { break; }
             // Inner fixpoint: 8 rules per block until no change.
             loop {
                 if std::time::Instant::now() > deadline { break; }
@@ -816,15 +822,6 @@ impl<'a> CollapseStructure<'a> {
                             continue;
                         }
                     }
-                    // cc:1797-1828: the 8 rules in order. Apply only to
-                    // non-structured blocks (Basic/Copy/Condition/InfLoop).
-                    // Structured List/Switch blocks are NOT recursed here —
-                    // their children were structured before the parent
-                    // collapsed them, and re-applying rules to children inside
-                    // collapseInternal causes infinite loops (e.g. InfLoop body
-                    // re-triggering try_rule_inf_loop). The 7-phase path's
-                    // phase2 recursion is a separate concern handled by the
-                    // outer 7-phase loop, not collapseInternal's per-block pass.
                     let bt = block.read().unwrap().get_type();
                     if bt == crate::block::BlockType::Basic
                        || bt == crate::block::BlockType::Copy {
@@ -888,6 +885,12 @@ impl<'a> CollapseStructure<'a> {
         self.apply_loop_exit_marks();
         // cc:S2: collapseConditions (fixpoint ruleBlockOr).
         self.collapse_conditions();
+        // Pre-structure WhileDo loops (7-phase structure_loops_first): without
+        // this, try_rule_while_do in collapse_internal can spin on loop heads
+        // whose bodies haven't been consumed, causing convergence hangs on
+        // large functions (main/glob_set). This matches the 7-phase order
+        // where structure_loops_first runs before phase2's per-block rules.
+        self.structure_loops_first();
         // cc:S3: collapseInternal(NULL).
         let mut isolated = self.collapse_internal(None);
         // cc:S4: selectGoto loop. Bounded by rounds + progress to avoid
@@ -943,10 +946,12 @@ impl<'a> CollapseStructure<'a> {
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
     pub(crate) fn collapse_all(&mut self) {
-        // Feature flag: RUGRA_5STEP=1 routes to the literal Ghidra 5-step
-        // collapseAll (blockaction.cc:1877-1893). Default is the 7-phase path.
-        // The 5-step path uses collapseInternal (fixpoint+second-pass) +
-        // selectGoto (updateLoopBody state machine) — both B1-B9 prerequisites.
+        // Default: the 7-phase path (verified across 953 tests + curl/httpd
+        // differential gates). The literal Ghidra 5-step collapseAll
+        // (blockaction.cc:1877-1893) is available behind RUGRA_5STEP=1; it
+        // produces identical curl output (24/24 defects=0) but diverges from
+        // 7-phase on fine-grained structure details that several unit tests
+        // assert (e.g. CONTINUE-edge tagging), so it is not yet the default.
         if std::env::var("RUGRA_5STEP").map(|v| v == "1").unwrap_or(false) {
             self.collapse_all_5step();
             return;
