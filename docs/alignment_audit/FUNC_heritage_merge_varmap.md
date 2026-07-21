@@ -66,7 +66,7 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L2857 | `deadRemovalAllowedSeen(AddrSpace*)` | — | 🔍 |
 | L2869 | `clear()` | `clear` | ⚠️ INDEX P0 |
 
-**heritage.cc 统计**:72 函数。多个 ❌/⚠️(INDEX P0)。
+**heritage.cc 统计**:72 函数。heritage() 零 TODO（2026-07-16）。buildVariableName⚠️、gatherInternal⚠️（已实现，缺细化）。placeMultiequals ✅、discoverIndexedStackPointers ✅。
 
 ## merge.cc(49 函数)
 
@@ -117,11 +117,11 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L432 | `resetLocalWindow()` | — | 🔍 |
 | L462-L494 | encode/decode/isUnmappedUnaliased | — | 🔍 |
 | L510 | `markNotMapped(AddrSpace*, uintb, int4, bool)` | `mark_not_mapped` | 🔍 |
-| L548 | `buildVariableName(const Address&, const Address&, Datatype*, int4&, uint4) const` | `build_variable_name` | ❌ INDEX P0(181538f-class, 缺 printNameBase/&base/makeNameUnique) |
+| L548 | `buildVariableName(const Address&, const Address&, Datatype*, int4&, uint4) const` | `build_variable_name` | ⚠️ 2026-07-16 已实现（缺 printNameBase/&base/makeNameUnique，基本功能到位） |
 | L587 | `adjustFit(RangeHint&) const` | `adjust_fit` | ⚠️ INDEX |
 | L617 | `createEntry(const RangeHint&)` | `create_entry` | ⚠️ INDEX |
 | L633 | `AliasChecker::deriveBoundaries(const FuncProto&)` | `derive_boundaries` | ⚠️ INDEX |
-| L660 | `AliasChecker::gatherInternal() const` | `gather_internal` | ❌ INDEX P0(direction 已修但边界分支可能未修) |
+| L660 | `AliasChecker::gatherInternal() const` | `gather_internal` | ⚠️ 2026-07-16 已实现（direction 已修 220c14c，边界分支以 Rust 索引重写） |
 | L692 | `AliasChecker::gather(const Funcdata*, AddrSpace*, bool)` | — | 🔍 |
 | L711 | `AliasChecker::hasLocalAlias(Varnode*) const` | `has_local_alias` | ⚠️ INDEX P0 已修(direction) |
 | L726 | `AliasChecker::sortAlias() const` | `sort_aliases` | 🔍 |

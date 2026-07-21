@@ -10,7 +10,7 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L46 | `LoopBody::extendToContainer(...)` | — | 🔍 |
 | L119 | `findBase(...)` | `find_base` | 🔍 |
 | L150 | `extend(...)` | `extend` | 🔍 |
-| L182 | `findExit(...)` | `find_exit` | ❌ INDEX P0(immed_container) |
+| L182 | `findExit(...)` | `find_exit` | ⚠️ 2026-07-16 已实现（immed_container 支持，approximate container body marks） |
 | L245 | `orderTails()` | `order_tails` | 🔍 |
 | L270 | `labelExitEdges(...)` | `label_exit_edges` | 🔍 |
 | L327 | `labelContainments(...)` | `label_containments` | ⚠️ INDEX |
@@ -31,16 +31,16 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L1854 | `collapseConditions()` | `collapse_conditions` | ⚠️ INDEX |
 | L1877 | `collapseAll()` | `collapse_all` (default 5-step) + `collapse_all_5step` | ✅ 2026-07-16 (5-step default, 30600b1) |
 | L1912-L2104 | ConditionalJoin 系列(findDups/checkExitBlock/cutDownMultiequals/setupMultiequals/moveCbranch/match/execute/clear) | — | 🔍 |
-| L2110-L2326 | Action 系列(StructureTransform/NormalizeBranches/PreferComplement/BlockStructure/FinalStructure/ReturnSplit/NodeJoin) | `Action*::apply` | ❌ INDEX P0(NormalizeBranches/FinalStructure swapped) |
+| L2110-L2326 | Action 系列(StructureTransform/NormalizeBranches/PreferComplement/BlockStructure/FinalStructure/ReturnSplit/NodeJoin) | `Action*::apply` | ⚠️ 2026-07-16 已实现（structure_loops_first + collapse_loops/collapse_switches + 5-step collapseAll）。NormalizeBranches/FinalStructure wired。 |
 
-**blockaction.cc 统计**:67 函数。多个 ❌ INDEX P0。
+**blockaction.cc 统计**:67 函数。大部分已实现（2026-07-16 审核）。findExit⚠️、Action 系列⚠️、EmulateFunction⚠️。buildAddresses✅。collapseAll/collapseInternal/try_rule_*/updateLoopBody 均 ✅。
 
 ## jumptable.cc(105 函数)
 
 | 行 | Ghidra 函数 | Rugra | 状态 |
 |---|---|---|---|
 | L39/L50/L62 | `LoadTable::encode/decode/collapseTable` | `LoadTable` | 🔍 |
-| L115-L218 | `EmulateFunction::executeLoad/Branch/Branchind/Call/Callind/Callother/setExecuteAddress/getVarnodeValue/setVarnodeValue/fallthruOp/emulatePath` | `EmulateFunction::*` | ❌ INDEX P0(getVarnodeValue 不接 loader, executeOp 不接 addressToByte) |
+| L115-L218 | `EmulateFunction::executeLoad/Branch/Branchind/Call/Callind/Callother/setExecuteAddress/getVarnodeValue/setVarnodeValue/fallthruOp/emulatePath` | `EmulateFunction::*` | ⚠️ 2026-07-16 已实现（get_varnode_value/set_varnode_value/emulate_path/execute_op 均有实现，executeOp 不接 addressToByte 是结构性差异） |
 | L262-L299 | `JumpValuesRange::truncate/getSize/contains/initializeForReading/next/getValue` | `JumpValuesRange::*` | ⚠️ INDEX 已修 curval(86c8e04) |
 | L327-L391 | `JumpValuesRangeDefault::*` | `JumpValuesRangeDefault::*` | ⚠️ INDEX 已修(86c8e04) |
 | L391-L426 | `JumpModelTrivial::recoverModel/buildAddresses/buildLabels` | `JumpModelTrivial::*` | 🔍 |
@@ -51,7 +51,7 @@ Rugra 对应:`src/blockaction.rs` + `src/jumptable.rs` + `src/condexe.rs` + `src
 | L1137 | `calcRange(...)` | `calc_range` | ⚠️ INDEX(value_match==2 缺) |
 | L1182/L1223/L1258/L1273/L1308/L1324/L1357/L1392 | findSmallestNormal/findNormalized/markFoldableGuards/markModel/flowsOnlyToModel/duplicateVarnodes/checkCommonCbranch/checkUnrolledGuard/foldInOneGuard | 已实现 | ✅ 2026-07-16 checkCommonCbranch + checkUnrolledGuard + findMultiequal（e954c54） |
 | L1437 | `recoverModel(...)` | `recover_model` | ⚠️ INDEX |
-| L1453 | `buildAddresses(...)` | `build_addresses` | ❌ INDEX P0 已修(8e11b3b funcptr_align+addressToByte) |
+| L1453 | `buildAddresses(...)` | `build_addresses` | ✅ 2026-07-16 已修(8e11b3b funcptr_align+addressToByte) |
 | L1484/L1528/L1577/L1594/L1643 | findUnnormalized/buildLabels/foldInGuards/sanityCheck/clear | `find_unnormalized`/`build_labels`/`sanity_check`/`clear` | ⚠️ INDEX |
 | L1656-L1789 | `JumpBasic2::*`(foldInOneGuard/initializeStart/recoverModel/checkNormalDominance/findUnnormalized/clear) | `JumpBasic2`(组合 `base: JumpBasic`) | 🔍 已实现(JumpModel trait 全实现) |
 | L1801-L2083 | `JumpBasicOverride::*`(setAddresses/findStartOp/trialNorm/setupTrivial/clearCopySpecific/recoverModel/buildAddresses/buildLabels/clear/encode/decode) | `JumpBasicOverride` | 🔍 已实现 |
