@@ -63,3 +63,4 @@ not yet wired into main.rs; existing linear scan still active).
 
 <!-- sleigh-lift-pipeline: 1783181897.3074532 -->
  
+**2026-07-22**: 23 missing flow.cc methods added (11→34 functions, +361 lines)

@@ -10,6 +10,41 @@ use crate::disasm::x86_lift::X86Lifter;
 use crate::funcdata::Funcdata;
 use crate::loadimage::LoadImage;
 use crate::opcodes::OpCode;
+use crate::op::pcodeop_flags;
+
+/// Flow-following option/property flag bits. Faithful to the anonymous enum
+/// in flow.hh:60-74.
+// Ghidra: flow.hh:60 FlowInfo::(anonymous enum)
+pub mod flow_flags {
+    /// Ignore/truncate flow into addresses out of the specified range.
+    pub const IGNORE_OUTOFBOUNDS: u32 = 1;
+    /// Treat unimplemented instructions as a NOP (no operation).
+    pub const IGNORE_UNIMPLEMENTED: u32 = 2;
+    /// Throw an exception for flow into addresses out of the specified range.
+    pub const ERROR_OUTOFBOUNDS: u32 = 4;
+    /// Throw an exception for flow into unimplemented instructions.
+    pub const ERROR_UNIMPLEMENTED: u32 = 8;
+    /// Throw an exception for flow into previously encountered data at a different cut.
+    pub const ERROR_REINTERPRETED: u32 = 0x10;
+    /// Throw an exception if too many instructions are encountered.
+    pub const ERROR_TOOMANYINSTRUCTIONS: u32 = 0x20;
+    /// Indicate we have encountered unimplemented instructions.
+    pub const UNIMPLEMENTED_PRESENT: u32 = 0x40;
+    /// Indicate we have encountered flow into unaccessible data.
+    pub const BADDATA_PRESENT: u32 = 0x80;
+    /// Indicate we have encountered flow out of the specified range.
+    pub const OUTOFBOUNDS_PRESENT: u32 = 0x100;
+    /// Indicate we have encountered reinterpreted data.
+    pub const REINTERPRETED_PRESENT: u32 = 0x200;
+    /// Indicate the maximum instruction threshold was reached.
+    pub const TOOMANYINSTRUCTIONS_PRESENT: u32 = 0x400;
+    /// Indicate a CALL was converted to a BRANCH and some code may be unreachable.
+    pub const POSSIBLE_UNREACHABLE: u32 = 0x1000;
+    /// Indicate flow is being generated to in-line (a function).
+    pub const FLOW_FORINLINE: u32 = 0x2000;
+    /// Indicate that any jump table recovery should record the table structure.
+    pub const RECORD_JUMPLOADS: u32 = 0x4000;
+}
 
 /// Record of a visited instruction (flow.hh:77-80 VisitStat).
 #[derive(Clone, Debug)]
@@ -35,6 +70,8 @@ pub struct FlowInfo<'a> {
     lifter: &'a mut X86Lifter,
     /// Work-list of addresses to process (LIFO stack). flow.hh:82 addrlist.
     addrlist: Vec<Address>,
+    /// Addresses which are permanently unprocessed (flow.hh:87 unprocessed).
+    unprocessed: Vec<Address>,
     /// Visited instruction map (flow.hh:84 visited).
     visited: std::collections::BTreeMap<u64, VisitStat>,
     /// Instruction count limit (flow.hh:96 insn_max).
@@ -47,6 +84,8 @@ pub struct FlowInfo<'a> {
     /// Actual min/max address seen.
     minaddr: u64,
     maxaddr: u64,
+    /// Boolean options for flow following (flow.hh:101 flags).
+    flags: u32,
 }
 
 impl<'a> FlowInfo<'a> {
@@ -65,6 +104,7 @@ impl<'a> FlowInfo<'a> {
             disassembler,
             lifter,
             addrlist: Vec::new(),
+            unprocessed: Vec::new(),
             visited: std::collections::BTreeMap::new(),
             insn_max: 100000, // Ghidra default max_instructions
             insn_count: 0,
@@ -72,6 +112,7 @@ impl<'a> FlowInfo<'a> {
             eaddr,
             minaddr: u64::MAX,
             maxaddr: 0,
+            flags: 0,
         }
     }
 
@@ -80,6 +121,311 @@ impl<'a> FlowInfo<'a> {
     pub fn set_max_instructions(&mut self, max: u64) {
         self.insn_max = max;
     }
+
+    /// Establish the flow bounds. Faithful to inline `setRange`
+    /// (flow.hh:145).
+    // Ghidra: flow.hh:145 FlowInfo::setRange
+    pub fn set_range(&mut self, b: u64, e: u64) {
+        self.baddr = b;
+        self.eaddr = e;
+    }
+
+    /// Enable a specific flow option. Faithful to inline `setFlags`
+    /// (flow.hh:147).
+    // Ghidra: flow.hh:147 FlowInfo::setFlags
+    pub fn set_flags(&mut self, val: u32) {
+        self.flags |= val;
+    }
+
+    /// Disable a specific flow option. Faithful to inline `clearFlags`
+    /// (flow.hh:148).
+    // Ghidra: flow.hh:148 FlowInfo::clearFlags
+    pub fn clear_flags(&mut self, val: u32) {
+        self.flags &= !val;
+    }
+
+    /// Get the number of bytes covered by the flow. Faithful to inline
+    /// `getSize` (flow.hh:160).
+    // Ghidra: flow.hh:160 FlowInfo::getSize
+    pub fn get_size(&self) -> u64 {
+        // Ghidra returns maxaddr - minaddr; Rugra uses u64 sentinel for "no min".
+        if self.minaddr == u64::MAX {
+            0
+        } else {
+            self.maxaddr.saturating_sub(self.minaddr)
+        }
+    }
+
+    /// Has the given instruction (address) been seen in flow. Faithful to
+    /// inline `seenInstruction` (flow.hh:108).
+    // Ghidra: flow.hh:108 FlowInfo::seenInstruction
+    pub fn seen_instruction(&self, addr: Address) -> bool {
+        self.visited.contains_key(&addr.as_u64())
+    }
+
+    /// Are there possible unreachable ops. Faithful to inline
+    /// `hasPossibleUnreachable` (flow.hh:105).
+    // Ghidra: flow.hh:105 FlowInfo::hasPossibleUnreachable
+    pub fn has_possible_unreachable(&self) -> bool {
+        (self.flags & flow_flags::POSSIBLE_UNREACHABLE) != 0
+    }
+
+    /// Mark that there may be unreachable ops. Faithful to inline
+    /// `setPossibleUnreachable` (flow.hh:106).
+    // Ghidra: flow.hh:106 FlowInfo::setPossibleUnreachable
+    pub fn set_possible_unreachable(&mut self) {
+        self.flags |= flow_flags::POSSIBLE_UNREACHABLE;
+    }
+
+    /// Does this flow have injections. Faithful to inline `hasInject`
+    /// (flow.hh:161). Rugra does not yet model an `injectlist`, so this is
+    /// always false; provided for API parity.
+    // Ghidra: flow.hh:161 FlowInfo::hasInject
+    pub fn has_inject(&self) -> bool {
+        false
+    }
+
+    /// Does this flow have unimplemented instructions. Faithful to inline
+    /// `hasUnimplemented` (flow.hh:162).
+    // Ghidra: flow.hh:162 FlowInfo::hasUnimplemented
+    pub fn has_unimplemented(&self) -> bool {
+        (self.flags & flow_flags::UNIMPLEMENTED_PRESENT) != 0
+    }
+
+    /// Does this flow reach inaccessible data. Faithful to inline
+    /// `hasBadData` (flow.hh:163).
+    // Ghidra: flow.hh:163 FlowInfo::hasBadData
+    pub fn has_bad_data(&self) -> bool {
+        (self.flags & flow_flags::BADDATA_PRESENT) != 0
+    }
+
+    /// Does this flow flow out of bound. Faithful to inline `hasOutOfBounds`
+    /// (flow.hh:164).
+    // Ghidra: flow.hh:164 FlowInfo::hasOutOfBounds
+    pub fn has_out_of_bounds(&self) -> bool {
+        (self.flags & flow_flags::OUTOFBOUNDS_PRESENT) != 0
+    }
+
+    /// Does this flow reinterpret bytes. Faithful to inline `hasReinterpreted`
+    /// (flow.hh:165).
+    // Ghidra: flow.hh:165 FlowInfo::hasReinterpreted
+    pub fn has_reinterpreted(&self) -> bool {
+        (self.flags & flow_flags::REINTERPRETED_PRESENT) != 0
+    }
+
+    /// Does this flow have too many instructions. Faithful to inline
+    /// `hasTooManyInstructions` (flow.hh:166).
+    // Ghidra: flow.hh:166 FlowInfo::hasTooManyInstructions
+    pub fn has_too_many_instructions(&self) -> bool {
+        (self.flags & flow_flags::TOOMANYINSTRUCTIONS_PRESENT) != 0
+    }
+
+    /// Is this flow to be in-lined. Faithful to inline `isFlowForInline`
+    /// (flow.hh:167).
+    // Ghidra: flow.hh:167 FlowInfo::isFlowForInline
+    pub fn is_flow_for_inline(&self) -> bool {
+        (self.flags & flow_flags::FLOW_FORINLINE) != 0
+    }
+
+    /// Should jump table structure be recorded. Faithful to inline
+    /// `doesJumpRecord` (flow.hh:168).
+    // Ghidra: flow.hh:168 FlowInfo::doesJumpRecord
+    pub fn does_jump_record(&self) -> bool {
+        (self.flags & flow_flags::RECORD_JUMPLOADS) != 0
+    }
+
+    /// Clear any discovered flow properties. Faithful to `clearProperties`
+    /// (flow.cc:78-83). Resets the presence flags and the instruction
+    /// counter, preparing for a fresh pass over the function.
+    // Ghidra: flow.cc:78 FlowInfo::clearProperties
+    pub fn clear_properties(&mut self) {
+        self.flags &= !(flow_flags::UNIMPLEMENTED_PRESENT
+            | flow_flags::BADDATA_PRESENT
+            | flow_flags::OUTOFBOUNDS_PRESENT);
+        self.insn_count = 0;
+    }
+
+    /// Generate warning message or throw exception for given flow that is
+    /// out of bounds. Faithful to `handleOutOfBounds` (flow.cc:519-540).
+    /// Rugra does not throw — it logs a warning and sets the
+    /// `OUTOFBOUNDS_PRESENT` flag unless `IGNORE_OUTOFBOUNDS` is set.
+    // Ghidra: flow.cc:519 FlowInfo::handleOutOfBounds
+    fn handle_out_of_bounds(&mut self, fromaddr: Address, toaddr: Address) {
+        if (self.flags & flow_flags::IGNORE_OUTOFBOUNDS) != 0 {
+            return;
+        }
+        let msg = format!(
+            "Function flow out of bounds: {:#x} flows to {:#x}",
+            fromaddr.as_u64(),
+            toaddr.as_u64()
+        );
+        if (self.flags & flow_flags::ERROR_OUTOFBOUNDS) == 0 {
+            // data.warning(msg, toaddr);
+            eprintln!("[FLOW] {}: {}", self.fd.name, msg);
+            if !self.has_out_of_bounds() {
+                self.flags |= flow_flags::OUTOFBOUNDS_PRESENT;
+                self.fd.warning_header("Function flows out of bounds");
+            }
+        } else {
+            // Ghidra throws LowlevelError; Rugra logs at error level instead.
+            eprintln!("[FLOW] ERROR: {}: {}", self.fd.name, msg);
+        }
+    }
+
+    /// Generate warning message or exception for a reinterpreted address.
+    /// Faithful to `reinterpreted` (flow.cc:606-629). A set of bytes is
+    /// reinterpreted if there are at least two different interpretations of
+    /// the bytes as instructions. Rugra logs and sets the
+    /// `REINTERPRETED_PRESENT` flag instead of throwing.
+    // Ghidra: flow.cc:606 FlowInfo::reinterpreted
+    fn reinterpreted(&mut self, addr: Address) {
+        // Find the previously visited instruction whose tail overlaps addr.
+        let mut addr2: Option<u64> = None;
+        for (&k, _stat) in self.visited.range(..=addr.as_u64()).rev() {
+            addr2 = Some(k);
+            break;
+        }
+        let addr2 = match addr2 {
+            Some(a) => a,
+            None => return, // Should never happen.
+        };
+        let msg = format!(
+            "Instruction at ({:#x}) overlaps instruction at ({:#x})",
+            addr.as_u64(),
+            addr2
+        );
+        if (self.flags & flow_flags::ERROR_REINTERPRETED) != 0 {
+            eprintln!("[FLOW] ERROR: {}: {}", self.fd.name, msg);
+            return;
+        }
+        if (self.flags & flow_flags::REINTERPRETED_PRESENT) == 0 {
+            self.flags |= flow_flags::REINTERPRETED_PRESENT;
+            self.fd.warning_header(&msg);
+        }
+    }
+
+    /// An artificial halt is a special form of RETURN op. Faithful to
+    /// `artificialHalt` (flow.cc:592-601). The op is annotated with the
+    /// desired type of artificial halt:
+    ///   - badinstruction (`PcodeOp::badinstruction`)
+    ///   - unimplemented (`PcodeOp::unimplemented`)
+    ///   - missing/truncated (`PcodeOp::missing`)
+    ///   - noreturn (`PcodeOp::noreturn`)
+    /// Returns the new RETURN op. The op is left in the dead list (Ghidra
+    /// inserts via `data.newOp`, which is dead until `opInsert`).
+    // Ghidra: flow.cc:592 FlowInfo::artificialHalt
+    fn artificial_halt(&mut self, addr: Address, flag: u32) -> crate::op::PcodeOpRef {
+        let haltop = self.fd.new_op(1, addr);
+        self.fd.op_set_opcode(&haltop, OpCode::CPUI_RETURN);
+        let c = self.fd.new_constant(4, 1);
+        self.fd.op_set_input(&haltop, c, 0);
+        if flag != 0 {
+            self.fd.op_mark_halt(&haltop, flag);
+        }
+        haltop
+    }
+
+    /// Test if the given p-code op is a member of an array. Faithful to
+    /// `isInArray` (flow.cc:776-783). This is a static helper in Ghidra used
+    /// by `recoverJumpTables` to dedup BRANCHIND ops that need to be retried.
+    // Ghidra: flow.cc:776 FlowInfo::isInArray
+    fn is_in_array(
+        array: &[crate::op::PcodeOpRef],
+        op: &crate::op::PcodeOpRef,
+    ) -> bool {
+        array.iter().any(|x| std::sync::Arc::ptr_eq(&x.0, &op.0))
+    }
+
+    /// Delete any remaining ops at the end of the instruction (because they
+    /// have been predetermined to be dead). Faithful to `deleteRemainingOps`
+    /// (flow.cc:240-248). Ghidra walks the raw dead list from `oiter` to
+    /// `endDead()` calling `opDestroyRaw`; Rugra uses `op_destroy` which
+    /// unlinks the op from input Varnodes and marks it dead.
+    // Ghidra: flow.cc:240 FlowInfo::deleteRemainingOps
+    fn delete_remaining_ops_from(&mut self, start_idx: usize) {
+        // Snapshot the tail of the alive list so we can drain without
+        // upsetting the borrow checker (op_destroy mutates the list).
+        let to_remove: Vec<crate::op::PcodeOpRef> =
+            self.fd.obank.alivelist[start_idx..].to_vec();
+        for op in &to_remove {
+            self.fd.op_destroy(op);
+        }
+    }
+
+    /// A function is in the EZ model if it is a straight-line leaf function.
+    /// Faithful to `checkEZModel` (flow.cc:1157-1167). Returns true if this
+    /// flow contains no CALL or BRANCH ops.
+    // Ghidra: flow.cc:1157 FlowInfo::checkEZModel
+    pub fn check_ez_model(&self) -> bool {
+        for op_ref in &self.fd.obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            match op.opcode {
+                OpCode::CPUI_BRANCH
+                | OpCode::CPUI_CBRANCH
+                | OpCode::CPUI_BRANCHIND
+                | OpCode::CPUI_CALL
+                | OpCode::CPUI_CALLIND
+                | OpCode::CPUI_RETURN => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
+    /// Treat an indirect jump (BRANCHIND) whose jumptable could not be
+    /// recovered as a CALLIND or RETURN instead. Faithful to
+    /// `truncateIndirectJump` (flow.cc:727-769). For `fail_return` the
+    /// BRANCHIND becomes a RETURN; otherwise it becomes a CALLIND with an
+    /// associated FuncCallSpecs and an artificial halt after it.
+    ///
+    /// Rugra notes: full FuncCallSpecs setup (`setupCallindSpecs`) and the
+    /// JumpTable::RecoveryMode enum are not yet modelled — callers pass the
+    /// canonical fail modes via the `fail_mode` byte (0 = fail_thunk,
+    /// 1 = fail_callother, 2 = fail_return, 3 = default).
+    // Ghidra: flow.cc:727 FlowInfo::truncateIndirectJump
+    pub fn truncate_indirect_jump(&mut self, op: &crate::op::PcodeOpRef, fail_mode: u8) {
+        let addr = {
+            let o = op.0.read().unwrap();
+            o.get_addr()
+        };
+        if fail_mode == 2 {
+            // JumpTable::fail_return: turn the jump into a RETURN.
+            self.fd.op_set_opcode(op, OpCode::CPUI_RETURN);
+            eprintln!(
+                "[FLOW] {}: Treating indirect jump at {:#x} as return",
+                self.fd.name,
+                addr.as_u64()
+            );
+            return;
+        }
+        // Otherwise turn the jump into a CALLIND.
+        self.fd.op_set_opcode(op, OpCode::CPUI_CALLIND);
+        // Ghidra: setupCallindSpecs(op, NULL); (flow.cc:736) — FuncCallSpecs
+        // plumbing is not yet ported; Rugra's ActionFuncLink does this
+        // post-hoc. We log it so the gap is visible.
+        eprintln!(
+            "[FLOW] {}: NOTE setupCallindSpecs at {:#x} deferred to ActionFuncLink",
+            self.fd.name,
+            addr.as_u64()
+        );
+        let (return_type, _no_params, warn_msg) = match fail_mode {
+            0 => (0u32, false, None), // fail_thunk
+            1 => (
+                pcodeop_flags::NORETURN,
+                true,
+                Some("Does not return"),
+            ), // fail_callother
+            _ => (0u32, false, Some("Treating indirect jump as call")), // default
+        };
+        if let Some(msg) = warn_msg {
+            eprintln!("[FLOW] {}: {} at {:#x}", self.fd.name, msg, addr.as_u64());
+        }
+        // Ghidra: if (noParams) { fc->setInternal(...) } — FuncCallSpecs gap.
+        // Create an artificial return (flow.cc:766-767) right after the op.
+        let truncop = self.artificial_halt(addr, return_type);
+        self.fd.op_insert_after(&truncop, op);
+    }
+
 
     /// Generate P-code ops by following control flow from the entry point.
     /// Faithful to `FlowInfo::generateOps` (flow.cc:785-822).
@@ -164,13 +510,22 @@ impl<'a> FlowInfo<'a> {
 
     // Ghidra: flow.cc:198 FlowInfo::newAddress
     /// Add a new address to the work-list (flow.cc newAddress, ~:198-215).
+    /// Mirrors Ghidra's behavior: out-of-bounds addresses are reported via
+    /// `handleOutOfBounds` and pushed to `unprocessed`; already-seen targets
+    /// are skipped (Ghidra additionally marks the target op as a basic-block
+    /// start, which Rugra handles post-hoc in `build_blocks_from_alive`).
     fn new_address(&mut self, addr: Address) {
-        // Only add if within flow range and not already visited.
         let a = addr.as_u64();
-        if a < self.baddr || a >= self.eaddr {
+        // flow.cc:222-226: range check + handleOutOfBounds.
+        if a < self.baddr || self.eaddr < a {
+            self.handle_out_of_bounds(Address::new(self.baddr), addr);
+            self.unprocessed.push(addr);
             return;
         }
-        if self.visited.contains_key(&a) {
+        // flow.cc:228-233: if already seen, Ghidra marks the target op as a
+        // basic block start. Rugra re-derives basic blocks from control-flow
+        // ops at the end (build_blocks_from_alive), so this is a no-op.
+        if self.seen_instruction(addr) {
             return;
         }
         self.addrlist.push(addr);
@@ -248,7 +603,9 @@ impl<'a> FlowInfo<'a> {
         // Full overlap check: any visited instruction [k, k+size) containing addr?
         for (&k, stat) in self.visited.range(..=addr).rev() {
             if k + stat.size as u64 > addr && k <= addr {
-                // addr is inside a previously decoded instruction → reinterpreted.
+                // addr is inside a previously decoded instruction → reinterpreted
+                // (flow.cc:504-505 calls reinterpreted(addr) here).
+                self.reinterpreted(Address::new(addr));
                 self.addrlist.pop();
                 return false;
             }
