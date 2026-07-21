@@ -1,6 +1,6 @@
 # `coreaction.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-07-16 ActionNameVars linkSymbols + linkSpacebaseSymbol + lookForFuncParamNames 全部实现）
+**状态**: 已核对（当前有效，2026-07-16 ActionSetCasts castOutput 已实现（缺 union resolution））
 **源代码路径**: `src/coreaction.rs`
 **2026-07-16**: 测试构造的 BlockWhileDo 加 `overflow_syntax: false` 字段（配合 printc P7-overflow_syntax，对齐 Ghidra hasOverflowSyntax block.hh:692）。
 

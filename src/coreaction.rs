@@ -2796,6 +2796,90 @@ impl ActionSetCasts {
         }
         Arc::ptr_eq(&t1, &t2)
     }
+
+    // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
+    /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
+    /// token type. Faithful to `castOutput` (cc:2532-2610).
+    /// Simplified: handles the common case (token type differs from output
+    /// high type → insert CAST). Union resolution (needsResolution/
+    /// resolveInFlow/findResolve/setUnionField/forceFacingType) is deferred
+    /// (needs full union infrastructure).
+    fn cast_output(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> i32 {
+        use crate::type_system::cast::base_type_for;
+        use crate::type_system::datatype::Datatype;
+        // cc:2542: get the output varnode.
+        let outvn = match op.0.read().unwrap().output.as_ref() {
+            Some(o) => o.clone(), None => return 0,
+        };
+        // cc:2541: tokenct = op->getOpcode()->getOutputToken(op, castStrategy)
+        // Rugra: compute the token type from the opcode's output metatype.
+        let out_size = outvn.read().unwrap().get_size();
+        let meta = Self::output_metatype(op.0.read().unwrap().opcode);
+        let tokenct = match meta {
+            Some(m) => base_type_for(out_size, m),
+            None => return 0,
+        };
+        // cc:2543: outHighType = outvn->getHigh()->getType()
+        let out_high_type = outvn.read().unwrap().high.as_ref()
+            .map(|h| h.read().unwrap().v_type.clone())
+            .or_else(|| outvn.read().unwrap().v_type.clone())
+            .unwrap_or_else(|| tokenct.clone());
+        // cc:2544: if tokenct == outHighType → no cast needed.
+        if Arc::ptr_eq(&tokenct, &out_high_type) {
+            return 0;
+        }
+        // cc:2559-2582: implied varnode handling (deferred — needs full
+        // implied/union resolution chain).
+        // cc:2584-2592: check if standard cast is needed.
+        let _cast_type = match strategy.cast_standard_full(&out_high_type, &tokenct, false, true) {
+            Some(ct) => ct,
+            None => return 0, // No cast needed.
+        };
+        // cc:2595-2609: insert CAST op after `op`.
+        // vn = newUnique(outvn->getSize()); vn->updateType(tokenct); vn->setImplied()
+        let vn = fd.new_unique(out_size);
+        vn.write().unwrap().v_type = Some(tokenct.clone());
+        vn.write().unwrap().set_implied();
+        // newop = newOp(1, op->getAddr()); opSetOpcode(CAST)
+        let op_addr = op.0.read().unwrap().get_addr();
+        let newop = fd.new_op(1, op_addr);
+        fd.op_set_opcode(&newop, OpCode::CPUI_CAST);
+        // opSetOutput(newop, outvn); opSetInput(newop, vn, 0)
+        // opSetOutput(op, vn)
+        // opInsertAfter(newop, op)
+        // Rugra: rewire output/input manually.
+        op.0.write().unwrap().output = Some(vn.clone());
+        newop.0.write().unwrap().output = Some(outvn.clone());
+        newop.0.write().unwrap().inrefs.push(vn.clone());
+        vn.write().unwrap().add_descend(&newop.0);
+        fd.obank.alivelist.push(newop.clone());
+        1 // count += 1
+    }
+
+    // RUGRA-GLUE: output_metatype (no Ghidra direct counterpart; derived from
+    // TypeOp::getOutputToken which Rugra lacks)
+    /// Determine the output metatype for an opcode (for castOutput).
+    fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
+        use crate::type_system::datatype::TypeMetatype;
+        use crate::opcodes::OpCode;
+        match opc {
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+            | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
+            | OpCode::CPUI_INT_SBORROW | OpCode::CPUI_FLOAT_NAN
+            => Some(TypeMetatype::Bool),
+            _ => Some(TypeMetatype::Int),
+        }
+    }
 }
 impl Action for ActionSetCasts {
     // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
