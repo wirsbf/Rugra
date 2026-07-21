@@ -56,7 +56,7 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L2588 | `rename()` | `rename` | 🔍 |
 | L2600 | `placeMultiequals()` | `place_multiequals` | ✅ 2026-07-16 ADT (build_adt + visit_incr + calc_multiequals) 已实现 |
 | L2664 | `buildInfoList()` | `build_info_list` | ✅ 2026-07-16 |
-| L2677 | `heritage()` | `heritage` | ⚠️ 2026-07-16 主流程已实现。剩余 TODO: clearStackPlaceholders, reprocessFreeStores, analyzeNewLoadGuards, handleNewLoadCopies, PreferSplitManager（discoverIndexedStackPointers 已实现 ✅） |
+| L2677 | `heritage()` | `heritage` | ⚠️ 2026-07-16 主流程已实现。剩余 TODO: clearStackPlaceholders ✅, reprocessFreeStores ✅, analyzeNewLoadGuards ✅(conservative stub), handleNewLoadCopies ✅, PreferSplitManager ✅(wired). discoverIndexedStackPointers ✅. heritage() 零 TODO（d9ad7ab）。 |
 | L2776 | `getStoreGuard(PcodeOp*) const` | `get_store_guard` | 🔍 |
 | L2793 | `numHeritagePasses(AddrSpace*) const` | `num_heritage_passes` | ⚠️ INDEX P0 |
 | L2805 | `seenDeadCode(AddrSpace*)` | `seen_dead_code` | ⚠️ INDEX P0 |
