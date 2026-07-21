@@ -147,4 +147,4 @@ Rugra 对应:`src/heritage.rs` + `src/merge.rs` + `src/varmap.rs`
 | L1590 | `addTypeRecommendation(...)` | — | 🔍 |
 | L1600 | `addRecommendName(Symbol*)` | — | 🔍 |
 
-**varmap.cc 统计**:51 函数。❌ build_variable_name, ⚠️ 多个。
+**varmap.cc 统计**:51 函数。⚠️ build_variable_name (已实现, 缺细化), 其他 ⚠️ 待逐行验证。
