@@ -1823,23 +1823,26 @@ mod tests {
 
     #[test]
     fn test_idents_table_sorted() {
-        // The table must be sorted lexicographically by name for the binary
-        // search to match Ghidra's behaviour.
-        for w in PCODE_IDENTS.windows(2) {
-            assert!(
-                w[0].name <= w[1].name,
-                "idents[] not sorted: {:?} before {:?}",
-                w[0].name,
-                w[1].name
-            );
+        // Ghidra's idents[] table (pcodeparse.y:229-276) is NOT strictly
+        // strcmp-sorted for symbol tokens. Only letter-prefixed keywords
+        // (the ones searched via findIdentifier) need to be sorted.
+        let letter_idents: Vec<&str> = PCODE_IDENTS
+            .iter()
+            .filter(|r| r.name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false))
+            .map(|r| r.name)
+            .collect();
+        for w in letter_idents.windows(2) {
+            assert!(w[0] <= w[1], "letter idents[] not sorted: {:?} before {:?}", w[0], w[1]);
         }
     }
 
     #[test]
     fn test_find_identifier_hits() {
-        // Each entry must be findable.
+        // Only letter-prefixed keywords are searched via findIdentifier.
         for (i, rec) in PCODE_IDENTS.iter().enumerate() {
-            assert_eq!(find_identifier(rec.name), Some(i), "missed {}", rec.name);
+            if rec.name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                assert_eq!(find_identifier(rec.name), Some(i), "missed {}", rec.name);
+            }
         }
     }
 
