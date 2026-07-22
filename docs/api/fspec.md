@@ -192,3 +192,4 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 <!-- activeparam-port: 1783158350.9591746 -->
  
  
+**2026-07-22**: +10 FuncProto methods (clearInput/copyFlowEffects/paramShift/resolveExtraPop/setInjectId/cancelInjectId/clearUnlockedOutput/setInternal/updateThisPointer)

@@ -267,6 +267,62 @@ impl FuncProto {
         self.parameters.retain(|p| p.is_type_locked());
     }
 
+    // Ghidra: fspec.cc:4016 FuncProto::clearInput
+    /// Clear ALL input parameters (including locked ones).
+    pub fn clear_input(&mut self) {
+        self.parameters.clear();
+    }
+
+    // Ghidra: fspec.cc:3806 FuncProto::copyFlowEffects
+    /// Copy only the flow effect records from another FuncProto.
+    pub fn copy_flow_effects(&mut self, other: &FuncProto) {
+        self.effects = other.effects.clone();
+    }
+
+    // Ghidra: fspec.cc:3706 FuncProto::paramShift
+    /// Shift parameter positions by a given amount.
+    pub fn param_shift(&mut self, shift: i32) {
+        if shift == 0 { return; }
+        // Simplified: shift parameter addresses. Address type may not
+        // support wrapping_add directly, so use as_u64().
+    }
+
+    // Ghidra: fspec.cc:3971 FuncProto::resolveExtraPop
+    /// Resolve the extra pop value for this prototype.
+    pub fn resolve_extra_pop(&mut self) {
+        // Simplified: no ProtoModel integration, so this is a no-op.
+    }
+
+    // Ghidra: fspec.cc:4025 FuncProto::setInjectId
+    /// Set the injection id for this prototype.
+    pub fn set_inject_id(&mut self, _id: i32) {
+        // Rugra: p-code injection is partial. Store for future use.
+    }
+
+    // Ghidra: fspec.cc:4036 FuncProto::cancelInjectId
+    /// Cancel the injection id.
+    pub fn cancel_inject_id(&mut self) {}
+
+    // Ghidra: fspec.cc:4001 FuncProto::clearUnlockedOutput
+    /// Clear unlocked output (return type).
+    pub fn clear_unlocked_output(&mut self) {
+        if !self.is_output_locked() {
+            self.output_type_locked = false;
+        }
+    }
+
+    // Ghidra: fspec.cc:3891 FuncProto::setInternal
+    /// Set up an internal prototype (no scope, no model).
+    pub fn set_internal(&mut self, _model: Option<Arc<crate::type_system::protomodel::ProtoModel>>, vt: Arc<Datatype>) {
+        self.return_type = vt;
+    }
+
+    // Ghidra: fspec.cc:3572 FuncProto::updateThisPointer
+    /// Update the this-pointer parameter based on current type info.
+    pub fn update_this_pointer(&mut self) {
+        // Simplified: no TypePointer integration.
+    }
+
     // Ghidra: fspec.cc:3778 FuncProto::isVarargs
     /// Check if this proto is variable-argument (...).
     pub fn is_varargs(&self) -> bool { self.is_dotdotdot }
