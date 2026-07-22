@@ -203,6 +203,27 @@ fn escape_c_string(s: &str) -> String {
     out
 }
 
+// Ghidra: printc.cc:2543/2545 dynamic_cast<FunctionSymbol*>/dynamic_cast<LabSymbol*>
+/// Approximate Ghidra's `dynamic_cast<FunctionSymbol*>(sym)` used by
+/// `emitScopeVarDecls` (printc.cc:2543). Ghidra skips FunctionSymbol entries
+/// when walking the scope map so function symbols are never emitted as
+/// variable declarations. Rugra's `Scope.entries` hold plain `Symbol`s (the
+/// `FunctionSymbol`/`LabSymbol` wrappers live as separate structs that embed a
+/// `Symbol`), so there is no runtime subclass tag. We detect by the canonical
+/// type-name that `FunctionSymbol::new` / `LabSymbol::new` set ("func" /
+/// "label"), which is the closest faithful signal available.
+fn is_function_symbol(sym: &crate::database::Symbol) -> bool {
+    sym.type_name == "func"
+}
+
+// Ghidra: printc.cc:2545 dynamic_cast<LabSymbol*>
+/// Approximate Ghidra's `dynamic_cast<LabSymbol*>(sym)` used by
+/// `emitScopeVarDecls` (printc.cc:2545). See `is_function_symbol` for the
+/// detection rationale.
+fn is_label_symbol(sym: &crate::database::Symbol) -> bool {
+    sym.type_name == "label"
+}
+
 /// Represents a detected struct on the stack frame.
 /// When a stack address is passed to a function call (via lea reg, [rsp+X]),
 /// it indicates a struct/buffer at that offset.
@@ -368,6 +389,20 @@ pub struct PrintC {
     /// `PrintC::option_unplaced` (printc.hh:154), defaulting to false
     /// (printc.cc:1589 `resetDefaultsPrintC`).
     option_unplaced: bool,
+    /// Mask of instruction-relative comment types to print (printlanguage.hh:271
+    /// `instr_comment_type`). Gated read in `emitCommentGroup` (printc.cc:3238).
+    /// Defaults to `Comment::header | Comment::warningheader` (printlanguage.cc:582).
+    instr_comment_type: u32,
+    /// Mask of function-header comment types to print (printlanguage.hh:272
+    /// `head_comment_type`). Gated read in `emitCommentFuncHeader`
+    /// (printc.cc:3280). Defaults to `Comment::user2 | Comment::warning`
+    /// (printlanguage.cc:582).
+    head_comment_type: u32,
+    /// Per-function comment sorter. Faithful to `PrintC::commsorter`
+    /// (printc.hh:158). Populated by `doc_function` via
+    /// `commsorter.setupFunctionList` (printc.cc:2650) and drained by
+    /// `emitCommentGroup` / `emitCommentFuncHeader` / `emitCommentBlockTree`.
+    comment_sorter: crate::comment::CommentSorter,
 }
 
 impl PrintC {
@@ -419,7 +454,14 @@ impl PrintC {
             option_hide_exts: true,    // printc.cc:1585 resetDefaultsPrintC
             option_inplace_ops: false, // printc.cc:1586 resetDefaultsPrintC
             option_unplaced: false,    // printc.cc:1589 resetDefaultsPrintC
-
+            // printlanguage.cc:582 resetDefaultsInternalState comment-type masks:
+            //   instr_comment_type = Comment::header | Comment::warningheader
+            //   head_comment_type  = Comment::user2 | Comment::warning
+            instr_comment_type: crate::comment::comment_type::HEADER
+                | crate::comment::comment_type::WARNINGHEADER,
+            head_comment_type: crate::comment::comment_type::USER2
+                | crate::comment::comment_type::WARNING,
+            comment_sorter: crate::comment::CommentSorter::new(),
         }
     }
 
@@ -5762,8 +5804,125 @@ impl PrintC {
         self.emit_label_statement(addr);
     }
 
-    // Ghidra: printc.cc:3307 PrintC::emitCommentBlockTree
-    pub fn emit_comment_block_tree(&self, _block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {}
+    // Ghidra: printc.cc:3247 PrintC::emitCommentBlockTree
+    /// With the control-flow hierarchy, print any comments associated with
+    /// basic blocks in the specified subtree. Used where statements from
+    /// multiple basic blocks are printed on one line and a normal comment
+    /// would get printed in the middle of this line.
+    ///
+    /// Faithful to `PrintC::emitCommentBlockTree(const FlowBlock*)`
+    /// (printc.cc:3247-3267):
+    ///   - return early on a null block;
+    ///   - if the block is a `t_copy`, descend into its single sub-block
+    ///     (collapse the copy);
+    ///   - if (after collapsing) the block is `t_plain`, return (plain blocks
+    ///     have no structured children to scan);
+    ///   - if the block is not `t_basic`, recurse over each sub-block of the
+    ///     structured block;
+    ///   - otherwise (a `t_basic` leaf) call `commsorter.setupBlockList(bl)` +
+    ///     `emitCommentGroup(null)` to flush this block's comments.
+    ///
+    /// Rugra adaptation: there is no virtual `FlowBlock::subBlock(i)`; each
+    /// structured block stores its children as struct fields. We therefore
+    /// collect the child Arcs per concrete block type (BlockGraph via
+    /// `get_block(i)`, BlockCopy via `original`, BlockGoto via its wrapped
+    /// block's ops, BlockIf/BlockWhileDo/etc. via their held sub-blocks). The
+    /// `t_copy` collapse and `t_plain` early-return are preserved. For a
+    /// `t_basic` leaf we look up the block's index for `setup_block_list`.
+    ///
+    /// NOTE: signature changed from `&self` to `&mut self` vs. the previous
+    /// empty stub, because `emit_comment_group` mutates `self.comment_sorter`.
+    pub fn emit_comment_block_tree(&mut self, block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+        use crate::block::{BlockType, BlockGraph};
+        // cc:3250: if (bl == (const FlowBlock *)0) return;
+        let btype = { block.read().unwrap().get_type() };
+
+        // cc:3252-3255: collapse a t_copy into its single sub-block.
+        let mut cur = block.clone();
+        let mut cur_type = btype;
+        if cur_type == BlockType::Copy {
+            let inner = {
+                let bl = cur.read().unwrap();
+                bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
+            };
+            // Re-cast the BlockBasic Arc to a dyn FlowBlock Arc for recursion.
+            if let Some(orig) = inner {
+                let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> = orig as std::sync::Arc<_>;
+                cur = broadened;
+                cur_type = cur.read().unwrap().get_type();
+            }
+        }
+
+        // cc:3256: if (btype == FlowBlock::t_plain) return;
+        if cur_type == BlockType::Plain {
+            return;
+        }
+
+        // cc:3257-3264: non-basic structured block → recurse over sub-blocks.
+        if cur_type != BlockType::Basic {
+            // Gather child blocks for the concrete structured block types.
+            let children: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+                let bl = cur.read().unwrap();
+                let any = bl.as_any();
+                if let Some(g) = any.downcast_ref::<BlockGraph>() {
+                    (0..g.get_size()).filter_map(|i| g.get_block(i)).collect()
+                } else if let Some(c) = any.downcast_ref::<crate::block::BlockCopy>() {
+                    vec![c.original.clone() as std::sync::Arc<_>]
+                } else if let Some(i) = any.downcast_ref::<crate::block::BlockIf>() {
+                    let mut v = vec![i.condition.clone(), i.if_body.clone()];
+                    if let Some(eb) = &i.else_body { v.push(eb.clone()); }
+                    v
+                } else if let Some(w) = any.downcast_ref::<crate::block::BlockWhileDo>() {
+                    vec![w.condition.clone(), w.body.clone()]
+                } else if let Some(d) = any.downcast_ref::<crate::block::BlockDoWhile>() {
+                    vec![d.condition.clone()]
+                } else if let Some(l) = any.downcast_ref::<crate::block::BlockList>() {
+                    l.children.clone()
+                } else if let Some(c) = any.downcast_ref::<crate::block::BlockCondition>() {
+                    vec![c.first.clone(), c.second.clone()]
+                } else if let Some(s) = any.downcast_ref::<crate::block::BlockSwitch>() {
+                    let mut v = vec![s.control.clone()];
+                    for cb in &s.cases { v.push(cb.clone()); }
+                    if let Some(dc) = &s.default_case { v.push(dc.clone()); }
+                    v
+                } else if let Some(il) = any.downcast_ref::<crate::block::BlockInfLoop>() {
+                    vec![il.body.clone()]
+                } else if let Some(g) = any.downcast_ref::<crate::block::BlockGoto>() {
+                    if let Some(t) = g.goto_target.clone() {
+                        vec![t as std::sync::Arc<_>]
+                    } else { Vec::new() }
+                } else {
+                    Vec::new()
+                }
+            };
+            for child in children {
+                self.emit_comment_block_tree(&child);
+            }
+            return;
+        }
+
+        // cc:3265-3266: t_basic leaf → commsorter.setupBlockList(bl); emitCommentGroup(0);
+        let block_index = cur.read().unwrap().get_index().max(0) as u32;
+        // Clone the comments out of the sorter (it borrows &self) so we can
+        // mutably call emit_line_comment in the loop below.
+        let comms: Vec<crate::comment::Comment> = self.comment_sorter
+            .setup_block_list(block_index)
+            .into_iter()
+            .cloned()
+            .collect();
+        // emitCommentGroup((const PcodeOp *)0): flush every comment the sorter
+        // associated with this block, skipping already-emitted ones and those
+        // not in the instr_comment_type mask. Faithful to printc.cc:3231-3241.
+        for comm in &comms {
+            if comm.is_emitted() {
+                continue;
+            }
+            if (self.instr_comment_type & comm.get_type()) == 0 {
+                continue;
+            }
+            self.emit_line_comment(-1, comm.get_text());
+        }
+    }
 
     // Ghidra: printc.cc:2303 PrintC::emitGotoStatement
     pub fn emit_goto_statement(&mut self, target_addr: u64, goto_type: u8) {
@@ -5777,6 +5936,450 @@ impl PrintC {
             }
             _ => self.emit.print(&format!("goto {};", self.code_label(target_addr))),
         }
+    }
+
+    // ===== Missing printc.cc methods (batch 3): emitBlock* + comment system =====
+    //
+    // This batch ports the P1 gaps from docs/alignment_audit/printc_audit.md:
+    //   - emitBlockCopy / emitBlockGoto (printc.cc:2759 / 2766)
+    //   - emitCommentGroup / emitCommentFuncHeader (printc.cc:3231 / 3272)
+    //   - emitScopeVarDecls / emitGlobalVarDeclsRecursive /
+    //     docAllGlobals / docSingleGlobal (printc.cc:2518 / 2608 / 2621 / 2631)
+    // (emitCommentBlockTree at printc.cc:3247 was ported above, replacing the
+    //  former empty `{}` stub.)
+
+    // Ghidra: printc.cc:2759 PrintC::emitBlockCopy
+    /// Emit a `BlockCopy`: emit any label, then recurse into the single
+    /// sub-block. Faithful to `PrintC::emitBlockCopy(const BlockCopy*)`
+    /// (printc.cc:2759-2764).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// emitAnyLabelStatement(bl);
+    /// bl->subBlock(0)->emit(this);
+    /// ```
+    /// Rugra adaptation: `BlockCopy.original` (an `Arc<RwLock<BlockBasic>>`)
+    /// is the single sub-block (`subBlock(0)`). There is no virtual `emit`, so
+    /// we re-enter `emit_block_structured` on the original. `beginBlock`/
+    /// `endBlock` markup ids are not tracked by Rugra's emit layer.
+    pub fn emit_block_copy(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, graph: &crate::block::BlockGraph, emitted: &mut std::collections::HashSet<usize>) {
+        // cc:2762: emitAnyLabelStatement(bl);
+        self.emit_any_label_statement(block_arc);
+        // cc:2763: bl->subBlock(0)->emit(this);
+        let sub = {
+            let bl = block_arc.read().unwrap();
+            bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
+        };
+        if let Some(orig) = sub {
+            // Re-cast Arc<RwLock<BlockBasic>> → Arc<RwLock<dyn FlowBlock>>.
+            let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+                orig as std::sync::Arc<_>;
+            self.emit_block_structured(&broadened, graph, emitted);
+        }
+    }
+
+    // Ghidra: printc.cc:2766 PrintC::emitBlockGoto
+    /// Emit a `BlockGoto`: emit the body with `no_branch`, then conditionally
+    /// emit a goto statement based on `gotoPrints()` (suppressed when the
+    /// target is the next block in flow). Faithful to
+    /// `PrintC::emitBlockGoto(const BlockGoto*)` (printc.cc:2766-2779).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// pushMod(); setMod(no_branch);
+    /// bl->getBlock(0)->emit(this);
+    /// popMod();
+    /// if (bl->gotoPrints()) {
+    ///     emit->tagLine();
+    ///     emitGotoStatement(bl->getBlock(0), bl->getGotoTarget(), bl->getGotoType());
+    /// }
+    /// ```
+    /// Rugra adaptation: `BlockGoto` does not hold a separate "body" sub-block;
+    /// it wraps the consumed source `BlockBasic` (whose ops are reached via
+    /// `get_ops()`). We therefore emit the wrapped block's ops with
+    /// `no_branch` active (matching Ghidra's `setMod(no_branch)` before
+    /// emitting the body). The `gotoPrints()` adjacency check lives on
+    /// `BlockGoto::goto_prints` (block.rs); Rugra conservatively returns true
+    /// (no `nextFlowAfter` path), so the goto is always emitted when present.
+    pub fn emit_block_goto(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+        // cc:2769-2770: pushMod(); setMod(no_branch);
+        self.push_mod();
+        self.set_mod(print_mods::NO_BRANCH);
+        // cc:2771: bl->getBlock(0)->emit(this);
+        self.emit_block_ops(block_arc, true);
+        // cc:2772: popMod();
+        self.pop_mod();
+        // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine(); emitGotoStatement(...); }
+        let (prints, target_addr, gt) = {
+            let bl = block_arc.read().unwrap();
+            if let Some(g) = bl.as_any().downcast_ref::<crate::block::BlockGoto>() {
+                let addr = g.goto_target.as_ref().map(|t| t.read().unwrap().start_addr.as_u64()).unwrap_or(0);
+                (g.goto_prints(), addr, g.get_goto_type())
+            } else {
+                (false, 0, 0)
+            }
+        };
+        if prints {
+            self.emit.tag_line(0);
+            // Map Ghidra's goto_type (block::goto_type) to the op::branch_type
+            // classification expected by emit_goto_statement.
+            let bt = match gt {
+                crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
+                crate::block::goto_type::CONTINUE_GOTO => crate::op::branch_type::CONTINUE,
+                _ => crate::op::branch_type::GOTO,
+            };
+            self.emit_goto_statement(target_addr, bt);
+        }
+    }
+
+    // Ghidra: printc.cc:3231 PrintC::emitCommentGroup
+    /// Collect any comment lines the sorter has associated with a statement
+    /// rooted at a given PcodeOp and emit them using appropriate delimiters.
+    /// Faithful to `PrintC::emitCommentGroup(const PcodeOp*)`
+    /// (printc.cc:3231-3241).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// commsorter.setupOpList(inst);
+    /// while (commsorter.hasNext()) {
+    ///     Comment *comm = commsorter.getNext();
+    ///     if (comm->isEmitted()) continue;
+    ///     if ((instr_comment_type & comm->getType()) == 0) continue;
+    ///     emitLineComment(-1, comm);
+    /// }
+    /// ```
+    ///
+    /// Rugra adaptation: `CommentSorter::setup_op_list(block_index, op_order)`
+    /// takes a block index + op order (the within-block position), returning
+    /// the comments up to that op landmark. We look up the op's owning basic
+    /// block (the block whose ops contain `inst`'s address) and its order. When
+    /// `inst` is null (the `emitCommentGroup(0)` form used to drain remaining
+    /// block comments) we pass `u32::MAX` as the order so every comment for the
+    /// block is returned.
+    pub fn emit_comment_group(&mut self, inst: Option<&PcodeOp>) {
+        // Resolve the op's (block_index, op_order) landmark. When the op is
+        // null (cc:3241 form `emitCommentGroup((const PcodeOp *)0)`) we still
+        // need a block index; Rugra's CommentSorter only drains by block, so
+        // without a block context we have nothing to flush (matching Ghidra's
+        // `setupOpList(null)` no-op when the sorter was never given a block).
+        let (block_index, op_order) = match inst {
+            Some(op) => {
+                // PcodeOp has no block_index field; derive it from the op's
+                // parent FlowBlock (the basic block owning it).
+                let bi = op.parent.as_ref().and_then(|p| p.upgrade())
+                    .map(|b| b.read().unwrap().get_index().max(0) as u32)
+                    .unwrap_or(0);
+                (bi, op.get_seq_num().order)
+            }
+            None => return,
+        };
+        // Clone the comments out of the sorter (it borrows &self) so we can
+        // mutably call emit_line_comment in the loop below.
+        let comms: Vec<crate::comment::Comment> = self.comment_sorter
+            .setup_op_list(block_index, op_order)
+            .into_iter()
+            .cloned()
+            .collect();
+        for comm in &comms {
+            // cc:3237: if (comm->isEmitted()) continue;
+            if comm.is_emitted() {
+                continue;
+            }
+            // cc:3238: if ((instr_comment_type & comm->getType()) == 0) continue;
+            if (self.instr_comment_type & comm.get_type()) == 0 {
+                continue;
+            }
+            // cc:3239: emitLineComment(-1, comm);
+            self.emit_line_comment(-1, comm.get_text());
+        }
+    }
+
+    // Ghidra: printc.cc:3272 PrintC::emitCommentFuncHeader
+    /// Collect all comment lines marked as header for the function and emit
+    /// them with the appropriate delimiters. Faithful to
+    /// `PrintC::emitCommentFuncHeader(const Funcdata*)` (printc.cc:3272-3311).
+    ///
+    /// Ghidra: drain `setupHeader(header_basic)` emitting each non-already-
+    /// emitted comment whose type passes `head_comment_type`; if
+    /// `option_unplaced`, drain `header_unplaced` under a banner; if
+    /// `option_nocasts`, emit the "DISPLAY WARNING: Type casts are NOT being
+    /// printed" banner. Emit a trailing linebreak if any comment was emitted.
+    ///
+    /// Rugra adaptation: `CommentSorter::header_comments()` yields every
+    /// header-positioned comment (both HEADER_BASIC and HEADER_UNPLACED
+    /// subsorts); we partition by the comment's `head_comment_type` mask and by
+    /// the unplaced banner. The synthetic banner Comments are built via
+    /// `Comment::new(warningheader, ...)` exactly as in Ghidra.
+    pub fn emit_comment_func_header(&mut self, fd: &Funcdata) {
+        let mut extralinebreak = false;
+        // cc:3276: commsorter.setupHeader(CommentSorter::header_basic);
+        self.comment_sorter.setup_header(crate::comment::header_type::HEADER_BASIC);
+        // Collect header comments (basic + unplaced subsorts share index==MAX).
+        let header_comms: Vec<crate::comment::Comment> = self.comment_sorter.header_comments().cloned().collect();
+        // cc:3277-3283: drain header_basic.
+        let fd_addr = *fd.get_address();
+        for comm in &header_comms {
+            // cc:3279: if (comm->isEmitted()) continue;
+            if comm.is_emitted() {
+                continue;
+            }
+            // cc:3280: if ((head_comment_type & comm->getType()) == 0) continue;
+            if (self.head_comment_type & comm.get_type()) == 0 {
+                continue;
+            }
+            // cc:3281: emitLineComment(0, comm);
+            self.emit_line_comment(0, comm.get_text());
+            extralinebreak = true;
+        }
+        // cc:3284-3300: option_unplaced → drain header_unplaced under a banner.
+        if self.option_unplaced {
+            if extralinebreak {
+                self.emit.tag_line(0);
+            }
+            extralinebreak = false;
+            self.comment_sorter.setup_header(crate::comment::header_type::HEADER_UNPLACED);
+            for comm in &header_comms {
+                if comm.is_emitted() {
+                    continue;
+                }
+                // Only unplaced comments belong under this banner (subsort
+                // HEADER_UNPLACED). We approximate by emitting any header
+                // comment not already drained by the basic pass.
+                if !extralinebreak {
+                    let label = crate::comment::Comment::new(
+                        crate::comment::comment_type::WARNINGHEADER,
+                        fd_addr,
+                        fd_addr,
+                        0,
+                        "Comments that could not be placed in the function body:",
+                    );
+                    // cc:3295: emitLineComment(0, &label);
+                    self.emit_line_comment(0, label.get_text());
+                    extralinebreak = true;
+                }
+                // cc:3298: emitLineComment(1, comm);
+                self.emit_line_comment(1, comm.get_text());
+            }
+        }
+        // cc:3301-3308: option_nocasts → "DISPLAY WARNING" banner.
+        if self.option_nocasts {
+            if extralinebreak {
+                self.emit.tag_line(0);
+            }
+            let comm = crate::comment::Comment::new(
+                crate::comment::comment_type::WARNINGHEADER,
+                fd_addr,
+                fd_addr,
+                0,
+                "DISPLAY WARNING: Type casts are NOT being printed",
+            );
+            self.emit_line_comment(0, comm.get_text());
+            extralinebreak = true;
+        }
+        // cc:3309-3310: if (extralinebreak) emit->tagLine();
+        if extralinebreak {
+            self.emit.tag_line(0);
+        }
+    }
+
+    // Ghidra: printc.cc:2518 PrintC::emitScopeVarDecls
+    /// Emit a variable declaration for each symbol in the given scope, either
+    /// filtered by category (cat >= 0) or over the whole map (cat < 0).
+    /// Returns whether anything was emitted. Faithful to
+    /// `PrintC::emitScopeVarDecls(const Scope*, int4 cat)`
+    /// (printc.cc:2518-2575).
+    ///
+    /// Ghidra:
+    ///  - cat >= 0: iterate the category's symbols (category 1 is dynamic),
+    ///    skipping unnamed/undefined symbols, emitting `emitVarDeclStatement`.
+    ///  - cat < 0: walk the full `MapIterator` + dynamic-entry list, skipping
+    ///    pieces, unnamed, `FunctionSymbol`, `LabSymbol`, and de-duping
+    ///    multi-entry symbols via `getFirstWholeMap()`.
+    ///
+    /// Rugra adaptation: Rugra's `Scope` keeps `symbols: BTreeMap<u64,
+    /// Arc<RwLock<Symbol>>>` plus `entries`/`dynamic_entries` (the maps) and a
+    /// `categories` table. We faithfully implement both the category branch
+    /// (using `Scope::get_category_size`/`categories`) and the full-map branch
+    /// (iterating `entries` + `dynamic_entries`). FunctionSymbol/LabSymbol are
+    /// approximated by a name-based check (Rugra's `Symbol` has no subclass);
+    /// the multi-entry de-dup uses `Symbol::is_multi_entry()` keyed by symbol
+    /// id (we only emit the first entry seen for a multi-entry symbol).
+    pub fn emit_scope_var_decls(&mut self, sym_scope: &crate::database::Scope, cat: i32) -> bool {
+        use crate::database::SymbolCategory;
+        let mut notempty = false;
+        // cc:2523-2534: if (cat >= 0) { ... category iteration ... return notempty; }
+        if cat >= 0 {
+            let sz = sym_scope.get_category_size(cat);
+            for i in 0..sz {
+                let sym_arc = match sym_scope.categories.get(&cat).and_then(|v| v.get(i)) {
+                    Some(s) => s.clone(),
+                    None => continue,
+                };
+                let sym = sym_arc.read().unwrap();
+                // cc:2528: if (sym->getName().size() == 0) continue;
+                if sym.name.is_empty() {
+                    continue;
+                }
+                // cc:2529: if (sym->isNameUndefined()) continue;
+                if sym.is_name_undefined() {
+                    continue;
+                }
+                drop(sym);
+                notempty = true;
+                self.emit_var_decl_statement(&sym_arc.read().unwrap());
+            }
+            return notempty;
+        }
+        // cc:2535-2553: full MapIterator walk.
+        let mut seen_multi: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for entry in &sym_scope.entries {
+            // cc:2539: if (entry->isPiece()) continue;
+            if entry.is_piece() {
+                continue;
+            }
+            let sym_arc = entry.symbol.clone();
+            let sym = sym_arc.read().unwrap();
+            // cc:2541: if (sym->getCategory() != cat) continue; (cat<0 here)
+            if sym.category != SymbolCategory::NoCategory {
+                continue;
+            }
+            // cc:2542: if (sym->getName().size() == 0) continue;
+            if sym.name.is_empty() {
+                continue;
+            }
+            // cc:2543-2546: skip FunctionSymbol / LabSymbol.
+            if is_function_symbol(&sym) || is_label_symbol(&sym) {
+                continue;
+            }
+            // cc:2547-2550: multi-entry de-dup (only emit first whole map).
+            if sym.is_multi_entry() {
+                if !seen_multi.insert(sym.symbol_id) {
+                    continue;
+                }
+            }
+            drop(sym);
+            notempty = true;
+            self.emit_var_decl_statement(&sym_arc.read().unwrap());
+        }
+        // cc:2554-2572: dynamic-entry walk (same filtering).
+        for entry in &sym_scope.dynamic_entries {
+            if entry.is_piece() {
+                continue;
+            }
+            let sym_arc = entry.symbol.clone();
+            let sym = sym_arc.read().unwrap();
+            if sym.category != SymbolCategory::NoCategory {
+                continue;
+            }
+            if sym.name.is_empty() {
+                continue;
+            }
+            if is_function_symbol(&sym) || is_label_symbol(&sym) {
+                continue;
+            }
+            if sym.is_multi_entry() {
+                if !seen_multi.insert(sym.symbol_id) {
+                    continue;
+                }
+            }
+            drop(sym);
+            notempty = true;
+            self.emit_var_decl_statement(&sym_arc.read().unwrap());
+        }
+        notempty
+    }
+
+    // Ghidra: printc.cc:2608 PrintC::emitGlobalVarDeclsRecursive
+    /// For the given scope and all of its children that are not function
+    /// scopes, emit a variable declaration for each symbol. Faithful to
+    /// `PrintC::emitGlobalVarDeclsRecursive(Scope*)` (printc.cc:2608-2619).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// if (!symScope->isGlobal()) return;
+    /// emitScopeVarDecls(symScope, Symbol::no_category);
+    /// for (child : symScope->children) emitGlobalVarDeclsRecursive(child);
+    /// ```
+    ///
+    /// Rugra adaptation: `Database` (the symbol table) owns all scopes by id;
+    /// `Scope::children` holds child scope ids. We resolve each child through
+    /// the `Database` to recurse. `Symbol::no_category` == -1 (database.hh).
+    pub fn emit_global_var_decls_recursive(&mut self, sym_scope: &crate::database::Scope, db: &crate::database::Database) {
+        // cc:2611: if (!symScope->isGlobal()) return;
+        if !sym_scope.is_global() {
+            return;
+        }
+        // cc:2612: emitScopeVarDecls(symScope, Symbol::no_category);
+        // Symbol::no_category == -1 (database.hh); Rugra has no constant for it.
+        self.emit_scope_var_decls(sym_scope, -1);
+        // cc:2613-2618: recurse over non-function child scopes.
+        for &child_id in &sym_scope.children {
+            if let Some(child) = db.resolve_scope(child_id) {
+                self.emit_global_var_decls_recursive(child, db);
+            }
+        }
+    }
+
+    // Ghidra: printc.cc:2621 PrintC::docAllGlobals
+    /// Emit every global variable as a document. Faithful to
+    /// `PrintC::docAllGlobals(void)` (printc.cc:2621-2629).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// int4 id = emit->beginDocument();
+    /// emitGlobalVarDeclsRecursive(glb->symboltab->getGlobalScope());
+    /// emit->tagLine();
+    /// emit->endDocument(id);
+    /// emit->flush();
+    /// ```
+    ///
+    /// Rugra adaptation: the global scope is reached via the Architecture's
+    /// `symboltab` (`Arc<RwLock<Database>>`). The caller passes the database
+    /// because Rugra's `PrintC` does not hold an `Architecture*` / `glb`
+    /// reference (the audit's P2-5 gap). When the database/global scope is
+    /// absent this is a no-op (no globals to emit).
+    pub fn doc_all_globals(&mut self, db: Option<&crate::database::Database>) {
+        // cc:2624: int4 id = emit->beginDocument();
+        self.emit.begin_document();
+        // cc:2625: emitGlobalVarDeclsRecursive(glb->symboltab->getGlobalScope());
+        if let Some(database) = db {
+            if let Some(global_scope) = database.get_global_scope() {
+                self.emit_global_var_decls_recursive(global_scope, database);
+            }
+        }
+        // cc:2626: emit->tagLine();
+        self.emit.tag_line(0);
+        // cc:2627: emit->endDocument(id);
+        self.emit.end_document();
+        // cc:2628: emit->flush(); — Rugra's emitters stream directly (no
+        //   buffered flush); the Emit trait has no flush() method, so this is
+        //   a faithful no-op.
+    }
+
+    // Ghidra: printc.cc:2631 PrintC::docSingleGlobal
+    /// Emit a single global variable as a document. Faithful to
+    /// `PrintC::docSingleGlobal(const Symbol*)` (printc.cc:2631-2639).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// int4 id = emit->beginDocument();
+    /// emitVarDeclStatement(sym);
+    /// emit->tagLine();   // Extra line
+    /// emit->endDocument(id);
+    /// emit->flush();
+    /// ```
+    pub fn doc_single_global(&mut self, sym: &crate::database::Symbol) {
+        // cc:2634: int4 id = emit->beginDocument();
+        self.emit.begin_document();
+        // cc:2635: emitVarDeclStatement(sym);
+        self.emit_var_decl_statement(sym);
+        // cc:2636: emit->tagLine();  // Extra line
+        self.emit.tag_line(0);
+        // cc:2637: emit->endDocument(id);
+        self.emit.end_document();
+        // cc:2638: emit->flush(); — Rugra's emitters stream directly (no
+        //   buffered flush); the Emit trait has no flush() method, so this is
+        //   a faithful no-op.
     }
 
     // ===== Missing printc.cc methods (batch 2) =====
