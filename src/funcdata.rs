@@ -5051,6 +5051,395 @@ impl Funcdata {
         }
     }
 
+    // =========================================================================
+    // String / return-address / replacement (funcdata_varnode.cc:1413-1743)
+    // =========================================================================
+
+    // Ghidra: funcdata_varnode.cc:1413 Funcdata::getInternalString
+    /// Build the p-code that displays an encoded string constant. Faithful
+    /// to `Funcdata::getInternalString` (funcdata_varnode.cc:1413-1434):
+    ///   - reject non-pointer types
+    ///   - register the raw bytes with the StringManager, returning a hash;
+    ///     hash==0 means the encoding is not a legal string → return null
+    ///   - register the BUILTIN_STRING_DATA user-op
+    ///   - emit `CALLOTHER(string_data_id, hash)` before `readOp`, returning
+    ///     its unique output typed as `ptrType`
+    /// Returns the new Varnode, or None if the encoding is not a string.
+    /// RUGRA-GAP: Rugra's StringManager has no `registerInternalStringData`;
+    /// we validate the encoding via `check_characters`/`has_char_terminator`
+    /// and synthesize a stable hash from (addr, bytes). When no arch/string
+    /// manager is attached, returns None (caller treats as non-string).
+    pub fn get_internal_string(
+        &mut self,
+        buf: &[u8],
+        ptr_type: &crate::type_system::datatype::Datatype,
+        read_op: &crate::op::PcodeOpRef,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        // cc:1416-1417: if (ptrType->getMetatype() != TYPE_PTR) return null.
+        if ptr_type.get_metatype() != TypeMetatype::Pointer {
+            return None;
+        }
+        // cc:1418: charType = ((TypePointer *)ptrType)->getPtrTo().
+        let char_type = match ptr_type {
+            Datatype::Pointer(p) => p.ptr_to.clone(),
+            _ => return None,
+        };
+        // cc:1420-1423: hash = glb->stringManager->registerInternalStringData(...).
+        // Rugra: validate + synthesize hash. charsize inferred from char_type size.
+        let charsize = char_type.get_size().max(1) as i32;
+        let addr = read_op.0.read().unwrap().get_addr();
+        let hash = if let Some(arch) = &self.arch {
+            if let Some(sm_arc) = &arch.string_manager {
+                let mut sm = sm_arc.write().unwrap();
+                // Validate the encoding (faithful to StringManager logic).
+                let num_chars = crate::stringmanage::check_characters(buf, charsize, false);
+                if num_chars < 0
+                    || !crate::stringmanage::has_char_terminator(buf, charsize as usize)
+                {
+                    return None;
+                }
+                let mut data = crate::stringmanage::StringData::default();
+                crate::stringmanage::assign_string_data(
+                    &mut data,
+                    buf,
+                    charsize,
+                    num_chars,
+                    false,
+                    sm.get_maximum_chars(),
+                );
+                sm.insert_string_data(addr, data);
+                // Synthesize a stable hash from addr (low 56 bits) | charsize<<56.
+                (addr.as_u64() & 0x00ff_ffff_ffff_ffff) | ((charsize as u64) << 56)
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        if hash == 0 {
+            return None;
+        }
+        // cc:1424-1429: register BUILTIN_STRING_DATA + emit CALLOTHER.
+        let string_data_id: u64 = if let Some(arch) = &self.arch {
+            if let Some(userops) = arch.userops.as_ref() {
+                let mut mgr = userops.write().unwrap();
+                mgr.register_builtin_by_id(crate::userop::BUILTIN_STRINGDATA) as u64
+            } else {
+                // RUGRA-GAP: no userop table — use the canonical builtin id.
+                crate::userop::BUILTIN_STRINGDATA as u64
+            }
+        } else {
+            crate::userop::BUILTIN_STRINGDATA as u64
+        };
+        let string_op = self.new_op(2, addr);
+        self.op_set_opcode(&string_op, crate::opcodes::OpCode::CPUI_CALLOTHER);
+        // cc:1427: stringOp->clearFlag(PcodeOp::call).
+        string_op.0.write().unwrap().flags &= !crate::op::pcodeop_flags::CALL;
+        let id_vn = self.new_constant(4, string_data_id);
+        let hash_vn = self.new_constant(8, hash);
+        self.op_set_input(&string_op, id_vn, 0);
+        self.op_set_input(&string_op, hash_vn, 1);
+        // cc:1430-1431: resVn = newUniqueOut(ptrType->getSize(), stringOp);
+        //   resVn->updateType(ptrType, true, false).
+        let ptr_size = ptr_type.get_size();
+        let res_vn = self.new_unique_out(ptr_size, &string_op);
+        res_vn.write().unwrap().update_type_lock(
+            std::sync::Arc::new(ptr_type.clone()),
+            true,
+            false,
+        );
+        // cc:1432: opInsertBefore(stringOp, readOp).
+        self.op_insert_before(&string_op, read_op);
+        Some(res_vn)
+    }
+
+    // Ghidra: funcdata_varnode.cc:1496 Funcdata::totalReplaceConstant
+    /// Replace every read reference of `vn` with a fresh constant `val`.
+    /// Faithful to `Funcdata::totalReplaceConstant` (funcdata_varnode.cc:1496-1534).
+    /// For marker ops (MULTIEQUAL/INDIRECT) a single COPY of the constant is
+    /// inserted (after vn's def, or at block 0 start if vn is unwritten) and
+    /// the marker input is set to the COPY's output; otherwise each read site
+    /// gets its own fresh constant Varnode.
+    pub fn total_replace_constant(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        val: u64,
+    ) {
+        let vn_size = vn.read().unwrap().get_size();
+        // Snapshot (op, slot) descendants before mutation.
+        let sites: Vec<(crate::op::PcodeOpRef, usize)> = {
+            let vn_rg = vn.read().unwrap();
+            vn_rg
+                .descend
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .filter_map(|op_arc| {
+                    let op_rg = op_arc.read().unwrap();
+                    let slot = op_rg
+                        .inrefs
+                        .iter()
+                        .position(|v| std::sync::Arc::ptr_eq(v, vn))?;
+                    drop(op_rg);
+                    Some((crate::op::PcodeOpRef(op_arc), slot))
+                })
+                .collect()
+        };
+        // Lazily-built COPY for marker ops (cc:1510-1529).
+        let mut copy_op: Option<crate::op::PcodeOpRef> = None;
+        for (op, slot) in sites {
+            let is_marker = op.0.read().unwrap().is_marker();
+            let new_rep = if is_marker {
+                if copy_op.is_none() {
+                    // cc:1511-1525: build a single COPY of the constant.
+                    let vn_is_written = vn.read().unwrap().is_written();
+                    if vn_is_written {
+                        let def = vn.read().unwrap().get_def();
+                        if let Some(def_op) = def {
+                            let def_ref = crate::op::PcodeOpRef(def_op);
+                            let def_addr = def_ref.0.read().unwrap().get_addr();
+                            let new_copy = self.new_op(1, def_addr);
+                            self.op_set_opcode(&new_copy, OpCode::CPUI_COPY);
+                            self.new_unique_out(vn_size, &new_copy);
+                            let c = self.new_constant(vn_size, val);
+                            self.op_set_input(&new_copy, c, 0);
+                            self.op_insert_after(&new_copy, &def_ref);
+                            copy_op = Some(new_copy);
+                        }
+                    } else {
+                        // cc:1519-1525: vn unwritten — insert at block 0 start.
+                        let bb0 = self.bblocks.get_block(0);
+                        if let Some(bb) = bb0 {
+                            let start_addr = bb.read().unwrap().get_start_addr();
+                            let new_copy = self.new_op(1, start_addr);
+                            self.op_set_opcode(&new_copy, OpCode::CPUI_COPY);
+                            self.new_unique_out(vn_size, &new_copy);
+                            let c = self.new_constant(vn_size, val);
+                            self.op_set_input(&new_copy, c, 0);
+                            self.op_insert_begin(&new_copy, &bb);
+                            copy_op = Some(new_copy);
+                        }
+                    }
+                }
+                // cc:1528: newrep = copyop->getOut().
+                match &copy_op {
+                    Some(c) => c.0.read().unwrap().get_out().cloned(),
+                    None => None,
+                }
+            } else {
+                // cc:1531: newrep = newConstant(vn->getSize(), val).
+                Some(self.new_constant(vn_size, val))
+            };
+            if let Some(rep) = new_rep {
+                self.op_set_input(&op, rep, slot);
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1573 Funcdata::findDisjointCover
+    /// Find the minimal Address range covering `vn` that does not split any
+    /// other Varnode. Faithful to `Funcdata::findDisjointCover`
+    /// (funcdata_varnode.cc:1573-1596). Walks the loc tree backward and
+    /// forward from vn's address, expanding the [addr, endaddr) range to
+    /// include any overlapping neighbours, then returns the start and passes
+    /// the size back via `sz`.
+    pub fn find_disjoint_cover(
+        &self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        sz: &mut usize,
+    ) -> crate::address::Address {
+        let mut addr = *vn.read().unwrap().get_addr();
+        let mut end_off = addr.as_u64() + vn.read().unwrap().get_size() as u64;
+        // cc:1580-1586: walk backward over overlapping earlier varnodes.
+        // Rugra: overlap_loc returns candidates overlapping the current range;
+        // we rescan with the expanded range until it stabilizes.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let candidates = self.vbank.overlap_loc(addr, (end_off - addr.as_u64()) as usize);
+            for cv in candidates {
+                let cv_rg = cv.read().unwrap();
+                let cv_addr = *cv_rg.get_addr();
+                let cv_end = cv_addr.as_u64() + cv_rg.get_size() as u64;
+                if cv_addr.as_u64() < addr.as_u64() {
+                    addr = cv_addr;
+                    changed = true;
+                }
+                if cv_end > end_off {
+                    end_off = cv_end;
+                    changed = true;
+                }
+            }
+        }
+        // cc:1594-1595: sz = endaddr - addr; return addr.
+        *sz = (end_off - addr.as_u64()) as usize;
+        addr
+    }
+
+    // Ghidra: funcdata_varnode.cc:1606 Funcdata::coverVarnodes
+    /// Ensure every Varnode in `list` (in Address order) overlaps a Symbol so
+    /// it will link. Faithful to `Funcdata::coverVarnodes`
+    /// (funcdata_varnode.cc:1606-1627). For each address group, pick the
+    /// biggest Varnode; if it has no overlapping Symbol entry, create one
+    /// named `<entry>_<diff>` at the over-extending offset.
+    /// RUGRA-GAP: ScopeLocal has no findContainer/addSymbol; we approximate by
+    /// recording the synthetic name in symbol_table (matching the existing
+    /// `remap_varnode` strategy) and setting MAPPED.
+    pub fn cover_varnodes(
+        &mut self,
+        entry_addr: u64,
+        entry_name: &str,
+        list: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+    ) {
+        let mut i = 0;
+        while i < list.len() {
+            let vn = &list[i];
+            // cc:1614-1615: skip if next varnode shares the same address
+            // (we only check once per address, picking the biggest implicitly
+            // by taking the last same-address varnode).
+            let vn_addr = *vn.read().unwrap().get_addr();
+            if i + 1 < list.len() && list[i + 1].read().unwrap().get_addr().as_u64() == vn_addr.as_u64()
+            {
+                i += 1;
+                continue;
+            }
+            // cc:1617: usepoint = vn->getUsePoint(*this).
+            // cc:1618: overlapEntry = scope->findContainer(addr, size, usepoint).
+            // Rugra: symbol_table lookup by address is the analogue of
+            // findContainer; if present the varnode already links.
+            let already_mapped = vn.read().unwrap().is_mapped()
+                || self.symbol_table.contains_key(&vn_addr.as_u64());
+            if !already_mapped {
+                // cc:1619-1624: diff = vn->getOffset() - entry->getAddr();
+                //   name = entry->getName() + "_" + diff; addSymbol(...).
+                let diff = vn_addr.as_u64() as i64 - entry_addr as i64;
+                let sym_name = format!("{}_{}", entry_name, diff);
+                self.symbol_table.insert(vn_addr.as_u64(), sym_name);
+                vn.write().unwrap()
+                    .set_flags(crate::varnode::varnode_flags::MAPPED);
+            }
+            i += 1;
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1637 Funcdata::applyUnionFacet
+    /// Cache a UnionFacetSymbol's forced union-field resolution into unionMap.
+    /// Faithful to `Funcdata::applyUnionFacet` (funcdata_varnode.cc:1637-1649):
+    ///   op = dhash.findOp(this, entry->getFirstUseAddress(), entry->getHash());
+    ///   if (op == NULL) return false;
+    ///   slot = DynamicHash::getSlotFromHash(hash);
+    ///   fldNum = ((UnionFacetSymbol *)sym)->getFieldNumber();
+    ///   ResolvedUnion resolve(sym->getType(), fldNum, *glb->types);
+    ///   resolve.setLock(true);
+    ///   return setUnionField(sym->getType(), op, slot, resolve);
+    /// RUGRA-GAP: there is no UnionFacetSymbol type yet; the caller passes the
+    /// resolved (parent type, field number) projection of the facet symbol.
+    /// Returns true if the op was located and the resolution cached.
+    pub fn apply_union_facet(
+        &mut self,
+        parent: std::sync::Arc<crate::type_system::datatype::Datatype>,
+        first_use_addr: crate::address::Address,
+        hash: u64,
+        field_num: i32,
+    ) -> bool {
+        // cc:1641: op = dhash.findOp(this, addr, hash).
+        let op = {
+            let mut dhash = crate::dynamic::DynamicHash::new();
+            dhash.find_op(self, first_use_addr, hash)
+        };
+        let Some(op_arc) = op else { return false };
+        let op_ref = crate::op::PcodeOpRef(op_arc);
+        // cc:1644: slot = DynamicHash::getSlotFromHash(hash).
+        let slot = crate::dynamic::DynamicHash::get_slot_from_hash(hash);
+        // cc:1645-1647: fldNum + ResolvedUnion(parent, fldNum, types); setLock.
+        let resolve = if let Some(arch) = &self.arch {
+            if let Some(tg) = &arch.types {
+                let tg_guard = tg.read().unwrap();
+                let mut r = crate::unionresolve::ResolvedUnion::with_field(
+                    parent.clone(),
+                    field_num,
+                    &tg_guard,
+                );
+                r.set_lock(true);
+                r
+            } else {
+                let mut r = crate::unionresolve::ResolvedUnion::new(parent.clone());
+                r.set_lock(true);
+                r
+            }
+        } else {
+            let mut r = crate::unionresolve::ResolvedUnion::new(parent.clone());
+            r.set_lock(true);
+            r
+        };
+        // cc:1648: return setUnionField(sym->getType(), op, slot, resolve).
+        self.set_union_field(parent.as_ref(), &op_ref, slot, resolve)
+    }
+
+    // Ghidra: funcdata_varnode.cc:1723 Funcdata::prepareThisPointer
+    /// Ensure that if a "this" pointer exists it is treated as a pointer
+    /// data-type. Faithful to `Funcdata::prepareThisPointer`
+    /// (funcdata_varnode.cc:1723-1743):
+    ///   for each param: if isThisPointer && isTypeLocked return;
+    ///   if (localmap->hasTypeRecommendations()) return;
+    ///   dt = getTypeVoid(); spc = getDefaultDataSpace();
+    ///   dt = getTypePointer(spc->getAddrSize(), dt, spc->getWordSize());
+    ///   addr = funcp.getThisPointerStorage(dt);
+    ///   localmap->addTypeRecommendation(addr, dt);
+    /// RUGRA-GAP: ScopeLocal has no type-recommendation store; we approximate
+    /// by recording the recommendation address in symbol_table. The
+    /// "this"-pointer storage location is taken from funcp's first param
+    /// marked as THIS_POINTER, or from the configured stack pointer.
+    pub fn prepare_this_pointer(&mut self) {
+        // cc:1727-1731: for each param if isThisPointer && isTypeLocked return.
+        let num_inputs = self.funcp.num_params();
+        for i in 0..num_inputs {
+            if let Some(param) = self.funcp.get_param(i) {
+                if param.is_this_pointer() && param.is_type_locked() {
+                    return;
+                }
+            }
+        }
+        // cc:1735-1736: if (localmap->hasTypeRecommendations()) return.
+        // Rugra: symbol_table acts as the recommendation store; presence of a
+        // "this" entry means a recommendation was already collected.
+        let has_recommendation = self
+            .symbol_table
+            .values()
+            .any(|name| name == "this" || name.contains("this"));
+        if has_recommendation {
+            return;
+        }
+        // cc:1738-1740: dt = void; spc = default data space;
+        //   dt = getTypePointer(spc->getAddrSize(), void, spc->getWordSize()).
+        let dt = if let Some(arch) = &self.arch {
+            if let Some(tg) = &arch.types {
+                let mut tg_guard = tg.write().unwrap();
+                let void_dt = tg_guard.get_type_void();
+                let addr_size = self.stack_pointer_size;
+                let word_size = self.stack_space.word_size();
+                tg_guard.get_type_pointer(addr_size, void_dt, word_size)
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+        // cc:1741-1742: addr = funcp.getThisPointerStorage(dt);
+        //   localmap->addTypeRecommendation(addr, dt).
+        // Rugra: prefer the first THIS_POINTER param's address; else the stack
+        // pointer offset.
+        let this_addr = (0..num_inputs)
+            .find_map(|i| {
+                self.funcp
+                    .get_param(i)
+                    .filter(|p| p.is_this_pointer())
+                    .and_then(|p| Some(p.address.as_u64()))
+            })
+            .unwrap_or(self.stack_pointer_offset);
+        self.symbol_table.insert(this_addr, "this".to_string());
+        let _ = dt; // recommendation data-type recorded implicitly via "this" name.
+    }
 
     // Ghidra: funcdata.cc:34 Funcdata::numHeritagePasses
     /// Get number of heritage passes completed
@@ -6053,16 +6442,73 @@ impl Funcdata {
         UserOpType::Unspecialized
     }
 
-    /// Test whether `vn` is (eventually) a copy of the return address.
-    /// Adapts Ghidra's `Funcdata::testForReturnAddress` used by
-    /// `stageJumpTable`. RUGRA-GAP: the full backtracking copy-chain analysis
-    /// is not ported; this checks the immediate definition only.
+    // Ghidra: funcdata_varnode.cc:1442 Funcdata::testForReturnAddress
+    /// Trace `vn` back to see if it derives from this function's return
+    /// address. Faithful to `Funcdata::testForReturnAddress`
+    /// (funcdata_varnode.cc:1442-1468). The value may flow through COPY,
+    /// INDIRECT, and INT_AND (alignment mask) ops; any other op breaks the
+    /// chain. The terminal Varnode must be an input marked as the return
+    /// address storage location.
+    /// RUGRA-GAP: Ghidra compares against `glb->defaultReturnAddr` (a
+    /// VarnodeData). Rugra's Architecture does not yet hold that datum, so we
+    /// instead check the terminal Varnode's `is_input()` and its
+    /// `RETURN_ADDRESS` flag (set by the loader/disassembler on the storage
+    /// location). When no return-address flag is present we conservatively
+    /// return false.
     fn test_for_return_address(&self, vn: &Arc<RwLock<crate::varnode::Varnode>>) -> bool {
-        // A return-address varnode typically comes from a COPY/LOAD of the
-        // stack pointer. Without the full analysis we conservatively return
-        // false (i.e. never short-circuit recovery).
-        let _ = vn;
-        false
+        // cc:1445-1447: retaddr = glb->defaultReturnAddr; if null return false.
+        // Rugra: the RETURN_ADDRESS varnode flag is our analogue of having a
+        // known return-address storage location.
+        let mut cur = vn.clone();
+        loop {
+            let (def, opc, in0) = {
+                let c = cur.read().unwrap();
+                if !c.is_written() {
+                    break;
+                }
+                let d = match c.get_def() {
+                    Some(d) => d,
+                    None => break,
+                };
+                // Read the opcode/input under the guard, then move the Arc out.
+                let (opc, in0) = {
+                    let dg = d.read().unwrap();
+                    (dg.opcode, dg.get_in(0).cloned())
+                };
+                (d, opc, in0)
+            };
+            // cc:1451-1453: INDIRECT/COPY → follow in(0).
+            if opc == OpCode::CPUI_INDIRECT || opc == OpCode::CPUI_COPY {
+                match in0 {
+                    Some(v) => cur = v,
+                    None => return false,
+                }
+            } else if opc == OpCode::CPUI_INT_AND {
+                // cc:1454-1458: only allow alignment-style masking (constant
+                // second input); follow in(0).
+                let in1_const = {
+                    let d = def.read().unwrap();
+                    d.get_in(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false)
+                };
+                if !in1_const {
+                    return false;
+                }
+                match in0 {
+                    Some(v) => cur = v,
+                    None => return false,
+                }
+            } else {
+                // cc:1460-1461: any other op → not a return address.
+                return false;
+            }
+        }
+        // cc:1463-1466: terminal must match the return-address storage and be
+        // an input. Rugra: check is_input() + RETURN_ADDRESS flag.
+        let c = cur.read().unwrap();
+        if !c.is_input() {
+            return false;
+        }
+        c.is_return_address()
     }
 }
 
