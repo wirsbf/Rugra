@@ -7411,6 +7411,166 @@ impl Funcdata {
     ) {
         vn.write().unwrap().set_return_address();
     }
+
+    // Ghidra: funcdata_varnode.cc:1756 Funcdata::checkCallDoubleUse
+    /// Test for legitimate double use of a parameter trial: the trial is a
+    /// putative input to `opmatch`, but also traces into a second CALL `op`.
+    /// Faithful to `Funcdata::checkCallDoubleUse`
+    /// (funcdata_varnode.cc:1756-1794). The Ghidra original:
+    ///   j = op->getSlot(vn);
+    ///   if (j <= 0) return false;             // flows to indirect-call var
+    ///   fc = getCallSpecs(op); matchfc = getCallSpecs(opmatch);
+    ///   if (op->code() == opmatch->code()) {
+    ///     bool isdirect = (opmatch->code() == CALL);
+    ///     if ((isdirect && matchfc->getEntryAddress()==fc->getEntryAddress()) ||
+    ///         (!isdirect && op->getIn(0)==opmatch->getIn(0))) {
+    ///       curtrial = fc->getActiveInput()->getTrialForInputVarnode(j);
+    ///       if (curtrial->getAddress() == trial->getAddress()) {
+    ///         if (op->getParent()==opmatch->getParent()) {
+    ///           if (opmatch->getSeqNum().getOrder() < op->getSeqNum().getOrder())
+    ///             return true;
+    ///         } else return true;
+    ///       }
+    ///     }
+    ///   }
+    ///   if (fc->isInputActive()) {
+    ///     curtrial = fc->getActiveInput()->getTrialForInputVarnode(j);
+    ///     if (curtrial->isChecked()) {
+    ///       if (curtrial->isActive()) return false;
+    ///     } else if (TraverseNode::isAlternatePathValid(vn, fl))
+    ///       return false;
+    ///     return true;
+    ///   }
+    ///   return false;
+    /// Rugra's free-function `only_op_use` does NOT consult call-spec trials,
+    /// so this method provides the missing double-use reasoning. It takes the
+    /// raw (opmatch, op, vn, fl, trial_addr) inputs; the ParamTrial is reduced
+    /// to its address for the same-function / same-trial comparison.
+    pub fn check_call_double_use(
+        &self,
+        opmatch: &crate::op::PcodeOpRef,
+        op: &crate::op::PcodeOpRef,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        _fl: u32,
+        trial_addr: crate::address::Address,
+    ) -> bool {
+        use crate::opcodes::OpCode as OC;
+        // cc:1759: j = op->getSlot(vn); if (j<=0) return false.
+        let j = self.op_get_slot(op, vn);
+        if j <= 0 { return false; }
+        // cc:1761-1762: fc / matchfc lookup by op address.
+        let op_addr = op.0.read().unwrap().get_addr().as_u64();
+        let match_addr = opmatch.0.read().unwrap().get_addr().as_u64();
+        let fc_idx = self.callspecs.iter().position(|c| c.op_addr.as_u64() == op_addr);
+        let matchfc_idx = self.callspecs.iter().position(|c| c.op_addr.as_u64() == match_addr);
+        // cc:1763-1781: same-call double-use test.
+        let op_code = op.0.read().unwrap().opcode;
+        let match_code = opmatch.0.read().unwrap().opcode;
+        if op_code == match_code {
+            let is_direct = match_code == OC::CPUI_CALL;
+            let same_target = match (fc_idx, matchfc_idx) {
+                (Some(fi), Some(mi)) => {
+                    let fc = &self.callspecs[fi];
+                    let mfc = &self.callspecs[mi];
+                    if is_direct {
+                        fc.entry_addr.is_some() && fc.entry_addr == mfc.entry_addr
+                    } else {
+                        // CALLIND: compare the indirect-call varnode (in(0)).
+                        let a = op.0.read().unwrap().get_in(0).cloned();
+                        let b = opmatch.0.read().unwrap().get_in(0).cloned();
+                        match (a, b) { (Some(x), Some(y)) => std::sync::Arc::ptr_eq(&x, &y), _ => false }
+                    }
+                }
+                _ => false,
+            };
+            if same_target {
+                // cc:1770-1778: same trial address + ordering test.
+                // Rugra: we approximate the per-slot trial-address lookup by
+                // checking that the candidate's address equals trial_addr.
+                let vn_addr = vn.read().unwrap().loc;
+                if vn_addr == trial_addr {
+                    let op_parent = op.0.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                    let match_parent = opmatch.0.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                    let same_parent = match (op_parent, match_parent) {
+                        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(&a, &b),
+                        _ => false,
+                    };
+                    if same_parent {
+                        // cc:1773-1774: opmatch dibs if it comes first.
+                        let op_order = op.0.read().unwrap().get_seq_num().get_order();
+                        let match_order = opmatch.0.read().unwrap().get_seq_num().get_order();
+                        if match_order < op_order { return true; }
+                        // else fall through (may still reject).
+                    } else {
+                        // cc:1777-1778: different blocks → assume legit.
+                        return true;
+                    }
+                }
+            }
+        }
+        // cc:1783-1793: input-active path.
+        if let Some(fi) = fc_idx {
+            if self.callspecs[fi].is_input_active() {
+                // cc:1784: curtrial = fc->getActiveInput()->getTrialForInputVarnode(j).
+                if let Some(active) = self.callspecs[fi].get_active_input() {
+                    // Rugra's ParamActive lacks getTrialForInputVarnode; we
+                    // approximate by indexing trials by slot (trial index is
+                    // slot-1 since slot 0 is the call target).
+                    let trial_idx = (j as usize).saturating_sub(1);
+                    if trial_idx < active.get_num_trials() {
+                        let trial = active.get_trial(trial_idx);
+                        if trial.is_checked() {
+                            // cc:1786-1787: checked & active → reject.
+                            if trial.is_active() { return false; }
+                            return true; // checked & inactive → keep.
+                        }
+                        // cc:1789-1790: not yet checked → reject if alt path
+                        // valid; RUGRA-GAP: TraverseNode::isAlternatePathValid
+                        // not ported, so we conservatively keep the trial.
+                        return true;
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    // Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
+    /// Test if the given Varnode seems to only be used by a CALL/RETURN op.
+    /// Faithful to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904).
+    /// This is the `impl Funcdata` method form of the existing free function
+    /// `only_op_use`; it supplies `has_active_output` from `self.active_output`
+    /// and delegates to the free function so existing call-sites stay intact.
+    pub fn only_op_use(
+        &self,
+        invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        opmatch: &crate::op::PcodeOpRef,
+        trial_slot: i32,
+        main_flags: u32,
+    ) -> bool {
+        let has_active_output = self.active_output.is_some();
+        only_op_use(has_active_output, invn, opmatch, trial_slot, main_flags)
+    }
+
+    // Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
+    /// Test if the given trial Varnode is likely only used for parameter
+    /// passing, following flow from ancestors it was copied from. Faithful to
+    /// `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994). This is the
+    /// `impl Funcdata` method form of the free function `ancestor_op_use`;
+    /// it supplies `has_active_output` from `self.active_output`.
+    pub fn ancestor_op_use(
+        &self,
+        maxlevel: i32,
+        invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: &crate::op::PcodeOpRef,
+        trial_slot: i32,
+        offset: i32,
+        main_flags: u32,
+    ) -> bool {
+        let has_active_output = self.active_output.is_some();
+        ancestor_op_use(has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags)
+    }
 }
 
 #[cfg(test)]
