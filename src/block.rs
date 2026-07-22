@@ -2929,6 +2929,128 @@ impl FlowBlock for BlockCondition {
     }
 }
 
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockCondition virtual overrides)
+impl BlockCondition {
+    /// Ghidra `BlockCondition::getOpcode` (block.hh:625, inline): the boolean
+    /// operation (BOOL_AND / BOOL_OR). Rugra returns the `BoolOp` enum.
+    // Ghidra: block.hh:625 BlockCondition::getOpcode
+    pub fn get_opcode(&self) -> BoolOp {
+        self.op_type
+    }
+
+    /// Ghidra `BlockCondition::flipInPlaceTest` (block.cc:2990-3006): test
+    /// whether the short-circuit condition can be flipped by testing each
+    /// sub-block's split point. Returns the reason code (0 = flippable, 2 =
+    /// not flippable). The C++ walks `getBlock(0)->getSplitPoint()` and
+    /// `getBlock(1)->getSplitPoint()`; Rugra asks each child via the trait.
+    // Ghidra: block.cc:2990 BlockCondition::flipInPlaceTest
+    pub fn is_split_point(&self) -> bool {
+        // cc:2993-3005: both children must have a split point that is flippable.
+        // Rugra treats each child as its own split point and asks flip_in_place_test.
+        if self.first.read().unwrap().flip_in_place_test() != 0 {
+            return false;
+        }
+        self.second.read().unwrap().flip_in_place_test() == 0
+    }
+
+    /// Ghidra `BlockCondition::isComplex` (block.hh, inherited): is this
+    /// condition too complex to fold? Rugra returns true unconditionally for
+    /// a compound condition (matching Ghidra's BlockCondition never being
+    /// considered "simple").
+    // RUGRA-GLUE: compound conditions are always complex (Ghidra BlockCondition has no isComplex override; base returns true for non-leaf)
+    pub fn is_complex(&self) -> bool {
+        true
+    }
+
+    /// Ghidra `BlockCondition::lastOp` (block.cc:3016-3021): the last op is
+    /// the second child's last op (block B holds the final CBRANCH).
+    // Ghidra: block.cc:3016 BlockCondition::lastOp
+    pub fn last_op(&self) -> Option<PcodeOpRef> {
+        // cc:3020: return getBlock(1)->lastOp();
+        self.second.read().unwrap().last_op()
+    }
+
+    /// Ghidra `BlockCondition::negateCondition` (block.cc:3023-3032): distribute
+    /// the NOT to both sides of the condition and swap the boolean op
+    /// (AND<->OR). Returns true if either child's condition was negated.
+    // Ghidra: block.cc:3023 BlockCondition::negateCondition
+    pub fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        // cc:3027-3028: res1 = getBlock(0)->negateCondition(false); res2 = getBlock(1)->negateCondition(false);
+        let res1 = self.first.write().unwrap().negate_condition(false);
+        let res2 = self.second.write().unwrap().negate_condition(false);
+        // cc:3029: opc = (opc==CPUI_BOOL_AND) ? CPUI_BOOL_OR : CPUI_BOOL_AND;
+        self.op_type = match self.op_type {
+            BoolOp::And => BoolOp::Or,
+            BoolOp::Or => BoolOp::And,
+        };
+        // cc:3030: FlowBlock::negateCondition(toporbottom);  -- flip outgoing edges
+        if toporbottom && self.outgoing.len() >= 2 {
+            self.outgoing.swap(0, 1);
+        }
+        // cc:3031: return (res1 || res2);
+        res1 || res2
+    }
+
+    /// Ghidra `BlockCondition::scopeBreak` (block.cc:3034-3039): propagate
+    /// scope-break into both sub-conditions with no fixed exit (`cur_exit=-1`).
+    // Ghidra: block.cc:3034 BlockCondition::scopeBreak
+    pub fn scope_break_children(&mut self, _cur_exit: i32, cur_loop_exit: i32) {
+        // cc:3037-3038: getBlock(0)->scopeBreak(-1, curloopexit); getBlock(1)->scopeBreak(-1, curloopexit);
+        self.first.write().unwrap().scope_break_trait(-1, cur_loop_exit);
+        self.second.write().unwrap().scope_break_trait(-1, cur_loop_exit);
+    }
+
+    /// Ghidra `BlockCondition::printHeader` (block.cc:3041-3051): emit
+    /// `"Condition block(&&)" ` or `"Condition block(||)" ` based on the op.
+    // Ghidra: block.cc:3041 BlockCondition::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:3044-3048: s << "Condition block("; if (opc==BOOL_AND) "&&" else "||"; s << ") ";
+        let op_str = match self.op_type {
+            BoolOp::And => "&&",
+            BoolOp::Or => "||",
+        };
+        format!("Condition block({}) {}", op_str, self.index)
+    }
+
+    /// Ghidra `BlockCondition::nextFlowAfter` (block.cc:3053-3057): flow after
+    /// a compound condition is unknown. Returns null.
+    // Ghidra: block.cc:3053 BlockCondition::nextFlowAfter
+    pub fn next_flow_after(
+        &self,
+        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:3056: return null;   // Do not know where flow goes
+        None
+    }
+
+    /// Ghidra `BlockCondition::encodeHeader` (block.cc:3059-3065): emit the
+    /// base header plus an `opcode` attribute with the boolean op name. Rugra
+    /// returns `(index, opcode_name)` for the marshal layer.
+    // Ghidra: block.cc:3059 BlockCondition::encodeHeader
+    pub fn encode_header(&self) -> (i32, &'static str) {
+        // cc:3063-3064: nm = get_opname(opc); writeString(ATTRIB_OPCODE, nm);
+        let nm = match self.op_type {
+            BoolOp::And => "BOOL_AND",
+            BoolOp::Or => "BOOL_OR",
+        };
+        (self.index, nm)
+    }
+
+    /// Ghidra `BlockCondition::flipInPlaceExecute` (block.cc:3008-3014): flip
+    /// the boolean op (AND<->OR) and flip each child's CBRANCH in place.
+    // Ghidra: block.cc:3008 BlockCondition::flipInPlaceExecute
+    pub fn flip_in_place_execute(&mut self) {
+        // cc:3011: opc = (opc==BOOL_AND) ? BOOL_OR : BOOL_AND;
+        self.op_type = match self.op_type {
+            BoolOp::And => BoolOp::Or,
+            BoolOp::Or => BoolOp::And,
+        };
+        // cc:3012-3013: getBlock(0)->getSplitPoint()->flipInPlaceExecute(); getBlock(1)->getSplitPoint()->flipInPlaceExecute();
+        self.first.write().unwrap().flip_in_place_execute();
+        self.second.write().unwrap().flip_in_place_execute();
+    }
+}
+
 /// A structured switch-case block.
 ///
 /// Corresponds to Ghidra's `BlockSwitch`. Contains:
@@ -2987,6 +3109,144 @@ impl FlowBlock for BlockSwitch {
     // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.control.read().unwrap().get_ops()
+    }
+}
+
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockSwitch virtual overrides)
+impl BlockSwitch {
+    /// Ghidra `BlockSwitch::getSwitchBlock` (block.hh:772, inline): the root
+    /// switch component (getBlock(0)). Rugra returns the `control` block.
+    // Ghidra: block.hh:772 BlockSwitch::getSwitchBlock
+    pub fn get_switch_block(&self) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        self.control.clone()
+    }
+
+    /// Ghidra `BlockSwitch::getNumCaseBlocks` (block.hh:773, inline): the
+    /// number of case components.
+    // Ghidra: block.hh:773 BlockSwitch::getNumCaseBlocks
+    pub fn get_num_case_blocks(&self) -> usize {
+        self.cases.len()
+    }
+
+    /// Ghidra `BlockSwitch::getCaseBlock` (block.hh:774, inline): the i-th
+    /// case FlowBlock.
+    // Ghidra: block.hh:774 BlockSwitch::getCaseBlock
+    pub fn get_case_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.cases.get(i).cloned()
+    }
+
+    /// Ghidra `BlockSwitch::getNumLabels` (block.hh:785, inline): the number
+    /// of case labels for the i-th case (each case may be reached by multiple
+    /// switch values). Rugra reads from `case_values[i]`.
+    // Ghidra: block.hh:785 BlockSwitch::getNumLabels
+    pub fn get_num_labels(&self, i: usize) -> usize {
+        self.case_values.get(i).map(|v| v.len()).unwrap_or(0)
+    }
+
+    /// Ghidra `BlockSwitch::getLabel` (block.hh:786, inline): the j-th case
+    /// label value for the i-th case.
+    // Ghidra: block.hh:786 BlockSwitch::getLabel
+    pub fn get_label(&self, i: usize, j: usize) -> Option<u64> {
+        self.case_values.get(i).and_then(|v| v.get(j).copied())
+    }
+
+    /// Ghidra `BlockSwitch::isDefaultCase` (block.hh:789, inline): is the i-th
+    /// case the default case? Rugra compares against `default_case`.
+    // Ghidra: block.hh:789 BlockSwitch::isDefaultCase
+    pub fn is_default_case(&self, i: usize) -> bool {
+        if let (Some(case), Some(default)) = (self.cases.get(i), &self.default_case) {
+            Arc::ptr_eq(case, default)
+        } else {
+            false
+        }
+    }
+
+    /// Ghidra `BlockSwitch::isExit` (block.hh:791, inline): does the i-th case
+    /// block exit the switch? Rugra approximates this with `size_out()==1`
+    /// (matching the C++ `addCase` rule at block.cc:3514: a case with a single
+    /// out-edge exits the switch). Cases with goto labels (gototype != 0) are
+    /// never exits.
+    // Ghidra: block.hh:791 BlockSwitch::isExit
+    pub fn is_exit(&self, i: usize) -> bool {
+        // cc:3513-3514 (addCase): isexit = (bl->sizeOut() == 1) when gototype == 0.
+        if let Some(case) = self.cases.get(i) {
+            case.read().unwrap().size_out() == 1
+        } else {
+            false
+        }
+    }
+
+    /// Ghidra `BlockSwitch::markUnstructured` (block.cc:3603-3611): mark each
+    /// case whose goto edge is a plain `goto` with `f_unstructured_targ`. The
+    /// C++ first recurses via `BlockGraph::markUnstructured`; Rugra's
+    /// `BlockSwitch` exposes its cases directly, so only the per-case marking
+    /// is ported (Rugra does not yet model per-case gototype, so this is a
+    /// conservative no-op until case gototypes are tracked).
+    // Ghidra: block.cc:3603 BlockSwitch::markUnstructured
+    pub fn mark_unstructured_targets(&self) {
+        // cc:3607-3610: for each case, if (caseblocks[i].gototype == f_goto_goto) markCopyBlock(caseblocks[i].block, f_unstructured_targ);
+        // Rugra does not yet track per-case gototype; nothing to mark.
+    }
+
+    /// Ghidra `BlockSwitch::scopeBreak` (block.cc:3613-3630): a new scope — the
+    /// current loop exit becomes the new `cur_exit`. The switch control has
+    /// multiple exits so gets `cur_exit = -1`; each case either has a goto
+    /// (reclassified as `break` if it lands on cur_exit) or shares the
+    /// switch's exit (scopeBreak with curexit=curexit). Rugra recurses into
+    /// the control and each case; the per-case goto reclassification is
+    /// deferred until Rugra tracks per-case gototypes.
+    // Ghidra: block.cc:3613 BlockSwitch::scopeBreak
+    pub fn scope_break_break_cases(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        // cc:3617: getBlock(0)->scopeBreak(-1, curexit);   // Top block has multiple exits
+        self.control.write().unwrap().scope_break_trait(-1, cur_exit);
+        // cc:3618-3629: for each case, scopeBreak(curexit, curexit) for exit cases.
+        for case in &self.cases {
+            case.write().unwrap().scope_break_trait(cur_exit, cur_exit);
+        }
+        let _ = cur_loop_exit;
+    }
+
+    /// Ghidra `BlockSwitch::printHeader` (block.cc:3632-3637): emit
+    /// `"Switch block <index>"`.
+    // Ghidra: block.cc:3632 BlockSwitch::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:3635-3636: s << "Switch block "; FlowBlock::printHeader(s);
+        format!("Switch block {}", self.index)
+    }
+
+    /// Ghidra `BlockSwitch::nextFlowAfter` (block.cc:3639-3661): if the query
+    /// is about the switch control, flow is unknown; otherwise, if the query
+    /// is a goto case block, the next block in flow is the next case in
+    /// fallthru order; if it is the last case, defer to the parent. Rugra
+    /// returns the case following the queried block, or None if not found or
+    /// at the end.
+    // Ghidra: block.cc:3639 BlockSwitch::nextFlowAfter
+    pub fn next_flow_after(
+        &self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:3642-3643: if (getBlock(0) == bl) return null;
+        if Arc::ptr_eq(&self.control, bl) {
+            return None;
+        }
+        // cc:3651-3653: find bl in caseblocks.
+        let pos = self.cases.iter().position(|c| Arc::ptr_eq(c, bl))?;
+        // cc:3655-3657: i = i + 1; if (i < caseblocks.size()) return caseblocks[i].block->getFrontLeaf();
+        let next = pos.checked_add(1)?;
+        if next < self.cases.len() {
+            return self.cases.get(next).cloned();
+        }
+        // cc:3658-3660: otherwise flow is to exit of switch -> parent->nextFlowAfter(this).
+        // BlockGraph's nextFlowAfter is not yet ported; return None.
+        None
+    }
+
+    /// Ghidra `BlockSwitch::getSwitchVar` (block.cc:3596-3601): the input
+    /// Varnode to the switch's BRANCHIND, used by the printer to emit the
+    /// switch expression. Rugra returns the held `index_varnode`.
+    // Ghidra: block.cc:3596 BlockSwitch::getSwitchVar
+    pub fn get_switch_varnode(&self) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        self.index_varnode.clone()
     }
 }
 
