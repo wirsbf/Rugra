@@ -1595,7 +1595,8 @@ impl GraphSigManager {
     /// modifier bits (shifted left by 2) plus the check bit may be set.
     // Ghidra: signature.cc:914 GraphSigManager::testSettings
     pub fn test_settings(val: u32) -> bool {
-        if val == 0 {
+        // signature.cc:914-924: bit 0 (check bit) must be set.
+        if (val & 1) == 0 {
             return false;
         }
         let mask = sig_mods::SIG_COLLAPSE_SIZE
