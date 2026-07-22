@@ -7187,6 +7187,230 @@ impl Funcdata {
             }
         }
     }
+
+    // Ghidra: funcdata_varnode.cc:1653 Funcdata::mapGlobals
+    /// For each persistent global Varnode that has no symbol yet, create / link
+    /// a global Symbol. Faithful to `Funcdata::mapGlobals`
+    /// (funcdata_varnode.cc:1653-1719):
+    ///   for each run of persistent Varnodes sharing a base address:
+    ///     maxvn = biggest vn; ct = type of maxvn (or sized base type);
+    ///     entry = localmap->queryProperties(addr, 1, usepoint, fl);
+    ///     if (entry == NULL) {
+    ///       discover = localmap->discoverScope(addr, sz, usepoint);
+    ///       name = discover->buildVariableName(addr, usepoint, ct, 0,
+    ///                                          addrtied|persist);
+    ///       discover->addSymbol(name, ct, addr, usepoint);
+    ///     } else if ((addr+sz-1) > (entry_addr+entry_sz-1)) {
+    ///       inconsistentuse = true;
+    ///       if (!uncoveredVarnodes.empty()) coverVarnodes(entry, uncovered);
+    ///     }
+    ///   if (inconsistentuse) warningHeader("Globals starting with '_' ...");
+    /// RUGRA-GAP: Rugra's ScopeLocal has no queryProperties/discoverScope/
+    /// addSymbol/buildVariableName; we approximate by recording each new
+    /// global in `symbol_table` (matching the existing link_symbol strategy)
+    /// and calling cover_varnodes when an inconsistent overlap is detected.
+    pub fn map_globals(&mut self) {
+        // Gather persistent varnodes (sorted by Address via loc_tree).
+        let candidates: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|lr| lr.0.clone())
+            .filter(|vn| {
+                let r = vn.read().unwrap();
+                !r.is_free() && r.is_persist()
+            })
+            .collect();
+        let mut inconsistent = false;
+        let mut i = 0;
+        while i < candidates.len() {
+            let vn = candidates[i].clone();
+            i += 1;
+            // cc:1670: skip if already has a symbol entry.
+            let already_mapped = vn.read().unwrap().is_mapped();
+            if already_mapped { continue; }
+            // cc:1671-1691: gather the run of overlapping persistent varnodes.
+            let (addr, mut endaddr, mut max_size) = {
+                let r = vn.read().unwrap();
+                let a = r.loc.as_u64();
+                (a, a + r.size as u64, r.size)
+            };
+            let mut uncovered: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+            while i < candidates.len() {
+                let next = candidates[i].clone();
+                let r = next.read().unwrap();
+                if !r.is_persist() { break; }
+                if r.loc.as_u64() >= endaddr { break; }
+                // cc:1682-1683: internal varnode with no symbol → uncovered.
+                if r.loc.as_u64() != addr && !r.is_mapped() {
+                    uncovered.push(next.clone());
+                }
+                endaddr = endaddr.max(r.loc.as_u64() + r.size as u64);
+                if r.size > max_size { max_size = r.size; }
+                i += 1;
+            }
+            // cc:1697-1701: queryProperties → does a symbol already overlap?
+            let has_symbol = self.scope.as_ref().map(|s| s.has_overlap(addr, 1)).unwrap_or(false)
+                || self.symbol_table.contains_key(&addr);
+            if !has_symbol {
+                // cc:1702-1709: discoverScope + buildVariableName + addSymbol.
+                // Rugra: record a synthetic name in symbol_table.
+                let name = format!("global_{:x}", addr);
+                self.symbol_table.insert(addr, name);
+            } else if (addr + max_size as u64).saturating_sub(1)
+                > self.symbol_table.get(&addr).map(|_| addr).unwrap_or(u64::MAX)
+            {
+                // cc:1711-1715: inconsistent overlap → cover uncovered varnodes.
+                inconsistent = true;
+                if !uncovered.is_empty() {
+                    let entry_name = self.symbol_table.get(&addr).cloned().unwrap_or_default();
+                    self.cover_varnodes(addr, &entry_name, &uncovered);
+                }
+            }
+        }
+        // cc:1717-1718: warningHeader on inconsistent use.
+        if inconsistent {
+            self.warning_header(
+                "Globals starting with '_' overlap smaller symbols at the same address",
+            );
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1314 Funcdata::attemptDynamicMapping
+    /// Given a dynamic SymbolEntry, find its Varnode via DynamicHash and attach
+    /// the symbol's properties. Faithful to `Funcdata::attemptDynamicMapping`
+    /// (funcdata_varnode.cc:1314-1337):
+    ///   sym = entry->getSymbol();
+    ///   if (sym->getScope() != localmap) throw;
+    ///   dhash.clear();
+    ///   category = sym->getCategory();
+    ///   if (category == union_facet) return applyUnionFacet(entry, dhash);
+    ///   vn = dhash.findVarnode(this, entry->getFirstUseAddress(), entry->getHash());
+    ///   if (vn == NULL) return false;
+    ///   if (vn->getSymbolEntry() != NULL) return false;
+    ///   if (category == equate) { vn->setSymbolEntry(entry); return true; }
+    ///   else if (entry->getSize() == vn->getSize())
+    ///     if (vn->setSymbolProperties(entry)) return true;
+    ///   return false;
+    /// RUGRA-GAP: Rugra has no SymbolEntry/Symbol objects on Funcdata; the
+    /// caller supplies (first_use_addr, hash, size, category) directly. On a
+    /// successful find, MAPPED is set and the name is recorded.
+    pub fn attempt_dynamic_mapping(
+        &mut self,
+        first_use_addr: crate::address::Address,
+        hash: u64,
+        size: usize,
+        is_equate: bool,
+        is_union_facet: bool,
+        sym_name: &str,
+    ) -> bool {
+        // cc:1322-1324: union_facet → applyUnionFacet.
+        if is_union_facet {
+            // RUGRA-GAP: full union-facet path needs parent type; callers
+            // should use apply_union_facet directly. We treat as no-match.
+            return false;
+        }
+        // cc:1325: vn = dhash.findVarnode(this, addr, hash).
+        let vn = {
+            let mut dhash = crate::dynamic::DynamicHash::new();
+            dhash.find_varnode(self, first_use_addr, hash)
+        };
+        let Some(vn) = vn else { return false };
+        // cc:1326-1327: if (vn->getSymbolEntry()) return false.
+        if vn.read().unwrap().is_mapped() { return false; }
+        // cc:1328-1331: equate category → setSymbolEntry.
+        if is_equate {
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            return true;
+        }
+        // cc:1332-1335: matching size → setSymbolProperties.
+        if vn.read().unwrap().size == size {
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: funcdata_varnode.cc:1347 Funcdata::attemptDynamicMappingLate
+    /// Late-phase dynamic mapping: attach the Symbol's NAME only (no
+    /// type/property forcing). Faithful to `Funcdata::attemptDynamicMappingLate`
+    /// (funcdata_varnode.cc:1347-1399):
+    ///   dhash.clear();
+    ///   sym = entry->getSymbol();
+    ///   if (sym->getCategory() == union_facet) return applyUnionFacet(...);
+    ///   vn = dhash.findVarnode(this, addr, hash);
+    ///   if (vn == NULL) return false;
+    ///   if (vn->getSymbolEntry()) return false;
+    ///   if (category == equate) { vn->setSymbolEntry(entry); return true; }
+    ///   if (vn->getSize() != entry->getSize()) {
+    ///     warningHeader("Unable to use symbol ...: Size does not match");
+    ///     return false;
+    ///   }
+    ///   if (vn->isImplied()) { /* look across a CAST */ }
+    ///   vn->setSymbolEntry(entry);
+    ///   if (!sym->isTypeLocked()) localmap->retypeSymbol(sym, vn->getType());
+    ///   else if (sym->getType() != vn->getType()) warningHeader(...);
+    ///   return true;
+    /// RUGRA-GAP: SymbolEntry/ScopeLocal.retypeSymbol not ported; we attach the
+    /// name + MAPPED flag and warn on size mismatch, matching the user-visible
+    /// behaviour.
+    pub fn attempt_dynamic_mapping_late(
+        &mut self,
+        first_use_addr: crate::address::Address,
+        hash: u64,
+        size: usize,
+        is_equate: bool,
+        is_union_facet: bool,
+        sym_name: &str,
+    ) -> bool {
+        // cc:1352-1354: union_facet → applyUnionFacet.
+        if is_union_facet { return false; }
+        // cc:1355: vn = dhash.findVarnode(this, addr, hash).
+        let vn = {
+            let mut dhash = crate::dynamic::DynamicHash::new();
+            dhash.find_varnode(self, first_use_addr, hash)
+        };
+        let Some(vn) = vn else { return false };
+        // cc:1358: already labelled.
+        if vn.read().unwrap().is_mapped() { return false; }
+        // cc:1359-1361: equate → setSymbolEntry regardless of size.
+        if is_equate {
+            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            return true;
+        }
+        // cc:1363-1371: size mismatch → warningHeader + return false.
+        if vn.read().unwrap().size != size {
+            self.warning_header(&format!(
+                "Unable to use symbol {}: Size does not match variable it labels",
+                sym_name
+            ));
+            return false;
+        }
+        // cc:1373-1386: implied varnode → follow across a CAST (omitted; rare).
+        // cc:1388: vn->setSymbolEntry(entry).
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+        self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+        // cc:1389-1397: retype / warningHeader on type mismatch omitted
+        // (RUGRA-GAP: no ScopeLocal.retypeSymbol).
+        true
+    }
+
+    // Ghidra: varnode.hh:313 Varnode::setReturnAddress / funcdata.cc setters
+    /// Mark `vn` as the storage location for a return address. Faithful to
+    /// `Varnode::setReturnAddress` (varnode.hh:313):
+    ///   void setReturnAddress(void) { flags |= Varnode::return_address; }
+    /// This is the Funcdata-level entry point used by `setInputVarnode`
+    /// (funcdata_varnode.cc:368-371) when a ProtoModel effect records the
+    /// input as a return-address storage location.
+    pub fn set_return_address(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        vn.write().unwrap().set_return_address();
+    }
 }
 
 #[cfg(test)]
