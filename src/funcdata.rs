@@ -121,6 +121,13 @@ pub struct Funcdata {
     /// `Funcdata::jumpvec` (funcdata.hh:89). Populated by JumpTable recovery.
     pub jump_tables: Vec<std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>>,
 
+    /// Map from data-flow edges to the resolved field of a TypeUnion being
+    /// accessed. Faithful to `Funcdata::unionMap` (funcdata.hh:100). Keyed by
+    /// `ResolveEdge` (parent type id + PcodeOp SeqNum order + slot encoding);
+    /// value is the `ResolvedUnion` produced by union resolution. Cleared by
+    /// `clear()`.
+    pub union_map: std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
+
     // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
     // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
     // not yet hold an Architecture reference (L3 gap), so these are defaults
@@ -165,6 +172,7 @@ impl Funcdata {
             arch: None,
             restart_pending: false,
             jump_tables: Vec::new(),
+            union_map: std::collections::BTreeMap::new(),
             stack_space: crate::space::AddressSpace::Stack,
             stack_pointer_space: crate::space::AddressSpace::Register,
             stack_pointer_offset: 0x20, // x86-64 RSP
@@ -4269,7 +4277,780 @@ impl Funcdata {
         self.bblocks.clear();
         self.sblocks.clear();
         self.heritage.clear();
+        self.union_map.clear();
     }
+
+    // =========================================================================
+    // Union field resolution (funcdata.cc:917-1005)
+    // =========================================================================
+
+    // Ghidra: funcdata.cc:917 Funcdata::getUnionField
+    /// Get the resolved union field associated with the given edge, or None.
+    /// Faithful to `Funcdata::getUnionField` (funcdata.cc:917-926):
+    ///   ResolveEdge edge(parent, op, slot);
+    ///   iter = unionMap.find(edge);
+    ///   if (iter != unionMap.end()) return &(*iter).second;
+    ///   return NULL;
+    /// Returns a cloned `ResolvedUnion` (Rugra's borrow model cannot hand out
+    /// a borrow tied to `&self` alongside later `&mut self` setUnionField).
+    pub fn get_union_field(
+        &self,
+        parent: &crate::type_system::datatype::Datatype,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+    ) -> Option<crate::unionresolve::ResolvedUnion> {
+        let edge = crate::unionresolve::ResolveEdge::new(parent, &op.0.read().unwrap(), slot);
+        self.union_map.get(&edge).cloned()
+    }
+
+    // Ghidra: funcdata.cc:937 Funcdata::setUnionField
+    /// Associate a union field with the given edge. Faithful to
+    /// `Funcdata::setUnionField` (funcdata.cc:937-965). If a previous
+    /// association exists and is locked, return false (no overwrite).
+    /// Otherwise overwrite. Additionally, when `op` is a MULTIEQUAL and slot
+    /// >= 0, copy the resolution to any other input slot holding the same
+    /// Varnode (data-type propagation does not happen between such slots).
+    /// Returns true unless a locked association blocked the overwrite.
+    pub fn set_union_field(
+        &mut self,
+        parent: &crate::type_system::datatype::Datatype,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+        resolve: crate::unionresolve::ResolvedUnion,
+    ) -> bool {
+        let edge = crate::unionresolve::ResolveEdge::new(parent, &op.0.read().unwrap(), slot);
+        // cc:942-948: res = unionMap.emplace(edge, resolve); if (!res.second)
+        //   { if (locked) return false; else (*res.first).second = resolve; }
+        let blocked = match self.union_map.get(&edge) {
+            Some(existing) if existing.is_locked() => true,
+            _ => false,
+        };
+        if blocked {
+            return false;
+        }
+        self.union_map.insert(edge.clone(), resolve.clone());
+        // cc:949-963: MULTIEQUAL same-Varnode duplication.
+        let (is_multiequal, dup_slots, dup_vn) = {
+            let o = op.0.read().unwrap();
+            if o.opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL && slot >= 0 {
+                let target = o.get_in(slot as usize).cloned();
+                if let Some(target_vn) = target {
+                    let mut dups = Vec::new();
+                    for i in 0..o.num_input() {
+                        if i as i32 == slot {
+                            continue;
+                        }
+                        if let Some(v) = o.get_in(i) {
+                            if std::sync::Arc::ptr_eq(v, &target_vn) {
+                                dups.push(i as i32);
+                            }
+                        }
+                    }
+                    (true, dups, Some(target_vn))
+                } else {
+                    (true, Vec::new(), None)
+                }
+            } else {
+                (false, Vec::new(), None)
+            }
+        };
+        let _ = (is_multiequal, dup_vn); // dup_vn only used to scope the read guard above.
+        // cc:956-961: for each dup slot, emplace dupedge; if not locked overwrite.
+        for dup_slot in dup_slots {
+            let dup_edge = crate::unionresolve::ResolveEdge::new(
+                parent,
+                &op.0.read().unwrap(),
+                dup_slot,
+            );
+            let locked = self
+                .union_map
+                .get(&dup_edge)
+                .map_or(false, |r| r.is_locked());
+            if !locked {
+                self.union_map.insert(dup_edge, resolve.clone());
+            }
+        }
+        true
+    }
+
+    // Ghidra: funcdata.cc:974 Funcdata::forceFacingType
+    /// Force a specific union field resolution for the given edge. Faithful
+    /// to `Funcdata::forceFacingType` (funcdata.cc:974-986):
+    ///   baseType = parent;
+    ///   if (baseType->getMetatype() == TYPE_PTR)
+    ///     baseType = ((TypePointer *)baseType)->getPtrTo();
+    ///   if (parent->isPointerRel())
+    ///     parent = glb->types->getTypePointer(parent->getSize(), baseType,
+    ///                                         ((TypePointer*)parent)->getWordSize());
+    ///   ResolvedUnion resolve(parent, fieldNum, *glb->types);
+    ///   setUnionField(parent, op, slot, resolve);
+    /// Rugra: relative pointers (pointerRel) are not modeled as a distinct
+    /// Datatype flag yet; the rewrite to a standard pointer is a no-op until
+    /// that metadata lands. The ResolvedUnion is built via `with_field`, which
+    /// needs a TypeFactory; when no arch is attached we fall back to the
+    /// plain `new(parent)` self-resolution.
+    pub fn force_facing_type(
+        &mut self,
+        parent: std::sync::Arc<crate::type_system::datatype::Datatype>,
+        field_num: i32,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+    ) {
+        // cc:978-979: strip one pointer layer for the base type.
+        let _base_type = match parent.as_ref() {
+            crate::type_system::datatype::Datatype::Pointer(p) => p.ptr_to.clone(),
+            _ => parent.clone(),
+        };
+        // cc:980-983: relative-pointer → standard-pointer rewrite (Rugra gap).
+        // cc:984-985: ResolvedUnion resolve(parent, fieldNum, *glb->types).
+        let resolve = if let Some(arch) = &self.arch {
+            if let Some(tg) = &arch.types {
+                let tg_guard = tg.read().unwrap();
+                crate::unionresolve::ResolvedUnion::with_field(
+                    parent.clone(),
+                    field_num,
+                    &tg_guard,
+                )
+            } else {
+                crate::unionresolve::ResolvedUnion::new(parent.clone())
+            }
+        } else {
+            // RUGRA-GAP: no TypeFactory available; record a self-resolution so
+            // the edge is at least tracked in unionMap.
+            crate::unionresolve::ResolvedUnion::new(parent.clone())
+        };
+        self.set_union_field(parent.as_ref(), op, slot, resolve);
+    }
+
+    // Ghidra: funcdata.cc:995 Funcdata::inheritResolution
+    /// Copy a read/write facing resolution from `oldOp`/`oldSlot` to
+    /// `op`/`slot`. Faithful to `Funcdata::inheritResolution`
+    /// (funcdata.cc:995-1005):
+    ///   ResolveEdge edge(parent, oldOp, oldSlot);
+    ///   iter = unionMap.find(edge);
+    ///   if (iter == unionMap.end()) return -1;
+    ///   setUnionField(parent, op, slot, (*iter).second);
+    ///   return (*iter).second.getFieldNum();
+    /// Returns the resolved field number, or -1 if no resolution was present
+    /// on the source edge.
+    pub fn inherit_resolution(
+        &mut self,
+        parent: &crate::type_system::datatype::Datatype,
+        op: &crate::op::PcodeOpRef,
+        slot: i32,
+        old_op: &crate::op::PcodeOpRef,
+        old_slot: i32,
+    ) -> i32 {
+        let edge =
+            crate::unionresolve::ResolveEdge::new(parent, &old_op.0.read().unwrap(), old_slot);
+        let Some(resolve) = self.union_map.get(&edge).cloned() else {
+            return -1;
+        };
+        let field_num = resolve.get_field_num();
+        self.set_union_field(parent, op, slot, resolve);
+        field_num
+    }
+
+    // =========================================================================
+    // Expression normalization (funcdata_op.cc:1132-1500)
+    // =========================================================================
+
+    // Ghidra: funcdata_op.cc:1132 Funcdata::collapseIntMultMult
+    /// Fold two chained constant INT_MULTs into one. Faithful to
+    /// `Funcdata::collapseIntMultMult` (funcdata_op.cc:1132-1153). Given
+    ///   vn = INT_MULT(A, c1)
+    ///   A  = INT_MULT(B, c2)
+    /// rewrites the outer multiply to `INT_MULT(B, c1*c2)`. Returns true if a
+    /// fold happened. Walks the def chain: vn must be written by an INT_MULT
+    /// whose second input is constant, and whose first input is itself a
+    /// constant INT_MULT.
+    pub fn collapse_int_mult_mult(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        // cc:1135: if (!vn->isWritten()) return false.
+        let (def, const_first, in0, sz) = {
+            let v = vn.read().unwrap();
+            if !v.is_written() {
+                return false;
+            }
+            let def = match v.get_def() {
+                Some(d) => d,
+                None => return false,
+            };
+            let (opcode, const_first, in0) = {
+                let o = def.read().unwrap();
+                // cc:1137: if (op->code() != CPUI_INT_MULT) return false.
+                if o.opcode != OpCode::CPUI_INT_MULT {
+                    return false;
+                }
+                // cc:1138-1139: constVnFirst = op->getIn(1); if (!isConstant) false.
+                let const_first = match o.get_in(1) {
+                    Some(c) if c.read().unwrap().is_constant() => c.clone(),
+                    _ => return false,
+                };
+                // cc:1140: if (!op->getIn(0)->isWritten()) return false.
+                let in0 = match o.get_in(0) {
+                    Some(v0) => v0.clone(),
+                    None => return false,
+                };
+                (o.opcode, const_first, in0)
+            };
+            if !in0.read().unwrap().is_written() {
+                return false;
+            }
+            let _ = opcode;
+            (def, const_first, in0, vn.read().unwrap().get_size())
+        };
+        // cc:1141-1142: otherMultOp = in0->getDef(); if code != INT_MULT false.
+        let (other_def, const_second, invn) = {
+            let other_def = match in0.read().unwrap().get_def() {
+                Some(d) => d,
+                None => return false,
+            };
+            let (const_second, invn) = {
+                let oo = other_def.read().unwrap();
+                if oo.opcode != OpCode::CPUI_INT_MULT {
+                    return false;
+                }
+                // cc:1143-1144: constVnSecond = otherMultOp->getIn(1); const check.
+                let const_second = match oo.get_in(1) {
+                    Some(c) if c.read().unwrap().is_constant() => c.clone(),
+                    _ => return false,
+                };
+                // cc:1145: invn = otherMultOp->getIn(0).
+                let invn = match oo.get_in(0) {
+                    Some(v) => v.clone(),
+                    None => return false,
+                };
+                (const_second, invn)
+            };
+            (other_def, const_second, invn)
+        };
+        // cc:1146: if (invn->isFree()) return false.
+        if invn.read().unwrap().is_free() {
+            return false;
+        }
+        // cc:1147-1152: val = (c1*c2) & calc_mask(sz); rewrite op inputs.
+        let val_first = const_first.read().unwrap().get_offset();
+        let val_second = const_second.read().unwrap().get_offset();
+        let mask = crate::address::calc_mask(sz);
+        let val = (val_first.wrapping_mul(val_second)) & mask;
+        let newvn = self.new_constant(sz, val);
+        let op_ref = crate::op::PcodeOpRef(def.clone());
+        self.op_set_input(&op_ref, newvn, 1);
+        self.op_set_input(&op_ref, invn, 0);
+        // other_def / const_second kept for clarity; the original INT_MULT(B,c2)
+        // becomes dead and is reclaimed by the dead-code pass (faithful: cc
+        // does not explicitly destroy it here).
+        let _ = (other_def, const_second);
+        true
+    }
+
+    // Ghidra: funcdata_op.cc:1161 Funcdata::buildCopyTemp
+    /// Return a unique-space Varnode defined by a COPY of `vn`, available at
+    /// `point`. Faithful to `Funcdata::buildCopyTemp` (funcdata_op.cc:1161-1213).
+    /// If a preexisting COPY into unique space exists and is usable at `point`,
+    /// reuse it; if it is in a different block but not ancestor/descendant, a
+    /// new COPY is built at the common dominator's end. Otherwise a fresh COPY
+    /// is inserted before `point`. Stale copies are totalReplace'd away.
+    pub fn build_copy_temp(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        point: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:1167-1177: scan vn's descendants for a COPY into unique space.
+        let mut other_op: Option<crate::op::PcodeOpRef> = None;
+        {
+            let descendants: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> =
+                vn.read().unwrap().descend_iter().collect();
+            for op_arc in descendants {
+                let o = op_arc.read().unwrap();
+                if o.opcode != OpCode::CPUI_COPY {
+                    continue;
+                }
+                // cc:1170-1173: outvn must be in IPTR_INTERNAL and not typelock.
+                if let Some(outvn) = o.get_out() {
+                    let ov = outvn.read().unwrap();
+                    if ov.get_space() == crate::space::AddressSpace::Unique
+                        && !ov.is_type_lock()
+                    {
+                        other_op = Some(crate::op::PcodeOpRef(op_arc.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+        // cc:1178-1200: decide which copy to use, possibly building one at a
+        // common dominator block.
+        let point_parent = point.0.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+        let mut used_copy: Option<crate::op::PcodeOpRef> = None;
+        let mut built_at_common = false;
+        if let Some(other) = &other_op {
+            let other_parent = other.0.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+            match (&point_parent, &other_parent) {
+                (Some(pp), Some(op_parent)) if std::sync::Arc::ptr_eq(pp, op_parent) => {
+                    // cc:1179-1184: same block — compare seqnum order.
+                    let (point_order, other_order) = {
+                        let p = point.0.read().unwrap();
+                        let o = other.0.read().unwrap();
+                        (p.get_seq_num().order, o.get_seq_num().order)
+                    };
+                    if point_order < other_order {
+                        used_copy = None;
+                    } else {
+                        used_copy = Some(other.clone());
+                    }
+                }
+                (Some(pp), Some(op_parent)) => {
+                    // cc:1186-1198: different blocks — find common dominator.
+                    let common = crate::block::BlockGraph::find_common_block(pp, op_parent);
+                    match &common {
+                        Some(c) if std::sync::Arc::ptr_eq(c, pp) => {
+                            used_copy = None;
+                        }
+                        Some(c) if std::sync::Arc::ptr_eq(c, op_parent) => {
+                            used_copy = Some(other.clone());
+                        }
+                        Some(c) => {
+                            // cc:1193-1198: neither dominates — build a COPY at
+                            // the common block's stop address, inserted at end.
+                            let vn_size = vn.read().unwrap().get_size();
+                            // Ghidra's getStop() is a BlockBasic method; we
+                            // downcast to fetch it, falling back to the block's
+                            // start address if the common dominator is not a
+                            // BlockBasic (shouldn't happen for the merge case).
+                            let stop_addr = {
+                                let c_rg = c.read().unwrap();
+                                c_rg
+                                    .as_any()
+                                    .downcast_ref::<crate::block::BlockBasic>()
+                                    .map(|bb| bb.get_stop_addr())
+                                    .unwrap_or_else(|| c_rg.get_start_addr())
+                            };
+                            let new_copy = self.new_op(1, stop_addr);
+                            self.op_set_opcode(&new_copy, OpCode::CPUI_COPY);
+                            self.new_unique_out(vn_size, &new_copy);
+                            self.op_set_input(&new_copy, vn.clone(), 0);
+                            self.op_insert_end(&new_copy, c);
+                            used_copy = Some(new_copy);
+                            built_at_common = true;
+                        }
+                        None => {
+                            used_copy = None;
+                        }
+                    }
+                }
+                _ => {
+                    used_copy = None;
+                }
+            }
+        }
+        // cc:1201-1207: no usable preexisting copy — build one before point.
+        if used_copy.is_none() {
+            let vn_size = vn.read().unwrap().get_size();
+            let addr = point.0.read().unwrap().get_addr();
+            let new_copy = self.new_op(1, addr);
+            self.op_set_opcode(&new_copy, OpCode::CPUI_COPY);
+            self.new_unique_out(vn_size, &new_copy);
+            self.op_set_input(&new_copy, vn.clone(), 0);
+            self.op_insert_before(&new_copy, point);
+            used_copy = Some(new_copy);
+        }
+        let used_copy = used_copy.expect("build_copy_temp: used_copy set above");
+        // cc:1208-1211: if the preexisting otherOp is no longer used, replace
+        // its output with the chosen copy's output and destroy it.
+        if let Some(other) = &other_op {
+            if !built_at_common && !std::sync::Arc::ptr_eq(&other.0, &used_copy.0) {
+                let (other_out, used_out) = {
+                    let o = other.0.read().unwrap();
+                    let u = used_copy.0.read().unwrap();
+                    (o.get_out().cloned(), u.get_out().cloned())
+                };
+                if let (Some(old), Some(new)) = (other_out, used_out) {
+                    self.total_replace(&old, new);
+                    self.op_destroy(&other.clone());
+                }
+            }
+        }
+        // cc:1212: return usedCopy->getOut().
+        let out_vn = used_copy
+            .0
+            .read()
+            .unwrap()
+            .get_out()
+            .cloned()
+            .expect("build_copy_temp: COPY has output");
+        out_vn
+    }
+
+    // Ghidra: funcdata_op.cc:1223 Funcdata::opFlipInPlaceTest
+    /// Trace a boolean value to the set of PcodeOps whose opcodes must flip to
+    /// negate it. Faithful to `Funcdata::opFlipInPlaceTest`
+    /// (funcdata_op.cc:1223-1275). Returns 0 if the flip normalizes, 1 if
+    /// ambivalent, 2 if the change does not normalize. The discovered ops are
+    /// appended to `fliplist` in evaluation order.
+    pub fn op_flip_in_place_test(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        fliplist: &mut Vec<crate::op::PcodeOpRef>,
+    ) -> i32 {
+        let opc = op.0.read().unwrap().opcode;
+        match opc {
+            OpCode::CPUI_CBRANCH => {
+                // cc:1230-1233: vn = getIn(1); loneDescend==op && isWritten.
+                let vn = op.0.read().unwrap().get_in(1).cloned();
+                let vn = match vn {
+                    Some(v) => v,
+                    None => return 2,
+                };
+                let lone = vn.read().unwrap().lone_descend();
+                let lone_is_op = lone.map(|d| std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(false);
+                if !lone_is_op {
+                    return 2;
+                }
+                if !vn.read().unwrap().is_written() {
+                    return 2;
+                }
+                let def = match vn.read().unwrap().get_def() {
+                    Some(d) => crate::op::PcodeOpRef(d),
+                    None => return 2,
+                };
+                self.op_flip_in_place_test(&def, fliplist)
+            }
+            OpCode::CPUI_INT_EQUAL | OpCode::CPUI_FLOAT_EQUAL => {
+                fliplist.push(op.clone());
+                1
+            }
+            OpCode::CPUI_BOOL_NEGATE
+            | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL => {
+                fliplist.push(op.clone());
+                0
+            }
+            OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESS => {
+                // cc:1245-1248: vn = getIn(0); push; if !const return 1 else 0.
+                let is_const = op
+                    .0
+                    .read()
+                    .unwrap()
+                    .get_in(0)
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                fliplist.push(op.clone());
+                if !is_const {
+                    1
+                } else {
+                    0
+                }
+            }
+            OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_INT_LESSEQUAL => {
+                // cc:1250-1253: vn = getIn(1); push; if const return 1 else 0.
+                let is_const = op
+                    .0
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map(|v| v.read().unwrap().is_constant())
+                    .unwrap_or(false);
+                fliplist.push(op.clone());
+                if is_const {
+                    1
+                } else {
+                    0
+                }
+            }
+            OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_AND => {
+                // cc:1256-1270: recurse into both inputs; push op last.
+                let (in0_ok, in0_def, in1_ok, in1_def) = {
+                    let o = op.0.read().unwrap();
+                    let i0 = o.get_in(0).cloned();
+                    let i1 = o.get_in(1).cloned();
+                    let check_lone = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+                        let lone = v.read().unwrap().lone_descend();
+                        lone.map(|d| std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(false)
+                    };
+                    let i0_ok = i0.as_ref().map_or(false, check_lone);
+                    let i1_ok = i1.as_ref().map_or(false, check_lone);
+                    (
+                        i0_ok,
+                        i0.and_then(|v| v.read().unwrap().get_def()),
+                        i1_ok,
+                        i1.and_then(|v| v.read().unwrap().get_def()),
+                    )
+                };
+                // cc:1258-1259: vn = getIn(0); loneDescend==op && isWritten.
+                if !in0_ok {
+                    return 2;
+                }
+                let in0_def = match in0_def {
+                    Some(d) => crate::op::PcodeOpRef(d),
+                    None => return 2,
+                };
+                let subtest1 = self.op_flip_in_place_test(&in0_def, fliplist);
+                if subtest1 == 2 {
+                    return 2;
+                }
+                // cc:1263-1265: vn = getIn(1); loneDescend==op && isWritten.
+                if !in1_ok {
+                    return 2;
+                }
+                let in1_def = match in1_def {
+                    Some(d) => crate::op::PcodeOpRef(d),
+                    None => return 2,
+                };
+                let subtest2 = self.op_flip_in_place_test(&in1_def, fliplist);
+                if subtest2 == 2 {
+                    return 2;
+                }
+                fliplist.push(op.clone());
+                subtest1 // cc:1270: front of AND/OR must be normalizing.
+            }
+            _ => 2,
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:1282 Funcdata::opFlipInPlaceExecute
+    /// Apply the precomputed op-code flips to negate a boolean value. Faithful
+    /// to `Funcdata::opFlipInPlaceExecute` (funcdata_op.cc:1282-1315). For
+    /// each op in `fliplist`: look up its boolean-flip target via
+    /// `get_booleanflip`. A BOOL_NEGATE collapses to COPY semantics (propagate
+    /// its input into the lone descendant, then destroy it). A BOOL_AND/BOOL_OR
+    /// with no direct flip swaps to the other. Otherwise set the opcode and,
+    /// if `reorder`, swap inputs and (for LESSEQUAL variants) replace_lessequal.
+    pub fn op_flip_in_place_execute(&mut self, fliplist: &[crate::op::PcodeOpRef]) {
+        use crate::opcodes::get_booleanflip;
+        for op in fliplist {
+            let cur_opc = op.0.read().unwrap().opcode;
+            let mut reorder = false;
+            let new_opc = get_booleanflip(cur_opc, &mut reorder);
+            if new_opc == OpCode::CPUI_COPY {
+                // cc:1290-1296: BOOL_NEGATE collapses — propagate input, destroy.
+                let (in0, out, lone_desc) = {
+                    let o = op.0.read().unwrap();
+                    let in0 = o.get_in(0).cloned();
+                    let out = o.get_out().cloned();
+                    let lone_desc = out.as_ref().and_then(|v| v.read().unwrap().lone_descend());
+                    (in0, out, lone_desc)
+                };
+                let Some(in_vn) = in0 else { continue };
+                let Some(out_vn) = out else { continue };
+                let Some(other_op) = lone_desc else { continue };
+                let other_ref = crate::op::PcodeOpRef(other_op);
+                // cc:1293-1294: slot = otherop->getSlot(op->getOut()).
+                let slot = other_ref
+                    .0
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &out_vn));
+                if let Some(slot) = slot {
+                    self.op_set_input(&other_ref, in_vn, slot);
+                }
+                self.op_destroy(op);
+            } else if new_opc == OpCode::CPUI_MAX {
+                // cc:1297-1303: BOOL_AND <-> BOOL_OR swap.
+                match cur_opc {
+                    OpCode::CPUI_BOOL_AND => self.op_set_opcode(op, OpCode::CPUI_BOOL_OR),
+                    OpCode::CPUI_BOOL_OR => self.op_set_opcode(op, OpCode::CPUI_BOOL_AND),
+                    _ => {
+                        eprintln!("[FUNCDATA] Bad flipInPlace op {:?}", cur_opc);
+                    }
+                }
+            } else {
+                // cc:1305-1313: set opcode; if reorder, swap inputs + lequal.
+                self.op_set_opcode(op, new_opc);
+                if reorder {
+                    self.op_swap_input(op, 0, 1);
+                    if new_opc == OpCode::CPUI_INT_LESSEQUAL
+                        || new_opc == OpCode::CPUI_INT_SLESSEQUAL
+                    {
+                        self.replace_lessequal(op);
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:1326 Funcdata::cseFindInBlock
+    /// Find a duplicate calculation of `op` that reads `vn` in block `bl`
+    /// earlier than `earliest`. Faithful to `Funcdata::cseFindInBlock`
+    /// (funcdata_op.cc:1326-1347). Only 1-level matches are considered: the
+    /// candidate op's output must be functionally equal (depth 0) to `op`'s
+    /// output. Returns the discovered duplicate, or None.
+    pub fn cse_find_in_block(
+        &self,
+        op: &crate::op::PcodeOpRef,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        earliest: Option<&crate::op::PcodeOpRef>,
+    ) -> Option<crate::op::PcodeOpRef> {
+        // cc:1331-1345: for each descendant res of vn:
+        let descendants: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        let op_out = op.0.read().unwrap().get_out().cloned();
+        let earliest_order = earliest.map(|e| e.0.read().unwrap().get_seq_num().order);
+        for res_arc in descendants {
+            // cc:1333: if (res == op) continue.
+            if std::sync::Arc::ptr_eq(&res_arc, &op.0) {
+                continue;
+            }
+            let res_parent = res_arc.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+            // cc:1334: if (res->getParent() != bl) continue.
+            let parent_matches = match (&res_parent, bl) {
+                (Some(rp), bp) => std::sync::Arc::ptr_eq(rp, bp),
+                _ => false,
+            };
+            if !parent_matches {
+                continue;
+            }
+            // cc:1335-1337: earliest != NULL && earliest->order < res->order → continue.
+            if let Some(eo) = earliest_order {
+                let res_order = res_arc.read().unwrap().get_seq_num().order;
+                if eo < res_order {
+                    continue;
+                }
+            }
+            // cc:1338-1344: functionalEqualityLevel(out1, out2, buf1, buf2) == 0.
+            let outvn2 = res_arc.read().unwrap().get_out().cloned();
+            let Some(outvn2) = outvn2 else { continue };
+            let Some(outvn1) = &op_out else { continue };
+            let eq = crate::expression::functional_equality_level(outvn1, &outvn2);
+            if eq.code == 0 {
+                return Some(crate::op::PcodeOpRef(res_arc));
+            }
+        }
+        None
+    }
+
+    // Ghidra: funcdata_op.cc:1459 Funcdata::moveRespectingCover
+    /// Move `op` past COPY/CAST ops toward `lastOp`, within its basic block,
+    /// only when no data-flow interference occurs. Faithful to
+    /// `Funcdata::moveRespectingCover` (funcdata_op.cc:1459-1500). The move
+    /// respects the cover of the expression rooted at `op`'s output: we stop
+    /// before any COPY that writes a HighVariable in the expression, or before
+    /// a possible indirect interference. Returns true if the move completed.
+    pub fn move_respecting_cover(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        last_op: &crate::op::PcodeOpRef,
+    ) -> bool {
+        // cc:1462: if (op == lastOp) return true.
+        if std::sync::Arc::ptr_eq(&op.0, &last_op.0) {
+            return true;
+        }
+        // cc:1463: if (op->isCall()) return false.
+        if op.0.read().unwrap().is_call() {
+            return false;
+        }
+        // cc:1464-1473: if op is CAST and its input is not explicit, the
+        // previous op must move as well (and immediately precede the CAST).
+        let prev_op: Option<crate::op::PcodeOpRef> = if op.0.read().unwrap().opcode == OpCode::CPUI_CAST {
+            let in0 = op.0.read().unwrap().get_in(0).cloned();
+            if let Some(vn) = in0 {
+                if !vn.read().unwrap().is_explicit() {
+                    if !vn.read().unwrap().is_written() {
+                        return false;
+                    }
+                    let prev = match vn.read().unwrap().get_def() {
+                        Some(d) => crate::op::PcodeOpRef(d),
+                        None => return false,
+                    };
+                    if prev.0.read().unwrap().is_call() {
+                        return false;
+                    }
+                    // cc:1471: op->previousOp() must equal prevOp.
+                    let op_prev = op
+                        .0
+                        .read()
+                        .unwrap()
+                        .previous_op_in_block(&self.obank);
+                    let matches = match &op_prev {
+                        Some(p) => std::sync::Arc::ptr_eq(&p.0, &prev.0),
+                        None => false,
+                    };
+                    if !matches {
+                        return false;
+                    }
+                    Some(prev)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // cc:1474-1476: rootvn = op->getOut(); markExpression(rootvn, highList).
+        let rootvn = op.0.read().unwrap().get_out().cloned();
+        let Some(rootvn) = rootvn else { return false };
+        let mut high_list: Vec<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> =
+            Vec::new();
+        let type_val = crate::variable::HighVariable::mark_expression(&rootvn, &mut high_list);
+        // cc:1477-1487: walk forward over COPY/CAST ops, stopping at any
+        // interference.
+        let mut cur_op = op.clone();
+        loop {
+            let next_op = cur_op
+                .0
+                .read()
+                .unwrap()
+                .next_op_in_flow(&self.obank);
+            let Some(next_op) = next_op else { break };
+            let next_opc = next_op.0.read().unwrap().opcode;
+            if next_opc != OpCode::CPUI_COPY && next_opc != OpCode::CPUI_CAST {
+                break;
+            }
+            // cc:1482: if (rootvn == nextOp->getIn(0)) break.
+            let next_in0 = next_op.0.read().unwrap().get_in(0).cloned();
+            if let Some(v) = &next_in0 {
+                if std::sync::Arc::ptr_eq(v, &rootvn) {
+                    break;
+                }
+            }
+            // cc:1483-1484: copyVn = nextOp->getOut(); if (copyVn->getHigh()->isMark()) break.
+            let copy_vn = next_op.0.read().unwrap().get_out().cloned();
+            if let Some(cv) = &copy_vn {
+                let copy_high = cv.read().unwrap().get_high().cloned();
+                if let Some(h) = copy_high {
+                    if h.read().unwrap().is_mark() {
+                        break;
+                    }
+                }
+            }
+            // cc:1485: if (typeVal != 0 && copyVn->isAddrTied()) break.
+            if type_val != 0 {
+                if let Some(cv) = &copy_vn {
+                    if cv.read().unwrap().is_addr_tied() {
+                        break;
+                    }
+                }
+            }
+            cur_op = next_op;
+            if std::sync::Arc::ptr_eq(&cur_op.0, &last_op.0) {
+                break;
+            }
+        }
+        // cc:1488-1489: clear marks on the expression.
+        for h in &high_list {
+            h.write().unwrap().clear_mark();
+        }
+        // cc:1490-1499: if we reached lastOp, perform the move.
+        if std::sync::Arc::ptr_eq(&cur_op.0, &last_op.0) {
+            self.op_uninsert(op);
+            self.op_insert_after(op, last_op);
+            if let Some(prev) = prev_op {
+                self.op_uninsert(&prev);
+                self.op_insert_after(&prev, last_op);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
 
     // Ghidra: funcdata.cc:34 Funcdata::numHeritagePasses
     /// Get number of heritage passes completed
