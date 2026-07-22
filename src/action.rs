@@ -59,6 +59,63 @@ pub mod rule_flags {
     pub const WARNINGS_GIVEN: u32 = 8;
 }
 
+/// The list of basegroup names defining a \e root Action (action.hh:31-40).
+///
+/// Mirrors Ghidra's `ActionGroupList` -- a `set<string>` of group names. Any
+/// leaf Action or Rule is cloned into a derived root Action only if its
+/// `basegroup` is `contains()`-ed in this list (action.hh:35-39). Rugra uses a
+/// `BTreeSet<String>` (sorted, deterministic) as the idiomatic equivalent.
+pub type ActionGroupList = std::collections::BTreeSet<String>;
+
+// ---- Per-name clone registries (Rugra equivalent of Ghidra virtual clone()) ----
+//
+// Ghidra implements `Action *clone(const ActionGroupList&) const` as a pure
+// virtual on each concrete leaf class (action.hh:119, coreaction.hh:37-40
+// etc.) -- each leaf knows how to re-construct itself. Rugra's `Box<dyn
+// Action>` trait object cannot express a `Self: Clone` bound across the >100
+// leaf types defined in other modules (coreaction.rs / blockaction.rs /
+// ruleaction.rs / subflow.rs ...), so we cannot add a `clone_box` method
+// requiring `Self: Clone` to the trait without editing every leaf. Instead --
+// faithful to Ghidra's per-class virtual dispatch -- we centralise the
+// per-name constructor in a registry that `set_default_actions()` populates
+// (it is the single place that constructs every leaf and so knows each
+// `T::new()`). An unregistered leaf name resolves to `None`, which
+// `clone_action` treats exactly as Ghidra treats `clone()` returning NULL for
+// a leaf whose group is not in the grouplist. Containers
+// (ActionGroup/ActionPool/ActionRestartGroup) override `clone_action` to
+// recurse, never consulting the registry.
+
+/// Constructor entry for a leaf Action clone (Rugra analogue of Ghidra's
+/// per-class `Action::clone`). `group` is the leaf's basegroup (e.g.
+/// `"universal"`); `make` rebuilds the leaf in its reset state -- matching
+/// Ghidra, whose `clone()` calls `new ConcreteAction(getGroup())`.
+pub struct ActionCloneEntry {
+    pub group: &'static str,
+    pub make: fn() -> Box<dyn Action>,
+}
+
+/// Name -> [`ActionCloneEntry`] registry, populated once by
+/// [`ActionDatabase::set_default_actions`]. Looked up by the default
+/// [`Action::clone_action`] impl for leaf Actions.
+pub static ACTION_CLONE_REGISTRY: std::sync::OnceLock<
+    std::collections::HashMap<&'static str, ActionCloneEntry>,
+> = std::sync::OnceLock::new();
+
+/// Constructor entry for a leaf Rule clone (Rugra analogue of Ghidra's
+/// per-class `Rule::clone`, action.hh:236 / ruleaction.hh:89+). Mirrors
+/// [`ActionCloneEntry`].
+pub struct RuleCloneEntry {
+    pub group: &'static str,
+    pub make: fn() -> Box<dyn Rule>,
+}
+
+/// Name -> [`RuleCloneEntry`] registry, populated once by
+/// [`ActionDatabase::set_default_actions`]. Looked up by
+/// [`Rule::clone_rule`] for each Rule.
+pub static RULE_CLONE_REGISTRY: std::sync::OnceLock<
+    std::collections::HashMap<&'static str, RuleCloneEntry>,
+> = std::sync::OnceLock::new();
+
 // RUGRA-GLUE: next_specifyterm helper mirrors Ghidra's static
 // `next_specifyterm(string&,string&,const string&)` (action.cc:257-269), used
 // by ActionGroup/ActionPool path-walking (`getSubAction`/`getSubRule`) to split
@@ -100,6 +157,55 @@ pub trait Action {
     /// Get the rule flags (repeatapply / onceperfunc / etc). Default: 0
     /// (single-pass). Containers override to return their group's flags.
     fn get_flags(&self) -> u32 { 0 }
+
+    // Ghidra: action.hh:108 Action::getGroup
+    /// Return the \e basegroup this Action belongs to (action.hh:108-109).
+    ///
+    /// Leaf Actions report the group they were constructed under (e.g.
+    /// `"universal"`); container Actions (groups/pools) have no single group
+    /// and return `None`, so group-membership filtering for them happens via
+    /// the recursive `clone_action` walk (each child filters itself).
+    /// Default `None` (matching Ghidra's empty-string `basegroup` for groups).
+    fn get_group(&self) -> Option<&str> { None }
+
+    // Ghidra: action.hh:119 Action::clone (virtual, pure)
+    /// Clone  this Action if it (or, for containers, any descendant) belongs
+    /// to one of the groups in `grouplist`. Faithful to
+    /// `Action::clone(const ActionGroupList &)` (action.hh:113-119).
+    ///
+    /// Returns `Some(boxed_clone)` if a descendant should participate in the
+    /// derived root Action, or `None` if not (Ghidra returns NULL). The default
+    /// leaf impl resolves this leaf's constructor by name from
+    /// [`ACTION_CLONE_REGISTRY`] and applies the group-membership filter
+    /// (action.hh:35-39, coreaction.cc:37-40 `grouplist.contains(getGroup())`);
+    /// a leaf whose name is not registered returns `None`, excluding it from
+    /// the derived tree -- identical to Ghidra returning NULL. Container
+    /// Actions override this to recurse over their children.
+    fn clone_action(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        let name = self.get_name();
+        let entry = ACTION_CLONE_REGISTRY
+            .get()
+            .and_then(|m| m.get(name))?;
+        if !grouplist.contains(entry.group) {
+            return None;
+        }
+        Some((entry.make)())
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Deep-clone  this Action and ALL descendants unconditionally (no
+    /// group-membership filter). Rugra-specific: Ghidra never needs this
+    /// because it builds the universal model once and derives filtered clones;
+    /// Rugra needs an identical copy of the model to register the same tree
+    /// under multiple names. The default leaf impl delegates to
+    /// [`Self::clone_action`] with a grouplist containing `"universal"` (the
+    /// only group Rugra leaves carry), so every registered leaf is included.
+    /// Containers override this to recurse without filtering.
+    fn clone_all(&self) -> Option<Box<dyn Action>> {
+        let mut gl = ActionGroupList::new();
+        gl.insert("universal".to_string());
+        self.clone_action(&gl)
+    }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// The perform state machine. Faithful to `Action::perform`
@@ -322,6 +428,35 @@ pub trait Rule {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the opcodes this rule applies to
     fn get_opcodes(&self) -> Vec<crate::opcodes::OpCode>;
+
+    // Ghidra: action.hh:216 Rule::getGroup
+    /// Return the \e basegroup this Rule belongs to (action.hh:216). Rugra
+    /// Rules are stateless traits with no in-object field, so the group is
+    /// recovered from the per-name [`RULE_CLONE_REGISTRY`] via `clone_rule`.
+    /// Default `None`; ActionPool overrides `clone_action` to consult the
+    /// registry rather than calling this.
+    fn get_group(&self) -> Option<&str> { None }
+
+    // Ghidra: action.hh:236 Rule::clone (virtual, pure)
+    /// Clone  this Rule if it belongs to one of the groups in `grouplist`.
+    /// Faithful to `Rule::clone(const ActionGroupList&)` (action.hh:230-236,
+    /// ruleaction.hh:89+). Rugra resolves the leaf constructor from
+    /// [`RULE_CLONE_REGISTRY`] by name; an unregistered name returns `None`
+    /// (Ghidra returns NULL). The group-membership filter
+    /// (`grouplist.contains(getGroup())`) is applied here (ruleaction.hh:90).
+    fn clone_rule(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Rule>> {
+        // Ghidra: ruleaction.hh:89-92
+        //   if (!grouplist.contains(getGroup())) return (Rule *)0;
+        //   return new ConcreteRule(getGroup());
+        let name = self.get_name();
+        let entry = RULE_CLONE_REGISTRY
+            .get()
+            .and_then(|m| m.get(name))?;
+        if !grouplist.contains(entry.group) {
+            return None;
+        }
+        Some((entry.make)())
+    }
 }
 
 /// Per-Rule state mirroring Ghidra's `Rule` member fields (action.hh:205-210):
@@ -522,6 +657,42 @@ impl Action for ActionGroup {
         }
     }
 
+    // Ghidra: action.cc:391 ActionGroup::clone
+    /// Clone  this group by recursively cloning each child Action and keeping
+    /// only those that clone (i.e. belong to a group in `grouplist`). Faithful
+    /// to `ActionGroup::clone` (action.cc:391-406): a fresh `ActionGroup` is
+    /// allocated lazily -- only once at least one child clones -- and each
+    /// successful child is appended in order. If no child clones, returns
+    /// `None` (Ghidra returns NULL). The group's own `flags` and `name` are
+    /// preserved on the clone (action.cc:401 `new ActionGroup(flags,getName())`).
+    fn clone_action(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        let mut res: Option<ActionGroup> = None;
+        for child in &self.actions {
+            if let Some(ac) = child.clone_action(grouplist) {
+                let group = res.get_or_insert_with(|| {
+                    ActionGroup::with_flags(&self.name, self.flags)
+                });
+                group.add_action(ac);
+            }
+        }
+        res.map(|g| Box::new(g) as Box<dyn Action>)
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Deep-clone this group with ALL children (no group filter). See
+    /// [`Action::clone_all`].
+    fn clone_all(&self) -> Option<Box<dyn Action>> {
+        let mut res = ActionGroup::with_flags(&self.name, self.flags);
+        let mut any = false;
+        for child in &self.actions {
+            if let Some(ac) = child.clone_all() {
+                res.add_action(ac);
+                any = true;
+            }
+        }
+        if any { Some(Box::new(res)) } else { None }
+    }
+
     // ---- Breakpoint / rule-management overrides (action.cc:382-504, 171-251) ----
     //
     // These faithfully mirror Ghidra's ActionGroup overrides, which walk the
@@ -713,6 +884,41 @@ impl Action for ActionRestartGroup {
         self.group.reset(fd);
     }
 
+    // Ghidra: action.cc:530 ActionRestartGroup::clone
+    /// Clone  this restart group. Faithful to
+    /// `ActionRestartGroup::clone` (action.cc:530-545): identical to
+    /// `ActionGroup::clone` except the lazily-allocated container is an
+    /// `ActionRestartGroup` (preserving `maxrestarts`), and children are cloned
+    /// via the inner group's recursive walk. Returns `None` if no child clones
+    /// (Ghidra returns NULL).
+    fn clone_action(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        let mut res: Option<ActionRestartGroup> = None;
+        for child in &self.group.actions {
+            if let Some(ac) = child.clone_action(grouplist) {
+                let rg = res.get_or_insert_with(|| {
+                    ActionRestartGroup::new(&self.name, self.flags, self.maxrestarts)
+                });
+                rg.add_action(ac);
+            }
+        }
+        res.map(|rg| Box::new(rg) as Box<dyn Action>)
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Deep-clone this restart group with ALL children (no group filter). See
+    /// [`Action::clone_all`].
+    fn clone_all(&self) -> Option<Box<dyn Action>> {
+        let mut res = ActionRestartGroup::new(&self.name, self.flags, self.maxrestarts);
+        let mut any = false;
+        for child in &self.group.actions {
+            if let Some(ac) = child.clone_all() {
+                res.add_action(ac);
+                any = true;
+            }
+        }
+        if any { Some(Box::new(res)) } else { None }
+    }
+
     // ---- Breakpoint / rule-management delegates ----
     //
     // Ghidra's ActionRestartGroup inherits ActionGroup's implementations
@@ -787,6 +993,24 @@ impl ActionPool {
             rule_states: Vec::new(),
             per_op: std::collections::HashMap::new(),
             flags: action_flags::RULE_REPEATAPPLY,
+            rule_hits: std::collections::HashMap::new(),
+            total: 0,
+        }
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Construct with explicit rule flags and name. Mirrors Ghidra's
+    /// `ActionPool(uint4 f, const string &nm)` (action.hh:269), which lets the
+    /// `flags` (notably `rule_repeatapply`) be caller-supplied -- used by
+    /// `ActionPool::clone` (action.cc:910) to preserve the source pool's flags
+    /// rather than hard-coding RULE_REPEATAPPLY.
+    pub fn with_flags_named(name: &str, flags: u32) -> Self {
+        Self {
+            name: name.to_string(),
+            rules: Vec::new(),
+            rule_states: Vec::new(),
+            per_op: std::collections::HashMap::new(),
+            flags,
             rule_hits: std::collections::HashMap::new(),
             total: 0,
         }
@@ -889,6 +1113,45 @@ impl Action for ActionPool {
     fn reset(&mut self, _fd: &mut Funcdata) {
         self.total = 0;
         self.rule_hits.clear();
+    }
+
+    // Ghidra: action.cc:900 ActionPool::clone
+    /// Clone  this pool by recursively cloning each Rule and keeping only
+    /// those whose group is in `grouplist`. Faithful to
+    /// `ActionPool::clone` (action.cc:900-915): a fresh `ActionPool` is
+    /// allocated lazily -- only once at least one Rule clones -- and each
+    /// successful Rule is added in order. If no Rule clones, returns `None`
+    /// (Ghidra returns NULL). The pool's own `flags` and `name` are preserved
+    /// (action.cc:910 `new ActionPool(flags,getName())`); `add_rule` rebuilds
+    /// the `per_op` opcode->Rule index on the clone.
+    fn clone_action(&self, grouplist: &ActionGroupList) -> Option<Box<dyn Action>> {
+        let mut res: Option<ActionPool> = None;
+        for rule in &self.rules {
+            if let Some(rl) = rule.clone_rule(grouplist) {
+                let pool = res.get_or_insert_with(|| {
+                    ActionPool::with_flags_named(&self.name, self.flags)
+                });
+                pool.add_rule(rl);
+            }
+        }
+        res.map(|p| Box::new(p) as Box<dyn Action>)
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Deep-clone this pool with ALL rules (no group filter). See
+    /// [`Action::clone_all`].
+    fn clone_all(&self) -> Option<Box<dyn Action>> {
+        let mut res = ActionPool::with_flags_named(&self.name, self.flags);
+        let mut any = false;
+        for rule in &self.rules {
+            // Deep clone a rule: consult registry unconditionally.
+            let name = rule.get_name();
+            if let Some(entry) = RULE_CLONE_REGISTRY.get().and_then(|m| m.get(name)) {
+                res.add_rule((entry.make)());
+                any = true;
+            }
+        }
+        if any { Some(Box::new(res)) } else { None }
     }
 
     // ---- Breakpoint / rule-management overrides (action.cc:790-813, 891-898) ----
@@ -1192,6 +1455,13 @@ pub fn build_cleanup_pool() -> ActionPool {
 
 ///
 /// Corresponds to Ghidra's `ActionDatabase` class
+// Ghidra: action.cc:975 ActionDatabase::universalname
+/// The name of the \e universal root Action (action.cc:975
+/// `const char ActionDatabase::universalname[] = "universal"`). The universal
+/// Action is the model from which all other root Actions are derived via
+/// `deriveAction` (action.cc:1146) / `toggleAction` (action.cc:1037).
+pub const UNIVERSAL_ACTION_NAME: &str = "universal";
+
 pub struct ActionDatabase {
     all_actions: Vec<Box<dyn Action>>,
     current_group: Option<String>,
@@ -1203,6 +1473,12 @@ pub struct ActionDatabase {
     /// `true` while only the built-in default groups are configured
     /// (action.hh:303 `bool isDefaultGroups`).
     is_default_groups: bool,
+    /// Map from \e root Action name to the instantiated root Action object
+    /// (action.hh:302 `map<string,Action *> actionmap`). The universal Action
+    /// is stored under [`UNIVERSAL_ACTION_NAME`]; every other root Action is
+    /// derived from it via [`Self::derive_action`] / [`Self::toggle_action`]
+    /// and registered here. The database owns these objects.
+    actionmap: std::collections::HashMap<String, Box<dyn Action>>,
 }
 // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
@@ -1227,12 +1503,28 @@ impl ActionDatabase {
             current_group: None,
             groupmap: std::collections::HashMap::new(),
             is_default_groups: false,
+            actionmap: std::collections::HashMap::new(),
         }
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Register a top-level (root) Action. The Action is owned by
+    /// `all_actions` (so [`Self::apply_all`] runs it) and is findable by name
+    /// via the linear scan in [`Self::get_action`]. The dedicated
+    /// [`Self::register_action_named`] indexes a derived root into `actionmap`
+    /// (action.hh:302) for clone/derive operations; this public API is for the
+    /// model (universal) Action built directly by `set_default_actions`.
     pub fn register_action(&mut self, action: Box<dyn Action>) {
         self.all_actions.push(action);
+    }
+
+    // Ghidra: action.cc:1127 ActionDatabase::registerAction
+    /// Internal: associate a \e root Action name with its Action object, taking
+    /// ownership (action.cc:1127-1139). If `nm` is already registered, the old
+    /// object is replaced (Ghidra `delete`s it). Used by [`Self::derive_action`]
+    /// and [`Self::toggle_action`] to store a freshly-cloned root Action.
+    fn register_action_named(&mut self, nm: &str, act: Box<dyn Action>) {
+        self.actionmap.insert(nm.to_string(), act);
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -1250,6 +1542,15 @@ impl ActionDatabase {
         self.all_actions.iter()
             .find(|a| a.get_name() == name)
             .map(|a| a.as_ref())
+    }
+
+    // Ghidra: action.cc:1113 ActionDatabase::getAction
+    /// Look up a \e root Action by name from `actionmap` (action.cc:1113-1121).
+    /// Returns `None` if `nm` is not a registered root Action. Prefer this over
+    /// [`Self::get_action`] for clone/derive operations, which consult
+    /// `actionmap` (Ghidra's canonical store), not `all_actions`.
+    pub fn get_action_by_name(&self, nm: &str) -> Option<&dyn Action> {
+        self.actionmap.get(nm).map(|a| a.as_ref())
     }
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
@@ -1449,7 +1750,246 @@ impl ActionDatabase {
         universal.add_action(Box::new(ActionFinalStructure::new()));
         universal.add_action(Box::new(crate::coreaction::ActionStop::new())); // :5738 — stub, safe
 
+        // Index the model (universal) Action into `actionmap` under
+        // UNIVERSAL_ACTION_NAME (action.hh:304 `universalname`,
+        // coreaction.cc:5474 builds it once) so that derive_action /
+        // toggle_action can clone from it by name (action.cc:1155
+        // `getAction(baseaction)`). Rugra's root is named "decompile" (the
+        // Ghidra default current root, coreaction.cc:5738), but it IS the
+        // universal model — registered under both names.
+        self.register_action_named(UNIVERSAL_ACTION_NAME, Box::new(universal.clone_all()).expect("universal model must be cloneable"));
+        // Also register under "decompile" so set_current("decompile") resolves
+        // to the model directly (Ghidra's setCurrent calls deriveAction which
+        // clones; here the model IS the default current root, so we register
+        // the same object and let set_current's derive_action path clone it on
+        // demand if a grouplist is configured).
+        self.register_action_named("decompile", Box::new(universal.clone_all()).expect("universal model must be cloneable"));
+        // register_action keeps the owned universal in all_actions for apply_all.
         self.register_action(Box::new(universal));
+
+        // Populate the per-name clone registries once (Rugra's equivalent of
+        // Ghidra's per-class virtual clone; see ACTION_CLONE_REGISTRY docs).
+        // Idempotent: OnceLock::set returns Err if already populated, which we
+        // ignore (re-calling set_default_actions is supported).
+        Self::populate_clone_registries();
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Populate [`ACTION_CLONE_REGISTRY`] / [`RULE_CLONE_REGISTRY`] with a
+    /// constructor for every leaf Action/Rule used by the universal pipeline.
+    /// This is Rugra's analogue of Ghidra's per-class `Action::clone` /
+    /// `Rule::clone` virtual methods (action.hh:119, 236): instead of each leaf
+    /// carrying its own clone, we centralise `T::new()` constructors keyed by
+    /// the leaf's `get_name()`. Called once from [`Self::set_default_actions`];
+    /// idempotent via `OnceLock`.
+    fn populate_clone_registries() {
+            // Rules (coreaction.cc:5511-5710 build_simplify/cleanup/oppool2). Each
+            // entry mirrors Ghidra's per-class Rule::clone (ruleaction.hh:89+): the
+            // group is "universal" (Rugra uses a single universal pipeline, matching
+            // Ghidra's coreaction.cc construction under group "universal").
+            let mut rrules: std::collections::HashMap<&'static str, RuleCloneEntry> = std::collections::HashMap::new();
+            rrules.insert("2comp2mult", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::Rule2Comp2Mult::new()) });
+            rrules.insert("2comp2sub", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::Rule2Comp2Sub::new()) });
+            rrules.insert("add_mult_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAddMultCollapse::new()) });
+            rrules.insert("add_unsigned", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAddUnsigned::new()) });
+            rrules.insert("and_commute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndCommute::new()) });
+            rrules.insert("and_compare", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndCompare::new()) });
+            rrules.insert("and_distribute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndDistribute::new()) });
+            rrules.insert("and_mask", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndMask::new()) });
+            rrules.insert("and_or_lump", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndOrLump::new()) });
+            rrules.insert("and_piece", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndPiece::new()) });
+            rrules.insert("and_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleAndZext::new()) });
+            rrules.insert("bit_undistribute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBitUndistribute::new()) });
+            rrules.insert("bool_negate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBoolNegate::new()) });
+            rrules.insert("bool_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBoolZext::new()) });
+            rrules.insert("boolean_dedup", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBooleanDedup::new()) });
+            rrules.insert("boolean_negate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBooleanNegate::new()) });
+            rrules.insert("boolean_undistribute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBooleanUndistribute::new()) });
+            rrules.insert("bxor2notequal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleBxor2NotEqual::new()) });
+            rrules.insert("carry_elim", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleCarryElim::new()) });
+            rrules.insert("collapse_constants", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleCollapseConstants::new()) });
+            rrules.insert("collect_terms", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleCollectTerms::new()) });
+            rrules.insert("concat_commute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConcatCommute::new()) });
+            rrules.insert("concat_leftshift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConcatLeftShift::new()) });
+            rrules.insert("concat_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConcatShift::new()) });
+            rrules.insert("concat_zero", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConcatZero::new()) });
+            rrules.insert("concat_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConcatZext::new()) });
+            rrules.insert("cond_negate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleCondNegate::new()) });
+            rrules.insert("conditional_move", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleConditionalMove::new()) });
+            rrules.insert("div_chain", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDivChain::new()) });
+            rrules.insert("div_opt", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDivOpt::new()) });
+            rrules.insert("div_term_add", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDivTermAdd::new()) });
+            rrules.insert("div_term_add2", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDivTermAdd2::new()) });
+            rrules.insert("double_arith_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDoubleArithShift::new()) });
+            rrules.insert("doublein", RuleCloneEntry { group: "universal", make: || Box::new(crate::double_precis::RuleDoubleIn::new()) });
+            rrules.insert("doubleload", RuleCloneEntry { group: "universal", make: || Box::new(crate::double_precis::RuleDoubleLoad::new()) });
+            rrules.insert("doubleout", RuleCloneEntry { group: "universal", make: || Box::new(crate::double_precis::RuleDoubleOut::new()) });
+            rrules.insert("double_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDoubleShift::new()) });
+            rrules.insert("doublestore", RuleCloneEntry { group: "universal", make: || Box::new(crate::double_precis::RuleDoubleStore::new()) });
+            rrules.insert("double_sub", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDoubleSub::new()) });
+            rrules.insert("dumpty_hump", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleDumptyHump::new()) });
+            rrules.insert("dumptyhump_late", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleDumptyHumpLate::new()) });
+            rrules.insert("early_removal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleEarlyRemoval::new()) });
+            rrules.insert("equal2constant", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleEqual2Constant::new()) });
+            rrules.insert("equal2zero", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleEqual2Zero::new()) });
+            rrules.insert("equality", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleEquality::new()) });
+            rrules.insert("expand_load", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleExpandLoad::new()) });
+            rrules.insert("extension_push", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleExtensionPush::new()) });
+            rrules.insert("float_cast", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleFloatCast::new()) });
+            rrules.insert("float_range", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleFloatRange::new()) });
+            rrules.insert("float_sign", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleFloatSign::new()) });
+            rrules.insert("float_sign_cleanup", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleFloatSignCleanup::new()) });
+            rrules.insert("funcptr_encoding", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleFuncPtrEncoding::new()) });
+            rrules.insert("high_order_and", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleHighOrderAnd::new()) });
+            rrules.insert("humpty_dumpty", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleHumptyDumpty::new()) });
+            rrules.insert("humpty_or", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleHumptyOr::new()) });
+            rrules.insert("identity_el", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleIdentityEl::new()) });
+            rrules.insert("ignore_nan", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleIgnoreNan::new()) });
+            rrules.insert("indirect_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleIndirectCollapse::new()) });
+            rrules.insert("int_2_float_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleInt2FloatCollapse::new()) });
+            rrules.insert("int_lessequal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleIntLessEqual::new()) });
+            rrules.insert("left_right", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLeftRight::new()) });
+            rrules.insert("less2_zero", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLess2Zero::new()) });
+            rrules.insert("less_equal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLessEqual::new()) });
+            rrules.insert("lessequal2_zero", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLessEqual2Zero::new()) });
+            rrules.insert("less_notequal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLessNotEqual::new()) });
+            rrules.insert("less_one", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLessOne::new()) });
+            rrules.insert("load_varnode", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLoadVarnode::new()) });
+            rrules.insert("logic2bool", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLogic2Bool::new()) });
+            rrules.insert("lzcount_shift_bool", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleLzcountShiftBool::new()) });
+            rrules.insert("mod_opt", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleModOpt::new()) });
+            rrules.insert("mult_neg_one", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleMultNegOne::new()) });
+            rrules.insert("multi_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleMultiCollapse::new()) });
+            rrules.insert("negate_identity", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleNegateIdentity::new()) });
+            rrules.insert("negate_negate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleNegateNegate::new()) });
+            rrules.insert("not_distribute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleNotDistribute::new()) });
+            rrules.insert("or_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleOrCollapse::new()) });
+            rrules.insert("or_compare", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleOrCompare::new()) });
+            rrules.insert("or_consume", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleOrConsume::new()) });
+            rrules.insert("or_mask", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleOrMask::new()) });
+            rrules.insert("or_predicate", RuleCloneEntry { group: "universal", make: || Box::new(crate::condexe::RuleOrPredicate::new()) });
+            rrules.insert("piece2sext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePiece2Sext::new()) });
+            rrules.insert("piece2zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePiece2Zext::new()) });
+            rrules.insert("piece_pathology", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePiecePathology::new()) });
+            rrules.insert("piece_structure", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePieceStructure::new()) });
+            rrules.insert("popcount_bool_xor", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePopcountBoolXor::new()) });
+            rrules.insert("positive_div", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePositiveDiv::new()) });
+            rrules.insert("propagate_copy", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePropagateCopy::new()) });
+            rrules.insert("ptrarith", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePtrArith::new()) });
+            rrules.insert("ptrflow", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePtrFlow::new()) });
+            rrules.insert("ptradd_undo", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePtraddUndo::new()) });
+            rrules.insert("ptrsub_char_constant", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePtrsubCharConstant::new()) });
+            rrules.insert("ptrsub_undo", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePtrsubUndo::new()) });
+            rrules.insert("pullsub_indirect", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePullsubIndirect::new()) });
+            rrules.insert("pullsub_multi", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePullsubMulti::new()) });
+            rrules.insert("push_multi", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePushMulti::new()) });
+            rrules.insert("push_ptr", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RulePushPtr::new()) });
+            rrules.insert("range_meld", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleRangeMeld::new()) });
+            rrules.insert("right_shift_and", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleRightShiftAnd::new()) });
+            rrules.insert("sless2zero", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSLess2Zero::new()) });
+            rrules.insert("sborrow", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSborrow::new()) });
+            rrules.insert("scarry", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleScarry::new()) });
+            rrules.insert("segment", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSegment::new()) });
+            rrules.insert("select_cse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSelectCse::new()) });
+            rrules.insert("sext_eliminate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSextEliminate::new()) });
+            rrules.insert("shift2mult", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShift2Mult::new()) });
+            rrules.insert("shift_and", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShiftAnd::new()) });
+            rrules.insert("shift_bitops", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShiftBitops::new()) });
+            rrules.insert("shift_compare", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShiftCompare::new()) });
+            rrules.insert("shift_piece", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShiftPiece::new()) });
+            rrules.insert("shift_sub", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleShiftSub::new()) });
+            rrules.insert("sign_div2", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignDiv2::new()) });
+            rrules.insert("sign_form", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignForm::new()) });
+            rrules.insert("sign_form2", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignForm2::new()) });
+            rrules.insert("sign_mod2_opt", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignMod2Opt::new()) });
+            rrules.insert("sign_mod2n_opt", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignMod2nOpt::new()) });
+            rrules.insert("sign_mod2n_opt2", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignMod2nOpt2::new()) });
+            rrules.insert("sign_near_mult", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignNearMult::new()) });
+            rrules.insert("sign_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSignShift::new()) });
+            rrules.insert("sless_to_less", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSlessToLess::new()) });
+            rrules.insert("splitcopy", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSplitCopy::new()) });
+            rrules.insert("splitflow", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSplitFlow::new()) });
+            rrules.insert("splitload", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSplitLoad::new()) });
+            rrules.insert("splitstore", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSplitStore::new()) });
+            rrules.insert("store_varnode", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleStoreVarnode::new()) });
+            rrules.insert("string_copy", RuleCloneEntry { group: "universal", make: || Box::new(crate::constseq::RuleStringCopy::new()) });
+            rrules.insert("string_store", RuleCloneEntry { group: "universal", make: || Box::new(crate::constseq::RuleStringStore::new()) });
+            rrules.insert("struct_offset0", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleStructOffset0::new()) });
+            rrules.insert("sub2_add", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSub2Add::new()) });
+            rrules.insert("sub_cancel", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubCancel::new()) });
+            rrules.insert("sub_commute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubCommute::new()) });
+            rrules.insert("sub_ext_comm", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubExtComm::new()) });
+            rrules.insert("sub_normal", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubNormal::new()) });
+            rrules.insert("sub_right", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubRight::new()) });
+            rrules.insert("sub_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSubZext::new()) });
+            rrules.insert("subfloat_convert", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubfloatConvert::new()) });
+            rrules.insert("subvar_and", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarAnd::new()) });
+            rrules.insert("subvar_compzero", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarCompZero::new()) });
+            rrules.insert("subvar_sext", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarSext::new()) });
+            rrules.insert("subvar_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarShift::new()) });
+            rrules.insert("subvar_subpiece", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarSubpiece::new()) });
+            rrules.insert("subvar_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::subflow::RuleSubvarZext::new()) });
+            rrules.insert("switch_single", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleSwitchSingle::new()) });
+            rrules.insert("term_order", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTermOrder::new()) });
+            rrules.insert("test_sign", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTestSign::new()) });
+            rrules.insert("three_way_compare", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleThreeWayCompare::new()) });
+            rrules.insert("transform_cpool", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTransformCpool::new()) });
+            rrules.insert("trivial_arith", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTrivialArith::new()) });
+            rrules.insert("trivial_bool", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTrivialBool::new()) });
+            rrules.insert("trivial_shift", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleTrivialShift::new()) });
+            rrules.insert("unsigned_2_float", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleUnsigned2Float::new()) });
+            rrules.insert("xor_collapse", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleXorCollapse::new()) });
+            rrules.insert("xor_swap", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleXorSwap::new()) });
+            rrules.insert("zext_commute", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleZextCommute::new()) });
+            rrules.insert("zext_eliminate", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleZextEliminate::new()) });
+            rrules.insert("zext_shift_zext", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleZextShiftZext::new()) });
+            rrules.insert("zext_sless", RuleCloneEntry { group: "universal", make: || Box::new(crate::ruleaction::RuleZextSless::new()) });
+            let _ = RULE_CLONE_REGISTRY.set(rrules);
+
+            // Actions (coreaction.cc:5477-5738 universal tree leaves). Mirrors Ghidra's
+            // per-class Action::clone (coreaction.hh:37+).
+            let mut ractions: std::collections::HashMap<&'static str, ActionCloneEntry> = std::collections::HashMap::new();
+            ractions.insert("blockstructure", ActionCloneEntry { group: "universal", make: || Box::new(crate::blockaction::ActionBlockStructure::new()) });
+            ractions.insert("conditionalconst", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionConditionalConst::new()) });
+            ractions.insert("conditionalexe", ActionCloneEntry { group: "universal", make: || Box::new(crate::condexe::ActionConditionalExe::new()) });
+            ractions.insert("constantptr", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionConstantPtr::new()) });
+            ractions.insert("constbase", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionConstbase::new()) });
+            ractions.insert("deadcode", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionDeadCode::new()) });
+            ractions.insert("determinedbranch", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionDeterminedBranch::new()) });
+            ractions.insert("donothing", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionDoNothing::new()) });
+            ractions.insert("dynamicsymbols", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionDynamicSymbols::new()) });
+            ractions.insert("extrapopsetup", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionExtraPopSetup::new()) });
+            ractions.insert("finalstructure", ActionCloneEntry { group: "universal", make: || Box::new(crate::blockaction::ActionFinalStructure::new()) });
+            ractions.insert("funclink", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionFuncLink::new()) });
+            ractions.insert("heritage", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionHeritage::new()) });
+            ractions.insert("infer_params", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionInferParams::new()) });
+            ractions.insert("infertypes", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionInferTypes::new()) });
+            ractions.insert("inputprototype", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionInputPrototype::new()) });
+            ractions.insert("likelytrash", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionLikelyTrash::new()) });
+            ractions.insert("mapglobals", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMapGlobals::new()) });
+            ractions.insert("mappedlocalsync", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMappedLocalSync::new()) });
+            ractions.insert("markexplicit", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMarkExplicit::new()) });
+            ractions.insert("markimplied", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMarkImplied::new()) });
+            ractions.insert("markindirectonly", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMarkIndirectOnly::new()) });
+            ractions.insert("merge_type", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionMergeType::new()) });
+            ractions.insert("nodejoin", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionNodeJoin::new()) });
+            ractions.insert("normalizebranches", ActionCloneEntry { group: "universal", make: || Box::new(crate::blockaction::ActionNormalizeBranches::new()) });
+            ractions.insert("outputprototype", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionOutputPrototype::new()) });
+            ractions.insert("prefercomplement", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionPreferComplement::new()) });
+            ractions.insert("prototypewarnings", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionPrototypeWarnings::new()) });
+            ractions.insert("redundbranch", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionRedundBranch::new()) });
+            ractions.insert("restrictlocal", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionRestrictLocal::new()) });
+            ractions.insert("restructureVarnode", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionRestructureVarnode::new()) });
+            ractions.insert("returnsplit", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionReturnSplit::new()) });
+            ractions.insert("setcasts", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionSetCasts::new()) });
+            ractions.insert("spacebase", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionSpacebase::new()) });
+            ractions.insert("stackptrflow", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionStackPtrFlow::new()) });
+            ractions.insert("start", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionStart::new()) });
+            ractions.insert("startcleanup", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionStartCleanUp::new()) });
+            ractions.insert("stop", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionStop::new()) });
+            ractions.insert("structuretransform", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionStructureTransform::new()) });
+            ractions.insert("unreachable", ActionCloneEntry { group: "universal", make: || Box::new(crate::coreaction::ActionUnreachable::new()) });
+            let _ = ACTION_CLONE_REGISTRY.set(ractions);
     }
 
     // ---- Runtime group configuration (action.hh:312-322, action.cc:1007-1097) ----
@@ -1475,15 +2015,67 @@ impl ActionDatabase {
         self.current_group.as_deref()
     }
 
-    // Ghidra: action.hh:316 setCurrent
-    /// Set the current \e root Action by name (action.hh:316). Returns a
-    /// reference to the newly-selected root if it is registered.
-    pub fn set_current(&mut self, actname: &str) -> Option<&dyn Action> {
-        if self.get_action(actname).is_some() {
-            self.current_group = Some(actname.to_string());
-            return self.get_action(actname);
+    // Ghidra: action.cc:1146 ActionDatabase::deriveAction
+    /// Internal: build (or return the cached) root Action corresponding to a
+    /// grouplist name, by selectively cloning components from an existing
+    /// model Action (action.cc:1141-1161). Faithful to
+    /// `ActionDatabase::deriveAction`:
+    ///   1. If `grp` is already in `actionmap`, return the cached object.
+    ///   2. Otherwise look up the grouplist named `grp` (`getGroup`, throws if
+    ///      unknown -- Rugra returns `None`).
+    ///   3. `getAction(baseaction)` -- fetch the model (action.cc:1155).
+    ///   4. `act->clone(curgrp)` -- clone filtered by the grouplist.
+    ///   5. `registerAction(grp, newact)` -- cache under `grp`.
+    /// Returns `Some(())` on success, `None` if the grouplist is unknown or the
+    /// model is absent (so callers can degrade gracefully).
+    fn derive_action(&mut self, baseaction: &str, grp: &str) -> Option<()> {
+        // (1) already derived? (action.cc:1149-1152)
+        if self.actionmap.contains_key(grp) {
+            return Some(());
         }
-        None
+        // (2) fetch the grouplist (action.cc:1154). getGroup throws on unknown;
+        // Rugra returns None.
+        let curgrp = self.groupmap.get(grp)?.clone();
+        // (3)+(4) fetch the model and clone filtered by the grouplist. We borrow
+        // the model immutably (via get_action_by_name) and produce an owned
+        // Box<dyn Action> before any &mut self mutation.
+        let newact = self.get_action_by_name(baseaction)
+            .or_else(|| {
+                // Fallback: model may live in all_actions under a different name
+                // (e.g. "decompile"). get_action scans all_actions by name.
+                if baseaction == UNIVERSAL_ACTION_NAME {
+                    self.all_actions.first().map(|a| a.as_ref())
+                } else {
+                    self.get_action(baseaction)
+                }
+            })
+            .and_then(|model| model.clone_action(&curgrp))?;
+        // (5) cache the derived root under `grp` (action.cc:1159 registerAction).
+        self.register_action_named(grp, newact);
+        Some(())
+    }
+
+    // Ghidra: action.cc:1022 ActionDatabase::setCurrent
+    /// Set the current \e root Action by name (action.hh:316). Faithful to
+    /// `ActionDatabase::setCurrent` (action.cc:1022-1028): records the name in
+    /// `currentactname` then derives the root Action from the universal model
+    /// via [`Self::derive_action`] (which clones the model filtered by the
+    /// grouplist named `actname`, caching the result in `actionmap`). Returns a
+    /// reference to the newly-selected root.
+    ///
+    /// Rugra differs only in return type (`Option<&dyn Action>` vs Ghidra's raw
+    /// `Action *`, which is never NULL because `deriveAction` throws on an
+    /// unknown grouplist); we return `None` if the grouplist is unknown so
+    /// callers can detect misconfiguration without panicking.
+    pub fn set_current(&mut self, actname: &str) -> Option<&dyn Action> {
+        // action.cc:1025-1027: currentactname = actname; currentact = deriveAction(universalname, actname)
+        match self.derive_action(UNIVERSAL_ACTION_NAME, actname) {
+            Some(()) => {
+                self.current_group = Some(actname.to_string());
+                self.actionmap.get(actname).map(|a| a.as_ref())
+            }
+            None => None,
+        }
     }
 
     // Ghidra: action.hh:315 getGroup
@@ -1493,18 +2085,46 @@ impl ActionDatabase {
         self.groupmap.get(grp)
     }
 
-    // Ghidra: action.hh:317 toggleAction
+    // Ghidra: action.cc:1037 ActionDatabase::toggleAction
     /// Add (`val=true`) or remove (`val=false`) a basegroup from a root
-    /// Action's grouplist (action.hh:317). Returns `true` if the membership
-    /// changed. Creates an empty grouplist for `grp` if absent.
+    /// Action's grouplist, then re-derive the root Action from the universal
+    /// model by cloning with the updated grouplist. Faithful to
+    /// `ActionDatabase::toggleAction` (action.cc:1037-1054):
+    ///   1. `getAction(universalname)` -- fetch the model.
+    ///   2. `addToGroup`/`removeFromGroup` -- mutate the grouplist.
+    ///   3. `act->clone(curgrp)` -- re-clone the model filtered by the new
+    ///      grouplist.
+    ///   4. `registerAction(grp, newact)` -- replace the cached derived root.
+    ///   5. If `grp == currentactname`, update `currentact`.
+    /// Returns `true` if the grouplist membership changed (Rugra's contract,
+    /// matching the prior behaviour; Ghidra returns the new Action pointer).
     pub fn toggle_action(&mut self, grp: &str, basegrp: &str, val: bool) -> bool {
         self.is_default_groups = false;
+        // (2) mutate the grouplist (action.cc:1041-1044).
         let entry = self.groupmap.entry(grp.to_string()).or_default();
-        if val {
+        let changed = if val {
             entry.insert(basegrp.to_string())
         } else {
             entry.remove(basegrp)
+        };
+        if !changed {
+            return false;
         }
+        // (1)+(3) re-clone the model filtered by the new grouplist.
+        // We snapshot the grouplist and clone via a &self borrow first, then
+        // mutate actionmap (avoids holding a &mut while cloning from &self).
+        let curgrp = self.groupmap.get(grp).cloned().unwrap_or_default();
+        let newact = self.get_action_by_name(UNIVERSAL_ACTION_NAME)
+            .and_then(|model| model.clone_action(&curgrp));
+        // (4) register the re-derived root (action.cc:1048 registerAction).
+        if let Some(act) = newact {
+            self.register_action_named(grp, act);
+        }
+        // (5) if this is the current root, point currentact at the new object
+        // (action.cc:1050-1051). Rugra's `current_group` is a name, so the next
+        // get_current()/set_current() resolves to the refreshed actionmap entry.
+        // No extra work needed: get_current() looks up by name each call.
+        changed
     }
 
     // Ghidra: action.cc:1060 ActionDatabase::setGroup
