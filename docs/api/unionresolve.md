@@ -2,9 +2,11 @@
 
 Faithful port of Ghidra's `unionresolve.hh` / `unionresolve.cc` (1110 lines).
 
-**Status:** L1 → L2. Complete ResolvedUnion + ResolveEdge + ScoreUnionFields
-data structures and scoring framework. L3 gap: full scoring algorithm
-requiring TypeFactory + PcodeOp integration.
+**Status:** L3. Full typed scoring algorithm ported with
+`Arc<Datatype>` / `Arc<RwLock<PcodeOp>>` / `Arc<RwLock<Varnode>>` threading
+that mirrors Ghidra's raw `Datatype*` / `PcodeOp*` / `Varnode*` API. All
+scoring tables in `scoreTrialDown` / `scoreTrialUp` are 1:1 with
+unionresolve.cc:305-833.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/unionresolve.{hh,cc}`.
@@ -13,44 +15,91 @@ Ghidra reference:
 
 ### `ResolvedUnion`
 A data-type resolved from a TypeUnion/TypeStruct (unionresolve.hh:39).
-- `new_self(parent_name)`, `new_field(parent_name, field_name, fld_num)`.
-- `get_datatype_name()`, `get_base_name()`, `get_field_num()`,
-  `is_locked()`, `set_lock(val)`.
+Holds `Arc<Datatype>` for `resolve` and `base_type`.
+- `new(parent: Arc<Datatype>)` — resolves to itself (cc:25).
+- `with_field(parent, fld_num, typegrp)` — specific field (cc:40).
+- `new_self(parent_name)`, `new_field(parent_name, field_name, fld_num)` —
+  RUGRA-GLUE string ctors for legacy callers.
+- `get_datatype()`, `get_base()`, `get_field_num()`, `is_locked()`,
+  `set_lock(val)`.
 
 ### `ResolveEdge`
 A data-flow edge for resolved types (unionresolve.hh:60).
-- `new(type_id, op_time, slot, is_pointer)`.
-- Derives `Ord` for set keying.
+- `new(parent: &Datatype, op: &PcodeOp, slot)` — typed ctor (cc:64).
+  Pointer encoding `+0x1000` (cc:71).
+- `from_components(type_id, op_time, slot, is_pointer)` — RUGRA-GLUE.
+- Derives `Ord` for set keying by `(type_id, encoding, op_time)`.
 
 ### `DirType`
-- `FitDown`, `FitUp`.
+- `FitDown`, `FitUp` (unionresolve.hh:87).
 
 ### `Trial`
 Trial data-type fitted to a data-flow position (unionresolve.hh:84).
-- `new_down(slot, type_name, index, is_array)`, `new_up(type_name, index, is_array)`.
+Holds `Arc<RwLock<Varnode>>` and optional `Arc<RwLock<PcodeOp>>`.
+- `new_down(op, slot, ct, index, is_array)` (hh:106).
+- `new_up(vn, ct, index, is_array)` (hh:115).
 
 ### `VisitMark`
 Visit tracking for Varnode+field (unionresolve.hh:120).
-- `new(vn_id, index)`. Derives `Ord`.
+- `new(vn: &Arc<RwLock<Varnode>>, index)`, `from_id(vn_id, index)`.
+- Derives `Ord` by `(vn_key, index)` (hh:130).
 
-### `ScoreUnionFields`
+### `ScoreUnionFields<'t>`
 Scores union fields for a specific access (unionresolve.hh:82).
-- `new(parent_name, field_names)`.
+Constructors (all run the scoring loop internally):
+- `new(typegrp, parent_type, op, slot)` — primary edge ctor (cc:990).
+- `new_for_subpiece(typegrp, union_type, offset, op)` — SUBPIECE (cc:1050).
+- `new_for_implied_trunc(typegrp, union_type, offset, op, slot)` (cc:1083).
+- `with_field_names(parent_name, field_names)` — RUGRA-GLUE for tests.
 - `get_result() -> &ResolvedUnion`, `num_fields()`, `add_score(index, score)`.
-- `compute_best_index()` — pick highest-scoring field (unionresolve.cc).
-- `run()` — L3 gap: full scoring framework.
+- `compute_best_index()` — pick highest-scoring field (cc:945).
+- `run_on_func(fd)` — legacy Funcdata-scanning entry.
 
-## Constants
-- `MAX_PASSES = 5`, `THRESHOLD = 10`, `MAX_TRIALS = 50`.
+## Scoring methods (private, 1:1 with Ghidra)
+- `test_array_arithmetic(op, in_slot, base_size)` (cc:88).
+- `score_simple_cases_inner(op, in_slot, parent)` (cc:119).
+- `score_locked_type(ct, lock_type)` (cc:144).
+- `score_parameter(ct, fd, call_op, param_slot)` (cc:184).
+- `score_return_type(ct, fd, call_op)` (cc:204).
+- `deref_pointer(ct, vn_size)` (cc:227).
+- `new_trials_down(vn, ct, score_index, is_array)` (cc:253).
+- `new_trials(op, slot, ct, score_index, is_array)` (cc:276).
+- `score_trial_down(trial, last_level)` — ~50 opcodes (cc:305-640).
+- `score_trial_up(trial, last_level)` — ~40 opcodes (cc:642-833).
+- `score_truncation(ct_in, vn_size, offset, score_index)` (cc:843).
+- `score_constant_fit(trial)` (cc:884).
+- `run_one_level(last_pass)` (cc:931).
+- `run_passes()` — multi-pass loop (cc:963).
 
-## L3 gaps
-- Full `scoreTrialDown`/`scoreTrialUp` with TypeFactory + PcodeOp data-flow.
-- `testArrayArithmetic`, `testSimpleCases`, `scoreLockedType`,
-  `scoreParameter`, `scoreReturnType`, `derefPointer`.
-- `scoreTruncation`, `scoreConstantFit`.
+## Free helpers (RUGRA-GLUE)
+- `num_depend(dt)`, `get_depend(dt, i)`, `depend_at(dt, i)` — Datatype virtual
+  dispatch aggregator.
+- `pointee_of`, `pointer_pointee`, `as_union`, `strip_pointer_layer`,
+  `pointee_word_size`, `union_field_list`, `type_pointer_strip_array`.
+- `bit_transition_count(val, size)` — address.cc port.
+- `test_simple_cases`, `score_truncation_inplace` — free-function forms used
+  before `self` exists.
 
-## 2026-06-27（续）：ScoreUnionFields::run_on_func Funcdata 集成
+## Constants (unionresolve.cc:79-81)
+- `THRESHOLD = 256`, `MAX_PASSES = 6`, `MAX_TRIALS = 1024`.
 
-- **run_on_func(fd)**：新方法——扫描 Funcdata 的 PcodeOps 检测 union 字段访问模式（SUBPIECE 提取 + INT_AND 掩码），对匹配的字段加分。完成后调用 compute_best_index 选择最佳字段。
-- **run()**：保留独立版本（仅 compute_best_index）。
-<!-- annotation-pass: 2026-07-04 -->
+## RUGRA-GLUE gaps
+- `scoreParameter` / `scoreReturnType` need Funcdata handle via
+  `op->getParent()->getFuncdata()`; typed ctor lacks it, uses unlocked fallback.
+- `TypePointer::downChain` not ported; INT_ADD constant-offset path approximated.
+- `TypeOpSubpiece::computeByteOffsetForComposite` not ported; uses constant offset.
+- `AddrSpace::getPointerLowerBound/UpperBound` not ported; bit-transition test only.
+- `FloatFormat::for_size` not ported; uses `FloatFormat::new(size)`.
+- `TypeFactory::getTypePointerStripArray` not ported; array-element fallback.
+
+## 2026-06-27: ScoreUnionFields::run_on_func Funcdata integration
+- **run_on_func(fd)**: scans Funcdata PcodeOps for union field access patterns
+  (SUBPIECE extraction + INT_AND mask), scores matching fields, then calls
+  compute_best_index.
+
+## 2026-07-22: Full L3 scoring algorithm port
+- Ported all scoring methods from unionresolve.cc:88-926 with typed API.
+- Fixed constants: THRESHOLD 10→256, MAX_PASSES 5→6, MAX_TRIALS 50→1024.
+- Fixed pointer encoding: +0x10000 → +0x1000 (cc:71).
+- 18 tests covering scoring semantics and typed API.
+<!-- annotation-pass: 2026-07-22 -->
