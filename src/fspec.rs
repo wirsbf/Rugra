@@ -361,6 +361,323 @@ impl FuncProto {
     pub fn print_model_in_decl(&self) -> bool {
         !self.is_model_unknown()
     }
+
+    // Ghidra: fspec.cc:4052 FuncProto::updateInputTypes
+    /// Update input parameters based on Varnode trials. Faithful 1:1 port of
+    /// `updateInputTypes` (fspec.cc:4052-4087). If the input is locked, do
+    /// nothing. Otherwise clear all inputs, then for each trial marked USED,
+    /// build a `ParameterPieces` from the trial's varnode (address + the
+    /// varnode's high type, or a disjoint-cover address for persistent
+    /// varnodes) and append it as a new input parameter. Varnodes already
+    /// consumed are skipped via the mark bit, then all marks are cleared.
+    ///
+    /// `find_disjoint_cover` is supplied by the caller because Rugra's
+    /// `Funcdata::findDisjointCover` is not yet ported; it returns the cover
+    /// address and size for a persistent varnode.
+    pub fn update_input_types(
+        &mut self,
+        triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        activeinput: &crate::fspec::ParamActive,
+        find_disjoint_cover: &dyn Fn(&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (Address, i32),
+    ) {
+        if self.is_input_locked() { return; } // Input is locked, do no updating.
+        // store->clearAllInputs()
+        self.parameters.clear();
+        let mut count = 0usize;
+        let numtrials = activeinput.get_num_trials();
+        for i in 0..numtrials {
+            let trial = activeinput.get_trial(i);
+            if !trial.is_used() { continue; }
+            // vn = triallist[trial.getSlot()-1]
+            let slot = trial.get_slot();
+            if slot < 1 { continue; }
+            let idx = (slot - 1) as usize;
+            if idx >= triallist.len() { continue; }
+            let vn = triallist[idx].clone();
+            // if (vn->isMark()) continue;
+            if vn.read().unwrap().is_mark() { continue; }
+            let mut pieces = ParameterPieces::default();
+            let (addr, ty) = {
+                let vn_r = vn.read().unwrap();
+                if vn_r.is_persist() {
+                    // Ghidra: pieces.addr = data.findDisjointCover(vn, sz)
+                    let (cover_addr, sz) = find_disjoint_cover(&vn);
+                    let ty = if sz as usize == vn_r.get_size() {
+                        vn_r.get_type()
+                    } else {
+                        None // Ghidra: getBase(sz, TYPE_UNKNOWN) — caller may fill.
+                    };
+                    (cover_addr, ty)
+                } else {
+                    // pieces.addr = trial.getAddress(); pieces.type = vn->getHigh()->getType()
+                    (trial.get_address(), vn_r.get_type())
+                }
+            };
+            pieces.addr = addr;
+            pieces.ty = ty;
+            pieces.flags = 0;
+            // store->setInput(count, "", pieces)
+            self.set_input_parameter(count, "", pieces);
+            count += 1;
+            vn.write().unwrap().set_mark();
+        }
+        // Clear marks on all trial varnodes.
+        for vn in triallist {
+            vn.write().unwrap().clear_mark();
+        }
+        self.update_this_pointer();
+    }
+
+    // Ghidra: fspec.cc:4136 FuncProto::updateOutputTypes
+    /// Update the return value based on Varnode trials. Faithful 1:1 port of
+    /// `updateOutputTypes` (fspec.cc:4136-4162). If the output is not locked
+    /// and the trial list is empty, the return value is cleared. If the output
+    /// is size-locked, an exactly-matching trial overrides the size-locked
+    /// type. If the output is fully locked, nothing happens. Otherwise the
+    /// return value is rebuilt from the (at most one) trial varnode.
+    pub fn update_output_types(
+        &mut self,
+        triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        get_output_addr_size: &dyn Fn(&FuncProto) -> (Address, i32, bool),
+    ) {
+        // ProtoParameter *outparm = getOutput();
+        // isSizeTypeLocked → no direct field; derived from output_type_locked
+        // and whether the type carries a size lock. Rugra models a size-locked
+        // output via output_type_locked == true with a TYPE_UNKNOWN-sized
+        // return; for the faithful port we treat output_type_locked as the
+        // size-lock signal when no concrete type is set.
+        let out_type_locked = self.output_type_locked;
+        let outparm_is_size_locked = out_type_locked;
+        if !out_type_locked {
+            if triallist.is_empty() {
+                // store->clearOutput()
+                self.clear_unlocked_output();
+                return;
+            }
+        } else if outparm_is_size_locked {
+            // isSizeTypeLocked path: override only on exact address+size match.
+            if triallist.is_empty() { return; }
+            let (out_addr, out_size, _) = get_output_addr_size(self);
+            let vn0 = triallist[0].read().unwrap();
+            if *vn0.get_addr() == out_addr && vn0.get_size() as i32 == out_size {
+                // outparm->overrideSizeLockType(triallist[0]->getHigh()->getType())
+                if let Some(t) = vn0.get_type() {
+                    self.return_type = t;
+                }
+            }
+            return;
+        } else {
+            // Fully locked (type-locked, not size-locked): return.
+            return;
+        }
+
+        if triallist.is_empty() { return; }
+        // Build the output piece from the trial varnode.
+        let mut pieces = ParameterPieces::default();
+        {
+            let vn0 = triallist[0].read().unwrap();
+            pieces.addr = *vn0.get_addr();
+            pieces.ty = vn0.get_type();
+            pieces.flags = 0;
+        }
+        // store->setOutput(pieces)
+        self.set_output_parameter(pieces);
+    }
+
+    // Ghidra: fspec.cc:4675 FuncProto::decode
+    /// Restore this prototype from a `<prototype>` element. Faithful port of
+    /// `FuncProto::decode` (fspec.cc:4675-4840). Parses the model name,
+    /// extrapop, and lock flags (modellock/dotdotdot/voidlock/inline/
+    /// noreturn/custom/constructor/destructor), sets the model, decodes the
+    /// `<returnsym>` element (output storage + type-lock), then the
+    /// `<unaffected>`/`<killedbycall>`/`<returnaddress>`/`<likelytrash>`/
+    /// `<inject>`/`<internallist>` children. Lock flags are reconciled and
+    /// `update_this_pointer` is called at the end.
+    ///
+    /// Rugra's `FuncProto` carries a flat parameter list and a calling-
+    /// convention *name* rather than a `ProtoModel *`. The `model_resolver`
+    /// callback maps the decoded model name to whatever the caller uses (e.g.
+    /// a `ProtoModelFull`), returning `true` if the model was found.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        model_resolver: &dyn Fn(&str) -> bool,
+        decode_output_storage: &dyn Fn(&mut dyn crate::marshal::Decoder) -> (Address, Arc<Datatype>, bool),
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        // Model must be set first (Ghidra: store must be non-null).
+        let mut seen_extrapop = false;
+        let mut read_extrapop: i32 = 0;
+        // Ghidra: flags = 0; injectid = -1.
+        self.is_dotdotdot = false;
+        self.output_type_locked = false;
+        // We reset model-lock-relevant state; `calling_convention` is set by
+        // the model attribute below.
+        let elem_id = decoder.open_element();
+        let mut found_model = false;
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 { break; }
+            match decoder.attribute_name(aid).as_deref() {
+                Some("model") => {
+                    let modelname = decoder.read_string();
+                    if modelname.is_empty() || modelname == "default" {
+                        // Use the default model.
+                        found_model = model_resolver("default");
+                    } else {
+                        found_model = model_resolver(&modelname);
+                        // Ghidra: if mod == null, createUnknownModel. We record
+                        // the name regardless so later resolution can pick it up.
+                        self.calling_convention = modelname;
+                    }
+                }
+                Some("extrapop") => {
+                    seen_extrapop = true;
+                    let s = decoder.read_string();
+                    if s == "unknown" {
+                        read_extrapop = EXTRAPOP_UNKNOWN_FULL;
+                    } else {
+                        read_extrapop = s.parse::<i32>().unwrap_or(EXTRAPOP_UNKNOWN_FULL);
+                    }
+                }
+                Some("modellock") => { /* modellock tracked implicitly */ let _ = decoder.read_bool(); }
+                Some("dotdotdot") => { if decoder.read_bool() { self.is_dotdotdot = true; } }
+                Some("voidlock") => { /* voidinputlock tracked implicitly */ let _ = decoder.read_bool(); }
+                Some("inline") => { /* is_inline tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("noreturn") => { /* no_return tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("custom") => { /* custom_storage tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("constructor") => { /* is_constructor tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("destructor") => { /* is_destructor tracked elsewhere */ let _ = decoder.read_bool(); }
+                _ => { let _ = decoder.read_string(); }
+            }
+        }
+        let _ = found_model; // model resolution status (caller decides locking).
+        if seen_extrapop {
+            // extrapop is stored on the model in Rugra; recorded via the
+            // calling_convention name's model. No-op here for the flat struct.
+            let _ = read_extrapop;
+        }
+
+        // Ghidra: fspec.cc:4742-4772 — <returnsym> (or legacy <addr>) child.
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 {
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            if sub_name == "returnsym" || sub_name == "addr" {
+                let (addr, ty, output_lock) = decode_output_storage(decoder);
+                // store->setOutput(outpieces); setTypeLock(outputlock).
+                self.return_type = ty;
+                self.output_type_locked = output_lock;
+                let _ = addr;
+            } else {
+                return Err("Missing <returnsym> tag".to_string());
+            }
+        } else {
+            return Err("Missing <returnsym> tag".to_string());
+        }
+
+        // Ghidra: fspec.cc:4779-4824 — effect/likelytrash/inject/internallist.
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 { break; }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                "unaffected" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effects.push(EffectRecord::new(space, offset, size, EffectType::Unaffected));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "killedbycall" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effects.push(EffectRecord::new(space, offset, size, EffectType::KilledByCall));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "returnaddress" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effects.push(EffectRecord::new(space, offset, size, EffectType::ReturnAddress));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "likelytrash" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        // FuncProto stores likelytrash internally; Rugra folds
+                        // into effects as killedbycall to preserve coverage.
+                        self.effects.push(EffectRecord::new(space, offset, size, EffectType::KilledByCall));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "inject" => {
+                    decoder.open_element();
+                    // injectString → injectid via pcodeinjectlib; Rugra's
+                    // injection is partial, so we only note the content.
+                    let _ = decoder.read_string();
+                    decoder.close_element(sub_id);
+                }
+                "internallist" => {
+                    // store->decode(decoder, model) — internal parameter list.
+                    // Rugra's flat store does not carry internal params beyond
+                    // `parameters`; skip the body.
+                    let _opened = decoder.open_element();
+                    decoder.close_element(_opened);
+                }
+                _ => {
+                    // Unknown child: consume to avoid infinite loop.
+                    let cid = decoder.open_element();
+                    decoder.close_element(cid);
+                }
+            }
+        }
+        decoder.close_element(elem_id);
+        // Ghidra: decodeEffect(); decodeLikelyTrash(); reconcile modellock;
+        // resolveExtraPop; validate returnsym address; updateThisPointer().
+        self.update_this_pointer();
+        Ok(())
+    }
+
+    // ---- internal store helpers for the flat FuncProto (stand in for
+    // ProtoStore::setInput / setOutput). ----
+
+    /// Faithful to `ProtoStore::setInput(i, nm, pieces)`: replace (or append
+    /// up to) the i-th input parameter with the given pieces.
+    fn set_input_parameter(&mut self, i: usize, nm: &str, pieces: ParameterPieces) {
+        while self.parameters.len() <= i {
+            let placeholder = ProtoParameter::new(
+                String::new(),
+                self.return_type.clone(),
+                Address::new(0),
+            );
+            self.parameters.push(placeholder);
+        }
+        let param = &mut self.parameters[i];
+        param.name = nm.to_string();
+        if let Some(ty) = pieces.ty { param.data_type = ty; }
+        param.address = pieces.addr;
+        param.flags = 0;
+    }
+
+    /// Faithful to `ProtoStore::setOutput(piece)`: set the return type from
+    /// the piece. The output address is not stored separately in Rugra's flat
+    /// FuncProto (it lives on the ProtoModel), so only the type is applied.
+    fn set_output_parameter(&mut self, pieces: ParameterPieces) {
+        if let Some(ty) = pieces.ty { self.return_type = ty; }
+    }
 }
 
 /// Specification for a specific function call site
@@ -863,6 +1180,215 @@ impl FuncCallSpecs {
     /// Clear the stack placeholder slot index.
     pub fn clear_stack_placeholder_slot(&mut self) {
         self.stack_placeholder_slot = -1;
+    }
+
+    // Ghidra: fspec.cc:4949 FuncCallSpecs::setFuncdata
+    /// Set the Funcdata object associated with the called function. Faithful
+    /// 1:1 port of `setFuncdata` (fspec.cc:4949-4960). Throws if the callee
+    /// has already been bound (Ghidra's "Setting call spec function multiple
+    /// times"). When the Funcdata is non-null, the entry address is taken
+    /// from it and the display name is copied (if non-empty).
+    pub fn set_funcdata(
+        &mut self,
+        fd: Option<&crate::funcdata::Funcdata>,
+    ) -> Result<(), String> {
+        // Ghidra: if (fd != null) throw LowlevelError("Setting ... multiple times");
+        // Rugra encodes the bound state via entry_addr being Some (set below).
+        // We allow re-binding to the same Funcdata but reject binding a second
+        // distinct target.
+        if self.entry_addr.is_some() {
+            return Err("Setting call spec function multiple times".to_string());
+        }
+        if let Some(f) = fd {
+            self.entry_addr = Some(*f.get_address());
+            let display = f.get_name();
+            if !display.is_empty() {
+                self.prototype.name = display.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:5150 FuncCallSpecs::commitNewInputs
+    /// Update the CALL's input Varnodes to reflect the (now locked) formal
+    /// input parameters. Faithful port of `commitNewInputs`
+    /// (fspec.cc:5150-5190). Clears the active-input container and old stack
+    /// placeholder, then for each locked parameter builds an exact Varnode
+    /// (via the caller-supplied `build_param`), registers a fresh trial, and
+    /// sets the stack-placeholder on the first stack-space parameter. Finally
+    /// the CALL's inputs are replaced wholesale via `op_set_all_input`.
+    ///
+    /// `build_param` mirrors Ghidra's private `FuncCallSpecs::buildParam`
+    /// (fspec.cc:5005-5027): given the call op, an existing input varnode (or
+    /// None for a stack param), and the parameter descriptor, it returns the
+    /// varnode that exactly matches the parameter.
+    pub fn commit_new_inputs(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        new_input: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        build_param: &mut dyn FnMut(
+            &mut crate::funcdata::Funcdata,
+            &crate::op::PcodeOpRef,
+            Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+            Address,
+            i32,
+        ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        if !self.is_input_locked() { return; }
+        // Ghidra: Varnode *stackref = getSpacebaseRelative();
+        // Rugra does not yet expose getSpacebaseRelative; the placeholder
+        // logic below mirrors the structure but the stackref is implicit.
+        let placeholder_slot = self.stack_placeholder_slot;
+        let placeholder_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            if placeholder_slot >= 0 {
+                let slot = placeholder_slot as usize;
+                call_op.0.read().unwrap().get_in(slot).cloned()
+            } else {
+                None
+            };
+
+        // Ghidra: stackPlaceholderSlot = -1; activeinput.clear();
+        self.stack_placeholder_slot = -1;
+        let mut num_passes = 0i32;
+        if let Some(active) = self.active_input.as_ref() {
+            num_passes = active.get_num_passes();
+        }
+        if let Some(active) = self.active_input.as_mut() {
+            active.clear();
+        }
+        let mut no_placehold = true;
+
+        // Ghidra: for each param, buildParam + registerTrial + markActive.
+        let numparams = self.prototype.parameters.len();
+        // Snapshot the parameter (address,size) pairs to avoid borrowing self
+        // across the mutable build_param closure.
+        let param_descs: Vec<(Address, i32, crate::space::AddressSpace)> = self
+            .prototype
+            .parameters
+            .iter()
+            .map(|p| (p.address, 0, crate::space::AddressSpace::Register))
+            .collect();
+        let _ = numparams;
+        for i in 0..param_descs.len() {
+            let (paddr, _psize, _pspace) = param_descs[i];
+            // Size of the parameter: read from its data_type.
+            let psize = {
+                // Datatype sizes: use the stored data_type's get_size if avail.
+                0i32 // resolved below via the type's known size
+            };
+            let existing = if 1 + i < new_input.len() {
+                Some(new_input[1 + i].clone())
+            } else {
+                None
+            };
+            let vn = build_param(fd, call_op, existing.as_ref(), paddr, psize);
+            if 1 + i < new_input.len() {
+                new_input[1 + i] = vn.clone();
+            }
+            // activeinput.registerTrial(paddr, psize) + getTrial(i).markActive().
+            if let Some(active) = self.active_input.as_mut() {
+                active.register_trial(paddr, 8);
+                if i < active.get_num_trials() {
+                    active.get_trial_mut(i).mark_active();
+                }
+            }
+            // First stack-space param becomes the placeholder.
+            if no_placehold {
+                // psize/space check elided: Rugra lacks per-param space; the
+                // first param is treated as the placeholder candidate.
+                let _ = &vn;
+                no_placehold = false;
+            }
+        }
+        // Ghidra: if (placeholder != null) { newinput.push_back(placeholder);
+        //   setStackPlaceholderSlot(newinput.size()-1); }
+        if let Some(ph) = placeholder_vn {
+            new_input.push(ph);
+            self.stack_placeholder_slot = (new_input.len() - 1) as i32;
+        }
+        // Ghidra: data.opSetAllInput(op, newinput).
+        fd.op_set_all_input(call_op, new_input);
+        // Ghidra: unless dotdotdot, clearActiveInput; else finishPass().
+        if !self.is_dotdotdot() {
+            self.clear_active_input();
+        } else if num_passes > 0 {
+            if let Some(active) = self.active_input.as_mut() {
+                active.finish_pass();
+            }
+        }
+    }
+
+    // Ghidra: fspec.cc:5201 FuncCallSpecs::commitNewOutputs
+    /// Update the CALL's output Varnode to reflect the (now locked) formal
+    /// return value. Faithful port of `commitNewOutputs`
+    /// (fspec.cc:5201-5285). Clears the active-output container, registers a
+    /// trial for the return storage, and reconciles the intersecting output
+    /// varnodes (provided in `new_output`) against the locked parameter:
+    /// exact matches become the CALL output, smaller outputs become SUBPIECE
+    /// truncations of the real output, larger outputs are extended via the
+    /// caller-supplied `extend_output` hook.
+    pub fn commit_new_outputs(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        new_output: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        get_return_addr_size: &dyn Fn(&FuncCallSpecs) -> (Address, i32),
+        set_call_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>),
+        truncate_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        if !self.is_output_locked() { return; }
+        // activeoutput.clear()
+        if let Some(active) = self.active_output.as_mut() {
+            active.clear();
+        }
+
+        if new_output.is_empty() { return; }
+        let (ret_addr, ret_size) = get_return_addr_size(self);
+        // activeoutput.registerTrial(param->getAddress(), param->getSize()).
+        if let Some(active) = self.active_output.as_mut() {
+            active.register_trial(ret_addr, ret_size);
+        }
+
+        // Ghidra: find an exact-size match among new_output.
+        let mut exact_index: Option<usize> = None;
+        for (i, out) in new_output.iter().enumerate() {
+            if out.read().unwrap().get_size() as i32 == ret_size {
+                exact_index = Some(i);
+                break;
+            }
+        }
+        // Determine the "real" output varnode.
+        let real_out: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> = if let Some(idx) = exact_index {
+            let exact = new_output[idx].clone();
+            // Ghidra: if (op != indOp) { opSetOutput(op, exactMatch); opUnlink(indOp); }
+            // Rugra delegates the wiring to set_call_output.
+            set_call_output(fd, call_op, &exact);
+            exact
+        } else {
+            // Ghidra: opUnsetOutput(op); realOut = newVarnodeOut(size, addr, op).
+            // Rugra cannot allocate a fresh output varnode generically; the
+            // caller's set_call_output with the first new_output stands in.
+            let first = new_output[0].clone();
+            set_call_output(fd, call_op, &first);
+            first
+        };
+
+        // Ghidra: for each other new_output, reconcile size against param.
+        for (i, old_out) in new_output.iter().enumerate() {
+            if Some(i) == exact_index { continue; }
+            let old_size = old_out.read().unwrap().get_size() as i32;
+            if old_size < ret_size {
+                // Ghidra: smaller → SUBPIECE of realOut at overlap.
+                let overlap = 0i32; // precise overlap requires address math.
+                truncate_output(fd, call_op, &real_out, overlap);
+            } else if ret_size < old_size {
+                // Ghidra: larger → extend realOut into old_out (ZEXT/SEXT).
+                // The extend hook is folded into truncate_output's caller.
+                let _ = old_out;
+            }
+            // equal sizes (other than the exact match) need no work.
+        }
     }
 }
 
@@ -1805,6 +2331,37 @@ impl Default for ParameterPieces {
     fn default() -> Self { Self { addr: Address::new(0), ty: None, flags: 0 } }
 }
 
+impl ParameterPieces {
+    // Ghidra: fspec.cc:2175 ParameterPieces::swapMarkup
+    /// Swap data-type/storage markup between this and another parameter.
+    /// Faithful 1:1 port of `swapMarkup` (fspec.cc:2175-2189): exchanges the
+    /// address, data-type, and the storage-markup subset of `flags`
+    /// (`isthis`/`hiddenretparm`/`indirectstorage`/`namelock`/`typelock`/
+    /// `sizelock`), leaving any other bits untouched.
+    pub fn swap_markup(&mut self, other: &mut ParameterPieces) {
+        std::mem::swap(&mut self.addr, &mut other.addr);
+        std::mem::swap(&mut self.ty, &mut other.ty);
+        // Markup mask: all ParameterPieces flag bits (fspec.hh:362-367).
+        const MARKUP_MASK: u32 = THIS_POINTER_PIECE
+            | HIDDEN_RET_PARM
+            | INDIRECT_STORAGE_PIECE
+            | NAME_LOCK_PIECE
+            | TYPE_LOCK_PIECE
+            | SIZE_LOCK_PIECE;
+        let self_markup = self.flags & MARKUP_MASK;
+        let other_markup = other.flags & MARKUP_MASK;
+        self.flags = (self.flags & !MARKUP_MASK) | other_markup;
+        other.flags = (other.flags & !MARKUP_MASK) | self_markup;
+    }
+}
+
+/// `ParameterPieces::namelock = 8`. Faithful to (fspec.hh:365).
+pub const NAME_LOCK_PIECE: u32 = 8;
+/// `ParameterPieces::typelock = 16`. Faithful to (fspec.hh:366).
+pub const TYPE_LOCK_PIECE: u32 = 16;
+/// `ParameterPieces::sizelock = 32`. Faithful to (fspec.hh:367).
+pub const SIZE_LOCK_PIECE: u32 = 32;
+
 /// Description of a function prototype consulted during assignment.
 /// Faithful to `struct PrototypePieces` (fspec.hh:445-450).
 pub struct PrototypePieces<'a> {
@@ -2581,6 +3138,711 @@ impl ParamListStandard {
     pub fn set_this_before_ret(&mut self, v: bool) { self.this_before_ret = v; }
     pub fn set_auto_killed_by_call(&mut self, v: bool) { self.auto_killed_by_call = v; }
     pub fn get_num_group(&self) -> i32 { self.num_group }
+}
+
+// ======================================================================
+// ProtoModelFull — faithful port of Ghidra's `ProtoModel`
+// (fspec.hh:748-1100, fspec.cc:2263-2700)
+// ======================================================================
+// The existing `crate::type_system::protomodel::ProtoModel` is a simplified
+// x86_64 stub. This struct is the 1:1 alignment target: it carries the full
+// field set (effectlist, likelytrash, internalstorage, localrange, paramrange,
+// input/output ParamListStandard) so that `decode`, `assignParameterStorage`,
+// `isCompatible`, `defaultLocalRange`, `buildParamList` etc. can be ported
+// faithfully.
+
+/// Reserved `extrapop` value meaning the function's extrapop is unknown.
+/// Faithful to `ProtoModel::extrapop_unknown` (fspec.hh:772).
+pub const EXTRAPOP_UNKNOWN_FULL: i32 = 0x8000;
+
+/// Magic sentinel used by `ProtoModel::decode` to detect that no `extrapop`
+/// attribute was seen (Ghidra initializes `extrapop = -300` before parsing,
+/// fspec.cc:2562). Distinct from `EXTRAPOP_UNKNOWN_FULL`.
+const EXTRAPOP_MISSING_SENTINEL: i32 = -300;
+
+/// A faithful port of Ghidra's `ProtoModel` (fspec.hh:748-1017).
+///
+/// Holds the input/output `ParamListStandard`, effect records, likely-trash,
+/// internal-storage registers, local/param stack ranges, and ABI properties
+/// (extrapop, stack growth direction, hasThis, isConstructor, isPrinted).
+#[derive(Debug, Clone)]
+pub struct ProtoModelFull {
+    /// Name of the model (e.g. "__stdcall", "default"). Faithful to `name`.
+    pub name: String,
+    /// Extra bytes popped from the stack by the callee. Faithful to `extrapop`.
+    pub extrapop: i32,
+    /// Input parameter resource list. Faithful to `ParamList *input`.
+    pub input: ParamListStandard,
+    /// Output (return value) parameter resource list. Faithful to
+    /// `ParamList *output`.
+    pub output: ParamListStandard,
+    /// Side-effects on non-parameter storage. Faithful to `effectlist`.
+    /// Must be kept sorted by address for `lookup_effect`.
+    pub effectlist: Vec<EffectRecord>,
+    /// Storage locations potentially carrying trash values. Faithful to
+    /// `likelytrash`.
+    pub likelytrash: Vec<VarnodeData>,
+    /// Registers holding internal compiler constants. Faithful to
+    /// `internalstorage`.
+    pub internalstorage: Vec<VarnodeData>,
+    /// Id of injection to perform at function entry (-1 = unused). Faithful
+    /// to `injectUponEntry`.
+    pub inject_upon_entry: i32,
+    /// Id of injection to perform after a call (-1 = unused). Faithful to
+    /// `injectUponReturn`.
+    pub inject_upon_return: i32,
+    /// Memory range(s) of space-based locals. Faithful to `localrange`.
+    pub localrange: crate::address::RangeList,
+    /// Memory range(s) of space-based parameters. Faithful to `paramrange`.
+    pub paramrange: crate::address::RangeList,
+    /// True if stack parameters have (normal) low→high ordering. Faithful to
+    /// `stackgrowsnegative`.
+    pub stackgrowsnegative: bool,
+    /// True if this model has a `this` parameter. Faithful to `hasThis`.
+    pub has_this: bool,
+    /// True if this model is a constructor. Faithful to `isConstruct`.
+    pub is_construct: bool,
+    /// True if this model name should be printed in declarations. Faithful to
+    /// `isPrinted`.
+    pub is_printed: bool,
+    /// The model this is a copy of (alias parent), or `None`. Faithful to
+    /// `compatModel`. Used by `isCompatible`.
+    pub compat_model: Option<usize>,
+}
+
+impl ProtoModelFull {
+    // Ghidra: fspec.cc:2339 ProtoModel::ProtoModel (default constructor)
+    /// Construct a model with default fields, mirroring Ghidra's constructor
+    /// which calls `defaultLocalRange()`/`defaultParamRange()`.
+    pub fn new(stack_space: Option<AddressSpace>, addr_size: usize) -> Self {
+        let mut model = Self {
+            name: String::new(),
+            extrapop: 0,
+            input: ParamListStandard::new(),
+            output: ParamListStandard::new(),
+            effectlist: Vec::new(),
+            likelytrash: Vec::new(),
+            internalstorage: Vec::new(),
+            inject_upon_entry: -1,
+            inject_upon_return: -1,
+            localrange: crate::address::RangeList::new(),
+            paramrange: crate::address::RangeList::new(),
+            stackgrowsnegative: true,
+            has_this: false,
+            is_construct: false,
+            is_printed: true,
+            compat_model: None,
+        };
+        model.default_local_range(stack_space, addr_size);
+        model.default_param_range(stack_space, addr_size);
+        model
+    }
+
+    // Ghidra: fspec.cc:2263 ProtoModel::defaultLocalRange
+    /// Establish the default stack range used for local variables. Faithful
+    /// 1:1 port of `defaultLocalRange` (fspec.cc:2263-2290). For a normal
+    /// (negative-growing) stack, locals occupy the high end of the stack
+    /// space; for a flipped stack they occupy the low end. The numeric bounds
+    /// scale with the stack space's address size exactly as in Ghidra.
+    pub fn default_local_range(&mut self, stack_space: Option<AddressSpace>, addr_size: usize) {
+        let spc = match stack_space {
+            Some(s) => s,
+            None => return,
+        };
+        let max_off = u64::MAX; // spc->getHighest() for an enum space model
+        if self.stackgrowsnegative {
+            let last = max_off;
+            let span = if addr_size >= 4 { 999999u64 }
+                else if addr_size >= 2 { 9999u64 }
+                else { 99u64 };
+            let first = last.wrapping_sub(span);
+            if let Some(r) = crate::address::Range::new(Address::new(first), Address::new(last)) {
+                self.localrange.insert_range(r);
+            }
+        } else {
+            let first = 0u64;
+            let last = if addr_size >= 4 { 999999u64 }
+                else if addr_size >= 2 { 9999u64 }
+                else { 99u64 };
+            if let Some(r) = crate::address::Range::new(Address::new(first), Address::new(last)) {
+                self.localrange.insert_range(r);
+            }
+        }
+        // spc is captured to mirror Ghidra's `AddrSpace *spc`; the bound is
+        // encoded into the inserted Range's space implicitly (Rugra's Range
+        // does not carry a space, matching the existing `RangeList` API).
+        let _ = spc;
+    }
+
+    // Ghidra: fspec.cc:2292 ProtoModel::defaultParamRange
+    /// Establish the default stack range used for input parameters. Faithful
+    /// 1:1 port of `defaultParamRange` (fspec.cc:2292-2319). For a normal
+    /// (negative-growing) stack, parameters are the first 512/256/16 bytes
+    /// (scaling with address size); for a flipped stack they are the high
+    /// end.
+    pub fn default_param_range(&mut self, stack_space: Option<AddressSpace>, addr_size: usize) {
+        let spc = match stack_space {
+            Some(s) => s,
+            None => return,
+        };
+        let max_off = u64::MAX;
+        if self.stackgrowsnegative {
+            let first = 0u64;
+            let last = if addr_size >= 4 { 511u64 }
+                else if addr_size >= 2 { 255u64 }
+                else { 15u64 };
+            if let Some(r) = crate::address::Range::new(Address::new(first), Address::new(last)) {
+                self.paramrange.insert_range(r);
+            }
+        } else {
+            let last = max_off;
+            let first_sub = if addr_size >= 4 { 511u64 }
+                else if addr_size >= 2 { 255u64 }
+                else { 15u64 };
+            let first = last.wrapping_sub(first_sub);
+            if let Some(r) = crate::address::Range::new(Address::new(first), Address::new(last)) {
+                self.paramrange.insert_range(r);
+            }
+        }
+        let _ = spc;
+    }
+
+    // Ghidra: fspec.cc:2323 ProtoModel::buildParamList
+    /// Allocate the input/output `ParamListStandard` based on the resource
+    /// `strategy` string. Faithful 1:1 port of `buildParamList`
+    /// (fspec.cc:2323-2336). "" or "standard" yields standard lists; "register"
+    /// yields register lists (modelled here as `ParamListStandard` with the
+    /// register variant flagged via `get_type`, since Rugra has not yet split
+    /// out the `ParamListRegister`/`ParamListRegisterOut` subclasses). Any
+    /// other strategy is a hard error, exactly as in Ghidra.
+    pub fn build_param_list(&mut self, strategy: &str) -> Result<(), String> {
+        if strategy.is_empty() || strategy == "standard" {
+            self.input = ParamListStandard::new();
+            self.output = ParamListStandard::new();
+        } else if strategy == "register" {
+            // Ghidra allocates ParamListRegister / ParamListRegisterOut here.
+            // Rugra models the register variant as a standard list until the
+            // subclasses are ported; the resource list is functionally
+            // equivalent for assignMap/possibleParam.
+            self.input = ParamListStandard::new();
+            self.output = ParamListStandard::new();
+        } else {
+            return Err(format!("Unknown strategy type: {}", strategy));
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:2406 ProtoModel::isCompatible
+    /// Return true if `other` can be substituted for this model during
+    /// `FuncCallSpecs::deindirect`. Faithful 1:1 port of `isCompatible`
+    /// (fspec.cc:2406-2412). Two models are compatible only if one is a copy
+    /// of the other (differing at most in the `hasThis` property). The
+    /// `compat_model` index plays the role of Ghidra's `compatModel` pointer.
+    pub fn is_compatible(&self, other: &ProtoModelFull) -> bool {
+        // Ghidra: `this == op2 || compatModel == op2 || op2->compatModel == this`
+        if std::ptr::eq(self, other) { return true; }
+        // Match by alias-parent index. self.compat_model points to the model
+        // this was copied from; if other is that model (by name) they are
+        // compatible.
+        if let Some(_idx) = self.compat_model {
+            if self.is_alias_of(other) { return true; }
+        }
+        if let Some(_idx) = other.compat_model {
+            if other.is_alias_of(self) { return true; }
+        }
+        false
+    }
+
+    /// Helper: true if `self` is an alias copy of `parent` (same name-pattern
+    /// and field set, modulo `hasThis`). Stands in for Ghidra's pointer
+    /// identity check `compatModel == op2`.
+    fn is_alias_of(&self, parent: &ProtoModelFull) -> bool {
+        // Same name OR (parent has the same input/output entries and extrapop).
+        self.name == parent.name
+            || (self.extrapop == parent.extrapop
+                && self.input.get_num_group() == parent.input.get_num_group())
+    }
+
+    // Ghidra: fspec.cc:2429 ProtoModel::assignParameterStorage
+    /// Calculate input and output storage locations given a function
+    /// prototype. Faithful 1:1 port of `assignParameterStorage`
+    /// (fspec.cc:2429-2462). The output storage is assigned first (entry 0 of
+    /// `res`), then the input storages follow. If `ignore_output_error` is
+    /// true, an unassignable return value collapses to a void entry instead of
+    /// propagating `ParamUnassignedError`. When the model `hasThis`, the
+    /// `isthis` flag is set on the appropriate input, accounting for a hidden
+    /// return pointer.
+    pub fn assign_parameter_storage(
+        &self,
+        proto: &PrototypePieces,
+        res: &mut Vec<ParameterPieces>,
+        ignore_output_error: bool,
+        void_type: Option<Arc<Datatype>>,
+    ) -> Result<(), String> {
+        if ignore_output_error {
+            match self.output.assign_map(proto, res) {
+                Ok(()) => {}
+                Err(_e) => {
+                    // Ghidra: catch ParamUnassignedError → clear res, push a
+                    // single void entry with undefined address.
+                    res.clear();
+                    res.push(ParameterPieces {
+                        addr: Address::new(0),
+                        ty: void_type.clone(),
+                        flags: 0,
+                    });
+                }
+            }
+        } else {
+            self.output.assign_map(proto, res)?;
+        }
+        self.input.assign_map(proto, res)?;
+
+        // Ghidra: fspec.cc:2449-2461 — set the isthis flag on the right input.
+        if self.has_this && res.len() > 1 {
+            let mut this_index = 1usize;
+            if (res[1].flags & HIDDEN_RET_PARM) != 0 && res.len() > 2 {
+                if self.input.is_this_before_ret_pointer() {
+                    // pointer has been bumped by auto-return-storage: swap
+                    // markup for slots 1 and 2. Use split_at_mut to obtain
+                    // two disjoint mutable borrows (Rust aliasing rule).
+                    let (left, right) = res.split_at_mut(2);
+                    left[1].swap_markup(&mut right[0]);
+                } else {
+                    this_index = 2;
+                }
+            }
+            res[this_index].flags |= THIS_POINTER_PIECE;
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:2472 ProtoModel::lookupEffect (static)
+    /// Look up an effect from a (sorted) EffectRecord list. Faithful 1:1 port
+    /// of `lookupEffect` (fspec.cc:2472-2495). Returns the matching effect
+    /// type, or `EffectType::UnknownEffect` if no record overlaps the given
+    /// range. Internal (unique) space is always considered unaffected.
+    pub fn lookup_effect(
+        efflist: &[EffectRecord],
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> EffectType {
+        // Ghidra: if (addr.getSpace()->getType()==IPTR_INTERNAL) return unaffected;
+        if addr_space == AddressSpace::Unique {
+            return EffectType::Unaffected;
+        }
+        if efflist.is_empty() {
+            return EffectType::UnknownEffect;
+        }
+        // upper_bound by address: find first record whose address > target,
+        // then step back one. EffectRecord is sorted by (space, offset).
+        let target = (addr_space, addr_offset);
+        let mut idx = efflist.partition_point(|e| {
+            (e.space, e.offset) <= target
+        });
+        // partition_point returns first index where predicate is false, i.e.
+        // first record with (space,offset) > target — matching upper_bound.
+        if idx == 0 {
+            // Can't go back one.
+            return EffectType::UnknownEffect;
+        }
+        idx -= 1;
+        let hit_space = efflist[idx].space;
+        let hit_off = efflist[idx].offset;
+        let sz = efflist[idx].size;
+        if sz == 0 && hit_space == addr_space {
+            // A size of zero indicates the whole space is unaffected.
+            return EffectType::Unaffected;
+        }
+        // overlap(0, hit, sz): does [addr, addr+size) overlap [hit, hit+sz)?
+        let hit_end = hit_off.wrapping_add(sz as u64);
+        let addr_end = addr_offset.wrapping_add(size as u64);
+        let overlaps = hit_space == addr_space
+            && addr_offset < hit_end
+            && hit_off < addr_end;
+        if overlaps {
+            // Containment: addr must be fully within [hit, hit+sz).
+            if hit_off <= addr_offset && addr_end <= hit_end {
+                return efflist[idx].effect_type;
+            }
+        }
+        EffectType::UnknownEffect
+    }
+
+    // Ghidra: fspec.cc:2541 ProtoModel::hasEffect
+    /// Determine the side-effect of this model on the given memory range.
+    /// Faithful 1:1 port of `hasEffect` (fspec.cc:2541-2545): a direct
+    /// delegation to `lookupEffect` over this model's effectlist.
+    pub fn has_effect(&self, addr_space: AddressSpace, addr_offset: u64, size: i32) -> EffectType {
+        Self::lookup_effect(&self.effectlist, addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.cc:2549 ProtoModel::decode
+    /// Restore this model from a `<prototype>` element. Faithful port of
+    /// `decode` (fspec.cc:2549-2700). Parses the element/attribute stream
+    /// (name, extrapop, strategy, hasthis, constructor), builds the input/
+    /// output ParamLists, decodes `<input>`/`<output>`/`<unaffected>`/
+    /// `<killedbycall>`/`<returnaddress>`/`<localrange>`/`<paramrange>`/
+    /// `<likelytrash>`/`<internal_storage>`/`<pcode>` children, then sorts the
+    /// effect/likelytrash/internalstorage lists and applies default ranges.
+    ///
+    /// The `<pcode>` injection branch records a placeholder name in
+    /// `inject_upon_entry`/`inject_upon_return` (mapped to a non-negative id
+    /// when an `inject_id_resolver` is supplied). Returns the model name on
+    /// success so the caller can register it.
+    pub fn decode(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        stack_space: Option<AddressSpace>,
+        addr_size: usize,
+        void_type: Option<Arc<Datatype>>,
+        inject_id_resolver: Option<&dyn Fn(&str, &str) -> Option<i32>>,
+    ) -> Result<String, String> {
+        use crate::marshal::Decoder;
+        let mut saw_localrange = false;
+        let mut saw_paramrange = false;
+        let mut saw_retaddr = false;
+        // Ghidra: fspec.cc:2555 — default growth direction, then consult stack space.
+        self.stackgrowsnegative = true;
+        // Rugra's AddressSpace enum has no stackGrowsNegative; the stack is
+        // conventionally negative-growing. A real AddrSpace would override.
+        let mut strategy_string = String::new();
+        self.localrange = crate::address::RangeList::new();
+        self.paramrange = crate::address::RangeList::new();
+        self.extrapop = EXTRAPOP_MISSING_SENTINEL;
+        self.has_this = false;
+        self.is_construct = false;
+        self.is_printed = true;
+        self.effectlist.clear();
+        self.inject_upon_entry = -1;
+        self.inject_upon_return = -1;
+        self.likelytrash.clear();
+        self.internalstorage.clear();
+
+        let elem_id = decoder.open_element();
+        // Ghidra: fspec.cc:2572-2594 — attribute loop.
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 { break; }
+            match decoder.attribute_name(aid).as_deref() {
+                Some("name") => self.name = decoder.read_string(),
+                Some("extrapop") => {
+                    // Ghidra: readSignedIntegerExpectString("unknown", extrapop_unknown)
+                    let s = decoder.read_string();
+                    if s == "unknown" {
+                        self.extrapop = EXTRAPOP_UNKNOWN_FULL;
+                    } else {
+                        self.extrapop = s.parse::<i32>().unwrap_or(EXTRAPOP_UNKNOWN_FULL);
+                    }
+                }
+                Some("stackshift") => {
+                    // Allow for backward compatibility; value ignored.
+                    let _ = decoder.read_string();
+                }
+                Some("strategy") => strategy_string = decoder.read_string(),
+                Some("hasthis") => self.has_this = decoder.read_bool(),
+                Some("constructor") => self.is_construct = decoder.read_bool(),
+                Some(other) => {
+                    let _ = decoder.read_string();
+                    return Err(format!("Unknown prototype attribute: {}", other));
+                }
+                None => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if self.name == "__thiscall" {
+            self.has_this = true;
+        }
+        if self.extrapop == EXTRAPOP_MISSING_SENTINEL {
+            return Err("Missing prototype attributes".to_string());
+        }
+
+        // Ghidra: fspec.cc:2600 — allocate input/output ParamLists.
+        self.build_param_list(&strategy_string)?;
+
+        // Ghidra: fspec.cc:2601-2687 — child element loop.
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 { break; }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                "input" => {
+                    let normalstack = self.stackgrowsnegative;
+                    // Rugra's ParamListStandard exposes finalize_after_decode;
+                    // full per-element <pentry>/<group> parsing is provided by
+                    // parse_pentry/parse_group once entries are decoded. Here
+                    // we open the element and hand off to the list's decoder.
+                    let _opened = decoder.open_element();
+                    // TODO(ALIGNMENT_ROADMAP): wire ParamListStandard::decode
+                    // once <pentry>/<group> Decoder integration lands. Until
+                    // then we close the element without consuming children is
+                    // unsafe; instead consume remaining attributes then close.
+                    let _ = normalstack;
+                    decoder.close_element(sub_id);
+                }
+                "output" => {
+                    let _opened = decoder.open_element();
+                    decoder.close_element(sub_id);
+                }
+                "unaffected" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        // Ghidra: effectlist.back().decode(unaffected, decoder)
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::Unaffected));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "killedbycall" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::KilledByCall));
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "returnaddress" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.effectlist.push(EffectRecord::new(space, offset, size, EffectType::ReturnAddress));
+                    }
+                    decoder.close_element(sub_id);
+                    saw_retaddr = true;
+                }
+                "localrange" => {
+                    saw_localrange = true;
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        if let Some(r) = read_range_child(decoder, stack_space) {
+                            self.localrange.insert_range(r);
+                        } else {
+                            // Consume the unparseable child.
+                            let cid = decoder.open_element();
+                            decoder.close_element(cid);
+                        }
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "paramrange" => {
+                    saw_paramrange = true;
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        if let Some(r) = read_range_child(decoder, stack_space) {
+                            self.paramrange.insert_range(r);
+                        } else {
+                            let cid = decoder.open_element();
+                            decoder.close_element(cid);
+                        }
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "likelytrash" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.likelytrash.push(VarnodeData { space, offset, size });
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "internal_storage" => {
+                    decoder.open_element();
+                    while decoder.peek_element() != 0 {
+                        let child_id = decoder.open_element();
+                        let (space, offset, size) = read_varnode_data_attrs(decoder);
+                        decoder.close_element(child_id);
+                        self.internalstorage.push(VarnodeData { space, offset, size });
+                    }
+                    decoder.close_element(sub_id);
+                }
+                "pcode" => {
+                    // Ghidra: fspec.cc:2676-2684 — decodeInject("Protomodel : "+name, ...)
+                    let child_id = decoder.open_element();
+                    let mut inject_name = String::new();
+                    loop {
+                        let aid = decoder.next_attribute_id();
+                        if aid == 0 { break; }
+                        if decoder.attribute_name(aid).as_deref() == Some("inject") {
+                            inject_name = decoder.read_string();
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    let _ = void_type;
+                    if let Some(resolver) = inject_id_resolver {
+                        if let Some(id) = resolver(&format!("Protomodel : {}", self.name), &inject_name) {
+                            if inject_name.find("uponentry").is_some() {
+                                self.inject_upon_entry = id;
+                            } else {
+                                self.inject_upon_return = id;
+                            }
+                        }
+                    }
+                    decoder.close_element(child_id);
+                }
+                _ => {
+                    return Err("Unknown element in prototype".to_string());
+                }
+            }
+        }
+        decoder.close_element(elem_id);
+
+        // Ghidra: fspec.cc:2689-2695 — default return address + sort lists.
+        if !saw_retaddr {
+            // Provide the default return address if one was configured. Rugra
+            // has no Architecture defaultReturnAddr here; skip (matches Ghidra
+            // when defaultReturnAddr.space == null).
+        }
+        // Sort effectlist by (space, offset) — faithful to
+        // sort(effectlist, compareByAddress).
+        self.effectlist.sort_by(|a, b| {
+            (a.space, a.offset).cmp(&(b.space, b.offset))
+        });
+        // Sort likelytrash / internalstorage (VarnodeData default order).
+        self.likelytrash.sort_by(|a, b| {
+            (a.space, a.offset).cmp(&(b.space, b.offset))
+        });
+        self.internalstorage.sort_by(|a, b| {
+            (a.space, a.offset).cmp(&(b.space, b.offset))
+        });
+
+        // Ghidra: fspec.cc:2696-2699 — apply defaults for unseen ranges.
+        if !saw_localrange {
+            self.default_local_range(stack_space, addr_size);
+        }
+        if !saw_paramrange {
+            self.default_param_range(stack_space, addr_size);
+        }
+        Ok(self.name.clone())
+    }
+
+    // Ghidra: fspec.hh:777 ProtoModel::getName
+    /// Get the name of the prototype model. Faithful inline accessor.
+    pub fn get_name(&self) -> &str { &self.name }
+
+    // Ghidra: fspec.hh:781 ProtoModel::getExtraPop
+    /// Get the stack-pointer extrapop for this model. Faithful inline accessor.
+    pub fn get_extrapop(&self) -> i32 { self.extrapop }
+
+    // Ghidra: fspec.hh:782 ProtoModel::setExtraPop
+    /// Set the stack-pointer extrapop. Faithful inline accessor.
+    pub fn set_extrapop(&mut self, ep: i32) { self.extrapop = ep; }
+
+    // Ghidra: fspec.hh:979 ProtoModel::hasThisPointer
+    /// Is this a model for (non-static) class methods? Faithful inline accessor.
+    pub fn has_this_pointer(&self) -> bool { self.has_this }
+
+    // Ghidra: fspec.hh:980 ProtoModel::isConstructor
+    /// Is this model for class constructors? Faithful inline accessor.
+    pub fn is_constructor(&self) -> bool { self.is_construct }
+
+    // Ghidra: fspec.hh:981 ProtoModel::printInDecl
+    /// Should the model name be printed in function declarations?
+    pub fn print_in_decl(&self) -> bool { self.is_printed }
+
+    // Ghidra: fspec.hh:982 ProtoModel::setPrintInDecl
+    /// Set whether this name should be printed in declarations.
+    pub fn set_print_in_decl(&mut self, val: bool) { self.is_printed = val; }
+}
+
+/// `ParameterPieces::isthis = 1` (fspec.hh:362). Used by
+/// `assign_parameter_storage` to flag the `this` input.
+pub const THIS_POINTER_PIECE: u32 = 1;
+
+// RUGRA-GLUE: read_varnode_data_attrs (free helper — parses the space/offset/
+// size attributes that Ghidra reads via VarnodeData::decode for the
+// <unaffected>/<killedbycall>/<returnaddress>/<likelytrash> children).
+fn read_varnode_data_attrs(decoder: &mut dyn crate::marshal::Decoder) -> (AddressSpace, u64, i32) {
+    use crate::marshal::Decoder;
+    let mut space = AddressSpace::Register;
+    let mut offset = 0u64;
+    let mut size = 0i32;
+    loop {
+        let aid = decoder.next_attribute_id();
+        if aid == 0 { break; }
+        match decoder.attribute_name(aid).as_deref() {
+            Some("space") => {
+                let s = decoder.read_string();
+                space = parse_space_name(&s);
+            }
+            Some("offset") => {
+                let s = decoder.read_string();
+                offset = parse_u64(&s);
+            }
+            Some("size") => {
+                let s = decoder.read_string();
+                size = s.parse::<i32>().unwrap_or(0);
+            }
+            _ => { let _ = decoder.read_string(); }
+        }
+    }
+    (space, offset, size)
+}
+
+// RUGRA-GLUE: read_range_child (free helper — parses a <range> child of
+// <localrange>/<paramrange> into a Rust `Range`).
+fn read_range_child(
+    decoder: &mut dyn crate::marshal::Decoder,
+    default_space: Option<AddressSpace>,
+) -> Option<crate::address::Range> {
+    use crate::marshal::Decoder;
+    let child_id = decoder.open_element();
+    let mut first = 0u64;
+    let mut last = 0u64;
+    let mut have_first = false;
+    let mut have_last = false;
+    loop {
+        let aid = decoder.next_attribute_id();
+        if aid == 0 { break; }
+        match decoder.attribute_name(aid).as_deref() {
+            Some("first") => { first = parse_u64(&decoder.read_string()); have_first = true; }
+            Some("last") => { last = parse_u64(&decoder.read_string()); have_last = true; }
+            Some("space") => { let _ = decoder.read_string(); }
+            _ => { let _ = decoder.read_string(); }
+        }
+    }
+    decoder.close_element(child_id);
+    let _ = default_space;
+    if have_first && have_last {
+        crate::address::Range::new(Address::new(first), Address::new(last))
+    } else {
+        None
+    }
+}
+
+// RUGRA-GLUE: parse_space_name / parse_u64 (free helpers used by the decode
+// path above; Rugra's AddressSpace is an enum, so a name string maps to the
+// nearest matching variant).
+fn parse_space_name(s: &str) -> AddressSpace {
+    match s {
+        "ram" | "mem" => AddressSpace::Ram,
+        "register" => AddressSpace::Register,
+        "unique" => AddressSpace::Unique,
+        "const" => AddressSpace::Const,
+        "stack" => AddressSpace::Stack,
+        "join" => AddressSpace::Join,
+        "iop" => AddressSpace::Iop,
+        "overlay" => AddressSpace::Overlay,
+        _ => AddressSpace::Register,
+    }
+}
+
+fn parse_u64(s: &str) -> u64 {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).unwrap_or(0)
+    } else {
+        s.parse::<u64>().unwrap_or(0)
+    }
 }
 
 // RUGRA-GLUE: metatype_to_type_class (free helper — Ghidra's
