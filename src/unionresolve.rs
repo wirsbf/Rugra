@@ -758,7 +758,7 @@ impl<'t> ScoreUnionFields<'t> {
     fn score_trial_down(&mut self, trial: &Trial, last_level: bool) {
         if trial.direction == DirType::FitUp { return; }
         let op = match &trial.op { Some(o) => o.clone(), None => return };
-        let (op_code, out_vn, in1, in2, out_size, in1_offset_const, in2_offset_const) = {
+        let (op_code, out_vn, _in0, in1, in2, out_size, in1_offset_const, in2_offset_const) = {
             let op_rg = op.read().unwrap();
             let out_vn = op_rg.get_out().cloned();
             let in0 = op_rg.get_in(0).cloned();
