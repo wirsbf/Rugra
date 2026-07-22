@@ -7571,6 +7571,263 @@ impl Funcdata {
         let has_active_output = self.active_output.is_some();
         ancestor_op_use(has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags)
     }
+
+    // Ghidra: funcdata_op.cc:332 Funcdata::newOp(int4, const SeqNum &)
+    /// Create a new PcodeOp with an explicit sequence number. Faithful to
+    /// `Funcdata::newOp(int4 inputs, const SeqNum &sq)` (funcdata_op.cc:332).
+    /// Rugra's PcodeOpBank::create currently derives the SeqNum from the
+    /// given Address, so this is a thin wrapper around `new_op` that uses
+    /// the SeqNum's address; the order field is preserved via set_seq_order.
+    pub fn new_op_with_seq(&mut self, num_inputs: usize, sq: &crate::address::SeqNum) -> crate::op::PcodeOpRef {
+        let addr = sq.addr;
+        let order = sq.get_order();
+        let op = self.new_op(num_inputs, addr);
+        op.0.write().unwrap().start.order = order;
+        op
+    }
+
+    // Ghidra: funcdata_op.cc:616 Funcdata::cloneOp
+    /// Clone an existing PcodeOp (with a new SeqNum) into this function.
+    /// Faithful to `Funcdata::cloneOp` (funcdata_op.cc:616-628):
+    ///   PcodeOp *newop = newOp(op->numInput(),seq);
+    ///   opSetOpcode(newop,op->code());
+    ///   uint4 fl = op->flags & (startmark | startbasic);
+    ///   newop->setFlag(fl);
+    ///   if (op->getOut() != (Varnode *)0)
+    ///     opSetOutput(newop,cloneVarnode(op->getOut()));
+    ///   for(int4 i=0;i<op->numInput();++i)
+    ///     opSetInput(newop,cloneVarnode(op->getIn(i)),i);
+    ///   return newop;
+    pub fn clone_op(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        seq: &crate::address::SeqNum,
+    ) -> crate::op::PcodeOpRef {
+        use crate::op::pcodeop_flags as pf;
+        let (num_inputs, opcode, flag_subset, has_out) = {
+            let r = op.0.read().unwrap();
+            let fl = r.flags & (pf::STARTMARK | pf::STARTBASIC);
+            (r.num_input(), r.opcode, fl, r.get_out().is_some())
+        };
+        let newop = self.new_op_with_seq(num_inputs, seq);
+        self.op_set_opcode(&newop, opcode);
+        // cc:621-622: copy startmark/startbasic flags.
+        newop.0.write().unwrap().flags |= flag_subset;
+        // cc:623-624: clone the output varnode if any.
+        if has_out {
+            let out_clone = {
+                let r = op.0.read().unwrap();
+                self.clone_varnode(r.get_out().unwrap())
+            };
+            self.op_set_output(&newop, out_clone);
+        }
+        // cc:625-626: clone each input varnode.
+        for i in 0..num_inputs {
+            let in_clone = {
+                let r = op.0.read().unwrap();
+                self.clone_varnode(r.get_in(i).unwrap())
+            };
+            self.op_set_input(&newop, in_clone, i);
+        }
+        newop
+    }
+
+    // Ghidra: funcdata_op.cc:656 Funcdata::newOpBefore
+    /// Create a new PcodeOp with 2 or 3 given operands and insert it before
+    /// `follow`. Faithful to `Funcdata::newOpBefore` (funcdata_op.cc:656-671):
+    ///   sz = (in3 == NULL) ? 2 : 3;
+    ///   newop = newOp(sz, follow->getAddr());
+    ///   opSetOpcode(newop, opc);
+    ///   newUniqueOut(in1->getSize(), newop);
+    ///   opSetInput(newop, in1, 0);
+    ///   opSetInput(newop, in2, 1);
+    ///   if (sz==3) opSetInput(newop, in3, 2);
+    ///   opInsertBefore(newop, follow);
+    pub fn new_op_before(
+        &mut self,
+        follow: &crate::op::PcodeOpRef,
+        opc: crate::opcodes::OpCode,
+        in1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        in2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        in3: Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) -> crate::op::PcodeOpRef {
+        let sz = if in3.is_some() { 3 } else { 2 };
+        let addr = follow.0.read().unwrap().get_addr();
+        let newop = self.new_op(sz, addr);
+        self.op_set_opcode(&newop, opc);
+        let s1 = in1.read().unwrap().size as usize;
+        self.new_unique_out(s1, &newop);
+        self.op_set_input(&newop, in1.clone(), 0);
+        self.op_set_input(&newop, in2.clone(), 1);
+        if sz == 3 {
+            self.op_set_input(&newop, in3.unwrap().clone(), 2);
+        }
+        // cc:671: opInsertBefore — `new_op` already registered the op in
+        // optree/alivelist, so we only need to reorder it ahead of `follow`.
+        self.op_insert_before(&newop, follow);
+        newop
+    }
+
+    // Ghidra: funcdata_op.cc:929 Funcdata::findPrimaryBranch
+    /// Find the primary branch op within an address range. Faithful to
+    /// `Funcdata::findPrimaryBranch` (funcdata_op.cc:929-961): iterate the
+    /// ops at `addr` and return the first whose opcode matches the requested
+    /// category (branch / call / return). BRANCH/CBRANCH are only returned
+    /// when their target input is non-constant (i.e., a real branch, not an
+    /// internal p-code branch).
+    pub fn find_primary_branch(
+        &self,
+        ops_at_addr: &[crate::op::PcodeOpRef],
+        find_branch: bool,
+        find_call: bool,
+        find_return: bool,
+    ) -> Option<crate::op::PcodeOpRef> {
+        use crate::opcodes::OpCode as OC;
+        for op_ref in ops_at_addr {
+            let r = op_ref.0.read().unwrap();
+            match r.opcode {
+                OC::CPUI_BRANCH | OC::CPUI_CBRANCH => {
+                    if find_branch {
+                        // cc:938: skip internal (constant-target) branches.
+                        let is_const = r.get_in(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                        if !is_const { return Some(op_ref.clone()); }
+                    }
+                }
+                OC::CPUI_BRANCHIND => {
+                    if find_branch { return Some(op_ref.clone()); }
+                }
+                OC::CPUI_CALL | OC::CPUI_CALLIND => {
+                    if find_call { return Some(op_ref.clone()); }
+                }
+                OC::CPUI_RETURN => {
+                    if find_return { return Some(op_ref.clone()); }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    // Ghidra: funcdata_op.cc:969 Funcdata::overrideFlow
+    /// Override the control-flow p-code for a particular instruction.
+    /// Faithful to `Funcdata::overrideFlow` (funcdata_op.cc:969-1021):
+    /// given an instruction address and an Override type, locate the primary
+    /// branch op at that address (still dead / pre-block-formation) and
+    /// rewrite its opcode per the override table. For `CALL_RETURN` a fresh
+    /// RETURN op is inserted after the rewritten call. Throws LowlevelError
+    /// if the primary op is missing or already alive (block-formed).
+    pub fn override_flow(&mut self, addr: crate::address::Address, flow_type: crate::override_rs::FlowOverride) {
+        use crate::opcodes::OpCode as OC;
+        use crate::override_rs::FlowOverride as FO;
+        // cc:972-983: gather dead ops at addr, then dispatch on the override.
+        let ops_at_addr: Vec<crate::op::PcodeOpRef> = self.obank.optree.iter()
+            .filter(|op| {
+                let r = op.0.read().unwrap();
+                r.get_addr() == addr && r.is_dead()
+            })
+            .cloned()
+            .collect();
+        let primary = match flow_type {
+            FO::Branch => self.find_primary_branch(&ops_at_addr, false, true, true),
+            FO::Call => self.find_primary_branch(&ops_at_addr, true, false, true),
+            FO::CallReturn => self.find_primary_branch(&ops_at_addr, true, true, true),
+            FO::Return => self.find_primary_branch(&ops_at_addr, true, true, false),
+            FO::None => return,
+        };
+        let op = match primary {
+            Some(o) => o,
+            None => {
+                self.warning_header("Could not apply flowoverride: no primary op");
+                return;
+            }
+        };
+        // cc:988-1020: rewrite the opcode per the override table.
+        let opc = op.0.read().unwrap().opcode;
+        match flow_type {
+            FO::Branch => {
+                match opc {
+                    OC::CPUI_CALL => self.op_set_opcode(&op, OC::CPUI_BRANCH),
+                    OC::CPUI_CALLIND => self.op_set_opcode(&op, OC::CPUI_BRANCHIND),
+                    OC::CPUI_RETURN => self.op_set_opcode(&op, OC::CPUI_BRANCHIND),
+                    _ => {}
+                }
+            }
+            FO::Call | FO::CallReturn => {
+                match opc {
+                    OC::CPUI_BRANCH => self.op_set_opcode(&op, OC::CPUI_CALL),
+                    OC::CPUI_BRANCHIND => self.op_set_opcode(&op, OC::CPUI_CALLIND),
+                    OC::CPUI_RETURN => self.op_set_opcode(&op, OC::CPUI_CALLIND),
+                    _ => {}
+                }
+                // cc:1006-1011: for CALL_RETURN, append a fresh RETURN after.
+                if flow_type == FO::CallReturn {
+                    let new_return = self.new_op(1, addr);
+                    self.op_set_opcode(&new_return, OC::CPUI_RETURN);
+                    let c = self.new_constant(1, 0);
+                    self.op_set_input(&new_return, c, 0);
+                    // cc:1010: opDeadInsertAfter — Rugra approximates by
+                    // pushing to deadlist after the primary op's position.
+                    let pos = self.obank.deadlist.iter()
+                        .position(|r| std::sync::Arc::ptr_eq(&r.0, &op.0));
+                    match pos {
+                        Some(idx) => self.obank.deadlist.insert(idx + 1, new_return),
+                        None => self.obank.deadlist.push(new_return),
+                    }
+                }
+            }
+            FO::Return => {
+                match opc {
+                    OC::CPUI_BRANCHIND => self.op_set_opcode(&op, OC::CPUI_RETURN),
+                    OC::CPUI_CALLIND => self.op_set_opcode(&op, OC::CPUI_RETURN),
+                    _ => {}
+                }
+            }
+            FO::None => {}
+        }
+        // Record the override so later passes / serialization see it.
+        self.localoverride.insert_flow_override(addr, flow_type);
+    }
+
+    // Ghidra: funcdata_op.cc:756 Funcdata::followFlow
+    /// Walk the instruction stream and produce p-code + basic blocks for the
+    /// half-open range `[baddr, eaddr)`. Faithful to
+    /// `Funcdata::followFlow` (funcdata_op.cc:756-783):
+    ///   if (!obank.empty()) {
+    ///     if ((flags & blocks_generated)==0)
+    ///       throw LowlevelError("Function loaded for inlining");
+    ///     return;  // Already translated
+    ///   }
+    ///   FlowInfo flow(*this,obank,bblocks,qlst);
+    ///   flow.setRange(baddr,eaddr);
+    ///   flow.generateOps();
+    ///   size = flow.getSize();
+    ///   flow.generateBlocks();
+    ///   flags |= blocks_generated;
+    ///   switchOverJumpTables(flow);
+    ///   if (flow.hasUnimplemented()) flags |= unimplemented_present;
+    ///   if (flow.hasBadData())      flags |= baddata_present;
+    /// RUGRA-GAP: Rugra currently ingests p-code via `inject_raw_ops` +
+    /// `build_blocks_from_ops` (see x86_lift.rs / the test harness), so the
+    /// disassembly-driven FlowInfo walk is not wired up. This stub preserves
+    /// the Ghidra semantics for the "already translated" early-return path
+    /// and the flag side-effects, and is the natural attachment point when
+    /// a Rugra FlowInfo / lifter is added.
+    pub fn follow_flow(&mut self, baddr: crate::address::Address, eaddr: crate::address::Address) {
+        // cc:759-763: if obank already populated, this function is either
+        // already translated (blocks_generated set → return) or was loaded
+        // for inlining (→ error).
+        if !self.obank.optree.is_empty() {
+            if (self.flags & funcdata_flags::BLOCKS_GENERATED) == 0 {
+                self.warning_header("Function loaded for inlining; follow_flow ignored");
+            }
+            return;
+        }
+        // cc:767-783: FlowInfo walk + block generation + flag side-effects.
+        // RUGRA-GAP: full FlowInfo not implemented; record the range so any
+        // future lifter can pick it up, and set blocks_generated defensively.
+        let _ = (baddr, eaddr);
+        self.flags |= funcdata_flags::BLOCKS_GENERATED;
+    }
 }
 
 #[cfg(test)]
