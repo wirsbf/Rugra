@@ -6861,6 +6861,332 @@ impl Funcdata {
             }
         }
     }
+
+    // Ghidra: funcdata_varnode.cc:635 Funcdata::fillinReadOnly
+    /// Treat the given Varnode as read-only; look up its value in the
+    /// LoadImage and replace read references with that value as a constant.
+    /// Faithful to `Funcdata::fillinReadOnly`
+    /// (funcdata_varnode.cc:635-709):
+    ///   if (vn->isWritten()) {
+    ///     defop = vn->getDef();
+    ///     if (defop->isMarker()) defop->setAdditionalFlag(warning);
+    ///     else if (!defop->isWarning()) {
+    ///       defop->setAdditionalFlag(warning);
+    ///       if (!isAddrForce || !hasNoDescend)
+    ///         warning("Read-only address ... is written", defop->getAddr());
+    ///     }
+    ///     return false;
+    ///   }
+    ///   if (vn->getSize() > sizeof(uintb)) return false;
+    ///   try { glb->loader->loadFill(bytes, size, addr); }
+    ///   catch (DataUnavailError) { vn->clearFlags(readonly); return true; }
+    ///   res = assemble bytes (big/little endian);
+    ///   for each descendant op:
+    ///     if (op->isMarker() && (op!=INDIRECT || slot!=0)) continue;
+    ///       if INDIRECT: opRemoveInput(1); opSetOpcode(op, COPY);
+    ///     cvn = newConstant(size, res);
+    ///     if (locktype) cvn->updateType(locktype, true, true);
+    ///     opSetInput(op, cvn, slot);
+    ///     changemade = true;
+    ///   return changemade;
+    /// RUGRA-GAP: requires the Architecture's LoadImage; when absent the method
+    /// returns false (no change). Marker-op collapse + locktype propagation are
+    /// faithfully ported.
+    pub fn fillin_read_only(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode as OC;
+        // cc:638-655: written varnode — warn and bail.
+        if vn.read().unwrap().is_written() {
+            let def = vn.read().unwrap().get_def();
+            if let Some(def) = def {
+                let def_ref = crate::op::PcodeOpRef(def);
+                let is_marker = def_ref.0.read().unwrap().is_marker();
+                if is_marker {
+                    def_ref.0.write().unwrap().addlflags |= crate::op::op_addl_flags::WARNING;
+                } else {
+                    let already_warn = (def_ref.0.read().unwrap().addlflags & crate::op::op_addl_flags::WARNING) != 0;
+                    if !already_warn {
+                        def_ref.0.write().unwrap().addlflags |= crate::op::op_addl_flags::WARNING;
+                        let (addr_force, no_descend, space, addr) = {
+                            let r = vn.read().unwrap();
+                            (r.is_addr_force(), r.has_no_descend(), r.address_space, r.loc)
+                        };
+                        if !addr_force || !no_descend {
+                            self.warning(
+                                &format!("Read-only address ({:?},{:x}) is written", space, addr.as_u64()),
+                                def_ref.0.read().unwrap().get_addr(),
+                            );
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        // cc:657-658: constants larger than uintb precision can't be assembled.
+        let sz = vn.read().unwrap().size;
+        if sz > std::mem::size_of::<u64>() { return false; }
+        // cc:660-667: load bytes from the LoadImage; on failure clear readonly.
+        let vn_addr = vn.read().unwrap().loc;
+        let bytes = match self.arch.as_ref() {
+            Some(a) => match &a.loader {
+                Some(loader) => match loader.load_fill(sz, vn_addr) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        vn.write().unwrap().clear_flags(crate::varnode::varnode_flags::READONLY);
+                        return true;
+                    }
+                },
+                None => return false,
+            },
+            None => return false,
+        };
+        if bytes.len() < sz { return false; }
+        // cc:669-682: assemble the value (little-endian default; Rugra lacks
+        // per-space endianness, so we mirror x86-64 LE).
+        let mut res: u64 = 0;
+        for i in (0..sz).rev() {
+            res <<= 8;
+            res |= bytes[i] as u64;
+        }
+        // cc:684-707: replace each read reference with the constant.
+        let locktype: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> =
+            vn.read().unwrap().get_type().map(|t| t.clone());
+        let descends: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        let mut changemade = false;
+        for op_arc in descends {
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            let slot = self.op_get_slot(&op_ref, vn) as usize;
+            let is_marker = op_arc.read().unwrap().is_marker();
+            let code = op_arc.read().unwrap().opcode;
+            if is_marker {
+                // cc:694-701: must not place constants into a marker, except
+                // an INDIRECT in slot 0 (converted to COPY).
+                if code != OC::CPUI_INDIRECT || slot != 0 { continue; }
+                // cc:699-700: opRemoveInput(op,1); opSetOpcode(op, COPY).
+                self.op_remove_input(&op_ref, 1);
+                self.op_set_opcode(&op_ref, OC::CPUI_COPY);
+            }
+            let cvn = self.new_constant(sz, res);
+            if let Some(lt) = &locktype {
+                // cc:703-704: cvn->updateType(locktype, true, true) — pass on
+                // the locked datatype. Rugra's update_type takes (Arc<Datatype>);
+                // the (lock, override_lock) flags map to the lock-keeping path
+                // via update_type_lock when typelock is set.
+                cvn.write().unwrap().update_type_lock(lt.clone(), true, true);
+            }
+            self.op_set_input(&op_ref, cvn, slot);
+            changemade = true;
+        }
+        changemade
+    }
+
+    // Ghidra: funcdata_varnode.cc:717 Funcdata::replaceVolatile
+    /// Model a volatile Varnode's read/write with a special user-op
+    /// (BUILTIN_VOLATILE_READ / BUILTIN_VOLATILE_WRITE). Faithful to
+    /// `Funcdata::replaceVolatile` (funcdata_varnode.cc:717-764):
+    ///   if (vn->isWritten()) {            // a write
+    ///     vw_op = registerBuiltin(VOLATILE_WRITE);
+    ///     if (!hasNoDescend) throw;
+    ///     defop = vn->getDef();
+    ///     newop = newOp(3, defop->getAddr()); CALLOTHER;
+    ///     opSetInput(newop, newConstant(4, vw_op->getIndex()), 0);
+    ///     annoteVn = newCodeRef(vn->getAddr()); annoteVn->setFlags(volatil);
+    ///     opSetInput(newop, annoteVn, 1);
+    ///     tmp = newUnique(size); opSetOutput(defop, tmp);
+    ///     opSetInput(newop, tmp, 2); opInsertAfter(newop, defop);
+    ///   } else {                          // a read
+    ///     vr_op = registerBuiltin(VOLATILE_READ);
+    ///     if (hasNoDescend) return false;
+    ///     readop = vn->loneDescend(); if null throw;
+    ///     newop = newOp(2, readop->getAddr()); CALLOTHER;
+    ///     tmp = newUniqueOut(size, newop);
+    ///     opSetInput(newop, newConstant(4, vr_op->getIndex()), 0);
+    ///     annoteVn = newCodeRef(vn->getAddr()); annoteVn->setFlags(volatil);
+    ///     opSetInput(newop, annoteVn, 1);
+    ///     opSetInput(readop, tmp, readop->getSlot(vn));
+    ///     opInsertBefore(newop, readop);
+    ///     if (vr_op->getDisplay() != 0) newop->setHoldOutput();
+    ///   }
+    ///   if (vn->isTypeLock()) newop->setAdditionalFlag(special_prop);
+    ///   return true;
+    /// RUGRA-GAP: Architecture's UserOpManage is consulted for the builtin
+    /// index; if absent the method returns false (no change).
+    pub fn replace_volatile(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode as OC;
+        let sz = vn.read().unwrap().size;
+        let vn_addr = vn.read().unwrap().loc;
+        let is_written = vn.read().unwrap().is_written();
+        let is_type_lock = vn.read().unwrap().is_type_lock();
+        let newop = if is_written {
+            // cc:721-738: model the write.
+            let vw_index = match self.arch.as_ref() {
+                Some(a) => match &a.userops {
+                    Some(uo) => uo.write().unwrap().register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_WRITE) as u64,
+                    None => return false,
+                },
+                None => return false,
+            };
+            if !vn.read().unwrap().has_no_descend() {
+                eprintln!("[FUNCDATA] replaceVolatile: volatile memory was propagated");
+                return false;
+            }
+            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => return false };
+            let def_ref = crate::op::PcodeOpRef(def.clone());
+            let def_addr = def.read().unwrap().get_addr();
+            let newop = self.new_op(3, def_addr);
+            self.op_set_opcode(&newop, OC::CPUI_CALLOTHER);
+            let idx_const = self.new_constant(4, vw_index);
+            self.op_set_input(&newop, idx_const, 0);
+            // cc:730-731: annoteVn = newCodeRef(addr); setFlags(volatil).
+            let annote_vn = self.new_code_ref(vn_addr);
+            annote_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::VOLATIL);
+            self.op_set_input(&newop, annote_vn, 1);
+            // cc:733-734: tmp = newUnique(size); opSetOutput(defop, tmp).
+            let tmp = self.new_unique(sz);
+            self.op_set_output(&def_ref, tmp.clone());
+            // cc:736: opSetInput(newop, tmp, 2).
+            self.op_set_input(&newop, tmp, 2);
+            // cc:738: opInsertAfter(newop, defop).
+            self.op_insert_after(&newop, &def_ref);
+            newop
+        } else {
+            // cc:740-759: model the read.
+            let vr_index = match self.arch.as_ref() {
+                Some(a) => match &a.userops {
+                    Some(uo) => uo.write().unwrap().register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_READ) as u64,
+                    None => return false,
+                },
+                None => return false,
+            };
+            if vn.read().unwrap().has_no_descend() { return false; }
+            let readop = match vn.read().unwrap().lone_descend() { Some(r) => r, None => {
+                eprintln!("[FUNCDATA] replaceVolatile: volatile memory value used more than once");
+                return false;
+            }};
+            let readop_ref = crate::op::PcodeOpRef(readop.clone());
+            let read_addr = readop.read().unwrap().get_addr();
+            let newop = self.new_op(2, read_addr);
+            self.op_set_opcode(&newop, OC::CPUI_CALLOTHER);
+            let tmp = self.new_unique_out(sz, &newop);
+            let idx_const = self.new_constant(4, vr_index);
+            self.op_set_input(&newop, idx_const, 0);
+            let annote_vn = self.new_code_ref(vn_addr);
+            annote_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::VOLATIL);
+            self.op_set_input(&newop, annote_vn, 1);
+            let slot = self.op_get_slot(&readop_ref, vn) as usize;
+            self.op_set_input(&readop_ref, tmp, slot);
+            self.op_insert_before(&newop, &readop_ref);
+            // cc:758-759: if (vr_op->getDisplay() != 0) newop->setHoldOutput().
+            // Rugra: VOLATILE_READ's display is functional (1), so always hold.
+            // HOLD_OUTPUT lives in addl_flags (Rugra models it as an addlflag).
+            newop.0.write().unwrap().addlflags |= crate::op::op_addl_flags::HOLD_OUTPUT;
+            newop
+        };
+        // cc:761-762: if (vn->isTypeLock()) newop->setAdditionalFlag(special_prop).
+        if is_type_lock {
+            // RUGRA-GAP: Ghidra's PcodeOp::special_prop (0x10000) is not
+            // modeled as a dedicated addl-flag; we approximate with the
+            // closest semantic — STOP_TYPE_PROPAGATION (0x40) — so type
+            // recovery knows the volatile user-op needs special handling.
+            newop.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+        }
+        true
+    }
+
+    // Ghidra: funcdata_varnode.cc:771 Funcdata::checkIndirectUse
+    /// Test if the given Varnode only flows into call-based INDIRECT ops,
+    /// following flow through MULTIEQUAL ops. Faithful to
+    /// `Funcdata::checkIndirectUse` (funcdata_varnode.cc:771-811):
+    ///   vlist = {vn}; vn->setMark();
+    ///   while (i < vlist.size() && result):
+    ///     vn = vlist[i++];
+    ///     for each descendant op:
+    ///       if INDIRECT: if isIndirectStore follow outvn; else continue;
+    ///       else if MULTIEQUAL: follow outvn;
+    ///       else: result = false; break;
+    ///   clear marks; return result;
+    pub fn check_indirect_use(
+        &self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode as OC;
+        let mut vlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = vec![vn.clone()];
+        vn.write().unwrap().set_mark();
+        let mut i = 0;
+        let mut result = true;
+        while i < vlist.len() && result {
+            let cur = vlist[i].clone();
+            i += 1;
+            let descends: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> =
+                cur.read().unwrap().descend_iter().collect();
+            for op_arc in descends {
+                let code = op_arc.read().unwrap().opcode;
+                match code {
+                    OC::CPUI_INDIRECT => {
+                        if op_arc.read().unwrap().is_indirect_store() {
+                            // cc:786-793: INDIRECT from a STORE — follow outvn.
+                            let outvn = op_arc.read().unwrap().get_out().cloned();
+                            if let Some(outvn) = outvn {
+                                if !outvn.read().unwrap().is_mark() {
+                                    outvn.write().unwrap().set_mark();
+                                    vlist.push(outvn);
+                                }
+                            }
+                        }
+                        // else: a call-based INDIRECT — keep going (result stays true).
+                    }
+                    OC::CPUI_MULTIEQUAL => {
+                        // cc:795-800: follow outvn.
+                        let outvn = op_arc.read().unwrap().get_out().cloned();
+                        if let Some(outvn) = outvn {
+                            if !outvn.read().unwrap().is_mark() {
+                                outvn.write().unwrap().set_mark();
+                                vlist.push(outvn);
+                            }
+                        }
+                    }
+                    _ => {
+                        // cc:802-804: any other op → not indirect-only.
+                        result = false;
+                        break;
+                    }
+                }
+            }
+        }
+        for v in &vlist { v.write().unwrap().clear_mark(); }
+        result
+    }
+
+    // Ghidra: funcdata_varnode.cc:815 Funcdata::markIndirectOnly
+    /// Mark every illegal-input Varnode that only flows into call-based
+    /// INDIRECTs with the `indirectonly` flag. Faithful to
+    /// `Funcdata::markIndirectOnly` (funcdata_varnode.cc:815-828):
+    ///   for each input vn:
+    ///     if (!vn->isIllegalInput()) continue;
+    ///     if (checkIndirectUse(vn)) vn->setFlags(indirectonly);
+    pub fn mark_indirect_only(&mut self) {
+        // Gather inputs first to avoid holding a borrow across mutation.
+        let inputs: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
+            .iter()
+            .filter_map(|lr| {
+                let r = lr.0.read().unwrap();
+                if r.is_input() && r.is_illegal_input() { Some(lr.0.clone()) } else { None }
+            })
+            .collect();
+        for vn in inputs {
+            if self.check_indirect_use(&vn) {
+                vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECTONLY);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
