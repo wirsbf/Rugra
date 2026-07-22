@@ -58,6 +58,7 @@
 - `cover`
 - `variable`
 - `merge`
+- `modelrules` — modelrules.hh/cc 原型模型规则（PrimitiveExtractor/DatatypeFilter/QualifierFilter/AssignAction/ModelRule，2026-07-22 Phase 1）
 - `blockaction`
 - `double_precis` — double.cc 双精度合并（SplitVarnode + RuleDouble*，2026-07-01）
 
@@ -593,4 +594,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 新增 `dynamic` 模块：动态哈希引擎（DynamicHash + ToOpEdge + translate_opcode）。
 ### 2026-07-04: Added flow module
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-07-22: Added modelrules module
+
+- `pub mod modelrules;` — 对应 `modelrules.hh` / `modelrules.cc`。原型模型规则引擎，22 个类 1:1 移植：PrimitiveExtractor（提取算法全 1:1）+ DatatypeFilter/SizeRestrictedFilter/MetaTypeFilter/HomogeneousAggregate + QualifierFilter/AndFilter/VarargsFilter/PositionMatchFilter/DatatypeMatchFilter + AssignAction/GotoStack/ConvertToPointer/MultiSlotAssign/MultiMemberAssign/MultiSlotDualAssign/ConsumeAs/HiddenReturnAssign/ConsumeExtra/ExtraStack/ConsumeRemaining + ModelRule。Phase 1：数据结构 + 过滤/提取/justifyPieces 算法全 1:1，29 单元测试。assignAddress 方法体待 ParamListStandard/TypeFactory 上游。
  

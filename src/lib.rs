@@ -76,6 +76,7 @@ pub mod emulate; // ← emulate.hh
 pub mod float_emulate; // ← float.hh
 pub mod merge; // ← merge.hh
 pub mod memstate; // ← memstate.hh
+pub mod modelrules; // ← modelrules.hh
 pub mod op; // ← op.hh
 pub mod opcodes; // ← opcodes.hh
 pub mod opbehavior; // ← opbehavior.hh
