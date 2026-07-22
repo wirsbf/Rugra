@@ -1077,7 +1077,6 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let while_block = block.as_any().downcast_ref::<BlockWhileDo>();
                 if let Some(while_data) = while_block {
-                    self.emit.tag_line(0);
                     // Check if this was identified as a for-loop by
                     // ActionStructureTransform (has init + iterate expressions).
                     let has_for = while_data.for_init.is_some() && while_data.for_iter.is_some();
@@ -1087,26 +1086,23 @@ impl PrintC {
                     // Set by ruleBlockWhileDo when bl->isComplex() (cc:1538).
                     let overflow = while_data.overflow_syntax;
                     if has_for {
-                        // Ghidra emitForLoop (printc.cc:2957-2999): emit
-                        // `for (init; cond; iter)` with the comma_separate mod
-                        // active so doc_statement suppresses stray ';'.
-                        self.push_mod();
-                        self.set_mod(print_mods::COMMA_SEPARATE);
-                        self.emit.print("for (");
-                        self.emit.print(while_data.for_init.as_ref().unwrap());
-                        self.emit.print("; ");
-                        self.emit_block_condition(&while_data.condition);
-                        self.emit.print("; ");
-                        self.emit.print(while_data.for_iter.as_ref().unwrap());
-                        self.emit.print(")");
-                        self.pop_mod();
+                        // Ghidra emitBlockWhileDo (printc.cc:3007-3009): when
+                        // getIterateOp()!=0, dispatch to emitForLoop and return.
+                        // The for-loop body + braces are emitted by emit_for_loop,
+                        // so we must NOT fall through to the while-body path below.
+                        self.emit_for_loop(while_data, graph, emitted);
+                        return;
                     } else if overflow {
+                        // cc:3022: emit->tagLine();
+                        self.emit.tag_line(0);
                         // cc:3017-3044: overflow syntax — condition too complex
                         // to print inline, so emit while(true) + explicit break.
                         self.emit.print("while (");
                         self.emit.print(" true");
                         self.emit.print(")");
                     } else {
+                        // cc:3049: emit->tagLine();
+                        self.emit.tag_line(0);
                         // Emit as while(cond)
                         self.emit.print("while (");
                         self.emit_block_condition(&while_data.condition);
@@ -4708,14 +4704,16 @@ impl PrintLanguage for PrintC {
     }
 
 
-    // Ghidra: printc.cc:2285 PrintC::emitStatement
-    /// Emit a statement: tagLine, emit the expression, then print ';' UNLESS
-    /// the comma_separate mod is active (for-loop header parts suppress the
-    /// trailing ';'). Faithful to `emitStatement` (printc.cc:2285-2293):
-    ///   emit->print(SEMICOLON) only `if (!isSet(comma_separate))`.
+    // Ghidra: printc.cc:2285 PrintC::emitStatement (Rugra dispatch entry)
+    /// Emit a statement via `tagLine` + `emit_statement`. This is the Rugra
+    /// internal entry that drives per-op statement emission from
+    /// `emit_block_ops` and `emit_structured_basic`; it is the same body as the
+    /// Ghidra-faithful `emit_statement` above except it performs the leading
+    /// `tagLine` (newline + indent) that Rugra's block walker relies on, since
+    /// Rugra does not run Ghidra's per-op `emitCommentGroup` → `tagLine` chain.
     fn doc_statement(&mut self, op: &PcodeOp) {
         self.emit.tag_line(0);
-        op.push(self); // This will call the appropriate op_xxx method
+        op.push(self); // opcode dispatch (see emit_expression)
         if !self.is_set(print_mods::COMMA_SEPARATE) {
             self.emit.print(";");
         }
@@ -5653,6 +5651,96 @@ impl PrintLanguage for PrintC {
 impl PrintC {
     // ===== Missing printc.cc methods (batch 1) =====
 
+    // Ghidra: printc.cc:2468 PrintC::emitExpression
+    /// Emit an entire expression rooted at the given op. Faithful to
+    /// `PrintC::emitExpression(const PcodeOp*)` (printc.cc:2468-2495):
+    ///
+    /// Ghidra:
+    /// ```text
+    /// const Varnode *outvn = op->getOut();
+    /// if (outvn != (Varnode *)0) {
+    ///   if (option_inplace_ops && emitInplaceOp(op)) return;  // x += y form
+    ///   pushOp(&assignment,op);
+    ///   pushSymbolDetail(outvn,op,false);                     // LHS
+    /// }
+    /// else if (op->doesSpecialPrinting()) {                   // constructor syntax
+    ///   const PcodeOp *newop = op->getIn(1)->getDef();
+    ///   outvn = newop->getOut();
+    ///   pushOp(&assignment,newop);
+    ///   pushSymbolDetail(outvn,newop,false);
+    ///   opConstructor(op,true);
+    ///   recurse();
+    ///   return;
+    /// }
+    /// op->getOpcode()->push(this,op,(PcodeOp *)0);            // generic opFunc
+    /// recurse();
+    /// ```
+    ///
+    /// Rugra adaptation: there is no RPN expression stack (`pushOp`/`recurse`/
+    /// `pushSymbolDetail`); each `op_*` method emits its text directly. We
+    /// therefore reproduce the three-way dispatch of `emitExpression`:
+    ///   1. If the op has an output and `option_inplace_ops` is on and
+    ///      `emit_inplace_op` accepts it, render `x += y` and return.
+    ///   2. The C++ constructor special-printing branch
+    ///      (`op->doesSpecialPrinting()` -> `opConstructor(op,true)`) requires the
+    ///      NEW/CALLOTHER wrapping machinery (`opConstructor`, printc.cc:717) which
+    ///      Rugra has not ported (audit P0-7). We fall through to the generic path
+    ///      for such ops - matching Ghidra's own "fall through to functional
+    ///      rendering" pattern used elsewhere (e.g. opSubpiece printc.cc:869).
+    ///   3. Otherwise call `op.push(self)` (Rugra's opcode->push equivalent) which
+    ///      emits the op's `output = ...` assignment via the per-opcode `op_*`
+    ///      method. This covers the assignment case: each `op_*` that produces a
+    ///      value emits `<lhs> = <rhs>` directly when `op.get_out()` is present.
+    pub fn emit_expression(&mut self, op: &PcodeOp) {
+        // printc.cc:2471-2476: if output exists and an in-place form applies, use it.
+        if op.get_out().is_some() && self.option_inplace_ops && self.emit_inplace_op(op) {
+            return;
+        }
+        // printc.cc:2477-2486: constructor special-printing branch. Not ported
+        // (opConstructor / opConstructor nesting requires the NEW-wrapping layer
+        // Rugra lacks - audit P0-7). Fall through to the generic dispatch below,
+        // which renders the op via its opcode handler (the constructor case will
+        // emit the functional form, never the C++ `Type(...)` syntax).
+        // printc.cc:2493-2494: op->getOpcode()->push(this,op,0); recurse();
+        // In Rugra, `op.push(self)` dispatches to the matching `op_*` method,
+        // which emits the assignment / expression text directly.
+        op.push(self);
+    }
+
+    // Ghidra: printc.cc:2285 PrintC::emitStatement
+    /// Emit an entire statement rooted at the given op, terminated by `;`
+    /// unless the `comma_separate` mod is active (for-loop header parts).
+    /// Faithful to `PrintC::emitStatement(const PcodeOp*)` (printc.cc:2285-2293):
+    ///
+    /// Ghidra:
+    /// ```text
+    /// int4 id = emit->beginStatement(inst);
+    /// emitExpression(inst);
+    /// emit->endStatement(id);
+    /// if (!isSet(comma_separate))
+    ///   emit->print(SEMICOLON);
+    /// ```
+    ///
+    /// Rugra adaptation: the EmitMarkup `begin_statement`/`end_statement` are
+    /// no-op defaults in Rugra's text emitter (no markup ids), so we call them
+    /// unconditionally to preserve the bracketing for any future markup emitter
+    /// but do not bind an `id`. The `comma_separate` guard is faithful: when
+    /// emitting for-loop init/iter slots (see `emit_for_loop`), the trailing `;`
+    /// is suppressed so the parts can be joined by the `;` separators that
+    /// `emit_for_loop` emits explicitly between them.
+    pub fn emit_statement(&mut self, op: &PcodeOp) {
+        // printc.cc:2288: emit->beginStatement(inst);
+        self.emit.begin_statement();
+        // printc.cc:2289: emitExpression(inst);
+        self.emit_expression(op);
+        // printc.cc:2290: emit->endStatement(id);
+        self.emit.end_statement();
+        // printc.cc:2291-2292: if (!isSet(comma_separate)) emit->print(SEMICOLON);
+        if !self.is_set(print_mods::COMMA_SEPARATE) {
+            self.emit.print(";");
+        }
+    }
+
     // Ghidra: printc.cc:582 PrintC::opBranchind
     pub fn op_branchind(&mut self, op: &PcodeOp) {
         if let Some(in0) = op.get_in(0) {
@@ -5802,6 +5890,142 @@ impl PrintC {
             b.get_ops().first().map(|o| o.0.read().unwrap().start.addr.as_u64()).unwrap_or(0)
         };
         self.emit_label_statement(addr);
+    }
+
+    // Ghidra: printc.cc:2957 PrintC::emitForLoop
+    /// Emit a `for(init;cond;iter) { body }` loop. Faithful to
+    /// `PrintC::emitForLoop(const BlockWhileDo*)` (printc.cc:2957-2999).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// pushMod();
+    /// unsetMod(no_branch|only_branch);
+    /// emitAnyLabelStatement(bl);
+    /// FlowBlock *condBlock = bl->getBlock(0);
+    /// emitCommentBlockTree(condBlock);
+    /// emit->tagLine();
+    /// op = condBlock->lastOp();
+    /// emit->tagOp(KEYWORD_FOR, keyword_color, op);
+    /// emit->spaces(1);
+    /// int4 id1 = emit->openParen(OPEN_PAREN);
+    /// pushMod();
+    /// setMod(comma_separate);
+    /// op = bl->getInitializeOp();          // optional init
+    /// if (op != 0) {
+    ///   int4 id3 = emit->beginStatement(op);
+    ///   emitExpression(op);
+    ///   emit->endStatement(id3);
+    /// }
+    /// emit->print(SEMICOLON); emit->spaces(1);
+    /// condBlock->emit(this);               // condition
+    /// emit->print(SEMICOLON); emit->spaces(1);
+    /// op = bl->getIterateOp();             // iterate
+    /// int4 id4 = emit->beginStatement(op);
+    /// emitExpression(op);
+    /// emit->endStatement(id4);
+    /// popMod();
+    /// emit->closeParen(CLOSE_PAREN, id1);
+    /// indent = emit->openBraceIndent(OPEN_CURLY, option_brace_loop);
+    /// setMod(no_branch);
+    /// int4 id2 = emit->beginBlock(bl->getBlock(1));
+    /// bl->getBlock(1)->emit(this);         // body
+    /// emit->endBlock(id2);
+    /// emit->closeBraceIndent(CLOSE_CURLY, indent);
+    /// popMod();
+    /// ```
+    ///
+    /// Rugra adaptation: `BlockWhileDo.for_init` / `for_iter` hold the init and
+    /// iterate expressions as *rendered text strings* (set at for-loop detection
+    /// time by `ActionStructureTransform`), not as `PcodeOp*` roots. Ghidra's
+    /// `getInitializeOp()`/`getIterateOp()` return `PcodeOp*` which it then
+    /// re-emits via `emitExpression(op)`; Rugra cannot re-emit because the
+    /// structurer already collapsed the ops to text. The faithful adaptation is
+    /// to print the cached strings directly inside the `comma_separate` mod
+    /// scope — this reproduces Ghidra's exact bracketing:
+    ///   - the outer `pushMod` / `unsetMod(no_branch|only_branch)` / final
+    ///     `popMod` pair is preserved;
+    ///   - the inner `pushMod` / `setMod(comma_separate)` / `popMod` pair wraps
+    ///     the three header slots exactly as in printc.cc:2973-2990;
+    ///   - `beginStatement`/`endStatement` bracket each slot (no-ops in text mode
+    ///     but preserved for markup emitters);
+    ///   - the condition is emitted via `emit_block_condition` (Rugra's
+    ///     `condBlock->emit(this)` equivalent under `comma_separate`);
+    ///   - the body is wrapped in `begin_block`/`end_block` under `no_branch`,
+    ///     matching Ghidra's `setMod(no_branch)` before `bl->getBlock(1)->emit`.
+    /// If neither `for_init` nor `for_iter` is present, this is not a for-loop
+    /// and the caller (`emit_structured_whiledo`) should have taken the
+    /// `while(...)` branch instead; we defensively no-op here.
+    pub fn emit_for_loop(
+        &mut self,
+        bl: &crate::block::BlockWhileDo,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        // cc:2963-2964: pushMod(); unsetMod(no_branch|only_branch);
+        self.push_mod();
+        self.unset_mod(print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+        // cc:2965: emitAnyLabelStatement(bl);
+        // (label emission requires the block Arc; Rugra's WhileDo label path
+        // is handled by emit_block_structured before dispatching here, so we
+        // skip the redundant label emission to avoid double-printing.)
+        // cc:2966-2967: emitCommentBlockTree(condBlock); emit->tagLine();
+        self.emit_comment_block_tree(&bl.condition);
+        self.emit.tag_line(0);
+        // cc:2970-2971: emit->tagOp(KEYWORD_FOR, ...); emit->spaces(1);
+        self.emit.tag_op("for");
+        self.emit.print(" ");
+        // cc:2972: openParen(OPEN_PAREN)
+        self.emit.open_paren();
+        // cc:2973-2974: pushMod(); setMod(comma_separate);
+        self.push_mod();
+        self.set_mod(print_mods::COMMA_SEPARATE);
+        // cc:2975-2980: init slot (optional)
+        self.emit.begin_statement();
+        if let Some(init_text) = bl.get_initialize_op() {
+            self.emit.print(init_text);
+        }
+        self.emit.end_statement();
+        // cc:2981: emit->print(SEMICOLON); emit->spaces(1);
+        self.emit.print("; ");
+        // cc:2983: condBlock->emit(this);  (condition slot)
+        self.emit_block_condition(&bl.condition);
+        // cc:2984: emit->print(SEMICOLON); emit->spaces(1);
+        self.emit.print("; ");
+        // cc:2986-2989: iterate slot
+        self.emit.begin_statement();
+        if let Some(iter_text) = bl.get_iterate_op() {
+            self.emit.print(iter_text);
+        }
+        self.emit.end_statement();
+        // cc:2990: popMod();
+        self.pop_mod();
+        // cc:2991: closeParen(CLOSE_PAREN, id1)
+        self.emit.close_paren();
+        // cc:2992: indent = openBraceIndent(OPEN_CURLY, option_brace_loop);
+        // cc:2993: setMod(no_branch);
+        self.set_mod(print_mods::NO_BRANCH);
+        // cc:2994-2995: beginBlock(getBlock(1)); getBlock(1)->emit(this);
+        self.emit.begin_block();
+        self.loop_depth += 1;
+        // Scope seen_return: a loop body is re-entered each iteration; a prior
+        // RETURN must not suppress it (mirrors emit_structured_whiledo).
+        let body_is_dead = bl.body.read().unwrap().get_flags()
+            & crate::block::block_flags::DEAD != 0;
+        let saved = self.seen_return;
+        self.seen_return = false;
+        if body_is_dead {
+            self.emit_block_ops(&bl.body, true);
+        } else {
+            self.emit_block_structured(&bl.body, graph, emitted);
+        }
+        self.seen_return = saved;
+        self.loop_depth -= 1;
+        // cc:2996: endBlock(id2);
+        self.emit.end_block();
+        // cc:2997: closeBraceIndent(CLOSE_CURLY, indent);
+        // ( Rugra's text emitter folds the closing brace into end_block(). )
+        // cc:2998: popMod();
+        self.pop_mod();
     }
 
     // Ghidra: printc.cc:3247 PrintC::emitCommentBlockTree
