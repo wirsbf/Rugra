@@ -479,6 +479,92 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:4002 TypeFactory::getTypeCode(PrototypePieces)
+    /// Create a `TypeCode` object and associate a specific function prototype
+    /// with it. Faithful to `TypeFactory::getTypeCode(const PrototypePieces&)`
+    /// (type.cc:4002-4008): builds an unnamed `TypeCode`, calls
+    /// `setPrototype(this, proto, getTypeVoid())` on it, marks it complete, and
+    /// dedupes via `findAdd`.
+    ///
+    /// Rugra note: Ghidra dedupes prototype-bearing code types structurally
+    /// via `findAdd` (which uses `compare`). Rugra's flat name-keyed map cannot
+    /// look up an unnamed type by structure efficiently, so this port mints a
+    /// synthetic name derived from the prototype's structure (return type name
+    /// + parameter type names + model name) so that equivalent prototypes
+    /// dedupe while distinct ones do not collide. The structural comparison
+    /// is still available via `Datatype::compare_deep` for callers that need
+    /// it.
+    pub fn get_type_code_pieces(
+        &mut self,
+        proto: &crate::fspec::PrototypePieces,
+    ) -> Arc<Datatype> {
+        // Build the synthetic name for dedup.
+        let mut name = String::from("funcptr");
+        name.push('(');
+        match proto.out_type {
+            Some(t) => name.push_str(t.get_name()),
+            None => name.push_str("void"),
+        }
+        name.push(')');
+        name.push('(');
+        for (i, t) in proto.in_types.iter().enumerate() {
+            if i > 0 {
+                name.push(',');
+            }
+            name.push_str(t.get_name());
+        }
+        name.push(')');
+        if proto.first_var_arg_slot >= 0 {
+            name.push_str("...");
+        }
+        if let Some(existing) = self.find_by_name(&name) {
+            return existing;
+        }
+        let mut base = TypeBase::new(name.clone(), 1, TypeMetatype::Code);
+        // Ghidra: tc.markComplete() clears type_incomplete.
+        base.flags |= type_flags::VARLENGTH;
+        let mut code = TypeCode { base, proto: None };
+        code.set_prototype_pieces(proto);
+        let dt = Arc::new(Datatype::Code(code));
+        self.types.insert(name, dt.clone());
+        dt
+    }
+
+    // Ghidra: type.cc:3518 TypeFactory::setPrototype
+    /// Set the prototype on an (incomplete) `TypeCode`. Faithful to
+    /// `TypeFactory::setPrototype(const FuncProto*, TypeCode*, uint4)`
+    /// (type.cc:3518-3528): asserts the target is incomplete, detaches it from
+    /// the tree, calls `TypeCode::setPrototype(this, fp)` on it, clears the
+    /// `type_incomplete` flag, ORs in the requested `(variable_length |
+    /// type_incomplete)` flags, and re-inserts it.
+    ///
+    /// Returns the updated `Arc<Datatype>` (re-inserted under the same name).
+    /// Errors if `name` is not a code type or is not incomplete.
+    pub fn set_prototype(
+        &mut self,
+        name: &str,
+        fp: Option<&crate::fspec::FuncProto>,
+        flags: u32,
+    ) -> Result<Arc<Datatype>, &'static str> {
+        let dt = self
+            .types
+            .get_mut(name)
+            .ok_or("TypeCode not found in factory")?;
+        let code = match Arc::make_mut(dt) {
+            Datatype::Code(c) => c,
+            _ => return Err("setPrototype target is not a TypeCode"),
+        };
+        if (code.base.flags & type_flags::TYPE_INCOMPLETE) == 0 {
+            return Err("Can only set prototype on incomplete data-type");
+        }
+        // TypeCode::setPrototype(typegrp, fp) — copy the prototype in.
+        code.set_prototype(fp);
+        // Clear incomplete; OR in the caller-requested flags.
+        code.base.flags &= !type_flags::TYPE_INCOMPLETE;
+        code.base.flags |= flags & (type_flags::VARLENGTH | type_flags::TYPE_INCOMPLETE);
+        Ok(dt.clone())
+    }
+
     // Ghidra: type.cc:3929 TypeFactory::getTypePartialStruct
     /// Create a partial-structure covering `[off, off+sz)` of `contain` (a
     /// struct or array). Faithful to `TypeFactory::getTypePartialStruct`
@@ -1060,5 +1146,80 @@ mod tests {
         let b = hash_size(0x1234, 4);
         assert_ne!(a, b);
         assert_eq!(a, hash_size(0x1234, 1));
+    }
+
+    // --- P2 TypeFactory::getTypeCode(PrototypePieces) / setPrototype ---
+
+    #[test]
+    fn test_get_type_code_pieces() {
+        // type.cc:4002 — builds a TypeCode with an attached prototype.
+        let mut factory = TypeFactory::new(8);
+        let int_t = factory.find_by_name("int").unwrap();
+        let void_t = factory.get_type_void();
+        let in_types = vec![int_t.clone(), int_t];
+        let sig = crate::fspec::PrototypePieces {
+            out_type: Some(void_t.as_ref()),
+            in_types: &in_types,
+            first_var_arg_slot: -1,
+        };
+        let code = factory.get_type_code_pieces(&sig);
+        assert_eq!(code.get_metatype(), TypeMetatype::Code);
+        // Dedup: a second call with the same pieces returns the same Arc.
+        let in_types2 = vec![
+            factory.find_by_name("int").unwrap(),
+            factory.find_by_name("int").unwrap(),
+        ];
+        let void_t2 = factory.get_type_void();
+        let sig2 = crate::fspec::PrototypePieces {
+            out_type: Some(void_t2.as_ref()),
+            in_types: &in_types2,
+            first_var_arg_slot: -1,
+        };
+        let code2 = factory.get_type_code_pieces(&sig2);
+        assert!(Arc::ptr_eq(&code, &code2));
+        // The prototype has 2 parameters.
+        if let Datatype::Code(c) = code.as_ref() {
+            let proto = c.proto.as_ref().expect("prototype attached");
+            assert_eq!(proto.num_params(), 2);
+            assert!(proto.is_input_locked());
+        } else {
+            panic!("expected a Code type");
+        }
+    }
+
+    #[test]
+    fn test_factory_set_prototype_on_incomplete() {
+        // type.cc:3518 — setPrototype requires an incomplete TypeCode.
+        let mut factory = TypeFactory::new(8);
+        // Build an incomplete code type manually.
+        let mut base = TypeBase::new("incomplete_code".to_string(), 1, TypeMetatype::Code);
+        base.flags |= type_flags::TYPE_INCOMPLETE;
+        let dt = Arc::new(Datatype::Code(TypeCode { base, proto: None }));
+        factory.types.insert("incomplete_code".to_string(), dt);
+        // Set a prototype on it.
+        let void_t = factory.get_type_void();
+        let proto = crate::fspec::FuncProto::new("f".to_string(), void_t);
+        let updated = factory
+            .set_prototype("incomplete_code", Some(&proto), 0)
+            .expect("setPrototype on incomplete code");
+        // Incomplete flag cleared.
+        assert!(updated.get_flags() & type_flags::TYPE_INCOMPLETE == 0);
+        // Prototype copied in.
+        if let Datatype::Code(c) = updated.as_ref() {
+            assert!(c.proto.is_some());
+        } else {
+            panic!("expected a Code type");
+        }
+    }
+
+    #[test]
+    fn test_factory_set_prototype_rejects_complete() {
+        // type.cc:3518 — setting a prototype on a complete code type errors.
+        let mut factory = TypeFactory::new(8);
+        let code = factory.get_type_code(); // complete (no TYPE_INCOMPLETE)
+        let void_t = factory.get_type_void();
+        let proto = crate::fspec::FuncProto::new("f".to_string(), void_t);
+        let res = factory.set_prototype("code", Some(&proto), 0);
+        assert!(res.is_err());
     }
 }

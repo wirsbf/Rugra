@@ -469,6 +469,49 @@ impl Datatype {
         self.compare(other)
     }
 
+    // Ghidra: type.cc:212/933/1211/1416/1742/2045/2608/2828 TypeXxx::compare (recursive)
+    /// Recursively compare two data-types for structural equality, descending
+    /// into ptrto / arrayof / fields / namemap / prototype as appropriate.
+    ///
+    /// Faithful to the per-subclass `compare` overrides in Ghidra
+    /// (type.cc:933 Pointer, 1211 Array, 1416 Enum, 1742 Struct, 2045 Union,
+    /// 2608 PointerRel, 2828 Code). `level` bounds the recursion depth;
+    /// when it drops below 0 the comparison falls back to `id`, matching
+    /// Ghidra's `if (level < 0) { ...compare id... }` short-circuit. The base
+    /// `Datatype::compare` (this file, above) is the non-recursive variant
+    /// retained for callers (e.g. modelrules) that only want the shallow
+    /// (metatype, size, name) comparison.
+    pub fn compare_deep(&self, other: &Datatype, level: i32) -> i32 {
+        match (self, other) {
+            (Datatype::Pointer(a), Datatype::Pointer(b)) => a.compare(b, level),
+            (Datatype::Array(a), Datatype::Array(b)) => a.compare(b, level),
+            (Datatype::Struct(a), Datatype::Struct(b)) => a.compare(b, level),
+            (Datatype::Union(a), Datatype::Union(b)) => a.compare(b, level),
+            (Datatype::Enum(a), Datatype::Enum(b)) => a.compare(b, level),
+            (Datatype::Code(a), Datatype::Code(b)) => a.compare(b, level),
+            // No subclass override recurses; fall back to the base comparison.
+            _ => self.compare(other),
+        }
+    }
+
+    // Ghidra: type.cc:227/954/1225/1422/1782/2084 TypeXxx::compareDependency (recursive)
+    /// Recursively compare two data-types for the type-factory tree sort,
+    /// using pointer-identity (not deep equality) for sub-types. Faithful to
+    /// the per-subclass `compareDependency` overrides (type.cc:954 Pointer,
+    /// 1225 Array, 1422 Enum, 1782 Struct, 2084 Union, 2860 Code).
+    pub fn compare_dependency_deep(&self, other: &Datatype) -> i32 {
+        match (self, other) {
+            (Datatype::Pointer(a), Datatype::Pointer(b)) => a.compare_dependency(b),
+            (Datatype::Array(a), Datatype::Array(b)) => a.compare_dependency(b),
+            (Datatype::Struct(a), Datatype::Struct(b)) => a.compare_dependency(b),
+            (Datatype::Union(a), Datatype::Union(b)) => a.compare_dependency(b),
+            (Datatype::Enum(a), Datatype::Enum(b)) => a.compare_dependency(b, 0),
+            (Datatype::Code(a), Datatype::Code(b)) => a.compare_dependency(b),
+            // No subclass override; fall back to the base comparison.
+            _ => self.compare(other),
+        }
+    }
+
     // Ghidra: type.cc:561 Datatype::getStripped
     /// Get the "stripped" version (removes typedef wrappers).
     /// Faithful to Datatype::getStripped (type.cc:561-565). The base class
@@ -794,12 +837,12 @@ fn partial_struct_get_hole_size(ps: &TypePartialStruct, off: i64) -> i64 {
 
 // Ghidra: type.cc:1354 TypeEnum::hasNamedValue
 /// True if `parent` is an enum with a name for `val`. Delegates to the enum's
-/// value map. Faithful to `TypeEnum::hasNamedValue` (type.cc:1354-1358):
-/// `namemap.find(val) != namemap.end()`. For non-enum parents (which Ghidra
-/// never constructs for a partial-enum), returns false.
+/// `has_named_value` method. Faithful to `TypeEnum::hasNamedValue`
+/// (type.cc:1354-1358): `namemap.find(val) != namemap.end()`. For non-enum
+/// parents (which Ghidra never constructs for a partial-enum), returns false.
 fn enum_has_named_value(parent: &Datatype, val: u64) -> bool {
     if let Datatype::Enum(e) = parent {
-        e.values.contains_key(&val)
+        e.has_named_value(val)
     } else {
         false
     }
@@ -807,11 +850,9 @@ fn enum_has_named_value(parent: &Datatype, val: u64) -> bool {
 
 // Ghidra: type.cc:1365 TypeEnum::getMatches
 /// Build the named representation of `val` by ORing enum names (with a
-/// complement fallback). Faithful to `TypeEnum::getMatches`
-/// (type.cc:1365-1414). This is the Representation-recovery algorithm used by
-/// the decompiler's print path: it greedily matches the largest named enum
-/// values covering the most-significant bits, falling back to the bitwise
-/// complement of `val` for the second pass.
+/// complement fallback). Delegates to the enum's `get_matches` method.
+/// Faithful to `TypeEnum::getMatches` (type.cc:1365-1414). This is the
+/// Representation-recovery algorithm used by the decompiler's print path.
 fn enum_get_matches(parent: &Datatype, val: u64, rep: &mut EnumRepresentation) {
     let e = match parent {
         Datatype::Enum(e) => e,
@@ -819,63 +860,7 @@ fn enum_get_matches(parent: &Datatype, val: u64, rep: &mut EnumRepresentation) {
         // the representation empty, matching "no representation possible".
         _ => return,
     };
-    let size = e.base.size;
-    // calc_mask(size): low-order (size*8) bits all set.
-    let mask: u64 = if size == 0 { 0 } else { if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 } };
-    let mut cur_val = val;
-    for count in 0..2 {
-        let mut all_match = true;
-        if cur_val == 0 {
-            if let Some(nm) = e.values.get(&0u64) {
-                rep.match_name.push(nm.clone());
-            } else {
-                all_match = false;
-            }
-        } else {
-            let mut bits_left = cur_val;
-            let mut target = cur_val;
-            loop {
-                if target == 0 {
-                    break;
-                }
-                // Find the biggest named value <= target.
-                // BTreeMap::range().next_back() returns Option<(&u64, &String)>.
-                let (curval_ref, name) = match e.values.range(..=target).next_back() {
-                    Some(pair) => pair,
-                    None => { all_match = false; break; }
-                };
-                let curval = *curval_ref;
-                // coveringmask(bitsleft ^ curval): mask of low bits where they
-                // agree up to the highest set bit of the xor.
-                let diff = covering_mask(bits_left ^ curval);
-                if diff >= bits_left {
-                    all_match = false;
-                    break;
-                }
-                if (curval & diff) == 0 {
-                    rep.match_name.push(name.clone());
-                    bits_left ^= curval;
-                    target = bits_left;
-                } else {
-                    // Restrict search to bits at or below `curval & ~diff`.
-                    let new_target = curval & !diff;
-                    if new_target == target {
-                        all_match = false;
-                        break;
-                    }
-                    target = new_target;
-                }
-            }
-            all_match = all_match && bits_left == 0;
-        }
-        if all_match {
-            rep.complement = count == 1;
-            return;
-        }
-        cur_val ^= mask; // switch to the complement for the second pass
-        rep.match_name.clear();
-    }
-    // No representation possible — match_name remains empty.
+    e.get_matches(val, rep);
 }
 
 /// `coveringmask(xor)`: the smallest mask covering the low bits of `xor` up to
@@ -921,6 +906,60 @@ pub struct TypePointer {
     pub wordsize: usize,
 }
 
+impl TypePointer {
+    // Ghidra: type.cc:933 TypePointer::compare
+    /// Compare two pointers. Faithful to `TypePointer::compare`
+    /// (type.cc:933-952): base `Datatype::compare` first, then `wordsize`,
+    /// then `spaceid` (skipped — Rugra's TypePointer has no spaceid field;
+    /// see type_audit.md "AddrSpace 集成缺失"). If `level > 0`, recurse into
+    /// `ptrto` with `level-1`; otherwise compare by `id`.
+    pub fn compare(&self, other: &TypePointer, level: i32) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        if self.wordsize != other.wordsize {
+            return if self.wordsize < other.wordsize { -1 } else { 1 };
+        }
+        // Ghidra compares spaceid here; Rugra has no spaceid field, so this
+        // branch is a no-op (documented gap).
+        let mut lvl = level - 1;
+        if lvl < 0 {
+            return cmp_u64(self.base.id, other.base.id);
+        }
+        if lvl < 0 {
+            lvl = 0;
+        }
+        self.ptr_to.compare_deep(&other.ptr_to, lvl)
+    }
+
+    // Ghidra: type.cc:954 TypePointer::compareDependency
+    /// Compare for the type-factory tree sort. Faithful to
+    /// `TypePointer::compareDependency` (type.cc:954-967): submeta, then
+    /// `ptrto` by pointer identity, then `wordsize`, then `spaceid` (skipped,
+    /// see `compare`), then `(op.size - size)`.
+    pub fn compare_dependency(&self, other: &TypePointer) -> i32 {
+        let sm = self.base.metatype as i32;
+        let om = other.base.metatype as i32;
+        if sm != om {
+            return if sm < om { -1 } else { 1 };
+        }
+        let sp = Arc::as_ptr(&self.ptr_to) as usize;
+        let op = Arc::as_ptr(&other.ptr_to) as usize;
+        if sp != op {
+            return if sp < op { -1 } else { 1 };
+        }
+        if self.wordsize != other.wordsize {
+            return if self.wordsize < other.wordsize { -1 } else { 1 };
+        }
+        // spaceid comparison skipped (no field).
+        other.base.size as i32 - self.base.size as i32
+    }
+}
+
 /// Array data type
 ///
 /// Corresponds to Ghidra's `TypeArray` class in `type.hh`
@@ -929,6 +968,49 @@ pub struct TypeArray {
     pub base: TypeBase,
     pub array_of: Arc<Datatype>,
     pub num_elements: usize,
+}
+
+impl TypeArray {
+    // Ghidra: type.cc:1211 TypeArray::compare
+    /// Compare two arrays. Faithful to `TypeArray::compare`
+    /// (type.cc:1211-1223): base `Datatype::compare` first, then (if
+    /// `level > 0`) recurse into `arrayof` with `level-1`; otherwise compare
+    /// by `id`.
+    pub fn compare(&self, other: &TypeArray, level: i32) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        let mut lvl = level - 1;
+        if lvl < 0 {
+            return cmp_u64(self.base.id, other.base.id);
+        }
+        if lvl < 0 {
+            lvl = 0;
+        }
+        self.array_of.compare_deep(&other.array_of, lvl)
+    }
+
+    // Ghidra: type.cc:1225 TypeArray::compareDependency
+    /// Compare for the type-factory tree sort. Faithful to
+    /// `TypeArray::compareDependency` (type.cc:1225-1232): submeta, then
+    /// `arrayof` by pointer identity, then `(op.size - size)`.
+    pub fn compare_dependency(&self, other: &TypeArray) -> i32 {
+        let sm = self.base.metatype as i32;
+        let om = other.base.metatype as i32;
+        if sm != om {
+            return if sm < om { -1 } else { 1 };
+        }
+        let sp = Arc::as_ptr(&self.array_of) as usize;
+        let op = Arc::as_ptr(&other.array_of) as usize;
+        if sp != op {
+            return if sp < op { -1 } else { 1 };
+        }
+        other.base.size as i32 - self.base.size as i32
+    }
 }
 
 /// Structure data type
@@ -940,6 +1022,265 @@ pub struct TypeStruct {
     pub fields: Vec<TypeField>,
 }
 
+impl TypeStruct {
+    // Ghidra: type.cc:1971 TypeStruct::assignFieldOffsets (static)
+    /// Assign an offset to fields in order so that each field starts at an
+    /// aligned offset within the structure.
+    ///
+    /// Faithful to `TypeStruct::assignFieldOffsets` (type.cc:1971-1993). Fields
+    /// whose `offset == -1` (Rugra sentinel: see note below) are assigned an
+    /// aligned offset; fields already carrying an explicit offset are skipped
+    /// (Ghidra uses `-1` as "unassigned"). `new_size`/`new_align` are returned
+    /// via the tuple. `new_size` is `calcAlignSize(offset, new_align)`.
+    ///
+    /// NOTE on the `-1` sentinel: Ghidra stores `TypeField::offset` as `int4`
+    /// and uses `-1` to mean "unassigned". Rugra's `TypeField.offset` is
+    /// `usize` (cannot hold `-1`), so callers must use `usize::MAX` as the
+    /// "unassigned" marker. Fields with any other value are treated as
+    /// explicitly assigned and left in place, matching Ghidra's
+    /// `if ((*iter).offset != -1) continue;`.
+    ///
+    /// NOTE on `ident`: Ghidra also sets `(*iter).ident = offset` here.
+    /// Rugra's `TypeField` has no `ident` field (it is unused outside XML
+    /// decode), so that assignment is omitted.
+    ///
+    /// Returns `(new_size, new_align)`. Errors if a field is `TYPE_VOID`.
+    pub fn assign_field_offsets(
+        list: &mut [TypeField],
+    ) -> Result<(usize, usize), &'static str> {
+        let mut offset: usize = 0;
+        let mut new_align: usize = 1;
+        for field in list.iter_mut() {
+            if field.type_ptr.get_metatype() == TypeMetatype::Void {
+                return Err("Illegal field data-type: void");
+            }
+            if field.offset != usize::MAX {
+                continue;
+            }
+            let cursize = field.type_ptr.get_align_size();
+            let align = field.type_ptr.get_alignment();
+            if align > new_align {
+                new_align = align;
+            }
+            // Ghidra: align -= 1; if (align>0 && (offset & align)!=0)
+            //   offset = (offset - (offset & align) + (align+1));
+            // i.e. round `offset` up to the next multiple of the field
+            // alignment. `(offset + align) & !(align-1)` is the equivalent
+            // round-up when align is a power of two (alignment always is).
+            let mask = align.wrapping_sub(1);
+            if align > 0 && (offset & mask) != 0 {
+                offset = (offset + mask) & !mask;
+            }
+            field.offset = offset;
+            offset += cursize;
+        }
+        let new_size = calc_align_size(offset, new_align);
+        Ok((new_size, new_align))
+    }
+
+    // Ghidra: type.cc:1893 TypeStruct::scoreSingleComponent (static)
+    /// If this method is called, the given data-type has a single component
+    /// that fills it entirely (either a field or an element). The indicated
+    /// Varnode can be resolved either by naming the data-type or naming the
+    /// component. This method returns an indication of the best fit: either 0
+    /// for the component or -1 for the data-type.
+    ///
+    /// Faithful to `TypeStruct::scoreSingleComponent` (type.cc:1893-1927).
+    /// Examines the PcodeOp `op`/`slot` to decide whether the whole `parent`
+    /// data-type or its single component is the better resolution.
+    ///
+    /// Returns 0 (component) or -1 (whole structure).
+    pub fn score_single_component(
+        parent: &Datatype,
+        op: &crate::op::PcodeOp,
+        slot: i32,
+    ) -> i32 {
+        use crate::opcodes::OpCode;
+        let code = op.opcode;
+        if code == OpCode::CPUI_COPY || code == OpCode::CPUI_INDIRECT {
+            // Look at the "other" end of the op: if slot==0 the output drives
+            // the decision, else input(0) does. Ghidra:
+            //   if (slot == 0) vn = op->getOut(); else vn = op->getIn(0);
+            let vn_opt = if slot == 0 {
+                op.get_out()
+            } else {
+                op.get_in(0)
+            };
+            if let Some(vn) = vn_opt {
+                let vn_rg = vn.read().unwrap();
+                if vn_rg.is_type_lock() {
+                    if let Some(vn_ty) = vn_rg.get_type() {
+                        // Ghidra: `vn->getType() == parent` is pointer equality
+                        // between two `Datatype*`. Rugra mirrors that via raw
+                        // pointer comparison against the Arc's allocation.
+                        let vn_ptr = Arc::as_ptr(&vn_ty) as *const Datatype;
+                        if std::ptr::eq(vn_ptr, parent) {
+                            // COPY of the structure directly, use whole structure.
+                            return -1;
+                        }
+                    }
+                }
+            }
+        } else if (code == OpCode::CPUI_LOAD && slot == -1)
+            || (code == OpCode::CPUI_STORE && slot == 2)
+        {
+            // op->getIn(1) is the pointer Varnode.
+            if let Some(vn) = op.get_in(1) {
+                let vn_rg = vn.read().unwrap();
+                if vn_rg.is_type_lock() {
+                    if let Some(ct) = vn_rg.get_type_read_facing_op(op, 1) {
+                        if ct.get_metatype() == TypeMetatype::Pointer {
+                        if let Datatype::Pointer(p) = ct.as_ref() {
+                            // Ghidra: `((TypePointer*)ct)->getPtrTo() == parent`
+                            // — pointer equality on the pointee Datatype.
+                            let pt_ptr = Arc::as_ptr(&p.ptr_to) as *const Datatype;
+                            if std::ptr::eq(pt_ptr, parent) {
+                                // LOAD or STORE of the structure directly.
+                                return -1;
+                            }
+                        }
+                        }
+                    }
+                }
+            }
+        } else if op.is_call() {
+            // Ghidra consults FuncCallSpecs for a type-locked param/output
+            // equal to `parent`. Rugra does not yet thread FuncCallSpecs
+            // through PcodeOp, so we fall through to the "resolve to
+            // component" default. This matches Ghidra's behaviour when no
+            // call specs are available (fc == null).
+        }
+        // In all other cases resolve to the component.
+        0
+    }
+
+    // Ghidra: type.cc:1742 TypeStruct::compare
+    /// Compare two structs. Faithful to `TypeStruct::compare`
+    /// (type.cc:1742-1780): base `Datatype::compare` first, then field count,
+    /// then per-field (offset, name, metatype). If `level > 0`, recurse into
+    /// each field's type with `level-1`; otherwise compare by `id`.
+    pub fn compare(&self, other: &TypeStruct, level: i32) -> i32 {
+        // Datatype::compare: submeta, then size, then name.
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        if self.fields.len() != other.fields.len() {
+            return other.fields.len() as i32 - self.fields.len() as i32;
+        }
+        // First pass: offset, name, metatype.
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            if f1.offset != f2.offset {
+                return if f1.offset < f2.offset { -1 } else { 1 };
+            }
+            if f1.name != f2.name {
+                return if f1.name < f2.name { -1 } else { 1 };
+            }
+            let m1 = f1.type_ptr.get_metatype() as i32;
+            let m2 = f2.type_ptr.get_metatype() as i32;
+            if m1 != m2 {
+                return if m1 < m2 { -1 } else { 1 };
+            }
+        }
+        let mut lvl = level - 1;
+        if lvl < 0 {
+            return cmp_u64(self.base.id, other.base.id);
+        }
+        if lvl < 0 {
+            lvl = 0;
+        }
+        // Second pass: recurse into each field type.
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            // Short-circuit recursive loops on pointer identity.
+            if !Arc::ptr_eq(&f1.type_ptr, &f2.type_ptr) {
+                let c = f1.type_ptr.compare_deep(&f2.type_ptr, lvl);
+                if c != 0 {
+                    return c;
+                }
+            }
+        }
+        0
+    }
+
+    // Ghidra: type.cc:1782 TypeStruct::compareDependency
+    /// Compare for the type-factory tree sort. Faithful to
+    /// `TypeStruct::compareDependency` (type.cc:1782-1807): base comparison,
+    /// then field count, then per-field (offset, name, field-type by pointer
+    /// identity).
+    pub fn compare_dependency(&self, other: &TypeStruct) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        if self.fields.len() != other.fields.len() {
+            return other.fields.len() as i32 - self.fields.len() as i32;
+        }
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            if f1.offset != f2.offset {
+                return if f1.offset < f2.offset { -1 } else { 1 };
+            }
+            if f1.name != f2.name {
+                return if f1.name < f2.name { -1 } else { 1 };
+            }
+            // Compare the field type pointers directly.
+            let p1 = Arc::as_ptr(&f1.type_ptr) as usize;
+            let p2 = Arc::as_ptr(&f2.type_ptr) as usize;
+            if p1 != p2 {
+                return if p1 < p2 { -1 } else { 1 };
+            }
+        }
+        0
+    }
+}
+
+// Ghidra: type.cc:212 Datatype::compare (base portion)
+/// The `Datatype::compare` base comparison: submeta (metatype), then
+/// `(op.size - size)`, then name lexicographically. Returns -1/0/1. Mirrors
+/// the first three lines of `Datatype::compare` (type.cc:212-220) used as the
+/// prefix of every subclass `compare`/`compareDependency` override.
+fn datatype_compare_base(
+    self_meta: TypeMetatype,
+    self_size: usize,
+    self_name: &str,
+    other_meta: TypeMetatype,
+    other_size: usize,
+    other_name: &str,
+) -> i32 {
+    let sm = self_meta as i32;
+    let om = other_meta as i32;
+    if sm != om {
+        return sm - om;
+    }
+    let sd = self_size as i32;
+    let od = other_size as i32;
+    if sd != od {
+        return sd - od;
+    }
+    match self_name.cmp(other_name) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+/// Three-way compare of two `u64` ids returning -1/0/1. Used by the
+/// `level < 0` fallback in subclass `compare` overrides (type.cc:1765 etc.).
+fn cmp_u64(a: u64, b: u64) -> i32 {
+    if a < b {
+        -1
+    } else if a > b {
+        1
+    } else {
+        0
+    }
+}
+
 /// Enumeration data type
 ///
 /// Corresponds to Ghidra's `TypeEnum` class in `type.hh`
@@ -947,6 +1288,195 @@ pub struct TypeStruct {
 pub struct TypeEnum {
     pub base: TypeBase,
     pub values: std::collections::BTreeMap<u64, String>,
+}
+
+impl TypeEnum {
+    // Ghidra: type.cc:1354 TypeEnum::hasNamedValue
+    /// \param val is the given value to test
+    /// \return \b true if \b this enumeration has a name with the value
+    ///
+    /// Faithful to `TypeEnum::hasNamedValue` (type.cc:1354-1358):
+    /// `namemap.find(val) != namemap.end()`.
+    pub fn has_named_value(&self, val: u64) -> bool {
+        self.values.contains_key(&val)
+    }
+
+    // Ghidra: type.cc:1365 TypeEnum::getMatches
+    /// Given a specific value of the enumeration, calculate the named
+    /// representation of that value. The representation is returned as a list
+    /// of names that must logically be ORed and possibly complemented. If no
+    /// representation is possible, no names will be returned.
+    ///
+    /// Faithful to `TypeEnum::getMatches` (type.cc:1365-1414). Two-pass
+    /// algorithm: greedily match the largest named value covering the most-
+    /// significant bits of `val`; if that fails, retry on the bitwise
+    /// complement of `val` (recorded via `rep.complement = (count==1)`).
+    pub fn get_matches(&self, val: u64, rep: &mut EnumRepresentation) {
+        let size = self.base.size;
+        // calc_mask(size) — low (size*8) bits set (address.hh:499).
+        let mask: u64 = crate::address::calc_mask(size);
+        let mut cur_val = val;
+        for count in 0..2u32 {
+            let mut all_match = true;
+            if cur_val == 0 {
+                // Zero handled specially.
+                if let Some(nm) = self.values.get(&0u64) {
+                    rep.match_name.push(nm.clone());
+                } else {
+                    all_match = false;
+                }
+            } else {
+                let mut bits_left = cur_val;
+                let mut target = cur_val;
+                loop {
+                    if target == 0 {
+                        break;
+                    }
+                    // Find the biggest named value <= target.
+                    let (curval_ref, name) = match self.values.range(..=target).next_back() {
+                        Some(pair) => pair,
+                        None => {
+                            // All named values are greater than target.
+                            all_match = false;
+                            break;
+                        }
+                    };
+                    let curval = *curval_ref;
+                    // coveringmask(bitsleft ^ curval)
+                    let diff = covering_mask(bits_left ^ curval);
+                    if diff >= bits_left {
+                        // Could not match most significant bit of bitsleft.
+                        all_match = false;
+                        break;
+                    }
+                    if (curval & diff) == 0 {
+                        // Found a named value matching at least the msb.
+                        rep.match_name.push(name.clone());
+                        bits_left ^= curval;
+                        target = bits_left;
+                    } else {
+                        // Restrict search to bits at or below (curval & ~diff).
+                        let new_target = curval & !diff;
+                        if new_target == target {
+                            all_match = false;
+                            break;
+                        }
+                        target = new_target;
+                    }
+                }
+                all_match = all_match && bits_left == 0;
+            }
+            if all_match {
+                rep.complement = count == 1;
+                return;
+            }
+            // Switch value to its complement for the second pass.
+            cur_val ^= mask;
+            rep.match_name.clear();
+        }
+        // No representation possible — match_name remains empty.
+    }
+
+    // Ghidra: type.cc:1516 TypeEnum::assignValues (static)
+    /// Establish unique enumeration values for a TypeEnum. Fill in any values
+    /// for any names that weren't explicitly assigned and check for duplicates.
+    ///
+    /// Faithful to `TypeEnum::assignValues` (type.cc:1516-1549). Returns the
+    /// constructed value→name map. Errors (duplicate assigned value) are
+    /// surfaced via `Result`; Ghidra throws `LowlevelError`.
+    ///
+    /// - `namelist` — list of names in the enumeration.
+    /// - `vallist` — corresponding list of values assigned to names.
+    /// - `assignlist` — `true` where the corresponding name has an assigned
+    ///   value; unassigned names get an auto-incremented value above the max
+    ///   assigned value (folded into `mask`), skipping collisions.
+    /// - `size` — size of the enum in bytes (used to build the value mask).
+    pub fn assign_values(
+        namelist: &[String],
+        vallist: &[u64],
+        assignlist: &[bool],
+        size: usize,
+    ) -> Result<std::collections::BTreeMap<u64, String>, String> {
+        let mut nmap: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+        let mask: u64 = crate::address::calc_mask(size);
+        let mut maxval: u64 = 0;
+        // First pass: insert explicitly assigned values, checking for duplicates.
+        for i in 0..namelist.len() {
+            if assignlist[i] {
+                let mut val = vallist[i];
+                if val > maxval {
+                    maxval = val;
+                }
+                val &= mask;
+                if nmap.contains_key(&val) {
+                    return Err(format!(
+                        "Enum field \"{}\" is a duplicate value",
+                        namelist[i]
+                    ));
+                }
+                nmap.insert(val, namelist[i].clone());
+            }
+        }
+        // Second pass: assign auto-incremented values to unassigned names.
+        for i in 0..namelist.len() {
+            if !assignlist[i] {
+                let val;
+                loop {
+                    maxval = maxval.wrapping_add(1);
+                    let candidate = maxval & mask;
+                    if !nmap.contains_key(&candidate) {
+                        val = candidate;
+                        break;
+                    }
+                }
+                nmap.insert(val, namelist[i].clone());
+            }
+        }
+        Ok(nmap)
+    }
+
+    // Ghidra: type.cc:1416 TypeEnum::compare
+    /// Compare two enums. Faithful to `TypeEnum::compare` (type.cc:1416-1420):
+    /// delegates to `compareDependency`.
+    pub fn compare(&self, other: &TypeEnum, level: i32) -> i32 {
+        self.compare_dependency(other, level)
+    }
+
+    // Ghidra: type.cc:1422 TypeEnum::compareDependency
+    /// Compare two enums for tree-structure ordering. Faithful to
+    /// `TypeEnum::compareDependency` (type.cc:1422-1445): base comparison
+    /// (TypeBase::compareDependency = submeta then `(op.size - size)`) first,
+    /// then the namemap (size, then element-wise key and value).
+    ///
+    /// NOTE: Ghidra's `TypeEnum::compareDependency` does NOT take a `level`
+    /// parameter (the namemap values are strings, not recursing Datatypes).
+    /// We accept `level` only to match the calling convention used by other
+    /// `compare` overloads in this port; it is ignored.
+    pub fn compare_dependency(&self, other: &TypeEnum, _level: i32) -> i32 {
+        // TypeBase::compareDependency: submeta(metatype), then (op.size - size).
+        let self_meta = self.base.metatype as i32;
+        let other_meta = other.base.metatype as i32;
+        if self_meta != other_meta {
+            return self_meta - other_meta;
+        }
+        let res = other.base.size as i32 - self.base.size as i32;
+        if res != 0 {
+            return res;
+        }
+        // namemap size, then element-wise (key, value).
+        if self.values.len() != other.values.len() {
+            return if self.values.len() < other.values.len() { -1 } else { 1 };
+        }
+        for ((k1, v1), (k2, v2)) in self.values.iter().zip(other.values.iter()) {
+            if k1 != k2 {
+                return if k1 < k2 { -1 } else { 1 };
+            }
+            if v1 != v2 {
+                return if v1 < v2 { -1 } else { 1 };
+            }
+        }
+        0
+    }
 }
 
 /// Union data type
@@ -958,6 +1488,119 @@ pub struct TypeUnion {
     pub fields: Vec<TypeField>,
 }
 
+impl TypeUnion {
+    // Ghidra: type.cc:2223 TypeUnion::assignFieldOffsets (static)
+    /// Assign field offsets for a union. All union fields share offset 0;
+    /// `new_size` is the maximum field size, `new_align` the max field
+    /// alignment. Faithful to `TypeUnion::assignFieldOffsets`
+    /// (type.cc:2223-2245). Sanity-checks field type (non-null, non-void) and
+    /// name. Returns `(new_size, new_align)`.
+    pub fn assign_field_offsets(
+        list: &mut [TypeField],
+        union_name: &str,
+    ) -> Result<(usize, usize), String> {
+        let mut new_size: usize = 0;
+        let mut new_align: usize = 1;
+        for field in list.iter_mut() {
+            let ct = &field.type_ptr;
+            if ct.get_metatype() == TypeMetatype::Void {
+                return Err(format!(
+                    "Bad field data-type for union: {}",
+                    union_name
+                ));
+            }
+            if field.name.is_empty() {
+                return Err(format!("Bad field name for union: {}", union_name));
+            }
+            field.offset = 0;
+            let end = ct.get_size();
+            if end > new_size {
+                new_size = end;
+            }
+            let cur_align = ct.get_alignment();
+            if cur_align > new_align {
+                new_align = cur_align;
+            }
+        }
+        Ok((new_size, new_align))
+    }
+
+    // Ghidra: type.cc:2045 TypeUnion::compare
+    /// Compare two unions. Faithful to `TypeUnion::compare`
+    /// (type.cc:2045-2082): base `Datatype::compare` first, then field count,
+    /// then per-field (name, metatype). If `level > 0`, recurse into each
+    /// field's type with `level-1`; otherwise compare by `id`.
+    pub fn compare(&self, other: &TypeUnion, level: i32) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        if self.fields.len() != other.fields.len() {
+            return other.fields.len() as i32 - self.fields.len() as i32;
+        }
+        // First pass: name, then first-level metatype.
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            if f1.name != f2.name {
+                return if f1.name < f2.name { -1 } else { 1 };
+            }
+            let m1 = f1.type_ptr.get_metatype() as i32;
+            let m2 = f2.type_ptr.get_metatype() as i32;
+            if m1 != m2 {
+                return if m1 < m2 { -1 } else { 1 };
+            }
+        }
+        let mut lvl = level - 1;
+        if lvl < 0 {
+            return cmp_u64(self.base.id, other.base.id);
+        }
+        if lvl < 0 {
+            lvl = 0;
+        }
+        // Second pass: recurse into each field type.
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            if !Arc::ptr_eq(&f1.type_ptr, &f2.type_ptr) {
+                let c = f1.type_ptr.compare_deep(&f2.type_ptr, lvl);
+                if c != 0 {
+                    return c;
+                }
+            }
+        }
+        0
+    }
+
+    // Ghidra: type.cc:2084 TypeUnion::compareDependency
+    /// Compare for the type-factory tree sort. Faithful to
+    /// `TypeUnion::compareDependency` (type.cc:2084-2107): base comparison,
+    /// then field count, then per-field (name, field-type by pointer
+    /// identity).
+    pub fn compare_dependency(&self, other: &TypeUnion) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        if self.fields.len() != other.fields.len() {
+            return other.fields.len() as i32 - self.fields.len() as i32;
+        }
+        for (f1, f2) in self.fields.iter().zip(other.fields.iter()) {
+            if f1.name != f2.name {
+                return if f1.name < f2.name { -1 } else { 1 };
+            }
+            let p1 = Arc::as_ptr(&f1.type_ptr) as usize;
+            let p2 = Arc::as_ptr(&f2.type_ptr) as usize;
+            if p1 != p2 {
+                return if p1 < p2 { -1 } else { 1 };
+            }
+        }
+        0
+    }
+}
+
 /// Code/Function data type
 ///
 /// Corresponds to Ghidra's `TypeCode` class in `type.hh`
@@ -966,6 +1609,223 @@ pub struct TypeCode {
     pub base: TypeBase,
     /// Function prototype associated with this code type
     pub proto: Option<Arc<FuncProto>>,
+}
+
+impl TypeCode {
+    // Ghidra: type.cc:2713 TypeCode::setPrototype(tfact, sig, voidtype)
+    /// Establish a function-pointer prototype on this code type from raw
+    /// prototype pieces. Faithful to `TypeCode::setPrototype`
+    /// (type.cc:2713-2726): sets `variable_length`, (re)builds the internal
+    /// `FuncProto`, configures it from `sig`, and locks both input and output.
+    ///
+    /// Rugra note: Ghidra's `proto->setInternal(sig.model, voidtype)` +
+    /// `proto->updateAllTypes(sig)` requires a `ProtoModel` object (from the
+    /// Architecture) to assign parameter storage. Rugra does not yet thread an
+    /// Architecture through every type, so this port builds the `FuncProto`
+    /// directly from the pieces (return type + parameter types/names) without
+    /// address assignment, then sets the input/output locks as Ghidra does.
+    /// The resulting prototype is structurally complete for type-comparison
+    /// and printing purposes.
+    pub fn set_prototype_pieces(&mut self, sig: &crate::fspec::PrototypePieces) {
+        self.base.flags |= type_flags::VARLENGTH;
+        let voidtype = Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void));
+        let return_type = sig
+            .out_type
+            .map(|t| Arc::new(t.clone()))
+            .unwrap_or_else(|| Arc::new(voidtype));
+        let mut proto = FuncProto::new(String::new(), return_type);
+        for (i, ty) in sig.in_types.iter().enumerate() {
+            let name = format!("param{}", i);
+            proto.add_parameter(crate::ProtoParameter::new(
+                name,
+                ty.clone(),
+                Address::new(0),
+            ));
+        }
+        proto.set_input_lock(true);
+        proto.set_output_lock(true);
+        self.proto = Some(Arc::new(proto));
+    }
+
+    // Ghidra: type.cc:2731 TypeCode::setPrototype(typegrp, fp)
+    /// Set a particular (already-built) function prototype on this code type.
+    /// The prototype is copied in. Faithful to `TypeCode::setPrototype`
+    /// (type.cc:2731-2744). Pass `None` to clear an existing prototype.
+    pub fn set_prototype(&mut self, fp: Option<&FuncProto>) {
+        if self.proto.is_some() {
+            self.proto = None;
+        }
+        if let Some(fp) = fp {
+            self.proto = Some(Arc::new(fp.clone()));
+        }
+    }
+
+    // Ghidra: type.cc:2788 TypeCode::compareBasic
+    /// Compare basic characteristics of this with another TypeCode, not
+    /// including the parameter types. Faithful to `TypeCode::compareBasic`
+    /// (type.cc:2788-2818). Returns:
+    ///   - -1 or 1 if `self` and `op` differ in surface characteristics,
+    ///   - 0 if they are exactly equal and have no parameters,
+    ///   - 2 if they are equal on the surface but additional comparisons must
+    ///     be made on parameters.
+    pub fn compare_basic(&self, other: &TypeCode) -> i32 {
+        match (self.proto.as_ref(), other.proto.as_ref()) {
+            (None, None) => return 0,
+            (None, Some(_)) => return 1,
+            (Some(_), None) => return -1,
+            (Some(p1), Some(p2)) => {
+                // hasModel / model name comparison.
+                // Ghidra: `proto->hasModel()` = (model != null). Rugra stores
+                // the model as a string on FuncProto, so "has model" maps to
+                // `!is_model_unknown()` (fspec.hh:1394).
+                let p1_has = !p1.is_model_unknown();
+                let p2_has = !p2.is_model_unknown();
+                if !p1_has {
+                    if p2_has {
+                        return 1;
+                    }
+                } else {
+                    if !p2_has {
+                        return -1;
+                    }
+                    let m1 = p1.get_model_name();
+                    let m2 = p2.get_model_name();
+                    if m1 != m2 {
+                        return if m1 < m2 { -1 } else { 1 };
+                    }
+                }
+                let nump = p1.num_params();
+                let opnump = p2.num_params();
+                if nump != opnump {
+                    // Ghidra: (opnump < nump) ? -1 : 1
+                    return if opnump < nump { -1 } else { 1 };
+                }
+                let myflags = comparable_flags(p1);
+                let opflags = comparable_flags(p2);
+                if myflags != opflags {
+                    return if myflags < opflags { -1 } else { 1 };
+                }
+            }
+        }
+        // Carry on with comparison of parameters.
+        2
+    }
+
+    // Ghidra: type.cc:2828 TypeCode::compare
+    /// Compare two code types. Faithful to `TypeCode::compare`
+    /// (type.cc:2828-2858): base `Datatype::compare`, then `compareBasic`;
+    /// if `compareBasic` returns 2 and `level > 0`, recurse into each
+    /// parameter type and the return type.
+    pub fn compare(&self, other: &TypeCode, level: i32) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        let res = self.compare_basic(other);
+        if res != 2 {
+            return res;
+        }
+        let mut lvl = level - 1;
+        if lvl < 0 {
+            return cmp_u64(self.base.id, other.base.id);
+        }
+        if lvl < 0 {
+            lvl = 0;
+        }
+        // Both protos are present (compareBasic returned 2).
+        let (p1, p2) = match (self.proto.as_ref(), other.proto.as_ref()) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return 0,
+        };
+        let nump = p1.num_params();
+        for i in 0..nump {
+            let param = match p1.get_param(i) {
+                Some(pp) => pp,
+                None => return 0,
+            };
+            let opparam = match p2.get_param(i) {
+                Some(pp) => pp,
+                None => return 0,
+            };
+            let c = param.data_type.compare_deep(&opparam.data_type, lvl);
+            if c != 0 {
+                return c;
+            }
+        }
+        // Output (return) type comparison.
+        let otype = &p1.return_type;
+        let opotype = &p2.return_type;
+        otype.compare_deep(opotype, lvl)
+    }
+
+    // Ghidra: type.cc:2860 TypeCode::compareDependency
+    /// Compare for the type-factory tree sort. Faithful to
+    /// `TypeCode::compareDependency` (type.cc:2860-2886): base comparison,
+    /// `compareBasic`, then each parameter type and the return type by
+    /// pointer identity.
+    pub fn compare_dependency(&self, other: &TypeCode) -> i32 {
+        let base_res = datatype_compare_base(
+            self.base.metatype, self.base.size, &self.base.name,
+            other.base.metatype, other.base.size, &other.base.name,
+        );
+        if base_res != 0 {
+            return base_res;
+        }
+        let res = self.compare_basic(other);
+        if res != 2 {
+            return res;
+        }
+        let (p1, p2) = match (self.proto.as_ref(), other.proto.as_ref()) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return 0,
+        };
+        let nump = p1.num_params();
+        for i in 0..nump {
+            let param = match p1.get_param(i) {
+                Some(pp) => pp,
+                None => return 0,
+            };
+            let opparam = match p2.get_param(i) {
+                Some(pp) => pp,
+                None => return 0,
+            };
+            let pa = Arc::as_ptr(&param.data_type) as usize;
+            let pb = Arc::as_ptr(&opparam.data_type) as usize;
+            if pa != pb {
+                return if pa < pb { -1 } else { 1 };
+            }
+        }
+        // Output (return) type by pointer identity.
+        let pa = Arc::as_ptr(&p1.return_type) as usize;
+        let pb = Arc::as_ptr(&p2.return_type) as usize;
+        if pa != pb {
+            return if pa < pb { -1 } else { 1 };
+        }
+        0
+    }
+}
+
+// Ghidra: fspec.hh:1618 FuncProto::getComparableFlags
+/// The subset of `FuncProto::flags` that participate in `TypeCode::compareBasic`.
+/// Faithful to `FuncProto::getComparableFlags` (fspec.hh:1618):
+///   `(flags & (dotdotdot | is_constructor | is_destructor | has_thisptr))`.
+///
+/// Rugra note: Rugra's `FuncProto` currently only carries `is_dotdotdot`; the
+/// `is_constructor`/`is_destructor`/`has_thisptr` bits are not yet ported
+/// (they originate from demangled names / ProtoModel analysis). We surface
+/// only the `dotdotdot` bit here so that varargs-vs-fixed prototypes compare
+/// distinctly, which is the comparison that matters for function-pointer
+/// deduplication. When the remaining flags are added to `FuncProto`, extend
+/// this mask.
+fn comparable_flags(proto: &FuncProto) -> u32 {
+    let mut flags = 0u32;
+    if proto.is_dotdotdot {
+        flags |= 0x1; // dotdotdot
+    }
+    flags
 }
 
 /// Type representing a spacebase (e.g. stack frame, register bank)
@@ -1974,5 +2834,347 @@ mod tests {
         // type.cc:2935 — global spacebase has invalid localframe.
         let global = TypeSpacebase::new_global(Address::new(0));
         assert!(global.is_invalid());
+    }
+
+    // --- P2 TypeEnum methods (type.cc:1354/1365/1516) ---
+
+    fn build_enum(values: &[(u64, &str)], size: usize) -> TypeEnum {
+        let mut base = TypeBase::new("Color".into(), size, TypeMetatype::Int);
+        base.flags |= type_flags::ENUMTYPE;
+        let mut map = std::collections::BTreeMap::new();
+        for (v, n) in values {
+            map.insert(*v, (*n).to_string());
+        }
+        TypeEnum { base, values: map }
+    }
+
+    #[test]
+    fn test_type_enum_has_named_value() {
+        // type.cc:1354 — hasNamedValue checks the value map.
+        let e = build_enum(&[(0, "RED"), (1, "GREEN"), (2, "BLUE")], 1);
+        assert!(e.has_named_value(0));
+        assert!(e.has_named_value(1));
+        assert!(e.has_named_value(2));
+        assert!(!e.has_named_value(3));
+    }
+
+    #[test]
+    fn test_type_enum_get_matches_single() {
+        // type.cc:1365 — value 1 → "GREEN" only.
+        let e = build_enum(&[(0, "RED"), (1, "GREEN"), (2, "BLUE")], 1);
+        let mut rep = EnumRepresentation::default();
+        e.get_matches(1, &mut rep);
+        assert!(!rep.complement);
+        assert_eq!(rep.match_name, vec!["GREEN".to_string()]);
+    }
+
+    #[test]
+    fn test_type_enum_get_matches_or_combination() {
+        // type.cc:1365 — value 0x3 should OR RED(|1) + GREEN(2)... actually
+        // bits: value 3 = 1|2 → "GREEN","BLUE"? No: 1=GREEN,2=BLUE → 3=GREEN|BLUE.
+        let e = build_enum(&[(1, "GREEN"), (2, "BLUE")], 1);
+        let mut rep = EnumRepresentation::default();
+        e.get_matches(3, &mut rep);
+        assert!(!rep.complement);
+        // The greedy algorithm picks the biggest <= target first.
+        assert!(!rep.match_name.is_empty());
+        // 3 = 1|2; both names should appear (order: biggest-first → BLUE then GREEN).
+        assert_eq!(rep.match_name.len(), 2);
+    }
+
+    #[test]
+    fn test_type_enum_get_matches_no_representation() {
+        // type.cc:1365 — value with no covering names → empty.
+        let e = build_enum(&[(0, "RED")], 1);
+        let mut rep = EnumRepresentation::default();
+        e.get_matches(5, &mut rep);
+        assert!(rep.match_name.is_empty());
+    }
+
+    #[test]
+    fn test_type_enum_get_matches_complement() {
+        // type.cc:1365 — for a 1-byte enum, value 0xFE with only 0x1 named
+        // has no direct representation; the complement pass (~0xFE & 0xFF = 1)
+        // matches, setting complement=true.
+        let e = build_enum(&[(1, "ONE")], 1);
+        let mut rep = EnumRepresentation::default();
+        e.get_matches(0xFE, &mut rep);
+        assert!(rep.complement);
+        assert_eq!(rep.match_name, vec!["ONE".to_string()]);
+    }
+
+    #[test]
+    fn test_type_enum_assign_values_explicit() {
+        // type.cc:1516 — explicitly assigned values land in the map.
+        let names = vec!["RED".to_string(), "GREEN".to_string()];
+        let vals = vec![0u64, 1u64];
+        let assigned = vec![true, true];
+        let nmap = TypeEnum::assign_values(&names, &vals, &assigned, 1).unwrap();
+        assert_eq!(nmap.get(&0), Some(&"RED".to_string()));
+        assert_eq!(nmap.get(&1), Some(&"GREEN".to_string()));
+    }
+
+    #[test]
+    fn test_type_enum_assign_values_auto_increment() {
+        // type.cc:1516 — unassigned names get auto-incremented values.
+        let names = vec!["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
+        let vals = vec![5u64, 0u64, 0u64];
+        let assigned = vec![true, false, false];
+        let nmap = TypeEnum::assign_values(&names, &vals, &assigned, 1).unwrap();
+        assert_eq!(nmap.get(&5), Some(&"RED".to_string()));
+        // GREEN and BLUE auto-assigned above maxval (5): 6, 7.
+        assert_eq!(nmap.get(&6), Some(&"GREEN".to_string()));
+        assert_eq!(nmap.get(&7), Some(&"BLUE".to_string()));
+    }
+
+    #[test]
+    fn test_type_enum_assign_values_duplicate_error() {
+        // type.cc:1516 — duplicate explicit value → Err.
+        let names = vec!["RED".to_string(), "ALSO_RED".to_string()];
+        let vals = vec![1u64, 1u64];
+        let assigned = vec![true, true];
+        assert!(TypeEnum::assign_values(&names, &vals, &assigned, 1).is_err());
+    }
+
+    #[test]
+    fn test_type_enum_compare_dependency() {
+        // type.cc:1422 — same namemap → 0; different size → nonzero.
+        let e1 = build_enum(&[(0, "A"), (1, "B")], 1);
+        let e2 = build_enum(&[(0, "A"), (1, "B")], 1);
+        assert_eq!(e1.compare_dependency(&e2, 0), 0);
+        let e3 = build_enum(&[(0, "A"), (1, "B")], 4);
+        assert_ne!(e1.compare_dependency(&e3, 0), 0);
+        let e4 = build_enum(&[(0, "A"), (1, "X")], 1);
+        assert_ne!(e1.compare_dependency(&e4, 0), 0);
+    }
+
+    // --- P2 TypeStruct methods (type.cc:1742/1782/1893/1971) ---
+
+    #[test]
+    fn test_struct_assign_field_offsets_alignment() {
+        // type.cc:1971 — char(1) then int(4): int must align to 4 → offset 4.
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let mut fields = vec![
+            TypeField { name: "c".into(), offset: usize::MAX, type_ptr: char_t },
+            TypeField { name: "i".into(), offset: usize::MAX, type_ptr: int_t },
+        ];
+        let (size, align) = TypeStruct::assign_field_offsets(&mut fields).unwrap();
+        assert_eq!(fields[0].offset, 0); // char at 0
+        assert_eq!(fields[1].offset, 4); // int aligned to 4
+        assert_eq!(align, 4);
+        assert_eq!(size, 8); // 4+4 rounded up to align 4
+    }
+
+    #[test]
+    fn test_struct_assign_field_offsets_void_error() {
+        // type.cc:1971 — void field → Err.
+        let void_t = Arc::new(Datatype::Void(TypeBase::new("void".into(), 0, TypeMetatype::Void)));
+        let mut fields = vec![
+            TypeField { name: "v".into(), offset: usize::MAX, type_ptr: void_t },
+        ];
+        assert!(TypeStruct::assign_field_offsets(&mut fields).is_err());
+    }
+
+    #[test]
+    fn test_struct_assign_field_offsets_skip_explicit() {
+        // type.cc:1971 — fields with explicit offset (not usize::MAX) are skipped.
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let mut fields = vec![
+            TypeField { name: "c".into(), offset: 10, type_ptr: char_t },
+        ];
+        let (size, _) = TypeStruct::assign_field_offsets(&mut fields).unwrap();
+        // offset stays 10, not reassigned; size = calcAlignSize(0,1) = 0.
+        assert_eq!(fields[0].offset, 10);
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_struct_compare_recursive() {
+        // type.cc:1742 — structs with same fields compare equal.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let s1 = TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() }],
+        };
+        let s2 = TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() }],
+        };
+        assert_eq!(s1.compare(&s2, 4), 0);
+        // Different field name → nonzero.
+        let s3 = TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "b".into(), offset: 0, type_ptr: int_t }],
+        };
+        assert_ne!(s1.compare(&s3, 4), 0);
+    }
+
+    #[test]
+    fn test_struct_compare_dependency_pointer_identity() {
+        // type.cc:1782 — compareDependency uses pointer identity for field types.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let int_t_copy = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let s1 = TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t }],
+        };
+        let s2 = TypeStruct {
+            base: TypeBase::new("S".into(), 4, TypeMetatype::Struct),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t_copy }],
+        };
+        // Different Arc allocations → nonzero under pointer-identity comparison.
+        assert_ne!(s1.compare_dependency(&s2), 0);
+    }
+
+    // --- P2 TypeUnion methods (type.cc:2045/2084/2223) ---
+
+    #[test]
+    fn test_union_assign_field_offsets() {
+        // type.cc:2223 — union fields all at offset 0; size = max field size.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
+        let mut fields = vec![
+            TypeField { name: "a".into(), offset: 99, type_ptr: int_t },
+            TypeField { name: "b".into(), offset: 99, type_ptr: char_t },
+        ];
+        let (size, align) = TypeUnion::assign_field_offsets(&mut fields, "U").unwrap();
+        assert_eq!(fields[0].offset, 0);
+        assert_eq!(fields[1].offset, 0);
+        assert_eq!(size, 4); // max(4, 1)
+        assert_eq!(align, 4);
+    }
+
+    #[test]
+    fn test_union_compare_recursive() {
+        // type.cc:2045 — unions with same fields compare equal.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let u1 = TypeUnion {
+            base: TypeBase::new("U".into(), 4, TypeMetatype::Union),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() }],
+        };
+        let u2 = TypeUnion {
+            base: TypeBase::new("U".into(), 4, TypeMetatype::Union),
+            fields: vec![TypeField { name: "a".into(), offset: 0, type_ptr: int_t }],
+        };
+        assert_eq!(u1.compare(&u2, 4), 0);
+    }
+
+    // --- P2 Pointer/Array recursive compare (type.cc:933/954/1211/1225) ---
+
+    #[test]
+    fn test_pointer_compare_recursive() {
+        // type.cc:933 — pointers to the same type compare equal.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let p1 = TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t.clone(),
+            wordsize: 1,
+        };
+        let p2 = TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t,
+            wordsize: 1,
+        };
+        assert_eq!(p1.compare(&p2, 4), 0);
+    }
+
+    #[test]
+    fn test_array_compare_recursive() {
+        // type.cc:1211 — arrays of the same element compare equal.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let a1 = TypeArray {
+            base: TypeBase::new("int[3]".into(), 12, TypeMetatype::Array),
+            array_of: int_t.clone(),
+            num_elements: 3,
+        };
+        let a2 = TypeArray {
+            base: TypeBase::new("int[3]".into(), 12, TypeMetatype::Array),
+            array_of: int_t,
+            num_elements: 3,
+        };
+        assert_eq!(a1.compare(&a2, 4), 0);
+    }
+
+    #[test]
+    fn test_datatype_compare_deep_dispatches() {
+        // Datatype::compare_deep dispatches to the subclass overrides.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let p1 = Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t.clone(),
+            wordsize: 1,
+        });
+        let p2 = Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t,
+            wordsize: 1,
+        });
+        assert_eq!(p1.compare_deep(&p2, 4), 0);
+    }
+
+    // --- P2 TypeCode methods (type.cc:2713/2731/2788/2828/2860) ---
+
+    #[test]
+    fn test_type_code_compare_basic_no_proto() {
+        // type.cc:2788 — two code types with no prototype → 0.
+        let c1 = TypeCode { base: TypeBase::new("code".into(), 1, TypeMetatype::Code), proto: None };
+        let c2 = TypeCode { base: TypeBase::new("code".into(), 1, TypeMetatype::Code), proto: None };
+        assert_eq!(c1.compare_basic(&c2), 0);
+    }
+
+    #[test]
+    fn test_type_code_compare_basic_one_proto() {
+        // type.cc:2788 — self has no proto, other has → 1.
+        let c1 = TypeCode { base: TypeBase::new("code".into(), 1, TypeMetatype::Code), proto: None };
+        let void_t = Arc::new(Datatype::Void(TypeBase::new("void".into(), 0, TypeMetatype::Void)));
+        let proto = FuncProto::new("f".into(), void_t);
+        let c2 = TypeCode {
+            base: TypeBase::new("code".into(), 1, TypeMetatype::Code),
+            proto: Some(Arc::new(proto)),
+        };
+        assert_eq!(c1.compare_basic(&c2), 1);
+        assert_eq!(c2.compare_basic(&c1), -1);
+    }
+
+    #[test]
+    fn test_type_code_set_prototype_pieces() {
+        // type.cc:2713 — setPrototypePieces builds a proto and locks it.
+        let mut code = TypeCode {
+            base: TypeBase::new("code".into(), 1, TypeMetatype::Code),
+            proto: None,
+        };
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let intypes = vec![int_t];
+        let sig = crate::fspec::PrototypePieces {
+            out_type: None,
+            in_types: &intypes,
+            first_var_arg_slot: -1,
+        };
+        code.set_prototype_pieces(&sig);
+        assert!(code.proto.is_some());
+        let proto = code.proto.as_ref().unwrap();
+        assert_eq!(proto.num_params(), 1);
+        assert!(proto.is_input_locked());
+        assert!(proto.is_output_locked());
+        // variable_length flag set.
+        assert!(code.base.flags & type_flags::VARLENGTH != 0);
+    }
+
+    #[test]
+    fn test_type_code_set_prototype_copy() {
+        // type.cc:2731 — setPrototype copies in an existing FuncProto.
+        let mut code = TypeCode {
+            base: TypeBase::new("code".into(), 1, TypeMetatype::Code),
+            proto: None,
+        };
+        let void_t = Arc::new(Datatype::Void(TypeBase::new("void".into(), 0, TypeMetatype::Void)));
+        let proto = FuncProto::new("f".into(), void_t);
+        code.set_prototype(Some(&proto));
+        assert!(code.proto.is_some());
+        assert_eq!(code.proto.as_ref().unwrap().name, "f");
+        // None clears it.
+        code.set_prototype(None);
+        assert!(code.proto.is_none());
     }
 }
