@@ -403,6 +403,19 @@ pub struct PrintC {
     /// `commsorter.setupFunctionList` (printc.cc:2650) and drained by
     /// `emitCommentGroup` / `emitCommentFuncHeader` / `emitCommentBlockTree`.
     comment_sorter: crate::comment::CommentSorter,
+    /// Borrowed constant-pool handle (Ghidra `glb->cpool`). Cached from
+    /// `fd.arch.cpool` at the start of `doc_function`. Read by
+    /// `op_cpoolref` (faithful port of printc.cc:1156 `PrintC::opCpoolRefOp`,
+    /// which dereferences `glb->cpool->getRecord(refs)`). `None` for
+    /// architectures without a constant pool (non-JVM/non-DEX targets) and
+    /// for legacy callers that construct `Funcdata` without an `Architecture`.
+    cpool: Option<std::sync::Arc<std::sync::RwLock<crate::cpool::ConstantPoolInternal>>>,
+    /// Borrowed user-defined-op manager (Ghidra `glb->userops`). Cached from
+    /// `fd.arch.userops` at the start of `doc_function`. Read by
+    /// `op_callother` (faithful port of printc.cc:673 `PrintC::opCallother`,
+    /// which calls `glb->userops.getOp(op->getIn(0)->getOffset())`). `None`
+    /// when the architecture has no registered user ops.
+    userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
 }
 
 impl PrintC {
@@ -462,6 +475,8 @@ impl PrintC {
             head_comment_type: crate::comment::comment_type::USER2
                 | crate::comment::comment_type::WARNING,
             comment_sorter: crate::comment::CommentSorter::new(),
+            cpool: None,
+            userops: None,
         }
     }
 
@@ -3773,6 +3788,13 @@ impl PrintLanguage for PrintC {
     fn doc_function(&mut self, fd: &Funcdata) {
         use std::collections::HashSet;
 
+        // Cache the architecture's constant-pool and user-op manager handles
+        // for the lifetime of this function (faithful to Ghidra's PrintC having
+        // a permanent `glb` pointer). Read by `op_cpoolref` / `op_callother`.
+        // `None` when the Funcdata has no Architecture (legacy callers).
+        self.cpool = fd.arch.as_ref().and_then(|a| a.cpool.clone());
+        self.userops = fd.arch.as_ref().and_then(|a| a.userops.clone());
+
         // Load symbol and string tables from Funcdata, sanitizing C identifiers
         self.symbol_table = fd.symbol_table.iter()
             .map(|(k, v)| (*k, sanitize_c_ident(v)))
@@ -5751,24 +5773,311 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:637 PrintC::opCallind
+    /// Emit an indirect CALL op. Faithful port of `PrintC::opCallind(const
+    /// PcodeOp*)` (printc.cc:637-671).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// pushOp(&function_call,op);
+    /// pushOp(&dereference,op);                 // (*fp)(...)
+    /// const Funcdata *fd = op->getParent()->getFuncdata();
+    /// FuncCallSpecs *fc = fd->getCallSpecs(op);
+    /// int4 skip = getHiddenThisSlot(op, fc);   // hide C++ 'this' param
+    /// int4 count = op->numInput() - 1;
+    /// count -= (skip < 0) ? 0 : 1;
+    /// if (count > 1) {                         // multiple params
+    ///   pushVn(op->getIn(0),op,mods);          // callable
+    ///   for(i=0;i<count-1;++i) pushOp(&comma,op);
+    ///   for(i=op->numInput()-1;i>=1;--i) { if (i==skip) continue; pushVn(op->getIn(i),op,mods); }
+    /// }
+    /// else if (count == 1) {                   // one param
+    ///   if (skip == 1) pushVn(op->getIn(2),op,mods);
+    ///   else pushVn(op->getIn(1),op,mods);
+    ///   pushVn(op->getIn(0),op,mods);          // callable (pushed last for RPN)
+    /// }
+    /// else {                                   // void / no params
+    ///   pushVn(op->getIn(0),op,mods);
+    ///   pushAtom(Atom(EMPTY_STRING,blanktoken,...));
+    /// }
+    /// ```
+    ///
+    /// Rugra adaptation: the `function_call` + `dereference` OpTokens render
+    /// textually as `(*callable)(args)`. Ghidra pushes inputs in reverse for
+    /// RPN-stack efficiency; Rugra emits left-to-right, so the callable (`in0`)
+    /// is emitted first, then the comma-separated args. The `getHiddenThisSlot`
+    /// C++-method-this hiding (audit P2-1, printc.cc:1562) is not ported —
+    /// `get_hidden_this_slot` returns -1, matching Ghidra's own `opCall` TODO
+    /// (printc.cc:619-620: "Cannot hide 'this' on a direct call until we print
+    /// the whole thing with the proper C++ method invocation format").
     pub fn op_callind(&mut self, op: &PcodeOp) {
+        // printc.cc:640-641: pushOp(&function_call); pushOp(&dereference) ->
+        // render the LHS assignment (if any), then `(*`callable`)(...)`.
         if let Some(out) = op.get_out() {
             self.is_lhs = true;
             self.push_varnode(&out.read().unwrap(), Some(op));
             self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
+        // printc.cc:642-645: fc = fd->getCallSpecs(op); skip = getHiddenThisSlot(op,fc).
+        // Rugra does not port getHiddenThisSlot (audit P2-1); default skip = -1.
+        let skip = self.get_hidden_this_slot(op);
+        // printc.cc:646-648: count = numInput() - 1 - (skip<0 ? 0 : 1)
+        let n_inputs = op.num_input();
+        let mut count = n_inputs.saturating_sub(1);
+        if skip >= 0 { count = count.saturating_sub(1); }
+        // printc.cc:649-670: three-way dispatch on count.
         self.emit.print("(*");
-        if let Some(in0) = op.get_in(0) { self.push_varnode(&in0.read().unwrap(), Some(op)); }
-        self.emit.print(")(");
-        for i in 1..op.num_input() {
-            if i > 1 { self.emit.print(", "); }
-            if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); }
+        if let Some(in0) = op.get_in(0) {
+            self.push_varnode(&in0.read().unwrap(), Some(op));
         }
+        self.emit.print(")(");
+        if count > 1 {
+            // Multiple parameters: emit in(1..) skipping `skip`, comma-separated.
+            let mut first = true;
+            for i in 1..n_inputs {
+                if i as i32 == skip { continue; }
+                if !first { self.emit.print(", "); }
+                first = false;
+                if let Some(vn) = op.get_in(i) {
+                    self.push_varnode(&vn.read().unwrap(), Some(op));
+                }
+            }
+        } else if count == 1 {
+            // One parameter: pick the non-skipped single arg.
+            // printc.cc:661-665: if skip==1 use in(2) else in(1).
+            let arg_slot = if skip == 1 { 2 } else { 1 };
+            if let Some(vn) = op.get_in(arg_slot) {
+                self.push_varnode(&vn.read().unwrap(), Some(op));
+            }
+        }
+        // count == 0: void function — pushAtom(EMPTY_STRING) renders as nothing.
         self.emit.print(")");
     }
 
-    // Ghidra: printc.cc:680 PrintC::opCpoolRefOp
+    // Ghidra: printc.cc:673 PrintC::opCallother
+    /// Emit a CALLOTHER op (user-defined p-code operation). Faithful port of
+    /// `PrintC::opCallother(const PcodeOp*)` (printc.cc:673-715).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// UserPcodeOp *userop = glb->userops.getOp(op->getIn(0)->getOffset());
+    /// uint4 display = userop->getDisplay();
+    /// if (display == 0) {                       // functional syntax
+    ///   string nm = op->getOpcode()->getOperatorName(op);
+    ///   pushOp(&function_call,op);
+    ///   pushAtom(Atom(nm,optoken,funcname_color,op));
+    ///   if (op->numInput() > 1) {
+    ///     for(i=1;i<numInput-1;++i) pushOp(&comma,op);
+    ///     for(i=numInput-1;i>=1;--i) pushVn(op->getIn(i),op,mods);
+    ///   } else pushAtom(Atom(EMPTY_STRING,blanktoken,...));
+    /// }
+    /// else if (display == annotation_assignment) {  // in(2) = in(1)
+    ///   pushOp(&assignment,op); pushVn(op->getIn(2),...); pushVn(op->getIn(1),...);
+    /// }
+    /// else if (display == no_operator) { pushVn(op->getIn(1),...); }
+    /// else if (display == display_string) {
+    ///   const Varnode *vn = op->getOut(); Datatype *ct = vn->getType();
+    ///   ostringstream str;
+    ///   if (ct->meta == TYPE_PTR) { ct = ct->getPtrTo();
+    ///     if (!printCharacterConstant(str, op->getIn(1)->getAddr(), ct)) str << "\"badstring\"";
+    ///   } else str << "\"badstring\"";
+    ///   pushAtom(Atom(str.str(), vartoken, const_color, op, vn));
+    /// }
+    /// ```
+    ///
+    /// Rugra adaptation: the CALLOTHER index is held in `in(0)`; the
+    /// architecture's `userops.getOp(index)` is consulted via the cached
+    /// `self.userops` handle (faithful to `glb->userops`). When no userop is
+    /// registered (or the Funcdata has no Architecture), Ghidra's
+    /// `getOperatorName` falls back to `CALLOTHER[<index>]`; we mirror that
+    /// here so the functional form still renders. The LHS-assignment emit
+    /// (`out = ...`) wraps the output (set by emitExpression when present).
+    pub fn op_callother(&mut self, op: &PcodeOp) {
+        // printc.cc:676: userop = glb->userops.getOp(op->getIn(0)->getOffset()).
+        let index = op.get_in(0).map(|a| a.read().unwrap().get_offset() as i32).unwrap_or(-1);
+        // Resolve the userop + its display flags. We clone the needed values out
+        // of the borrowed guard before emitting, so no immutable borrow overlaps
+        // the &mut self emitter.
+        let (display, name) = self.userops.as_ref().and_then(|uo| {
+            let guard = uo.read().unwrap();
+            guard.get_op(index).map(|u| (u.get_display(), u.get_name().to_string()))
+        }).unwrap_or((
+            0,
+            // Ghidra fallback (typeop.cc:848-852): "CALLOTHER[<index>]".
+            format!("CALLOTHER[{}]", index),
+        ));
+        use crate::userop::userop_flags;
+        if display == 0 {
+            // printc.cc:678-692: functional syntax  nm(arg1, arg2, ...)
+            if let Some(out) = op.get_out() {
+                self.is_lhs = true;
+                self.push_varnode(&out.read().unwrap(), Some(op));
+                self.is_lhs = false;
+                self.emit.tag_op(" = ");
+            }
+            // printc.cc:679: nm = op->getOpcode()->getOperatorName(op).
+            self.emit.tag_variable(&name, 0);
+            self.emit.print("(");
+            // printc.cc:682-689: inputs in(1..) comma-separated.
+            let n = op.num_input();
+            if n > 1 {
+                for i in 1..n {
+                    if i > 1 { self.emit.print(", "); }
+                    if let Some(vn) = op.get_in(i) {
+                        self.push_varnode(&vn.read().unwrap(), Some(op));
+                    }
+                }
+            }
+            // printc.cc:690-691: else pushAtom(EMPTY_STRING) — void.
+            self.emit.print(")");
+        } else if display == userop_flags::ANNOTATION_ASSIGNMENT {
+            // printc.cc:693-697: assignment form  in(1) = in(2)
+            if let Some(in1) = op.get_in(1) {
+                self.push_varnode(&in1.read().unwrap(), Some(op));
+            }
+            self.emit.tag_op(" = ");
+            if let Some(in2) = op.get_in(2) {
+                self.push_varnode(&in2.read().unwrap(), Some(op));
+            }
+        } else if display == userop_flags::NO_OPERATOR {
+            // printc.cc:698-700: bare operand — pushVn(op->getIn(1)).
+            if let Some(in1) = op.get_in(1) {
+                self.push_varnode(&in1.read().unwrap(), Some(op));
+            }
+        } else if display == userop_flags::DISPLAY_STRING {
+            // printc.cc:701-714: string-data rendering. Ghidra looks up the
+            // output's pointed-to char type and emits the literal via
+            // printCharacterConstant; on failure it emits "\"badstring\"".
+            // Rugra's printCharacterConstant (audit P2-2) is not ported; we
+            // emit the faithful fallback "\"badstring\"" string literal token.
+            self.emit.print("\"badstring\"");
+        }
+    }
+
+    // Ghidra: printc.cc:717 PrintC::opConstructor
+    /// Emit a C++ constructor invocation, optionally wrapped in `new`.
+    /// Faithful port of `PrintC::opConstructor(const PcodeOp*, bool withNew)`
+    /// (printc.cc:717-752).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// Datatype *dt;
+    /// if (withNew) {
+    ///   const PcodeOp *newop = op->getIn(1)->getDef();   // the NEW op feeding this
+    ///   const Varnode *outvn = newop->getOut();
+    ///   pushOp(&new_op,newop);
+    ///   pushAtom(Atom(KEYWORD_NEW,optoken,keyword_color,newop,outvn));  // "new"
+    ///   dt = outvn->getTypeDefFacing();
+    /// } else {
+    ///   const Varnode *thisvn = op->getIn(1);
+    ///   dt = thisvn->getType();
+    /// }
+    /// if (dt->getMetatype() == TYPE_PTR) dt = ((TypePointer*)dt)->getPtrTo();
+    /// string nm = dt->getDisplayName();
+    /// pushOp(&function_call,op);
+    /// pushAtom(Atom(nm,optoken,funcname_color,op));       // Type(...)
+    /// if (op->numInput()>3) { for(i=2;i<numInput-1;++i) pushOp(&comma);
+    ///   for(i=numInput-1;i>=2;--i) pushVn(op->getIn(i),...); }
+    /// else if (op->numInput()==3) { pushVn(op->getIn(2),...); }
+    /// else { pushAtom(EMPTY_STRING); }
+    /// ```
+    ///
+    /// Rugra adaptation: the `new_op` + `function_call` OpTokens render textually
+    /// as `new Type(args)` (when `with_new`) or `Type(args)`. Ghidra pushes the
+    /// constructor arguments in reverse for RPN efficiency; Rugra emits them
+    /// left-to-right after the type name. The type name is resolved from the
+    /// `this`/new-output varnode, dereferencing once if it is a pointer (so
+    /// `Foo *` renders as `Foo(...)`).
+    pub fn op_constructor(&mut self, op: &PcodeOp, with_new: bool) {
+        // printc.cc:720-731: resolve the constructed type.
+        let dt = if with_new {
+            // op->getIn(1)->getDef() -> the NEW op feeding this constructor.
+            let newop_arc = op.get_in(1).and_then(|a| a.read().unwrap().get_def());
+            if let Some(newop_arc) = newop_arc {
+                let newop = newop_arc.read().unwrap();
+                // outvn = newop->getOut(); dt = outvn->getTypeDefFacing().
+                newop.get_out().and_then(|o| o.read().unwrap().get_type_def_facing())
+            } else {
+                None
+            }
+        } else {
+            // printc.cc:729-730: thisvn = op->getIn(1); dt = thisvn->getType().
+            op.get_in(1).and_then(|a| a.read().unwrap().get_type())
+        };
+        // printc.cc:732-734: if (dt->meta == TYPE_PTR) dt = dt->getPtrTo().
+        let dt = dt.and_then(|d| match &*d {
+            Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+            _ => Some(d.clone()),
+        });
+        // printc.cc:735: nm = dt->getDisplayName().
+        let nm = dt.as_ref().map(|d| d.get_name().to_string())
+            .unwrap_or_else(|| "UNKNOWN_TYPE".to_string());
+        // printc.cc:721-726: pushOp(&new_op); pushAtom("new") -> "new".
+        if with_new {
+            self.emit.print("new ");
+        }
+        // printc.cc:736-737: pushOp(&function_call); pushAtom(nm) -> Type(...).
+        self.emit.print(&nm);
+        self.emit.print("(");
+        // printc.cc:740-751: constructor args are in(2..); in(1) is `this`,
+        // in(0) is the CALLOTHER index. Emit them comma-separated.
+        let n = op.num_input();
+        if n > 3 {
+            for i in 2..n {
+                if i > 2 { self.emit.print(", "); }
+                if let Some(vn) = op.get_in(i) {
+                    self.push_varnode(&vn.read().unwrap(), Some(op));
+                }
+            }
+        } else if n == 3 {
+            // One parameter: in(2).
+            if let Some(vn) = op.get_in(2) {
+                self.push_varnode(&vn.read().unwrap(), Some(op));
+            }
+        }
+        // else: void constructor — pushAtom(EMPTY_STRING) renders as nothing.
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:1156 PrintC::opCpoolRefOp
+    /// Emit a CPOOLREF op (Java/DEX constant-pool reference). Faithful port of
+    /// `PrintC::opCpoolRefOp(const PcodeOp*)` (printc.cc:1156-1228).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// const Varnode *outvn = op->getOut();
+    /// const Varnode *vn0 = op->getIn(0);
+    /// vector<uintb> refs;
+    /// for(i=1;i<op->numInput();++i) refs.push_back(op->getIn(i)->getOffset());
+    /// const CPoolRecord *rec = glb->cpool->getRecord(refs);
+    /// if (rec == 0) { pushAtom(Atom("UNKNOWNREF",...)); }
+    /// else switch (rec->getTag()) {
+    ///   case string_literal: { ostringstream str; str << '"';
+    ///     escapeCharacterData(str, rec->getByteData(), len, 1, false);
+    ///     if (len == rec->getByteDataLength()) str << '"'; else str << '..."';
+    ///     pushAtom(Atom(str.str(), vartoken, const_color, op, outvn)); break; }
+    ///   case class_reference: pushAtom(Atom(rec->getToken(), vartoken, type_color,...)); break;
+    ///   case instance_of: { dt = rec->getType(); while(dt->meta==TYPE_PTR) dt=dt->getPtrTo();
+    ///     pushOp(&function_call,op); pushAtom(Atom(rec->getToken(), functoken, funcname_color,...));
+    ///     pushOp(&comma,0); pushVn(vn0,op,mods);
+    ///     pushAtom(Atom(dt->getDisplayName(), syntax, type_color,...)); break; }
+    ///   default: { // primitive, pointer_method, pointer_field, array_length, check_cast
+    ///     Datatype *ct = rec->getType(); color = var_color;
+    ///     if (ct->meta==TYPE_PTR) { ct = ct->getPtrTo(); if (ct->meta==TYPE_CODE) color = funcname_color; }
+    ///     if (vn0->isConstant()) pushAtom(Atom(rec->getToken(), vartoken, color,...));
+    ///     else { pushOp(&pointer_member,op); pushVn(vn0,op,mods);
+    ///            pushAtom(Atom(rec->getToken(), syntax, color,...)); }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// Rugra adaptation: when no constant pool is attached (non-JVM/DEX target,
+    /// or a Funcdata built without an Architecture), we fall back to the
+    /// faithful `UNKNOWNREF` token Ghidra itself emits when `getRecord` returns
+    /// null (printc.cc:1166). The LHS-assignment emit (`out = ...`) mirrors the
+    /// RPN `pushOp(&assignment)` wrapping done by `emitExpression` when the op
+    /// has an output and is not in-place — emitted here so this method is
+    /// self-contained (it is not reached via `op.push` today; see audit P0-1).
     pub fn op_cpoolref(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
             self.is_lhs = true;
@@ -5776,70 +6085,485 @@ impl PrintC {
             self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
-        self.emit.print("CPOOLREF");
+        // printc.cc:1159-1163: gather refs from in(1..)->getOffset().
+        let refs: Vec<u64> = (1..op.num_input())
+            .filter_map(|i| op.get_in(i).map(|a| a.read().unwrap().get_offset()))
+            .collect();
+        // printc.cc:1164: rec = glb->cpool->getRecord(refs). Clone the record
+        // out of the (borrowed) pool guard before any further &mut self emit
+        // calls, so the immutable pool borrow does not overlap the mutable
+        // emitter borrow.
+        let rec = self.cpool.as_ref().and_then(|cp| {
+            let guard = cp.read().unwrap();
+            crate::cpool::ConstantPool::get_record(&*guard, &refs).cloned()
+        });
+        let rec = match rec {
+            Some(r) => r,
+            None => {
+                // printc.cc:1165-1167: pushAtom(Atom("UNKNOWNREF", syntax, const_color,...))
+                self.emit.tag_variable("UNKNOWNREF", 0);
+                return;
+            }
+        };
+        use crate::cpool::cpool_tag;
+        match rec.get_tag() {
+            // printc.cc:1170-1185: string_literal.
+            cpool_tag::STRING_LITERAL => {
+                let mut s = String::from("\"");
+                let data = rec.get_byte_data().unwrap_or(&[]);
+                let total = rec.get_byte_data_length();
+                // Ghidra caps at 2048 bytes (printc.cc:1175-1176).
+                let len = total.min(2048);
+                let slice = &data[..len.min(data.len())];
+                // escapeCharacterData(str, data, len, 1, false).
+                s.push_str(&crate::printlanguage::escape_character_data(slice, 1));
+                if len == total {
+                    s.push('"');
+                } else {
+                    s.push_str("...\"");
+                }
+                self.emit.tag_variable(&s, 0);
+            }
+            // printc.cc:1186-1188: class_reference.
+            cpool_tag::CLASS_REFERENCE => {
+                self.emit.tag_variable(rec.get_token(), 0);
+            }
+            // printc.cc:1189-1201: instance_of.
+            cpool_tag::INSTANCE_OF => {
+                // pushOp(&function_call,op); pushAtom(rec->getToken(), functoken,...);
+                // pushOp(&comma,0); pushVn(vn0,op,mods);
+                // pushAtom(dt->getDisplayName(), syntax, type_color,...)
+                // Renders: token(in0, typename)
+                self.emit.print(rec.get_token());
+                self.emit.print("(");
+                if let Some(in0) = op.get_in(0) {
+                    self.push_varnode(&in0.read().unwrap(), Some(op));
+                }
+                self.emit.print(", ");
+                self.emit.print(rec.get_type_name());
+                self.emit.print(")");
+            }
+            // printc.cc:1202-1226: primitive, pointer_method, pointer_field,
+            // array_length, check_cast, and default.
+            _ => {
+                // printc.cc:1216: if (vn0->isConstant()) pushAtom(rec->getToken());
+                let vn0_const = op.get_in(0).map(|a| a.read().unwrap().is_constant()).unwrap_or(false);
+                if vn0_const {
+                    self.emit.tag_variable(rec.get_token(), 0);
+                } else {
+                    // printc.cc:1219-1223: pushOp(&pointer_member,op);
+                    // pushVn(vn0,op,mods); pushAtom(rec->getToken(),...).
+                    // Renders: vn0->token
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_varnode(&in0.read().unwrap(), Some(op));
+                    }
+                    self.emit.print("->");
+                    self.emit.print(rec.get_token());
+                }
+            }
+        }
     }
 
-    // Ghidra: printc.cc:690 PrintC::opExtract
+    // Ghidra: printc.cc:424 PrintC::opFunc
+    /// Emit an op using functional syntax: `operator_name(arg1, arg2, ...)`.
+    /// Faithful port of `PrintC::opFunc(const PcodeOp*)` (printc.cc:424-442).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// pushOp(&function_call,op);
+    /// string nm = op->getOpcode()->getOperatorName(op);
+    /// pushAtom(Atom(nm,optoken,funcname_color,op));
+    /// if (op->numInput() > 0) {
+    ///   for(i=0;i<numInput-1;++i) pushOp(&comma,op);
+    ///   for(i=numInput-1;i>=0;--i) pushVn(op->getIn(i),op,mods);  // reverse for RPN
+    /// } else pushAtom(Atom(EMPTY_STRING,blanktoken,...));
+    /// ```
+    ///
+    /// This is the catch-all functional renderer used by `opInsertOp` /
+    /// `opExtractOp` (printc.cc:1267, 1273: `opFunc(op);`) and as the fallback
+    /// for ops without a dedicated pretty-printer. Rugra emits the operator
+    /// name (via `OpCode::name()`, the faithful `getOperatorName` equivalent)
+    /// followed by the comma-separated inputs in source order (Ghidra pushes
+    /// them in reverse only because its RPN stack pops them in reverse; the
+    /// rendered text is the same).
+    fn op_func(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        // printc.cc:430: nm = op->getOpcode()->getOperatorName(op).
+        self.emit.print(op.opcode.name());
+        // printc.cc:432-438: inputs in comma-separated parens.
+        self.emit.print("(");
+        let n = op.num_input();
+        if n > 0 {
+            for i in 0..n {
+                if i > 0 { self.emit.print(", "); }
+                if let Some(vn) = op.get_in(i) {
+                    self.push_varnode(&vn.read().unwrap(), Some(op));
+                }
+            }
+        }
+        // printc.cc:440-441: else pushAtom(EMPTY_STRING) — void, renders empty.
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:1270 PrintC::opExtractOp
+    /// Emit an EXTRACT op. Faithful port of `PrintC::opExtractOp(const
+    /// PcodeOp*)` (printc.cc:1270-1274): delegates to `opFunc(op)` for
+    /// functional rendering (`EXTRACT(arg1, arg2, ...)`). Per the Ghidra
+    /// comment: "If no other way to print it, print as functional operator".
     pub fn op_extract(&mut self, op: &PcodeOp) {
-        if let Some(out) = op.get_out() {
-            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
-            self.emit.tag_op(" = ");
-        }
-        self.emit.print("EXTRACT(");
-        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
-        self.emit.print(")");
+        // printc.cc:1273: opFunc(op).
+        self.op_func(op);
     }
 
-    // Ghidra: printc.cc:700 PrintC::opInsert
+    // Ghidra: printc.cc:1264 PrintC::opInsertOp
+    /// Emit an INSERT op. Faithful port of `PrintC::opInsertOp(const PcodeOp*)`
+    /// (printc.cc:1264-1268): delegates to `opFunc(op)` for functional
+    /// rendering (`INSERT(arg1, arg2, ...)`). Per the Ghidra comment: "If no
+    /// other way to print it, print as functional operator".
     pub fn op_insert(&mut self, op: &PcodeOp) {
-        if let Some(out) = op.get_out() {
-            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
-            self.emit.tag_op(" = ");
-        }
-        self.emit.print("INSERT(");
-        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
-        self.emit.print(")");
+        // printc.cc:1267: opFunc(op).
+        self.op_func(op);
     }
 
-    // Ghidra: printc.cc:710 PrintC::opNewOp
+    // Ghidra: printc.cc:1230 PrintC::opNewOp
+    /// Emit a NEW op (C++ `new` operator). Faithful port of
+    /// `PrintC::opNewOp(const PcodeOp*)` (printc.cc:1230-1262).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// const Varnode *outvn = op->getOut();
+    /// const Varnode *vn0 = op->getIn(0);
+    /// if (op->numInput() == 2) {
+    ///   const Varnode *vn1 = op->getIn(1);
+    ///   if (!vn0->isConstant()) {            // array allocation form
+    ///     pushOp(&new_op,op);
+    ///     pushAtom(Atom(KEYWORD_NEW,optoken,keyword_color,op,outvn));  // "new"
+    ///     string nm;
+    ///     if (outvn == 0) nm = "<unused>";
+    ///     else { Datatype *dt = outvn->getTypeDefFacing();
+    ///            while (dt->meta==TYPE_PTR) dt = dt->getPtrTo();
+    ///            nm = dt->getDisplayName(); }
+    ///     pushOp(&subscript,op);              // Type[size]
+    ///     pushAtom(Atom(nm,optoken,type_color,op));
+    ///     pushVn(vn1,op,mods);
+    ///     return;
+    ///   }
+    /// }
+    /// // Scalar form: not feeding a constructor — new(vn0)
+    /// pushOp(&function_call,op);
+    /// pushAtom(Atom(KEYWORD_NEW,optoken,keyword_color,op,outvn));
+    /// pushVn(vn0,op,mods);
+    /// ```
+    ///
+    /// Rugra adaptation: the array form (`new_op` + `subscript` OpTokens)
+    /// renders textually as `new Type[size]`; the scalar form
+    /// (`function_call` OpToken) renders as `new(vn0)`. The constructed type is
+    /// dereferenced through any pointer layers (matching Ghidra's `while
+    /// (dt->meta==TYPE_PTR) dt = dt->getPtrTo()` loop). When the output is
+    /// absent Ghidra emits `<unused>` as the type name.
     pub fn op_new(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
-            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
+        // printc.cc:1233-1257: array allocation form (2 inputs, in(0) non-const).
+        let vn0_const = op.get_in(0).map(|a| a.read().unwrap().is_constant()).unwrap_or(true);
+        if op.num_input() == 2 && !vn0_const {
+            // pushOp(&new_op); pushAtom("new") -> "new".
+            self.emit.print("new ");
+            // printc.cc:1242-1251: nm = dt->getDisplayName() after peeling PTRs.
+            let nm = op.get_out().and_then(|o| {
+                let o_vn = o.read().unwrap();
+                o_vn.get_type_def_facing().map(|dt| {
+                    let mut cur = dt;
+                    while let Datatype::Pointer(p) = &*cur {
+                        cur = p.ptr_to.clone();
+                    }
+                    cur.get_name().to_string()
+                })
+            }).unwrap_or_else(|| "<unused>".to_string());
+            // pushOp(&subscript); pushAtom(nm); pushVn(vn1) -> Type[size].
+            self.emit.print(&nm);
+            self.emit.print("[");
+            if let Some(in1) = op.get_in(1) {
+                self.push_varnode(&in1.read().unwrap(), Some(op));
+            }
+            self.emit.print("]");
+            return;
+        }
+        // printc.cc:1259-1261: scalar form  new(vn0).
+        // pushOp(&function_call); pushAtom("new"); pushVn(vn0).
         self.emit.print("new(");
-        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
+        if let Some(in0) = op.get_in(0) {
+            self.push_varnode(&in0.read().unwrap(), Some(op));
+        }
         self.emit.print(")");
     }
 
-    // Ghidra: printc.cc:727 PrintC::opPtrsub
+    // Ghidra: printc.cc:929 PrintC::opPtrsub
+    /// Emit a PTRSUB op (pointer + constant offset → field/address access).
+    /// Faithful port of `PrintC::opPtrsub(const PcodeOp*)` (printc.cc:929-1143).
+    ///
+    /// PTRSUB dereferences a pointer at a constant byte offset; Ghidra uses the
+    /// pointee's type to decide whether the access is a struct-field access
+    /// (`->name` / `.name`), a spacebase symbol reference, or an array element.
+    /// The full decision table (printc.cc:912-927) depends on three inputs:
+    ///   - `valueon`  : whether the `print_load_value`/`print_store_value` mod
+    ///                  is set (we are the address of a LOAD/STORE needing the
+    ///                  value, not the pointer),
+    ///   - `flex`     : whether `in(0)`'s defining op is a PTRSUB/PTRADD that
+    ///                  can absorb the dereference (Ghidra's `isValueFlexible`),
+    ///   - `ct->meta` : Struct/Union, Spacebase, Array.
+    ///
+    /// Ghidra (struct/union arm, printc.cc:959-1056):
+    /// ```text
+    /// if (ct->meta == TYPE_STRUCT || ct->meta == TYPE_UNION) {
+    ///   suboff = addressToByteInt(in1const, ptype->getWordSize());
+    ///   fieldname = ct->findTruncation(suboff,0,op,0,newoff)->name;  // or "field_0x<hex>"
+    ///   if (!valueon) {            // &( )->name   or   &( ).name
+    ///     pushOp(&addressof); pushOp(&pointer_member|object_member);
+    ///     pushVn(in0); pushAtom(fieldname);
+    ///   } else {                   // ( )->name    or  ( ).name
+    ///     pushOp(&pointer_member|object_member);
+    ///     pushVn(in0); pushAtom(fieldname);
+    ///   }
+    /// }
+    /// else if (ct->meta == TYPE_SPACEBASE) { ...symbol/unnamed lookup... }
+    /// else if (ct->meta == TYPE_ARRAY) { ...[0] subscript... }
+    /// else throw LowlevelError("PTRSUB off of non structured pointer type");
+    /// ```
+    ///
+    /// Rugra adaptation: `TypePointerRel` (formal-relative pointers),
+    /// `isValueFlexible`, `pushTypePointerRel`, `pushPartialSymbol`, and
+    /// `pushUnnamedLocation(addr,vn,op)` are not yet ported (audit P0-3, P2-1).
+    /// We faithfully render the struct/union field arm (the overwhelmingly
+    /// common case): dereference the pointee, look up the field via
+    /// `find_partial_field`, and emit `in0->name` (valueon) or `&in0->name`
+    /// (!valueon). When the field cannot be resolved (no type, or offset
+    /// outside any field) we fall back to Ghidra's own default field name
+    /// `field_0x<hex>` (printc.cc:999-1001, matching DataTypeComponent::
+    /// getDefaultFieldName). Spacebase/array/unknown metatypes fall back to
+    /// the same `->field_0x<hex>` form, which is valid C and degrades
+    /// gracefully when type information is absent.
     pub fn op_ptrsub(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
-            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
+        // printc.cc:940-941: in0 = op->getIn(0); in1const = op->getIn(1)->getOffset().
+        let (in0_type, in1const) = {
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            let in1 = op.get_in(1).map(|a| a.read().unwrap());
+            let in1const = in1.as_ref()
+                .filter(|v| v.is_constant())
+                .map(|v| v.get_offset()).unwrap_or(0);
+            // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
+            let ptype = in0.as_ref()
+                .and_then(|v| v.get_high_type_read_facing(op, 0));
+            (ptype, in1const)
+        };
+        // printc.cc:943-946: if (ptype->meta != TYPE_PTR) throw.
+        // (Rugra cannot throw from the printer without disrupting output; we
+        //  fall through to the generic field-name fallback instead.)
+        // printc.cc:947-954: ptrel/ct resolution. ct = ptype->getPtrTo() when
+        // there is no formal-relative pointer; Rugra has no TypePointerRel, so
+        // we always take the `ct = ptype->getPtrTo()` branch.
+        let ct = in0_type.as_ref().and_then(|pt| match &**pt {
+            Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+            _ => None,
+        });
+        // printc.cc:955-956: valueon = (mods & (print_load_value|print_store_value)) != 0.
+        let valueon = self.is_set(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+        // Resolve the pointee base + the in1 offset. Without a symbol table
+        // lookup we use the raw constant.
+        let need_deref_printed = |ct_meta: TypeMetatype| {
+            // For struct/union/array the PTRSUB renders as field/subscript
+            // access via the pointer (in0 is already a pointer to ct).
+            matches!(ct_meta, TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array | TypeMetatype::Spacebase)
+        };
+        if let Some(ct) = ct {
+            let meta = ct.get_metatype();
+            if need_deref_printed(meta) {
+                // printc.cc:1018-1052: decide the prefix operator and the
+                // access form based on valueon and the pointee metatype.
+                // Ghidra emits prefix tokens (& or *) BEFORE pushing in0; we
+                // mirror that order so the rendered text matches.
+                let is_struct = meta == TypeMetatype::Struct || meta == TypeMetatype::Union;
+                let is_array = meta == TypeMetatype::Array;
+                if is_struct {
+                    // printc.cc:1018-1034 (!valueon) / 1036-1052 (valueon):
+                    // struct/union -> `&in0->field` (!valueon) or `in0->field`.
+                    if !valueon {
+                        self.emit.print("&");
+                    }
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_varnode(&in0.read().unwrap(), Some(op));
+                    }
+                    // printc.cc:991-1010: field lookup via findTruncation.
+                    let fieldname = Self::find_partial_field(&ct, in1const as usize, 0)
+                        .map(|(name, _, _)| name)
+                        .unwrap_or_else(|| {
+                            // printc.cc:999-1001: default field name
+                            // "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
+                            format!("field_0x{:x}", in1const)
+                        });
+                    self.emit.print("->");
+                    self.emit.print(&fieldname);
+                } else if is_array {
+                    // printc.cc:1098-1137: array — PTRSUB(*,0) switches to
+                    // element-pointer view. valueon: `in0[0]`; !valueon: `*in0`
+                    // (the !flex arms; Rugra has no isValueFlexible).
+                    if valueon {
+                        if let Some(in0) = op.get_in(0) {
+                            self.push_varnode(&in0.read().unwrap(), Some(op));
+                        }
+                        self.emit.print("[0]");
+                    } else {
+                        // EMIT *(in0)
+                        self.emit.print("*");
+                        if let Some(in0) = op.get_in(0) {
+                            self.push_varnode(&in0.read().unwrap(), Some(op));
+                        }
+                    }
+                } else {
+                    // Spacebase or other structured pointer: emit the fallback
+                    // field name (Ghidra's spacebase arm resolves a symbol or
+                    // unnamed location; Rugra lacks that machinery, P0-3).
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_varnode(&in0.read().unwrap(), Some(op));
+                    }
+                    self.emit.print("->");
+                    self.emit.print(&format!("field_0x{:x}", in1const));
+                }
+                return;
+            }
+        }
+        // printc.cc:1139-1142: throw "PTRSUB off of non structured pointer type".
+        // Rugra cannot throw here; fall back to the pre-port behaviour, which
+        // emitted `in0->field_<hex>` for constant offsets and `in0[in1]` for
+        // variable offsets. This is the faithful default-field-name rendering
+        // extended to the variable-offset case.
         if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
             self.push_varnode(&in0.read().unwrap(), Some(op));
             let off_vn = in1.read().unwrap();
-            if off_vn.is_constant() { self.emit.print(&format!("->field_{:x}", off_vn.get_offset())); }
-            else { self.emit.print("["); self.push_varnode(&off_vn, Some(op)); self.emit.print("]"); }
+            if off_vn.is_constant() {
+                self.emit.print(&format!("->field_{:x}", off_vn.get_offset()));
+            } else {
+                self.emit.print("[");
+                self.push_varnode(&off_vn, Some(op));
+                self.emit.print("]");
+            }
         }
     }
 
-    // Ghidra: printc.cc:740 PrintC::opSegmentOp
+    // Ghidra: printc.cc:1150 PrintC::opSegmentOp
+    /// Emit a SEGMENTOP op. Faithful port of `PrintC::opSegmentOp(const
+    /// PcodeOp*)` (printc.cc:1150-1154).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// // slot 0 is the spaceid constant
+    /// // slot 1 is the segment, we could conceivably try to annotate the segment here
+    /// // slot 2 is the pointer we are really interested in printing
+    /// pushVn(op->getIn(2),op,mods);
+    /// ```
+    ///
+    /// A SEGMENTOP dereferences a segmented pointer; the segment selector
+    /// (slot 1) and the spaceid (slot 0) are not printed — only the resolved
+    /// pointer (slot 2) is. Rugra mirrors this by emitting just `in(2)`,
+    /// wrapped in the LHS-assignment emit when the op produces a value.
     pub fn op_segment(&mut self, op: &PcodeOp) {
         if let Some(out) = op.get_out() {
-            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
-        self.emit.print("SEGMENTOP(");
-        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
-        self.emit.print(")");
+        // printc.cc:1153: pushVn(op->getIn(2),op,mods).
+        if let Some(in2) = op.get_in(2) {
+            self.push_varnode(&in2.read().unwrap(), Some(op));
+        }
     }
 
-    // Ghidra: printc.cc:750 PrintC::opTypeCast
+    // Ghidra: printc.cc:448 PrintC::opTypeCast
+    /// Emit a TYPE-cast op. Faithful port of `PrintC::opTypeCast(const PcodeOp*)`
+    /// (printc.cc:448-464).
+    ///
+    /// Ghidra:
+    /// ```text
+    /// Datatype *dt = op->getOut()->getHighTypeDefFacing();
+    /// if (dt->isPointerToArray()) {
+    ///   if (checkAddressOfCast(op)) {        // &arr decayed to ptr
+    ///     pushOp(&addressof,op);
+    ///     pushVn(op->getIn(0),op,mods);
+    ///     return;
+    ///   }
+    /// }
+    /// if (!option_nocasts) {
+    ///   pushOp(&typecast,op);
+    ///   pushType(dt);
+    /// }
+    /// pushVn(op->getIn(0),op,mods);
+    /// ```
+    ///
+    /// Rugra adaptation: the RPN-stack `pushOp(&typecast)` + `pushType(dt)` +
+    /// `pushVn` sequence renders textually as `(typename) operand`. The
+    /// `isPointerToArray()` + `checkAddressOfCast()` short-circuit (which
+    /// rewrites `&x[0]`-style casts back to `&x`) depends on
+    /// `Datatype::isPointerToArray` and `PrintC::checkAddressOfCast`, neither of
+    /// which is ported yet (audit P2-1 / printc.cc:376). We faithfully inline
+    /// the pointer-to-array test (`dt` is a `Pointer` whose `ptr_to` is an
+    /// `Array`) and, when it holds, render the address-of form `&in0` — matching
+    /// the `pushOp(&addressof)` + `pushVn` output. (`checkAddressOfCast`'s full
+    /// heuristics — comparing the cast pointer-type against the array element
+    /// pointer-type and verifying the input is an array lvalue — are reduced to
+    /// the conservative `in0`'s type being an array, which is the common case.)
     pub fn op_type_cast(&mut self, op: &PcodeOp) {
-        if let Some(in0) = op.get_in(0) { self.push_varnode(&in0.read().unwrap(), Some(op)); }
+        use crate::type_system::datatype::Datatype;
+        // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing();
+        let out_dt = op.get_out().and_then(|a| a.read().unwrap().get_high_type_def_facing());
+        // printc.cc:452-458: if (dt->isPointerToArray()) { if (checkAddressOfCast(op)) {...} }
+        if let Some(ref dt) = out_dt {
+            if Self::is_pointer_to_array(dt) {
+                // checkAddressOfCast(op): the input is an array lvalue being
+                // decayed to a pointer (printc.cc:376-405). Rugra does not port
+                // the full heuristic; we take the common decay case where the
+                // cast target pointer-type matches the array's element pointer.
+                let in0_is_array = op.get_in(0).map(|a| {
+                    a.read().unwrap().get_high_type_read_facing(op, 0)
+                        .map(|t| t.get_metatype() == TypeMetatype::Array)
+                        .unwrap_or(false)
+                }).unwrap_or(false);
+                if in0_is_array {
+                    // pushOp(&addressof,op); pushVn(op->getIn(0),op,mods);
+                    self.emit.print("&");
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_varnode(&in0.read().unwrap(), Some(op));
+                    }
+                    return;
+                }
+            }
+        }
+        // printc.cc:459-462: if (!option_nocasts) { pushOp(&typecast); pushType(dt); }
+        if !self.option_nocasts {
+            if let Some(ref dt) = out_dt {
+                // pushType(dt) renders the type's display name.
+                self.emit.print(&format!("({})", dt.get_name()));
+            }
+        }
+        // printc.cc:463: pushVn(op->getIn(0),op,mods);
+        if let Some(in0) = op.get_in(0) {
+            self.push_varnode(&in0.read().unwrap(), Some(op));
+        }
     }
 
     // Ghidra: printc.cc:780 PrintC::pushConstant
@@ -8066,6 +8790,37 @@ impl PrintC {
         self.emit.print(tok);
         self.push_input(op, 1);
         true
+    }
+
+    // Ghidra: type.hh:294 Datatype::isPointerToArray
+    /// Is this type a pointer whose pointee is an array? Faithful to
+    /// `Datatype::isPointerToArray` (type.hh:294): returns true iff the metatype
+    /// is `TYPE_PTR` and `((TypePointer*)this)->getPtrTo()->getMetatype() ==
+    /// TYPE_ARRAY`. Used by `op_type_cast` (printc.cc:452) to detect the
+    /// array-decay-to-pointer cast that `checkAddressOfCast` rewrites as `&x`.
+    fn is_pointer_to_array(dt: &Datatype) -> bool {
+        match dt {
+            Datatype::Pointer(p) => p.ptr_to.get_metatype() == TypeMetatype::Array,
+            _ => false,
+        }
+    }
+
+    // Ghidra: printc.cc:1562 PrintC::getHiddenThisSlot
+    /// Return the input slot holding the hidden `this` pointer for a C++
+    /// method-call op, or -1 if there is none. Faithful to
+    /// `PrintC::getHiddenThisSlot(const PcodeOp*, const FuncCallSpecs*)`
+    /// (printc.cc:1562-1578).
+    ///
+    /// Ghidra returns the slot (1 for direct calls, 0 for constructor/new)
+    /// when the call's prototype is a `this`-call AND `option_hide_thisparam`
+    /// is set; otherwise -1. Rugra does not yet port `option_hide_thisparam`
+    /// (audit P0-4) nor the `FuncCallSpecs` `isThisCall()` lookup, and — per
+    /// the Ghidra `opCall`/`opCallind` TODO (printc.cc:619-620, 646) — the
+    /// `this`-hiding is gated on emitting proper C++ method-invocation syntax,
+    /// which Rugra does not do. We therefore return -1 (no slot hidden),
+    /// matching the conservative default that keeps all parameters visible.
+    fn get_hidden_this_slot(&self, _op: &PcodeOp) -> i32 {
+        -1
     }
 
     // Ghidra: printc.cc:2388 PrintC::checkPrintNegation
