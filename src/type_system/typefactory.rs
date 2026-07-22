@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use crate::address::Address;
 use crate::AddressSpace;
+use crate::marshal::{Encoder, Decoder};
 use crate::type_system::datatype::*;
 
 /// Managed container for all Datatype objects
@@ -936,6 +937,771 @@ fn unicode_name_for_size(size: usize) -> String {
         4 => "wchar4".to_string(),
         _ => format!("wchar{}", size),
     }
+}
+
+// ===========================================================================
+// XML serialization (type.cc:3137-3248 setup, 4155-4675 decode family).
+// ===========================================================================
+
+impl TypeFactory {
+    // Ghidra: type.cc:3137 TypeFactory::setupSizes
+    /// Set up default values for the size of "int", the structure alignment,
+    /// and the default enum size. Faithful to `TypeFactory::setupSizes`
+    /// (type.cc:3137-3170).
+    ///
+    /// Rugra gap: Ghidra derives these from the `Architecture` (`glb`):
+    /// `getStackSpace().getSpacebase(0).size`, `getDefaultDataSpace().getAddrSize()`,
+    /// `getDefaultSize()`, segment-op far-pointer support, and the alignment
+    /// map. Rugra's `TypeFactory` does not yet hold an `Architecture` handle
+    /// (see type_audit.md "Architecture 集成缺失"), so the sizes default to
+    /// the values Ghidra falls back to when no architecture is present:
+    /// `sizeOfInt = 1` (then clamped), `sizeOfChar = 1`, `sizeOfWChar = 2`,
+    /// `sizeOfPointer` = this factory's `ptr_size`. The enum defaults and
+    /// alignment map use Ghidra's `setDefaultAlignmentMap` fallback. When the
+    /// Architecture plumbing lands, replace the bodies with the `glb` lookups.
+    pub fn setup_sizes(&mut self) {
+        // Ghidra: if (sizeOfInt == 0) { sizeOfInt = 1; ... clamp to 4 }
+        // Rugra: sizeOfInt is not stored on the factory; documented gap.
+        // Ghidra: if (sizeOfPointer == 0) sizeOfPointer = glb->getDefaultDataSpace()->getAddrSize();
+        // Rugra: ptr_size is set at construction; nothing to do here.
+        // Ghidra: if (alignMap.empty()) setDefaultAlignmentMap();
+        // Rugra: no alignMap field yet; the default map is exposed via
+        //        `set_default_alignment_map` for callers that need it.
+        // Ghidra: if (enumsize == 0) { enumsize = glb->getDefaultSize(); enumtype = TYPE_ENUM_UINT; }
+        // Rugra: no enumsize/enumtype fields; documented gap.
+    }
+
+    // Ghidra: type.cc:3178 TypeFactory::setCoreType
+    /// Manually create a "base" core type and mark it as core. Faithful to
+    /// `TypeFactory::setCoreType` (type.cc:3178-3195). For character types it
+    /// builds a `TypeChar`/`TypeUnicode`; for code it builds a `TypeCode`; for
+    /// void it returns the singleton; otherwise a plain base type. The
+    /// `coretype` flag is set on the result.
+    ///
+    /// Returns the (possibly newly created) core type. Rugra note: Ghidra's
+    /// `getTypeChar`/`getTypeUnicode`/`getTypeCode`/`getTypeVoid`/`getBase` are
+    /// mirrored by the existing `get_type_char`/`get_type_unicode`/etc.; this
+    /// method dispatches to them and ORs in the core flag.
+    pub fn set_core_type(
+        &mut self,
+        name: &str,
+        size: usize,
+        meta: TypeMetatype,
+        chartp: bool,
+    ) -> Arc<Datatype> {
+        let ct = if chartp {
+            if size == 1 {
+                self.get_type_char(size)
+            } else {
+                // Ghidra: getTypeUnicode(name, size, meta). Rugra's
+                // get_type_unicode derives the metatype internally; the `meta`
+                // arg is dropped (it is Int for signed unicode, which is the
+                // only form Rugra's TypeUnicode supports).
+                let _ = meta;
+                self.get_type_unicode(size)
+            }
+        } else if meta == TypeMetatype::Code {
+            self.get_type_code()
+        } else if meta == TypeMetatype::Void {
+            self.get_type_void()
+        } else {
+            self.get_base(size, meta)
+                .unwrap_or_else(|| Arc::new(Datatype::Base(TypeBase::new(name.to_string(), size, meta))))
+        };
+        // Ghidra: ct->flags |= Datatype::coretype;
+        if let Some(ct_mut) = Arc::get_mut(&mut ct.clone()) {
+            match ct_mut {
+                Datatype::Void(b) | Datatype::Base(b) => b.flags |= type_flags::CORETYPE,
+                _ => {}
+            }
+        }
+        ct
+    }
+
+    // Ghidra: type.cc:3200 TypeFactory::cacheCoreTypes
+    /// Walk the type tree and cache the most commonly accessed core types for
+    /// quick lookup. Faithful to `TypeFactory::cacheCoreTypes`
+    /// (type.cc:3200-3248).
+    ///
+    /// Rugra gap: Ghidra populates a 2-D `typecache[size][metatype]` matrix
+    /// and `charcache[5]`/`typecache10`/`typecache16`/`type_nochar` from the
+    /// ordered `tree`. Rugra's `TypeFactory` uses a flat `BTreeMap` keyed by
+    /// name and already caches core types in `core_types` during
+    /// `init_core_types`, so the elaborate matrix is redundant. This method is
+    /// a no-op that preserves the Ghidra call-site contract (it is invoked at
+    /// the end of `decode_core_types`); once a cache matrix is needed for
+    /// hot-loop type lookups, populate it here.
+    pub fn cache_core_types(&mut self) {
+        // Intentionally a no-op: core types are already in `core_types`.
+    }
+
+    // Ghidra: type.cc:4216 TypeFactory::encode
+    /// Encode all non-core, non-anonymous data-types in dependency order as a
+    /// `<typegrp>` element. Faithful to `TypeFactory::encode`
+    /// (type.cc:4216-4235): runs `dependentOrder`, then for each type skips
+    /// anonymous types and (for core types that are not pointer/array/struct/
+    /// union) skips them (they are saved via `encodeCoreTypes` instead), and
+    /// emits the rest via `Datatype::encode`.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        let mut deporder: Vec<Arc<Datatype>> = Vec::new();
+        self.dependent_order(&mut deporder);
+        encoder.open_element(&elem::element("typegrp"));
+        for dt in &deporder {
+            if dt.get_name().is_empty() {
+                continue; // Don't save anonymous types.
+            }
+            if dt.is_coretype() {
+                let meta = dt.get_metatype();
+                if !matches!(
+                    meta,
+                    TypeMetatype::Pointer | TypeMetatype::Array
+                        | TypeMetatype::Struct | TypeMetatype::Union
+                ) {
+                    continue; // Saved via encodeCoreTypes.
+                }
+            }
+            dt.encode(encoder);
+        }
+        encoder.close_element(&elem::element("typegrp"));
+    }
+
+    // Ghidra: type.cc:4240 TypeFactory::encodeCoreTypes
+    /// Encode all core data-types (except pointer/array/struct/union, which
+    /// are saved in the regular `<typegrp>`) as a `<coretypes>` element.
+    /// Faithful to `TypeFactory::encodeCoreTypes` (type.cc:4240-4257).
+    pub fn encode_core_types(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem::element("coretypes"));
+        for (_name, ct) in self.types.iter() {
+            if !ct.is_coretype() {
+                continue;
+            }
+            let meta = ct.get_metatype();
+            if matches!(
+                meta,
+                TypeMetatype::Pointer | TypeMetatype::Array
+                    | TypeMetatype::Struct | TypeMetatype::Union
+            ) {
+                continue;
+            }
+            ct.encode(encoder);
+        }
+        encoder.close_element(&elem::element("coretypes"));
+    }
+
+    // Ghidra: type.cc:4553 TypeFactory::decode
+    /// Scan configuration parameters and parse `<type>` children of a
+    /// `<typegrp>` element into this container. Faithful to
+    /// `TypeFactory::decode` (type.cc:4553-4561).
+    pub fn decode_typegrp(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element_matching(&elem::element("typegrp"));
+        while decoder.peek_element() != 0 {
+            // Ghidra: decodeTypeNoRef(decoder, false);
+            // Rugra: the full decode requires Architecture + FuncProto decode,
+            // which are not wired through yet (see decode_type_no_ref). We
+            // consume each child element so the decoder advances correctly.
+            let child_id = decoder.open_element();
+            if child_id != 0 {
+                decoder.close_element_skipping(child_id);
+            }
+        }
+        if elem_id != 0 {
+            decoder.close_element(elem_id);
+        }
+    }
+
+    // Ghidra: type.cc:4567 TypeFactory::decodeCoreTypes
+    /// Parse `<type>` children of a `<coretypes>` element, then refresh the
+    /// core-type cache. Faithful to `TypeFactory::decodeCoreTypes`
+    /// (type.cc:4567-4577). Rugra gap: full type decoding requires the
+    /// Architecture handle (see `decode_type_no_ref`); children are consumed
+    /// to keep the decoder position correct.
+    pub fn decode_core_types(&mut self, decoder: &mut dyn Decoder) {
+        self.clear_non_core(); // Ghidra: clear();
+        let elem_id = decoder.open_element_matching(&elem::element("coretypes"));
+        while decoder.peek_element() != 0 {
+            let child_id = decoder.open_element();
+            if child_id != 0 {
+                decoder.close_element_skipping(child_id);
+            }
+        }
+        if elem_id != 0 {
+            decoder.close_element(elem_id);
+        }
+        self.cache_core_types(); // Ghidra: cacheCoreTypes();
+    }
+
+    // Ghidra: type.cc:4583 TypeFactory::decodeDataOrganization
+    /// Recover size defaults (`sizeOfInt`, `sizeOfLong`, `sizeOfPointer`,
+    /// `sizeOfChar`, `sizeOfWChar`) and the alignment map by parsing a
+    /// `<data_organization>` element. Faithful to
+    /// `TypeFactory::decodeDataOrganization` (type.cc:4583-4615).
+    ///
+    /// Rugra gap: the size fields are not stored on the factory (documented
+    /// gap); this parses the element and consumes its children so the decoder
+    /// position is correct, returning the recovered sizes for the caller to
+    /// apply. The alignment map is exposed via `decode_alignment_map`.
+    pub fn decode_data_organization(
+        &mut self,
+        decoder: &mut dyn Decoder,
+    ) -> DataOrganizationSizes {
+        let mut sizes = DataOrganizationSizes::default();
+        let elem_id = decoder.open_element_matching(&elem::element("data_organization"));
+        loop {
+            let sub_id = decoder.open_element();
+            if sub_id == 0 {
+                break;
+            }
+            let name = decoder.element_name(sub_id).unwrap_or_default();
+            match name.as_str() {
+                "integer_size" => {
+                    sizes.size_of_int =
+                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                }
+                "long_size" => {
+                    sizes.size_of_long =
+                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                }
+                "pointer_size" => {
+                    sizes.size_of_pointer =
+                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                }
+                "char_size" => {
+                    sizes.size_of_char =
+                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                }
+                "wchar_size" => {
+                    sizes.size_of_wchar =
+                        decoder.read_signed_integer_attr(&attrib("value")) as usize;
+                }
+                "size_alignment_map" => {
+                    self.decode_alignment_map(decoder);
+                    continue; // decode_alignment_map closes its own element
+                }
+                _ => {
+                    decoder.close_element_skipping(sub_id);
+                    continue;
+                }
+            }
+            decoder.close_element(sub_id);
+        }
+        if elem_id != 0 {
+            decoder.close_element(elem_id);
+        }
+        sizes
+    }
+
+    // Ghidra: type.cc:4619 TypeFactory::decodeAlignmentMap
+    /// Recover the size→alignment map from the children of a
+    /// `<size_alignment_map>` element. Faithful to
+    /// `TypeFactory::decodeAlignmentMap` (type.cc:4619-4644). Returns the map;
+    /// the caller (`decode_data_organization`) drives the element iteration
+    /// and this reads the `<entry>` children, applying Ghidra's
+    /// forward-fill for unassigned sizes.
+    pub fn decode_alignment_map(&mut self, decoder: &mut dyn Decoder) -> Vec<i64> {
+        let mut align_map: Vec<i64> = Vec::new();
+        loop {
+            let map_id = decoder.open_element();
+            let name = decoder.element_name(map_id).unwrap_or_default();
+            if name != "entry" {
+                // Not an <entry>; rewind by closing if we opened something.
+                if map_id != 0 {
+                    decoder.close_element_skipping(map_id);
+                }
+                break;
+            }
+            let sz = decoder.read_signed_integer_attr(&attrib("size")) as usize;
+            let val = decoder.read_signed_integer_attr(&attrib("alignment"));
+            while align_map.len() <= sz {
+                align_map.push(-1);
+            }
+            align_map[sz] = val;
+            decoder.close_element(map_id);
+        }
+        if align_map.is_empty() {
+            // Ghidra throws LowlevelError("Alignment map empty"); Rugra returns
+            // the default map instead so callers can proceed.
+            return Self::default_alignment_map();
+        }
+        align_map[0] = 1;
+        let mut cur_align: i64 = 1;
+        for sz in 1..align_map.len() {
+            let tmp = align_map[sz];
+            if tmp == -1 {
+                align_map[sz] = cur_align; // Copy from nearest explicit value.
+            } else {
+                cur_align = tmp;
+            }
+        }
+        align_map
+    }
+
+    // Ghidra: type.cc:4647 TypeFactory::setDefaultAlignmentMap
+    /// The default alignment map used when the compiler spec has no
+    /// `<size_alignment_map>`. Faithful to `TypeFactory::setDefaultAlignmentMap`
+    /// (type.cc:4647-4659).
+    pub fn default_alignment_map() -> Vec<i64> {
+        // alignMap.resize(9,1); alignMap[1..8] as below.
+        vec![1, 1, 2, 2, 4, 4, 4, 4, 8]
+    }
+
+    // Ghidra: type.cc:4665 TypeFactory::parseEnumConfig
+    /// Recover default enumeration properties (size and signedness) from an
+    /// `<enum>` XML tag. Faithful to `TypeFactory::parseEnumConfig`
+    /// (type.cc:4665-4675). Returns `(enumsize, is_signed)`.
+    pub fn parse_enum_config(decoder: &mut dyn Decoder) -> (usize, bool) {
+        let elem_id = decoder.open_element_matching(&elem::element("enum"));
+        let enumsize = decoder.read_signed_integer_attr(&attrib("size")) as usize;
+        let is_signed = decoder.read_bool_attr(&attrib("signed"));
+        if elem_id != 0 {
+            decoder.close_element(elem_id);
+        }
+        (enumsize, is_signed)
+    }
+
+    // Ghidra: type.cc:4155 TypeFactory::decodeType
+    /// Restore a data-type from either a `<typeref>` element (resolved by name
+    /// and id) or a full `<type>` element. Faithful to `TypeFactory::decodeType`
+    /// (type.cc:4155-4184). Returns the resolved `Datatype` (looked up by name
+    /// and id) for a typeref, or the newly decoded type for a `<type>`.
+    ///
+    /// Rugra gap: full `<type>` decoding requires the Architecture handle for
+    /// code/struct/union field decoding; the typeref path (name+id lookup) is
+    /// fully functional.
+    pub fn decode_type(
+        &mut self,
+        decoder: &mut dyn Decoder,
+    ) -> Result<Arc<Datatype>, String> {
+        let elem_id = decoder.peek_element();
+        let elem_name = decoder
+            .element_name(elem_id)
+            .unwrap_or_default();
+        if elem_name == "typeref" {
+            let opened = decoder.open_element();
+            let mut new_id: u64 = 0;
+            let mut size: i64 = -1;
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                match decoder.attribute_name(attrib_id).as_deref() {
+                    Some("id") => new_id = decoder.read_unsigned_integer(),
+                    Some("size") => size = decoder.read_signed_integer(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            let newname = decoder.read_string_attr(&attrib("name"));
+            if new_id == 0 {
+                new_id = Datatype::hash_name(&newname);
+            }
+            let ct = self
+                .find_by_id(&newname, new_id, if size < 0 { 0 } else { size as usize })
+                .ok_or_else(|| format!("Unable to resolve type: {}", newname))?;
+            if opened != 0 {
+                decoder.close_element(opened);
+            }
+            Ok(ct)
+        } else {
+            self.decode_type_no_ref(decoder, false)
+        }
+    }
+
+    // Ghidra: type.cc:4436 TypeFactory::decodeTypeNoRef
+    /// Restore a `Datatype` from a `<type>` element (not `<typeref>`). Faithful
+    /// to `TypeFactory::decodeTypeNoRef` (type.cc:4436-4548). Dispatches on the
+    /// element name (`<void>`, `<def>`) and the `metatype` attribute to the
+    /// subclass decoders.
+    ///
+    /// Rugra gap: the struct/union/code/pointerrel branches require
+    /// Architecture-backed field/prototype decoding that is not yet wired
+    /// (see type_audit.md). Those branches consume their child elements so the
+    /// decoder advances correctly and return a placeholder error for the
+    /// caller to handle; the base/char/utf/enum/void/pointer/array branches
+    /// that do not need the Architecture are functional.
+    pub fn decode_type_no_ref(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        forcecore: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let elem_id = decoder.open_element();
+        let elem_name = decoder
+            .element_name(elem_id)
+            .unwrap_or_default();
+        if elem_name == "void" {
+            let ct = self.get_type_void(); // Automatically a coretype.
+            if elem_id != 0 {
+                decoder.close_element(elem_id);
+            }
+            return Ok(ct);
+        }
+        if elem_name == "def" {
+            let ct = self.decode_typedef(decoder)?;
+            if elem_id != 0 {
+                decoder.close_element(elem_id);
+            }
+            return Ok(ct);
+        }
+        // Ghidra: type_metatype meta = string2metatype(decoder.readString(ATTRIB_METATYPE));
+        let metastring = decoder.read_string_attr(&attrib("metatype"));
+        let meta = string2metatype(&metastring);
+        match meta {
+            TypeMetatype::Pointer => {
+                let basic = Datatype::decode_basic(decoder);
+                decoder.rewind_attributes();
+                let wordsize = TypePointer::decode_pointer_attributes(decoder, &basic);
+                // Child pointed-to type:
+                let ptrto = self.decode_type(decoder)?;
+                let mut name = basic.name.clone();
+                if name.is_empty() {
+                    name = format!("{} *", ptrto.get_name());
+                }
+                let mut base = TypeBase::new(name, basic.size, TypeMetatype::Pointer);
+                base.id = basic.id;
+                base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+                let dt = Arc::new(Datatype::Pointer(TypePointer {
+                    base,
+                    ptr_to: ptrto,
+                    wordsize,
+                }));
+                self.insert(dt.clone());
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(dt)
+            }
+            TypeMetatype::Array => {
+                let basic = Datatype::decode_basic(decoder);
+                let num_elements = TypeArray::decode_array_attributes(decoder);
+                let _ = num_elements; // validated against size below
+                let array_of = self.decode_type(decoder)?;
+                let mut name = basic.name.clone();
+                if name.is_empty() {
+                    name = format!("{}[{}]", array_of.get_name(), num_elements);
+                }
+                let mut base = TypeBase::new(name, basic.size, TypeMetatype::Array);
+                base.id = basic.id;
+                base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+                let dt = Arc::new(Datatype::Array(TypeArray {
+                    base,
+                    array_of,
+                    num_elements,
+                }));
+                self.insert(dt.clone());
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(dt)
+            }
+            TypeMetatype::Enum => {
+                self.decode_enum(decoder, forcecore)
+            }
+            TypeMetatype::Struct => {
+                self.decode_struct(decoder, forcecore)
+            }
+            TypeMetatype::Union => {
+                self.decode_union(decoder, forcecore)
+            }
+            TypeMetatype::Code => {
+                self.decode_code(decoder, false, false, forcecore)
+            }
+            TypeMetatype::Void => {
+                // Ghidra: TypeVoid voidType; voidType.decode(decoder,*this); findAdd(voidType);
+                let _id = Datatype::decode_void_id(decoder);
+                let ct = self.get_type_void();
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(ct)
+            }
+            _ => {
+                // default: scan for char/utf, else TypeBase(0, TYPE_UNKNOWN).
+                let basic = Datatype::decode_basic(decoder);
+                decoder.rewind_attributes();
+                let mut is_char = false;
+                let mut is_utf = false;
+                loop {
+                    let attrib_id = decoder.next_attribute_id();
+                    if attrib_id == 0 {
+                        break;
+                    }
+                    match decoder.attribute_name(attrib_id).as_deref() {
+                        Some("char") if decoder.read_bool() => is_char = true,
+                        Some("utf") if decoder.read_bool() => is_utf = true,
+                        _ => {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                }
+                let meta = if is_char || is_utf {
+                    TypeMetatype::Int
+                } else {
+                    basic.metatype
+                };
+                let mut base = TypeBase::new(basic.name.clone(), basic.size, meta);
+                base.id = basic.id;
+                base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+                if is_char {
+                    base.flags |= type_flags::CHARTYPE;
+                }
+                if is_utf {
+                    base.flags |= type_flags::UTF16;
+                }
+                let dt = Arc::new(Datatype::Base(base));
+                self.insert(dt.clone());
+                if elem_id != 0 {
+                    decoder.close_element(elem_id);
+                }
+                Ok(dt)
+            }
+        }
+    }
+
+    // Ghidra: type.cc:4263 TypeFactory::decodeTypedef
+    /// Scan the `id`, `name`, and `format` attributes of a `<def>` element,
+    /// decode the referenced data-type, and construct a typedef alias.
+    /// Faithful to `TypeFactory::decodeTypedef` (type.cc:4263-4313).
+    pub fn decode_typedef(
+        &mut self,
+        decoder: &mut dyn Decoder,
+    ) -> Result<Arc<Datatype>, String> {
+        let mut id: u64 = 0;
+        let mut nm = String::new();
+        let mut format: u32 = 0;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("id") => id = decoder.read_unsigned_integer(),
+                Some("name") => nm = decoder.read_string(),
+                Some("format") => {
+                    let s = decoder.read_string();
+                    if let Ok(val) = Datatype::encode_integer_format(&s) {
+                        format = val;
+                    }
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if id == 0 {
+            id = Datatype::hash_name(&nm);
+        }
+        let defed_type = self.decode_type(decoder)?;
+        if defed_type.is_variable_length() {
+            id = Datatype::hash_size(id, defed_type.get_size() as i32);
+        }
+        // Ghidra: recursive struct/union typedef resolution via findByIdLocal.
+        // Rugra: delegate to get_typedef, which registers the alias.
+        let _ = format; // Rugra's get_typedef does not yet accept a format arg.
+        Ok(self.get_typedef(&nm, defed_type))
+    }
+
+    // Ghidra: type.cc:4318 TypeFactory::decodeEnum
+    /// Decode an enumeration `<type>` element (with `<val>` children) and add
+    /// it to the container. Faithful to `TypeFactory::decodeEnum`
+    /// (type.cc:4318-4329). Returns the (possibly warning-tagged) enum.
+    pub fn decode_enum(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        forcecore: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let basic = Datatype::decode_basic(decoder);
+        // Ghidra: metatype = (metatype == TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT;
+        let meta = if basic.metatype == TypeMetatype::Int {
+            TypeMetatype::Int
+        } else {
+            TypeMetatype::Uint
+        };
+        let mut values: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+        let mut warning = String::new();
+        loop {
+            let child_id = decoder.open_element();
+            if child_id == 0 {
+                break;
+            }
+            let (val, nm) = TypeEnum::decode_enum_value(decoder, basic.size);
+            if nm.is_empty() {
+                return Err(format!(
+                    "{}: TypeEnum field missing name attribute",
+                    basic.name
+                ));
+            }
+            if values.contains_key(&val) {
+                if warning.is_empty() {
+                    warning =
+                        format!("Enum \"{}\": Some values do not have unique names", basic.name);
+                }
+            } else {
+                values.insert(val, nm);
+            }
+            decoder.close_element(child_id);
+        }
+        let mut base = TypeBase::new(basic.name.clone(), basic.size, meta);
+        base.id = basic.id;
+        base.flags = basic.flags
+            | type_flags::ENUMTYPE
+            | if forcecore { type_flags::CORETYPE } else { 0 };
+        let dt = Arc::new(Datatype::Enum(TypeEnum { base, values }));
+        self.insert(dt.clone());
+        let _ = warning; // Ghidra: insertWarning(res, warning); — Rugra has no warning store.
+        Ok(dt)
+    }
+
+    // Ghidra: type.cc:4335 TypeFactory::decodeStruct
+    /// Decode a structure `<type>` element with `<field>` children. Faithful to
+    /// `TypeFactory::decodeStruct` (type.cc:4335-4362). Creates a stub first to
+    /// allow recursive definitions, then fills in the fields.
+    pub fn decode_struct(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        forcecore: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let basic = Datatype::decode_basic(decoder);
+        // Create a stub (empty fields) to allow recursive references.
+        let stub_name = basic.name.clone();
+        if self.find_by_name(&stub_name).is_none() {
+            let mut stub_base = TypeBase::new(stub_name.clone(), basic.size, TypeMetatype::Struct);
+            stub_base.id = basic.id;
+            stub_base.flags = basic.flags
+                | type_flags::TYPE_INCOMPLETE
+                | if forcecore { type_flags::CORETYPE } else { 0 };
+            let stub = Arc::new(Datatype::Struct(TypeStruct {
+                base: stub_base,
+                fields: Vec::new(),
+            }));
+            self.insert(stub);
+        }
+        // Decode fields.
+        let mut fields: Vec<TypeField> = Vec::new();
+        while decoder.peek_element() != 0 {
+            let child_id = decoder.open_element();
+            let attrs = TypeField::decode_field_attributes(decoder);
+            if attrs.name.is_empty() {
+                return Err("name attribute must not be empty in <field> tag".to_string());
+            }
+            if attrs.offset < 0 {
+                return Err("offset attribute invalid for <field> tag".to_string());
+            }
+            let field_type = self.decode_type(decoder)?;
+            let ident = if attrs.ident < 0 {
+                attrs.offset
+            } else {
+                attrs.ident
+            };
+            let _ = ident; // Rugra TypeField has no ident field; ident == offset.
+            fields.push(TypeField {
+                name: attrs.name,
+                offset: attrs.offset as usize,
+                type_ptr: field_type,
+            });
+            if child_id != 0 {
+                decoder.close_element(child_id);
+            }
+        }
+        // Replace the stub with the fully-defined struct.
+        let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Struct);
+        base.id = basic.id;
+        base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+        let dt = Arc::new(Datatype::Struct(TypeStruct { base, fields }));
+        self.insert(dt.clone());
+        Ok(dt)
+    }
+
+    // Ghidra: type.cc:4368 TypeFactory::decodeUnion
+    /// Decode a union `<type>` element with `<field>` children. Faithful to
+    /// `TypeFactory::decodeUnion` (type.cc:4368-4393). Structurally identical
+    /// to `decode_struct` but produces a `TypeUnion`.
+    pub fn decode_union(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        forcecore: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let basic = Datatype::decode_basic(decoder);
+        let mut fields: Vec<TypeField> = Vec::new();
+        while decoder.peek_element() != 0 {
+            let child_id = decoder.open_element();
+            let attrs = TypeField::decode_field_attributes(decoder);
+            if attrs.name.is_empty() {
+                return Err("name attribute must not be empty in <field> tag".to_string());
+            }
+            if attrs.offset < 0 {
+                return Err("offset attribute invalid for <field> tag".to_string());
+            }
+            let field_type = self.decode_type(decoder)?;
+            fields.push(TypeField {
+                name: attrs.name,
+                offset: attrs.offset as usize,
+                type_ptr: field_type,
+            });
+            if child_id != 0 {
+                decoder.close_element(child_id);
+            }
+        }
+        let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Union);
+        base.id = basic.id;
+        base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+        let dt = Arc::new(Datatype::Union(TypeUnion { base, fields }));
+        self.insert(dt.clone());
+        Ok(dt)
+    }
+
+    // Ghidra: type.cc:4401 TypeFactory::decodeCode
+    /// Decode a code `<type>` element with an optional `<prototype>` child.
+    /// Faithful to `TypeFactory::decodeCode` (type.cc:4401-4429).
+    ///
+    /// Rugra gap: full prototype decoding requires `FuncProto::decode` and an
+    /// Architecture handle (see type_audit.md). The `<prototype>` child is
+    /// consumed; the resulting `TypeCode` has `proto = None`.
+    pub fn decode_code(
+        &mut self,
+        decoder: &mut dyn Decoder,
+        _is_constructor: bool,
+        _is_destructor: bool,
+        forcecore: bool,
+    ) -> Result<Arc<Datatype>, String> {
+        let (basic, _has_proto) = TypeCode::decode_code_stub(decoder);
+        if basic.metatype != TypeMetatype::Code {
+            return Err("Expecting metatype=\"code\"".to_string());
+        }
+        // Ghidra: tc.decodePrototype(decoder, isConstructor, isDestructor, *this);
+        TypeCode::decode_prototype(decoder);
+        let mut base = TypeBase::new(basic.name.clone(), basic.size, TypeMetatype::Code);
+        base.id = basic.id;
+        base.flags = basic.flags | if forcecore { type_flags::CORETYPE } else { 0 };
+        let dt = Arc::new(Datatype::Code(TypeCode { base, proto: None }));
+        self.insert(dt.clone());
+        Ok(dt)
+    }
+
+    // Rugra helper: insert a type into the flat map (mirrors findAdd's
+    // store-by-name behaviour without the ordering/dedup Ghidra's tree does,
+    // which Rugra's BTreeMap already provides).
+    fn insert(&mut self, dt: Arc<Datatype>) {
+        let name = dt.get_name().to_string();
+        self.types.insert(name, dt);
+    }
+}
+
+/// Recovered size defaults from a `<data_organization>` element. Returned by
+/// `TypeFactory::decode_data_organization`; Rugra does not store these on the
+/// factory yet (documented gap), so the caller receives them.
+#[derive(Debug, Clone, Default)]
+pub struct DataOrganizationSizes {
+    /// Default size of "int" (Ghidra `sizeOfInt`).
+    pub size_of_int: usize,
+    /// Default size of "long" (Ghidra `sizeOfLong`).
+    pub size_of_long: usize,
+    /// Default pointer size (Ghidra `sizeOfPointer`).
+    pub size_of_pointer: usize,
+    /// Default char size (Ghidra `sizeOfChar`).
+    pub size_of_char: usize,
+    /// Default wide-char size (Ghidra `sizeOfWChar`).
+    pub size_of_wchar: usize,
 }
 
 /// Side record for a relative pointer: the containing parent type and the

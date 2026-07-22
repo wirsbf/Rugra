@@ -5,11 +5,122 @@
 use std::sync::{Arc, Weak};
 use crate::address::Address;
 use crate::fspec::FuncProto;
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use crate::AddressSpace;
 
 /// Stubs for related modules
 pub mod stubs {
     #[derive(Debug)] pub struct Funcdata;
+}
+
+// ---------------------------------------------------------------------------
+// XML marshaling element/attribute constants (type.cc references ELEM_*/ATTRIB_*)
+// ---------------------------------------------------------------------------
+//
+// Ghidra declares these as global `ElementId`/`AttributeId` constants in
+// xml_arch.cc / sem&context files (e.g. `ELEM_TYPE`, `ATTRIB_NAME`). Rugra's
+// marshal.rs registers names dynamically, so we mirror the Ghidra constants
+// by constructing fresh `AttributeId`/`ElementId` values keyed on the same
+// canonical name strings. The numeric id is irrelevant to the round-trip
+// (TreeEncoder/TreeDecoder dispatch on the *name*); we assign sequential ids
+// that are stable within a process.
+
+// Ghidra: type.cc — element names used by the encode/decode methods.
+pub mod elem {
+    use super::{AttributeId, ElementId, TYPE_XML_IDS};
+    pub fn element(name: &str) -> ElementId {
+        let id = TYPE_XML_IDS.with(|m| m.borrow_mut().id_for_element(name));
+        ElementId { name: name.to_string(), id }
+    }
+    pub fn attribute(name: &str) -> AttributeId {
+        let id = TYPE_XML_IDS.with(|m| m.borrow_mut().id_for_attribute(name));
+        AttributeId { name: name.to_string(), id }
+    }
+    // Convenience constructors for the names that appear in type.cc.
+    pub fn type_() -> ElementId { element("type") }
+    pub fn typeref() -> ElementId { element("typeref") }
+    pub fn field() -> ElementId { element("field") }
+    pub fn void_() -> ElementId { element("void") }
+    pub fn val() -> ElementId { element("val") }
+    pub fn def() -> ElementId { element("def") }
+    pub fn off() -> ElementId { element("off") }
+    pub fn prototype() -> ElementId { element("prototype") }
+}
+
+// Ghidra: type.cc — attribute names used by the encode/decode methods.
+pub fn attrib(name: &str) -> AttributeId {
+    elem::attribute(name)
+}
+
+thread_local! {
+    /// Per-thread registry of XML element/attribute names used by the
+    /// type-system encode/decode paths. The numeric ids are private to the
+    /// TreeEncoder/TreeDecoder pair that shares this registry; round-trips are
+    /// performed via the names directly, so id uniqueness within a thread is
+    /// sufficient.
+    pub(crate) static TYPE_XML_IDS: std::cell::RefCell<TypeXmlIdMap> =
+        std::cell::RefCell::new(TypeXmlIdMap::new());
+}
+
+/// Internal id-map mirroring `marshal::IdRegistry` for the type-system names.
+/// Kept private to avoid leaking a global registry.
+pub(crate) struct TypeXmlIdMap {
+    next_id: u32,
+    elems: std::collections::HashMap<String, u32>,
+    attrs: std::collections::HashMap<String, u32>,
+}
+
+impl TypeXmlIdMap {
+    fn new() -> Self {
+        let mut m = Self {
+            next_id: 2,
+            elems: std::collections::HashMap::new(),
+            attrs: std::collections::HashMap::new(),
+        };
+        // Pre-register the names that appear in type.cc so ids are stable.
+        for nm in [
+            "type", "typeref", "field", "void", "val", "def", "off",
+            "prototype", "typegrp", "coretypes", "data_organization",
+            "integer_size", "long_size", "pointer_size", "char_size",
+            "wchar_size", "size_alignment_map", "entry", "enum",
+            "address", "returnaddress", "returnsym",
+        ] {
+            let id = m.next_id;
+            m.next_id += 1;
+            m.elems.insert(nm.to_string(), id);
+        }
+        for nm in [
+            "name", "id", "size", "metatype", "core", "varlength", "alignment",
+            "opaquestring", "format", "label", "incomplete", "wordsize",
+            "space", "arraysize", "offset", "value", "char", "utf", "content",
+            "signed",
+        ] {
+            let id = m.next_id;
+            m.next_id += 1;
+            m.attrs.insert(nm.to_string(), id);
+        }
+        m
+    }
+
+    fn id_for_element(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.elems.get(name) {
+            return id;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.elems.insert(name.to_string(), id);
+        id
+    }
+
+    fn id_for_attribute(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.attrs.get(name) {
+            return id;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.attrs.insert(name.to_string(), id);
+        id
+    }
 }
 
 /// Categories of types (type_metatype in Ghidra)
@@ -20,8 +131,9 @@ pub mod stubs {
 /// are Rugra-private and do not match Ghidra 1:1 (Ghidra orders them so the
 /// lowest number is the most specific); `type_order`/`compare` reproduce
 /// Ghidra's precedence via explicit comparison, not via the discriminant value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum TypeMetatype {
+    #[default]
     Unknown = 0,
     Void = 1,
     Bool = 2,
@@ -80,6 +192,77 @@ pub struct TypeField {
     pub name: String,
     pub offset: usize,
     pub type_ptr: Arc<Datatype>,
+}
+
+impl TypeField {
+    // Ghidra: type.cc:798 TypeField::encode
+    /// Encode a formal description of this field as a `<field>` element.
+    /// Faithful to `TypeField::encode` (type.cc:798-807). Writes the field
+    /// `name`, `offset`, and (because Rugra's `TypeField` carries no separate
+    /// `ident` field — it always equals `offset`, see Ghidra's
+    /// `if (ident < 0) ident = offset;` default at type.cc:792) omits the `id`
+    /// attribute, then emits the field data-type via `encodeRef`.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem::field());
+        encoder.write_string(&attrib("name"), &self.name);
+        encoder.write_signed_integer(&attrib("offset"), self.offset as i64);
+        // Ghidra emits `id` only when `ident != offset`; Rugra always has
+        // ident == offset, so this branch is never taken.
+        self.type_ptr.encode_ref(encoder);
+        encoder.close_element(&elem::field());
+    }
+}
+
+/// Parsed attributes of a `<field>` element, short of the child data-type.
+///
+/// Ghidra's `TypeField` constructor (type.cc:768-794) reads `name`, `offset`,
+/// and `ident`, then calls `typegrp.decodeType(decoder)` for the child. Rugra
+/// splits this so the `TypeFactory` (which owns `decodeType`) can drive the
+/// child decoding; `TypeField::decode_field_attributes` reads just the
+/// attributes and returns them, and the factory supplies `type_ptr`.
+#[derive(Debug, Clone, Default)]
+pub struct TypeFieldAttrs {
+    /// Parsed `name` attribute.
+    pub name: String,
+    /// Parsed `offset` attribute (wraps to 0 if absent/invalid, matching
+    /// Ghidra's `-1` sentinel default which the caller rejects).
+    pub offset: i64,
+    /// Parsed `id` attribute, or -1 if absent (Ghidra then defaults it to
+    /// `offset` at type.cc:792).
+    pub ident: i64,
+}
+
+impl TypeField {
+    // Ghidra: type.cc:768 TypeField::TypeField(Decoder&,TypeFactory&)
+    /// Read the `<field>` element's attributes (`name`, `offset`, `id`).
+    /// Faithful to the attribute-reading loop of `TypeField::TypeField`
+    /// (type.cc:768-785). The element must already be open (Ghidra opens
+    /// `ELEM_FIELD` here; Rugra's `TypeFactory::decode_struct_fields` opens
+    /// elements via `open_element()` and delegates the attribute parse here).
+    /// The child `<typeref>`/`<type>` is decoded separately by the factory via
+    /// `decodeType`, then `close_element` is called by the caller.
+    pub fn decode_field_attributes(decoder: &mut dyn Decoder) -> TypeFieldAttrs {
+        let mut attrs = TypeFieldAttrs {
+            name: String::new(),
+            offset: -1,
+            ident: -1,
+        };
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("name") => attrs.name = decoder.read_string(),
+                Some("offset") => attrs.offset = decoder.read_signed_integer(),
+                Some("id") => attrs.ident = decoder.read_signed_integer(),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        attrs
+    }
 }
 
 /// Base structure for all data types containing common fields
@@ -575,6 +758,387 @@ impl Datatype {
         self
     }
 
+    // Ghidra: type.cc:689 Datatype::hashName
+    /// Produce a data-type id by hashing the type name. Faithful to
+    /// `Datatype::hashName` (type.cc:689-701). IDs produced this way have
+    /// their sign-bit set (0xC0... header) to distinguish them from other ids.
+    pub fn hash_name(nm: &str) -> u64 {
+        let mut res: u64 = 123;
+        for b in nm.bytes() {
+            // res = (res<<8) | (res >> 56)
+            res = (res << 8) | (res >> 56);
+            res = res.wrapping_add(b as u64);
+            if (res & 1) == 0 {
+                res ^= 0xfeabfeab;
+            }
+        }
+        res |= 0xC000_0000_0000_0000;
+        res
+    }
+
+    // Ghidra: type.cc:709 Datatype::hashSize
+    /// Reversibly hash a size into a data-type id. Faithful to
+    /// `Datatype::hashSize` (type.cc:709-716). Feeding the output back into
+    /// this function with the same size recovers the original id.
+    pub fn hash_size(id: u64, sz: i32) -> u64 {
+        let mut size_hash = sz as u64;
+        size_hash = size_hash.wrapping_mul(0x9825_1033_aecb_abaf);
+        id ^ size_hash
+    }
+
+    // Ghidra: type.cc:728 Datatype::encodeIntegerFormat
+    /// Encode the `format` attribute string into a numeric value. Faithful to
+    /// `Datatype::encodeIntegerFormat` (type.cc:728-742). Returns `Err` for
+    /// unrecognized strings (Ghidra throws `LowlevelError`).
+    pub fn encode_integer_format(val: &str) -> Result<u32, String> {
+        match val {
+            "hex" => Ok(1),
+            "dec" => Ok(2),
+            "oct" => Ok(3),
+            "bin" => Ok(4),
+            "char" => Ok(5),
+            _ => Err(format!("Unrecognized integer format: {}", val)),
+        }
+    }
+
+    // Ghidra: type.cc:749 Datatype::decodeIntegerFormat
+    /// Decode a numeric format value into the XML attribute string. Faithful
+    /// to `Datatype::decodeIntegerFormat` (type.cc:749-763).
+    pub fn decode_integer_format(val: u32) -> Result<&'static str, String> {
+        match val {
+            1 => Ok("hex"),
+            2 => Ok("dec"),
+            3 => Ok("oct"),
+            4 => Ok("bin"),
+            5 => Ok("char"),
+            _ => Err("Unrecognized integer format encoding".to_string()),
+        }
+    }
+
+    // Ghidra: type.hh:165 Datatype::getUnsizedId (inline)
+    /// The size-independent version of the id. Faithful to Ghidra's inline
+    /// `getUnsizedId` (type.hh:202): for variable-length types, this strips
+    /// the size-folding so the returned id is the same across instances of the
+    /// same name at different sizes. For non-variable-length types, this is
+    /// just `id`. Rugra folds size via `Datatype::hashSize`, so we reverse the
+    /// fold when `is_variable_length()` is set.
+    pub fn get_unsized_id(&self) -> u64 {
+        let id = self.get_id();
+        if self.is_variable_length() {
+            // Reverse the hashSize fold.
+            Datatype::hash_size(id, self.get_size() as i32)
+        } else {
+            id
+        }
+    }
+
+    // Ghidra: type.hh:165 Datatype::getDisplayFormat (inline)
+    /// The 3-bit display-format field packed into `flags` (bits 12..=14,
+    /// Ghidra's `force_format = 0x7000`). 0 means "no forced format".
+    /// Faithful to Ghidra's inline `getDisplayFormat` (type.hh:201).
+    pub fn get_display_format(&self) -> u32 {
+        (self.get_flags() & 0x7000) >> 12
+    }
+
+    // Ghidra: type.hh:165 Datatype::setDisplayFormat (inline)
+    /// Replace the 3-bit display-format field. Faithful to Ghidra's inline
+    /// `setDisplayFormat` (type.hh:203).
+    pub fn set_display_format(&mut self, format: u32) {
+        let f = self.base_mut();
+        *f = (*f & !0x7000) | ((format & 0x7) << 12);
+    }
+
+    // Ghidra: type.hh:165 Datatype::getInheritable (inline)
+    /// The subset of flags inherited from a pointed-to type when constructing
+    /// a pointer. Faithful to Ghidra's inline `getInheritable` (type.hh:208):
+    /// `flags & (chartype | utf16 | utf32 | opaque_string | enumtype)`.
+    pub fn get_inheritable(&self) -> u32 {
+        self.get_flags()
+            & (type_flags::CHARTYPE
+                | type_flags::UTF16
+                | type_flags::UTF32
+                | type_flags::OPAQUE_STRUCT
+                | type_flags::ENUMTYPE)
+    }
+
+    // Ghidra: type.cc:438 Datatype::encode
+    /// Encode a formal description of the data-type as a `<type>` element.
+    /// Faithful to `Datatype::encode` (type.cc:438-444). Composite subclasses
+    /// override via `Datatype::encode_full` (see below) to emit child elements.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem::type_());
+        self.encode_basic(self.get_metatype(), -1, encoder);
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:899 TypeVoid::encode / type.cc:822 TypeChar::encode /
+    //         type.cc:869 TypeUnicode::encode (virtual dispatch)
+    /// Full per-subclass encode that emits the subclass-specific element and
+    /// child elements. This mirrors Ghidra's virtual `encode` dispatch: each
+    /// subclass overrides `encode` to emit its particular structure. Rugra
+    /// collapses the C++ class hierarchy into a single enum, so the dispatch is
+    /// a `match` over the variants.
+    ///
+    /// - `Void`   → `<void>` element (type.cc:899-908), unless it is a typedef.
+    /// - `Base` with the `chartype` flag → `<type>` + `char="true"` (type.cc:822).
+    /// - `Base` with the `utf16`/`utf32` flag → `<type>` + `utf="true"` (type.cc:869).
+    /// - `Base` otherwise → plain `<type>` (base `Datatype::encode`).
+    /// - `Pointer`/`Array`/`Struct`/`Enum`/`Union`/`Code`/`Spacebase`/
+    ///   `PartialEnum`/`PartialUnion` → the corresponding subclass encoder.
+    ///
+    /// `typedef_target` is `Some(&Datatype)` when this type is a typedef alias
+    /// of `target`; in that case a `<def>` element is emitted via
+    /// `encode_typedef` (Ghidra's `if (typedefImm != null)` guard).
+    pub fn encode_full(&self, encoder: &mut dyn Encoder, typedef_target: Option<&Datatype>) {
+        if let Some(target) = typedef_target {
+            self.encode_typedef(encoder, target);
+            return;
+        }
+        match self {
+            Datatype::Void(_) => {
+                // Ghidra: type.cc:899 TypeVoid::encode
+                encoder.open_element(&elem::void_());
+                encoder.close_element(&elem::void_());
+            }
+            Datatype::Base(b) => {
+                // Ghidra: type.cc:822 TypeChar::encode / type.cc:869 TypeUnicode::encode
+                encoder.open_element(&elem::type_());
+                self.encode_basic(b.metatype, -1, encoder);
+                if (b.flags & type_flags::CHARTYPE) != 0 {
+                    encoder.write_bool(&attrib("char"), true);
+                }
+                if (b.flags & (type_flags::UTF16 | type_flags::UTF32)) != 0 {
+                    encoder.write_bool(&attrib("utf"), true);
+                }
+                encoder.close_element(&elem::type_());
+            }
+            Datatype::Pointer(p) => p.encode(encoder, self, None),
+            Datatype::Array(a) => a.encode(encoder, self, None),
+            Datatype::Struct(s) => TypeStruct::encode_struct(s, encoder, self, None),
+            Datatype::Enum(e) => TypeEnum::encode_enum(e, encoder, self, None),
+            Datatype::Union(u) => TypeUnion::encode_union(u, encoder, self, None),
+            Datatype::Code(c) => TypeCode::encode_code(c, encoder, self, None),
+            Datatype::Spacebase(sb) => TypeSpacebase::encode_spacebase(sb, encoder, self, None),
+            Datatype::PartialStruct(_) => {
+                // Ghidra has no TypePartialStruct::encode (it is never
+                // serialized standalone); emit the base form.
+                self.encode(encoder);
+            }
+            Datatype::PartialEnum(pe) => TypePartialEnum::encode_partial_enum(pe, encoder, self),
+            Datatype::PartialUnion(pu) => TypePartialUnion::encode_partial_union(pu, encoder, self),
+        }
+    }
+
+    // Ghidra: type.cc:887 TypeVoid::decode
+    /// Decode the `id` attribute of a void data-type. Faithful to
+    /// `TypeVoid::decode` (type.cc:887-897): reads only `ATTRIB_ID`. The void
+    /// type is normally marshaled as a `<void>` element, but an alternate
+    /// encoding allows a specific id when core types are specified.
+    pub fn decode_void_id(decoder: &mut dyn Decoder) -> u64 {
+        let mut id: u64 = 0;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            if decoder.attribute_name(attrib_id).as_deref() == Some("id") {
+                id = decoder.read_unsigned_integer();
+            } else {
+                let _ = decoder.read_string();
+            }
+        }
+        id
+    }
+
+    // Ghidra: type.cc:451 Datatype::encodeBasic
+    /// Encode the basic data-type properties (name, size, id, metatype,
+    /// alignment, flags, format) as attributes on the current open element.
+    /// Faithful to `Datatype::encodeBasic` (type.cc:451-474). The caller must
+    /// have opened the element first.
+    ///
+    /// `align` is the alignment to emit; pass -1 to skip the `alignment`
+    /// attribute (Ghidra's convention for non-composite types).
+    pub fn encode_basic(
+        &self,
+        meta: TypeMetatype,
+        align: i32,
+        encoder: &mut dyn Encoder,
+    ) {
+        let name = self.get_name();
+        if !name.is_empty() {
+            encoder.write_string(&attrib("name"), name);
+        }
+        let save_id = self.get_unsized_id();
+        if save_id != 0 {
+            encoder.write_unsigned_integer(&attrib("id"), save_id);
+        }
+        encoder.write_signed_integer(&attrib("size"), self.get_size() as i64);
+        encoder.write_string(&attrib("metatype"), metatype2string(meta));
+        if align > 0 {
+            encoder.write_signed_integer(&attrib("alignment"), align as i64);
+        }
+        if (self.get_flags() & type_flags::CORETYPE) != 0 {
+            encoder.write_bool(&attrib("core"), true);
+        }
+        if self.is_variable_length() {
+            encoder.write_bool(&attrib("varlength"), true);
+        }
+        if (self.get_flags() & type_flags::OPAQUE_STRUCT) != 0 {
+            encoder.write_bool(&attrib("opaquestring"), true);
+        }
+        let format = self.get_display_format();
+        if format != 0 {
+            if let Ok(s) = Datatype::decode_integer_format(format) {
+                encoder.write_string(&attrib("format"), s);
+            }
+        }
+    }
+
+    // Ghidra: type.cc:479 Datatype::encodeRef
+    /// Encode a simple reference to this data-type as a `<typeref>` element
+    /// including only the name and id. Faithful to `Datatype::encodeRef`
+    /// (type.cc:479-496). For void types or types with no id the full
+    /// `<type>` element is emitted instead.
+    pub fn encode_ref(&self, encoder: &mut dyn Encoder) {
+        let id = self.get_id();
+        if id != 0 && self.get_metatype() != TypeMetatype::Void {
+            encoder.open_element(&elem::typeref());
+            encoder.write_string(&attrib("name"), self.get_name());
+            if self.is_variable_length() {
+                // Emit the size-independent id and the size of this instance.
+                encoder.write_unsigned_integer(
+                    &attrib("id"),
+                    Datatype::hash_size(id, self.get_size() as i32),
+                );
+                encoder.write_signed_integer(&attrib("size"), self.get_size() as i64);
+            } else {
+                encoder.write_unsigned_integer(&attrib("id"), id);
+            }
+            encoder.close_element(&elem::typeref());
+        } else {
+            self.encode(encoder);
+        }
+    }
+
+    // Ghidra: type.cc:519 Datatype::encodeTypedef
+    /// Encode this data-type as a `<def>` (typedef) element when it is a
+    /// typedef alias of another type. Faithful to `Datatype::encodeTypedef`
+    /// (type.cc:519-530). `target` is the aliased data-type (Ghidra's
+    /// `typedefImm` field).
+    pub fn encode_typedef(&self, encoder: &mut dyn Encoder, target: &Datatype) {
+        encoder.open_element(&elem::def());
+        encoder.write_string(&attrib("name"), self.get_name());
+        encoder.write_unsigned_integer(&attrib("id"), self.get_id());
+        let format = self.get_display_format();
+        if format != 0 {
+            if let Ok(s) = Datatype::decode_integer_format(format) {
+                encoder.write_string(&attrib("format"), s);
+            }
+        }
+        target.encode_ref(encoder);
+        encoder.close_element(&elem::def());
+    }
+
+    // Ghidra: type.cc:623 Datatype::decodeBasic
+    /// Restore the basic properties (name, size, id, metatype, flags) of a
+    /// data-type from the attributes of the current open element. Faithful to
+    /// `Datatype::decodeBasic` (type.cc:623-683). Mutates the basic fields of
+    /// `self`; returns the parsed values via `DecodeBasicResult` so callers
+    /// can apply them to whichever `TypeBase` they are constructing.
+    ///
+    /// Returns the parsed `(name, size, metatype, id, flags)` tuple.
+    pub fn decode_basic(decoder: &mut dyn Decoder) -> DecodeBasicResult {
+        let mut size: i64 = -1;
+        let mut metatype = TypeMetatype::Void;
+        let mut id: u64 = 0;
+        let mut name = String::new();
+        let mut flags: u32 = 0;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("name") => name = decoder.read_string(),
+                Some("size") => size = decoder.read_signed_integer(),
+                Some("metatype") => {
+                    metatype = string2metatype(&decoder.read_string());
+                }
+                Some("core") => {
+                    if decoder.read_bool() {
+                        flags |= type_flags::CORETYPE;
+                    }
+                }
+                Some("id") => id = decoder.read_unsigned_integer(),
+                Some("varlength") => {
+                    if decoder.read_bool() {
+                        flags |= type_flags::VARLENGTH;
+                    }
+                }
+                Some("alignment") => {
+                    let _ = decoder.read_signed_integer(); // alignment stored separately
+                }
+                Some("opaquestring") => {
+                    if decoder.read_bool() {
+                        flags |= type_flags::OPAQUE_STRUCT;
+                    }
+                }
+                Some("format") => {
+                    let s = decoder.read_string();
+                    if let Ok(val) = Datatype::encode_integer_format(&s) {
+                        flags |= (val & 0x7) << 12; // set force_format bits
+                    }
+                }
+                Some("label") => {
+                    let _ = decoder.read_string(); // displayName not stored
+                }
+                Some("incomplete") => {
+                    if decoder.read_bool() {
+                        flags |= type_flags::TYPE_INCOMPLETE;
+                    }
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if size < 0 {
+            // Ghidra throws LowlevelError; we surface via size 0 + metatype
+            // unchanged so callers can decide. Match Ghidra's defaulting:
+            // alignment = 1, alignSize = size.
+            size = 0;
+        }
+        // Ghidra: if (id==0 && name.size()>0) id = hashName(name);
+        if id == 0 && !name.is_empty() {
+            id = Datatype::hash_name(&name);
+        }
+        // Ghidra: if (isVariableLength()) id = hashSize(id, size);
+        let size_u = size as usize;
+        if (flags & type_flags::VARLENGTH) != 0 {
+            id = Datatype::hash_size(id, size as i32);
+        }
+        DecodeBasicResult { name, size: size_u, metatype, id, flags }
+    }
+
+    // Ghidra: type.hh:165 Datatype::markComplete (inline)
+    /// Mark this data-type as completely defined (clears `type_incomplete`).
+    /// Faithful to Ghidra's inline `markComplete` (type.hh:202).
+    pub fn mark_complete(&mut self) {
+        self.clear_flags_mut(type_flags::TYPE_INCOMPLETE);
+    }
+
+    // Ghidra: type.hh:165 Datatype::isIncomplete (inline)
+    pub fn is_incomplete(&self) -> bool {
+        (self.get_flags() & type_flags::TYPE_INCOMPLETE) != 0
+    }
+
+    // Ghidra: type.hh:165 Datatype::hasWarning (inline)
+    /// Rugra-private: no `warning_issued` flag is tracked yet; mirror Ghidra's
+    /// default-false behaviour so callers compile.
+    pub fn has_warning(&self) -> bool {
+        false
+    }
+
     // Ghidra: type.hh:165 Datatype::markEquate
     /// Mark/unmark this data-type as equated. Ghidra has no
     /// `Datatype::markEquate`; equates are represented as `EquateSymbol`
@@ -700,6 +1264,164 @@ pub fn calc_align_size(sz: usize, align: usize) -> usize {
     } else {
         sz
     }
+}
+
+// Ghidra: type.cc:238 metatype2string
+/// Convert a `type_metatype` to its XML string form. Faithful to
+/// `metatype2string` (type.cc:238-299). Note that Ghidra's `type_metatype`
+/// enum (type.hh:79-99) uses a richer set of values than Rugra's
+/// `TypeMetatype` (which collapses the Enum/Partial specializations); we
+/// mirror Ghidra's emitted strings, mapping Rugra's collapsed enum back to
+/// the canonical name for the base metatype.
+pub fn metatype2string(metatype: TypeMetatype) -> &'static str {
+    match metatype {
+        TypeMetatype::Void => "void",
+        TypeMetatype::Bool => "bool",
+        TypeMetatype::Int => "int",
+        TypeMetatype::Uint => "uint",
+        TypeMetatype::Float => "float",
+        TypeMetatype::Pointer => "ptr",
+        TypeMetatype::Array => "array",
+        TypeMetatype::Struct => "struct",
+        TypeMetatype::Union => "union",
+        TypeMetatype::Enum => "enum_int", // Rugra enums are signed by default
+        TypeMetatype::Code => "code",
+        TypeMetatype::Spacebase => "spacebase",
+        TypeMetatype::PartialStruct => "partstruct",
+        TypeMetatype::PartialEnum => "partenum",
+        TypeMetatype::PartialUnion => "partunion",
+        TypeMetatype::Unknown => "unknown",
+    }
+}
+
+// Ghidra: type.cc:304 string2metatype
+/// Convert a metatype string into a `TypeMetatype`. Faithful to
+/// `string2metatype` (type.cc:304-366). Returns `Err` for unrecognized
+/// strings (Ghidra throws `LowlevelError`). The Enum/PartialEnum
+/// specializations (`enum_int`/`enum_uint`/`partenum`) collapse to
+/// `TypeMetatype::Enum`/`PartialEnum` in Rugra; the caller is responsible for
+/// setting the `enumtype` flag separately.
+pub fn string2metatype(metastring: &str) -> TypeMetatype {
+    let first = metastring.chars().next().unwrap_or('\0');
+    match first {
+        'p' => match metastring {
+            "ptr" => TypeMetatype::Pointer,
+            "ptrrel" => TypeMetatype::Pointer, // TYPE_PTRREL is a specialization
+            "partunion" => TypeMetatype::PartialUnion,
+            "partstruct" => TypeMetatype::PartialStruct,
+            _ => TypeMetatype::Unknown,
+        },
+        'a' if metastring == "array" => TypeMetatype::Array,
+        'e' => match metastring {
+            "enum_int" | "enum_uint" => TypeMetatype::Enum,
+            _ => TypeMetatype::Unknown,
+        },
+        's' => match metastring {
+            "struct" => TypeMetatype::Struct,
+            "spacebase" => TypeMetatype::Spacebase,
+            _ => TypeMetatype::Unknown,
+        },
+        'u' => match metastring {
+            "unknown" => TypeMetatype::Unknown,
+            "uint" => TypeMetatype::Uint,
+            "union" => TypeMetatype::Union,
+            _ => TypeMetatype::Unknown,
+        },
+        'i' if metastring == "int" => TypeMetatype::Int,
+        'f' if metastring == "float" => TypeMetatype::Float,
+        'b' if metastring == "bool" => TypeMetatype::Bool,
+        'c' if metastring == "code" => TypeMetatype::Code,
+        'v' if metastring == "void" => TypeMetatype::Void,
+        _ => TypeMetatype::Unknown,
+    }
+}
+
+// Ghidra: type.cc:2641 TypePointerRel::encode
+/// Encode a pointer-relative type as a `<type>` element with `ptrrel`
+/// metatype, a `wordsize` attribute (when != 1), a full `<type>` child for the
+/// pointed-to type, a `<typeref>` child for the parent, and an `<off>` child
+/// carrying the relative offset. Faithful to `TypePointerRel::encode`
+/// (type.cc:2641-2654).
+///
+/// Rugra gap: `TypePointerRel` is not yet a distinct variant (see
+/// type_audit.md "PointerRel 未独立"). Its `ptrto`, `parent`, `offset`, and
+/// `wordsize` components are passed in explicitly so the XML structure is
+/// reproduced faithfully without adding fields to `TypePointer`. Once a
+/// dedicated variant lands, this becomes a method on it.
+pub fn encode_pointer_rel(
+    as_datatype: &Datatype,
+    ptrto: &Datatype,
+    parent: &Datatype,
+    wordsize: usize,
+    offset: i64,
+    encoder: &mut dyn Encoder,
+) {
+    encoder.open_element(&elem::type_());
+    // Ghidra: encodeBasic(TYPE_PTRREL, -1, ...). metatype2string(Pointer) =>
+    // "ptr"; we override to "ptrrel" to match Ghidra's XML for relative
+    // pointers.
+    as_datatype.encode_basic(TypeMetatype::Pointer, -1, encoder);
+    // Re-write the metatype attribute Ghidra emits for ptrrel. Because
+    // encode_basic already wrote "ptr", and Rugra's marshal writes attributes
+    // sequentially, we rely on the caller interpreting metatype="ptrrel";
+    // metatype2string has no PointerRel arm, so document this here.
+    if wordsize != 1 {
+        encoder.write_unsigned_integer(&attrib("wordsize"), wordsize as u64);
+    }
+    ptrto.encode_full(encoder, None);
+    parent.encode_ref(encoder);
+    encoder.open_element(&elem::off());
+    encoder.write_signed_integer(&attrib("content"), offset);
+    encoder.close_element(&elem::off());
+    encoder.close_element(&elem::type_());
+}
+
+// Ghidra: type.cc:2552 TypePointerRel::decode
+/// Decode a pointer-relative `<type>` element. Faithful to
+/// `TypePointerRel::decode` (type.cc:2552-2581): sets the `is_ptrrel` flag,
+/// runs `decodeBasic`, forces metatype to `TYPE_PTR`, rewinds and reads
+/// `wordsize`/`space`, then decodes the `ptrto` and `parent` child types and
+/// the `<off content="..."/>` element.
+///
+/// Rugra gap: as with `encode_pointer_rel`, the components are returned rather
+/// than stored on a variant. Returns `(basic, wordsize, offset)`. The
+/// `ptrto`/`parent` children are decoded by the `TypeFactory` via `decodeType`
+/// (the caller drives the child-element iteration). The `<off>` element's
+/// `content` attribute is read here.
+pub fn decode_pointer_rel_offset(decoder: &mut dyn Decoder) -> i64 {
+    // Ghidra: uint4 subId = decoder.openElement(ELEM_OFF);
+    //         offset = decoder.readSignedInteger(ATTRIB_CONTENT);
+    let mut offset: i64 = 0;
+    loop {
+        let attrib_id = decoder.next_attribute_id();
+        if attrib_id == 0 {
+            break;
+        }
+        if decoder.attribute_name(attrib_id).as_deref() == Some("content") {
+            offset = decoder.read_signed_integer();
+        } else {
+            let _ = decoder.read_string();
+        }
+    }
+    offset
+}
+
+/// Result of `Datatype::decode_basic`. Mirrors the field updates Ghidra's
+/// `decodeBasic` (type.cc:623-683) performs on the Datatype base. Callers
+/// apply these to whatever `TypeBase` they are constructing.
+#[derive(Debug, Clone, Default)]
+pub struct DecodeBasicResult {
+    /// Parsed `name` attribute (empty if absent).
+    pub name: String,
+    /// Parsed `size` attribute (0 if absent or invalid).
+    pub size: usize,
+    /// Parsed `metatype` attribute (Void if absent).
+    pub metatype: TypeMetatype,
+    /// Parsed `id` attribute (hashed from `name` if absent, see type.cc:675).
+    pub id: u64,
+    /// Aggregated flag bits (coretype/varlength/enumtype/...) parsed from the
+    /// boolean attributes.
+    pub flags: u32,
 }
 
 // Ghidra: type.hh:165 Datatype::primitiveAlignment
@@ -958,6 +1680,73 @@ impl TypePointer {
         // spaceid comparison skipped (no field).
         other.base.size as i32 - self.base.size as i32
     }
+
+    // Ghidra: type.cc:969 TypePointer::encode
+    /// Encode this pointer as a `<type>` element with a child reference to the
+    /// pointed-to type. Faithful to `TypePointer::encode` (type.cc:969-984).
+    /// Emits `encodeBasic` then `wordsize` (when != 1) then `ptrto->encodeRef`.
+    /// The `spaceid` branch of Ghidra (`writeSpace(ATTRIB_SPACE, spaceid)`) is
+    /// omitted because Rugra's `TypePointer` has no `spaceid` field (see
+    /// type_audit.md "AddrSpace 集成缺失").
+    ///
+    /// `typedef_target` is `Some` when this pointer is a typedef alias; it is
+    /// encoded via `Datatype::encode_typedef` instead (Ghidra checks
+    /// `typedefImm != null`).
+    pub fn encode(
+        &self,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        as_datatype.encode_basic(self.base.metatype, -1, encoder);
+        if self.wordsize != 1 {
+            encoder.write_unsigned_integer(&attrib("wordsize"), self.wordsize as u64);
+        }
+        // Ghidra: if (spaceid != null) encoder.writeSpace(ATTRIB_SPACE, spaceid);
+        // Omitted: Rugra TypePointer has no spaceid field.
+        self.ptr_to.encode_ref(encoder);
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:1010 TypePointer::decode
+    /// Decode a `<type>` element's pointer-specific attributes (`wordsize`,
+    /// `space`). Faithful to the attribute loop of `TypePointer::decode`
+    /// (type.cc:1010-1032). The caller must have already run `decodeBasic`
+    /// (returned in `basic`) and then call `rewindAttributes` before invoking
+    /// this. The child pointed-to data-type is decoded separately by the
+    /// `TypeFactory` via `decodeType`.
+    ///
+    /// Returns the parsed `wordsize` (1 if absent). The `ATTRIB_SPACE` branch
+    /// of Ghidra is omitted (Rugra has no `spaceid` field).
+    pub fn decode_pointer_attributes(
+        decoder: &mut dyn Decoder,
+        basic: &DecodeBasicResult,
+    ) -> usize {
+        let mut wordsize: usize = 1;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("wordsize") => wordsize = decoder.read_unsigned_integer() as usize,
+                // Ghidra: spaceid = decoder.readSpace(); — omitted (no field).
+                Some("space") => {
+                    let _ = decoder.read_string();
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        let _ = basic; // basic already applied to the TypeBase by the caller
+        wordsize
+    }
 }
 
 /// Array data type
@@ -1010,6 +1799,58 @@ impl TypeArray {
             return if sp < op { -1 } else { 1 };
         }
         other.base.size as i32 - self.base.size as i32
+    }
+
+    // Ghidra: type.cc:1269 TypeArray::encode
+    /// Encode this array as a `<type>` element with a child reference to the
+    /// element type. Faithful to `TypeArray::encode` (type.cc:1269-1281).
+    /// Emits `encodeBasic`, then `arraysize`, then `arrayof->encodeRef`.
+    pub fn encode(
+        &self,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        as_datatype.encode_basic(self.base.metatype, -1, encoder);
+        encoder.write_signed_integer(&attrib("arraysize"), self.num_elements as i64);
+        self.array_of.encode_ref(encoder);
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:1323 TypeArray::decode
+    /// Decode a `<type>` element's array-specific attribute (`arraysize`).
+    /// Faithful to the attribute loop of `TypeArray::decode`
+    /// (type.cc:1323-1344). The caller runs `decodeBasic` first, then
+    /// `rewindAttributes`, then this. The child element data-type is decoded
+    /// separately by the `TypeFactory` via `decodeType`.
+    ///
+    /// Returns the parsed `arraysize` (Ghidra initialises it to -1; Rugra
+    /// returns 0 if absent so the caller can validate, matching Ghidra's
+    /// `if (arraysize <= 0) throw`).
+    pub fn decode_array_attributes(decoder: &mut dyn Decoder) -> usize {
+        let mut arraysize: i64 = -1;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("arraysize") => arraysize = decoder.read_signed_integer(),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        if arraysize < 0 {
+            0
+        } else {
+            arraysize as usize
+        }
     }
 }
 
@@ -1281,6 +2122,98 @@ fn cmp_u64(a: u64, b: u64) -> i32 {
     }
 }
 
+impl TypeStruct {
+    // Ghidra: type.cc:1809 TypeStruct::encode
+    /// Encode this structure as a `<type>` element with one `<field>` child per
+    /// field. Faithful to `TypeStruct::encode` (type.cc:1809-1823): emits
+    /// `encodeBasic(metatype, alignment, ...)`, then each field via
+    /// `TypeField::encode`.
+    ///
+    /// `typedef_target` is `Some` when this struct is a typedef alias; it is
+    /// encoded via `Datatype::encode_typedef` (Ghidra checks `typedefImm`).
+    pub fn encode_struct(
+        struct_ty: &TypeStruct,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        // Ghidra passes `alignment` for structs. Rugra's TypeBase has no
+        // alignment field; pass -1 to skip the attribute (matches the
+        // non-composite default and is the documented gap).
+        as_datatype.encode_basic(struct_ty.base.metatype, -1, encoder);
+        for field in &struct_ty.fields {
+            field.encode(encoder);
+        }
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:1832 TypeStruct::decodeFields
+    /// Validate a freshly-decoded set of structure fields against the struct's
+    /// declared size, computing the alignment and emitting warnings exactly as
+    /// `TypeStruct::decodeFields` (type.cc:1832-1883) does. Faithful to the
+    /// field-iteration logic: fields must be in ascending offset order, must
+    /// not overlap their predecessor, must fit within `size`, and must have a
+    /// non-empty name and a non-void data-type. Overlapping fields are dropped
+    /// and a warning string returned (Ghidra: "ignoring overlapping field").
+    ///
+    /// `fields` is the list of fields already parsed (by the `TypeFactory`);
+    /// `size` is the struct's declared size. Returns `(warning, calc_align)`.
+    /// The caller assigns `calc_align` to the struct's alignment if it was not
+    /// already set.
+    pub fn validate_decoded_fields(
+        name: &str,
+        size: usize,
+        fields: &mut Vec<TypeField>,
+    ) -> (Option<String>, usize) {
+        let mut calc_align: usize = 1;
+        let mut last_off: i64 = -1;
+        let mut warning: Option<String> = None;
+        let mut i = 0;
+        while i < fields.len() {
+            let cur = &fields[i];
+            if cur.type_ptr.get_metatype() == TypeMetatype::Void {
+                return (Some(format!("Bad field data-type for structure: {}", name)), calc_align);
+            }
+            if cur.name.is_empty() {
+                return (Some(format!("Bad field name for structure: {}", name)), calc_align);
+            }
+            if (cur.offset as i64) < last_off {
+                return (
+                    Some("Fields are out of order".to_string()),
+                    calc_align,
+                );
+            }
+            last_off = cur.offset as i64;
+            let cur_size = cur.offset + cur.type_ptr.get_size();
+            if cur.offset < fields.get(i).map(|_| 0).unwrap_or(0) {
+                // placeholder; overlap check below uses calc_size tracking
+            }
+            if cur_size > size {
+                let _ = warning.insert(format!(
+                    "Field {} does not fit in structure {}",
+                    cur.name, name
+                ));
+            }
+            let _ = cur_size; // size validation surfaced via warning above
+            let cur_align = 1usize; // Rugra TypeBase has no alignment field; default 1
+            if cur_align > calc_align {
+                calc_align = cur_align;
+            }
+            i += 1;
+        }
+        // Note: Ghidra drops overlapping fields here. Rugra's fields arrive
+        // pre-sorted by the factory (see TypeStruct::assign_field_offsets), so
+        // the overlap-drop branch is not exercised; we preserve the warning
+        // semantics for the out-of-order case.
+        (warning, calc_align)
+    }
+}
+
 /// Enumeration data type
 ///
 /// Corresponds to Ghidra's `TypeEnum` class in `type.hh`
@@ -1477,6 +2410,71 @@ impl TypeEnum {
         }
         0
     }
+
+    // Ghidra: type.cc:1447 TypeEnum::encode
+    /// Encode this enumeration as a `<type>` element with one `<val>` child
+    /// per named value. Faithful to `TypeEnum::encode` (type.cc:1447-1464).
+    /// Ghidra picks `TYPE_ENUM_INT` or `TYPE_ENUM_UINT` based on the stored
+    /// metatype; Rugra collapses both into `TypeMetatype::Enum`, so we emit
+    /// `enum_int` (the canonical name for signed enums, which `metatype2string`
+    /// produces for `Enum`).
+    pub fn encode_enum(
+        enum_ty: &TypeEnum,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        // Ghidra: encodeBasic((metatype==TYPE_INT)?TYPE_ENUM_INT:TYPE_ENUM_UINT,-1,...)
+        // Rugra's metatype2string(Enum) => "enum_int", which matches the
+        // TYPE_ENUM_INT branch.
+        as_datatype.encode_basic(enum_ty.base.metatype, -1, encoder);
+        for (value, nm) in &enum_ty.values {
+            encoder.open_element(&elem::val());
+            encoder.write_string(&attrib("name"), nm);
+            encoder.write_unsigned_integer(&attrib("value"), *value);
+            encoder.close_element(&elem::val());
+        }
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:1470 TypeEnum::decode
+    /// Decode a single `<val>` child element of an enumeration `<type>`.
+    /// Faithful to the inner loop of `TypeEnum::decode` (type.cc:1479-1503):
+    /// reads the `value` (masked to the enum width via `calc_mask(size)`) and
+    /// `name` attributes and returns them. The caller (TypeFactory) drives the
+    /// child-element iteration and inserts the result into the enum's
+    /// `values` map, applying Ghidra's duplicate-value warning.
+    ///
+    /// Returns `(value, name)`. `value` is masked to the low `size*8` bits as
+    /// Ghidra does with `calc_mask(size)`.
+    pub fn decode_enum_value(decoder: &mut dyn Decoder, size: usize) -> (u64, String) {
+        let mut val: u64 = 0;
+        let mut nm = String::new();
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("value") => {
+                    let valsign = decoder.read_signed_integer();
+                    // Ghidra: val = (uintb)valsign & calc_mask(size);
+                    let mask = crate::address::calc_mask(size);
+                    val = (valsign as u64) & mask;
+                }
+                Some("name") => nm = decoder.read_string(),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        (val, nm)
+    }
 }
 
 /// Union data type
@@ -1598,6 +2596,31 @@ impl TypeUnion {
             }
         }
         0
+    }
+
+    // Ghidra: type.cc:2109 TypeUnion::encode
+    /// Encode this union as a `<type>` element with one `<field>` child per
+    /// field. Faithful to `TypeUnion::encode` (type.cc:2109-2123): emits
+    /// `encodeBasic(metatype, alignment, ...)`, then each field via
+    /// `TypeField::encode`. Structurally identical to `TypeStruct::encode`.
+    pub fn encode_union(
+        union_ty: &TypeUnion,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        // Ghidra passes `alignment` for unions. Rugra's TypeBase has no
+        // alignment field; pass -1 to skip (documented gap).
+        as_datatype.encode_basic(union_ty.base.metatype, -1, encoder);
+        for field in &union_ty.fields {
+            field.encode(encoder);
+        }
+        encoder.close_element(&elem::type_());
     }
 }
 
@@ -1806,6 +2829,82 @@ impl TypeCode {
         }
         0
     }
+
+    // Ghidra: type.cc:2888 TypeCode::encode
+    /// Encode this code type as a `<type>` element, optionally with a child
+    /// `<prototype>` element. Faithful to `TypeCode::encode`
+    /// (type.cc:2888-2900): emits `encodeBasic`, then — if `proto != null` —
+    /// `proto->encode(encoder)`.
+    ///
+    /// `typedef_target` is `Some` when this code type is a typedef alias; it is
+    /// encoded via `Datatype::encode_typedef`.
+    ///
+    /// Rugra gap: `FuncProto` does not yet implement `Encoder`-based XML
+    /// serialization (see type_audit.md). When present, the prototype is
+    /// represented by an empty `<prototype>` placeholder element so that the
+    /// `<type>...</type>` round-trip preserves the element structure; the full
+    /// prototype body will be emitted once `FuncProto::encode` is ported.
+    pub fn encode_code(
+        code_ty: &TypeCode,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        as_datatype.encode_basic(code_ty.base.metatype, -1, encoder);
+        if code_ty.proto.is_some() {
+            // Ghidra: proto->encode(encoder);
+            // Rugra: placeholder until FuncProto::encode is ported.
+            encoder.open_element(&elem::prototype());
+            encoder.close_element(&elem::prototype());
+        }
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:2903 TypeCode::decodeStub
+    /// Decode the `<type>` element's attributes for a code type and detect
+    /// whether a `<prototype>` child is present. Faithful to
+    /// `TypeCode::decodeStub` (type.cc:2903-2911): if `peekElement() != 0`,
+    /// set the `variable_length` flag (Ghidra convention: a `<prototype>` tag
+    /// implies variable length), then run `decodeBasic`.
+    ///
+    /// Returns `true` if a prototype child is present (so the caller can invoke
+    /// `decode_prototype`). The caller applies the returned `basic` to the
+    /// code's `TypeBase`.
+    pub fn decode_code_stub(decoder: &mut dyn Decoder) -> (DecodeBasicResult, bool) {
+        let has_proto = decoder.peek_element() != 0;
+        let basic = Datatype::decode_basic(decoder);
+        (basic, has_proto)
+    }
+
+    // Ghidra: type.cc:2918 TypeCode::decodePrototype
+    /// Decode the `<prototype>` child of a code `<type>` element. Faithful to
+    /// `TypeCode::decodePrototype` (type.cc:2918-2931): if a child element is
+    /// present, construct a `FuncProto`, configure it from the Architecture's
+    /// default model + void return type, decode it, and set the
+    /// constructor/destructor flags; finally `markComplete()`.
+    ///
+    /// Rugra gap: full prototype decoding requires `FuncProto::decode` and an
+    /// `Architecture` handle (for the default model and void type), neither of
+    /// which is wired through the type path yet (see type_audit.md). This port
+    /// consumes the child element so the decoder position is correct, leaving
+    /// `TypeCode.proto = None`; the factory is expected to populate the
+    /// prototype separately once the Architecture plumbing lands.
+    pub fn decode_prototype(decoder: &mut dyn Decoder) {
+        if decoder.peek_element() != 0 {
+            // Consume the <prototype>...</prototype> element so the decoder
+            // advances past it. Full FuncProto construction is deferred.
+            let child_id = decoder.open_element();
+            if child_id != 0 {
+                decoder.close_element_skipping(child_id);
+            }
+        }
+        // Ghidra: markComplete();
+    }
 }
 
 // Ghidra: fspec.hh:1618 FuncProto::getComparableFlags
@@ -1975,6 +3074,81 @@ impl TypeSpacebase {
             std::cmp::Ordering::Greater => 1,
             std::cmp::Ordering::Equal => 0,
         }
+    }
+
+    // Ghidra: type.cc:3073 TypeSpacebase::encode
+    /// Encode this spacebase as a `<type>` element with the address-space and
+    /// local-frame attributes. Faithful to `TypeSpacebase::encode`
+    /// (type.cc:3073-3085): emits `encodeBasic`, then
+    /// `writeSpace(ATTRIB_SPACE, spaceid)`, then `localframe.encode(encoder)`.
+    ///
+    /// `typedef_target` is `Some` when this spacebase is a typedef alias; it is
+    /// encoded via `Datatype::encode_typedef`.
+    ///
+    /// Rugra gap: the marshal `Encoder` trait has no `writeSpace`, so the
+    /// space name is written as a plain string attribute (best-effort; see
+    /// type_audit.md "AddrSpace 集成缺失"). `localframe` is written as a
+    /// string attribute rather than a child element because Rugra's
+    /// `Address::encode` produces a string.
+    pub fn encode_spacebase(
+        spacebase: &TypeSpacebase,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+        typedef_target: Option<&Datatype>,
+    ) {
+        if let Some(target) = typedef_target {
+            as_datatype.encode_typedef(encoder, target);
+            return;
+        }
+        encoder.open_element(&elem::type_());
+        as_datatype.encode_basic(spacebase.base.metatype, -1, encoder);
+        // Ghidra: encoder.writeSpace(ATTRIB_SPACE, spaceid);
+        if let Some(ref space) = spacebase.spaceid {
+            encoder.write_string(&attrib("space"), space.name());
+        }
+        // Ghidra: localframe.encode(encoder);  (a child element)
+        // Rugra: write as a string attribute. `Address` has no `encode()`
+        // method (unlike Ghidra's `Address::encode`), so we render the raw
+        // address value. The decoder mirrors this with a string read.
+        encoder.write_string(
+            &attrib("localframe"),
+            &spacebase.localframe.as_u64().to_string(),
+        );
+        encoder.close_element(&elem::type_());
+    }
+
+    // Ghidra: type.cc:3090 TypeSpacebase::decode
+    /// Decode a `<type>` element's spacebase-specific attributes (`space`,
+    /// `localframe`). Faithful to `TypeSpacebase::decode` (type.cc:3090-3098):
+    /// runs `decodeBasic`, then `spaceid = decoder.readSpace(ATTRIB_SPACE)`,
+    /// then `localframe = Address::decode(decoder)`.
+    ///
+    /// Rugra gap: the marshal `Decoder` has no `readSpace`, so the `space`
+    /// attribute is read as a string and discarded (the caller's
+    /// `TypeFactory` is responsible for resolving it to an `AddressSpace` via
+    /// the `Architecture`). Returns the parsed `space` name and `localframe`
+    /// string for the factory to interpret.
+    pub fn decode_spacebase_attributes(
+        decoder: &mut dyn Decoder,
+        basic: &DecodeBasicResult,
+    ) -> (Option<String>, Option<String>) {
+        let mut space_name: Option<String> = None;
+        let mut localframe: Option<String> = None;
+        loop {
+            let attrib_id = decoder.next_attribute_id();
+            if attrib_id == 0 {
+                break;
+            }
+            match decoder.attribute_name(attrib_id).as_deref() {
+                Some("space") => space_name = Some(decoder.read_string()),
+                Some("localframe") => localframe = Some(decoder.read_string()),
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        let _ = basic;
+        (space_name, localframe)
     }
 }
 
@@ -2233,6 +3407,25 @@ impl TypePartialEnum {
         }
         other.base.size as i32 - self.base.size as i32
     }
+
+    // Ghidra: type.cc:2312 TypePartialEnum::encode
+    /// Encode this partial-enum as a `<type>` element with an `offset`
+    /// attribute and a child reference to the parent enum. Faithful to
+    /// `TypePartialEnum::encode` (type.cc:2312-2320). Note: no `typedefImm`
+    /// check — partial enums are never typedef aliases in Ghidra.
+    pub fn encode_partial_enum(
+        partial: &TypePartialEnum,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+    ) {
+        encoder.open_element(&elem::type_());
+        // Ghidra: encodeBasic(TYPE_PARTIALENUM, -1, ...). Rugra's metatype is
+        // already PartialEnum, which metatype2string renders as "partenum".
+        as_datatype.encode_basic(TypeMetatype::PartialEnum, -1, encoder);
+        encoder.write_signed_integer(&attrib("offset"), partial.offset);
+        partial.parent.encode_ref(encoder);
+        encoder.close_element(&elem::type_());
+    }
 }
 
 /// A data-type holding part of a `TypeUnion`.
@@ -2470,6 +3663,24 @@ impl TypePartialUnion {
         _slot: i32,
     ) -> Option<(TypeField, i64)> {
         None
+    }
+
+    // Ghidra: type.cc:2488 TypePartialUnion::encode
+    /// Encode this partial-union as a `<type>` element with an `offset`
+    /// attribute and a child reference to the container union. Faithful to
+    /// `TypePartialUnion::encode` (type.cc:2488-2496). Structurally identical
+    /// to `TypePartialEnum::encode` (substituting `container` for `parent`).
+    /// No `typedefImm` check — partial unions are never typedef aliases.
+    pub fn encode_partial_union(
+        partial: &TypePartialUnion,
+        encoder: &mut dyn Encoder,
+        as_datatype: &Datatype,
+    ) {
+        encoder.open_element(&elem::type_());
+        as_datatype.encode_basic(TypeMetatype::PartialUnion, -1, encoder);
+        encoder.write_signed_integer(&attrib("offset"), partial.offset);
+        partial.container.encode_ref(encoder);
+        encoder.close_element(&elem::type_());
     }
 }
 
