@@ -2535,6 +2535,59 @@ impl FlowBlock for BlockDoWhile {
     }
 }
 
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockDoWhile virtual overrides)
+impl BlockDoWhile {
+    /// Ghidra `BlockDoWhile::markLabelBumpUp` (block.cc:3426-3432): do-while
+    /// loops "steal" their lower blocks' labels — the loop exit label is
+    /// bumped up so it prints at the loop header, not the trailing goto. The
+    /// C++ first recurses via `BlockGraph::markLabelBumpUp(true)`, then clears
+    /// the flag on itself if `bump` is false. Rugra recurses into the condition
+    /// (which holds the fused body) and manages the `f_label_bumpup` flag.
+    // Ghidra: block.cc:3426 BlockDoWhile::markLabelBumpUp
+    pub fn mark_label_bump_up(&mut self, bump: bool) {
+        // cc:3429: BlockGraph::markLabelBumpUp(true);  -- recurse into children
+        self.condition.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
+        // cc:3430-3431: if (!bump) clearFlag(f_label_bumpup);
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        } else {
+            self.flags &= !block_flags::LABEL_BUMPUP;
+        }
+    }
+
+    /// Ghidra `BlockDoWhile::scopeBreak` (block.cc:3434-3439): a new loop scope
+    /// begins — the current loop exit becomes the new `cur_exit`. The single
+    /// child (the fused body+condition) has multiple exits so gets
+    /// `cur_exit = -1`. Rugra recurses into the held `condition` (which holds
+    /// the fused body) via the trait method.
+    // Ghidra: block.cc:3434 BlockDoWhile::scopeBreak
+    pub fn scope_break_body(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        // cc:3438: getBlock(0)->scopeBreak(-1, curexit);   // Multiple exits
+        self.condition.write().unwrap().scope_break_trait(-1, cur_exit);
+        let _ = cur_loop_exit;
+    }
+
+    /// Ghidra `BlockDoWhile::printHeader` (block.cc:3441-3446): emit
+    /// `"Dowhile block <index>"`.
+    // Ghidra: block.cc:3441 BlockDoWhile::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:3444-3445: s << "Dowhile block "; FlowBlock::printHeader(s);
+        format!("Dowhile block {}", self.index)
+    }
+
+    /// Ghidra `BlockDoWhile::nextFlowAfter` (block.cc:3448-3452): flow after
+    /// any child of a do-while is unknown (the loop may iterate). Returns
+    /// null.
+    // Ghidra: block.cc:3448 BlockDoWhile::nextFlowAfter
+    pub fn next_flow_after(
+        &self,
+        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:3451: return null;   // Don't know what will execute next
+        None
+    }
+}
+
 /// An infinite loop (`do { ... } while(true);`).
 ///
 /// Corresponds to Ghidra's `BlockInfLoop` (block.hh:735). Wraps a single
@@ -2587,6 +2640,60 @@ impl FlowBlock for BlockInfLoop {
     // RUGRA-GLUE: Rust helper (structured blocks delegate ops to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.body.read().unwrap().get_ops()
+    }
+}
+
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockInfLoop virtual overrides)
+impl BlockInfLoop {
+    /// Ghidra `BlockInfLoop::markLabelBumpUp` (block.cc:3454-3460): infinite
+    /// loops "steal" their lower blocks' labels — the loop entry label is
+    /// bumped up so it prints at the loop header. The C++ first recurses via
+    /// `BlockGraph::markLabelBumpUp(true)`, then clears the flag on itself if
+    /// `bump` is false. Rugra recurses into the body and manages the
+    /// `f_label_bumpup` flag.
+    // Ghidra: block.cc:3454 BlockInfLoop::markLabelBumpUp
+    pub fn mark_label_bump_up(&mut self, bump: bool) {
+        // cc:3457: BlockGraph::markLabelBumpUp(true);  -- recurse into children
+        self.body.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
+        // cc:3458-3459: if (!bump) clearFlag(f_label_bumpup);
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        } else {
+            self.flags &= !block_flags::LABEL_BUMPUP;
+        }
+    }
+
+    /// Ghidra `BlockInfLoop::scopeBreak` (block.cc:3462-3467): a new loop scope
+    /// begins — the current loop exit becomes the new `cur_exit`. The body
+    /// exits into itself (the loop's entry), so it gets
+    /// `cur_exit = body's index`. Rugra recurses into the held `body` via the
+    /// trait method.
+    // Ghidra: block.cc:3462 BlockInfLoop::scopeBreak
+    pub fn scope_break_body(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        // cc:3466: getBlock(0)->scopeBreak(getBlock(0)->getIndex(), curexit);   // Exits into itself
+        let body_idx = self.body.read().unwrap().get_index();
+        self.body.write().unwrap().scope_break_trait(body_idx, cur_exit);
+        let _ = cur_loop_exit;
+    }
+
+    /// Ghidra `BlockInfLoop::printHeader` (block.cc:3469-3474): emit
+    /// `"Infinite loop block <index>"`.
+    // Ghidra: block.cc:3469 BlockInfLoop::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:3472-3473: s << "Infinite loop block "; FlowBlock::printHeader(s);
+        format!("Infinite loop block {}", self.index)
+    }
+
+    /// Ghidra `BlockInfLoop::nextFlowAfter` (block.cc:3476-3483): the next
+    /// block in flow after a child query is the body's front leaf (the first
+    /// statement of the infinite loop). Rugra returns the body block.
+    // Ghidra: block.cc:3476 BlockInfLoop::nextFlowAfter
+    pub fn next_flow_after(
+        &self,
+        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:3479-3482: nextbl = getBlock(0); if (nextbl != null) nextbl = nextbl->getFrontLeaf(); return nextbl;
+        Some(self.body.clone())
     }
 }
 
