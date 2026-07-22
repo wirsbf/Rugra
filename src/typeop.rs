@@ -2,6 +2,7 @@
 //!
 //! Corresponds to Ghidra's `typeop.hh`
 
+use crate::address::calc_mask;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::printlanguage::PrintLanguage;
@@ -1015,6 +1016,82 @@ unary_op!(TypeOpBoolNot, CPUI_BOOL_NEGATE, "BOOL_NEGATE", 0, "!");
 // Special Operations
 functional_binary_op!(TypeOpPiece, CPUI_PIECE, "PIECE", 0, "concat");
 functional_binary_op!(TypeOpSubpiece, CPUI_SUBPIECE, "SUBPIECE", 0, "subpiece");
+
+impl TypeOpPiece {
+    /// Compute the byte offset into an assumed composite data-type for an
+    /// input to the given `CPUI_PIECE`.
+    ///
+    /// Faithful to `TypeOpPiece::computeByteOffsetForComposite`
+    /// (typeop.cc:2104-2114). If the output varnode is a composite data-type,
+    /// an input to PIECE represents a range of bytes starting at a particular
+    /// offset within the data-type. The offset depends on the endianness of
+    /// the output and the particular input slot:
+    ///   - big-endian:    slot 0 -> 0,           slot 1 -> inVn0.size
+    ///   - little-endian: slot 0 -> in(1).size,   slot 1 -> 0
+    // Ghidra: typeop.cc:2104 TypeOpPiece::computeByteOffsetForComposite
+    pub fn compute_byte_offset_for_composite(op: &PcodeOp, slot: i32) -> i64 {
+        let in_vn0 = match op.get_in(0) {
+            Some(v) => v.clone(),
+            None => return 0,
+        };
+        let vn0 = in_vn0.read().unwrap();
+        let big_endian = vn0.get_space().is_big_endian();
+        if big_endian {
+            if slot == 0 {
+                0
+            } else {
+                vn0.get_size() as i64
+            }
+        } else {
+            let in1_size = op
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0) as i64;
+            if slot == 0 {
+                in1_size
+            } else {
+                0
+            }
+        }
+    }
+}
+
+impl TypeOpSubpiece {
+    /// Compute the byte offset into an assumed composite data-type produced by
+    /// the given `CPUI_SUBPIECE`.
+    ///
+    /// Faithful to `TypeOpSubpiece::computeByteOffsetForComposite`
+    /// (typeop.cc:2195-2207). If the input varnode is a composite data-type,
+    /// the extracted result of the SUBPIECE represents a range of bytes
+    /// starting at a particular offset within the data-type. The offset
+    /// depends on the endianness of the input:
+    ///   - big-endian:    byteOff = vn.size - outSize - lsb
+    ///   - little-endian: byteOff = lsb
+    /// where `lsb` is the truncation shift constant held in input slot 1.
+    // Ghidra: typeop.cc:2195 TypeOpSubpiece::computeByteOffsetForComposite
+    pub fn compute_byte_offset_for_composite(op: &PcodeOp) -> i64 {
+        let out_size = op
+            .get_out()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0) as i64;
+        let lsb = op
+            .get_in(1)
+            .map(|v| v.read().unwrap().get_offset() as i64)
+            .unwrap_or(0);
+        let vn = match op.get_in(0) {
+            Some(v) => v.clone(),
+            None => return 0,
+        };
+        let v = vn.read().unwrap();
+        let vn_size = v.get_size() as i64;
+        if v.get_space().is_big_endian() {
+            vn_size - out_size - lsb
+        } else {
+            lsb
+        }
+    }
+}
+
 functional_unary_op!(TypeOpPopcount, CPUI_POPCOUNT, "POPCOUNT", 0, "popcount");
 functional_unary_op!(TypeOpLzcount, CPUI_LZCOUNT, "LZCOUNT", 0, "lzcount");
 
@@ -1550,13 +1627,131 @@ impl TypeOp for TypeOpCallother {
             .get_out()
             .map(|v| format!("{}", v.read().unwrap()))
             .unwrap_or_else(|| "_".to_string());
+        // Ghidra emits the operator name (looked up via getOperatorName, see
+        // typeop.cc:837), then the inputs after slot 0 (which holds the
+        // CALLOTHER index). We mirror that here, calling get_operator_name.
+        let name = self.get_operator_name(op);
         let mut inputs = Vec::new();
-        let mut i = 0;
+        // Skip slot 0 (the CALLOTHER index constant); print remaining inputs.
+        let mut i = 1;
         while let Some(v) = op.get_in(i) {
             inputs.push(format!("{}", v.read().unwrap()));
             i += 1;
         }
-        format!("{} = callother({})", out, inputs.join(", "))
+        if inputs.is_empty() {
+            format!("{} = {}", out, name)
+        } else {
+            format!("{} = {}({})", out, name, inputs.join(", "))
+        }
+    }
+}
+
+impl TypeOpCallother {
+    /// Look up the actual operator name for a CALLOTHER op.
+    ///
+    /// Faithful to `TypeOpCallother::getOperatorName` (typeop.cc:837-853):
+    /// query the architecture's userop table by the CALLOTHER index held in
+    /// input slot 0; if a registered `UserPcodeOp` exists, return its name;
+    /// otherwise fall back to `CALLOTHER[<slot0>]`.
+    ///
+    /// Rugra's `TypeOp` does not (yet) carry a back-pointer to the owning
+    /// `Architecture`/`UserOpManage`, so the table lookup must be supplied by
+    /// the caller. The default path mirrors Ghidra's fallback branch
+    /// (`TypeOp::getOperatorName(op) + '[' + slot0 + ']'`).
+    // Ghidra: typeop.cc:837 TypeOpCallother::getOperatorName
+    pub fn get_operator_name(&self, op: &PcodeOp) -> String {
+        if let Some(index_vn) = op.get_in(0) {
+            let vn = index_vn.read().unwrap();
+            let index = vn.get_offset() as i32;
+            if let Some(name) = callother_userop_name(op, index) {
+                return name;
+            }
+            // Fallback: "CALLOTHER[<index varnode>]" (typeop.cc:848-852).
+            return format!("CALLOTHER[{}]", vn);
+        }
+        "CALLOTHER".to_string()
+    }
+}
+
+/// Hook consulted by `TypeOpCallother::get_operator_name` to resolve the
+/// `UserOpManage` entry for a CALLOTHER index.
+///
+/// Ghidra reaches the manager via `op->getParent()->getFuncdata()->getArch()
+/// ->userops.getOp(index)` (typeop.cc:840-846). Rugra's `PcodeOp` has no such
+/// link today, so this returns `None` until the architecture wiring lands; the
+/// caller then falls back to the `CALLOTHER[...]` form, exactly as Ghidra does
+/// when the index is unregistered.
+// RUGRA-GLUE: indirection for the (not-yet-wired) PcodeOp -> UserOpManage edge
+//   used by typeop.cc:837 TypeOpCallother::getOperatorName.
+fn callother_userop_name(_op: &PcodeOp, _index: i32) -> Option<String> {
+    None
+}
+
+// ---------------------------------------------------------------------------
+// TypeOpCast — CPUI_CAST
+//
+// Ghidra's `TypeOpCast` (typeop.cc:2209 / typeop.hh:803) is a `TypeOp`
+// subclass (not TypeOpUnary/Binary/Func) that exists only to print explicit
+// type conversions and dispatch to `PrintLanguage::opCast`. It sets no input/
+// output type requirements ("We don't care what types are cast") and carries
+// a dummy `OpBehavior`. This is a hand-written Rust struct mirroring that.
+// ---------------------------------------------------------------------------
+
+/// `CPUI_CAST` type operator.
+///
+/// Faithful to `TypeOpCast` (typeop.cc:2209-2222 / typeop.hh:803-811).
+/// Constructor in Ghidra:
+///   `TypeOpCast(t)` sets `name = "(cast)"`,
+///   `opflags = unary | special | nocollapse`,
+///   `behave = new OpBehavior(CPUI_CAST, false, true)` (dummy).
+/// `push` forwards to `PrintLanguage::opCast`; `printRaw` prints
+/// `out = (cast) in0`. No type requirements, so `getOutputLocal`/
+/// `getInputLocal`/`propagateType`/`getOutputToken`/`getInputCast` all use the
+/// `TypeOp` defaults (None).
+pub struct TypeOpCast;
+
+impl TypeOp for TypeOpCast {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_CAST
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "(cast)"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    // opflags = unary | special | nocollapse (PcodeOp flags, not addlflags);
+    // TypeOpCast sets no addlflags, so this is 0 — matches TypeOpCopy/Return.
+    fn get_flags(&self) -> u32 {
+        0
+    }
+
+    // Ghidra: typeop.hh:809 TypeOpCast::push  -> lng->opCast(op)
+    //
+    // Ghidra's `TypeOpCast::push` is `lng->opCast(op)` (typeop.hh:809).
+    // Rugra's `PrintLanguage` trait does not yet declare `op_cast`, so CAST
+    // is routed through the trait's default binary fallback (which PrintC
+    // treats as a no-op cast / assignment). This is documented rather than a
+    // simplified reimplementation; once `op_cast` lands on `PrintLanguage`,
+    // swap this body to `lng.op_cast(op)`.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        lng.op_binary(op);
+    }
+
+    // Ghidra: typeop.cc:2216 TypeOpCast::printRaw
+    //
+    // Ghidra emits: `<out> = (cast) <in0>` — the literal name "(cast)" between
+    // the output and the single input.
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = (cast) {}", out, in0)
     }
 }
 
@@ -1857,6 +2052,154 @@ impl TypeOp for TypeOpIntAdd {
     }
 }
 
+/// Command returned by `propagate_add_pointer`, mirroring Ghidra's integer
+/// return codes (typeop.cc:1255-1267):
+///   - `AddZero`:   "add a constant" adding a zero  (PTRSUB or PTRADD)
+///   - `AddConst`:  "add a constant"; the constant is passed back in `offset`
+///   - `NoPropagate`: the pointer does not propagate through
+///   - `Passthrough`: the input data-type propagates through untransformed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropagateAddCommand {
+    AddZero,
+    AddConst,
+    NoPropagate,
+    Passthrough,
+}
+
+impl TypeOpIntAdd {
+    /// Determine whether a data-type edge looks like a pointer propagating
+    /// through an "add a constant" operation.
+    ///
+    /// Faithful to `TypeOpIntAdd::propagateAddPointer` (typeop.cc:1268-1316).
+    /// Given the PcodeOp propagating the data-type, the input edge `slot`, and
+    /// the size `sz` of the data-type being pointed to, returns a command
+    /// indicating how the op should be treated. When the command is `AddConst`
+    /// or `AddZero`, the constant offset is written into `offset`.
+    ///
+    /// Note: Ghidra's `propagateAddPointer` is the low-level classifier;
+    /// `propagateAddIn2Out` (typeop.cc:1215, which also uses
+    /// `TypePointer::downChain`/`getTypePointerRel`) consumes it to build the
+    /// transformed pointer type. Rugra ports the classifier faithfully here;
+    /// the full down-chain reconstruction (`propagateAddIn2Out`) requires
+    /// `TypeFactory`/`TypePointer::down_chain` wiring that is not yet
+    /// available and is tracked separately.
+    // Ghidra: typeop.cc:1268 TypeOpIntAdd::propagateAddPointer
+    pub fn propagate_add_pointer(
+        op: &PcodeOp,
+        slot: i32,
+        sz: i32,
+    ) -> (PropagateAddCommand, u64) {
+        match op.get_opcode() {
+            OpCode::CPUI_PTRADD => {
+                // typeop.cc:1271-1282
+                if slot != 0 {
+                    return (PropagateAddCommand::NoPropagate, 0);
+                }
+                let constvn = match op.get_in(1) {
+                    Some(v) => v.clone(),
+                    None => return (PropagateAddCommand::NoPropagate, 0),
+                };
+                let cv = constvn.read().unwrap();
+                let mult = op
+                    .get_in(2)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                if cv.is_constant() {
+                    let off =
+                        (cv.get_offset().wrapping_mul(mult)) & calc_mask(cv.get_size());
+                    return (
+                        if off == 0 {
+                            PropagateAddCommand::AddZero
+                        } else {
+                            PropagateAddCommand::AddConst
+                        },
+                        off,
+                    );
+                }
+                if sz != 0 && (mult % sz as u64) != 0 {
+                    return (PropagateAddCommand::NoPropagate, 0);
+                }
+                return (PropagateAddCommand::Passthrough, 0);
+            }
+            OpCode::CPUI_PTRSUB => {
+                // typeop.cc:1283-1287
+                if slot != 0 {
+                    return (PropagateAddCommand::NoPropagate, 0);
+                }
+                let off = op
+                    .get_in(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                return (
+                    if off == 0 {
+                        PropagateAddCommand::AddZero
+                    } else {
+                        PropagateAddCommand::AddConst
+                    },
+                    off,
+                );
+            }
+            OpCode::CPUI_INT_ADD => {
+                // typeop.cc:1288-1314
+                let other_slot = (1 - slot) as usize;
+                let othervn = match op.get_in(other_slot) {
+                    Some(v) => v.clone(),
+                    None => return (PropagateAddCommand::NoPropagate, 0),
+                };
+                let ov = othervn.read().unwrap();
+                // Check if othervn is an offset.
+                if !ov.is_constant() {
+                    if ov.is_written() {
+                        if let Some(def) = ov.get_def() {
+                            let multop = def.read().unwrap();
+                            if multop.get_opcode() == OpCode::CPUI_INT_MULT {
+                                let constvn = multop.get_in(1);
+                                if let Some(cv_arc) = constvn {
+                                    let cv = cv_arc.read().unwrap();
+                                    if cv.is_constant() {
+                                        let mult = cv.get_offset();
+                                        // If multiplying by -1, assume pointer difference.
+                                        if mult == calc_mask(cv.get_size()) {
+                                            return (PropagateAddCommand::NoPropagate, 0);
+                                        }
+                                        if sz != 0 && (mult % sz as u64) != 0 {
+                                            return (PropagateAddCommand::NoPropagate, 0);
+                                        }
+                                    }
+                                }
+                                return (PropagateAddCommand::Passthrough, 0);
+                            }
+                        }
+                    }
+                    if sz == 1 {
+                        return (PropagateAddCommand::Passthrough, 0);
+                    }
+                    return (PropagateAddCommand::NoPropagate, 0);
+                }
+                // othervn is constant: check if it is marked as a pointer.
+                if ov
+                    .v_type
+                    .as_ref()
+                    .map(|t| t.get_metatype() == TypeMetatype::Pointer)
+                    .unwrap_or(false)
+                {
+                    return (PropagateAddCommand::NoPropagate, 0);
+                }
+                let off = ov.get_offset();
+                return (
+                    if off == 0 {
+                        PropagateAddCommand::AddZero
+                    } else {
+                        PropagateAddCommand::AddConst
+                    },
+                    off,
+                );
+            }
+            _ => (PropagateAddCommand::NoPropagate, 0),
+        }
+    }
+}
+
 /// Manager for TypeOps
 ///
 /// This handles the mapping between OpCodes and their TypeOp implementations.
@@ -1962,6 +2305,7 @@ impl TypeOpManager {
         ops[OpCode::CPUI_CPOOLREF as usize] = Some(Box::new(TypeOpCpoolref));
         ops[OpCode::CPUI_NEW as usize] = Some(Box::new(TypeOpNew));
         ops[OpCode::CPUI_CALLOTHER as usize] = Some(Box::new(TypeOpCallother));
+        ops[OpCode::CPUI_CAST as usize] = Some(Box::new(TypeOpCast));
         ops[OpCode::CPUI_INSERT as usize] = Some(Box::new(TypeOpInsert));
         ops[OpCode::CPUI_EXTRACT as usize] = Some(Box::new(TypeOpExtract));
 
