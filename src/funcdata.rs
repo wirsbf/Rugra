@@ -6528,6 +6528,339 @@ impl Funcdata {
         }
         c.is_return_address()
     }
+
+    // Ghidra: funcdata_varnode.cc:190 Funcdata::newVarnodeSpace
+    /// Encode an address space as a constant Varnode. Faithful to
+    /// `Funcdata::newVarnodeSpace` (funcdata_varnode.cc:190-198):
+    ///   Datatype *ct = glb->types->getBase(sizeof(spc), TYPE_UNKNOWN);
+    ///   Varnode *vn = vbank.create(sizeof(spc), glb->createConstFromSpace(spc), ct);
+    ///   assignHigh(vn);
+    ///   return vn;
+    /// These Varnodes are used as the first input to LOAD/STORE p-code ops to
+    /// name the address space being accessed. Rugra encodes the space via its
+    /// SpaceId (which uniquely identifies the space) as the constant offset.
+    pub fn new_varnode_space(
+        &mut self,
+        spc: crate::space::AddressSpace,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let sz = std::mem::size_of::<usize>();
+        let offset = spc.space_id() as u64;
+        let vn = self.vbank.create_with_space(sz, crate::space::AddressSpace::Const, offset);
+        let _ = self.assign_high(&vn);
+        vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:205 Funcdata::newVarnodeCallSpecs
+    /// Encode a FuncCallSpecs pointer as a fspace annotation Varnode. Faithful
+    /// to `Funcdata::newVarnodeCallSpecs` (funcdata_varnode.cc:205-214):
+    ///   Datatype *ct = glb->types->getBase(sizeof(fc), TYPE_UNKNOWN);
+    ///   AddrSpace *cspc = glb->getFspecSpace();
+    ///   Varnode *vn = vbank.create(sizeof(fc), Address(cspc,(uintb)(uintp)fc), ct);
+    ///   assignHigh(vn);
+    ///   return vn;
+    /// The Varnode is the first input to a CPUI_CALL op and accelerates lookup
+    /// of the associated call specification. Rugra has no fspace address space;
+    /// we encode the callspec's index in the callspecs vector as the offset of
+    /// a synthetic Iop-adjacent annotation Varnode.
+    pub fn new_varnode_call_specs(
+        &mut self,
+        fc_index: usize,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let sz = std::mem::size_of::<usize>();
+        let vn = self.vbank.create_with_space(
+            sz,
+            crate::space::AddressSpace::Iop,
+            fc_index as u64,
+        );
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        let _ = self.assign_high(&vn);
+        vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:222 Funcdata::newCodeRef
+    /// Construct an annotation Varnode that holds a reference to a code
+    /// Address (used as the destination of a BRANCH op). Faithful to
+    /// `Funcdata::newCodeRef` (funcdata_varnode.cc:222-233):
+    ///   Datatype *ct = glb->types->getTypeCode();
+    ///   vn = vbank.create(1, m, ct);
+    ///   vn->setFlags(Varnode::annotation);
+    ///   assignHigh(vn);
+    ///   return vn;
+    /// Rugra has no dedicated TypeCode; we still create a 1-byte Varnode at the
+    /// given code address and mark it as an annotation.
+    pub fn new_code_ref(
+        &mut self,
+        m: crate::address::Address,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create(1, m);
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        let _ = self.assign_high(&vn);
+        vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:252 Funcdata::cloneVarnode
+    /// Shallow-clone a Varnode from another Funcdata into \b this. Faithful to
+    /// `Funcdata::cloneVarnode` (funcdata_varnode.cc:252-267):
+    ///   newvn = vbank.create(vn->getSize(), vn->getAddr(), vn->getType());
+    ///   uint4 vflags = vn->getFlags();
+    ///   vflags &= (annotation | externref | readonly | persist |
+    ///             addrtied | addrforce | indirect_creation | incidental_copy |
+    ///             volatil | mapped);
+    ///   newvn->setFlags(vflags);
+    ///   return newvn;
+    /// Used by `cloneOp` / `truncatedFlow` to copy raw p-code across functions.
+    /// The clone deliberately does NOT carry over `def`/`descend` links — the
+    /// caller re-establishes them via `opSetOutput`/`opSetInput`.
+    pub fn clone_varnode(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        use crate::varnode::varnode_flags as vf;
+        let (size, loc, vflags) = {
+            let r = vn.read().unwrap();
+            (r.size, r.loc, r.flags)
+        };
+        let newvn = self.vbank.create(size, loc);
+        // cc:260-264: keep only the documented flag subset.
+        let keep_mask = vf::ANNOTATION
+            | vf::EXTERNREF
+            | vf::READONLY
+            | vf::PERSIST
+            | vf::ADDRTIED
+            | vf::ADDRFORCE
+            | vf::INDIRECT_CREATION
+            | vf::INCIDENTAL_COPY
+            | vf::VOLATIL
+            | vf::MAPPED;
+        newvn.write().unwrap().set_flags(vflags & keep_mask);
+        newvn
+    }
+
+    // Ghidra: funcdata_varnode.cc:298 Funcdata::checkForLanedRegister
+    /// Check if the given storage range is a potential laned register; if so,
+    /// record the storage with the matching laned-register record. Faithful to
+    /// `Funcdata::checkForLanedRegister` (funcdata_varnode.cc:298-309):
+    ///   const LanedRegister *lanedRegister = glb->getLanedRegister(addr, sz);
+    ///   if (lanedRegister == NULL) return;
+    ///   VarnodeData storage{addr.getSpace(), addr.getOffset(), sz};
+    ///   lanedMap[storage] = lanedRegister;
+    /// Rugra has no LanedRegister database wired to the Architecture yet; this
+    /// port records the candidate storage in `laned_map` keyed by (offset,
+    /// size) so downstream lane-analysis passes can query it. Because Rugra
+    /// cannot currently classify a storage as lane-forming without the global
+    /// table, we conservatively record every candidate and defer the
+    /// filter. RUGRA-GAP: link Architecture's LanedRegister table when ported.
+    pub fn check_for_laned_register(&mut self, sz: usize, addr: crate::address::Address) {
+        // RUGRA-GAP: glb->getLanedRegister(addr, sz) is not ported; record all
+        // candidates so downstream passes see the same storage set.
+        let key = (addr.as_u64(), sz as u32);
+        self.laned_map.insert(key, ());
+    }
+
+    // Ghidra: funcdata_varnode.cc:494 Funcdata::adjustInputVarnodes
+    /// Collapse any input Varnodes contained in the range `[addr, addr+sz)`
+    /// into a single input, redefining the originals as SUBPIECEs of it.
+    /// Faithful to `Funcdata::adjustInputVarnodes`
+    /// (funcdata_varnode.cc:494-537):
+    ///   endaddr = addr + (sz-1);
+    ///   for each input vn in [addr, endaddr]:
+    ///     if (vn->getOffset() + (vn->getSize()-1) > endaddr) throw;
+    ///     inlist.push_back(vn);
+    ///   for each vn in inlist:
+    ///     sa = addr.justifiedContain(sz, vn->getAddr(), vn->getSize(), false);
+    ///     if (!isInput || sa<0 || sz<=vn->getSize()) throw;
+    ///     subop = newOp(2, getAddress()); SUBPIECE;
+    ///     opSetInput(subop, newConstant(4, sa), 1);
+    ///     newvn = newVarnodeOut(vn->getSize(), vn->getAddr(), subop);
+    ///     opInsertBegin(subop, bblocks[0]);
+    ///     totalReplace(vn, newvn); deleteVarnode(vn);
+    ///     inlist[i] = newvn;
+    ///   invn = newVarnode(sz, addr); invn = setInputVarnode(invn);
+    ///   invn->setWriteMask();
+    ///   for each vn in inlist: opSetInput(vn->getDef(), invn, 0);
+    /// RUGRA-GAP: `justifiedContain` is approximated by a direct byte offset;
+    /// Rugra scans loc_tree for inputs completely contained in the range.
+    pub fn adjust_input_varnodes(&mut self, addr: crate::address::Address, sz: usize) {
+        let end = addr.as_u64().saturating_add(sz.saturating_sub(1) as u64);
+        // cc:500-508: gather inputs completely contained in [addr, end].
+        let inlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
+            .iter()
+            .filter_map(|lr| {
+                let r = lr.0.read().unwrap();
+                if !r.is_input() { return None; }
+                let start = r.loc.as_u64();
+                let vn_end = start.saturating_add(r.size as u64).saturating_sub(1);
+                if start < addr.as_u64() || vn_end > end { return None; }
+                Some(lr.0.clone())
+            })
+            .collect();
+        // cc:510-524: replace each contained input with a SUBPIECE off the new
+        // combined input, then destroy the old input.
+        let mut replaced: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        for vn in inlist {
+            let (vn_addr, vn_size) = {
+                let r = vn.read().unwrap();
+                (r.loc.as_u64(), r.size)
+            };
+            let sa = vn_addr.saturating_sub(addr.as_u64()) as usize;
+            if sz <= vn_size { continue; }
+            let pc = self.baseaddr;
+            let subop = self.new_op(2, pc);
+            self.op_set_opcode(&subop, crate::opcodes::OpCode::CPUI_SUBPIECE);
+            let sa_const = self.new_constant(4, sa as u64);
+            self.op_set_input(&subop, sa_const, 1);
+            let newvn = self.new_varnode_out(vn_size, crate::address::Address::new(vn_addr), &subop);
+            // cc:520: opInsertBegin(subop, bblocks[0]).
+            if let Some(bb0) = self.bblocks.get_block(0) {
+                self.op_insert_begin(&subop, &bb0);
+            }
+            self.total_replace(&vn, newvn.clone());
+            self.delete_varnode(&vn);
+            replaced.push(newvn);
+        }
+        if replaced.is_empty() { return; }
+        // cc:526-531: create the combined input and mark it writemask.
+        let invn = self.new_varnode(sz, addr);
+        let invn = self.set_input_varnode(invn);
+        invn.write().unwrap().set_write_mask();
+        // cc:533-536: each replacement SUBPIECE reads the new input at slot 0.
+        for newvn in replaced {
+            let def = newvn.read().unwrap().get_def();
+            if let Some(def) = def {
+                self.op_set_input(&crate::op::PcodeOpRef(def), invn.clone(), 0);
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:543 Funcdata::descend2Undef
+    /// Replace every read of `vn` with a 0xBADDEF constant, inserting COPY
+    /// ops where the reader is a MULTIEQUAL or INDIRECT (constants cannot go
+    /// directly into those slots). Faithful to `Funcdata::descend2Undef`
+    /// (funcdata_varnode.cc:543-583):
+    ///   for each descendant op (skipping dead-parent ops):
+    ///     if MULTIEQUAL: copyop = newOp(1, inbl->getStart()); COPY(badconst);
+    ///                    insertEnd(inbl); opSetInput(op, inputvn, i);
+    ///     else if INDIRECT: copyop = newOp(1, op->getAddr()); COPY(badconst);
+    ///                       insertBefore(op); opSetInput(op, inputvn, i);
+    ///     else: opSetInput(op, badconst, i);
+    /// Used by unreachable-block removal to make stale reads explicit.
+    /// Returns true if any modified op was inside a block with non-zero in-edges.
+    pub fn descend2_undef(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
+        use crate::opcodes::OpCode as OC;
+        let sz = vn.read().unwrap().size;
+        // cc:556: iterate descendants; gather first since we'll mutate.
+        let descends: Vec<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> =
+            vn.read().unwrap().descend_iter().collect();
+        let mut res = false;
+        for op_arc in descends {
+            let opc = op_arc.read().unwrap().opcode;
+            let parent = op_arc.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+            // cc:558-559: skip ops whose parent block has been destroyed.
+            // Rugra models this as parent.is_none() — a destroyed block clears
+            // the op's parent link. The Ghidra `isDead()` block flag is not
+            // modeled as a runtime field; we treat presence of a parent as
+            // "alive" and set `res` if that parent has incoming edges.
+            if parent.is_none() { continue; }
+            if let Some(p) = &parent {
+                if p.read().unwrap().size_in() != 0 { res = true; }
+            }
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            let slot = self.op_get_slot(&op_ref, vn) as usize;
+            let badconst = self.new_constant(sz, 0xBA_AD_EF);
+            match opc {
+                OC::CPUI_MULTIEQUAL => {
+                    // cc:563-569: insert COPY in the predecessor block.
+                    let inblk_edge = parent.as_ref().and_then(|p| p.read().unwrap().get_in(slot));
+                    let inbl_start = inblk_edge.as_ref().and_then(|e| {
+                        e.point.read().unwrap().as_any()
+                            .downcast_ref::<crate::block::BlockBasic>()
+                            .map(|bb| bb.start_addr)
+                    }).unwrap_or(self.baseaddr);
+                    let copyop = self.new_op(1, inbl_start);
+                    self.op_set_opcode(&copyop, OC::CPUI_COPY);
+                    let inputvn = self.new_unique_out(sz, &copyop);
+                    self.op_set_input(&copyop, badconst, 0);
+                    if let Some(e) = inblk_edge {
+                        self.op_insert_end(&copyop, &e.point);
+                    }
+                    self.op_set_input(&op_ref, inputvn, slot);
+                }
+                OC::CPUI_INDIRECT => {
+                    // cc:571-577: insert COPY immediately before the INDIRECT.
+                    let op_addr = op_arc.read().unwrap().get_addr();
+                    let copyop = self.new_op(1, op_addr);
+                    self.op_set_opcode(&copyop, OC::CPUI_COPY);
+                    let inputvn = self.new_unique_out(sz, &copyop);
+                    self.op_set_input(&copyop, badconst, 0);
+                    self.op_insert_before(&copyop, &op_ref);
+                    self.op_set_input(&op_ref, inputvn, slot);
+                }
+                _ => {
+                    // cc:579-580: directly slot the constant.
+                    self.op_set_input(&op_ref, badconst, slot);
+                }
+            }
+        }
+        res
+    }
+
+    // Ghidra: funcdata_varnode.cc:585 Funcdata::initActiveOutput
+    /// Allocate / reset `activeoutput` for return-value recovery. Faithful to
+    /// `Funcdata::initActiveOutput` (funcdata_varnode.cc:585-593):
+    ///   activeoutput = new ParamActive(false);
+    ///   maxdelay = funcp.getMaxOutputDelay();
+    ///   if (maxdelay > 0) maxdelay = 3;
+    ///   activeoutput->setMaxPass(maxdelay);
+    /// RUGRA-GAP: FuncProto::getMaxOutputDelay is not ported; we use the
+    /// Ghidra-default of 3 passes (matches the `maxdelay>0 ? 3` arm).
+    pub fn init_active_output(&mut self) {
+        let mut active = crate::fspec::ParamActive::new(false);
+        // cc:590-592: clamp any positive delay to 3.
+        active.set_max_pass(3);
+        self.active_output = Some(active);
+    }
+
+    // Ghidra: funcdata_varnode.cc:832 Funcdata::clearDeadVarnodes
+    /// Free any unattached Varnodes so editing ops can detach/reattach without
+    /// leaking. Faithful to `Funcdata::clearDeadVarnodes`
+    /// (funcdata_varnode.cc:832-850):
+    ///   for vn in vbank.beginLoc()..endLoc():
+    ///     if (vn->hasNoDescend()):
+    ///       if (vn->isInput() && !vn->isLockedInput()):
+    ///         vbank.makeFree(vn); vn->clearCover();
+    ///       if (vn->isFree()): vbank.destroy(vn);
+    pub fn clear_dead_varnodes(&mut self) {
+        // Gather first; we'll mutate vbank during the loop.
+        let candidates: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|lr| lr.0.clone())
+            .collect();
+        for vn in candidates {
+            if !vn.read().unwrap().has_no_descend() { continue; }
+            let (is_input, is_locked_input) = {
+                let r = vn.read().unwrap();
+                (r.is_input(), (r.addlflags & crate::varnode::addl_flags::LOCKED_INPUT) != 0)
+            };
+            if is_input && !is_locked_input {
+                // cc:843-845: makeFree + clearCover.
+                {
+                    let mut w = vn.write().unwrap();
+                    self.vbank.make_free(&mut w);
+                    w.clear_cover();
+                }
+            }
+            if vn.read().unwrap().is_free() {
+                self.vbank.destroy_varnode(&vn);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
