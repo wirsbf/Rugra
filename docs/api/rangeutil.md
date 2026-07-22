@@ -62,3 +62,57 @@
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 <!-- annotation-pass: 2026-07-04 -->
 **2026-07-22**: +5 CircleRange methods (newStride/newDomain/setRange)
+
+## 2026-07-22：ValueSet / ValueSetSolver / Widener 完整移植
+
+新增 rangeutil.hh:106-327 + rangeutil.cc:1494-2604 的数据流值集分析层。1:1 移植，每个方法附 `// Ghidra: rangeutil.cc:<line> <fn>` 注释。
+
+**CircleRange 补齐的集合运算（faithful 版，供 ValueSet::iterate 使用）**：
+- `encode_range_overlaps(op1l, op1r, op2l, op2r) -> char`（rangeutil.hh:358）：6 种归一化重叠类别编码，索引 `ARRANGE` 表。
+- `ARRANGE` 常量（rangeutil.cc:21）：64 项 char 表，逐字符核对 Ghidra 源串。
+- `circle_union(op2) -> i32`（rangeutil.cc:360）：faithful circleUnion，返回 0=单区间、2=两段。
+- `circle_intersect(op2) -> i32`（rangeutil.cc:549）：faithful intersect，返回 0=有效、2=两段。内含 newStride/newDomain 静态辅助（cc:103/143）。
+- `minimal_container(op2, max_step) -> bool`（rangeutil.cc:454）：构造包含两者的最小范围。
+- `get_min()` / `get_max_value()` / `get_end()`（rangeutil.hh:74）：getMin/getMax/getEnd 内联镜像。
+
+**`pub struct ValueSet`**（rangeutil.hh:113）——附在 Varnode 上的值集，兼作数据流子图节点。
+- `new()` — 默认构造（替代 C++ `list<ValueSet>::emplace_back`）。
+- `set_varnode(vn, t_code)`（cc:1503）/ `set_defining_op(op, n)` — 初始化（Varnode::getDef 暂未接入，op-code 由 solver 注入）。
+- `add_equation(slot, type, range)`（cc:1549）/ `add_landmark(type, range)`（hh:146）——按 slot 有序插入约束。
+- `does_equation_apply(num, slot) -> bool`（hh:143）/ `get_land_mark() -> Option<&CircleRange>`（cc:1742）。
+- `compute_type_code_with(input_type_codes) -> bool`（cc:1567）——绝对/相对判定，不可判定返回 true。
+- `iterate(widener) -> bool`（cc:1611）——核心迭代：MULTIEQUAL/1参/2参/3参分支，push-forward + circleUnion + widening，faithful。
+- 访问器：`get_count/get_type_code/get_varnode/get_range/is_left_stable/is_right_stable`。
+- `print_raw() -> String`（cc:1756）。
+
+**`pub struct Equation`**（rangeutil.hh:121）：`(slot, type_code, range)` 约束三元组。
+
+**`pub struct ValueSetRead`**（rangeutil.hh:178）——读点处的值集，主迭代后计算。
+- `set_pcode_op(op, slot)`（cc:1781）/ `add_equation(slt, type, range)`（cc:1793）/ `compute(src_value_set)`（cc:1804）/ `print_raw()`（cc:1821）。
+
+**`pub struct Partition`**（rangeutil.hh:161）——弱拓扑排序的节点组。`start_node/stop_node` 用 arena id（`Option<VsId>`）替代 C++ `ValueSet *`。
+
+**`pub trait Widener`**（rangeutil.hh:204）+ 两个实现：
+- `WidenerFull`（hh:236）：`widen_iteration=2, full_iteration=5`；landmark 引导的受控 widening。
+- `WidenerNone`（hh:254）：`freeze_iteration=3`，提前冻结以加速收敛。
+
+**`pub struct ValueSetSolver`**（hh:274）——Bourdoncle 弱拓扑排序 + chaotic iteration。
+- arena 模型：`value_nodes: Vec<ValueSet>` + `VsId = usize` 替代 `list<ValueSet>` 与裸 `ValueSet *` 指针。
+- `new_value_set(vn, t_code) -> VsId`（cc:1953）。
+- `visit(vertex, part) -> i32`（cc:1991）/ `component(vertex, part)`（cc:1974）/ `establish_topological_order()`（cc:2042）——Bourdoncle 算法，DFS 编号 + 头节点 0x7fffffff + 回路边重置 0。
+- `partition_prepend_vertex_in_arena` / `partition_prepend_head_in_arena`（hh:389/400）——arena 化的 partition 前插。
+- `solve(max, widener)`（cc:2524）——主迭代循环，component 栈 + isDirty 重启 + widener 重置。
+- `establish_value_sets(sinks, reads, stack_reg, indirect_as_copy)`（cc:2416）——构建数据流系统（Varnode::getDef 未接入前 input 扩展受限）。
+- `generate_true_equation` / `generate_false_equation`（cc:2066/2084）。
+- 结构占位（待 FlowBlock 支配查询 + CircleRange::pullBack(PcodeOp*) 接入）：`apply_constraints`（cc:2105）/`constraints_from_path`（cc:2185）/`constraints_from_cbranch`（cc:2210）/`generate_constraints`（cc:2248）/`check_relative_constant`（cc:2316）/`generate_relative_constraint`（cc:2351）。
+- `ValueSetEdge`（hh:281）——出边迭代器，预收集后继 id。
+
+**`pub struct ValueSetInput`**（RUGRA-GLUE）——`iterate` 的输入暂存（range/left_stable/right_stable/vn_size），替代 C++ `op->getIn(i)->getValueSet()` 链。
+
+**已知基础设施缺口**（均标 `// TODO: depends on unported <X>`，结构就位待接入）：
+- `Varnode::getDef()` 未暴露给 rangeutil → `set_varnode` 的 written 分支与 `establish_value_sets` 的 input 扩展、`check_relative_constant` 的 COPY/INT_ADD 链遍历受限。
+- `Varnode::getValueSet()` 反向指针未实现 → solver 用 arena 扫描（`find_value_set_by_vn`）替代。
+- `FlowBlock` 支配查询（`getImmedDom`/`restrictedByConditional`/`getTrueOut`/`getFalseOut`）未接入 → 约束生成族方法为结构占位。
+- `CircleRange::pullBack(PcodeOp*,...)` 需 opbehavior 完整接线 → `constraints_from_path` 占位。
+
+测试：新增 21 个（rangeutil::value_set_tests），覆盖 Equation/ValueSet 构造与访问器、add_equation 有序性、does_equation_apply、compute_type_code、WidenerFull/WidenerNone、ValueSetRead::compute/add_equation、circle_union/circle_intersect/minimal_container、print_range_raw、encode_range_overlaps。全部通过（1026/1026）。
