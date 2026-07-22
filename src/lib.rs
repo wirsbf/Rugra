@@ -67,6 +67,7 @@ pub mod double_precis; // ← double.cc (SplitVarnode double-precision merge)
 pub mod fspec; // ← fspec.hh
 pub mod funcdata; // ← funcdata.hh
 pub mod grammar; // ← grammar.hh
+pub mod graph; // ← graph.hh
 pub mod heritage; // ← heritage.hh
 pub mod jumptable; // ← jumptable.hh
 pub mod expression; // ← expression.hh
@@ -98,6 +99,7 @@ pub mod space; // ← space.hh
 pub mod stringmanage; // ← stringmanage.hh
 pub mod subflow; // ← subflow.hh
 pub mod transform; // ← transform.hh
+pub mod translate; // ← translate.hh
 pub mod type_system; // ← type.hh
 pub mod typeop; // ← typeop.hh
 pub mod unionresolve; // ← unionresolve.hh
