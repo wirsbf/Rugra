@@ -266,7 +266,7 @@ impl MemoryBank {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             if size == self.wordsize {
                 self.insert(ind, val);
@@ -274,7 +274,7 @@ impl MemoryBank {
             }
             val1 = self.find(ind);
             val2 = 0;
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -329,14 +329,14 @@ impl MemoryBank {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             val1 = self.find(ind);
             val2 = 0;
             if size == self.wordsize {
                 return val1;
             }
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -579,14 +579,14 @@ impl MemoryImage {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             val1 = self.find(ind);
             val2 = 0;
             if size == self.wordsize {
                 return val1;
             }
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -872,14 +872,14 @@ impl MemoryPageOverlay {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             val1 = self.find(ind);
             val2 = 0;
             if size == self.wordsize {
                 return val1;
             }
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -923,7 +923,7 @@ impl MemoryPageOverlay {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             if size == self.wordsize {
                 self.insert(ind, val);
@@ -931,7 +931,7 @@ impl MemoryPageOverlay {
             }
             val1 = self.find(ind);
             val2 = 0;
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -1148,14 +1148,14 @@ impl MemoryHashOverlay {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             val1 = self.find(ind);
             val2 = 0;
             if size == self.wordsize {
                 return val1;
             }
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -1199,7 +1199,7 @@ impl MemoryHashOverlay {
             size1 = size1_init;
             val1 = self.find(ind);
             val2 = self.find(ind + self.wordsize as u64);
-            gap = self.wordsize - size2;
+            gap = self.wordsize.wrapping_sub(size2);
         } else {
             if size == self.wordsize {
                 self.insert(ind, val);
@@ -1207,7 +1207,7 @@ impl MemoryHashOverlay {
             }
             val1 = self.find(ind);
             val2 = 0;
-            gap = size1_init - size;
+            gap = size1_init.wrapping_sub(size);
             size1 = size;
             size2 = 0;
         }
@@ -1530,9 +1530,11 @@ mod tests {
 
     #[test]
     fn test_page_overlay_with_underlie() {
-        let mut bank = MemoryBank::new(AddressSpace::Ram, 1, 16);
+        // wordsize=4 so a 4-byte get_value is a single-word read
+        // (Ghidra's getValue/setValue are defined for <= 2-word spans).
+        let mut bank = MemoryBank::new(AddressSpace::Ram, 4, 16);
         bank.set_value(0, 4, 0xdeadbeef);
-        let mut overlay = MemoryPageOverlay::new(AddressSpace::Ram, 1, 16, Some(Box::new(bank)));
+        let mut overlay = MemoryPageOverlay::new(AddressSpace::Ram, 4, 16, Some(Box::new(bank)));
         // Read from underlie when not overlayed.
         assert_eq!(overlay.get_value(0, 4), 0xdeadbeef);
         // Overlay a write.
