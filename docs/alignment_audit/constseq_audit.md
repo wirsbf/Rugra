@@ -58,16 +58,79 @@ Ghidra 用三个类 `ArraySequence` / `StringSequence` / `HeapSequence` 分别�
 ### WriteNode — 缺失 1 个
 - `WriteNode::operator<` — Ghidra: constseq.hh:41 (内联) — 优先级: 低 — 按 SeqNum order 排序的比较算子。Rugra 用 `ArraySequence::sort_ops` 内联比较替代。
 
+## HeapSequence 详细缺失清单 (2026-07-22 细化)
+
+> 背景：Ghidra `class HeapSequence`（constseq.hh:86-117）继承 `ArraySequence`，专责 STORE 路径的堆指针分析。Rugra `src/constseq.rs` 仅有 `struct HeapSequence`（constseq.rs:397-404），**无 `impl HeapSequence` 块**，所有原属 HeapSequence 的逻辑被折叠进 `RuleStringStore::apply_op` 的内联线性扫描（constseq.rs:482-583）或 `ArraySequence::*`。下面按字段、方法、嵌套类三层细化。
+
+### A. 结构体字段缺失 (constseq.hh:97-101)
+
+| Ghidra 字段 | 行号 | Rugra 对应 | 状态 |
+|---|---|---|---|
+| `basePointer` | hh:97 | `HeapSequence.base_pointer` (rs:401) | **已声明但永不填充**（apply_op 未走构造路径） |
+| `baseOffset` | hh:98 | `HeapSequence.base_offset` (rs:403) | **已声明但永不填充** |
+| `storeSpace` | hh:99 | — | **缺失**（`AddrSpace *`，Rugra AddrSpace 基础设施不完整） |
+| `ptrAddMult` | hh:100 | — | **缺失**（`int4`，元素大小映射到地址单位的倍率，calcPtraddOffset 依赖） |
+| `nonConstAdds` | hh:101 | — | **缺失**（`vector<Varnode *>`，非常量地址分量，buildStringCopy 依赖构造 destPtr） |
+
+### B. 方法覆盖矩阵 (constseq.cc:465-940)
+
+| # | Ghidra 方法 | 行号 | Rugra 状态 | 对齐说明 |
+|---|---|---|---|---|
+| 1 | `findBasePointer` | cc:465 | **部分**（`RuleStringStore::ptr_shares_base` rs:598） | 简化版：仅 PTRADD/COPY 两层回溯，**未校验 `ptrAddMult` 分量**（cc:473-475），漏判倍率不符的 PTRADD |
+| 2 | `findDuplicateBases` | cc:486 | **完全缺失** | 别名基址发现，需 PTRSUB/INT_ADD/PTRADD 常量偏移反向跟踪 + 正向匹配。**多基址场景全部漏判** |
+| 3 | `findInitialStores` | cc:544 | **部分**（apply_op 内联 rs:516-559） | 未做 `findDuplicateBases` 扩展、未做对齐/重叠剔除 |
+| 4 | `calcAddElements` | cc:583 | **缺失** | 递归 INT_ADD 树求和 + 收集非常量分量（maxDepth=3）。精确长度推断依赖 |
+| 5 | `calcPtraddOffset` | cc:604 | **缺失** | PTRADD/COPY 反向偏移累加 + 字节转换。`baseOffset` 计算 + 非常量分量收集依赖 |
+| 6 | `setsEqual` | cc:636 | **缺失** | 两个已排序 Varnode 集合比较（collectStoreOps 去重用） |
+| 7 | `testValue` | cc:648 | **部分**（apply_op `is_constant` 单测 rs:539） | 仅测常量，未校验 `charType->getSize()`（cc:654），size 不符的 STORE 未剔除 |
+| 8 | `collectStoreOps` | cc:663 | **部分**（apply_op 内联 rs:508-564） | 仅同块同基址线性扫描；**缺 `calcPtraddOffset`/`setsEqual`/`testValue` 的 wrapMask 回绕校验**（cc:671-684），偏移回绕场景误判 |
+| 9 | `buildStringCopy` | cc:698 | **已对齐**（`ArraySequence::build_string_copy` rs:276） | 合并版，但**未构造非零 `baseOffset`/`nonConstAdds` 的 PTRADD index Varnode**（cc:709-748 整段缺失），destPtr 恒为裸 basePointer |
+| 10 | `gatherIndirectPairs` | cc:770 | **缺失** | STORE 前驱 INDIRECT 链收集 + 跨链 in/out 配对 |
+| 11 | `deduplicatePairs` | cc:827 | **缺失** | 按 outVn 存储 sort + characterizeOverlap 去重（partial overlap 判失败） |
+| 12 | `removeStoreOps` | cc:871 | **部分**（`ArraySequence::transform` 的 `op_destroy_recursive` rs:379） | 销毁语义等价，但**未处理 INDIRECT 对的 unhook/重建**（cc:875-893） |
+| 13 | `HeapSequence::HeapSequence`（构造） | cc:907 | **缺失** | 无 `impl`，构造逻辑（storeSpace/ptrAddMult 初始化 + findBasePointer + collectStoreOps + formByteArray 链）从未执行 |
+| 14 | `transform` | cc:927 | **部分**（`ArraySequence::transform` rs:356 合并版） | 缺 gatherIndirectPairs/deduplicatePairs 前置 + INDIRECT 重建后置 |
+
+**HeapSequence 方法小结**：14 个成员（13 方法 + 1 构造）中，**完全缺失 6 个**（findDuplicateBases、calcAddElements、calcPtraddOffset、setsEqual、gatherIndirectPairs、deduplicatePairs）、**部分覆盖 6 个**（findBasePointer、findInitialStores、testValue、collectStoreOps、removeStoreOps、transform）、**已对齐 1 个**（buildStringCopy 合并版）、**构造缺失 1 个**。
+
+### C. 嵌套类 IndirectPair 完全缺失（原审计遗漏）
+
+> **新发现**：Ghidra `HeapSequence::IndirectPair`（constseq.hh:88-96，嵌套 helper 类）承载 STORE 间 INDIRECT 的 in/out Varnode 配对，是 gatherIndirectPairs/deduplicatePairs/removeStoreOps 的数据载体。**原审计未提及该类，Rugra 完全无对应**。这是 STORE 路径无法正确处理跨 STORE 的 INDIRECT 衔接的根因。
+
+| # | Ghidra 成员 | 行号 | 优先级 | 说明 |
+|---|---|---|---|---|
+| 1 | `IndirectPair::IndirectPair`（构造） | hh:92 | 中 | 持 inVn/outVn |
+| 2 | `IndirectPair::markDuplicate` | hh:93 | 中 | 标记重复（置 inVn=null） |
+| 3 | `IndirectPair::isDuplicate` | hh:94 | 中 | 查询重复标记 |
+| 4 | `IndirectPair::compareOutput` | cc:808 | 中 | 按 (space,offset,size) 排序，deduplicatePairs 依赖 |
+
+### D. 数据流影响（为何 STORE 路径覆盖远低于 COPY 路径）
+
+`RuleStringStore::apply_op`（constseq.rs:482）的实际数据流是：
+1. 取 root STORE 的 input[1] 作为 base（**不调用 findBasePointer，无 ptrAddMult 校验**）
+2. 线性扫描同块 STORE，用 `ptr_shares_base` 判同基（**PTRADD 多层/SEGMENTOP/INT_ADD 常量分量全不处理**）
+3. 按 seqnum 顺序拼 byte_array（**不做 offset 对齐/回绕/去重校验**）
+4. 调 `ArraySequence::transform` 销毁 + 建 CALLOTHER（**destPtr 恒为裸 base，无 baseOffset/非常量 index 重建**）
+
+对比 Ghidra 完整路径：构造 → findBasePointer → collectStoreOps(findInitialStores→findDuplicateBases + calcPtraddOffset + setsEqual + testValue) → checkInterference → formByteArray → transform(gatherIndirectPairs→deduplicatePairs→buildStringCopy→removeStoreOps)。Rugra 仅保留了"同块同基址线性扫描 + 销毁重建"骨架，**6 个地址分析方法 + 4 个 INDIRECT 配对方法 = 10 个核心分析点缺失**。
+
 ### StringSequence/HeapSequence 构造 — 缺失 2 个
 - `StringSequence::StringSequence` — Ghidra: constseq.hh:77 — 优先级: 低 — 构造（需 SymbolEntry，Rugra 暂无 Symbol 基础设施）。
 - `HeapSequence::HeapSequence` — Ghidra: constseq.hh:115 — 优先级: 低 — 构造。
 
-## 高优先级缺失清单 (4个)
-1. `HeapSequence::findBasePointer` (constseq.cc:465) — 基址识别不全，漏判别名基址
-2. `HeapSequence::findDuplicateBases` (constseq.cc:486) — 多基址场景完全不支持
-3. `HeapSequence::collectStoreOps` (constseq.cc:663) — store 收集过于简化，缺少间接对处理
-4. `StringSequence::collectCopyOps` 的完整形态 — Rugra `check_interference` 仅覆盖线性同块场景
+## 高优先级缺失清单 (6个)
+1. `HeapSequence::findDuplicateBases` (constseq.cc:486) — 多基址场景完全不支持，别名基址漏判
+2. `HeapSequence::calcPtraddOffset` (constseq.cc:604) — STORE 偏移精确计算缺失，baseOffset 恒为 0
+3. `HeapSequence::collectStoreOps` (constseq.cc:663) — store 收集过于简化，缺 wrapMask 回绕/setsEqual/testValue 校验
+4. `HeapSequence::deduplicatePairs` + `gatherIndirectPairs` (constseq.cc:770/827) — 跨 STORE INDIRECT 配对分析整段缺失
+5. `HeapSequence::buildStringCopy` 的 index Varnode 构造 (constseq.cc:709-748) — destPtr 恒为裸 base，非零 baseOffset/非常量分量丢失
+6. `StringSequence::collectCopyOps` 的完整形态 — Rugra `check_interference` 仅覆盖线性同块场景
 
 ## 说明
-- `StringSequence` / `HeapSequence` 两个类在 Rugra 中为空 wrapper（仅 `base: ArraySequence`），其方法被折叠进 `ArraySequence` 或 Rule 的 `apply_op`。这是明确的架构决策（模块头注释已声明"skeleton"），但导致 13 个 HeapSequence 方法无独立对应入口。
-- 依赖未实现的基础设施：完整的 `HeapSequence` 路径需要 `Symbol`/`SymbolEntry`、`Scope`、间接配对分析等，Rugra 目前未具备。
+- `StringSequence` / `HeapSequence` 两个类在 Rugra 中为空 wrapper（仅 `base: ArraySequence`），其方法被折叠进 `ArraySequence` 或 Rule 的 `apply_op`。这是明确的架构决策（模块头注释已声明"skeleton"），但导致 13 个 HeapSequence 方法 + 4 个 IndirectPair 方法无独立对应入口。
+- `HeapSequence` 在 Rust 中**无 `impl` 块**（constseq.rs:397 仅有 `struct`，3/5 字段缺失），所有逻辑内联进 `RuleStringStore::apply_op`，这是 STORE 路径覆盖远低于 COPY 路径的结构性原因。
+- 依赖未实现的基础设施：完整的 `HeapSequence` 路径需要 `Symbol`/`SymbolEntry`、`Scope`、`AddrSpace::addressToByteInt`、`Varnode::characterizeOverlap`、间接配对分析等，Rugra 目前未具备。
+- 原审计"14个缺失方法"未区分"完全缺失 vs 部分覆盖"。细化后：HeapSequence 实际**完全缺失 6 + 部分覆盖 6 + 构造缺失 1**，外加 IndirectPair 嵌套类 4 个方法（原审计遗漏）。
+
+## 覆盖率修正
+- 原统计"14个缺失方法"低估了 HeapSequence 路径。计入 5 个新增（IndirectPair 嵌套类 4 + 构造 1）与 3 个结构体字段缺失后，STORE 路径的实际有效覆盖约为 Ghidra 的 30-40%（仅 buildStringCopy 骨架 + 线性扫描），远低于模块整体的 80%。
