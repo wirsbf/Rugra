@@ -618,9 +618,10 @@ impl DynamicHash {
                         return;
                     }
                 };
-                match out.read().unwrap().lone_descend() {
+                let next = { out.read().unwrap().lone_descend() };
+                match next {
                     Some(n) => {
-                        let new_slot = n.read().unwrap().slot_of_input(&out);
+                        let new_slot = { n.read().unwrap().slot_of_input(&out) };
                         *slot = new_slot.map(|s| s as i32).unwrap_or(-1);
                         *op = Some(n);
                     }
@@ -641,7 +642,8 @@ impl DynamicHash {
                     *op = None;
                     return;
                 }
-                match in0.read().unwrap().get_def() {
+                let def = { in0.read().unwrap().get_def() };
+                match def {
                     Some(d) => *op = Some(d),
                     None => {
                         *op = None;
