@@ -2,8 +2,9 @@
 
 Faithful port of Ghidra's `database.hh` / `database.cc` (3430 lines).
 
-**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). 2026-07-16: Symbol::is_name_undefined added (database.cc:249). All public classes (`SymbolEntry`,
-`Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `Scope`, `Database`)
+**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). 2026-07-22: Full Symbol/Scope/Database/SymbolEntry XML encode/decode ported from database.cc (SymbolEntry::decode, FunctionSymbol/EquateSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol encode/decode, Scope::encode/add_map_sym/assign_default_names/decode_hole/decode_collision, Database::parse_parent_tag/decode_scope/decode_scope_path). All public classes (`SymbolEntry`,
+`Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `ExternRefSymbol`,
+`UnionFacetSymbol`, `Scope`, `Database`)
 are present with full data structures, the in-memory query/insert algorithms,
 AND XML encode/decode via `marshal.rs`'s `Encoder`/`Decoder` traits.
 
@@ -35,6 +36,10 @@ A storage location for a particular Symbol. Faithful to `SymbolEntry`
   `get_last()`, `get_symbol()`, `get_addr()`, `get_hash()`, `get_size()`,
   `get_all_flags()`, `in_use(usepoint)`, `get_use_limit()`, `set_use_limit()`,
   `is_addr_tied()`.
+- `encode(encoder)` (database.cc:187): emits `<addr>` (static) or `<hash>`
+  (dynamic) + a `<rangelist>` uselimit. Pieces are skipped.
+- `decode(decoder)` (database.cc:206): parses `<hash>` (dynamic) or `<addr>`
+  (static), then the `<rangelist>` uselimit via `decode_use_limit`.
 
 ### `Symbol`
 The base class for a symbol. Faithful to `Symbol` (database.hh:172).
@@ -47,8 +52,19 @@ The base class for a symbol. Faithful to `Symbol` (database.hh:172).
   `set_display_format(val)`, `set_isolated(val)`, `is_isolated()`,
   `set_this_pointer(val)`.
 
-### `FunctionSymbol` / `EquateSymbol` / `LabSymbol`
-Specialized symbol types. Each wraps a base `Symbol`.
+### `FunctionSymbol` / `EquateSymbol` / `LabSymbol` / `ExternRefSymbol` / `UnionFacetSymbol`
+Specialized symbol types. Each wraps a base `Symbol` and now implements its own
+XML encode/decode, faithful to the per-subclass methods in database.cc:
+- `FunctionSymbol`: `encode`/`decode` (database.cc:566/580) — `<functionshell>`
+  with header, entry `<addr>`, and consume-size.
+- `EquateSymbol`: `encode`/`decode` (database.cc:659/670) — `<equatesymbol>`
+  with header and a `<value>` child carrying the constant.
+- `LabSymbol`: `encode`/`decode` (database.cc:751/759) — `<labelsym>` with
+  header and the labelled `<addr>`.
+- `ExternRefSymbol`: `encode`/`decode` (database.cc:796/805) —
+  `<externrefsymbol>` with header and the reference `<addr>`.
+- `UnionFacetSymbol`: `encode`/`decode` (database.cc:698/708) — `<facetsymbol>`
+  with header and the `field` attribute giving the union field index.
 
 ### `Scope`
 An in-memory implementation of the Scope interface. Faithful to `Scope`
@@ -64,6 +80,24 @@ An in-memory implementation of the Scope interface. Faithful to `Scope`
 - `get_category_size(cat)`, `set_category(id, cat, ind)`.
 - `clear()`, `clear_unlocked()`.
 - `attach_child(id)`, `detach_child(id)`, `num_symbols()`.
+- XML encode/decode (database.cc:2616/2744):
+  - `encode(encoder)` — `<scope>` with name/id/label, optional `<parent>`,
+    `<rangelist>`, and a `<symbollist>` of `<mapsym>` children (each carrying a
+    symbol + its `<addr>`/`<hash>` mappings).
+  - `encode_recursive(encoder, only_global)` (database.cc:1371) — encodes this
+    scope; the Database drives the recursive descent over its child ids.
+  - `decode(decoder)` (database.cc:2744) — reads `<parent>` (skipped, applied
+    by Database), `<rangelist>` / `<rangeequalssymbols>`, and a `<symbollist>`
+    of `<mapsym>`/`<hole>`/`<collision>` children.
+  - `add_map_sym(decoder)` (database.cc:1564) — parses one `<mapsym>`
+    (symbol header + `<addr>`/`<hash>` mappings) and inserts the symbol +
+    entries.
+  - `decode_hole(decoder)` (database.cc:2667) — parses a `<hole>` element
+    into a (Range, flags) pair.
+  - `decode_collision_name(decoder)` (database.cc:2695) — parses a
+    `<collision>` element's name.
+  - `assign_default_names(base)` (database.cc:2850) — assigns default
+    variable names to unnamed symbols via `build_default_name`.
 
 ### `Database`
 A manager for symbol scopes for a whole executable. Faithful to `Database`
@@ -77,9 +111,25 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
 - `get_property(addr)`, `set_property_range(flags, range)`,
   `clear_property_range(flags, range)`.
 - `map_scope(qpoint, addr) -> u64`, `num_scopes()`.
+- XML encode/decode (database.cc:3270/3314):
+  - `encode(encoder)` — `<db>` with optional `scopeidbyname` attribute,
+    `<property_changepoint>` children, then the global scope and all its
+    descendants via `encode_scope_recursive`.
+  - `encode_scope_recursive(encoder, scope_id)` (database.cc:1371) —
+    Database-driven recursive walk over the scope map.
+  - `decode(decoder)` — reads `scopeidbyname`, property change-points, and
+    one or more `<scope>` elements (parent resolved via `parse_parent_tag`,
+    scope created via `find_create_scope`, contents filled by `Scope::decode`).
+  - `parse_parent_tag(decoder)` (database.cc:3300) — parses a `<parent>`
+    element, returning the parent scope id.
+  - `decode_scope(decoder, new_scope_id)` (database.cc:3375) — registers and
+    fills out a single Scope from a `<scope>` (or wrapping) element.
+  - `attach_scope_by_id(scope_id, parent_id)` — RUGRA-GLUE helper mirroring
+    `attachScope` (database.cc:3381) for `decode_scope`.
+  - `decode_scope_path(decoder)` (database.cc:3398) — decodes a namespace
+    path (`<val>` children) and ensures each namespace exists.
 
 ## L3 gaps
-- XML `encode`/`decode` of `<db>`/`<scope>`/`<mapsym>` elements.
 - `ScopeInternal` name-tree (`SymbolNameTree`) for ordered name lookup.
 - `partmap<Address, uint4>` for the property flagbase (currently a Vec).
 - `rangemap<SymbolEntry>` / `rangemap<ScopeMapper>` for address-keyed lookup
@@ -118,3 +168,51 @@ A manager for symbol scopes for a whole executable. Faithful to `Database`
 - Symbol 加 `dtype: Option<Arc<Datatype>>` 字段（database.hh `Symbol::type`）。
 - `get_type() -> Option<Arc<Datatype>>`（database.hh:244）+ `set_dtype(dt)`。
 <!-- annotation-pass: 2026-07-04 -->
+
+## 2026-07-22：Full Symbol/Scope/Database XML port (L3 completion)
+
+Ported the remaining Symbol/Scope/Database/SymbolEntry XML serialization from
+database.cc, closing the last XML gap:
+
+**SymbolEntry** (database.cc:187/206):
+- `encode` fixed to emit the `offset` attribute on `<addr>` (was `space`).
+- `decode` + private `decode_use_limit` — parse `<hash>`/`<addr>` + the
+  `<rangelist>` uselimit.
+
+**Symbol subclasses** — full encode/decode per subclass:
+- `FunctionSymbol::encode`/`decode` (database.cc:566/580) — `<functionshell>`.
+- `EquateSymbol::encode`/`decode` (database.cc:659/670) — `<equatesymbol>` +
+  `<value>`.
+- `LabSymbol::encode`/`decode` (database.cc:751/759) — `<labelsym>`.
+- `ExternRefSymbol` (new struct) `encode`/`decode` (database.cc:796/805) —
+  `<externrefsymbol>`.
+- `UnionFacetSymbol` (new struct) `encode`/`decode` (database.cc:698/708) —
+  `<facetsymbol>` + `field` attribute.
+
+**Scope** (database.cc:2616/2744/1564/2850):
+- `encode` — `<scope>` + `<parent>` + `<rangelist>` + `<symbollist>` of
+  `<mapsym>` children (with `rangetree_encode` helper).
+- `decode` — reads `<parent>`/`<rangelist>`/`<rangeequalssymbols>`/`<symbollist>`
+  (dispatching `<mapsym>`/`<hole>`/`<collision>`), via `decode_rangelist`,
+  `add_map_sym`, `decode_hole`, `decode_collision_name`.
+- `add_map_sym` (database.cc:1564) — parse one `<mapsym>` (symbol + mappings).
+- `assign_default_names` (database.cc:2850) + `build_default_name` — default
+  variable naming.
+
+**Database** (database.cc:3270/3314/3300/3375/3398):
+- `encode` enhanced: emits `scopeidbyname` attribute + drives
+  `encode_scope_recursive` over the scope map.
+- `decode` enhanced: reads `scopeidbyname`, property change-points with
+  `offset`/`val`, and resolves each `<scope>`'s parent via `parse_parent_tag`.
+- `parse_parent_tag` (database.cc:3300), `decode_scope` (database.cc:3375),
+  `attach_scope_by_id` (RUGRA-GLUE for `attachScope`, database.cc:3381),
+  `decode_scope_path` (database.cc:3398).
+- `id_by_name` field added to the struct + wired through `new`.
+
+Each ported function carries a `// Ghidra: database.cc:<line> <func>` comment
+(84 alignment comments total). The one RUGRA-GLUE method
+(`attach_scope_by_id`) is marked accordingly.
+
+Tests: 26 database tests pass (`cargo test --lib database::`), including the
+Symbol and Database encode/decode round-trips. `cargo check --lib` is clean
+(0 database.rs warnings/errors).

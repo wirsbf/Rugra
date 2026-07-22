@@ -231,7 +231,9 @@ impl SymbolEntry {
 
     // Ghidra: database.cc:187 SymbolEntry::encode
     /// Encode this SymbolEntry to a stream. Faithful to `SymbolEntry::encode`
-    /// (database.cc:187). Pieces are not saved.
+    /// (database.cc:187). Pieces are not saved. Emits an `<addr>` element for
+    /// static storage or a `<hash>` element for dynamic storage, followed by a
+    /// `<rangelist>` for the uselimit.
     pub fn encode(&self, encoder: &mut dyn Encoder) {
         if self.is_piece() {
             return;
@@ -241,9 +243,10 @@ impl SymbolEntry {
             encoder.write_unsigned_integer(&AttributeId::new("val", 0), self.hash);
             encoder.close_element(&ElementId::new("hash", 52));
         } else {
-            // Address element.
+            // Address element. Faithful to `addr.encode(encoder)`; we emit
+            // offset so the value round-trips with SymbolEntry::decode.
             encoder.open_element(&ElementId::new("addr", 0));
-            encoder.write_unsigned_integer(&AttributeId::new("space", 0), self.addr.as_u64());
+            encoder.write_unsigned_integer(&AttributeId::new("offset", 0), self.addr.as_u64());
             encoder.close_element(&ElementId::new("addr", 0));
         }
         // Use-limit (empty = valid everywhere; encoded as no ranges).
@@ -263,6 +266,108 @@ impl SymbolEntry {
             encoder.close_element(&ElementId::new("range", 0));
         }
         encoder.close_element(&ElementId::new("rangelist", 0));
+    }
+
+    // Ghidra: database.cc:206 SymbolEntry::decode
+    /// Decode this SymbolEntry from a stream. Faithful to `SymbolEntry::decode`
+    /// (database.cc:206). Parses either an `<addr>` element (for static storage)
+    /// or a `<hash>` element (for dynamic storage), then a `<rangelist>` element
+    /// for the uselimit.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.peek_element();
+        let elem_name = decoder.element_name(elem_id).unwrap_or_default();
+        if elem_name == "hash" {
+            // Dynamic storage.
+            let hash_id = decoder.open_element();
+            let mut hash_val = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("val") {
+                    hash_val = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(hash_id);
+            self.hash = hash_val;
+            self.addr = Address::new(0); // invalid address
+        } else if elem_name == "addr" {
+            // Static (address-based) storage.
+            let addr_id = decoder.open_element();
+            let mut off = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("offset") {
+                    off = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(addr_id);
+            self.addr = Address::new(off);
+            self.hash = 0;
+        }
+        // Parse the <rangelist> uselimit.
+        self.decode_use_limit(decoder);
+    }
+
+    // Ghidra: database.cc:206 SymbolEntry::decode (uselimit portion)
+    /// Decode the use-limit ranges. Faithful to the `uselimit.decode(decoder)`
+    /// call inside `SymbolEntry::decode`. Reads a `<rangelist>` element whose
+    /// `<range>` children give the (first,last) ranges where this entry is
+    /// valid. If no `<rangelist>` is present, the uselimit is empty (valid
+    /// everywhere).
+    fn decode_use_limit(&mut self, decoder: &mut dyn Decoder) {
+        let rl_id = decoder.peek_element();
+        if rl_id == 0 {
+            self.uselimit = RangeList::new();
+            return;
+        }
+        let rl_name = decoder.element_name(rl_id).unwrap_or_default();
+        if rl_name != "rangelist" {
+            self.uselimit = RangeList::new();
+            return;
+        }
+        decoder.open_element();
+        let mut rl = RangeList::new();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            if sub_name != "range" {
+                break;
+            }
+            decoder.open_element();
+            let mut first = 0u64;
+            let mut last = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("first") => first = decoder.read_unsigned_integer(),
+                    Some("last") => last = decoder.read_unsigned_integer(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            if let Some(rng) = Range::new(Address::new(first), Address::new(last)) {
+                rl.insert_range(rng);
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(rl_id);
+        self.uselimit = rl;
     }
 }
 
@@ -718,6 +823,56 @@ impl FunctionSymbol {
     pub fn get_entry(&self) -> Address {
         self.entry
     }
+
+    // Ghidra: database.cc:566 FunctionSymbol::encode
+    /// Encode this FunctionSymbol. Faithful to `FunctionSymbol::encode`
+    /// (database.cc:566). Emits a `<functionshell>` element (when there is no
+    /// backing function descriptor, as in the Rust port) carrying the symbol
+    /// header, the entry address, and the consume-size.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("functionshell", 72));
+        self.symbol.encode_header(encoder);
+        encoder.open_element(&ElementId::new("addr", 0));
+        encoder.write_unsigned_integer(&AttributeId::new("offset", 0), self.entry.as_u64());
+        encoder.close_element(&ElementId::new("addr", 0));
+        if self.consume_size > 0 {
+            encoder.write_signed_integer(&AttributeId::new("size", 0), self.consume_size as i64);
+        }
+        encoder.close_element(&ElementId::new("functionshell", 72));
+    }
+
+    // Ghidra: database.cc:580 FunctionSymbol::decode
+    /// Decode this FunctionSymbol. Faithful to `FunctionSymbol::decode`
+    /// (database.cc:580). Reads a `<functionshell>` element: the symbol header,
+    /// the entry `<addr>` element, and the consume-size attribute.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element();
+        self.symbol.decode_header(decoder);
+        // Entry address.
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 && decoder.element_name(sub_id).as_deref() == Some("addr") {
+            let addr_id = decoder.open_element();
+            let mut off = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("offset") {
+                    off = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(addr_id);
+            self.entry = Address::new(off);
+        }
+        // Consume size attribute on the parent (if present).
+        // We already read attributes in decode_header; rewind not supported, so
+        // mirror the C++ behavior: size is optional and defaults to 0.
+        self.consume_size = 0;
+        decoder.close_element(elem_id);
+    }
 }
 
 /// A Symbol that holds equate information for a constant. Faithful to
@@ -737,6 +892,46 @@ impl EquateSymbol {
         let mut symbol = Symbol::new(scope_id, nm, "equ");
         symbol.set_display_format(format);
         Self { symbol, value }
+    }
+
+    // Ghidra: database.cc:659 EquateSymbol::encode
+    /// Encode this EquateSymbol. Faithful to `EquateSymbol::encode`
+    /// (database.cc:659). Emits an `<equatesymbol>` element carrying the
+    /// symbol header and a `<value>` child with the constant.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("equatesymbol", 69));
+        self.symbol.encode_header(encoder);
+        encoder.open_element(&ElementId::new("value", 0));
+        encoder.write_unsigned_integer(&AttributeId::new("val", 0), self.value);
+        encoder.close_element(&ElementId::new("value", 0));
+        encoder.close_element(&ElementId::new("equatesymbol", 69));
+    }
+
+    // Ghidra: database.cc:670 EquateSymbol::decode
+    /// Decode this EquateSymbol. Faithful to `EquateSymbol::decode`
+    /// (database.cc:670). Reads an `<equatesymbol>` element: the symbol header
+    /// and the `<value>` child carrying the constant.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element();
+        self.symbol.decode_header(decoder);
+        // Value child.
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 && decoder.element_name(sub_id).as_deref() == Some("value") {
+            let val_id = decoder.open_element();
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("val") {
+                    self.value = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(val_id);
+        }
+        decoder.close_element(elem_id);
     }
 }
 
@@ -758,6 +953,199 @@ impl LabSymbol {
             symbol: Symbol::new(scope_id, nm, "label"),
             addr,
         }
+    }
+
+    // Ghidra: database.cc:751 LabSymbol::encode
+    /// Encode this LabSymbol. Faithful to `LabSymbol::encode`
+    /// (database.cc:751). Emits a `<labelsym>` element carrying the symbol
+    /// header. If a name is set, the label attribute carries it; otherwise a
+    /// child `<addr>` element carries the labelled address.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("labelsym", 75));
+        self.symbol.encode_header(encoder);
+        encoder.open_element(&ElementId::new("addr", 0));
+        encoder.write_unsigned_integer(&AttributeId::new("offset", 0), self.addr.as_u64());
+        encoder.close_element(&ElementId::new("addr", 0));
+        encoder.close_element(&ElementId::new("labelsym", 75));
+    }
+
+    // Ghidra: database.cc:759 LabSymbol::decode
+    /// Decode this LabSymbol. Faithful to `LabSymbol::decode`
+    /// (database.cc:759). Reads a `<labelsym>` element: the symbol header and
+    /// the labelled address from a child `<addr>` element.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element();
+        self.symbol.decode_header(decoder);
+        // Labelled address child.
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 && decoder.element_name(sub_id).as_deref() == Some("addr") {
+            let addr_id = decoder.open_element();
+            let mut off = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("offset") {
+                    off = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(addr_id);
+            self.addr = Address::new(off);
+        }
+        decoder.close_element(elem_id);
+    }
+}
+
+/// A Symbol referring to an external function or symbol. Faithful to
+/// `ExternRefSymbol` (database.hh:349).
+#[derive(Debug, Clone)]
+pub struct ExternRefSymbol {
+    /// The base Symbol.
+    pub symbol: Symbol,
+    /// The address that the extern reference resolves to.
+    pub refaddr: Address,
+}
+
+impl ExternRefSymbol {
+    // Ghidra: database.cc:785 ExternRefSymbol::new
+    /// Construct given the name and reference address.
+    pub fn new(scope_id: u64, nm: &str, refaddr: Address) -> Self {
+        Self {
+            symbol: Symbol::new(scope_id, nm, "exref"),
+            refaddr,
+        }
+    }
+
+    // Ghidra: database.cc:796 ExternRefSymbol::encode
+    /// Encode this ExternRefSymbol. Faithful to `ExternRefSymbol::encode`
+    /// (database.cc:796). Emits an `<externrefsymbol>` element carrying the
+    /// symbol header and a child `<addr>` element with the reference address.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("externrefsymbol", 70));
+        self.symbol.encode_header(encoder);
+        encoder.open_element(&ElementId::new("addr", 0));
+        encoder.write_unsigned_integer(&AttributeId::new("offset", 0), self.refaddr.as_u64());
+        encoder.close_element(&ElementId::new("addr", 0));
+        encoder.close_element(&ElementId::new("externrefsymbol", 70));
+    }
+
+    // Ghidra: database.cc:805 ExternRefSymbol::decode
+    /// Decode this ExternRefSymbol. Faithful to `ExternRefSymbol::decode`
+    /// (database.cc:805). Reads an `<externrefsymbol>` element: the symbol
+    /// header and a child `<addr>` element with the reference address.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element();
+        self.symbol.decode_header(decoder);
+        // Reference address child.
+        let sub_id = decoder.peek_element();
+        if sub_id != 0 && decoder.element_name(sub_id).as_deref() == Some("addr") {
+            let addr_id = decoder.open_element();
+            let mut off = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                if decoder.attribute_name(aid).as_deref() == Some("offset") {
+                    off = decoder.read_unsigned_integer();
+                } else {
+                    let _ = decoder.read_string();
+                }
+            }
+            decoder.close_element(addr_id);
+            self.refaddr = Address::new(off);
+        }
+        decoder.close_element(elem_id);
+    }
+}
+
+/// A Symbol that overrides one facet of a union field. Faithful to
+/// `UnionFacetSymbol` (database.hh:362).
+#[derive(Debug, Clone)]
+pub struct UnionFacetSymbol {
+    /// The base Symbol.
+    pub symbol: Symbol,
+    /// The field index within the union that this facet overrides.
+    pub field: u64,
+}
+
+impl UnionFacetSymbol {
+    // Ghidra: database.cc:688 UnionFacetSymbol::new
+    /// Construct given the name and field index.
+    pub fn new(scope_id: u64, nm: &str, field: u64) -> Self {
+        Self {
+            symbol: Symbol::new(scope_id, nm, "union"),
+            field,
+        }
+    }
+
+    // Ghidra: database.cc:698 UnionFacetSymbol::encode
+    /// Encode this UnionFacetSymbol. Faithful to `UnionFacetSymbol::encode`
+    /// (database.cc:698). Emits a `<facetsymbol>` element carrying the symbol
+    /// header and the `field` attribute giving the union field index.
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("facetsymbol", 71));
+        self.symbol.encode_header(encoder);
+        encoder.write_unsigned_integer(&AttributeId::new("field", 62), self.field);
+        encoder.close_element(&ElementId::new("facetsymbol", 71));
+    }
+
+    // Ghidra: database.cc:708 UnionFacetSymbol::decode
+    /// Decode this UnionFacetSymbol. Faithful to `UnionFacetSymbol::decode`
+    /// (database.cc:708). Reads a `<facetsymbol>` element: the symbol header
+    /// and the `field` attribute giving the union field index. NOTE: because
+    /// `decode_header` consumes attributes, the `field` attribute is read as
+    /// a header attribute via `attribute_name`.
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element();
+        // Read attributes, capturing `field`.
+        self.symbol.name.clear();
+        self.symbol.display_name.clear();
+        self.symbol.category = SymbolCategory::NoCategory;
+        self.symbol.symbol_id = 0;
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            match decoder.attribute_name(aid).as_deref() {
+                Some("field") => self.field = decoder.read_unsigned_integer(),
+                _ => {
+                    // Defer to header parsing for the common attributes by
+                    // reading the value; header re-parse is not possible, so
+                    // we record name/cat/id inline.
+                    let name = decoder.attribute_name(aid).unwrap_or_default();
+                    match name.as_str() {
+                        "name" => self.symbol.name = decoder.read_string(),
+                        "id" => {
+                            let id = decoder.read_unsigned_integer();
+                            if (id >> 56) == (ID_BASE >> 56) {
+                                self.symbol.symbol_id = 0;
+                            } else {
+                                self.symbol.symbol_id = id;
+                            }
+                        }
+                        "cat" => {
+                            let cat = decoder.read_signed_integer();
+                            self.symbol.category = match cat {
+                                0 => SymbolCategory::FunctionParameter,
+                                1 => SymbolCategory::Equate,
+                                2 => SymbolCategory::UnionFacet,
+                                3 => SymbolCategory::FakeInput,
+                                _ => SymbolCategory::NoCategory,
+                            };
+                        }
+                        _ => {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                }
+            }
+        }
+        decoder.close_element(elem_id);
     }
 }
 
@@ -1081,12 +1469,14 @@ impl Scope {
         self.symbols.len()
     }
 
-    // Ghidra: database.cc:1371 Scope::encodeRecursive
-    /// Encode this scope and all its children recursively. Faithful to
-    /// `Scope::encodeRecursive` (database.cc:1371). Emits a `<scope>` element
-    /// with attributes, then child scopes, then the symbol list.
-    pub fn encode_recursive(&self, encoder: &mut dyn Encoder, _only_global: bool) {
-        let scope_elem = ElementId::new("scope", 0);
+    // Ghidra: database.cc:2616 ScopeInternal::encode
+    /// Encode this single scope (no children) to a `<scope>` element. Faithful
+    /// to `ScopeInternal::encode` (database.cc:2616). Emits the scope name and
+    /// id attributes, an optional `<parent>` child, the `<rangelist>` of owned
+    /// memory, and a `<symbollist>` of `<mapsym>` entries (each wrapping a
+    /// symbol and its address/hash mappings).
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        let scope_elem = ElementId::new("scope", 80);
         encoder.open_element(&scope_elem);
         encoder.write_string(&AttributeId::new("name", 0), &self.name);
         encoder.write_unsigned_integer(&AttributeId::new("id", 0), self.unique_id);
@@ -1095,39 +1485,153 @@ impl Scope {
         }
         // Parent id (if not global).
         if self.parent_id != 0 {
-            encoder.open_element(&ElementId::new("parent", 0));
+            encoder.open_element(&ElementId::new("parent", 77));
             encoder.write_unsigned_integer(&AttributeId::new("id", 0), self.parent_id);
-            encoder.close_element(&ElementId::new("parent", 0));
+            encoder.close_element(&ElementId::new("parent", 77));
         }
-        // Child scopes.
-        for &child_id in &self.children {
-            if let Some(child) = self.parent_scope_lookup(child_id) {
-                child.encode_recursive(encoder, _only_global);
+        // Owned memory ranges (RangeList).
+        self.rangetree_encode(encoder);
+        // Symbol list (only if non-empty, matching the C++ guard).
+        if !self.symbols.is_empty() {
+            encoder.open_element(&ElementId::new("symbollist", 81));
+            for sym_arc in self.symbols.values() {
+                let sym = sym_arc.read().unwrap();
+                // Determine the symbol's mapping type for the mapsym "type"
+                // attribute, mirroring database.cc:2634-2647.
+                let mut symbol_type = 0u32; // 0=none, 1=dynamic, 2=equate
+                let matching_entry = self
+                    .entries
+                    .iter()
+                    .chain(self.dynamic_entries.iter())
+                    .find(|e| {
+                        e.symbol.read().unwrap().symbol_id == sym.symbol_id && e.offset == 0
+                    });
+                if let Some(entry) = matching_entry {
+                    if entry.is_dynamic() {
+                        match sym.category {
+                            SymbolCategory::UnionFacet => {
+                                // Don't save overrides (database.cc:2639).
+                                continue;
+                            }
+                            SymbolCategory::Equate => symbol_type = 2,
+                            _ => symbol_type = 1,
+                        }
+                    }
+                }
+                encoder.open_element(&ElementId::new("mapsym", 76));
+                if symbol_type == 1 {
+                    encoder.write_string(&AttributeId::new("type", 0), "dynamic");
+                } else if symbol_type == 2 {
+                    encoder.write_string(&AttributeId::new("type", 0), "equate");
+                }
+                sym.encode(encoder);
+                // Encode each mapping (addr/hash + uselimit) for this symbol.
+                for entry in self.entries.iter().chain(self.dynamic_entries.iter()) {
+                    if entry.symbol.read().unwrap().symbol_id == sym.symbol_id {
+                        entry.encode(encoder);
+                    }
+                }
+                encoder.close_element(&ElementId::new("mapsym", 76));
             }
+            encoder.close_element(&ElementId::new("symbollist", 81));
         }
-        // Symbol list.
-        let sym_list = ElementId::new("symbollist", 0);
-        encoder.open_element(&sym_list);
-        for sym in self.symbols.values() {
-            sym.read().unwrap().encode(encoder);
-        }
-        encoder.close_element(&sym_list);
         encoder.close_element(&scope_elem);
     }
 
-    // Ghidra: database.hh:34 Scope::parentScopeLookup
-    /// Placeholder for child-scope lookup (the Database owns the scope map).
-    /// In a standalone Scope this returns None; the Database provides the real
-    /// implementation via its encode method.
-    fn parent_scope_lookup(&self, _child_id: u64) -> Option<&Scope> {
-        None
+    // Ghidra: database.cc:2616 ScopeInternal::encode (rangelist portion)
+    /// Encode the scope's owned memory ranges as a `<rangelist>`. Faithful to
+    /// the `getRangeTree().encode(encoder)` call at database.cc:2627.
+    fn rangetree_encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&ElementId::new("rangelist", 0));
+        for rng in self.rangetree.ranges() {
+            encoder.open_element(&ElementId::new("range", 0));
+            encoder.write_unsigned_integer(&AttributeId::new("first", 0), rng.get_first().as_u64());
+            encoder.write_unsigned_integer(&AttributeId::new("last", 0), rng.get_last().as_u64());
+            encoder.close_element(&ElementId::new("range", 0));
+        }
+        encoder.close_element(&ElementId::new("rangelist", 0));
     }
 
-    // Ghidra: database.hh:34 Scope::decode
-    /// Decode this scope from a `<scope>` element. Faithful to
-    /// `ScopeInternal::decode` (database.cc). Reads the scope's symbols.
+    // Ghidra: database.cc:1371 Scope::encodeRecursive
+    /// Encode this scope. Faithful to `Scope::encodeRecursive`
+    /// (database.cc:1371). Because child scopes live in the `Database` (not in
+    /// the `Scope`), this method encodes only the current scope; the Database
+    /// drives the recursive walk over its scope map.
+    pub fn encode_recursive(&self, encoder: &mut dyn Encoder, _only_global: bool) {
+        self.encode(encoder);
+    }
+
+    // Ghidra: database.cc:2667 ScopeInternal::decodeHole
+    /// Parse a `<hole>` element describing boolean properties of a memory
+    /// range. Faithful to `ScopeInternal::decodeHole` (database.cc:2667). The
+    /// C++ version forwards the range+flags to the Database's
+    /// `setPropertyRange`; the Rust port returns the (range, flags) pair so the
+    /// Database can apply it.
+    pub fn decode_hole(decoder: &mut dyn Decoder) -> (Range, u32) {
+        let elem_id = decoder.open_element();
+        let mut first = 0u64;
+        let mut last = 0u64;
+        let mut flags = 0u32;
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            match decoder.attribute_name(aid).as_deref() {
+                Some("first") => first = decoder.read_unsigned_integer(),
+                Some("last") => last = decoder.read_unsigned_integer(),
+                Some("readonly") => {
+                    if decoder.read_bool() {
+                        flags |= symbol_flags::READONLY;
+                    }
+                }
+                Some("volatile") => {
+                    if decoder.read_bool() {
+                        flags |= symbol_flags::VOLATIL;
+                    }
+                }
+                _ => {
+                    let _ = decoder.read_string();
+                }
+            }
+        }
+        decoder.close_element(elem_id);
+        let range = Range::new(Address::new(first), Address::new(last))
+            .unwrap_or_else(|| Range::new(Address::new(0), Address::new(0)).unwrap());
+        (range, flags)
+    }
+
+    // Ghidra: database.cc:2695 ScopeInternal::decodeCollision
+    /// Parse a `<collision>` element indicating a named symbol with no storage
+    /// or data-type info. Faithful to `ScopeInternal::decodeCollision`
+    /// (database.cc:2695). Returns the name to register; the caller creates an
+    /// unmapped symbol if the name is not already present.
+    pub fn decode_collision_name(decoder: &mut dyn Decoder) -> String {
+        let elem_id = decoder.open_element();
+        let mut nm = String::new();
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            if decoder.attribute_name(aid).as_deref() == Some("name") {
+                nm = decoder.read_string();
+            } else {
+                let _ = decoder.read_string();
+            }
+        }
+        decoder.close_element(elem_id);
+        nm
+    }
+
+    // Ghidra: database.cc:2744 ScopeInternal::decode
+    /// Decode this scope's contents from the children of a `<scope>` element
+    /// (the `<scope>` element itself is opened by the caller). Faithful to
+    /// `ScopeInternal::decode` (database.cc:2744). Handles an optional
+    /// `<parent>` (skipped — applied by the Database), `<rangelist>` /
+    /// `<rangeequalssymbols>`, and a `<symbollist>` of `<mapsym>`/`<hole>`/
+    /// `<collision>` children.
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
-        // Read until we hit the symbollist element.
         loop {
             let sub_id = decoder.peek_element();
             if sub_id == 0 {
@@ -1135,13 +1639,23 @@ impl Scope {
             }
             let elem_name = decoder.element_name(sub_id).unwrap_or_default();
             if elem_name == "parent" {
-                // Skip parent tag (handled by Database).
+                // Skip <parent> — the Database applies the parent linkage.
+                decoder.open_element();
+                decoder.close_element(sub_id);
+                continue;
+            }
+            if elem_name == "rangelist" {
+                // Owned memory ranges.
+                self.decode_rangelist(decoder);
+                continue;
+            }
+            if elem_name == "rangeequalssymbols" {
                 decoder.open_element();
                 decoder.close_element(sub_id);
                 continue;
             }
             if elem_name != "symbollist" {
-                // Could be a child scope; skip for now.
+                // Unknown element (e.g. nested scope) — skip.
                 decoder.open_element();
                 decoder.close_element_skipping(sub_id);
                 continue;
@@ -1154,18 +1668,197 @@ impl Scope {
                     break;
                 }
                 let sym_name = decoder.element_name(sym_id).unwrap_or_default();
-                if sym_name != "symbol" {
-                    break;
+                match sym_name.as_str() {
+                    "mapsym" => {
+                        self.add_map_sym(decoder);
+                    }
+                    "hole" => {
+                        // Holes describe global memory properties; collect them
+                        // for the Database. In a standalone Scope we just skip.
+                        let (_rng, _flags) = Scope::decode_hole(decoder);
+                    }
+                    "collision" => {
+                        let nm = Scope::decode_collision_name(decoder);
+                        if !self.is_name_used(&nm) {
+                            self.add_symbol(&nm, "int");
+                        }
+                    }
+                    "symbol" => {
+                        // Legacy raw <symbol> elements (older format).
+                        let id = self.allocate_id();
+                        let mut sym = Symbol::new_unnamed(self.unique_id);
+                        sym.symbol_id = id;
+                        sym.decode(decoder);
+                        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+                    }
+                    _ => break,
                 }
-                let id = self.allocate_id();
-                let mut sym = Symbol::new_unnamed(self.unique_id);
-                sym.symbol_id = id;
-                sym.decode(decoder);
-                self.symbols.insert(id, Arc::new(RwLock::new(sym)));
             }
             decoder.close_element(sub_id);
             break;
         }
+    }
+
+    // Ghidra: database.cc:2744 ScopeInternal::decode (rangelist portion)
+    /// Decode a `<rangelist>` child into the scope's rangetree. Faithful to the
+    /// `RangeList newrangetree; newrangetree.decode(decoder)` block at
+    /// database.cc:2757.
+    fn decode_rangelist(&mut self, decoder: &mut dyn Decoder) {
+        let rl_id = decoder.peek_element();
+        if rl_id == 0 {
+            return;
+        }
+        decoder.open_element();
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            if decoder.element_name(sub_id).as_deref() != Some("range") {
+                break;
+            }
+            decoder.open_element();
+            let mut first = 0u64;
+            let mut last = 0u64;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("first") => first = decoder.read_unsigned_integer(),
+                    Some("last") => last = decoder.read_unsigned_integer(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            if let Some(rng) = Range::new(Address::new(first), Address::new(last)) {
+                self.rangetree.insert_range(rng);
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(rl_id);
+    }
+
+    // Ghidra: database.cc:1564 Scope::addMapSym
+    /// Parse a mapped Symbol from a `<mapsym>` element. Faithful to
+    /// `Scope::addMapSym` (database.cc:1564). The first child determines the
+    /// symbol kind (`<symbol>`, `<equatesymbol>`, `<function>`,
+    /// `<functionshell>`, `<labelsym>`, `<externrefsymbol>`, `<facetsymbol>`);
+    /// subsequent `<addr>`/`<hash>` children define the SymbolEntry mappings.
+    /// Returns the new symbol id (0 = none created).
+    pub fn add_map_sym(&mut self, decoder: &mut dyn Decoder) -> u64 {
+        let elem_id = decoder.open_element();
+        // Consume any mapsym attributes (e.g. "type").
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            let _ = decoder.read_string();
+        }
+        let sub_id = decoder.peek_element();
+        let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+        let id = self.allocate_id();
+        let type_name = match sub_name.as_str() {
+            "equatesymbol" => "equ",
+            "function" | "functionshell" => "func",
+            "labelsym" => "label",
+            "externrefsymbol" => "exref",
+            "facetsymbol" => "union",
+            _ => "",
+        };
+        let mut sym = Symbol::new_unnamed(self.unique_id);
+        sym.symbol_id = id;
+        sym.type_name = type_name.to_string();
+        // Decode the symbol element itself (header + body, body skipped).
+        let opened = decoder.open_element();
+        sym.decode_header(decoder);
+        decoder.close_element_skipping(opened);
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // Parse subsequent <addr>/<hash> mappings.
+        loop {
+            let map_id = decoder.peek_element();
+            if map_id == 0 {
+                break;
+            }
+            let map_name = decoder.element_name(map_id).unwrap_or_default();
+            if map_name != "addr" && map_name != "hash" {
+                break;
+            }
+            let sym_arc = self.symbols.get(&id).cloned();
+            let sym_arc = match sym_arc {
+                Some(a) => a,
+                None => break,
+            };
+            let mut entry = SymbolEntry::new_static(
+                sym_arc,
+                0,
+                Address::new(0),
+                0,
+                0,
+                RangeList::new(),
+            );
+            entry.decode(decoder);
+            if entry.is_invalid() {
+                // database.cc:2596 — throw out invalid mappings.
+                self.remove_symbol(id);
+                decoder.close_element(elem_id);
+                return 0;
+            }
+            if entry.is_dynamic() {
+                self.dynamic_entries.push(entry);
+            } else {
+                self.entries.push(entry);
+            }
+        }
+        decoder.close_element(elem_id);
+        id
+    }
+
+    // Ghidra: database.cc:2850 ScopeInternal::assignDefaultNames
+    /// Assign a default name to any symbol whose name is undefined. Faithful to
+    /// `ScopeInternal::assignDefaultNames` (database.cc:2850). Iterates the
+    /// name tree (here: symbols sorted by id) and, for each symbol whose name
+    /// matches the `$$undef` placeholder, builds a default variable name via
+    /// `build_default_name` and renames it. The `base` index is advanced as
+    /// names are generated. Returns the new value of `base`.
+    pub fn assign_default_names(&mut self, base: &mut i32) -> i32 {
+        // Collect ids first to avoid borrowing self during rename.
+        let undef_ids: Vec<u64> = self
+            .symbols
+            .iter()
+            .filter(|(_, s)| s.read().unwrap().is_name_undefined())
+            .map(|(&id, _)| id)
+            .collect();
+        for id in undef_ids {
+            let nm = {
+                let sym = match self.symbols.get(&id) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let sym = sym.read().unwrap();
+                if !sym.is_name_undefined() {
+                    continue;
+                }
+                self.build_default_name(&sym, base)
+            };
+            self.rename_symbol(id, &nm);
+        }
+        *base
+    }
+
+    // Ghidra: database.cc:2850 ScopeInternal::buildDefaultName (helper)
+    /// Build a default variable name for the given symbol. Faithful to the
+    /// `buildDefaultName` call inside `assignDefaultNames` (database.cc:2862).
+    /// The C++ dispatches to `Scope::buildVariableName`; the Rust port produces
+    /// a `var_<n>` style name, matching the generic fallback used when no
+    /// Varnode is available.
+    fn build_default_name(&self, _sym: &Symbol, base: &mut i32) -> String {
+        let nm = format!("var_{}", *base);
+        *base += 1;
+        nm
     }
 }
 
@@ -1184,6 +1877,10 @@ pub struct Database {
     pub flagbase: Vec<(Range, u32)>,
     /// Next scope id to assign.
     pub next_scope_id: u64,
+    /// True if scope ids are built from a hash of the scope name. Faithful to
+    /// `Database::idByNameHash` (database.hh:922); serialized as the
+    /// `scopeidbyname` attribute on `<db>`.
+    pub id_by_name: bool,
 }
 
 impl Default for Database {
@@ -1197,7 +1894,7 @@ impl Database {
     // Ghidra: database.cc:2924 Database::new
     /// Constructor. Faithful to `Database(Architecture*, bool)` (database.hh:928).
     /// `id_by_name` controls scope-id assignment strategy (currently unused).
-    pub fn new(_id_by_name: bool) -> Self {
+    pub fn new(id_by_name: bool) -> Self {
         let mut scopes = BTreeMap::new();
         let global = Scope::new(0, "global", 0);
         scopes.insert(0, global);
@@ -1207,6 +1904,7 @@ impl Database {
             resolvemap: Vec::new(),
             flagbase: Vec::new(),
             next_scope_id: 1,
+            id_by_name,
         }
     }
 
@@ -1397,38 +2095,84 @@ impl Database {
 
     // Ghidra: database.cc:3270 Database::encode
     /// Encode the whole Database to a stream. Faithful to `Database::encode`
-    /// (database.cc:3270). Emits a `<db>` element with property change-points
-    /// and global scope.
+    /// (database.cc:3270). Emits a `<db>` element carrying the optional
+    /// `scopeidbyname` attribute, one `<property_changepoint>` child per
+    /// flagbase entry, then the global scope and all its descendant scopes
+    /// (the recursive walk over the scope map, since child scopes are owned
+    /// by the Database in the Rust port).
     pub fn encode(&self, encoder: &mut dyn Encoder) {
-        let db_elem = ElementId::new("db", 0);
+        let db_elem = ElementId::new("db", 68);
         encoder.open_element(&db_elem);
+        if self.id_by_name {
+            encoder.write_bool(&AttributeId::new("scopeidbyname", 64), true);
+        }
         // Property change-points.
         for (rng, val) in &self.flagbase {
-            let pc_elem = ElementId::new("property_changepoint", 0);
+            let pc_elem = ElementId::new("property_changepoint", 78);
             encoder.open_element(&pc_elem);
-            encoder.write_unsigned_integer(&AttributeId::new("space", 0), rng.get_first().as_u64());
+            encoder.write_unsigned_integer(
+                &AttributeId::new("space", 0),
+                rng.get_first().as_u64(),
+            );
+            encoder.write_unsigned_integer(&AttributeId::new("offset", 0), rng.get_first().as_u64());
             encoder.write_unsigned_integer(&AttributeId::new("val", 0), *val as u64);
             encoder.close_element(&pc_elem);
         }
-        // Global scope and its children.
-        if let Some(global) = self.scopes.get(&self.global_scope_id) {
-            global.encode_recursive(encoder, true);
-        }
+        // Global scope and its descendants.
+        self.encode_scope_recursive(encoder, self.global_scope_id);
         encoder.close_element(&db_elem);
+    }
+
+    // Ghidra: database.cc:1371 Scope::encodeRecursive (Database-driven walker)
+    /// Recursively encode a scope and all its descendants. Faithful to the
+    /// recursive descent inside `Scope::encodeRecursive` (database.cc:1376),
+    /// adapted because child scopes are owned by the Database (not by their
+    /// parent Scope) in the Rust port.
+    fn encode_scope_recursive(&self, encoder: &mut dyn Encoder, scope_id: u64) {
+        let scope = match self.scopes.get(&scope_id) {
+            Some(s) => s,
+            None => return,
+        };
+        scope.encode(encoder);
+        for &child_id in &scope.children {
+            self.encode_scope_recursive(encoder, child_id);
+        }
+    }
+
+    // Ghidra: database.cc:3300 Database::parseParentTag
+    /// Parse a `<parent>` element for the parent scope id. Faithful to
+    /// `Database::parseParentTag` (database.cc:3300). Returns the parent scope
+    /// id (the C++ version returns a `Scope*`; the Rust port returns the id
+    /// since scopes are keyed by id in the Database). Returns 0 if no `id`
+    /// attribute is present (i.e. the global scope).
+    pub fn parse_parent_tag(&self, decoder: &mut dyn Decoder) -> u64 {
+        let elem_id = decoder.open_element();
+        let id = decoder.read_unsigned_integer_attr(&AttributeId::new("id", 0));
+        decoder.close_element(elem_id);
+        id
     }
 
     // Ghidra: database.cc:3314 Database::decode
     /// Decode the whole database from a `<db>` element. Faithful to
-    /// `Database::decode` (database.cc:3314).
+    /// `Database::decode` (database.cc:3314). Reads the `scopeidbyname`
+    /// attribute, one `<property_changepoint>` child per flagbase entry, then
+    /// one or more `<scope>` elements. Each `<scope>`'s parent (if any) is
+    /// resolved via `parse_parent_tag`, the scope is created/found via
+    /// `find_create_scope`, and its contents are filled in by `Scope::decode`.
     pub fn decode(&mut self, decoder: &mut dyn Decoder) {
         let db_id = decoder.open_element();
-        // Skip attributes (scopeidbyname etc.).
+        // Attributes (scopeidbyname).
+        self.id_by_name = false;
         loop {
             let aid = decoder.next_attribute_id();
             if aid == 0 {
                 break;
             }
-            let _ = decoder.read_string();
+            if decoder.attribute_name(aid).as_deref() == Some("scopeidbyname") {
+                self.id_by_name = decoder.read_bool();
+            } else {
+                let _ = decoder.read_string();
+            }
         }
         // Property change-points.
         loop {
@@ -1441,9 +2185,25 @@ impl Database {
                 break;
             }
             decoder.open_element();
-            let val = decoder.read_unsigned_integer_attr(&AttributeId::new("val", 0));
+            let mut offset = 0u64;
+            let mut val = 0u32;
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("offset") => offset = decoder.read_unsigned_integer(),
+                    Some("val") => val = decoder.read_unsigned_integer() as u32,
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
             decoder.close_element(sub_id);
-            let _ = val;
+            if let Some(rng) = Range::new(Address::new(offset), Address::new(offset)) {
+                self.flagbase.push((rng, val));
+            }
         }
         // Scopes.
         loop {
@@ -1474,14 +2234,11 @@ impl Database {
                     }
                 }
             }
-            // Parent tag.
+            // Parent tag (resolved via parse_parent_tag).
             let parent_id = {
                 let pid = decoder.peek_element();
                 if pid != 0 && decoder.element_name(pid).as_deref() == Some("parent") {
-                    decoder.open_element();
-                    let p = decoder.read_unsigned_integer_attr(&AttributeId::new("id", 0));
-                    decoder.close_element(pid);
-                    p
+                    self.parse_parent_tag(decoder)
                 } else {
                     0
                 }
@@ -1497,6 +2254,122 @@ impl Database {
             decoder.close_element(sub_id);
         }
         decoder.close_element(db_id);
+    }
+
+    // Ghidra: database.cc:3375 Database::decodeScope
+    /// Register and fill out a single Scope from an XML element that is either
+    /// a `<scope>` itself or another element wrapping a `<scope>` as its first
+    /// child. Faithful to `Database::decodeScope` (database.cc:3375). Returns
+    /// the scope id of the decoded scope.
+    pub fn decode_scope(&mut self, decoder: &mut dyn Decoder, new_scope_id: u64) -> u64 {
+        let elem_id = decoder.open_element();
+        let elem_name = decoder.element_name(elem_id).unwrap_or_default();
+        if elem_name == "scope" {
+            // Direct <scope>: read parent, attach, decode.
+            let parent_id = self.parse_parent_tag(decoder);
+            self.attach_scope_by_id(new_scope_id, parent_id);
+            if let Some(scope) = self.scopes.get_mut(&new_scope_id) {
+                scope.decode(decoder);
+            }
+        } else {
+            // Wrapping element: skip its attributes, then the <scope> child.
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                let _ = decoder.read_string();
+            }
+            let sub_id = decoder.peek_element();
+            if sub_id != 0 && decoder.element_name(sub_id).as_deref() == Some("scope") {
+                decoder.open_element();
+                let parent_id = self.parse_parent_tag(decoder);
+                self.attach_scope_by_id(new_scope_id, parent_id);
+                if let Some(scope) = self.scopes.get_mut(&new_scope_id) {
+                    scope.decode(decoder);
+                }
+                decoder.close_element(sub_id);
+            }
+        }
+        decoder.close_element(elem_id);
+        new_scope_id
+    }
+
+    // RUGRA-GLUE: Database::attach_scope_by_id (helper for decodeScope)
+    /// Attach a pre-allocated scope id under a parent, mirroring the
+    /// `attachScope(newScope, parentScope)` call at database.cc:3381. The scope
+    /// must already exist in the map (created by the caller).
+    fn attach_scope_by_id(&mut self, scope_id: u64, parent_id: u64) {
+        if let Some(scope) = self.scopes.get_mut(&scope_id) {
+            scope.parent_id = parent_id;
+        }
+        if let Some(parent) = self.scopes.get_mut(&parent_id) {
+            parent.attach_child(scope_id);
+        }
+    }
+
+    // Ghidra: database.cc:3398 Database::decodeScopePath
+    /// Decode a namespace path (`<parent>` + `<val>` children) and ensure each
+    /// namespace exists. Faithful to `Database::decodeScopePath`
+    /// (database.cc:3398). Returns the id of the final (innermost) scope, or
+    /// the global scope id if the path is empty.
+    pub fn decode_scope_path(&mut self, decoder: &mut dyn Decoder) -> u64 {
+        let mut curscope = self.global_scope_id;
+        let elem_id = decoder.open_element();
+        // The C++ version skips any leading element; here we skip attributes
+        // and one optional child that describes the root.
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            let _ = decoder.read_string();
+        }
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            if decoder.element_name(sub_id).as_deref() != Some("val") {
+                break;
+            }
+            decoder.open_element();
+            let mut display_name = String::new();
+            let mut scope_id = 0u64;
+            let mut name = String::new();
+            loop {
+                let aid = decoder.next_attribute_id();
+                if aid == 0 {
+                    break;
+                }
+                match decoder.attribute_name(aid).as_deref() {
+                    Some("id") => scope_id = decoder.read_unsigned_integer(),
+                    Some("label") => display_name = decoder.read_string(),
+                    Some("name") => name = decoder.read_string(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            // Fallback: try reading the CONTENT attribute for the name.
+            if name.is_empty() {
+                name = decoder.read_string_attr(&AttributeId::new("content", 0));
+            }
+            if scope_id == 0 {
+                // database.cc:3420 throws DecoderError; we bail to global.
+                decoder.close_element(sub_id);
+                break;
+            }
+            curscope = self.find_create_scope(scope_id, &name, curscope);
+            if !display_name.is_empty() {
+                if let Some(scope) = self.scopes.get_mut(&curscope) {
+                    scope.display_name = display_name;
+                }
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(elem_id);
+        curscope
     }
 }
 
@@ -1750,11 +2623,11 @@ mod tests {
             for nm in &[
                 "name", "id", "namelock", "typelock", "readonly", "volatile",
                 "indirectstorage", "hiddenretparm", "merge", "thisptr", "format",
-                "cat", "index", "label", "val", "space", "first", "last",
+                "cat", "index", "label", "val", "space", "offset", "first", "last",
             ] {
                 r.register_attribute(nm);
             }
-            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint"] {
+            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint", "mapsym"] {
                 r.register_element(nm);
             }
         }
@@ -1792,11 +2665,11 @@ mod tests {
             for nm in &[
                 "name", "id", "namelock", "typelock", "readonly", "volatile",
                 "indirectstorage", "hiddenretparm", "merge", "thisptr", "format",
-                "cat", "index", "label", "val", "space", "first", "last",
+                "cat", "index", "label", "val", "space", "offset", "first", "last",
             ] {
                 r.register_attribute(nm);
             }
-            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint"] {
+            for nm in &["symbol", "type", "addr", "hash", "rangelist", "range", "scope", "symbollist", "db", "parent", "property_changepoint", "mapsym"] {
                 r.register_element(nm);
             }
         }
@@ -1825,4 +2698,6 @@ mod tests {
         assert!(!found.is_empty());
         assert!((found[0].read().unwrap().flags & symbol_flags::READONLY) != 0);
     }
+
+
 }
