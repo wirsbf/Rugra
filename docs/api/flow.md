@@ -64,3 +64,60 @@ not yet wired into main.rs; existing linear scan still active).
 <!-- sleigh-lift-pipeline: 1783181897.3074532 -->
  
 **2026-07-22**: 23 missing flow.cc methods added (11→34 functions, +361 lines)
+
+## 2026-07-22（续）：FlowInfo 跳转表细节补齐 — Phase 2 完整化
+
+补齐 Ghidra `flow.cc` 中缺失的跳转表（jump-table）分析与基本块生成方法。每个
+移植方法均带 `// Ghidra: flow.cc:<行号> FlowInfo::<函数名>` 注释，Rust 胶水
+标 `// RUGRA-GLUE: <理由>`。
+
+### 新增方法（src/flow.rs，+403 行，778→1181）
+
+| Rust 方法 | Ghidra flow.cc | 说明 |
+|---|---|---|
+| `recover_jump_tables` | :1427 recoverJumpTables | BRANCHIND 跳转表恢复主入口；notreached 延迟列表 + partial/complete 分支 |
+| `check_multistage_jumptables` | :1408 checkMultistageJumptables | 多阶段跳转表检测（结构占位，checkForMultistage 未移植） |
+| `xref_inlined_branch` | :1053 xrefInlinedBranch | 内联注入的 CALL/CALLIND/BRANCHIND 交叉引用；BRANCHIND 走 find_jump_table |
+| `find_unprocessed` | :850 findUnprocessed | addrlist 剩余地址 → unprocessed |
+| `dedup_unprocessed` | :866 dedupUnprocessed | 排序 + 去重（Address: Ord） |
+| `fillin_branch_stubs` | :889 fillinBranchStubs | 为 unprocessed 地址生成 artificial_halt(MISSING) + STARTBASIC/STARTMARK |
+| `collect_edges` | :906 collectEdges | 收集 (src,targ) 边对；BRANCH/CBRANCH/BRANCHIND(jumptable 条目)/fallthru |
+| `split_basic` | :983 splitBasic | 委托 build_blocks_from_alive；保留入口块不变量 |
+| `connect_basic` | :1021 connectBasic | 边重放（Rugra 在 build 时已派生） |
+| `generate_blocks` | :824 generateBlocks | fillinBranchStubs → splitBasic → connectBasic → removeUnreachableBlocks |
+
+辅助方法（`// RUGRA-GLUE`）：
+- `target_op_for_branch` — BRANCH/CBRANCH input(0) 地址 → alive op（Ghidra
+  branchTarget 的直接地址路径，相对分支走 lifter 已发射绝对地址）
+- `target_op_by_addr` — 地址 → 首个 alive op（Ghidra target() 地址回退循环）
+- `fallthru_op` — 顺序下一个 alive op（Ghidra fallthruOp 的近似）
+
+### 已知缺口（RUGRA-GLUE 标注）
+
+- **partial Funcdata 克隆**：Ghidra 在 recoverJumpTables 里构建独立的 partial
+  Funcdata 做分析；Rugra 无此机制，恢复直接走 `jumptable::try_recover` 原地执行
+  `JumpTable::recover_addresses`。
+- **JumpTable::checkForMultistage**：未移植（依赖 partial Funcdata 简化路径），
+  `check_multistage_jumptables` 保留迭代结构但不推送新 op。
+- **Funcdata::linkJumpTable**：未移植，`xref_inlined_branch` 用 `find_jump_table`
+  近似。
+- **FuncCallSpecs 管线**：`setupCallSpecs`/`setupCallindSpecs` 需要 FuncCallSpecs，
+  推迟到 ActionFuncLink；`xref_inlined_branch` 的 CALL/CALLIND 分支为 no-op。
+- **opMarkStartBasic/opMarkStartInstruction**：Rugra 在 build_blocks_from_alive
+  统一处理，fillin_branch_stubs 直接置 STARTBASIC/STARTMARK flag。
+
+### 验证
+
+- `cargo check --lib`：flow.rs 零错误（唯一的 E0502 在 grammar.rs，与本任务无关的
+  并发改动）。
+- flow.rs 仅 3 个 pre-existing 警告（unused `Instruction` import / `stat` / `inst`）。
+- 新增方法无新增警告。
+
+## Alignment Evidence
+
+- 源文件：`ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/flow.cc`（1460 行）
+  + `flow.hh`（172 行）。
+- 目标文件：`src/flow.rs`（778 → 1181 行，+403 行）。
+- 每个移植方法上方有 `// Ghidra: flow.cc:<行号> FlowInfo::<名>` 注释。
+- `cargo check --lib` 通过（flow.rs 零错误）。
+

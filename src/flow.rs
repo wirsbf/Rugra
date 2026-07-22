@@ -11,6 +11,7 @@ use crate::funcdata::Funcdata;
 use crate::loadimage::LoadImage;
 use crate::opcodes::OpCode;
 use crate::op::pcodeop_flags;
+use std::sync::Arc;
 
 /// Flow-following option/property flag bits. Faithful to the anonymous enum
 /// in flow.hh:60-74.
@@ -424,6 +425,408 @@ impl<'a> FlowInfo<'a> {
         // Create an artificial return (flow.cc:766-767) right after the op.
         let truncop = self.artificial_halt(addr, return_type);
         self.fd.op_insert_after(&truncop, op);
+    }
+
+    /// Recover jumptables for the current set of BRANCHIND ops using existing
+    /// flow. Faithful to `FlowInfo::recoverJumpTables`
+    /// (flow.cc:1427-1458).
+    ///
+    /// Ghidra builds a fresh partial `Funcdata` for analysis, then walks every
+    /// op in `tablelist` calling `data.recoverJumpTable(partial, op, this,
+    /// mode)`. On failure it calls `truncateIndirectJump(op, mode)`; on a
+    /// partial recovery it either defers the op to `notreached` (if more flow
+    /// is coming) or marks the table complete.
+    ///
+    /// Rugra notes: there is no partial `Funcdata` clone, and `Funcdata::
+    /// recoverJumpTable` is not yet ported — recovery goes through
+    /// [`crate::jumptable::try_recover`], which performs the same
+    /// `JumpTable::recover_addresses` work in-place. The `notreached` deferral
+    /// list and the `fail_mode` → `RecoveryMode` mapping are preserved so the
+    /// caller can drive the multistage loop in `generate_ops`.
+    // Ghidra: flow.cc:1427 FlowInfo::recoverJumpTables
+    pub fn recover_jump_tables(
+        &mut self,
+        new_tables: &mut Vec<Option<crate::jumptable::JumpTable>>,
+        notreached: &mut Vec<crate::op::PcodeOpRef>,
+    ) {
+        // Ghidra reads tablelist[0] to build the partial-Funcdata label
+        // (flow.cc:1430-1437). Rugra skips the label because there is no
+        // partial clone; we still require a non-empty tablelist.
+        let tablelist = self.collect_branchinds();
+        let tablelist_len = tablelist.len();
+
+        for op in &tablelist {
+            let mode = crate::jumptable::RecoveryMode::FailNormal;
+
+            // data.recoverJumpTable(partial, op, this, mode) (flow.cc:1442).
+            let jt_opt = match crate::jumptable::try_recover(&op.0, self.fd) {
+                Some(jt) => Some(jt),
+                None => None,
+            };
+
+            match &jt_opt {
+                None => {
+                    // Could not recover the jumptable (flow.cc:1443-1445).
+                    if !self.is_flow_for_inline() {
+                        // Treat the indirect jump as a call/return. Rugra
+                        // maps RecoveryMode → fail_mode byte expected by
+                        // truncate_indirect_jump (FailNormal=1 → default).
+                        self.truncate_indirect_jump(op, mode as u8);
+                    }
+                }
+                Some(jt) => {
+                    if jt.is_partial() {
+                        // flow.cc:1447-1455: defer if more flow is coming and
+                        // we have not already queued this op.
+                        if tablelist_len > 1 && !Self::is_in_array(notreached, op) {
+                            notreached.push(op.clone());
+                        } else {
+                            // Recovered table is final — attach it to fd and
+                            // mark complete. Ghidra leaves attachment to the
+                            // caller of recoverJumpTable; Rugra attaches here
+                            // because there is no partial-clone hand-off.
+                            let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(
+                                crate::jumptable::JumpTable::new(jt.opaddress),
+                            ));
+                            {
+                                let mut dst = jt_arc.write().unwrap();
+                                dst.addresstable = jt.addresstable.clone();
+                                dst.mark_complete();
+                                dst.set_indirect_op(op.0.clone());
+                            }
+                            self.fd.jump_tables.push(jt_arc);
+                        }
+                    } else {
+                        // Fully recovered — attach to fd.
+                        let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(
+                            crate::jumptable::JumpTable::new(jt.opaddress),
+                        ));
+                        {
+                            let mut dst = jt_arc.write().unwrap();
+                            dst.addresstable = jt.addresstable.clone();
+                            dst.set_indirect_op(op.0.clone());
+                        }
+                        self.fd.jump_tables.push(jt_arc);
+                    }
+                }
+            }
+            new_tables.push(jt_opt);
+        }
+    }
+
+    /// Look for changes in control-flow near indirect jumps that were
+    /// discovered after the jumptable recovery. Faithful to
+    /// `FlowInfo::checkMultistageJumptables` (flow.cc:1408-1417).
+    ///
+    /// Ghidra walks every `JumpTable` on `data` and, if `checkForMultistage`
+    /// reports new flow, pushes the table's indirect op back onto
+    /// `tablelist` so `generateOps` will recover it again.
+    ///
+    /// Rugra notes: `JumpTable::checkForMultistage` is not yet ported (it
+    /// needs the partial-`Funcdata` simplification path). We mirror the
+    /// iteration structure and surface the gap: for now no new indirect jumps
+    /// are reported, so this is a structural placeholder that preserves the
+    /// multistage loop contract.
+    // Ghidra: flow.cc:1408 FlowInfo::checkMultistageJumptables
+    pub fn check_multistage_jumptables(&self) -> Vec<crate::op::PcodeOpRef> {
+        let rediscovered: Vec<crate::op::PcodeOpRef> = Vec::new();
+        let num = self.fd.jump_tables.len();
+        for i in 0..num {
+            let jt_arc = &self.fd.jump_tables[i];
+            // Ghidra: if (jt->checkForMultistage(&data)) tablelist.push_back(...);
+            // RUGRA-GLUE: JumpTable::checkForMultistage is not yet ported — it
+            // requires the partial Funcdata simplification loop that Rugra
+            // does not model. We keep the iteration so the multistage contract
+            // is visible; nothing is pushed until that method exists.
+            let _ = jt_arc;
+        }
+        rediscovered
+    }
+
+    /// If the given injected op is a CALL, CALLIND, or BRANCHIND, add
+    /// references to it in the other flow tables. Faithful to
+    /// `FlowInfo::xrefInlinedBranch` (flow.cc:1053-1065).
+    ///
+    /// For BRANCHIND, Ghidra calls `data.linkJumpTable(op)` and, if that
+    /// returns NULL, pushes the op onto `tablelist` so it will be recovered
+    /// later. Rugra does not yet have `Funcdata::linkJumpTable`, so we mirror
+    /// the logic with a local `find_jump_table` lookup and push onto the
+    /// returned work-list when no table is linked.
+    // Ghidra: flow.cc:1053 FlowInfo::xrefInlinedBranch
+    pub fn xref_inlined_branch(&mut self, op: &crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef> {
+        let mut new_tablelist: Vec<crate::op::PcodeOpRef> = Vec::new();
+        let code = op.0.read().unwrap().opcode;
+        match code {
+            OpCode::CPUI_CALL => {
+                // RUGRA-GLUE: setupCallSpecs needs FuncCallSpecs; deferred to
+                // ActionFuncLink (flow.cc:1057). No-op here.
+            }
+            OpCode::CPUI_CALLIND => {
+                // RUGRA-GLUE: setupCallindSpecs needs FuncCallSpecs; deferred
+                // to ActionFuncLink (flow.cc:1059). No-op here.
+            }
+            OpCode::CPUI_BRANCHIND => {
+                // data.linkJumpTable(op) — flow.cc:1061. Rugra's equivalent is
+                // find_jump_table; if none exists we queue the op for recovery.
+                let linked = self.fd.find_jump_table(op).is_some();
+                if !linked {
+                    new_tablelist.push(op.clone());
+                }
+            }
+            _ => {}
+        }
+        new_tablelist
+    }
+
+    /// Add any remaining un-followed addresses to the unprocessed list.
+    /// Faithful to `FlowInfo::findUnprocessed` (flow.cc:850-863). For each
+    /// address still on `addrlist`: if we have already seen it, Ghidra marks
+    /// its target op as a basic-block start; otherwise it is appended to
+    /// `unprocessed`.
+    // Ghidra: flow.cc:850 FlowInfo::findUnprocessed
+    pub fn find_unprocessed(&mut self) {
+        // Snapshot addrlist so we can mutate self while iterating.
+        let addrs: Vec<Address> = self.addrlist.drain(..).collect();
+        for addr in addrs {
+            if self.seen_instruction(addr) {
+                // Ghidra: PcodeOp *op = target(*iter); data.opMarkStartBasic(op);
+                // RUGRA-GLUE: opMarkStartBasic is applied during block
+                // splitting (build_blocks_from_alive), so this is a no-op.
+            } else {
+                self.unprocessed.push(addr);
+            }
+        }
+    }
+
+    /// Sort the unprocessed list and remove duplicates. Faithful to
+    /// `FlowInfo::dedupUnprocessed` (flow.cc:866-885). Ghidra hand-rolls the
+    /// dedup over a sorted vector; Rust's `sort` + `dedup` produce the same
+    /// result because `Address: Ord`.
+    // Ghidra: flow.cc:866 FlowInfo::dedupUnprocessed
+    pub fn dedup_unprocessed(&mut self) {
+        if self.unprocessed.is_empty() {
+            return;
+        }
+        self.unprocessed.sort();
+        self.unprocessed.dedup();
+    }
+
+    /// Generate a special-form RETURN (artificial halt) for every address in
+    /// the unprocessed list. Faithful to `FlowInfo::fillinBranchStubs`
+    /// (flow.cc:889-901). Each stub is marked as both a basic-block start and
+    /// an instruction start.
+    // Ghidra: flow.cc:889 FlowInfo::fillinBranchStubs
+    pub fn fillin_branch_stubs(&mut self) {
+        self.find_unprocessed();
+        self.dedup_unprocessed();
+        let stubs: Vec<Address> = self.unprocessed.iter().cloned().collect();
+        for addr in &stubs {
+            let op = self.artificial_halt(*addr, pcodeop_flags::MISSING);
+            // Ghidra: data.opMarkStartBasic(op); data.opMarkStartInstruction(op);
+            // RUGRA-GLUE: Rugra applies STARTBASIC/STARTMARK during
+            // build_blocks_from_alive; the halt op is already in the alive
+            // list via new_op. We set the flags directly to match Ghidra.
+            {
+                let mut o = op.0.write().unwrap();
+                o.flags |= pcodeop_flags::STARTBASIC;
+                o.flags |= pcodeop_flags::STARTMARK;
+            }
+        }
+    }
+
+    /// Collect edges between basic blocks as (source_op, target_op) pairs.
+    /// Faithful to `FlowInfo::collectEdges` (flow.cc:906-977).
+    ///
+    /// Edges are generated for:
+    ///   - BRANCH: one edge to branchTarget
+    ///   - CBRANCH: two edges (fallthru + branch target)
+    ///   - BRANCHIND: one edge per jump-table entry (de-duped via setMark)
+    ///   - default op: a fallthru edge if the next op starts a basic block
+    ///
+    /// Rugra notes: Ghidra stores edges in two parallel lists
+    /// (`block_edge1`/`block_edge2`); we return a single `Vec<(PcodeOpRef,
+    /// PcodeOpRef)>`. Branch targets are resolved by address lookup against
+    /// the alive op list (the `target(addr)` analogue).
+    // Ghidra: flow.cc:906 FlowInfo::collectEdges
+    pub fn collect_edges(
+        &self,
+    ) -> Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> {
+        let mut edges: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)> = Vec::new();
+        let alive: &[crate::op::PcodeOpRef] = &self.fd.obank.alivelist;
+
+        for (idx, op_ref) in alive.iter().enumerate() {
+            let code = op_ref.0.read().unwrap().opcode;
+            match code {
+                OpCode::CPUI_BRANCH => {
+                    if let Some(targ) = self.target_op_for_branch(op_ref) {
+                        edges.push((op_ref.clone(), targ));
+                    }
+                }
+                OpCode::CPUI_BRANCHIND => {
+                    // data.findJumpTable(op) — flow.cc:934. If there is no
+                    // table we are doing partial flow analysis, assume no
+                    // out-edges (flow.cc:935-937).
+                    let op_addr = op_ref.0.read().unwrap().get_addr();
+                    if let Some(jt_arc) = self.fd.jump_tables.iter().find(|jt| {
+                        jt.read().unwrap().get_op_address().as_u64() == op_addr.as_u64()
+                    }) {
+                        let jt = jt_arc.read().unwrap();
+                        let num = jt.num_entries();
+                        // De-dup targets within this BRANCHIND via setMark
+                        // (flow.cc:941-946). We snapshot entries first.
+                        for i in 0..num {
+                            let addr = jt.get_address_by_index(i);
+                            if let Some(targ) = self.target_op_by_addr(addr) {
+                                if targ.0.read().unwrap().is_mark() {
+                                    continue;
+                                }
+                                targ.0.write().unwrap().set_mark();
+                                edges.push((op_ref.clone(), targ));
+                            }
+                        }
+                        // RUGRA-GLUE: Ghidra clears only the marks it set in
+                        // this iteration (flow.cc:947-956) by walking back
+                        // from the end of the edge list. We clear every mark
+                        // we set across all BRANCHINDs in a final pass below
+                        // to avoid borrow-checker conflicts.
+                    }
+                }
+                OpCode::CPUI_RETURN => {
+                    // No out-edge (flow.cc:958-959).
+                }
+                OpCode::CPUI_CBRANCH => {
+                    if let Some(targ) = self.fallthru_op(op_ref) {
+                        edges.push((op_ref.clone(), targ));
+                    }
+                    if let Some(targ) = self.target_op_for_branch(op_ref) {
+                        edges.push((op_ref.clone(), targ));
+                    }
+                }
+                _ => {
+                    // flow.cc:968-974: fallthru edge if next op starts a block.
+                    let nextstart = match alive.get(idx + 1) {
+                        Some(next) => {
+                            (next.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0
+                        }
+                        None => true, // end of list acts like a block boundary
+                    };
+                    if nextstart {
+                        if let Some(targ) = self.fallthru_op(op_ref) {
+                            edges.push((op_ref.clone(), targ));
+                        }
+                    }
+                }
+            }
+        }
+        // Final pass: clear all marks set during edge collection.
+        for (_, targ) in &edges {
+            targ.0.write().unwrap().clear_mark();
+        }
+        edges
+    }
+
+    // RUGRA-GLUE: Resolve the BRANCH/CBRANCH input(0) address to the first
+    // alive op at that address. Ghidra's branchTarget (flow.cc:187-199) also
+    // handles relative (constant) branches via findRelTarget; Rugra's lifter
+    // emits absolute addresses, so we only need the direct-address path.
+    fn target_op_for_branch(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
+        let in0 = {
+            let o = op.0.read().unwrap();
+            o.inrefs.get(0).cloned()
+        };
+        let in0 = in0?;
+        let target_addr = in0.read().unwrap().get_offset();
+        self.target_op_by_addr(Address::new(target_addr))
+    }
+
+    // RUGRA-GLUE: Find the first alive op whose address matches. Mirrors the
+    // address-fallthru loop in Ghidra's target() (flow.cc:115-138).
+    fn target_op_by_addr(&self, addr: Address) -> Option<crate::op::PcodeOpRef> {
+        for op_ref in &self.fd.obank.alivelist {
+            if op_ref.0.read().unwrap().get_addr().as_u64() == addr.as_u64() {
+                return Some(op_ref.clone());
+            }
+        }
+        None
+    }
+
+    // RUGRA-GLUE: Find the fallthru op for a given op. Mirrors Ghidra's
+    // fallthruOp (flow.cc:88-107): the next alive op in sequence, unless it
+    // belongs to a later instruction (in which case we look up the target of
+    // the next instruction). Rugra lacks SeqNum time-ordering across
+    // instructions, so we approximate with the next alive op whose address
+    // differs from the source op's instruction address.
+    fn fallthru_op(&self, op: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
+        let alive = &self.fd.obank.alivelist;
+        let pos = alive.iter().position(|r| Arc::ptr_eq(&r.0, &op.0))?;
+        let src_addr = op.0.read().unwrap().get_addr();
+        for next in alive.iter().skip(pos + 1) {
+            let next_addr = next.0.read().unwrap().get_addr();
+            if next_addr.as_u64() != src_addr.as_u64() {
+                return Some(next.clone());
+            }
+        }
+        None
+    }
+
+    /// Split raw p-code ops up into basic blocks. Faithful to
+    /// `FlowInfo::splitBasic` (flow.cc:983-1017).
+    ///
+    /// Ghidra walks the dead list creating a new `PcodeBlockBasic` each time
+    /// it encounters an op marked `isBlockStart()`, recording per-block
+    /// address ranges. Rugra delegates block construction to
+    /// [`Funcdata::build_blocks_from_alive`], which already groups ops by
+    /// STARTBASIC flags; this wrapper preserves the entry-point invariant
+    /// (flow.cc:994-995): the first alive op must be marked as a block start.
+    // Ghidra: flow.cc:983 FlowInfo::splitBasic
+    pub fn split_basic(&mut self) {
+        let first_ok = self
+            .fd
+            .obank
+            .alivelist
+            .first()
+            .map(|r| (r.0.read().unwrap().flags & pcodeop_flags::STARTBASIC) != 0)
+            .unwrap_or(true);
+        if !first_ok {
+            // Ghidra throws LowlevelError("First op not marked as entry point").
+            eprintln!("[FLOW] {}: warning: first op not marked as entry point", self.fd.name);
+        }
+        // Delegate to the existing block builder, which honors STARTBASIC.
+        self.fd.build_blocks_from_alive();
+    }
+
+    /// Generate edges between the basic blocks. Faithful to
+    /// `FlowInfo::connectBasic` (flow.cc:1021-1037). Walks the collected
+    /// (source, target) op pairs and asks the block graph to add an edge
+    /// between the parent blocks of each op. Rugra's block graph is rebuilt
+    /// wholesale by `build_blocks_from_alive`, so edge collection here is
+    /// informational; the graph already derives edges from branch ops.
+    // Ghidra: flow.cc:1021 FlowInfo::connectBasic
+    pub fn connect_basic(&self) {
+        // RUGRA-GLUE: Rugra's build_blocks_from_alive derives edges directly
+        // from branch ops during construction, so there is no separate edge
+        // list to replay. We collect edges only for diagnostics/testing.
+        let _edges = self.collect_edges();
+    }
+
+    /// Generate basic blocks from the raw control-flow. Faithful to
+    /// `FlowInfo::generateBlocks` (flow.cc:824-845). Order: fillinBranchStubs
+    /// → collectEdges → splitBasic → connectBasic, then ensure the entry
+    /// block has no incoming edges, and finally drop unreachable blocks if
+    /// the flow flagged possible_unreachable.
+    // Ghidra: flow.cc:824 FlowInfo::generateBlocks
+    pub fn generate_blocks(&mut self) {
+        self.fillin_branch_stubs();
+        // collectEdges is folded into split_basic's delegation in Rugra.
+        self.split_basic();
+        self.connect_basic();
+        // Ghidra: if entry block has incoming edges, prepend a new entry
+        // (flow.cc:831-840). Rugra's build_blocks_from_alive always makes the
+        // entry block the first block with no in-edges, so this is a no-op.
+        if self.has_possible_unreachable() {
+            // data.removeUnreachableBlocks(false,true) (flow.cc:844).
+            self.fd.remove_unreachable_blocks();
+        }
     }
 
 
