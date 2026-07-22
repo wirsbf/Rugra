@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::address::Address;
-use crate::block::{FlowBlock};
 use crate::crc32::crc_update;
 use crate::funcdata::Funcdata;
 use crate::marshal::{AttributeId, ElementId, Encoder};
@@ -772,8 +771,10 @@ impl SignatureEntry {
             return true;
         }
         drop(invn_rg);
-        // signature.cc:243-245: no descendants => standalone.
-        let mut descend = vn.read().unwrap().descend_iter();
+        // signature.cc:243-245: no descendants => standalone. Bind the read
+        // guard to a named variable so it outlives the descend iterator.
+        let vn_rg2 = vn.read().unwrap();
+        let mut descend = vn_rg2.descend_iter();
         let first = match descend.next() {
             None => return true,
             Some(d) => d,
@@ -1766,7 +1767,7 @@ impl GraphSigManager {
                 .hash[1];
             // signature.cc:589-603: order-invariant accumulation with CBRANCH
             // condition mixing.
-            let mut local_curhash = curhash;
+            let local_curhash = curhash;
             let mut accum: u64 = 0xbafabaca;
             for k in 0..neigh_hashes.len() {
                 let mut tmphash = hash_mixin(local_curhash, neigh_hashes[k]);
