@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use crate::address::Address;
+use crate::AddressSpace;
 use crate::type_system::datatype::*;
 
 /// Managed container for all Datatype objects
@@ -291,6 +293,24 @@ impl TypeFactory {
                 .map(|p| p.return_type.clone())
                 .into_iter()
                 .collect(),
+            // Ghidra TypePartialStruct/TypePartialUnion do not override
+            // numDepend/getDepend on the base (type.hh has no override on
+            // TypePartialStruct; TypePartialUnion delegates to the union —
+            // type.cc:2446). We return the container as the single dependency
+            // so dependentOrder can place the partial after its container.
+            Datatype::PartialStruct(ps) => vec![ps.container.clone()],
+            // TypePartialEnum inherits TypeEnum's numDepend=0, but the parent
+            // enum must precede it; expose it as a dependency.
+            Datatype::PartialEnum(pe) => vec![pe.parent.clone()],
+            // TypePartialUnion delegates numDepend to the underlying union
+            // (type.cc:2446); return the container's fields.
+            Datatype::PartialUnion(pu) => {
+                if let Datatype::Union(u) = pu.container.as_ref() {
+                    u.fields.iter().map(|f| f.type_ptr.clone()).collect()
+                } else {
+                    vec![pu.container.clone()]
+                }
+            }
         }
     }
 
@@ -459,6 +479,116 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3929 TypeFactory::getTypePartialStruct
+    /// Create a partial-structure covering `[off, off+sz)` of `contain` (a
+    /// struct or array). Faithful to `TypeFactory::getTypePartialStruct`
+    /// (type.cc:3929-3953): builds a `TypePartialStruct` whose `stripped`
+    /// fallback is `getBase(sz, TYPE_UNKNOWN)` — i.e. an undefined type of
+    /// `sz` bytes. Rugra reuses `get_base(sz, Unknown)` for the stripped form.
+    pub fn get_type_partial_struct(
+        &mut self,
+        contain: Arc<Datatype>,
+        off: i64,
+        sz: usize,
+    ) -> Arc<Datatype> {
+        // Ghidra keys partial types in the factory tree by their structure
+        // (container pointer + offset + size), not by name. Rugra's flat
+        // name-keyed map cannot look those up efficiently; we mint a
+        // synthetic name encoding the key so equivalent partials dedupe.
+        let key = format!("__partstruct_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
+        if let Some(existing) = self.find_by_name(&key) {
+            return existing;
+        }
+        let stripped = self.get_base(sz, TypeMetatype::Unknown);
+        let mut ps = TypePartialStruct::new(contain, off, sz, stripped);
+        ps.base.name = key.clone();
+        let dt = Arc::new(Datatype::PartialStruct(ps));
+        self.types.insert(key, dt.clone());
+        dt
+    }
+
+    // Ghidra: type.cc:3980 TypeFactory::getTypePartialEnum
+    /// Create a partial-enumeration covering `[off, off+sz)` of `contain` (an
+    /// enum). Faithful to `TypeFactory::getTypePartialEnum`
+    /// (type.cc:3980-3990): builds a `TypePartialEnum` whose `stripped`
+    /// fallback is `getBase(sz, TYPE_UNKNOWN)`.
+    pub fn get_type_partial_enum(
+        &mut self,
+        contain: Arc<Datatype>,
+        off: i64,
+        sz: usize,
+    ) -> Arc<Datatype> {
+        let key = format!("__partenum_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
+        if let Some(existing) = self.find_by_name(&key) {
+            return existing;
+        }
+        let stripped = self.get_base(sz, TypeMetatype::Unknown);
+        let mut pe = TypePartialEnum::new(contain, off, sz, stripped);
+        pe.base.name = key.clone();
+        let dt = Arc::new(Datatype::PartialEnum(pe));
+        self.types.insert(key, dt.clone());
+        dt
+    }
+
+    // Ghidra: type.cc:3955 TypeFactory::getTypePartialUnion
+    /// Create a partial-union covering `[off, off+sz)` of `contain` (a union).
+    /// Faithful to `TypeFactory::getTypePartialUnion` (type.cc:3955-3978):
+    /// builds a `TypePartialUnion` whose `stripped` fallback is
+    /// `getBase(sz, TYPE_UNKNOWN)`.
+    pub fn get_type_partial_union(
+        &mut self,
+        contain: Arc<Datatype>,
+        off: i64,
+        sz: usize,
+    ) -> Arc<Datatype> {
+        let key = format!("__partunion_{}_{}_{}", Arc::as_ptr(&contain) as usize, off, sz);
+        if let Some(existing) = self.find_by_name(&key) {
+            return existing;
+        }
+        let stripped = self.get_base(sz, TypeMetatype::Unknown);
+        let mut pu = TypePartialUnion::new(contain, off, sz, stripped);
+        pu.base.name = key.clone();
+        let dt = Arc::new(Datatype::PartialUnion(pu));
+        self.types.insert(key, dt.clone());
+        dt
+    }
+
+    // Ghidra: type.cc:3992 TypeFactory::getTypeSpacebase
+    /// Create a "spacebase" type for the given address space, scoped to
+    /// `frame` (INVALID for the global spacebase). Faithful to
+    /// `TypeFactory::getTypeSpacebase` (type.cc:3992-4000), which builds a
+    /// `TypeSpacebase(spaceid, localframe, glb)`. Rugra stores the optional
+    /// `Scope` (set later when an Architecture/SymbolTable is attached).
+    pub fn get_type_spacebase(
+        &mut self,
+        spaceid: Option<AddressSpace>,
+        frame: Address,
+    ) -> Arc<Datatype> {
+        // Rugra dedupes by a synthetic name encoding the space+frame identity.
+        let key = format!(
+            "__spacebase_{}_{}",
+            spaceid.map(|s| s.word_size()).unwrap_or(0),
+            frame.as_u64()
+        );
+        if let Some(existing) = self.find_by_name(&key) {
+            return existing;
+        }
+        let mut base = TypeBase::new(key.clone(), 0, TypeMetatype::Spacebase);
+        // Ghidra spacebase is a core type (cached on the architecture).
+        base.flags |= type_flags::CORETYPE;
+        let sb = TypeSpacebase {
+            base,
+            address: frame.clone(),
+            fd: None,
+            spaceid,
+            localframe: frame,
+            scope: None,
+        };
+        let dt = Arc::new(Datatype::Spacebase(sb));
+        self.types.insert(key, dt.clone());
+        dt
+    }
+
     // Ghidra: type.cc:4016 TypeFactory::getTypePointerRel
     /// Find/create a relative pointer that points at a known byte offset
     /// within a containing data-type. Faithful to
@@ -541,6 +671,27 @@ impl TypeFactory {
                 base,
                 address: s.address.clone(),
                 fd: s.fd.clone(),
+                spaceid: s.spaceid,
+                localframe: s.localframe.clone(),
+                scope: s.scope.clone(),
+            }),
+            Datatype::PartialStruct(ps) => Datatype::PartialStruct(TypePartialStruct {
+                base,
+                container: ps.container.clone(),
+                offset: ps.offset,
+                stripped: ps.stripped.clone(),
+            }),
+            Datatype::PartialEnum(pe) => Datatype::PartialEnum(TypePartialEnum {
+                base,
+                parent: pe.parent.clone(),
+                offset: pe.offset,
+                stripped: pe.stripped.clone(),
+            }),
+            Datatype::PartialUnion(pu) => Datatype::PartialUnion(TypePartialUnion {
+                base,
+                container: pu.container.clone(),
+                offset: pu.offset,
+                stripped: pu.stripped.clone(),
             }),
         };
         let dt = Arc::new(dt);

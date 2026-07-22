@@ -19832,6 +19832,14 @@ mod tests {
             base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
             address: Address::new(0),
             fd: None,
+            // RUGRA-GLUE: spaceid/localframe/scope added by the TypeSpacebase
+            // alignment pass (type.cc:2935 getMap/getSubType/getAddress). These
+            // tests exercise the chartype fast-path and do not need a scope, so
+            // the global-spacebase defaults (no space, invalid localframe, no
+            // scope) reproduce the prior "global spacebase" behaviour.
+            spaceid: None,
+            localframe: Address::new(0),
+            scope: None,
         }));
         let sb_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
@@ -19891,6 +19899,14 @@ mod tests {
             base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
             address: Address::new(0),
             fd: None,
+            // RUGRA-GLUE: spaceid/localframe/scope added by the TypeSpacebase
+            // alignment pass (type.cc:2935 getMap/getSubType/getAddress). These
+            // tests exercise the chartype fast-path and do not need a scope, so
+            // the global-spacebase defaults (no space, invalid localframe, no
+            // scope) reproduce the prior "global spacebase" behaviour.
+            spaceid: None,
+            localframe: Address::new(0),
+            scope: None,
         }));
         let sb_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),

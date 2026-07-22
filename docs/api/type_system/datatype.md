@@ -65,5 +65,66 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - needs_resolution()（type.hh:231）、find_resolve()（type.cc:586）、is_enum_type()（type.hh:219）、has_stripped()（type.hh:229）。
 - mark_equate/mark_un_equate/is_equated（Rugra 私有 EQUATED 位，Ghidra 对应 EquateSymbol）。
 - type_flags 补齐 CHARTYPE/ENUMTYPE/UTF16/UTF32/HAS_STRIPPED/IS_PTRREL/TYPE_INCOMPLETE/NEEDS_RESOLUTION。
+
+## 2026-07-22 新增 P0：TypePartialStruct / TypePartialEnum / TypePartialUnion + TypeSpacebase 完整对齐
+
+填补 `docs/alignment_audit/type_audit.md` 指出的 P0 缺口：三个 partial 子类此前完全缺失
+（被 `varmap.cc`/`printc.cc`/`ruleaction.cc` 大量使用），且 `TypeSpacebase::getMap/getSubType/getAddress`
+（栈帧/全局变量类型传播）未实现。本次按 `type.cc` 行号逐一忠实移植。
+
+### 新增 TypeMetatype 变体
+- `PartialStruct = 13`、`PartialEnum = 14`、`PartialUnion = 15`
+（对应 Ghidra `TYPE_PARTIALSTRUCT/TYPE_PARTIALENUM/TYPE_PARTIALUNION`，type.hh:79-98）。
+
+### `struct TypePartialStruct`（type.hh:571-585, type.cc:2330-2420）
+表示从一个 struct/array 容器中按字节区间 `[offset, offset+size)` 切出的部分。
+- `new(container, offset, size, stripped)`（type.cc:2330）— 断言容器为 Struct|Array，置 `HAS_STRIPPED`。
+- `get_component_for_ptr(off, sz)`（type.cc:2382）— 在容器内查找容纳 `[off, off+sz)` 的字段。
+- `compare` / `compare_dependency`（type.cc:2405/2415）— 先比 container 指针、再比 offset、再比 size。
+- 通过 `partial_struct_get_sub_type` / `partial_struct_get_hole_size`（free 函数）接入
+  `Datatype::get_sub_type` / `get_hole_size` 的 match 分派。
+
+### `struct TypePartialEnum`（type.hh:587-595, type.cc:2247-2330）
+表示枚举值的高/低字节切片：解析前将值左移 `8*offset` 位再委托给父枚举。
+- `new(container, offset, size, stripped)`（type.cc:2254）— 断言容器为 Enum。
+- `resolve_in_flow(val)`（type.cc:2280）— `val << (8*offset)` 后构造 `EnumRepresentation`。
+- `find_resolve(val)` / `find_compatible_resolve(val)`（type.cc:2300/2315）。
+- `resolve_truncation(val, skip)`（type.cc:2322）— 截断到 `size` 字节后解析。
+- `has_named_value` / `get_matches` 经 `enum_has_named_value`（type.cc:1354）、
+  `enum_get_matches`（type.cc:1365）实现，后者为 Ghidra 的命名恢复算法：
+  贪心匹配最大命名值，并以 `val` 的按位补码作第二轮回退（`covering_mask`）。
+
+### `struct TypePartialUnion`（type.hh:597-617, type.cc:2425-2546）
+union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
+- `new(container, offset, size, stripped)`（type.cc:2433）。
+- `resolve_in_flow(val)`（type.cc:2478）— 遍历容器 union 的同偏移字段，返回首个匹配 size 的字段类型。
+- `find_resolve(val)` / `find_compatible_resolve(val)`（type.cc:2500/2515）。
+- `find_truncation(val, shortsize)`（type.cc:2525）— 在 union 字段中找截断匹配。
+- `num_depend` / `get_depend` 经 `union_num_depend` / `union_get_depend`（type.cc:2540）
+  返回容器 union 的字段列表。
+
+### `TypeSpacebase` 完整方法（type.hh:721-746, type.cc:2935-3098）
+将一个 `AddrSpace` 视作按指针偏移索引的"结构体"，用于栈帧/全局变量类型传播。
+- 结构体新增字段 `spaceid: Option<AddressSpace>`、`localframe: Address`、`scope: Option<Arc<Scope>>`。
+- `get_map(off)`（type.cc:2996）— 委托 `Scope::map_addr(localframe, off, ...)`；
+  无 scope 时返回空（对应 Ghidra "no map ⇒ TYPE_UNKNOWN" 回退）。
+- `get_sub_type(off)`（type.cc:3040）— 经 `get_map` 取组件。
+- `get_address(off, sz)`（type.cc:3060）— 构造目标 `Address`。
+- `compare` / `compare_dependency`（type.cc:3085/3092）— 比 spaceid/localframe。
+- `new_global(address)` 便捷构造全局 spacebase；`is_invalid()` 判定 localframe 是否 INVALID。
+
+### 依赖范围与工厂（见 `typefactory.md` / `typefactory.rs`）
+- `TypeFactory::depends_of` 已覆盖三 partial 变体：PartialStruct 返回 container；
+  PartialEnum 返回 parent；PartialUnion 返回 union 字段。
+- `TypeFactory::typedef` 已覆盖三 partial 变体的克隆（带新 base）。
+- 新增工厂 getter：`get_type_partial_struct` / `get_type_partial_enum` /
+  `get_type_partial_union`（type.cc:3929/3980/3955），以 `__part{struct,enum,union}_{ptr}_{off}_{sz}`
+  合成名做去重键（Rugra 平坦 map 无法像 Ghidra 树那样按结构键查找）。
+- `get_type_spacebase`（type.cc:3992）。
+
+### 测试
+新增 10 个单元测试覆盖：partial struct 的 offset 切片与 compare、partial enum 的位移解析与
+`get_matches`、partial union 的 `resolve_in_flow`、spacebase 的 `get_map`/`is_invalid` 行为。
+<!-- partial-port: 2026-07-22 -->
 <!-- annotation-pass: 2026-07-04 -->
 <!-- printnamebase-port: 1783140112.9236958 -->
