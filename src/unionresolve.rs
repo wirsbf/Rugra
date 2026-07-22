@@ -1574,13 +1574,13 @@ mod tests {
 
     #[test]
     fn test_visit_mark_ordering() {
-        let v1 = Arc::new(RwLock::new(Varnode::new_unique(0x100, 4)));
-        let v2 = Arc::new(RwLock::new(Varnode::new_unique(0x200, 4)));
-        let m1 = VisitMark::new(&v1, 0);
-        let m1b = VisitMark::new(&v1, 1);
-        let m2 = VisitMark::new(&v2, 0);
-        assert!(m1 < m1b);
-        assert!(m1b < m2);
+        // Use from_id for deterministic key ordering (Arc pointer addresses
+        // are not guaranteed to reflect allocation order).
+        let m1 = VisitMark::from_id(0x100, 0);
+        let m1b = VisitMark::from_id(0x100, 1);
+        let m2 = VisitMark::from_id(0x200, 0);
+        assert!(m1 < m1b);  // same vn, lower index first
+        assert!(m1b < m2);  // lower vn_key first
         let a = VisitMark::from_id(0x100, 0);
         let b = VisitMark::from_id(0x100, 1);
         assert!(a < b);
@@ -1691,8 +1691,9 @@ mod tests {
             ],
         });
         assert_eq!(num_depend(&u), 2);
-        assert_eq!(get_depend(&u, 0).get_name(), "a");
-        assert_eq!(get_depend(&u, 1).get_name(), "b");
+        // get_depend returns the field TYPE (type_ptr), not the field name.
+        assert_eq!(get_depend(&u, 0).get_name(), "int");
+        assert_eq!(get_depend(&u, 1).get_name(), "char");
         let int_base = Datatype::Base(crate::type_system::datatype::TypeBase::new(
             "int".into(), 4, TypeMetatype::Int));
         assert_eq!(num_depend(&int_base), 0);
