@@ -127,6 +127,10 @@ pub mod optoken {
 /// Printing modification flags mirroring Ghidra's `modifiers` enum
 /// (printlanguage.hh:144-161). Stored in PrintC.mods as a bitmask.
 pub mod print_mods {
+    /// Hide pointer deref for load with other ops (printlanguage.hh:150).
+    pub const PRINT_LOAD_VALUE: u32 = 0x20;
+    /// Hide pointer deref for store with other ops (printlanguage.hh:151).
+    pub const PRINT_STORE_VALUE: u32 = 0x40;
     /// Do not print branch instruction (printlanguage.hh:152).
     pub const NO_BRANCH: u32 = 0x80;
     /// Print only the branch instruction (printlanguage.hh:153).
@@ -140,6 +144,9 @@ pub mod print_mods {
     /// The current block may need to surround itself with additional braces
     /// (printlanguage.hh:160). Enables `else if` collapsing.
     pub const PENDING_BRACE: u32 = 0x8000;
+    /// Print the negation token (printlanguage.hh:158). Set by opBoolNegate
+    /// when folding `!(a==b)` -> `a != b`; the comparison reader consumes it.
+    pub const NEGATETOKEN: u32 = 0x2000;
 }
 
 // Ghidra: database.hh:2027 symbol_display_format
@@ -346,6 +353,21 @@ pub struct PrintC {
     /// (printc.cc:1588 `resetDefaultsPrintC`). Read by the TYPE_PTR arm of
     /// `pushConstant` (printc.cc:1777).
     option_null: bool,
+    /// Whether to hide extension casts that are implied by C integer
+    /// promotion. Faithful to `PrintC::option_hide_exts` (printc.hh:149),
+    /// defaulting to true (printc.cc:1585 `resetDefaultsPrintC`). Read by
+    /// `opIntZext`/`opIntSext` (printc.cc:790, 803) via
+    /// `CastStrategyC::isExtensionCastImplied`.
+    option_hide_exts: bool,
+    /// Whether to emit compound assignment operators (`+=`, `*=`, ...).
+    /// Faithful to `PrintC::option_inplace_ops` (printc.hh:150), defaulting to
+    /// false (printc.cc:1586 `resetDefaultsPrintC`). Read by `emitExpression`
+    /// (printc.cc:2473) before calling `emitInplaceOp`.
+    option_inplace_ops: bool,
+    /// Whether to print unplaced/unused variables. Faithful to
+    /// `PrintC::option_unplaced` (printc.hh:154), defaulting to false
+    /// (printc.cc:1589 `resetDefaultsPrintC`).
+    option_unplaced: bool,
 }
 
 impl PrintC {
@@ -394,6 +416,9 @@ impl PrintC {
             option_convention: true, // printc.cc:1584 resetDefaultsPrintC
             option_nocasts: false,   // printc.cc:1587 resetDefaultsPrintC
             option_null: false,      // printc.cc:1588 resetDefaultsPrintC
+            option_hide_exts: true,    // printc.cc:1585 resetDefaultsPrintC
+            option_inplace_ops: false, // printc.cc:1586 resetDefaultsPrintC
+            option_unplaced: false,    // printc.cc:1589 resetDefaultsPrintC
 
         }
     }
@@ -6729,7 +6754,9 @@ impl PrintC {
     pub fn push_partial_symbol(&mut self, sym_name: &str, mut off: i64,
                                mut sz: i64, ct: Option<&Datatype>) {
         let mut entries: Vec<String> = Vec::new();
-        let mut current = ct.cloned();
+        // Walk the type tree via Arc clones so field/array descent (which
+        // returns Arc<Datatype>) composes with the entry-point borrow.
+        let mut current: Option<Arc<Datatype>> = ct.map(|d| Arc::new(d.clone()));
         // Bound the type-tree walk (Ghidra's `while(ct != nullptr)` terminates
         // because each iteration either descends into a smaller field or
         // pushes a synthetic entry and nulls ct).
