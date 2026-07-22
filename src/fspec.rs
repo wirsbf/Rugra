@@ -338,6 +338,29 @@ impl FuncProto {
     // Ghidra: fspec.cc:3778 FuncProto::setModelName
     /// Set the calling convention model name.
     pub fn set_model_name(&mut self, name: &str) { self.calling_convention = name.to_string(); }
+
+    // Ghidra: fspec.hh:1394 FuncProto::isModelUnknown
+    /// Return true if the prototype model is unknown. Faithful to
+    /// `FuncProto::isModelUnknown()` (fspec.hh:1394), which delegates to
+    /// `model->isUnknown()`. Rugra represents the model as a string; the
+    /// "unknown" sentinel (constructor default, fspec.rs:151) maps to Ghidra's
+    /// `UnknownModel::isUnknown() == true` (fspec.hh:1031).
+    pub fn is_model_unknown(&self) -> bool {
+        self.calling_convention == "unknown" || self.calling_convention.is_empty()
+    }
+
+    // Ghidra: fspec.hh:1395 FuncProto::printModelInDecl
+    /// Return true if the model name should be printed in declarations.
+    /// Faithful to `FuncProto::printModelInDecl()` (fspec.hh:1395), which
+    /// delegates to `model->printInDecl()` (fspec.hh:981, returns `isPrinted`).
+    /// Unknown models have `isPrinted=false`, so their name is never printed.
+    /// For known models, Rugra conservatively returns true (matching Ghidra's
+    /// default for non-unknown models where `isPrinted` is set during model
+    /// loading). This guards the `option_convention` branch in
+    /// `emit_function_declaration` (printc.cc:2583-2589).
+    pub fn print_model_in_decl(&self) -> bool {
+        !self.is_model_unknown()
+    }
 }
 
 /// Specification for a specific function call site

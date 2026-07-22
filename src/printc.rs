@@ -307,6 +307,10 @@ pub struct PrintC {
     /// covers a stack offset, get_stack_variable_name prefers its name over the
     /// frame-relative heuristic.
     scope: Option<crate::varmap::ScopeLocal>,
+    /// Whether to print the calling-convention model name in function
+    /// declarations. Faithful to `PrintC::option_convention` (printc.hh:148),
+    /// defaulting to true (printc.cc:1584 `resetDefaultsPrintC`).
+    option_convention: bool,
 }
 
 impl PrintC {
@@ -352,6 +356,7 @@ impl PrintC {
             struct_emit_depth: 0,
             goto_targets: HashSet::new(),
             scope: None,
+            option_convention: true, // printc.cc:1584 resetDefaultsPrintC
 
         }
     }
@@ -5816,17 +5821,19 @@ impl PrintC {
         self.emit_prototype_output(fd, proto);
         // emit->spaces(1);
         self.emit.print(" ");
-        // if (option_convention) { ... printModelInDecl / getModelName ... }
-        // Rugra has no option_convention field; Ghidra default is false, so
-        // this branch is unreachable today. Preserved for 1:1 alignment once
-        // the field is wired (no behaviour change vs Ghidra default-off).
-        // if self.option_convention {
-        //     if proto.print_model_in_decl() {
-        //         let highlight = if proto.is_model_unknown() { error_color } else { keyword_color };
-        //         self.emit.print(proto.get_model_name(), highlight);
-        //         self.emit.spaces(1);
-        //     }
-        // }
+        // Ghidra: printc.cc:2583-2589 — calling-convention emission.
+        // `option_convention` defaults to true (printc.cc:1584). The model
+        // name is printed only when `printModelInDecl()` is true (i.e. the
+        // model is known and marked isPrinted). For unknown/default models
+        // (the common case for stripped x64 binaries), printModelInDecl
+        // returns false, so no convention token is emitted — matching the
+        // Ghidra golden curl output (0 convention tokens).
+        if self.option_convention {
+            if proto.print_model_in_decl() {
+                self.emit.print(proto.get_model_name());
+                self.emit.print(" ");
+            }
+        }
         // int4 id1 = emit->openGroup();
         // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
         // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
@@ -6308,7 +6315,9 @@ impl PrintC {
         }
         // displayFormat decision (no symbol, no mods force): val<=10 -> dec;
         // else mostNaturalBase(val)==16 -> hex, else dec.
-        let as_hex = v > 10 && Self::most_natural_base(v) == 16;
+        // Uses the faithful most_natural_base from printlanguage.rs (cc:731-788,
+        // digit-frequency heuristic), not a crude threshold.
+        let as_hex = v > 10 && crate::printlanguage::most_natural_base(v) == 16;
         let text = if print_negsign {
             if as_hex {
                 format!("-0x{:x}", v)
@@ -6324,18 +6333,6 @@ impl PrintC {
         self.emit.print(&text);
     }
 
-    // Ghidra: printlanguage.cc mostNaturalBase
-    /// Decide the most natural base for displaying a value. Faithful to
-    /// `PrintLanguage::mostNaturalBase` (printlanguage.cc). Rugra mirrors the
-    /// common heuristic used by the existing push_constant (batch-1):
-    /// values > 0x1000 favour hex.
-    fn most_natural_base(val: u64) -> u32 {
-        if val > 0x1000 {
-            16
-        } else {
-            10
-        }
-    }
 }
 
 #[cfg(test)]

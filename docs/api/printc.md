@@ -4,7 +4,9 @@
 
 ## 文档状态
 
-- **状态**: 🔧 **L2→L3 迁移中（2026-07-16 P4 register-var 编号已改进）**
+- **状态**: 🔧 **L2→L3 迁移中（2026-07-22 cross-review 修复 calling-convention + mostNaturalBase）**
+- **2026-07-22 修复（cross-review printc.cc:2583 calling-convention）**: `emit_function_declaration` 的调用约定分支此前被注释掉且文档错误声称 `option_convention` 默认 false（实际默认 true，printc.cc:1584）。现已：新增 `PrintC.option_convention` 字段（默认 true）+ 取消注释分支 + 在 FuncProto 新增 `is_model_unknown()`/`print_model_in_decl()`（fspec.hh:1394-1395）。对 unknown 模型（curl 场景）`print_model_in_decl` 返回 false，不发射约定 token，与 Ghidra golden 一致（0 个约定 token）。
+- **2026-07-22 修复（cross-review mostNaturalBase）**: `emit_integer_value` 的进制选择此前用 `val > 0x1000` 粗糙阈值，现改为调用 `printlanguage::most_natural_base()`（printlanguage.cc:731-788 的 digit-frequency 启发式）。影响枚举值/常量的 hex/dec 显示。
 - **2026-07-16 修复（P4 register-var 编号顺序）**: 新增 `preallocate_register_compact_names`：在 doc_variable_decls 前扫描所有 op，收集 Register 空间 auto-local 输出 varnode 的 raw 名 + def-op 地址，按 def-op 地址排序（Ghidra nameDedup 创建顺序的近似），预填 compact_rename。使寄存器变量编号按 def-op 地址序确定，而非 op 遍历首次触及序。栈变量路径已对齐（doc_variable_decls 按 scope.symbols 顺序）。numbering=485 不变（defects=0，编号是外观差异）。
 - **2026-07-16 修复（P7-overflow_syntax）**: while-do 循环当条件块 isComplex 时（BlockWhileDo.overflow_syntax 标志，对齐 hasOverflowSyntax block.hh:692，由 try_rule_while_do 的 bl.is_complex() 设置，cc:1538），emit_structured_whiledo 发射 `while(true){ <cond body> if(cond) break; <body> }` 而非 `while(cond){ body }`（对齐 emitBlockWhileDo cc:3017-3044）。新增 BlockWhileDo.overflow_syntax 字段。
 - **2026-07-16 修复（P5 for-loop header comma_separate）**: for 循环头 `for(init;cond;iter)` 发射现包裹 `push_mod/set_mod(COMMA_SEPARATE)/pop_mod`，对齐 Ghidra `emitForLoop`（printc.cc:2973-2990）为 init/cond/iter 片段激活 comma_separate。配合 P10 的 `doc_statement` 按 `!is_set(COMMA_SEPARATE)` 条件输出 `;`，避免 for 头片段重复分号。init/iter 文本仍在检测时烘焙（ActionStructureTransform），非从 raw PcodeOp 重发——这是 P5 剩余保真细节，但 latent（curl 语料 0 个 for 循环）。

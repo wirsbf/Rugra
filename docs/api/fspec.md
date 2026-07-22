@@ -1,6 +1,6 @@
 # `fspec.rs` API Reference
 
-**状态**: ✅ **L3（2026-07-16 abort_spacebase_relative + clear_stack_placeholder_slot + stack_placeholder_slot 已加）**——全部 FuncProto/FuncCallSpecs/ParamTrial/ParamActive 方法覆盖 + spacebase 占位符清理。
+**状态**: ✅ **L3（2026-07-22 +is_model_unknown/print_model_in_decl for calling-convention emission）**——全部 FuncProto/FuncCallSpecs/ParamTrial/ParamActive 方法覆盖 + spacebase 占位符清理 + 调用约定模型查询。
 **源代码路径**: `src/fspec.rs`
 
 ## 模块说明 (Module Doc)
