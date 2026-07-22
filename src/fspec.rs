@@ -332,11 +332,11 @@ impl FuncProto {
     pub fn set_dotdotdot(&mut self, val: bool) { self.is_dotdotdot = val; }
 
     // Ghidra: fspec.cc:3778 FuncProto::getModelName
-    /// Get the calling convention model name.
+    /// Get the calling-convention model name.
     pub fn get_model_name(&self) -> &str { &self.calling_convention }
 
     // Ghidra: fspec.cc:3778 FuncProto::setModelName
-    /// Set the calling convention model name.
+    /// Set the calling-convention model name.
     pub fn set_model_name(&mut self, name: &str) { self.calling_convention = name.to_string(); }
 
     // Ghidra: fspec.hh:1394 FuncProto::isModelUnknown
@@ -899,13 +899,21 @@ pub struct ParamTrial {
     slot: i32,
     offset: i32,
     fixed_position: i32,
+    /// Index into the owning `ParamListStandard`'s entry list, or `None` if
+    /// no matching entry was found. Stands in for Ghidra's
+    /// `const ParamEntry *entry` pointer (fspec.hh:230). Rugra stores an
+    /// index because Rust trials must be `Clone` without lifetime params.
+    entry_index: Option<usize>,
 }
 
 impl ParamTrial {
     // Ghidra: fspec.hh:210 ParamTrial::new
     /// Construct from (address, size, slot). Faithful to the C++ constructor.
     pub fn new(addr: Address, sz: i32, sl: i32) -> Self {
-        Self { flags: 0, addr, size: sz, slot: sl, offset: -1, fixed_position: -1 }
+        Self {
+            flags: 0, addr, size: sz, slot: sl, offset: -1, fixed_position: -1,
+            entry_index: None,
+        }
     }
     // Ghidra: fspec.hh:210 ParamTrial::getAddress
     pub fn get_address(&self) -> Address { self.addr }
@@ -917,8 +925,23 @@ impl ParamTrial {
     pub fn set_slot(&mut self, val: i32) { self.slot = val; }
     // Ghidra: fspec.hh:210 ParamTrial::getOffset
     pub fn get_offset(&self) -> i32 { self.offset }
-    // Ghidra: fspec.hh:210 ParamTrial::setEntry
-    pub fn set_entry(&mut self, off: i32) { self.offset = off; }
+    // Ghidra: fspec.hh:230 ParamTrial::setEntry
+    /// Record which ParamEntry (by index into the model's entry list) holds
+    /// this trial, plus the slot offset within that entry. Faithful to
+    /// `ParamTrial::setEntry(const ParamEntry *,int4)`.
+    pub fn set_entry(&mut self, entry_index: usize, off: i32) {
+        self.entry_index = Some(entry_index);
+        self.offset = off;
+    }
+    // Ghidra: fspec.hh:230 ParamTrial::clearEntry
+    /// Detach this trial from its ParamEntry. Faithful to the
+    /// `entry = (const ParamEntry *)0` reset.
+    pub fn clear_entry(&mut self) { self.entry_index = None; }
+    // Ghidra: fspec.hh:230 ParamTrial::getEntry
+    /// Return the index of the ParamEntry that holds this trial, or `None`
+    /// if no entry matches. Stands in for Ghidra's `const ParamEntry*` — the
+    /// caller dereferences `model.get_entry()[index]`.
+    pub fn get_entry_index(&self) -> Option<usize> { self.entry_index }
     // Ghidra: fspec.hh:210 ParamTrial::setFixedPosition
     pub fn set_fixed_position(&mut self, pos: i32) { self.fixed_position = pos; }
     // Ghidra: fspec.hh:210 ParamTrial::markUsed
@@ -1098,6 +1121,1485 @@ impl ParamActive {
     pub fn get_num_used(&self) -> usize {
         self.trial.iter().filter(|t| t.is_used()).count()
     }
+
+    // Ghidra: fspec.cc:2087 ParamActive::sortTrials
+    /// Sort the trial list by (address, size). Faithful to
+    /// `ParamActive::sortTrials` (fspec.cc:2087-2095). Called at the end of
+    /// `ParamListStandard::buildTrialMap` so separateSections can assume
+    /// trials are in storage order within each section.
+    pub fn sort_trials(&mut self) {
+        self.trial.sort_by(|a, b| {
+            a.addr.as_u64().cmp(&b.addr.as_u64()).then(a.size.cmp(&b.size))
+        });
+    }
+}
+
+// ======================================================================
+// ParamEntry (fspec.hh:84-155 / fspec.cc:60-595)
+// ======================================================================
+// A parameter storage resource: either a single hardware register set, a
+// range of stack slots, or a join across multiple registers. Managed by
+// ParamListStandard. Faithful port of `class ParamEntry`.
+
+use crate::address::Range as FsRange;
+use crate::opcodes::OpCode as FspecOpCode;
+
+/// Storage class of a parameter resource. Faithful to the `TypeClass` enum
+/// (fspec.hh:421-431). Local copy in `fspec` (modelrules has its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TypeClass {
+    General = 0,
+    Float = 1,
+    Pointer = 2,
+    HiddenReturn = 3,
+    Vector = 4,
+    Class1 = 100,
+    Class2 = 101,
+    Class3 = 102,
+    Class4 = 103,
+}
+
+/// Translate the `<pentry>` `metatype=` attribute string to a TypeClass.
+/// Faithful to the inline parser in `ParamEntry::decode` (fspec.cc:511-543).
+/// RUGRA-GLUE: standalone helper (Ghidra inlines this in decode()).
+pub fn string_to_type_class(s: &str) -> TypeClass {
+    match s {
+        "float" => TypeClass::Float,
+        "ptr" => TypeClass::Pointer,
+        "hiddenret" => TypeClass::HiddenReturn,
+        "vector" => TypeClass::Vector,
+        "class1" => TypeClass::Class1,
+        "class2" => TypeClass::Class2,
+        "class3" => TypeClass::Class3,
+        "class4" => TypeClass::Class4,
+        _ => TypeClass::General,
+    }
+}
+
+/// A single storage location (space + offset + size). Faithful port of
+/// `struct VarnodeData` (varnode.hh). Local copy in `fspec` (modelrules
+/// has its own). Rugra collapses the space+into a single AddressSpace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VarnodeData {
+    pub space: AddressSpace,
+    pub offset: u64,
+    pub size: i32,
+}
+
+impl VarnodeData {
+    // RUGRA-GLUE: get_addr (Ghidra's VarnodeData has an `addr` field that
+    // is a constructed Address; Rugra builds it on demand).
+    pub fn get_addr(&self) -> Address { Address::new(self.offset) }
+}
+
+impl Default for VarnodeData {
+    fn default() -> Self {
+        Self { space: AddressSpace::Ram, offset: 0, size: 0 }
+    }
+}
+
+/// Cached join record: the list of pieces that make up a joined ParamEntry.
+/// Faithful port of `struct ParamEntry::JoinRecord` (fspec.hh:99).
+#[derive(Debug, Clone)]
+pub struct ParamEntryJoin {
+    pub pieces: Vec<VarnodeData>,
+}
+
+/// Flags for a ParamEntry. Faithful to the `ParamEntry` flags enum
+/// (fspec.hh:88-97).
+pub mod param_entry_flags {
+    /// The logical value is left-justified within its container.
+    pub const FORCE_LEFT_JUSTIFY: u32 = 1;
+    /// This entry contains the right-half of a small-size extension.
+    pub const FORCE_RIGHT_JUSTIFY: u32 = 2;
+    /// Reverse stack: slot 0 is the highest address, growing down.
+    pub const REVERSE_STACK: u32 = 4;
+    /// This entry is part of a `<group>` of mutually-overlapping entries.
+    pub const IS_GROUPED: u32 = 8;
+    /// This entry overlaps another and shares its group set.
+    pub const OVERLAPPING: u32 = 0x10;
+    /// Small values in this entry are zero-extended to the full size.
+    pub const SMALLSIZE_ZEXT: u32 = 0x20;
+    /// Small values in this entry are sign-extended to the full size.
+    pub const SMALLSIZE_SEXT: u32 = 0x40;
+    /// Small values in this entry are extended via the inttype's sign.
+    pub const SMALLSIZE_INTTYPE: u32 = 0x80;
+    /// A small float in this entry is extended into a larger float slot.
+    pub const SMALLSIZE_FLOATEXT: u32 = 0x100;
+    /// The high half of a joined entry: an additional check is required.
+    pub const EXTRACHECK_HIGH: u32 = 0x200;
+    /// The low half of a joined entry: an additional check is required.
+    pub const EXTRACHECK_LOW: u32 = 0x400;
+    /// This is the first ParamEntry in its type/storage class.
+    pub const FIRST_STORAGE: u32 = 0x800;
+}
+
+/// Containment characterization codes returned by
+/// `ParamListStandard::characterizeAsParam`. Faithful to the inline enum
+/// in `ProtoModel::characterizeAsParam` (fspec.hh:846-851).
+pub mod containment {
+    pub const NO_CONTAINMENT: i32 = 0;
+    pub const CONTAINS_UNJUSTIFIED: i32 = 1;
+    pub const CONTAINS_JUSTIFIED: i32 = 2;
+    pub const CONTAINED_BY: i32 = 3;
+}
+
+/// A parameter storage resource entry: register set, stack slot range, or
+/// join. Faithful port of `class ParamEntry` (fspec.hh:84-155).
+#[derive(Debug, Clone)]
+pub struct ParamEntry {
+    flags: u32,
+    type_storage: TypeClass,
+    group_set: Vec<i32>,
+    space: AddressSpace,
+    address_base: u64,
+    size: i32,
+    min_size: i32,
+    alignment: i32,
+    num_slots: i32,
+    join: Option<ParamEntryJoin>,
+}
+
+impl ParamEntry {
+    /// Is the logical value left-justified within its container. Faithful
+    /// to the inline `isLeftJustified` (fspec.hh:123).
+    fn is_left_justified(&self) -> bool {
+        (self.flags & param_entry_flags::FORCE_LEFT_JUSTIFY) != 0
+            || !self.space.is_big_endian()
+    }
+
+    // Ghidra: fspec.hh:125 ParamEntry::ParamEntry
+    // RUGRA-GLUE: constructor for use with decode (fspec.hh:125 pushes the
+    // first group; decode() fills the rest).
+    pub fn new(grp: i32) -> Self {
+        Self {
+            flags: 0,
+            type_storage: TypeClass::General,
+            group_set: vec![grp],
+            space: AddressSpace::Ram,
+            address_base: 0,
+            size: 0,
+            min_size: 0,
+            alignment: 0,
+            num_slots: 1,
+            join: None,
+        }
+    }
+
+    // Ghidra: fspec.hh:126 ParamEntry::getGroup
+    pub fn get_group(&self) -> i32 { self.group_set[0] }
+    // Ghidra: fspec.hh:127 ParamEntry::getAllGroups
+    pub fn get_all_groups(&self) -> &[i32] { &self.group_set }
+    // Ghidra: fspec.hh:129 ParamEntry::getSize
+    pub fn get_size(&self) -> i32 { self.size }
+    // Ghidra: fspec.hh:130 ParamEntry::getMinSize
+    pub fn get_min_size(&self) -> i32 { self.min_size }
+    // Ghidra: fspec.hh:131 ParamEntry::getAlign
+    pub fn get_align(&self) -> i32 { self.alignment }
+    // Ghidra: fspec.hh:133 ParamEntry::getType
+    pub fn get_type(&self) -> TypeClass { self.type_storage }
+    // Ghidra: fspec.hh:134 ParamEntry::isExclusion
+    pub fn is_exclusion(&self) -> bool { self.alignment == 0 }
+    // Ghidra: fspec.hh:135 ParamEntry::isReverseStack
+    pub fn is_reverse_stack(&self) -> bool {
+        (self.flags & param_entry_flags::REVERSE_STACK) != 0
+    }
+    // Ghidra: fspec.hh:136 ParamEntry::isGrouped
+    pub fn is_grouped(&self) -> bool {
+        (self.flags & param_entry_flags::IS_GROUPED) != 0
+    }
+    // Ghidra: fspec.hh:137 ParamEntry::isOverlap
+    pub fn is_overlap(&self) -> bool {
+        (self.flags & param_entry_flags::OVERLAPPING) != 0
+    }
+    // Ghidra: fspec.hh:138 ParamEntry::isFirstInClass
+    pub fn is_first_in_class(&self) -> bool {
+        (self.flags & param_entry_flags::FIRST_STORAGE) != 0
+    }
+    // Ghidra: fspec.hh:152 ParamEntry::isParamCheckHigh
+    pub fn is_param_check_high(&self) -> bool {
+        (self.flags & param_entry_flags::EXTRACHECK_HIGH) != 0
+    }
+    // Ghidra: fspec.hh:153 ParamEntry::isParamCheckLow
+    pub fn is_param_check_low(&self) -> bool {
+        (self.flags & param_entry_flags::EXTRACHECK_LOW) != 0
+    }
+    // Ghidra: fspec.hh:147 ParamEntry::getSpace
+    pub fn get_space(&self) -> AddressSpace { self.space }
+    // Ghidra: fspec.hh:148 ParamEntry::getBase
+    pub fn get_base(&self) -> u64 { self.address_base }
+    // Ghidra: fspec.hh:132 ParamEntry::getJoinRecord
+    pub fn get_join_pieces(&self) -> Option<&[VarnodeData]> {
+        self.join.as_ref().map(|j| j.pieces.as_slice())
+    }
+
+    // Ghidra: fspec.cc:60 ParamEntry::findEntryByStorage
+    /// Find a ParamEntry matching the given storage Varnode. Search
+    /// backward. Faithful to `findEntryByStorage` (fspec.cc:60-71).
+    pub fn find_entry_by_storage<'a>(
+        entry_list: &'a [ParamEntry],
+        vn: &VarnodeData,
+    ) -> Option<&'a ParamEntry> {
+        entry_list.iter().rev().find(|entry| {
+            entry.space == vn.space
+                && entry.address_base == vn.offset
+                && entry.size == vn.size
+        })
+    }
+
+    // Ghidra: fspec.cc:76 ParamEntry::resolveFirst
+    fn resolve_first(&mut self, cur_list: &[ParamEntry]) {
+        if cur_list.is_empty() {
+            self.flags |= param_entry_flags::FIRST_STORAGE;
+            return;
+        }
+        let prev = &cur_list[cur_list.len() - 1];
+        if self.type_storage != prev.type_storage {
+            self.flags |= param_entry_flags::FIRST_STORAGE;
+        }
+    }
+
+    // Ghidra: fspec.cc:94 ParamEntry::resolveJoin
+    /// If the ParamEntry is initialized with a join address, cache the join
+    /// record and adjust the group. Faithful to `resolveJoin`
+    /// (fspec.cc:94-116).
+    fn resolve_join(&mut self, cur_list: &[ParamEntry]) {
+        // TODO(ALIGNMENT_ROADMAP): depends on unported
+        // AddrSpaceManager::findJoin (space.cc). The join-space manager is
+        // not yet ported; Rugra receives pieces via set_join_pieces.
+        if self.space != AddressSpace::Join {
+            self.join = None;
+            return;
+        }
+        let pieces = match &self.join {
+            Some(j) if !j.pieces.is_empty() => j.pieces.clone(),
+            _ => return,
+        };
+        let mut new_groups: Vec<i32> = Vec::new();
+        for (i, piece) in pieces.iter().enumerate() {
+            if let Some(entry) = ParamEntry::find_entry_by_storage(cur_list, piece) {
+                new_groups.extend_from_slice(&entry.group_set);
+                if i == 0 {
+                    self.flags |= param_entry_flags::EXTRACHECK_LOW;
+                } else {
+                    self.flags |= param_entry_flags::EXTRACHECK_HIGH;
+                }
+            }
+        }
+        if new_groups.is_empty() { return; }
+        new_groups.sort_unstable();
+        new_groups.dedup();
+        self.group_set = new_groups;
+        self.flags |= param_entry_flags::OVERLAPPING;
+    }
+
+    // RUGRA-GLUE: set_join_pieces (no direct Ghidra counterpart — Ghidra
+    // pulls pieces from `spaceid->getManager()->findJoin(addressbase)`; in
+    // Rugra the caller supplies them since the join-space manager is
+    // unported).
+    pub fn set_join_pieces(&mut self, pieces: Vec<VarnodeData>) {
+        self.join = Some(ParamEntryJoin { pieces });
+    }
+
+    // Ghidra: fspec.cc:122 ParamEntry::resolveOverlap
+    /// Search for overlaps of this with any previous entry. If an overlap
+    /// is discovered, reassign this group. Faithful to `resolveOverlap`
+    /// (fspec.cc:122-153).
+    fn resolve_overlap(&mut self, cur_list: &[ParamEntry]) {
+        if self.join.is_some() { return; }
+        let mut overlap_set: Vec<i32> = Vec::new();
+        let addr = Address::new(self.address_base);
+        for entry in cur_list.iter() {
+            if !entry.intersects(addr, self.size) { continue; }
+            if self.contains(entry) {
+                if entry.is_overlap() { continue; }
+                overlap_set.extend_from_slice(&entry.group_set);
+                if self.address_base == entry.address_base {
+                    self.flags |= if self.space.is_big_endian() {
+                        param_entry_flags::EXTRACHECK_LOW
+                    } else {
+                        param_entry_flags::EXTRACHECK_HIGH
+                    };
+                } else {
+                    self.flags |= if self.space.is_big_endian() {
+                        param_entry_flags::EXTRACHECK_HIGH
+                    } else {
+                        param_entry_flags::EXTRACHECK_LOW
+                    };
+                }
+            }
+        }
+        if overlap_set.is_empty() { return; }
+        overlap_set.sort_unstable();
+        overlap_set.dedup();
+        self.group_set = overlap_set;
+        self.flags |= param_entry_flags::OVERLAPPING;
+    }
+
+    // Ghidra: fspec.cc:157 ParamEntry::groupOverlap
+    /// Return `true` if the group sets intersect at all. Faithful to
+    /// `groupOverlap` (fspec.cc:157-177).
+    pub fn group_overlap(&self, op2: &ParamEntry) -> bool {
+        let mut i = 0usize;
+        let mut j = 0usize;
+        let mut val_this = self.group_set[i];
+        let mut val_other = op2.group_set[j];
+        loop {
+            if val_this == val_other { return true; }
+            if val_this < val_other {
+                i += 1;
+                if i >= self.group_set.len() { return false; }
+                val_this = self.group_set[i];
+            } else {
+                j += 1;
+                if j >= op2.group_set.len() { return false; }
+                val_other = op2.group_set[j];
+            }
+        }
+    }
+
+    // Ghidra: fspec.cc:184 ParamEntry::subsumesDefinition
+    /// This entry must properly contain the other memory range, and the
+    /// entry properties must be compatible. Faithful to
+    /// `subsumesDefinition` (fspec.cc:184-193).
+    pub fn subsumes_definition(&self, op2: &ParamEntry) -> bool {
+        if self.type_storage != TypeClass::General && op2.type_storage != self.type_storage {
+            return false;
+        }
+        if self.space != op2.space { return false; }
+        if op2.address_base < self.address_base { return false; }
+        if op2.address_base + op2.size as u64 - 1 > self.address_base + self.size as u64 - 1 {
+            return false;
+        }
+        if self.alignment != op2.alignment { return false; }
+        true
+    }
+
+    // Ghidra: fspec.cc:199 ParamEntry::containedBy
+    /// Return `true` if the entire ParamEntry fits inside the range
+    /// `[addr, addr+sz)`. Faithful to `containedBy` (fspec.cc:199-207).
+    pub fn contained_by(&self, addr: Address, sz: i32) -> bool {
+        if self.address_base < addr.as_u64() { return false; }
+        let entry_off = self.address_base + self.size as u64 - 1;
+        let range_off = addr.as_u64() + sz as u64 - 1;
+        entry_off <= range_off
+    }
+
+    // Ghidra: fspec.cc:214 ParamEntry::intersects
+    /// If this is a join, each piece is tested for intersection. Otherwise
+    /// this, considered as a single memory, is tested. Faithful to
+    /// `intersects` (fspec.cc:214-239).
+    pub fn intersects(&self, addr: Address, sz: i32) -> bool {
+        let range_end = addr.as_u64().wrapping_add(sz as u64).wrapping_sub(1);
+        if let Some(j) = &self.join {
+            for vdata in &j.pieces {
+                let vdata_end = vdata.offset + vdata.size as u64 - 1;
+                if addr.as_u64() < vdata.offset && range_end < vdata_end { continue; }
+                if addr.as_u64() > vdata.offset && range_end > vdata_end { continue; }
+                return true;
+            }
+        }
+        let this_end = self.address_base + self.size as u64 - 1;
+        if addr.as_u64() < self.address_base && range_end < this_end { return false; }
+        if addr.as_u64() > self.address_base && range_end > this_end { return false; }
+        true
+    }
+
+    // Ghidra: fspec.cc:248 ParamEntry::justifiedContain
+    /// Check if the given memory range is contained in this. Return the
+    /// endian-aware offset (0 if LSB-aligned), else -1. Faithful to
+    /// `justifiedContain` (fspec.cc:248-283).
+    pub fn justified_contain(&self, addr: Address, sz: i32) -> i32 {
+        if let Some(j) = &self.join {
+            let mut res = 0i32;
+            for vdata in j.pieces.iter().rev() {
+                let cur = justified_contain_range(vdata.offset, vdata.size, addr.as_u64(), sz, false);
+                if cur < 0 { res += vdata.size; } else { return res + cur; }
+            }
+            return -1;
+        }
+        if self.alignment == 0 {
+            return justified_contain_range(
+                self.address_base, self.size, addr.as_u64(), sz,
+                (self.flags & param_entry_flags::FORCE_LEFT_JUSTIFY) != 0,
+            );
+        }
+        let start_addr = addr.as_u64();
+        if start_addr < self.address_base { return -1; }
+        let end_addr = start_addr.wrapping_add(sz as u64).wrapping_sub(1);
+        if end_addr < start_addr { return -1; }
+        if end_addr > self.address_base + self.size as u64 - 1 { return -1; }
+        let start_off = start_addr - self.address_base;
+        let end_off = end_addr - self.address_base;
+        if !self.is_left_justified() {
+            let res = ((end_off + 1) % self.alignment as u64) as i32;
+            if res == 0 { return 0; }
+            return self.alignment - res;
+        }
+        (start_off % self.alignment as u64) as i32
+    }
+
+    // Ghidra: fspec.cc:295 ParamEntry::getContainer
+    /// Calculate the containing memory range. Pass back the VarnodeData of
+    /// the parameter that would contain the given range. Faithful to
+    /// `getContainer` (fspec.cc:295-328).
+    pub fn get_container(&self, addr: Address, sz: i32, res: &mut VarnodeData) -> bool {
+        let end_addr = Address::new(addr.as_u64().wrapping_add(sz as u64 - 1));
+        if let Some(j) = &self.join {
+            for vdata in j.pieces.iter().rev() {
+                let vaddr = vdata.get_addr();
+                if addr.overlap(0, vaddr, vdata.size) >= 0
+                    && end_addr.overlap(0, vaddr, vdata.size) >= 0
+                {
+                    *res = *vdata;
+                    return true;
+                }
+            }
+            return false;
+        }
+        let entry = Address::new(self.address_base);
+        if addr.overlap(0, entry, self.size) < 0 { return false; }
+        if end_addr.overlap(0, entry, self.size) < 0 { return false; }
+        if self.alignment == 0 {
+            res.space = self.space;
+            res.offset = self.address_base;
+            res.size = self.size;
+            return true;
+        }
+        let al = (addr.as_u64() - self.address_base) % self.alignment as u64;
+        res.space = self.space;
+        res.offset = addr.as_u64() - al;
+        res.size = (end_addr.as_u64() - res.offset) as i32 + 1;
+        let al2 = res.size as i32 % self.alignment;
+        if al2 != 0 { res.size += self.alignment - al2; }
+        true
+    }
+
+    // Ghidra: fspec.cc:335 ParamEntry::contains
+    /// Test that this contains the other ParamEntry's memory range.
+    /// Faithful to `contains` (fspec.cc:335-350).
+    pub fn contains(&self, op2: &ParamEntry) -> bool {
+        if op2.join.is_some() { return false; }
+        if self.join.is_none() {
+            let addr = Address::new(self.address_base);
+            return op2.contained_by(addr, self.size);
+        }
+        let j = self.join.as_ref().unwrap();
+        for vdata in &j.pieces {
+            if op2.contained_by(vdata.get_addr(), vdata.size) { return true; }
+        }
+        false
+    }
+
+    // Ghidra: fspec.cc:366 ParamEntry::assumedExtension
+    /// Calculate the type of extension to expect for the given logical
+    /// value. Returns CPUI_COPY if no extensions are assumed. Faithful to
+    /// `assumedExtension` (fspec.cc:366-394).
+    pub fn assumed_extension(&self, addr: Address, sz: i32, res: &mut VarnodeData) -> FspecOpCode {
+        if self.flags
+            & (param_entry_flags::SMALLSIZE_ZEXT
+                | param_entry_flags::SMALLSIZE_SEXT
+                | param_entry_flags::SMALLSIZE_INTTYPE)
+            == 0
+        {
+            return FspecOpCode::CPUI_COPY;
+        }
+        if self.alignment != 0 {
+            if sz >= self.alignment { return FspecOpCode::CPUI_COPY; }
+        } else if sz >= self.size {
+            return FspecOpCode::CPUI_COPY;
+        }
+        if self.join.is_some() { return FspecOpCode::CPUI_COPY; }
+        if self.justified_contain(addr, sz) != 0 { return FspecOpCode::CPUI_COPY; }
+        if self.alignment == 0 {
+            res.space = self.space;
+            res.offset = self.address_base;
+            res.size = self.size;
+        } else {
+            res.space = self.space;
+            let align_adjust = (addr.as_u64() - self.address_base) % self.alignment as u64;
+            res.offset = addr.as_u64() - align_adjust;
+            res.size = self.alignment;
+        }
+        if self.flags & param_entry_flags::SMALLSIZE_ZEXT != 0 {
+            return FspecOpCode::CPUI_INT_ZEXT;
+        }
+        if self.flags & param_entry_flags::SMALLSIZE_INTTYPE != 0 {
+            return FspecOpCode::CPUI_PIECE;
+        }
+        FspecOpCode::CPUI_INT_SEXT
+    }
+
+    // Ghidra: fspec.cc:407 ParamEntry::getSlot
+    /// Calculate the slot occupied by a specific address. Faithful to
+    /// `getSlot` (fspec.cc:407-423).
+    pub fn get_slot(&self, addr: Address, skip: i32) -> i32 {
+        let mut res = self.group_set[0];
+        if self.alignment != 0 {
+            let diff = addr.as_u64() + skip as u64 - self.address_base;
+            let base_slot = (diff / self.alignment as u64) as i32;
+            if self.is_reverse_stack() {
+                res += (self.num_slots - 1) - base_slot;
+            } else {
+                res += base_slot;
+            }
+        } else if skip != 0 {
+            res = *self.group_set.last().unwrap();
+        }
+        res
+    }
+
+    // Ghidra: fspec.cc:434 ParamEntry::getAddrBySlot (3-arg)
+    /// Calculate the storage address assigned when allocating a parameter.
+    /// Faithful to `getAddrBySlot(int4&, int4, int4)` (fspec.cc:434-438).
+    pub fn get_addr_by_slot(&self, slot_num: &mut i32, sz: i32, type_align: i32) -> Option<Address> {
+        self.get_addr_by_slot_just(slot_num, sz, type_align, !self.is_left_justified())
+    }
+
+    // Ghidra: fspec.cc:450 ParamEntry::getAddrBySlot (4-arg)
+    /// Calculate the storage address assigned when allocating a parameter,
+    /// with explicit justification. Faithful to `getAddrBySlot(int4&, int4,
+    /// int4, bool)` (fspec.cc:450-493).
+    pub fn get_addr_by_slot_just(
+        &self, slot_num: &mut i32, sz: i32, type_align: i32, justify_right: bool,
+    ) -> Option<Address> {
+        if sz < self.min_size { return None; }
+        let space_used;
+        let mut res;
+        if self.alignment == 0 {
+            if *slot_num != 0 { return None; }
+            if sz > self.size { return None; }
+            res = Address::new(self.address_base);
+            space_used = self.size;
+            if self.flags & param_entry_flags::SMALLSIZE_FLOATEXT != 0 && sz != self.size {
+                // TODO(ALIGNMENT_ROADMAP): depends on unported
+                // AddrSpaceManager (constructFloatExtensionAddress). Rugra
+                // leaves the base address; the float-ext join record would
+                // normally be materialized here.
+                return Some(res);
+            }
+        } else {
+            if type_align > self.alignment {
+                let tmp = (*slot_num * self.alignment) % type_align;
+                if tmp != 0 {
+                    *slot_num += (type_align - tmp) / self.alignment;
+                }
+            }
+            let mut slots_used = sz / self.alignment;
+            if sz % self.alignment != 0 { slots_used += 1; }
+            if *slot_num + slots_used > self.num_slots { return None; }
+            space_used = slots_used * self.alignment;
+            let index;
+            if self.is_reverse_stack() {
+                index = self.num_slots - *slot_num - slots_used;
+            } else {
+                index = *slot_num;
+            }
+            res = Address::new(self.address_base + index as u64 * self.alignment as u64);
+            *slot_num += slots_used;
+        }
+        if justify_right {
+            res = Address::new(res.as_u64() + (space_used - sz) as u64);
+        }
+        Some(res)
+    }
+
+    // Ghidra: fspec.cc:583 ParamEntry::orderWithinGroup
+    /// Entries within a group must be distinguishable by size or type.
+    /// Returns `Err` if not distinguishable (Ghidra throws). Faithful to
+    /// `orderWithinGroup` (fspec.cc:583-595).
+    pub fn order_within_group(entry1: &ParamEntry, entry2: &ParamEntry) -> Result<(), String> {
+        if entry2.min_size > entry1.size || entry1.min_size > entry2.size { return Ok(()); }
+        if entry1.type_storage != entry2.type_storage {
+            if entry1.type_storage == TypeClass::General {
+                return Err(
+                    "<pentry> tags with a specific type must come before the general type".to_string(),
+                );
+            }
+            return Ok(());
+        }
+        Err("<pentry> tags within a group must be distinguished by size or type".to_string())
+    }
+
+    // RUGRA-GLUE: builder-style setters for the model loader (Ghidra fills
+    // these during `ParamEntry::decode`; Rugra's decoder is unported so the
+    // loader populates them via these accessors).
+    pub fn set_space(&mut self, spc: AddressSpace) { self.space = spc; }
+    pub fn set_base(&mut self, base: u64) { self.address_base = base; }
+    pub fn set_sizes(&mut self, size: i32, min_size: i32) {
+        self.size = size;
+        self.min_size = min_size;
+        if self.alignment != 0 && self.num_slots == 1 {
+            self.num_slots = size / self.alignment;
+        }
+    }
+    /// Set the alignment. If `alignment == size`, normalized to 0 (exclusion
+    /// entry) per `ParamEntry::decode` (fspec.cc:547-548).
+    pub fn set_alignment(&mut self, alignment: i32) {
+        self.alignment = alignment;
+        if self.alignment == self.size { self.alignment = 0; }
+        if self.alignment != 0 {
+            self.num_slots = self.size / self.alignment;
+        } else {
+            self.num_slots = 1;
+        }
+    }
+    pub fn set_type_class(&mut self, ty: TypeClass) { self.type_storage = ty; }
+
+    // RUGRA-GLUE: flags_mut (private field accessor so parse_pentry can
+    // mirror fspec.cc:565-573 reverse_stack/is_grouped adjustments without
+    // exposing flags as a public mutable field).
+    pub fn flags_mut(&mut self) -> &mut u32 { &mut self.flags }
+}
+
+// RUGRA-GLUE: justified_contain_range (free helper — mirrors Ghidra's
+// inline `Address::justifiedContain` used by `ParamEntry::justifiedContain`
+// and its join-piece walk).
+fn justified_contain_range(base: u64, sz2: i32, addr: u64, sz: i32, force_left: bool) -> i32 {
+    let end_addr = addr.wrapping_add(sz as u64).wrapping_sub(1);
+    let this_end = base.wrapping_add(sz2 as u64).wrapping_sub(1);
+    if addr < base && end_addr < this_end { return -1; }
+    if addr > base && end_addr > this_end { return -1; }
+    if force_left { (addr - base) as i32 } else { (this_end - end_addr) as i32 }
+}
+
+// ======================================================================
+// ParamListStandard (fspec.hh:589-646 / fspec.cc:597-1517)
+// ======================================================================
+
+/// Parameter-list type discriminator. Faithful to `ParamList`'s anonymous
+/// enum (fspec.hh:427-433).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamListKind {
+    Standard,
+    StandardOut,
+    Register,
+    RegisterOut,
+    Merged,
+}
+
+/// Response codes for address assignment. Faithful to `AssignAction`'s
+/// anonymous enum (modelrules.hh:264-271). Local copy in `fspec`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignActionResponse {
+    Success,
+    Fail,
+    NoAssignment,
+}
+
+/// Holds the result of a parameter assignment. Faithful to
+/// `struct ParameterPieces` (fspec.hh:451-460). Local copy in `fspec`.
+#[derive(Debug, Clone)]
+pub struct ParameterPieces {
+    pub addr: Address,
+    pub ty: Option<Arc<Datatype>>,
+    pub flags: u32,
+}
+
+/// `ParameterPieces::hiddenretparm = 2`. Faithful to (fspec.hh:457).
+pub const HIDDEN_RET_PARM: u32 = 2;
+/// `ParameterPieces::indirectstorage = 1`. Faithful to (fspec.hh:458).
+pub const INDIRECT_STORAGE_PIECE: u32 = 1;
+
+impl Default for ParameterPieces {
+    fn default() -> Self { Self { addr: Address::new(0), ty: None, flags: 0 } }
+}
+
+/// Description of a function prototype consulted during assignment.
+/// Faithful to `struct PrototypePieces` (fspec.hh:445-450).
+pub struct PrototypePieces<'a> {
+    pub out_type: Option<&'a Datatype>,
+    pub in_types: &'a [Arc<Datatype>],
+    pub first_var_arg_slot: i32,
+}
+
+/// A standard model for parameters as an ordered list of storage resources.
+/// Faithful port of `class ParamListStandard` (fspec.hh:589-646).
+#[derive(Debug, Clone)]
+pub struct ParamListStandard {
+    num_group: i32,
+    max_delay: i32,
+    this_before_ret: bool,
+    auto_killed_by_call: bool,
+    resource_start: Vec<i32>,
+    entry: Vec<ParamEntry>,
+    space_base: Option<AddressSpace>,
+    stack_entry_index: Option<usize>,
+}
+
+impl Default for ParamListStandard {
+    fn default() -> Self { Self::new() }
+}
+
+impl ParamListStandard {
+    // Ghidra: fspec.hh:617 ParamListStandard::ParamListStandard()
+    // RUGRA-GLUE: default constructor for use with decode().
+    pub fn new() -> Self {
+        Self {
+            num_group: 0,
+            max_delay: 0,
+            this_before_ret: false,
+            auto_killed_by_call: false,
+            resource_start: Vec::new(),
+            entry: Vec::new(),
+            space_base: None,
+            stack_entry_index: None,
+        }
+    }
+    // Ghidra: fspec.hh:628 ParamListStandard::getType
+    pub fn get_type(&self) -> ParamListKind { ParamListKind::Standard }
+    // Ghidra: fspec.hh:639 ParamListStandard::getSpacebase
+    pub fn get_spacebase(&self) -> Option<AddressSpace> { self.space_base }
+    // Ghidra: fspec.hh:640 ParamListStandard::isThisBeforeRetPointer
+    pub fn is_this_before_ret_pointer(&self) -> bool { self.this_before_ret }
+    // Ghidra: fspec.hh:642 ParamListStandard::getMaxDelay
+    pub fn get_max_delay(&self) -> i32 { self.max_delay }
+    // Ghidra: fspec.hh:643 ParamListStandard::isAutoKilledByCall
+    pub fn is_auto_killed_by_call(&self) -> bool { self.auto_killed_by_call }
+    // Ghidra: fspec.hh:620 ParamListStandard::getEntry
+    pub fn get_entry(&self) -> &[ParamEntry] { &self.entry }
+    // Ghidra: fspec.hh:621 ParamListStandard::isBigEndian
+    pub fn is_big_endian(&self) -> bool {
+        self.entry.first().map(|e| e.get_space().is_big_endian()).unwrap_or(false)
+    }
+
+    // Ghidra: fspec.cc:626 ParamListStandard::extractTiles
+    /// Collect registers of the given storage class. Faithful to
+    /// `extractTiles` (fspec.cc:626-638).
+    pub fn extract_tiles(&self, ty: TypeClass) -> Vec<usize> {
+        let mut tiles = Vec::new();
+        for (i, e) in self.entry.iter().enumerate() {
+            if !e.is_exclusion() { continue; }
+            if e.get_type() != ty || e.get_all_groups().len() != 1 { continue; }
+            tiles.push(i);
+        }
+        tiles
+    }
+
+    // Ghidra: fspec.cc:642 ParamListStandard::getStackEntry
+    /// If the stack entry is not present, `None` is returned. Faithful to
+    /// `getStackEntry` (fspec.cc:642-654).
+    pub fn get_stack_entry(&self) -> Option<usize> {
+        if let Some(idx) = self.stack_entry_index { return Some(idx); }
+        if self.entry.is_empty() { return None; }
+        let idx = self.entry.len() - 1;
+        let cur = &self.entry[idx];
+        if !cur.is_exclusion() && cur.get_space() == AddressSpace::Stack { Some(idx) } else { None }
+    }
+
+    // Ghidra: fspec.cc:661 ParamListStandard::findEntry
+    /// Find the (first) entry containing the given memory range. Faithful
+    /// to `findEntry` (fspec.cc:661-680). Rugra uses a linear scan over
+    /// `entry` since the dedicated `rangemap`-based `ParamEntryResolver`
+    /// (fspec.hh:597) is unported.
+    pub fn find_entry(&self, loc: Address, size: i32, just: bool) -> Option<usize> {
+        // TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
+        // rangemap (fspec.hh:597).
+        for (i, e) in self.entry.iter().enumerate() {
+            if e.get_min_size() > size { continue; }
+            if e.get_space() != AddressSpace::Ram { continue; }
+            if !just || e.justified_contain(loc, size) == 0 { return Some(i); }
+        }
+        None
+    }
+
+    // Ghidra: fspec.cc:682 ParamListStandard::characterizeAsParam
+    /// Characterize whether the given range overlaps parameter storage.
+    /// Returns one of the `containment::*` codes. Faithful to
+    /// `characterizeAsParam` (fspec.cc:682-719).
+    pub fn characterize_as_param(&self, loc: Address, size: i32) -> i32 {
+        let mut res_contains = false;
+        let mut res_contained_by = false;
+        for e in &self.entry {
+            if e.get_space() != AddressSpace::Ram { continue; }
+            let off = e.justified_contain(loc, size);
+            if off == 0 { return containment::CONTAINS_JUSTIFIED; }
+            else if off > 0 { res_contains = true; }
+            if e.is_exclusion() && e.contained_by(loc, size) { res_contained_by = true; }
+        }
+        if res_contains { return containment::CONTAINS_UNJUSTIFIED; }
+        if res_contained_by { return containment::CONTAINED_BY; }
+        containment::NO_CONTAINMENT
+    }
+
+    // Ghidra: fspec.cc:735 ParamListStandard::assignAddressFallback
+    /// Assign storage for given parameter class, using the fallback
+    /// assignment algorithm. Faithful to `assignAddressFallback`
+    /// (fspec.cc:735-760).
+    pub fn assign_address_fallback(
+        &self, resource: TypeClass, tp: &Datatype, match_exact: bool,
+        status: &mut [i32], param: &mut ParameterPieces,
+    ) -> AssignActionResponse {
+        for cur in &self.entry {
+            let grp = cur.get_group();
+            if status[grp as usize] < 0 { continue; }
+            if resource != cur.get_type() {
+                if match_exact || cur.get_type() != TypeClass::General { continue; }
+            }
+            // TODO(ALIGNMENT_ROADMAP): depends on unported
+            // `Datatype::getAlignSize`/`getAlignment`. Approximate with
+            // size / alignment 1.
+            let align_size = tp.get_size() as i32;
+            let type_alignment = 1i32;
+            let assigned = cur.get_addr_by_slot(&mut status[grp as usize], align_size, type_alignment);
+            match assigned {
+                None => continue,
+                Some(addr) => param.addr = addr,
+            }
+            if cur.is_exclusion() {
+                let group_set = cur.get_all_groups();
+                for &g in group_set { status[g as usize] = -1; }
+            }
+            param.ty = None;
+            param.flags = 0;
+            return AssignActionResponse::Success;
+        }
+        AssignActionResponse::Fail
+    }
+
+    // Ghidra: fspec.cc:772 ParamListStandard::assignAddress
+    /// Fill in the Address and other details for the given parameter.
+    /// Faithful to `assignAddress` (fspec.cc:772-783).
+    pub fn assign_address(
+        &self, dt: &Datatype, _proto: &PrototypePieces, _pos: i32,
+        status: &mut [i32], res: &mut ParameterPieces,
+    ) -> AssignActionResponse {
+        // TODO(ALIGNMENT_ROADMAP): depends on unported `ModelRule`
+        // (modelrules.hh). Ghidra iterates `modelRules` first; Rugra goes
+        // straight to fallback.
+        let store = metatype_to_type_class(dt);
+        self.assign_address_fallback(store, dt, false, status, res)
+    }
+
+    // Ghidra: fspec.cc:785 ParamListStandard::assignMap
+    /// Given list of data-types, map the list positions to storage
+    /// locations. Faithful to `assignMap` (fspec.cc:785-814).
+    pub fn assign_map(&self, proto: &PrototypePieces, res: &mut Vec<ParameterPieces>) -> Result<(), String> {
+        let mut status = vec![0i32; self.num_group as usize];
+        if res.len() == 2 {
+            let dt = res.last().unwrap().ty.clone();
+            if (res.last().unwrap().flags & HIDDEN_RET_PARM) != 0 {
+                if let Some(dt_ref) = &dt {
+                    if self.assign_address_fallback(
+                        TypeClass::HiddenReturn, dt_ref, false,
+                        &mut status, res.last_mut().unwrap(),
+                    ) == AssignActionResponse::Fail
+                    {
+                        return Err("Cannot assign parameter address for hidden return".to_string());
+                    }
+                }
+            } else if let Some(dt_ref) = &dt {
+                if self.assign_address(dt_ref, proto, 0, &mut status, res.last_mut().unwrap())
+                    == AssignActionResponse::Fail
+                {
+                    return Err("Cannot assign parameter address".to_string());
+                }
+            }
+            res.last_mut().unwrap().flags |= HIDDEN_RET_PARM;
+        }
+        for (i, dt) in proto.in_types.iter().enumerate() {
+            res.push(ParameterPieces::default());
+            let response = self.assign_address(
+                dt.as_ref(), proto, i as i32, &mut status, res.last_mut().unwrap(),
+            );
+            if response == AssignActionResponse::Fail || response == AssignActionResponse::NoAssignment {
+                return Err("Cannot assign parameter address".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:820 ParamListStandard::selectUnreferenceEntry
+    /// From among the ParamEntrys matching the given group, return the one
+    /// that best matches the given metatype. Faithful to
+    /// `selectUnreferenceEntry` (fspec.cc:820-842).
+    pub fn select_unreference_entry(&self, grp: i32, pref_type: TypeClass) -> Option<usize> {
+        let mut best_score = -1i32;
+        let mut best_entry = None;
+        for (i, cur) in self.entry.iter().enumerate() {
+            if cur.get_group() != grp { continue; }
+            let cur_score = if cur.get_type() == pref_type { 2 }
+                else if pref_type == TypeClass::General { 1 } else { 0 };
+            if cur_score > best_score { best_score = cur_score; best_entry = Some(i); }
+        }
+        best_entry
+    }
+
+    // Ghidra: fspec.cc:849 ParamListStandard::buildTrialMap
+    /// Associate trials with model ParamEntry objects. Faithful to
+    /// `buildTrialMap` (fspec.cc:849-937).
+    pub fn build_trial_map(&self, active: &mut ParamActive) {
+        let mut hit_list: Vec<Option<usize>> = Vec::new();
+        let mut float_count = 0i32;
+        let mut int_count = 0i32;
+        for i in 0..active.get_num_trials() {
+            let (addr, size) = { let t = active.get_trial(i); (t.get_address(), t.get_size()) };
+            let entry_slot = self.find_entry(addr, size, true);
+            if entry_slot.is_none() {
+                active.get_trial_mut(i).mark_no_use();
+                continue;
+            }
+            let entry_slot = entry_slot.unwrap();
+            active.get_trial_mut(i).set_entry(entry_slot, 0);
+            let is_active = active.get_trial(i).is_active();
+            let entry_type = self.entry[entry_slot].get_type();
+            if is_active {
+                if entry_type == TypeClass::Float { float_count += 1; } else { int_count += 1; }
+            }
+            let grp = self.entry[entry_slot].get_group();
+            while hit_list.len() <= grp as usize { hit_list.push(None); }
+            if hit_list[grp as usize].is_none() { hit_list[grp as usize] = Some(entry_slot); }
+        }
+        for (grp_idx, curentry_opt) in hit_list.iter().enumerate() {
+            let grp = grp_idx as i32;
+            if curentry_opt.is_none() {
+                let pref = if float_count > int_count { TypeClass::Float } else { TypeClass::General };
+                let curentry = match self.select_unreference_entry(grp, pref) { Some(e) => e, None => continue };
+                let (sz, next_slot_init) = if self.entry[curentry].is_exclusion() {
+                    (self.entry[curentry].get_size(), 0)
+                } else {
+                    (self.entry[curentry].get_align(), 0)
+                };
+                let mut next_slot = next_slot_init;
+                let addr = self.entry[curentry]
+                    .get_addr_by_slot(&mut next_slot, sz, 1)
+                    .unwrap_or(Address::new(0));
+                let trial_pos = active.get_num_trials();
+                active.register_trial(addr, sz);
+                active.get_trial_mut(trial_pos).mark_unref();
+                active.get_trial_mut(trial_pos).set_entry(curentry, 0);
+            } else {
+                let curentry = curentry_opt.unwrap();
+                if !self.entry[curentry].is_exclusion() {
+                    let mut slot_list: Vec<i32> = Vec::new();
+                    for j in 0..active.get_num_trials() {
+                        let (addr, size) = { let t = active.get_trial(j); (t.get_address(), t.get_size()) };
+                        if active.get_trial(j).get_entry_index() != Some(curentry) { continue; }
+                        let mut slot = self.entry[curentry].get_slot(addr, 0) - self.entry[curentry].get_group();
+                        let mut end_slot = self.entry[curentry].get_slot(addr, size - 1) - self.entry[curentry].get_group();
+                        if end_slot < slot { std::mem::swap(&mut slot, &mut end_slot); }
+                        while slot_list.len() <= end_slot as usize { slot_list.push(0); }
+                        let mut s = slot;
+                        while s <= end_slot { slot_list[s as usize] = 1; s += 1; }
+                    }
+                    for (j, &v) in slot_list.iter().enumerate() {
+                        if v == 0 {
+                            let mut next_slot = j as i32;
+                            let align = self.entry[curentry].get_align();
+                            let addr = self.entry[curentry]
+                                .get_addr_by_slot(&mut next_slot, align, 1)
+                                .unwrap_or(Address::new(0));
+                            let trial_pos = active.get_num_trials();
+                            active.register_trial(addr, align);
+                            active.get_trial_mut(trial_pos).mark_unref();
+                            active.get_trial_mut(trial_pos).set_entry(curentry, 0);
+                        }
+                    }
+                }
+            }
+        }
+        active.sort_trials();
+    }
+
+    // Ghidra: fspec.cc:946 ParamListStandard::separateSections
+    /// Calculate the range of trials in each resource section. Faithful to
+    /// `separateSections` (fspec.cc:946-966).
+    pub fn separate_sections(&self, active: &ParamActive, trial_start: &mut Vec<i32>) {
+        let num_trials = active.get_num_trials() as i32;
+        let mut current_trial = 0i32;
+        if self.resource_start.len() < 2 { return; }
+        let mut next_group = self.resource_start[1];
+        let mut next_section = 2usize;
+        trial_start.push(current_trial);
+        while current_trial < num_trials {
+            let cur = active.get_trial(current_trial as usize);
+            if cur.get_entry_index().is_none() { current_trial += 1; continue; }
+            let grp = cur.get_entry_index()
+                .and_then(|idx| self.entry.get(idx))
+                .map(|e| e.get_group())
+                .unwrap_or(-1);
+            if grp >= next_group {
+                if next_section >= self.resource_start.len() { break; }
+                next_group = self.resource_start[next_section];
+                next_section += 1;
+                trial_start.push(current_trial);
+            }
+            current_trial += 1;
+        }
+        trial_start.push(num_trials);
+    }
+
+    // Ghidra: fspec.cc:974 ParamListStandard::markGroupNoUse
+    /// Mark all the trials within the indicated groups as not used, except
+    /// for one specified index. Faithful to `markGroupNoUse`
+    /// (fspec.cc:974-986).
+    pub fn mark_group_no_use(&self, active: &mut ParamActive, active_trial: usize, trial_start: usize) {
+        let num_trials = active.get_num_trials();
+        let active_entry = match active.get_trial(active_trial).get_entry_index().and_then(|i| self.entry.get(i)) {
+            Some(e) => e,
+            None => return,
+        };
+        for i in trial_start..num_trials {
+            if i == active_trial { continue; }
+            let other_entry_idx = match active.get_trial(i).get_entry_index() { Some(e) => e, None => continue };
+            if active.get_trial(i).is_definitely_not_used() { continue; }
+            let other_entry = match self.entry.get(other_entry_idx) { Some(e) => e, None => continue };
+            if !other_entry.group_overlap(active_entry) { break; }
+            active.get_trial_mut(i).mark_no_use();
+        }
+    }
+
+    // Ghidra: fspec.cc:997 ParamListStandard::markBestInactive
+    /// From among multiple inactive trials, select the most likely to be
+    /// active and mark others as not used. Faithful to `markBestInactive`
+    /// (fspec.cc:997-1025).
+    pub fn mark_best_inactive(
+        &self, active: &mut ParamActive, group: i32, group_start: usize, pref_type: TypeClass,
+    ) {
+        let num_trials = active.get_num_trials();
+        let mut best_trial = -1i32;
+        let mut best_score = -1i32;
+        for i in group_start..num_trials {
+            let trial = active.get_trial(i);
+            if trial.is_definitely_not_used() { continue; }
+            let entry_idx = match trial.get_entry_index() { Some(e) => e, None => continue };
+            let entry = match self.entry.get(entry_idx) { Some(e) => e, None => continue };
+            let grp = entry.get_group();
+            if grp != group { break; }
+            if entry.get_all_groups().len() > 1 { continue; }
+            let mut score = 0i32;
+            if trial.has_ancestor_realistic() {
+                score += 5;
+                if trial.has_ancestor_solid() { score += 5; }
+            }
+            if entry.get_type() == pref_type { score += 1; }
+            if score > best_score { best_score = score; best_trial = i as i32; }
+        }
+        if best_trial >= 0 { self.mark_group_no_use(active, best_trial as usize, group_start); }
+    }
+
+    // Ghidra: fspec.cc:1032 ParamListStandard::forceExclusionGroup
+    /// Enforce exclusion rules for the given set of parameter trials.
+    /// Faithful to `forceExclusionGroup` (fspec.cc:1032-1060).
+    pub fn force_exclusion_group(&self, active: &mut ParamActive) {
+        let num_trials = active.get_num_trials();
+        let mut cur_group = -1i32;
+        let mut group_start = -1i32;
+        let mut inactive_count = 0i32;
+        for i in 0..num_trials {
+            let entry_idx = match active.get_trial(i).get_entry_index() { Some(e) => e, None => continue };
+            let entry = match self.entry.get(entry_idx) { Some(e) => e, None => continue };
+            if active.get_trial(i).is_definitely_not_used() || !entry.is_exclusion() { continue; }
+            let grp = entry.get_group();
+            if grp != cur_group {
+                if inactive_count > 1 {
+                    self.mark_best_inactive(active, cur_group, group_start as usize, TypeClass::General);
+                }
+                cur_group = grp;
+                group_start = i as i32;
+                inactive_count = 0;
+            }
+            if active.get_trial(i).is_active() {
+                self.mark_group_no_use(active, i, group_start as usize);
+            } else {
+                inactive_count += 1;
+            }
+        }
+        if inactive_count > 1 {
+            self.mark_best_inactive(active, cur_group, group_start as usize, TypeClass::General);
+        }
+    }
+
+    // Ghidra: fspec.cc:1069 ParamListStandard::forceNoUse
+    /// Mark every trial above the first "definitely not used" as inactive.
+    /// Faithful to `forceNoUse` (fspec.cc:1069-1095).
+    pub fn force_no_use(&self, active: &mut ParamActive, start: usize, stop: usize) {
+        let mut seen_defnouse = false;
+        let mut cur_group = -1i32;
+        let mut all_defnouse = false;
+        for i in start..stop {
+            let entry_idx = match active.get_trial(i).get_entry_index() { Some(e) => e, None => continue };
+            let entry = match self.entry.get(entry_idx) { Some(e) => e, None => continue };
+            let grp = entry.get_group();
+            let exclusion = entry.is_exclusion();
+            if grp <= cur_group && exclusion {
+                if !active.get_trial(i).is_definitely_not_used() { all_defnouse = false; }
+            } else {
+                if all_defnouse { seen_defnouse = true; }
+                all_defnouse = active.get_trial(i).is_definitely_not_used();
+                cur_group = grp;
+            }
+            if seen_defnouse { active.get_trial_mut(i).mark_inactive(); }
+        }
+    }
+
+    // Ghidra: fspec.cc:1111 ParamListStandard::forceInactiveChain
+    /// Enforce rules about chains of inactive slots. Faithful to
+    /// `forceInactiveChain` (fspec.cc:1111-1151).
+    pub fn force_inactive_chain(
+        &self, active: &mut ParamActive, max_chain: i32, start: usize, stop: usize, group_start: i32,
+    ) {
+        let recover_subcall = active.is_recover_subcall();
+        let mut seen_chain = false;
+        let mut chain_length = 0i32;
+        let mut max = -1i32;
+        for i in start..stop {
+            let entry_idx = match active.get_trial(i).get_entry_index() { Some(e) => e, None => continue };
+            let entry = match self.entry.get(entry_idx) { Some(e) => e, None => continue };
+            if active.get_trial(i).is_definitely_not_used() { continue; }
+            if !active.get_trial(i).is_active() {
+                let on_stack = active.get_trial(i).get_address().as_u64() != 0
+                    && self.space_base == Some(AddressSpace::Stack);
+                if active.get_trial(i).is_unref() && recover_subcall {
+                    if on_stack { seen_chain = true; }
+                }
+                let trial_addr = active.get_trial(i).get_address();
+                let trial_size = active.get_trial(i).get_size();
+                let slot_group = entry.get_slot(trial_addr, trial_size - 1);
+                if i == start {
+                    chain_length += slot_group - group_start + 1;
+                } else {
+                    let prev_addr = active.get_trial(i - 1).get_address();
+                    let prev_size = active.get_trial(i - 1).get_size();
+                    let prev_entry_idx = active.get_trial(i - 1).get_entry_index();
+                    let prev_slot_group = prev_entry_idx
+                        .and_then(|idx| self.entry.get(idx))
+                        .map(|e| e.get_slot(prev_addr, prev_size - 1))
+                        .unwrap_or(slot_group);
+                    chain_length += slot_group - prev_slot_group;
+                }
+                if chain_length > max_chain { seen_chain = true; }
+            } else {
+                chain_length = 0;
+                if !seen_chain { max = i as i32; }
+            }
+            if seen_chain { active.get_trial_mut(i).mark_inactive(); }
+        }
+        let upper = std::cmp::min(max as usize, stop.saturating_sub(1));
+        for i in start..=upper {
+            if active.get_trial(i).is_definitely_not_used() { continue; }
+            if !active.get_trial(i).is_active() { active.get_trial_mut(i).mark_active(); }
+        }
+    }
+
+    // Ghidra: fspec.cc:1285 ParamListStandard::fillinMap
+    /// Decide on the formal ordered parameter list, given a set of trials.
+    /// Faithful to `fillinMap` (fspec.cc:1285-1313).
+    pub fn fillin_map(&self, active: &mut ParamActive) {
+        if active.get_num_trials() == 0 { return; }
+        if self.entry.is_empty() { return; }
+        self.build_trial_map(active);
+        self.force_exclusion_group(active);
+        let mut trial_start = Vec::new();
+        self.separate_sections(active, &mut trial_start);
+        if trial_start.len() < 2 { return; }
+        let num_section = trial_start.len() - 1;
+        for i in 0..num_section {
+            self.force_no_use(active, trial_start[i] as usize, trial_start[i + 1] as usize);
+        }
+        for i in 0..num_section {
+            self.force_inactive_chain(
+                active, 2,
+                trial_start[i] as usize, trial_start[i + 1] as usize,
+                self.resource_start[i],
+            );
+        }
+        for i in 0..active.get_num_trials() {
+            if active.get_trial(i).is_active() { active.get_trial_mut(i).mark_used(); }
+        }
+    }
+
+    // Ghidra: fspec.cc:1315 ParamListStandard::checkJoin
+    /// Check if the two (hi/lo) locations can be joined. Faithful to
+    /// `checkJoin` (fspec.cc:1315-1340).
+    pub fn check_join(&self, hi_addr: Address, hi_size: i32, lo_addr: Address, lo_size: i32) -> bool {
+        let entry_hi = match self.find_entry(hi_addr, hi_size, true) { Some(e) => e, None => return false };
+        let entry_lo = match self.find_entry(lo_addr, lo_size, true) { Some(e) => e, None => return false };
+        if self.entry[entry_hi].get_group() == self.entry[entry_lo].get_group() {
+            if self.entry[entry_hi].is_exclusion() || self.entry[entry_lo].is_exclusion() { return false; }
+            if !is_contiguous(hi_addr, hi_size, lo_addr, lo_size) { return false; }
+            if (hi_addr.as_u64() - self.entry[entry_hi].get_base()) % self.entry[entry_hi].get_align() as u64 != 0 { return false; }
+            if (lo_addr.as_u64() - self.entry[entry_lo].get_base()) % self.entry[entry_lo].get_align() as u64 != 0 { return false; }
+            return true;
+        }
+        let size_sum = hi_size + lo_size;
+        for cur in &self.entry {
+            if cur.get_size() < size_sum { continue; }
+            if cur.justified_contain(lo_addr, lo_size) != 0 { continue; }
+            if cur.justified_contain(hi_addr, hi_size) != lo_size { continue; }
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: fspec.cc:1342 ParamListStandard::checkSplit
+    /// Check if it makes sense to split a single storage location.
+    /// Faithful to `checkSplit` (fspec.cc:1342-1352).
+    pub fn check_split(&self, loc: Address, size: i32, split_point: i32) -> bool {
+        let loc2 = Address::new(loc.as_u64() + split_point as u64);
+        let size2 = size - split_point;
+        if self.find_entry(loc, split_point, true).is_none() { return false; }
+        if self.find_entry(loc2, size2, true).is_none() { return false; }
+        true
+    }
+
+    // Ghidra: fspec.cc:1354 ParamListStandard::possibleParam
+    pub fn possible_param(&self, loc: Address, size: i32) -> bool {
+        self.find_entry(loc, size, true).is_some()
+    }
+
+    // Ghidra: fspec.cc:1360 ParamListStandard::possibleParamWithSlot
+    /// Pass-back the slot and slot size. Faithful to `possibleParamWithSlot`
+    /// (fspec.cc:1360-1373).
+    pub fn possible_param_with_slot(
+        &self, loc: Address, size: i32, slot: &mut i32, slot_size: &mut i32,
+    ) -> bool {
+        let entry_num = match self.find_entry(loc, size, true) { Some(e) => e, None => return false };
+        let entry = &self.entry[entry_num];
+        *slot = entry.get_slot(loc, 0);
+        if entry.is_exclusion() {
+            *slot_size = entry.get_all_groups().len() as i32;
+        } else {
+            *slot_size = ((size - 1) / entry.get_align()) + 1;
+        }
+        true
+    }
+
+    // Ghidra: fspec.cc:1375 ParamListStandard::getBiggestContainedParam
+    /// Pass-back the biggest parameter contained within the given range.
+    /// Faithful to `getBiggestContainedParam` (fspec.cc:1375-1409).
+    pub fn get_biggest_contained_param(&self, loc: Address, size: i32, res: &mut VarnodeData) -> bool {
+        let end_loc = Address::new(loc.as_u64().wrapping_add(size as u64 - 1));
+        if end_loc.as_u64() < loc.as_u64() { return false; }
+        let mut max_entry: Option<usize> = None;
+        for (i, e) in self.entry.iter().enumerate() {
+            if e.get_space() != AddressSpace::Ram { continue; }
+            if e.contained_by(loc, size) {
+                match max_entry {
+                    None => max_entry = Some(i),
+                    Some(m) => { if e.get_size() > self.entry[m].get_size() { max_entry = Some(i); } }
+                }
+            }
+        }
+        if let Some(m) = max_entry {
+            let max_e = &self.entry[m];
+            if !max_e.is_exclusion() { return false; }
+            res.space = max_e.get_space();
+            res.offset = max_e.get_base();
+            res.size = max_e.get_size();
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: fspec.cc:1411 ParamListStandard::unjustifiedContainer
+    /// Check if the given storage location looks like an unjustified
+    /// parameter. Faithful to `unjustifiedContainer` (fspec.cc:1411-1424).
+    pub fn unjustified_container(&self, loc: Address, size: i32, res: &mut VarnodeData) -> bool {
+        for cur in &self.entry {
+            if cur.get_min_size() > size { continue; }
+            if cur.get_space() != AddressSpace::Ram { continue; }
+            let just = cur.justified_contain(loc, size);
+            if just < 0 { continue; }
+            if just == 0 { return false; }
+            cur.get_container(loc, size, res);
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: fspec.cc:1426 ParamListStandard::assumedExtension
+    /// Get the type of extension and containing parameter. Faithful to
+    /// `assumedExtension` (fspec.cc:1426-1437).
+    pub fn assumed_extension(&self, addr: Address, size: i32, res: &mut VarnodeData) -> FspecOpCode {
+        for cur in &self.entry {
+            if cur.get_min_size() > size { continue; }
+            if cur.get_space() != AddressSpace::Ram { continue; }
+            let ext = cur.assumed_extension(addr, size, res);
+            if ext != FspecOpCode::CPUI_COPY { return ext; }
+        }
+        FspecOpCode::CPUI_COPY
+    }
+
+    // Ghidra: fspec.cc:1439 ParamListStandard::getRangeList
+    /// For a given address space, collect all the parameter locations.
+    /// Faithful to `getRangeList` (fspec.cc:1439-1449).
+    pub fn get_range_list(&self, spc: AddressSpace, res: &mut crate::address::RangeList) {
+        for cur in &self.entry {
+            if cur.get_space() != spc { continue; }
+            let base_off = cur.get_base();
+            let end_off = base_off + cur.get_size() as u64 - 1;
+            if let Some(r) = FsRange::new(Address::new(base_off), Address::new(end_off)) {
+                res.insert_range(r);
+            }
+        }
+    }
+
+    // Ghidra: fspec.cc:1153 ParamListStandard::calcDelay
+    /// Calculate the maximum heritage delay. Faithful to `calcDelay`
+    /// (fspec.cc:1153-1163).
+    pub fn calc_delay(&mut self) {
+        self.max_delay = 0;
+        for cur in &self.entry {
+            let delay = cur.get_space().get_delay();
+            if delay > self.max_delay { self.max_delay = delay; }
+        }
+    }
+
+    // Ghidra: fspec.cc:1191 ParamListStandard::populateResolver
+    /// Enter all the ParamEntry objects into an interval map.
+    ///
+    /// TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
+    /// rangemap (fspec.hh:597). Rugra's resolver is the linear scan in
+    /// `find_entry`; this method refreshes the `stack_entry_index` cache.
+    pub fn populate_resolver(&mut self) {
+        self.stack_entry_index = None;
+        for (i, e) in self.entry.iter().enumerate() {
+            if !e.is_exclusion() && e.get_space() == AddressSpace::Stack {
+                self.stack_entry_index = Some(i);
+            }
+        }
+    }
+
+    // Ghidra: fspec.cc:1174 ParamListStandard::addResolverRange
+    /// Internal method for adding a single address range to the
+    /// ParamEntryResolvers.
+    ///
+    /// TODO(ALIGNMENT_ROADMAP): depends on unported `ParamEntryResolver`
+    /// rangemap. Rugra's resolver is the linear scan in `find_entry`, so
+    /// this is a no-op stub; preserved for API parity.
+    pub fn add_resolver_range(
+        &mut self, _spc: AddressSpace, _first: u64, _last: u64, _param_entry: usize, _position: i32,
+    ) {}
+
+    // Ghidra: fspec.cc:1226 ParamListStandard::parsePentry
+    /// Parse a `<pentry>` element and add it to this list.
+    ///
+    /// TODO(ALIGNMENT_ROADMAP): depends on unported `Decoder` marshaling.
+    /// Accepts an already-decoded ParamEntry and applies the post-decode
+    /// state transitions (resolve_first/resolve_join/resolve_overlap,
+    /// resource_start accounting, space_base detection). Faithful algorithm
+    /// in the doc-comment.
+    pub fn parse_pentry(
+        &mut self, group_id: i32, normal_stack: bool, split_float: bool, grouped: bool,
+        effect_list: &mut Vec<EffectRecord>, decoded: ParamEntry,
+    ) -> Result<(), String> {
+        let last_class = if !self.entry.is_empty() {
+            if self.entry.last().unwrap().is_grouped() { TypeClass::General }
+            else { self.entry.last().unwrap().get_type() }
+        } else { TypeClass::Class4 };
+        let mut new_entry = decoded;
+        new_entry.resolve_first(&self.entry);
+        new_entry.resolve_join(&self.entry);
+        new_entry.resolve_overlap(&self.entry);
+        if !normal_stack {
+            *new_entry.flags_mut() |= param_entry_flags::REVERSE_STACK;
+        }
+        if grouped {
+            *new_entry.flags_mut() |= param_entry_flags::IS_GROUPED;
+        }
+        self.entry.push(new_entry);
+        let cur = self.entry.last().unwrap();
+        if split_float {
+            let current_class = if grouped { TypeClass::General } else { cur.get_type() };
+            if last_class != current_class {
+                if last_class < current_class {
+                    return Err("parameter list entries must be ordered by storage class".to_string());
+                }
+                self.resource_start.push(group_id);
+            }
+        }
+        let spc = cur.get_space();
+        if spc == AddressSpace::Stack {
+            self.space_base = Some(spc);
+            self.stack_entry_index = Some(self.entry.len() - 1);
+        } else if self.auto_killed_by_call {
+            effect_list.push(EffectRecord::new(spc, cur.get_base(), cur.get_size(), EffectType::KilledByCall));
+        }
+        let max_group = *cur.get_all_groups().last().unwrap_or(&0) + 1;
+        if max_group > self.num_group { self.num_group = max_group; }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:1262 ParamListStandard::parseGroup
+    /// Parse a sequence of `<pentry>` elements allocated as a group.
+    ///
+    /// TODO(ALIGNMENT_ROADMAP): depends on unported `Decoder` marshaling.
+    /// Accepts an already-decoded sequence and applies the group-ordering
+    /// rules.
+    pub fn parse_group(
+        &mut self, group_id: i32, normal_stack: bool, split_float: bool,
+        effect_list: &mut Vec<EffectRecord>, entries: Vec<ParamEntry>,
+    ) -> Result<(), String> {
+        let base_group = self.num_group;
+        let mut previous1: Option<usize> = None;
+        let mut previous2: Option<usize> = None;
+        for decoded_entry in entries {
+            if decoded_entry.get_space() == AddressSpace::Join {
+                return Err("<pentry> in the join space not allowed in <group> tag".to_string());
+            }
+            self.parse_pentry(base_group, normal_stack, split_float, true, effect_list, decoded_entry)?;
+            let pentry_idx = self.entry.len() - 1;
+            if let Some(p1) = previous1 {
+                ParamEntry::order_within_group(&self.entry[p1], &self.entry[pentry_idx])?;
+                if let Some(p2) = previous2 {
+                    ParamEntry::order_within_group(&self.entry[p2], &self.entry[pentry_idx])?;
+                }
+            }
+            previous2 = previous1;
+            previous1 = Some(pentry_idx);
+        }
+        let _ = group_id;
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:1451 ParamListStandard::decode
+    /// Restore the model from an `<input>` or `<output>` element.
+    ///
+    /// TODO(ALIGNMENT_ROADMAP): depends on unported `Decoder` attribute/
+    /// element id constants. Rugra exposes the post-decode finalization
+    /// (`resource_start.push(num_group)`, `calc_delay`, `populate_resolver`)
+    /// via `finalize_after_decode` so a caller that has manually parsed the
+    /// element tree can complete the model.
+    pub fn finalize_after_decode(&mut self, pointer_max: i32) {
+        self.resource_start.push(self.num_group);
+        self.calc_delay();
+        self.populate_resolver();
+        // TODO(ALIGNMENT_ROADMAP): depends on unported ModelRule /
+        // ConvertToPointer (modelrules.hh). Ghidra appends a
+        // convert-to-pointer rule when pointermax > 0.
+        let _ = pointer_max;
+    }
+
+    // Ghidra: fspec.hh:645 ParamListStandard::clone
+    // RUGRA-GLUE: clone (Rust uses Clone derive; named accessor matching
+    // Ghidra's virtual clone()).
+    pub fn clone_model(&self) -> ParamListStandard { self.clone() }
+
+    // RUGRA-GLUE: setters for the model loader (Ghidra fills these during
+    // `ParamListStandard::decode`; Rugra's decoder is unported).
+    pub fn set_this_before_ret(&mut self, v: bool) { self.this_before_ret = v; }
+    pub fn set_auto_killed_by_call(&mut self, v: bool) { self.auto_killed_by_call = v; }
+    pub fn get_num_group(&self) -> i32 { self.num_group }
+}
+
+// RUGRA-GLUE: metatype_to_type_class (free helper — Ghidra's
+// `metatype2typeclass` is defined in type.cc and not yet ported).
+/// Map a data-type's metatype to its storage class. Faithful to
+/// `metatype2typeclass` (type.hh:153). TODO(ALIGNMENT_ROADMAP): depends on
+/// unported `metatype2typeclass`.
+fn metatype_to_type_class(dt: &Datatype) -> TypeClass {
+    use crate::type_system::TypeMetatype;
+    match dt.get_metatype() {
+        TypeMetatype::Float => TypeClass::Float,
+        _ => TypeClass::General,
+    }
+}
+
+// RUGRA-GLUE: is_contiguous (free helper — mirrors `Address::isContiguous`,
+// address.cc, used only by `ParamListStandard::check_join`).
+fn is_contiguous(hi_addr: Address, hi_size: i32, lo_addr: Address, _lo_size: i32) -> bool {
+    hi_addr.as_u64() + hi_size as u64 == lo_addr.as_u64()
 }
 
 #[cfg(test)]
@@ -1202,5 +2704,91 @@ mod tests {
         assert!(!proto.is_varargs());
         proto.set_dotdotdot(true);
         assert!(proto.is_varargs());
+    }
+
+    // ---- ParamEntry / ParamListStandard tests ----
+
+    #[test]
+    fn test_param_entry_exclusion_basic() {
+        // Ghidra: fspec.cc:60-71 findEntryByStorage, fspec.hh:134 isExclusion
+        let mut e = ParamEntry::new(0);
+        e.set_space(AddressSpace::Register);
+        e.set_base(0x10);
+        e.set_sizes(8, 4);
+        e.set_alignment(0); // alignment==0 => exclusion entry
+        assert!(e.is_exclusion());
+        assert_eq!(e.get_size(), 8);
+        assert_eq!(e.get_min_size(), 4);
+        assert_eq!(e.get_base(), 0x10);
+        assert_eq!(e.get_space(), AddressSpace::Register);
+    }
+
+    #[test]
+    fn test_param_entry_aligned_slots() {
+        // Ghidra: fspec.hh:131 getAlign, fspec.hh:135 isReverseStack
+        let mut e = ParamEntry::new(2);
+        e.set_space(AddressSpace::Register);
+        e.set_base(0x100);
+        e.set_sizes(32, 4);
+        e.set_alignment(8); // 32/8 = 4 slots
+        assert!(!e.is_exclusion());
+        assert_eq!(e.get_align(), 8);
+        // get_addr_by_slot advances slot_num (fspec.cc:434)
+        let mut slot = 0i32;
+        let a0 = e.get_addr_by_slot(&mut slot, 8, 1).unwrap();
+        assert_eq!(a0.as_u64(), 0x100);
+        assert_eq!(slot, 1);
+        let a1 = e.get_addr_by_slot(&mut slot, 8, 1).unwrap();
+        assert_eq!(a1.as_u64(), 0x108);
+        assert_eq!(slot, 2);
+    }
+
+    #[test]
+    fn test_param_entry_justified_contain() {
+        // Ghidra: fspec.cc:248-283 justifiedContain. For a little-endian
+        // (non-left-justified) exclusion entry, the return value is the
+        // offset of the value's HIGH byte from the container's high end.
+        let mut e = ParamEntry::new(0);
+        e.set_space(AddressSpace::Register);
+        e.set_base(0x200);
+        e.set_sizes(8, 1);
+        e.set_alignment(0); // exclusion
+        // Full-range containment returns 0 (value is flush with the high end).
+        assert_eq!(e.justified_contain(Address::new(0x200), 8), 0);
+        // 2-byte value at 0x202 spans [0x202..0x203]; container high end is
+        // 0x207. Offset from high end = 0x207 - 0x203 = 4.
+        assert_eq!(e.justified_contain(Address::new(0x202), 2), 4);
+        // A value flush with the high end returns 0.
+        assert_eq!(e.justified_contain(Address::new(0x206), 2), 0);
+        // Out of range
+        assert_eq!(e.justified_contain(Address::new(0x300), 4), -1);
+    }
+
+    #[test]
+    fn test_param_list_standard_new() {
+        // Ghidra: fspec.hh:617 ParamListStandard()
+        let m = ParamListStandard::new();
+        assert_eq!(m.get_type(), ParamListKind::Standard);
+        assert!(!m.is_this_before_ret_pointer());
+        assert!(!m.is_auto_killed_by_call());
+        assert_eq!(m.get_max_delay(), 0);
+        assert!(m.get_entry().is_empty());
+        assert_eq!(m.get_num_group(), 0);
+    }
+
+    #[test]
+    fn test_param_list_standard_possible_param() {
+        // Ghidra: fspec.cc:1354 possibleParam + fspec.cc:661 findEntry
+        let mut m = ParamListStandard::new();
+        let mut e = ParamEntry::new(0);
+        e.set_space(AddressSpace::Ram);
+        e.set_base(0x1000);
+        e.set_sizes(32, 4);
+        e.set_alignment(8);
+        let mut effects = Vec::new();
+        m.parse_pentry(0, true, false, false, &mut effects, e).unwrap();
+        m.finalize_after_decode(0);
+        assert!(m.possible_param(Address::new(0x1000), 8));
+        assert!(!m.possible_param(Address::new(0x9000), 8));
     }
 }
