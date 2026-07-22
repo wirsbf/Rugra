@@ -709,3 +709,4 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 <!-- annotation-pass: 2026-07-04 -->
 <!-- var-prefix-port: 1783140605.8637707 -->
 <!-- ref-fix: 1783140652.1869905 -->
+**2026-07-22**: +18 printc methods (opBranchind/opCallind/opCpoolRef/opExtract/opInsert/opNew/opPtrsub/opSegment/opTypeCast + pushConstant/pushCharConstant/pushEnumConstant/pushBoolConstant/pushPtrCharConstant/pushEquate + emitLabelStatement/emitAnyLabelStatement/emitCommentBlockTree/emitGotoStatement)

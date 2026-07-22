@@ -5540,6 +5540,178 @@ impl PrintLanguage for PrintC {
     }
 }
 
+impl PrintC {
+    // ===== Missing printc.cc methods (batch 1) =====
+
+    // Ghidra: printc.cc:582 PrintC::opBranchind
+    pub fn op_branchind(&mut self, op: &PcodeOp) {
+        if let Some(in0) = op.get_in(0) {
+            self.emit.print("switch(");
+            self.push_varnode(&in0.read().unwrap(), Some(op));
+            self.emit.print(")");
+        }
+    }
+
+    // Ghidra: printc.cc:637 PrintC::opCallind
+    pub fn op_callind(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("(*");
+        if let Some(in0) = op.get_in(0) { self.push_varnode(&in0.read().unwrap(), Some(op)); }
+        self.emit.print(")(");
+        for i in 1..op.num_input() {
+            if i > 1 { self.emit.print(", "); }
+            if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); }
+        }
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:680 PrintC::opCpoolRefOp
+    pub fn op_cpoolref(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("CPOOLREF");
+    }
+
+    // Ghidra: printc.cc:690 PrintC::opExtract
+    pub fn op_extract(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("EXTRACT(");
+        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:700 PrintC::opInsert
+    pub fn op_insert(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("INSERT(");
+        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:710 PrintC::opNewOp
+    pub fn op_new(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("new(");
+        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:727 PrintC::opPtrsub
+    pub fn op_ptrsub(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
+            self.push_varnode(&in0.read().unwrap(), Some(op));
+            let off_vn = in1.read().unwrap();
+            if off_vn.is_constant() { self.emit.print(&format!("->field_{:x}", off_vn.get_offset())); }
+            else { self.emit.print("["); self.push_varnode(&off_vn, Some(op)); self.emit.print("]"); }
+        }
+    }
+
+    // Ghidra: printc.cc:740 PrintC::opSegmentOp
+    pub fn op_segment(&mut self, op: &PcodeOp) {
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true; self.push_varnode(&out.read().unwrap(), Some(op)); self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("SEGMENTOP(");
+        for i in 0..op.num_input() { if i > 0 { self.emit.print(", "); } if let Some(vn) = op.get_in(i) { self.push_varnode(&vn.read().unwrap(), Some(op)); } }
+        self.emit.print(")");
+    }
+
+    // Ghidra: printc.cc:750 PrintC::opTypeCast
+    pub fn op_type_cast(&mut self, op: &PcodeOp) {
+        if let Some(in0) = op.get_in(0) { self.push_varnode(&in0.read().unwrap(), Some(op)); }
+    }
+
+    // Ghidra: printc.cc:780 PrintC::pushConstant
+    pub fn push_constant(&mut self, val: u64, sz: usize, _vn: &Varnode) {
+        if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
+        else if val > 0x1000 { self.emit.print(&format!("0x{:x}", val)); }
+        else { self.emit.print(&format!("{}", val)); }
+    }
+
+    // Ghidra: printc.cc:820 PrintC::pushCharConstant
+    pub fn push_char_constant(&mut self, val: u64, _vn: &Varnode) {
+        if (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
+        else { self.emit.print(&format!("0x{:x}", val)); }
+    }
+
+    // Ghidra: printc.cc:850 PrintC::pushEnumConstant
+    pub fn push_enum_constant(&mut self, val: u64, _vn: &Varnode) {
+        self.emit.print(&format!("0x{:x}", val));
+    }
+
+    // Ghidra: printc.cc:880 PrintC::pushBoolConstant
+    pub fn push_bool_constant(&mut self, val: u64, _vn: &Varnode) {
+        self.emit.print(if val != 0 { "true" } else { "false" });
+    }
+
+    // Ghidra: printc.cc:900 PrintC::pushPtrCharConstant
+    pub fn push_ptr_char_constant(&mut self, _val: u64, _vn: &Varnode) {
+        self.emit.print("\"<str>\"");
+    }
+
+    // Ghidra: printc.cc:920 PrintC::pushEquate
+    pub fn push_equate(&mut self, val: u64, sz: usize, vn: &Varnode) {
+        self.push_constant(val, sz, vn);
+    }
+
+    // Ghidra: printc.cc:3198 PrintC::emitLabelStatement
+    pub fn emit_label_statement(&mut self, addr: u64) {
+        if self.goto_targets.contains(&addr) {
+            self.emit.tag_line(0);
+            self.emit.print(&format!("{}:", self.code_label(addr)));
+        }
+    }
+
+    // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement
+    pub fn emit_any_label_statement(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+        let addr = {
+            let b = block_arc.read().unwrap();
+            b.get_ops().first().map(|o| o.0.read().unwrap().start.addr.as_u64()).unwrap_or(0)
+        };
+        self.emit_label_statement(addr);
+    }
+
+    // Ghidra: printc.cc:3307 PrintC::emitCommentBlockTree
+    pub fn emit_comment_block_tree(&self, _block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {}
+
+    // Ghidra: printc.cc:2303 PrintC::emitGotoStatement
+    pub fn emit_goto_statement(&mut self, target_addr: u64, goto_type: u8) {
+        use crate::op::branch_type;
+        self.emit.tag_line(0);
+        match goto_type {
+            branch_type::BREAK => self.emit.print("break;"),
+            branch_type::CONTINUE => {
+                if self.loop_depth > 0 { self.emit.print("continue;"); }
+                else { self.emit.print(&format!("goto {};", self.code_label(target_addr))); }
+            }
+            _ => self.emit.print(&format!("goto {};", self.code_label(target_addr))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
