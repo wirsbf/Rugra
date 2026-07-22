@@ -6887,6 +6887,481 @@ impl PrintC {
         }
     }
 
+    // ===== P0 cast/truncation/negation op methods (batch 3) =====
+    //
+    // These are the Ghidra-faithful ports of the PrintC op* methods that
+    // decide between casting, hiding, and functional rendering for the
+    // INT_ZEXT / INT_SEXT / BOOL_NEGATE / SUBPIECE / PTRADD opcodes, plus the
+    // PrintC-specific option reset, the compound-assignment detector, and the
+    // negation-fold predicate. They are called (directly or via the op_unary /
+    // op_binary dispatchers) from doc_statement -> op.push(self).
+    //
+    // NOTE on the expression-stack model: Ghidra's originals push onto an RPN
+    // expression stack (pushOp/pushVn/pushAtom/recurse) which is later emitted
+    // by emitExpression. Rugra emits text directly via self.emit, so each port
+    // performs the equivalent text emission inline. The decision logic (which
+    // branch is taken) is faithful; the emission primitive differs by design
+    // (see printc_audit.md notes on the PARTIAL emit_* family).
+
+    // Ghidra: printc.cc:786 PrintC::opIntZext
+    /// Emit an INT_ZEXT op. If the cast strategy recognizes this as a
+    /// zero-extension cast, render it as `(type)in0` (or hide it entirely if
+    /// `option_hide_exts` is set and the extension is implied by C integer
+    /// promotion); otherwise fall through to the generic unary rendering.
+    ///
+    /// Faithful to `PrintC::opIntZext(const PcodeOp*, const PcodeOp*)`
+    /// (printc.cc:786-797). Ghidra's second parameter `readOp` is the consumer
+    /// of this op's output, used only by `isExtensionCastImplied`. Rugra does
+    /// not track the single consumer op here, so we pass `None`; in that case
+    /// `is_extension_cast_implied` returns false (matching Ghidra's
+    /// `readOp == nullptr -> return false`), so a recognized zext cast still
+    /// prints as an explicit cast - the same as Ghidra when the consumer is
+    /// unknown.
+    pub fn op_int_zext(&mut self, op: &PcodeOp, _read_op: Option<&PcodeOp>) {
+        let (out_type, in_type) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    o.get_high_type_def_facing(),
+                    i.get_high_type_read_facing(op, 0),
+                ),
+                _ => (None, None),
+            }
+        };
+        let is_zext = match (&out_type, &in_type) {
+            (Some(o), Some(i)) => self.cast_strategy.is_zext_cast(o, i),
+            _ => false,
+        };
+        if is_zext {
+            // option_hide_exts && castStrategy->isExtensionCastImplied(op, readOp)
+            // -> opHiddenFunc (suppress). With read_op=None the implied check
+            // is false, so we never take the hide branch here - matching Ghidra.
+            if self.option_hide_exts && _read_op.is_some()
+                && self.is_extension_cast_implied(op, _read_op.unwrap())
+            {
+                self.op_hidden_func(op);
+            } else {
+                self.op_type_cast(op);
+            }
+        } else {
+            // opFunc(op) - generic functional rendering. Rugra routes INT_ZEXT
+            // through op_unary (which emits `(uint)in0`).
+            self.op_unary(op);
+        }
+    }
+
+    // Ghidra: printc.cc:799 PrintC::opIntSext
+    /// Emit an INT_SEXT op. Same structure as `op_int_zext` but uses
+    /// `is_sext_cast` (input must be signed). Faithful to
+    /// `PrintC::opIntSext(const PcodeOp*, const PcodeOp*)` (printc.cc:799-810).
+    pub fn op_int_sext(&mut self, op: &PcodeOp, _read_op: Option<&PcodeOp>) {
+        let (out_type, in_type) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    o.get_high_type_def_facing(),
+                    i.get_high_type_read_facing(op, 0),
+                ),
+                _ => (None, None),
+            }
+        };
+        let is_sext = match (&out_type, &in_type) {
+            (Some(o), Some(i)) => self.cast_strategy.is_sext_cast(o, i),
+            _ => false,
+        };
+        if is_sext {
+            if self.option_hide_exts && _read_op.is_some()
+                && self.is_extension_cast_implied(op, _read_op.unwrap())
+            {
+                self.op_hidden_func(op);
+            } else {
+                self.op_type_cast(op);
+            }
+        } else {
+            self.op_unary(op);
+        }
+    }
+
+    // Ghidra: printc.cc:754 PrintC::opHiddenFunc  (referenced by opIntZext/Sext)
+    /// Suppress this op entirely - its output is rendered inline by the
+    /// consumer. Faithful to `PrintC::opHiddenFunc` (printc.cc:754-760):
+    /// Ghidra pushes nothing (the op is implied). Rugra marks the op as
+    /// inlined so the statement emitter skips its standalone line.
+    pub fn op_hidden_func(&mut self, op: &PcodeOp) {
+        self.inlined_ops.insert(*op.get_seq_num());
+    }
+
+    // Ghidra: printc.cc:814 PrintC::opBoolNegate
+    /// Emit a BOOL_NEGATE op, folding `!(a==b)` into `a != b` when possible.
+    ///
+    /// Faithful to `PrintC::opBoolNegate(const PcodeOp*)` (printc.cc:814-828).
+    /// Three branches:
+    /// 1. If `negatetoken` mod is set (we are the input of an outer
+    ///    BOOL_NEGATE that already decided to fold), consume it and print our
+    ///    input unmodified.
+    /// 2. Else if `checkPrintNegation(in(0))` is true (the input is a
+    ///    comparison whose token can be flipped), set `negatetoken` and print
+    ///    the flipped comparison.
+    /// 3. Else print `!in(0)`.
+    ///
+    /// Rugra's comparison emitter (`op_binary` for CPUI_INT_EQUAL etc.) reads
+    /// `negatetoken` to pick the flipped token, mirroring Ghidra's
+    /// printlanguage.cc:549-554 negatetoken handling.
+    pub fn op_bool_negate(&mut self, op: &PcodeOp) {
+        if self.is_set(print_mods::NEGATETOKEN) {
+            // Branch 1: we are being consumed by an outer BOOL_NEGATE fold.
+            self.unset_mod(print_mods::NEGATETOKEN);
+            if let Some(in0) = op.get_in(0) {
+                let resolved = self.resolve_varnode(&in0).unwrap_or_else(|| in0.clone());
+                self.push_varnode(&resolved.read().unwrap(), Some(op));
+            }
+            return;
+        }
+        // Branch 2: check if the input is a flippable comparison.
+        let can_flip = op.get_in(0).map(|in0| {
+            let vn = in0.read().unwrap();
+            self.check_print_negation(&vn)
+        }).unwrap_or(false);
+        if can_flip {
+            self.set_mod(print_mods::NEGATETOKEN);
+            if let Some(in0) = op.get_in(0) {
+                let resolved = self.resolve_varnode(&in0).unwrap_or_else(|| in0.clone());
+                self.push_varnode(&resolved.read().unwrap(), Some(op));
+            }
+            return;
+        }
+        // Branch 3: print `!in(0)`.
+        if let Some(out) = op.get_out() {
+            self.is_lhs = true;
+            self.push_varnode(&out.read().unwrap(), Some(op));
+            self.is_lhs = false;
+            self.emit.tag_op(" = ");
+        }
+        self.emit.print("!");
+        if let Some(in0) = op.get_in(0) {
+            let resolved = self.resolve_varnode(&in0).unwrap_or_else(|| in0.clone());
+            // Parenthesize if the input is itself an expression.
+            self.emit.print("(");
+            self.push_varnode(&resolved.read().unwrap(), Some(op));
+            self.emit.print(")");
+        }
+    }
+
+    // Ghidra: printc.cc:843 PrintC::opSubpiece
+    /// Emit a SUBPIECE op. If the op does special printing (field extraction
+    /// from a piece-structured composite), render the field access; else if
+    /// the cast strategy recognizes the truncation as a cast, render
+    /// `(type)in0`; else fall through to the generic binary rendering.
+    ///
+    /// Faithful to `PrintC::opSubpiece(const PcodeOp*)` (printc.cc:843-878).
+    /// The special-printing branch (piece-structured composite field lookup
+    /// via `findTruncation`/`pushPartialSymbol`) requires the full symbol /
+    /// type-resolution machinery that Rugra's direct-emit layer does not yet
+    /// expose; when `doesSpecialPrinting()` is true but the field cannot be
+    /// resolved we fall through to the functional rendering, matching Ghidra's
+    /// "Fall thru to functional printing" comment (printc.cc:869).
+    pub fn op_subpiece(&mut self, op: &PcodeOp) {
+        if op.does_special_printing() {
+            // Field extraction from a piece-structured composite.
+            if let Some(in0) = op.get_in(0) {
+                let vn = in0.read().unwrap();
+                if let Some(ct) = vn.get_high_type_read_facing(op, 0) {
+                    if ct.is_piece_structured() {
+                        // byteOff = TypeOpSubpiece::computeByteOffsetForComposite(op)
+                        // For little-endian (Rugra's x86/x64 target) this is
+                        // the SUBPIECE offset constant (in(1)).
+                        let byte_off = op.get_in(1).map(|c| {
+                            let cv = c.read().unwrap();
+                            if cv.is_constant() { cv.get_offset() as u32 } else { 0 }
+                        }).unwrap_or(0);
+                        // Attempt formal field lookup: findTruncation(byteOff,
+                        // outSize, op, slot=1, &offset). Rugra's Datatype does
+                        // not yet expose findTruncation, so we cannot resolve a
+                        // named field here. Fall through to functional printing
+                        // (Ghidra printc.cc:869 comment) - the cast/func branch
+                        // below.
+                        let _ = byte_off;
+                    }
+                }
+            }
+        }
+        // Cast-or-functional branch.
+        let (out_type, in_type, offset) = {
+            let out = op.get_out().map(|a| a.read().unwrap());
+            let in0 = op.get_in(0).map(|a| a.read().unwrap());
+            let in1 = op.get_in(1).map(|a| a.read().unwrap());
+            let offset = in1.map(|c| if c.is_constant() { c.get_offset() as u32 } else { 0 }).unwrap_or(0);
+            match (out, in0) {
+                (Some(o), Some(i)) => (
+                    o.get_high_type_def_facing(),
+                    i.get_high_type_read_facing(op, 0),
+                    offset,
+                ),
+                _ => (None, None, offset),
+            }
+        };
+        let is_cast = match (&out_type, &in_type) {
+            (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset),
+            _ => false,
+        };
+        if is_cast {
+            self.op_type_cast(op);
+        } else {
+            // opFunc(op) - generic functional rendering via op_binary.
+            self.op_binary(op);
+        }
+    }
+
+    // Ghidra: printc.cc:880 PrintC::opPtradd
+    /// Emit a PTRADD op (pointer arithmetic / array indexing). If the
+    /// `print_load_value` or `print_store_value` mod is set (we are the
+    /// address sub-expression of a LOAD/STORE that needs the value), render as
+    /// array subscript `in0[in1]`; otherwise render as pointer addition
+    /// `in0 + in1`.
+    ///
+    /// Faithful to `PrintC::opPtradd(const PcodeOp*)` (printc.cc:880-893).
+    /// Ghidra pushes the inputs in reverse order (in1 then in0) for RPN-stack
+    /// efficiency; Rugra emits left-to-right text, so we print in0 then the
+    /// operator then in1. The `m` mask strips the load/store-value mods before
+    /// recursing into the inputs, matching
+    /// `m = mods & ~(print_load_value | print_store_value)`.
+    pub fn op_ptradd(&mut self, op: &PcodeOp) {
+        let printval = self.is_set(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+        // m = mods & ~(print_load_value | print_store_value)
+        let m = self.mods & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+        // Save and apply the stripped mod mask for the recursive push.
+        self.push_mod();
+        self.mods = m;
+        if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
+            let in0_resolved = self.resolve_varnode(&in0).unwrap_or_else(|| in0.clone());
+            let in1_resolved = self.resolve_varnode(&in1).unwrap_or_else(|| in1.clone());
+            if printval {
+                // subscript: in0[in1]
+                self.push_varnode(&in0_resolved.read().unwrap(), Some(op));
+                self.emit.print("[");
+                self.push_varnode(&in1_resolved.read().unwrap(), Some(op));
+                self.emit.print("]");
+            } else {
+                // binary_plus: in0 + in1
+                self.push_varnode(&in0_resolved.read().unwrap(), Some(op));
+                self.emit.print(" + ");
+                self.push_varnode(&in1_resolved.read().unwrap(), Some(op));
+            }
+        }
+        self.pop_mod();
+    }
+
+    // Ghidra: printc.cc:1581 PrintC::resetDefaultsPrintC
+    /// Reset the PrintC-specific option flags to their defaults. Faithful to
+    /// `PrintC::resetDefaultsPrintC(void)` (printc.cc:1581-1595).
+    ///
+    /// Ghidra also resets the brace-formatting options
+    /// (`option_brace_func`/`option_brace_ifelse`/`option_brace_loop`/
+    /// `option_brace_switch`) and calls `setCStyleComments()`. Rugra has no
+    /// brace-formatting fields (the structured-block emitter uses a fixed
+    /// style) and no comment-style switch, so those resets are noted but not
+    /// applied here. The integer/bool options below ARE reset, matching Ghidra
+    /// line-for-line.
+    pub fn reset_defaults_print_c(&mut self) {
+        // printc.cc:1584
+        self.option_convention = true;
+        // printc.cc:1585
+        self.option_hide_exts = true;
+        // printc.cc:1586
+        self.option_inplace_ops = false;
+        // printc.cc:1587
+        self.option_nocasts = false;
+        // printc.cc:1588
+        self.option_null = false;
+        // printc.cc:1589
+        self.option_unplaced = false;
+        // printc.cc:1590-1593: option_brace_* (brace formatting) - no Rugra
+        //   counterpart; structured-block emitter uses a fixed style.
+        // printc.cc:1594: setCStyleComments() - Rugra emits C-style comments
+        //   unconditionally; no style flag to reset.
+    }
+
+    // Ghidra: printc.cc:2418 PrintC::emitInplaceOp
+    /// Detect whether the given op can be rendered as a compound assignment
+    /// (`+=`, `*=`, ...) and, if so, emit it and return true. Returns false if
+    /// the op has no in-place token form or if the first input and output are
+    /// not the same variable (so `x = x + y` must be used instead).
+    ///
+    /// Faithful to `PrintC::emitInplaceOp(const PcodeOp*)` (printc.cc:2418-
+    /// 2466). Ghidra maps each opcode to a static OpToken (multequal,
+    /// divequal, ...) and pushes it onto the RPN stack; Rugra emits the
+    /// equivalent text directly. The opcode->token table and the
+    /// `out.getHigh() != in(0).getHigh()` same-variable guard are faithful.
+    pub fn emit_inplace_op(&mut self, op: &PcodeOp) -> bool {
+        // printc.cc:2422-2457: opcode -> in-place token
+        let tok: &str = match op.opcode {
+            OpCode::CPUI_INT_MULT => "*=",
+            OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV => "/=",
+            OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM => "%=",
+            OpCode::CPUI_INT_ADD => "+=",
+            OpCode::CPUI_INT_SUB => "-=",
+            OpCode::CPUI_INT_LEFT => "<<=",
+            OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => ">>=",
+            OpCode::CPUI_INT_AND => "&=",
+            OpCode::CPUI_INT_OR => "|=",
+            OpCode::CPUI_INT_XOR => "^=",
+            _ => return false,
+        };
+        // printc.cc:2459-2460: out.getHigh() != in(0).getHigh() -> not in-place
+        let same_var = match (op.get_out(), op.get_in(0)) {
+            (Some(out_arc), Some(in0_arc)) => {
+                let out_high = out_arc.read().unwrap().get_high().map(|h| {
+                    Arc::as_ptr(h) as usize
+                });
+                let in0_high = in0_arc.read().unwrap().get_high().map(|h| {
+                    Arc::as_ptr(h) as usize
+                });
+                // HighVariable pointer equality is the faithful equivalent of
+                // Ghidra's `getHigh() != getHigh()` pointer comparison.
+                match (out_high, in0_high) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !same_var {
+            return false;
+        }
+        // printc.cc:2461-2464: pushOp(tok,op); pushVnExplicit(vn,op);
+        // pushVn(op->getIn(1),op,mods); recurse();
+        // Rugra emits `in0 tok in1` directly.
+        if let Some(in0) = op.get_in(0) {
+            self.push_varnode(&in0.read().unwrap(), Some(op));
+        }
+        self.emit.print(tok);
+        self.push_input(op, 1);
+        true
+    }
+
+    // Ghidra: printc.cc:2388 PrintC::checkPrintNegation
+    /// Predicate: can this varnode's defining op be rendered by flipping its
+    /// comparison token (so `!(a==b)` becomes `a != b`)? Returns true iff the
+    /// varnode is implied, is written, and its defining op's opcode has a
+    /// boolean-flip complement (i.e. `get_booleanflip` returns non-MAX).
+    ///
+    /// Faithful to `PrintC::checkPrintNegation(const Varnode*)` (printc.cc:
+    /// 2388-2398). The `reorder` out-parameter of `get_booleanflip` is unused
+    /// by the caller (printc.cc only checks `opc == CPUI_MAX`), so we discard
+    /// it. The flippable opcode set is the faithful port of
+    /// `get_booleanflip` (opcodes.cc:94-135): INT_EQUAL/NOTEQUAL,
+    /// INT_SLESS/SLESSEQUAL, INT_LESS/LESSEQUAL, BOOL_NEGATE, FLOAT_EQUAL/
+    /// NOTEQUAL, FLOAT_LESS/LESSEQUAL.
+    pub fn check_print_negation(&self, vn: &Varnode) -> bool {
+        // printc.cc:2391-2392
+        if !vn.is_implied() { return false; }
+        if !vn.is_written() { return false; }
+        // printc.cc:2393: op = vn->getDef()
+        let def_arc = match vn.get_def() { Some(a) => a, None => return false };
+        let def = def_arc.read().unwrap();
+        // printc.cc:2395: opc = get_booleanflip(op->code(), reorder)
+        // printc.cc:2396-2397: if (opc == CPUI_MAX) return false;
+        Self::boolean_flip_opcode(def.opcode).is_some()
+    }
+
+    /// The complement opcode for a boolean-flippable comparison, or `None`
+    /// (Ghidra's `CPUI_MAX`) if the opcode cannot be flipped. Faithful port of
+    /// `get_booleanflip` (opcodes.cc:94-135). The `reorder` flag is dropped
+    /// (printc.cc:2388-2398 never reads it).
+    fn boolean_flip_opcode(opc: OpCode) -> Option<OpCode> {
+        use crate::opcodes::OpCode::*;
+        Some(match opc {
+            CPUI_INT_EQUAL => CPUI_INT_NOTEQUAL,
+            CPUI_INT_NOTEQUAL => CPUI_INT_EQUAL,
+            CPUI_INT_SLESS => CPUI_INT_SLESSEQUAL,
+            CPUI_INT_SLESSEQUAL => CPUI_INT_SLESS,
+            CPUI_INT_LESS => CPUI_INT_LESSEQUAL,
+            CPUI_INT_LESSEQUAL => CPUI_INT_LESS,
+            CPUI_BOOL_NEGATE => CPUI_COPY,
+            CPUI_FLOAT_EQUAL => CPUI_FLOAT_NOTEQUAL,
+            CPUI_FLOAT_NOTEQUAL => CPUI_FLOAT_EQUAL,
+            CPUI_FLOAT_LESS => CPUI_FLOAT_LESSEQUAL,
+            CPUI_FLOAT_LESSEQUAL => CPUI_FLOAT_LESS,
+            _ => return None,
+        })
+    }
+
+    /// Inlined subset of `CastStrategyC::isExtensionCastImplied` (cast.cc:
+    /// 249-298). Returns true if the ZEXT/SEXT `op`'s extension is implied by
+    /// C integer promotion in the context of `read_op` (the consumer).
+    ///
+    /// This is inlined here (rather than ported to cast.rs) because the task
+    /// scope restricts edits to `src/printc.rs`. The logic is faithful to
+    /// cast.cc:249-298 for the cases Rugra can evaluate:
+    /// - outVn explicit -> Ghidra falls through to `return false` (the empty
+    ///   `if (outVn->isExplicit()) {}` branch at cast.cc:253-255), so we
+    ///   return false.
+    /// - readOp null -> false (cast.cc:257-258).
+    /// - The consumer opcode must be a binary arithmetic/comparison op
+    ///   (cast.cc:262-277); PTRADD falls through (cast.cc:263-264 -> `break` ->
+    ///   return true, but only when the other operand matches - see below).
+    /// - If the other operand is a constant bigger than the promotion size,
+    ///   the extension is NOT implied (cast.cc:281-285).
+    /// - If the other operand is not explicit, not implied (cast.cc:287-288).
+    /// - If the other operand's metatype differs from the output's, not
+    ///   implied (cast.cc:289-290).
+    fn is_extension_cast_implied(&self, op: &PcodeOp, read_op: &PcodeOp) -> bool {
+        let out_vn = match op.get_out() { Some(a) => a, None => return false };
+        let out = out_vn.read().unwrap();
+        // cast.cc:253-255: explicit output -> empty branch -> falls to return false
+        if out.is_explicit() { return false; }
+        // outVn metatype (read-facing, via readOp)
+        let out_meta = out.get_high_type_read_facing(read_op, 0)
+            .map(|t| t.get_metatype());
+        let out_meta = match out_meta { Some(m) => m, None => return false };
+
+        // cast.cc:262-294: switch on readOp->code()
+        let read_opc = read_op.opcode;
+        let in_slot_ok = match read_opc {
+            // cast.cc:263-264: PTRADD -> break (falls to return true)
+            OpCode::CPUI_PTRADD => true,
+            // cast.cc:265-277: arithmetic / comparison ops
+            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                // cast.cc:278: slot = readOp->getSlot(outVn)
+                // Find which input slot of read_op is our output varnode.
+                let out_ptr = Arc::as_ptr(out_vn) as usize;
+                let slot = (0..read_op.num_input())
+                    .find(|&s| {
+                        read_op.get_in(s).map(|a| Arc::as_ptr(a) as usize) == Some(out_ptr)
+                    });
+                let slot = match slot { Some(s) => s, None => return false };
+                let other = match read_op.get_in(1 - slot) { Some(a) => a, None => return false };
+                let other_vn = other.read().unwrap();
+                // cast.cc:281-285: constant bigger than promotion size -> not implied
+                if other_vn.is_constant() {
+                    if other_vn.get_size() > 4 { // promote_size = 4 (x86/x64 int)
+                        return false;
+                    }
+                } else if !other_vn.is_explicit() {
+                    // cast.cc:287-288: non-explicit other -> not implied
+                    return false;
+                }
+                // cast.cc:289-290: other metatype must match output metatype
+                let other_meta = other_vn.get_high_type_read_facing(read_op, 1 - slot)
+                    .map(|t| t.get_metatype());
+                match other_meta {
+                    Some(m) if m == out_meta => true,
+                    _ => false,
+                }
+            }
+            // cast.cc:292-293: default -> return false
+            _ => return false,
+        };
+        // cast.cc:295: return true (everything is integer promotion)
+        in_slot_ok
+    }
+
 }
 
 #[cfg(test)]
