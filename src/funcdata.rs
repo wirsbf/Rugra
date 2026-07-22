@@ -7861,6 +7861,57 @@ impl Funcdata {
     pub fn get_override(&mut self) -> &mut crate::override_rs::Override {
         &mut self.localoverride
     }
+
+    // Ghidra: funcdata_varnode.cc:272 Funcdata::destroyVarnode
+    /// Fully detach and destroy a Varnode. Faithful to
+    /// `Funcdata::destroyVarnode` (funcdata_varnode.cc:272-292):
+    ///   for(iter=vn->beginDescend(); iter!=vn->endDescend(); ++iter) {
+    ///     PcodeOp *op = *iter;
+    ///     op->clearInput(op->getSlot(vn));
+    ///   }
+    ///   if (vn->def != NULL) {
+    ///     vn->def->setOutput(NULL);
+    ///     vn->def = NULL;
+    ///   }
+    ///   vn->destroyDescend();
+    ///   vbank.destroy(vn);
+    /// This is distinct from `delete_varnode` (a thin wrapper around
+    /// `vbank.destroy_varnode` that only removes the varnode from the loc/def
+    /// trees): `destroy_varnode` first nullifies every read reference and the
+    /// defining op's output, so the varnode is cleanly detached from the SSA
+    /// web before removal. Callers that just want to retire a varnode that is
+    /// already known to be unreferenced should prefer `delete_varnode`.
+    pub fn destroy_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        // cc:277-284: clear each descending op's input slot.
+        // Snapshot the (op, slot) pairs first because the slot lookup
+        // (`op_get_slot`) and the unset both read the op.
+        let descend_pairs: Vec<(crate::op::PcodeOpRef, usize)> = {
+            let r = vn.read().unwrap();
+            r.descend.iter()
+                .filter_map(|w| w.upgrade())
+                .map(|op_arc| {
+                    let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+                    let slot = self.op_get_slot(&op_ref, vn) as usize;
+                    (op_ref, slot)
+                })
+                .collect()
+        };
+        for (op_ref, slot) in descend_pairs {
+            // cc:283: op->clearInput(op->getSlot(vn)).
+            // Rugra has no clearInput; op_unset_input erases the descend link
+            // and leaves the slot stale (to be overwritten or removed).
+            self.op_unset_input(&op_ref, slot);
+        }
+        // cc:285-288: if vn has a def, detach the def's output.
+        let def_op = vn.read().unwrap().get_def();
+        if let Some(def) = def_op {
+            self.op_unset_output(&crate::op::PcodeOpRef(def));
+        }
+        // cc:290: vn->destroyDescend().
+        vn.write().unwrap().destroy_descend();
+        // cc:291: vbank.destroy(vn).
+        self.vbank.destroy_varnode(vn);
+    }
 }
 
 #[cfg(test)]
