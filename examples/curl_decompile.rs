@@ -246,6 +246,13 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
+        eprintln!("[SYMS] {} entries; targets 0x2000-0x5000:", symbol_table.len());
+        for (&addr, name) in symbol_table.iter() {
+            if addr >= 0x2000 && addr <= 0x5000 {
+                eprintln!("[SYM] 0x{:x} = {}", addr, name);
+            }
+        }
+
         let max_size = std::cmp::min(func.size, 4096);
         let end_offset = std::cmp::min(func.file_offset as usize + max_size, buffer.len());
         if func.file_offset as usize >= buffer.len() {
@@ -263,15 +270,25 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // 2. Lift to P-code
-        let mut lifter = X86Lifter::new();
-        let mut raw_ops = Vec::new();
+        // 2. Lift to P-code via Rugra native SLEIGH FFI (one context per function)
+        let inst_offsets: Vec<(u64, usize)> = instructions.iter()
+            .map(|i| (i.address.as_u64() - func.vaddr, i.length))
+            .collect();
         for inst in &instructions {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+            if inst.mnemonic == "call" {
+                if let Some(ref bt) = inst.metadata.branch_target {
+                    eprintln!("[ICED-CALL] addr=0x{:x} target=0x{:x}", inst.address.as_u64(), bt.as_u64());
+                }
             }
-            raw_ops.extend(ops);
+        }
+        let all_ops = rugra::disasm::sleigh_lift::SleighLifter::lift_function(
+            code_bytes, func.vaddr, &inst_offsets,
+        );
+        let mut raw_ops = Vec::new();
+        for (_addr, ops) in &all_ops {
+            for op in ops {
+                raw_ops.push(op.clone());
+            }
         }
 
         // Run analysis + decompilation in a thread with timeout

@@ -4670,6 +4670,14 @@ impl<'a> CollapseStructure<'a> {
 
             self.graph.blocks[i] = list_block;
             merged[succ_idx] = true;
+            // Mark succ DEAD so subsequent collapse passes (collapse_loops,
+            // collapse_conditions, etc.) skip it as a consumed child, matching
+            // Ghidra identifyInternal which removes consumed nodes from the
+            // parent's list. Do NOT clear_edges — BlockList.children[1] still
+            // holds succ's Arc and the edges are needed if succ is itself
+            // structured later. finalize_structure (Phase 1.1) physically
+            // removes DEAD blocks at the end of collapse_all.
+            succ.write().unwrap().set_flags(crate::block::block_flags::DEAD);
             self.change_count += 1;
         }
     }

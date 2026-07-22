@@ -1,0 +1,52 @@
+﻿34:class ActionStart : public Action {
+36:  ActionStart(const string &g) : Action(0,"start",g) {}		///< Constructor
+39:    return new ActionStart(getGroup());
+46:class ActionStop : public Action {
+48:  ActionStop(const string &g) : Action(0,"stop",g) {}		///< Constructor
+51:    return new ActionStop(getGroup());
+58:class ActionStartCleanUp : public Action {
+60:  ActionStartCleanUp(const string &g) : Action(0,"startcleanup",g) {}	///< Constructor
+63:    return new ActionStartCleanUp(getGroup());
+74:class ActionStartTypes : public Action {
+76:  ActionStartTypes(const string &g) : Action(0,"starttypes",g) {}	///< Constructor
+80:    return new ActionStartTypes(getGroup());
+270:class ActionSpacebase : public Action {
+272:  ActionSpacebase(const string &g) : Action(0,"spacebase",g) {}	///< Constructor
+275:    return new ActionSpacebase(getGroup());
+282:class ActionHeritage : public Action {
+284:  ActionHeritage(const string &g) : Action(0,"heritage",g) {}	///< Constructor
+287:    return new ActionHeritage(getGroup());
+293:class ActionNonzeroMask : public Action {
+295:  ActionNonzeroMask(const string &g) : Action(0,"nonzeromask",g) {}	///< Constructor
+298:    return new ActionNonzeroMask(getGroup());
+339:class ActionAssignHigh : public Action {
+341:  ActionAssignHigh(const string &g) : Action(rule_onceperfunc,"assignhigh",g) {}	///< Constructor
+344:    return new ActionAssignHigh(getGroup());
+350:class ActionMarkIndirectOnly : public Action {
+352:  ActionMarkIndirectOnly(const string &g) : Action(rule_onceperfunc, "markindirectonly",g) {}	///< Constructor
+355:    return new ActionMarkIndirectOnly(getGroup());
+362:class ActionMergeRequired : public Action {
+364:  ActionMergeRequired(const string &g) : Action(rule_onceperfunc,"mergerequired",g) {}	///< Constructor
+367:    return new ActionMergeRequired(getGroup());
+374:class ActionMergeAdjacent : public Action {
+376:  ActionMergeAdjacent(const string &g) : Action(rule_onceperfunc,"mergeadjacent",g) {}	///< Constructor
+379:    return new ActionMergeAdjacent(getGroup());
+385:class ActionMergeCopy : public Action {
+387:  ActionMergeCopy(const string &g) : Action(rule_onceperfunc,"mergecopy",g) {}	///< Constructor
+390:    return new ActionMergeCopy(getGroup());
+396:class ActionMergeMultiEntry : public Action {
+398:  ActionMergeMultiEntry(const string &g) : Action(rule_onceperfunc,"mergemultientry",g) {}	///< Constructor
+401:    return new ActionMergeMultiEntry(getGroup());
+407:class ActionMergeType : public Action {
+409:  ActionMergeType(const string &g) : Action(rule_onceperfunc,"mergetype",g) {}	///< Constructor
+412:    return new ActionMergeType(getGroup());
+746:/// This needs to be called \b after ActionHeritage and \b after ActionDirectWrite
+878:class ActionMapGlobals : public Action {
+880:  ActionMapGlobals(const string &g) : Action(rule_onceperfunc,"mapglobals",g) {}	///< Constructor
+883:    return new ActionMapGlobals(getGroup());
+1001:class ActionDominantCopy : public Action {
+1003:  ActionDominantCopy(const string &g) : Action(rule_onceperfunc,"dominantcopy",g) {}	///< Constructor
+1006:    return new ActionDominantCopy(getGroup());
+1012:class ActionCopyMarker : public Action {
+1014:  ActionCopyMarker(const string &g) : Action(rule_onceperfunc,"copymarker",g) {}	///< Constructor
+1017:    return new ActionCopyMarker(getGroup());

@@ -144,9 +144,13 @@ void* rugra_sleigh_create(const char* sla_path) {
 void rugra_sleigh_set_image(void* handle, const uint8_t* bytes, uint64_t len, uint64_t base_addr) {
     auto* s = (RugraSleigh*)handle;
     s->loader.setBytes(bytes, (size_t)len, base_addr);
-    s->context.setVariableDefault("longMode", 1);
-    s->context.setVariableDefault("addrsize", 2);
-    s->context.setVariableDefault("bit64", 1);
+}
+
+void rugra_sleigh_set_context(void* handle, const char* name, int32_t val) {
+    auto* s = (RugraSleigh*)handle;
+    try {
+        s->context.setVariableDefault(name, val);
+    } catch (...) {}
 }
 
 // Decode instruction at offset. Returns number of p-code ops, or -1 on failure.
@@ -154,8 +158,8 @@ void rugra_sleigh_set_image(void* handle, const uint8_t* bytes, uint64_t len, ui
 int32_t rugra_sleigh_decode(void* handle, uint64_t offset,
                              PcodeOpC* ops, int32_t max_ops) {
     auto* s = (RugraSleigh*)handle;
-    Address addr(s->trans->getDefaultCodeSpace(), offset);
 
+    Address addr(s->trans->getDefaultCodeSpace(), offset);
     RugraPcodeEmit emitter;
     try {
         s->trans->oneInstruction(emitter, addr);

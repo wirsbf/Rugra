@@ -39,10 +39,18 @@ impl SleighLifter {
             Some(c) => c,
             None => return Vec::new(),
         };
+        let pspec = std::path::Path::new("sleigh_specs/x86-64.pspec");
+        if pspec.exists() {
+            ctx.load_pspec(pspec.to_str().unwrap());
+        }
         ctx.set_image(func_code, func_base);
 
         let mut result = Vec::new();
         for &(rel_offset, _len) in inst_offsets {
+            let off = rel_offset as usize;
+            if off + 4 <= func_code.len() && func_code[off..off+4] == [0xf3, 0x0f, 0x1e, 0xfa] {
+                continue;
+            }
             let abs_addr = func_base + rel_offset;
             let ops_c = ctx.decode(abs_addr);
             if ops_c.is_empty() { continue; }

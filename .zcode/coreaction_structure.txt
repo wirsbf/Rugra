@@ -1,0 +1,446 @@
+﻿12:/// Action for performing SSA construction (Heritage)
+15:pub struct ActionHeritage;
+18:    pub fn new() -> Self {
+24:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+65:    fn get_name(&self) -> &str {
+82:pub struct ActionDeadCode;
+85:    pub fn new() -> Self {
+93:    fn push_consumed(
+115:    fn propagate_consumed(
+172:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+293:    fn get_name(&self) -> &str {
+301:pub struct ActionConstantPtr;
+304:    pub fn new() -> Self {
+310:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+343:    fn get_name(&self) -> &str {
+351:pub struct ActionCse;
+354:    pub fn new() -> Self {
+360:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+433:    fn get_name(&self) -> &str {
+438:/// Restructure the local-variable scope from stack varnodes.
+440:/// Faithful to `ActionRestructureVarnode` (coreaction.cc:2274). In Ghidra this
+441:/// builds the `ScopeLocal` (via `ScopeLocal::restructureVarnode`) and syncs
+447:pub struct ActionRestructureVarnode {
+452:impl ActionRestructureVarnode {
+453:    pub fn new() -> Self {
+458:impl Action for ActionRestructureVarnode {
+459:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+460:        // Faithful to ActionRestructureVarnode::apply (coreaction.cc:2274-2295).
+462:        scope.restructure_varnode(fd);
+470:    fn get_name(&self) -> &str {
+471:        "restructureVarnode"
+476:pub struct ActionStart;
+479:    pub fn new() -> Self {
+485:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+489:    fn get_name(&self) -> &str {
+497:pub struct ActionMergeRequired;
+500:    pub fn new() -> Self {
+506:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+512:    fn get_name(&self) -> &str {
+520:pub struct ActionMergeAdjacent;
+523:    pub fn new() -> Self {
+529:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+535:    fn get_name(&self) -> &str {
+546:pub struct ActionMergeCopy;
+549:    pub fn new() -> Self {
+555:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+562:    fn get_name(&self) -> &str {
+570:pub struct ActionMergeMultiEntry;
+573:    pub fn new() -> Self {
+579:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+585:    fn get_name(&self) -> &str {
+593:pub struct ActionMergeType;
+596:    pub fn new() -> Self {
+602:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+608:    fn get_name(&self) -> &str {
+620:pub struct ActionSimplify;
+623:    pub fn new() -> Self {
+629:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+633:        enum Transform {
+641:        for (idx, op_ref) in fd.obank.alivelist.iter().enumerate() {
+720:        // INT_OR / INT_XOR constructions. Runs after the generic simplifiers
+747:    fn get_name(&self) -> &str {
+756:pub struct ActionCopyPropagate;
+759:    pub fn new() -> Self {
+765:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+859:    fn get_name(&self) -> &str {
+868:pub struct ActionCallParams;
+886:fn known_param_count(func_name: Option<&str>) -> usize {
+960:fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
+985:fn is_known_function(func_name: Option<&str>) -> bool {
+998:pub enum KnownReturn {
+1009:fn known_return_type(func_name: Option<&str>) -> Option<KnownReturn> {
+1048:    pub fn new() -> Self {
+1054:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+1064:        let call_info: Vec<(usize, usize, usize)> = fd.obank.alivelist.iter().enumerate()
+1127:                        for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
+1206:                    for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
+1231:                for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
+1281:    fn get_name(&self) -> &str {
+1294:pub struct ActionInferParams;
+1297:    pub fn new() -> Self {
+1303:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+1330:                        for (i, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
+1385:                                    for (abi_idx, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
+1402:                                for (abi_idx, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
+1607:    fn get_name(&self) -> &str {
+1618:pub struct ActionTypeInfer;
+1621:    pub fn new() -> Self {
+1627:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+1897:    fn get_name(&self) -> &str {
+1902:fn get_pointed_type(ptr_dt: &Arc<crate::type_system::datatype::Datatype>) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+1910:fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<crate::type_system::datatype::Datatype> {
+1929:pub struct ActionUnreachable { pub count: i32 }
+1931:    pub fn new() -> Self { Self { count: 0 } }
+1934:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+1942:    fn get_name(&self) -> &str { "unreachable" }
+1950:pub struct ActionDoNothing { pub count: i32 }
+1952:    pub fn new() -> Self { Self { count: 0 } }
+1955:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2024:    fn get_name(&self) -> &str { "donothing" }
+2036:pub struct ActionRedundBranch { pub count: i32 }
+2038:    pub fn new() -> Self { Self { count: 0 } }
+2041:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2105:    fn get_name(&self) -> &str { "redundbranch" }
+2114:pub struct ActionDeterminedBranch { pub count: i32 }
+2116:    pub fn new() -> Self { Self { count: 0 } }
+2119:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2166:    fn get_name(&self) -> &str { "determinedbranch" }
+2174:pub struct ActionHideShadow;
+2176:    pub fn new() -> Self { Self }
+2179:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2210:    fn get_name(&self) -> &str { "hideshadow" }
+2218:pub struct ActionSwitchNorm { pub count: i32 }
+2220:    pub fn new() -> Self { Self { count: 0 } }
+2223:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2263:    fn get_name(&self) -> &str { "switchnorm" }
+2271:pub struct ActionNormalizeSetup;
+2273:    pub fn new() -> Self { Self }
+2276:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2291:    fn get_name(&self) -> &str { "normalizesetup" }
+2302:pub struct ActionPrototypeWarnings;
+2304:    pub fn new() -> Self { Self }
+2307:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2335:    fn get_name(&self) -> &str { "prototypewarnings" }
+2349:pub struct ActionMarkExplicit { pub count: i32 }
+2351:    pub fn new() -> Self { Self { count: 0 } }
+2359:    fn base_explicit(
+2401:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2438:    fn get_name(&self) -> &str { "markexplicit" }
+2449:pub struct ActionMarkImplied { pub count: i32 }
+2451:    pub fn new() -> Self { Self { count: 0 } }
+2457:    fn is_possible_alias_step(
+2502:    fn check_implied_cover(
+2608:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2649:    fn get_name(&self) -> &str { "markimplied" }
+2662:pub struct ActionSetCasts { pub count: i32 }
+2664:    pub fn new() -> Self { Self { count: 0 } }
+2673:    fn input_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
+2706:    fn cast_input(
+2760:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+2771:        // infrastructure).
+2791:    fn get_name(&self) -> &str { "setcasts" }
+2808:pub struct ActionInferTypes {
+2809:    pub local_count: i32,
+2812:    pub fn new() -> Self { Self { local_count: 0 } }
+2826:fn vn_id(vn: &crate::varnode::Varnode) -> u64 {
+2836:fn make_ptr(
+2850:fn ptr_to<'a>(
+2865:    fn build_localtypes(
+2992:    fn propagate_type_edge(
+3069:    fn propagate_type(
+3219:    fn propagate_one_type(
+3236:        struct Edge {
+3345:    fn write_back(&self, fd: &Funcdata, temps: &TempTypes) -> bool {
+3368:    fn propagate_across_returns(
+3451:struct IntTypes {
+3460:    fn sized(&self, sz: usize) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+3471:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+3561:    fn get_name(&self) -> &str { "infertypes" }
+3572:pub struct ActionNameVars;
+3574:    pub fn new() -> Self { Self }
+3577:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+3601:    fn get_name(&self) -> &str { "namevars" }
+3606:pub struct ActionVarnodeProps;
+3608:    pub fn new() -> Self { Self }
+3611:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+3666:    fn get_name(&self) -> &str { "varnodeprops" }
+3678:pub struct ActionRestrictLocal;
+3680:    pub fn new() -> Self { Self }
+3683:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+3746:    fn get_name(&self) -> &str { "restrictlocal" }
+3751:pub struct ActionMultiCse { pub count: i32 }
+3753:    pub fn new() -> Self { Self { count: 0 } }
+3757:    fn resolve_copy(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+3783:    fn preferred_output(
+3824:    fn find_match(
+3878:    fn process_block(fd: &mut Funcdata, block_ops: &[crate::op::PcodeOpRef]) -> bool {
+3887:        'outer: for (idx, op) in block_ops.iter().enumerate() {
+3945:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+3978:    fn get_name(&self) -> &str { "multicse" }
+3997:pub struct ActionDirectWrite;
+3999:    pub fn new() -> Self { Self }
+4002:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4039:                    // COPY and STACK_STORE cases deferred (need is_stack_store infrastructure)
+4067:    fn get_name(&self) -> &str { "directwrite" }
+4076:pub struct ActionConstbase;
+4078:    pub fn new() -> Self { Self }
+4081:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4112:    fn get_name(&self) -> &str { "constbase" }
+4117:pub struct ActionInputPrototype;
+4119:    pub fn new() -> Self { Self }
+4122:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4186:    fn get_name(&self) -> &str { "inputprototype" }
+4191:pub struct ActionOutputPrototype;
+4193:    pub fn new() -> Self { Self }
+4196:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4247:    fn get_name(&self) -> &str { "outputprototype" }
+4252:pub struct ActionPrototypeTypes;
+4254:    pub fn new() -> Self { Self }
+4257:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4307:    fn get_name(&self) -> &str { "prototypetypes" }
+4312:pub struct ActionActiveParam;
+4314:    pub fn new() -> Self { Self }
+4317:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4357:    fn get_name(&self) -> &str { "activeparam" }
+4362:pub struct ActionActiveReturn;
+4364:    pub fn new() -> Self { Self }
+4367:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4423:    fn get_name(&self) -> &str { "activereturn" }
+4428:pub struct ActionDefaultParams;
+4430:    pub fn new() -> Self { Self }
+4433:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4459:    fn get_name(&self) -> &str { "defaultparams" }
+4464:pub struct ActionParamDouble;
+4466:    pub fn new() -> Self { Self }
+4469:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4493:    fn get_name(&self) -> &str { "paramdouble" }
+4498:pub struct ActionUnjustifiedParams;
+4500:    pub fn new() -> Self { Self }
+4503:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4558:    fn get_name(&self) -> &str { "unjustifiedparams" }
+4568:pub struct ActionLikelyTrash { pub count: i32 }
+4570:    pub fn new() -> Self { Self { count: 0 } }
+4573:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4587:    fn get_name(&self) -> &str { "likelytrash" }
+4596:pub struct ActionShadowVar {
+4598:    pub count: i32,
+4601:    pub fn new() -> Self { Self { count: 0 } }
+4604:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4737:    fn get_name(&self) -> &str { "shadowvar" }
+4742:fn get_block_ops(fd: &Funcdata, op: &crate::op::PcodeOpRef) -> Vec<crate::op::PcodeOpRef> {
+4766:pub struct ActionFuncLink;
+4768:    pub fn new() -> Self { Self }
+4776:    fn setup_call_specs(&self, fd: &mut Funcdata) -> usize {
+4866:    pub fn func_link_input(
+4888:            for (i, &reg_off) in sysv_offsets.iter().enumerate() {
+4914:    /// Funcdata op-edit infrastructure beyond this pass and are deferred.
+4915:    pub fn func_link_output(fd: &mut Funcdata, fc_idx: usize, op: &crate::op::PcodeOpRef) {
+4952:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+4999:    fn get_name(&self) -> &str { "funclink" }
+5006:pub struct ActionFuncLinkOutOnly;
+5008:    pub fn new() -> Self { Self }
+5011:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5035:    fn get_name(&self) -> &str { "funclinkoutonly" }
+5040:pub struct ActionDeindirect { pub count: i32 }
+5042:    pub fn new() -> Self { Self { count: 0 } }
+5045:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5108:    fn get_name(&self) -> &str { "deindirect" }
+5116:    fn trace_indirect_target(op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>) -> Option<crate::address::Address> {
+5135:    fn chase_copy_to_const(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::address::Address> {
+5165:/// StackSolver + ProtoModel::extrapop infrastructure.
+5166:pub struct ActionStackPtrFlow;
+5168:    pub fn new() -> Self { Self }
+5172:    fn is_stack_relative(
+5203:    fn adjust_load(
+5237:    fn repair(
+5288:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5365:    fn get_name(&self) -> &str { "stackptrflow" }
+5377:pub struct ActionSpacebase;
+5379:    pub fn new() -> Self { Self }
+5382:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5386:    fn get_name(&self) -> &str { "spacebase" }
+5391:pub struct ActionSegmentize;
+5393:    pub fn new() -> Self { Self }
+5396:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5413:    fn get_name(&self) -> &str { "segmentize" }
+5418:pub struct ActionInternalStorage;
+5420:    pub fn new() -> Self { Self }
+5423:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5444:    fn get_name(&self) -> &str { "internalstorage" }
+5449:pub struct ActionExtraPopSetup;
+5451:    pub fn new() -> Self { Self }
+5454:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5461:        // The infrastructure is ready for when extraPop tracking is added.
+5464:    fn get_name(&self) -> &str { "extrapopsetup" }
+5481:pub struct ActionConditionalConst { pub count: i32 }
+5483:    pub fn new() -> Self { Self { count: 0 } }
+5486:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5500:    fn get_name(&self) -> &str { "conditionalconst" }
+5505:pub struct ActionDynamicMapping;
+5507:    pub fn new() -> Self { Self }
+5510:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5513:    fn get_name(&self) -> &str { "dynamicmapping" }
+5518:pub struct ActionDynamicSymbols;
+5520:    pub fn new() -> Self { Self }
+5523:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5526:    fn get_name(&self) -> &str { "dynamicsymbols" }
+5531:pub struct ActionMappedLocalSync;
+5533:    pub fn new() -> Self { Self }
+5536:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5539:    fn get_name(&self) -> &str { "mappedlocalsync" }
+5544:pub struct ActionLaneDivide;
+5546:    pub fn new() -> Self { Self }
+5549:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5552:    fn get_name(&self) -> &str { "lanedivide" }
+5564:pub struct ActionReturnRecovery { pub count: i32 }
+5566:    // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
+5567:    pub fn new() -> Self { Self { count: 0 } }
+5570:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5634:    fn get_name(&self) -> &str { "returnrecovery" }
+5642:pub struct ActionNonzeroMask;
+5644:    pub fn new() -> Self { Self }
+5647:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5654:    fn get_name(&self) -> &str { "nonzeromask" }
+5661:/// Each override marks a specific branch as an unstructured goto.
+5662:pub struct ActionForceGoto { pub count: i32 }
+5664:    pub fn new() -> Self { Self { count: 0 } }
+5667:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5681:    fn get_name(&self) -> &str { "forcegoto" }
+5690:// ConditionalJoin for nodejoin, collapseInternal/structure tree for the
+5691:// block transforms), the struct + `impl Action` is still provided with a
+5709:pub struct ActionStartCleanUp;
+5712:    pub fn new() -> Self {
+5718:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5723:    fn get_name(&self) -> &str {
+5734:pub struct ActionStartTypes {
+5736:    pub count: i32,
+5740:    pub fn new() -> Self {
+5746:    fn reset(&mut self, fd: &mut Funcdata) {
+5751:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5761:    fn get_name(&self) -> &str {
+5772:pub struct ActionStop;
+5775:    pub fn new() -> Self {
+5781:    fn apply(&mut self, _fd: &mut Funcdata) -> Result<i32> {
+5786:    fn get_name(&self) -> &str {
+5798:/// `assignHigh(vn)` for every Varnode 鈥?constructing a fresh `HighVariable`
+5800:pub struct ActionAssignHigh;
+5803:    pub fn new() -> Self {
+5809:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5823:    fn get_flags(&self) -> u32 {
+5827:    fn get_name(&self) -> &str {
+5839:pub struct ActionDominantCopy;
+5842:    pub fn new() -> Self {
+5848:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5856:    fn get_flags(&self) -> u32 {
+5860:    fn get_name(&self) -> &str {
+5871:pub struct ActionCopyMarker;
+5874:    pub fn new() -> Self {
+5880:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5887:    fn get_flags(&self) -> u32 {
+5891:    fn get_name(&self) -> &str {
+5904:pub struct ActionMarkIndirectOnly;
+5907:    pub fn new() -> Self {
+5916:    fn check_indirect_use(start: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
+5960:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+5985:    fn get_flags(&self) -> u32 {
+5989:    fn get_name(&self) -> &str {
+6006:pub struct ActionMapGlobals;
+6009:    pub fn new() -> Self {
+6015:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+6054:    fn get_flags(&self) -> u32 {
+6058:    fn get_name(&self) -> &str {
+6064:// These operate on the structured control-flow tree / basic-block graph and
+6067:// because Rugra's staged structurer assumes block indices are stable and a
+6068:// mid-pipeline block edit would push it out of bounds. The structs exist so
+6072:/// Normalize symmetric structured control-flow (e.g. swap if/else arms).
+6075:/// `apply` (blockaction.cc:2140-2167) walks the structure tree breadth-first
+6097:pub struct ActionPreferComplement {
+6098:    pub count: i32,
+6102:    pub fn new() -> Self {
+6118:    fn flip_comparison(op_ref: &crate::op::PcodeOpRef) -> bool {
+6149:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+6150:        // Ghidra (blockaction.cc:2140-2167): BFS over the structure tree;
+6158:        // Rugra port: walk the structured blocks (skipping t_copy / t_basic,
+6171:        // Empty structure 鈫?nothing to do (blockaction.cc:2145).
+6245:    fn get_name(&self) -> &str {
+6250:/// Final transform of structured control-flow (while鈫抐or loop setup).
+6269:pub struct ActionStructureTransform {
+6273:    pub count: i32,
+6277:    pub fn new() -> Self {
+6283:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+6291:        // Rugra port: walk the structured blocks; for each WhileDo loop,
+6300:        // Empty structure 鈫?nothing to do.
+6525:    fn get_name(&self) -> &str {
+6526:        "structuretransform"
+6541:/// break the staged structurer's stable-index invariant. We instead achieve
+6550:pub struct ActionReturnSplit {
+6551:    pub count: i32,
+6555:    pub fn new() -> Self {
+6563:    fn is_splittable(ops: &[crate::op::PcodeOpRef]) -> bool {
+6596:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+6705:                for (i, vin) in ret_inputs.iter().enumerate() {
+6723:    fn get_name(&self) -> &str {
+6740:/// perform the full structural join. We port the *candidate detection*
+6750:pub struct ActionNodeJoin {
+6751:    pub count: i32,
+6755:    pub fn new() -> Self {
+6761:    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+6942:    fn get_name(&self) -> &str {
+6978:pub fn build_full_pipeline_actions() -> Vec<Box<dyn Action>> {
+6988:        // INSIDE ActionBlockStructure (as a pre-structuring pass), not as
+7021:        // excluded 鈥?they mutate the structured block tree and conflict with the
+7022:        // staged structurer. ActionMarkIndirectOnly (:5725) and ActionMapGlobals
+7042:    fn test_action_restructure_varnode_builds_scope() {
+7043:        // ActionRestructureVarnode must build a ScopeLocal on Funcdata.scope
+7048:        let mut action = ActionRestructureVarnode::new();
+7050:        // restructure_varnode always returns CHANGE in our port (it rebuilds
+7057:    fn test_action_restructure_varnode_get_name() {
+7058:        let mut action = ActionRestructureVarnode::new();
+7059:        assert_eq!(action.get_name(), "restructureVarnode");
+7063:    // ---- G5: structural cleanup Action apply() tests ----
+7066:    // because Rugra's staged structurer isn't designed around block removal,
+7070:    fn test_action_unreachable_name() {
+7076:    fn test_action_donothing_name() {
+7082:    fn test_action_redundbranch_name() {
+7088:    fn test_action_determinedbranch_name() {
+7096:    fn test_action_unreachable_empty_fd() {
+7105:    fn test_action_donothing_empty_fd() {
+7114:    fn test_action_redundbranch_empty_fd() {
+7124:    fn test_remove_unreachable_blocks() {
+7145:    fn test_splice_block_basic() {
+7165:    fn test_action_deindirect_empty_fd() {
+7173:    fn test_action_deindirect_name() {
+7180:    fn test_deindirect_trace_constant() {
+7195:    fn test_action_funclink_empty_fd() {
+7204:    fn test_action_funclink_initializes_active() {
+7234:    fn test_funcspecs_is_input_locked() {
+7250:    /// ActionRestructureVarnode now calls sync_varnodes_with_symbols.
+7253:    fn test_action_restructure_calls_sync() {
+7256:        let mut action = ActionRestructureVarnode::new();
+7265:    fn test_action_infertypes_name() {
+7271:    fn test_action_infertypes_apply_empty() {
+7282:    fn test_action_infertypes_propagates_bool() {
+7320:    fn test_build_full_pipeline_actions_nonempty() {
+7336:    fn test_build_full_pipeline_actions_unique_names() {
+7348:    fn test_build_full_pipeline_actions_has_new_actions() {
+7359:    fn test_build_full_pipeline_actions_excludes_block_mutators_and_stubs() {
+7360:        // Block-tree mutators that break the staged structurer must NOT be in
+7361:        // the flat pipeline; their structs exist but are unregistered.
+7365:        assert!(!names.contains(&"structuretransform"));
+7374:    fn test_new_action_names_match_ghidra() {
+7385:        assert_eq!(ActionStructureTransform::new().get_name(), "structuretransform");
+7391:    fn test_action_starttypes_flips_type_recovery_bit() {
+7408:    fn test_action_assignhigh_creates_highvariables() {
+7434:    fn test_action_marker_stubs_return_nochange() {
+7475:    fn test_action_mapglobals_marks_persistent_ram_varnodes() {
+7523:    fn test_action_markindirectonly_flags_indirect_only_input() {
+7585:    fn test_action_assignhigh_onceperfunc_flag() {
+7609:    // ---- Behavioural tests for the 4 structured Actions' transforms ----
+7614:    /// it finds a CBRANCH terminating a non-copy/non-basic structured block
+7617:    fn test_prefercomplement_flips_boolean_flip() {
+7641:        // Wrap the condition in a BlockIf (a structured if-block 鈥?non-copy,
+7675:    fn test_prefercomplement_flip_comparison() {
+7700:    fn test_structuretransform_detects_for_loop() {
+7788:    fn test_returnsplit_creates_return_at_goto_pred() {
+7847:    fn test_nodejoin_counts_diamond_candidate() {

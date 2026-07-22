@@ -1,0 +1,38 @@
+﻿
+鉂?src/coreaction.rs  (259 涓繚瑙?
+   src/coreaction.rs:18  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:24  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:65  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:85  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:93  fn push_consumed  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:115  fn propagate_consumed  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:172  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:293  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:304  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:310  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:343  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:354  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:360  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:433  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:453  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:459  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:470  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:479  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:485  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:489  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:500  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:506  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:512  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:523  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:529  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:535  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:549  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:555  fn apply  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:562  fn get_name  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   src/coreaction.rs:573  fn new  鈥?缂哄皯 `// Ghidra: <file>:<line> <fn>` 瀵归綈娉ㄩ噴
+   ... 杩樻湁 229 涓?
+
+鈹佲攣鈹?鍏?259 涓嚜鍒涘嚱鏁帮紙鏃?Ghidra 瀵归綈娉ㄩ噴锛夆攣鈹佲攣
+姣忎釜闈炴祴璇曞嚱鏁颁笂鏂瑰繀椤绘湁涓€琛?`// Ghidra: <file>:<line> <ghidraFnName>`锛?
+鎴栧鐪熸鐨勮瑷€缁撴瀯鑳舵按锛堟瀯閫犲櫒/璁块棶鍣級鏍囨敞 `// RUGRA-GLUE: <鐞嗙敱>`銆?
+璇﹁ AGENTS.md 閾佸緥 9 / 5.5銆?
