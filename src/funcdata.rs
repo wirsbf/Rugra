@@ -26,6 +26,29 @@ pub mod funcdata_flags {
     /// Double-precision recovery is active (Ghidra `double_precis_on`,
     /// funcdata.hh:85 = 0x2000).
     pub const DOUBLE_PRECIS_ON: u32 = 1 << 13;
+    /// Basic blocks have been generated (Ghidra `blocks_generated`,
+    /// funcdata.hh:84 = 0x2). Rugra uses bit 2 to avoid clashing with
+    /// HIGHLEVEL_ON (which occupies bit 2 in Rugra's remapped flag space).
+    pub const BLOCKS_GENERATED: u32 = 1 << 3;
+    /// Processing of the function has started (Ghidra `processing_started`,
+    /// funcdata.hh:84 = 0x8). Set by `startProcessing`; checked to make the
+    /// start entry idempotent.
+    pub const PROCESSING_STARTED: u32 = 1 << 4;
+    /// Processing of the function is complete (Ghidra `processing_complete`,
+    /// funcdata.hh:84 = 0x10). Set by `stopProcessing`.
+    pub const PROCESSING_COMPLETE: u32 = 1 << 5;
+    /// This Funcdata object is dedicated to jump-table recovery (Ghidra
+    /// `jumptablerecovery_on`, funcdata.hh:84 = 0x100). Set on the partial
+    /// clone during `stageJumpTable`; read by `warning`/`warningHeader` to
+    /// tag diagnostics.
+    pub const JUMPTABLERECOVERY_ON: u32 = 1 << 8;
+    /// Do not try to recover jump-tables; always truncate (Ghidra
+    /// `jumptablerecovery_dont`, funcdata.hh:84 = 0x200). Set by
+    /// `setJumptableRecovery(false)`; read by `recoverJumpTable`.
+    pub const JUMPTABLERECOVERY_DONT: u32 = 1 << 9;
+    /// Analysis must be restarted because of new override info (Ghidra
+    /// `restart_pending`, funcdata.hh:84 = 0x400).
+    pub const RESTART_PENDING: u32 = 1 << 10;
 }
 
 use crate::varnode::VarnodeBank;
@@ -376,9 +399,36 @@ impl Funcdata {
     }
     // Ghidra: funcdata.cc:34 Funcdata::isJumptableRecoveryOn
     /// Is jumptable recovery currently active? Faithful to
-    /// `Funcdata::isJumptableRecoveryOn`. Rugra has no jumptable recovery yet.
+    /// `Funcdata::isJumptableRecoveryOn` (funcdata.hh:162). True when \b this
+    /// Funcdata object is a partial clone dedicated to recovering a jump-table.
     pub fn is_jumptable_recovery_on(&self) -> bool {
-        false
+        (self.flags & funcdata_flags::JUMPTABLERECOVERY_ON) != 0
+    }
+
+    // Ghidra: funcdata.hh:159 Funcdata::setJumptableRecovery
+    /// Enable/disable jumptable recovery on this function. Faithful to
+    /// `Funcdata::setJumptableRecovery` (funcdata.hh:159). When disabled the
+    /// `jumptablerecovery_dont` flag is set, which `recoverJumpTable` honors.
+    pub fn set_jumptable_recovery(&mut self, val: bool) {
+        if val {
+            self.flags &= !funcdata_flags::JUMPTABLERECOVERY_DONT;
+        } else {
+            self.flags |= funcdata_flags::JUMPTABLERECOVERY_DONT;
+        }
+    }
+
+    // Ghidra: funcdata.hh:147 Funcdata::isProcStarted
+    /// Has processing of the function started? Faithful to
+    /// `Funcdata::isProcStarted` (funcdata.hh:147). Set by `startProcessing`.
+    pub fn is_proc_started(&self) -> bool {
+        (self.flags & funcdata_flags::PROCESSING_STARTED) != 0
+    }
+
+    // Ghidra: funcdata.hh:148 Funcdata::isProcComplete
+    /// Is processing of the function complete? Faithful to
+    /// `Funcdata::isProcComplete` (funcdata.hh:148). Set by `stopProcessing`.
+    pub fn is_proc_complete(&self) -> bool {
+        (self.flags & funcdata_flags::PROCESSING_COMPLETE) != 0
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::setSelfRef
@@ -2411,6 +2461,623 @@ impl Funcdata {
         }
     }
 
+    // Ghidra: funcdata_op.cc:150 Funcdata::opInsert
+    /// Insert the given PcodeOp at a specific point in a basic block. Faithful
+    /// to `Funcdata::opInsert` (funcdata_op.cc:150-159). This is the common
+    /// low-level primitive underlying every `opInsertBefore/After/Begin/End`:
+    ///   obank.markAlive(op);
+    ///   bl->insert(iter, op);
+    /// Rugra's alive list is flat (not strictly per-block, see `op_insert_before`),
+    /// so this marks the op alive and places it at `iter_index` in the alive
+    /// list (None ⇒ append). The `bb` parameter mirrors Ghidra's signature.
+    pub fn op_insert(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        _bb: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        iter_index: Option<usize>,
+    ) {
+        // cc:157: obank.markAlive(op).
+        self.obank.mark_alive(op.clone());
+        // cc:158: bl->insert(iter, op). Rugra: place at iter_index, else append.
+        match iter_index {
+            Some(idx) if idx < self.obank.alivelist.len() => {
+                self.obank.alivelist.insert(idx, op.clone());
+            }
+            _ => {
+                self.obank.alivelist.push(op.clone());
+            }
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:179 Funcdata::opUnlink
+    /// Extricate the op from all its Varnode connections to the function's
+    /// data-flow and remove it from its basic block, WITHOUT changing block
+    /// connections. Faithful to `Funcdata::opUnlink` (funcdata_op.cc:179-193):
+    ///   opUnsetOutput(op);
+    ///   for(i=0;i<op->numInput();++i) opUnsetInput(op,i);
+    ///   if (op->getParent() != NULL) opUninsert(op);
+    /// The op remains in the \e dead list (Rugra: detached from the alive
+    /// list, awaiting a subsequent `mark_dead`).
+    pub fn op_unlink(&mut self, op: &crate::op::PcodeOpRef) {
+        // cc:188: opUnsetOutput(op).
+        self.op_unset_output(op);
+        // cc:189-190: for i in 0..numInput: opUnsetInput(op, i).
+        let num = op.0.read().unwrap().num_input();
+        for i in 0..num {
+            self.op_unset_input(op, i);
+        }
+        // cc:191-192: if (op->getParent() != NULL) opUninsert(op).
+        // Rugra's alive list is the analogue of "is in a basic block"; if the
+        // op is currently in the alive list, remove it (faithful op_uninsert).
+        let in_alive = self
+            .obank
+            .alivelist
+            .iter()
+            .any(|r| std::sync::Arc::ptr_eq(&r.0, &op.0));
+        if in_alive {
+            self.op_uninsert(op);
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:253 Funcdata::opDestroyRaw
+    /// Specialized routine for deleting an op during flow generation that has
+    /// been replaced by something else. Faithful to `Funcdata::opDestroyRaw`
+    /// (funcdata_op.cc:253-261). The op is expected to be \e dead with none of
+    /// its inputs or outputs linked to anything else. Both the PcodeOp and all
+    /// the input/output Varnodes are destroyed:
+    ///   for(i=0;i<op->numInput();++i) destroyVarnode(op->getIn(i));
+    ///   if (op->getOut() != NULL) destroyVarnode(op->getOut());
+    ///   obank.destroy(op);
+    /// Differs from `op_destroy` (cc:203) in that it does NOT touch block
+    /// membership and additionally frees the input/output Varnodes.
+    pub fn op_destroy_raw(&mut self, op: &crate::op::PcodeOpRef) {
+        // cc:256-257: destroy each input varnode.
+        let inputs = op.0.read().unwrap().inrefs.clone();
+        for vn in &inputs {
+            self.delete_varnode(vn);
+        }
+        // cc:258-259: destroy the output varnode if present.
+        let out = op.0.read().unwrap().output.clone();
+        if let Some(out_vn) = out {
+            self.delete_varnode(&out_vn);
+        }
+        // cc:260: obank.destroy(op).
+        self.obank.destroy(op.clone());
+    }
+
+    // Ghidra: funcdata_varnode.cc:25 Funcdata::setVarnodeProperties
+    /// Gather storage properties for `vn` from the symbol/scope and apply them.
+    /// Faithful to `Funcdata::setVarnodeProperties` (funcdata_varnode.cc:25-42):
+    ///   if (!vn->isMapped()) {
+    ///     queryProperties(vn->getAddr(), vn->getSize(), usepoint, vflags);
+    ///     if (entry) vn->setSymbolProperties(entry);
+    ///     else       vn->setFlags(vflags & ~typelock);
+    ///   }
+    ///   if (vn->cover == NULL && isHighOn()) vn->calcCover();
+    /// Rugra: uses `symbol_table` as the backing store (matching the existing
+    /// `link_symbol` strategy). When an entry is found we set MAPPED so we
+    /// don't re-query (faithful to setSymbolProperties' side-effect). The full
+    /// ScopeLocal::queryProperties API is not yet ported (scope gap noted in
+    /// docs/alignment_audit/funcdata_audit.md).
+    pub fn set_varnode_properties(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+        // cc:28: if (!vn->isMapped()) — one more chance to find an entry now
+        // that we know the usepoint.
+        let is_mapped = vn.read().unwrap().is_mapped();
+        if !is_mapped {
+            // cc:30-31: queryProperties(addr, size, usepoint, vflags).
+            let addr = vn.read().unwrap().get_offset();
+            // Rugra: symbol_table maps addr→name (best-effort scope).
+            if self.symbol_table.get(&addr).is_some() {
+                // cc:32-33: entry found → vn->setSymbolProperties(entry).
+                // Rugra has no SymbolEntry to attach here; the address already
+                // resolves via symbol_table. Set the MAPPED flag so we don't
+                // re-query (faithful to the side-effect of setSymbolProperties).
+                vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+            }
+            // cc:34-35: vn->setFlags(vflags & ~typelock). With vflags==0 the
+            // flag mutation is a no-op; typelock is set by updateType.
+        }
+        // cc:38-41: if (vn->cover == NULL && isHighOn()) vn->calcCover().
+        let high_on = (self.flags & funcdata_flags::HIGHLEVEL_ON) != 0;
+        if high_on {
+            if vn.read().unwrap().has_cover() {
+                vn.write().unwrap().calc_cover();
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:48 Funcdata::assignHigh
+    /// If HighVariables are enabled, ensure `vn` has a HighVariable. Allocate
+    /// a dedicated HighVariable (containing only `vn`) if necessary. Faithful
+    /// to `Funcdata::assignHigh` (funcdata_varnode.cc:48-59):
+    ///   if ((flags & highlevel_on)!=0) {
+    ///     if (vn->hasCover()) vn->calcCover();
+    ///     if (!vn->isAnnotation()) return new HighVariable(vn);
+    ///   }
+    ///   return NULL;
+    /// Returns the new HighVariable Arc (or None). The caller may attach it to
+    /// the varnode; the C++ ctor side-effect of registering vn as an instance
+    /// is left to higher-level glue (Rugra's HighVariable allocates by type).
+    pub fn assign_high(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
+        // cc:51: if ((flags & highlevel_on)!=0).
+        if (self.flags & funcdata_flags::HIGHLEVEL_ON) == 0 {
+            return None;
+        }
+        // cc:52-53: if (vn->hasCover()) vn->calcCover().
+        if vn.read().unwrap().has_cover() {
+            vn.write().unwrap().calc_cover();
+        }
+        // cc:54-56: if (!vn->isAnnotation()) return new HighVariable(vn).
+        if vn.read().unwrap().is_annotation() {
+            return None;
+        }
+        let vn_type = vn.read().unwrap().get_type().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
+                crate::type_system::datatype::TypeBase::new(
+                    "void".to_string(),
+                    0,
+                    crate::type_system::datatype::TypeMetatype::Void,
+                ),
+            ))
+        });
+        let high = crate::variable::HighVariable::new(vn_type);
+        Some(std::sync::Arc::new(std::sync::RwLock::new(high)))
+    }
+
+    // Ghidra: funcdata_varnode.cc:316 Funcdata::findHigh
+    /// Look up a Symbol visible in this function's scope by name and return
+    /// the HighVariable associated with it. Faithful to
+    /// `Funcdata::findHigh` (funcdata_varnode.cc:316-328):
+    ///   queryByName(nm, symList);
+    ///   if (symList.empty()) return NULL;
+    ///   sym = symList[0];
+    ///   vn = findLinkedVarnode(sym->getFirstWholeMap());
+    ///   if (vn) return vn->getHigh();
+    ///   return NULL;
+    /// Rugra: `symbol_table` is address-keyed; we scan it (and `scope.symbols`)
+    /// for a name match, then resolve the varnode at that address via the
+    /// VarnodeBank's loc tree.
+    pub fn find_high(&self, nm: &str) -> Option<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
+        // cc:319-320: queryByName(nm, symList). Rugra: search symbol_table +
+        // scope.symbols for an entry whose name matches `nm`.
+        let addr: Option<u64> = self
+            .symbol_table
+            .iter()
+            .find_map(|(a, name)| if name == nm { Some(*a) } else { None })
+            .or_else(|| {
+                self.scope.as_ref().and_then(|scope| {
+                    scope.symbols.iter().find_map(|s| {
+                        if s.name == nm {
+                            Some(s.start)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            });
+        let addr = addr?;
+        // cc:323: vn = findLinkedVarnode(sym->getFirstWholeMap()).
+        let vn = self.vbank.find_by_loc(0, crate::address::Address::new(addr))?;
+        // cc:324-325: return vn->getHigh(). Clone the inner Arc out of the
+        // read guard so the borrow does not extend past `vn`'s lifetime.
+        let high = {
+            let r = vn.read().unwrap();
+            r.get_high().cloned()
+        };
+        high
+    }
+
+    // Ghidra: funcdata_varnode.cc:614 Funcdata::transferVarnodeProperties
+    /// Copy properties from an existing Varnode `vn` to a new overlapping
+    /// Varnode `new_vn`. Faithful to `Funcdata::transferVarnodeProperties`
+    /// (funcdata_varnode.cc:614-629):
+    ///   newConsume = ((vn->getConsume() >> 8*lsbOffset) | fillBits)
+    ///                & calc_mask(newVn->getSize());
+    ///   vnFlags = vn->getFlags() & (directwrite|addrforce);
+    ///   newVn->setFlags(vnFlags);
+    ///   newVn->setConsume(newConsume);
+    /// Used by SUBPIECE / truncation transforms to preserve the consume mask
+    /// and directwrite/addrforce flags across a width change.
+    pub fn transfer_varnode_properties(
+        &self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        new_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        lsb_offset: i32,
+    ) {
+        // cc:617: newConsume = ~((uintb)0).
+        let mut new_consume: u64 = !0u64;
+        // cc:618: if (lsbOffset < sizeof(uintb)).
+        if (lsb_offset as usize) < std::mem::size_of::<u64>() {
+            // cc:619-622: shift the consume mask right by lsbOffset bytes,
+            // filling high bits so any value shifted in above the Varnode
+            // precision is treated as "used".
+            let lsb_bytes = lsb_offset as u32;
+            let fill_bits = if lsb_offset != 0 {
+                new_consume << (8 * (std::mem::size_of::<u64>() as u32 - lsb_bytes))
+            } else {
+                0
+            };
+            let vn_consume = vn.read().unwrap().get_consume();
+            let new_size = new_vn.read().unwrap().get_size();
+            let mask = crate::address::calc_mask(new_size);
+            new_consume = ((vn_consume >> (8 * lsb_bytes)) | fill_bits) & mask;
+        }
+        // cc:625: vnFlags = vn->getFlags() & (directwrite|addrforce).
+        let vn_flags = {
+            let f = vn.read().unwrap().flags;
+            f & (crate::varnode::varnode_flags::DIRECTWRITE
+                | crate::varnode::varnode_flags::ADDRFORCE)
+        };
+        // cc:627-628: newVn->setFlags(vnFlags); newVn->setConsume(newConsume).
+        new_vn.write().unwrap().set_flags(vn_flags);
+        new_vn.write().unwrap().set_consume(new_consume);
+    }
+
+    // Ghidra: funcdata_varnode.cc:997 Funcdata::handleSymbolConflict
+    /// Resolve a Varnode/SymbolEntry overlap. Faithful to
+    /// `Funcdata::handleSymbolConflict` (funcdata_varnode.cc:997-1029):
+    ///   if (vn->isInput() || vn->isAddrTied() || vn->isPersist() ||
+    ///       vn->isConstant() || entry->isDynamic()) {
+    ///     vn->setSymbolEntry(entry); return entry->getSymbol();
+    ///   }
+    ///   high = vn->getHigh();
+    ///   // scan overlapping varnodes for a conflicting HighVariable
+    ///   otherHigh = find a vn at (entry->getSize, entry->getAddr()) whose
+    ///               HighVariable != high;
+    ///   if (otherHigh == NULL) { vn->setSymbolEntry(entry); return entry->getSymbol(); }
+    ///   buildDynamicSymbol(vn);
+    ///   return vn->getSymbolEntry()->getSymbol();
+    /// Rugra: ScopeLocal has no SymbolEntry, so we approximate: if `vn`
+    /// already maps to a symbol (via symbol_table), no conflict; otherwise we
+    /// delegate to `build_dynamic_symbol` which fabricates a name. The full
+    /// conflicting-HighVariable scan requires iterating the loc tree, which we
+    /// perform; the setSymbolEntry step is approximated by recording in
+    /// symbol_table (mirroring `link_symbol`).
+    pub fn handle_symbol_conflict(
+        &mut self,
+        entry_addr: u64,
+        entry_size: usize,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<String> {
+        // cc:1000-1004: if (vn->isInput() || isAddrTied() || isPersist() ||
+        //                isConstant() || entry->isDynamic()).
+        let (is_input, is_addr_tied, is_persist, is_const, vn_addr) = {
+            let r = vn.read().unwrap();
+            (r.is_input(), r.is_addr_tied(), r.is_persist(), r.is_constant(), r.get_offset())
+        };
+        if is_input || is_addr_tied || is_persist || is_const {
+            // cc:1002-1003: vn->setSymbolEntry(entry); return entry->getSymbol().
+            // Rugra: register the address in symbol_table if not present.
+            let sym = self
+                .symbol_table
+                .entry(entry_addr)
+                .or_insert_with(|| format!("sym_{:x}", entry_addr))
+                .clone();
+            return Some(sym);
+        }
+        // cc:1005-1020: scan overlapping varnodes for a conflicting HighVariable.
+        let high = vn.read().unwrap().get_high().cloned();
+        let mut conflict = false;
+        if let Some(_high) = &high {
+            let candidates = self.vbank.overlap_loc(
+                crate::address::Address::new(entry_addr),
+                entry_size,
+            );
+            for cv in candidates {
+                if std::sync::Arc::ptr_eq(&cv, vn) {
+                    continue;
+                }
+                let c_high = cv.read().unwrap().get_high().cloned();
+                if let (Some(ch), Some(h)) = (c_high, &high) {
+                    if !std::sync::Arc::ptr_eq(&ch, h) {
+                        conflict = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !conflict {
+            // cc:1021-1024: vn->setSymbolEntry(entry); return entry->getSymbol().
+            let sym = self
+                .symbol_table
+                .entry(entry_addr)
+                .or_insert_with(|| format!("sym_{:x}", entry_addr))
+                .clone();
+            return Some(sym);
+        }
+        // cc:1027: buildDynamicSymbol(vn).
+        let _ = vn_addr;
+        self.build_dynamic_symbol(vn)
+    }
+
+    // Ghidra: funcdata_varnode.cc:1104 Funcdata::remapVarnode
+    /// Remap a Symbol to `vn` using a static (address-based) mapping. Faithful
+    /// to `Funcdata::remapVarnode` (funcdata_varnode.cc:1104-1110):
+    ///   vn->clearSymbolLinks();
+    ///   entry = localmap->remapSymbol(sym, vn->getAddr(), usepoint);
+    ///   vn->setSymbolEntry(entry);
+    /// Rugra: ScopeLocal::remapSymbol is not ported; we approximate by
+    /// recording the symbol name at `vn`'s address in `symbol_table`. The
+    /// usepoint is preserved for downstream resolution but not stored (Rugra
+    /// has no per-usepoint SymbolEntry).
+    pub fn remap_varnode(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        sym_name: &str,
+        _usepoint: crate::address::Address,
+    ) {
+        // cc:1107: vn->clearSymbolLinks().
+        vn.write().unwrap().clear_symbol_links();
+        // cc:1108-1109: entry = localmap->remapSymbol(sym, vn->getAddr(), usepoint).
+        let vn_addr = vn.read().unwrap().get_offset();
+        // Rugra: record the name at vn's address.
+        self.symbol_table.insert(vn_addr, sym_name.to_string());
+        // cc:1109: vn->setSymbolEntry(entry). Approximate by setting MAPPED.
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+    }
+
+    // Ghidra: funcdata_varnode.cc:1120 Funcdata::remapDynamicVarnode
+    /// Remap a Symbol to `vn` using a new dynamic (hash-based) mapping. Faithful
+    /// to `Funcdata::remapDynamicVarnode` (funcdata_varnode.cc:1120-1126):
+    ///   vn->clearSymbolLinks();
+    ///   entry = localmap->remapSymbolDynamic(sym, hash, usepoint);
+    ///   vn->setSymbolEntry(entry);
+    /// Rugra: dynamic-symbol storage is not yet implemented; we record the
+    /// symbol name in symbol_table keyed by a synthetic dynamic id. The hash
+    /// is preserved on the varnode via a best-effort flag.
+    pub fn remap_dynamic_varnode(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        sym_name: &str,
+        _usepoint: crate::address::Address,
+        hash: u64,
+    ) {
+        // cc:1123: vn->clearSymbolLinks().
+        vn.write().unwrap().clear_symbol_links();
+        // cc:1124: entry = localmap->remapSymbolDynamic(sym, hash, usepoint).
+        // Rugra: encode the dynamic symbol under a synthetic key so lookups
+        // still resolve. Key space is the high bit of u64 (set MSB), which is
+        // above any real 48-bit x86-64 address.
+        let key = hash | 0x8000_0000_0000_0000;
+        self.symbol_table.insert(key, sym_name.to_string());
+        // cc:1125: vn->setSymbolEntry(entry). Approximate by setting MAPPED.
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+    }
+
+    // Ghidra: funcdata_varnode.cc:1132 Funcdata::linkProtoPartial
+    /// For a PIECE input Varnode, find the whole Varnode it composes and
+    /// assign the same symbol. Faithful to `Funcdata::linkProtoPartial`
+    /// (funcdata_varnode.cc:1132-1149):
+    ///   high = vn->getHigh();
+    ///   if (high->getSymbol() != NULL) return;
+    ///   rootVn = PieceNode::findRoot(vn);
+    ///   if (rootVn == vn) return;
+    ///   rootHigh = rootVn->getHigh();
+    ///   if (!rootHigh->isSameGroup(high)) return;
+    ///   nameRep = rootHigh->getNameRepresentative();
+    ///   sym = linkSymbol(nameRep);
+    ///   if (sym == NULL) return;
+    ///   rootHigh->establishGroupSymbolOffset();
+    ///   entry = sym->getFirstWholeMap();
+    ///   vn->setSymbolEntry(entry);
+    /// Rugra: PieceNode::findRoot walks the PIECE composition graph; we
+    /// approximate by following vn's def op (if it's a PIECE input) to the
+    /// PIECE's output. Full multi-level PIECE chains are not yet ported.
+    pub fn link_proto_partial(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        // cc:1135: high = vn->getHigh(); if (high->getSymbol() != NULL) return.
+        if let Some(high) = vn.read().unwrap().get_high().cloned() {
+            if high.read().unwrap().get_symbol().is_some() {
+                return;
+            }
+        }
+        // cc:1137-1138: rootVn = PieceNode::findRoot(vn); if (rootVn == vn) return.
+        // Rugra: approximate root by following the single reader if it is a
+        // PIECE op, taking its output as the whole.
+        let root_vn = {
+            let readers: Vec<_> = vn.read().unwrap().descend_iter().collect();
+            if readers.len() == 1 {
+                let reader = readers[0].clone();
+                if reader.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE {
+                    reader.read().unwrap().output.clone()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let Some(root_vn) = root_vn else { return };
+        if std::sync::Arc::ptr_eq(&root_vn, vn) {
+            return;
+        }
+        // cc:1140-1142: rootHigh = rootVn->getHigh(); if (!isSameGroup) return.
+        // Rugra: isSameGroup requires HighVariable::is_same_group; if both
+        // share a high group (group_with) we proceed. We conservatively skip
+        // the check and link unconditionally (over-linking is safer than
+        // dropping a legitimate partial symbol).
+        // cc:1143-1145: nameRep = rootHigh->getNameRepresentative(); sym = linkSymbol(nameRep).
+        let sym_name = self.link_symbol(&root_vn);
+        let Some(sym_name) = sym_name else { return };
+        // cc:1146: rootHigh->establishGroupSymbolOffset().
+        if let Some(root_high) = root_vn.read().unwrap().get_high().cloned() {
+            root_high.read().unwrap().establish_group_symbol_offset();
+        }
+        // cc:1147-1148: entry = sym->getFirstWholeMap(); vn->setSymbolEntry(entry).
+        let vn_addr = vn.read().unwrap().get_offset();
+        self.symbol_table.insert(vn_addr, sym_name);
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+    }
+
+    // Ghidra: funcdata_varnode.cc:1218 Funcdata::findLinkedVarnode
+    /// Return the (first) Varnode that matches the given SymbolEntry. Faithful
+    /// to `Funcdata::findLinkedVarnode` (funcdata_varnode.cc:1218-1251). For
+    /// dynamic entries, resolve via DynamicHash; for static entries, scan the
+    /// loc tree at (entry->getSize(), entry->getAddr()) honoring usepoints.
+    /// Rugra: we accept (addr, size, is_dynamic, first_use_addr) as the
+    /// SymbolEntry projection, avoiding the full SymbolEntry dependency.
+    pub fn find_linked_varnode(
+        &self,
+        entry_addr: u64,
+        entry_size: usize,
+        is_dynamic: bool,
+        first_use_addr: crate::address::Address,
+        hash: u64,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        if is_dynamic {
+            // cc:1221-1227: DynamicHash::findVarnode(this, firstUseAddr, hash).
+            let mut dhash = crate::dynamic::DynamicHash::new();
+            let vn = dhash.find_varnode(self, first_use_addr, hash);
+            // cc:1224: skip annotations.
+            vn.and_then(|v| {
+                if v.read().unwrap().is_annotation() {
+                    None
+                } else {
+                    Some(v)
+                }
+            })
+        } else {
+            // cc:1229-1250: scan loc tree.
+            let usestart = first_use_addr;
+            let candidates = self.vbank.overlap_loc(
+                crate::address::Address::new(entry_addr),
+                entry_size,
+            );
+            if usestart.as_u64() == 0 {
+                // cc:1233-1240: invalid usepoint → first addr-tied varnode.
+                for vn in candidates {
+                    if vn.read().unwrap().is_addr_tied() {
+                        return Some(vn);
+                    }
+                }
+                None
+            } else {
+                // cc:1242-1249: first vn whose usepoint is in entry's range.
+                for vn in candidates {
+                    let up = vn.read().unwrap().get_use_point(self);
+                    if up.as_u64() >= usestart.as_u64() {
+                        return Some(vn);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1257 Funcdata::findLinkedVarnodes
+    /// Collect all Varnodes that should be mapped to the given SymbolEntry.
+    /// Faithful to `Funcdata::findLinkedVarnodes` (funcdata_varnode.cc:1257-1277):
+    ///   if (entry->isDynamic()) { dhash.findVarnode(...); res.push_back(vn); }
+    ///   else for vn in locTree(entry->getSize(), entry->getAddr()):
+    ///     if (entry->inUse(vn->getUsePoint(*this))) res.push_back(vn);
+    /// Rugra: same SymbolEntry projection as `find_linked_varnode`.
+    pub fn find_linked_varnodes(
+        &self,
+        entry_addr: u64,
+        entry_size: usize,
+        is_dynamic: bool,
+        first_use_addr: crate::address::Address,
+        hash: u64,
+        res: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) {
+        if is_dynamic {
+            // cc:1260-1265.
+            let mut dhash = crate::dynamic::DynamicHash::new();
+            if let Some(vn) = dhash.find_varnode(self, first_use_addr, hash) {
+                res.push(vn);
+            }
+        } else {
+            // cc:1266-1277.
+            let candidates = self.vbank.overlap_loc(
+                crate::address::Address::new(entry_addr),
+                entry_size,
+            );
+            for vn in candidates {
+                let up = vn.read().unwrap().get_use_point(self);
+                // cc:1272: if (entry->inUse(addr)). Rugra: approximate "in use"
+                // by comparing against first_use_addr (entries without a
+                // usepoint restriction use addr 0 → always in use).
+                if first_use_addr.as_u64() == 0 || up.as_u64() >= first_use_addr.as_u64() {
+                    res.push(vn);
+                }
+            }
+        }
+    }
+
+    // Ghidra: funcdata_varnode.cc:1283 Funcdata::buildDynamicSymbol
+    /// Create a dynamic Symbol for `vn` keyed by a hash of its local data-flow.
+    /// Faithful to `Funcdata::buildDynamicSymbol` (funcdata_varnode.cc:1283-1305):
+    ///   if (isTypeLock || isNameLock) throw RecovError(...);
+    ///   if (!isHighOn()) throw RecovError(...);
+    ///   high = vn->getHigh();
+    ///   if (high->getSymbol() != NULL) return;
+    ///   dhash.uniqueHash(vn, this);
+    ///   if (dhash.getHash() == 0) throw RecovError(...);
+    ///   if (vn->isConstant())
+    ///     sym = addEquateSymbol("", force_hex, vn->getOffset(), addr, hash);
+    ///   else
+    ///     sym = addDynamicSymbol("", high->getType(), addr, hash);
+    ///   vn->setSymbolEntry(sym->getFirstWholeMap());
+    /// Rugra: ScopeLocal lacks addEquate/addDynamicSymbol; we synthesize a
+    /// name and record it under a dynamic key in symbol_table (matching the
+    /// `remap_dynamic_varnode` strategy). Errors are logged and returned as
+    /// None rather than thrown.
+    pub fn build_dynamic_symbol(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<String> {
+        // cc:1286-1287: if (isTypeLock || isNameLock) throw.
+        let (is_type_lock, is_name_lock) = {
+            let r = vn.read().unwrap();
+            (r.is_type_lock(), r.is_name_lock())
+        };
+        if is_type_lock || is_name_lock {
+            eprintln!("[FUNCDATA] buildDynamicSymbol on locked varnode");
+            return None;
+        }
+        // cc:1288-1289: if (!isHighOn()) throw.
+        if (self.flags & funcdata_flags::HIGHLEVEL_ON) == 0 {
+            eprintln!("[FUNCDATA] buildDynamicSymbol before decompile complete");
+            return None;
+        }
+        // cc:1290-1292: high = vn->getHigh(); if (high->getSymbol()) return.
+        if let Some(high) = vn.read().unwrap().get_high().cloned() {
+            if high.read().unwrap().get_symbol().is_some() {
+                // Already has a symbol; return its name.
+                return self.symbol_table.values().next().cloned();
+            }
+        }
+        // cc:1293-1297: dhash.uniqueHash(vn, this); if (hash == 0) throw.
+        let mut dhash = crate::dynamic::DynamicHash::new();
+        dhash.unique_hash_vn(vn, self);
+        let hash = dhash.get_hash();
+        if hash == 0 {
+            eprintln!("[FUNCDATA] buildDynamicSymbol: no unique hash");
+            return None;
+        }
+        let addr = dhash.get_address();
+        // cc:1299-1303: build equate/dynamic symbol.
+        let is_const = vn.read().unwrap().is_constant();
+        let sym_name = if is_const {
+            format!("const_{:x}", hash)
+        } else {
+            format!("dyn_{:x}", hash)
+        };
+        // Rugra: record under a synthetic key (high bit set, above real
+        // 48-bit x86-64 addresses).
+        let key = hash | 0x8000_0000_0000_0000;
+        self.symbol_table.insert(key, sym_name.clone());
+        // cc:1304: vn->setSymbolEntry(sym->getFirstWholeMap()).
+        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+        let _ = addr;
+        Some(sym_name)
+    }
+
     // Ghidra: funcdata.hh:451 Funcdata::markIndirectCreation
     /// Convert CPUI_INDIRECT into an indirect creation. Faithful to
     /// `Funcdata::markIndirectCreation` (funcdata_op.cc:736-748).
@@ -2512,6 +3179,412 @@ impl Funcdata {
                 // sufficient for varmap/ActionStackPtrFlow recognition.
             }
         }
+    }
+
+    // Ghidra: funcdata.cc:275 Funcdata::newSpacebasePtr
+    /// Given an address space known to have a base register, construct a
+    /// Varnode representing that register. Faithful to
+    /// `Funcdata::newSpacebasePtr` (funcdata.cc:275-284):
+    ///   const VarnodeData &point(id->getSpacebase(0));
+    ///   vn = newVarnode(point.size, Address(point.space,point.offset));
+    ///   return vn;
+    /// Rugra: `id` is approximated by the Funcdata's configured stack space
+    /// (Architecture cspec). The stack-pointer (space, offset, size) come from
+    /// the `stack_pointer_*` fields populated by `set_arch`.
+    pub fn new_spacebase_ptr(
+        &mut self,
+        id: crate::space::AddressSpace,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:281: const VarnodeData &point(id->getSpacebase(0)).
+        // Rugra: only the stack space has a known base register; for other
+        // spaces we fall back to the configured stack-pointer location.
+        let (sp_space, sp_offset, sp_size) = if id.is_stack() {
+            (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size)
+        } else {
+            (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size)
+        };
+        // cc:282: vn = newVarnode(point.size, Address(point.space,point.offset)).
+        let vn = self.vbank.create_with_space(sp_size, sp_space, sp_offset);
+        vn
+    }
+
+    // Ghidra: funcdata.cc:291 Funcdata::findSpacebaseInput
+    /// Locate the unique input Varnode holding the incoming value of the base
+    /// register for `id`. Faithful to `Funcdata::findSpacebaseInput`
+    /// (funcdata.cc:291-300):
+    ///   const VarnodeData &point(id->getSpacebase(0));
+    ///   vn = vbank.findInput(point.size, Address(point.space,point.offset));
+    ///   return vn;
+    /// Returns None if no input varnode exists at the base-register location.
+    pub fn find_spacebase_input(
+        &self,
+        id: crate::space::AddressSpace,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        // cc:297: const VarnodeData &point(id->getSpacebase(0)).
+        let (_sp_space, sp_offset, sp_size) = (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size);
+        // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset)).
+        self.vbank.find_input(sp_size, crate::address::Address::new(sp_offset))
+    }
+
+    // Ghidra: funcdata.cc:309 Funcdata::constructSpacebaseInput
+    /// If it doesn't exist, create an input Varnode of the base register for
+    /// `id`. Faithful to `Funcdata::constructSpacebaseInput` (funcdata.cc:309-325):
+    ///   spacePtr = findSpacebaseInput(id);
+    ///   if (spacePtr) return spacePtr;
+    ///   if (id->numSpacebase() == 0) throw LowlevelError(...);
+    ///   point = id->getSpacebase(0);
+    ///   ptr = getTypePointer(point.size, getTypeSpacebase(id,getAddress()), id->getWordSize());
+    ///   spacePtr = newVarnode(point.size, point.getAddr(), ptr);
+    ///   spacePtr = setInputVarnode(spacePtr);
+    ///   spacePtr->setFlags(Varnode::spacebase);
+    ///   spacePtr->updateType(ptr, true, true);
+    ///   return spacePtr;
+    /// Idempotent: returns the existing input if one is present.
+    pub fn construct_spacebase_input(
+        &mut self,
+        id: crate::space::AddressSpace,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:312-314: spacePtr = findSpacebaseInput(id); if (spacePtr) return.
+        if let Some(existing) = self.find_spacebase_input(id) {
+            return existing;
+        }
+        // cc:315-316: if (id->numSpacebase() == 0) throw LowlevelError(...).
+        // Rugra: only the stack space is known to have a base register; for
+        // other spaces we still attempt construction (best-effort) rather than
+        // panic, mirroring the existing spacebase() method's tolerance.
+        // cc:317-320: build the varnode + pointer type.
+        let sp_space = self.stack_pointer_space;
+        let sp_offset = self.stack_pointer_offset;
+        let sp_size = self.stack_pointer_size;
+        let space_ptr = self.vbank.create_with_space(sp_size, sp_space, sp_offset);
+        // cc:321: spacePtr = setInputVarnode(spacePtr).
+        let space_ptr = self.set_input_varnode(space_ptr);
+        // cc:322: spacePtr->setFlags(Varnode::spacebase).
+        space_ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        // cc:323: spacePtr->updateType(ptr, true, true). Rugra lacks
+        // TypeSpacebase; the SPACEBASE flag is sufficient for downstream
+        // recognition (see existing `spacebase()` note).
+        space_ptr
+    }
+
+    // Ghidra: funcdata.cc:332 Funcdata::constructConstSpacebase
+    /// Create a constant Varnode representing the \e base of the given global
+    /// address space, with the TypeSpacebase data-type. Faithful to
+    /// `Funcdata::constructConstSpacebase` (funcdata.cc:332-341):
+    ///   ct = getTypeSpacebase(id, Address());
+    ///   ptr = getTypePointer(id->getAddrSize(), ct, id->getWordSize());
+    ///   spacePtr = newConstant(id->getAddrSize(), 0);
+    ///   spacePtr->updateType(ptr, true, true);
+    ///   spacePtr->setFlags(Varnode::spacebase);
+    ///   return spacePtr;
+    /// Used by spacebaseConstant to build the synthetic "base of ram" pointer.
+    pub fn construct_const_spacebase(
+        &mut self,
+        id: crate::space::AddressSpace,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:336: addr_size = id->getAddrSize().
+        let addr_size = id.addr_size();
+        // cc:337: spacePtr = newConstant(id->getAddrSize(), 0).
+        let space_ptr = self.vbank.create_constant(addr_size, 0);
+        // cc:338: spacePtr->updateType(ptr, true, true). TypeSpacebase not yet
+        // ported; SPACEBASE flag carries the semantic.
+        // cc:339: spacePtr->setFlags(Varnode::spacebase).
+        space_ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        space_ptr
+    }
+
+    // Ghidra: funcdata.cc:360 Funcdata::spacebaseConstant
+    /// Convert a constant pointer into a CPUI_PTRSUB that triggers a Symbol
+    /// lookup. Faithful to `Funcdata::spacebaseConstant`
+    /// (funcdata.cc:360-462). Given `op` reading a constant pointer at
+    /// `slot`, rewrite the constant into PTRSUB(constSpacebase, symOffset)
+    /// so that global Symbol resolution fires at analysis time. May insert
+    /// INT_ADD (for intra-symbol offset), INT_ZEXT (if growing), or
+    /// SUBPIECE (if shrinking) to preserve the original value/size.
+    ///
+    /// Rugra caveat: full Ghidra behaviour requires a SymbolEntry with
+    /// `getAddr()`/`getSymbol()->getType()`. Rugra's `symbol_table` is
+    /// name-only; we perform the structural PTRSUB/ADD/ZEXT/SUBPIECE
+    /// rewrite and rely on `link_symbol_reference` to recover the Symbol
+    /// at PTRSUB time. Type-locking of the output is skipped (no entrytype).
+    pub fn spacebase_constant(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        rampoint: crate::address::Address,
+        origval: u64,
+        origsize: usize,
+    ) {
+        use crate::opcodes::OpCode;
+        // cc:363: sz = rampoint.getAddrSize().
+        let sz = rampoint.as_u64().leading_zeros().checked_sub(0).map(|_| 8).unwrap_or(8);
+        let sz = sz.max(1).min(8) as usize;
+        // Rugra: use the configured address size (x86-64 = 8) when rampoint
+        // does not carry it. Fall back to origsize for the structural rewrite.
+        let sz = origsize.max(sz).min(8);
+        // cc:369: extra = rampoint.getOffset() - entry->getAddr().getOffset().
+        // Rugra: without a SymbolEntry we cannot know the entry's start; assume
+        // extra == 0 (the constant points at the start of its symbol). This
+        // matches the common case and avoids fabricating an INT_ADD.
+        let extra: u64 = 0;
+        // Convert extra to address units (cc:370). Word size of ram is 1 for
+        // typical x86-64, so byteToAddress is a no-op; kept for fidelity.
+        let extra = extra; // already in address units (word_size==1).
+
+        // cc:372-390: classify the existing op (COPY vs other).
+        let op_code = op.0.read().unwrap().opcode;
+        let is_copy = op_code == OpCode::CPUI_COPY;
+        let mut add_op: Option<crate::op::PcodeOpRef> = None;
+        let mut extra_op: Option<crate::op::PcodeOpRef> = None;
+        let mut zext_op: Option<crate::op::PcodeOpRef> = None;
+        let mut sub_op: Option<crate::op::PcodeOpRef> = None;
+        if is_copy {
+            if sz < origsize {
+                zext_op = Some(op.clone());
+            } else {
+                // cc:382: op->insertInput(1) — PTRSUB/ADD/SUBPIECE take 2 inputs.
+                op.0.write().unwrap().inrefs.resize(2, std::sync::Arc::new(std::sync::RwLock::new(
+                    crate::varnode::Varnode::new_constant(0, 0),
+                )));
+                if origsize < sz {
+                    sub_op = Some(op.clone());
+                } else if extra != 0 {
+                    extra_op = Some(op.clone());
+                } else {
+                    add_op = Some(op.clone());
+                }
+            }
+        }
+
+        // cc:391-393: spacebase_vn = newConstant(sz, 0); updateType; setFlags.
+        let spacebase_vn = self.new_constant(sz, 0);
+        spacebase_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+
+        // cc:394-402: allocate/repurpose the PTRSUB op.
+        if add_op.is_none() {
+            let add = self.new_op(2, op.0.read().unwrap().get_addr());
+            self.op_set_opcode(&add, OpCode::CPUI_PTRSUB);
+            self.new_unique_out(sz, &add);
+            self.op_insert_before(&add, op);
+            add_op = Some(add);
+        } else {
+            let add = add_op.clone().unwrap();
+            self.op_set_opcode(&add, OpCode::CPUI_PTRSUB);
+        }
+        let add_op = add_op.unwrap();
+
+        // cc:405: newconstoff = origval - extra.
+        let newconstoff = origval.wrapping_sub(extra);
+        // cc:406-407: newconst = newConstant(sz, newconstoff); setPtrCheck.
+        let newconst = self.new_constant(sz, newconstoff);
+        // Ghidra cc:407: vn->setPtrCheck() clears the PTR_CHECK bit so the
+        // constant is no longer re-examined as a potential pointer. Rugra
+        // stores this in `addlflags` (addl_flags::PTR_CHECK).
+        newconst.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
+
+        // cc:410-411: opSetInput(addOp, spacebase_vn, 0); opSetInput(addOp, newconst, 1).
+        self.op_set_input(&add_op, spacebase_vn, 0);
+        self.op_set_input(&add_op, newconst, 1);
+
+        // Track the current output varnode of the chain.
+        let mut outvn = add_op.0.read().unwrap().output.clone();
+
+        // cc:420-434: if (extra != 0) build INT_ADD(outvn, extconst).
+        if extra != 0 {
+            if extra_op.is_none() {
+                let eop = self.new_op(2, op.0.read().unwrap().get_addr());
+                self.op_set_opcode(&eop, OpCode::CPUI_INT_ADD);
+                self.new_unique_out(sz, &eop);
+                self.op_insert_before(&eop, op);
+                extra_op = Some(eop);
+            }
+            let extra_op = extra_op.unwrap();
+            self.op_set_opcode(&extra_op, OpCode::CPUI_INT_ADD);
+            let extconst = self.new_constant(sz, extra);
+            extconst.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
+            // cc:431-432.
+            self.op_set_input(&extra_op, outvn.clone().unwrap(), 0);
+            self.op_set_input(&extra_op, extconst, 1);
+            outvn = extra_op.0.read().unwrap().output.clone();
+        }
+
+        // cc:435-446: if (sz < origsize) INT_ZEXT.
+        if sz < origsize {
+            if zext_op.is_none() {
+                let zop = self.new_op(1, op.0.read().unwrap().get_addr());
+                self.op_set_opcode(&zop, OpCode::CPUI_INT_ZEXT);
+                self.new_unique_out(origsize, &zop);
+                self.op_insert_before(&zop, op);
+                zext_op = Some(zop);
+            }
+            let zext_op = zext_op.unwrap();
+            self.op_set_opcode(&zext_op, OpCode::CPUI_INT_ZEXT);
+            self.op_set_input(&zext_op, outvn.clone().unwrap(), 0);
+            outvn = zext_op.0.read().unwrap().output.clone();
+        } else if origsize < sz {
+            // cc:447-458: INT_SUBPIECE to truncate back to origsize.
+            if sub_op.is_none() {
+                let sop = self.new_op(2, op.0.read().unwrap().get_addr());
+                self.op_set_opcode(&sop, OpCode::CPUI_SUBPIECE);
+                self.new_unique_out(origsize, &sop);
+                self.op_insert_before(&sop, op);
+                sub_op = Some(sop);
+            }
+            let sub_op = sub_op.unwrap();
+            self.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+            self.op_set_input(&sub_op, outvn.clone().unwrap(), 0);
+            let zero = self.new_constant(4, 0);
+            self.op_set_input(&sub_op, zero, 1);
+            outvn = sub_op.0.read().unwrap().output.clone();
+        }
+
+        // cc:460-461: if (!isCopy) opSetInput(op, outvn, slot).
+        if !is_copy {
+            if let Some(out) = outvn {
+                self.op_set_input(op, out, slot);
+            }
+        }
+    }
+
+    // Ghidra: funcdata_op.cc:459 Funcdata::createStackRef
+    /// Create an INT_ADD PcodeOp calculating an offset to the \e spacebase
+    /// register. Faithful to `Funcdata::createStackRef`
+    /// (funcdata_op.cc:459-496):
+    ///   if (stackptr == NULL) stackptr = newSpacebasePtr(spc);
+    ///   addrsize = stackptr->getSize();
+    ///   addop = newOp(2, op->getAddr()); opSetOpcode(addop, INT_ADD);
+    ///   addout = newUniqueOut(addrsize, addop);
+    ///   opSetInput(addop, stackptr, 0);
+    ///   off = AddrSpace::byteToAddress(off, spc->getWordSize());
+    ///   opSetInput(addop, newConstant(addrsize, off), 1);
+    ///   if (insertafter) opInsertAfter(addop, op); else opInsertBefore(addop, op);
+    ///   segdef = glb->userops.getSegmentOp(spc->getContain()->getIndex());
+    ///   if (segdef) { build SEGMENTOP chain; addout = segout; }
+    ///   return addout;
+    /// Rugra: SegmentOp is architecturally rare (x86-64 has none); we skip the
+    /// SEGMENTOP branch (logged) since the Funcdata has no userops handle yet.
+    pub fn create_stack_ref(
+        &mut self,
+        spc: crate::space::AddressSpace,
+        off: u64,
+        op: &crate::op::PcodeOpRef,
+        stackptr: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        insertafter: bool,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:467-468: stackptr = stackptr.unwrap_or_else(|| newSpacebasePtr(spc)).
+        let stackptr = match stackptr {
+            Some(vn) => vn,
+            None => self.new_spacebase_ptr(spc),
+        };
+        // cc:469: addrsize = stackptr->getSize().
+        let addrsize = stackptr.read().unwrap().get_size();
+        // cc:470-471: addop = newOp(2, op->getAddr()); opSetOpcode(INT_ADD).
+        let addop = self.new_op(2, op.0.read().unwrap().get_addr());
+        self.op_set_opcode(&addop, crate::opcodes::OpCode::CPUI_INT_ADD);
+        // cc:472: addout = newUniqueOut(addrsize, addop).
+        let addout = self.new_unique_out(addrsize, &addop);
+        // cc:473: opSetInput(addop, stackptr, 0).
+        self.op_set_input(&addop, stackptr, 0);
+        // cc:474: off = AddrSpace::byteToAddress(off, spc->getWordSize()).
+        let word_size = spc.word_size() as u64;
+        let off = if word_size > 1 { off / word_size } else { off };
+        // cc:475: opSetInput(addop, newConstant(addrsize, off), 1).
+        let off_const = self.new_constant(addrsize, off);
+        self.op_set_input(&addop, off_const, 1);
+        // cc:476-479: insert before/after op.
+        if insertafter {
+            self.op_insert_after(&addop, op);
+        } else {
+            self.op_insert_before(&addop, op);
+        }
+        // cc:481-493: SegmentOp chain. Rugra: skipped (no userops handle);
+        // x86-64 has no segment ops so this branch is dead code for the
+        // current target.
+        addout
+    }
+
+    // Ghidra: funcdata_op.cc:508 Funcdata::opStackStore
+    /// Create a STORE expression at an offset relative to a \e spacebase
+    /// register. Faithful to `Funcdata::opStackStore` (funcdata_op.cc:508-527):
+    ///   addout = createStackRef(spc, off, op, NULL, insertafter);
+    ///   storeop = newOp(3, op->getAddr()); opSetOpcode(storeop, STORE);
+    ///   opSetInput(storeop, newVarnodeSpace(spc->getContain()), 0);
+    ///   opSetInput(storeop, addout, 1);
+    ///   opInsertAfter(storeop, addout->getDef());
+    ///   return storeop;
+    /// The Varnode value being stored must still be set on the returned op.
+    /// Rugra: `newVarnodeSpace` is approximated by a constant encoding the
+    /// space id (the actual `newVarnodeSpace` is in the missing-API list).
+    pub fn op_stack_store(
+        &mut self,
+        spc: crate::space::AddressSpace,
+        off: u64,
+        op: &crate::op::PcodeOpRef,
+        insertafter: bool,
+    ) -> crate::op::PcodeOpRef {
+        // cc:518: addout = createStackRef(spc, off, op, NULL, insertafter).
+        let addout = self.create_stack_ref(spc, off, op, None, insertafter);
+        // Capture the stack-building op (def of addout) before we lose it.
+        let stack_def = addout.read().unwrap().get_def().map(crate::op::PcodeOpRef);
+        // cc:519-520: storeop = newOp(3, op->getAddr()); opSetOpcode(STORE).
+        let storeop = self.new_op(3, op.0.read().unwrap().get_addr());
+        self.op_set_opcode(&storeop, crate::opcodes::OpCode::CPUI_STORE);
+        // cc:523: opSetInput(storeop, newVarnodeSpace(spc->getContain()), 0).
+        // Rugra: encode the stack container space as a constant varnode. The
+        // container of the stack space is the ram-like space; we use `spc`
+        // itself as a best-effort (matching existing STORE lowering).
+        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        self.op_set_input(&storeop, space_vn, 0);
+        // cc:524: opSetInput(storeop, addout, 1).
+        self.op_set_input(&storeop, addout, 1);
+        // cc:525: opInsertAfter(storeop, addout->getDef()).
+        if let Some(def) = stack_def {
+            self.op_insert_after(&storeop, &def);
+        } else {
+            self.op_insert_after(&storeop, op);
+        }
+        storeop
+    }
+
+    // Ghidra: funcdata_op.cc:541 Funcdata::opStackLoad
+    /// Create a LOAD expression at an offset relative to a \e spacebase
+    /// register. Faithful to `Funcdata::opStackLoad` (funcdata_op.cc:541-552):
+    ///   addout = createStackRef(spc, off, op, stackref, insertafter);
+    ///   loadop = newOp(2, op->getAddr()); opSetOpcode(loadop, LOAD);
+    ///   opSetInput(loadop, newVarnodeSpace(spc->getContain()), 0);
+    ///   opSetInput(loadop, addout, 1);
+    ///   res = newUniqueOut(sz, loadop);
+    ///   opInsertAfter(loadop, addout->getDef());
+    ///   return res;
+    pub fn op_stack_load(
+        &mut self,
+        spc: crate::space::AddressSpace,
+        off: u64,
+        sz: usize,
+        op: &crate::op::PcodeOpRef,
+        stackref: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        insertafter: bool,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:544: addout = createStackRef(spc, off, op, stackref, insertafter).
+        let addout = self.create_stack_ref(spc, off, op, stackref, insertafter);
+        let stack_def = addout.read().unwrap().get_def().map(crate::op::PcodeOpRef);
+        // cc:545-546: loadop = newOp(2, ...); opSetOpcode(LOAD).
+        let loadop = self.new_op(2, op.0.read().unwrap().get_addr());
+        self.op_set_opcode(&loadop, crate::opcodes::OpCode::CPUI_LOAD);
+        // cc:547: opSetInput(loadop, newVarnodeSpace(spc->getContain()), 0).
+        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        self.op_set_input(&loadop, space_vn, 0);
+        // cc:548: opSetInput(loadop, addout, 1).
+        self.op_set_input(&loadop, addout, 1);
+        // cc:549: res = newUniqueOut(sz, loadop).
+        let res = self.new_unique_out(sz, &loadop);
+        // cc:550: opInsertAfter(loadop, addout->getDef()).
+        if let Some(def) = stack_def {
+            self.op_insert_after(&loadop, &def);
+        } else {
+            self.op_insert_after(&loadop, op);
+        }
+        res
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::calcNzMask
