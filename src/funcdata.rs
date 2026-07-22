@@ -6473,7 +6473,7 @@ impl Funcdata {
     /// `RETURN_ADDRESS` flag (set by the loader/disassembler on the storage
     /// location). When no return-address flag is present we conservatively
     /// return false.
-    fn test_for_return_address(&self, vn: &Arc<RwLock<crate::varnode::Varnode>>) -> bool {
+    pub fn test_for_return_address(&self, vn: &Arc<RwLock<crate::varnode::Varnode>>) -> bool {
         // cc:1445-1447: retaddr = glb->defaultReturnAddr; if null return false.
         // Rugra: the RETURN_ADDRESS varnode flag is our analogue of having a
         // known return-address storage location.
@@ -7911,6 +7911,71 @@ impl Funcdata {
         vn.write().unwrap().destroy_descend();
         // cc:291: vbank.destroy(vn).
         self.vbank.destroy_varnode(vn);
+    }
+
+    // Ghidra: funcdata_varnode.cc:1048 Funcdata::syncVarnodesWithSymbol (single-range)
+    /// Update MAPPED/ADDRTIED/ADDRFORCE/NOLOCALALIAS flags on a range of
+    /// Varnodes that all share the same address, plus optionally update their
+    /// Datatype. Faithful to `Funcdata::syncVarnodesWithSymbol(VarnodeLocSet::const_iterator &iter, uint4 fl, Datatype *ct)`
+    /// (funcdata_varnode.cc:1048-1095). Ghidra walks an iterator range
+    /// `[iter, endLoc(size, addr))` advancing the caller's iterator in place;
+    /// Rugra passes the explicit slice of Varnodes at that address instead
+    /// (the idiomatic Rust equivalent of the iterator range), since the
+    /// in-out iterator pattern has no direct Rust analogue.
+    ///
+    /// Flag-update rules (verbatim from cc:1055-1067):
+    ///   mask  = mapped;
+    ///   if ((fl & addrtied) == 0)        // addrtied cleared → clear addrforce too
+    ///     mask |= addrtied | addrforce;
+    ///   if ((fl & nolocalalias) != 0)    // nolocalalias set → clear addrforce
+    ///     mask |= nolocalalias | addrforce;
+    ///   fl &= mask;
+    /// and per-varnode (cc:1071-1093): skip free varnodes; if a dynamic
+    /// SymbolEntry is attached (`mapentry`), hold the `mapped` bit unchanged;
+    /// otherwise apply `fl` vs `mask`. Finally, if `ct` is provided, call
+    /// `vn->updateType(ct)`.
+    ///
+    /// RUGRA-GAP: Rugra's Varnode has no `mapentry` field (no SymbolEntry
+    /// infrastructure), so the "dynamic SymbolEntry attached" branch is taken
+    /// to be the same as the plain branch — the `mapped` bit is updated along
+    /// with the rest of the mask. When SymbolEntry wiring lands, restore the
+    /// `localMask = mask & ~mapped` special case for attached entries.
+    pub fn sync_varnodes_with_symbol(
+        &mut self,
+        range: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        fl_in: u32,
+        ct: Option<&std::sync::Arc<crate::type_system::Datatype>>,
+    ) -> bool {
+        use crate::varnode::varnode_flags as vf;
+        // cc:1056-1067: build mask and clamp fl.
+        let mut mask = vf::MAPPED;
+        if (fl_in & vf::ADDRTIED) == 0 {
+            mask |= vf::ADDRTIED | vf::ADDRFORCE;
+        }
+        if (fl_in & vf::NOLOCALALIAS) != 0 {
+            mask |= vf::NOLOCALALIAS | vf::ADDRFORCE;
+        }
+        let fl = fl_in & mask;
+        let mut update_occurred = false;
+        for vn_arc in range {
+            let mut vn = vn_arc.write().unwrap();
+            // cc:1073: if (vn->isFree()) continue.
+            if vn.is_free() { continue; }
+            let vnflags = vn.flags;
+            // RUGRA-GAP: no mapentry — treat all varnodes uniformly (see doc).
+            if (vnflags & mask) != fl {
+                update_occurred = true;
+                vn.set_flags(fl);
+                vn.clear_flags((!fl) & mask);
+            }
+            if let Some(ct_arc) = ct {
+                // cc:1089-1092: if (ct != NULL && vn->updateType(ct)) updateoccurred = true.
+                if vn.update_type(ct_arc.clone()) {
+                    update_occurred = true;
+                }
+            }
+        }
+        update_occurred
     }
 }
 
