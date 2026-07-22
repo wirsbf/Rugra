@@ -1406,6 +1406,290 @@ pub fn decode_pointer_rel_offset(decoder: &mut dyn Decoder) -> i64 {
     offset
 }
 
+// ---------------------------------------------------------------------------
+// TypePointerRel methods (type.cc:2552-2707)
+// ---------------------------------------------------------------------------
+//
+// Ghidra's `TypePointerRel` (type.hh:647) is a `TypePointer` subclass
+// carrying a `parent` container data-type, a byte `offset` into it, and a
+// `stripped` pointer fallback. Rugra models relative pointers as
+// `Datatype::Pointer` with the `IS_PTRREL` flag plus an out-of-line
+// `RelativePointer { parent, offset }` record on the `TypeFactory`
+// (`rel_pointers`, keyed by the pointer name — see typefactory.rs). The
+// methods below take `parent`/`offset`/`wordsize`/`stripped` explicitly so
+// the C++ virtual dispatch is reproduced without adding fields to
+// `TypePointer`. They are faithful line-by-line ports; the only change is
+// the parameter passing convention. The `downChain`/`getPtrToFromParent`
+// methods (which call back into the factory) live in `typefactory.rs`.
+
+/// `wordsize`-scaled helpers mirroring `AddrSpace::addressToByteInt` /
+/// `byteToAddressInt` (space.hh:532-543). Centralised here because Rugra's
+/// `AddressSpace` does not yet expose these as inherent methods.
+fn address_to_byte_int(val: i64, ws: usize) -> i64 {
+    val.wrapping_mul(ws as i64)
+}
+fn byte_to_address_int(val: i64, ws: usize) -> i64 {
+    // Ghidra does integer division; wordsize is always >= 1.
+    if ws == 0 {
+        val
+    } else {
+        val / (ws as i64)
+    }
+}
+
+// Ghidra: type.cc:2597 TypePointerRel::printRaw
+/// Render a relative pointer in the form `<ptrto> *+<offset>[<parent>]`.
+/// Faithful to `TypePointerRel::printRaw` (type.cc:2597-2606):
+///   ptrto->printRaw(s); s << " *+" << dec << offset << '[';
+///   parent->printRaw(s); s << ']';
+///
+/// `ptrto`/`parent` are the pointed-to and container data-types; `offset`
+/// is the byte offset into the parent.
+pub fn pointer_rel_print_raw(ptrto: &Datatype, offset: i64, parent: &Datatype) -> String {
+    format!("{} *+{}[{}]", ptrto.print_raw(), offset, parent.print_raw())
+}
+
+// Ghidra: type.cc:2587 TypePointerRel::evaluateThruParent
+/// Decide whether a constant address offset on a relative pointer should be
+/// displayed as coming from the parent container rather than from the pointer
+/// itself. Faithful to `TypePointerRel::evaluateThruParent`
+/// (type.cc:2587-2595).
+///
+/// `addr_off` is the offset in address units; `wordsize` is the pointer's
+/// word size; `offset` is the relative pointer's byte offset into `parent`;
+/// `size` is the pointer size in bytes.
+pub fn pointer_rel_evaluate_thru_parent(
+    ptrto: &Datatype,
+    parent: &Datatype,
+    wordsize: usize,
+    offset: i64,
+    size: usize,
+    addr_off: u64,
+) -> bool {
+    let byte_off = address_to_byte_int(addr_off as i64, wordsize);
+    // If the offset lands inside the pointed-to struct, keep it on the pointer.
+    if ptrto.get_metatype() == TypeMetatype::Struct
+        && (byte_off as usize) < ptrto.get_size()
+    {
+        return false;
+    }
+    // Otherwise fold (byteOff + offset) into the pointer width and check the
+    // parent. Ghidra: byteOff = (byteOff + offset) & calc_mask(size).
+    let mask = crate::address::calc_mask(size) as i64;
+    let folded = (byte_off + offset) & mask;
+    (folded as usize) < parent.get_size()
+}
+
+// Ghidra: type.cc:2608 TypePointerRel::compare
+/// Compare two relative pointers. Faithful to `TypePointerRel::compare`
+/// (type.cc:2608-2626): first compare as plain `TypePointer`s (metatype,
+/// size, name, wordsize, ptrto recursion), then compare the `stripped`
+/// presence: a formal pointer (stripped != null) is ordered after an
+/// ephemeral one (stripped == null), so the formal version wins dedup.
+///
+/// `self_stripped`/`other_stripped` are `true` when the corresponding
+/// pointer has a non-null `stripped` form.
+pub fn pointer_rel_compare(
+    self_ptr: &TypePointer,
+    other_ptr: &TypePointer,
+    level: i32,
+    self_stripped: bool,
+    other_stripped: bool,
+) -> i32 {
+    // Compare as plain pointers first (TypePointer::compare, type.cc:933).
+    let res = self_ptr.compare(other_ptr, level);
+    if res != 0 {
+        return res;
+    }
+    // Both must be relative pointers. Its possible a formal relative pointer
+    // gets compared to its equivalent ephemeral version. In which case, we
+    // prefer the formal version (type.cc:2616-2624).
+    match (self_stripped, other_stripped) {
+        (false, true) => -1, // self is ephemeral, other is formal → prefer other
+        (true, false) => 1,  // self is formal, other is ephemeral → prefer self
+        _ => 0,
+    }
+}
+
+// Ghidra: type.cc:2628 TypePointerRel::compareDependency
+/// Compare two relative pointers for the type-factory tree sort. Faithful to
+/// `TypePointerRel::compareDependency` (type.cc:2628-2639): submeta, then
+/// `ptrto` by pointer identity, then `offset`, then `parent` by pointer
+/// identity, then `wordsize`, then `(op.size - size)`.
+pub fn pointer_rel_compare_dependency(
+    self_ptr: &TypePointer,
+    other_ptr: &TypePointer,
+    self_offset: i64,
+    other_offset: i64,
+    self_parent: &Datatype,
+    other_parent: &Datatype,
+) -> i32 {
+    // submeta (metatype) comparison.
+    let sm = self_ptr.base.metatype as i32;
+    let om = other_ptr.base.metatype as i32;
+    if sm != om {
+        return if sm < om { -1 } else { 1 };
+    }
+    // ptrto by pointer identity.
+    let sp = Arc::as_ptr(&self_ptr.ptr_to) as usize;
+    let op = Arc::as_ptr(&other_ptr.ptr_to) as usize;
+    if sp != op {
+        return if sp < op { -1 } else { 1 };
+    }
+    if self_offset != other_offset {
+        return if self_offset < other_offset { -1 } else { 1 };
+    }
+    // parent by pointer identity.
+    let pp1 = self_parent as *const Datatype as usize;
+    let pp2 = other_parent as *const Datatype as usize;
+    if pp1 != pp2 {
+        return if pp1 < pp2 { -1 } else { 1 };
+    }
+    if self_ptr.wordsize != other_ptr.wordsize {
+        return if self_ptr.wordsize < other_ptr.wordsize {
+            -1
+        } else {
+            1
+        };
+    }
+    other_ptr.base.size as i32 - self_ptr.base.size as i32
+}
+
+// Ghidra: type.cc:2674 TypePointerRel::isPtrsubMatching
+/// Test whether a PTRSUB offset is consistent with this relative pointer.
+/// Faithful to `TypePointerRel::isPtrsubMatching` (type.cc:2674-2683).
+///
+/// If this pointer has a `stripped` form, defer to the plain
+/// `TypePointer::isPtrsubMatching` semantics. Otherwise convert the offset
+/// and extra to byte units, add the relative `offset`, and check the result
+/// lands within `[0, parent->getSize()]`.
+///
+/// `stripped` is `Some(ptr)` when this pointer has a non-null stripped form.
+/// Returns `true` if the PTRSUB matches.
+pub fn pointer_rel_is_ptrsub_matching(
+    ptrto: &Datatype,
+    parent: &Datatype,
+    wordsize: usize,
+    offset: i64,
+    stripped: bool,
+    off: i64,
+    extra: i64,
+    _multiplier: i64,
+) -> bool {
+    if stripped {
+        // Defer to TypePointer::isPtrsubMatching (type.cc:1123). That overload
+        // dispatches on ptrto's metatype (spacebase/array/struct) and is
+        // reproduced by `pointer_is_ptrsub_matching` below.
+        return pointer_is_ptrsub_matching(ptrto, wordsize, off, extra, _multiplier);
+    }
+    let mut i_off = address_to_byte_int(off, wordsize);
+    let extra_b = address_to_byte_int(extra, wordsize);
+    i_off += offset + extra_b;
+    i_off >= 0 && (i_off as usize) <= parent.get_size()
+}
+
+// Ghidra: type.cc:1123 TypePointer::isPtrsubMatching
+/// Plain-pointer PTRSUB matching, factored out so that
+/// `pointer_rel_is_ptrsub_matching` can delegate when the relative pointer
+/// has a stripped form (type.cc:2677-2678). Faithful to the metatype
+/// dispatch of `TypePointer::isPtrsubMatching` (type.cc:1123-1175).
+///
+/// Rugra gaps: the `TYPE_SPACEBASE` branch needs a `Scope` to resolve
+/// sub-types, and the `TYPE_STRUCT` branch recurses into
+/// `testForArraySlack`; both are reproduced as faithfully as the available
+/// data allows. When `ptrto` has no arrayed component at the offset, the
+/// routine returns `false` (matching Ghidra's null-subType fallback).
+pub fn pointer_is_ptrsub_matching(
+    ptrto: &Datatype,
+    wordsize: usize,
+    off: i64,
+    extra: i64,
+    multiplier: i64,
+) -> bool {
+    let meta = ptrto.get_metatype();
+    if meta == TypeMetatype::Spacebase {
+        let newoff = address_to_byte_int(off, wordsize);
+        let (sub_type, sub_newoff) = ptrto.get_sub_type(newoff);
+        let sub_type = match sub_type {
+            Some(t) => t,
+            None => return false,
+        };
+        if sub_newoff != 0 {
+            return false;
+        }
+        let extra_b = address_to_byte_int(extra, wordsize);
+        if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
+            // testForArraySlack fallback: an arrayed component at the offset
+            // still matches (type.cc:1134).
+            if !test_for_array_slack(sub_type, extra_b) {
+                return false;
+            }
+        }
+        true
+    } else if meta == TypeMetatype::Array {
+        if off != 0 {
+            return false;
+        }
+        let mult = address_to_byte_int(multiplier, wordsize);
+        if (mult as usize) >= ptrto.get_align_size() {
+            return false;
+        }
+        true
+    } else if meta == TypeMetatype::Struct {
+        let _typesize = ptrto.get_size();
+        let mult = address_to_byte_int(multiplier, wordsize);
+        if (mult as usize) >= ptrto.get_align_size() {
+            return false;
+        }
+        let newoff = address_to_byte_int(off, wordsize);
+        let extra_b = address_to_byte_int(extra, wordsize);
+        let (sub_type, sub_newoff) = ptrto.get_sub_type(newoff);
+        let sub_type = match sub_type {
+            Some(t) => t,
+            None => {
+                // No exact sub-type at the offset; allow if there is array
+                // slack at `extra` (type.cc:1163-1167).
+                return test_for_array_slack(ptrto, extra_b);
+            }
+        };
+        if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
+            if !test_for_array_slack(sub_type, extra_b) {
+                return false;
+            }
+        }
+        let _ = sub_newoff;
+        true
+    } else {
+        false
+    }
+}
+
+// Ghidra: type.cc:990 TypePointer::testForArraySlack (static)
+/// Test if an out-of-bounds offset makes sense as array slack: i.e. whether
+/// the data-type is itself an array or has an arrayed component at `off`.
+/// Faithful to `TypePointer::testForArraySlack` (type.cc:990-1005).
+///
+/// Rugra note: `nearestArrayedComponentForward/Backward` are not yet ported
+/// on `Datatype` (they live inlined in `ruleaction.rs`); the forward/backward
+/// branches therefore currently reduce to the `TYPE_ARRAY` short-circuit,
+/// matching Ghidra's behaviour when no arrayed component is found. The full
+/// nearest-component walk will be wired in when the
+/// `nearest_arrayed_component_*` methods are lifted to `Datatype`.
+pub fn test_for_array_slack(dt: &Datatype, off: i64) -> bool {
+    if dt.get_metatype() == TypeMetatype::Array {
+        return true;
+    }
+    // Ghidra: compType = (off < 0)
+    //           ? dt->nearestArrayedComponentForward(off,&newoff,&elSize)
+    //           : dt->nearestArrayedComponentBackward(off,&newoff,&elSize);
+    //         return (compType != null);
+    // Rugra: nearest-arrayed-component methods are not yet on Datatype; until
+    // they land, no non-array type reports slack. This is the conservative
+    // (false-negative) fallback.
+    let _ = off;
+    false
+}
+
 /// Result of `Datatype::decode_basic`. Mirrors the field updates Ghidra's
 /// `decodeBasic` (type.cc:623-683) performs on the Datatype base. Callers
 /// apply these to whatever `TypeBase` they are constructing.

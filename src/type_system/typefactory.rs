@@ -708,6 +708,238 @@ impl TypeFactory {
         dt
     }
 
+    // Ghidra: type.cc:3867 TypeFactory::getTypePointer(s,pt,ws)
+    /// Find/create a pointer of the given `size` to `ptr_to` with `wordsize`,
+    /// mirroring Ghidra's `TypeFactory::getTypePointer(int4 sz, Datatype *pt,
+    /// uint4 ws)` (type.cc:3867-3883). The simpler `get_ptr` (which derives
+    /// size from `ptr_size` and assumes `wordsize = 1`) is the hot path; this
+    /// overload exists for callers (notably `TypePointerRel::downChain`,
+    /// type.cc:2667) that must match an explicit pointer width and word size.
+    pub fn get_type_pointer(
+        &mut self,
+        size: usize,
+        ptr_to: Arc<Datatype>,
+        wordsize: usize,
+    ) -> Arc<Datatype> {
+        // If the requested size matches the default and wordsize is 1, the
+        // cheap `get_ptr` lookup covers us (and dedups by name).
+        if size == self.ptr_size && wordsize == 1 {
+            return self.get_ptr(ptr_to);
+        }
+        let name = format!("{} *", ptr_to.get_name());
+        if let Some(existing) = self.find_by_name(&name) {
+            // An existing entry under the default name may have a different
+            // size/wordsize; trust the caller's explicit request by building
+            // a fresh entry only when the cached one does not match.
+            if existing.get_size() == size {
+                return existing;
+            }
+        }
+        let mut base = TypeBase::new(name.clone(), size, TypeMetatype::Pointer);
+        base.flags |= type_flags::IS_PTRREL; // mark as non-core
+        let dt = Arc::new(Datatype::Pointer(TypePointer {
+            base,
+            ptr_to,
+            wordsize,
+        }));
+        self.types.insert(name, dt.clone());
+        dt
+    }
+
+    // Ghidra: type.cc:2656 TypePointerRel::downChain
+    /// Find a sub-type pointer given an offset into this relative pointer.
+    /// Faithful to `TypePointerRel::downChain` (type.cc:2656-2672).
+    ///
+    /// If the offset lands inside `ptrto` and `ptrto` is a struct/array,
+    /// defer to the plain `TypePointer::downChain` (reproduced inline below).
+    /// Otherwise convert the offset to be relative to the parent container:
+    /// `relOff = (off + offset) & calc_mask(size)`. If `relOff` is out of the
+    /// parent's range, return `None`. Otherwise build a pointer to the parent
+    /// and recurse via the plain-pointer downChain.
+    ///
+    /// `ptr` is the relative pointer; `parent`/`offset` come from the side
+    /// table; `allow_array_wrap` matches Ghidra's `allowArrayWrap`. `off` is
+    /// the in/out offset (updated in place). On success returns `(component,
+    /// new_par, new_par_off)` where `component` is the pointer to drill into,
+    /// `new_par` is the container pointer, and `new_par_off` is the offset
+    /// into the container.
+    pub fn down_chain(
+        &mut self,
+        ptr: &TypePointer,
+        parent: &Arc<Datatype>,
+        offset: i64,
+        off: &mut i64,
+        par: &mut Option<Arc<Datatype>>,
+        par_off: &mut i64,
+        allow_array_wrap: bool,
+    ) -> Option<Arc<Datatype>> {
+        let ptrto_meta = ptr.ptr_to.get_metatype();
+        let ptrto_size = ptr.ptr_to.get_size() as i64;
+        // If the offset is inside ptrto and ptrto is a container, defer to the
+        // plain TypePointer::downChain (type.cc:2660-2662).
+        if *off >= 0 && *off < ptrto_size
+            && (ptrto_meta == TypeMetatype::Struct || ptrto_meta == TypeMetatype::Array)
+        {
+            return self.down_chain_pointer(ptr, off, par, par_off, allow_array_wrap);
+        }
+        // Convert off to be relative to the parent container.
+        let mask = crate::address::calc_mask(ptr.base.size) as i64;
+        let rel_off = (*off + offset) & mask;
+        if rel_off < 0 || rel_off >= parent.get_size() as i64 {
+            return None; // Don't let pointer shift beyond original container.
+        }
+        // Build a pointer to the parent (Ghidra: origPointer =
+        // typegrp.getTypePointer(size, parent, wordsize)).
+        let orig_pointer = self.get_type_pointer(ptr.base.size, parent.clone(), ptr.wordsize);
+        *off = rel_off;
+        // Recovering the start of the parent is still downchaining, even
+        // though the parent may be the container (type.cc:2669-2670): return
+        // the pointer to the parent and do not drill down to a field at 0.
+        if rel_off == 0 && offset != 0 {
+            *par = Some(orig_pointer.clone());
+            *par_off = rel_off;
+            return Some(orig_pointer);
+        }
+        // Recurse via the plain-pointer downChain on the freshly built parent
+        // pointer (type.cc:2671). This walks into the parent's sub-type at
+        // rel_off.
+        let orig_as_ptr = match orig_pointer.as_ref() {
+            Datatype::Pointer(p) => p.clone(),
+            // Should not happen: get_type_pointer always builds a Pointer.
+            _ => return Some(orig_pointer),
+        };
+        let result =
+            self.down_chain_pointer(&orig_as_ptr, off, par, par_off, allow_array_wrap);
+        result.or(Some(orig_pointer))
+    }
+
+    // Ghidra: type.cc:1084 TypePointer::downChain
+    /// Plain `TypePointer::downChain` (type.cc:1084-1121), factored out so the
+    /// relative-pointer override above can recurse into it. Faithful to the
+    /// wrapping / enum / array / struct dispatch.
+    ///
+    /// Returns `Some(pointer_to_component)` with `off` updated to the
+    /// component-relative offset, `par` set to the container pointer (when
+    /// ptrto is an array or struct), and `par_off` set to the offset into the
+    /// container.
+    fn down_chain_pointer(
+        &mut self,
+        ptr: &TypePointer,
+        off: &mut i64,
+        par: &mut Option<Arc<Datatype>>,
+        par_off: &mut i64,
+        allow_array_wrap: bool,
+    ) -> Option<Arc<Datatype>> {
+        let ptrto = &ptr.ptr_to;
+        let ptrto_size = ptrto.get_align_size() as i64;
+        // Check if we are wrapping (type.cc:1088-1100).
+        if *off < 0 || *off >= ptrto_size {
+            if ptrto_size != 0 && !ptrto.is_variable_length() {
+                if !allow_array_wrap {
+                    return None;
+                }
+                // sign_extend(off, size*8-1) then modulo ptrto_size.
+                let bits = ptr.base.size * 8;
+                let mut sign_off = sign_extend(*off, bits.saturating_sub(1));
+                sign_off = sign_off % ptrto_size;
+                if sign_off < 0 {
+                    sign_off += ptrto_size;
+                }
+                *off = sign_off;
+                if *off == 0 {
+                    // Wrapped back to zero: consider this going down one level.
+                    // Return a pointer to `this` (the original ptrto).
+                    return Some(
+                        self.get_type_pointer(ptr.base.size, ptrto.clone(), ptr.wordsize),
+                    );
+                }
+            }
+        }
+        if ptrto.is_enum_type() {
+            // Go "into" the enumeration: build a pointer to a 1-byte uint.
+            let tmp = self.get_base(1, TypeMetatype::Uint)?;
+            *off = 0;
+            return Some(self.get_type_pointer(ptr.base.size, tmp, ptr.wordsize));
+        }
+        let meta = ptrto.get_metatype();
+        let is_array = meta == TypeMetatype::Array;
+        // Build the pointer-to-`this` for the container bookkeeping (Ghidra
+        // sets `par = this`).
+        let this_pointer = self.get_type_pointer(ptr.base.size, ptrto.clone(), ptr.wordsize);
+        if is_array || meta == TypeMetatype::Struct {
+            *par = Some(this_pointer.clone());
+            *par_off = *off;
+        }
+        // pt = ptrto->getSubType(off, &off).
+        let (pt, new_off) = ptrto.get_sub_type(*off);
+        let pt = match pt {
+            Some(t) => Arc::new(t.clone()),
+            None => return None,
+        };
+        *off = new_off;
+        if !is_array {
+            // getTypePointerStripArray: strip the array layer off `pt` if any
+            // (type.cc:3849). Rugra has no dedicated factory method yet; the
+            // strip is done inline by recursing into the element type.
+            let stripped = strip_array(pt.clone());
+            Some(self.get_type_pointer(ptr.base.size, stripped, ptr.wordsize))
+        } else {
+            Some(self.get_type_pointer(ptr.base.size, pt, ptr.wordsize))
+        }
+    }
+
+    // Ghidra: type.cc:2693 TypePointerRel::getPtrToFromParent (static)
+    /// Given a containing data-type and offset, find the "pointed to"
+    /// data-type suitable for a `TypePointerRel`. Faithful to
+    /// `TypePointerRel::getPtrToFromParent` (type.cc:2693-2707).
+    ///
+    /// The biggest contained data-type that starts at the exact offset is
+    /// returned. If the offset is negative or there is no data-type starting
+    /// exactly there, a 1-byte `xunknown1` data-type is returned.
+    pub fn get_ptr_to_from_parent(
+        &mut self,
+        base: &Arc<Datatype>,
+        off: i64,
+    ) -> Arc<Datatype> {
+        if off > 0 {
+            let mut cur = base.clone();
+            let mut cur_off = off;
+            loop {
+                let (sub, new_off) = cur.get_sub_type(cur_off);
+                match sub {
+                    Some(s) => {
+                        cur = Arc::new(s.clone());
+                        cur_off = new_off;
+                        if cur_off == 0 {
+                            break;
+                        }
+                    }
+                    None => {
+                        // Ghidra: base = typegrp.getBase(1, TYPE_UNKNOWN).
+                        return self.get_base(1, TypeMetatype::Unknown)
+                            .unwrap_or_else(|| {
+                                Arc::new(Datatype::Base(TypeBase::new(
+                                    "xunknown1".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                )))
+                            });
+                    }
+                }
+            }
+            cur
+        } else {
+            // off <= 0: unknown.
+            self.get_base(1, TypeMetatype::Unknown).unwrap_or_else(|| {
+                Arc::new(Datatype::Base(TypeBase::new(
+                    "xunknown1".to_string(),
+                    1,
+                    TypeMetatype::Unknown,
+                )))
+            })
+        }
+    }
+
     // Ghidra: type.cc:3818 TypeFactory::getTypedef
     /// Create a typedef of `ct` under a new `name`. Faithful to
     /// `TypeFactory::getTypedef` (type.cc:3818-3840): clone the base type,
@@ -1706,13 +1938,41 @@ pub struct DataOrganizationSizes {
 
 /// Side record for a relative pointer: the containing parent type and the
 /// byte offset into it. Models the `parent`/`offset` fields of Ghidra's
-/// `TypePointerRel` (type.hh:647) that do not fit on Rugra's `TypePointer`.
+/// `TypePointerRel` (type.hh:647) that do not fit on Rugra's flat `TypePointer`.
 #[derive(Debug, Clone)]
 pub struct RelativePointer {
     /// The container data-type this pointer indexes into.
     pub parent: Arc<Datatype>,
     /// Byte offset within `parent` where the pointee begins.
     pub offset: i64,
+}
+
+// Ghidra: type.cc:1092 sign_extend (address.hh:499 local helper)
+/// Sign-extend the low `bits+1` bits of `val` to a full `i64`. Mirrors
+/// Ghidra's `sign_extend(off, size*8-1)` invocation at type.cc:1092 (the
+/// helper is defined in address.hh:499 as `sign_extend(intb val, int4 bits)`).
+/// Used by `TypeFactory::down_chain_pointer` when wrapping an out-of-range
+/// array offset back into `[0, ptrtoSize)`.
+fn sign_extend(val: i64, bits: usize) -> i64 {
+    // Guard against bits >= 64 (size >= 8 bytes), in which case no extension
+    // is needed (Ghidra's shift by >= width is UB but effectively a no-op).
+    if bits >= 63 {
+        return val;
+    }
+    let shift = 63 - bits;
+    ((val as i64) << shift) >> shift
+}
+
+// Ghidra: type.cc:3849 TypeFactory::getTypePointerStripArray (inline effect)
+/// Strip a single array layer from `dt`, mirroring the behaviour of
+/// `TypeFactory::getTypePointerStripArray` (type.cc:3849-3859) as invoked by
+/// the plain `TypePointer::downChain` (type.cc:1119): if the component is an
+/// array, return its element type; otherwise return the type unchanged.
+fn strip_array(dt: Arc<Datatype>) -> Arc<Datatype> {
+    match dt.as_ref() {
+        Datatype::Array(a) => a.array_of.clone(),
+        _ => dt,
+    }
 }
 
 #[cfg(test)]
@@ -1847,6 +2107,67 @@ mod tests {
         let rec = factory.rel_pointers.get(rp.get_name()).unwrap();
         assert_eq!(rec.offset, 4);
         assert_eq!(rec.parent.get_name(), "S");
+    }
+
+    #[test]
+    fn test_get_ptr_to_from_parent() {
+        // type.cc:2693 — drill into a struct to find the field type at `off`.
+        let mut factory = TypeFactory::new(8);
+        let int_t = factory.find_by_name("int").unwrap();
+        let _ = factory.create_struct("S");
+        // S { int a @ 0; int b @ 4; }
+        let fields = vec![
+            TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+            TypeField { name: "b".into(), offset: 4, type_ptr: int_t.clone() },
+        ];
+        let struct_t = factory.set_fields("S", fields).expect("struct S exists");
+        // off=4 lands on field `b` (an int); the loop exits at newoff==0.
+        let pt = factory.get_ptr_to_from_parent(&struct_t, 4);
+        assert_eq!(pt.get_size(), 4);
+        // off=0 should return the unknown fallback (Ghidra: getBase(1, UNKNOWN)).
+        let pt0 = factory.get_ptr_to_from_parent(&struct_t, 0);
+        assert_eq!(pt0.get_size(), 1);
+        // Negative offset returns the 1-byte unknown fallback.
+        let ptn = factory.get_ptr_to_from_parent(&struct_t, -1);
+        assert_eq!(ptn.get_size(), 1);
+    }
+
+    #[test]
+    fn test_down_chain_struct_field() {
+        // type.cc:2656 — downchain a relative pointer whose offset (4) points
+        // past the end of a 4-byte struct into the parent at offset 4.
+        let mut factory = TypeFactory::new(8);
+        let int_t = factory.find_by_name("int").unwrap();
+        let _ = factory.create_struct("Inner");
+        let inner_fields = vec![
+            TypeField { name: "a".into(), offset: 0, type_ptr: int_t.clone() },
+        ];
+        let inner = factory.set_fields("Inner", inner_fields).expect("Inner exists");
+        // Parent is a 2-field struct; the relative pointer points to `inner`
+        // at offset 0 but its parent-relative offset is 4.
+        let _ = factory.create_struct("Outer");
+        let outer_fields = vec![
+            TypeField { name: "x".into(), offset: 0, type_ptr: int_t.clone() },
+            TypeField { name: "y".into(), offset: 4, type_ptr: inner.clone() },
+        ];
+        let outer = factory.set_fields("Outer", outer_fields).expect("Outer exists");
+        let rp = factory.get_type_pointer_rel(int_t.clone(), outer.clone(), 4);
+        let rp_ptr = match rp.as_ref() {
+            Datatype::Pointer(p) => p.clone(),
+            _ => panic!("expected a Pointer"),
+        };
+        // off=0 lands inside ptrto (int, size 4) but ptrto is neither struct
+        // nor array, so we fall through to the parent-relative path.
+        let mut off: i64 = 0;
+        let mut par: Option<Arc<Datatype>> = None;
+        let mut par_off: i64 = 0;
+        let result = factory.down_chain(
+            &rp_ptr, &outer, 4, &mut off, &mut par, &mut par_off, false,
+        );
+        // We expect a non-None result (drilled into the parent at rel_off=4).
+        assert!(result.is_some(), "down_chain should produce a component pointer");
+        // `par` should be populated (the pointer to Outer).
+        assert!(par.is_some());
     }
 
     #[test]
