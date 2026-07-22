@@ -5,10 +5,12 @@
 use crate::address::calc_mask;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
+use crate::printc::PrintC;
 use crate::printlanguage::PrintLanguage;
 use crate::type_system::{Datatype, TypeMetatype};
 // use crate::varnode::Varnode;
 // use std::sync::{Arc, RwLock};
+use std::any::Any;
 use std::sync::Arc;
 
 // Forward declarations/Stubs for related modules
@@ -29,6 +31,41 @@ pub mod typeop_flags {
     pub const ARITHMETIC_OP: u32 = 1 << 3;
     pub const LOGICAL_OP: u32 = 1 << 4;
     pub const FLOATINGPOINT_OP: u32 = 1 << 5;
+}
+
+// ---------------------------------------------------------------------------
+// RUGRA-GLUE: PrintC recovery helper for `TypeOp::push` dispatch.
+//
+// Ghidra models per-opcode printing as virtual `TypeOp*::push(lng, op, readOp)`
+// methods (typeop.hh:170) that each call a single `PrintLanguage` virtual such
+// as `opCallind`, `opPtrsub`, `opCast`, ... (typeop.hh:329/837/809...). In C++
+// these are virtuals on the abstract `PrintLanguage` base; `PrintC` overrides
+// the ones it cares about. The Rust port keeps the corresponding emitters
+// (`op_callind`, `op_ptrsub`, `op_type_cast`, `op_callother`, `op_new`,
+// `op_insert`, `op_extract`, `op_cpoolref`, `op_segment`) as *inherent* methods
+// on `PrintC` (see printc.rs), not as `PrintLanguage` trait methods, so a
+// `&mut dyn PrintLanguage` cannot name them directly.
+//
+// To preserve the exact 1:1 routing Ghidra uses (CALLIND -> opCallind,
+// PTRSUB -> opPtrsub, CAST -> opCast, ...) we recover the concrete `PrintC`
+// behind the trait object via an `Any` down-cast and call the inherent method.
+// `PrintLanguage: Any` (printlanguage.rs) is what makes this cast possible; the
+// fallback `lng.op_binary(op)` mirrors Ghidra's behaviour for any future
+// `PrintLanguage` implementation that is not `PrintC`.
+// ---------------------------------------------------------------------------
+
+/// Down-cast a `&mut dyn PrintLanguage` to the concrete `PrintC`.
+///
+/// Returns `None` for any `PrintLanguage` implementation other than `PrintC`.
+/// This is the Rust equivalent of the implicit C++ up-cast from
+/// `PrintLanguage*` to `PrintC*` that Ghidra relies on inside `TypeOp*::push`.
+// RUGRA-GLUE: enabled by `PrintLanguage: Any` (printlanguage.rs); used by the
+//   per-opcode `push` dispatchers below to reach PrintC-specific emitters.
+fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
+    // Up-cast `&mut dyn PrintLanguage` to `&mut dyn Any` (valid because
+    // PrintLanguage is declared a sub-trait of Any) then down-cast to PrintC.
+    let any_ref: &mut dyn Any = lng;
+    any_ref.downcast_mut::<PrintC>()
 }
 
 /// Core trait representing a P-code operation type
@@ -1223,6 +1260,21 @@ impl TypeOp for TypeOpCallind {
             .unwrap_or_else(|| "_".to_string());
         format!("call [{}]", in0)
     }
+
+    // Ghidra: typeop.hh:329 TypeOpCallind::push -> lng->opCallind(op)
+    //
+    // Was previously mis-routed: CALLIND fell through the default `push`
+    // (and the PcodeOp::push wrapper sent it to `op_call`). Ghidra's
+    // `TypeOpCallind::push` (typeop.hh:329) calls `PrintLanguage::opCallind`,
+    // overridden by `PrintC::op_callind` (printc.cc). We recover `PrintC` via
+    // `as_printc_mut` and call the inherent `op_callind`; for any non-PrintC
+    // language we keep the prior `op_call` behaviour as a safe fallback.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_callind(op),
+            None => lng.op_call(op),
+        }
+    }
 }
 
 pub struct TypeOpReturn;
@@ -1333,6 +1385,21 @@ impl TypeOp for TypeOpPtrsub {
             .map(|v| format!("{}", v.read().unwrap()))
             .unwrap_or_else(|| "_".to_string());
         format!("{} = {} + {}", out, in0, in1)
+    }
+
+    // Ghidra: typeop.hh:837 TypeOpPtrsub::push -> lng->opPtrsub(op)
+    //
+    // Was previously mis-routed: PTRSUB inherited the default `push`, which
+    // dispatched to `op_binary`. Ghidra's `TypeOpPtrsub::push` (typeop.hh:837)
+    // calls `PrintLanguage::opPtrsub`, overridden by `PrintC::op_ptrsub`
+    // (printc.cc). We recover `PrintC` via `as_printc_mut` and call the
+    // inherent `op_ptrsub`; non-PrintC languages keep the generic binary
+    // fallback so existing behaviour is unchanged.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_ptrsub(op),
+            None => lng.op_binary(op),
+        }
     }
 
     // Ghidra: typeop.cc:2308 TypeOpPtrsub::getOutputLocal
@@ -1545,6 +1612,21 @@ impl TypeOp for TypeOpSegment {
         }
         format!("{} = segment({})", out, inputs.join(", "))
     }
+
+    // Ghidra: typeop.hh:858 TypeOpSegment::push -> lng->opSegmentOp(op)
+    //
+    // Was previously unrouted: SEGMENTOP inherited the default `push`, which
+    // dispatched to `op_binary` (a no-op-ish fallback). Ghidra's
+    // `TypeOpSegment::push` (typeop.hh:858) calls `PrintLanguage::opSegmentOp`,
+    // overridden by `PrintC::op_segment` (printc.cc). We recover `PrintC` via
+    // `as_printc_mut` and call the inherent `op_segment`; non-PrintC languages
+    // fall back to `op_binary` to preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_segment(op),
+            None => lng.op_binary(op),
+        }
+    }
 }
 
 pub struct TypeOpCpoolref;
@@ -1575,6 +1657,21 @@ impl TypeOp for TypeOpCpoolref {
         }
         format!("{} = cpool({})", out, inputs.join(", "))
     }
+
+    // Ghidra: typeop.hh:870 TypeOpCpoolref::push -> lng->opCpoolRefOp(op)
+    //
+    // Was previously unrouted: CPOOLREF inherited the default `push`, which
+    // dispatched to `op_binary`. Ghidra's `TypeOpCpoolref::push`
+    // (typeop.hh:870) calls `PrintLanguage::opCpoolRefOp`, overridden by
+    // `PrintC::op_cpoolref` (printc.cc). We recover `PrintC` via
+    // `as_printc_mut` and call the inherent `op_cpoolref`; non-PrintC
+    // languages fall back to `op_binary` to preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_cpoolref(op),
+            None => lng.op_binary(op),
+        }
+    }
 }
 
 pub struct TypeOpNew;
@@ -1604,6 +1701,21 @@ impl TypeOp for TypeOpNew {
             i += 1;
         }
         format!("{} = new({})", out, inputs.join(", "))
+    }
+
+    // Ghidra: typeop.hh:881 TypeOpNew::push -> lng->opNewOp(op)
+    //
+    // Was previously unrouted: NEW inherited the default `push`, which
+    // dispatched to `op_binary`. Ghidra's `TypeOpNew::push` (typeop.hh:881)
+    // calls `PrintLanguage::opNewOp`, overridden by `PrintC::op_new`
+    // (printc.cc). We recover `PrintC` via `as_printc_mut` and call the
+    // inherent `op_new`; non-PrintC languages fall back to `op_binary` to
+    // preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_new(op),
+            None => lng.op_binary(op),
+        }
     }
 }
 
@@ -1642,6 +1754,21 @@ impl TypeOp for TypeOpCallother {
             format!("{} = {}", out, name)
         } else {
             format!("{} = {}({})", out, name, inputs.join(", "))
+        }
+    }
+
+    // Ghidra: typeop.hh:339 TypeOpCallother::push -> lng->opCallother(op)
+    //
+    // Was previously unrouted: CALLOTHER inherited the default `push`, which
+    // dispatched to `op_binary`. Ghidra's `TypeOpCallother::push`
+    // (typeop.hh:339) calls `PrintLanguage::opCallother`, overridden by
+    // `PrintC::op_callother` (printc.cc). We recover `PrintC` via
+    // `as_printc_mut` and call the inherent `op_callother`; non-PrintC
+    // languages fall back to `op_binary` to preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_callother(op),
+            None => lng.op_binary(op),
         }
     }
 }
@@ -1728,14 +1855,18 @@ impl TypeOp for TypeOpCast {
 
     // Ghidra: typeop.hh:809 TypeOpCast::push  -> lng->opCast(op)
     //
-    // Ghidra's `TypeOpCast::push` is `lng->opCast(op)` (typeop.hh:809).
-    // Rugra's `PrintLanguage` trait does not yet declare `op_cast`, so CAST
-    // is routed through the trait's default binary fallback (which PrintC
-    // treats as a no-op cast / assignment). This is documented rather than a
-    // simplified reimplementation; once `op_cast` lands on `PrintLanguage`,
-    // swap this body to `lng.op_cast(op)`.
+    // Was previously mis-routed: `TypeOpCast::push` called the trait's generic
+    // `op_binary` fallback because Rugra's `PrintLanguage` trait did not (and
+    // still does not) declare an `op_cast`. Ghidra's `TypeOpCast::push`
+    // (typeop.hh:809) calls `PrintLanguage::opCast`, overridden by
+    // `PrintC::op_type_cast` (printc.cc). We recover `PrintC` via
+    // `as_printc_mut` and call the inherent `op_type_cast`; non-PrintC
+    // languages keep the prior `op_binary` fallback so behaviour is unchanged.
     fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
-        lng.op_binary(op);
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_type_cast(op),
+            None => lng.op_binary(op),
+        }
     }
 
     // Ghidra: typeop.cc:2216 TypeOpCast::printRaw
@@ -1755,8 +1886,147 @@ impl TypeOp for TypeOpCast {
     }
 }
 
-functional_binary_op!(TypeOpInsert, CPUI_INSERT, "INSERT", 0, "insert");
-functional_binary_op!(TypeOpExtract, CPUI_EXTRACT, "EXTRACT", 0, "extract");
+// ---------------------------------------------------------------------------
+// TypeOpInsert / TypeOpExtract — CPUI_INSERT / CPUI_EXTRACT
+//
+// Hand-written instead of `functional_binary_op!` because Ghidra's
+// `TypeOpInsert::push` (typeop.hh:890) and `TypeOpExtract::push`
+// (typeop.hh:898) call PrintLanguage emitters that are overridden only by
+// `PrintC` (`PrintC::op_insert` / `PrintC::op_extract`, printc.cc), i.e. the
+// macro's generic `op_binary` push is wrong here. Every other field mirrors
+// what `functional_binary_op!` would emit so behaviour is unchanged apart
+// from the corrected push routing.
+// ---------------------------------------------------------------------------
+
+/// CPUI_INSERT type operator.
+///
+/// Faithful to `TypeOpInsert` (typeop.hh:886-891 / typeop.cc:2519-2541).
+/// Ghidra constructor: `TypeOpFunc(t, CPUI_INSERT, "INSERT", TYPE_INT, TYPE_INT)`
+/// with `opflags = binary`. `push` forwards to `PrintLanguage::opInsertOp`,
+/// overridden by `PrintC::op_insert`. The remaining accessors reproduce the
+/// `functional_binary_op!` body (Rugra has not yet ported Ghidra's
+//  `TypeOpInsert::getInputLocal` override at typeop.cc:2535).
+pub struct TypeOpInsert;
+
+impl TypeOp for TypeOpInsert {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_INSERT
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "INSERT"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    fn get_flags(&self) -> u32 {
+        0
+    }
+    // Ghidra: typeop.cc:377 TypeOpFunc::printRaw (INSERT has no printRaw override)
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = insert({}, {})", out, in0, in1)
+    }
+    // Ghidra: typeop.hh:890 TypeOpInsert::push -> lng->opInsertOp(op)
+    //
+    // Was previously mis-routed: the `functional_binary_op!` macro generated a
+    // `push` that dispatched to `op_binary`. Ghidra's `TypeOpInsert::push`
+    // (typeop.hh:890) calls `PrintLanguage::opInsertOp`, overridden by
+    // `PrintC::op_insert` (printc.cc). We recover `PrintC` via `as_printc_mut`
+    // and call the inherent `op_insert`; non-PrintC languages fall back to
+    // `op_binary` to preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_insert(op),
+            None => lng.op_binary(op),
+        }
+    }
+    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        op.get_in(0)
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+    // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+        op.get_out()
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+}
+
+/// CPUI_EXTRACT type operator.
+///
+/// Faithful to `TypeOpExtract` (typeop.hh:894-899 / typeop.cc:2543-2556).
+/// Ghidra constructor: `TypeOpFunc(t, CPUI_EXTRACT, "EXTRACT", TYPE_INT, TYPE_INT)`
+/// with `opflags = ternary`. `push` forwards to `PrintLanguage::opExtractOp`,
+/// overridden by `PrintC::op_extract`. The remaining accessors reproduce the
+/// `functional_binary_op!` body (Rugra has not yet ported Ghidra's
+//  `TypeOpExtract::getInputLocal` override at typeop.cc:2550).
+pub struct TypeOpExtract;
+
+impl TypeOp for TypeOpExtract {
+    // Ghidra: typeop.hh:71 TypeOp::getOpcode
+    fn get_opcode(&self) -> OpCode {
+        OpCode::CPUI_EXTRACT
+    }
+    // Ghidra: typeop.hh:70 TypeOp::getName
+    fn get_name(&self) -> &str {
+        "EXTRACT"
+    }
+    // Ghidra: typeop.hh:72 TypeOp::getFlags
+    fn get_flags(&self) -> u32 {
+        0
+    }
+    // Ghidra: typeop.cc:377 TypeOpFunc::printRaw (EXTRACT has no printRaw override)
+    fn print_raw(&self, op: &PcodeOp) -> String {
+        let out = op
+            .get_out()
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in0 = op
+            .get_in(0)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        let in1 = op
+            .get_in(1)
+            .map(|v| format!("{}", v.read().unwrap()))
+            .unwrap_or_else(|| "_".to_string());
+        format!("{} = extract({}, {})", out, in0, in1)
+    }
+    // Ghidra: typeop.hh:898 TypeOpExtract::push -> lng->opExtractOp(op)
+    //
+    // Was previously mis-routed: the `functional_binary_op!` macro generated a
+    // `push` that dispatched to `op_binary`. Ghidra's `TypeOpExtract::push`
+    // (typeop.hh:898) calls `PrintLanguage::opExtractOp`, overridden by
+    // `PrintC::op_extract` (printc.cc). We recover `PrintC` via `as_printc_mut`
+    // and call the inherent `op_extract`; non-PrintC languages fall back to
+    // `op_binary` to preserve prior behaviour.
+    fn push(&self, lng: &mut dyn PrintLanguage, op: &PcodeOp) {
+        match as_printc_mut(lng) {
+            Some(printc) => printc.op_extract(op),
+            None => lng.op_binary(op),
+        }
+    }
+    // Ghidra: typeop.cc:365 TypeOpFunc::getOutputLocal
+    fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+        op.get_in(0)
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+    // Ghidra: typeop.cc:371 TypeOpFunc::getInputLocal
+    fn get_input_local(&self, op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+        op.get_out()
+            .and_then(|v| v.read().unwrap().v_type.clone())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Hand-written impls for the comparison ops and INT_ADD.
@@ -2327,17 +2597,34 @@ impl crate::op::PcodeOp {
     //   per-op push lives on the TypeOp subclass (typeop.hh:170 push), and
     //   PcodeOp has no push method of its own (it forwards via opcode->push).
     pub fn push(&self, lng: &mut dyn PrintLanguage) {
+        // RUGRA-GLUE: this wrapper mirrors the per-opcode `TypeOp*::push`
+        //   routing defined above (and in Ghidra typeop.hh:261..). The opcodes
+        //   whose PrintC emitter is an inherent method on `PrintC`
+        //   (`op_callind`, `op_ptrsub`, `op_callother`, `op_new`, `op_insert`,
+        //   `op_extract`, `op_cpoolref`, `op_segment`, `op_type_cast`) are
+        //   reached via the `as_printc_mut` down-cast; everything else uses the
+        //   `PrintLanguage` trait emitters (`op_copy`, `op_load`, ...).
+        //   CALL is correctly handled by the trait `op_call`; only CALLIND
+        //   needs the PrintC-specific path. See the per-opcode `push` overrides
+        //   on `TypeOpCallind`/`TypeOpPtrsub`/... for the authoritative
+        //   Ghidra-cited routing.
         match self.opcode {
             OpCode::CPUI_COPY => lng.op_copy(self),
             OpCode::CPUI_LOAD => lng.op_load(self),
             OpCode::CPUI_STORE => lng.op_store(self),
             OpCode::CPUI_MULTIEQUAL => lng.op_multiequal(self),
             OpCode::CPUI_INDIRECT => lng.op_indirect(self),
-            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => lng.op_call(self),
+            // Ghidra: TypeOpCall::push -> opCall; TypeOpCallind::push -> opCallind.
+            // CALL stays on the trait emitter; CALLIND needs the PrintC path.
+            OpCode::CPUI_CALL => lng.op_call(self),
+            OpCode::CPUI_CALLIND => match as_printc_mut(lng) {
+                Some(printc) => printc.op_callind(self),
+                None => lng.op_call(self),
+            },
             OpCode::CPUI_RETURN => lng.op_return(self),
             OpCode::CPUI_CBRANCH => lng.op_cbranch(self),
             OpCode::CPUI_BRANCH | OpCode::CPUI_BRANCHIND => lng.op_branch(self),
-            // Unary ops
+            // Unary ops (Ghidra TypeOpUnary/TypeOpFunc subclasses)
             OpCode::CPUI_INT_2COMP
             | OpCode::CPUI_INT_NEGATE
             | OpCode::CPUI_BOOL_NEGATE
@@ -2346,6 +2633,41 @@ impl crate::op::PcodeOp {
             | OpCode::CPUI_FLOAT_SQRT
             | OpCode::CPUI_INT_ZEXT
             | OpCode::CPUI_INT_SEXT => lng.op_unary(self),
+            // PrintC-specific emitters (no PrintLanguage trait method).
+            // Routed via down-cast with an `op_binary` fallback for non-PrintC
+            // languages, matching the per-opcode `TypeOp*::push` overrides.
+            OpCode::CPUI_PTRSUB => match as_printc_mut(lng) {
+                Some(printc) => printc.op_ptrsub(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_CALLOTHER => match as_printc_mut(lng) {
+                Some(printc) => printc.op_callother(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_NEW => match as_printc_mut(lng) {
+                Some(printc) => printc.op_new(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_INSERT => match as_printc_mut(lng) {
+                Some(printc) => printc.op_insert(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_EXTRACT => match as_printc_mut(lng) {
+                Some(printc) => printc.op_extract(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_CPOOLREF => match as_printc_mut(lng) {
+                Some(printc) => printc.op_cpoolref(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_SEGMENTOP => match as_printc_mut(lng) {
+                Some(printc) => printc.op_segment(self),
+                None => lng.op_binary(self),
+            },
+            OpCode::CPUI_CAST => match as_printc_mut(lng) {
+                Some(printc) => printc.op_type_cast(self),
+                None => lng.op_binary(self),
+            },
             // Default to binary for all other ops
             _ => lng.op_binary(self),
         }

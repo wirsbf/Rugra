@@ -16,6 +16,7 @@
 //!   3. Pure formatting utilities can be unit-tested against Ghidra behaviour.
 
 use crate::prettyprint::Emit;
+use std::any::Any;
 
 // ===========================================================================
 // PrintLanguage::modifiers (printlanguage.hh:144-161)
@@ -1406,7 +1407,18 @@ pub const CLOSE_PAREN: &str = ")";
 /// RUGRA-GLUE: This trait exists because Rugra's `PrintC` pre-dates the RPN
 /// engine port and emits directly. Ghidra's `PrintLanguage` is an abstract
 /// base class; the methods here are the subset `PrintC` currently overrides.
-pub trait PrintLanguage {
+///
+/// RUGRA-GLUE: `PrintLanguage` is declared a sub-trait of `std::any::Any` so
+/// that per-opcode `TypeOp::push` dispatchers in `typeop.rs` can recover the
+/// concrete `PrintC` (`crate::printc::PrintC`) behind a `&mut dyn PrintLanguage`
+/// and route to `PrintC`-specific emitters (`op_callind`, `op_ptrsub`,
+/// `op_callother`, `op_new`, `op_insert`, `op_extract`, `op_cpoolref`,
+/// `op_segment`, `op_type_cast`). This mirrors Ghidra's design, where each
+/// `TypeOp*::push` (typeop.hh:261..) calls a `PrintLanguage` virtual that is
+/// only meaningfully overridden by `PrintC`; the `Any` super-trait is the Rust
+/// equivalent of that C++ down-cast. `PrintC` is `'static`, so it implements
+/// `Any` automatically with no change to `printc.rs`.
+pub trait PrintLanguage: Any {
     // RUGRA-GLUE: get_emit (PrintC direct-emit accessor, no Ghidra base method)
     /// Get the underlying token emitter.
     fn get_emit(&mut self) -> &mut dyn Emit;
