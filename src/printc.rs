@@ -7348,7 +7348,7 @@ impl PrintC {
                     return false;
                 }
                 // cast.cc:289-290: other metatype must match output metatype
-                let other_meta = other_vn.get_high_type_read_facing(read_op, 1 - slot)
+                let other_meta = other_vn.get_high_type_read_facing(read_op, 1 - slot as i32)
                     .map(|t| t.get_metatype());
                 match other_meta {
                     Some(m) if m == out_meta => true,

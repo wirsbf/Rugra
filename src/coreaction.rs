@@ -9205,6 +9205,7 @@ mod tests {
             else_body: None,
             negated: false,
             goto_target: None,
+            goto_type: crate::block::goto_type::GOTO_GOTO,
             incoming: Vec::new(),
             outgoing: Vec::new(),
             parent: None,
