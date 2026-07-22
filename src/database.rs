@@ -229,6 +229,65 @@ impl SymbolEntry {
         (self.symbol.read().unwrap().flags & symbol_flags::ADDRTIED) != 0
     }
 
+    // Ghidra: database.cc:151 SymbolEntry::getSizedType
+    /// Return the data-type that matches the given size and address within
+    /// this storage. Faithful to `SymbolEntry::getSizedType`
+    /// (database.cc:151). For dynamic storage, the symbol's own offset is
+    /// used; for static storage, the offset of `inaddr` relative to this
+    /// entry's starting address is added. Returns `None` if there is no
+    /// exact sub-type of the requested size at the computed offset.
+    ///
+    /// Ghidra resolves the sub-type via
+    /// `TypeFactory::getExactPiece(cur, off, sz)`. Rugra does not yet wire a
+    /// `TypeFactory` into `SymbolEntry`; we use `Datatype::get_sub_type` to
+    /// locate the field at `off`, then accept it only when the remaining
+    /// offset is zero and its size equals `sz`. Because field sub-types are
+    /// borrowed out of the symbol's own `Arc<Datatype>` allocation, when the
+    /// offset is zero and the request covers the whole symbol we return the
+    /// symbol's whole type (matching `getExactPiece(cur, 0, type->getSize())`
+    /// returning `cur` itself).
+    pub fn get_sized_type(&self, inaddr: Address, sz: i32) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let off = if self.is_dynamic() {
+            self.offset
+        } else {
+            ((inaddr.as_u64() as i64).wrapping_sub(self.addr.as_u64() as i64)) as i32 + self.offset
+        };
+        let sym = self.symbol.read().unwrap();
+        let dt = sym.dtype.clone()?;
+        if off == 0 && dt.get_size() as i32 == sz {
+            // Whole-symbol match — `getExactPiece` returns the type itself.
+            return Some(dt);
+        }
+        // Look up the field at the computed offset and accept it only if it is
+        // an exact (size, offset) match.
+        let (sub, rem) = dt.get_sub_type(off as i64);
+        if rem == 0 && sub.map_or(false, |s| s.get_size() as i32 == sz) {
+            // No separate Arc per field; return the whole-type Arc. Callers
+            // needing the exact field pointer must defer to a future
+            // TypeFactory-backed implementation.
+            Some(dt)
+        } else {
+            None
+        }
+    }
+
+    // Ghidra: database.cc:135 SymbolEntry::updateType
+    /// If the Symbol associated with this is type-locked, change the given
+    /// Varnode's attached data-type to match the Symbol. Faithful to
+    /// `SymbolEntry::updateType` (database.cc:135). The C++ form takes a
+    /// `Varnode*` and calls `vn->updateType(dt,true,true)`; the Rust port
+    /// returns the resolved `Datatype` (or `None`) so the caller can apply
+    /// it to the Varnode. This is the type-propagation entry point for
+    /// mapped symbols.
+    pub fn update_type(&self, vn_addr: Address, vn_size: i32) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let sym = self.symbol.read().unwrap();
+        if (sym.flags & symbol_flags::TYPELOCK) == 0 {
+            return None;
+        }
+        drop(sym);
+        self.get_sized_type(vn_addr, vn_size)
+    }
+
     // Ghidra: database.cc:187 SymbolEntry::encode
     /// Encode this SymbolEntry to a stream. Faithful to `SymbolEntry::encode`
     /// (database.cc:187). Pieces are not saved. Emits an `<addr>` element for
@@ -557,10 +616,13 @@ impl Symbol {
 
     // Ghidra: database.cc:255 Symbol::setIsolated
     /// Set whether this Symbol should be speculatively merged. Faithful to
-    /// `setIsolated`.
+    /// `setIsolated` (database.cc:255). When isolating, the Symbol is also
+    /// type-locked and `checkSizeTypeLock` is re-run (database.cc:259-262).
     pub fn set_isolated(&mut self, val: bool) {
         if val {
             self.dispflags |= display_flags::ISOLATE;
+            self.flags |= symbol_flags::TYPELOCK;
+            self.check_size_type_lock();
         } else {
             self.dispflags &= !display_flags::ISOLATE;
         }
@@ -570,6 +632,61 @@ impl Symbol {
     /// Return true if this is isolated from speculative merging.
     pub fn is_isolated(&self) -> bool {
         (self.dispflags & display_flags::ISOLATE) != 0
+    }
+
+    // Ghidra: database.cc:226 Symbol::checkSizeTypeLock
+    /// Examine the data-type to decide if the Symbol has the special property
+    /// called \b size_typelock, which indicates the \e size of the Symbol is
+    /// locked, but the data-type is not locked (and can float). Faithful to
+    /// `Symbol::checkSizeTypeLock` (database.cc:226). Clears the
+    /// `size_typelock` flag, then sets it iff the Symbol is type-locked and
+    /// its data-type is `TYPE_UNKNOWN`. This must be re-invoked after any
+    /// change to the type or typelock flag.
+    pub fn check_size_type_lock(&mut self) {
+        self.dispflags &= !display_flags::SIZE_TYPELOCK;
+        if self.is_type_locked() {
+            if let Some(dt) = &self.dtype {
+                if dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Unknown {
+                    self.dispflags |= display_flags::SIZE_TYPELOCK;
+                }
+            }
+        }
+    }
+
+    // Ghidra: database.cc:268 Symbol::getFirstWholeMap
+    /// Return the first SymbolEntry that maps the whole Symbol. Faithful to
+    /// `Symbol::getFirstWholeMap` (database.cc:268). Ghidra's Symbol carries a
+    /// `mapentry` vector; Rugra's Symbol does not, so this method accepts the
+    /// list of SymbolEntries (typically from the owning Scope) and returns the
+    /// first entry whose `offset == 0`. The C++ form throws `LowlevelError`
+    /// when no mapping exists; the Rust port returns `None`.
+    pub fn get_first_whole_map<'a>(&self, entries: &'a [SymbolEntry]) -> Option<&'a SymbolEntry> {
+        entries.iter().find(|e| {
+            e.symbol.read().unwrap().symbol_id == self.symbol_id && e.offset == 0
+        })
+    }
+
+    // Ghidra: database.cc:280 Symbol::getMapEntry
+    /// Return the SymbolEntry containing the given address. Faithful to
+    /// `Symbol::getMapEntry(addr)` (database.cc:280). May return a partial
+    /// entry (one holding only part of the whole Symbol). Ghidra walks the
+    /// Symbol's own `mapentry` vector; Rugra's Symbol does not carry one, so
+    /// this method accepts the list of SymbolEntries (typically from the
+    /// owning Scope). Returns the first entry whose address range contains
+    /// `addr`.
+    pub fn get_map_entry<'a>(&self, entries: &'a [SymbolEntry], addr: Address) -> Option<&'a SymbolEntry> {
+        entries.iter().find(|e| {
+            if e.symbol.read().unwrap().symbol_id != self.symbol_id {
+                return false;
+            }
+            // Same address space (Rugra is single-space, so skip the space
+            // check at database.cc:287).
+            let start = e.addr.as_u64();
+            let diff = addr.as_u64().wrapping_sub(start);
+            // database.cc:289 — skip if addr < entry start, then require
+            // diff < size.
+            diff < e.size as u64
+        })
     }
 
     // Ghidra: database.cc:235 Symbol::setThisPointer
@@ -1381,6 +1498,506 @@ impl Scope {
         self.symbols
             .values()
             .any(|s| s.read().unwrap().name == nm)
+    }
+
+    // Ghidra: database.cc:2284 ScopeInternal::findClosestFit
+    /// Find the SymbolEntry that most closely matches the given range,
+    /// valid at `usepoint`. Faithful to `ScopeInternal::findClosestFit`
+    /// (database.cc:2284). Among entries whose last address is at or beyond
+    /// `addr` (i.e. they contain the start of the requested range), picks
+    /// the entry whose size is closest to `size` — preferring an exact match,
+    /// then the smallest over-sized entry, then the largest under-sized one.
+    /// Entries must also be valid at `usepoint`.
+    pub fn find_closest_fit(&self, addr: Address, size: i32, usepoint: Address) -> Option<&SymbolEntry> {
+        let mut best: Option<&SymbolEntry> = None;
+        let mut olddiff: i32 = -10000; // Ghidra sentinel: -10000
+        for entry in &self.entries {
+            // database.cc:2305 — require entry->getLast() >= addr.
+            if entry.get_last() < addr.as_u64() {
+                continue;
+            }
+            if !entry.in_use(usepoint) {
+                continue;
+            }
+            let newdiff = entry.size - size;
+            // database.cc:2307-2308 selection predicate.
+            let accept = if olddiff < 0 {
+                newdiff > olddiff
+            } else {
+                newdiff >= 0 && newdiff < olddiff
+            };
+            if accept {
+                best = Some(entry);
+                if newdiff == 0 {
+                    break; // Exact match — database.cc:2311.
+                }
+                olddiff = newdiff;
+            }
+        }
+        best
+    }
+
+    // Ghidra: database.cc:2321 ScopeInternal::findFunction
+    /// Find the FunctionSymbol whose entry starts at `addr`. Faithful to
+    /// `ScopeInternal::findFunction` (database.cc:2321). Returns the
+    /// FunctionSymbol's entry address (the C++ version returns a `Funcdata*`;
+    /// Rugra's FunctionSymbol is a separate struct without Funcdata
+    /// integration, so we return the entry's `Address`). Rugra identifies
+    /// function symbols by `type_name == "func"` since the Symbol struct is
+    /// not polymorphic.
+    pub fn find_function(&self, addr: Address) -> Option<Address> {
+        for entry in &self.entries {
+            if entry.addr.as_u64() != addr.as_u64() {
+                continue;
+            }
+            let sym = entry.symbol.read().unwrap();
+            if sym.type_name == "func" {
+                return Some(entry.addr);
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:2342 ScopeInternal::findExternalRef
+    /// Find the ExternRefSymbol whose entry starts at `addr`. Faithful to
+    /// `ScopeInternal::findExternalRef` (database.cc:2342). The C++ version
+    /// returns the `ExternRefSymbol*`; Rugra's ExternRefSymbol is a separate
+    /// struct, so we return the symbol id of the matching entry (identified
+    /// by `type_name == "exref"`).
+    pub fn find_external_ref(&self, addr: Address) -> Option<u64> {
+        for entry in &self.entries {
+            if entry.addr.as_u64() != addr.as_u64() {
+                continue;
+            }
+            let sym = entry.symbol.read().unwrap();
+            if sym.type_name == "exref" {
+                return Some(sym.symbol_id);
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:2368 ScopeInternal::findCodeLabel
+    /// Find the LabSymbol for the given address, valid at `addr`. Faithful to
+    /// `ScopeInternal::findCodeLabel` (database.cc:2368). The C++ version
+    /// returns the `LabSymbol*`; Rugra's LabSymbol is a separate struct, so
+    /// we return the symbol id of the matching entry (identified by
+    /// `type_name == "label"`).
+    pub fn find_code_label(&self, addr: Address) -> Option<u64> {
+        // database.cc:2379-2385 walks entries in reverse for the most
+        // recent label valid at `addr`. We walk forward and require
+        // in_use(addr), matching the C++ acceptance predicate.
+        for entry in &self.entries {
+            if entry.addr.as_u64() != addr.as_u64() {
+                continue;
+            }
+            if !entry.in_use(addr) {
+                continue;
+            }
+            let sym = entry.symbol.read().unwrap();
+            if sym.type_name == "label" {
+                return Some(sym.symbol_id);
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:268 Symbol::getFirstWholeMap (Scope-side helper)
+    /// Return the first SymbolEntry that maps the whole of the given Symbol
+    /// within this Scope. Faithful to `Symbol::getFirstWholeMap`
+    /// (database.cc:268). Ghidra's Symbol carries its own `mapentry` list;
+    /// Rugra's does not, so the owning Scope provides the entries.
+    pub fn symbol_first_whole_map(&self, symbol_id: u64) -> Option<&SymbolEntry> {
+        self.entries.iter().find(|e| {
+            e.symbol.read().unwrap().symbol_id == symbol_id && e.offset == 0
+        })
+    }
+
+    // Ghidra: database.cc:280 Symbol::getMapEntry (Scope-side helper)
+    /// Return the SymbolEntry for `symbol_id` that contains `addr`. Faithful
+    /// to `Symbol::getMapEntry(addr)` (database.cc:280). May return a partial
+    /// entry. Ghidra walks the Symbol's own `mapentry` vector; Rugra's Symbol
+    /// does not carry one, so the owning Scope provides the entries.
+    pub fn symbol_map_entry(&self, symbol_id: u64, addr: Address) -> Option<&SymbolEntry> {
+        self.entries.iter().find(|e| {
+            if e.symbol.read().unwrap().symbol_id != symbol_id {
+                return false;
+            }
+            let start = e.addr.as_u64();
+            addr.as_u64().wrapping_sub(start) < e.size as u64
+        })
+    }
+
+    // Ghidra: database.cc:909 Scope::stackAddr
+    /// Query for Symbols starting at a given address, matching a given
+    /// usepoint, walking the scope stack from `scope1` up to (but not
+    /// including) `scope2`. Faithful to `Scope::stackAddr` (database.cc:909).
+    /// If a Scope owns the address (`inScope`), that Scope is returned and a
+    /// new variable may be discovered there; if a SymbolEntry matches, it is
+    /// passed back via `addrmatch`. Returns the owning Scope's index in
+    /// `scope_stack`, or `None` if no Scope controls the address.
+    ///
+    /// Ghidra threads the scope chain via `Scope::getParent()`; Rugra's
+    /// Scopes are owned by the `Database` and carry no parent pointer chain,
+    /// so the caller supplies the ordered stack of ancestor scopes
+    /// (`scope_stack[0]` = innermost). `scope1_end` is the exclusive end
+    /// index (corresponding to Ghidra's `scope2`).
+    pub fn stack_addr(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        usepoint: Address,
+        addrmatch: &mut Option<usize>,
+    ) -> Option<usize> {
+        // database.cc:916 — bail on constant addresses. Rugra is a
+        // single-address-space model with no constant space, so this guard
+        // is a no-op preserved for fidelity.
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:918 — findAddr(addr, usepoint). Rugra's find_addr
+            // ignores usepoint (all entries are considered valid); we refine
+            // to in_use(usepoint) here.
+            if let Some(entry) = scope1.find_addr(addr) {
+                if entry.in_use(usepoint) {
+                    // Map the matched entry back to its position in this
+                    // Scope's entries vector.
+                    *addrmatch = scope1.entries.iter().position(|e| std::ptr::eq(e, entry));
+                    return Some(i);
+                }
+            }
+            // database.cc:923 — discovery of a new variable.
+            if scope1.in_scope(addr, 1) {
+                return Some(i);
+            }
+            i += 1; // scope1 = scope1->getParent()
+        }
+        None
+    }
+
+    // Ghidra: database.cc:943 Scope::stackContainer
+    /// Query for a Symbol containing a given range accessed at `usepoint`,
+    /// walking the scope stack. Faithful to `Scope::stackContainer`
+    /// (database.cc:943). See `stack_addr` for the scope-stack convention.
+    pub fn stack_container(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+        addrmatch: &mut Option<usize>,
+    ) -> Option<usize> {
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:952 — findContainer(addr, size, usepoint).
+            if let Some(entry) = scope1.find_container(addr, size) {
+                if entry.in_use(usepoint) {
+                    *addrmatch = scope1.entries.iter().position(|e| std::ptr::eq(e, entry));
+                    return Some(i);
+                }
+            }
+            // database.cc:957 — discovery of a new variable.
+            if scope1.in_scope(addr, size) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // Ghidra: database.cc:977 Scope::stackClosestFit
+    /// Query for the SymbolEntry which most closely matches a given range
+    /// and usepoint, walking the scope stack. Faithful to
+    /// `Scope::stackClosestFit` (database.cc:977). See `stack_addr` for the
+    /// scope-stack convention.
+    pub fn stack_closest_fit(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+        addrmatch: &mut Option<usize>,
+    ) -> Option<usize> {
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:986 — findClosestFit(addr, size, usepoint).
+            if let Some(entry) = scope1.find_closest_fit(addr, size, usepoint) {
+                *addrmatch = scope1.entries.iter().position(|e| std::ptr::eq(e, entry));
+                return Some(i);
+            }
+            // database.cc:991 — discovery of a new variable.
+            if scope1.in_scope(addr, size) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1009 Scope::stackFunction
+    /// Query for a function Symbol starting at `addr`, walking the scope
+    /// stack. Faithful to `Scope::stackFunction` (database.cc:1009). On a
+    /// match, `addrmatch` is set to the function's entry address (the C++
+    /// version passes back a `Funcdata*`). See `stack_addr` for the
+    /// scope-stack convention.
+    pub fn stack_function(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        addrmatch: &mut Option<Address>,
+    ) -> Option<usize> {
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:1017 — findFunction(addr).
+            if let Some(faddr) = scope1.find_function(addr) {
+                *addrmatch = Some(faddr);
+                return Some(i);
+            }
+            // database.cc:1022 — discovery of a new variable (no usepoint).
+            if scope1.in_scope(addr, 1) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1040 Scope::stackExternalRef
+    /// Query for an external-reference Symbol at `addr`, walking the scope
+    /// stack. Faithful to `Scope::stackExternalRef` (database.cc:1040). On a
+    /// match, `addrmatch` is set to the matching ExternRefSymbol's id.
+    ///
+    /// NOTE (database.cc:1053-1057): unlike the other stack* methods, this
+    /// one does NOT perform scope discovery — a function in a lower scope may
+    /// mask the external reference that refers to it. See `stack_addr` for
+    /// the scope-stack convention.
+    pub fn stack_external_ref(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        addrmatch: &mut Option<u64>,
+    ) -> Option<usize> {
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:1048 — findExternalRef(addr). No discovery.
+            if let Some(sym_id) = scope1.find_external_ref(addr) {
+                *addrmatch = Some(sym_id);
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1074 Scope::stackCodeLabel
+    /// Query for a label Symbol at `addr`, walking the scope stack. Faithful
+    /// to `Scope::stackCodeLabel` (database.cc:1074). On a match, `addrmatch`
+    /// is set to the matching LabSymbol's id. See `stack_addr` for the
+    /// scope-stack convention.
+    pub fn stack_code_label(
+        scope_stack: &[&Scope],
+        scope1_end: usize,
+        addr: Address,
+        addrmatch: &mut Option<u64>,
+    ) -> Option<usize> {
+        let mut i = 0;
+        while i < scope1_end && i < scope_stack.len() {
+            let scope1 = scope_stack[i];
+            // database.cc:1082 — findCodeLabel(addr).
+            if let Some(sym_id) = scope1.find_code_label(addr) {
+                *addrmatch = Some(sym_id);
+                return Some(i);
+            }
+            // database.cc:1087 — discovery of a new variable.
+            if scope1.in_scope(addr, 1) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1198 Scope::queryByName
+    /// Starting from the first scope in `scope_stack`, look for Symbols with
+    /// the given name; if none are found in this scope, recurse into the
+    /// parent (next entry in the stack). Faithful to `Scope::queryByName`
+    /// (database.cc:1198). The C++ form recurses via `parent->queryByName`;
+    /// Rugra walks the supplied ancestor stack. Returns the ids of all
+    /// matching Symbols in the first scope that has any.
+    pub fn query_by_name(scope_stack: &[&Scope], nm: &str) -> Vec<u64> {
+        for scope in scope_stack {
+            // database.cc:1201 — findByName(nm, res).
+            let matches: Vec<u64> = scope
+                .symbols
+                .values()
+                .filter(|s| s.read().unwrap().name == nm)
+                .map(|s| s.read().unwrap().symbol_id)
+                .collect();
+            if !matches.is_empty() {
+                // database.cc:1202-1203 — stop at the first non-empty scope.
+                return matches;
+            }
+            // database.cc:1204-1205 — else recurse into parent.
+        }
+        Vec::new()
+    }
+
+    // Ghidra: database.cc:1212 Scope::queryFunction(string)
+    /// Find a function with the given name by walking the scope stack.
+    /// Faithful to `Scope::queryFunction(const string &nm)`
+    /// (database.cc:1212). Uses `query_by_name` then filters for symbols
+    /// whose `type_name == "func"` (the C++ version dynamic_casts to
+    /// `FunctionSymbol*`). Returns the first matching function's entry
+    /// address, or `None`.
+    pub fn query_function_by_name(scope_stack: &[&Scope], nm: &str) -> Option<Address> {
+        let sym_ids = Scope::query_by_name(scope_stack, nm);
+        for sid in sym_ids {
+            for scope in scope_stack {
+                if let Some(sym) = scope.symbols.get(&sid) {
+                    let s = sym.read().unwrap();
+                    if s.type_name == "func" {
+                        // The FunctionSymbol's entry address lives in its
+                        // SymbolEntry; look it up in the owning scope.
+                        if let Some(entry) = scope.symbol_first_whole_map(sid) {
+                            return Some(entry.addr);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Ghidra: database.cc:1231 Scope::queryByAddr
+    /// Within the scope stack, find a SymbolEntry mapped to `addr`, valid at
+    /// `usepoint`. Faithful to `Scope::queryByAddr` (database.cc:1231). The
+    /// C++ form first calls `mapScope` to pick the base scope; the caller
+    /// supplies that base scope as `scope_stack[0]`. Returns a tuple of
+    /// (scope index, entry index within that scope) or `None`.
+    pub fn query_by_addr(
+        scope_stack: &[&Scope],
+        addr: Address,
+        usepoint: Address,
+    ) -> Option<(usize, usize)> {
+        let mut addrmatch: Option<usize> = None;
+        // database.cc:1236 — stackAddr(basescope, NULL, ...).
+        let scope_idx = Scope::stack_addr(scope_stack, scope_stack.len(), addr, usepoint, &mut addrmatch)?;
+        match addrmatch {
+            Some(entry_idx) => Some((scope_idx, entry_idx)),
+            None => None,
+        }
+    }
+
+    // Ghidra: database.cc:1246 Scope::queryContainer
+    /// Within the scope stack, find the smallest SymbolEntry containing the
+    /// given range, valid at `usepoint`. Faithful to `Scope::queryContainer`
+    /// (database.cc:1246). See `query_by_addr` for the return convention.
+    pub fn query_container(
+        scope_stack: &[&Scope],
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> Option<(usize, usize)> {
+        let mut addrmatch: Option<usize> = None;
+        // database.cc:1251 — stackContainer(basescope, NULL, ...).
+        let scope_idx = Scope::stack_container(scope_stack, scope_stack.len(), addr, size, usepoint, &mut addrmatch)?;
+        match addrmatch {
+            Some(entry_idx) => Some((scope_idx, entry_idx)),
+            None => None,
+        }
+    }
+
+    // Ghidra: database.cc:1263 Scope::queryProperties
+    /// Search for the smallest containing Symbol, and regardless of whether
+    /// one is found, also look up the boolean properties of the memory range.
+    /// Faithful to `Scope::queryProperties` (database.cc:1263). Returns
+    /// `(Some((scope_idx, entry_idx)), flags)` when a SymbolEntry is found,
+    /// or `(None, flags)` with the scope/property-derived flags otherwise.
+    ///
+    /// `flag_lookup` provides the analogue of
+    /// `glb->symboltab->getProperty(addr)` (Rugra's Database::get_property),
+    /// since the Scope itself has no Architecture handle.
+    pub fn query_properties(
+        scope_stack: &[&Scope],
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+        flag_lookup: impl Fn(Address) -> u32,
+    ) -> (Option<(usize, usize)>, u32) {
+        let mut addrmatch: Option<usize> = None;
+        // database.cc:1268 — stackContainer(basescope, NULL, ...).
+        let finalscope = Scope::stack_container(scope_stack, scope_stack.len(), addr, size, usepoint, &mut addrmatch);
+        if let Some(entry_idx) = addrmatch {
+            // database.cc:1269-1270 — use the symbol's flags. The matched
+            // entry lives in the scope returned by stack_container.
+            if let Some(scope_idx) = finalscope {
+                if let Some(entry) = scope_stack[scope_idx].entries.get(entry_idx) {
+                    let flags = entry.get_all_flags();
+                    return (Some((scope_idx, entry_idx)), flags);
+                }
+            }
+            (None, flag_lookup(addr))
+        } else if let Some(scope_idx) = finalscope {
+            // database.cc:1271-1276 — set flags based on the owning scope.
+            let mut flags = crate::varnode::varnode_flags::MAPPED | crate::varnode::varnode_flags::ADDRTIED;
+            if scope_stack[scope_idx].is_global() {
+                flags |= crate::varnode::varnode_flags::PERSIST;
+            }
+            flags |= flag_lookup(addr);
+            (None, flags)
+        } else {
+            // database.cc:1278-1279 — just the global property.
+            (None, flag_lookup(addr))
+        }
+    }
+
+    // Ghidra: database.cc:1287 Scope::queryFunction(addr)
+    /// Within the scope stack, find a function starting at `addr`. Faithful
+    /// to `Scope::queryFunction(const Address &addr)` (database.cc:1287).
+    /// Returns the function's entry address, or `None`.
+    pub fn query_function_addr(scope_stack: &[&Scope], addr: Address) -> Option<Address> {
+        let mut addrmatch: Option<Address> = None;
+        // database.cc:1293 — stackFunction(basescope, NULL, addr, ...).
+        let _ = Scope::stack_function(scope_stack, scope_stack.len(), addr, &mut addrmatch)?;
+        addrmatch
+    }
+
+    // Ghidra: database.cc:1301 Scope::queryCodeLabel
+    /// Within the scope stack, find a label Symbol at `addr`. Faithful to
+    /// `Scope::queryCodeLabel` (database.cc:1301). Returns the matching
+    /// LabSymbol's id, or `None`.
+    pub fn query_code_label(scope_stack: &[&Scope], addr: Address) -> Option<u64> {
+        let mut addrmatch: Option<u64> = None;
+        // database.cc:1307 — stackCodeLabel(basescope, NULL, addr, ...).
+        let _ = Scope::stack_code_label(scope_stack, scope_stack.len(), addr, &mut addrmatch)?;
+        addrmatch
+    }
+
+    // Ghidra: database.cc:1416 Scope::queryExternalRefFunction
+    /// Search for an external reference at `addr`, then resolve the function
+    /// it refers to. Faithful to `Scope::queryExternalRefFunction`
+    /// (database.cc:1416). The C++ version calls
+    /// `basescope->resolveExternalRefFunction(sym)`, which is
+    /// `queryFunction(sym->getRefAddr())`; Rugra returns the referred-to
+    /// function's entry address by performing that lookup against the same
+    /// scope stack.
+    pub fn query_external_ref_function(
+        scope_stack: &[&Scope],
+        addr: Address,
+        refaddr_lookup: impl Fn(u64) -> Option<Address>,
+    ) -> Option<Address> {
+        let mut addrmatch: Option<u64> = None;
+        // database.cc:1422 — stackExternalRef(basescope, NULL, addr, &sym).
+        let _base = Scope::stack_external_ref(scope_stack, scope_stack.len(), addr, &mut addrmatch)?;
+        let sym_id = addrmatch?;
+        // database.cc:1425 — resolveExternalRefFunction(sym):
+        //   queryFunction(sym->getRefAddr()).
+        let refaddr = refaddr_lookup(sym_id)?;
+        Scope::query_function_addr(scope_stack, refaddr)
     }
 
     // Ghidra: database.hh:34 Scope::getCategorySize
@@ -2697,6 +3314,143 @@ mod tests {
         let found = global.find_by_name("globalVar");
         assert!(!found.is_empty());
         assert!((found[0].read().unwrap().flags & symbol_flags::READONLY) != 0);
+    }
+
+    #[test]
+    fn test_symbol_check_size_type_lock() {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        let mut sym = Symbol::new(0, "x", "int");
+        // Not type-locked → never size_typelocked.
+        sym.check_size_type_lock();
+        assert!(!sym.is_size_type_locked());
+        // Type-locked with a non-unknown type → not size_typelocked.
+        sym.flags |= symbol_flags::TYPELOCK;
+        sym.dtype = Some(Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        ))));
+        sym.check_size_type_lock();
+        assert!(!sym.is_size_type_locked());
+        // Type-locked with an UNKNOWN type → size_typelocked.
+        sym.dtype = Some(Arc::new(Datatype::Base(TypeBase::new(
+            "unk".into(), 4, TypeMetatype::Unknown,
+        ))));
+        sym.check_size_type_lock();
+        assert!(sym.is_size_type_locked());
+    }
+
+    #[test]
+    fn test_symbol_get_first_whole_map_and_map_entry() {
+        let mut scope = Scope::new(1, "local", 0);
+        let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        let sym_arc = scope.symbols.get(&id).cloned().unwrap();
+        let sym = sym_arc.read().unwrap();
+        // First whole map.
+        let first = sym.get_first_whole_map(&scope.entries);
+        assert!(first.is_some());
+        assert_eq!(first.unwrap().addr.as_u64(), 0x1000);
+        // Map entry containing an interior address.
+        let entry = sym.get_map_entry(&scope.entries, Address::new(0x1002));
+        assert!(entry.is_some());
+        // Out-of-range address.
+        assert!(sym.get_map_entry(&scope.entries, Address::new(0x2000)).is_none());
+    }
+
+    #[test]
+    fn test_scope_find_closest_fit() {
+        let mut scope = Scope::new(1, "local", 0);
+        scope.add_symbol_mapped("a", "int", Address::new(0x1000), 4);
+        scope.add_symbol_mapped("big", "struct", Address::new(0x1000), 16);
+        // Request 4 bytes at 0x1000: both contain it; exact match (4) wins.
+        let exact = scope.find_closest_fit(Address::new(0x1000), 4, Address::new(0));
+        assert!(exact.is_some());
+        assert_eq!(exact.unwrap().size, 4);
+        // Request 8 bytes at 0x1000: only the 16-byte entry contains it,
+        // and it is the closest (only) over-sized entry.
+        let big = scope.find_closest_fit(Address::new(0x1000), 8, Address::new(0));
+        assert!(big.is_some());
+        assert_eq!(big.unwrap().size, 16);
+    }
+
+    #[test]
+    fn test_scope_find_function_externalref_codelabel() {
+        let mut scope = Scope::new(1, "local", 0);
+        // A function symbol (type_name "func") mapped at 0x401000.
+        let fid = scope.add_symbol_mapped("main", "func", Address::new(0x401000), 1);
+        scope.symbols.get(&fid).unwrap().write().unwrap().type_name = "func".into();
+        // An extern ref symbol (type_name "exref") mapped at 0x5000.
+        let eid = scope.add_symbol_mapped("printf", "exref", Address::new(0x5000), 1);
+        scope.symbols.get(&eid).unwrap().write().unwrap().type_name = "exref".into();
+        // A code label (type_name "label") mapped at 0x6000.
+        let lid = scope.add_symbol_mapped("L1", "label", Address::new(0x6000), 1);
+        scope.symbols.get(&lid).unwrap().write().unwrap().type_name = "label".into();
+        assert_eq!(scope.find_function(Address::new(0x401000)), Some(Address::new(0x401000)));
+        assert!(scope.find_function(Address::new(0x9999)).is_none());
+        assert_eq!(scope.find_external_ref(Address::new(0x5000)), Some(eid));
+        assert_eq!(scope.find_code_label(Address::new(0x6000)), Some(lid));
+    }
+
+    #[test]
+    fn test_scope_stack_and_query_methods() {
+        // Build two scopes: a local (child) and the global scope.
+        let mut local = Scope::new(1, "local", 0);
+        let mut global = Scope::new(0, "global", 0);
+        // Local has a 4-byte int at 0x1000.
+        local.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        // Global owns the 0x2000 range and has a function there.
+        global.add_range(Range::new(Address::new(0x2000), Address::new(0x2FFF)).unwrap());
+        let fid = global.add_symbol_mapped("func", "func", Address::new(0x2000), 1);
+        global.symbols.get(&fid).unwrap().write().unwrap().type_name = "func".into();
+
+        // Stack: [local, global].
+        let stack: Vec<&Scope> = vec![&local, &global];
+
+        // query_by_name finds "x" in the local scope.
+        let ids = Scope::query_by_name(&stack, "x");
+        assert_eq!(ids.len(), 1);
+        // query_by_name falls through to global for "func".
+        let ids = Scope::query_by_name(&stack, "func");
+        assert_eq!(ids.len(), 1);
+
+        // stack_addr finds the entry at 0x1000 in local.
+        let mut addrmatch = None;
+        let scope_idx = Scope::stack_addr(&stack, stack.len(), Address::new(0x1000), Address::new(0), &mut addrmatch);
+        assert_eq!(scope_idx, Some(0));
+        assert!(addrmatch.is_some());
+
+        // query_by_addr returns (scope_idx=0, entry_idx).
+        let res = Scope::query_by_addr(&stack, Address::new(0x1000), Address::new(0));
+        assert!(res.is_some());
+        assert_eq!(res.unwrap().0, 0);
+
+        // stack_function finds the function in global at 0x2000.
+        let mut faddr = None;
+        let idx = Scope::stack_function(&stack, stack.len(), Address::new(0x2000), &mut faddr);
+        assert_eq!(idx, Some(1));
+        assert_eq!(faddr, Some(Address::new(0x2000)));
+        // query_function_addr convenience wrapper.
+        assert_eq!(Scope::query_function_addr(&stack, Address::new(0x2000)), Some(Address::new(0x2000)));
+
+        // query_properties with no symbol → returns scope-derived flags for
+        // an address owned by the global scope.
+        let (entry, _flags) = Scope::query_properties(
+            &stack, Address::new(0x2500), 1, Address::new(0), |_| 0,
+        );
+        assert!(entry.is_none()); // no symbol at 0x2500
+    }
+
+    #[test]
+    fn test_symbol_entry_get_sized_type_whole_match() {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        let sym = Arc::new(RwLock::new(Symbol::new(0, "x", "int")));
+        sym.write().unwrap().dtype = Some(Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        ))));
+        let entry = SymbolEntry::new_static(sym, 0, Address::new(0x1000), 0, 4, RangeList::new());
+        // Whole-symbol match (offset 0, exact size).
+        let dt = entry.get_sized_type(Address::new(0x1000), 4);
+        assert!(dt.is_some());
+        // Wrong size → no exact match.
+        assert!(entry.get_sized_type(Address::new(0x1000), 8).is_none());
     }
 
 
