@@ -7828,6 +7828,39 @@ impl Funcdata {
         let _ = (baddr, eaddr);
         self.flags |= funcdata_flags::BLOCKS_GENERATED;
     }
+
+    // Ghidra: funcdata.hh:547 Funcdata::getStructure
+    /// Get the current control-flow structuring hierarchy. Faithful to
+    /// `BlockGraph &getStructure(void)` (funcdata.hh:547) — returns a mutable
+    /// reference to the structured BlockGraph (`sblocks`) that sits on top of
+    /// the basic blocks.
+    pub fn get_structure(&mut self) -> &mut crate::block::BlockGraph {
+        &mut self.sblocks
+    }
+
+    // Ghidra: funcdata.hh:549 Funcdata::getBasicBlocks
+    /// Get the basic-block container. Faithful to
+    /// `const BlockGraph &getBasicBlocks(void) const` (funcdata.hh:549).
+    pub fn get_basic_blocks(&self) -> &crate::block::BlockGraph {
+        &self.bblocks
+    }
+
+    // Ghidra: funcdata.hh:170 Funcdata::hasNoStructBlocks
+    /// Return true if no block structuring was performed. Faithful to
+    /// `bool hasNoStructBlocks(void) const` (funcdata.hh:170) — true iff the
+    /// structured hierarchy is empty.
+    pub fn has_no_struct_blocks(&self) -> bool {
+        self.sblocks.get_size() == 0
+    }
+
+    // Ghidra: funcdata.hh:206 Funcdata::getOverride
+    /// Get the Override object for this function. Faithful to
+    /// `Override &getOverride(void)` (funcdata.hh:206) — returns a mutable
+    /// reference to `localoverride` so callers can insert flow/deadcodedelay
+    /// overrides.
+    pub fn get_override(&mut self) -> &mut crate::override_rs::Override {
+        &mut self.localoverride
+    }
 }
 
 #[cfg(test)]
