@@ -38,6 +38,16 @@ pub mod block_flags {
     /// unstructured jump to its interior. Set by setGotoBranch (block.cc:313).
     pub const INTERIOR_GOTOIN: u32 = 0x800;
     pub const DEAD: u32 = 0x4000;            // f_dead (block.hh:101)
+    /// Ghidra f_label_bumpup = 0x1000 (block.hh:99). Labels for this block
+    /// are printed by a parent higher in the hierarchy. Set/cleared by
+    /// markLabelBumpUp (block.cc:259-263).
+    pub const LABEL_BUMPUP: u32 = 0x1000;
+    /// Ghidra f_donothing_loop = 0x2000 (block.hh:100). Block does nothing in
+    /// an infinite loop (halt).
+    pub const DONOTHING_LOOP: u32 = 0x2000;
+    /// Ghidra f_whiledo_overflow = 0x8000 (block.hh:102). The conditional block
+    /// of a while-do is too big to print as `while(cond)`; use overflow syntax.
+    pub const WHILEDO_OVERFLOW: u32 = 0x8000;
     pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
     /// Ghidra f_duplicate_block = 0x40000 (block.hh:106). Duplicated block.
     pub const DUPLICATE_BLOCK: u32 = 0x40000;
@@ -48,6 +58,18 @@ pub mod block_flags {
     pub const CASE_BODY: u32 = 0x200000;
     pub const GOTO_EDGE_0: u32 = 0x400000;
     pub const GOTO_EDGE_1: u32 = 0x800000;
+}
+
+/// Goto-type constants used by `BlockGoto`/`BlockIf` to classify an
+/// unstructured branch (block.hh:89-91). These mirror Ghidra's
+/// `f_goto_goto` / `f_break_goto` / `f_continue_goto`.
+pub mod goto_type {
+    /// Ghidra `f_goto_goto = 1` (block.hh:89): non-structured branch.
+    pub const GOTO_GOTO: u32 = 1;
+    /// Ghidra `f_break_goto = 2` (block.hh:90): block ends with a `break;`.
+    pub const BREAK_GOTO: u32 = 2;
+    /// Ghidra `f_continue_goto = 4` (block.hh:91): block ends with a `continue;`.
+    pub const CONTINUE_GOTO: u32 = 4;
 }
 
 /// Flags for edge properties (corresponds to Ghidra's edge_flags)
@@ -1831,6 +1853,38 @@ impl FlowBlock for BlockCopy {
     fn add_out_edge(&mut self, _edge: BlockEdge) {}
 }
 
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockCopy virtual overrides)
+impl BlockCopy {
+    /// Ghidra `BlockCopy::printHeader` (block.cc:2835-2840): prints
+    /// `"Basic(copy) block "` followed by the FlowBlock header.
+    // Ghidra: block.cc:2835 BlockCopy::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:2838-2839: s << "Basic(copy) block "; FlowBlock::printHeader(s);
+        format!("Basic(copy) block {}", self.index)
+    }
+
+    /// Ghidra `BlockCopy::printTree` (block.cc:2842-2846): delegates to the
+    /// wrapped original block's printTree at the given indentation level.
+    // Ghidra: block.cc:2842 BlockCopy::printTree
+    pub fn print_tree(&self, level: i32) -> String {
+        // cc:2845: copy->printTree(s, level);
+        let indent: String = std::iter::repeat(' ').take((level as usize) * 2).collect();
+        let body = self.original.read().unwrap();
+        format!("{}Block_{} (copy of {})\n", indent, self.index, body.get_index())
+    }
+
+    /// Ghidra `BlockCopy::encodeHeader` (block.cc:2848-2854): emits the base
+    /// header (index) plus an `altindex` attribute holding the wrapped
+    /// block's index. Returns `(index, altindex)` for the marshal layer.
+    // Ghidra: block.cc:2848 BlockCopy::encodeHeader
+    pub fn encode_header(&self) -> (i32, i32) {
+        // cc:2851: FlowBlock::encodeHeader(encoder);
+        // cc:2852-2853: altindex = copy->getIndex(); writeSignedInteger(ATTRIB_ALTINDEX, altindex);
+        let altindex = self.original.read().unwrap().get_index();
+        (self.index, altindex)
+    }
+}
+
 /// Represents a goto statement
 ///
 /// Corresponds to Ghidra's `BlockGoto` class
@@ -1840,6 +1894,12 @@ pub struct BlockGoto {
     pub flags: u32,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
     pub goto_target: Option<Arc<RwLock<BlockBasic>>>,
+    /// Ghidra `BlockGoto::gototype` (block.hh:549): classification of the
+    /// unstructured branch (one of `goto_type::GOTO_GOTO` /
+    /// `goto_type::BREAK_GOTO` / `goto_type::CONTINUE_GOTO`). Defaults to
+    /// `GOTO_GOTO`; mutated by `scope_break` to `BREAK_GOTO` when the goto
+    /// lands on the enclosing loop's exit (block.cc:2873).
+    pub goto_type: u32,
     pub incoming: Vec<BlockEdge>,
     pub outgoing: Vec<BlockEdge>,
 }
@@ -1898,6 +1958,92 @@ impl FlowBlock for BlockGoto {
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+}
+
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockGoto virtual overrides)
+impl BlockGoto {
+    /// Ghidra `BlockGoto::getGotoTarget` (block.hh:552, inline): return the
+    /// target block of the unstructured goto.
+    // Ghidra: block.hh:552 BlockGoto::getGotoTarget
+    pub fn get_goto_target(&self) -> Option<Arc<RwLock<BlockBasic>>> {
+        self.goto_target.clone()
+    }
+
+    /// Ghidra `BlockGoto::getGotoType` (block.hh:553, inline): return the
+    /// classification of the unstructured branch
+    /// (`goto_type::GOTO_GOTO`/`BREAK_GOTO`/`CONTINUE_GOTO`).
+    // Ghidra: block.hh:553 BlockGoto::getGotoType
+    pub fn get_goto_type(&self) -> u32 {
+        self.goto_type
+    }
+
+    /// Ghidra `BlockGoto::markUnstructured` (block.cc:2856-2864): if the goto
+    /// is a plain `goto` (not a `break`/`continue`) and it actually prints,
+    /// mark its target block with `f_unstructured_targ`. The C++ first recurses
+    /// via `BlockGraph::markUnstructured`, but Rugra's `BlockGoto` wraps a
+    /// `BlockBasic` (no structured children), so only the target-marking step
+    /// is needed.
+    // Ghidra: block.cc:2856 BlockGoto::markUnstructured
+    pub fn mark_unstructured_target(&self) {
+        // cc:2860-2863: if (gototype == f_goto_goto) { if (gotoPrints()) markCopyBlock(gototarget, f_unstructured_targ); }
+        if self.goto_type == goto_type::GOTO_GOTO {
+            if self.goto_prints() {
+                if let Some(target) = &self.goto_target {
+                    target.write().unwrap().flags |= block_flags::UNSTRUCTURED_TARG;
+                }
+            }
+        }
+    }
+
+    /// Ghidra `BlockGoto::scopeBreak` (block.cc:2866-2874): classify this goto
+    /// as a `break` if its target index equals the current loop's exit index.
+    /// The C++ first line recurses into the wrapped child via
+    /// `getBlock(0)->scopeBreak(...)`; Rugra's `BlockGoto` wraps a `BlockBasic`
+    /// with no structured children, so that recursion is a no-op and only the
+    /// classification step (cc:2872-2873) is performed.
+    // Ghidra: block.cc:2866 BlockGoto::scopeBreak
+    pub fn scope_break_goto_type(&mut self, _cur_exit: i32, cur_loop_exit: i32) {
+        // cc:2872-2873: if (curloopexit == gototarget->getIndex()) gototype = f_break_goto;
+        if let Some(target) = &self.goto_target {
+            if target.read().unwrap().index == cur_loop_exit {
+                self.goto_type = goto_type::BREAK_GOTO;
+            }
+        }
+    }
+
+    /// Ghidra `BlockGoto::gotoPrints` (block.cc:2881-2890): would a formal
+    /// `goto` statement be emitted for this block? Returns `false` when the
+    /// emitter can place the target immediately after this block (so the goto
+    /// is a fall-thru and must not print). Rugra asks the parent for the block
+    /// following this one in flow and compares it to the target's front leaf.
+    /// Without a `nextFlowAfter` path through Rugra's `BlockGraph` parent, we
+    /// conservatively return `true` (always print) — matching the C++ behaviour
+    /// when the parent is null (block.cc:2889).
+    // Ghidra: block.cc:2881 BlockGoto::gotoPrints
+    pub fn goto_prints(&self) -> bool {
+        // cc:2884-2888: parent != null ? (gototarget->getFrontLeaf() != parent->nextFlowAfter(this)) : false
+        // Rugra's BlockGraph parent does not yet implement nextFlowAfter, so we
+        // cannot compute `nextbl`; fall back to "always print" (true).
+        true
+    }
+
+    /// Ghidra `BlockGoto::printHeader` (block.cc:2892-2897): emit
+    /// `"Plain goto block <index>"`.
+    // Ghidra: block.cc:2892 BlockGoto::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:2895-2896: s << "Plain goto block "; FlowBlock::printHeader(s);
+        format!("Plain goto block {}", self.index)
+    }
+
+    /// Ghidra `BlockGoto::nextFlowAfter` (block.cc:2899-2903): the block
+    /// containing the next statement in flow is the goto target's front leaf.
+    /// Rugra returns the target's index (the front-leaf concept does not yet
+    /// have a Rust counterpart), or `None` if no target is set.
+    // Ghidra: block.cc:2899 BlockGoto::nextFlowAfter
+    pub fn next_flow_after_index(&self) -> Option<i32> {
+        // cc:2902: return getGotoTarget()->getFrontLeaf();
+        self.goto_target.as_ref().map(|t| t.read().unwrap().index)
     }
 }
 
