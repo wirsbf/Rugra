@@ -577,6 +577,14 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// block.cc:2368 to negate the boolean input).
     // Ghidra: block.hh FlowBlock::flipInPlaceExecute
     fn flip_in_place_execute(&mut self) {}
+
+    /// Ghidra `FlowBlock::lastOp` (block.hh, virtual): the last PcodeOp in
+    /// this block, or null. Default: null. BlockBasic/BlockList/BlockIf/
+    /// BlockCondition override (block.cc:761, 2960, 3119, 3016).
+    // Ghidra: block.hh FlowBlock::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        None
+    }
 }
 
 /// Find the CBRANCH that controls two block/edge paths.
@@ -2756,7 +2764,8 @@ impl BlockList {
         };
         // cc:2972: FlowBlock::negateCondition(toporbottom);  -- flip order of outgoing
         if toporbottom {
-            self.outgoing.swap(0, 1.min(self.outgoing.len().saturating_sub(1)));
+            let last_idx = self.outgoing.len().saturating_sub(1);
+            self.outgoing.swap(0, last_idx);
         }
         res
     }
