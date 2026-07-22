@@ -940,6 +940,73 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 ### 2026-07-04（续 2）：新增 DUPLICATE_BLOCK flag
 - `block_flags::DUPLICATE_BLOCK = 0x40000`（f_duplicate_block, block.hh:106）。nodeSplit 创建的重复块。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-07-22：移植 block.cc Block 子类型 inherent impls（B5 对齐）
+
+完整对齐 Ghidra `block.cc` 中 BlockCopy / BlockGoto / BlockIf / BlockWhileDo /
+BlockDoWhile / BlockInfLoop / BlockList / BlockCondition / BlockSwitch 子类型的
+虚方法（printHeader / markUnstructured / scopeBreak / nextFlowAfter /
+markLabelBumpUp / negateCondition / flipInPlaceTest / flipInPlaceExecute /
+getExitLeaf / lastOp / encodeHeader 等）。Rugra 因 struct-with-specific-fields
+布局无法直接复用 Ghidra 的 BlockGraph 子类模型，改为 inherent impl 辅助方法
+（返回 `String` / `Option` / 索引），由调用方在 downcast 后使用。
+
+**新增模块级常量：**
+- `block_flags::LABEL_BUMPUP = 0x1000`（f_label_bumpup, block.hh:99）。
+- `block_flags::DONOTHING_LOOP = 0x2000`（f_donothing_loop, block.hh:100）。
+- `block_flags::WHILEDO_OVERFLOW = 0x8000`（f_whiledo_overflow, block.hh:102）。
+- `goto_type` 模块：`GOTO_GOTO=1` / `BREAK_GOTO=2` / `CONTINUE_GOTO=4`
+  （block.hh:89-91，对应 f_goto_goto/f_break_goto/f_continue_goto）。
+
+**新增 FlowBlock trait 方法（默认实现）：**
+- `scope_break_trait(cur_exit, cur_loop_exit)`（block.hh:266 FlowBlock::scopeBreak）。
+- `get_exit_leaf_trait() -> Option<...>`（FlowBlock::getExitLeaf）。
+- `flip_in_place_test() -> i32`（FlowBlock::flipInPlaceTest，默认 2=不可翻转）。
+- `flip_in_place_execute()`（FlowBlock::flipInPlaceExecute）。
+- `last_op() -> Option<PcodeOpRef>`（FlowBlock::lastOp，默认 None）。
+
+**新增 inherent impl 方法（每个对应 Ghidra block.cc 中的虚方法重写）：**
+
+- **BlockCopy**（block.cc:2835-2854）：`print_header` / `print_tree` /
+  `encode_header`。
+- **BlockGoto**（block.cc:2856-2903）：新增 `goto_type: u32` 字段；
+  `get_goto_target` / `get_goto_type` / `mark_unstructured_target` /
+  `scope_break_goto_type` / `goto_prints` / `print_header` /
+  `next_flow_after_index`。
+- **BlockIf**（block.cc:3067-3135）：新增 `goto_type: u32` 字段；
+  `set_goto_target` / `get_goto_target` / `get_goto_type` /
+  `mark_unstructured_target` / `scope_break_goto_type` / `print_header` /
+  `get_exit_leaf` / `last_op` / `next_flow_after_parent` / `prefer_complement`
+  （cc:3093-3109，翻转 CBRANCH 并交换 if_body/else_body）。
+- **BlockWhileDo**（block.cc:3316-3351）：`get_initialize_op` /
+  `get_iterate_op` / `has_overflow_syntax` / `set_overflow_syntax` /
+  `mark_label_bump_up` / `scope_break_children` / `print_header` /
+  `next_flow_after`。
+- **BlockDoWhile**（block.cc:3426-3452）：`mark_label_bump_up` /
+  `scope_break_body` / `print_header` / `next_flow_after`。
+- **BlockInfLoop**（block.cc:3454-3483）：`mark_label_bump_up` /
+  `scope_break_body` / `print_header` / `next_flow_after`。
+- **BlockList**（block.cc:2953-2988）：`get_exit_leaf` / `last_op` /
+  `negate_condition` / `get_split_point` / `print_header` / `outgoing_swap`。
+- **BlockCondition**（block.cc:2990-3065）：`get_opcode` / `is_split_point` /
+  `is_complex` / `last_op` / `negate_condition`（分布 NOT 到两个子条件并
+  切换 AND<->OR）/ `scope_break_children` / `print_header` /
+  `next_flow_after` / `encode_header` / `flip_in_place_execute`。
+- **BlockSwitch**（block.cc:3596-3661）：`get_switch_block` /
+  `get_num_case_blocks` / `get_case_block` / `get_num_labels` / `get_label` /
+  `is_default_case` / `is_exit` / `mark_unstructured_targets` /
+  `scope_break_break_cases` / `print_header` / `next_flow_after` /
+  `get_switch_varnode`。
+
+**调用点更新（blockaction.rs）：**
+- 3 个 `BlockIf` 构造点（blockaction.rs:3128/3163/3630）+ 1 个 `BlockGoto`
+  构造点（blockaction.rs:3715）添加 `goto_type: GOTO_GOTO` 字段
+  （由并发会话在 commit 4b5584f 中完成）。
+
+**验证：** `cargo check` 通过（block.rs / blockaction.rs / coreaction.rs 零错误；
+剩余 4 个 E0308 错误位于 printc.rs / typefactory.rs，属其他并发会话的进行中工作）。
+每个移植方法上方均有 `// Ghidra: block.cc:<行号> <函数名>` 注释；Rust 粘合代码
+标记为 `// RUGRA-GLUE: <reason>`。
  
  
  
