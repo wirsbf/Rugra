@@ -1,38 +1,142 @@
 # `signature.rs` API Reference
 
-**源代码路径**: `src/signature.rs`
-**Ghidra 对应**: `signature.hh` / `signature.cc` (1505行)
-**状态**: 📋 L1→🔧 L2（Signature/SignatureEntry/SignatureDB 骨架已实现）
+**Source path**: `src/signature.rs`
+**Ghidra counterpart**: `signature.hh` / `signature.cc` (1148 lines)
+**Status**: L1 -> L2 (faithful port of the full feature-generation framework)
 
-## 模块说明
+## Module overview
 
-函数签名匹配，用于识别已知库函数。
-对应 Ghidra 的 `signature.hh`。
+Function signature / feature generation. Ghidra extracts a feature vector from a
+function's data-flow and control-flow graphs by iteratively hashing information
+through the graph edges. The vector can be compared against a database of known
+function signatures to identify standard library calls.
 
-## 导出的公共 API
+This module is a faithful 1:1 port of `signature.hh` / `signature.cc`. Every
+ported function carries a `// Ghidra: signature.cc:<line> <name>` comment
+pointing at the exact Ghidra source line; pure Rust glue (arena indices,
+`Mutex` settings, disjoint-borrow helpers) is marked `// RUGRA-GLUE: <reason>`.
+
+### Key type-alignment note
+
+`hashword` is `uint8` (8-byte unsigned) in Ghidra, so the iterative hash slots
+`SignatureEntry::hash[2]` and `BlockSignatureEntry::hash[2]` are `[u64; 2]`.
+`Signature::sig` is explicitly `uint4` (32-bit) per `signature.hh:51`, so the
+emitted feature hash stored in a `Signature` is truncated to 32 bits (matching
+the constructor cast `sig=(uint4)h`). The original Rugra skeleton used `[u32; 2]`
+for the hash slots, which was incorrect.
+
+## Public API
+
+### Marshaling ids
+- `LazyAttrib` / `LazyElem` - const-fn holders for `AttributeId` / `ElementId`,
+  materialized on demand (Rust statics cannot run the allocating constructor).
+- `ATTRIB_BADDATA` (145), `ATTRIB_HASH` (146), `ATTRIB_UNIMPL` (147),
+  `ATTRIB_VAL` (71), `ATTRIB_INDEX` (27), `ATTRIB_SPACE` (9), `ATTRIB_OFFSET` (4).
+- `ELEM_BLOCKSIG` (258), `ELEM_CALL` (259), `ELEM_GENSIG` (260), `ELEM_COPYSIG`
+  (263), `ELEM_SIG` (265), `ELEM_SIGNATUREDESC` (266), `ELEM_SIGNATURES` (267),
+  `ELEM_VARSIG` (269). All ids match `signature.cc:26-41`.
+
+### Modifier bits (`sig_mods`)
+`SIG_COLLAPSE_SIZE` (0x1), `SIG_COLLAPSE_INDNOISE` (0x2), `SIG_DONOTUSE_CONST`
+(0x10), `SIG_DONOTUSE_INPUT` (0x20), `SIG_DONOTUSE_PERSIST` (0x40). Faithful to
+`GraphSigManager::Mods` (`signature.hh:268-275`).
+
+### Entry flags (`entry_flags`)
+`SIG_NODE_TERMINAL` (0x1), `SIG_NODE_COMMUTATIVE` (0x2), `SIG_NODE_NOT_EMITTED`
+(0x4), `SIG_NODE_STANDALONE` (0x8), `VISITED` (0x10), `MARKER_ROOT` (0x20).
+Faithful to `SignatureEntry::SignatureFlags` (`signature.hh:80-87`).
 
 ### `pub struct Signature`
-32 位特征哈希。对应 Ghidra `Signature`。
+A single 32-bit feature hash. Faithful to `Signature` (`signature.hh:50`).
+- `new(h: u64)` - truncate 64-bit hashword to 32-bit `sig`.
+- `get_hash()`, `print(s)`, `print_origin(s)`, `compare(op2)`, `compare_ptr(a,b)`,
+  `encode(encoder)`.
+
+### Feature subtypes (emitted)
+- `VarnodeSignature` (`signature.hh:183`) - data-flow rooted feature.
+- `BlockSignature` (`signature.hh:197`) - control-flow rooted feature (two forms).
+- `CopySignature` (`signature.hh:215`) - stand-alone COPY feature.
+- `SignatureFeature` - Rust enum replacing Ghidra's `Signature*` virtual hierarchy.
 
 ### `pub struct SignatureEntry`
-数据流特征生成节点。对应 Ghidra `SignatureEntry`。
+Data-flow feature-generation node. Faithful to `SignatureEntry`
+(`signature.hh:78`). Rust uses an **arena** (`SignatureGraph`) instead of
+Ghidra's `map<int4,SignatureEntry*>` to avoid shared mutable aliasing.
+- `new(vn, modifiers)`, `new_virtual(ind)` - constructors.
+- Accessors: `is_terminal`, `is_not_emitted`, `is_commutative`, `is_standalone_copy`,
+  `num_inputs`, `is_visited`, `set_visited`, `get_in`, `marker_size_in`,
+  `get_marker_in`, `flip`, `get_hash`, `get_varnode`.
+- Hash methods: `calculate_shadow`, `calculate_shadow_via` (closure variant),
+  `get_op_hash`, `test_standalone_copy`, `standalone_copy_hash`, `hash_size`,
+  `local_hash`, `hash_in`.
+- Noise removal: `noise_post_order`, `noise_dominator`, `intersect`, `remove_noise`
+  (dominator-tree based COPY/INDIRECT/MULTIEQUAL collapse).
 
-### `pub struct SignatureDB`
-已知函数签名数据库。对应 Ghidra `SignatureDB`。
-- `register_function(name, sigs)` — 注册函数签名
-- `lookup_hash(hash)` — 按哈希查找函数名
-- `num_functions()` — 已注册函数数
+### `pub struct SignatureGraph`
+Arena of `SignatureEntry` values + a `create_index -> VnIdx` lookup map. Owns
+entries by value and exposes index-based access so entries can reference each
+other via `shadow` without violating Rust aliasing rules.
+- `map_to_entry`, `map_to_entry_collapse`, `entry`, `entry_mut`, `push_root`,
+  `push_virtual`.
+- `calculate_shadows_all`, `apply_hash_in_round` - disjoint-borrow helpers that
+  keep `&create_to_slot` (immut) and `&mut entries` visible within one method
+  body for the borrow checker.
 
-测试：signature::tests 3 个。
+### `pub struct BlockSignatureEntry`
+Control-flow feature-generation node. Faithful to `BlockSignatureEntry`
+(`signature.hh:167`).
+- `new`, `local_hash(size_in, size_out)`, `flip`, `get_hash`, `get_block`.
 
-## 2026-06-26（续）：signature.rs 完善实现
+### `pub struct SigSettings` / `pub struct SigManager`
+- `SigSettings::get()` / `set(value)` - process-wide settings static (Rust uses
+  a `Mutex<Option<u32>>` since mutable statics are unsafe).
+- `SigManager` - feature vector container (`signature.hh:233`): `new`,
+  `add_signature`, `clear`, `set_current_function`, `num_signatures`,
+  `get_signature`, `get_signature_vector`, `get_overall_hash`, `sort_by_hash`,
+  `print`, `encode`.
 
-新增特征生成基础设施：
-- `hash_opcode(opc, modifiers)` — opcode 哈希（signature.cc getOpHash）
-- `combine_hashes(a, b)` — 哈希混合函数
-- `generate_features(opcodes)` — 从 opcode 序列生成特征签名
-- `SignatureEntry::set_hash/get_current_hash/get_previous_hash/hash_changed` — 迭代哈希追踪
+### `pub struct GraphSigManager`
+Data-flow + control-flow feature driver. Faithful to `GraphSigManager`
+(`signature.hh:265`). Composes a `SigManager` (Rust composition replaces
+inheritance).
+- `new`, `set_max_iteration`, `set_max_block_iteration`, `set_max_varnode`,
+  `test_settings`, `varnode_clear`, `block_clear`, `clear`, `set_current_function`,
+  `flip_varnodes`, `flip_blocks`, `signature_iterate`, `signature_block_iterate`,
+  `initialize_blocks`, `collect_varnode_sigs`, `collect_block_sigs`, `generate`.
 
-测试：新增 4 个（hash_opcode/combine_hashes/generate_features/signature_entry_hash）。
-<!-- annotation-pass: 2026-07-04 -->
-**2026-07-22**: +6 SignatureEntry methods + Signature print/compare
+### Free functions
+- `has_unimplemented(fd)`, `has_bad_data(fd)` - scan the op bank for
+  `UNIMPLEMENTED` / `BADINSTRUCTION` flags (Ghidra `Funcdata::hasUnimplemented` /
+  `hasBadData`).
+- `simple_signature(fd, encoder)` - faithful to `signature.cc:1099`.
+- `debug_signature(fd, encoder)` - faithful to `signature.cc:1137`.
+
+## Alignment evidence
+
+- `ghidra/.../signature.hh` (357 lines) and `signature.cc` (1148 lines) read in
+  full before writing any code.
+- `hashword` verified as `uint8` (64-bit); `Signature::sig` kept as `uint4`
+  (32-bit) per `signature.hh:51`.
+- Every ported function annotated `// Ghidra: signature.cc:<line> <name>`.
+- Pure Rust glue marked `// RUGRA-GLUE: <reason>`.
+- No simplified implementations: iterative graph hashing, dominator-tree noise
+  removal, all three feature types, and both free functions ported faithfully.
+- Magic constants preserved verbatim (`0xbafabaca`, `0x78abbf`, `0xfeedface`,
+  `0x55055055`, `0x9b1c5f`, `0xa2de3c`, `0xaf29e23b`, `0xd7651ec3`, etc.).
+
+## Verification
+
+- `cargo check --lib`: `signature.rs` compiles with **0 errors, 0 warnings**.
+  (The wider crate has pre-existing errors in `type_system`, `varmap`, `block`,
+  `graph`, etc. from concurrent ports; none are in `signature.rs`.)
+- 18 unit tests (`signature::tests`) covering `hash_mixin` determinism/asymmetry,
+  32-bit truncation, `Signature::compare`, `test_settings` validity matrix,
+  `BlockSignatureEntry::local_hash`, arena lookup, and feature-vector sorting.
+  Test logic verified against the real CRC32 table.
+
+## History
+
+- 2026-07-22: full faithful port of `signature.cc`. Replaced the 289-line
+  skeleton (which had an incorrect `[u32; 2]` hashword and a non-existent
+  `SignatureDB` class) with a 2302-line port covering every Ghidra type and
+  function in scope.
