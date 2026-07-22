@@ -233,6 +233,94 @@ that the bulk of `printc.cc` is built on; the gap below is therefore dominated b
 - **`emit_comment_block_tree`** (printc.rs:5704): empty body `{}`.
 - **`emit_block_structured` + `emit_structured_*`** family (printc.rs:662-1553): the Rugra replacement for the entire `emitBlock*` subtree; functionally emits *a* C representation but is not a line-by-line port of `emitBlockBasic`/`Graph`/`Copy`/`Goto`/`Ls`/`If`/`WhileDo`/`DoWhile`/`InfLoop`/`Switch`.
 
+## Detailed P1 inventory: `emitBlock*` subtree and comment system
+
+The summary tables above flag the `emitBlock*` / comment methods as PARTIAL or MISSING at a
+per-name level. This section enumerates, per Ghidra method, (a) the exact line range in
+`printc.cc`, (b) what the method does, and (c) what (if anything) exists in Rugra today, so a
+porter can scope each gap without re-reading the C++.
+
+All references are to `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/printc.cc`.
+
+### Block-tree emission (`emitBlock*`) — L2678-L3353
+
+| Ghidra method (line) | Signature / role | Rugra status | Gap |
+|---|---|---|---|
+| `emitBlockBasic` (L2678-L2744, 67 lines) | `void emitBlockBasic(const BlockBasic *bb)` — walks the basic block's PcodeOp list, skipping `notPrinted`/`BRANCH`/implied-output ops, calling `emitCommentGroup` + `emitStatement` per op, applying `comma_separate` / `only_branch` / `no_branch` mods, and emitting the flat-print `goto` when `nofallthru` is set. Drives the per-op comment sorter via `commsorter.setupBlockList(bb)`. | **PARTIAL** — split across `emit_block_ops` (printc.rs:491) and `emit_structured_basic` (printc.rs:1458). Neither is the faithful walk: `emit_block_ops` skips branches/implied ops but has no `comma_separate` handling, no per-op `emitCommentGroup`, no flat-print goto path, and adds Rugra-original dead-output/COPY/rip-relative filters not present in Ghidra. | No `commsorter` integration (comments never per-op), no `comma_separate`, no flat-goto, extra filters diverge output. |
+| `emitBlockGraph` (L2746-L2757, 12 lines) | `void emitBlockGraph(const BlockGraph *bl)` — iterates the block list, bracketing each child in `beginBlock`/`endBlock` and recursing via `(*iter)->emit(this)`. The top-level entry for block-tree emission. | **PARTIAL** — closest is `emit_block_structured` (printc.rs:724), the Rugra dispatcher. It uses `Arc<RwLock<dyn FlowBlock>>` + `BlockGraph` + `emitted` set (Rugra-original cycle-break) instead of the recursive `emit` virtual dispatch. | No `beginBlock`/`endBlock` bracketing (Emit markup ids dropped), no virtual-dispatch recursion. |
+| `emitBlockCopy` (L2759-L2764, 6 lines) | `void emitBlockCopy(const BlockCopy *bl)` — emits any label, then recurses into the single sub-block. The block-duplication forwarding case. | **MISSING** — no Rust callable. Rugra's `emit_block_structured` does not special-case `BlockCopy`/`BlockGoto` block types; the goto-forwarding that `BlockCopy`/`BlockGoto` exist to express has no equivalent. | Entire block-copy class unhandled. |
+| `emitBlockGoto` (L2766-L2779, 14 lines) | `void emitBlockGoto(const BlockGoto *bl)` — emits the body with `no_branch`, then conditionally emits `emitGotoStatement(...)` based on `bl->gotoPrints()` (suppresses goto when the target is the next block). | **MISSING** — referenced in a comment at printc.rs:540 but not implemented. `emit_goto_statement` (printc.rs:5768) exists with a different signature (addr + goto_type, not `FlowBlock*` + `getGotoTarget()`/`getGotoType()`). | The `gotoPrints()` adjacency check (suppress goto if target is next-in-flow) is not ported → spurious `goto next_label;`. |
+| `emitBlockLs` (L2781-L2834, 54 lines) | `void emitBlockLs(const BlockList *bl)` — emits the list of sub-blocks; for non-flat prints it sets `no_branch` on all but the last block and sets `nofallthru` on any sub-block whose successor is not `nextInFlow()`. | **PARTIAL** — closest is `emit_structured_list` (printc.rs:1191), a thin iterator over the list. It does not apply the `no_branch`/`nofallthru` per-subblock mod logic that drives correct goto insertion between non-adjacent list members. | Missing per-subblock fallthru-mod logic → missing `goto` between non-flow-adjacent siblings. |
+| `emitBlockCondition` (L2836-L2870, 35 lines) | `void emitBlockCondition(const BlockCondition *bl)` — emits `(A && B)` / `(A || B)` using the `ReversePolish`/`emitOp` machinery for the boolean token; honors `only_branch`/`comma_separate`/`no_branch`. | **PARTIAL** — `emit_block_condition` (printc.rs:3036) + `emit_block_condition_inner` (printc.rs:3317). Emits text `&&`/`||` rather than going through the OpToken stack; does not honor `only_branch`/`comma_separate` mods. | No OpToken-stack emission, mod handling incomplete. |
+| `emitBlockIf` (L2878-L2949, 72 lines) | `void emitBlockIf(const BlockIf *bl)` — full `if`/`else if`/`else` with `PendingBrace` (for `option_brace_ifelse`), conditional `else if` merging via `pending_brace`, `emitGotoStatement` when `getGotoTarget()!=0`, `emitCommentBlockTree(condBlock)`. | **PARTIAL** — `emit_structured_if` (printc.rs:812). Emits if/else but no `PendingBrace` deferred-brace logic, no `else if` merge via `cancelPendingPrint`, no conditional goto-target path. | Missing `else if` brace-merge and goto-target branches. |
+| `emitForLoop` (L2957-L2999, 43 lines) | `void emitForLoop(const BlockWhileDo *bl)` — emits `for (init; cond; iter) { body }` using `getInitializeOp()`/`getIterateOp()`, `comma_separate` mod, `beginStatement`/`endStatement` markup per slot. | **PARTIAL** — for-loop text is emitted inline inside `emit_structured_whiledo` (printc.rs:1047-1059) when `for_init`/`for_iter` are set, but there is no standalone callable. The inline path uses pre-baked text strings (`while_data.for_init`) rather than re-emitting the init/iterate ops through `emitExpression`. | No standalone method; init/iter rendered from cached strings, not op re-emission → no markup ids, no nested expression formatting. |
+| `emitBlockWhileDo` (L3001-L3066, 66 lines) | `void emitBlockWhileDo(const BlockWhileDo *bl)` — dispatches to `emitForLoop` when `getIterateOp()!=0`; otherwise emits `while(cond){body}` OR the overflow form `while(true){ condbody; if(cond) break; }` when `hasOverflowSyntax()`. | **PARTIAL** — `emit_structured_whiledo` (printc.rs:1027) handles both the for-loop and overflow-syntax cases, but the overflow body emits `if (...) break;` textually rather than via `emitGotoStatement(condBlock, 0, f_break_goto)`. | Overflow break uses text, not `emitGotoStatement`. |
+| `emitBlockDoWhile` (L3068-L3095, 28 lines) | `void emitBlockDoWhile(const BlockDoWhile *bl)` — `do { body } while(cond);`. | **PARTIAL** — `emit_structured_dowhile` (printc.rs:1111). | Signature divergence; body reuses `emit_block_ops`. |
+| `emitBlockInfLoop` (L3097-L3122, 26 lines) | `void emitBlockInfLoop(const BlockInfLoop *bl)` — `do { body } while(true);`. | **PARTIAL** — `emit_structured_infloop` (printc.rs:1157). | Signature divergence. |
+| `emitBlockSwitch` (L3313-L3353, 41 lines) | `void emitBlockSwitch(const BlockSwitch *bl)` — emits `switch(cond){ case ...: ... }` calling `emitSwitchCase` per case, with `f_break_goto` for exit cases and `getGotoType(i)` fallthrough handling. | **PARTIAL** — `emit_structured_switch` (printc.rs:1279). | No `emitSwitchCase` separation (P1 partial), no `getGotoType(i)` fallthrough. |
+
+**Subtree status**: 12 `emitBlock*` methods. Of these, **2 are MISSING** (`emitBlockCopy`, `emitBlockGoto`) and **10 are PARTIAL** (`emitBlockBasic`, `emitBlockGraph`, `emitBlockLs`, `emitBlockCondition`, `emitBlockIf`, `emitForLoop`, `emitBlockWhileDo`, `emitBlockDoWhile`, `emitBlockInfLoop`, `emitBlockSwitch`). Additionally `emitSwitchCase` (L3129-L3158) is folded into `emit_structured_switch` and `emitLabel`/`emitLabelStatement`/`emitAnyLabelStatement` (L3164-L3230) are PARTIAL with `FlowBlock*`-vs-`addr` signature divergence.
+
+The common structural divergence is that Rugra's `emit_block_structured` dispatcher takes
+`(block_arc: Arc<RwLock<dyn FlowBlock>>, graph: &BlockGraph, emitted: &mut HashSet<usize>)` and
+dispatches by `BlockType` enum, whereas Ghidra's `FlowBlock::emit(this)` is a virtual call that
+lands in each `emitBlock*` overload. This means none of the per-block mod stacking
+(`pushMod`/`setMod(no_branch|only_branch|comma_separate|nofallthru|pending_brace)`), the
+`PendingBrace`/brace-indent machinery, or the `beginBlock`/`endBlock` markup ids are reproduced.
+
+### Comment system — L3231-L3311
+
+The Ghidra comment system is built on a `CommentSorter commsorter` member driven by
+`setupBlockList` / `setupOpList` / `setupHeader`, and gated by two printer flags
+(`instr_comment_type`, `head_comment_type`). **Rugra has no `CommentSorter` equivalent at all**
+— comments are never collected, sorted, or emitted anywhere in `printc.rs` (confirmed: grep for
+`commsorter`/`CommentSorter`/`comment_sorter` in `src/printc.rs` returns zero hits outside
+string literals).
+
+| Ghidra method (line) | Signature / role | Rugra status | Gap |
+|---|---|---|---|
+| `emitCommentGroup` (L3231-L3241, 11 lines) | `void emitCommentGroup(const PcodeOp *inst)` — drains `commsorter` (set up via `setupOpList`) and emits each non-already-emitted comment whose type passes `instr_comment_type` via `emitLineComment(-1, comm)`. Called per-op in `emitBlockBasic`. | **MISSING** — no callable, no `commsorter`. | All per-op line comments (header/body/tail/warning) dropped. |
+| `emitCommentBlockTree` (L3247-L3267, 21 lines) | `void emitCommentBlockTree(const FlowBlock *bl)` — recursively descends the block subtree (collapsing `t_copy`, skipping `t_plain`), calls `commsorter.setupBlockList` + `emitCommentGroup(0)` at each basic block. Used by `emitBlockIf`/`emitForLoop`/`emitBlockWhileDo` to flush comments for statements printed on a shared line. | **PARTIAL — empty stub** — `emit_comment_block_tree` (printc.rs:5766) is `pub fn emit_comment_block_tree(&self, _block: ...) {}` (empty body, `_block` unused). | Stub; no recursion, no `setupBlockList`, no `emitCommentGroup`. |
+| `emitCommentFuncHeader` (L3272-L3311, 40 lines) | `void emitCommentFuncHeader(const Funcdata *fd)` — drains `commsorter.setupHeader(header_basic)`, then (if `option_unplaced`) drains `header_unplaced` with a `"Comments that could not be placed..."` banner, then (if `option_nocasts`) emits the `"DISPLAY WARNING: Type casts are NOT being printed"` banner. | **MISSING** — no callable. `doc_function` (printc.rs:3735) does not call any header-comment emitter. | Function header comments, unplaced-comment banner, and nocasts warning all missing. |
+
+**Comment system status**: 3 methods. **2 MISSING** (`emitCommentGroup`, `emitCommentFuncHeader`),
+**1 PARTIAL/stub** (`emitCommentBlockTree` empty body). The root cause is the absent
+`CommentSorter` infrastructure plus the missing `emitLineComment` lower half (which itself is not
+in the `PrintC::` method set audited here but lives in `printlanguage.cc`). The two gating fields
+`instr_comment_type` / `head_comment_type` and the `option_unplaced` / `option_nocasts` flags are
+also absent in Rugra.
+
+### Global / scope var-decl emission — L2518-L2641
+
+These four methods form the global-symbol-documentation path that Ghidra's `docFunction` calls
+into (`docFunction` at L2641 calls `docAllGlobals`; `emitScopeVarDecls` is also reused for
+function-local category emission). They are grouped here because they share the
+`Symbol`/`Scope`/`MapIterator` traversal that Rugra's `doc_variable_decls_from_funcdata`
+(printc.rs:1800) bypasses.
+
+| Ghidra method (line) | Signature / role | Rugra status | Gap |
+|---|---|---|---|
+| `emitScopeVarDecls` (L2518-L2575, 58 lines) | `bool emitScopeVarDecls(const Scope *symScope, int4 cat)` — iterates category symbols (if `cat>=0`) or the full `MapIterator` + dynamic-entry list, skipping pieces/unnamed/`FunctionSymbol`/`LabSymbol` and de-duping multi-entry symbols via `getFirstWholeMap()`, emitting `emitVarDeclStatement(sym)` for each. Returns whether anything was emitted. | **MISSING** — no callable. `doc_variable_decls_from_funcdata` (printc.rs:1800) walks `fd`'s stack/param varnodes via a different path; it does not iterate a `Scope`/category map. | No `Scope`-map iteration, no category filter, no `FunctionSymbol`/`LabSymbol`/multi-entry de-dup. |
+| `emitGlobalVarDeclsRecursive` (L2608-L2619, 12 lines) | `void emitGlobalVarDeclsRecursive(Scope *symScope)` — guards on `isGlobal()`, calls `emitScopeVarDecls(symScope, no_category)`, recurses over all non-function child scopes. | **MISSING** — no callable. | No recursive global-scope walk. |
+| `docAllGlobals` (L2621-L2629, 9 lines) | `void docAllGlobals(void)` — wraps a `beginDocument`/`endDocument`/`flush` around `emitGlobalVarDeclsRecursive(glb->symboltab->getGlobalScope())`. | **MISSING** — no callable. | No global-symbol document emission; Rugra's `doc_function` (printc.rs:3735) emits only the current function and never the global table. |
+| `docSingleGlobal` (L2631-L2639, 9 lines) | `void docSingleGlobal(const Symbol *sym)` — wraps `beginDocument`/`endDocument` around a single `emitVarDeclStatement(sym)`. | **MISSING** — no callable. | No single-global decl emission. |
+
+**Global/scope status**: all **4 methods MISSING**. They block faithful alignment of
+`docFunction` (L2641), whose Ghidra body calls `docAllGlobals` as its first act; Rugra's
+`doc_function` (printc.rs:3735) is a from-scratch reimplementation that never emits globals.
+
+### P1 subtotal
+
+- `emitBlock*` subtree: **2 MISSING + 10 PARTIAL** across 12 methods (plus `emitSwitchCase` /
+  `emitLabel*` partial).
+- Comment system: **2 MISSING + 1 PARTIAL-stub** across 3 methods; the underlying `CommentSorter`
+  infrastructure is entirely absent.
+- Global/scope decls: **4 MISSING**.
+
+This P1 inventory accounts for **8 MISSING + 11 PARTIAL** of the 54-method gap from the summary
+table; the remainder of the gap sits in the P0 (op-dispatch + `push*`/constant family) and P2
+(type-stack + char/float formatting + arch wiring) buckets described above.
+
 ## Methodology caveats
 
 1. This audit is **name-based**; PARTIAL items may share a name but emit substantially different
