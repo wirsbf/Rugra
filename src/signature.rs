@@ -2196,8 +2196,9 @@ mod tests {
         // Check-bit must be set.
         let no_check = (sig_mods::SIG_DONOTUSE_CONST | sig_mods::SIG_COLLAPSE_INDNOISE) << 2;
         assert!(!GraphSigManager::test_settings(no_check));
-        // Disallowed bits.
-        assert!(!GraphSigManager::test_settings(0x1 | 0x4)); // bit 0x100 shifted would be invalid
+        // Disallowed bits: bit 1 (value 0x2) is not in the allowed mask, so a
+        // value with bit 1 set is invalid even with the check bit set.
+        assert!(!GraphSigManager::test_settings(0x1 | 0x2));
     }
 
     #[test]
