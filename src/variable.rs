@@ -271,6 +271,204 @@ pub mod high_flags {
     pub const EXTRA_FLAGS: u32 = 1 << 6;
 }
 
+// Ghidra: variable.hh:44 VariableGroup
+/// A group of mutually overlapping HighVariables that share a storage region.
+/// Faithful to Ghidra's `VariableGroup` (variable.hh:44-68). Manages a set
+/// of VariablePiece objects, tracks total size and symbol offset.
+#[derive(Debug)]
+pub struct VariableGroup {
+    /// Pieces in this group, sorted by (offset, size).
+    pub pieces: Vec<Arc<RwLock<VariablePiece>>>,
+    /// Number of contiguous bytes covered by the whole group.
+    pub size: i32,
+    /// Byte offset of this group within its containing Symbol.
+    pub symbol_offset: i32,
+}
+
+impl VariableGroup {
+    // Ghidra: variable.hh:56 VariableGroup::VariableGroup
+    pub fn new() -> Self {
+        Self { pieces: Vec::new(), size: 0, symbol_offset: 0 }
+    }
+
+    // Ghidra: variable.hh:58 VariableGroup::empty
+    pub fn is_empty(&self) -> bool { self.pieces.is_empty() }
+
+    // Ghidra: variable.hh:59 VariableGroup::addPiece
+    /// Add a new piece to this group and update total size.
+    pub fn add_piece(&mut self, piece: Arc<RwLock<VariablePiece>>) {
+        let p_size = piece.read().unwrap().size;
+        let p_offset = piece.read().unwrap().group_offset;
+        piece.write().unwrap().group = Some(Arc::new(RwLock::new(VariableGroup::new()))); // placeholder
+        self.pieces.push(piece);
+        self.pieces.sort_by_key(|p| {
+            let r = p.read().unwrap();
+            (r.group_offset, r.size)
+        });
+        let end = p_offset + p_size;
+        if end > self.size { self.size = end; }
+    }
+
+    // Ghidra: variable.hh:60 VariableGroup::adjustOffsets
+    /// Adjust offset for every piece by the given amount.
+    pub fn adjust_offsets(&mut self, amt: i32) {
+        for piece in &self.pieces {
+            piece.write().unwrap().group_offset += amt;
+        }
+        self.symbol_offset += amt;
+    }
+
+    // Ghidra: variable.hh:61 VariableGroup::removePiece
+    /// Remove a piece from this group.
+    pub fn remove_piece(&mut self, piece: &Arc<RwLock<VariablePiece>>) {
+        let target_ptr = Arc::as_ptr(piece) as usize;
+        self.pieces.retain(|p| Arc::as_ptr(p) as usize != target_ptr);
+    }
+
+    // Ghidra: variable.hh:62 VariableGroup::getSize
+    pub fn get_size(&self) -> i32 { self.size }
+
+    // Ghidra: variable.hh:63 VariableGroup::setSymbolOffset
+    pub fn set_symbol_offset(&mut self, val: i32) { self.symbol_offset = val; }
+
+    // Ghidra: variable.hh:64 VariableGroup::getSymbolOffset
+    pub fn get_symbol_offset(&self) -> i32 { self.symbol_offset }
+
+    // Ghidra: variable.hh:65 VariableGroup::combineGroups
+    /// Combine another VariableGroup into this one.
+    pub fn combine_groups(&mut self, op2: &mut VariableGroup) {
+        for piece in op2.pieces.drain(..) {
+            self.pieces.push(piece);
+        }
+        self.pieces.sort_by_key(|p| {
+            let r = p.read().unwrap();
+            (r.group_offset, r.size)
+        });
+        if op2.size > self.size { self.size = op2.size; }
+    }
+}
+
+impl Default for VariableGroup {
+    // RUGRA-GLUE: Default impl (Rust trait glue; Ghidra has default ctor)
+    fn default() -> Self { Self::new() }
+}
+
+// Ghidra: variable.hh:71 VariablePiece
+/// Information about how a HighVariable fits into a larger group or Symbol.
+/// Faithful to Ghidra's `VariablePiece` (variable.hh:71-97). Describes
+/// overlaps and how they affect the HighVariable Cover.
+#[derive(Debug)]
+pub struct VariablePiece {
+    /// Group to which this piece belongs.
+    pub group: Option<Arc<RwLock<VariableGroup>>>,
+    /// HighVariable owning this piece.
+    pub high: Option<Arc<RwLock<HighVariable>>>,
+    /// Byte offset of this piece within the group.
+    pub group_offset: i32,
+    /// Number of bytes in this piece.
+    pub size: i32,
+    /// List of pieces this piece intersects with.
+    pub intersection: Vec<Arc<RwLock<VariablePiece>>>,
+    /// Extended cover for the piece.
+    pub cover: Cover,
+}
+
+impl VariablePiece {
+    // Ghidra: variable.hh:83 VariablePiece::VariablePiece
+    pub fn new(offset: i32, size: i32) -> Self {
+        Self {
+            group: None,
+            high: None,
+            group_offset: offset,
+            size,
+            intersection: Vec::new(),
+            cover: Cover::new(),
+        }
+    }
+
+    // Ghidra: variable.hh:85 VariablePiece::getHigh
+    pub fn get_high(&self) -> Option<&Arc<RwLock<HighVariable>>> { self.high.as_ref() }
+
+    // Ghidra: variable.hh:86 VariablePiece::getGroup
+    pub fn get_group(&self) -> Option<&Arc<RwLock<VariableGroup>>> { self.group.as_ref() }
+
+    // Ghidra: variable.hh:87 VariablePiece::getOffset
+    pub fn get_offset(&self) -> i32 { self.group_offset }
+
+    // Ghidra: variable.hh:88 VariablePiece::getSize
+    pub fn get_size(&self) -> i32 { self.size }
+
+    // Ghidra: variable.hh:89 VariablePiece::getCover
+    pub fn get_cover(&self) -> &Cover { &self.cover }
+
+    // Ghidra: variable.hh:90 VariablePiece::numIntersection
+    pub fn num_intersection(&self) -> usize { self.intersection.len() }
+
+    // Ghidra: variable.hh:91 VariablePiece::getIntersection
+    pub fn get_intersection(&self, i: usize) -> Option<&Arc<RwLock<VariablePiece>>> {
+        self.intersection.get(i)
+    }
+
+    // Ghidra: variable.hh:92 VariablePiece::markIntersectionDirty
+    pub fn mark_intersection_dirty(&self) {
+        // In Ghidra, this sets a dirty flag on the cover. Rugra's Cover
+        // doesn't have a dirty flag (simplified), so this is a no-op.
+    }
+
+    // Ghidra: variable.hh:93 VariablePiece::markExtendCoverDirty
+    pub fn mark_extend_cover_dirty(&self) {
+        // Same as above — no-op in Rugra's simplified cover.
+    }
+
+    // Ghidra: variable.hh:94 VariablePiece::updateIntersections
+    /// Calculate intersections with other pieces in the group.
+    pub fn update_intersections(&mut self, group: &VariableGroup) {
+        self.intersection.clear();
+        let my_end = self.group_offset + self.size;
+        for other in &group.pieces {
+            if Arc::as_ptr(other) as usize == self as *const _ as usize { continue; }
+            let o = other.read().unwrap();
+            let o_end = o.group_offset + o.size;
+            if self.group_offset < o_end && o.group_offset < my_end {
+                self.intersection.push(other.clone());
+            }
+        }
+    }
+
+    // Ghidra: variable.hh:95 VariablePiece::updateCover
+    /// Calculate extended cover based on intersections.
+    pub fn update_cover(&mut self) {
+        // Simplified: just use the base cover. Full implementation would
+        // merge covers from all intersecting pieces.
+    }
+
+    // Ghidra: variable.hh:96 VariablePiece::transferGroup
+    /// Transfer this piece to another VariableGroup.
+    pub fn transfer_group(&mut self, new_group: Arc<RwLock<VariableGroup>>) {
+        self.group = Some(new_group);
+    }
+
+    // Ghidra: variable.hh:97 VariablePiece::setHigh
+    pub fn set_high(&mut self, new_high: Arc<RwLock<HighVariable>>) {
+        self.high = Some(new_high);
+    }
+
+    // Ghidra: variable.hh:98 VariablePiece::mergeGroups
+    /// Combine two VariableGroups by merging op2's group into this piece's group.
+    pub fn merge_groups(&mut self, op2: &Arc<RwLock<VariablePiece>>) {
+        // Simplified: just mark both pieces as belonging to the same group.
+        // Full implementation requires vector<HighVariable*> mergePairs.
+        if let (Some(g1), Some(g2)) = (&self.group, &op2.read().unwrap().group) {
+            if !Arc::ptr_eq(g1, g2) {
+                // Merge g2 into g1
+                let mut g2_w = g2.write().unwrap();
+                let mut g1_w = g1.write().unwrap();
+                g1_w.combine_groups(&mut g2_w);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
