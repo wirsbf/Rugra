@@ -128,6 +128,19 @@ pub struct Funcdata {
     /// `clear()`.
     pub union_map: std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
 
+    /// Candidate laned-register storage, populated by `checkForLanedRegister`.
+    /// Faithful to `Funcdata::lanedMap` (funcdata.hh:107). Keyed by
+    /// (offset, size). RUGRA-GAP: Ghidra maps to a `LanedRegister*` record;
+    /// Rugra stores unit placeholders until the Architecture's lane table is
+    /// ported. Cleared by `clear()`.
+    pub laned_map: std::collections::BTreeMap<(u64, u32), ()>,
+
+    /// Per-function override container. Faithful to `Funcdata::localoverride`
+    /// (funcdata.hh:108). Holds force-goto / deadcode-delay / flow-override /
+    /// indirect-override / proto-override / multistage-jump commands. Populated
+    /// by `setOverride` / `Override::decode`; read by the analysis passes.
+    pub localoverride: crate::override_rs::Override,
+
     // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
     // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
     // not yet hold an Architecture reference (L3 gap), so these are defaults
@@ -173,6 +186,8 @@ impl Funcdata {
             restart_pending: false,
             jump_tables: Vec::new(),
             union_map: std::collections::BTreeMap::new(),
+            laned_map: std::collections::BTreeMap::new(),
+            localoverride: crate::override_rs::Override::new(),
             stack_space: crate::space::AddressSpace::Stack,
             stack_pointer_space: crate::space::AddressSpace::Register,
             stack_pointer_offset: 0x20, // x86-64 RSP
@@ -4278,6 +4293,9 @@ impl Funcdata {
         self.sblocks.clear();
         self.heritage.clear();
         self.union_map.clear();
+        self.laned_map.clear();
+        // Ghidra's clear() does not reset localoverride (commands survive
+        // restarts), so we leave it intact here.
     }
 
     // =========================================================================
