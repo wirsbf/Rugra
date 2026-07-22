@@ -2477,6 +2477,630 @@ impl Scope {
         *base += 1;
         nm
     }
+
+    // Ghidra: database.cc:1615 Scope::addFunction
+    /// Create a function Symbol at the given address in this Scope. Faithful to
+    /// `Scope::addFunction` (database.cc:1615). The C++ form builds a
+    /// `FunctionSymbol` (carrying `glb->min_funcsymbol_size`) and maps it to the
+    /// function entry address; Rugra's `Scope` stores generic `Symbol`s, so we
+    /// create a `FunctionSymbol` struct (for the caller) and register its base
+    /// `Symbol` (with `type_name == "func"`) plus a whole-map `SymbolEntry` at
+    /// `addr`. As in database.cc:1620-1625, an overlapping container is queried
+    /// for a warning; Rugra has no `glb->printMessage`, so the overlap is
+    /// reported only via the returned `overlap` flag.
+    ///
+    /// Returns `(FunctionSymbol, overlap)` where `overlap` is the address of an
+    /// overlapping SymbolEntry's symbol (database.cc:1623), or `None`.
+    pub fn add_function(
+        &mut self,
+        addr: Address,
+        nm: &str,
+        consume_size: i32,
+    ) -> (FunctionSymbol, Option<u64>) {
+        // database.cc:1620 — queryContainer(addr, 1, Address()).
+        let overlap = self
+            .find_container(addr, 1)
+            .map(|e| e.symbol.read().unwrap().symbol_id);
+        // database.cc:1626 — new FunctionSymbol(owner, nm, glb->min_funcsymbol_size).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, "func");
+        sym.symbol_id = id;
+        // Build the FunctionSymbol view for the caller (database.cc:1615 return).
+        let fs = FunctionSymbol::new(self.unique_id, nm, consume_size, addr);
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1627 — addSymbolInternal(sym).
+        // database.cc:1630 — addMapPoint(sym, addr, Address()). whole-map entry.
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.entries.push(SymbolEntry::new_static(
+            sym_arc,
+            0,
+            addr,
+            0,
+            consume_size,
+            RangeList::new(),
+        ));
+        (fs, overlap)
+    }
+
+    // Ghidra: database.cc:1642 Scope::addExternalRef
+    /// Create an external reference at the given address in this Scope.
+    /// Faithful to `Scope::addExternalRef` (database.cc:1642). The C++ form
+    /// builds an `ExternRefSymbol` storing `refaddr`, maps it to `addr`, and
+    /// clears the `Varnode::readonly` flag on the resulting SymbolEntry's
+    /// symbol (database.cc:1654). Rugra's `Scope` stores generic `Symbol`s, so
+    /// we create an `ExternRefSymbol` struct (for the caller) and register its
+    /// base `Symbol` (with `type_name == "exref"`) plus a whole-map entry. The
+    /// readonly flag is cleared via `symbol_flags::READONLY` (database.cc:1654
+    /// uses `Varnode::readonly`; Rugra's Symbol flags namespace reuses
+    /// `symbol_flags::READONLY` for the same purpose).
+    ///
+    /// Returns the `ExternRefSymbol` view for the caller.
+    pub fn add_external_ref(
+        &mut self,
+        addr: Address,
+        refaddr: Address,
+        nm: &str,
+    ) -> ExternRefSymbol {
+        // database.cc:1647 — new ExternRefSymbol(owner, refaddr, nm).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, "exref");
+        sym.symbol_id = id;
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1648 — addSymbolInternal(sym).
+        // database.cc:1651 — addMapPoint(sym, addr, Address()). whole-map entry.
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.entries.push(SymbolEntry::new_static(
+            sym_arc.clone(),
+            0,
+            addr,
+            0,
+            1,
+            RangeList::new(),
+        ));
+        // database.cc:1654 — ret->symbol->flags &= ~Varnode::readonly.
+        // The external reference value is in the image and probably isn't a
+        // valid readonly datum, so strip the readonly attribute.
+        sym_arc.write().unwrap().flags &= !symbol_flags::READONLY;
+        // The ExternRefSymbol view for the caller (database.cc:1655 return).
+        ExternRefSymbol::new(self.unique_id, nm, refaddr)
+    }
+
+    // Ghidra: database.cc:1664 Scope::addCodeLabel
+    /// Create a code label at the given address in this Scope. Faithful to
+    /// `Scope::addCodeLabel` (database.cc:1664). The C++ form builds a
+    /// `LabSymbol` and maps it to `addr`; as in database.cc:1669-1674, an
+    /// overlapping container is queried for a warning (using `addr` itself as
+    /// the usepoint). Rugra has no `glb->printMessage`, so the overlap is
+    /// reported only via the returned `overlap` flag.
+    ///
+    /// Returns `(LabSymbol, overlap)` where `overlap` is the symbol id of an
+    /// overlapping SymbolEntry (database.cc:1672), or `None`.
+    pub fn add_code_label(
+        &mut self,
+        addr: Address,
+        nm: &str,
+    ) -> (LabSymbol, Option<u64>) {
+        // database.cc:1669 — queryContainer(addr, 1, addr).
+        let overlap = self
+            .find_container(addr, 1)
+            .map(|e| e.symbol.read().unwrap().symbol_id);
+        // database.cc:1675 — new LabSymbol(owner, nm).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, "label");
+        sym.symbol_id = id;
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1676 — addSymbolInternal(sym).
+        // database.cc:1677 — addMapPoint(sym, addr, Address()). whole-map entry.
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.entries.push(SymbolEntry::new_static(
+            sym_arc,
+            0,
+            addr,
+            0,
+            1,
+            RangeList::new(),
+        ));
+        // The LabSymbol view for the caller (database.cc:1678 return).
+        (LabSymbol::new(self.unique_id, nm, addr), overlap)
+    }
+
+    // Ghidra: database.cc:1690 Scope::addDynamicSymbol
+    /// Create a dynamically mapped Symbol attached to a specific data-flow.
+    /// Faithful to `Scope::addDynamicSymbol` (database.cc:1690). The C++ form
+    /// builds a `Symbol`, then calls `addDynamicMapInternal(sym, Varnode::mapped,
+    /// hash, 0, ct->getSize(), rnglist)` (database.cc:1700), where `rnglist`
+    /// holds `caddr` if it is valid. Rugra's `Scope` stores generic `Symbol`s
+    /// and uses `dynamic_entries` for hashed `SymbolEntry`s; we mirror that by
+    /// pushing a `SymbolEntry::new_dynamic` with `extraflags = MAPPED`, offset 0
+    /// and the requested size, and a `RangeList` containing `caddr` when valid.
+    ///
+    /// Returns the new symbol id.
+    pub fn add_dynamic_symbol(
+        &mut self,
+        nm: &str,
+        type_name: &str,
+        size: i32,
+        caddr: Address,
+        hash: u64,
+    ) -> u64 {
+        // database.cc:1695 — new Symbol(owner, nm, ct).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, type_name);
+        sym.symbol_id = id;
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1696 — addSymbolInternal(sym).
+        // database.cc:1697-1699 — RangeList rnglist; insertRange(caddr...) if valid.
+        let mut rnglist = RangeList::new();
+        if caddr.as_u64() != 0 {
+            if let Some(rng) = Range::new(caddr, caddr) {
+                rnglist.insert_range(rng);
+            }
+        }
+        // database.cc:1700 — addDynamicMapInternal(sym, Varnode::mapped, hash, 0, ct->getSize(), rnglist).
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.dynamic_entries.push(SymbolEntry::new_dynamic(
+            sym_arc,
+            crate::varnode::varnode_flags::MAPPED,
+            hash,
+            0,
+            size,
+            rnglist,
+        ));
+        id
+    }
+
+    // Ghidra: database.cc:1712 Scope::addEquateSymbol
+    /// Create a symbol that forces display conversion on a constant. Faithful
+    /// to `Scope::addEquateSymbol` (database.cc:1712). The C++ form builds an
+    /// `EquateSymbol(owner, nm, format, value)`, then calls
+    /// `addDynamicMapInternal(sym, Varnode::mapped, hash, 0, 1, rnglist)`
+    /// (database.cc:1722), where `rnglist` holds `addr` if valid. Rugra builds
+    /// an `EquateSymbol` struct (for the caller), registers its base `Symbol`
+    /// (with `type_name == "equ"` and the requested display format), and pushes
+    /// a single-byte dynamic `SymbolEntry`.
+    ///
+    /// Returns the `(EquateSymbol, symbol_id)` pair so the caller can recover
+    /// both the equate view and the registered id.
+    pub fn add_equate_symbol(
+        &mut self,
+        nm: &str,
+        format: u32,
+        value: u64,
+        addr: Address,
+        hash: u64,
+    ) -> (EquateSymbol, u64) {
+        // database.cc:1717 — new EquateSymbol(owner, nm, format, value).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, "equ");
+        sym.symbol_id = id;
+        sym.set_display_format(format);
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1718 — addSymbolInternal(sym).
+        // database.cc:1719-1721 — RangeList rnglist; insertRange(addr...) if valid.
+        let mut rnglist = RangeList::new();
+        if addr.as_u64() != 0 {
+            if let Some(rng) = Range::new(addr, addr) {
+                rnglist.insert_range(rng);
+            }
+        }
+        // database.cc:1722 — addDynamicMapInternal(sym, Varnode::mapped, hash, 0, 1, rnglist).
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.dynamic_entries.push(SymbolEntry::new_dynamic(
+            sym_arc,
+            crate::varnode::varnode_flags::MAPPED,
+            hash,
+            0,
+            1,
+            rnglist,
+        ));
+        // The EquateSymbol view for the caller (database.cc:1723 return).
+        (EquateSymbol::new(self.unique_id, nm, format, value), id)
+    }
+
+    // Ghidra: database.cc:1737 Scope::addUnionFacetSymbol
+    /// Create a symbol forcing a field interpretation for a specific access to a
+    /// variable with union data-type. Faithful to `Scope::addUnionFacetSymbol`
+    /// (database.cc:1737). The C++ form builds a `UnionFacetSymbol(owner, nm,
+    /// dt, fieldNum)`, then calls `addDynamicMapInternal(sym, Varnode::mapped,
+    /// hash, 0, 1, rnglist)` (database.cc:1745). Rugra builds a
+    /// `UnionFacetSymbol` struct (for the caller), registers its base `Symbol`
+    /// (with `type_name == "union"` and the requested category), and pushes a
+    /// single-byte dynamic `SymbolEntry`.
+    ///
+    /// Returns the `(UnionFacetSymbol, symbol_id)` pair.
+    pub fn add_union_facet_symbol(
+        &mut self,
+        nm: &str,
+        type_name: &str,
+        field_num: u64,
+        addr: Address,
+        hash: u64,
+    ) -> (UnionFacetSymbol, u64) {
+        // database.cc:1740 — new UnionFacetSymbol(owner, nm, dt, fieldNum).
+        let id = self.allocate_id();
+        let mut sym = Symbol::new(self.unique_id, nm, type_name);
+        sym.symbol_id = id;
+        sym.category = SymbolCategory::UnionFacet;
+        self.symbols.insert(id, Arc::new(RwLock::new(sym)));
+        // database.cc:1741 — addSymbolInternal(sym).
+        // database.cc:1742-1744 — RangeList rnglist; insertRange(addr...) if valid.
+        let mut rnglist = RangeList::new();
+        if addr.as_u64() != 0 {
+            if let Some(rng) = Range::new(addr, addr) {
+                rnglist.insert_range(rng);
+            }
+        }
+        // database.cc:1745 — addDynamicMapInternal(sym, Varnode::mapped, hash, 0, 1, rnglist).
+        let sym_arc = self.symbols.get(&id).cloned().unwrap();
+        sym_arc.write().unwrap().whole_count += 1;
+        self.dynamic_entries.push(SymbolEntry::new_dynamic(
+            sym_arc,
+            crate::varnode::varnode_flags::MAPPED,
+            hash,
+            0,
+            1,
+            rnglist,
+        ));
+        // The UnionFacetSymbol view for the caller (database.cc:1746 return).
+        (UnionFacetSymbol::new(self.unique_id, nm, field_num), id)
+    }
+
+    // Ghidra: database.cc:1548 Scope::addMapPoint
+    /// Create a new SymbolEntry that maps the whole Symbol to the given address.
+    /// Faithful to `Scope::addMapPoint` (database.cc:1548). The C++ form
+    /// constructs a `SymbolEntry(sym)`, restricts its use to `usepoint` if valid,
+    /// sets `entry.addr = addr`, then calls `addMap(entry)`. Rugra pushes a
+    /// whole-map static `SymbolEntry` directly. Does nothing if the symbol id is
+    /// not registered in this scope.
+    pub fn add_map_point(
+        &mut self,
+        symbol_id: u64,
+        addr: Address,
+        usepoint: Address,
+        size: i32,
+    ) {
+        let sym_arc = match self.symbols.get(&symbol_id).cloned() {
+            Some(a) => a,
+            None => return,
+        };
+        // database.cc:1553-1554 — restrict use if usepoint is valid.
+        let mut uselimit = RangeList::new();
+        if usepoint.as_u64() != 0 {
+            if let Some(rng) = Range::new(usepoint, usepoint) {
+                uselimit.insert_range(rng);
+            }
+        }
+        // database.cc:1555 — entry.addr = addr.
+        // database.cc:1556 — addMap(entry). whole-map entry at offset 0.
+        sym_arc.write().unwrap().whole_count += 1;
+        self.entries.push(SymbolEntry::new_static(
+            sym_arc,
+            0,
+            addr,
+            0,
+            size,
+            uselimit,
+        ));
+    }
+
+    // Ghidra: database.cc:1889 ScopeInternal::begin
+    /// Return an iterator over the whole-map `SymbolEntry`s in this Scope,
+    /// ordered by mapping address. Faithful to `ScopeInternal::begin`
+    /// (database.cc:1889) / `ScopeInternal::end` (database.cc:1914). Ghidra's
+    /// `MapIterator` walks the per-address-space `maptable` rangemaps in
+    /// address order; Rugra stores a single `entries` vector, so we sort a
+    /// snapshot by address to provide the same ordering guarantee. This is the
+    /// range-for equivalent used by `Database::encode` and debugging output.
+    ///
+    /// Returns a freshly-allocated `Vec<&SymbolEntry>` sorted by `addr` then
+    /// `size`, so callers can iterate in mapping-address order without mutating
+    /// the scope.
+    pub fn begin_end(&self) -> Vec<&SymbolEntry> {
+        let mut refs: Vec<&SymbolEntry> = self.entries.iter().collect();
+        // database.cc:1889 comment — "The symbols are ordered via their mapping address".
+        refs.sort_by(|a, b| {
+            a.addr
+                .as_u64()
+                .cmp(&b.addr.as_u64())
+                .then(a.size.cmp(&b.size))
+        });
+        refs
+    }
+
+    // Ghidra: database.cc:1921 ScopeInternal::beginDynamic
+    /// Return an iterator over the dynamic (hash-based) `SymbolEntry`s in this
+    /// Scope. Faithful to `ScopeInternal::beginDynamic` (database.cc:1921) /
+    /// `ScopeInternal::endDynamic` (database.cc:1927). Ghidra returns a
+    /// `list<SymbolEntry>::const_iterator` over `dynamicentry`; Rugra returns a
+    /// slice iterator over `dynamic_entries`.
+    pub fn begin_end_dynamic(&self) -> std::slice::Iter<'_, SymbolEntry> {
+        self.dynamic_entries.iter()
+    }
+
+    // Ghidra: database.cc:2020 ScopeInternal::clearCategory
+    /// Clear all symbols of the given category from this Scope. Faithful to
+    /// `ScopeInternal::clearCategory` (database.cc:2020). When `cat >= 0`, every
+    /// symbol in `category[cat]` is removed via `removeSymbol`; when `cat < 0`,
+    /// every symbol whose category is `>= 0` is skipped (Ghidra clears the
+    /// `no_category` bucket, i.e. symbols whose category is `< 0`). The C++
+    /// implementation uses the `nametree` to enumerate; Rugra collects ids from
+    /// `symbols` first to avoid mutating the map while iterating.
+    ///
+    /// NOTE: Rugra maps Ghidra's `Symbol::no_category = -1` to
+    /// `SymbolCategory::NoCategory`; the `cat < 0` branch therefore clears
+    /// symbols whose category is `NoCategory` (i.e. `get_category() < 0` in the
+    /// C++ sense), matching database.cc:2032-2038.
+    pub fn clear_category(&mut self, cat: i32) {
+        if cat >= 0 {
+            // database.cc:2023-2029 — remove every symbol in category[cat].
+            let to_remove: Vec<u64> = self
+                .categories
+                .get(&cat)
+                .map(|v| v.iter().map(|s| s.read().unwrap().symbol_id).collect())
+                .unwrap_or_default();
+            for id in to_remove {
+                self.remove_symbol(id);
+            }
+        } else {
+            // database.cc:2031-2038 — walk nametree, remove symbols whose
+            // category >= 0 are skipped (i.e. clear the no_category bucket).
+            let to_remove: Vec<u64> = self
+                .symbols
+                .iter()
+                .filter(|(_, s)| {
+                    s.read().unwrap().category == SymbolCategory::NoCategory
+                })
+                .map(|(&id, _)| id)
+                .collect();
+            for id in to_remove {
+                self.remove_symbol(id);
+            }
+        }
+    }
+
+    // Ghidra: database.cc:2071 ScopeInternal::clearUnlockedCategory
+    /// Clear unlocked symbols of the given category from this Scope. Faithful
+    /// to `ScopeInternal::clearUnlockedCategory` (database.cc:2071). When
+    /// `cat >= 0`, for each symbol in `category[cat]`: if it is type-locked,
+    /// clear any unlocked name and reset size-typelock (Ghidra renames to an
+    /// undefined name and calls `resetSizeLockType`); otherwise remove it. When
+    /// `cat < 0`, the same logic applies to symbols whose category is
+    /// `NoCategory`. Rugra inlines the rename to an undefined placeholder and
+    /// clears the size-typelock flag directly (see `clear_unlocked` for the
+    /// same simplification).
+    pub fn clear_unlocked_category(&mut self, cat: i32) {
+        let ids: Vec<u64> = if cat >= 0 {
+            // database.cc:2074-2076 — category[cat].
+            self.categories
+                .get(&cat)
+                .map(|v| v.iter().map(|s| s.read().unwrap().symbol_id).collect())
+                .unwrap_or_default()
+        } else {
+            // database.cc:2092-2097 — nametree filtered to category < 0.
+            self.symbols
+                .iter()
+                .filter(|(_, s)| {
+                    s.read().unwrap().category == SymbolCategory::NoCategory
+                })
+                .map(|(&id, _)| id)
+                .collect()
+        };
+        let mut to_remove: Vec<u64> = Vec::new();
+        for id in ids {
+            let sym = match self.symbols.get(&id) {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+            let mut s = sym.write().unwrap();
+            // database.cc:2079 — if type-locked, clear unlocked name & reset size-lock.
+            if (s.flags & symbol_flags::TYPELOCK) != 0 {
+                // database.cc:2080-2082 — rename to undefined if name not undefined.
+                if (s.flags & symbol_flags::NAMELOCK) == 0 && !s.is_name_undefined() {
+                    s.name = "$$undef".to_string();
+                    s.display_name = "$$undef".to_string();
+                }
+                // database.cc:2085-2086 — resetSizeLockType.
+                s.dispflags &= !display_flags::SIZE_TYPELOCK;
+            } else {
+                // database.cc:2088-2089 — remove symbol.
+                to_remove.push(id);
+            }
+        }
+        for id in to_remove {
+            self.remove_symbol(id);
+        }
+    }
+
+    // Ghidra: database.cc:2111 ScopeInternal::adjustCaches
+    /// Let the Scope adjust its internal caches after the Architecture's
+    /// address-space configuration is finalized. Faithful to
+    /// `ScopeInternal::adjustCaches` (database.cc:2111). The C++ form resizes
+    /// `maptable` to `glb->numSpaces()`; Rugra's Scope has a single address
+    /// space and uses flat vectors rather than a per-space rangemap, so this is
+    /// a no-op preserved for API fidelity (callers in the configuration path
+    /// may still invoke it).
+    pub fn adjust_caches(&mut self) {
+        // database.cc:2114 — maptable.resize(glb->numSpaces(), NULL).
+        // Rugra has no per-space maptable to resize.
+    }
+
+    // Ghidra: database.cc:2117 ScopeInternal::removeSymbolMappings
+    /// Remove every mapping (SymbolEntry) of the given Symbol, but keep the
+    /// Symbol itself registered. Faithful to
+    /// `ScopeInternal::removeSymbolMappings` (database.cc:2117). The C++ form
+    /// erases each iterator in `symbol->mapentry` from the owning rangemap (or
+    /// `dynamicentry` for dynamic maps), resets `wholeCount = 0`, and clears
+    /// `mapentry`. Rugra retains entries in the flat `entries` /
+    /// `dynamic_entries` vectors, so we filter them out by symbol id and reset
+    /// `whole_count` on the Symbol.
+    pub fn remove_symbol_mappings(&mut self, symbol_id: u64) {
+        // database.cc:2122-2133 — erase each mapping.
+        self.entries
+            .retain(|e| e.symbol.read().unwrap().symbol_id != symbol_id);
+        self.dynamic_entries
+            .retain(|e| e.symbol.read().unwrap().symbol_id != symbol_id);
+        // database.cc:2134 — symbol->wholeCount = 0.
+        if let Some(sym) = self.symbols.get(&symbol_id) {
+            sym.write().unwrap().whole_count = 0;
+        }
+    }
+
+    // Ghidra: database.cc:2166 ScopeInternal::retypeSymbol
+    /// Change the data-type of a Symbol, adjusting its mappings if the size
+    /// changed. Faithful to `ScopeInternal::retypeSymbol` (database.cc:2166).
+    /// If the new type's size matches the current type, or the symbol has no
+    /// mappings, only the type is updated (database.cc:2171-2176). If the
+    /// symbol has exactly one address-tied mapping, that mapping is removed,
+    /// the type is updated, and a new whole-map entry is added at the saved
+    /// address with the new size (database.cc:2177-2196). Otherwise the
+    /// retype fails; Ghidra throws `RecovError`, Rugra returns `false`.
+    ///
+    /// Rugra accepts the new type as `(type_name, size)` since Datatype
+    /// integration is deferred; `checkSizeTypeLock` is re-run after the change
+    /// (database.cc:2174/2192).
+    pub fn retype_symbol(&mut self, symbol_id: u64, type_name: &str, new_size: i32) -> bool {
+        let sym_arc = match self.symbols.get(&symbol_id).cloned() {
+            Some(a) => a,
+            None => return false,
+        };
+        // Collect this symbol's own whole-map static entries (database.cc:2171
+        // uses sym->mapentry, the symbol's own mapping list).
+        let mine: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.symbol.read().unwrap().symbol_id == symbol_id)
+            .map(|(i, _)| i)
+            .collect();
+        // database.cc:2171 — if size matches OR no mappings, just set type.
+        // Ghidra's sym->type->getSize() is the symbol's data-type size; Rugra's
+        // dtype may be None (deferred integration), so we fall back to the
+        // first whole-map entry's size when dtype is unset.
+        let cur_size = sym_arc.read().unwrap()
+            .dtype
+            .as_ref()
+            .map_or_else(
+                || mine.first().map_or(0, |&i| self.entries[i].size),
+                |d| d.get_size() as i32,
+            );
+        let has_mappings = !mine.is_empty();
+        if cur_size == new_size || !has_mappings {
+            let mut s = sym_arc.write().unwrap();
+            s.type_name = type_name.to_string();
+            s.check_size_type_lock();
+            return true;
+        }
+        // database.cc:2177 — if exactly one address-tied mapping.
+        if mine.len() == 1 {
+            let entry = self.entries[mine[0]].clone();
+            // database.cc:2179 — must be address-tied.
+            let is_addr_tied = {
+                let s = sym_arc.read().unwrap();
+                (s.flags & symbol_flags::ADDRTIED) != 0
+            };
+            if is_addr_tied {
+                // database.cc:2186 — erase the old rangemap entry.
+                let saved_addr = entry.addr;
+                self.entries.swap_remove(mine[0]);
+                // database.cc:2188 — wholeCount = 0.
+                {
+                    let mut s = sym_arc.write().unwrap();
+                    s.whole_count = 0;
+                    // database.cc:2191 — change the type.
+                    s.type_name = type_name.to_string();
+                    s.check_size_type_lock();
+                }
+                // database.cc:2193 — addMapPoint(sym, addr, Address()) with new size.
+                self.add_map_point(symbol_id, saved_addr, Address::new(0), new_size);
+                return true;
+            }
+        }
+        // database.cc:2197 — throw RecovError. Rugra returns false.
+        false
+    }
+
+    // Ghidra: database.cc:2218 ScopeInternal::setDisplayFormat
+    /// Set the display format of a Symbol. Faithful to
+    /// `ScopeInternal::setDisplayFormat` (database.cc:2218). The C++ form
+    /// forwards to `sym->setDisplayFormat(attr)`; Rugra does the same. No-op if
+    /// the symbol id is not registered.
+    pub fn set_display_format(&mut self, symbol_id: u64, attr: u32) {
+        if let Some(sym) = self.symbols.get(&symbol_id) {
+            sym.write().unwrap().set_display_format(attr);
+        }
+    }
+
+    // Ghidra: database.cc:2814 ScopeInternal::getCategorySymbol
+    /// Get the indexed Symbol within the given category. Faithful to
+    /// `ScopeInternal::getCategorySymbol` (database.cc:2814). Returns `None`
+    /// when `cat` is out of range or `ind` is out of range for that category.
+    /// The C++ form indexes `category[cat][ind]`; Rugra stores categories in a
+    /// `BTreeMap<i32, Vec<...>>`, so we look up the vector and index it.
+    pub fn get_category_symbol(&self, cat: i32, ind: usize) -> Option<Arc<RwLock<Symbol>>> {
+        // database.cc:2817-2818 — bounds on cat.
+        self.categories.get(&cat).and_then(|v| {
+            // database.cc:2819 — bounds on ind.
+            if ind < v.len() {
+                Some(v[ind].clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    // Ghidra: database.cc:2200 ScopeInternal::setAttribute
+    /// Set boolean Varnode properties on a Symbol, restricted to the
+    /// type/name/readonly/incidental_copy/nolocalalias/volatile/indirectstorage/
+    /// hiddenretparm subset (database.cc:2203-2204), then re-run
+    /// `checkSizeTypeLock`. Faithful to `ScopeInternal::setAttribute`
+    /// (database.cc:2200). This overrides the existing `set_attribute` to
+    /// additionally mask the attribute bits and re-run the size-typelock check;
+    /// callers that only need the raw OR can keep using `set_attribute`.
+    pub fn set_attribute_masked(&mut self, symbol_id: u64, attr: u32) {
+        // database.cc:2203-2204 — restrict to the symbol-attribute subset.
+        let mask = symbol_flags::TYPELOCK
+            | symbol_flags::NAMELOCK
+            | symbol_flags::READONLY
+            | symbol_flags::VOLATIL
+            | symbol_flags::INDIRECTSTORAGE
+            | symbol_flags::HIDDENRETPARM;
+        let masked = attr & mask;
+        if let Some(sym) = self.symbols.get(&symbol_id) {
+            let mut s = sym.write().unwrap();
+            // database.cc:2205 — sym->flags |= attr.
+            s.flags |= masked;
+            // database.cc:2206 — sym->checkSizeTypeLock().
+            s.check_size_type_lock();
+        }
+    }
+
+    // Ghidra: database.cc:2209 ScopeInternal::clearAttribute
+    /// Clear boolean Varnode properties on a Symbol, restricted to the same
+    /// subset as `set_attribute_masked` (database.cc:2212-2213), then re-run
+    /// `checkSizeTypeLock`. Faithful to `ScopeInternal::clearAttribute`
+    /// (database.cc:2209).
+    pub fn clear_attribute_masked(&mut self, symbol_id: u64, attr: u32) {
+        // database.cc:2212-2213 — restrict to the symbol-attribute subset.
+        let mask = symbol_flags::TYPELOCK
+            | symbol_flags::NAMELOCK
+            | symbol_flags::READONLY
+            | symbol_flags::VOLATIL
+            | symbol_flags::INDIRECTSTORAGE
+            | symbol_flags::HIDDENRETPARM;
+        let masked = attr & mask;
+        if let Some(sym) = self.symbols.get(&symbol_id) {
+            let mut s = sym.write().unwrap();
+            // database.cc:2214 — sym->flags &= ~attr.
+            s.flags &= !masked;
+            // database.cc:2215 — sym->checkSizeTypeLock().
+            s.check_size_type_lock();
+        }
+    }
 }
 
 /// A manager for symbol scopes for a whole executable. Faithful to `Database`
@@ -3451,6 +4075,270 @@ mod tests {
         assert!(dt.is_some());
         // Wrong size → no exact match.
         assert!(entry.get_sized_type(Address::new(0x1000), 8).is_none());
+    }
+
+    #[test]
+    fn test_scope_add_function() {
+        // database.cc:1615 — addFunction creates a func symbol and maps it.
+        let mut scope = Scope::new(1, "global", 0);
+        let (fs, overlap) = scope.add_function(Address::new(0x401000), "main", 16);
+        assert_eq!(fs.get_entry().as_u64(), 0x401000);
+        assert_eq!(fs.get_bytes_consumed(), 16);
+        assert!(overlap.is_none()); // no overlap
+        assert_eq!(scope.num_symbols(), 1);
+        // The function should be discoverable via find_function.
+        assert_eq!(scope.find_function(Address::new(0x401000)), Some(Address::new(0x401000)));
+        // The entry should be a whole-map (offset 0) at the function address.
+        let entry = scope.find_addr(Address::new(0x401000));
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().offset, 0);
+        assert_eq!(entry.unwrap().size, 16);
+    }
+
+    #[test]
+    fn test_scope_add_function_overlap() {
+        // database.cc:1620-1625 — addFunction reports overlap with existing.
+        let mut scope = Scope::new(1, "global", 0);
+        let big_id = scope.add_symbol_mapped("big", "struct", Address::new(0x401000), 16);
+        let (_fs, overlap) = scope.add_function(Address::new(0x401002), "inner", 1);
+        // Overlap should report the big symbol id.
+        assert_eq!(overlap, Some(big_id));
+    }
+
+    #[test]
+    fn test_scope_add_external_ref() {
+        // database.cc:1642 — addExternalRef creates an exref symbol.
+        let mut scope = Scope::new(1, "global", 0);
+        let exref = scope.add_external_ref(Address::new(0x5000), Address::new(0x9000), "printf");
+        assert_eq!(exref.refaddr.as_u64(), 0x9000);
+        // The symbol is discoverable as an external ref at 0x5000.
+        assert!(scope.find_external_ref(Address::new(0x5000)).is_some());
+        // The readonly flag must be cleared (database.cc:1654).
+        let entry = scope.find_addr(Address::new(0x5000)).unwrap();
+        let s = entry.symbol.read().unwrap();
+        assert_eq!(s.type_name, "exref");
+        assert_eq!(s.flags & symbol_flags::READONLY, 0);
+    }
+
+    #[test]
+    fn test_scope_add_code_label() {
+        // database.cc:1664 — addCodeLabel creates a label symbol.
+        let mut scope = Scope::new(1, "func", 0);
+        let (lab, overlap) = scope.add_code_label(Address::new(0x6000), "L1");
+        assert_eq!(lab.addr.as_u64(), 0x6000);
+        assert!(overlap.is_none());
+        // The label is discoverable via find_code_label.
+        assert!(scope.find_code_label(Address::new(0x6000)).is_some());
+    }
+
+    #[test]
+    fn test_scope_add_dynamic_symbol() {
+        // database.cc:1690 — addDynamicSymbol creates a hashed SymbolEntry.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_dynamic_symbol(
+            "dyn", "int", 4, Address::new(0x1234), 0xDEADBEEF,
+        );
+        assert_eq!(scope.num_symbols(), 1);
+        assert!(id != 0);
+        // The dynamic entry should be in dynamic_entries with the hash.
+        assert_eq!(scope.dynamic_entries.len(), 1);
+        let entry = &scope.dynamic_entries[0];
+        assert_eq!(entry.get_hash(), 0xDEADBEEF);
+        assert!(entry.is_dynamic());
+        assert_eq!(entry.size, 4);
+        // Use-limit should contain the caddr.
+        assert!(entry.in_use(Address::new(0x1234)));
+        assert!(!entry.in_use(Address::new(0x9999)));
+    }
+
+    #[test]
+    fn test_scope_add_equate_symbol() {
+        // database.cc:1712 — addEquateSymbol creates an equate + dynamic entry.
+        let mut scope = Scope::new(1, "func", 0);
+        let (equ, id) = scope.add_equate_symbol(
+            "MY_CONST", display_flags::FORCE_HEX, 0x42, Address::new(0x2000), 0xCAFE,
+        );
+        assert_eq!(equ.value, 0x42);
+        assert_eq!(scope.dynamic_entries.len(), 1);
+        let entry = &scope.dynamic_entries[0];
+        assert_eq!(entry.get_hash(), 0xCAFE);
+        assert_eq!(entry.size, 1); // equates are 1-byte (database.cc:1722).
+        // The registered symbol should carry the display format.
+        let s = scope.symbols.get(&id).unwrap().read().unwrap();
+        assert_eq!(s.type_name, "equ");
+        assert_eq!(s.get_display_format(), display_flags::FORCE_HEX);
+    }
+
+    #[test]
+    fn test_scope_add_union_facet_symbol() {
+        // database.cc:1737 — addUnionFacetSymbol creates a union facet.
+        let mut scope = Scope::new(1, "func", 0);
+        let (facet, id) = scope.add_union_facet_symbol(
+            "u_facet", "union", 3, Address::new(0x3000), 0xBEEF,
+        );
+        assert_eq!(facet.field, 3);
+        assert_eq!(scope.dynamic_entries.len(), 1);
+        let s = scope.symbols.get(&id).unwrap().read().unwrap();
+        assert_eq!(s.type_name, "union");
+        assert_eq!(s.category, SymbolCategory::UnionFacet);
+    }
+
+    #[test]
+    fn test_scope_add_map_point() {
+        // database.cc:1548 — addMapPoint maps a whole Symbol to an address.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_symbol("v", "int");
+        scope.add_map_point(id, Address::new(0x1000), Address::new(0x5000), 4);
+        let entry = scope.find_addr(Address::new(0x1000));
+        assert!(entry.is_some());
+        // Use-limit must be restricted to the usepoint.
+        assert!(entry.unwrap().in_use(Address::new(0x5000)));
+        assert!(!entry.unwrap().in_use(Address::new(0x9999)));
+    }
+
+    #[test]
+    fn test_scope_begin_end_iteration_order() {
+        // database.cc:1889 — begin/end provide mapping-address order.
+        let mut scope = Scope::new(1, "global", 0);
+        scope.add_symbol_mapped("c", "int", Address::new(0x3000), 4);
+        scope.add_symbol_mapped("a", "int", Address::new(0x1000), 4);
+        scope.add_symbol_mapped("b", "int", Address::new(0x2000), 4);
+        let ordered = scope.begin_end();
+        assert_eq!(ordered.len(), 3);
+        // Sorted by mapping address.
+        assert_eq!(ordered[0].addr.as_u64(), 0x1000);
+        assert_eq!(ordered[1].addr.as_u64(), 0x2000);
+        assert_eq!(ordered[2].addr.as_u64(), 0x3000);
+    }
+
+    #[test]
+    fn test_scope_clear_category() {
+        // database.cc:2020 — clearCategory removes all symbols in a category.
+        let mut scope = Scope::new(1, "func", 0);
+        let p1 = scope.add_symbol("p1", "int");
+        let p2 = scope.add_symbol("p2", "int");
+        let other = scope.add_symbol("other", "int");
+        scope.set_category(p1, 0, 0); // function_parameter
+        scope.set_category(p2, 0, 1);
+        assert_eq!(scope.get_category_size(0), 2);
+        scope.clear_category(0);
+        assert_eq!(scope.get_category_size(0), 0);
+        // The symbols themselves should be removed.
+        assert!(!scope.symbols.contains_key(&p1));
+        assert!(!scope.symbols.contains_key(&p2));
+        // The non-category symbol survives.
+        assert!(scope.symbols.contains_key(&other));
+    }
+
+    #[test]
+    fn test_scope_clear_category_negative_clears_no_category() {
+        // database.cc:2031-2038 — cat < 0 clears the no_category bucket.
+        let mut scope = Scope::new(1, "func", 0);
+        let cat_id = scope.add_symbol("param", "int");
+        let nocat_id = scope.add_symbol("local", "int");
+        scope.set_category(cat_id, 0, 0);
+        scope.clear_category(-1);
+        // The no-category symbol is removed.
+        assert!(!scope.symbols.contains_key(&nocat_id));
+        // The categorized symbol survives.
+        assert!(scope.symbols.contains_key(&cat_id));
+    }
+
+    #[test]
+    fn test_scope_remove_symbol_mappings() {
+        // database.cc:2117 — removeSymbolMappings drops entries but keeps symbol.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        assert_eq!(scope.entries.len(), 1);
+        scope.remove_symbol_mappings(id);
+        assert_eq!(scope.entries.len(), 0);
+        // Symbol is still registered, with whole_count reset.
+        assert!(scope.symbols.contains_key(&id));
+        assert_eq!(scope.symbols.get(&id).unwrap().read().unwrap().whole_count, 0);
+    }
+
+    #[test]
+    fn test_scope_retype_symbol_same_size() {
+        // database.cc:2166 — retype with same size just updates type_name.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        let ok = scope.retype_symbol(id, "uint", 4);
+        assert!(ok);
+        let s = scope.symbols.get(&id).unwrap().read().unwrap();
+        assert_eq!(s.type_name, "uint");
+    }
+
+    #[test]
+    fn test_scope_retype_symbol_addr_tied_resize() {
+        // database.cc:2177-2196 — retype with size change + 1 addr-tied map.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        // Mark the symbol as address-tied (database.cc:2179 guard).
+        scope.symbols.get(&id).unwrap().write().unwrap().flags |= symbol_flags::ADDRTIED;
+        let ok = scope.retype_symbol(id, "long", 8);
+        assert!(ok);
+        // The single mapping should now be 8 bytes at the same address.
+        let entry = scope.find_addr(Address::new(0x1000));
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().size, 8);
+        let s = scope.symbols.get(&id).unwrap().read().unwrap();
+        assert_eq!(s.type_name, "long");
+    }
+
+    #[test]
+    fn test_scope_get_category_symbol() {
+        // database.cc:2814 — getCategorySymbol indexes a category vector.
+        let mut scope = Scope::new(1, "func", 0);
+        let p1 = scope.add_symbol("p1", "int");
+        let p2 = scope.add_symbol("p2", "int");
+        scope.set_category(p1, 0, 0);
+        scope.set_category(p2, 0, 1);
+        assert!(scope.get_category_symbol(0, 0).is_some());
+        assert!(scope.get_category_symbol(0, 1).is_some());
+        // Out of range.
+        assert!(scope.get_category_symbol(0, 5).is_none());
+        assert!(scope.get_category_symbol(99, 0).is_none());
+    }
+
+    #[test]
+    fn test_scope_set_attribute_masked() {
+        // database.cc:2200 — setAttribute masks bits and re-runs size-typelock.
+        let mut scope = Scope::new(1, "func", 0);
+        let id = scope.add_symbol("x", "int");
+        // Set TYPELOCK | NAMELOCK | READONLY (all in the mask).
+        scope.set_attribute_masked(
+            id,
+            symbol_flags::TYPELOCK | symbol_flags::NAMELOCK | symbol_flags::READONLY,
+        );
+        let s = scope.symbols.get(&id).unwrap().read().unwrap();
+        assert!(s.is_type_locked());
+        assert!(s.is_name_locked());
+        assert_eq!(s.flags & symbol_flags::READONLY, symbol_flags::READONLY);
+    }
+
+    #[test]
+    fn test_scope_clear_unlocked_category() {
+        // database.cc:2071 — clearUnlockedCategory removes unlocked symbols.
+        let mut scope = Scope::new(1, "func", 0);
+        let unlocked = scope.add_symbol("u", "int");
+        let locked = scope.add_symbol("l", "int");
+        scope.set_category(unlocked, 0, 0);
+        scope.set_category(locked, 0, 1);
+        scope.set_attribute_masked(locked, symbol_flags::TYPELOCK);
+        scope.clear_unlocked_category(0);
+        // Unlocked is removed; locked survives.
+        assert!(!scope.symbols.contains_key(&unlocked));
+        assert!(scope.symbols.contains_key(&locked));
+    }
+
+    #[test]
+    fn test_scope_adjust_caches_noop() {
+        // database.cc:2111 — adjustCaches is a no-op in Rugra (single space).
+        let mut scope = Scope::new(1, "func", 0);
+        scope.add_symbol_mapped("x", "int", Address::new(0x1000), 4);
+        scope.adjust_caches();
+        // State unchanged.
+        assert_eq!(scope.num_symbols(), 1);
     }
 
 
