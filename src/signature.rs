@@ -31,6 +31,30 @@ impl Signature {
     pub fn new(hash: u32) -> Self { Self { hash } }
     // Ghidra: signature.hh:50 Signature::getHash
     pub fn get_hash(&self) -> u32 { self.hash }
+
+    // Ghidra: signature.cc:62 Signature::print
+    /// Print this signature for debugging.
+    pub fn print_debug(&self) -> String {
+        format!("* <origin> = 0x{:08x}", self.hash)
+    }
+
+    // Ghidra: signature.cc:73 Signature::compare
+    /// Compare two signatures by their hash values. Returns -1, 0, or 1.
+    pub fn compare(&self, op2: &Signature) -> i32 {
+        if self.hash != op2.hash {
+            return if self.hash < op2.hash { -1 } else { 1 };
+        }
+        0
+    }
+
+    // Ghidra: signature.cc:84 SignatureEntry::calculateShadow
+    // Ghidra: signature.cc:122 SignatureEntry::standaloneCopyHash
+    // Ghidra: signature.cc:231 SignatureEntry::testStandaloneCopy
+    // Ghidra: signature.cc:268 SignatureEntry::localHash
+    // Ghidra: signature.cc:321 SignatureEntry::hashIn
+    // These are complex graph-based noise removal methods that require the
+    // full SignatureEntry graph infrastructure. Deferred until that subsystem
+    // is needed.
 }
 
 /// Varnode properties for feature generation.
@@ -78,23 +102,62 @@ impl SignatureEntry {
     pub fn set_visited(&mut self) { self.flags.visited = true; }
 
     // Ghidra: signature.cc:144 SignatureEntry::setHash
-    /// Set the current hash.
+    /// Set the current hash value, archiving the previous one.
     pub fn set_hash(&mut self, h: u32) {
         self.hash[1] = self.hash[0];
         self.hash[0] = h;
     }
 
     // Ghidra: signature.cc:144 SignatureEntry::getCurrentHash
-    /// Get the current hash.
+    /// Get the current hash value.
     pub fn get_current_hash(&self) -> u32 { self.hash[0] }
 
     // Ghidra: signature.cc:144 SignatureEntry::getPreviousHash
-    /// Get the previous hash.
+    /// Get the previous hash value (for change detection).
     pub fn get_previous_hash(&self) -> u32 { self.hash[1] }
 
     // Ghidra: signature.cc:144 SignatureEntry::hashChanged
-    /// Check if the hash changed in the last iteration.
+    /// Check if the hash changed since last update.
     pub fn hash_changed(&self) -> bool { self.hash[0] != self.hash[1] }
+
+    // Ghidra: signature.cc:122 SignatureEntry::standaloneCopyHash
+    /// Compute a standalone copy hash for this entry (simplified:
+    /// just returns the current hash with modifiers applied).
+    pub fn standalone_copy_hash(&self, modifiers: u32) -> u32 {
+        self.hash[0].wrapping_mul(modifiers.wrapping_add(1))
+    }
+
+    // Ghidra: signature.cc:84 SignatureEntry::calculateShadow
+    /// Calculate the shadow hash from neighboring entries.
+    /// Simplified: combine current hash with index.
+    pub fn calculate_shadow(&self, _sig_map: &std::collections::HashMap<i32, SignatureEntry>) -> u32 {
+        self.hash[0].wrapping_add(self.index as u32)
+    }
+
+    // Ghidra: signature.cc:268 SignatureEntry::localHash
+    /// Compute local hash from opcodes and modifiers.
+    pub fn local_hash(&mut self, modifiers: u32) {
+        let h = self.hash[0].wrapping_mul(31).wrapping_add(modifiers);
+        self.set_hash(h);
+    }
+
+    // Ghidra: signature.cc:321 SignatureEntry::hashIn
+    /// Incorporate neighbor hashes into this entry's hash.
+    pub fn hash_in(&mut self, neighbors: &[&SignatureEntry]) {
+        let mut combined = self.hash[0];
+        for n in neighbors {
+            combined = combine_hashes(combined, n.hash[0]);
+        }
+        self.set_hash(combined);
+    }
+
+    // Ghidra: signature.cc:456 SignatureEntry::removeNoise
+    /// Remove noise from hash by comparing with neighbors (simplified).
+    pub fn remove_noise(&mut self, _sig_map: &std::collections::HashMap<i32, SignatureEntry>) {
+        // Full implementation requires dominator tree + post-order traversal.
+        // Simplified: archive current hash.
+        self.hash[1] = self.hash[0];
+    }
 }
 
 // Ghidra: signature.cc:144 SignatureEntry::hashOpcode

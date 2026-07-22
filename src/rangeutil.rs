@@ -112,6 +112,72 @@ impl CircleRange {
     /// Get the step.
     pub fn get_step(&self) -> u64 { self.step }
 
+    // Ghidra: rangeutil.cc:103 CircleRange::newStride
+    /// Extend the range to cover values with a different stride. Returns
+    /// true if the resulting range is empty. Faithful to cc:103-131.
+    pub fn new_stride(&mut self, mask: u64, step: u64, old_step: u64, rem: u32, myleft: &mut u64, myright: &mut u64) -> bool {
+        if old_step != 1 {
+            let old_rem = (*myleft % old_step) as u32;
+            if old_rem != (rem % old_step as u32) {
+                return true;
+            }
+        }
+        let orig_order = *myleft < *myright;
+        let left_rem = (*myleft % step) as u32;
+        let right_rem = (*myright % step) as u32;
+        if left_rem > rem {
+            *myleft += rem as u64 + step - left_rem as u64;
+        } else {
+            *myleft += rem as u64 - left_rem as u64;
+        }
+        if right_rem > rem {
+            *myright += rem as u64 + step - right_rem as u64;
+        } else {
+            *myright += rem as u64 - right_rem as u64;
+        }
+        *myleft &= mask;
+        *myright &= mask;
+        let new_order = *myleft < *myright;
+        if orig_order != new_order { return true; }
+        false
+    }
+
+    // Ghidra: rangeutil.cc:143 CircleRange::newDomain
+    /// Truncate range to fit in a new domain mask. Returns true if empty.
+    pub fn new_domain(&mut self, new_mask: u64, new_step: u64, myleft: &mut u64, myright: &mut u64) -> bool {
+        let rem = if new_step != 1 { *myleft % new_step } else { 0 };
+        if *myleft > new_mask {
+            if *myright > new_mask { return true; }
+            *myleft = rem;
+        }
+        if *myright > new_mask + 1 {
+            *myright = (new_mask + 1) - ((new_mask + 1 - rem) % new_step);
+        }
+        self.mask = new_mask;
+        self.step = new_step;
+        false
+    }
+
+    // Ghidra: rangeutil.cc:219 CircleRange::setRange(lft,rgt,size,stp)
+    /// Set range from explicit boundaries, size, and step.
+    pub fn set_range(&mut self, lft: u64, rgt: u64, size: usize, stp: u64) {
+        self.mask = Self::calc_mask(size);
+        self.left = lft;
+        self.right = rgt;
+        self.step = stp;
+        self.isempty = false;
+    }
+
+    // Ghidra: rangeutil.cc:233 CircleRange::setRange(val,size)
+    /// Set range to a single value.
+    pub fn set_range_val(&mut self, val: u64, size: usize) {
+        self.mask = Self::calc_mask(size);
+        self.step = 1;
+        self.left = val;
+        self.right = (val + 1) & self.mask;
+        self.isempty = false;
+    }
+
     // Ghidra: rangeutil.cc:179 CircleRange::containsVal
     /// Check containment of a specific integer.
     pub fn contains_val(&self, val: u64) -> bool {

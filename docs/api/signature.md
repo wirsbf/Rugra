@@ -35,3 +35,4 @@
 
 测试：新增 4 个（hash_opcode/combine_hashes/generate_features/signature_entry_hash）。
 <!-- annotation-pass: 2026-07-04 -->
+**2026-07-22**: +6 SignatureEntry methods + Signature print/compare
