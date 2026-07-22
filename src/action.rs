@@ -46,6 +46,30 @@ pub mod break_flags {
     pub const TMPBREAK_ACTION: u32 = 8;
 }
 
+/// Rule property flags (action.hh:197-202). Stored in a `Rule`'s `flags` field
+/// (mirrored in [`RuleState::flags`] for Rugra's trait-based Rules).
+pub mod rule_flags {
+    /// Rule is disabled and will be skipped by its pool (action.hh:198).
+    pub const TYPE_DISABLE: u32 = 1;
+    /// Per-rule debug tracing (action.hh:199).
+    pub const RULE_DEBUG: u32 = 2;
+    /// A warning is issued when this rule applies (action.hh:200).
+    pub const WARNINGS_ON: u32 = 4;
+    /// A warning has already been issued for this rule (action.hh:201).
+    pub const WARNINGS_GIVEN: u32 = 8;
+}
+
+// RUGRA-GLUE: next_specifyterm helper mirrors Ghidra's static
+// `next_specifyterm(string&,string&,const string&)` (action.cc:257-269), used
+// by ActionGroup/ActionPool path-walking (`getSubAction`/`getSubRule`) to split
+// a ':' separated name path into the next token and the remaining suffix.
+fn next_specifyterm(specify: &str) -> (String, String) {
+    match specify.find(':') {
+        Some(idx) => (specify[..idx].to_string(), specify[idx + 1..].to_string()),
+        None => (specify.to_string(), String::new()),
+    }
+}
+
 /// Base trait for all analysis actions
 ///
 /// Corresponds to Ghidra's `Action` class. An action represents a high-level
@@ -80,15 +104,31 @@ pub trait Action {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// The perform state machine. Faithful to `Action::perform`
     /// (action.cc:298-362). Drives repeatapply / onceperfunc semantics by
-    /// looping apply() until no change (or once for onceperfunc).
+    /// looping apply() until no change (or once for onceperfunc), and honours
+    /// the start/action breakpoints set via [`Action::set_break_point`].
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
-        // Faithful to Action::perform (action.cc:298-362). `count` is cleared
-        // ONCE at the start (status_start case), and count_tests is incremented
-        // ONCE per perform() call — NOT once per loop iteration. The original
-        // Rugra code reset count=0 inside the loop, discarding the accumulated
-        // count from prior iterations and breaking repeatapply convergence.
-        state.count = 0;
-        state.count_tests += 1;
+        // Faithful to Action::perform (action.cc:298-362). The C switch uses
+        // fall-through; we model the same transitions explicitly. `count` is
+        // cleared ONCE at the start (status_start case), and count_tests is
+        // incremented ONCE per perform() call — NOT once per loop iteration.
+        // The original Rugra code reset count=0 inside the loop, discarding the
+        // accumulated count from prior iterations and breaking repeatapply
+        // convergence.
+        if state.status == status_flags::STATUS_START {
+            // action.cc:306 `count = 0`.
+            state.count = 0;
+            // action.cc:307-310 — start breakpoint: halt before doing any work.
+            // On the next perform() call status is BREAKSTARTHIT, so we fall
+            // through to the apply loop without re-checking (Ghidra does NOT
+            // re-check on resume).
+            if state.check_start_break() {
+                state.status = status_flags::STATUS_BREAKSTARTHIT;
+                return Ok(-1); // Partial completion (start breakpoint hit)
+            }
+            // action.cc:311 `count_tests += 1` — only counted when we actually
+            // begin work (past the start-break check).
+            state.count_tests += 1;
+        }
         // Faithful to Action::perform (action.cc:298-362): an UNBOUNDED
         // do-while that repeats only while this iteration made a change
         // (lcount < count) AND repeatapply is set. The previous Rugra code
@@ -110,8 +150,17 @@ pub trait Action {
             }
             // accumulate changes (Ghidra increments member count inside apply)
             state.count += res;
-            if res > 0 {
+            // action.cc:327-333 — if this iteration made a change, count it and
+            // honour an action breakpoint. `lcount < count` is Ghidra's change
+            // predicate (equivalent to `res > 0` here).
+            if state.lcount < state.count {
                 state.count_apply += 1;
+                if state.check_action_break() {
+                    // action.cc:331-333 — halt with actionbreak status; a
+                    // subsequent perform() resumes the repeatapply loop.
+                    state.status = status_flags::STATUS_ACTIONBREAK;
+                    return Ok(-1);
+                }
             }
             // Loop condition (action.cc:350): repeat only if THIS iteration
             // made a change (lcount < count) AND repeatapply is set.
@@ -133,6 +182,50 @@ pub trait Action {
         }
         Ok(state.count)
     }
+
+    // ---- Breakpoint & rule management (action.hh:103-107, action.cc:171-251) ----
+    //
+    // Rugra carries Ghidra's per-Action `breakpoint` field in the external
+    // [`ActionState`], so these methods take a `&mut ActionState` argument
+    // (where Ghidra mutates the in-object field directly). Leaf Actions use the
+    // default implementations; container Actions (ActionGroup / ActionPool /
+    // ActionRestartGroup) override to recurse by name path.
+
+    // Ghidra: action.cc:171 Action::setBreakPoint
+    /// Place a breakpoint of type `tp` on the Action/Rule named `specify`
+    /// (a ':' separated path, relative to `this`). Returns `true` if a target
+    /// matched. The base implementation only matches `this` Action's own name.
+    fn set_break_point(
+        &mut self,
+        state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        if self.get_name() == specify {
+            state.breakpoint |= tp;
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: action.hh:104 Action::clearBreakPoints (virtual, base form at action.cc:187)
+    /// Clear all breakpoints on `this` Action. Base form just zeros `state`'s
+    /// breakpoint field; containers recurse into their children first.
+    fn clear_break_points(&mut self, state: &mut ActionState) {
+        state.clear_break_points();
+    }
+
+    // Ghidra: action.cc:226 Action::disableRule
+    /// Disable the Rule named `specify` (a ':' separated path) within `this`
+    /// Action. Returns `true` if a matching Rule was found and disabled. Base
+    /// Action holds no Rules, so this returns `false` unless overridden by a
+    /// container (ActionGroup / ActionPool).
+    fn disable_rule(&mut self, _specify: &str) -> bool { false }
+
+    // Ghidra: action.cc:242 Action::enableRule
+    /// Enable the Rule named `specify` (a ':' separated path) within `this`
+    /// Action. Returns `true` if a matching Rule was found and re-enabled.
+    fn enable_rule(&mut self, _specify: &str) -> bool { false }
 }
 
 /// Per-Action execution state, mirroring Ghidra's Action member fields
@@ -146,6 +239,10 @@ pub struct ActionState {
     pub count_apply: u32,
     /// Rule flags for this Action (repeatapply / onceperfunc).
     pub flags: u32,
+    /// Breakpoint properties (action.hh:83 `uint4 breakpoint`). Set via
+    /// [`Action::set_break_point`] and consulted by [`Self::check_start_break`]
+    /// / [`Self::check_action_break`] inside the `perform()` state machine.
+    pub breakpoint: u32,
 }
 
 impl ActionState {
@@ -158,6 +255,7 @@ impl ActionState {
             count_tests: 0,
             count_apply: 0,
             flags,
+            breakpoint: 0,
         }
     }
 
@@ -165,6 +263,43 @@ impl ActionState {
     /// Resolve effective flags.
     pub fn get_flags_val(&self) -> u32 {
         self.flags
+    }
+
+    // Ghidra: action.cc:52 Action::checkStartBreak
+    /// Check if there was an active \e start breakpoint on this action.
+    /// Clears a temporary start breakpoint (`tmpbreak_start`) if present,
+    /// matching Ghidra's one-shot semantics. Returns `true` if the breakpoint
+    /// was active (caller should return -1 for partial completion).
+    pub fn check_start_break(&mut self) -> bool {
+        if (self.breakpoint & (break_flags::BREAK_START | break_flags::TMPBREAK_START)) != 0 {
+            // Ghidra: action.cc:56 `breakpoint &= ~(tmpbreak_start)` — clear
+            // the temporary breakpoint after it fires.
+            self.breakpoint &= !break_flags::TMPBREAK_START;
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: action.cc:117 Action::checkActionBreak
+    /// Check if there was an active \e action breakpoint on this action.
+    /// Clears a temporary action breakpoint (`tmpbreak_action`) if present.
+    /// Returns `true` if the breakpoint was active.
+    pub fn check_action_break(&mut self) -> bool {
+        if (self.breakpoint & (break_flags::BREAK_ACTION | break_flags::TMPBREAK_ACTION)) != 0 {
+            // Ghidra: action.cc:121 `breakpoint &= ~(tmpbreak_action)`.
+            self.breakpoint &= !break_flags::TMPBREAK_ACTION;
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: action.cc:187 Action::clearBreakPoints (base)
+    /// Clear all breakpoints set on this Action. Base Action form; container
+    /// Actions override to recurse into their children first.
+    pub fn clear_break_points(&mut self) {
+        self.breakpoint = 0;
     }
 }
 
@@ -187,6 +322,72 @@ pub trait Rule {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the opcodes this rule applies to
     fn get_opcodes(&self) -> Vec<crate::opcodes::OpCode>;
+}
+
+/// Per-Rule state mirroring Ghidra's `Rule` member fields (action.hh:205-210):
+/// `flags` (disable/warnings/debug) and `breakpoint`. Rugra Rules are stateless
+/// traits, so this state is owned by the containing [`ActionPool`] (one entry
+/// per Rule, parallel to `rules`), exactly mirroring how Ghidra's
+/// `Rule::flags`/`Rule::breakpoint` are in-object fields mutated by
+/// `Action::disableRule`/`Action::setBreakPoint` via `setDisable`/`setBreak`.
+#[derive(Debug, Clone)]
+pub struct RuleState {
+    /// Rule property flags ([`rule_flags`]). Tracks disabled/warnings/debug.
+    pub flags: u32,
+    /// Breakpoint toggles ([`break_flags`]) set on this Rule.
+    pub breakpoint: u32,
+}
+
+impl RuleState {
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    pub fn new() -> Self {
+        Self { flags: 0, breakpoint: 0 }
+    }
+
+    // Ghidra: action.hh:219 Rule::setBreak
+    /// Set a breakpoint on this Rule (`breakpoint |= tp`).
+    pub fn set_break(&mut self, tp: u32) { self.breakpoint |= tp; }
+
+    // Ghidra: action.hh:220 Rule::clearBreak
+    /// Clear a specific breakpoint on this Rule (`breakpoint &= ~tp`).
+    pub fn clear_break(&mut self, tp: u32) { self.breakpoint &= !tp; }
+
+    // Ghidra: action.hh:221 Rule::clearBreakPoints
+    /// Clear all breakpoints on this Rule (`breakpoint = 0`).
+    pub fn clear_break_points(&mut self) { self.breakpoint = 0; }
+
+    // Ghidra: action.hh:225 Rule::setDisable
+    /// Disable this Rule within its pool (`flags |= type_disable`).
+    pub fn set_disable(&mut self) { self.flags |= rule_flags::TYPE_DISABLE; }
+
+    // Ghidra: action.hh:226 Rule::clearDisable
+    /// Re-enable this Rule within its pool (`flags &= ~type_disable`).
+    pub fn clear_disable(&mut self) { self.flags &= !rule_flags::TYPE_DISABLE; }
+
+    // Ghidra: action.hh:224 Rule::isDisabled
+    /// Return `true` if this Rule is disabled.
+    pub fn is_disabled(&self) -> bool { (self.flags & rule_flags::TYPE_DISABLE) != 0 }
+
+    // Ghidra: action.hh:228 Rule::getBreakPoint
+    /// Return the breakpoint toggles.
+    pub fn get_breakpoint(&self) -> u32 { self.breakpoint }
+
+    // Ghidra: action.cc:719 Rule::checkActionBreak
+    /// Check if an action breakpoint is active on this Rule, clearing a
+    /// temporary action breakpoint (`tmpbreak_action`) if so. Returns `true`
+    /// if the breakpoint fired (caller halts).
+    pub fn check_action_break(&mut self) -> bool {
+        if (self.breakpoint & (break_flags::BREAK_ACTION | break_flags::TMPBREAK_ACTION)) != 0 {
+            self.breakpoint &= !break_flags::TMPBREAK_ACTION;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for RuleState {
+    fn default() -> Self { Self::new() }
 }
 
 /// A group of actions executed together
@@ -320,6 +521,94 @@ impl Action for ActionGroup {
             self.actions[i].reset(fd);
         }
     }
+
+    // ---- Breakpoint / rule-management overrides (action.cc:382-504, 171-251) ----
+    //
+    // These faithfully mirror Ghidra's ActionGroup overrides, which walk the
+    // child list and dispatch by name path (`':'` separated). Rugra passes the
+    // matching child's `&mut ActionState` (from `child_states`) into the child
+    // call, since state is external.
+
+    // Ghidra: action.cc:382 ActionGroup::clearBreakPoints
+    /// Recursively clear breakpoints on every child Action, then on `this`.
+    fn clear_break_points(&mut self, state: &mut ActionState) {
+        for i in 0..self.actions.len() {
+            self.actions[i].clear_break_points(&mut self.child_states[i]);
+        }
+        state.clear_break_points();
+    }
+
+    // Ghidra: action.cc:171 Action::setBreakPoint + action.cc:456 ActionGroup::getSubAction
+    //         + action.cc:481 ActionGroup::getSubRule
+    /// Set a breakpoint by walking the ':' separated name path. First tries to
+    /// match a sub-Action (via `getSubAction`-style descent); if no Action
+    /// matches, tries a sub-Rule. Faithful to Ghidra: the path is split at the
+    /// first ':'; if the leading token equals this group's name, the remainder
+    /// is matched against children, otherwise the whole `specify` is matched.
+    /// More than one match resolves to no match (ambiguous).
+    fn set_break_point(
+        &mut self,
+        state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        // Fast path: exact name match (leaf-style) — set on this group's state.
+        if self.name == specify {
+            state.breakpoint |= tp;
+            return true;
+        }
+        // Path descent (action.cc:456-479 getSubAction).
+        let (token, remain) = next_specifyterm(specify);
+        let effective = if self.name == token {
+            // Leading token matched this group: walk children with the suffix.
+            // If the suffix is empty, this is the group itself (handled above).
+            &remain[..]
+        } else {
+            // Leading token did not match: children must still match the whole
+            // `specify` (Ghidra: `remain = specify`).
+            specify
+        };
+        let mut matched = false;
+        for i in 0..self.actions.len() {
+            if self.actions[i].set_break_point(&mut self.child_states[i], tp, effective) {
+                // Ghidra returns immediately on the first match (getSubAction
+                // collects all matches and bails if >1, but setBreakPoint calls
+                // getSubAction which already collapses to one). We stop on the
+                // first hit to match the single-target semantics.
+                matched = true;
+                break;
+            }
+        }
+        matched
+    }
+
+    // Ghidra: action.cc:226 Action::disableRule + action.cc:481 ActionGroup::getSubRule
+    /// Disable a Rule by name path within `this` group. Walks children; the
+    /// first child whose `disable_rule` accepts the (possibly suffixed) name
+    /// wins. ActionPool children match against their Rule list.
+    fn disable_rule(&mut self, specify: &str) -> bool {
+        let (token, remain) = next_specifyterm(specify);
+        let effective = if self.name == token { &remain[..] } else { specify };
+        for a in &mut self.actions {
+            if a.disable_rule(effective) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // Ghidra: action.cc:242 Action::enableRule + action.cc:481 ActionGroup::getSubRule
+    /// Enable a Rule by name path within `this` group (mirror of disable_rule).
+    fn enable_rule(&mut self, specify: &str) -> bool {
+        let (token, remain) = next_specifyterm(specify);
+        let effective = if self.name == token { &remain[..] } else { specify };
+        for a in &mut self.actions {
+            if a.enable_rule(effective) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// A restartable action group — the top-level container for the universal
@@ -336,6 +625,11 @@ pub struct ActionRestartGroup {
     curstart: i32,
     /// State for this Action (used by parent perform — though this is root).
     flags: u32,
+    /// Breakpoint/state slot for the inner `group` (action.hh:83 `breakpoint`).
+    /// ActionRestartGroup delegates `set_break_point`/`clear_break_points` to
+    /// its inner ActionGroup via this state, matching Ghidra's inheritance
+    /// (ActionRestartGroup IS-A ActionGroup, so the breakpoint field is shared).
+    group_state: ActionState,
 }
 
 impl ActionRestartGroup {
@@ -348,6 +642,7 @@ impl ActionRestartGroup {
             maxrestarts,
             curstart: 0,
             flags,
+            group_state: ActionState::new(flags),
         }
     }
 
@@ -417,6 +712,48 @@ impl Action for ActionRestartGroup {
         self.curstart = 0;
         self.group.reset(fd);
     }
+
+    // ---- Breakpoint / rule-management delegates ----
+    //
+    // Ghidra's ActionRestartGroup inherits ActionGroup's implementations
+    // verbatim (it adds no overrides). Rugra wraps the ActionGroup, so we
+    // forward to it via `group_state`.
+
+    // Ghidra: inherited ActionGroup::clearBreakPoints (action.cc:382)
+    fn clear_break_points(&mut self, state: &mut ActionState) {
+        self.group.clear_break_points(&mut self.group_state);
+        state.clear_break_points();
+    }
+
+    // Ghidra: inherited ActionGroup's setBreakPoint path (action.cc:171 + 456)
+    fn set_break_point(
+        &mut self,
+        state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        // ActionRestartGroup's own name is `self.name`; the inner group shares
+        // that name, so try the inner group first, then fall back to this
+        // restart-group's own breakpoint slot.
+        if self.group.set_break_point(&mut self.group_state, tp, specify) {
+            return true;
+        }
+        if self.name == specify {
+            state.breakpoint |= tp;
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: inherited ActionGroup::disableRule (action.cc:226, walks children)
+    fn disable_rule(&mut self, specify: &str) -> bool {
+        self.group.disable_rule(specify)
+    }
+
+    // Ghidra: inherited ActionGroup::enableRule (action.cc:242, walks children)
+    fn enable_rule(&mut self, specify: &str) -> bool {
+        self.group.enable_rule(specify)
+    }
 }
 
 /// A pool of Rules applied to every matching P-code op.
@@ -428,6 +765,10 @@ impl Action for ActionRestartGroup {
 pub struct ActionPool {
     name: String,
     rules: Vec<Box<dyn Rule>>,
+    /// Per-Rule disable/breakpoint state (action.hh:205-210). Parallel to
+    /// `rules`; mirrors Ghidra's in-object `Rule::flags`/`Rule::breakpoint`,
+    /// mutated by `disable_rule`/`set_break_point`/`clear_break_points`.
+    rule_states: Vec<RuleState>,
     /// Opcode → indices into `rules`, built on add_rule for O(1) dispatch.
     per_op: std::collections::HashMap<crate::opcodes::OpCode, Vec<usize>>,
     /// Rule flags — RULE_REPEATAPPLY so perform() loops this pool.
@@ -443,6 +784,7 @@ impl ActionPool {
         Self {
             name: name.to_string(),
             rules: Vec::new(),
+            rule_states: Vec::new(),
             per_op: std::collections::HashMap::new(),
             flags: action_flags::RULE_REPEATAPPLY,
             rule_hits: std::collections::HashMap::new(),
@@ -457,17 +799,24 @@ impl ActionPool {
         let idx = self.rules.len();
         let opcodes = rule.get_opcodes();
         self.rules.push(rule);
+        self.rule_states.push(RuleState::new());
         for opc in opcodes {
             self.per_op.entry(opc).or_default().push(idx);
         }
     }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Borrow the per-Rule state slice (for diagnostics / external inspection).
+    pub fn rule_states(&self) -> &[RuleState] { &self.rule_states }
 }
 
 impl Action for ActionPool {
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Single-pass Rule application. Faithful to `ActionPool::apply`
     /// (action.cc:878-889) + `processOp` (action.cc:823-876). The parent
-    /// `perform()` repeats this until no change (via rule_repeatapply).
+    /// `perform()` repeats this until no change (via rule_repeatapply). Honours
+    /// per-Rule disable flags (action.cc:839) and per-Rule action breakpoints
+    /// (action.cc:852): a fired breakpoint returns -1 (partial completion).
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let want_stats = std::env::var("RUGRA_RULE_STATS")
             .map(|v| v == "1")
@@ -491,6 +840,9 @@ impl Action for ActionPool {
                 if rule_idxs.is_empty() { break; }
                 let mut applied_any = false;
                 for ridx in rule_idxs {
+                    // action.cc:839 `if (rl->isDisabled()) continue;` — skip
+                    // Rules disabled via `disable_rule`/`Action::disableRule`.
+                    if self.rule_states[ridx].is_disabled() { continue; }
                     // Re-check dead after each rule.
                     if op_ref.0.read().unwrap().is_dead() { break; }
                     let res = self.rules[ridx].apply_op(&op_ref.0, fd)?;
@@ -499,6 +851,12 @@ impl Action for ActionPool {
                         applied_any = true;
                         if want_stats {
                             *self.rule_hits.entry(ridx).or_insert(0) += res;
+                        }
+                        // action.cc:852 `if (rl->checkActionBreak()) return -1;`
+                        // — a Rule-level action breakpoint halts this pass.
+                        if self.rule_states[ridx].check_action_break() {
+                            self.total += pass_changes;
+                            return Ok(-1);
                         }
                     }
                 }
@@ -531,6 +889,96 @@ impl Action for ActionPool {
     fn reset(&mut self, _fd: &mut Funcdata) {
         self.total = 0;
         self.rule_hits.clear();
+    }
+
+    // ---- Breakpoint / rule-management overrides (action.cc:790-813, 891-898) ----
+
+    // Ghidra: action.cc:891 ActionPool::clearBreakPoints
+    /// Clear breakpoints on every Rule, then on this pool's own state.
+    fn clear_break_points(&mut self, state: &mut ActionState) {
+        for rs in &mut self.rule_states {
+            rs.clear_break_points();
+        }
+        state.clear_break_points();
+    }
+
+    // Ghidra: action.cc:171 Action::setBreakPoint + action.cc:790 ActionPool::getSubRule
+    /// Set a breakpoint. If `specify` matches this pool's name it is applied to
+    /// the pool's own state; otherwise the name (or ':' path suffix) is matched
+    /// against the Rule list. More than one Rule matching resolves to no match
+    /// (ambiguous), faithful to Ghidra's getSubRule matchcount guard.
+    fn set_break_point(
+        &mut self,
+        state: &mut ActionState,
+        tp: u32,
+        specify: &str,
+    ) -> bool {
+        if self.name == specify {
+            state.breakpoint |= tp;
+            return true;
+        }
+        // action.cc:790-813 getSubRule: split path; if leading token is this
+        // pool's name, match the remainder against Rule names.
+        let (token, remain) = next_specifyterm(specify);
+        let target = if self.name == token { &remain[..] } else { specify };
+        let mut match_idx: Option<usize> = None;
+        let mut matchcount = 0;
+        for (i, r) in self.rules.iter().enumerate() {
+            if r.get_name() == target {
+                match_idx = Some(i);
+                matchcount += 1;
+                if matchcount > 1 {
+                    return false; // Ambiguous — Ghidra returns NULL.
+                }
+            }
+        }
+        if let Some(i) = match_idx {
+            self.rule_states[i].set_break(tp);
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: action.cc:226 Action::disableRule (dispatches to getSubRule → setDisable)
+    /// Disable the Rule named `specify` within this pool. Name-path aware.
+    fn disable_rule(&mut self, specify: &str) -> bool {
+        let (token, remain) = next_specifyterm(specify);
+        let target = if self.name == token { &remain[..] } else { specify };
+        let mut match_idx: Option<usize> = None;
+        let mut matchcount = 0;
+        for (i, r) in self.rules.iter().enumerate() {
+            if r.get_name() == target {
+                match_idx = Some(i);
+                matchcount += 1;
+                if matchcount > 1 { return false; }
+            }
+        }
+        if let Some(i) = match_idx {
+            self.rule_states[i].set_disable();
+            return true;
+        }
+        false
+    }
+
+    // Ghidra: action.cc:242 Action::enableRule (dispatches to getSubRule → clearDisable)
+    /// Enable the Rule named `specify` within this pool. Name-path aware.
+    fn enable_rule(&mut self, specify: &str) -> bool {
+        let (token, remain) = next_specifyterm(specify);
+        let target = if self.name == token { &remain[..] } else { specify };
+        let mut match_idx: Option<usize> = None;
+        let mut matchcount = 0;
+        for (i, r) in self.rules.iter().enumerate() {
+            if r.get_name() == target {
+                match_idx = Some(i);
+                matchcount += 1;
+                if matchcount > 1 { return false; }
+            }
+        }
+        if let Some(i) = match_idx {
+            self.rule_states[i].clear_disable();
+            return true;
+        }
+        false
     }
 }
 
@@ -747,6 +1195,14 @@ pub fn build_cleanup_pool() -> ActionPool {
 pub struct ActionDatabase {
     all_actions: Vec<Box<dyn Action>>,
     current_group: Option<String>,
+    /// Map from \e root Action name to the set of group names it includes
+    /// (action.hh:301 `map<string,ActionGroupList> groupmap`). Populated by
+    /// [`Self::set_group`] / `set_default_groups`, consulted by future
+    /// `deriveAction`/`toggleAction` clones.
+    groupmap: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// `true` while only the built-in default groups are configured
+    /// (action.hh:303 `bool isDefaultGroups`).
+    is_default_groups: bool,
 }
 // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
 /// Build the oppool2 `ActionPool` mirroring Ghidra's `actprop2`
@@ -769,6 +1225,8 @@ impl ActionDatabase {
         Self {
             all_actions: Vec::new(),
             current_group: None,
+            groupmap: std::collections::HashMap::new(),
+            is_default_groups: false,
         }
     }
 
@@ -993,6 +1451,123 @@ impl ActionDatabase {
 
         self.register_action(Box::new(universal));
     }
+
+    // ---- Runtime group configuration (action.hh:312-322, action.cc:1007-1097) ----
+    //
+    // These mirror Ghidra's ActionDatabase group-management API, which backs
+    // the decompiler command-line options `-trigger`/`-actionpath`. Rugra's
+    // `set_default_actions` builds the universal tree directly (no clone), so
+    // these methods currently manage the grouplist metadata that describes a
+    // root Action; full derive/clone support (action.cc:1078-1104) is left as a
+    // follow-up since Rugra's `Box<dyn Action>` is not `Clone`.
+
+    // Ghidra: action.hh:313 getCurrent / action.hh:314 getCurrentName
+    /// Get the current \e root Action (action.hh:313). Returns `None` until a
+    /// root is registered and selected.
+    pub fn get_current(&self) -> Option<&dyn Action> {
+        let name = self.current_group.as_ref()?;
+        self.get_action(name)
+    }
+
+    // Ghidra: action.hh:314 getCurrentName
+    /// Get the name of the current \e root Action (action.hh:314).
+    pub fn get_current_name(&self) -> Option<&str> {
+        self.current_group.as_deref()
+    }
+
+    // Ghidra: action.hh:316 setCurrent
+    /// Set the current \e root Action by name (action.hh:316). Returns a
+    /// reference to the newly-selected root if it is registered.
+    pub fn set_current(&mut self, actname: &str) -> Option<&dyn Action> {
+        if self.get_action(actname).is_some() {
+            self.current_group = Some(actname.to_string());
+            return self.get_action(actname);
+        }
+        None
+    }
+
+    // Ghidra: action.hh:315 getGroup
+    /// Get the grouplist (as a sorted set of basegroup names) for a named
+    /// \e root Action (action.hh:315). Returns `None` if `grp` is unknown.
+    pub fn get_group(&self, grp: &str) -> Option<&std::collections::BTreeSet<String>> {
+        self.groupmap.get(grp)
+    }
+
+    // Ghidra: action.hh:317 toggleAction
+    /// Add (`val=true`) or remove (`val=false`) a basegroup from a root
+    /// Action's grouplist (action.hh:317). Returns `true` if the membership
+    /// changed. Creates an empty grouplist for `grp` if absent.
+    pub fn toggle_action(&mut self, grp: &str, basegrp: &str, val: bool) -> bool {
+        self.is_default_groups = false;
+        let entry = self.groupmap.entry(grp.to_string()).or_default();
+        if val {
+            entry.insert(basegrp.to_string())
+        } else {
+            entry.remove(basegrp)
+        }
+    }
+
+    // Ghidra: action.cc:1060 ActionDatabase::setGroup
+    /// (Re)set the grouplist for a particular \e root Action (action.cc:1060).
+    /// `groups` replaces any existing membership for `grp`. This is the core of
+    /// Ghidra's command-line `-trigger`/`-actionpath` options: the caller
+    /// supplies the set of basegroups that should participate in the named
+    /// root Action. Does not redefine an already-instantiated root.
+    ///
+    /// NOTE: Ghidra takes a NULL-terminated `const char **argv`; Rugra takes an
+    /// iterator of `&str`, which is the idiomatic equivalent.
+    pub fn set_group<'a, I>(&mut self, grp: &str, groups: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let entry = self.groupmap.entry(grp.to_string()).or_default();
+        entry.clear();
+        for g in groups {
+            entry.insert(g.to_string());
+        }
+        self.is_default_groups = false;
+    }
+
+    // Ghidra: action.cc:1078 ActionDatabase::cloneGroup
+    /// Copy an existing \e root Action's grouplist under a new name
+    /// (action.cc:1078). Returns `true` if `oldname` existed and was copied.
+    pub fn clone_group(&mut self, oldname: &str, newname: &str) -> bool {
+        if let Some(src) = self.groupmap.get(oldname).cloned() {
+            self.groupmap.insert(newname.to_string(), src);
+            self.is_default_groups = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    // Ghidra: action.cc:1091 ActionDatabase::addToGroup
+    /// Add a basegroup to a root Action's grouplist (action.cc:1091). Returns
+    /// `true` for a new addition, `false` if already present.
+    pub fn add_to_group(&mut self, grp: &str, basegroup: &str) -> bool {
+        self.is_default_groups = false;
+        self.groupmap
+            .entry(grp.to_string())
+            .or_default()
+            .insert(basegroup.to_string())
+    }
+
+    // Ghidra: action.cc:1104 ActionDatabase::removeFromGroup
+    /// Remove a basegroup from a root Action's grouplist (action.cc:1104).
+    /// Returns `true` if the group was present and removed.
+    pub fn remove_from_group(&mut self, grp: &str, basegroup: &str) -> bool {
+        self.is_default_groups = false;
+        self.groupmap
+            .get_mut(grp)
+            .map(|set| set.remove(basegroup))
+            .unwrap_or(false)
+    }
+
+    // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
+    /// Whether only the built-in default groups are configured (action.hh:303
+    /// `isDefaultGroups`). Returns `false` after any `set_group`/`toggle_action`
+    /// /`add_to_group`/`remove_from_group`/`clone_group` call.
+    pub fn is_default_groups(&self) -> bool { self.is_default_groups }
 }
 
 /// ActionTypePropagate: Conservative P-code struct pointer type propagation.
