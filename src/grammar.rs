@@ -483,6 +483,33 @@ fn parse_number(s: &str) -> u64 {
 // Type declaration AST (data structures)
 // ---------------------------------------------------------------------------
 
+// Ghidra: fspec.hh:377 struct PrototypePieces
+/// Raw components of a function prototype obtained from parsing source code.
+/// Faithful to `struct PrototypePieces` (fspec.hh:377-384).
+///
+/// Rugra note: `fspec.rs` already declares a `PrototypePieces` for the model-
+/// rules / code-type pipeline (which is borrowed and carries no `model`/`name`/
+/// `innames`); the parser-facing variant here is owned and mirrors Ghidra's
+/// full struct, including the (optional) prototype-model name and parameter
+/// names. The `model` field stores the model *name* because Rugra has no
+/// in-tree `ProtoModel *` reachable from this module; the C++ stores a pointer
+/// resolved via `glb->getModel(model)`.
+#[derive(Debug, Clone, Default)]
+pub struct PrototypePieces {
+    /// `PrototypePieces::model` — model on which prototype is based (name).
+    pub model: Option<String>,
+    /// `PrototypePieces::name` — identifier (function name) of the prototype.
+    pub name: String,
+    /// `PrototypePieces::outtype` — return data-type.
+    pub out_type: Option<Arc<Datatype>>,
+    /// `PrototypePieces::intypes` — input parameter data-types in order.
+    pub in_types: Vec<Arc<Datatype>>,
+    /// `PrototypePieces::innames` — identifiers for input types.
+    pub in_names: Vec<String>,
+    /// `PrototypePieces::firstVarArgSlot` — first vararg position, or -1.
+    pub first_var_arg_slot: i32,
+}
+
 /// Type modifier kind. Faithful to `TypeModifier` enum (grammar.hh:120).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModifierKind {
@@ -674,6 +701,72 @@ impl TypeDeclarator {
     pub fn model_name(&self) -> &str {
         &self.model
     }
+
+    // Ghidra: grammar.cc:2506 TypeDeclarator::getModel
+    /// Resolve the declarator's prototype model name. Faithful to
+    /// `getModel(glb)`: returns `Some(model)` when a model name is present,
+    /// else `None` (Ghidra then falls back to `glb->defaultfp`). Rugra has no
+    /// in-tree `ProtoModel` resolver reachable from this module, so the name is
+    /// returned to the caller rather than a `ProtoModel *`.
+    pub fn get_model(&self) -> Option<&str> {
+        if self.model.is_empty() {
+            None
+        } else {
+            Some(&self.model)
+        }
+    }
+
+    // Ghidra: grammar.cc:2518 TypeDeclarator::getPrototype
+    /// Extract the prototype pieces from this declarator, applying the
+    /// function modifier. Faithful to `getPrototype`. Returns `false` (as
+    /// `None`) when the declarator's first modifier is not a function modifier.
+    /// Otherwise populates `pieces` with the model name (see `get_model`),
+    /// identifier, input types/names, first-vararg slot, and the constructed
+    /// output type.
+    pub fn get_prototype(
+        &self,
+        pieces: &mut PrototypePieces,
+        types: &mut crate::type_system::typefactory::TypeFactory,
+    ) -> bool {
+        let first = self.mods.first();
+        if !matches!(first, Some(TypeModifier::Function { .. })) {
+            return false;
+        }
+        // pieces.model = getModel(glb)
+        pieces.model = self.get_model().map(|s| s.to_string());
+        // pieces.name = ident
+        pieces.name = self.ident.clone();
+        // pieces.intypes.clear(); fmod->getInTypes(intypes, glb)
+        pieces.in_types.clear();
+        pieces.in_names.clear();
+        if let Some(TypeModifier::Function { params, dotdotdot }) = first {
+            collect_param_types(&mut pieces.in_types, params, types);
+            collect_param_names(&mut pieces.in_names, params);
+            // firstVarArgSlot = (dotdotdot) ? intypes.size() : -1
+            pieces.first_var_arg_slot = if *dotdotdot {
+                pieces.in_types.len() as i32
+            } else {
+                -1
+            };
+        }
+        // Construct the output type by applying every modifier EXCEPT the
+        // (first) function modifier, in reverse binding order. Faithful to the
+        // C++ loop that walks mods.end()-1 .. begin(). Ghidra's `basetype` is a
+        // (possibly null) `Datatype *`; Rugra carries it as an `Option`, so a
+        // missing base type (abstract declarator) leaves `out_type = None`,
+        // matching Ghidra passing a null pointer through to `modType`.
+        let mut outtype = self.basetype.clone();
+        if let Some(TypeModifier::Function { .. }) = first {
+            // The function modifier itself is skipped; apply the rest.
+            for mod_ in self.mods.iter().skip(1).rev() {
+                if let Some(base) = outtype {
+                    outtype = mod_type(mod_, base, self, types);
+                }
+            }
+        }
+        pieces.out_type = outtype;
+        true
+    }
 }
 
 // Ghidra: grammar.cc:2403 PointerModifier::modType
@@ -698,6 +791,38 @@ fn mod_type(
         TypeModifier::Function { params, dotdotdot } => {
             let _ = (decl, params, dotdotdot); // parameters consulted by full pipeline
             Some(types.get_type_code())
+        }
+    }
+}
+
+// Ghidra: grammar.cc:2434 FunctionModifier::getInTypes
+/// Collect each parameter's built type into `intypes`. Faithful to
+/// `FunctionModifier::getInTypes(vector<Datatype *> &, Architecture *)`:
+/// iterates the paramlist and pushes `decl->buildType(glb)`. Rugra's function
+/// modifier carries `params: Vec<Option<TypeDeclarator>>` (the `None` slot
+/// encodes the trailing varargs trailer), so `None` is skipped.
+pub fn collect_param_types(
+    intypes: &mut Vec<Arc<Datatype>>,
+    params: &[Option<TypeDeclarator>],
+    types: &mut crate::type_system::typefactory::TypeFactory,
+) {
+    for opt in params.iter() {
+        if let Some(decl) = opt {
+            if let Some(ct) = decl.build_type(types) {
+                intypes.push(ct);
+            }
+        }
+    }
+}
+
+// Ghidra: grammar.cc:2443 FunctionModifier::getInNames
+/// Collect each parameter's identifier into `innames`. Faithful to
+/// `FunctionModifier::getInNames(vector<string> &)`. The varargs trailer
+/// (`None`) is skipped.
+pub fn collect_param_names(innames: &mut Vec<String>, params: &[Option<TypeDeclarator>]) {
+    for opt in params.iter() {
+        if let Some(decl) = opt {
+            innames.push(decl.get_identifier().to_string());
         }
     }
 }
@@ -1033,6 +1158,205 @@ impl CParse {
         }
         let params: Vec<Option<TypeDeclarator>> = declist.into_iter().map(Some).collect();
         dec.mods.push(TypeModifier::Function { params, dotdotdot });
+    }
+
+    // Ghidra: grammar.cc:2779 CParse::newStruct
+    /// Build a new structure from a `struct ident { ... }` definition. Faithful
+    /// to `newStruct(const string &, vector<TypeDeclarator *> *)`. Creates a
+    /// stub `TypeStruct` (for recursion), validates each declarator, assigns
+    /// field offsets, and commits the fields to the `TypeFactory`.
+    ///
+    /// Returns `Some(res)` on success, or `None` after calling `set_error`.
+    /// Ghidra's `TypeFactory::destroyType(res)` on the failure paths (removing
+    /// the stub) is currently a no-op here: Rugra's `TypeFactory` exposes no
+    /// removal API and the grammar alignment rule restricts edits to this
+    /// module, so the stub is left in place on failure (a documented deviation;
+    /// the stub is incomplete and only consulted for forward references).
+    pub fn new_struct(
+        &mut self,
+        ident: &str,
+        declist: &[TypeDeclarator],
+        types: &mut crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        // Create stub (for recursion): glb->types->getTypeStruct(ident)
+        let _stub = types.create_struct(ident);
+        let mut sublist: Vec<crate::type_system::datatype::TypeField> = Vec::new();
+        for decl in declist.iter() {
+            if !decl.is_valid() {
+                self.set_error("Invalid structure declarator");
+                return None;
+            }
+            // TypeField(0, -1, name, type): offset -1 == "unassigned".
+            sublist.push(crate::type_system::datatype::TypeField {
+                name: decl.get_identifier().to_string(),
+                offset: usize::MAX,
+                type_ptr: decl.build_type(types)?,
+            });
+        }
+        // assignFieldOffsets + setFields; Ghidra catches LowlevelError.
+        match crate::type_system::datatype::TypeStruct::assign_field_offsets(&mut sublist) {
+            Ok(_) => {
+                if types.set_fields(ident, sublist).is_some() {
+                    // Re-read the now-complete struct.
+                    types.find_by_name(ident)
+                } else {
+                    self.set_error("Could not set struct fields");
+                    None
+                }
+            }
+            Err(msg) => {
+                self.set_error(msg);
+                None
+            }
+        }
+    }
+
+    // Ghidra: grammar.cc:2809 CParse::oldStruct
+    /// Reference an already-existing struct by name. Faithful to `oldStruct`.
+    /// Looks the name up in the `TypeFactory`; if absent or not a struct, sets
+    /// an error but still returns the (possibly `None`) lookup result to mirror
+    /// the C++ control flow.
+    pub fn old_struct(
+        &mut self,
+        ident: &str,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        let res = types.find_by_name(ident);
+        let bad = match &res {
+            None => true,
+            Some(dt) => dt.get_metatype() != crate::type_system::datatype::TypeMetatype::Struct,
+        };
+        if bad {
+            self.set_error("Identifier does not represent a struct as required");
+        }
+        res
+    }
+
+    // Ghidra: grammar.cc:2818 CParse::newUnion
+    /// Build a new union from a `union ident { ... }` definition. Faithful to
+    /// `newUnion(const string &, vector<TypeDeclarator *> *)`. Creates a stub
+    /// `TypeUnion`, validates each declarator, assigns field offsets (union
+    /// members all at offset 0), and commits the fields to the `TypeFactory`.
+    /// See `new_struct` for the documented `destroyType` deviation on failure.
+    pub fn new_union(
+        &mut self,
+        ident: &str,
+        declist: &[TypeDeclarator],
+        types: &mut crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        // Create stub: glb->types->getTypeUnion(ident)
+        let _stub = types.get_type_union(ident);
+        let mut sublist: Vec<crate::type_system::datatype::TypeField> = Vec::new();
+        for (_i, decl) in declist.iter().enumerate() {
+            if !decl.is_valid() {
+                self.set_error("Invalid union declarator");
+                return None;
+            }
+            // TypeField(i, 0, name, type): union fields share offset 0.
+            sublist.push(crate::type_system::datatype::TypeField {
+                name: decl.get_identifier().to_string(),
+                offset: 0,
+                type_ptr: decl.build_type(types)?,
+            });
+        }
+        match crate::type_system::datatype::TypeUnion::assign_field_offsets(
+            &mut sublist,
+            ident,
+        ) {
+            Ok(_) => {
+                if types.set_union_fields(ident, sublist).is_some() {
+                    types.find_by_name(ident)
+                } else {
+                    self.set_error("Could not set union fields");
+                    None
+                }
+            }
+            Err(msg) => {
+                self.set_error(&msg);
+                None
+            }
+        }
+    }
+
+    // Ghidra: grammar.cc:2848 CParse::oldUnion
+    /// Reference an already-existing union by name. Faithful to `oldUnion`.
+    pub fn old_union(
+        &mut self,
+        ident: &str,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        let res = types.find_by_name(ident);
+        let bad = match &res {
+            None => true,
+            Some(dt) => dt.get_metatype() != crate::type_system::datatype::TypeMetatype::Union,
+        };
+        if bad {
+            self.set_error("Identifier does not represent a union as required");
+        }
+        res
+    }
+
+    // Ghidra: grammar.cc:2881 CParse::newEnum
+    /// Build a new enumeration from an `enum ident { ... }` definition.
+    /// Faithful to `newEnum(const string &, vector<Enumerator *> *)`. Creates
+    /// a `TypeEnum` stub, runs `TypeEnum::assignValues` to fill in the
+    /// value→name map, and commits it via `set_enum_values`. See `new_struct`
+    /// for the documented `destroyType` deviation on failure.
+    pub fn new_enum(
+        &mut self,
+        ident: &str,
+        vecenum: &[Enumerator],
+        types: &mut crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        // Create stub: glb->types->getTypeEnum(ident)
+        let res = types.get_type_enum(ident);
+        // Determine the enum size to feed assignValues; the stub defaults to 4.
+        let size = res.get_size();
+        let mut namelist: Vec<String> = Vec::new();
+        let mut vallist: Vec<u64> = Vec::new();
+        let mut assignlist: Vec<bool> = Vec::new();
+        for enumer in vecenum.iter() {
+            namelist.push(enumer.enum_constant.clone());
+            vallist.push(enumer.value);
+            assignlist.push(enumer.constant_assigned);
+        }
+        match crate::type_system::datatype::TypeEnum::assign_values(
+            &namelist,
+            &vallist,
+            &assignlist,
+            size,
+        ) {
+            Ok(namemap) => {
+                if types.set_enum_values(ident, namemap).is_some() {
+                    types.find_by_name(ident)
+                } else {
+                    self.set_error("Could not set enum values");
+                    None
+                }
+            }
+            Err(msg) => {
+                self.set_error(&msg);
+                None
+            }
+        }
+    }
+
+    // Ghidra: grammar.cc:2907 CParse::oldEnum
+    /// Reference an already-existing enum by name. Faithful to `oldEnum`.
+    pub fn old_enum(
+        &mut self,
+        ident: &str,
+        types: &crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        let res = types.find_by_name(ident);
+        let bad = match &res {
+            None => true,
+            Some(dt) => !dt.is_enum_type(),
+        };
+        if bad {
+            self.set_error("Identifier does not represent an enum as required");
+        }
+        res
     }
 
     // Ghidra: grammar.cc:2857 CParse::newEnumerator(const string &)
@@ -1450,6 +1774,100 @@ pub fn parse_type(text: &str) -> Option<(String, String)> {
         String::new()
     };
     Some((type_name, var_name))
+}
+
+// Ghidra: grammar.cc:3131 parse_protopieces
+/// Parse a function prototype from C text, returning the recovered
+/// `PrototypePieces`. Faithful to `parse_protopieces(PrototypePieces &,
+/// istream &, Architecture *)`: drives a `CParse` with `DocType::Declaration`,
+/// takes the single result declarator, validates it, and calls
+/// `TypeDeclarator::getPrototype`.
+///
+/// Errors (parse failure, no/multiple declarations, invalid type, no prototype
+/// modifier) map to the C++ `throw ParseError(...)` paths and are returned as
+/// `Err(message)`.
+pub fn parse_protopieces(
+    text: &str,
+    types: &mut crate::type_system::typefactory::TypeFactory,
+) -> Result<PrototypePieces, String> {
+    let mut parser = CParse::new(4096);
+    if !parser.parse_stream(text, DocType::Declaration) {
+        return Err(parser.get_error().to_string());
+    }
+    let decls = match parser.take_result_declarations() {
+        Some(d) => d,
+        None => return Err("Did not parse a datatype".to_string()),
+    };
+    if decls.is_empty() {
+        return Err("Did not parse a datatype".to_string());
+    }
+    if decls.len() > 1 {
+        return Err("Parsed multiple declarations".to_string());
+    }
+    let decl = &decls[0];
+    if !decl.is_valid() {
+        return Err("Parsed type is invalid".to_string());
+    }
+    let mut pieces = PrototypePieces::default();
+    if !decl.get_prototype(&mut pieces, types) {
+        return Err("Did not parse a prototype".to_string());
+    }
+    Ok(pieces)
+}
+
+// Ghidra: grammar.cc:3151 parse_C
+/// Parse a C declaration straight into the data structures. Faithful to
+/// `parse_C(Architecture *, istream &)`: drives a `CParse` with
+/// `DocType::Declaration`, takes the single result declarator, and validates
+/// it. Ghidra then branches on the `extern` property: an `extern` declarator is
+/// treated as a prototype (its `PrototypePieces` are built via `getPrototype`
+/// and committed via the `TypeFactory`/`Funcproto` machinery); a non-extern
+/// declarator is treated as a type definition (its built type is committed via
+/// `TypeFactory::findReplace`).
+///
+/// Rugra wires only the parse + validation half (the `TypeFactory` here has no
+/// `FuncProto`/`findReplace` bridge reachable from this module); the returned
+/// `TypeDeclarator` carries the fully parsed structure for the caller to
+/// commit. The validation/error semantics match Ghidra exactly.
+pub fn parse_c(
+    text: &str,
+    types: &mut crate::type_system::typefactory::TypeFactory,
+) -> Result<TypeDeclarator, String> {
+    let mut parser = CParse::new(4096);
+    if !parser.parse_stream(text, DocType::Declaration) {
+        return Err(parser.get_error().to_string());
+    }
+    let decls = match parser.take_result_declarations() {
+        Some(d) => d,
+        None => return Err("Did not parse a datatype".to_string()),
+    };
+    if decls.is_empty() {
+        return Err("Did not parse a datatype".to_string());
+    }
+    if decls.len() > 1 {
+        return Err("Parsed multiple declarations".to_string());
+    }
+    let decl = decls.into_iter().next().unwrap();
+    if !decl.is_valid() {
+        return Err("Parsed type is invalid".to_string());
+    }
+    // Ghidra: if decl->hasProperty(f_extern) build & commit a prototype; else
+    // commit the built type. Rugra builds the prototype/type so the returned
+    // declarator carries resolved data for the caller to commit upstream.
+    if decl.has_property(CParse::F_EXTERN) {
+        let mut pieces = PrototypePieces::default();
+        if !decl.get_prototype(&mut pieces, types) {
+            return Err("Did not parse a prototype".to_string());
+        }
+        // The TypeCode for this prototype can be minted via
+        // `get_type_code_pieces` once Rugra's fspec PrototypePieces is bridged;
+        // for now the pieces are computed and discarded, matching the parse
+        // half of parse_C.
+    } else {
+        // Build the declared type so it is materialised in the factory.
+        let _ = decl.build_type(types);
+    }
+    Ok(decl)
 }
 
 // Ghidra: grammar.hh:116 TypeDeclarator::parseToSeparator
