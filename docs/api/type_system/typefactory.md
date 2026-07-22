@@ -64,3 +64,20 @@ Clear all non-core types
 ### 2026-07-01（续）：补全 14 个 TypeFactory 工厂方法
 get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set_enum_values、get_type_code、get_type_pointer_rel、get_typedef、resize_pointer、find_by_id/find_by_id_local、concretize/deconcretize、hash_size。+rel_pointers/typedefs 侧表字段。18 新测试。
 <!-- annotation-pass: 2026-07-04 -->
+
+**2026-07-22 (printc batch 2)**: +3 TypeFactory methods to support
+`PrintC::docTypeDefinitions` (printc.cc:2401) dependency-ordered type emission:
+
+- `dependent_order(&mut Vec<Arc<Datatype>>)` — type.cc:3563
+  `TypeFactory::dependentOrder`. Iterates the type tree (BTreeMap, sorted by
+  name = matches Ghidra's `tree` ordered set) and recursively orders each via
+  `order_recurse`. Output excludes nothing — callers filter core types.
+- `order_recurse(deporder, mark, ct)` — type.cc:3545
+  `TypeFactory::orderRecurse`. Visits typedef target first, then each
+  `getDepend(i)` for `i in 0..numDepend()`, then pushes `ct`. Cycle-break via
+  insert-second-check on a `HashSet<usize>` (Arc pointer identity, mirroring
+  Ghidra's DatatypeSet pointer-identity semantics).
+- `depends_of(ct)` — RUGRA-GLUE aggregator of Ghidra's per-variant
+  `Datatype::numDepend` + `Datatype::getDepend` virtual dispatch table
+  (type.hh:261 base; overrides 422 Pointer, 455 Array, 526 Struct, 555 Union,
+  629 Code). C++ uses virtual dispatch; Rust matches on the Datatype enum.

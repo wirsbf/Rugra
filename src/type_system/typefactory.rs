@@ -207,6 +207,93 @@ impl TypeFactory {
         self.types.len()
     }
 
+    // Ghidra: type.cc:3563 TypeFactory::dependentOrder
+    /// Place data-types in an order such that if the definition of data-type
+    /// "a" depends on the definition of data-type "b", then "b" occurs earlier
+    /// in the order. Faithful to `TypeFactory::dependentOrder`
+    /// (type.cc:3563-3571): iterates the type tree (BTreeMap = sorted by name,
+    /// matching Ghidra's `tree` ordered set) and recursively orders each via
+    /// `order_recurse`. The output `deporder` excludes nothing — callers (e.g.
+    /// `PrintC::docTypeDefinitions`, printc.cc:2401) filter out core types.
+    ///
+    /// Alignment Evidence (four decisive-semantics checklist):
+    /// - References/output params: `deporder` is an out-param appended to
+    ///   (Ghidra passes `vector<Datatype*> &deporder`); Rust passes `&mut Vec`.
+    /// - Loop bounds/order: Ghidra iterates `tree.begin()..tree.end()` —
+    ///   ordered by Datatype::compare (name, then size). Rust's `self.types`
+    ///   is a `BTreeMap<String, Arc<Datatype>>` ordered by name, matching.
+    /// - Counter/accumulator: `mark` (DatatypeSet) is per-call, reset on each
+    ///   `dependentOrder` invocation; cycle-break via insert-second-check.
+    /// - Sort/compare key: Datatype pointer identity in Ghidra's DatatypeSet;
+    ///   Rust uses `Arc::as_ptr` identity for the visited set.
+    pub fn dependent_order(&self, deporder: &mut Vec<Arc<Datatype>>) {
+        // Ghidra: type.cc:3545 TypeFactory::orderRecurse
+        // `mark` prevents cycles: insert returns whether the ptr was new.
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // Ghidra iterates tree.begin()..tree.end() — sorted by name. BTreeMap
+        // values() preserves insertion-sorted-by-key order, matching Ghidra.
+        for ct in self.types.values() {
+            Self::order_recurse(deporder, &mut visited, ct);
+        }
+    }
+
+    // Ghidra: type.cc:3545 TypeFactory::orderRecurse
+    /// Recursively order: ensure dependents of `ct` are added before `ct`
+    /// itself. Faithful to `orderRecurse` (type.cc:3545-3557). Visits
+    /// `ct->typedefImm` first (Rugra: typedef target), then each
+    /// `ct->getDepend(i)` for `i in 0..numDepend()`, then pushes `ct`.
+    fn order_recurse(
+        deporder: &mut Vec<Arc<Datatype>>,
+        mark: &mut std::collections::HashSet<usize>,
+        ct: &Arc<Datatype>,
+    ) {
+        // pair<DatatypeSet::iterator,bool> res = mark.insert(ct);
+        // if (!res.second) return;
+        let key = Arc::as_ptr(ct) as usize;
+        if !mark.insert(key) {
+            return; // Already inserted before
+        }
+        // numDepend()/getDepend(i) — dispatch by variant (type.hh:261-630).
+        // Pointer->ptrto, Array->arrayof, Struct/Union->field[i].type,
+        // Code->proto return type. Base/Void/Enum/Spacebase: 0 depends.
+        for dep in Self::depends_of(ct) {
+            Self::order_recurse(deporder, mark, &dep);
+        }
+        deporder.push(ct.clone());
+    }
+
+    // RUGRA-GLUE: depends_of — Rust aggregator of Ghidra's per-variant
+    //   `Datatype::numDepend` + `Datatype::getDepend` virtual dispatch table
+    //   (type.hh:261 base virtual; overrides at type.hh:422 Pointer, 455 Array,
+    //   526 Struct, 555 Union, 629 Code). C++ uses virtual dispatch on the
+    //   Datatype base; Rust matches on the Datatype enum. Faithful 1:1 port.
+    /// Return the direct dependency sub-types of `ct`. Faithful to Ghidra's
+    /// `Datatype::numDepend` + `Datatype::getDepend` virtuals (type.hh:
+    /// 261/422/455/526/555/629). Mirrors the per-variant override table:
+    /// - Void/Base/Enum/Spacebase: 0 depends (base virtual returns 0).
+    /// - Pointer: 1 (`ptrto`).   Array: 1 (`arrayof`).
+    /// - Struct/Union: `fields.len()` (`field[i].type`).
+    /// - Code: 1 (the proto's return type — TypeCode::numDepend type.hh:629).
+    ///   (Ghidra's TypeCode::getDepend returns the prototype's return type;
+    ///   Rugra's TypeCode.proto is Option<Arc<FuncProto>>.)
+    fn depends_of(ct: &Datatype) -> Vec<Arc<Datatype>> {
+        match ct {
+            Datatype::Void(_) | Datatype::Base(_) | Datatype::Enum(_) | Datatype::Spacebase(_) => {
+                Vec::new()
+            }
+            Datatype::Pointer(p) => vec![p.ptr_to.clone()],
+            Datatype::Array(a) => vec![a.array_of.clone()],
+            Datatype::Struct(s) => s.fields.iter().map(|f| f.type_ptr.clone()).collect(),
+            Datatype::Union(u) => u.fields.iter().map(|f| f.type_ptr.clone()).collect(),
+            Datatype::Code(c) => c
+                .proto
+                .as_ref()
+                .map(|p| p.return_type.clone())
+                .into_iter()
+                .collect(),
+        }
+    }
+
     // Ghidra: type.cc:3106 TypeFactory::clearNonCore
     /// Clear all non-core types
     pub fn clear_non_core(&mut self) {

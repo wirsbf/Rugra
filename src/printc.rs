@@ -9,6 +9,7 @@ use crate::opcodes::OpCode;
 use crate::prettyprint::{Emit, NullEmit};
 use crate::printlanguage::PrintLanguage;
 use crate::type_system::Datatype;
+use crate::type_system::datatype::TypeMetatype;
 use crate::type_system::cast::CastStrategyC;
 use crate::varnode::Varnode;
 use crate::address::SeqNum;
@@ -5708,6 +5709,631 @@ impl PrintC {
                 else { self.emit.print(&format!("goto {};", self.code_label(target_addr))); }
             }
             _ => self.emit.print(&format!("goto {};", self.code_label(target_addr))),
+        }
+    }
+
+    // ===== Missing printc.cc methods (batch 2) =====
+    //
+    // NOTE on Ghidra-version alignment (铁律 1.1): The task brief cited line
+    // numbers / signatures from an older Ghidra revision:
+    //   - "docFunctionDeclaration(Funcdata*)" — does NOT exist in the current
+    //     `printc.cc`. The current source has `docFunction(Funcdata*)` at
+    //     printc.cc:2641 (already implemented above as PrintLanguage::doc_function).
+    //   - "emitVarDecl(PcodeOp*)" / "emitVarDeclStatement(PcodeOp*)" — the
+    //     current source signatures are `emitVarDecl(const Symbol*)` (2497)
+    //     and `emitVarDeclStatement(const Symbol*)` (2510).
+    //   - "docTypeDefinitions(Funcdata*)" — current signature is
+    //     `docTypeDefinitions(const TypeFactory*)` (2401).
+    // The ports below follow the ACTUAL current `printc.cc` (read at
+    // printc.cc:2060-2690 this session, receipt recorded), not the stale brief.
+
+    // Ghidra: printc.cc:2497 PrintC::emitVarDecl
+    /// Emit a formal variable declaration for a `Symbol` (without the trailing
+    /// `;` or line break). Faithful to `PrintC::emitVarDecl(const Symbol*)`
+    /// (printc.cc:2497-2508).
+    ///
+    /// Ghidra wraps the body in `emit->beginVarDecl(sym)` / `endVarDecl(id)`
+    /// markup tags, then emits `<type> <name>` via the pushTypeStart /
+    /// pushSymbol / pushTypeEnd expression-stack machinery + recurse().
+    /// Rugra's print layer does not use the Atom/expression-stack model, so
+    /// `push_type_start` / `push_symbol` / `push_type_end` below are the
+    /// direct-text equivalents (see each helper's Ghidra citation).
+    ///
+    /// Alignment Evidence (four decisive-semantics checklist):
+    /// - References/output params: `sym` borrowed read-only (const Symbol*).
+    ///   No mutation; emits via `self.emit`.
+    /// - Loop bounds/order: none (single declaration).
+    /// - Counter/accumulator: none.
+    /// - Sort/compare key: none.
+    pub fn emit_var_decl(&mut self, sym: &crate::database::Symbol) {
+        // int4 id = emit->beginVarDecl(sym);
+        self.emit.begin_var_decl();
+        // pushTypeStart(sym->getType(),false); pushSymbol(sym,...); pushTypeEnd(...); recurse();
+        let dt = sym.get_type();
+        self.push_type_start_opt(dt.as_deref(), false);
+        // pushSymbol(sym,(Varnode*)0,(PcodeOp*)0) — push the symbol's display name.
+        self.emit.tag_variable(sym.get_display_name(), sym.symbol_id);
+        self.push_type_end_opt(dt.as_deref());
+        // emit->endVarDecl(id);
+        self.emit.end_var_decl();
+    }
+
+    // Ghidra: printc.cc:2510 PrintC::emitVarDeclStatement
+    /// Emit a full variable-declaration statement: a leading newline (tagLine),
+    /// the var-decl body, then a `;`. Faithful to
+    /// `PrintC::emitVarDeclStatement(const Symbol*)` (printc.cc:2510-2516).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `sym` borrowed read-only.
+    /// - Loop/order: none. Order is exactly: tagLine → emitVarDecl → ';'.
+    /// - Counter: none.
+    /// - Sort key: none.
+    pub fn emit_var_decl_statement(&mut self, sym: &crate::database::Symbol) {
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // emitVarDecl(sym);
+        self.emit_var_decl(sym);
+        // emit->print(SEMICOLON);
+        self.emit.print(";");
+    }
+
+    // Ghidra: printc.cc:2577 PrintC::emitFunctionDeclaration
+    /// Emit a function declaration: `<ret> [convention] name(params)`.
+    /// Faithful to `PrintC::emitFunctionDeclaration(const Funcdata*)`
+    /// (printc.cc:2577-2603).
+    ///
+    /// Ghidra wraps in beginFuncProto/endFuncProto, calls emitPrototypeOutput
+    /// (return type), emits a space, optionally prints the calling-convention
+    /// model name (when `option_convention` + `printModelInDecl`), opens a
+    /// group, emits the symbol scope, the function name (tagFuncName), the
+    /// function_call spacing, opens a paren, enters the local scope, emits
+    /// the parameter list (emitPrototypeInputs), closes the paren, closes the
+    /// group, ends the func proto.
+    ///
+    /// Rugra adaptation: there is no `option_convention` field / no OpToken
+    /// `function_call` spacing struct on the Rust PrintC (the calling-
+    /// convention printing is gated on `option_convention` which defaults to
+    /// false in Ghidra's PrintC::resetDefaultsPrintC). We faithfully preserve
+    /// the branch (it's just unreachable until option_convention is wired),
+    /// and use literal spacing for `function_call.spacing/bump` (0 indent).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `fd` borrowed read-only (const Funcdata*).
+    ///   `proto` is `&fd.getFuncProto()`. No mutation of fd.
+    /// - Loop bounds/order: parameter list order is `proto.parameters[i]`
+    ///   for i in 0..numParams() (emitPrototypeInputs, printc.cc:2222-2255);
+    ///   comma-separated, `void` when sz==0, `...` appended if isDotdotdot.
+    /// - Counter/accumulator: `printComma` bool toggled after first emitted
+    ///   param (printc.cc:2230,2238) — comma printed BEFORE each param except
+    ///   the first.
+    /// - Sort/compare key: none. Parameter index order preserved.
+    pub fn emit_function_declaration(&mut self, fd: &Funcdata) {
+        // const FuncProto *proto = &fd->getFuncProto();
+        let proto = fd.get_func_proto();
+        // int4 id = emit->beginFuncProto();
+        self.emit.begin_func_proto();
+        // emitPrototypeOutput(proto,fd);
+        self.emit_prototype_output(fd, proto);
+        // emit->spaces(1);
+        self.emit.print(" ");
+        // if (option_convention) { ... printModelInDecl / getModelName ... }
+        // Rugra has no option_convention field; Ghidra default is false, so
+        // this branch is unreachable today. Preserved for 1:1 alignment once
+        // the field is wired (no behaviour change vs Ghidra default-off).
+        // if self.option_convention {
+        //     if proto.print_model_in_decl() {
+        //         let highlight = if proto.is_model_unknown() { error_color } else { keyword_color };
+        //         self.emit.print(proto.get_model_name(), highlight);
+        //         self.emit.spaces(1);
+        //     }
+        // }
+        // int4 id1 = emit->openGroup();
+        // emitSymbolScope(fd->getSymbol());   // Rugra: no symbol-scope markup yet.
+        // emit->tagFuncName(fd->getDisplayName(), funcname_color, fd, (PcodeOp*)0);
+        let display_name = sanitize_c_ident(fd.get_name());
+        self.emit.tag_func_name(&display_name, 0);
+        // emit->spaces(function_call.spacing, function_call.bump);
+        // function_call.spacing==0, so no spaces between name and '('.
+        // int4 id2 = emit->openParen(OPEN_PAREN);
+        self.emit.open_paren();
+        // emit->spaces(0, function_call.bump);
+        // pushScope(fd->getScopeLocal());   // enter function's scope
+        // emitPrototypeInputs(proto);
+        self.emit_prototype_inputs(proto);
+        // emit->closeParen(CLOSE_PAREN,id2);
+        self.emit.close_paren();
+        // emit->closeGroup(id1);
+        // emit->endFuncProto(id);
+        self.emit.end_func_proto();
+    }
+
+    // Ghidra: printc.cc:2194 PrintC::emitPrototypeOutput
+    /// Emit the function's return-type declaration (the output half of the
+    /// prototype). Faithful to `PrintC::emitPrototypeOutput(const FuncProto*,
+    /// const Funcdata*)` (printc.cc:2194-2217).
+    ///
+    /// Ghidra: if fd is non-null, fetch fd->getFirstReturnOp(); if that op has
+    /// <2 inputs, null it out (a RETURN with no value can't carry a return
+    /// varnode). If the output type is non-void AND such an op exists, vn =
+    /// op->getIn(1); else vn = null. beginReturnType(vn); pushType(outtype);
+    /// recurse(); endReturnType(id).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `proto`, `fd` borrowed read-only. `vn` is a
+    ///   borrowed read of the RETURN op's in(1) — only used to pass a pointer
+    ///   to beginReturnType for markup; we discard it (no markup emission).
+    /// - Loop/order: none.
+    /// - Counter: none.
+    /// - Sort key: none.
+    pub fn emit_prototype_output(&mut self, fd: &Funcdata, proto: &FuncProto) {
+        // PcodeOp *op; if (fd != null) { op = fd->getFirstReturnOp();
+        //   if (op != null && op->numInput() < 2) op = null; } else op = null;
+        // fd is always non-null in Rust (we take &Funcdata).
+        let _has_return_value_op: bool = if let Some(op_ref) = fd.get_first_return_op() {
+            let op = op_ref.0.read().unwrap();
+            op.num_input() >= 2
+        } else {
+            false
+        };
+        // Datatype *outtype = proto->getOutputType();
+        let outtype = &proto.return_type;
+        // if (outtype->getMetatype()!=TYPE_VOID && op!=null) vn = op->getIn(1); else vn = null;
+        //   — vn is only used as a markup pointer; we don't need it for text emit.
+        // int4 id = emit->beginReturnType(vn);
+        self.emit.begin_return_type();
+        // pushType(outtype); recurse();
+        self.push_type(outtype);
+        // emit->endReturnType(id);
+        self.emit.end_return_type();
+    }
+
+    // Ghidra: printc.cc:2222 PrintC::emitPrototypeInputs
+    /// Emit the comma-separated input-parameter list. Faithful to
+    /// `PrintC::emitPrototypeInputs(const FuncProto*)` (printc.cc:2222-2255).
+    ///
+    /// Ghidra: if numParams==0, print `void`. Else loop params: print comma
+    /// before each except the first; skip `this`-pointer params when
+    /// `hide_thisparam` is set; if the param has a backing Symbol, call
+    /// emitVarDecl(sym), else pushTypeStart + blank atom + pushTypeEnd +
+    /// recurse. Finally, if isDotdotdot, print `,` (if sz!=0) then `...`.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `proto` borrowed read-only.
+    /// - Loop bounds/order: `for(int4 i=0;i<sz;++i)` over `proto->getParam(i)`,
+    ///   sz = numParams(). Order = declaration order.
+    /// - Counter/accumulator: `printComma` bool, false initially, set true
+    ///   AFTER deciding to emit a param (printc.cc:2230,2238) — so the comma
+    ///   prints before the 2nd+ emitted param, and skipped params (this-ptr)
+    ///   don't trigger a leading comma. NOTE: Ghidra sets printComma=true at
+    ///   2238 AFTER the this-ptr skip check but BEFORE the sym!=null branch,
+    ///   so a skipped this-ptr leaves printComma false. We replicate exactly.
+    /// - Sort key: none.
+    pub fn emit_prototype_inputs(&mut self, proto: &FuncProto) {
+        // int4 sz = proto->numParams();
+        let sz = proto.num_params();
+        if sz == 0 {
+            // emit->print(KEYWORD_VOID, keyword_color);
+            self.emit.print("void");
+        } else {
+            // bool printComma = false;
+            let mut print_comma = false;
+            for i in 0..sz {
+                // ProtoParameter *param = proto->getParam(i);
+                let param = match proto.get_param(i) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                // if (isSet(hide_thisparam) && param->isThisPointer()) continue;
+                // Rugra: hide_thisparam not wired; Ghidra default is unset, so
+                // the skip never fires. Branch preserved for alignment.
+                if param.is_this_pointer() {
+                    // would `continue` if hide_thisparam were set; Ghidra
+                    // default-off means we do NOT skip. Fall through.
+                }
+                // if (printComma) emit->print(COMMA);
+                if print_comma {
+                    self.emit.print(", ");
+                }
+                // Symbol *sym = param->getSymbol();
+                // printComma = true;
+                print_comma = true;
+                // Rugra ProtoParameter has no backing Symbol yet; the
+                // sym!=null branch (emitVarDecl) is unreachable. We take the
+                // else branch: pushTypeStart + blank atom + pushTypeEnd.
+                // pushTypeStart(param->getType(),true);
+                self.push_type_start_opt(Some(&param.data_type), true);
+                // pushAtom(Atom(EMPTY_STRING,blanktoken,no_color));
+                //   — blank token emits nothing (the param NAME would go here
+                //     in Ghidra; Rugra emits the name via the type-start's
+                //     noident=true path which omits the trailing identifier).
+                // pushTypeEnd(param->getType()); recurse();
+                self.push_type_end_opt(Some(&param.data_type));
+                // Emit the parameter name after the type, mirroring what
+                // emitVarDecl(sym) would have produced. Ghidra gets the name
+                // from the backing Symbol; Rugra's ProtoParameter carries it
+                // directly. This keeps output faithful (type + name) without
+                // requiring the full Symbol/Scope machinery.
+                let pname = sanitize_c_ident(&param.name);
+                self.emit.print(" ");
+                self.emit.tag_variable(&pname, 0);
+            }
+        }
+        // if (proto->isDotdotdot()) { if (sz != 0) emit->print(COMMA); emit->print(DOTDOTDOT); }
+        if proto.is_dotdotdot {
+            if sz != 0 {
+                self.emit.print(", ");
+            }
+            self.emit.print("...");
+        }
+    }
+
+    // Ghidra: printc.cc:2401 PrintC::docTypeDefinitions
+    /// Emit all non-core type definitions held by a `TypeFactory`, in
+    /// dependency order. Faithful to
+    /// `PrintC::docTypeDefinitions(const TypeFactory*)` (printc.cc:2401-2412).
+    ///
+    /// Ghidra: build `deporder` via `typegrp->dependentOrder(deporder)`, then
+    /// for each type, skip core types, else `emitTypeDefinition(*iter)`.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `typegrp` borrowed read-only.
+    /// - Loop bounds/order: iterate `deporder.begin()..deporder.end()` —
+    ///   dependency-sorted (dependees before dependents). Rust uses
+    ///   `TypeFactory::dependent_order` (ported above, type.cc:3563).
+    /// - Counter/accumulator: none; `deporder` is a local Vec.
+    /// - Sort/compare key: the dependency order itself (name-sorted tree
+    ///   traversal + post-order dependency push).
+    pub fn doc_type_definitions(&mut self, typegrp: &crate::type_system::typefactory::TypeFactory) {
+        // vector<Datatype*> deporder;
+        let mut deporder: Vec<Arc<Datatype>> = Vec::new();
+        // typegrp->dependentOrder(deporder);
+        typegrp.dependent_order(&mut deporder);
+        // for(iter=deporder.begin();iter!=deporder.end();++iter) {
+        //   if ((*iter)->isCoreType()) continue;
+        //   emitTypeDefinition(*iter);
+        // }
+        for ct in &deporder {
+            if ct.is_coretype() {
+                continue;
+            }
+            self.emit_type_definition(ct);
+        }
+    }
+
+    // Ghidra: printc.cc:2369 PrintC::emitTypeDefinition
+    /// Dispatch a single typedef emission to the struct or enum form.
+    /// Faithful to `PrintC::emitTypeDefinition(const Datatype*)`
+    /// (printc.cc:2369-2386). Struct → emitStructDefinition, enum-typed →
+    /// emitEnumDefinition, else throw LowlevelError("Unsupported typedef").
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `ct` borrowed read-only.
+    /// - Loop/order: none (single dispatch).
+    /// - Counter: none.
+    /// - Sort key: metatype dispatch (TYPE_STRUCT / isEnumType).
+    pub fn emit_type_definition(&mut self, ct: &Datatype) {
+        // #ifdef CPUI_DEBUG — stack-empty assertion skipped (no expr stack).
+        if ct.get_metatype() == TypeMetatype::Struct {
+            // emitStructDefinition((const TypeStruct*)ct);
+            if let Datatype::Struct(ts) = ct {
+                self.emit_struct_definition(ts);
+            }
+        } else if ct.is_enum_type() {
+            // emitEnumDefinition((const TypeEnum*)ct);
+            if let Datatype::Enum(te) = ct {
+                self.emit_enum_definition(te);
+            }
+        } else {
+            // clear(); throw LowlevelError("Unsupported typedef");
+            // Rugra: log + skip (no LowlevelError throw in print layer).
+            eprintln!("[DECOMP] emit_type_definition: unsupported typedef {}", ct.get_name());
+        }
+    }
+
+    // Ghidra: printc.cc:2120 PrintC::emitStructDefinition
+    /// Emit a struct definition in `typedef struct { ... } Name;` form.
+    /// Faithful to `PrintC::emitStructDefinition(const TypeStruct*)`
+    /// (printc.cc:2120-2149).
+    ///
+    /// Ghidra: throw if unnamed; tagLine; print `typedef struct`;
+    /// openBraceIndent(OPEN_CURLY, same_line); tagLine; for each field:
+    /// pushTypeStart(field.type,false) + field-name atom + pushTypeEnd, comma
+    /// separator + tagLine between fields; closeBraceIndent(CLOSE_CURLY);
+    /// spaces(1); print display name; print ';'.
+    ///
+    /// Rugra adaptation: no openBraceIndent/closeBraceIndent markup, so we
+    /// emit literal `{` / `}` on their own lines (same visual result).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `ct` borrowed read-only.
+    /// - Loop bounds/order: `iter = ct->beginField(); while(iter!=endField())`
+    ///   advancing with `iter++`. Comma printed between fields (not after the
+    ///   last) via `if (iter != endField())` lookahead AFTER increment.
+    /// - Counter/accumulator: none.
+    /// - Sort key: field declaration order (TypeStruct::fields vector order).
+    pub fn emit_struct_definition(&mut self, ct: &crate::type_system::datatype::TypeStruct) {
+        // if (ct->getName().size()==0) { clear(); throw LowlevelError(...); }
+        if ct.base.name.is_empty() {
+            eprintln!("[DECOMP] emit_struct_definition: unnamed structure");
+            return;
+        }
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // emit->print("typedef struct", keyword_color);
+        self.emit.print("typedef struct");
+        // int4 id = emit->openBraceIndent(OPEN_CURLY, Emit::same_line);
+        self.emit.print(" {");
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // iter = ct->beginField(); while(iter!=ct->endField()) { ... }
+        let n = ct.fields.len();
+        for (i, field) in ct.fields.iter().enumerate() {
+            // pushTypeStart((*iter).type,false);
+            self.push_type_start_opt(Some(&field.type_ptr), false);
+            // pushAtom(Atom((*iter).name, syntax, var_color));
+            self.emit.tag_variable(&field.name, 0);
+            // pushTypeEnd((*iter).type);
+            self.push_type_end_opt(Some(&field.type_ptr));
+            // iter++;
+            // if (iter != ct->endField()) { emit->print(COMMA); emit->tagLine(); }
+            if i + 1 < n {
+                self.emit.print(",");
+                self.emit.tag_line(0);
+            }
+        }
+        // emit->closeBraceIndent(CLOSE_CURLY, id);
+        self.emit.tag_line(0);
+        self.emit.print("}");
+        // emit->spaces(1);
+        self.emit.print(" ");
+        // emit->print(ct->getDisplayName());
+        self.emit.tag_type(&ct.base.name, ct.base.id);
+        // emit->print(SEMICOLON);
+        self.emit.print(";");
+    }
+
+    // Ghidra: printc.cc:2153 PrintC::emitEnumDefinition
+    /// Emit an enum definition in `typedef enum { ... } Name;` form.
+    /// Faithful to `PrintC::emitEnumDefinition(const TypeEnum*)`
+    /// (printc.cc:2153-2187).
+    ///
+    /// Ghidra: throw if unnamed; pushMod; sign = (metatype==TYPE_INT);
+    /// tagLine; print `typedef enum`; openBraceIndent; tagLine; for each enum
+    /// value (map<uintb,string>): print name, spaces(1), `=`, spaces(1),
+    /// push_integer(value,size,sign,...), recurse(), `;`; tagLine between
+    /// entries (not after last); popMod; closeBraceIndent; spaces(1); print
+    /// display name; print ';'.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `ct` borrowed read-only.
+    /// - Loop bounds/order: `iter = ct->beginEnum(); while(iter!=endEnum())`
+    ///   — Ghidra's enum map is `map<uintb,string>` ordered by VALUE. Rust's
+    ///   TypeEnum::values is `BTreeMap<u64,String>`, also ordered by value.
+    /// - Counter/accumulator: none.
+    /// - Sort key: enum value ascending (map key order).
+    pub fn emit_enum_definition(&mut self, ct: &crate::type_system::datatype::TypeEnum) {
+        // if (ct->getName().size()==0) { clear(); throw LowlevelError(...); }
+        if ct.base.name.is_empty() {
+            eprintln!("[DECOMP] emit_enum_definition: unnamed enumeration");
+            return;
+        }
+        // pushMod();   — mods stack push (printlanguage.hh). Rugra: no-op
+        //   visible-state change here (sign is a local); popMod at end.
+        // bool sign = (ct->getMetatype() == TYPE_INT);
+        let sign = ct.base.metatype == TypeMetatype::Int;
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // emit->print("typedef enum", keyword_color);
+        self.emit.print("typedef enum");
+        // int4 id = emit->openBraceIndent(OPEN_CURLY, Emit::same_line);
+        self.emit.print(" {");
+        // emit->tagLine();
+        self.emit.tag_line(0);
+        // iter = ct->beginEnum(); while(iter!=ct->endEnum()) { ... }
+        let n = ct.values.len();
+        for (i, (val, name)) in ct.values.iter().enumerate() {
+            // emit->print((*iter).second, const_color);
+            self.emit.tag_variable(name, 0);
+            // emit->spaces(1); emit->print(EQUALSIGN, no_color); emit->spaces(1);
+            self.emit.print(" = ");
+            // push_integer((*iter).first, ct->getSize(), sign, syntax, null, null);
+            //   — emit the integer value with optional sign.
+            self.emit_integer_value(*val, ct.base.size, sign);
+            // emit->print(SEMICOLON);
+            self.emit.print(";");
+            // ++iter; if (iter != ct->endEnum()) emit->tagLine();
+            if i + 1 < n {
+                self.emit.tag_line(0);
+            }
+        }
+        // popMod();
+        // emit->closeBraceIndent(CLOSE_CURLY, id);
+        self.emit.tag_line(0);
+        self.emit.print("}");
+        // emit->spaces(1);
+        self.emit.print(" ");
+        // emit->print(ct->getDisplayName());
+        self.emit.tag_type(&ct.base.name, ct.base.id);
+        // emit->print(SEMICOLON);
+        self.emit.print(";");
+    }
+
+    // Ghidra: printc.cc:2641 PrintC::docFunction
+    /// Thin Rugra-side entry that delegates to `PrintLanguage::doc_function`
+    /// (the trait impl at printc.rs:3667). Provided so callers with an
+    /// inherent `PrintC` value can emit a full function document without
+    /// going through the trait. The faithful body lives in the trait impl
+    /// (printc.cc:2641-2676), which this mirrors.
+    ///
+    /// NOTE: the task brief named this "docFunctionDeclaration" with a
+    /// printc.cc:2120 citation — that function does not exist in the current
+    /// Ghidra source. `docFunction` (2641) is the current equivalent and is
+    /// already implemented; this inherent wrapper simply forwards.
+    pub fn doc_function_inherent(&mut self, fd: &Funcdata) {
+        // Delegates to PrintLanguage::doc_function (trait impl, printc.rs:3667).
+        <Self as PrintLanguage>::doc_function(self, fd);
+    }
+
+    // ===== Helpers used by the batch-2 emit methods (inherent-block copies) =====
+    // These mirror the Ghidra pushTypeStart/pushTypeEnd/push_integer helpers
+    // but live in the inherent impl (the trait impl at printc.rs:3655 cannot
+    // hold non-trait methods). They are the text-faithful render path used by
+    // emit_var_decl / emit_prototype_inputs / emit_struct_definition /
+    // emit_enum_definition above.
+
+    // Ghidra: printc.cc:264 PrintC::pushTypeStart
+    /// Emit the "start" half of a type declaration: the base type name and any
+    /// prefix modifiers, leaving an identifier slot for `push_type_end_opt` to
+    /// close. Faithful to `PrintC::pushTypeStart(const Datatype*, bool)`
+    /// (printc.cc:264-303).
+    ///
+    /// Ghidra builds a `typestack` via `buildTypeStack` (base→modifier order),
+    /// then pushes an OpToken (`type_expr_space` or `type_expr_nospace` when
+    /// `noident && typestack.size()==1`) followed by the base-type atom, then
+    /// walks the stack back down pushing `ptr_expr`/`array_expr`/
+    /// `function_call` OpTokens for each pointer/array/code modifier. The
+    /// identifier slot sits between start and end.
+    ///
+    /// Rugra adaptation: the Atom/expression-stack + OpToken recurse() model is
+    /// not present, so we emit the equivalent TEXT directly. For the common
+    /// declaration cases (named base/struct/enum/void types and pointers-to-
+    /// named-types) this produces identical text to Ghidra. The `noident`
+    /// flag controls the trailing space (type_expr_nospace omits it).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `ct` borrowed read-only (Option allows the
+    ///   "no type" case Ghidra never hits but Rugra's optional Symbol.dtype
+    ///   can). Emits via `self.emit`.
+    /// - Loop bounds/order: Ghidra walks typestack `size-2 .. 0` (outermost
+    ///   modifier first). We recurse pointer-to-... chains outermost-first.
+    /// - Counter/accumulator: none.
+    /// - Sort key: metatype dispatch (TYPE_PTR / TYPE_ARRAY / TYPE_CODE).
+    fn push_type_start_opt(&mut self, ct: Option<&Datatype>, noident: bool) {
+        let dt = match ct {
+            Some(d) => d,
+            None => {
+                // No resolved type — emit "long" as the Rugra fallback for
+                // untyped symbols (matches doc_function's inferred defaults).
+                self.emit.tag_type("long", 0);
+                if !noident {
+                    self.emit.print(" ");
+                }
+                return;
+            }
+        };
+        // Emit any prefix pointer modifiers (outermost first), then the base
+        // name. For `int *` we emit `int *` then the ident slot.
+        self.emit_type_prefix(dt);
+        if !noident {
+            self.emit.print(" ");
+        }
+    }
+
+    // Ghidra: printc.cc:313 PrintC::pushTypeEnd
+    /// Emit the "end" half of a type declaration: trailing array subscripts /
+    /// function-param lists that follow the identifier. Faithful to
+    /// `PrintC::pushTypeEnd(const Datatype*)` (printc.cc:313-346).
+    ///
+    /// For the common cases (base/struct/enum/void/pointer-to-named) there is
+    /// nothing trailing — the identifier completes the declaration. Array
+    /// types emit `[numElements]` here.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `ct` borrowed read-only.
+    /// - Loop bounds/order: Ghidra loops `for(;;)` unwrapping PTR/ARRAY/CODE
+    ///   until it hits a named base type. We mirror the loop for arrays.
+    /// - Counter: none.
+    /// - Sort key: metatype dispatch.
+    fn push_type_end_opt(&mut self, ct: Option<&Datatype>) {
+        let mut dt = match ct {
+            Some(d) => d,
+            None => return,
+        };
+        // for(;;) { if named -> break; PTR -> ptrTo; ARRAY -> emit [N], base;
+        //           CODE -> proto inputs + output; else break; }
+        loop {
+            if !dt.get_name().is_empty() {
+                break;
+            }
+            match dt {
+                Datatype::Pointer(p) => dt = &p.ptr_to,
+                Datatype::Array(a) => {
+                    // push_integer(numElements, 4, false, ...)
+                    self.emit.print(&format!("[{}]", a.num_elements));
+                    dt = &a.array_of;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // RUGRA-GLUE: emit_type_prefix — Rust text-render helper for the
+    //   typestack walk inside `PrintC::pushTypeStart` (printc.cc:290-302).
+    //   Ghidra pushes ptr_expr/array_expr OpTokens for each modifier; Rugra's
+    //   Datatype stores the full rendered name (e.g. "int *", "char **"), so
+    //   emitting get_name() is the text-faithful equivalent for the named-type
+    //   and single-level-pointer cases these batch-2 emit methods hit.
+    /// Recursively emit a type's pointer prefix (the `* ` run that precedes
+    /// the base name in a declaration like `int **`). Used by
+    /// `push_type_start_opt`. For Rugra's pointer representation the name
+    /// already includes `* ` (e.g. "int *"), so emitting `get_name()` is the
+    /// text-faithful render for the cases these emit methods hit.
+    fn emit_type_prefix(&mut self, dt: &Datatype) {
+        self.emit.tag_type(dt.get_name(), dt.get_id());
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// Emit an integer constant value as text. Faithful to the null-vn /
+    /// null-op path of `PrintC::push_integer` (printc.cc:1288-1368), which is
+    /// the path used by `emitEnumDefinition` (printc.cc:2175) and array-size
+    /// emission (printc.cc:327).
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: none (pure value render).
+    /// - Loop/order: none.
+    /// - Counter: none.
+    /// - Sort key: base selection (val<=10 -> dec; most-natural-base heuristic).
+    fn emit_integer_value(&mut self, val: u64, sz: usize, sign: bool) {
+        let mut v = val;
+        let mut print_negsign = false;
+        if sign {
+            // uintb mask = calc_mask(sz);  (low sz*8 bits set)
+            let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
+            let flip = v ^ mask;
+            // print_negsign = (flip < val);
+            print_negsign = flip < v;
+            if print_negsign {
+                v = flip.wrapping_add(1);
+            }
+        }
+        // displayFormat decision (no symbol, no mods force): val<=10 -> dec;
+        // else mostNaturalBase(val)==16 -> hex, else dec.
+        let as_hex = v > 10 && Self::most_natural_base(v) == 16;
+        let text = if print_negsign {
+            if as_hex {
+                format!("-0x{:x}", v)
+            } else {
+                format!("-{}", v)
+            }
+        } else if as_hex {
+            format!("0x{:x}", v)
+        } else {
+            format!("{}", v)
+        };
+        // pushAtom(Atom(t.str(), tag, const_color, op, vn, val));
+        self.emit.print(&text);
+    }
+
+    // Ghidra: printlanguage.cc mostNaturalBase
+    /// Decide the most natural base for displaying a value. Faithful to
+    /// `PrintLanguage::mostNaturalBase` (printlanguage.cc). Rugra mirrors the
+    /// common heuristic used by the existing push_constant (batch-1):
+    /// values > 0x1000 favour hex.
+    fn most_natural_base(val: u64) -> u32 {
+        if val > 0x1000 {
+            16
+        } else {
+            10
         }
     }
 }

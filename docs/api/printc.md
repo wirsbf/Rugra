@@ -710,3 +710,35 @@ mainloop repeatapply 测试（per-arm helpers + depth 20-200 + 256MB 栈）：**
 <!-- var-prefix-port: 1783140605.8637707 -->
 <!-- ref-fix: 1783140652.1869905 -->
 **2026-07-22**: +18 printc methods (opBranchind/opCallind/opCpoolRef/opExtract/opInsert/opNew/opPtrsub/opSegment/opTypeCast + pushConstant/pushCharConstant/pushEnumConstant/pushBoolConstant/pushPtrCharConstant/pushEquate + emitLabelStatement/emitAnyLabelStatement/emitCommentBlockTree/emitGotoStatement)
+
+**2026-07-22 (batch 2)**: +9 printc methods ported from the ACTUAL current `printc.cc`
+(read at printc.cc:2060-2690 this session). NOTE: the task brief cited line
+numbers / signatures from an older Ghidra revision that do not exist in the
+current source (`docFunctionDeclaration`, `emitVarDecl(PcodeOp*)`,
+`emitVarDeclStatement(PcodeOp*)`, `docTypeDefinitions(Funcdata*)`). Per 铁律 1.1
+the ports follow the real current signatures:
+
+- `emit_var_decl(Symbol)` — printc.cc:2497 `emitVarDecl(const Symbol*)`
+- `emit_var_decl_statement(Symbol)` — printc.cc:2510 `emitVarDeclStatement(const Symbol*)`
+- `emit_function_declaration(Funcdata)` — printc.cc:2577 `emitFunctionDeclaration(const Funcdata*)`
+- `emit_prototype_output(Funcdata, FuncProto)` — printc.cc:2194 `emitPrototypeOutput`
+- `emit_prototype_inputs(FuncProto)` — printc.cc:2222 `emitPrototypeInputs`
+- `doc_type_definitions(TypeFactory)` — printc.cc:2401 `docTypeDefinitions(const TypeFactory*)`
+- `emit_type_definition(Datatype)` — printc.cc:2369 `emitTypeDefinition`
+- `emit_struct_definition(TypeStruct)` — printc.cc:2120 `emitStructDefinition`
+- `emit_enum_definition(TypeEnum)` — printc.cc:2153 `emitEnumDefinition`
+- `doc_function_inherent(Funcdata)` — printc.cc:2641 wrapper forwarding to the
+  existing `PrintLanguage::doc_function` (the brief's "docFunctionDeclaration"
+  has no current counterpart; `docFunction` is the equivalent, already impl'd).
+
+Helper ports (text-faithful render path; the Atom/OpToken expression-stack
+model is not present in Rugra's print layer):
+- `push_type_start_opt` — printc.cc:264 `pushTypeStart`
+- `push_type_end_opt` — printc.cc:313 `pushTypeEnd`
+- `emit_integer_value` — printc.cc:1288 `push_integer` (null-vn path)
+- `most_natural_base` — printlanguage.cc `mostNaturalBase`
+
+`TypeFactory::dependent_order` (type.cc:3563) + `order_recurse` (type.cc:3545)
++ `depends_of` ported to `src/type_system/typefactory.rs` to support
+`docTypeDefinitions`'s dependency-sorted type emission (faithful to Ghidra's
+`Datatype::numDepend`/`getDepend` virtuals, type.hh:261-630).
