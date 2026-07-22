@@ -99,7 +99,7 @@ pub mod space; // ← space.hh
 pub mod stringmanage; // ← stringmanage.hh
 pub mod subflow; // ← subflow.hh
 pub mod transform; // ← transform.hh
-// pub mod translate; // ← translate.hh (WIP: agent creating file)
+pub mod translate; // ← translate.hh
 pub mod type_system; // ← type.hh
 pub mod typeop; // ← typeop.hh
 pub mod unionresolve; // ← unionresolve.hh
