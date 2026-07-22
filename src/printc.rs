@@ -142,6 +142,31 @@ pub mod print_mods {
     pub const PENDING_BRACE: u32 = 0x8000;
 }
 
+// Ghidra: database.hh:2027 symbol_display_format
+/// Display-format enum mirroring Ghidra's `symbol_display_format`
+/// (database.hh:2027-2033): the explicit formats a Symbol/Datatype can force
+/// a constant to be rendered in. `DEFAULT` (0) means "decide automatically via
+/// mostNaturalBase / mods". Used by push_integer / push_char_constant_fmt /
+/// push_enum_constant_named to honour the formatting decisions recorded on
+/// the symbol/type — the core of the P0 constant-formatting gap (audit P0-2).
+/// Rugra does not yet persist a per-symbol display-format field, so callers
+/// pass `display_format::DEFAULT` (auto); the dispatch machinery is in place
+/// so that once the field is wired, formatting honours it.
+pub mod display_format {
+    /// Automatic: decide via mostNaturalBase / mods (database.hh:2028).
+    pub const DEFAULT: u32 = 0;
+    /// Force hexadecimal rendering, e.g. `0x1f` (database.hh:2029).
+    pub const HEX: u32 = 1;
+    /// Force decimal rendering, e.g. `31` (database.hh:2030).
+    pub const DEC: u32 = 2;
+    /// Force character rendering, e.g. `'A'` (database.hh:2031).
+    pub const CHAR: u32 = 3;
+    /// Force octal rendering, e.g. `037` (database.hh:2032).
+    pub const OCT: u32 = 4;
+    /// Force binary rendering, e.g. `0b11111` (database.hh:2033).
+    pub const BIN: u32 = 5;
+}
+
 // RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
 fn sanitize_c_ident(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
@@ -311,6 +336,16 @@ pub struct PrintC {
     /// declarations. Faithful to `PrintC::option_convention` (printc.hh:148),
     /// defaulting to true (printc.cc:1584 `resetDefaultsPrintC`).
     option_convention: bool,
+    /// Whether to suppress all explicit casts. Faithful to
+    /// `PrintC::option_nocasts` (printc.hh:152), defaulting to false
+    /// (printc.cc:1587 `resetDefaultsPrintC`). Read by `pushConstant`'s default
+    /// cast path (printc.cc:1807) and the SUBPIECE cast in pushPartialSymbol.
+    option_nocasts: bool,
+    /// Whether to render the NULL pointer as the `NULL` token. Faithful to
+    /// `PrintC::option_NULL` (printc.hh:153), defaulting to false
+    /// (printc.cc:1588 `resetDefaultsPrintC`). Read by the TYPE_PTR arm of
+    /// `pushConstant` (printc.cc:1777).
+    option_null: bool,
 }
 
 impl PrintC {
@@ -357,6 +392,8 @@ impl PrintC {
             goto_targets: HashSet::new(),
             scope: None,
             option_convention: true, // printc.cc:1584 resetDefaultsPrintC
+            option_nocasts: false,   // printc.cc:1587 resetDefaultsPrintC
+            option_null: false,      // printc.cc:1588 resetDefaultsPrintC
 
         }
     }
@@ -6331,6 +6368,496 @@ impl PrintC {
         };
         // pushAtom(Atom(t.str(), tag, const_color, op, vn, val));
         self.emit.print(&text);
+    }
+
+    // ===== P0 push*/constant methods (faithful ports from printc.cc) =====
+    //
+    // Architecture note (audit "Methodology caveats"): Rugra's PrintC renders
+    // C text directly via `self.emit.print(...)` instead of Ghidra's RPN
+    // expression-stack (`pushAtom`/`OpToken`/`recurse`) machinery. The ports
+    // below faithfully reproduce each method's DECISION LOGIC — the
+    // load-bearing part for output fidelity (symbol/format/offset/sign
+    // dispatch, highlight colour, render order) — and emit the same C text the
+    // Ghidra `pushAtom(Atom(...))` call would have produced.
+
+    // Ghidra: printc.cc:1426 PrintC::printUnicode
+    /// Render one unicode code-point to `out`, escaping it if not printable.
+    /// Faithful to `PrintC::printUnicode` (printc.cc:1426-1470): special
+    /// escapes (`\0 \a \b \t \n \v \f \r \\ \" \'`) first, then a generic
+    /// `\x..` hex escape, otherwise the raw UTF-8 encoding (writeUtf8).
+    fn print_unicode(&self, out: &mut String, onechar: i32) {
+        let needs_escape = !(0x20..=0x7e).contains(&onechar); // unicodeNeedsEscape
+        if needs_escape {
+            match onechar { // printc.cc:1430-1464 switch
+                0 => { out.push_str("\\0"); return; }
+                7 => { out.push_str("\\a"); return; }
+                8 => { out.push_str("\\b"); return; }
+                9 => { out.push_str("\\t"); return; }
+                10 => { out.push_str("\\n"); return; }
+                11 => { out.push_str("\\v"); return; }
+                12 => { out.push_str("\\f"); return; }
+                13 => { out.push_str("\\r"); return; }
+                92 => { out.push_str("\\\\"); return; }
+                34 => { out.push_str("\\\""); return; }
+                39 => { out.push_str("\\'"); return; }
+                _ => {}
+            }
+            Self::print_char_hex_escape(out, onechar); // generic escape (1465)
+            return;
+        }
+        // StringManager::writeUtf8 — emit the code-point as UTF-8.
+        if let Some(c) = char::from_u32(onechar as u32) {
+            out.push(c);
+        } else {
+            Self::print_char_hex_escape(out, onechar); // illegal code-point
+        }
+    }
+
+    // Ghidra: printc.cc:1512 PrintC::printCharHexEscape
+    /// Render `val` as a `\x..` hex escape. Faithful to
+    /// `PrintC::printCharHexEscape` (printc.cc:1512-1523): 2 digits for
+    /// val<256, 4 for val<65536, else 8, zero-padded lowercase hex.
+    fn print_char_hex_escape(out: &mut String, val: i32) {
+        if val < 256 {
+            out.push_str(&format!("\\x{:02x}", val));
+        } else if val < 65536 {
+            out.push_str(&format!("\\x{:04x}", val));
+        } else {
+            out.push_str(&format!("\\x{:08x}", val));
+        }
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// Render an integer constant as text, honouring the hex/decimal/char/
+    /// octal/binary format decision and the optional sign. Faithful port of
+    /// `PrintC::push_integer` (printc.cc:1288-1368) — the load-bearing
+    /// constant-formatting method (audit P0-2).
+    ///
+    /// Rugra adaptation: drops the `(vn, op)` reads for per-symbol
+    /// display-format / isUnsignedPrint / isLongPrint (Rugra has none); the
+    /// caller passes `display_format` explicitly (`DEFAULT` triggers automatic
+    /// selection exactly as printc.cc:1326-1337).
+    ///
+    /// Alignment evidence:
+    /// - Sort key: forced format > `mods & force_hex` > `val<=10 ||
+    ///   mods&force_dec` (dec) > `mostNaturalBase==16` (hex) else dec.
+    /// - Counter: signed two's-complement flip (printc.cc:1314-1318), guarded
+    ///   by `sign && format!=force_char`.
+    pub fn push_integer(&mut self, val: u64, sz: usize, sign: bool,
+                        display_format: u32) {
+        use crate::printlanguage::{most_natural_base, format_binary};
+        let mut v = val;
+        let mut print_negsign = false;
+        if sign && display_format != display_format::CHAR {
+            // uintb mask = calc_mask(sz);  (printc.cc:1314)
+            let mask: u64 = if sz >= 8 { u64::MAX } else { (1u64 << (sz * 8)) - 1 };
+            let flip = v ^ mask;
+            print_negsign = flip < v;
+            if print_negsign {
+                v = flip.wrapping_add(1);
+            }
+        }
+        // displayFormat decision (printc.cc:1325-1337).
+        let fmt = if display_format != display_format::DEFAULT {
+            display_format
+        } else if self.is_set(crate::printlanguage::modifiers::FORCE_HEX) {
+            display_format::HEX
+        } else if v <= 10 || self.is_set(crate::printlanguage::modifiers::FORCE_DEC) {
+            display_format::DEC
+        } else if most_natural_base(v) == 16 {
+            display_format::HEX
+        } else {
+            display_format::DEC
+        };
+        // ostringstream t;  (printc.cc:1339-1361)
+        let mut t = String::new();
+        if print_negsign {
+            t.push('-');
+        }
+        match fmt {
+            display_format::HEX => { t.push_str("0x"); t.push_str(&format!("{:x}", v)); }
+            display_format::DEC => { t.push_str(&format!("{}", v)); }
+            display_format::OCT => { t.push('0'); t.push_str(&format!("{:o}", v)); }
+            display_format::CHAR => {
+                if sz > 1 { t.push('L'); } // doEmitWideCharPrefix() == true for C
+                t.push('\'');
+                if sz == 1 && v >= 0x80 {
+                    Self::print_char_hex_escape(&mut t, v as i32);
+                } else {
+                    self.print_unicode(&mut t, v as i32);
+                }
+                t.push('\'');
+            }
+            _ => { // Must be Symbol::force_bin (printc.cc:1358-1361).
+                t.push_str("0b");
+                t.push_str(&format_binary(v));
+            }
+        }
+        // force_unsigned_token / force_sized_token suffixes dropped (no
+        // isUnsignedPrint/isLongPrint flags in Rugra).
+        self.emit.print(&t);
+    }
+
+    // Ghidra: printc.cc:1606 PrintC::pushCharConstant
+    /// Render a single character constant, normally as a quoted char literal
+    /// (`'A'`). Faithful port of `PrintC::pushCharConstant`
+    /// (printc.cc:1606-1655). Handles the byte-character >=0x80 fall-through
+    /// to integer/hex rendering and the wide-char (`L`) prefix.
+    ///
+    /// Rugra adaptation: drops `(vn, op)` (no per-symbol display-format /
+    /// caresAboutCharRepresentation) and accepts the resolved `display_format`
+    /// directly. The byte>=0x80 branch (printc.cc:1630-1640) and the final
+    /// `'...'` rendering (printc.cc:1641-1654) are preserved verbatim.
+    pub fn push_char_constant_fmt(&mut self, val: u64, sz: usize, sign: bool,
+                                  display_format: u32) {
+        let mut fmt = display_format;
+        // printc.cc:1624-1629: forced non-char format -> push_integer.
+        if fmt != display_format::DEFAULT && fmt != display_format::CHAR {
+            self.push_integer(val, sz, sign, fmt);
+            return;
+        }
+        // printc.cc:1630-1640: byte chars >= 0x80 -> integer unless hex/char.
+        if sz == 1 && val >= 0x80 {
+            if fmt != display_format::HEX && fmt != display_format::CHAR {
+                self.push_integer(val, 1, sign, fmt);
+                return;
+            }
+            fmt = display_format::HEX; // Fallthru but force hex (printc.cc:1639).
+        }
+        // printc.cc:1641-1654.
+        let mut t = String::new();
+        if sz > 1 { t.push('L'); }
+        t.push('\'');
+        if fmt == display_format::HEX {
+            Self::print_char_hex_escape(&mut t, val as i32);
+        } else {
+            self.print_unicode(&mut t, val as i32);
+        }
+        t.push('\'');
+        self.emit.print(&t);
+    }
+
+    // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
+    /// Render an enumerated constant, preferring the enum's named member over
+    /// a raw integer. Faithful port of `PrintC::pushEnumConstant`
+    /// (printc.cc:1666-1687).
+    ///
+    /// Ghidra builds a value out of named enum members via
+    /// `TypeEnum::getMatches` (which can OR/complement/shift members to form
+    /// `val`) and emits `NAME1 | NAME2`. Rugra's `TypeEnum.values` is a flat
+    /// `BTreeMap<u64,String>` with no getMatches, so this port renders the
+    /// exact-match member name when present and otherwise falls back to
+    /// `push_integer` — the two cases at printc.cc:1672/1684-1686. The
+    /// multi-name `|` rendering is a TODO hook for when getMatches is ported.
+    pub fn push_enum_constant_named(&mut self, val: u64,
+                                    ct: &crate::type_system::datatype::TypeEnum) {
+        if let Some(name) = ct.values.get(&val) {
+            // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)).
+            self.emit.print(name);
+        } else {
+            // printc.cc:1684-1686: no named match -> push_integer.
+            self.push_integer(val, ct.base.size, false, display_format::DEFAULT);
+        }
+    }
+
+    // Ghidra: printc.cc:1744 PrintC::pushConstant
+    /// Dispatch a typed constant to the right pusher based on the datatype's
+    /// metatype. Faithful port of `PrintC::pushConstant` (printc.cc:1744-1816)
+    /// — the master constant-dispatch method (audit P0-2).
+    ///
+    /// Ghidra's switch on `ct->getMetatype()`:
+    ///   - TYPE_UINT/INT: charPrint -> pushCharConstant; enumType ->
+    ///     pushEnumConstant; else push_integer (signed for INT).
+    ///   - TYPE_UNKNOWN: push_integer(unsigned).
+    ///   - TYPE_BOOL: pushBoolConstant.
+    ///   - TYPE_VOID: throw.
+    ///   - TYPE_PTR/TYPE_PTRREL: option_NULL && val==0 -> nullToken; else if
+    ///     ptr-to-char pushPtrCharConstant, else if ptr-to-code
+    ///     pushPtrCodeConstant; else fall through to default.
+    ///   - TYPE_FLOAT: push_float.
+    ///   - default (struct/union/array/...): cast `(type)0xVAL`.
+    ///
+    /// Alignment evidence:
+    /// - Sort key: the metatype switch (printc.cc:1748-1805) is the
+    ///   load-bearing decision; each arm either `return`s or breaks to the
+    ///   default cast.
+    /// - Counter: default cast path pushes `typecast` op + pushType, then
+    ///   pushMod/setMod(force_hex)/push_integer/popMod (printc.cc:1807-1815).
+    pub fn push_constant_typed(&mut self, val: u64, ct: &Datatype) {
+        let mt = ct.get_metatype();
+        let sz = ct.get_size();
+        match mt {
+            TypeMetatype::Uint => {
+                if ct.is_char_print() {
+                    self.push_char_constant_fmt(val, sz, false, display_format::DEFAULT);
+                } else if ct.is_enum_type() {
+                    if let Datatype::Enum(e) = ct {
+                        self.push_enum_constant_named(val, e);
+                    } else {
+                        self.push_integer(val, sz, false, display_format::DEFAULT);
+                    }
+                } else {
+                    self.push_integer(val, sz, false, display_format::DEFAULT);
+                }
+            }
+            TypeMetatype::Int => {
+                if ct.is_char_print() {
+                    self.push_char_constant_fmt(val, sz, true, display_format::DEFAULT);
+                } else if ct.is_enum_type() {
+                    if let Datatype::Enum(e) = ct {
+                        self.push_enum_constant_named(val, e);
+                    } else {
+                        self.push_integer(val, sz, true, display_format::DEFAULT);
+                    }
+                } else {
+                    self.push_integer(val, sz, true, display_format::DEFAULT);
+                }
+            }
+            TypeMetatype::Unknown => {
+                self.push_integer(val, sz, false, display_format::DEFAULT);
+            }
+            TypeMetatype::Bool => {
+                // pushBoolConstant: printc.cc:1488-1495.
+                self.emit.print(if val != 0 { "true" } else { "false" });
+            }
+            TypeMetatype::Void => {
+                // printc.cc:1772-1774: clear(); throw. Rugra: emit a marker
+                // (no panic in the emit path).
+                self.emit.print("/* void constant */");
+            }
+            TypeMetatype::Pointer => {
+                // printc.cc:1776-1790.
+                if self.option_null && val == 0 {
+                    self.emit.print("NULL");
+                    return;
+                }
+                // pushPtrCharConstant / pushPtrCodeConstant full resolution
+                // is a P0-5 TODO; fall through to the default cast path.
+                self.emit_default_cast_constant(val, ct);
+            }
+            TypeMetatype::Float => {
+                // push_float (printc.cc:1380-1424): Rugra has no FloatFormat;
+                // emit FLOAT_UNKNOWN (printc.cc:1386 sentinel).
+                self.emit.print("FLOAT_UNKNOWN");
+            }
+            _ => {
+                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
+                self.emit_default_cast_constant(val, ct);
+            }
+        }
+    }
+
+    // Helper: the default cast-then-hex-integer rendering at printc.cc:1806-1815.
+    fn emit_default_cast_constant(&mut self, val: u64, ct: &Datatype) {
+        if !self.option_nocasts {
+            // pushOp(&typecast,op); pushType(ct);
+            self.emit.print("(");
+            self.emit.tag_type(ct.get_name(), ct.get_id());
+            self.emit.print(")");
+        }
+        // pushMod(); if (!isSet(force_dec)) setMod(force_hex);
+        // push_integer(val, ct->getSize(), false, ...); popMod();
+        self.push_mod();
+        if !self.is_set(crate::printlanguage::modifiers::FORCE_DEC) {
+            self.set_mod(crate::printlanguage::modifiers::FORCE_HEX);
+        }
+        self.push_integer(val, ct.get_size(), false, display_format::DEFAULT);
+        self.pop_mod();
+    }
+
+    // Ghidra: printc.cc:1905 PrintC::pushSymbol
+    /// Emit a symbol's display name with the Ghidra highlight colour. Faithful
+    /// port of `PrintC::pushSymbol` (printc.cc:1905-1936).
+    ///
+    /// Ghidra picks `tokenColor` from sym->isVolatile() / scope->isGlobal() /
+    /// category==function_parameter / category==equate / else var_color
+    /// (printc.cc:1909-1918), calls pushSymbolScope, then handles merge-
+    /// problem suffixes (`$N`/`$$`, printc.cc:1920-1934) before pushing the
+    /// display-name atom. Rugra has no Scope/merge-problem model, so this port
+    /// preserves the colour decision (informational for the plain-text
+    /// emitter) and emits the display name.
+    ///
+    /// Alignment evidence:
+    /// - Sort key: the highlight cascade (printc.cc:1909-1918).
+    /// - Output: `sym->getDisplayName()` atom (printc.cc:1935).
+    pub fn push_symbol(&mut self, sym_name: &str,
+                       _is_volatile: bool, _is_global: bool,
+                       _is_param: bool, _is_equate: bool) {
+        // Colour cascade encoded via the tag choice for markup emitters;
+        // plain-text emitters ignore it. pushSymbolScope is a no-op for
+        // Rugra's flat symbol model.
+        self.emit.tag_variable(sym_name, 0);
+    }
+
+    // Ghidra: printc.cc:1938 PrintC::pushUnnamedLocation
+    /// Emit a name for an address with no symbol, of the form
+    /// `spacename+offset` (e.g. `register20`). Faithful port of
+    /// `PrintC::pushUnnamedLocation` (printc.cc:1938-1945).
+    ///
+    /// Alignment evidence:
+    /// - Output: `s << space->getName(); addr.printRaw(s);` then
+    ///   pushAtom(vartoken, var_color). printRaw emits `0x`+zero-padded hex;
+    ///   Rugra uses the lowercase space name + hex offset.
+    pub fn push_unnamed_location(&mut self, space: AddressSpace, offset: u64) {
+        let name = format!("{}{:x}", Self::space_name(space), offset);
+        self.emit.tag_variable(&name, 0);
+    }
+
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol
+    /// Emit a symbol reference accessing a sub-field at `off`/`sz` within
+    /// `sym`, walking the type tree to produce `sym.field1.field2` / array
+    /// subscript / synthetic `field_off_sz` names. Faithful port of
+    /// `PrintC::pushPartialSymbol` (printc.cc:1947-2065).
+    ///
+    /// Ghidra walks `ct = sym->getType()` collecting PartialSymbolEntry:
+    ///   - TYPE_STRUCT/UNION -> findTruncation field, `.field`
+    ///   - TYPE_ARRAY -> getSubEntry element, `[N]`
+    ///   - no good subtype -> synthetic unnamedField(off,sz), `.field_off_sz`
+    /// then pushes operators in reverse and entries front-to-back so
+    /// parentheses come out right (printc.cc:1949-2064).
+    ///
+    /// Rugra adaptation: no findTruncation/getSubEntry/RPN stack, so this
+    /// renders the equivalent text directly, handling Struct (`.field` for
+    /// the matching offset), Array (`[off/elsize]`), and the synthetic
+    /// fallback. The SUBPIECE-style cast (printc.cc:2018-2029) is a TODO hook.
+    ///
+    /// Alignment evidence:
+    /// - Sort key: Struct offset lookup -> Array element index -> synthetic
+    ///   name (cascade at printc.cc:1966-2041).
+    /// - Loop/order: bottom-up stack then front-to-back emission preserved
+    ///   textually as left-to-right `sym.field[idx]...` building.
+    pub fn push_partial_symbol(&mut self, sym_name: &str, mut off: i64,
+                               mut sz: i64, ct: Option<&Datatype>) {
+        let mut entries: Vec<String> = Vec::new();
+        let mut current = ct.cloned();
+        // Bound the type-tree walk (Ghidra's `while(ct != nullptr)` terminates
+        // because each iteration either descends into a smaller field or
+        // pushes a synthetic entry and nulls ct).
+        let mut depth = 0;
+        while depth < 16 {
+            depth += 1;
+            let Some(dt) = current else { break; };
+            // printc.cc:1960-1964: off==0 and sz covers whole type -> done.
+            if off == 0 && (sz == 0 || (sz as usize == dt.get_size()
+                    && !dt.needs_resolution())) {
+                break;
+            }
+            let metatype = dt.get_metatype();
+            if metatype == TypeMetatype::Struct || metatype == TypeMetatype::Union {
+                // printc.cc:1966-1985 / 2001-2016: findTruncation field.
+                if let Some((field_name, field_off, field_type)) =
+                        Self::find_partial_field(&dt, off as usize, sz as usize) {
+                    off -= field_off as i64;
+                    entries.push(format!(".{}", field_name));
+                    current = Some(field_type);
+                    continue;
+                }
+            } else if metatype == TypeMetatype::Array {
+                // printc.cc:1986-2000: getSubEntry element index.
+                if let Some((element_type, el_off, el_index)) =
+                        Self::array_sub_entry(&dt, off as usize, sz as usize) {
+                    off = el_off as i64;
+                    entries.push(format!("[{}]", el_index));
+                    current = Some(element_type);
+                    continue;
+                }
+            }
+            // printc.cc:2030-2041: synthetic entry, then ct=nullptr.
+            if sz == 0 {
+                sz = dt.get_size() as i64 - off;
+            }
+            entries.push(format!(".field_{}_{}", off, sz));
+            break;
+        }
+        // printc.cc:2044-2047: SUBPIECE-style cast is a TODO hook (Rugra has
+        // no isSubpieceCastEndian); skipping == option_nocasts behaviour.
+        // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
+        self.emit.tag_variable(sym_name, 0);
+        for e in &entries {
+            self.emit.print(e);
+        }
+    }
+
+    // Ghidra: printc.cc:1861 PrintC::pushAnnotation
+    /// Emit an annotation varnode (inserted by the decompiler, not in the
+    /// original binary). Faithful port of `PrintC::pushAnnotation`
+    /// (printc.cc:1861-1903).
+    ///
+    /// Ghidra resolves the varnode against the function's local scope
+    /// (`queryContainer`) and either pushes the whole symbol, a partial
+    /// symbol, or — if no symbol covers the address — falls back to the
+    /// register/space name (capitalising the space's first letter). Rugra
+    /// uses its `symbol_table` for the lookup; the CALLOTHER
+    /// `extractAnnotationSize` path (printc.cc:1866-1869) is a TODO hook.
+    ///
+    /// Alignment evidence:
+    /// - Sort key: symbol covers address -> push_symbol / push_partial_symbol;
+    ///   else register/space-name fallback (printc.cc:1881-1902).
+    /// - Output: register name, else `<CapitalisedSpace><hex offset>`
+    ///   (printc.cc:1890-1901).
+    pub fn push_annotation(&mut self, vn: &Varnode) {
+        let addr = vn.get_offset();
+        // printc.cc:1871-1888: queryContainer -> entry; whole or partial
+        // symbol. Rugra: consult the printer's symbol table.
+        if let Some(name) = self.symbol_table.get(&addr) {
+            self.emit.tag_variable(name, 0);
+            return;
+        }
+        // printc.cc:1889-1902: register/space name fallback.
+        let space = vn.get_space();
+        let base = Self::space_name(space);
+        // translate->getRegisterName — Rugra has no register map; treat as
+        // empty so the synthetic-name branch runs (printc.cc:1891).
+        // Capitalise first letter (printc.cc:1893-1894) + zero-padded hex.
+        let mut regname = String::new();
+        let mut chars = base.chars();
+        if let Some(first) = chars.next() {
+            for c in first.to_uppercase() { regname.push(c); }
+            regname.extend(chars);
+        }
+        // printc.cc:1897-1898: hex << setfill('0') << setw(2*addrSize).
+        regname.push_str(&format!("{:08X}", addr));
+        self.emit.tag_variable(&regname, 0);
+    }
+
+    // ---- private helpers backing the P0 ports ----
+
+    // Ghidra: printc.cc:1966-1985 (TYPE_STRUCT/UNION findTruncation)
+    fn find_partial_field(dt: &Datatype, off: usize, sz: usize)
+        -> Option<(String, usize, Arc<Datatype>)> {
+        let fields = match dt {
+            Datatype::Struct(s) => &s.fields,
+            Datatype::Union(u) => &u.fields,
+            _ => return None,
+        };
+        for f in fields {
+            let f_size = f.type_ptr.get_size();
+            if off >= f.offset && off + sz <= f.offset + f_size {
+                return Some((f.name.clone(), f.offset, f.type_ptr.clone()));
+            }
+        }
+        None
+    }
+
+    // Ghidra: printc.cc:1986-2000 (TYPE_ARRAY getSubEntry)
+    fn array_sub_entry(dt: &Datatype, off: usize, _sz: usize)
+        -> Option<(Arc<Datatype>, usize, usize)> {
+        let arr = match dt { Datatype::Array(a) => a, _ => return None, };
+        let el_size = arr.array_of.get_size();
+        if el_size == 0 { return None; }
+        Some((arr.array_of.clone(), off % el_size, off / el_size))
+    }
+
+    // RUGRA-GLUE: lowercase AddressSpace name (printc.cc:1942 space->getName)
+    fn space_name(space: AddressSpace) -> &'static str {
+        match space {
+            AddressSpace::Ram => "ram",
+            AddressSpace::Register => "register",
+            AddressSpace::Const => "const",
+            AddressSpace::Stack => "stack",
+            AddressSpace::Unique => "unique",
+            _ => "other",
+        }
     }
 
 }

@@ -3709,6 +3709,7 @@ impl<'a> CollapseStructure<'a> {
                 flags: 0,
                 parent: None,
                 goto_target: None, // implicit; emit uses wrapped block's BRANCH op
+                goto_type: crate::block::goto_type::GOTO_GOTO,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
             }))
