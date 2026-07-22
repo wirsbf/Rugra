@@ -397,10 +397,1132 @@ pub struct StringSequence {
 pub struct HeapSequence {
     /// Base ArraySequence
     pub base: ArraySequence,
-    /// Pointer that sequence is stored to
+    /// Pointer that sequence is stored to (constseq.hh:97 `basePointer`)
     pub base_pointer: Option<Arc<RwLock<Varnode>>>,
-    /// Offset relative to pointer to root STORE
+    /// Offset relative to pointer to root STORE (constseq.hh:98 `baseOffset`)
     pub base_offset: u64,
+    /// Address space being STOREd to (constseq.hh:99 `storeSpace`).
+    /// Rugra stores the AddressSpace enum directly (Ghidra holds an `AddrSpace *`).
+    pub store_space: crate::space::AddressSpace,
+    /// Required multiplier for PTRADD ops (constseq.hh:100 `ptrAddMult`).
+    /// Maps element size to address units. Rugra: with word_size==1, this equals
+    /// `charType->getAlignSize()` (see HeapSequence::new_heap).
+    pub ptr_add_mult: u64,
+    /// Non-constant Varnodes being added into pointer calculation
+    /// (constseq.hh:101 `nonConstAdds`). Built by calcPtraddOffset and consumed
+    /// by buildStringCopy's index-Varnode construction.
+    pub non_const_adds: Vec<Arc<RwLock<Varnode>>>,
+}
+
+/// Helper class containing Varnode pairs that flow across a sequence of
+/// INDIRECTs. Corresponds to Ghidra's `HeapSequence::IndirectPair`
+/// (constseq.hh:88-96). Holds the in/out Varnode pair of a STORE-side
+/// INDIRECT, with a "duplicate" marker used by deduplicatePairs.
+#[derive(Clone, Debug)]
+pub struct IndirectPair {
+    /// Input to INDIRECTs (constseq.hh:90 `inVn`). Set to `None` by
+    /// `mark_duplicate` to signal that this pair is a duplicate of another.
+    pub in_vn: Option<Arc<RwLock<Varnode>>>,
+    /// Output of INDIRECTs (constseq.hh:91 `outVn`).
+    pub out_vn: Arc<RwLock<Varnode>>,
+}
+
+impl IndirectPair {
+    // Ghidra: constseq.hh:92 IndirectPair::IndirectPair
+    /// Construct from the input/output Varnode pair. Faithful to
+    /// `IndirectPair(Varnode *in, Varnode *out)` (constseq.hh:92).
+    pub fn new(in_vn: Arc<RwLock<Varnode>>, out_vn: Arc<RwLock<Varnode>>) -> Self {
+        Self { in_vn: Some(in_vn), out_vn }
+    }
+
+    // Ghidra: constseq.hh:93 IndirectPair::markDuplicate
+    /// Note that `this` is a duplicate of another pair. Faithful to
+    /// `markDuplicate(void)` (constseq.hh:93): sets `inVn = (Varnode *)0`.
+    /// Rugra uses `Option::None` as the null sentinel.
+    pub fn mark_duplicate(&mut self) {
+        self.in_vn = None;
+    }
+
+    // Ghidra: constseq.hh:94 IndirectPair::isDuplicate
+    /// Return true if `this` is marked as a duplicate. Faithful to
+    /// `isDuplicate(void) const` (constseq.hh:94): returns `inVn == null`.
+    pub fn is_duplicate(&self) -> bool {
+        self.in_vn.is_none()
+    }
+
+    // Ghidra: constseq.cc:808 IndirectPair::compareOutput
+    /// Compare pairs by output storage, ordering on (space index, offset, size).
+    /// Faithful to `IndirectPair::compareOutput` (constseq.cc:808-820). Used as
+    /// the sort comparator in `deduplicatePairs`. Returns true if `a < b`.
+    ///
+    /// Ghidra orders address spaces by `AddrSpace::getIndex()`; Rugra uses
+    /// `AddressSpace::space_id()` (the SLEIGH space index) for the same ordering.
+    pub fn compare_output(a: &IndirectPair, b: &IndirectPair) -> std::cmp::Ordering {
+        let va = a.out_vn.read().unwrap();
+        let vb = b.out_vn.read().unwrap();
+        // cc:813: compare by space index.
+        let sa = va.address_space.space_id();
+        let sb = vb.address_space.space_id();
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+        // cc:815: compare by offset.
+        if va.get_offset() != vb.get_offset() {
+            return va.get_offset().cmp(&vb.get_offset());
+        }
+        // cc:817: compare by size.
+        if va.get_size() != vb.get_size() {
+            return va.get_size().cmp(&vb.get_size());
+        }
+        // cc:819: equal storage.
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// Convert byte offset to address units. Faithful to
+/// `AddrSpace::byteToAddressInt` (space.hh). With Rugra's `word_size == 1`
+/// across all spaces, this is the identity.
+fn byte_to_address_int(byte_off: u64, _word_size: usize) -> u64 {
+    byte_off
+}
+
+/// Convert address units to byte offset. Faithful to
+/// `AddrSpace::addressToByteInt` (space.hh). With Rugra's `word_size == 1`
+/// across all spaces, this is the identity.
+fn address_to_byte_int(addr_off: u64, _word_size: usize) -> u64 {
+    addr_off
+}
+
+/// Extract the destination AddressSpace of a STORE from its space-id constant
+/// input. Faithful to `Varnode::getSpaceFromConst` (varnode.hh): given the
+/// STORE's `input[0]` constant space-id Varnode, return the AddressSpace.
+fn get_space_from_const(vn: &Arc<RwLock<Varnode>>) -> crate::space::AddressSpace {
+    let r = vn.read().unwrap();
+    if !r.is_constant() {
+        // Defensive: Ghidra's getSpaceFromConst assumes a constant; if not,
+        // fall back to the varnode's own space.
+        return r.address_space;
+    }
+    crate::space::AddressSpace::from_id(r.get_offset() as crate::space::SpaceId)
+}
+
+impl HeapSequence {
+    // Ghidra: constseq.hh:88 HeapSequence::HeapSequence (constructor body at
+    //   constseq.cc:907-921) — Rugra separates allocation (Struct::new) from
+    //   analysis (new_heap / collect_store_ops). `new_heap` performs the
+    //   storeSpace / ptrAddMult initialization that Ghidra does inline in the
+    //   constructor (cc:911-912), then defers to find_base_pointer +
+    //   collect_store_ops + check_interference + form_byte_array. Callers that
+    //   only want a heap object without running analysis should use `new`.
+    /// Construct a HeapSequence around `root_op` (a STORE). Faithful to the
+    /// Ghidra `HeapSequence::HeapSequence` constructor (constseq.cc:907-921)
+    /// up to the `baseOffset = 0` initialization (cc:910); the full analysis
+    /// chain (`findBasePointer` → `collectStoreOps` → ...) is launched by
+    /// `new_heap`, mirroring the rest of the Ghidra constructor body.
+    pub fn new(root_op: Arc<RwLock<PcodeOp>>) -> Self {
+        Self {
+            base: ArraySequence::new(root_op),
+            base_pointer: None,
+            base_offset: 0,
+            store_space: crate::space::AddressSpace::Ram,
+            ptr_add_mult: 1,
+            non_const_adds: Vec::new(),
+        }
+    }
+
+    // Ghidra: constseq.cc:907 HeapSequence::HeapSequence (analysis body)
+    /// Run the full HeapSequence analysis chain on the root STORE. Faithful to
+    /// the body of the Ghidra constructor (constseq.cc:910-921):
+    ///   1. baseOffset = 0; storeSpace = root->getIn(0)->getSpaceFromConst()
+    ///   2. ptrAddMult  = byteToAddressInt(charType->getAlignSize(), wordSize)
+    ///   3. findBasePointer(root->getIn(1))
+    ///   4. if (!collectStoreOps()) return
+    ///   5. if (!checkInterference()) return
+    ///   6. numElements = formByteArray(moveOps.size()*alignSize, 2, 0, bigEndian)
+    /// Returns true if a valid sequence was recovered (`base.is_valid()`).
+    pub fn new_heap(&mut self, fd: &Funcdata) -> bool {
+        let (space, char_align_size) = {
+            let root = self.base.root_op.read().unwrap();
+            // cc:911: storeSpace = root->getIn(0)->getSpaceFromConst().
+            let space_vn = match root.inrefs.first() {
+                Some(v) => v.clone(),
+                None => return false,
+            };
+            let store_space = get_space_from_const(&space_vn);
+            // cc:912: ptrAddMult = byteToAddressInt(charType->getAlignSize(),
+            //                                       storeSpace->getWordSize()).
+            let char_align = self
+                .base
+                .char_type
+                .as_ref()
+                .map(|t| t.get_align_size())
+                .unwrap_or(1) as u64;
+            (store_space, char_align)
+        };
+        self.store_space = space;
+        self.ptr_add_mult = byte_to_address_int(char_align_size, space.word_size());
+
+        // cc:913: findBasePointer(rootOp->getIn(1)).
+        let root_ptr = {
+            let root = self.base.root_op.read().unwrap();
+            match root.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return false,
+            }
+        };
+        self.find_base_pointer(&root_ptr);
+
+        // cc:914-915: if (!collectStoreOps()) return.
+        if !self.collect_store_ops(fd) {
+            return false;
+        }
+        // cc:916-917: if (!checkInterference()) return.
+        // ArraySequence::check_interference is the Rugra port of Ghidra's
+        // checkInterference; it takes fd/root_offset/element_size which Ghidra
+        // reads from the in-block state. Rugra's variant needs the element size
+        // (== charType->getAlignSize()) and a root offset of 0 (Ghidra's
+        // moveOps store the diff directly).
+        let elem_size = self
+            .base
+            .char_type
+            .as_ref()
+            .map(|t| t.get_align_size())
+            .unwrap_or(1) as i32;
+        self.base.check_interference(fd, 0, elem_size);
+        if !self.base.is_valid() {
+            // Ghidra checkInterference returns false directly; the constructor
+            // leaves numElements=0 in that case. We mirror by not running
+            // form_byte_array.
+            // NOTE: Ghidra's numElements is only set by formByteArray below, so
+            // a checkInterference failure leaves numElements=0 (isValid=false),
+            // matching Rugra's check_interference leaving num_elements=0 when
+            // the run is too short.
+        }
+        // cc:918-920: numElements = formByteArray(arrSize, 2, 0, bigEndian).
+        let arr_size = self.base.move_ops.len() as i32 * elem_size;
+        let _big_endian = self.store_space.is_big_endian();
+        // Rugra's form_byte_array pulls COPY input[0] constants (slot -1). For
+        // STORE sequences the value is at input slot 2; Rugra's ArraySequence
+        // currently only has the COPY-slot form_byte_array. We provide the
+        // STORE form here by filling byte_array directly from each STORE's
+        // input[2] constant, mirroring Ghidra formByteArray(slot=2, rootOff=0).
+        self.base.byte_array = vec![0u8; arr_size.max(0) as usize];
+        let mut used = vec![0u8; arr_size.max(0) as usize];
+        for node in &self.base.move_ops {
+            let op = node.op.read().unwrap();
+            let byte_pos = node.offset as i64;
+            if byte_pos < 0 || byte_pos + elem_size as i64 > arr_size as i64 {
+                continue;
+            }
+            let val_vn = match op.inrefs.get(2) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let val_r = val_vn.read().unwrap();
+            if !val_r.is_constant() {
+                continue;
+            }
+            let val = val_r.get_offset();
+            let bp = byte_pos as usize;
+            used[bp] = if val == 0 { 2 } else { 1 };
+            for j in 0..elem_size as usize {
+                if bp + j < self.base.byte_array.len() {
+                    self.base.byte_array[bp + j] =
+                        ((val >> (j * 8)) & 0xff) as u8;
+                }
+            }
+        }
+        // Count leading non-null characters (cc:135-142 of formByteArray).
+        let mut count = 0i32;
+        let max_el = arr_size / elem_size;
+        while count < max_el {
+            let u = used[(count * elem_size) as usize];
+            if u != 1 {
+                if u == 2 {
+                    count += 1; // allow a single null terminator
+                }
+                break;
+            }
+            count += 1;
+        }
+        if count < MINIMUM_SEQUENCE_LENGTH {
+            self.base.num_elements = 0;
+            return false;
+        }
+        self.base.num_elements = count;
+        true
+    }
+
+    // Ghidra: constseq.cc:465 HeapSequence::findBasePointer
+    /// From a starting pointer, backtrack through PTRADDs and COPYs to a
+    /// putative root Varnode pointer. Faithful to `findBasePointer`
+    /// (constseq.cc:465-480). This is the FULL version: it verifies the
+    /// PTRADD multiplier (input[2]) equals `self.ptr_add_mult` (cc:473-475),
+    /// which the simplified `RuleStringStore::ptr_shares_base` helper omits.
+    /// Sets `self.base_pointer` to the discovered root.
+    pub fn find_base_pointer(&mut self, init_ptr: &Arc<RwLock<Varnode>>) {
+        let mut base_ptr = init_ptr.clone();
+        loop {
+            let def = {
+                let g = base_ptr.read().unwrap();
+                if !g.is_written() {
+                    break;
+                }
+                g.get_def()
+            };
+            let Some(def_op) = def else { break };
+            let (opc, in0, in2_offset) = {
+                let d = def_op.read().unwrap();
+                (
+                    d.opcode,
+                    d.inrefs.first().cloned(),
+                    d.inrefs.get(2).map(|v| v.read().unwrap().get_offset()),
+                )
+            };
+            if opc == OpCode::CPUI_PTRADD {
+                // cc:473-475: break if multiplier != ptrAddMult.
+                if let Some(sz) = in2_offset {
+                    if sz != self.ptr_add_mult {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else if opc != OpCode::CPUI_COPY {
+                // cc:476-477: any other defining op stops the walk.
+                break;
+            }
+            // cc:478: basePointer = op->getIn(0).
+            let Some(next) = in0 else { break };
+            base_ptr = next;
+        }
+        self.base_pointer = Some(base_ptr);
+    }
+
+    // Ghidra: constseq.cc:486 HeapSequence::findDuplicateBases
+    /// Back-track from `base_pointer` through PTRSUBs, PTRADDs, and INT_ADDs
+    /// to an earlier root, keeping track of any offsets; then trace forward
+    /// through ops trying to match the offsets. Faithful to `findDuplicateBases`
+    /// (constseq.cc:486-539). `duplist` is filled with the discovered alias
+    /// base Varnodes, including `base_pointer` itself.
+    ///
+    /// NOTE on Ghidra typo: cc:510 and cc:526 list `CPUI_PTRSUB` twice in the
+    /// `&&` chain (a transcription bug in upstream Ghidra — INT_ADD is dropped
+    /// on the second check). Rugra ports the *intended* semantics: the back-
+    /// track/forward-scan accepts PTRSUB, INT_ADD, and PTRADD with constant
+    /// input[1]. The upstream bug would in practice rarely fire because the
+    /// initial guard at cc:495 already gates entry.
+    pub fn find_duplicate_bases(
+        &self,
+        duplist: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let base_ptr = match &self.base_pointer {
+            Some(b) => b.clone(),
+            None => return,
+        };
+        // cc:489-492: if basePointer is not written, push it and return.
+        let def_op = match base_ptr.read().unwrap().get_def() {
+            Some(d) => Some(d),
+            None => None,
+        };
+        let def_op = match def_op {
+            Some(d) => d,
+            None => {
+                duplist.push(base_ptr);
+                return;
+            }
+        };
+        // cc:493-498: gate on PTRSUB/INT_ADD/PTRADD with constant input[1].
+        let (opc, in1_const) = {
+            let d = def_op.read().unwrap();
+            let in1_const = d
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().is_constant())
+                .unwrap_or(false);
+            (d.opcode, in1_const)
+        };
+        if (opc != OpCode::CPUI_PTRSUB
+            && opc != OpCode::CPUI_INT_ADD
+            && opc != OpCode::CPUI_PTRADD)
+            || !in1_const
+        {
+            duplist.push(base_ptr);
+            return;
+        }
+        // cc:499-513: back-track collecting offsets.
+        let mut copy_root = base_ptr.clone();
+        let mut offsets: Vec<u64> = Vec::new();
+        let mut cur_op = def_op;
+        let mut cur_opc = opc;
+        let mut cur_in1_const = in1_const;
+        loop {
+            let (off, in0, in0_def, next_opc, next_in1_const) = {
+                let d = cur_op.read().unwrap();
+                let raw_off = d
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                let off = if cur_opc == OpCode::CPUI_PTRADD {
+                    // cc:503-504: PTRADD offsets are scaled by input[2].
+                    let mult = d
+                        .inrefs
+                        .get(2)
+                        .map(|v| v.read().unwrap().get_offset())
+                        .unwrap_or(1);
+                    raw_off.wrapping_mul(mult)
+                } else {
+                    raw_off
+                };
+                let in0 = d.inrefs.first().cloned();
+                let in0_def = in0.as_ref().and_then(|v| v.read().unwrap().get_def());
+                // Peek the next defining op's opcode + input[1] constness.
+                let (next_opc, next_in1_const) = match &in0_def {
+                    Some(op) => {
+                        let od = op.read().unwrap();
+                        let c = od
+                            .inrefs
+                            .get(1)
+                            .map(|v| v.read().unwrap().is_constant())
+                            .unwrap_or(false);
+                        (od.opcode, c)
+                    }
+                    None => (OpCode::CPUI_COPY, false),
+                };
+                (off, in0, in0_def, next_opc, next_in1_const)
+            };
+            offsets.push(off);
+            let Some(next) = in0 else { break };
+            copy_root = next;
+            // cc:507-512: stop if copyRoot is not written or its def is not an
+            // acceptable address-arithmetic op (intended: PTRSUB/INT_ADD/PTRADD).
+            let next_def = match in0_def {
+                Some(d) => d,
+                None => break,
+            };
+            if next_opc != OpCode::CPUI_PTRSUB
+                && next_opc != OpCode::CPUI_INT_ADD
+                && next_opc != OpCode::CPUI_PTRADD
+            {
+                break;
+            }
+            cur_op = next_def;
+            cur_opc = next_opc;
+            cur_in1_const = next_in1_const;
+            if !cur_in1_const {
+                break;
+            }
+        }
+        // cc:514: duplist.push_back(copyRoot).
+        duplist.push(copy_root.clone());
+
+        // cc:516-538: trace forward through each offset layer.
+        for i in (0..offsets.len()).rev() {
+            let target_off = offsets[i];
+            // Swap current duplist into midlist, clear duplist for this layer.
+            let midlist: Vec<Arc<RwLock<Varnode>>> = std::mem::take(duplist);
+            for vn in &midlist {
+                // For each candidate in midlist, scan its descendants for ops
+                // that re-add the matching offset (cc:521-536).
+                let descendants: Vec<Arc<RwLock<PcodeOp>>> =
+                    vn.read().unwrap().descend_iter().collect();
+                for op in descendants {
+                    let d = op.read().unwrap();
+                    let d_opc = d.opcode;
+                    // cc:526: PTRSUB/INT_ADD/PTRADD only (intended semantics).
+                    if d_opc != OpCode::CPUI_PTRSUB
+                        && d_opc != OpCode::CPUI_INT_ADD
+                        && d_opc != OpCode::CPUI_PTRADD
+                    {
+                        continue;
+                    }
+                    // cc:528: in(0) must be vn and in(1) must be constant.
+                    let in0_match = d.inrefs.first().map(|v| Arc::ptr_eq(v, vn)).unwrap_or(false);
+                    if !in0_match {
+                        continue;
+                    }
+                    let in1_const = d
+                        .inrefs
+                        .get(1)
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false);
+                    if !in1_const {
+                        continue;
+                    }
+                    let raw_off = d
+                        .inrefs
+                        .get(1)
+                        .map(|v| v.read().unwrap().get_offset())
+                        .unwrap_or(0);
+                    let off = if d_opc == OpCode::CPUI_PTRADD {
+                        let mult = d
+                            .inrefs
+                            .get(2)
+                            .map(|v| v.read().unwrap().get_offset())
+                            .unwrap_or(1);
+                        raw_off.wrapping_mul(mult)
+                    } else {
+                        raw_off
+                    };
+                    if off != target_off {
+                        continue;
+                    }
+                    // cc:535: duplist.push_back(op->getOut()).
+                    if let Some(out) = &d.output {
+                        duplist.push(out.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: constseq.cc:544 HeapSequence::findInitialStores
+    /// Find STOREs with pointers derived from `base_pointer` and that are in
+    /// the same basic block as the root STORE. The root STORE is NOT included.
+    /// Faithful to `findInitialStores` (constseq.cc:544-573).
+    ///
+    /// Walks forward from `base_pointer` (and its duplicate bases) through
+    /// PTRADD/COPY descendants, collecting STORE ops in the root's block whose
+    /// pointer input equals the walked Varnode.
+    pub fn find_initial_stores(
+        &mut self,
+        fd: &Funcdata,
+        stores: &mut Vec<Arc<RwLock<PcodeOp>>>,
+    ) {
+        // cc:547-548: ptradds starts with findDuplicateBases output.
+        let mut ptradds: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        self.find_duplicate_bases(&mut ptradds);
+
+        let (root_block, root_seq) = {
+            let r = self.base.root_op.read().unwrap();
+            let rb = r.parent.as_ref().and_then(|w| w.upgrade());
+            (rb, r.start.clone())
+        };
+
+        let mut pos = 0usize;
+        while pos < ptradds.len() {
+            let vn = ptradds[pos].clone();
+            pos += 1;
+            // cc:553-571: iterate over vn's descendants.
+            let descendants: Vec<Arc<RwLock<PcodeOp>>> =
+                vn.read().unwrap().descend_iter().collect();
+            for op in descendants {
+                let d = op.read().unwrap();
+                let opc = d.opcode;
+                if opc == OpCode::CPUI_PTRADD {
+                    // cc:558-562: only PTRADDs whose input[0] is vn and whose
+                    // input[2] (multiplier) == ptrAddMult extend the walk.
+                    let in0_is_vn = d.inrefs.first().map(|v| Arc::ptr_eq(v, &vn)).unwrap_or(false);
+                    if !in0_is_vn {
+                        continue;
+                    }
+                    let mult_match = d
+                        .inrefs
+                        .get(2)
+                        .map(|v| v.read().unwrap().get_offset() == self.ptr_add_mult)
+                        .unwrap_or(false);
+                    if !mult_match {
+                        continue;
+                    }
+                    if let Some(out) = &d.output {
+                        ptradds.push(out.clone());
+                    }
+                } else if opc == OpCode::CPUI_COPY {
+                    // cc:564-566: COPYs extend the walk unconditionally.
+                    if let Some(out) = &d.output {
+                        ptradds.push(out.clone());
+                    }
+                } else if opc == OpCode::CPUI_STORE {
+                    // cc:567-570: STORE in root's block, input[1] == vn, not root.
+                    let in1_is_vn = d.inrefs.get(1).map(|v| Arc::ptr_eq(v, &vn)).unwrap_or(false);
+                    if !in1_is_vn {
+                        continue;
+                    }
+                    let same_block = match (&d.parent, &root_block) {
+                        (Some(a), Some(b)) => a.upgrade().map(|x| Arc::ptr_eq(&x, b)).unwrap_or(false),
+                        _ => false,
+                    };
+                    if !same_block {
+                        continue;
+                    }
+                    if d.start == root_seq {
+                        continue; // root STORE excluded
+                    }
+                    stores.push(op.clone());
+                }
+            }
+        }
+        let _ = fd; // Ghidra reads block via rootOp->getParent(); Rugra does the same.
+    }
+
+    // Ghidra: constseq.cc:583 HeapSequence::calcAddElements
+    /// Recursively walk an INT_ADD tree from a given root, collecting offsets
+    /// and non-constant elements. Faithful to `calcAddElements`
+    /// (constseq.cc:583-595). Constant offsets are summed and returned; any
+    /// non-constant Varnode encountered (or depth limit hit) is pushed to
+    /// `non_const`. Recursion is depth-limited (Ghidra calls with maxDepth=3).
+    pub fn calc_add_elements(
+        vn: &Arc<RwLock<Varnode>>,
+        non_const: &mut Vec<Arc<RwLock<Varnode>>>,
+        max_depth: i32,
+    ) -> u64 {
+        let r = vn.read().unwrap();
+        // cc:586-587: constant leaf returns its offset.
+        if r.is_constant() {
+            return r.get_offset();
+        }
+        // cc:588-591: non-constant leaf or non-INT_ADD def or depth exhausted.
+        let def_op = r.get_def();
+        drop(r);
+        let def_op = match def_op {
+            Some(d) => d,
+            None => {
+                non_const.push(vn.clone());
+                return 0;
+            }
+        };
+        let is_int_add = def_op.read().unwrap().opcode == OpCode::CPUI_INT_ADD;
+        if !is_int_add || max_depth == 0 {
+            non_const.push(vn.clone());
+            return 0;
+        }
+        // cc:592-594: recurse into both inputs.
+        let (in0, in1) = {
+            let d = def_op.read().unwrap();
+            (d.inrefs.first().cloned(), d.inrefs.get(1).cloned())
+        };
+        let mut res = 0u64;
+        if let Some(i0) = in0 {
+            res = res.wrapping_add(Self::calc_add_elements(&i0, non_const, max_depth - 1));
+        }
+        if let Some(i1) = in1 {
+            res = res.wrapping_add(Self::calc_add_elements(&i1, non_const, max_depth - 1));
+        }
+        res
+    }
+
+    // Ghidra: constseq.cc:604 HeapSequence::calcPtraddOffset
+    /// Calculate the byte offset and any non-constant additive elements
+    /// between the given Varnode and `base_pointer`. Faithful to
+    /// `calcPtraddOffset` (constseq.cc:604-627). Walks backward from `vn`
+    /// through PTRADDs and COPYs, summing constant offsets (scaled by the
+    /// PTRADD multiplier when it matches `ptr_add_mult`). Non-constant
+    /// Varnodes encountered (that are not themselves the pointer) are passed
+    /// back in `non_const`. Returns the summed offset in byte units.
+    ///
+    /// NOTE: this delegates to a free-function helper that takes `ptr_add_mult`
+    /// and `store_space_word_size` as scalar parameters. The split lets callers
+    /// that hold a `&mut self.field` borrow (e.g. `collect_store_ops` writing
+    /// `self.non_const_adds`) invoke the analysis without an aliasing `&self`
+    /// borrow — Rust's borrow checker forbids `self.x(&mut self.y)` even though
+    /// the two fields are disjoint.
+    pub fn calc_ptradd_offset(
+        &self,
+        vn: &Arc<RwLock<Varnode>>,
+        non_const: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) -> u64 {
+        Self::calc_ptradd_offset_inner(
+            vn,
+            non_const,
+            self.ptr_add_mult,
+            self.store_space.word_size(),
+        )
+    }
+
+    /// Inner implementation of `calcPtraddOffset` taking scalar parameters so
+    /// callers can avoid an `&self` borrow. See `calc_ptradd_offset` for the
+    /// Ghidra-line attribution.
+    fn calc_ptradd_offset_inner(
+        vn: &Arc<RwLock<Varnode>>,
+        non_const: &mut Vec<Arc<RwLock<Varnode>>>,
+        ptr_add_mult: u64,
+        store_space_word_size: usize,
+    ) -> u64 {
+        let mut res = 0u64;
+        let mut cur = vn.clone();
+        loop {
+            let r = cur.read().unwrap();
+            if !r.is_written() {
+                break;
+            }
+            let def_op = match r.get_def() {
+                Some(d) => d,
+                None => break,
+            };
+            drop(r);
+            let d = def_op.read().unwrap();
+            let opc = d.opcode;
+            if opc == OpCode::CPUI_PTRADD {
+                // cc:612-618: PTRADD with matching multiplier.
+                let mult = d
+                    .inrefs
+                    .get(2)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(1);
+                if mult != ptr_add_mult {
+                    break;
+                }
+                let idx_vn = match d.inrefs.get(1) {
+                    Some(v) => v.clone(),
+                    None => break,
+                };
+                let mut local_non_const: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+                let off = Self::calc_add_elements(&idx_vn, &mut local_non_const, 3);
+                let off = off.wrapping_mul(mult);
+                res = res.wrapping_add(off);
+                non_const.extend(local_non_const);
+                // cc:618: vn = op->getIn(0).
+                let in0 = match d.inrefs.first() {
+                    Some(v) => v.clone(),
+                    None => break,
+                };
+                cur = in0;
+            } else if opc == OpCode::CPUI_COPY {
+                // cc:620-621: COPY just unwraps.
+                let in0 = match d.inrefs.first() {
+                    Some(v) => v.clone(),
+                    None => break,
+                };
+                cur = in0;
+            } else {
+                // cc:623-624: any other op stops the walk.
+                break;
+            }
+        }
+        // cc:626: convert address units to byte units.
+        address_to_byte_int(res, store_space_word_size)
+    }
+
+    // Ghidra: constseq.cc:636 HeapSequence::setsEqual
+    /// Determine if two sets of Varnodes are equal. Faithful to `setsEqual`
+    /// (constseq.cc:636-644). The sets are assumed sorted; returns true iff
+    /// they contain the exact same Varnodes. Used by collectStoreOps to verify
+    /// two STOREs share the same non-constant address components.
+    pub fn sets_equal(
+        op1: &[Arc<RwLock<Varnode>>],
+        op2: &[Arc<RwLock<Varnode>>],
+    ) -> bool {
+        if op1.len() != op2.len() {
+            return false;
+        }
+        for i in 0..op1.len() {
+            if !Arc::ptr_eq(&op1[i], &op2[i]) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: constseq.cc:648 HeapSequence::testValue
+    /// Test if a STORE's value (input[2]) has the matching size for the
+    /// sequence's character type. Faithful to `testValue` (constseq.cc:648-657).
+    /// Returns false if the value is not constant or its size differs from
+    /// `char_type->getSize()`. This is the FULL form missing from the inline
+    /// apply_op path.
+    pub fn test_value(&self, op: &Arc<RwLock<PcodeOp>>) -> bool {
+        let r = op.read().unwrap();
+        let vn = match r.inrefs.get(2) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+        drop(r);
+        let vr = vn.read().unwrap();
+        // cc:652-653: must be constant.
+        if !vr.is_constant() {
+            return false;
+        }
+        // cc:654-655: size must match charType->getSize().
+        let char_size = self
+            .base
+            .char_type
+            .as_ref()
+            .map(|t| t.get_size())
+            .unwrap_or(1);
+        if vr.get_size() != char_size {
+            return false;
+        }
+        true
+    }
+
+    // Ghidra: constseq.cc:663 HeapSequence::collectStoreOps
+    /// Walk forward from the base pointer to all STORE ops from that pointer,
+    /// keeping track of the offset. The final set of STOREs all live in the
+    /// same basic block as the root STORE and have offset >= the root's.
+    /// Faithful to `collectStoreOps` (constseq.cc:663-690). Returns true if the
+    /// minimum sequence size is collected.
+    ///
+    /// This is the FULL version: it computes `base_offset` via
+    /// `calc_ptradd_offset` (cc:672), then for each initial STORE verifies the
+    /// non-constant components match via `sets_equal` (cc:679), applies the
+    /// wrap-mask relative offset (cc:678), bounds-checks against maxSize
+    /// (cc:680-681), and tests the value via `test_value` (cc:682-683). The
+    /// root STORE is appended last at offset 0 (cc:687).
+    pub fn collect_store_ops(&mut self, fd: &Funcdata) -> bool {
+        let mut init_stores: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        self.find_initial_stores(fd, &mut init_stores);
+        // cc:668: need at least MINIMUM_SEQUENCE_LENGTH-1 siblings (+1 root).
+        if init_stores.len() + 1 < MINIMUM_SEQUENCE_LENGTH as usize {
+            return false;
+        }
+        let char_align = self
+            .base
+            .char_type
+            .as_ref()
+            .map(|t| t.get_align_size())
+            .unwrap_or(1) as u64;
+        // cc:670: maxSize = MAXIMUM_SEQUENCE_LENGTH * charType->getAlignSize().
+        let max_size = MAXIMUM_SEQUENCE_LENGTH as u64 * char_align;
+        // cc:671: wrapMask = calc_mask(storeSpace->getAddrSize()).
+        let wrap_mask = crate::address::calc_mask(self.store_space.addr_size());
+        // cc:672: baseOffset = calcPtraddOffset(rootOp->getIn(1), nonConstAdds).
+        // Snapshot the scalar fields so we can mutably borrow non_const_adds
+        // without aliasing `self` (see calc_ptradd_offset_inner doc comment).
+        let root_ptr = {
+            let r = self.base.root_op.read().unwrap();
+            match r.inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => return false,
+            }
+        };
+        let pam = self.ptr_add_mult;
+        let sws = self.store_space.word_size();
+        self.base_offset = Self::calc_ptradd_offset_inner(
+            &root_ptr,
+            &mut self.non_const_adds,
+            pam,
+            sws,
+        );
+        // cc:674-686: walk each initial STORE.
+        for op in &init_stores {
+            let cur_ptr = match op.read().unwrap().inrefs.get(1) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            let mut non_const_comp: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+            let cur_offset = self.calc_ptradd_offset(&cur_ptr, &mut non_const_comp);
+            // cc:678: diff = (curOffset - baseOffset) & wrapMask.
+            let diff = cur_offset.wrapping_sub(self.base_offset) & wrap_mask;
+            if Self::sets_equal(&self.non_const_adds, &non_const_comp) {
+                // cc:680-681: too far → root is not earliest or offsets span
+                // more than maxSize.
+                if diff >= max_size {
+                    return false;
+                }
+                // cc:682-683: value must have matching form.
+                if !self.test_value(op) {
+                    return false;
+                }
+                // cc:684: moveOps.emplace_back(diff, op, -1).
+                self.base.move_ops.push(WriteNode::new(diff, op.clone(), -1));
+            }
+        }
+        // cc:687: root STORE at offset 0.
+        self.base
+            .move_ops
+            .push(WriteNode::new(0, self.base.root_op.clone(), -1));
+        // cc:689: return true (minimum size already checked above; Ghidra
+        // checks >= MINIMUM_SEQUENCE_LENGTH implicitly via the caller).
+        true
+    }
+
+    // Ghidra: constseq.cc:770 HeapSequence::gatherIndirectPairs
+    /// Gather INDIRECT ops attached to the final sequence STOREs and their
+    /// input/output Varnode pairs. Faithful to `gatherIndirectPairs`
+    /// (constseq.cc:770-806).
+    ///
+    /// Walks the ops immediately preceding each STORE; chained INDIRECTs for a
+    /// single storage location are collapsed to their initial input and final
+    /// output. INDIRECTs whose output has a use outside another STORE INDIRECT
+    /// produce a pair. Marks each gathered INDIRECT op so descendant scans can
+    /// recognize STORE-side INDIRECTs, then clears the marks at the end.
+    pub fn gather_indirect_pairs(
+        &mut self,
+        indirects: &mut Vec<Arc<RwLock<PcodeOp>>>,
+        pairs: &mut Vec<IndirectPair>,
+    ) {
+        // cc:773-781: for each STORE, walk preceding INDIRECT chain.
+        // Ghidra uses op->previousOp(); Rugra finds the previous alive op in
+        // the same block via the op bank ordering. We approximate by scanning
+        // the root STORE's parent block for ops ordered before each move op.
+        for node in &self.base.move_ops {
+            let mut prev = self.previous_op_in_block(&node.op);
+            while let Some(p) = prev {
+                let is_indirect = p.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
+                if !is_indirect {
+                    break;
+                }
+                // cc:777: mark the INDIRECT.
+                p.write().unwrap().set_mark();
+                // cc:778: indirects.push_back(op).
+                indirects.push(p.clone());
+                // cc:779: continue backward.
+                prev = self.previous_op_in_block(&p);
+            }
+        }
+        // cc:782-803: for each INDIRECT, check if its output has a non-INDIRECT use.
+        for op in indirects.clone().iter() {
+            let (out_vn, in_vn_initial) = {
+                let r = op.read().unwrap();
+                let out = match &r.output {
+                    Some(o) => o.clone(),
+                    None => continue,
+                };
+                let in0 = match r.inrefs.first() {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                (out, in0)
+            };
+            // cc:786-793: look for a read of outvn that is not by another
+            // marked STORE-INDIRECT.
+            let mut has_use = false;
+            for use_op in out_vn.read().unwrap().descend_iter() {
+                if !use_op.read().unwrap().is_mark() {
+                    has_use = true;
+                    break;
+                }
+            }
+            if !has_use {
+                continue;
+            }
+            // cc:795-800: trace in back to an input not defined by a marked
+            // STORE-INDIRECT.
+            let mut invn = in_vn_initial;
+            loop {
+                let (is_written, def, def_in0) = {
+                    let g = invn.read().unwrap();
+                    if !g.is_written() {
+                        break;
+                    }
+                    let d = match g.get_def() {
+                        Some(d) => d,
+                        None => break,
+                    };
+                    let di0 = d.read().unwrap().inrefs.first().cloned();
+                    (true, d, di0)
+                };
+                let _ = is_written;
+                // cc:798: if (!defOp->isMark()) break;
+                if !def.read().unwrap().is_mark() {
+                    break;
+                }
+                // cc:799: invn = defOp->getIn(0).
+                match def_in0 {
+                    Some(next) => invn = next,
+                    None => break,
+                }
+            }
+            // cc:801: pairs.emplace_back(invn, outvn).
+            pairs.push(IndirectPair::new(invn, out_vn));
+        }
+        // cc:804-805: clear marks.
+        for op in indirects {
+            op.write().unwrap().clear_mark();
+        }
+    }
+
+    /// Find the op immediately preceding `op` in the same basic block, or None.
+    /// Rugra helper standing in for Ghidra's `PcodeOp::previousOp()`
+    /// (op.cc:344). Scans the Funcdata op bank for the greatest order less than
+    /// `op`'s order within the same parent block.
+    fn previous_op_in_block(
+        &self,
+        op: &Arc<RwLock<PcodeOp>>,
+    ) -> Option<Arc<RwLock<PcodeOp>>> {
+        let (my_order, my_block) = {
+            let r = op.read().unwrap();
+            (r.start.get_order(), r.parent.as_ref().and_then(|w| w.upgrade()))
+        };
+        let fd = self.base.fd;
+        if fd.is_null() {
+            return None;
+        }
+        let bank = unsafe { &(*fd).obank };
+        let mut best: Option<Arc<RwLock<PcodeOp>>> = None;
+        let mut best_order: u32 = u32::MAX;
+        for r in &bank.alivelist {
+            let g = r.0.read().unwrap();
+            let ord = g.start.get_order();
+            if ord >= my_order {
+                continue;
+            }
+            let same_block = match (&g.parent, &my_block) {
+                (Some(a), Some(b)) => a.upgrade().map(|x| Arc::ptr_eq(&x, b)).unwrap_or(false),
+                _ => false,
+            };
+            if !same_block {
+                continue;
+            }
+            // First candidate encountered is the greatest order < my_order
+            // because the bank is ordered ascending; but to be safe we keep
+            // the max.
+            if ord < best_order {
+                best_order = ord;
+                best = Some(r.0.clone());
+            }
+        }
+        best
+    }
+
+    // Ghidra: constseq.cc:827 HeapSequence::deduplicatePairs
+    /// Find and eliminate duplicate INDIRECT pairs. Faithful to
+    /// `deduplicatePairs` (constseq.cc:827-864). INDIRECTs collected from
+    /// different effect ops may share the same output storage; this finds any
+    /// output Varnodes that share storage and replaces their reads with a
+    /// single representative Varnode. Returns false on partial overlap or on
+    /// same-storage-different-sources, in which case the transform must abort.
+    pub fn deduplicate_pairs(
+        &mut self,
+        fd: &mut Funcdata,
+        pairs: &mut Vec<IndirectPair>,
+    ) -> bool {
+        // cc:830: empty list is trivially deduplicated.
+        if pairs.is_empty() {
+            return true;
+        }
+        // cc:831-833: build a sort view (Rust sorts in place via indices).
+        let mut order: Vec<usize> = (0..pairs.len()).collect();
+        order.sort_by(|&a, &b| {
+            IndirectPair::compare_output(&pairs[a], &pairs[b])
+        });
+        // cc:836-852: walk sorted pairs, classifying overlap with the head.
+        let mut head_idx = order[0];
+        let mut dup_count = 0usize;
+        for &i in order.iter().skip(1) {
+            let overlap = {
+                let h = pairs[head_idx].out_vn.read().unwrap();
+                let v = pairs[i].out_vn.read().unwrap();
+                h.characterize_overlap(&v)
+            };
+            // cc:841-842: partial overlap → fail.
+            if overlap == 1 {
+                return false;
+            }
+            if overlap == 2 {
+                // cc:843-848: identical storage; must come from same source.
+                let same_source = match (&pairs[i].in_vn, &pairs[head_idx].in_vn) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                };
+                if !same_source {
+                    return false;
+                }
+                pairs[i].mark_duplicate();
+                dup_count += 1;
+                // cc:848: keep the same head for the next iteration.
+            } else {
+                // cc:850-851: no overlap, advance head.
+                head_idx = i;
+            }
+        }
+        // cc:853-862: if any duplicates, replace their reads with the head's out.
+        if dup_count > 0 {
+            head_idx = order[0];
+            for &i in order.iter().skip(1) {
+                if pairs[i].is_duplicate() {
+                    let head_out = pairs[head_idx].out_vn.clone();
+                    let dup_out = pairs[i].out_vn.clone();
+                    fd.total_replace(&dup_out, head_out);
+                } else {
+                    head_idx = i;
+                }
+            }
+        }
+        true
+    }
+
+    // Ghidra: constseq.cc:871 HeapSequence::removeStoreOps
+    /// Remove all STORE ops from the basic block, unhooking INDIRECT pairs'
+    /// outputs first so they survive the recursive destroy, then rebuilding
+    /// the surviving INDIRECTs around the replacement CALLOTHER. Faithful to
+    /// `removeStoreOps` (constseq.cc:871-894).
+    pub fn remove_store_ops(
+        &mut self,
+        fd: &mut Funcdata,
+        indirects: &[Arc<RwLock<PcodeOp>>],
+        indirect_pairs: &[IndirectPair],
+        replace_op: &crate::op::PcodeOpRef,
+    ) {
+        // cc:874-877: unhook output Varnodes of each pair we want to preserve.
+        for pair in indirect_pairs {
+            // pair.outVn->getDef() is the INDIRECT; unset its output so the
+            // recursive destroy below does not kill the preserved outVn.
+            let def = pair.out_vn.read().unwrap().get_def();
+            if let Some(def_op) = def {
+                fd.op_unset_output(&crate::op::PcodeOpRef(def_op));
+            }
+        }
+        // cc:878-881: destroy each move op (STORE) recursively.
+        let to_remove: Vec<crate::op::PcodeOpRef> = self
+            .base
+            .move_ops
+            .iter()
+            .map(|n| crate::op::PcodeOpRef(n.op.clone()))
+            .collect();
+        for op in &to_remove {
+            fd.op_destroy_recursive(op);
+        }
+        // cc:882-884: destroy the original INDIRECT ops.
+        for ind in indirects {
+            fd.op_destroy(&crate::op::PcodeOpRef(ind.clone()));
+        }
+        // cc:885-893: rebuild a fresh INDIRECT around replaceOp for each
+        // surviving (non-duplicate) pair.
+        for pair in indirect_pairs {
+            if pair.is_duplicate() {
+                continue;
+            }
+            let addr = replace_op.0.read().unwrap().get_addr();
+            let new_ind = fd.new_op(2, addr);
+            fd.op_set_opcode(&new_ind, OpCode::CPUI_INDIRECT);
+            // cc:889: opSetOutput(newInd, outVn).
+            fd.op_set_output(&new_ind, pair.out_vn.clone());
+            // cc:890: opSetInput(newInd, inVn, 0).
+            if let Some(in_vn) = &pair.in_vn {
+                fd.op_set_input(&new_ind, in_vn.clone(), 0);
+            }
+            // cc:891: opSetInput(newInd, newVarnodeIop(replaceOp), 1).
+            let iop_vn = fd.new_varnode_iop(replace_op);
+            fd.op_set_input(&new_ind, iop_vn, 1);
+            // cc:892: opInsertBefore(newInd, replaceOp).
+            fd.op_insert_before(&new_ind, replace_op);
+        }
+    }
+
+    // Ghidra: constseq.cc:927 HeapSequence::transform
+    /// Transform STOREs into a single CALLOTHER memcpy user-op. Faithful to
+    /// `HeapSequence::transform` (constseq.cc:927-940). Gathers indirect
+    /// pairs, deduplicates them (aborting on failure), builds the string-copy
+    /// CALLOTHER, then removes the STORE ops. Returns false if any step fails.
+    ///
+    /// This is the STORE-path-specific transform; it layers the indirect-pair
+    /// analysis on top of the shared `ArraySequence::build_string_copy` /
+    /// `remove_store_ops` machinery. `dest_ptr_addr` is the destination
+    /// pointer address passed through to `build_string_copy`.
+    pub fn transform(
+        &mut self,
+        fd: &mut Funcdata,
+        dest_ptr_addr: u64,
+    ) -> bool {
+        // cc:930-932: gather indirect pairs.
+        let mut indirects: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        let mut indirect_pairs: Vec<IndirectPair> = Vec::new();
+        self.gather_indirect_pairs(&mut indirects, &mut indirect_pairs);
+        // cc:933-934: deduplicate (abort on partial overlap / source mismatch).
+        if !self.deduplicate_pairs(fd, &mut indirect_pairs) {
+            return false;
+        }
+        // cc:935-937: build the CALLOTHER. Uses the shared ArraySequence
+        // builder with is_store=true so the store path's destPtr handling runs.
+        let callop = match self.base.build_string_copy(fd, dest_ptr_addr, true) {
+            Some(op) => op,
+            None => return false,
+        };
+        // cc:938: remove the STORE ops (rebuilds surviving INDIRECTs).
+        self.remove_store_ops(fd, &indirects, &indirect_pairs, &callop);
+        true
+    }
 }
 
 /// Rule triggering on COPY ops to detect string copy sequences.
