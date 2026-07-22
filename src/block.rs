@@ -2724,6 +2724,72 @@ impl BlockList {
             flags: 0,
         }
     }
+
+    /// Ghidra `BlockList::getExitLeaf` (block.cc:2953-2958): the exit leaf is
+    /// the last child's exit leaf. Returns null if there are no children.
+    // Ghidra: block.cc:2953 BlockList::getExitLeaf
+    pub fn get_exit_leaf(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:2956-2957: if (getSize()==0) return null; return getBlock(getSize()-1)->getExitLeaf();
+        self.children.last().and_then(|c| c.read().unwrap().get_exit_leaf_trait())
+    }
+
+    /// Ghidra `BlockList::lastOp` (block.cc:2960-2965): the last op is the
+    /// last child's last op. Returns null if there are no children.
+    // Ghidra: block.cc:2960 BlockList::lastOp
+    pub fn last_op(&self) -> Option<PcodeOpRef> {
+        // cc:2963-2964: if (getSize()==0) return null; return getBlock(getSize()-1)->lastOp();
+        self.children.last().and_then(|c| c.read().unwrap().last_op())
+    }
+
+    /// Ghidra `BlockList::negateCondition` (block.cc:2967-2974): negate the
+    /// condition of the last child and flip the order of this block's outgoing
+    /// edges. Returns true if the child's condition was negated. Rugra
+    /// delegates to the last child's `negate_condition` and then swaps the
+    /// outgoing edges in place.
+    // Ghidra: block.cc:2967 BlockList::negateCondition
+    pub fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        // cc:2970-2971: bl = getBlock(getSize()-1); res = bl->negateCondition(false);
+        let res = if let Some(last) = self.children.last() {
+            last.write().unwrap().negate_condition(false)
+        } else {
+            false
+        };
+        // cc:2972: FlowBlock::negateCondition(toporbottom);  -- flip order of outgoing
+        if toporbottom {
+            self.outgoing.swap(0, 1.min(self.outgoing.len().saturating_sub(1)));
+        }
+        res
+    }
+
+    /// Ghidra `BlockList::getSplitPoint` (block.cc:2976-2981): the split point
+    /// is the last child's split point. Returns null if there are no children.
+    /// Rugra returns the last child itself (the block whose CBRANCH can be
+    /// flipped), as the front-leaf split-point concept does not yet have a
+    /// distinct Rust counterpart.
+    // Ghidra: block.cc:2976 BlockList::getSplitPoint
+    pub fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:2979-2980: if (getSize()==0) return null; return getBlock(getSize()-1)->getSplitPoint();
+        self.children.last().cloned()
+    }
+
+    /// Ghidra `BlockList::printHeader` (block.cc:2983-2988): emit
+    /// `"List block <index>"`.
+    // Ghidra: block.cc:2983 BlockList::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:2986-2987: s << "List block "; FlowBlock::printHeader(s);
+        format!("List block {}", self.index)
+    }
+
+    /// RUGRA-GLUE: outgoing-edge swap helper (mirrors FlowBlock::negateCondition's
+    /// edge-flip step, used by BlockList::negateCondition above). Exposed as a
+    /// separate inherent method so callers can flip the edges without negating
+    /// the last child's condition.
+    // RUGRA-GLUE: outgoing swap helper (Ghidra folds this into FlowBlock::negateCondition block.cc:227-233)
+    pub fn outgoing_swap(&mut self) {
+        if self.outgoing.len() >= 2 {
+            self.outgoing.swap(0, 1);
+        }
+    }
 }
 
 impl FlowBlock for BlockList {

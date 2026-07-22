@@ -3125,6 +3125,7 @@ impl<'a> CollapseStructure<'a> {
                 outgoing: Vec::new(),
                 parent: None,
                 goto_target: None,
+                goto_type: crate::block::goto_type::GOTO_GOTO,
                 flags: 0,
             }));
         let tc_idx = tc.read().unwrap().get_index();
@@ -3159,6 +3160,7 @@ impl<'a> CollapseStructure<'a> {
                 outgoing: Vec::new(),
                 parent: None,
                 goto_target: None,
+                goto_type: crate::block::goto_type::GOTO_GOTO,
                 flags: 0,
             }));
         let tc_idx = tc.read().unwrap().get_index();
@@ -3625,6 +3627,7 @@ impl<'a> CollapseStructure<'a> {
                 else_body: None,
                 negated: true,
                 goto_target: Some(goto_target.clone()),
+                goto_type: crate::block::goto_type::GOTO_GOTO,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
                 parent: None,
