@@ -937,7 +937,7 @@ impl ActionDatabase {
         // removing blocks that became unreachable after structuring.
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
         mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
-        // mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674 — stub, defer
+        mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674
         mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — stub, safe
 
         fullloop.add_action(Box::new(mainloop));
@@ -945,7 +945,7 @@ impl ActionDatabase {
         // but some may need maturity before enabling.
         fullloop.add_action(Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
         fullloop.add_action(Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
-        // fullloop.add_action(Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685 — stub, defer
+        fullloop.add_action(Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685
         fullloop.add_action(Box::new(ActionDeadCode::new())); // :5687
 
         universal.add_action(Box::new(fullloop));
