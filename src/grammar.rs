@@ -409,7 +409,9 @@ impl GrammarLexer {
     /// `filestack`, and replaces the current input so the recursive-descent
     /// driver reads from this file.
     pub fn push_file(&mut self, filename: &str, body: &str) {
-        let filenum = (self.filenamemap.len() + self.streammap.len()) as i32;
+        // Ghidra: `int4 filenum = filenamemap.size();` — filenamemap and
+        // streammap grow in lockstep, so either length gives the next id.
+        let filenum = self.filenamemap.len() as i32;
         self.filenamemap.insert(filenum, filename.to_string());
         self.streammap.push(LexerStream {
             body: body.chars().collect(),
@@ -650,7 +652,12 @@ impl GrammarLexer {
                 LexerState::SingleQuote => {
                     if c == '\'' {
                         self.next_char();
+                        // Ghidra: GrammarToken::set(charconstant, ptr, len)
+                        // stores the decoded character value in value.integer
+                        // (grammar.cc:1985). Mirror that here so CHAR_CONSTANT
+                        // tokens carry their integer value, not just the text.
                         token.token_type = token_type::CHAR_CONSTANT;
+                        token.integer_value = parse_char_constant(&accum);
                         token.string_value = accum;
                     return token;
                     } else {
@@ -805,9 +812,56 @@ impl TypeModifier {
             TypeModifier::Function { params, .. } => {
                 params.iter().all(|p| match p {
                     None => true,
-                    Some(dec) => dec.is_valid(),
+                    Some(dec) => {
+                        if !dec.is_valid() {
+                            return false;
+                        }
+                        // Ghidra: grammar.cc:2456-2460 — a parameter declarator
+                        // with no modifiers whose base type is `void` is an
+                        // "extra void type" and invalidates the modifier.
+                        if dec.mods.is_empty() {
+                            if let Some(ref ct) = dec.basetype {
+                                if ct.get_metatype()
+                                    == crate::type_system::datatype::TypeMetatype::Void
+                                {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    }
                 })
             }
+        }
+    }
+
+    // Ghidra: grammar.hh:136 PointerModifier::flags (ctor param)
+    /// Get the pointer-modifier flags (the `flags` ctor argument in
+    /// `PointerModifier(uint4 fl)`). Faithful to the public `flags` member.
+    pub fn pointer_flags(&self) -> Option<u32> {
+        match self {
+            TypeModifier::Pointer { flags } => Some(*flags),
+            _ => None,
+        }
+    }
+
+    // Ghidra: grammar.hh:146 ArrayModifier::arraysize (ctor param)
+    /// Get the array-modifier element count (the `arraysize` ctor argument in
+    /// `ArrayModifier(uint4 fl, int4 as)`). Returns `None` for non-array
+    /// modifiers. Faithful to the public `arraysize` member.
+    pub fn array_size(&self) -> Option<i32> {
+        match self {
+            TypeModifier::Array { array_size, .. } => Some(*array_size),
+            _ => None,
+        }
+    }
+
+    // Ghidra: grammar.hh:146 ArrayModifier::flags (ctor param)
+    /// Get the array-modifier flags. Returns `None` for non-array modifiers.
+    pub fn array_flags(&self) -> Option<u32> {
+        match self {
+            TypeModifier::Array { flags, .. } => Some(*flags),
+            _ => None,
         }
     }
 
@@ -1493,8 +1547,12 @@ impl CParse {
     }
 
     // Ghidra: grammar.cc:2764 CParse::newFunc
-    /// Append a function modifier to `dec`, normalising the varargs trailer.
-    /// Faithful to `newFunc`.
+    // Ghidra: grammar.cc:2764 CParse::newFunc + grammar.cc:2419 FunctionModifier ctor
+    /// Append a function modifier to `dec`, normalising the varargs trailer and
+    /// the single-`(void)` parameter. Faithful to `newFunc` followed by the
+    /// `FunctionModifier` constructor (grammar.cc:2419): if the (post-varargs)
+    /// paramlist is exactly one declarator with no modifiers and a `void` base
+    /// type, the list is cleared (encoding `f(void)` as a zero-arity function).
     pub fn new_func(&mut self, dec: &mut TypeDeclarator, mut declist: Vec<TypeDeclarator>) {
         let mut dotdotdot = false;
         if let Some(true) = declist.last().map(|d| d.ident.is_empty() && d.mods.is_empty() && d.basetype.is_none() && d.flags == u32::MAX) {
@@ -1503,6 +1561,17 @@ impl CParse {
             // encodes that trailer as a sentinel declarator with `flags=u32::MAX`.
             dotdotdot = true;
             declist.pop();
+        }
+        // Ghidra: grammar.cc:2423-2430 — drop a lone `(void)` parameter.
+        if declist.len() == 1 {
+            let only = &declist[0];
+            if only.mods.is_empty() {
+                if let Some(ref ct) = only.basetype {
+                    if ct.get_metatype() == crate::type_system::datatype::TypeMetatype::Void {
+                        declist.clear();
+                    }
+                }
+            }
         }
         let params: Vec<Option<TypeDeclarator>> = declist.into_iter().map(Some).collect();
         dec.mods.push(TypeModifier::Function { params, dotdotdot });
@@ -2281,6 +2350,48 @@ pub fn parse_type(text: &str) -> Option<(String, String)> {
         String::new()
     };
     Some((type_name, var_name))
+}
+
+// Ghidra: grammar.cc:3112 parse_type
+/// Parse a single type from C text, returning the built `Datatype` and the
+/// declarator's identifier. Faithful to `parse_type(istream &, string &,
+/// Architecture *)`: drives a `CParse` with `DocType::ParameterDeclaration`,
+/// takes the single result declarator, validates it, captures the identifier,
+/// and builds the type via `TypeDeclarator::build_type`.
+///
+/// Unlike the simplified `parse_type` (which lexes only two tokens), this walks
+/// the full CParse grammar so modifiers (`int * x`, `long x`) and pointer/array
+/// suffixes are handled.
+///
+/// Errors map to the C++ `throw ParseError(...)` paths and are returned as
+/// `Err(message)`.
+pub fn parse_type_full(
+    text: &str,
+    types: &mut crate::type_system::typefactory::TypeFactory,
+) -> Result<(Arc<Datatype>, String), String> {
+    let mut parser = CParse::new(4096);
+    if !parser.parse_stream(text, DocType::ParameterDeclaration) {
+        return Err(parser.get_error().to_string());
+    }
+    let mut decls = match parser.take_result_declarations() {
+        Some(d) => d,
+        None => return Err("Did not parse a datatype".to_string()),
+    };
+    if decls.is_empty() {
+        return Err("Did not parse a datatype".to_string());
+    }
+    if decls.len() > 1 {
+        return Err("Parsed multiple declarations".to_string());
+    }
+    let decl = decls.swap_remove(0);
+    if !decl.is_valid() {
+        return Err("Parsed type is invalid".to_string());
+    }
+    let name = decl.get_identifier().to_string();
+    let dt = decl
+        .build_type(types)
+        .ok_or_else(|| "Parsed type is invalid".to_string())?;
+    Ok((dt, name))
 }
 
 // Ghidra: grammar.cc:3131 parse_protopieces
@@ -3115,5 +3226,147 @@ mod tests {
         };
         let res = mod_type(&func_mod, base, &decl, &mut tf).expect("code");
         assert_eq!(res.get_metatype(), crate::type_system::datatype::TypeMetatype::Code);
+    }
+
+    // ---- new tests for the GrammarToken::set / void-param / accessor ports ----
+
+    #[test]
+    fn test_parse_char_constant_single() {
+        // grammar.cc:1986 — a single char maps to its byte value.
+        assert_eq!(parse_char_constant("A"), 65);
+        assert_eq!(parse_char_constant("0"), 48);
+    }
+
+    #[test]
+    fn test_parse_char_constant_escapes() {
+        // grammar.cc:1988-2014 — backslash escapes.
+        assert_eq!(parse_char_constant("\\n"), 10);
+        assert_eq!(parse_char_constant("\\0"), 0);
+        assert_eq!(parse_char_constant("\\a"), 7);
+        assert_eq!(parse_char_constant("\\b"), 8);
+        assert_eq!(parse_char_constant("\\f"), 12);
+        assert_eq!(parse_char_constant("\\r"), 13);
+        assert_eq!(parse_char_constant("\\t"), 9);
+        assert_eq!(parse_char_constant("\\v"), 11);
+        assert_eq!(parse_char_constant("\\\\"), 92);
+        assert_eq!(parse_char_constant("\\'"), 39);
+        assert_eq!(parse_char_constant("\\\""), 34);
+    }
+
+    #[test]
+    fn test_grammar_token_set_with_text_integer() {
+        // GrammarToken::set(integer, ptr, len) (grammar.cc:1971).
+        let mut tok = GrammarToken::new();
+        tok.set_with_text(token_type::INTEGER, "42");
+        assert_eq!(tok.get_type(), token_type::INTEGER);
+        assert_eq!(tok.get_integer(), 42);
+    }
+
+    #[test]
+    fn test_grammar_token_set_with_text_hex() {
+        let mut tok = GrammarToken::new();
+        tok.set_with_text(token_type::INTEGER, "0xff");
+        assert_eq!(tok.get_integer(), 255);
+    }
+
+    #[test]
+    fn test_grammar_token_set_with_text_charconstant() {
+        // GrammarToken::set(charconstant, ptr, len) decodes escapes.
+        let mut tok = GrammarToken::new();
+        tok.set_with_text(token_type::CHAR_CONSTANT, "\\n");
+        assert_eq!(tok.get_type(), token_type::CHAR_CONSTANT);
+        assert_eq!(tok.get_integer(), 10);
+    }
+
+    #[test]
+    fn test_grammar_token_set_type_only() {
+        // GrammarToken::set(uint4 tp) (grammar.cc:1960).
+        let mut tok = GrammarToken::new();
+        tok.set_type_only(token_type::SEMICOLON);
+        assert_eq!(tok.get_type(), token_type::SEMICOLON);
+    }
+
+    #[test]
+    fn test_function_modifier_void_param_dropped() {
+        // FunctionModifier ctor (grammar.cc:2423-2430): a lone `(void)` param
+        // is dropped, yielding a zero-arity function.
+        let mut p = CParse::new(1024);
+        let mut dec = TypeDeclarator::new();
+        let void_dec = TypeDeclarator {
+            basetype: Some(std::sync::Arc::new(
+                crate::type_system::datatype::Datatype::Void(
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        crate::type_system::datatype::TypeMetatype::Void,
+                    ),
+                ),
+            )),
+            ..TypeDeclarator::new()
+        };
+        p.new_func(&mut dec, vec![void_dec]);
+        match &dec.mods[0] {
+            TypeModifier::Function { params, .. } => assert!(params.is_empty()),
+            _ => panic!("expected Function modifier"),
+        }
+    }
+
+    #[test]
+    fn test_function_modifier_is_valid_rejects_extra_void() {
+        // FunctionModifier::isValid (grammar.cc:2456-2460): a non-lone void
+        // parameter invalidates the modifier.
+        let void_dec = TypeDeclarator {
+            basetype: Some(std::sync::Arc::new(
+                crate::type_system::datatype::Datatype::Void(
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        crate::type_system::datatype::TypeMetatype::Void,
+                    ),
+                ),
+            )),
+            ..TypeDeclarator::new()
+        };
+        let int_dec = TypeDeclarator {
+            basetype: Some(std::sync::Arc::new(
+                crate::type_system::datatype::Datatype::Void(
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        crate::type_system::datatype::TypeMetatype::Void,
+                    ),
+                ),
+            )),
+            ..TypeDeclarator::new()
+        };
+        let fmod = TypeModifier::Function {
+            params: vec![Some(int_dec), Some(void_dec)],
+            dotdotdot: false,
+        };
+        assert!(!fmod.is_valid());
+    }
+
+    #[test]
+    fn test_pointer_array_accessors() {
+        // PointerModifier/ArrayModifier ctor-param accessors.
+        let ptr = TypeModifier::Pointer { flags: 7 };
+        assert_eq!(ptr.pointer_flags(), Some(7));
+        assert!(ptr.array_size().is_none());
+        let arr = TypeModifier::Array { flags: 3, array_size: 10 };
+        assert_eq!(arr.array_size(), Some(10));
+        assert_eq!(arr.array_flags(), Some(3));
+        assert!(arr.pointer_flags().is_none());
+    }
+
+    #[test]
+    fn test_lexer_get_cur_stream_and_bump_line() {
+        // GrammarLexer::getCurStream (grammar.hh:107) + bumpLine (grammar.cc:2054).
+        let mut lex = GrammarLexer::new(1024);
+        assert!(lex.get_cur_stream().is_none());
+        lex.push_file("a.c", "int x;\n");
+        assert_eq!(lex.get_cur_stream(), Some(0));
+        let lineno_before = lex.cur_lineno();
+        lex.bump_line();
+        assert_eq!(lex.cur_lineno(), lineno_before + 1);
     }
 }
