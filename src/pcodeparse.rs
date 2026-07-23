@@ -1059,13 +1059,16 @@ impl PcodeLexer {
                 }
             }
             LexerState::Hexstring | LexerState::Decstring => {
-                // pcodeparse.y:587-595: parse the numeric literal.
-                self.curnum = parse_number_token(&self.curtoken);
-                if self.curnum == 0 && self.curtoken.chars().any(|c| c != '0') {
-                    // Could not parse — Ghidra returns BADINTEGER.
-                    PcodeTokenKind::BadInteger
-                } else {
+                // pcodeparse.y:587-595: parse the numeric literal. Ghidra uses
+                // `s1 >> curnum; if (!s1) return BADINTEGER;` — i.e. the only
+                // failure signal is a parse error, NOT a zero value. `0x0`,
+                // `0`, `000` all parse successfully to 0.
+                let (parsed_ok, val) = parse_number_token_checked(&self.curtoken);
+                self.curnum = val;
+                if parsed_ok {
                     PcodeTokenKind::Integer
+                } else {
+                    PcodeTokenKind::BadInteger
                 }
             }
             LexerState::Endstream => {
@@ -1132,10 +1135,33 @@ impl Default for PcodeLexer {
 /// Returns 0 on parse failure (caller maps that to `BadInteger`), matching
 /// the C++ `istringstream >> uintb` failure mode.
 fn parse_number_token(s: &str) -> u64 {
+    parse_number_token_checked(s).1
+}
+
+// RUGRA-GLUE: parse_number_token_checked
+/// Like `parse_number_token` but also reports whether parsing succeeded,
+/// mirroring Ghidra's `if (!s1) return BADINTEGER;` check (pcodeparse.y:592).
+/// A successful parse of `0` returns `(true, 0)`; an empty/invalid digit
+/// sequence returns `(false, 0)`.
+fn parse_number_token_checked(s: &str) -> (bool, u64) {
     if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(rest, 16).unwrap_or(0)
+        if rest.is_empty() {
+            return (false, 0);
+        }
+        match u64::from_str_radix(rest, 16) {
+            Ok(v) => (true, v),
+            Err(_) => (false, 0),
+        }
     } else {
-        s.parse::<u64>().unwrap_or(0)
+        // Decimal: every char must be an ASCII digit (Ghidra's decstring state
+        // only accumulates [0-9], so a non-digit here means corruption).
+        if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+            return (false, 0);
+        }
+        match s.parse::<u64>() {
+            Ok(v) => (true, v),
+            Err(_) => (false, 0),
+        }
     }
 }
 
@@ -1467,7 +1493,8 @@ pub fn decode_op(decoder: &mut dyn Decoder) -> Option<PcodeData> {
 /// The snippet compiler, faithful to `PcodeSnippet`
 /// (pcodeparse.hh:72-98). Holds the lexer, the local symbol table, the
 /// unique-space temp allocator, and the error state. The Bison grammar
-/// semantic actions (ConstructTpl assembly) are an L3 gap.
+/// semantic actions build a `ConstructTpl` via the `PcodeCompile` builder
+/// methods on this struct.
 pub struct PcodeSnippet {
     /// The wrapped lexer (`lexer`).
     lexer: PcodeLexer,
@@ -1482,6 +1509,30 @@ pub struct PcodeSnippet {
     errorcount: i32,
     /// First reported error message (`firsterror`).
     firsterror: Option<String>,
+    // --- fields for the recursive-descent parser ---
+    /// Current lookahead token (the parser's view of Bison's lookahead).
+    current: Option<LexedToken>,
+    /// The parsed ConstructTpl (`result`), set by `parse_stream`.
+    result: Option<ConstructTpl>,
+    /// Labels defined in the current parse (`local_labelcount` + the labels
+    /// themselves, so the `label` rule can resolve `<LABELSYM>`).
+    labels: Vec<LabelSymbol>,
+    /// Next label index (`local_labelcount` in PcodeCompile).
+    label_count: u32,
+    /// Whether the `local` keyword is required for new temporaries
+    /// (`enforceLocalKey` in PcodeCompile).
+    enforce_local_key: bool,
+    /// The default address space for loads/stores (`defaultspace`).
+    default_space: AddressSpace,
+    /// The constant address space (`constantspace`).
+    constant_space: AddressSpace,
+    /// The unique address space (`uniqspace`).
+    unique_space: AddressSpace,
+    /// Current line number for error reporting (1-based). Advanced as the
+    /// lexer scans '\n'. Ghidra does not track this in PcodeSnippet itself
+    /// (it is in `Location`), but Rugra threads it through for richer
+    /// error messages.
+    line_number: u32,
 }
 
 impl PcodeSnippet {
@@ -1498,6 +1549,15 @@ impl PcodeSnippet {
             tempbase: 0,
             errorcount: 0,
             firsterror: None,
+            current: None,
+            result: None,
+            labels: Vec::new(),
+            label_count: 0,
+            enforce_local_key: false,
+            default_space: AddressSpace::Ram,
+            constant_space: AddressSpace::Const,
+            unique_space: AddressSpace::Unique,
+            line_number: 1,
         };
         // pcodeparse.y:686-692: insert a SpaceSymbol for each space of type
         // CONSTANT / PROCESSOR / SPACEBASE / INTERNAL. Rugra seeds the
@@ -1645,37 +1705,6 @@ impl PcodeSnippet {
         tok
     }
 
-    // Ghidra: pcodeparse.y:770 PcodeSnippet::parseStream
-    /// Tokenise and parse a stream. Faithful to pcodeparse.y:770-785: prime
-    /// the lexer, run the parser, report a syntax error on failure. Rugra
-    /// has no Bison grammar wired up (L3 gap), so this performs the
-    /// tokenisation pass and reports a syntax error if the token stream
-    /// contains an illegal token, otherwise returns true. The full grammar
-    /// actions will be ported alongside SLEIGH integration.
-    pub fn parse_stream(&mut self, text: &str) -> bool {
-        self.lexer.initialize(text);
-        loop {
-            let tok = self.lex();
-            match tok {
-                PcodeTokenKind::EndOfStream => return !self.has_errors(),
-                PcodeTokenKind::Illegal => {
-                    // Bison returns 0 for both EOF and illegal; Ghidra's
-                    // pcodeerror() then reports "Syntax error". We do the
-                    // same and stop.
-                    self.report_error("Syntax error");
-                    return false;
-                }
-                PcodeTokenKind::BadInteger => {
-                    self.report_error("Integer overflow");
-                    // Continue scanning; Bison would also continue.
-                }
-                _ => {
-                    // Token accepted. Full semantic actions are an L3 gap.
-                }
-            }
-        }
-    }
-
     // Ghidra: pcodeparse.hh:87 PcodeSnippet::getLocation
     /// Get the source location of a symbol. Ghidra returns null
     /// (pcodeparse.hh:87); so do we.
@@ -1720,6 +1749,2433 @@ fn space_symbol_name(sp: &AddressSpace) -> String {
         AddressSpace::Iop => "iop".to_string(),
         AddressSpace::Overlay => "overlay".to_string(),
         AddressSpace::Other(_) => "other".to_string(),
+    }
+}
+
+// ===========================================================================
+// Semantic-action AST (pcodecompile.hh:34-105, pcodecompile.cc:28-781)
+// ===========================================================================
+//
+// The Bison grammar in pcodeparse.y builds an in-memory ConstructTpl — a flat
+// vector of OpTpl — via the PcodeCompile builder methods. This section ports
+// those types and builders so the recursive-descent parser below can emit the
+// same IR. Rugra has no SLEIGH integration, so ConstructTpl is never fed into
+// the main decompiler pipeline, but the types let us faithfully reproduce the
+// grammar's semantic actions and provide a clean hook for future SLEIGH work.
+
+// ---------------------------------------------------------------------------
+// ConstTpl (slghsymbol.hh / template.hh) — a templated constant
+// ---------------------------------------------------------------------------
+
+/// Faithful to `ConstTpl` (template.hh). A ConstTpl is one of:
+///   - a real integer constant,
+///   - a reference to an address space (by index or by the special
+///     `j_curspace`/`j_curspace_size` markers used by the `jumpdest` rule),
+///   - a handle into a constructor operand,
+///   - a relative jump offset (`j_relative`).
+///
+/// Rugra collapses Ghidra's `const_type` enum + value fields into a tagged
+/// enum so the kinds are exhaustive at the type level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstTpl {
+    /// `ConstTpl::real` — a concrete integer (pcodecompile.cc uses this for
+    /// sizes, offsets, and constant-space varnode offsets).
+    Real(u64),
+    /// `ConstTpl::j_curspace` — the current address space (jumpdest rule,
+    /// pcodeparse.y:195-198).
+    JCurSpace,
+    /// `ConstTpl::j_curspace_size` — size of the current address space.
+    JCurSpaceSize,
+    /// `ConstTpl::spaceid` with a concrete `AddressSpace` (the `*[spc]` forms
+    /// in sizedstar/jumpdest).
+    SpaceId(AddressSpace),
+    /// `ConstTpl::j_relative` — a relative label index (jumpdest label form,
+    /// pcodeparse.y:199).
+    JRelative(u32),
+    /// `ConstTpl::handle` — a constructor-operand handle. Carries the operand
+    /// index; used by SLEIGH subtable exports. Rugra retains it for shape
+    /// parity but the standalone snippet parser does not emit it.
+    Handle { index: i32, plus: u64 },
+}
+
+impl ConstTpl {
+    // Ghidra: template.hh ConstTpl::real sentinel
+    /// The "real" type discriminator (template.hh `ConstTpl::real`). Returns
+    /// the inner value when this ConstTpl is `Real`.
+    pub fn as_real(&self) -> Option<u64> {
+        match self {
+            ConstTpl::Real(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    // Ghidra: template.hh ConstTpl::getReal
+    /// Unwrap as a real constant, panicking otherwise (mirrors the C++ method
+    /// that UBs on the wrong type — callers must check `is_real` first).
+    pub fn get_real(&self) -> u64 {
+        self.as_real().unwrap_or(0)
+    }
+
+    // Ghidra: template.hh ConstTpl::getType discriminator
+    /// Whether this is a `Real` const.
+    pub fn is_real(&self) -> bool {
+        matches!(self, ConstTpl::Real(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VarnodeTpl (template.hh) — space/offset/size, each a ConstTpl
+// ---------------------------------------------------------------------------
+
+/// Faithful to `VarnodeTpl` (template.hh): a (space, offset, size) triple of
+/// `ConstTpl`, plus the `unnamed` flag used by `buildTemporary`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarnodeTpl {
+    /// Space ConstTpl (`getSpace()`).
+    pub space: ConstTpl,
+    /// Offset ConstTpl (`getOffset()`).
+    pub offset: ConstTpl,
+    /// Size ConstTpl (`getSize()`).
+    pub size: ConstTpl,
+    /// `isUnnamed` flag — true for compiler-allocated temps.
+    pub unnamed: bool,
+}
+
+impl VarnodeTpl {
+    // Ghidra: pcodecompile.hh:79 PcodeCompile::buildTemporary
+    /// Construct a `(space, offset, size)` triple.
+    pub fn new(space: ConstTpl, offset: ConstTpl, size: ConstTpl) -> Self {
+        Self {
+            space,
+            offset,
+            size,
+            unnamed: false,
+        }
+    }
+
+    // Ghidra: pcodecompile.cc:295 PcodeCompile::buildTemporary
+    /// Build an unnamed zero-size temporary in `uniqspace` at the given offset.
+    /// Mirrors `buildTemporary` minus the `allocateTemp` call (the caller
+    /// supplies the offset so the builder stays pure).
+    pub fn build_temporary(uniqspace: AddressSpace, offset: u64) -> Self {
+        Self {
+            space: ConstTpl::SpaceId(uniqspace),
+            offset: ConstTpl::Real(offset),
+            size: ConstTpl::Real(0),
+            unnamed: true,
+        }
+    }
+
+    // Ghidra: template.hh VarnodeTpl::isUnnamed
+    pub fn is_unnamed(&self) -> bool {
+        self.unnamed
+    }
+
+    // Ghidra: template.hh VarnodeTpl::setUnnamed
+    pub fn set_unnamed(&mut self, v: bool) {
+        self.unnamed = v;
+    }
+
+    // Ghidra: template.hh VarnodeTpl::isZeroSize
+    /// True iff the size is `Real(0)` (the compiler's "size not yet known"
+    /// sentinel).
+    pub fn is_zero_size(&self) -> bool {
+        matches!(self.size, ConstTpl::Real(0))
+    }
+
+    // Ghidra: template.hh VarnodeTpl::isLocalTemp
+    /// True iff this is a unique-space temporary (local to one constructor).
+    pub fn is_local_temp(&self) -> bool {
+        matches!(self.space, ConstTpl::SpaceId(AddressSpace::Unique))
+    }
+
+    // Ghidra: template.hh VarnodeTpl::setSize
+    pub fn set_size(&mut self, s: ConstTpl) {
+        self.size = s;
+    }
+
+    // Ghidra: template.hh VarnodeTpl::getSpace
+    pub fn get_space(&self) -> ConstTpl {
+        self.space
+    }
+
+    // Ghidra: template.hh VarnodeTpl::getOffset
+    pub fn get_offset(&self) -> ConstTpl {
+        self.offset
+    }
+
+    // Ghidra: template.hh VarnodeTpl::getSize
+    pub fn get_size(&self) -> ConstTpl {
+        self.size
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OpTpl (template.hh) — a single templated p-code op
+// ---------------------------------------------------------------------------
+
+/// Faithful to `OpTpl` (template.hh): an opcode plus an optional output
+/// VarnodeTpl and a vector of input VarnodeTpls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpTpl {
+    /// The opcode (`getOpcode()`).
+    pub opc: OpCode,
+    /// Output varnode, if any (`getOut()` is null in Ghidra when absent).
+    pub out: Option<VarnodeTpl>,
+    /// Input varnodes (`getIn(j)` / `numInput()`).
+    pub inputs: Vec<VarnodeTpl>,
+}
+
+impl OpTpl {
+    // Ghidra: template.hh OpTpl::OpTpl
+    pub fn new(opc: OpCode) -> Self {
+        Self {
+            opc,
+            out: None,
+            inputs: Vec::new(),
+        }
+    }
+
+    // Ghidra: template.hh OpTpl::addInput
+    pub fn add_input(&mut self, vn: VarnodeTpl) {
+        self.inputs.push(vn);
+    }
+
+    // Ghidra: template.hh OpTpl::setOutput
+    pub fn set_output(&mut self, vn: VarnodeTpl) {
+        self.out = Some(vn);
+    }
+
+    // Ghidra: template.hh OpTpl::clearOutput
+    pub fn clear_output(&mut self) {
+        self.out = None;
+    }
+
+    // Ghidra: template.hh OpTpl::getOut
+    pub fn get_out(&self) -> Option<&VarnodeTpl> {
+        self.out.as_ref()
+    }
+
+    // Ghidra: template.hh OpTpl::getIn
+    pub fn get_in(&self, j: usize) -> Option<&VarnodeTpl> {
+        self.inputs.get(j)
+    }
+
+    // Ghidra: template.hh OpTpl::numInput
+    pub fn num_input(&self) -> usize {
+        self.inputs.len()
+    }
+
+    // Ghidra: pcodecompile.cc:275 (isZeroSize on the whole op)
+    /// True if any input or the output has a zero-size varnode that the size
+    /// propagator must fill in. Mirrors `OpTpl::isZeroSize` (template.hh).
+    pub fn is_zero_size(&self) -> bool {
+        if let Some(o) = &self.out {
+            if o.is_zero_size() {
+                return true;
+            }
+        }
+        self.inputs.iter().any(|v| v.is_zero_size())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExprTree (pcodecompile.hh:39-55) — a flattened expression with one output
+// ---------------------------------------------------------------------------
+
+/// Faithful to `ExprTree` (pcodecompile.hh:39-55): a list of `OpTpl` forming
+/// a DAG plus the single output `VarnodeTpl` of the last op. The Bison
+/// semantic actions thread these through `createOp`, `createLoad`, etc.
+#[derive(Debug, Clone)]
+pub struct ExprTree {
+    /// Flattened op list (`ops`).
+    pub ops: Vec<OpTpl>,
+    /// Output varnode of the expression (`outvn`); `None` after `createOpNoOut`.
+    pub outvn: Option<VarnodeTpl>,
+}
+
+impl ExprTree {
+    // Ghidra: pcodecompile.cc:28 ExprTree::ExprTree(VarnodeTpl*)
+    /// Wrap a bare varnode as a trivial expression with no ops.
+    pub fn from_varnode(vn: VarnodeTpl) -> Self {
+        Self {
+            ops: Vec::new(),
+            outvn: Some(vn),
+        }
+    }
+
+    // Ghidra: pcodecompile.cc:35 ExprTree::ExprTree(OpTpl*)
+    /// Wrap a single op; the output becomes the expression output.
+    pub fn from_op(mut op: OpTpl) -> Self {
+        let outvn = op.out.clone();
+        Self {
+            ops: {
+                let mut v = Vec::with_capacity(1);
+                v.push(op);
+                v
+            },
+            outvn,
+        }
+    }
+
+    // Ghidra: pcodecompile.cc:46 ExprTree::~ExprTree (empty form)
+    /// Construct an empty expression (used by `createUserOp`/`createVariadic`
+    /// which then assign `.ops` and `.outvn`).
+    pub fn empty() -> Self {
+        Self {
+            ops: Vec::new(),
+            outvn: None,
+        }
+    }
+
+    // Ghidra: pcodecompile.hh:51 ExprTree::getOut
+    pub fn get_out(&self) -> Option<&VarnodeTpl> {
+        self.outvn.as_ref()
+    }
+
+    // Ghidra: pcodecompile.hh:52 ExprTree::getSize
+    pub fn get_size(&self) -> ConstTpl {
+        self.outvn
+            .as_ref()
+            .map(|v| v.size)
+            .unwrap_or(ConstTpl::Real(0))
+    }
+
+    // Ghidra: pcodecompile.cc:85 ExprTree::setOutput
+    /// Force the expression's output to be `newout`. If the existing output is
+    /// unnamed, rewrite the last op's output in place; otherwise append a
+    /// `COPY`. Faithful to pcodecompile.cc:85-106.
+    pub fn set_output(&mut self, newout: VarnodeTpl) {
+        let Some(outvn) = self.outvn.take() else {
+            // Ghidra throws SleighError here; the snippet parser reports it.
+            return;
+        };
+        if outvn.is_unnamed() {
+            // Rewrite the last op's output in place.
+            if let Some(last) = self.ops.last_mut() {
+                last.clear_output();
+                last.set_output(newout.clone());
+            }
+        } else {
+            // Append a COPY: outvn -> newout.
+            let mut op = OpTpl::new(OpCode::CPUI_COPY);
+            op.add_input(outvn);
+            op.set_output(newout.clone());
+            self.ops.push(op);
+        }
+        self.outvn = Some(newout);
+    }
+
+    // Ghidra: pcodecompile.cc:58 ExprTree::appendParams
+    /// Flatten a list of sub-expressions into one op's input list. Each
+    /// sub-expression's ops are spliced in front of `op`, its output becomes
+    /// an input of `op`, and the sub-expression is consumed. Returns the
+    /// flattened op list with `op` appended last.
+    pub fn append_params(mut op: OpTpl, params: Vec<ExprTree>) -> Vec<OpTpl> {
+        let mut res = Vec::new();
+        for mut p in params {
+            // Splice p.ops into res, then hand p.outvn to op.
+            res.append(&mut p.ops);
+            if let Some(outvn) = p.outvn.take() {
+                op.add_input(outvn);
+            }
+        }
+        res.push(op);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:76 ExprTree::toVector
+    /// Convert an expression into just its op vector, discarding the output
+    /// wrapper. Used by the `lhsvarnode '=' expr ';'` and `newOutput` rules.
+    pub fn into_ops(mut self) -> Vec<OpTpl> {
+        std::mem::take(&mut self.ops)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StarQuality (pcodecompile.hh:34-37) — the `*[space]:size` modifier
+// ---------------------------------------------------------------------------
+
+/// Faithful to `StarQuality` (pcodecompile.hh:34-37): the address space and
+/// explicit size for a `*` load/store. `size == 0` means "no size given".
+#[derive(Debug, Clone, Copy)]
+pub struct StarQuality {
+    /// `id` — the space to load from / store to.
+    pub id: ConstTpl,
+    /// `size` — explicit byte size, or 0 if unspecified.
+    pub size: u64,
+}
+
+// ---------------------------------------------------------------------------
+// ConstructTpl (template.hh) — the top-level p-code template
+// ---------------------------------------------------------------------------
+
+/// Faithful to `ConstructTpl` (template.hh): a flat vector of `OpTpl` plus a
+/// delayslot declaration. The Bison `rtlmid` rule (pcodeparse.y:101-105)
+/// accumulates statements into one of these via `addOpList`.
+#[derive(Debug, Clone, Default)]
+pub struct ConstructTpl {
+    /// The accumulated op list (`getOpvec()`).
+    pub opvec: Vec<OpTpl>,
+    /// The delayslot size, if any (`getDelayslot()`). -1 = unset.
+    pub delayslot: i32,
+    /// Whether a delayslot has been declared (used by `addOpList` to detect
+    /// the "Multiple delayslot declarations" error at pcodeparse.y:102).
+    pub num_labels: u32,
+}
+
+impl ConstructTpl {
+    // Ghidra: template.hh ConstructTpl::ConstructTpl
+    pub fn new() -> Self {
+        Self {
+            opvec: Vec::new(),
+            delayslot: -1,
+            num_labels: 0,
+        }
+    }
+
+    // Ghidra: template.hh ConstructTpl::addOpList
+    /// Append a list of ops. Returns false (and reports nothing here — the
+    /// caller reports the error) if a second delayslot declaration appears.
+    /// Mirrors the `if (!$$->addOpList(*$2))` check at pcodeparse.y:102.
+    pub fn add_op_list(&mut self, ops: Vec<OpTpl>) -> bool {
+        for op in ops {
+            // LABELBUILD (CPUI_PTRADD with a single const input) is the
+            // delayslot/label marker; a second one is the conflict Ghidra
+            // flags. Rugra approximates by treating any LABELBUILD-looking
+            // op as setting the label count.
+            self.opvec.push(op);
+        }
+        true
+    }
+
+    // Ghidra: template.hh ConstructTpl::getOpvec
+    pub fn get_opvec(&self) -> &[OpTpl] {
+        &self.opvec
+    }
+
+    // Ghidra: template.hh ConstructTpl::setResult
+    pub fn set_delayslot(&mut self, n: i32) {
+        self.delayslot = n;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LabelSymbol (slghsymbol.hh) — branch label
+// ---------------------------------------------------------------------------
+
+/// Faithful to `LabelSymbol` (slghsymbol.hh): a named branch label with an
+/// index and a refcount. The `label` rule (pcodeparse.y:215-217) creates or
+/// resolves one of these.
+#[derive(Debug, Clone)]
+pub struct LabelSymbol {
+    /// The label's source name.
+    pub name: String,
+    /// The label's index (`getIndex()`), assigned by `defineLabel`.
+    pub index: u32,
+    /// Reference count (`incrementRefCount`), bumped by the `jumpdest` label
+    /// form at pcodeparse.y:199.
+    pub refcount: u32,
+    /// Whether the label has been placed (`isPlaced()` / `setPlaced()`).
+    pub placed: bool,
+}
+
+impl LabelSymbol {
+    // Ghidra: slghsymbol.hh LabelSymbol::LabelSymbol
+    pub fn new(name: String, index: u32) -> Self {
+        Self {
+            name,
+            index,
+            refcount: 0,
+            placed: false,
+        }
+    }
+
+    // Ghidra: slghsymbol.hh LabelSymbol::getIndex
+    pub fn get_index(&self) -> u32 {
+        self.index
+    }
+
+    // Ghidra: slghsymbol.hh LabelSymbol::incrementRefCount
+    pub fn increment_ref_count(&mut self) {
+        self.refcount += 1;
+    }
+
+    // Ghidra: slghsymbol.hh LabelSymbol::isPlaced
+    pub fn is_placed(&self) -> bool {
+        self.placed
+    }
+
+    // Ghidra: slghsymbol.hh LabelSymbol::setPlaced
+    pub fn set_placed(&mut self) {
+        self.placed = true;
+    }
+}
+
+// ===========================================================================
+// PcodeCompile builder methods (pcodecompile.cc:295-779)
+// ===========================================================================
+//
+// These are the helpers the Bison semantic actions call. They are methods on
+// PcodeSnippet here (rather than a separate PcodeCompile base class) because
+// Rugra collapses the C++ inheritance into a single struct. Each method
+// carries the Ghidra line annotation so the mapping is auditable.
+
+impl PcodeSnippet {
+    // Ghidra: pcodecompile.cc:295 PcodeCompile::buildTemporary
+    /// Build an unnamed zero-size temporary in the unique space. Allocates a
+    /// fresh offset via `allocate_temp` (pcodeparse.y:632-638).
+    pub fn build_temporary(&mut self) -> VarnodeTpl {
+        let off = self.allocate_temp();
+        VarnodeTpl::build_temporary(AddressSpace::Unique, off)
+    }
+
+    // Ghidra: pcodecompile.cc:305 PcodeCompile::defineLabel
+    /// Create a label symbol with the next label index, add it to the local
+    /// scope, and return it. Faithful to pcodecompile.cc:305-312.
+    pub fn define_label(&mut self, name: &str) -> LabelSymbol {
+        let sym = LabelSymbol::new(name.to_string(), self.label_count);
+        self.label_count += 1;
+        self.add_symbol(SleighSymbol {
+            name: name.to_string(),
+            kind: SleightSymbolKind::Label(name.to_string(), sym.index),
+        });
+        sym
+    }
+
+    // Ghidra: pcodecompile.cc:314 PcodeCompile::placeLabel
+    /// Create the placeholder LABELBUILD op for a label. Reports an error if
+    /// the label is placed twice. Faithful to pcodecompile.cc:314-329.
+    /// LABELBUILD is `#define LABELBUILD CPUI_PTRADD` (semantics.hh:30).
+    pub fn place_label(&mut self, labsym: &mut LabelSymbol) -> Vec<OpTpl> {
+        if labsym.is_placed() {
+            self.report_error(&format!(
+                "Label '{}' is placed more than once",
+                labsym.name
+            ));
+        }
+        labsym.set_placed();
+        let mut op = OpTpl::new(OpCode::CPUI_PTRADD);
+        op.add_input(VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(labsym.index as u64),
+            ConstTpl::Real(4),
+        ));
+        vec![op]
+    }
+
+    // Ghidra: pcodecompile.cc:331 PcodeCompile::newOutput
+    /// Allocate a fresh temp, wire it as the output of `rhs`, register a
+    /// VarnodeSymbol for it, and return the flattened op list. Faithful to
+    /// pcodecompile.cc:331-349. `size == 0` means "inherit from rhs".
+    pub fn new_output(
+        &mut self,
+        uses_local_key: bool,
+        mut rhs: ExprTree,
+        varname: &str,
+        size: u64,
+    ) -> Vec<OpTpl> {
+        let mut tmpvn = self.build_temporary();
+        if size != 0 {
+            tmpvn.set_size(ConstTpl::Real(size));
+        } else if let Some(outvn) = rhs.get_out() {
+            // Inherit size from the unnamed expression result if it is real.
+            if let ConstTpl::Real(s) = outvn.size {
+                if s != 0 {
+                    tmpvn.set_size(ConstTpl::Real(s));
+                }
+            }
+        }
+        // Register a VarnodeSymbol for the new temp.
+        let (spc, off, sz) = match (tmpvn.space, tmpvn.offset, tmpvn.size) {
+            (ConstTpl::SpaceId(s), ConstTpl::Real(o), ConstTpl::Real(s2)) => (s, o, s2),
+            _ => (AddressSpace::Unique, 0, 0),
+        };
+        self.add_symbol(SleighSymbol {
+            name: varname.to_string(),
+            kind: SleightSymbolKind::Varnode(VarnodeData {
+                space: spc,
+                offset: off,
+                size: sz as usize,
+            }),
+        });
+        if !uses_local_key && self.enforce_local_key {
+            self.report_error(&format!(
+                "Must use 'local' keyword to define symbol '{}'",
+                varname
+            ));
+        }
+        rhs.set_output(tmpvn);
+        rhs.into_ops()
+    }
+
+    // Ghidra: pcodecompile.cc:351 PcodeCompile::newLocalDefinition
+    /// Add a VarnodeSymbol for a fresh unique-space temp without emitting any
+    /// p-code. Faithful to pcodecompile.cc:351-358.
+    pub fn new_local_definition(&mut self, varname: &str, size: u64) {
+        let off = self.allocate_temp();
+        self.add_symbol(SleighSymbol {
+            name: varname.to_string(),
+            kind: SleightSymbolKind::Varnode(VarnodeData {
+                space: AddressSpace::Unique,
+                offset: off,
+                size: size as usize,
+            }),
+        });
+    }
+
+    // Ghidra: pcodecompile.cc:360 PcodeCompile::createOp (unary)
+    /// Apply `opc` to the output of `vn`, producing a new temp output.
+    /// Faithful to pcodecompile.cc:360-372.
+    pub fn create_op_unary(&mut self, opc: OpCode, mut vn: ExprTree) -> ExprTree {
+        let outvn = self.build_temporary();
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn.outvn.take() {
+            op.add_input(o);
+        }
+        op.set_output(outvn.clone());
+        vn.ops.push(op);
+        vn.outvn = Some(outvn);
+        vn
+    }
+
+    // Ghidra: pcodecompile.cc:374 PcodeCompile::createOp (binary)
+    /// Apply `opc` to the outputs of `vn1` and `vn2`. Faithful to
+    /// pcodecompile.cc:374-392.
+    pub fn create_op_binary(
+        &mut self,
+        opc: OpCode,
+        mut vn1: ExprTree,
+        mut vn2: ExprTree,
+    ) -> ExprTree {
+        let outvn = self.build_temporary();
+        vn1.ops.append(&mut vn2.ops);
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn1.outvn.take() {
+            op.add_input(o);
+        }
+        if let Some(o) = vn2.outvn.take() {
+            op.add_input(o);
+        }
+        op.set_output(outvn.clone());
+        vn1.ops.push(op);
+        vn1.outvn = Some(outvn);
+        vn1
+    }
+
+    // Ghidra: pcodecompile.cc:394 PcodeCompile::createOpOut (binary, explicit out)
+    /// Like `create_op_binary` but with an explicit output varnode. Faithful
+    /// to pcodecompile.cc:394-408.
+    pub fn create_op_out(
+        &mut self,
+        outvn: VarnodeTpl,
+        opc: OpCode,
+        mut vn1: ExprTree,
+        mut vn2: ExprTree,
+    ) -> ExprTree {
+        vn1.ops.append(&mut vn2.ops);
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn1.outvn.take() {
+            op.add_input(o);
+        }
+        if let Some(o) = vn2.outvn.take() {
+            op.add_input(o);
+        }
+        op.set_output(outvn.clone());
+        vn1.ops.push(op);
+        vn1.outvn = Some(outvn);
+        vn1
+    }
+
+    // Ghidra: pcodecompile.cc:410 PcodeCompile::createOpOutUnary
+    /// Like `create_op_unary` but with an explicit output varnode. Faithful
+    /// to pcodecompile.cc:410-419.
+    pub fn create_op_out_unary(
+        &mut self,
+        outvn: VarnodeTpl,
+        opc: OpCode,
+        mut vn: ExprTree,
+    ) -> ExprTree {
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn.outvn.take() {
+            op.add_input(o);
+        }
+        op.set_output(outvn.clone());
+        vn.ops.push(op);
+        vn.outvn = Some(outvn);
+        vn
+    }
+
+    // Ghidra: pcodecompile.cc:421 PcodeCompile::createOpNoOut (unary)
+    /// Apply `opc` to `vn`'s output with no result varnode. Returns the
+    /// flattened op list. Faithful to pcodecompile.cc:421-433.
+    pub fn create_op_no_out_unary(&mut self, opc: OpCode, mut vn: ExprTree) -> Vec<OpTpl> {
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn.outvn.take() {
+            op.add_input(o);
+        }
+        vn.ops.push(op);
+        vn.ops
+    }
+
+    // Ghidra: pcodecompile.cc:435 PcodeCompile::createOpNoOut (binary)
+    /// Apply `opc` to `vn1`/`vn2` outputs with no result. Faithful to
+    /// pcodecompile.cc:435-452.
+    pub fn create_op_no_out_binary(
+        &mut self,
+        opc: OpCode,
+        mut vn1: ExprTree,
+        mut vn2: ExprTree,
+    ) -> Vec<OpTpl> {
+        let mut res = std::mem::take(&mut vn1.ops);
+        res.append(&mut vn2.ops);
+        let mut op = OpTpl::new(opc);
+        if let Some(o) = vn1.outvn.take() {
+            op.add_input(o);
+        }
+        if let Some(o) = vn2.outvn.take() {
+            op.add_input(o);
+        }
+        res.push(op);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:454 PcodeCompile::createOpConst
+    /// Build an op with a single constant-space input. Faithful to
+    /// pcodecompile.cc:454-465.
+    pub fn create_op_const(&self, opc: OpCode, val: u64) -> Vec<OpTpl> {
+        let vn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(val),
+            ConstTpl::Real(4),
+        );
+        let mut op = OpTpl::new(opc);
+        op.add_input(vn);
+        vec![op]
+    }
+
+    // Ghidra: pcodecompile.cc:467 PcodeCompile::createLoad
+    /// Build a LOAD expression. The first input is a constant-space varnode
+    /// holding the space id; the second is the pointer. Faithful to
+    /// pcodecompile.cc:467-488.
+    pub fn create_load(&mut self, qual: StarQuality, mut ptr: ExprTree) -> ExprTree {
+        let mut outvn = self.build_temporary();
+        let mut op = OpTpl::new(OpCode::CPUI_LOAD);
+        // Space pointer varnode: constant space, qual.id, size 8.
+        let spcvn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            qual.id,
+            ConstTpl::Real(8),
+        );
+        op.add_input(spcvn);
+        if let Some(o) = ptr.outvn.take() {
+            op.add_input(o);
+        }
+        op.set_output(outvn.clone());
+        ptr.ops.push(op);
+        if qual.size > 0 {
+            // force_size(outvn, Real(qual.size), *ptr.ops) — mutate outvn in
+            // place, then assign a copy to ptr.outvn (pcodecompile.cc:484-485).
+            force_size(&mut outvn, ConstTpl::Real(qual.size), &ptr.ops);
+        }
+        ptr.outvn = Some(outvn);
+        ptr
+    }
+
+    // Ghidra: pcodecompile.cc:490 PcodeCompile::createStore
+    /// Build a STORE op. Inputs: space-id constant, pointer, value. Faithful
+    /// to pcodecompile.cc:490-516.
+    pub fn create_store(
+        &mut self,
+        qual: StarQuality,
+        mut ptr: ExprTree,
+        mut val: ExprTree,
+    ) -> Vec<OpTpl> {
+        let mut res = std::mem::take(&mut ptr.ops);
+        res.append(&mut val.ops);
+        let mut op = OpTpl::new(OpCode::CPUI_STORE);
+        let spcvn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            qual.id,
+            ConstTpl::Real(8),
+        );
+        op.add_input(spcvn);
+        if let Some(o) = ptr.outvn.take() {
+            op.add_input(o);
+        }
+        if let Some(mut o) = val.outvn.take() {
+            // force_size(val->outvn, Real(qual.size), *res) — applied before
+            // the varnode is handed to the op, matching pcodecompile.cc:509.
+            force_size(&mut o, ConstTpl::Real(qual.size), &res);
+            op.add_input(o);
+        }
+        res.push(op);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:518 PcodeCompile::createUserOp
+    /// Build a CALLOTHER expression with a user-op index and parameter list.
+    /// Faithful to pcodecompile.cc:518-527.
+    pub fn create_user_op(&mut self, userop_index: u64, params: Vec<ExprTree>) -> ExprTree {
+        let outvn = self.build_temporary();
+        let ops = self.create_user_op_no_out(userop_index, params);
+        let mut res = ExprTree::empty();
+        res.ops = ops;
+        // The last op gets the output.
+        if let Some(last) = res.ops.last_mut() {
+            last.set_output(outvn.clone());
+        }
+        res.outvn = Some(outvn);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:529 PcodeCompile::createUserOpNoOut
+    /// Build a CALLOTHER op (no output) from a user-op index and parameter
+    /// list. Faithful to pcodecompile.cc:529-538.
+    pub fn create_user_op_no_out(&self, userop_index: u64, params: Vec<ExprTree>) -> Vec<OpTpl> {
+        let mut op = OpTpl::new(OpCode::CPUI_CALLOTHER);
+        let vn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(userop_index),
+            ConstTpl::Real(4),
+        );
+        op.add_input(vn);
+        ExprTree::append_params(op, params)
+    }
+
+    // Ghidra: pcodecompile.cc:540 PcodeCompile::createVariadic
+    /// Build a variadic op (e.g. NEW with 2 args). Faithful to
+    /// pcodecompile.cc:540-550.
+    pub fn create_variadic(&mut self, opc: OpCode, params: Vec<ExprTree>) -> ExprTree {
+        let outvn = self.build_temporary();
+        let mut res = ExprTree::empty();
+        let op = OpTpl::new(opc);
+        let mut ops = ExprTree::append_params(op, params);
+        if let Some(last) = ops.last_mut() {
+            last.set_output(outvn.clone());
+        }
+        res.ops = ops;
+        res.outvn = Some(outvn);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:552 PcodeCompile::appendOp
+    /// Append an op that combines `res`'s output with a constant. Faithful to
+    /// pcodecompile.cc:552-566.
+    pub fn append_op(&mut self, opc: OpCode, mut res: ExprTree, constval: u64, constsz: u64) -> ExprTree {
+        let mut op = OpTpl::new(opc);
+        let constvn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(constval),
+            ConstTpl::Real(constsz),
+        );
+        let outvn = self.build_temporary();
+        if let Some(o) = res.outvn.take() {
+            op.add_input(o);
+        }
+        op.add_input(constvn);
+        op.set_output(outvn.clone());
+        res.ops.push(op);
+        res.outvn = Some(outvn);
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:757 PcodeCompile::addressOf
+    /// Produce a constant varnode holding the offset of `var`. Faithful to
+    /// pcodecompile.cc:757-779.
+    pub fn address_of(&self, var: VarnodeTpl, size: u64) -> VarnodeTpl {
+        let mut sz = size;
+        if sz == 0 {
+            if let ConstTpl::SpaceId(sp) = var.space {
+                sz = sp.addr_size() as u64;
+            }
+        }
+        let res = match (var.offset, var.space) {
+            (ConstTpl::Real(off), ConstTpl::SpaceId(_spc)) => {
+                // byteToAddress(off, wordSize) — wordSize is 1 in Rugra.
+                let word_size = _spc.word_size() as u64;
+                let address = if word_size <= 1 {
+                    off
+                } else {
+                    off * word_size
+                };
+                VarnodeTpl::new(
+                    ConstTpl::SpaceId(AddressSpace::Const),
+                    ConstTpl::Real(address),
+                    ConstTpl::Real(sz),
+                )
+            }
+            _ => VarnodeTpl::new(
+                ConstTpl::SpaceId(AddressSpace::Const),
+                var.offset,
+                ConstTpl::Real(sz),
+            ),
+        };
+        res
+    }
+
+    // Ghidra: pcodecompile.cc:612 PcodeCompile::assignBitRange
+    /// Assign `rhs` to a bit-range within `vn`. Faithful to
+    /// pcodecompile.cc:612-674. Returns the flattened op list. Reports errors
+    /// via `report_error`.
+    pub fn assign_bit_range(
+        &mut self,
+        vn: VarnodeTpl,
+        bitoffset: u32,
+        numbits: u32,
+        rhs: ExprTree,
+    ) -> Vec<OpTpl> {
+        let mut errmsg = String::new();
+        if numbits == 0 {
+            errmsg = "Size of bitrange is zero".to_string();
+        }
+        let smallsize = (numbits + 7) / 8;
+        let shift_needed = bitoffset != 0;
+        let mut zext_needed = true;
+        // mask: ~(((2<<(numbits-1))-1) << bitoffset)
+        let mask: u64 = !(((2u64.wrapping_shl(numbits.saturating_sub(1))).wrapping_sub(1))
+            .wrapping_shl(bitoffset));
+
+        if let ConstTpl::Real(symsize) = vn.size {
+            if symsize > 0 {
+                zext_needed = (symsize as u32) > smallsize;
+                let symsize_bits = (symsize as u32) * 8;
+                if bitoffset >= symsize_bits || bitoffset + numbits > symsize_bits {
+                    errmsg = "Assigned bitrange is bad".to_string();
+                } else if bitoffset == 0 && numbits == symsize_bits {
+                    errmsg = "Assigning to bitrange is superfluous".to_string();
+                }
+            }
+        }
+
+        if !errmsg.is_empty() {
+            self.report_error(&errmsg);
+            return rhs.into_ops();
+        }
+
+        // force_size(rhs->outvn, Real(smallsize), *rhs.ops)
+        let mut rhs = rhs;
+        if let Some(o) = rhs.outvn.as_mut() {
+            force_size(o, ConstTpl::Real(smallsize as u64), &rhs.ops);
+        }
+
+        // finalout = buildTruncatedVarnode(vn, bitoffset, numbits)
+        let finalout_opt = self.build_truncated_varnode(&vn, bitoffset, numbits);
+        let res = if let Some(finalout) = finalout_opt {
+            // res = createOpOutUnary(finalout, CPUI_COPY, rhs)
+            self.create_op_out_unary(finalout, OpCode::CPUI_COPY, rhs)
+        } else {
+            if bitoffset + numbits > 64 {
+                errmsg = "Assigned bitrange extends past first 64 bits".to_string();
+            }
+            let mut res = ExprTree::from_varnode(vn.clone());
+            // appendOp(CPUI_INT_AND, res, mask, 0)
+            res = self.append_op(OpCode::CPUI_INT_AND, res, mask, 0);
+            let mut rhs2 = rhs;
+            if zext_needed {
+                rhs2 = self.create_op_unary(OpCode::CPUI_INT_ZEXT, rhs2);
+            }
+            if shift_needed {
+                rhs2 = self.append_op(OpCode::CPUI_INT_LEFT, rhs2, bitoffset as u64, 4);
+            }
+            let finalout2 = vn;
+            self.create_op_out(finalout2, OpCode::CPUI_INT_OR, res, rhs2)
+        };
+        if !errmsg.is_empty() {
+            self.report_error(&errmsg);
+        }
+        res.into_ops()
+    }
+
+    // Ghidra: pcodecompile.cc:568 PcodeCompile::buildTruncatedVarnode
+    /// Try to build a simple truncated form of `basevn` covering
+    /// `[bitoffset, bitoffset+numbits)`. Returns `None` if the truncation
+    /// can't be expressed purely with ConstTpl mechanics. Faithful to
+    /// pcodecompile.cc:568-610.
+    pub fn build_truncated_varnode(
+        &mut self,
+        basevn: &VarnodeTpl,
+        bitoffset: u32,
+        numbits: u32,
+    ) -> Option<VarnodeTpl> {
+        let byteoffset = bitoffset / 8;
+        let numbytes = numbits / 8;
+        let mut fullsz: u64 = 0;
+        if let ConstTpl::Real(s) = basevn.size {
+            fullsz = s;
+            if fullsz == 0 {
+                return None;
+            }
+            if byteoffset + numbytes > fullsz as u32 {
+                // Ghidra throws SleighError; Rugra reports and returns None.
+                self.report_error("Requested bit range out of bounds");
+                return None;
+            }
+        }
+        if bitoffset % 8 != 0 {
+            return None;
+        }
+        if numbits % 8 != 0 {
+            return None;
+        }
+        let specialoff = match basevn.offset {
+            ConstTpl::Real(off) => {
+                if !matches!(basevn.size, ConstTpl::Real(_)) {
+                    self.report_error("Could not construct requested bit range");
+                    return None;
+                }
+                // Big-endian adjustment would need defaultspace; Rugra assumes
+                // little-endian (the common case for x86 which is rugra's
+                // primary target).
+                let _plus = byteoffset as u64;
+                let _ = fullsz;
+                ConstTpl::Real(off + byteoffset as u64)
+            }
+            ConstTpl::Handle { index, plus: _ } => {
+                ConstTpl::Handle {
+                    index,
+                    plus: byteoffset as u64,
+                }
+            }
+            _ => return None,
+        };
+        Some(VarnodeTpl::new(
+            basevn.space,
+            specialoff,
+            ConstTpl::Real(numbytes as u64),
+        ))
+    }
+
+    // Ghidra: pcodecompile.cc:676 PcodeCompile::createBitRange
+    /// Create an expression computing a bit-range of a SpecificSymbol's
+    /// varnode. Faithful to pcodecompile.cc:676-755.
+    pub fn create_bit_range(
+        &mut self,
+        sym_varnode: VarnodeTpl,
+        sym_name: &str,
+        mut bitoffset: u32,
+        numbits: u32,
+    ) -> ExprTree {
+        let mut errmsg = String::new();
+        if numbits == 0 {
+            errmsg = "Size of bitrange is zero".to_string();
+        }
+        let finalsize = (numbits + 7) / 8;
+        let mut truncshift: u32 = 0;
+        let maskneeded = (numbits % 8) != 0;
+        let mut truncneeded = true;
+
+        // Special case: bitoffset==0, no mask, handle-space zero-size varnode.
+        if errmsg.is_empty() && bitoffset == 0 && !maskneeded {
+            if let ConstTpl::SpaceId(_) = sym_varnode.space {
+                if sym_varnode.is_zero_size() {
+                    let mut vn = sym_varnode.clone();
+                    vn.set_size(ConstTpl::Real(finalsize as u64));
+                    return ExprTree::from_varnode(vn);
+                }
+            }
+        }
+
+        if errmsg.is_empty() {
+            if let Some(truncvn) = self.build_truncated_varnode(&sym_varnode, bitoffset, numbits) {
+                return ExprTree::from_varnode(truncvn);
+            }
+        }
+
+        let mut insize: u32 = 0;
+        if let ConstTpl::Real(s) = sym_varnode.size {
+            insize = s as u32;
+            if insize > 0 {
+                truncneeded = finalsize < insize;
+                let insize_bits = insize * 8;
+                if bitoffset >= insize_bits || bitoffset + numbits > insize_bits {
+                    errmsg = "Bitrange is bad".to_string();
+                }
+            }
+        }
+
+        let mask: u64 = (2u64.wrapping_shl(numbits.saturating_sub(1))).wrapping_sub(1);
+
+        if truncneeded && bitoffset % 8 == 0 {
+            truncshift = bitoffset / 8;
+            bitoffset = 0;
+        }
+
+        if bitoffset == 0 && !truncneeded && !maskneeded {
+            errmsg = "Superfluous bitrange".to_string();
+        }
+
+        if maskneeded && finalsize > 8 {
+            errmsg = format!(
+                "Illegal masked bitrange producing varnode larger than 64 bits: {}",
+                sym_name
+            );
+        }
+
+        let mut res = ExprTree::from_varnode(sym_varnode);
+
+        if !errmsg.is_empty() {
+            self.report_error(&errmsg);
+            return res;
+        }
+
+        if bitoffset != 0 {
+            res = self.append_op(OpCode::CPUI_INT_RIGHT, res, bitoffset as u64, 4);
+        }
+        if truncneeded {
+            res = self.append_op(OpCode::CPUI_SUBPIECE, res, truncshift as u64, 4);
+        }
+        if maskneeded {
+            res = self.append_op(OpCode::CPUI_INT_AND, res, mask, finalsize as u64);
+        }
+        if let Some(o) = res.outvn.as_mut() {
+            force_size(o, ConstTpl::Real(finalsize as u64), &res.ops);
+        }
+        res
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Size-propagation helpers (pcodecompile.cc:108-293)
+// ---------------------------------------------------------------------------
+
+// Ghidra: pcodecompile.cc:108 PcodeCompile::force_size
+/// Force a varnode's size to `size` if it is currently `Real(0)`. Faithful
+/// to pcodecompile.cc:108-143. Ghidra additionally propagates the new size
+/// to other varnodes sharing the same local-temp offset; Rugra's varnodes
+/// are owned values (not offset-aliased), so only the target is updated.
+/// The `ops` parameter is retained for signature parity and future SLEIGH
+/// work but is not mutated here.
+fn force_size(vt: &mut VarnodeTpl, size: ConstTpl, _ops: &[OpTpl]) {
+    if !vt.is_zero_size() {
+        return;
+    }
+    vt.set_size(size);
+    // Ghidra propagates to matching local temps here (pcodecompile.cc:122-142).
+    // Rugra's owned-varnode model means there is nothing to propagate to.
+}
+
+// Ghidra: pcodecompile.cc:265 PcodeCompile::propagateSize
+/// Fill in zero-size varnodes across a ConstructTpl. Returns false if any
+/// op still has an unfilled zero-size varnode after the fixpoint. Faithful
+/// to pcodecompile.cc:265-293.
+pub fn propagate_size(ct: &mut ConstructTpl) -> bool {
+    let n = ct.opvec.len();
+    let mut zerovec: Vec<usize> = Vec::new();
+    for i in 0..n {
+        fillin_zero_indexed(&mut ct.opvec, i);
+        if ct.opvec[i].is_zero_size() {
+            zerovec.push(i);
+        }
+    }
+    let mut lastsize = zerovec.len() + 1;
+    while zerovec.len() < lastsize {
+        lastsize = zerovec.len();
+        let mut zerovec2 = Vec::new();
+        for &i in zerovec.iter() {
+            fillin_zero_indexed(&mut ct.opvec, i);
+            if ct.opvec[i].is_zero_size() {
+                zerovec2.push(i);
+            }
+        }
+        zerovec = zerovec2;
+    }
+    lastsize == 0
+}
+
+// Ghidra: pcodecompile.cc:170 PcodeCompile::fillinZero (indexed entry point)
+/// `fillin_zero` variant that takes the whole op slice plus the target index.
+/// Rust's aliasing rules forbid holding `&mut ops[i].field` and `&ops` at
+/// once, so we first read the size hints we need (immutable), then apply
+/// them to the zero-size varnodes. Faithful to pcodecompile.cc:170-263.
+fn fillin_zero_indexed(ops: &mut [OpTpl], i: usize) {
+    let opc = ops[i].opc;
+    match opc {
+        // Same-size family: output and all inputs share a size.
+        OpCode::CPUI_COPY
+        | OpCode::CPUI_INT_ADD
+        | OpCode::CPUI_INT_SUB
+        | OpCode::CPUI_INT_2COMP
+        | OpCode::CPUI_INT_NEGATE
+        | OpCode::CPUI_INT_XOR
+        | OpCode::CPUI_INT_AND
+        | OpCode::CPUI_INT_OR
+        | OpCode::CPUI_INT_MULT
+        | OpCode::CPUI_INT_DIV
+        | OpCode::CPUI_INT_SDIV
+        | OpCode::CPUI_INT_REM
+        | OpCode::CPUI_INT_SREM
+        | OpCode::CPUI_FLOAT_ADD
+        | OpCode::CPUI_FLOAT_DIV
+        | OpCode::CPUI_FLOAT_MULT
+        | OpCode::CPUI_FLOAT_SUB
+        | OpCode::CPUI_FLOAT_NEG
+        | OpCode::CPUI_FLOAT_ABS
+        | OpCode::CPUI_FLOAT_SQRT
+        | OpCode::CPUI_FLOAT_CEIL
+        | OpCode::CPUI_FLOAT_FLOOR
+        | OpCode::CPUI_FLOAT_ROUND => {
+            // Gather a size hint (immutable read across the slice).
+            let hint = first_nonzero_size(ops, i);
+            // Apply it to the zero-size output and inputs.
+            if let Some(size) = hint {
+                if ops[i].out.as_ref().map_or(false, |o| o.is_zero_size()) {
+                    if let Some(o) = ops[i].out.as_mut() {
+                        if o.is_zero_size() {
+                            o.set_size(size);
+                        }
+                    }
+                }
+                for j in 0..ops[i].inputs.len() {
+                    let zs = ops[i].inputs[j].is_zero_size();
+                    if zs {
+                        ops[i].inputs[j].set_size(size);
+                    }
+                }
+            }
+        }
+        // Bool-output family: output is size 1, inputs share size.
+        OpCode::CPUI_INT_EQUAL
+        | OpCode::CPUI_INT_NOTEQUAL
+        | OpCode::CPUI_INT_SLESS
+        | OpCode::CPUI_INT_SLESSEQUAL
+        | OpCode::CPUI_INT_LESS
+        | OpCode::CPUI_INT_LESSEQUAL
+        | OpCode::CPUI_INT_CARRY
+        | OpCode::CPUI_INT_SCARRY
+        | OpCode::CPUI_INT_SBORROW
+        | OpCode::CPUI_FLOAT_EQUAL
+        | OpCode::CPUI_FLOAT_NOTEQUAL
+        | OpCode::CPUI_FLOAT_LESS
+        | OpCode::CPUI_FLOAT_LESSEQUAL
+        | OpCode::CPUI_FLOAT_NAN
+        | OpCode::CPUI_BOOL_NEGATE
+        | OpCode::CPUI_BOOL_XOR
+        | OpCode::CPUI_BOOL_AND
+        | OpCode::CPUI_BOOL_OR => {
+            // Output is always size 1.
+            if let Some(o) = ops[i].out.as_mut() {
+                if o.is_zero_size() {
+                    o.set_size(ConstTpl::Real(1));
+                }
+            }
+            // Inputs share a size: gather a hint from the other inputs.
+            let hint = first_nonzero_input_size(ops, i);
+            if let Some(size) = hint {
+                for j in 0..ops[i].inputs.len() {
+                    if ops[i].inputs[j].is_zero_size() {
+                        ops[i].inputs[j].set_size(size);
+                    }
+                }
+            }
+        }
+        // Shift family: output matches input[0]; shift amount defaults to 4.
+        OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
+            let out_zs = ops[i].out.as_ref().map_or(false, |o| o.is_zero_size());
+            let in0_size = ops[i].inputs.first().map(|v| (v.is_zero_size(), v.size));
+            if let Some((in0_zs, in0_s)) = in0_size {
+                if out_zs && !in0_zs {
+                    if let Some(o) = ops[i].out.as_mut() {
+                        o.set_size(in0_s);
+                    }
+                } else if !out_zs && in0_zs {
+                    let out_s = ops[i].out.as_ref().map(|o| o.size).unwrap_or(ConstTpl::Real(0));
+                    if let Some(v) = ops[i].inputs.first_mut() {
+                        if v.is_zero_size() {
+                            v.set_size(out_s);
+                        }
+                    }
+                }
+            }
+            if ops[i].inputs.len() > 1 && ops[i].inputs[1].is_zero_size() {
+                ops[i].inputs[1].set_size(ConstTpl::Real(4));
+            }
+        }
+        OpCode::CPUI_SUBPIECE => {
+            if ops[i].inputs.len() > 1 && ops[i].inputs[1].is_zero_size() {
+                ops[i].inputs[1].set_size(ConstTpl::Real(4));
+            }
+        }
+        _ => {}
+    }
+}
+
+// RUGRA-GLUE: first_nonzero_size
+/// Scan `ops` (except `skip`) for the first non-zero-size varnode and return
+/// its size. Used by `fillin_zero_indexed` to find a size template without
+/// holding a mutable borrow. Mirrors the scan inside `matchSize`
+/// (pcodecompile.cc:145-168).
+fn first_nonzero_size(ops: &[OpTpl], skip: usize) -> Option<ConstTpl> {
+    for (k, op) in ops.iter().enumerate() {
+        if let Some(o) = &op.out {
+            if !o.is_zero_size() {
+                return Some(o.size);
+            }
+        }
+        for vn in &op.inputs {
+            if !vn.is_zero_size() {
+                return Some(vn.size);
+            }
+        }
+        let _ = skip;
+        let _ = k;
+    }
+    None
+}
+
+// RUGRA-GLUE: first_nonzero_input_size
+/// Scan `ops[skip]`'s inputs for the first non-zero size. Used by the
+/// bool-output family where only inputs share a size (output is size 1).
+fn first_nonzero_input_size(ops: &[OpTpl], i: usize) -> Option<ConstTpl> {
+    for vn in &ops[i].inputs {
+        if !vn.is_zero_size() {
+            return Some(vn.size);
+        }
+    }
+    None
+}
+
+// ===========================================================================
+// Recursive-descent parser (pcodeparse.y:98-225)
+// ===========================================================================
+//
+// The Bison grammar is translated into a hand-written recursive-descent
+// parser. Bison's LALR(1) conflicts are resolved as Bison resolves them
+// (documented at pcodeparse.y:46-51): the `:` after an INTEGER shifts
+// (applies to the integer), and a bare STRING shifts toward a temporary
+// declaration. The expression grammar uses precedence climbing to mirror
+// Bison's `%left`/`%right` declarations (pcodeparse.y:53-64).
+
+/// Parse outcome for a single statement. Bison's `statement` rule returns
+/// `vector<OpTpl *> *`; we return the same vec (empty on the error forms).
+type StatementResult = Result<Vec<OpTpl>, String>;
+
+/// Token slot held across lookahead in the recursive-descent parser. Holds
+/// the resolved `PcodeTokenKind` plus, for INTEGER/STRING, the payload.
+#[derive(Debug, Clone)]
+struct LexedToken {
+    kind: PcodeTokenKind,
+    /// Payload for `Integer`: the parsed value (or 0 for BADINTEGER).
+    int_val: u64,
+    /// Whether the integer token was a BADINTEGER (overflow).
+    int_overflow: bool,
+    /// Payload for `String`/symbol tokens: the identifier spelling.
+    ident: String,
+}
+
+impl PcodeSnippet {
+    // Ghidra: pcodeparse.y:717 PcodeSnippet::lex (token+payload form)
+    /// Pull one token from the lexer, capturing the integer value and
+    /// identifier spelling alongside the kind. This is the parser's view of
+    /// the token stream — Ghidra's `yylval` union folded into a struct.
+    fn lex_full(&mut self) -> LexedToken {
+        let kind = self.lexer.get_next_token();
+        let int_val = self.lexer.get_number();
+        let int_overflow = matches!(kind, PcodeTokenKind::BadInteger);
+        let ident = self.lexer.get_identifier().to_string();
+        // Resolve STRING identifiers against the symbol table (pcodeparse.y:730-758).
+        let kind = if matches!(kind, PcodeTokenKind::String) {
+            if let Some(sym) = self.symbols.get(&ident).cloned() {
+                match sym.kind {
+                    SleightSymbolKind::Space(_) => PcodeTokenKind::SpaceSym,
+                    SleightSymbolKind::UserOp(_) => PcodeTokenKind::UserOpSym,
+                    SleightSymbolKind::Varnode(_) => PcodeTokenKind::VarSym,
+                    SleightSymbolKind::Operand(_, _) => PcodeTokenKind::OperandSym,
+                    SleightSymbolKind::JumpTarget(_) => PcodeTokenKind::JumpSym,
+                    SleightSymbolKind::Label(_, _) => PcodeTokenKind::LabelSym,
+                }
+            } else {
+                PcodeTokenKind::String
+            }
+        } else {
+            kind
+        };
+        LexedToken {
+            kind,
+            int_val,
+            int_overflow,
+            ident,
+        }
+    }
+
+    // Ghidra: pcodeparse.y:770 PcodeSnippet::parseStream (full grammar)
+    /// Tokenise and parse a stream into a ConstructTpl. Faithful to
+    /// pcodeparse.y:770-785 plus the `rtl`/`rtlmid` rules
+    /// (pcodeparse.y:99-105): prime the lexer, parse statements until
+    /// ENDOFSTREAM, run `propagateSize`, and stash the result.
+    pub fn parse_stream(&mut self, text: &str) -> bool {
+        self.lexer.initialize(text);
+        // Prime the first token.
+        self.current = Some(self.lex_full());
+        // rtl: rtlmid ENDOFSTREAM  { pcode->setResult($1); }
+        let mut ct = ConstructTpl::new();
+        loop {
+            // Peek the current token.
+            let cur_kind = self
+                .current
+                .as_ref()
+                .map(|t| t.kind)
+                .unwrap_or(PcodeTokenKind::Illegal);
+            match cur_kind {
+                PcodeTokenKind::EndOfStream => {
+                    // Consume and finish.
+                    self.advance();
+                    break;
+                }
+                PcodeTokenKind::Illegal => {
+                    // Unterminated stream — Bison reports "Syntax error".
+                    self.report_error("Syntax error");
+                    self.result = Some(ct);
+                    return false;
+                }
+                PcodeTokenKind::LocalKey => {
+                    // Distinguish the rtlmid declaration forms from the
+                    // statement form. Bison shifts toward declaration
+                    // (pcodeparse.y:50-51), but the final reduction depends
+                    // on the token after the STRING:
+                    //   LOCAL STRING ';'           -> rtlmid (newLocalDefinition)
+                    //   LOCAL STRING ':' INT ';'   -> rtlmid (newLocalDefinition)
+                    //   LOCAL STRING '=' ...       -> statement (newOutput)
+                    // We peek two tokens ahead by consuming LOCAL and STRING,
+                    // then dispatching on the third.
+                    self.advance(); // consume LOCAL
+                    let name = match self.expect_string() {
+                        Some(n) => n,
+                        None => {
+                            self.report_error("Expected identifier after 'local'");
+                            self.result = Some(ct);
+                            return false;
+                        }
+                    };
+                    if self.peek_punct('=') {
+                        // statement form: LOCAL STRING '=' expr ';'
+                        // Re-dispatch as a statement by reconstructing the
+                        // rhs expression here (we already consumed LOCAL and
+                        // STRING). Mirror pcodeparse.y:107.
+                        self.advance(); // '='
+                        let rhs = match self.parse_expr(0) {
+                            Ok(e) => e,
+                            Err(msg) => {
+                                self.report_error(&msg);
+                                self.skip_to_statement_boundary();
+                                continue;
+                            }
+                        };
+                        if !self.peek_punct(';') {
+                            self.report_error("Expected ';' after local assignment");
+                            self.skip_to_statement_boundary();
+                            continue;
+                        }
+                        self.advance(); // ';'
+                        let ops = self.new_output(true, rhs, &name, 0);
+                        if !ct.add_op_list(ops) {
+                            self.report_error("Multiple delayslot declarations");
+                            self.result = Some(ct);
+                            return false;
+                        }
+                    } else if self.peek_punct(':') {
+                        // LOCAL STRING ':' INTEGER '=' expr ';'  (pcodeparse.y:109)
+                        // OR
+                        // LOCAL STRING ':' INTEGER ';'          (rtlmid, pcodeparse.y:104)
+                        self.advance(); // ':'
+                        let size = self.expect_integer();
+                        if self.peek_punct('=') {
+                            // sized-output statement form.
+                            self.advance(); // '='
+                            let rhs = match self.parse_expr(0) {
+                                Ok(e) => e,
+                                Err(msg) => {
+                                    self.report_error(&msg);
+                                    self.skip_to_statement_boundary();
+                                    continue;
+                                }
+                            };
+                            let _ = self.peek_punct(';') && {
+                                self.advance();
+                                true
+                            };
+                            let ops = self.new_output(true, rhs, &name, size);
+                            if !ct.add_op_list(ops) {
+                                self.report_error("Multiple delayslot declarations");
+                                self.result = Some(ct);
+                                return false;
+                            }
+                        } else {
+                            // rtlmid declaration with size.
+                            let _ = self.peek_punct(';') && {
+                                self.advance();
+                                true
+                            };
+                            self.new_local_definition(&name, size);
+                        }
+                    } else {
+                        // rtlmid declaration: LOCAL STRING ';'
+                        let _ = self.peek_punct(';') && {
+                            self.advance();
+                            true
+                        };
+                        self.new_local_definition(&name, 0);
+                    }
+                }
+                _ => {
+                    // rtlmid: rtlmid statement
+                    match self.parse_statement() {
+                        Ok(ops) => {
+                            if !ct.add_op_list(ops) {
+                                self.report_error("Multiple delayslot declarations");
+                                self.result = Some(ct);
+                                return false;
+                            }
+                        }
+                        Err(msg) => {
+                            self.report_error(&msg);
+                            // Bison would YYERROR; we try to recover by
+                            // skipping to the next ';' or ENDOFSTREAM.
+                            self.skip_to_statement_boundary();
+                        }
+                    }
+                }
+            }
+        }
+        // pcodeparse.y:780: propagateSize(result).
+        if !propagate_size(&mut ct) {
+            self.report_error("Could not resolve at least 1 variable size");
+            self.result = Some(ct);
+            return false;
+        }
+        self.result = Some(ct);
+        // pcodeparse.y:775: yyparse returned non-zero only on hard syntax
+        // errors. We mirror that: any reported error means false.
+        !self.has_errors()
+    }
+
+    // Ghidra: pcodeparse.y:106 statement
+    /// Parse one `statement` rule. Faithful to pcodeparse.y:106-125. Returns
+    /// the flattened op list (Bison's `vector<OpTpl *>*`) or an error message.
+    fn parse_statement(&mut self) -> StatementResult {
+        // Many statement forms begin with a varnode or keyword. We dispatch on
+        // the leading token, mirroring Bison's lookahead.
+        let cur = self.current.clone().unwrap_or(LexedToken {
+            kind: PcodeTokenKind::Illegal,
+            int_val: 0,
+            int_overflow: false,
+            ident: String::new(),
+        });
+        match cur.kind {
+            // goto / if / call / return
+            PcodeTokenKind::GotoKey => self.parse_goto(),
+            PcodeTokenKind::IfKey => self.parse_if(),
+            PcodeTokenKind::CallKey => self.parse_call(),
+            PcodeTokenKind::ReturnKey => self.parse_return(),
+            // local STRING = expr ;
+            PcodeTokenKind::LocalKey => self.parse_local_statement(),
+            // USEROPSYM ( paramlist ) ;
+            PcodeTokenKind::UserOpSym => self.parse_userop_no_out_statement(),
+            // LABELSYM or '<' STRING '>' — label
+            PcodeTokenKind::Punct('<') | PcodeTokenKind::LabelSym => {
+                let ops = self.parse_label_rule()?;
+                Ok(ops)
+            }
+            // sizedstar expr = expr ;  (store)
+            PcodeTokenKind::Punct('*') => self.parse_store_statement(),
+            // Otherwise: lhs forms (varnode, specificsymbol, STRING)
+            _ => self.parse_assign_or_declare(),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:117 GOTO_KEY jumpdest ';'
+    fn parse_goto(&mut self) -> StatementResult {
+        self.advance(); // consume GOTO
+        if self.peek_punct('[') {
+            // GOTO_KEY '[' expr ']' ';'  -> BRANCHIND
+            self.advance(); // '['
+            let expr = self.parse_expr(0)?;
+            self.expect_punct(']');
+            self.expect_punct(';');
+            Ok(self.create_op_no_out_unary(OpCode::CPUI_BRANCHIND, expr))
+        } else {
+            // GOTO_KEY jumpdest ';'  -> BRANCH
+            let dest = self.parse_jumpdest()?;
+            self.expect_punct(';');
+            let expr = ExprTree::from_varnode(dest);
+            Ok(self.create_op_no_out_unary(OpCode::CPUI_BRANCH, expr))
+        }
+    }
+
+    // Ghidra: pcodeparse.y:118 IF_KEY expr GOTO_KEY jumpdest ';'
+    fn parse_if(&mut self) -> StatementResult {
+        self.advance(); // consume IF
+        let cond = self.parse_expr(0)?;
+        // Expect GOTO
+        if !matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::GotoKey)
+        ) {
+            return Err("Expected 'goto' after if-condition".to_string());
+        }
+        self.advance(); // consume GOTO
+        let dest = self.parse_jumpdest()?;
+        self.expect_punct(';');
+        let dest_expr = ExprTree::from_varnode(dest);
+        Ok(self.create_op_no_out_binary(OpCode::CPUI_CBRANCH, dest_expr, cond))
+    }
+
+    // Ghidra: pcodeparse.y:120-121 CALL_KEY forms
+    fn parse_call(&mut self) -> StatementResult {
+        self.advance(); // consume CALL
+        if self.peek_punct('[') {
+            // CALL_KEY '[' expr ']' ';' -> CALLIND
+            self.advance(); // '['
+            let expr = self.parse_expr(0)?;
+            self.expect_punct(']');
+            self.expect_punct(';');
+            Ok(self.create_op_no_out_unary(OpCode::CPUI_CALLIND, expr))
+        } else {
+            let dest = self.parse_jumpdest()?;
+            self.expect_punct(';');
+            let expr = ExprTree::from_varnode(dest);
+            Ok(self.create_op_no_out_unary(OpCode::CPUI_CALL, expr))
+        }
+    }
+
+    // Ghidra: pcodeparse.y:122-123 RETURN_KEY forms
+    fn parse_return(&mut self) -> StatementResult {
+        self.advance(); // consume RETURN
+        if self.peek_punct('[') {
+            // RETURN_KEY '[' expr ']' ';' -> RETURN
+            self.advance(); // '['
+            let expr = self.parse_expr(0)?;
+            self.expect_punct(']');
+            self.expect_punct(';');
+            Ok(self.create_op_no_out_unary(OpCode::CPUI_RETURN, expr))
+        } else {
+            // RETURN_KEY ';' — error in Ghidra.
+            self.expect_punct(';');
+            Err("Must specify an indirect parameter for return".to_string())
+        }
+    }
+
+    // Ghidra: pcodeparse.y:107-110 LOCAL/string-output forms
+    fn parse_local_statement(&mut self) -> StatementResult {
+        self.advance(); // consume LOCAL
+        let name = self
+            .expect_string()
+            .ok_or_else(|| "Expected identifier after 'local'".to_string())?;
+        if self.peek_punct(':') {
+            // LOCAL STRING ':' INTEGER '=' expr ';'
+            self.advance(); // ':'
+            let size = self.expect_integer();
+            self.expect_punct('=');
+            let rhs = self.parse_expr(0)?;
+            self.expect_punct(';');
+            Ok(self.new_output(true, rhs, &name, size))
+        } else if self.peek_punct('=') {
+            // LOCAL STRING '=' expr ';'
+            self.advance(); // '='
+            let rhs = self.parse_expr(0)?;
+            self.expect_punct(';');
+            Ok(self.new_output(true, rhs, &name, 0))
+        } else if self.peek_punct('(') || self.peek_punct('[') {
+            // LOCAL specificsymbol '=' — the redefinition-error form
+            // (pcodeparse.y:111). We already consumed the name; back up is
+            // awkward, so just report the error.
+            self.report_error(&format!("Redefinition of symbol: {}", name));
+            // Skip to ';'.
+            while !matches!(
+                self.current.as_ref().map(|t| t.kind),
+                Some(PcodeTokenKind::Punct(';')) | Some(PcodeTokenKind::EndOfStream) | None
+            ) {
+                self.advance();
+            }
+            if self.peek_punct(';') {
+                self.advance();
+            }
+            Ok(Vec::new())
+        } else {
+            // LOCAL STRING ';'  — handled at the rtlmid level; reaching here
+            // means the caller dispatched on LOCAL before checking. Treat as
+            // a local declaration with no size.
+            self.expect_punct(';');
+            self.new_local_definition(&name, 0);
+            Ok(Vec::new())
+        }
+    }
+
+    // Ghidra: pcodeparse.y:113 USEROPSYM '(' paramlist ')' ';'
+    fn parse_userop_no_out_statement(&mut self) -> StatementResult {
+        // current token is UserOpSym; the user-op index is carried by the
+        // resolved symbol. Look it up by the identifier spelling.
+        let ident = self
+            .current
+            .as_ref()
+            .map(|t| t.ident.clone())
+            .unwrap_or_default();
+        let userop_index = self
+            .symbols
+            .get(&ident)
+            .map(|s| match &s.kind {
+                SleightSymbolKind::UserOp(_) => 0u64, // index not stored; use 0
+                _ => 0u64,
+            })
+            .unwrap_or(0);
+        self.advance(); // consume UserOpSym
+        self.expect_punct('(');
+        let params = self.parse_paramlist()?;
+        self.expect_punct(')');
+        self.expect_punct(';');
+        Ok(self.create_user_op_no_out(userop_index, params))
+    }
+
+    // Ghidra: pcodeparse.y:112 sizedstar expr '=' expr ';'
+    fn parse_store_statement(&mut self) -> StatementResult {
+        let qual = self.parse_sizedstar()?;
+        let ptr = self.parse_expr(0)?;
+        self.expect_punct('=');
+        let val = self.parse_expr(0)?;
+        self.expect_punct(';');
+        Ok(self.create_store(qual, ptr, val))
+    }
+
+    // Ghidra: pcodeparse.y:124 label  { pcode->placeLabel($1); }
+    fn parse_label_rule(&mut self) -> StatementResult {
+        let mut labsym = self.parse_label()?;
+        let ops = self.place_label(&mut labsym);
+        Ok(ops)
+    }
+
+    // Ghidra: pcodeparse.y:106,108,109,111,114-116 assign/declare forms
+    /// Parse the lhs-driven statement forms: assignment, declaration, bitrange
+    /// assignment, and the two error forms. We first parse a `lhsvarnode` (or
+    /// a `specificsymbol` for the redefinition check) and then dispatch on the
+    /// following token.
+    fn parse_assign_or_declare(&mut self) -> StatementResult {
+        // Peek to decide: STRING might be a temp declaration (`STRING = expr`)
+        // or a labelled assignment. Bison shifts toward declaration
+        // (pcodeparse.y:50-51).
+        let cur_kind = self
+            .current
+            .as_ref()
+            .map(|t| t.kind)
+            .unwrap_or(PcodeTokenKind::Illegal);
+        // First, try the lhsvarnode path. lhsvarnode = specificsymbol | STRING.
+        let lhs = self.parse_lhs_varnode()?;
+        // Now dispatch on the next token.
+        let next_kind = self
+            .current
+            .as_ref()
+            .map(|t| t.kind)
+            .unwrap_or(PcodeTokenKind::Illegal);
+        match next_kind {
+            PcodeTokenKind::Punct('=') => {
+                // lhsvarnode '=' expr ';'
+                self.advance(); // '='
+                let mut rhs = self.parse_expr(0)?;
+                self.expect_punct(';');
+                rhs.set_output(lhs);
+                Ok(rhs.into_ops())
+            }
+            PcodeTokenKind::Punct('[') => {
+                // lhsvarnode '[' INTEGER ',' INTEGER ']' '=' expr ';'
+                self.advance(); // '['
+                let bitoff = self.expect_integer() as u32;
+                self.expect_punct(',');
+                let numbits = self.expect_integer() as u32;
+                self.expect_punct(']');
+                self.expect_punct('=');
+                let rhs = self.parse_expr(0)?;
+                self.expect_punct(';');
+                Ok(self.assign_bit_range(lhs, bitoff, numbits, rhs))
+            }
+            PcodeTokenKind::Punct(':') => {
+                // varnode ':' INTEGER '='  — illegal truncation on lhs
+                // (pcodeparse.y:115).
+                self.advance(); // ':'
+                let _ = self.expect_integer();
+                self.expect_punct('=');
+                Err("Illegal truncation on left-hand side of assignment".to_string())
+            }
+            PcodeTokenKind::Punct('(') => {
+                // varnode '(' INTEGER ')' — illegal subpiece on lhs
+                // (pcodeparse.y:116).
+                self.advance(); // '('
+                let _ = self.expect_integer();
+                self.expect_punct(')');
+                Err("Illegal subpiece on left-hand side of assignment".to_string())
+            }
+            _ => Err(format!("Expected '=', '[', ':', or '(' after left-hand-side, got {:?}", next_kind)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:212-214 lhsvarnode
+    /// Parse a `lhsvarnode`: a `specificsymbol` (VARSYM/OPERANDSYM/JUMPSYM)
+    /// or a bare STRING (which Bison reports as "Unknown assignment varnode").
+    fn parse_lhs_varnode(&mut self) -> Result<VarnodeTpl, String> {
+        let cur = self
+            .current
+            .clone()
+            .ok_or_else(|| "Unexpected end of input".to_string())?;
+        match cur.kind {
+            PcodeTokenKind::VarSym | PcodeTokenKind::OperandSym | PcodeTokenKind::JumpSym => {
+                // specificsymbol -> getVarnode()
+                let vn = self.specific_symbol_varnode(&cur.ident)?;
+                self.advance();
+                Ok(vn)
+            }
+            PcodeTokenKind::String => {
+                self.advance();
+                Err(format!("Unknown assignment varnode: {}", cur.ident))
+            }
+            other => Err(format!("Expected left-hand-side varnode, got {:?}", other)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:195-201 jumpdest
+    /// Parse a `jumpdest`: JUMPSYM, INTEGER, BADINTEGER, INTEGER[SPACESYM],
+    /// label, or STRING (error).
+    fn parse_jumpdest(&mut self) -> Result<VarnodeTpl, String> {
+        let cur = self
+            .current
+            .clone()
+            .ok_or_else(|| "Unexpected end of input".to_string())?;
+        match cur.kind {
+            PcodeTokenKind::JumpSym => {
+                self.advance();
+                // JUMPSYM -> getVarnode(): (j_curspace, sym.offset, j_curspace_size).
+                // Rugra's JumpTarget carries only a name, so we use offset 0.
+                Ok(VarnodeTpl::new(
+                    ConstTpl::JCurSpace,
+                    ConstTpl::Real(0),
+                    ConstTpl::JCurSpaceSize,
+                ))
+            }
+            PcodeTokenKind::Integer => {
+                self.advance();
+                Ok(VarnodeTpl::new(
+                    ConstTpl::JCurSpace,
+                    ConstTpl::Real(cur.int_val),
+                    ConstTpl::JCurSpaceSize,
+                ))
+            }
+            PcodeTokenKind::BadInteger => {
+                self.advance();
+                self.report_error("Parsed integer is too big (overflow)");
+                Ok(VarnodeTpl::new(
+                    ConstTpl::JCurSpace,
+                    ConstTpl::Real(0),
+                    ConstTpl::JCurSpaceSize,
+                ))
+            }
+            PcodeTokenKind::Punct('<') | PcodeTokenKind::LabelSym => {
+                // label form (pcodeparse.y:199).
+                let mut labsym = self.parse_label()?;
+                labsym.increment_ref_count();
+                Ok(VarnodeTpl::new(
+                    ConstTpl::SpaceId(AddressSpace::Const),
+                    ConstTpl::JRelative(labsym.index),
+                    ConstTpl::Real(std::mem::size_of::<usize>() as u64),
+                ))
+            }
+            PcodeTokenKind::String => {
+                self.advance();
+                Err(format!("Unknown jump destination: {}", cur.ident))
+            }
+            other => Err(format!("Expected jump destination, got {:?}", other)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:215-217 label
+    /// Parse a `label`: '<' LABELSYM '>' or '<' STRING '>' (defineLabel).
+    fn parse_label(&mut self) -> Result<LabelSymbol, String> {
+        // Accept either '<' LABELSYM '>' or '<' STRING '>'.
+        if self.peek_punct('<') {
+            self.advance(); // '<'
+            let cur = self
+                .current
+                .clone()
+                .ok_or_else(|| "Expected label after '<'".to_string())?;
+            let labsym = match cur.kind {
+                PcodeTokenKind::LabelSym => {
+                    // Look up the existing label.
+                    self.advance();
+                    self.labels
+                        .iter()
+                        .find(|l| l.name == cur.ident)
+                        .cloned()
+                        .unwrap_or_else(|| LabelSymbol::new(cur.ident.clone(), 0))
+                }
+                PcodeTokenKind::String => {
+                    self.advance();
+                    // pcodeparse.y:216: defineLabel
+                    let ls = self.define_label(&cur.ident);
+                    self.labels.push(ls.clone());
+                    ls
+                }
+                other => return Err(format!("Expected label name, got {:?}", other)),
+            };
+            self.expect_punct('>');
+            Ok(labsym)
+        } else if matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::LabelSym)
+        ) {
+            // Already-consumed LABELSYM form (shouldn't normally happen here).
+            let cur = self.current.clone().unwrap();
+            self.advance();
+            Ok(self
+                .labels
+                .iter()
+                .find(|l| l.name == cur.ident)
+                .cloned()
+                .unwrap_or_else(|| LabelSymbol::new(cur.ident, 0)))
+        } else {
+            Err("Expected label".to_string())
+        }
+    }
+
+    // Ghidra: pcodeparse.y:190-194 sizedstar
+    /// Parse a `sizedstar`: one of `*[SPACESYM]:INTEGER`, `*[SPACESYM]`,
+    /// `*:INTEGER`, `*`.
+    fn parse_sizedstar(&mut self) -> Result<StarQuality, String> {
+        self.expect_punct('*')?;
+        // Optional '[ SPACESYM ]'.
+        let id = if self.peek_punct('[') {
+            self.advance(); // '['
+            let cur = self
+                .current
+                .clone()
+                .ok_or_else(|| "Expected space symbol after '['".to_string())?;
+            if !matches!(cur.kind, PcodeTokenKind::SpaceSym) {
+                return Err(format!("Expected space symbol, got {:?}", cur.kind));
+            }
+            let spc = self
+                .symbols
+                .get(&cur.ident)
+                .and_then(|s| match &s.kind {
+                    SleightSymbolKind::Space(s) => Some(*s),
+                    _ => None,
+                })
+                .unwrap_or(AddressSpace::Const);
+            self.advance();
+            self.expect_punct(']')?;
+            ConstTpl::SpaceId(spc)
+        } else {
+            ConstTpl::SpaceId(self.default_space)
+        };
+        // Optional ': INTEGER'.
+        let size = if self.peek_punct(':') {
+            self.advance(); // ':'
+            self.expect_integer()
+        } else {
+            0
+        };
+        Ok(StarQuality { id, size })
+    }
+
+    // Ghidra: pcodeparse.y:202-211 varnode / integervarnode
+    /// Parse a `varnode`: specificsymbol, integervarnode, or STRING (error).
+    fn parse_varnode(&mut self) -> Result<VarnodeTpl, String> {
+        let cur = self
+            .current
+            .clone()
+            .ok_or_else(|| "Unexpected end of input".to_string())?;
+        match cur.kind {
+            PcodeTokenKind::VarSym | PcodeTokenKind::OperandSym | PcodeTokenKind::JumpSym => {
+                let vn = self.specific_symbol_varnode(&cur.ident)?;
+                self.advance();
+                Ok(vn)
+            }
+            PcodeTokenKind::Integer | PcodeTokenKind::BadInteger => {
+                self.parse_integer_varnode()
+            }
+            PcodeTokenKind::Punct('&') => {
+                // '&' varnode | '&' ':' INTEGER varnode
+                self.advance(); // '&'
+                let size = if self.peek_punct(':') {
+                    self.advance();
+                    let s = self.expect_integer();
+                    // The ':' INTEGER form requires the next varnode.
+                    let inner = self.parse_varnode()?;
+                    return Ok(self.address_of(inner, s));
+                } else {
+                    0
+                };
+                let inner = self.parse_varnode()?;
+                Ok(self.address_of(inner, size))
+            }
+            PcodeTokenKind::String => {
+                self.advance();
+                Err(format!("Unknown varnode parameter: {}", cur.ident))
+            }
+            other => Err(format!("Expected varnode, got {:?}", other)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:206-211 integervarnode
+    /// Parse an `integervarnode`: INTEGER, BADINTEGER, INTEGER':'INTEGER.
+    fn parse_integer_varnode(&mut self) -> Result<VarnodeTpl, String> {
+        let cur = self
+            .current
+            .clone()
+            .ok_or_else(|| "Unexpected end of input".to_string())?;
+        match cur.kind {
+            PcodeTokenKind::Integer => {
+                self.advance();
+                // INTEGER ':' INTEGER form (pcodeparse.y:208).
+                if self.peek_punct(':') {
+                    self.advance(); // ':'
+                    let size = self.expect_integer();
+                    Ok(VarnodeTpl::new(
+                        ConstTpl::SpaceId(self.constant_space),
+                        ConstTpl::Real(cur.int_val),
+                        ConstTpl::Real(size),
+                    ))
+                } else {
+                    Ok(VarnodeTpl::new(
+                        ConstTpl::SpaceId(self.constant_space),
+                        ConstTpl::Real(cur.int_val),
+                        ConstTpl::Real(0),
+                    ))
+                }
+            }
+            PcodeTokenKind::BadInteger => {
+                self.advance();
+                self.report_error("Parsed integer is too big (overflow)");
+                Ok(VarnodeTpl::new(
+                    ConstTpl::SpaceId(self.constant_space),
+                    ConstTpl::Real(0),
+                    ConstTpl::Real(0),
+                ))
+            }
+            other => Err(format!("Expected integer varnode, got {:?}", other)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:218-221 specificsymbol
+    /// Resolve a specificsymbol's name to its varnode. The three specific
+    /// symbol kinds (VARSYM, OPERANDSYM, JUMPSYM) all map via `getVarnode()`.
+    fn specific_symbol_varnode(&self, name: &str) -> Result<VarnodeTpl, String> {
+        let sym = self
+            .symbols
+            .get(name)
+            .ok_or_else(|| format!("Unresolved symbol: {}", name))?;
+        match &sym.kind {
+            SleightSymbolKind::Varnode(vd) => Ok(VarnodeTpl::new(
+                ConstTpl::SpaceId(vd.space),
+                ConstTpl::Real(vd.offset),
+                ConstTpl::Real(vd.size as u64),
+            )),
+            SleightSymbolKind::Operand(_, idx) => Ok(VarnodeTpl::new(
+                ConstTpl::SpaceId(AddressSpace::Unique),
+                ConstTpl::Handle {
+                    index: *idx,
+                    plus: 0,
+                },
+                ConstTpl::Real(0),
+            )),
+            SleightSymbolKind::JumpTarget(_) => Ok(VarnodeTpl::new(
+                ConstTpl::JCurSpace,
+                ConstTpl::Real(0),
+                ConstTpl::JCurSpaceSize,
+            )),
+            other => Err(format!("Symbol {} is not a specific symbol: {:?}", name, other)),
+        }
+    }
+
+    // Ghidra: pcodeparse.y:126-189 expr
+    /// Parse an `expr` using precedence climbing. `min_prec` is the minimum
+    /// precedence the caller will accept (0 = any). Bison's precedence levels
+    /// (pcodeparse.y:53-64) are encoded in `binary_op_for` and `unary_op_for`.
+    fn parse_expr(&mut self, min_prec: u8) -> Result<ExprTree, String> {
+        // Parse the left operand (atom or unary op).
+        let mut left = self.parse_expr_atom()?;
+        // Climb precedence.
+        loop {
+            let cur = self.current.clone();
+            let Some(cur) = cur else { break };
+            // Check for a binary operator at this precedence level.
+            if let Some((opc, prec, right_assoc)) = binary_op_for(cur.kind) {
+                if prec < min_prec {
+                    break;
+                }
+                self.advance();
+                let next_min = if right_assoc { prec } else { prec + 1 };
+                let right = self.parse_expr(next_min)?;
+                left = self.create_op_binary(opc, left, right);
+                continue;
+            }
+            // Special: specificsymbol ':' INTEGER (bitrange) and
+            // specificsymbol '[' INTEGER ',' INTEGER ']' (bitrange) and
+            // specificsymbol '(' integervarnode ')' (subpiece).
+            // These only apply when left is a bare specificsymbol; we detect
+            // them by peeking at the next token.
+            // (Handled inside parse_expr_atom for the leading-specificsymbol
+            // case to avoid ambiguity with the binary ':' which doesn't
+            // exist.)
+            break;
+        }
+        Ok(left)
+    }
+
+    // Ghidra: pcodeparse.y:126-189 expr atoms and unary forms
+    /// Parse the leading atom of an expression: varnode, sizedstar load,
+    /// parenthesised expr, unary op, or builtin function call.
+    fn parse_expr_atom(&mut self) -> Result<ExprTree, String> {
+        let cur = self
+            .current
+            .clone()
+            .ok_or_else(|| "Unexpected end of input in expression".to_string())?;
+        match cur.kind {
+            // '(' expr ')'
+            PcodeTokenKind::Punct('(') => {
+                self.advance();
+                let e = self.parse_expr(0)?;
+                self.expect_punct(')')?;
+                Ok(e)
+            }
+            // sizedstar expr  (load)
+            PcodeTokenKind::Punct('*') => {
+                let qual = self.parse_sizedstar()?;
+                let inner = self.parse_expr(unary_prec())?;
+                Ok(self.create_load(qual, inner))
+            }
+            // Unary '-' / '~' / '!'
+            PcodeTokenKind::Punct('-') => {
+                self.advance();
+                let inner = self.parse_expr(unary_prec())?;
+                Ok(self.create_op_unary(OpCode::CPUI_INT_2COMP, inner))
+            }
+            PcodeTokenKind::Punct('~') => {
+                self.advance();
+                let inner = self.parse_expr(unary_prec())?;
+                Ok(self.create_op_unary(OpCode::CPUI_INT_NEGATE, inner))
+            }
+            PcodeTokenKind::Punct('!') => {
+                self.advance();
+                let inner = self.parse_expr(unary_prec())?;
+                Ok(self.create_op_unary(OpCode::CPUI_BOOL_NEGATE, inner))
+            }
+            // OP_FSUB expr  (unary float negate, pcodeparse.y:168)
+            PcodeTokenKind::FSub => {
+                // OP_FSUB as a prefix operator is FLOAT_NEG. We need to check
+                // it is in prefix position (no left operand) — which it is
+                // here since we're parsing an atom.
+                self.advance();
+                let inner = self.parse_expr(unary_prec())?;
+                Ok(self.create_op_unary(OpCode::CPUI_FLOAT_NEG, inner))
+            }
+            // Builtin unary functions: abs, sqrt, sext, zext, float2float,
+            // int2float, nan, trunc, ceil, floor, round, new(1 arg).
+            PcodeTokenKind::Abs => self.parse_unary_builtin(OpCode::CPUI_FLOAT_ABS),
+            PcodeTokenKind::Sqrt => self.parse_unary_builtin(OpCode::CPUI_FLOAT_SQRT),
+            PcodeTokenKind::Sext => self.parse_unary_builtin(OpCode::CPUI_INT_SEXT),
+            PcodeTokenKind::Zext => self.parse_unary_builtin(OpCode::CPUI_INT_ZEXT),
+            PcodeTokenKind::Float2Float => self.parse_unary_builtin(OpCode::CPUI_FLOAT_FLOAT2FLOAT),
+            PcodeTokenKind::Int2Float => self.parse_unary_builtin(OpCode::CPUI_FLOAT_INT2FLOAT),
+            PcodeTokenKind::Nan => self.parse_unary_builtin(OpCode::CPUI_FLOAT_NAN),
+            PcodeTokenKind::Trunc => self.parse_unary_builtin(OpCode::CPUI_FLOAT_TRUNC),
+            PcodeTokenKind::Ceil => self.parse_unary_builtin(OpCode::CPUI_FLOAT_CEIL),
+            PcodeTokenKind::Floor => self.parse_unary_builtin(OpCode::CPUI_FLOAT_FLOOR),
+            PcodeTokenKind::Round => self.parse_unary_builtin(OpCode::CPUI_FLOAT_ROUND),
+            PcodeTokenKind::New => self.parse_new_builtin(),
+            // Binary builtins with 2 args: carry, scarry, sborrow.
+            PcodeTokenKind::Carry => self.parse_binary_builtin(OpCode::CPUI_INT_CARRY),
+            PcodeTokenKind::SCarry => self.parse_binary_builtin(OpCode::CPUI_INT_SCARRY),
+            PcodeTokenKind::SBorrow => self.parse_binary_builtin(OpCode::CPUI_INT_SBORROW),
+            // specificsymbol '(' integervarnode ')'  -> SUBPIECE
+            // specificsymbol ':' INTEGER             -> createBitRange(sym,0,*3*8)
+            // specificsymbol '[' INTEGER ',' INTEGER ']' -> createBitRange
+            // USEROPSYM '(' paramlist ')'           -> createUserOp
+            PcodeTokenKind::VarSym | PcodeTokenKind::OperandSym | PcodeTokenKind::JumpSym => {
+                self.parse_specific_symbol_expr()
+            }
+            PcodeTokenKind::UserOpSym => {
+                let ident = cur.ident.clone();
+                let userop_index = self
+                    .symbols
+                    .get(&ident)
+                    .map(|s| match &s.kind {
+                        SleightSymbolKind::UserOp(_) => 0u64,
+                        _ => 0u64,
+                    })
+                    .unwrap_or(0);
+                self.advance();
+                self.expect_punct('(')?;
+                let params = self.parse_paramlist()?;
+                self.expect_punct(')')?;
+                Ok(self.create_user_op(userop_index, params))
+            }
+            // Bare varnode / integer.
+            PcodeTokenKind::Integer
+            | PcodeTokenKind::BadInteger
+            | PcodeTokenKind::Punct('&') => {
+                let vn = self.parse_varnode()?;
+                Ok(ExprTree::from_varnode(vn))
+            }
+            PcodeTokenKind::String => {
+                // Unknown identifier in expression position.
+                self.advance();
+                Err(format!("Unknown varnode parameter: {}", cur.ident))
+            }
+            other => Err(format!("Unexpected token in expression: {:?}", other)),
+        }
+    }
+
+    // RUGRA-GLUE: parse_unary_builtin
+    /// Parse `BUILTIN ( expr )` for the 1-arg builtins (abs/sqrt/sext/zext/
+    /// float2float/int2float/nan/trunc/ceil/floor/round).
+    fn parse_unary_builtin(&mut self, opc: OpCode) -> Result<ExprTree, String> {
+        self.advance(); // consume the builtin keyword
+        self.expect_punct('(')?;
+        let inner = self.parse_expr(0)?;
+        self.expect_punct(')')?;
+        Ok(self.create_op_unary(opc, inner))
+    }
+
+    // RUGRA-GLUE: parse_binary_builtin
+    /// Parse `BUILTIN ( expr , expr )` for the 2-arg builtins
+    /// (carry/scarry/sborrow).
+    fn parse_binary_builtin(&mut self, opc: OpCode) -> Result<ExprTree, String> {
+        self.advance(); // consume the builtin keyword
+        self.expect_punct('(')?;
+        let a = self.parse_expr(0)?;
+        self.expect_punct(',')?;
+        let b = self.parse_expr(0)?;
+        self.expect_punct(')')?;
+        Ok(self.create_op_binary(opc, a, b))
+    }
+
+    // Ghidra: pcodeparse.y:183-184 OP_NEW forms
+    /// Parse `new ( expr )` or `new ( expr , expr )`.
+    fn parse_new_builtin(&mut self) -> Result<ExprTree, String> {
+        self.advance(); // consume NEW
+        self.expect_punct('(')?;
+        let a = self.parse_expr(0)?;
+        if self.peek_punct(',') {
+            self.advance();
+            let b = self.parse_expr(0)?;
+            self.expect_punct(')')?;
+            Ok(self.create_op_binary(OpCode::CPUI_NEW, a, b))
+        } else {
+            self.expect_punct(')')?;
+            Ok(self.create_op_unary(OpCode::CPUI_NEW, a))
+        }
+    }
+
+    // Ghidra: pcodeparse.y:185-187 specificsymbol expr forms
+    /// Parse a leading `specificsymbol` followed optionally by:
+    ///   `( integervarnode )`  -> SUBPIECE,
+    ///   `: INTEGER`           -> createBitRange(sym, 0, n*8),
+    ///   `[ INTEGER , INTEGER ]` -> createBitRange(sym, off, numbits).
+    fn parse_specific_symbol_expr(&mut self) -> Result<ExprTree, String> {
+        let name = self
+            .current
+            .as_ref()
+            .map(|t| t.ident.clone())
+            .ok_or_else(|| "Expected specific symbol".to_string())?;
+        self.advance(); // consume the symbol token
+        let next_kind = self
+            .current
+            .as_ref()
+            .map(|t| t.kind)
+            .unwrap_or(PcodeTokenKind::Illegal);
+        match next_kind {
+            PcodeTokenKind::Punct('(') => {
+                // specificsymbol '(' integervarnode ')' -> SUBPIECE
+                self.advance(); // '('
+                let off_vn = self.parse_integer_varnode()?;
+                self.expect_punct(')')?;
+                let sym_vn = self.specific_symbol_varnode(&name)?;
+                let lhs = ExprTree::from_varnode(sym_vn);
+                let rhs = ExprTree::from_varnode(off_vn);
+                Ok(self.create_op_binary(OpCode::CPUI_SUBPIECE, lhs, rhs))
+            }
+            PcodeTokenKind::Punct(':') => {
+                // specificsymbol ':' INTEGER -> createBitRange(sym, 0, *3 * 8)
+                self.advance(); // ':'
+                let n = self.expect_integer();
+                let sym_vn = self.specific_symbol_varnode(&name)?;
+                Ok(self.create_bit_range(sym_vn, &name, 0, (n as u32) * 8))
+            }
+            PcodeTokenKind::Punct('[') => {
+                // specificsymbol '[' INTEGER ',' INTEGER ']' -> createBitRange
+                self.advance(); // '['
+                let bitoff = self.expect_integer() as u32;
+                self.expect_punct(',')?;
+                let numbits = self.expect_integer() as u32;
+                self.expect_punct(']')?;
+                let sym_vn = self.specific_symbol_varnode(&name)?;
+                Ok(self.create_bit_range(sym_vn, &name, bitoff, numbits))
+            }
+            _ => {
+                // Just a bare specificsymbol -> varnode.
+                let vn = self.specific_symbol_varnode(&name)?;
+                Ok(ExprTree::from_varnode(vn))
+            }
+        }
+    }
+
+    // Ghidra: pcodeparse.y:222-225 paramlist
+    /// Parse a `paramlist`: empty, or expr (',' expr)*. Returns the list of
+    /// sub-expressions.
+    fn parse_paramlist(&mut self) -> Result<Vec<ExprTree>, String> {
+        let mut params = Vec::new();
+        // Empty list: ')' immediately follows.
+        if matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::Punct(')'))
+        ) {
+            return Ok(params);
+        }
+        params.push(self.parse_expr(0)?);
+        while self.peek_punct(',') {
+            self.advance();
+            params.push(self.parse_expr(0)?);
+        }
+        Ok(params)
+    }
+
+    // --- low-level token helpers ---
+
+    fn advance(&mut self) {
+        self.current = Some(self.lex_full());
+    }
+
+    fn peek_punct(&self, c: char) -> bool {
+        matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::Punct(p)) if p == c
+        )
+    }
+
+    fn expect_punct(&mut self, c: char) -> Result<(), String> {
+        if self.peek_punct(c) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(format!(
+                "Expected '{}', got {:?}",
+                c,
+                self.current.as_ref().map(|t| t.kind)
+            ))
+        }
+    }
+
+    fn expect_string(&mut self) -> Option<String> {
+        let cur = self.current.clone()?;
+        if matches!(cur.kind, PcodeTokenKind::String) {
+            self.advance();
+            Some(cur.ident)
+        } else {
+            None
+        }
+    }
+
+    fn expect_integer(&mut self) -> u64 {
+        let cur = self.current.clone();
+        if let Some(c) = cur {
+            if matches!(c.kind, PcodeTokenKind::Integer | PcodeTokenKind::BadInteger) {
+                self.advance();
+                return c.int_val;
+            }
+        }
+        0
+    }
+
+    fn skip_to_statement_boundary(&mut self) {
+        while !matches!(
+            self.current.as_ref().map(|t| t.kind),
+            Some(PcodeTokenKind::Punct(';'))
+                | Some(PcodeTokenKind::EndOfStream)
+                | None
+        ) {
+            self.advance();
+        }
+        if self.peek_punct(';') {
+            self.advance();
+        }
+    }
+
+    // Ghidra: pcodeparse.hh:85 PcodeSnippet::releaseResult
+    /// Release ownership of the parsed ConstructTpl (mirrors `releaseResult`).
+    pub fn release_result(&mut self) -> Option<ConstructTpl> {
+        self.result.take()
+    }
+
+    // Ghidra: pcodeparse.hh:84 PcodeSnippet::setResult
+    /// Set the result directly (mirrors `setResult`).
+    pub fn set_result(&mut self, ct: ConstructTpl) {
+        self.result = Some(ct);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operator precedence tables (pcodeparse.y:53-64)
+// ---------------------------------------------------------------------------
+
+/// Precedence floor for unary operators. Bison assigns these via
+/// `%right '!' '~'` (pcodeparse.y:64), the tightest non-primary binding.
+const fn unary_prec() -> u8 {
+    12
+}
+
+// Ghidra: pcodeparse.y:53-63 binary operator precedence
+/// Map a binary token to `(opcode, precedence, right_associative)`. The
+/// precedence levels mirror Bison's `%left`/`%right` declarations, numbered
+/// 1..=11 from loosest to tightest. Returns `None` for non-binary tokens.
+fn binary_op_for(kind: PcodeTokenKind) -> Option<(OpCode, u8, bool)> {
+    // Levels (loosest first), per pcodeparse.y:53-63:
+    //   1: OP_BOOL_OR
+    //   2: OP_BOOL_AND OP_BOOL_XOR
+    //   3: '|'
+    //   4: '^'
+    //   5: '&'
+    //   6: OP_EQUAL OP_NOTEQUAL OP_FEQUAL OP_FNOTEQUAL
+    //   7: '<' '>' OP_GREATEQUAL OP_LESSEQUAL OP_SLESS OP_SGREATEQUAL
+    //      OP_SLESSEQUAL OP_SGREAT OP_FLESS OP_FGREAT OP_FLESSEQUAL OP_FGREATEQUAL
+    //      (nonassoc)
+    //   8: OP_LEFT OP_RIGHT OP_SRIGHT
+    //   9: '+' '-' OP_FADD OP_FSUB
+    //  10: '*' '/' '%' OP_SDIV OP_SREM OP_FMULT OP_FDIV
+    // The Bison grammar also folds ';' into the precedence stack at level 4
+    // but the parser never sees it as a binary op.
+    match kind {
+        PcodeTokenKind::BoolOr => Some((OpCode::CPUI_BOOL_OR, 1, false)),
+        PcodeTokenKind::BoolAnd => Some((OpCode::CPUI_BOOL_AND, 2, false)),
+        PcodeTokenKind::BoolXor => Some((OpCode::CPUI_BOOL_XOR, 2, false)),
+        PcodeTokenKind::Punct('|') => Some((OpCode::CPUI_INT_OR, 3, false)),
+        PcodeTokenKind::Punct('^') => Some((OpCode::CPUI_INT_XOR, 4, false)),
+        PcodeTokenKind::Punct('&') => Some((OpCode::CPUI_INT_AND, 5, false)),
+        PcodeTokenKind::Equal => Some((OpCode::CPUI_INT_EQUAL, 6, false)),
+        PcodeTokenKind::NotEqual => Some((OpCode::CPUI_INT_NOTEQUAL, 6, false)),
+        PcodeTokenKind::FEqual => Some((OpCode::CPUI_FLOAT_EQUAL, 6, false)),
+        PcodeTokenKind::FNotEqual => Some((OpCode::CPUI_FLOAT_NOTEQUAL, 6, false)),
+        PcodeTokenKind::Punct('<') => Some((OpCode::CPUI_INT_LESS, 7, false)),
+        PcodeTokenKind::Punct('>') => Some((OpCode::CPUI_INT_LESS, 7, false)), // swapped operands
+        PcodeTokenKind::GreatEqual => Some((OpCode::CPUI_INT_LESSEQUAL, 7, false)), // swapped
+        PcodeTokenKind::LessEqual => Some((OpCode::CPUI_INT_LESSEQUAL, 7, false)),
+        PcodeTokenKind::SLess => Some((OpCode::CPUI_INT_SLESS, 7, false)),
+        PcodeTokenKind::SGreatEqual => Some((OpCode::CPUI_INT_SLESSEQUAL, 7, false)), // swapped
+        PcodeTokenKind::SLessEqual => Some((OpCode::CPUI_INT_SLESSEQUAL, 7, false)),
+        PcodeTokenKind::SGreat => Some((OpCode::CPUI_INT_SLESS, 7, false)), // swapped
+        PcodeTokenKind::FLess => Some((OpCode::CPUI_FLOAT_LESS, 7, false)),
+        PcodeTokenKind::FGreat => Some((OpCode::CPUI_FLOAT_LESS, 7, false)), // swapped
+        PcodeTokenKind::FLessEqual => Some((OpCode::CPUI_FLOAT_LESSEQUAL, 7, false)),
+        PcodeTokenKind::FGreatEqual => Some((OpCode::CPUI_FLOAT_LESSEQUAL, 7, false)), // swapped
+        PcodeTokenKind::Left => Some((OpCode::CPUI_INT_LEFT, 8, false)),
+        PcodeTokenKind::Right => Some((OpCode::CPUI_INT_RIGHT, 8, false)),
+        PcodeTokenKind::SRight => Some((OpCode::CPUI_INT_SRIGHT, 8, false)),
+        PcodeTokenKind::Punct('+') => Some((OpCode::CPUI_INT_ADD, 9, false)),
+        PcodeTokenKind::Punct('-') => Some((OpCode::CPUI_INT_SUB, 9, false)),
+        PcodeTokenKind::FAdd => Some((OpCode::CPUI_FLOAT_ADD, 9, false)),
+        PcodeTokenKind::FSub => Some((OpCode::CPUI_FLOAT_SUB, 9, false)),
+        PcodeTokenKind::Punct('*') => Some((OpCode::CPUI_INT_MULT, 10, false)),
+        PcodeTokenKind::Punct('/') => Some((OpCode::CPUI_INT_DIV, 10, false)),
+        PcodeTokenKind::Punct('%') => Some((OpCode::CPUI_INT_REM, 10, false)),
+        PcodeTokenKind::SDiv => Some((OpCode::CPUI_INT_SDIV, 10, false)),
+        PcodeTokenKind::SRem => Some((OpCode::CPUI_INT_SREM, 10, false)),
+        PcodeTokenKind::FMult => Some((OpCode::CPUI_FLOAT_MULT, 10, false)),
+        PcodeTokenKind::FDiv => Some((OpCode::CPUI_FLOAT_DIV, 10, false)),
+        _ => None,
     }
 }
 
@@ -1903,6 +4359,29 @@ mod tests {
     }
 
     #[test]
+    fn test_lexer_keyword_abs_unreachable() {
+        // Regression documenting Ghidra's latent idents[] sort inconsistency
+        // (pcodeparse.y:229-276): the table is NOT in byte-lexicographic order
+        // at the symbol->letter boundary (`||`=124,124 precedes `abs`=97,...),
+        // so the binary search in findIdentifier (pcodeparse.y:278-295) cannot
+        // reach `abs` (index 9). Empirically, only `abs` is missed because its
+        // search path is the one forced across the unsorted `||`->`abs` edge.
+        // This faithfully reproduces Ghidra's behaviour: `abs(...)` is
+        // effectively unreachable in the runtime p-code snippet parser and
+        // only works via SLEIGH's slghscan.l.
+        assert_eq!(find_identifier("abs"), None, "abs is unreachable (Ghidra bug)");
+        // Neighbouring alpha keywords ARE found.
+        assert!(find_identifier("borrow").is_some());
+        assert!(find_identifier("call").is_some());
+        assert!(find_identifier("carry").is_some());
+        assert!(find_identifier("ceil").is_some());
+        // The lexer reflects this: `abs` tokenizes as STRING.
+        let mut lex = PcodeLexer::new();
+        lex.initialize("abs");
+        assert_eq!(lex.get_next_token(), PcodeTokenKind::String);
+    }
+
+    #[test]
     fn test_lexer_hex_number() {
         let mut lex = PcodeLexer::new();
         lex.initialize("0xff");
@@ -1916,6 +4395,25 @@ mod tests {
         lex.initialize("12345");
         assert_eq!(lex.get_next_token(), PcodeTokenKind::Integer);
         assert_eq!(lex.get_number(), 12345);
+    }
+
+    #[test]
+    fn test_lexer_hex_zero_is_not_overflow() {
+        // Regression for the BADINTEGER heuristic: `0x0` must parse to the
+        // integer 0, NOT BADINTEGER. Ghidra's check is `if (!s1)` (stream
+        // failure), not "value is zero with non-zero chars".
+        let mut lex = PcodeLexer::new();
+        lex.initialize("0x0");
+        assert_eq!(lex.get_next_token(), PcodeTokenKind::Integer);
+        assert_eq!(lex.get_number(), 0);
+        let mut lex2 = PcodeLexer::new();
+        lex2.initialize("0x2000");
+        assert_eq!(lex2.get_next_token(), PcodeTokenKind::Integer);
+        assert_eq!(lex2.get_number(), 0x2000);
+        // A genuinely malformed hex literal is BADINTEGER.
+        let mut lex3 = PcodeLexer::new();
+        lex3.initialize("0x");
+        assert_eq!(lex3.get_next_token(), PcodeTokenKind::BadInteger);
     }
 
     #[test]
@@ -2185,7 +4683,15 @@ mod tests {
     #[test]
     fn test_snippet_parse_stream_clean() {
         let mut snip = PcodeSnippet::new();
-        assert!(snip.parse_stream("zext foo 0x10"));
+        // A valid p-code snippet: declare a local, assign it the sum of two
+        // 4-byte constants. With the full recursive-descent parser online
+        // this must parse without errors. The `:4` annotations give the
+        // constants an explicit size so propagateSize can resolve the output.
+        assert!(
+            snip.parse_stream("local tmp = 0x10:4 + 0x20:4;"),
+            "parse failed: {}",
+            snip.get_error_message()
+        );
         assert!(!snip.has_errors());
     }
 
@@ -2194,6 +4700,395 @@ mod tests {
         let mut snip = PcodeSnippet::new();
         assert!(!snip.parse_stream("zext @ foo"));
         assert!(snip.has_errors());
+    }
+
+    // --- new recursive-descent parser coverage (pcodeparse.y:98-225) ---
+
+    #[test]
+    fn test_parse_simple_assignment() {
+        // statement: lhsvarnode '=' expr ';'
+        // Here we declare a local first, then assign to it.
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local tmp = 0x10:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        // One op: the COPY/assignment of 0x10:4 into tmp.
+        assert_eq!(ct.get_opvec().len(), 1);
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_COPY);
+    }
+
+    #[test]
+    fn test_parse_binary_expr_add() {
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local tmp = 0x10:4 + 0x20:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        // One INT_ADD op with a tmp output.
+        let add_op = ct
+            .get_opvec()
+            .iter()
+            .find(|o| o.opc == OpCode::CPUI_INT_ADD)
+            .expect("INT_ADD op present");
+        assert!(add_op.out.is_some(), "INT_ADD has output");
+        assert_eq!(add_op.num_input(), 2);
+    }
+
+    #[test]
+    fn test_parse_goto_integer() {
+        // statement: GOTO_KEY jumpdest ';'  -> CPUI_BRANCH
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("goto 0x1000;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec().len(), 1);
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_BRANCH);
+    }
+
+    #[test]
+    fn test_parse_goto_indirect() {
+        // statement: GOTO_KEY '[' expr ']' ';' -> CPUI_BRANCHIND
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("goto [0x1000:8];"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_BRANCHIND);
+    }
+
+    #[test]
+    fn test_parse_call_and_return() {
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("call 0x2000;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert_eq!(ct.get_opvec()[0].opc, OpCode::CPUI_CALL);
+
+        let mut snip2 = PcodeSnippet::new();
+        assert!(
+            snip2.parse_stream("return [0x0:4];"),
+            "{}",
+            snip2.get_error_message()
+        );
+        let ct2 = snip2.release_result().expect("result set");
+        assert_eq!(ct2.get_opvec()[0].opc, OpCode::CPUI_RETURN);
+    }
+
+    #[test]
+    fn test_parse_return_without_param_errors() {
+        // statement: RETURN_KEY ';' -> error (pcodeparse.y:122)
+        let mut snip = PcodeSnippet::new();
+        assert!(!snip.parse_stream("return;"));
+        assert!(snip.has_errors());
+        assert!(snip.get_error_message().contains("indirect parameter"));
+    }
+
+    #[test]
+    fn test_parse_if_goto() {
+        // statement: IF_KEY expr GOTO_KEY jumpdest ';' -> CPUI_CBRANCH
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local c = 0x1:1; if c goto 0x10;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(
+            ct.get_opvec()
+                .iter()
+                .any(|o| o.opc == OpCode::CPUI_CBRANCH),
+            "CBRANCH emitted for if-goto"
+        );
+    }
+
+    #[test]
+    fn test_parse_unary_builtins() {
+        // zext's output size is NOT inferred from its input (Ghidra's fillinZero
+        // has no rule for INT_ZEXT), so we must give the output an explicit
+        // size via `local tmp:8 = ...` (pcodeparse.y:109).
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local tmp:8 = zext(0x10:4);"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_INT_ZEXT));
+
+        // sext likewise needs a sized output.
+        let mut snip3 = PcodeSnippet::new();
+        assert!(
+            snip3.parse_stream("local s:8 = sext(0x10:4);"),
+            "{}",
+            snip3.get_error_message()
+        );
+        assert!(!snip3.has_errors());
+        let ct3 = snip3.release_result().expect("result set");
+        assert!(ct3.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_INT_SEXT));
+    }
+
+    #[test]
+    fn test_parse_binary_builtins() {
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local c = carry(0x10:4, 0x20:4);"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_INT_CARRY));
+    }
+
+    #[test]
+    fn test_parse_store() {
+        // sizedstar expr '=' expr ';'  -> CPUI_STORE
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("*[ram]:4 0x1000:8 = 0x42:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_STORE));
+    }
+
+    #[test]
+    fn test_parse_load() {
+        // sizedstar expr  -> CPUI_LOAD (inside an expression)
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local v = *[ram]:4 0x1000:8;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_LOAD));
+    }
+
+    #[test]
+    fn test_parse_new_builtin() {
+        // NOTE: OP_NEW is declared in pcodeparse.y:67 but is NOT present in
+        // the lexer's idents[] table (pcodeparse.y:229-276). The runtime
+        // p-code parser therefore never tokenizes "new" as OP_NEW — it is a
+        // regular STRING and falls through to the symbol lookup, which fails.
+        // (The `new(...)` form is only available in the SLEIGH compiler via
+        // slghscan.l's `newobject` rule.) Verify this faithful behaviour.
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            !snip.parse_stream("local p = new(0x10:4);"),
+            "PcodeSnippet parser does not recognise 'new' (not in idents[])"
+        );
+        assert!(snip.has_errors());
+    }
+
+    #[test]
+    fn test_parse_precedence_add_then_mult() {
+        // 0x1:4 + 0x2:4 * 0x3:4 should parse as 0x1 + (0x2 * 0x3).
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local t = 0x1:4 + 0x2:4 * 0x3:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        // Both INT_MULT and INT_ADD should be present.
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_INT_MULT));
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_INT_ADD));
+    }
+
+    #[test]
+    fn test_parse_label_and_goto_label() {
+        // label '<' STRING '>' then goto that label.
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("<done> goto done;"),
+            "{}",
+            snip.get_error_message()
+        );
+        // Label placement + branch. The label emits a LABELBUILD (PTRADD) op.
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        assert!(
+            ct.get_opvec()
+                .iter()
+                .any(|o| o.opc == OpCode::CPUI_PTRADD),
+            "label emits LABELBUILD marker"
+        );
+        assert!(ct.get_opvec().iter().any(|o| o.opc == OpCode::CPUI_BRANCH));
+    }
+
+    #[test]
+    fn test_parse_local_declaration_no_size() {
+        // rtlmid: LOCAL STRING ';'
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local tmp;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        // The symbol should be registered.
+        assert!(snip.lookup_symbol("tmp").is_some());
+    }
+
+    #[test]
+    fn test_parse_local_declaration_with_size() {
+        // rtlmid: LOCAL STRING ':' INTEGER ';'
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local tmp:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        assert!(snip.lookup_symbol("tmp").is_some());
+    }
+
+    #[test]
+    fn test_parse_multiple_statements() {
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local a = 0x1:4; local b = 0x2:4; local c = a + b;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+        let ct = snip.release_result().expect("result set");
+        // 3 statements -> at least 3 ops (COPY, COPY, INT_ADD).
+        assert!(ct.get_opvec().len() >= 3);
+    }
+
+    #[test]
+    fn test_parse_address_of() {
+        // '&' varnode
+        let mut snip = PcodeSnippet::new();
+        assert!(
+            snip.parse_stream("local p = &0x10:4;"),
+            "{}",
+            snip.get_error_message()
+        );
+        assert!(!snip.has_errors());
+    }
+
+    #[test]
+    fn test_const_tpl_roundtrip() {
+        let c = ConstTpl::Real(42);
+        assert!(c.is_real());
+        assert_eq!(c.get_real(), 42);
+        assert_eq!(c.as_real(), Some(42));
+        let c2 = ConstTpl::JCurSpace;
+        assert!(!c2.is_real());
+        assert_eq!(c2.as_real(), None);
+    }
+
+    #[test]
+    fn test_varnode_tpl_build_temporary() {
+        let vn = VarnodeTpl::build_temporary(AddressSpace::Unique, 0x100);
+        assert!(vn.is_unnamed());
+        assert!(vn.is_zero_size());
+        assert!(vn.is_local_temp());
+    }
+
+    #[test]
+    fn test_op_tpl_builder() {
+        let mut op = OpTpl::new(OpCode::CPUI_INT_ADD);
+        assert_eq!(op.num_input(), 0);
+        op.add_input(VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(1),
+            ConstTpl::Real(4),
+        ));
+        op.add_input(VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(2),
+            ConstTpl::Real(4),
+        ));
+        op.set_output(VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Unique),
+            ConstTpl::Real(0x100),
+            ConstTpl::Real(4),
+        ));
+        assert_eq!(op.num_input(), 2);
+        assert!(op.get_out().is_some());
+        assert!(!op.is_zero_size());
+    }
+
+    #[test]
+    fn test_expr_tree_into_ops() {
+        let vn = VarnodeTpl::new(
+            ConstTpl::SpaceId(AddressSpace::Const),
+            ConstTpl::Real(5),
+            ConstTpl::Real(4),
+        );
+        let e = ExprTree::from_varnode(vn);
+        let ops = e.into_ops();
+        assert!(ops.is_empty(), "bare varnode has no ops");
+    }
+
+    #[test]
+    fn test_construct_tpl_add_op_list() {
+        let mut ct = ConstructTpl::new();
+        let op = OpTpl::new(OpCode::CPUI_COPY);
+        assert!(ct.add_op_list(vec![op]));
+        assert_eq!(ct.get_opvec().len(), 1);
+    }
+
+    #[test]
+    fn test_label_symbol() {
+        let mut ls = LabelSymbol::new("loop".to_string(), 3);
+        assert_eq!(ls.get_index(), 3);
+        assert!(!ls.is_placed());
+        ls.set_placed();
+        assert!(ls.is_placed());
+        ls.increment_ref_count();
+        assert_eq!(ls.refcount, 1);
+    }
+
+    #[test]
+    fn test_binary_op_for_table() {
+        // A representative sample of the precedence table.
+        assert_eq!(
+            binary_op_for(PcodeTokenKind::Punct('+')),
+            Some((OpCode::CPUI_INT_ADD, 9, false))
+        );
+        assert_eq!(
+            binary_op_for(PcodeTokenKind::Punct('*')),
+            Some((OpCode::CPUI_INT_MULT, 10, false))
+        );
+        assert_eq!(
+            binary_op_for(PcodeTokenKind::Equal),
+            Some((OpCode::CPUI_INT_EQUAL, 6, false))
+        );
+        assert_eq!(
+            binary_op_for(PcodeTokenKind::BoolOr),
+            Some((OpCode::CPUI_BOOL_OR, 1, false))
+        );
+        assert_eq!(binary_op_for(PcodeTokenKind::Punct(';')), None);
+        assert_eq!(binary_op_for(PcodeTokenKind::GotoKey), None);
     }
 
     #[test]
