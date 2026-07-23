@@ -3,8 +3,87 @@
 //! Corresponds to Ghidra's `block.hh`
 
 use crate::address::Address;
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use crate::op::PcodeOpRef;
 use std::sync::{Arc, RwLock, Weak};
+
+// ===== Marshal ElementId / AttributeId helpers (block.cc:22-28, 30-31) =====
+// Ghidra defines these as static ElementId/AttributeId instances. Rugra builds
+// them on demand via constructor functions matching the Ghidra names.
+
+/// `ELEM_BLOCK` (block.cc:22): a \<block> element wrapping a FlowBlock.
+// Ghidra: block.cc:22 ELEM_BLOCK
+pub fn elem_block() -> ElementId { ElementId::new("block", 134) }
+/// `ELEM_BHEAD` (block.cc:23): a \<bhead> element — header for a child block.
+// Ghidra: block.cc:23 ELEM_BHEAD
+pub fn elem_bhead() -> ElementId { ElementId::new("bhead", 135) }
+/// `ELEM_EDGE` (block.cc:31): an \<edge> element — a flow graph edge.
+// Ghidra: block.cc:31 ELEM_EDGE
+pub fn elem_edge() -> ElementId { ElementId::new("edge", 105) }
+/// `ELEM_TARGET` (block.cc:24): a \<target> element — a goto target ref.
+// Ghidra: block.cc:24 ELEM_TARGET
+pub fn elem_target() -> ElementId { ElementId::new("target", 136) }
+
+/// `ATTRIB_INDEX` (block.cc:26): block index attribute.
+// Ghidra: block.cc:26 ATTRIB_INDEX
+pub fn attrib_index() -> AttributeId { AttributeId::new("index", 13) }
+/// `ATTRIB_END` (block.cc:27): edge endpoint reference attribute.
+// Ghidra: block.cc:27 ATTRIB_END
+pub fn attrib_end() -> AttributeId { AttributeId::new("end", 37) }
+/// `ATTRIB_REV` (block.cc:28): edge reverse-index attribute.
+// Ghidra: block.cc:28 ATTRIB_REV
+pub fn attrib_rev() -> AttributeId { AttributeId::new("rev", 38) }
+/// `ATTRIB_DEPTH` (block.hh): goto-target depth attribute.
+// Ghidra: block.hh ATTRIB_DEPTH
+pub fn attrib_depth() -> AttributeId { AttributeId::new("depth", 39) }
+/// `ATTRIB_TYPE` (block.hh): goto-type / block-type attribute.
+// Ghidra: block.hh ATTRIB_TYPE
+pub fn attrib_type() -> AttributeId { AttributeId::new("type", 40) }
+/// `ATTRIB_ALTINDEX` (block.hh): BlockCopy alt-index attribute.
+// Ghidra: block.hh ATTRIB_ALTINDEX
+pub fn attrib_altindex() -> AttributeId { AttributeId::new("altindex", 41) }
+/// `ATTRIB_OPCODE` (block.hh): BlockCondition opcode attribute.
+// Ghidra: block.hh ATTRIB_OPCODE
+pub fn attrib_opcode() -> AttributeId { AttributeId::new("opcode", 42) }
+
+// ===== Free functions (block.cc static dispatch) =====
+
+/// Ghidra `FlowBlock::nameToType` (block.cc:657-666): map a deserialized type
+/// name string to a `BlockType`. Only "graph" and "copy" are distinguishable
+/// from the base "plain" type when reading the \<bhead> tag; the structured
+/// subtypes (if/while/do/switch) are inferred from component counts elsewhere.
+// Ghidra: block.cc:657 FlowBlock::nameToType
+pub fn name_to_type(nm: &str) -> BlockType {
+    // cc:661-665: graph → t_graph; copy → t_copy; else t_plain.
+    match nm {
+        "graph" => BlockType::Graph,
+        "copy" => BlockType::Copy,
+        _ => BlockType::Plain,
+    }
+}
+
+/// Ghidra `FlowBlock::typeToName` (block.cc:671-703): map a `BlockType` to its
+/// serialized name string. Used by `BlockGraph::encodeBody` when writing the
+/// \<bhead> type attribute.
+// Ghidra: block.cc:671 FlowBlock::typeToName
+pub fn type_to_name(bt: BlockType) -> &'static str {
+    // cc:674-702: exhaustive switch over block_type.
+    match bt {
+        BlockType::Plain => "plain",
+        BlockType::Basic => "basic",
+        BlockType::Graph => "graph",
+        BlockType::Copy => "copy",
+        BlockType::Goto => "goto",
+        BlockType::MultiGoto => "multigoto",
+        BlockType::List => "list",
+        BlockType::Condition => "condition",
+        BlockType::If => "properif",
+        BlockType::WhileDo => "whiledo",
+        BlockType::DoWhile => "dowhile",
+        BlockType::Switch => "switch",
+        BlockType::InfLoop => "infloop",
+    }
+}
 
 /// Type of flow block (corresponds to Ghidra's BlockType)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -585,6 +664,119 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     fn last_op(&self) -> Option<PcodeOpRef> {
         None
     }
+
+    // ---- Marshaling (block.cc:2447-2510) ----
+
+    /// Ghidra `FlowBlock::encodeHeader` (block.cc:2447-2451): emit the `index`
+    /// attribute. Sub-classes (BlockCopy, BlockCondition) override to add
+    /// extra attributes. Default writes only the index.
+    // Ghidra: block.cc:2447 FlowBlock::encodeHeader
+    fn encode_header_trait(&self, encoder: &mut dyn Encoder) {
+        // cc:2450: encoder.writeSignedInteger(ATTRIB_INDEX, index);
+        encoder.write_signed_integer(&attrib_index(), self.get_index() as i64);
+    }
+
+    /// Ghidra `FlowBlock::decodeHeader` (block.cc:2454-2458): read the `index`
+    /// attribute and store it on this block.
+    // Ghidra: block.cc:2454 FlowBlock::decodeHeader
+    fn decode_header_trait(&mut self, decoder: &mut dyn Decoder) {
+        // cc:2457: index = decoder.readSignedInteger(ATTRIB_INDEX);
+        let i = decoder.read_signed_integer_attr(&attrib_index());
+        self.set_index(i as i32);
+    }
+
+    /// Ghidra `FlowBlock::encodeEdges` (block.cc:2462-2468): emit one \<edge>
+    /// element per incoming edge. Default iterates `intothis`.
+    // Ghidra: block.cc:2462 FlowBlock::encodeEdges
+    fn encode_edges_trait(&self, encoder: &mut dyn Encoder) {
+        // cc:2465-2467: for (i=0; i<intothis.size(); ++i) intothis[i].encode(encoder);
+        for i in 0..self.size_in() {
+            if let Some(e) = self.get_in(i) {
+                encode_block_edge(&e, encoder);
+            }
+        }
+    }
+
+    /// Ghidra `FlowBlock::encodeBody` (block.hh, virtual): emit the type-
+    /// specific body of this block. Default: no-op (plain FlowBlock has no
+    /// body). BlockBasic/BlockGraph/BlockGoto/BlockIf override.
+    // Ghidra: block.hh FlowBlock::encodeBody
+    fn encode_body_trait(&self, _encoder: &mut dyn Encoder) {}
+
+    /// Ghidra `FlowBlock::decodeBody` (block.hh, virtual): restore the type-
+    /// specific body. Default: no-op.
+    // Ghidra: block.hh FlowBlock::decodeBody
+    fn decode_body_trait(&mut self, _decoder: &mut dyn Decoder) {}
+
+    /// Ghidra `FlowBlock::encode` (block.cc:2487-2495): encode this block as a
+    /// \<block> element — header, body, then edges.
+    // Ghidra: block.cc:2487 FlowBlock::encode
+    fn encode_trait(&self, encoder: &mut dyn Encoder) {
+        // cc:2490-2494: openElement(BLOCK); encodeHeader; encodeBody; encodeEdges; closeElement.
+        let block_id = elem_block();
+        encoder.open_element(&block_id);
+        self.encode_header_trait(encoder);
+        self.encode_body_trait(encoder);
+        self.encode_edges_trait(encoder);
+        encoder.close_element(&block_id);
+    }
+
+    /// Ghidra `FlowBlock::printHeader` (block.cc:604-611): emit the block
+    /// index, optionally followed by the start-stop address range. Default
+    /// writes the index and the address range if both ends are valid.
+    // Ghidra: block.cc:604 FlowBlock::printHeader
+    fn print_header_trait(&self) -> String {
+        // cc:607: s << dec << index;
+        let mut s = format!("{}", self.get_index());
+        // cc:608-610: if (!getStart().isInvalid() && !getStop().isInvalid()) s << ' ' << getStart() << '-' << getStop();
+        let start = self.get_start_addr();
+        if !start.is_null() {
+            s.push_str(&format!(" {}", start));
+        }
+        s
+    }
+
+    /// Ghidra `FlowBlock::printTree` (block.cc:616-625): emit the header
+    /// indented by `level` spaces. Default does not recurse (leaf blocks).
+    // Ghidra: block.cc:616 FlowBlock::printTree
+    fn print_tree_trait(&self, level: i32) -> String {
+        // cc:621-624: indent; printHeader(s); s << endl;
+        let indent: String = "  ".repeat(level as usize);
+        format!("{}{}\n", indent, self.print_header_trait())
+    }
+
+    /// Ghidra `FlowBlock::printRaw` (block.hh, virtual): emit the raw p-code /
+    /// block listing. Default: emit just the header (no body to print).
+    // Ghidra: block.hh FlowBlock::printRaw
+    fn print_raw_trait(&self) -> String {
+        // cc: default behaviour: just the header line.
+        format!("{}\n", self.print_header_trait())
+    }
+
+    /// Ghidra `FlowBlock::printRawImpliedGoto` (block.hh, virtual): emit an
+    /// implied goto comment if this block's fall-thru does not reach
+    /// `next_block`. Default: no-op (no implied goto for leaf blocks without
+    /// a single out-edge).
+    // Ghidra: block.hh FlowBlock::printRawImpliedGoto
+    fn print_raw_implied_goto_trait(&self, _next_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> String {
+        String::new()
+    }
+}
+
+/// Ghidra `BlockEdge::encode` (block.cc:35-43): emit an \<edge> element with
+/// `end` (the other-end block index) and `rev` (reverse-index) attributes.
+/// Free function because Rugra's `BlockEdge` is a plain struct (no Ghidra
+/// `BlockEdge::encode` method dispatch).
+// Ghidra: block.cc:35 BlockEdge::encode
+pub fn encode_block_edge(edge: &BlockEdge, encoder: &mut dyn Encoder) {
+    // cc:38-42: openElement(EDGE); writeSignedInteger(ATTRIB_END, point->getIndex());
+    //          writeSignedInteger(ATTRIB_REV, reverse_index); closeElement(EDGE);
+    let edge_id = elem_edge();
+    encoder.open_element(&edge_id);
+    let end_idx = edge.point.read().unwrap().get_index();
+    encoder.write_signed_integer(&attrib_end(), end_idx as i64);
+    encoder.write_signed_integer(&attrib_rev(), edge.reverse_index as i64);
+    encoder.close_element(&edge_id);
 }
 
 /// Find the CBRANCH that controls two block/edge paths.

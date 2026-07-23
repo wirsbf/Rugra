@@ -223,6 +223,11 @@ pub struct FuncProto {
     /// must not change it. Set by `set_output_lock`. A locked-void return
     /// (e.g. `exit`, `free`) means the CALL produces NO output varnode.
     pub output_type_locked: bool,
+    /// Is the prototype model locked for this prototype? Faithful to the
+    /// `modellock` (fspec.hh:1347) flag bit. Set by `set_model_lock` /
+    /// `set_pieces`; read by `is_model_locked`. Ghidra folds this into the
+    /// `flags` bitfield; Rugra keeps a dedicated boolean.
+    pub model_locked: bool,
     /// Number of bytes of the return value that are consumed by callers
     /// (0 = all bytes). Faithful to `FuncProto::returnBytesConsumed`
     /// (fspec.hh:1367). Set by `set_return_bytes_consumed`; read by the
@@ -243,6 +248,7 @@ impl FuncProto {
             is_dotdotdot: false,
             effects: Vec::new(),
             output_type_locked: false,
+            model_locked: false,
             return_bytes_consumed: 0,
         }
     }
@@ -312,6 +318,38 @@ impl FuncProto {
     /// active-output trials (unlocked).
     pub fn is_output_locked(&self) -> bool {
         self.output_type_locked
+    }
+
+    // Ghidra: fspec.hh:1399 FuncProto::isModelLocked
+    /// Is the prototype model locked for this prototype? Faithful to
+    /// `isModelLocked` (fspec.hh:1399): reads the `modellock` flag bit.
+    pub fn is_model_locked(&self) -> bool {
+        self.model_locked
+    }
+
+    // Ghidra: fspec.hh:1409 FuncProto::setModelLock
+    /// Set or clear the model lock. Faithful to `setModelLock` (fspec.hh:1409).
+    pub fn set_model_lock(&mut self, val: bool) {
+        self.model_locked = val;
+    }
+
+    // Ghidra: fspec.cc:3843 FuncProto::setPieces
+    /// Set this prototype from a `PrototypePieces`, locking input, output, and
+    /// model. Faithful to `setPieces` (fspec.cc:3843). The model name (when
+    /// present) is applied via `set_model_name`; the parameter types/names are
+    /// installed via `update_all_types_from_pieces`; then all three locks are
+    /// set. Rugra has no `ProtoModel *` object reachable from here, so the
+    /// model is recorded by name.
+    pub fn set_pieces(&mut self, pieces: &crate::grammar::PrototypePieces) {
+        if let Some(ref nm) = pieces.model {
+            if !nm.is_empty() {
+                self.set_model_name(nm);
+            }
+        }
+        self.update_all_types_from_pieces(pieces);
+        self.set_input_lock(true);
+        self.set_output_lock(true);
+        self.set_model_lock(true);
     }
 
     // Ghidra: fspec.cc:3778 FuncProto::getReturnBytesConsumed
@@ -517,6 +555,73 @@ impl FuncProto {
             vn.write().unwrap().clear_mark();
         }
         self.update_this_pointer();
+    }
+
+    // Ghidra: fspec.cc:4194 FuncProto::updateAllTypes
+    /// Set this entire function prototype from a list of names and data-types.
+    /// Faithful to `updateAllTypes(PrototypePieces)` (fspec.cc:4194-4233).
+    /// Ghidra calls `model->assignParameterStorage(proto, pieces, false)` to
+    /// derive the storage locations; Rugra has no in-tree storage-assignment
+    /// pass reachable from here, so the parameters are installed carrying their
+    /// type/name with an unset (zero) address — the caller (or a later pass)
+    /// fills the storage. Existing inputs/output are cleared, the `dotdotdot`
+    /// flag is set from `first_var_arg_slot >= 0`, and the output type is taken
+    /// from `out_type` (void if absent).
+    pub fn update_all_types_from_pieces(&mut self, proto: &crate::grammar::PrototypePieces) {
+        // setModel(model); store->clearAllInputs(); store->clearOutput();
+        self.parameters.clear();
+        // flags &= ~voidinputlock; setDotdotdot(proto.firstVarArgSlot >= 0);
+        self.is_dotdotdot = proto.first_var_arg_slot >= 0;
+        // Output parameter: pieces[0] → store->setOutput(pieces[0]).
+        // Ghidra's outtype is the function return type; void if None.
+        if let Some(ref ot) = proto.out_type {
+            self.return_type = ot.clone();
+        }
+        // Input parameters: pieces[1..] → store->setInput(i-1, nm, pieces[i]).
+        // hiddenretparm slots increment i but not the name index j.
+        let mut j = 0usize;
+        for ty in &proto.in_types {
+            let nm = if j < proto.in_names.len() {
+                proto.in_names[j].as_str()
+            } else {
+                ""
+            };
+            let mut param = ProtoParameter::new(
+                nm.to_string(),
+                ty.clone(),
+                Address::new(0), // storage unassigned (no assignParameterStorage)
+            );
+            // Match Ghidra's typelock: updateAllTypes installs locked params.
+            param.flags |= protoparam_flags::TYPE_LOCKED;
+            self.parameters.push(param);
+            j += 1;
+        }
+    }
+
+    // Ghidra: fspec.cc:3857 FuncProto::getPieces
+    /// Copy out the raw pieces of this prototype as stand-alone objects
+    /// (model name, names, and data-types). Faithful to `getPieces`
+    /// (fspec.cc:3857-3870). Ghidra returns the `ProtoModel *`; Rugra returns
+    /// the model name (see `get_model_name`). `first_var_arg_slot` is set to
+    /// the param count when `is_dotdotdot`, else -1.
+    pub fn get_pieces(&self) -> crate::grammar::PrototypePieces {
+        let mut pieces = crate::grammar::PrototypePieces {
+            model: Some(self.get_model_name().to_string()),
+            name: self.name.clone(),
+            out_type: Some(self.return_type.clone()),
+            in_types: Vec::new(),
+            in_names: Vec::new(),
+            first_var_arg_slot: if self.is_dotdotdot {
+                self.parameters.len() as i32
+            } else {
+                -1
+            },
+        };
+        for p in &self.parameters {
+            pieces.in_types.push(p.data_type.clone());
+            pieces.in_names.push(p.name.clone());
+        }
+        pieces
     }
 
     // Ghidra: fspec.cc:4136 FuncProto::updateOutputTypes
