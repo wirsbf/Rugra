@@ -170,6 +170,70 @@ impl GrammarToken {
         self.lineno = line;
         self.colno = col;
     }
+
+    // Ghidra: grammar.cc:1960 GrammarToken::set(uint4 tp)
+    /// Set the token to a pure type (no payload). Faithful to the single-arg
+    /// `set(uint4 tp)` overload used by the lexer for punctuation/keywords.
+    pub fn set_type_only(&mut self, tp: u32) {
+        self.token_type = tp;
+    }
+
+    // Ghidra: grammar.cc:1966 GrammarToken::set(uint4 tp,char *ptr,int4 len)
+    /// Set the token to a value-bearing type, parsing the lexeme text. Faithful
+    /// to the three-arg `set(uint4 tp, char*, int4)` overload. For `integer` the
+    /// text is parsed (honouring 0x/0 prefixes via `parse_number`); for
+    /// `identifier`/`stringval` the text is stored; for `charconstant` the
+    /// character value is computed (including the backslash escapes `n 0 a b f
+    /// r t v \\ ' "` listed at grammar.cc:1985-2014).
+    pub fn set_with_text(&mut self, tp: u32, text: &str) {
+        self.token_type = tp;
+        match tp {
+            x if x == token_type::INTEGER => {
+                self.integer_value = parse_number(text);
+            }
+            x if x == token_type::IDENTIFIER || x == token_type::STRING_VAL => {
+                self.string_value = text.to_string();
+            }
+            x if x == token_type::CHAR_CONSTANT => {
+                self.integer_value = parse_char_constant(text);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Ghidra: grammar.cc:1985 GrammarToken::set (charconstant escapes)
+/// Decode a C character constant (the text between the quotes, already
+/// stripped) into its integer value. Faithful to the `case charconstant:`
+/// branch of `GrammarToken::set` (grammar.cc:1985-2014): a single char maps to
+/// its byte value; a backslash escape is decoded (`n`=10, `0`=0, `a`=7, `b`=8,
+/// `f`=12, `r`=13, `t`=9, `v`=11, `\\`=92, `'`=39, `"`=34); any other escape
+/// falls back to the literal character.
+pub fn parse_char_constant(text: &str) -> u64 {
+    let bytes = text.as_bytes();
+    if bytes.len() == 1 {
+        return bytes[0] as u64;
+    }
+    // Backslash escape: text[0] == '\\', text[1] is the escape letter.
+    if bytes.len() >= 2 && bytes[0] == b'\\' {
+        match bytes[1] {
+            b'n' => 10,
+            b'0' => 0,
+            b'a' => 7,
+            b'b' => 8,
+            b'f' => 12,
+            b'r' => 13,
+            b't' => 9,
+            b'v' => 11,
+            b'\\' => 92,
+            b'\'' => 39,
+            b'"' => 34,
+            other => other as u64,
+        }
+    } else {
+        // Multi-byte non-escape: take the first byte (best-effort).
+        bytes[0] as u64
+    }
 }
 
 /// Lexer state machine states. Faithful to the `GrammarLexer` enum
@@ -280,6 +344,30 @@ impl GrammarLexer {
     /// Check if at end of file.
     pub fn is_eof(&self) -> bool {
         self.pos >= self.input.len()
+    }
+
+    // Ghidra: grammar.hh:107 GrammarLexer::getCurStream
+    /// Get the filenum of the current stream (the top of `filestack`), or `None`
+    /// if no file is active. Faithful to `getCurStream` (Ghidra returns the raw
+    /// `istream *in`; Rugra exposes the filenum that indexes `streammap`).
+    pub fn get_cur_stream(&self) -> Option<i32> {
+        self.filestack.last().copied()
+    }
+
+    // Ghidra: grammar.cc:2054 GrammarLexer::bumpLine
+    /// Increment the current line counter. Faithful to `bumpLine`. Rugra's
+    /// `next_char` inlines this on `'\n'`; this method exposes it for callers
+    /// that need to advance the line counter out-of-band (e.g. when swallowing
+    /// a multi-line token via `moveState`).
+    pub fn bump_line(&mut self) {
+        self.cur_lineno += 1;
+    }
+
+    // Ghidra: grammar.hh:77 GrammarLexer::curlineno (field accessor)
+    /// Get the current line number. Faithful to the `curlineno` member used by
+    /// `writeTokenLocation` and `setPosition`.
+    pub fn cur_lineno(&self) -> i32 {
+        self.cur_lineno
     }
 
     // Ghidra: grammar.cc:2320 GrammarLexer::writeLocation
