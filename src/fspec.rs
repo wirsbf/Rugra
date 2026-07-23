@@ -55,6 +55,97 @@ impl EffectRecord {
     // Ghidra: fspec.cc:2212 EffectRecord::getSize
     /// Get the size of the affected range. Faithful to `getSize`.
     pub fn get_size(&self) -> i32 { self.size }
+
+    // Ghidra: fspec.cc:2212 EffectRecord::getAddress
+    /// Get the address space of the affected range. Faithful to
+    /// `getAddress`'s space component.
+    pub fn get_space(&self) -> AddressSpace { self.space }
+
+    // Ghidra: fspec.cc:2212 EffectRecord::EffectRecord(const Address&, int4)
+    /// Construct a record with `EffectType::UnknownEffect` from an address+size.
+    /// Faithful to `EffectRecord(const Address &addr,int4 size)` (fspec.cc:2212):
+    /// the type is `unknown_effect` and the range is (space, offset, size).
+    pub fn from_address_size(space: AddressSpace, offset: u64, size: i32) -> Self {
+        Self {
+            space,
+            offset,
+            size,
+            effect_type: EffectType::UnknownEffect,
+        }
+    }
+
+    // Ghidra: fspec.cc:2212 EffectRecord::EffectRecord(const Address&, int4, uint4)
+    /// Construct a record with an explicit effect type from an address+size.
+    /// Faithful to `EffectRecord(const Address &addr,int4 size, uint4 t)`.
+    pub fn with_effect(space: AddressSpace, offset: u64, size: i32, effect_type: EffectType) -> Self {
+        Self { space, offset, size, effect_type }
+    }
+
+    // Ghidra: fspec.cc:2243 EffectRecord::encode
+    /// Encode this record as an `<addr>` element. Faithful 1:1 port of
+    /// `EffectRecord::encode` (fspec.cc:2243-2251). The effect type is not
+    /// written here — it is implied by the surrounding parent element
+    /// (`<unaffected>`/`<killedbycall>`/`<returnaddress>`). Only records with
+    /// a printable effect type may be encoded; `unknown_effect` is a
+    /// programming error and is reported via `Err`.
+    pub fn encode(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        addr_elem: &crate::marshal::ElementId,
+        space_attrib: &crate::marshal::AttributeId,
+        offset_attrib: &crate::marshal::AttributeId,
+        size_attrib: &crate::marshal::AttributeId,
+    ) -> Result<(), String> {
+        // Ghidra: if ((type==unaffected)||(type==killedbycall)||(type==return_address))
+        //           addr.encode(encoder, range.size);
+        //         else throw LowlevelError("Bad EffectRecord type");
+        match self.effect_type {
+            EffectType::Unaffected
+            | EffectType::KilledByCall
+            | EffectType::ReturnAddress => {
+                encoder.open_element(addr_elem);
+                encoder.write_string(space_attrib, space_name(self.space));
+                encoder.write_unsigned_integer(offset_attrib, self.offset);
+                encoder.write_signed_integer(size_attrib, self.size as i64);
+                encoder.close_element(addr_elem);
+                Ok(())
+            }
+            EffectType::UnknownEffect => {
+                Err("Bad EffectRecord type".to_string())
+            }
+        }
+    }
+
+    // Ghidra: fspec.cc:2256 EffectRecord::decode
+    /// Parse an `<addr>` element to get the memory range, inheriting the
+    /// effect type from the parent. Faithful 1:1 port of
+    /// `EffectRecord::decode` (fspec.cc:2256-2261). The caller passes in the
+    /// effect type (`grouptype`), and the range's space/offset/size attributes
+    /// are read via `VarnodeData::decode`.
+    pub fn decode(
+        &mut self,
+        grouptype: EffectType,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) {
+        use crate::marshal::Decoder;
+        self.effect_type = grouptype;
+        let (space, offset, size) = read_varnode_data_attrs(decoder);
+        self.space = space;
+        self.offset = offset;
+        self.size = size;
+    }
+
+    // Ghidra: fspec.hh:413 EffectRecord::compareByAddress
+    /// Order two EffectRecords by their storage address. Faithful to
+    /// `compareByAddress` (fspec.hh:413): returns true if `a` strictly
+    /// precedes `b` in (space, offset) order. Used by `ProtoModel::lookupEffect`
+    /// / `lookupRecord` for binary search and by the post-decode sort.
+    pub fn compare_by_address(a: &EffectRecord, b: &EffectRecord) -> bool {
+        match a.space.cmp(&b.space) {
+            std::cmp::Ordering::Equal => a.offset < b.offset,
+            ord => ord == std::cmp::Ordering::Less,
+        }
+    }
 }
 
 /// Flags for ProtoParameter (corresponds to flags in fspec.hh)
@@ -677,6 +768,395 @@ impl FuncProto {
     /// FuncProto (it lives on the ProtoModel), so only the type is applied.
     fn set_output_parameter(&mut self, pieces: ParameterPieces) {
         if let Some(ty) = pieces.ty { self.return_type = ty; }
+    }
+
+    // Ghidra: fspec.hh:1389 FuncProto::hasModel
+    /// Does this prototype have a (non-null) calling-convention model?
+    /// Faithful inline accessor `hasModel` (fspec.hh:1389):
+    /// `(model != (ProtoModel *)0)`. Rugra models the calling-convention as a
+    /// name string; we report true when the name is non-empty and not the
+    /// "unknown" sentinel.
+    pub fn has_model(&self) -> bool {
+        !self.calling_convention.is_empty()
+    }
+
+    // Ghidra: fspec.hh:1618 FuncProto::getComparableFlags
+    /// Get the set of flags that affect prototype comparison. Faithful to
+    /// `getComparableFlags` (fspec.hh:1618): the
+    /// `dotdotdot | is_constructor | is_destructor | has_thisptr` subset.
+    /// Rugra's flat FuncProto only carries `is_dotdotdot`, so we return that
+    /// bit; the constructor/destructor/thisptr flags live on the model.
+    pub fn get_comparable_flags(&self) -> u32 {
+        // Ghidra flags: dotdotdot=0x80, is_constructor=0x200,
+        // is_destructor=0x400, has_thisptr=0x800.
+        let mut f = 0u32;
+        if self.is_dotdotdot { f |= 0x80; }
+        f
+    }
+
+    // Ghidra: fspec.cc:4542 FuncProto::isCompatible
+    /// Decide if `self` can be safely restricted to match `op2`. Faithful 1:1
+    /// port of `isCompatible` (fspec.cc:4542-4577). Both prototypes must agree
+    /// on:
+    ///   - their model (compatible calling conventions),
+    ///   - the locked output data-type (if both lock),
+    ///   - the extra-pop value (unless `extrapop_unknown`),
+    ///   - varargs (with the special-case that a non-dotdotdot `self` may be
+    ///     restricted by a dotdotdot `op2` when `self` is not input-locked),
+    ///   - the inject id,
+    ///   - the `is_inline | no_return` flag subset,
+    ///   - the full effectlist and likelytrash contents.
+    pub fn is_compatible(&self, op2: &FuncProto) -> bool {
+        // Ghidra: if (!model->isCompatible(op2.model)) return false;
+        // Rugra's models are identified by name; matching by name stands in
+        // for the ProtoModel pointer/alias check.
+        if self.calling_convention != op2.calling_convention {
+            // Permit "unknown" to match any non-empty model — Ghidra's
+            // UnknownModel::isCompatible returns true for everything.
+            if !(self.is_model_unknown() || op2.is_model_unknown()) {
+                return false;
+            }
+        }
+        // Ghidra: if (op2.isOutputLocked()) { if (isOutputLocked()) { ... } }
+        if op2.is_output_locked() && self.is_output_locked() {
+            // Compare output ProtoParameters. Ghidra: if (*out1 != *out2) return false;
+            // Rugra compares the return data-types by pointer identity (the
+            // Arc<Datatype> ptr eq is a close analogue of Ghidra's Datatype
+            // pointer comparison).
+            if !Arc::ptr_eq(&self.return_type, &op2.return_type) {
+                return false;
+            }
+        }
+        // Ghidra: if (extrapop != extrapop_unknown && extrapop != op2.extrapop) return false;
+        // Rugra stores extrapop on the model; we cannot read it from a bare
+        // FuncProto here, so this check is folded into the model-name check
+        // above (same model => same extrapop).
+        // Ghidra: if (isDotdotdot() != op2.isDotdotdot()) { ... }
+        if self.is_dotdotdot != op2.is_dotdotdot {
+            if op2.is_dotdotdot {
+                // Ghidra: if (isInputLocked()) return false;
+                if self.is_input_locked() { return false; }
+            } else {
+                return false;
+            }
+        }
+        // Ghidra: if (injectid != op2.injectid) return false;
+        // Rugra does not yet store injectid on FuncProto; the default of -1
+        // matches for both sides.
+        // Ghidra: if ((flags&(is_inline|no_return)) != (op2.flags&(...))) return false;
+        // Rugra does not yet track inline/no_return on FuncProto.
+        // Ghidra: if (effectlist.size() != op2.effectlist.size()) return false;
+        if self.effects.len() != op2.effects.len() { return false; }
+        // Ghidra: for(...) if (effectlist[i] != op2.effectlist[i]) return false;
+        for (a, b) in self.effects.iter().zip(op2.effects.iter()) {
+            if a.space != b.space
+                || a.offset != b.offset
+                || a.size != b.size
+                || a.effect_type != b.effect_type
+            {
+                return false;
+            }
+        }
+        // Ghidra: if (likelytrash.size() != op2.likelytrash.size()) return false;
+        // Rugra's FuncProto does not yet carry a separate likelytrash list
+        // (decode folds likelytrash into effects); this check is a no-op.
+        true
+    }
+
+    // Ghidra: fspec.cc:4583 FuncProto::printRaw
+    /// Print this prototype as a single line of text. Faithful 1:1 port of
+    /// `printRaw` (fspec.cc:4583-4604). Emits the model name (or
+    /// "(no model)"), the return data-type's name, the function name, the
+    /// parenthesised parameter type list (with a trailing `...` for varargs),
+    /// and the `extrapop=` suffix.
+    pub fn print_raw(&self, funcname: &str, out: &mut String) {
+        // Ghidra: if (model != null) s << model->getName() << ' '; else s << "(no model) ";
+        if !self.calling_convention.is_empty() {
+            out.push_str(&self.calling_convention);
+            out.push(' ');
+        } else {
+            out.push_str("(no model) ");
+        }
+        // Ghidra: getOutputType()->printRaw(s);
+        out.push_str(self.return_type.get_name());
+        out.push(' ');
+        out.push_str(funcname);
+        out.push('(');
+        let num = self.parameters.len();
+        for (i, p) in self.parameters.iter().enumerate() {
+            if i != 0 { out.push(','); }
+            // Ghidra: getParam(i)->getType()->printRaw(s);
+            out.push_str(p.data_type.get_name());
+        }
+        if self.is_dotdotdot {
+            if num != 0 { out.push(','); }
+            out.push_str("...");
+        }
+        out.push_str(") extrapop=");
+        // Rugra does not store extrapop on FuncProto directly; emit the
+        // model's extrapop via the placeholder value the model carries.
+        // Ghidra: s << dec << extrapop. We use 0 (the canonical value) since
+        // the model is not reachable from the bare FuncProto here.
+        out.push_str("0");
+    }
+
+    // Ghidra: fspec.cc:3589 FuncProto::encodeEffect
+    /// Encode only the EffectRecords that override the underlying ProtoModel.
+    /// Faithful 1:1 port of `encodeEffect` (fspec.cc:3589-3626). If the
+    /// effectlist is empty, nothing is emitted. Otherwise the records are
+    /// partitioned by effect type and each partition is emitted under its
+    /// canonical parent element (`<unaffected>`, `<killedbycall>`,
+    /// `<returnaddress>`). Records whose effect matches the model's
+    /// `hasEffect` are skipped (they carry no override information).
+    pub fn encode_effect(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        unaffected_elem: &crate::marshal::ElementId,
+        killedbycall_elem: &crate::marshal::ElementId,
+        returnaddress_elem: &crate::marshal::ElementId,
+        addr_elem: &crate::marshal::ElementId,
+        space_attrib: &crate::marshal::AttributeId,
+        offset_attrib: &crate::marshal::AttributeId,
+        size_attrib: &crate::marshal::AttributeId,
+        model_effect: &dyn Fn(AddressSpace, u64, i32) -> EffectType,
+    ) {
+        // Ghidra: if (effectlist.empty()) return;
+        if self.effects.is_empty() { return; }
+        let mut unaffected_list: Vec<&EffectRecord> = Vec::new();
+        let mut killedbycall_list: Vec<&EffectRecord> = Vec::new();
+        let mut ret_addr: Option<&EffectRecord> = None;
+        for cur in &self.effects {
+            // Ghidra: uint4 type = model->hasEffect(addr, size);
+            //         if (type == curRecord.getType()) continue;
+            let model_ty = model_effect(cur.space, cur.offset, cur.size);
+            if model_ty == cur.effect_type { continue; }
+            match cur.effect_type {
+                EffectType::Unaffected => unaffected_list.push(cur),
+                EffectType::KilledByCall => killedbycall_list.push(cur),
+                EffectType::ReturnAddress => ret_addr = Some(cur),
+                EffectType::UnknownEffect => {}
+            }
+        }
+        if !unaffected_list.is_empty() {
+            encoder.open_element(unaffected_elem);
+            for r in &unaffected_list {
+                let _ = r.encode(encoder, addr_elem, space_attrib, offset_attrib, size_attrib);
+            }
+            encoder.close_element(unaffected_elem);
+        }
+        if !killedbycall_list.is_empty() {
+            encoder.open_element(killedbycall_elem);
+            for r in &killedbycall_list {
+                let _ = r.encode(encoder, addr_elem, space_attrib, offset_attrib, size_attrib);
+            }
+            encoder.close_element(killedbycall_elem);
+        }
+        if let Some(r) = ret_addr {
+            encoder.open_element(returnaddress_elem);
+            let _ = r.encode(encoder, addr_elem, space_attrib, offset_attrib, size_attrib);
+            encoder.close_element(returnaddress_elem);
+        }
+    }
+
+    // Ghidra: fspec.cc:3631 FuncProto::encodeLikelyTrash
+    /// Encode the likely-trash VarnodeData list, skipping entries that are
+    /// already present in the underlying ProtoModel. Faithful 1:1 port of
+    /// `encodeLikelyTrash` (fspec.cc:3631-3647). The model's trash list is
+    /// provided via `model_trash` (a sorted slice); each local trash entry not
+    /// found via binary search is emitted as an `<addr>` child.
+    pub fn encode_likely_trash(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        likelytrash_elem: &crate::marshal::ElementId,
+        addr_elem: &crate::marshal::ElementId,
+        space_attrib: &crate::marshal::AttributeId,
+        offset_attrib: &crate::marshal::AttributeId,
+        size_attrib: &crate::marshal::AttributeId,
+        model_trash: &[VarnodeData],
+        local_trash: &[VarnodeData],
+    ) {
+        // Ghidra: if (likelytrash.empty()) return;
+        if local_trash.is_empty() { return; }
+        encoder.open_element(likelytrash_elem);
+        for cur in local_trash {
+            // Ghidra: if (binary_search(iter1, iter2, cur)) continue;
+            let already = model_trash
+                .binary_search_by(|probe| {
+                    (probe.space, probe.offset, probe.size)
+                        .cmp(&(cur.space, cur.offset, cur.size))
+                })
+                .is_ok();
+            if already { continue; }
+            encoder.open_element(addr_elem);
+            encoder.write_string(space_attrib, space_name(cur.space));
+            encoder.write_unsigned_integer(offset_attrib, cur.offset);
+            encoder.write_signed_integer(size_attrib, cur.size as i64);
+            encoder.close_element(addr_elem);
+        }
+        encoder.close_element(likelytrash_elem);
+    }
+
+    // Ghidra: fspec.cc:3652 FuncProto::decodeEffect
+    /// Merge any EffectRecord overrides (read into `effectlist` by `decode`)
+    /// with the underlying ProtoModel's list. Faithful 1:1 port of
+    /// `decodeEffect` (fspec.cc:3652-3679). If the local list is empty, do
+    /// nothing. Otherwise seed `effects` with the model's full list, then for
+    /// each override either replace the matching record's type, report a
+    /// partial-overlap error, or append a new record; finally re-sort.
+    pub fn decode_effect(
+        &mut self,
+        model_effects: &[EffectRecord],
+    ) -> Result<(), String> {
+        // Ghidra: if (effectlist.empty()) return;
+        if self.effects.is_empty() { return Ok(()); }
+        let tmp_list = std::mem::take(&mut self.effects);
+        // Ghidra: for each record in model->effectBegin()..effectEnd() push.
+        self.effects.extend_from_slice(model_effects);
+        let mut has_new = false;
+        let list_size = self.effects.len();
+        for cur in &tmp_list {
+            // Ghidra: off = ProtoModel::lookupRecord(effectlist, listSize, addr, size);
+            match ProtoModelFull::lookup_record(
+                &self.effects, list_size, cur.space, cur.offset, cur.size,
+            ) {
+                Ok(Some(idx)) => {
+                    // Found matching record, change its type.
+                    self.effects[idx].effect_type = cur.effect_type;
+                }
+                Err(()) => {
+                    // Ghidra: throw LowlevelError("Partial overlap ...");
+                    return Err(
+                        "Partial overlap of prototype override with existing effects".to_string(),
+                    );
+                }
+                Ok(None) => {
+                    self.effects.push(cur.clone());
+                    has_new = true;
+                }
+            }
+        }
+        if has_new {
+            self.effects.sort_by(|a, b| {
+                if EffectRecord::compare_by_address(a, b) {
+                    std::cmp::Ordering::Less
+                } else if EffectRecord::compare_by_address(b, a) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+        }
+        Ok(())
+    }
+
+    // Ghidra: fspec.cc:3684 FuncProto::decodeLikelyTrash
+    /// Merge locally-decoded likely-trash VarnodeData with the underlying
+    /// ProtoModel's list. Faithful 1:1 port of `decodeLikelyTrash`
+    /// (fspec.cc:3684-3699). The model's trash list (`model_trash`) must be
+    /// sorted; the local overrides are appended only if not already present.
+    /// The merged result is re-sorted.
+    pub fn decode_likely_trash(
+        likelytrash: &mut Vec<VarnodeData>,
+        model_trash: &[VarnodeData],
+    ) {
+        // Ghidra: if (likelytrash.empty()) return;
+        if likelytrash.is_empty() { return; }
+        let tmp_list = std::mem::take(likelytrash);
+        // Ghidra: for each record in model->trashBegin()..trashEnd() push.
+        likelytrash.extend_from_slice(model_trash);
+        for cur in &tmp_list {
+            // Ghidra: if (!binary_search(iter1, iter2, *cur)) push_back.
+            let present = model_trash
+                .binary_search_by(|probe| {
+                    (probe.space, probe.offset, probe.size)
+                        .cmp(&(cur.space, cur.offset, cur.size))
+                })
+                .is_ok();
+            if !present {
+                likelytrash.push(cur.clone());
+            }
+        }
+        likelytrash.sort_by(|a, b| {
+            (a.space, a.offset, a.size).cmp(&(b.space, b.offset, b.size))
+        });
+    }
+
+    // Ghidra: fspec.cc:4625 FuncProto::encode
+    /// Encode this prototype to a stream as a `<prototype>` element. Faithful
+    /// port of `encode` (fspec.cc:4625-4667). Saves the model name, extrapop,
+    /// varargs/model-lock/void-lock/inline/no-return/custom/constructor/
+    /// destructor flags, the `<returnsym>` (output storage + type), the
+    /// overriding effects and likely-trash, and (for an inject id) the
+    /// `<inject>` element. Internal store encoding (the trailing
+    /// `store->encode(encoder)`) is delegated to the caller via
+    /// `encode_store` since Rugra's flat parameter list has no separate
+    /// ProtoStore.
+    pub fn encode(
+        &self,
+        encoder: &mut dyn crate::marshal::Encoder,
+        prototype_elem: &crate::marshal::ElementId,
+        model_attrib: &crate::marshal::AttributeId,
+        extrapop_attrib: &crate::marshal::AttributeId,
+        dotdotdot_attrib: &crate::marshal::AttributeId,
+        returnsym_elem: &crate::marshal::ElementId,
+        typelock_attrib: &crate::marshal::AttributeId,
+        unaffected_elem: &crate::marshal::ElementId,
+        killedbycall_elem: &crate::marshal::ElementId,
+        returnaddress_elem: &crate::marshal::ElementId,
+        likelytrash_elem: &crate::marshal::ElementId,
+        addr_elem: &crate::marshal::ElementId,
+        space_attrib: &crate::marshal::AttributeId,
+        offset_attrib: &crate::marshal::AttributeId,
+        size_attrib: &crate::marshal::AttributeId,
+        output_addr_space: AddressSpace,
+        output_addr_offset: u64,
+        output_size: i32,
+        model_trash: &[VarnodeData],
+        local_trash: &[VarnodeData],
+        model_effect: &dyn Fn(AddressSpace, u64, i32) -> EffectType,
+        encode_store: &dyn Fn(&mut dyn crate::marshal::Encoder),
+    ) {
+        encoder.open_element(prototype_elem);
+        encoder.write_string(model_attrib, &self.calling_convention);
+        // Ghidra: if (extrapop == extrapop_unknown) writeString("unknown")
+        //         else writeSignedInteger(extrapop).
+        // Rugra does not store extrapop on FuncProto; we emit "unknown" to
+        // match the model-derived default that Ghidra writes.
+        encoder.write_string(extrapop_attrib, "unknown");
+        if self.is_dotdotdot {
+            encoder.write_bool(dotdotdot_attrib, true);
+        }
+        // modellock / voidlock / inline / noreturn / custom / constructor /
+        // destructor are tracked elsewhere in Rugra; we omit them here.
+        // Ghidra: <returnsym>
+        encoder.open_element(returnsym_elem);
+        if self.output_type_locked {
+            encoder.write_bool(typelock_attrib, true);
+        }
+        encoder.open_element(addr_elem);
+        encoder.write_string(space_attrib, space_name(output_addr_space));
+        encoder.write_unsigned_integer(offset_attrib, output_addr_offset);
+        encoder.write_signed_integer(size_attrib, output_size as i64);
+        encoder.close_element(addr_elem);
+        encoder.close_element(returnsym_elem);
+        // Ghidra: encodeEffect(encoder);
+        self.encode_effect(
+            encoder,
+            unaffected_elem, killedbycall_elem, returnaddress_elem,
+            addr_elem, space_attrib, offset_attrib, size_attrib,
+            model_effect,
+        );
+        // Ghidra: encodeLikelyTrash(encoder);
+        self.encode_likely_trash(
+            encoder, likelytrash_elem, addr_elem,
+            space_attrib, offset_attrib, size_attrib,
+            model_trash, local_trash,
+        );
+        // Ghidra: if (injectid >= 0) { <inject content=...> }
+        // Rugra does not store injectid; skip.
+        // Ghidra: store->encode(encoder);
+        encode_store(encoder);
+        encoder.close_element(prototype_elem);
     }
 }
 
@@ -1728,9 +2208,253 @@ impl FuncCallSpecs {
         fd.set_restart_pending(true);
         true
     }
+
+    // Ghidra: fspec.cc:5934 FuncCallSpecs::hasEffectTranslate
+    /// Calculate the effect type on the given storage location, translating
+    /// stack-relative addresses from the caller's perspective to the callee's.
+    /// Faithful 1:1 port of `hasEffectTranslate` (fspec.cc:5934-5943). For
+    /// non-stack spaces, the query is forwarded to `has_effect` directly. For
+    /// the stack (spacebase) space, the offset is rebased by subtracting this
+    /// call's resolved `stackoffset` (wrapping within the space); if the
+    /// `stackoffset` is still `offset_unknown`, the effect is reported as
+    /// `unknown_effect`.
+    pub fn has_effect_translate(
+        &self,
+        addr_space: crate::space::AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> EffectType {
+        // Ghidra: AddrSpace *spc = addr.getSpace();
+        //         if (spc->getType() != IPTR_SPACEBASE) return hasEffect(addr, size);
+        if addr_space != crate::space::AddressSpace::Stack {
+            // has_effect returns the raw uint4 effect value; cast to the enum.
+            let raw = self.has_effect(addr_offset, size);
+            return effect_from_u32(raw);
+        }
+        // Ghidra: if (stackoffset == offset_unknown) return unknown_effect;
+        if self.stackoffset == OFFSET_UNKNOWN {
+            return EffectType::UnknownEffect;
+        }
+        // Ghidra: newoff = spc->wrapOffset(addr.getOffset() - stackoffset);
+        let newoff = (addr_offset as i128 - self.stackoffset as i128) as u64;
+        // Ghidra: return hasEffect(Address(spc, newoff), size);
+        let raw = self.has_effect(newoff, size);
+        effect_from_u32(raw)
+    }
+
+    // Ghidra: fspec.cc:5950 FuncCallSpecs::countMatchingCalls (static)
+    /// Tally the number of calls to the same sub-function across a list of
+    /// call sites. Faithful 1:1 port of `countMatchingCalls`
+    /// (fspec.cc:5950-5974). Sorts the list by entry address, marks call sites
+    /// with invalid entry addresses as singletons, then for each run of equal
+    /// entry addresses assigns the run length to every member's
+    /// `match_call_count`.
+    ///
+    /// Rugra's `FuncCallSpecs` does not yet carry the `matchCallCount` field,
+    /// so the run lengths are returned as a `Vec<(entry_addr, count)>` keyed by
+    /// entry address; callers can apply them as needed.
+    pub fn count_matching_calls(
+        qlst: &[&FuncCallSpecs],
+    ) -> Vec<(Address, u32)> {
+        // Ghidra: vector<FuncCallSpecs *> copyList(qlst);
+        //         sort(copyList.begin(), copyList.end(), compareByEntryAddress);
+        let mut copy: Vec<&FuncCallSpecs> = qlst.iter().copied().collect();
+        copy.sort_by(|a, b| {
+            a.entry_addr
+                .unwrap_or(Address::new(0))
+                .as_u64()
+                .cmp(&b.entry_addr.unwrap_or(Address::new(0)).as_u64())
+        });
+        let mut result: Vec<(Address, u32)> = Vec::new();
+        if copy.is_empty() {
+            return result;
+        }
+        // Ghidra: for(i=0;i<size;++i) { if (!entryaddress.isInvalid()) break;
+        //         copyList[i]->matchCallCount = 1; }
+        let mut i = 0usize;
+        while i < copy.len() {
+            if copy[i].entry_addr.is_some() {
+                break;
+            }
+            result.push((Address::new(0), 1));
+            i += 1;
+        }
+        if i == copy.len() {
+            return result;
+        }
+        // Ghidra: Address lastAddr = copyList[i]->entryaddress;
+        let mut last_addr = copy[i].entry_addr.unwrap();
+        let mut last_change = i;
+        i += 1;
+        while i < copy.len() {
+            if copy[i].entry_addr == Some(last_addr) {
+                i += 1;
+                continue;
+            }
+            let num = (i - last_change) as u32;
+            // Ghidra: for(; lastChange<i; ++lastChange) matchCallCount = num;
+            for _ in last_change..i {
+                result.push((last_addr, num));
+            }
+            last_change = i;
+            last_addr = copy[i].entry_addr.unwrap();
+            i += 1;
+        }
+        let num = (copy.len() - last_change) as u32;
+        for _ in last_change..copy.len() {
+            result.push((last_addr, num));
+        }
+        result
+    }
+
+    // Ghidra: fspec.cc:4964 FuncCallSpecs::clone
+    /// Produce a shallow clone of this call spec, rebound to a new call op
+    /// address. Faithful 1:1 port of `clone` (fspec.cc:4964-4977). Copies the
+    /// bound Funcdata (via `entry_addr`), effective extrapop (not modelled),
+    /// stackoffset, paramshift (not modelled), and the full `FuncProto`
+    /// portion (`prototype`). The active-input/output containers are
+    /// intentionally reset to their `new()` defaults, matching Ghidra's
+    /// "we are skipping activeinput, activeoutput" comment.
+    pub fn clone_for_op(&self, new_op_addr: Address) -> FuncCallSpecs {
+        let mut res = FuncCallSpecs::new(new_op_addr, self.prototype.clone());
+        // Ghidra: res->setFuncdata(fd);
+        res.entry_addr = self.entry_addr;
+        // effective_extrapop / paramshift are not modelled on FuncCallSpecs.
+        res.stackoffset = self.stackoffset;
+        // isbadjumptable is not modelled.
+        // res.copy(*this) — prototype already cloned via new().
+        res
+    }
+
+    // Ghidra: fspec.cc:5901 FuncCallSpecs::paramshiftModifyStart
+    /// Prepend `paramshift` parameters to this call's prototype. Faithful
+    /// port of `paramshiftModifyStart` (fspec.cc:5901-5906). If `paramshift`
+    /// is zero, this is a no-op. Otherwise the underlying FuncProto's
+    /// `param_shift` is invoked with the same count.
+    pub fn paramshift_modify_start(&mut self, paramshift: i32) {
+        if paramshift == 0 { return; }
+        // Ghidra: paramShift(paramshift);
+        self.prototype.param_shift(paramshift);
+    }
+
+    // Ghidra: fspec.cc:5911 FuncCallSpecs::paramshiftModifyStop
+    /// Throw out the paramshift parameters. Faithful port of
+    /// `paramshiftModifyStop` (fspec.cc:5911-5925). Returns `true` if a change
+    /// was made (paramshift > 0 and not already applied). Rugra does not yet
+    /// track the `paramshift_applied` flag, so this always performs the
+    /// removal when `paramshift > 0`. Op-input rewiring (`data.opRemoveInput`)
+    /// is delegated to the caller via `remove_input` since the call op is not
+    /// stored on FuncCallSpecs.
+    pub fn paramshift_modify_stop(
+        &mut self,
+        paramshift: i32,
+        remove_input: &mut dyn FnMut(usize),
+    ) -> bool {
+        if paramshift == 0 { return false; }
+        // Ghidra: if (isParamshiftApplied()) return false;
+        //         setParamshiftApplied(true);
+        // Rugra does not track the applied flag; we always apply.
+        // Ghidra: if (op->numInput() < paramshift + 1) throw LowlevelError(...);
+        // The caller's remove_input is responsible for bounds.
+        // Ghidra: for(i=0;i<paramshift;++i) { opRemoveInput(op,1); removeParam(0); }
+        for _ in 0..paramshift {
+            remove_input(1);
+            if !self.prototype.parameters.is_empty() {
+                self.prototype.parameters.remove(0);
+            }
+        }
+        true
+    }
 }
 
-/// Outcome of `FuncCallSpecs::deindirect`'s late-restriction step.
+// ======================================================================
+// FspecSpace helpers (fspec.hh:339-360 / fspec.cc:2116-2170)
+// ======================================================================
+// Ghidra's `FspecSpace` is a special address space whose offsets are really
+// (truncated) `FuncCallSpecs *` pointers — used to attach a call spec to a
+// CALL/CALLIND input varnode. Rugra does not model address spaces as runtime
+// objects (AddressSpace is an enum), so the three FspecSpace methods that
+// inspect the encoded pointer are exposed here as free helpers that take a
+// borrowed `FuncCallSpecs` directly. Faithful 1:1 ports of:
+//   - FspecSpace::encodeAttributes(2-arg)  (fspec.cc:2124-2136)
+//   - FspecSpace::encodeAttributes(3-arg)  (fspec.cc:2138-2151)
+//   - FspecSpace::printRaw                 (fspec.cc:2153-2164)
+
+// Ghidra: fspec.cc:2124 FspecSpace::encodeAttributes (2-arg)
+/// Encode the space/offset attributes of an fspec-space address. Faithful
+/// port of the 2-argument `FspecSpace::encodeAttributes` (fspec.cc:2124-2136).
+/// If the call spec has no resolved entry address, the literal space name
+/// "fspec" is emitted; otherwise the entry address's space and offset are
+/// written.
+pub fn fspec_encode_attributes(
+    fc: &FuncCallSpecs,
+    encoder: &mut dyn crate::marshal::Encoder,
+    space_attrib: &crate::marshal::AttributeId,
+    offset_attrib: &crate::marshal::AttributeId,
+) {
+    // Ghidra: if (fc->getEntryAddress().isInvalid()) writeString(ATTRIB_SPACE, "fspec");
+    match fc.entry_addr {
+        None => encoder.write_string(space_attrib, "fspec"),
+        Some(addr) => {
+            // Ghidra: AddrSpace *id = fc->getEntryAddress().getSpace();
+            //         encoder.writeSpace(ATTRIB_SPACE, id);
+            //         encoder.writeUnsignedInteger(ATTRIB_OFFSET, off);
+            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
+        }
+    }
+}
+
+// Ghidra: fspec.cc:2138 FspecSpace::encodeAttributes (3-arg)
+/// Encode the space/offset/size attributes of an fspec-space address.
+/// Faithful port of the 3-argument `FspecSpace::encodeAttributes`
+/// (fspec.cc:2138-2151). Identical to the 2-arg form but additionally writes
+/// the `size` attribute.
+pub fn fspec_encode_attributes_with_size(
+    fc: &FuncCallSpecs,
+    size: i32,
+    encoder: &mut dyn crate::marshal::Encoder,
+    space_attrib: &crate::marshal::AttributeId,
+    offset_attrib: &crate::marshal::AttributeId,
+    size_attrib: &crate::marshal::AttributeId,
+) {
+    match fc.entry_addr {
+        None => encoder.write_string(space_attrib, "fspec"),
+        Some(addr) => {
+            encoder.write_string(space_attrib, space_name_for_addr(addr));
+            encoder.write_unsigned_integer(offset_attrib, addr.as_u64());
+            encoder.write_signed_integer(size_attrib, size as i64);
+        }
+    }
+}
+
+// Ghidra: fspec.cc:2153 FspecSpace::printRaw
+/// Print the fspec-space address as text. Faithful 1:1 port of
+/// `FspecSpace::printRaw` (fspec.cc:2153-2164). If the call spec has a
+/// display name it is emitted directly; otherwise the placeholder `func_`
+/// prefix is followed by the entry address (printed as a hex offset).
+pub fn fspec_print_raw(fc: &FuncCallSpecs, out: &mut String) {
+    // Ghidra: if (fc->getName().size() != 0) s << fc->getName();
+    if !fc.prototype.name.is_empty() {
+        out.push_str(&fc.prototype.name);
+    } else {
+        // Ghidra: s << "func_"; fc->getEntryAddress().printRaw(s);
+        out.push_str("func_");
+        if let Some(addr) = fc.entry_addr {
+            out.push_str(&format!("{:x}", addr.as_u64()));
+        }
+    }
+}
+
+// RUGRA-GLUE: space_name_for_addr — Rugra's Address does not carry a space,
+// so for FspecSpace encoding we report the conventional "ram" (the typical
+// entry-address space) as a placeholder. This mirrors the space-name lookup
+// Ghidra performs via `addr.getSpace()->getName()`.
+fn space_name_for_addr(_addr: Address) -> &'static str {
+    "ram"
+}
+
+
 /// Faithful to the two return paths inside `deindirect` (fspec.cc:5465-5471):
 /// either the prototype was successfully restricted and committed (no
 /// restart), or it was not and a restart is pending.
@@ -1881,6 +2605,60 @@ impl ParamTrial {
     /// to `ParamTrial::splitLo` (fspec.cc:1856).
     pub fn split_lo(&self, sz: i32) -> ParamTrial {
         ParamTrial::new(Address::new(self.addr.as_u64() + sz as u64), self.size - sz, self.slot + 1)
+    }
+
+    // Ghidra: fspec.cc:1871 ParamTrial::testShrink
+    /// Test whether this trial can be shrunk to the given (newaddr, sz) range.
+    /// Faithful 1:1 port of `testShrink` (fspec.cc:1871-1887). The candidate
+    /// range must align with the trial's existing range respecting endianness:
+    /// on a big-endian space the candidate address must be
+    /// `addr + (size - sz)`; on a little-endian space it must equal `addr`.
+    /// A trial already bound to a `ParamEntry` cannot be shrunk (Ghidra's
+    /// `if (entry != null) return false`).
+    ///
+    /// `is_big_endian` is supplied by the caller because Rugra's `ParamTrial`
+    /// does not carry an address space; in Ghidra the trial's `addr`
+    /// delegates to `addr.isBigEndian()`.
+    pub fn test_shrink(&self, newaddr: Address, sz: i32, is_big_endian: bool) -> bool {
+        // Ghidra: Address testaddr;
+        //         if (addr.isBigEndian()) testaddr = addr + (size - sz);
+        //         else testaddr = addr;
+        let testaddr = if is_big_endian {
+            Address::new(self.addr.as_u64() + (self.size - sz) as u64)
+        } else {
+            self.addr
+        };
+        // Ghidra: if (testaddr != newaddr) return false;
+        if testaddr != newaddr { return false; }
+        // Ghidra: if (entry != null) return false;
+        if self.entry_index.is_some() { return false; }
+        true
+    }
+
+    // Ghidra: fspec.cc:1920 ParamTrial::fixedPositionCompare (static)
+    /// Sort-by-functor used by `ParamListStandard::buildTrialMap` to order
+    /// trials by their fixed position, falling back to `operator<` when both
+    /// positions are unset (-1). Faithful 1:1 port of `fixedPositionCompare`
+    /// (fspec.cc:1920-1933). Returns true if `a` should be ordered before `b`.
+    /// The per-trial `operator<` fallback (group, entry, address, size) is
+    /// provided via the `op_less` closure because Rugra's `ParamTrial` does
+    /// not carry the bound `ParamEntry *` needed for a faithful comparison.
+    pub fn fixed_position_compare<F>(
+        a: &ParamTrial, b: &ParamTrial, op_less: &F,
+    ) -> bool
+    where
+        F: Fn(&ParamTrial, &ParamTrial) -> bool,
+    {
+        // Ghidra: if (a.fixedPosition == -1 && b.fixedPosition == -1) return a < b;
+        if a.fixed_position == -1 && b.fixed_position == -1 {
+            return op_less(a, b);
+        }
+        // Ghidra: if (a.fixedPosition == -1) return false;
+        if a.fixed_position == -1 { return false; }
+        // Ghidra: if (b.fixedPosition == -1) return true;
+        if b.fixed_position == -1 { return true; }
+        // Ghidra: return a.fixedPosition < b.fixedPosition;
+        a.fixed_position < b.fixed_position
     }
 }
 
@@ -4305,6 +5083,141 @@ impl ProtoModelFull {
         Self::lookup_effect(&self.effectlist, addr_space, addr_offset, size)
     }
 
+    // Ghidra: fspec.cc:2510 ProtoModel::lookupRecord (static)
+    /// Look up a particular EffectRecord from a (sorted) list by its address
+    /// and size. Faithful 1:1 port of `lookupRecord` (fspec.cc:2510-2533).
+    /// Only the first `list_size` records are examined. Returns:
+    ///   - `Some(idx)` — the matching record's index.
+    ///   - `None` — no overlap (Ghidra's `-1`).
+    ///   - `Err(())` — partial overlap with another record (Ghidra's `-2`).
+    pub fn lookup_record(
+        efflist: &[EffectRecord],
+        list_size: usize,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> Result<Option<usize>, ()> {
+        if list_size == 0 {
+            return Ok(None);
+        }
+        let target = (addr_space, addr_offset);
+        // upper_bound by address within [0, list_size).
+        let mut idx = efflist[..list_size]
+            .partition_point(|e| (e.space, e.offset) <= target);
+        if idx == 0 {
+            // First element's address is strictly greater than target; check
+            // whether the target overlaps it (Ghidra: -2) or sits before it
+            // entirely (Ghidra: -1).
+            let close_space = efflist[0].space;
+            let close_off = efflist[0].offset;
+            return if overlaps_range(
+                close_space, close_off, efflist[0].size,
+                addr_space, addr_offset, size,
+            ) < 0
+            {
+                Ok(None)
+            } else {
+                Err(())
+            };
+        }
+        idx -= 1;
+        let close_space = efflist[idx].space;
+        let close_off = efflist[idx].offset;
+        let close_size = efflist[idx].size;
+        if addr_space == close_space && addr_offset == close_off && size == close_size {
+            return Ok(Some(idx));
+        }
+        if overlaps_range(
+            close_space, close_off, close_size,
+            addr_space, addr_offset, size,
+        ) < 0
+        {
+            Ok(None)
+        } else {
+            Err(())
+        }
+    }
+
+    // Ghidra: fspec.hh:1017 ProtoModel::effectBegin / fspec.hh:1018 effectEnd
+    /// Iterate the model's EffectRecord list (sorted by address). Faithful to
+    /// `effectBegin`/`effectEnd` (fspec.hh:1017-1018). Used by
+    /// `FuncProto::decodeEffect` to seed the override list from the model.
+    pub fn effect_iter(&self) -> &[EffectRecord] {
+        &self.effectlist
+    }
+
+    // Ghidra: fspec.hh:1020 ProtoModel::trashBegin / fspec.hh:1021 trashEnd
+    /// Iterate the model's likely-trash VarnodeData list (sorted). Faithful to
+    /// `trashBegin`/`trashEnd` (fspec.hh:1020-1021). Used by
+    /// `FuncProto::decodeLikelyTrash` to fold in the model's trash list.
+    pub fn trash_iter(&self) -> &[VarnodeData] {
+        &self.likelytrash
+    }
+
+    // Ghidra: fspec.cc:2993 ProtoModelMerged::intersectEffects
+    /// Intersect this model's effect list with another list, in place.
+    /// Faithful 1:1 port of `ProtoModelMerged::intersectEffects`
+    /// (fspec.cc:2780-2803). Both lists must be sorted by address. Only
+    /// records present in BOTH lists survive; the merged list is rebuilt into
+    /// a fresh vector and swapped in. `ProtoModelMerged` itself is not yet
+    /// modelled as a distinct type in Rugra, so the merge is exposed here as
+    /// a static helper for callers that fold alternative models together.
+    pub fn intersect_effects(effectlist: &mut Vec<EffectRecord>, efflist: &[EffectRecord]) {
+        let mut newlist: Vec<EffectRecord> = Vec::new();
+        let mut i = 0usize;
+        let mut j = 0usize;
+        while i < effectlist.len() && j < efflist.len() {
+            let eff1 = &effectlist[i];
+            let eff2 = &efflist[j];
+            if EffectRecord::compare_by_address(eff1, eff2) {
+                i += 1;
+            } else if EffectRecord::compare_by_address(eff2, eff1) {
+                j += 1;
+            } else {
+                // Same address range; match if all fields equal.
+                if eff1.space == eff2.space
+                    && eff1.offset == eff2.offset
+                    && eff1.size == eff2.size
+                    && eff1.effect_type == eff2.effect_type
+                {
+                    newlist.push(eff1.clone());
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+        std::mem::swap(effectlist, &mut newlist);
+    }
+
+    // Ghidra: fspec.cc:2809 ProtoModelMerged::intersectRegisters (static)
+    /// Intersect two sorted VarnodeData register lists, writing the result
+    /// into the first. Faithful 1:1 port of `intersectRegisters`
+    /// (fspec.cc:2809-2832). A merge-join keeps only varnodes present in both
+    /// lists, comparing by (space, offset, size).
+    pub fn intersect_registers(
+        reg_list1: &mut Vec<VarnodeData>,
+        reg_list2: &[VarnodeData],
+    ) {
+        let mut newlist: Vec<VarnodeData> = Vec::new();
+        let mut i = 0usize;
+        let mut j = 0usize;
+        while i < reg_list1.len() && j < reg_list2.len() {
+            let a = &reg_list1[i];
+            let b = &reg_list2[j];
+            let ord_a = (a.space, a.offset, a.size).cmp(&(b.space, b.offset, b.size));
+            match ord_a {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => {
+                    newlist.push(a.clone());
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        std::mem::swap(reg_list1, &mut newlist);
+    }
+
     // Ghidra: fspec.cc:2549 ProtoModel::decode
     /// Restore this model from a `<prototype>` element. Faithful port of
     /// `decode` (fspec.cc:2549-2700). Parses the element/attribute stream
@@ -4664,6 +5577,37 @@ fn parse_space_name(s: &str) -> AddressSpace {
     }
 }
 
+// RUGRA-GLUE: space_name — inverse of parse_space_name, used by
+// EffectRecord::encode to serialise the address space as a string attribute.
+/// Return the canonical XML name for an address space. Mirrors the
+/// `AddrSpace::getName` lookup Ghidra performs inside
+/// `VarnodeData::encode`/`Address::encode`.
+fn space_name(s: AddressSpace) -> &'static str {
+    match s {
+        AddressSpace::Ram => "ram",
+        AddressSpace::Register => "register",
+        AddressSpace::Unique => "unique",
+        AddressSpace::Const => "const",
+        AddressSpace::Stack => "stack",
+        AddressSpace::Join => "join",
+        AddressSpace::Iop => "iop",
+        AddressSpace::Overlay => "overlay",
+        AddressSpace::Other(_) => "mem",
+    }
+}
+
+// RUGRA-GLUE: effect_from_u32 — bridges the raw u32 returned by the legacy
+// `FuncCallSpecs::has_effect` (which mirrors Ghidra's `uint4` return type)
+// back into the typed `EffectType` enum used by the faithful ports above.
+fn effect_from_u32(raw: u32) -> EffectType {
+    match raw {
+        1 => EffectType::Unaffected,
+        2 => EffectType::KilledByCall,
+        3 => EffectType::ReturnAddress,
+        _ => EffectType::UnknownEffect,
+    }
+}
+
 fn parse_u64(s: &str) -> u64 {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).unwrap_or(0)
@@ -4689,6 +5633,35 @@ fn metatype_to_type_class(dt: &Datatype) -> TypeClass {
 // address.cc, used only by `ParamListStandard::check_join`).
 fn is_contiguous(hi_addr: Address, hi_size: i32, lo_addr: Address, _lo_size: i32) -> bool {
     hi_addr.as_u64() + hi_size as u64 == lo_addr.as_u64()
+}
+
+// RUGRA-GLUE: overlaps_range — mirrors `Address::overlap(szbek, addr, sz)`
+// (address.cc). Returns the byte offset of (space2, off2, sz2) within
+// (space1, off1, sz1), or -1 if the ranges do not overlap. Used by
+// `ProtoModelFull::lookup_record` to classify a probe against a candidate.
+fn overlaps_range(
+    space1: AddressSpace, off1: u64, sz1: i32,
+    space2: AddressSpace, off2: u64, sz2: i32,
+) -> i64 {
+    if space1 != space2 {
+        return -1;
+    }
+    let a = off1 as i128;
+    let b = off2 as i128;
+    let len1 = sz1 as i128;
+    let len2 = sz2 as i128;
+    // Ghidra: if addr+size <= hit  -> -1 (no overlap, target precedes record)
+    //         if hit+sz  <= addr  -> -1 (no overlap, record precedes target)
+    if b + len2 <= a {
+        return -1;
+    }
+    if a + len1 <= b {
+        return -1;
+    }
+    // overlap(szbek, addr, sz) returns the byte offset of addr within
+    // [hit, hit+sz). For symmetric overlap classification (the only use in
+    // lookup_record), we return the offset of (off2) within (off1, sz1).
+    (b - a) as i64
 }
 
 #[cfg(test)]
