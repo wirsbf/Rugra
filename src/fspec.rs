@@ -190,6 +190,24 @@ impl ProtoParameter {
         (self.flags & protoparam_flags::THIS_POINTER) != 0
     }
 
+    // Ghidra: fspec.hh:1117 ProtoParameter::setThisPointer
+    /// Toggle whether this parameter is the "this" pointer for a class
+    /// method. Faithful to `setThisPointer`.
+    pub fn set_this_pointer(&mut self, val: bool) {
+        if val {
+            self.flags |= protoparam_flags::THIS_POINTER;
+        } else {
+            self.flags &= !protoparam_flags::THIS_POINTER;
+        }
+    }
+
+    // Ghidra: fspec.hh:1113 ProtoParameter::isHiddenReturn
+    /// Is this a pointer to storage for the return value (a hidden return
+    /// parameter)? Faithful to `isHiddenReturn`.
+    pub fn is_hidden_return(&self) -> bool {
+        (self.flags & protoparam_flags::HIDDEN_RETURN) != 0
+    }
+
     // Ghidra: fspec.hh:1100 ProtoParameter::isTypeLocked
     /// Returns true if the type is locked (user-defined)
     pub fn is_type_locked(&self) -> bool {
@@ -228,6 +246,28 @@ pub struct FuncProto {
     /// `set_pieces`; read by `is_model_locked`. Ghidra folds this into the
     /// `flags` bitfield; Rugra keeps a dedicated boolean.
     pub model_locked: bool,
+    /// Should this function be in-lined during decompilation? Faithful to the
+    /// `is_inline` (fspec.hh:1348) flag bit. Read by `is_inline`; set by
+    /// `set_inline`. In-lining is based on a call-fixup or the full body.
+    pub is_inline: bool,
+    /// Function does not return. Faithful to the `no_return`
+    /// (fspec.hh:1349) flag bit. Read by `is_no_return`; set by
+    /// `set_no_return`. A no-return function terminates its caller's
+    /// basic-block flow.
+    pub no_return: bool,
+    /// Function is an (object-oriented) constructor. Faithful to the
+    /// `is_constructor` (fspec.hh:1354) flag bit. Read by
+    /// `is_constructor_flag`; set by `set_constructor`. Named with the
+    /// `_flag` suffix to avoid clashing with `ProtoModel::is_constructor`.
+    pub is_constructor_flag: bool,
+    /// Function is an (object-oriented) destructor. Faithful to the
+    /// `is_destructor` (fspec.hh:1355) flag bit. Read by `is_destructor`;
+    /// set by `set_destructor`.
+    pub is_destructor: bool,
+    /// Function is a method with a 'this' pointer argument. Faithful to the
+    /// `has_thisptr` (fspec.hh:1356) flag bit. Read by `has_thisptr`; set by
+    /// `set_has_thisptr` and by `update_this_pointer`.
+    pub has_thisptr: bool,
     /// Number of bytes of the return value that are consumed by callers
     /// (0 = all bytes). Faithful to `FuncProto::returnBytesConsumed`
     /// (fspec.hh:1367). Set by `set_return_bytes_consumed`; read by the
@@ -249,6 +289,11 @@ impl FuncProto {
             effects: Vec::new(),
             output_type_locked: false,
             model_locked: false,
+            is_inline: false,
+            no_return: false,
+            is_constructor_flag: false,
+            is_destructor: false,
+            has_thisptr: false,
             return_bytes_consumed: 0,
         }
     }
@@ -333,6 +378,82 @@ impl FuncProto {
         self.model_locked = val;
     }
 
+    // Ghidra: fspec.hh:1411 FuncProto::isInline
+    /// Does this function get in-lined during decompilation? Faithful to
+    /// `isInline` (fspec.hh:1411): reads the `is_inline` flag bit.
+    pub fn is_inline(&self) -> bool {
+        self.is_inline
+    }
+
+    // Ghidra: fspec.hh:1417 FuncProto::setInline
+    /// Toggle the in-line setting. Faithful to `setInline` (fspec.hh:1417).
+    /// In-lining can be based on a call-fixup or the full function body.
+    pub fn set_inline(&mut self, val: bool) {
+        self.is_inline = val;
+    }
+
+    // Ghidra: fspec.hh:1434 FuncProto::isNoReturn
+    /// Does a function with this prototype never return? Faithful to
+    /// `isNoReturn` (fspec.hh:1434): reads the `no_return` flag bit.
+    pub fn is_no_return(&self) -> bool {
+        self.no_return
+    }
+
+    // Ghidra: fspec.hh:1439 FuncProto::setNoReturn
+    /// Toggle the no-return setting. Faithful to `setNoReturn`
+    /// (fspec.hh:1439). When true the function is treated as never
+    /// returning, terminating its caller's basic-block flow.
+    pub fn set_no_return(&mut self, val: bool) {
+        self.no_return = val;
+    }
+
+    // Ghidra: fspec.hh:1442 FuncProto::hasThisPointer
+    /// Is this a prototype for a class method, taking a 'this' pointer?
+    /// Faithful to `hasThisPointer` (fspec.hh:1442): reads the `has_thisptr`
+    /// flag bit. Set automatically by `update_this_pointer` when the model
+    /// declares a this-pointer.
+    pub fn has_thisptr(&self) -> bool {
+        self.has_thisptr
+    }
+
+    // Ghidra: fspec.hh:1368 FuncProto::setThisPointer (via flag)
+    /// Toggle whether this prototype has a 'this' pointer. Rugra analogue
+    /// of the `has_thisptr` flag bit assignment that Ghidra performs in
+    /// `setModel` (fspec.cc:3827).
+    pub fn set_has_thisptr(&mut self, val: bool) {
+        self.has_thisptr = val;
+    }
+
+    // Ghidra: fspec.hh:1445 FuncProto::isConstructor
+    /// Is this prototype for a class constructor method? Faithful to
+    /// `isConstructor` (fspec.hh:1445): reads the `is_constructor` flag bit.
+    /// Named `is_constructor_flag` to avoid clashing with
+    /// `ProtoModel::is_constructor`.
+    pub fn is_constructor_flag(&self) -> bool {
+        self.is_constructor_flag
+    }
+
+    // Ghidra: fspec.hh:1450 FuncProto::setConstructor
+    /// Toggle whether this prototype is a constructor method. Faithful to
+    /// `setConstructor` (fspec.hh:1450).
+    pub fn set_constructor(&mut self, val: bool) {
+        self.is_constructor_flag = val;
+    }
+
+    // Ghidra: fspec.hh:1453 FuncProto::isDestructor
+    /// Is this prototype for a class destructor method? Faithful to
+    /// `isDestructor` (fspec.hh:1453): reads the `is_destructor` flag bit.
+    pub fn is_destructor(&self) -> bool {
+        self.is_destructor
+    }
+
+    // Ghidra: fspec.hh:1458 FuncProto::setDestructor
+    /// Toggle whether this prototype is a destructor method. Faithful to
+    /// `setDestructor` (fspec.hh:1458).
+    pub fn set_destructor(&mut self, val: bool) {
+        self.is_destructor = val;
+    }
+
     // Ghidra: fspec.cc:3843 FuncProto::setPieces
     /// Set this prototype from a `PrototypePieces`, locking input, output, and
     /// model. Faithful to `setPieces` (fspec.cc:3843). The model name (when
@@ -386,6 +507,12 @@ impl FuncProto {
         self.calling_convention = other.calling_convention.clone();
         self.is_dotdotdot = other.is_dotdotdot;
         self.output_type_locked = other.output_type_locked;
+        self.model_locked = other.model_locked;
+        self.is_inline = other.is_inline;
+        self.no_return = other.no_return;
+        self.is_constructor_flag = other.is_constructor_flag;
+        self.is_destructor = other.is_destructor;
+        self.has_thisptr = other.has_thisptr;
         self.return_bytes_consumed = other.return_bytes_consumed;
     }
 
@@ -447,9 +574,26 @@ impl FuncProto {
     }
 
     // Ghidra: fspec.cc:3572 FuncProto::updateThisPointer
-    /// Update the this-pointer parameter based on current type info.
+    /// Make sure any "this" parameter is properly marked. Faithful to
+    /// `updateThisPointer` (fspec.cc:3572-3584). If the prototype has a
+    /// this-pointer (model-derived), the first non-hidden-return input
+    /// parameter has its `THIS_POINTER` flag set.
     pub fn update_this_pointer(&mut self) {
-        // Simplified: no TypePointer integration.
+        if !self.has_thisptr {
+            return;
+        }
+        let num_inputs = self.parameters.len();
+        if num_inputs == 0 {
+            return;
+        }
+        let mut idx = 0;
+        if self.parameters[0].is_hidden_return() {
+            if num_inputs < 2 {
+                return;
+            }
+            idx = 1;
+        }
+        self.parameters[idx].set_this_pointer(true);
     }
 
     // Ghidra: fspec.cc:3778 FuncProto::isVarargs
@@ -736,14 +880,14 @@ impl FuncProto {
                         read_extrapop = s.parse::<i32>().unwrap_or(EXTRAPOP_UNKNOWN_FULL);
                     }
                 }
-                Some("modellock") => { /* modellock tracked implicitly */ let _ = decoder.read_bool(); }
+                Some("modellock") => { if decoder.read_bool() { self.model_locked = true; } }
                 Some("dotdotdot") => { if decoder.read_bool() { self.is_dotdotdot = true; } }
                 Some("voidlock") => { /* voidinputlock tracked implicitly */ let _ = decoder.read_bool(); }
-                Some("inline") => { /* is_inline tracked elsewhere */ let _ = decoder.read_bool(); }
-                Some("noreturn") => { /* no_return tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("inline") => { self.is_inline = decoder.read_bool(); }
+                Some("noreturn") => { self.no_return = decoder.read_bool(); }
                 Some("custom") => { /* custom_storage tracked elsewhere */ let _ = decoder.read_bool(); }
-                Some("constructor") => { /* is_constructor tracked elsewhere */ let _ = decoder.read_bool(); }
-                Some("destructor") => { /* is_destructor tracked elsewhere */ let _ = decoder.read_bool(); }
+                Some("constructor") => { self.is_constructor_flag = decoder.read_bool(); }
+                Some("destructor") => { self.is_destructor = decoder.read_bool(); }
                 _ => { let _ = decoder.read_string(); }
             }
         }
@@ -889,13 +1033,14 @@ impl FuncProto {
     /// Get the set of flags that affect prototype comparison. Faithful to
     /// `getComparableFlags` (fspec.hh:1618): the
     /// `dotdotdot | is_constructor | is_destructor | has_thisptr` subset.
-    /// Rugra's flat FuncProto only carries `is_dotdotdot`, so we return that
-    /// bit; the constructor/destructor/thisptr flags live on the model.
     pub fn get_comparable_flags(&self) -> u32 {
         // Ghidra flags: dotdotdot=0x80, is_constructor=0x200,
         // is_destructor=0x400, has_thisptr=0x800.
         let mut f = 0u32;
         if self.is_dotdotdot { f |= 0x80; }
+        if self.is_constructor_flag { f |= 0x200; }
+        if self.is_destructor { f |= 0x400; }
+        if self.has_thisptr { f |= 0x800; }
         f
     }
 
@@ -949,7 +1094,11 @@ impl FuncProto {
         // Rugra does not yet store injectid on FuncProto; the default of -1
         // matches for both sides.
         // Ghidra: if ((flags&(is_inline|no_return)) != (op2.flags&(...))) return false;
-        // Rugra does not yet track inline/no_return on FuncProto.
+        // Ghidra flags: is_inline=0x8, no_return=0x10. A direct boolean
+        // comparison of each flag is equivalent to the bitfield test.
+        if self.is_inline != op2.is_inline || self.no_return != op2.no_return {
+            return false;
+        }
         // Ghidra: if (effectlist.size() != op2.effectlist.size()) return false;
         if self.effects.len() != op2.effects.len() { return false; }
         // Ghidra: for(...) if (effectlist[i] != op2.effectlist[i]) return false;
@@ -1203,6 +1352,11 @@ impl FuncProto {
         model_attrib: &crate::marshal::AttributeId,
         extrapop_attrib: &crate::marshal::AttributeId,
         dotdotdot_attrib: &crate::marshal::AttributeId,
+        modellock_attrib: &crate::marshal::AttributeId,
+        inline_attrib: &crate::marshal::AttributeId,
+        noreturn_attrib: &crate::marshal::AttributeId,
+        constructor_attrib: &crate::marshal::AttributeId,
+        destructor_attrib: &crate::marshal::AttributeId,
         returnsym_elem: &crate::marshal::ElementId,
         typelock_attrib: &crate::marshal::AttributeId,
         unaffected_elem: &crate::marshal::ElementId,
@@ -1232,7 +1386,23 @@ impl FuncProto {
             encoder.write_bool(dotdotdot_attrib, true);
         }
         // modellock / voidlock / inline / noreturn / custom / constructor /
-        // destructor are tracked elsewhere in Rugra; we omit them here.
+        // destructor are emitted only when set, matching Ghidra's
+        // `if (flag) writeBool(ATTRIB_*, true)` pattern (fspec.cc:4636-4649).
+        if self.model_locked {
+            encoder.write_bool(modellock_attrib, true);
+        }
+        if self.is_inline {
+            encoder.write_bool(inline_attrib, true);
+        }
+        if self.no_return {
+            encoder.write_bool(noreturn_attrib, true);
+        }
+        if self.is_constructor_flag {
+            encoder.write_bool(constructor_attrib, true);
+        }
+        if self.is_destructor {
+            encoder.write_bool(destructor_attrib, true);
+        }
         // Ghidra: <returnsym>
         encoder.open_element(returnsym_elem);
         if self.output_type_locked {
@@ -5926,6 +6096,70 @@ mod tests {
         assert!(!proto.is_varargs());
         proto.set_dotdotdot(true);
         assert!(proto.is_varargs());
+    }
+
+    #[test]
+    fn test_func_proto_method_flags() {
+        // Ghidra: fspec.hh:1411-1458 inline/noreturn/constructor/destructor/thisptr
+        let int_type = Arc::new(Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+        let mut proto = FuncProto::new("method".into(), int_type);
+        // All method flags start false.
+        assert!(!proto.is_inline());
+        assert!(!proto.is_no_return());
+        assert!(!proto.is_constructor_flag());
+        assert!(!proto.is_destructor());
+        assert!(!proto.has_thisptr());
+        // Set each flag.
+        proto.set_inline(true);
+        proto.set_no_return(true);
+        proto.set_constructor(true);
+        proto.set_destructor(true);
+        proto.set_has_thisptr(true);
+        assert!(proto.is_inline());
+        assert!(proto.is_no_return());
+        assert!(proto.is_constructor_flag());
+        assert!(proto.is_destructor());
+        assert!(proto.has_thisptr());
+        // Comparable flags should now carry the constructor/destructor/thisptr bits.
+        let cf = proto.get_comparable_flags();
+        assert_ne!(cf & 0x200, 0); // is_constructor
+        assert_ne!(cf & 0x400, 0); // is_destructor
+        assert_ne!(cf & 0x800, 0); // has_thisptr
+        // Flags survive copy_from.
+        let mut proto2 = FuncProto::new("dst".into(), proto.return_type.clone());
+        proto2.copy_from(&proto);
+        assert!(proto2.is_inline());
+        assert!(proto2.is_no_return());
+        assert!(proto2.is_constructor_flag());
+        assert!(proto2.is_destructor());
+        assert!(proto2.has_thisptr());
+    }
+
+    #[test]
+    fn test_func_proto_update_this_pointer() {
+        // Ghidra: fspec.cc:3572-3584 updateThisPointer
+        let int_type = Arc::new(Datatype::Base(
+            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+        let mut proto = FuncProto::new("method".into(), int_type.clone());
+        // Without has_thisptr set, update_this_pointer is a no-op.
+        proto.add_parameter(ProtoParameter::new("this".into(), int_type.clone(), Address::new(0)));
+        proto.update_this_pointer();
+        assert!(!proto.parameters[0].is_this_pointer());
+        // With has_thisptr set, the first parameter is marked as the this pointer.
+        proto.set_has_thisptr(true);
+        proto.update_this_pointer();
+        assert!(proto.parameters[0].is_this_pointer());
+        // A hidden-return parameter at slot 0 is skipped.
+        let mut proto2 = FuncProto::new("method2".into(), int_type.clone());
+        proto2.set_has_thisptr(true);
+        let mut hidden = ProtoParameter::new("rethidden".into(), int_type.clone(), Address::new(0));
+        hidden.flags |= protoparam_flags::HIDDEN_RETURN;
+        proto2.add_parameter(hidden);
+        proto2.add_parameter(ProtoParameter::new("this".into(), int_type, Address::new(0x8)));
+        proto2.update_this_pointer();
+        assert!(!proto2.parameters[0].is_this_pointer());
+        assert!(proto2.parameters[1].is_this_pointer());
     }
 
     // ---- ParamEntry / ParamListStandard tests ----
