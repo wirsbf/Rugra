@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::address::Address;
+use crate::arch::Architecture;
 use crate::type_system::datatype::Datatype;
 
 /// Token types for the C grammar lexer. Faithful to the `GrammarToken` enum
@@ -41,6 +42,50 @@ pub mod token_type {
     pub const CHAR_CONSTANT: u32 = 0x104;
     pub const IDENTIFIER: u32 = 0x105;
     pub const STRING_VAL: u32 = 0x106;
+}
+
+/// Bison token codes emitted at the top of `grammar.cc` (lines 148-166) and
+/// returned by `CParse::lex` / `lookupIdentifier`. Faithful to the
+/// `grammartokentype` enum in `grammar.cc`.
+///
+/// These are distinct from the lexer-level `GrammarToken::type` codes in
+/// `token_type` (which describe *raw* tokens); the bison codes describe
+/// *parser-level* tokens produced by `lex()` after identifier reclassification
+/// via `lookupIdentifier` (e.g. `STRUCT` / `TYPE_NAME` / `STORAGE_CLASS_SPECIFIER`).
+pub mod bison_token {
+    /// `DOTDOTDOT = 258` (grammar.cc:153).
+    pub const DOTDOTDOT: i32 = 258;
+    /// `BADTOKEN = 259` (grammar.cc:154).
+    pub const BADTOKEN: i32 = 259;
+    /// `STRUCT = 260` (grammar.cc:155).
+    pub const STRUCT: i32 = 260;
+    /// `UNION = 261` (grammar.cc:156).
+    pub const UNION: i32 = 261;
+    /// `ENUM = 262` (grammar.cc:157).
+    pub const ENUM: i32 = 262;
+    /// `DECLARATION_RESULT = 263` (grammar.cc:158) — start-token for the
+    /// `doc_declaration` grammar.
+    pub const DECLARATION_RESULT: i32 = 263;
+    /// `PARAM_RESULT = 264` (grammar.cc:159) — start-token for the
+    /// `doc_parameter_declaration` grammar.
+    pub const PARAM_RESULT: i32 = 264;
+    /// `NUMBER = 265` (grammar.cc:160) — integer/char constant.
+    pub const NUMBER: i32 = 265;
+    /// `IDENTIFIER = 266` (grammar.cc:161) — an unknown identifier.
+    pub const IDENTIFIER: i32 = 266;
+    /// `STORAGE_CLASS_SPECIFIER = 267` (grammar.cc:162).
+    pub const STORAGE_CLASS_SPECIFIER: i32 = 267;
+    /// `TYPE_QUALIFIER = 268` (grammar.cc:163).
+    pub const TYPE_QUALIFIER: i32 = 268;
+    /// `FUNCTION_SPECIFIER = 269` (grammar.cc:164) — `inline` or a
+    /// prototype-model name.
+    pub const FUNCTION_SPECIFIER: i32 = 269;
+    /// `TYPE_NAME = 270` (grammar.cc:165) — an identifier already bound to a
+    /// `Datatype` in the `TypeFactory`.
+    pub const TYPE_NAME: i32 = 270;
+    /// Sentinel returned by `lex()` to signal end of stream (Ghidra's `lex`
+    /// returns `-1` on `GrammarToken::endoffile`).
+    pub const END_OF_STREAM: i32 = -1;
 }
 
 /// A lexical token from the C grammar. Faithful to `GrammarToken`
@@ -161,6 +206,29 @@ pub struct GrammarLexer {
     end_of_file: bool,
     /// Error message (if any).
     error: String,
+    /// `filenamemap` — every file ever seen, keyed by an assigned filenum.
+    /// Faithful to `map<int4,string> filenamemap` (grammar.hh:70).
+    filenamemap: std::collections::HashMap<i32, String>,
+    /// `streammap` — the text body of each filenum. Faithful to
+    /// `map<int4,istream *> streammap` (grammar.hh:71). Rugra has no
+    /// `istream`, so each "stream" is held as an owned `Vec<char>` body plus a
+    /// per-stream position. The most recent entry is the "current" stream.
+    streammap: Vec<LexerStream>,
+    /// `filestack` — stack of current files. Faithful to
+    /// `vector<int4> filestack` (grammar.hh:72).
+    filestack: Vec<i32>,
+}
+
+/// One logical input stream within the lexer's multi-file stack. Faithful to a
+/// single `istream *` entry in `GrammarLexer::streammap`; Rugra has no
+/// `istream`, so the stream body and read position are owned here.
+struct LexerStream {
+    /// Full text of the stream.
+    body: Vec<char>,
+    /// Current read position within `body`.
+    pos: usize,
+    /// Current line number within this stream.
+    lineno: i32,
 }
 
 impl GrammarLexer {
@@ -174,17 +242,25 @@ impl GrammarLexer {
             cur_lineno: 1,
             end_of_file: false,
             error: String::new(),
+            filenamemap: std::collections::HashMap::new(),
+            streammap: Vec::new(),
+            filestack: Vec::new(),
         }
     }
 
     // Ghidra: grammar.cc:2305 GrammarLexer::clear
-    /// Clear the lexer state. Faithful to `clear`.
+    /// Clear the lexer state. Faithful to `clear`. Resets the multi-file
+    /// stream stack (`filenamemap` / `streammap` / `filestack`) and the
+    /// single-string input the recursive-descent driver consumes.
     pub fn clear(&mut self) {
         self.input.clear();
         self.pos = 0;
         self.cur_lineno = 1;
         self.end_of_file = false;
         self.error.clear();
+        self.filenamemap.clear();
+        self.streammap.clear();
+        self.filestack.clear();
     }
 
     // Ghidra: grammar.cc:2035 GrammarLexer::setInput
@@ -204,6 +280,86 @@ impl GrammarLexer {
     /// Check if at end of file.
     pub fn is_eof(&self) -> bool {
         self.pos >= self.input.len()
+    }
+
+    // Ghidra: grammar.cc:2320 GrammarLexer::writeLocation
+    /// Write the `" at line N in <file>"` location suffix used by error
+    /// reporting. Faithful to `writeLocation(ostream &, int4, int4)`. Rugra
+    /// appends to the supplied `String` instead of an `ostream`.
+    pub fn write_location(&self, s: &mut String, line: i32, filenum: i32) {
+        use std::fmt::Write as _;
+        let _ = write!(s, " at line {}", line);
+        if let Some(name) = self.filenamemap.get(&filenum) {
+            let _ = write!(s, " in {}", name);
+        }
+    }
+
+    // Ghidra: grammar.cc:2327 GrammarLexer::writeTokenLocation
+    /// Write the `buffer + '\n' + colno spaces + "^--\n"` caret pointer used
+    /// by error reporting. Faithful to `writeTokenLocation(ostream &, int4,
+    /// int4)`. Returns without writing when `line` does not match the current
+    /// line (the C++ side does the same against `curlineno`). Rugra's "buffer"
+    /// is the current input's remaining text from the start of the current
+    /// line, which is the closest analogue available.
+    pub fn write_token_location(&self, s: &mut String, line: i32, colno: i32) {
+        if line != self.cur_lineno {
+            return;
+        }
+        s.push_str(&self.input.iter().collect::<String>());
+        s.push('\n');
+        for _ in 0..colno {
+            s.push(' ');
+        }
+        s.push_str("^--\n");
+    }
+
+    // Ghidra: grammar.cc:2339 GrammarLexer::pushFile
+    /// Push a new file stream onto the lexer's file stack and make it the
+    /// current stream. Faithful to `pushFile(const string &, istream *)`.
+    /// Assigns a fresh filenum (one greater than the largest seen), records the
+    /// filename in `filenamemap`, the body in `streammap`, the filenum on
+    /// `filestack`, and replaces the current input so the recursive-descent
+    /// driver reads from this file.
+    pub fn push_file(&mut self, filename: &str, body: &str) {
+        let filenum = (self.filenamemap.len() + self.streammap.len()) as i32;
+        self.filenamemap.insert(filenum, filename.to_string());
+        self.streammap.push(LexerStream {
+            body: body.chars().collect(),
+            pos: 0,
+            lineno: 1,
+        });
+        self.filestack.push(filenum);
+        // Install the file body as the active input. The recursive-descent
+        // `yyparse` reads from `input`/`pos`; mirroring C++'s `in = i`.
+        self.input = body.chars().collect();
+        self.pos = 0;
+        self.cur_lineno = 1;
+        self.end_of_file = false;
+    }
+
+    // Ghidra: grammar.cc:2350 GrammarLexer::popFile
+    /// Pop the top file from the file stack. Faithful to `popFile`. When the
+    /// stack becomes empty the lexer is marked end-of-file (matching the C++
+    /// `endoffile = true; return;` path); otherwise the previous stream is
+    /// reinstalled as the current input.
+    pub fn pop_file(&mut self) {
+        self.filestack.pop();
+        if self.filestack.is_empty() {
+            self.end_of_file = true;
+            return;
+        }
+        // Get previous stream — the one that was active before this push.
+        let prev_filenum = *self.filestack.last().unwrap();
+        let _ = prev_filenum; // C++ does `in = streammap[filenum]`.
+        // Reinstall the previous body so the recursive-descent driver reads
+        // from it. Its read position was preserved in `streammap` if it is
+        // still the most-recently-pushed stream; otherwise we restart at EOF
+        // because the earlier input was already exhausted before the push.
+        if let Some(stream) = self.streammap.last() {
+            self.input = stream.body.clone();
+            self.pos = stream.pos;
+            self.cur_lineno = stream.lineno;
+        }
     }
 
     // Ghidra: grammar.cc:2035 GrammarLexer::peek
@@ -566,6 +722,55 @@ impl TypeModifier {
             }
         }
     }
+
+    // Ghidra: grammar.cc:2403 PointerModifier::modType
+    // Ghidra: grammar.cc:2412 ArrayModifier::modType
+    // Ghidra: grammar.cc:2465 FunctionModifier::modType
+    /// Apply this modifier to `base` and return the resulting type. Faithful
+    /// to the three `TypeModifier::modType` virtuals. Dispatches to the
+    /// `Pointer`/`Array`/`Function` behaviour based on the variant.
+    pub fn mod_type(
+        &self,
+        base: Arc<Datatype>,
+        decl: &TypeDeclarator,
+        types: &mut crate::type_system::typefactory::TypeFactory,
+    ) -> Option<Arc<Datatype>> {
+        mod_type(self, base, decl, types)
+    }
+
+    // Ghidra: grammar.cc:2434 FunctionModifier::getInTypes
+    /// Collect each parameter's built type into `intypes`. Faithful to
+    /// `FunctionModifier::getInTypes(vector<Datatype *> &, Architecture *)`:
+    /// iterates the paramlist and pushes `decl->buildType(glb)`. Rugra's
+    /// function modifier carries `params: Vec<Option<TypeDeclarator>>` (the
+    /// `None` slot encodes the trailing varargs trailer), so `None` is skipped.
+    pub fn get_in_types(
+        &self,
+        intypes: &mut Vec<Arc<Datatype>>,
+        types: &mut crate::type_system::typefactory::TypeFactory,
+        params: &[Option<TypeDeclarator>],
+    ) {
+        collect_param_types(intypes, params, types)
+    }
+
+    // Ghidra: grammar.cc:2443 FunctionModifier::getInNames
+    /// Collect each parameter's identifier into `innames`. Faithful to
+    /// `FunctionModifier::getInNames(vector<string> &)`. The varargs trailer
+    /// (`None`) is skipped.
+    pub fn get_in_names(&self, innames: &mut Vec<String>, params: &[Option<TypeDeclarator>]) {
+        collect_param_names(innames, params)
+    }
+
+    // Ghidra: grammar.cc:2450 FunctionModifier::isDotdotdot
+    /// Is this function modifier marked varargs? Faithful to
+    /// `FunctionModifier::isDotdotdot`. Only meaningful for the `Function`
+    /// variant; `Pointer`/`Array` always return `false`.
+    pub fn is_dotdotdot(&self) -> bool {
+        match self {
+            TypeModifier::Function { dotdotdot, .. } => *dotdotdot,
+            _ => false,
+        }
+    }
 }
 
 /// A C type declarator. Faithful to `TypeDeclarator` (grammar.hh:165).
@@ -773,8 +978,11 @@ impl TypeDeclarator {
 // Ghidra: grammar.cc:2412 ArrayModifier::modType
 // Ghidra: grammar.cc:2465 FunctionModifier::modType
 /// Apply a single type modifier to `base`, returning the resulting type.
-/// Faithful to the `TypeModifier::modType` virtuals (grammar.hh:130).
-fn mod_type(
+/// Faithful to the `TypeModifier::modType` virtuals (grammar.hh:130). This is
+/// the common dispatch used by `TypeDeclarator::build_type` and
+/// `get_prototype`; the per-variant methods below (`pointer_mod_type` etc.)
+/// carry the exact C++ per-class behaviour and are the public entry points.
+pub fn mod_type(
     modifier: &TypeModifier,
     base: Arc<Datatype>,
     decl: &TypeDeclarator,
@@ -785,12 +993,27 @@ fn mod_type(
         TypeModifier::Array { array_size, .. } => {
             Some(types.get_array(base, (*array_size).max(0) as usize))
         }
-        // Function modifier: in C++ this builds a TypeCode from PrototypePieces.
-        // Rugra's TypeFactory::get_type_code takes no arguments, so we return
-        // the canonical code type when the modifier is a function.
         TypeModifier::Function { params, dotdotdot } => {
-            let _ = (decl, params, dotdotdot); // parameters consulted by full pipeline
-            Some(types.get_type_code())
+            // Ghidra: grammar.cc:2465 FunctionModifier::modType — build a
+            // PrototypePieces (outtype=base; firstVarArgSlot from the trailing
+            // None slot; intypes from getInTypes; model from decl->getModel)
+            // and return glb->types->getTypeCode(proto). The base here is
+            // never None (the caller only enters modType with a present
+            // base), so out_type = Some(base) directly.
+            let first_var_arg_slot: i32 = if *dotdotdot {
+                params.len() as i32
+            } else {
+                -1
+            };
+            let mut in_types: Vec<Arc<Datatype>> = Vec::new();
+            collect_param_types(&mut in_types, params, types);
+            let _model_name = decl.get_model(); // proto.model = getModel(glb)
+            let fspec_proto = crate::fspec::PrototypePieces {
+                out_type: Some(base.as_ref()),
+                in_types: &in_types,
+                first_var_arg_slot,
+            };
+            Some(types.get_type_code_pieces(&fspec_proto))
         }
     }
 }
@@ -924,7 +1147,11 @@ pub enum DocType {
 /// 1:1.
 pub struct CParse {
     /// Architecture reference (unused for parsing proper; consulted by
-    /// type-specifier resolution). Faithful to `glb`.
+    /// type-specifier resolution). Faithful to `glb`. Rugra holds an
+    /// `Option<Arc<Architecture>>` so a parser can be built without one (the
+    /// original Rugra `CParse::new(maxbuf)` path); Ghidra's constructor
+    /// requires it. Set via `new_with_arch`.
+    pub glb: Option<Arc<Architecture>>,
     pub lexer: GrammarLexer,
     keywords: std::collections::HashMap<String, u32>,
     typedec_alloc: Vec<TypeDeclarator>,
@@ -946,13 +1173,42 @@ pub struct CParse {
     /// and supports arbitrary lookahead; this single-slot cache implements the
     /// `peek`/`advance` pair used by the hand-written `yyparse`.
     peeked: Option<GrammarToken>,
+    /// `yylval.i` — the most recent numeric lex value. Faithful to
+    /// `yylval.i = new uintb(...)` in `CParse::lex` (grammar.cc:3018).
+    yylval_int: u64,
+    /// `yylval.str` — the most recent string lex value. Faithful to
+    /// `yylval.str = tok.getString()` in `CParse::lex` (grammar.cc:3022).
+    yylval_str: String,
+    /// `yylval.type` — the most recent `Datatype *` lex value, set when
+    /// `lookupIdentifier` returns `TYPE_NAME`. Faithful to
+    /// `yylval.type = tp` in `CParse::lex`/`lookupIdentifier`
+    /// (grammar.cc:2991).
+    yylval_type: Option<Arc<Datatype>>,
 }
 
 impl CParse {
     // Ghidra: grammar.cc:2585 CParse::CParse
     /// Construct the parser. Faithful to the constructor — initialises the
     /// keyword table identically to the C++ side (grammar.cc:2594-2605).
+    ///
+    /// Ghidra's constructor takes `Architecture *g`; Rugra has historically
+    /// run with no architecture handle, so this signature is preserved for
+    /// back-compat and `glb` is left `None`. Call `new_with_arch` to attach an
+    /// `Architecture` for the `lookupIdentifier` / `lex` paths.
     pub fn new(_max_buf: i32) -> Self {
+        Self::new_impl(_max_buf, None)
+    }
+
+    // Ghidra: grammar.cc:2585 CParse::CParse
+    /// Construct the parser with an attached `Architecture`. Faithful to
+    /// `CParse(Architecture *g, int4 maxbuf)`. Enables the
+    /// `lookupIdentifier`→`TYPE_NAME` path (which queries `glb->types`) and the
+    /// model-name lookup (which queries `glb->hasModel`).
+    pub fn new_with_arch(_max_buf: i32, glb: Arc<Architecture>) -> Self {
+        Self::new_impl(_max_buf, Some(glb))
+    }
+
+    fn new_impl(_max_buf: i32, glb: Option<Arc<Architecture>>) -> Self {
         let mut keywords = std::collections::HashMap::new();
         keywords.insert("typedef".to_string(), cparse_flags::F_TYPEDEF);
         keywords.insert("extern".to_string(), cparse_flags::F_EXTERN);
@@ -967,6 +1223,7 @@ impl CParse {
         keywords.insert("union".to_string(), cparse_flags::F_UNION);
         keywords.insert("enum".to_string(), cparse_flags::F_ENUM);
         Self {
+            glb,
             lexer: GrammarLexer::new(_max_buf),
             keywords,
             typedec_alloc: Vec::new(),
@@ -984,6 +1241,9 @@ impl CParse {
             colno: -1,
             filenum: -1,
             peeked: None,
+            yylval_int: 0,
+            yylval_str: String::new(),
+            yylval_type: None,
         }
     }
 
@@ -1396,15 +1656,17 @@ impl CParse {
     }
 
     // Ghidra: grammar.cc:3041 CParse::setError
-    /// Format and store an error message. Faithful to `setError`.
+    /// Format and store an error message. Faithful to `setError`. Ghidra's
+    /// `setError` writes the message then calls `lexer.writeLocation(s, lineno,
+    /// filenum)` and `lexer.writeTokenLocation(s, lineno, colno)`; this port
+    /// delegates to the now-ported `GrammarLexer::write_location` /
+    /// `write_token_location` so the format is byte-identical.
     pub fn set_error(&mut self, msg: &str) {
         let mut s = String::new();
         s.push_str(msg);
-        // lexer.writeLocation + writeTokenLocation are folded into the line/col.
-        s.push_str(&format!(
-            " line {} file {} col {}\n",
-            self.lineno, self.filenum, self.colno
-        ));
+        self.lexer.write_location(&mut s, self.lineno, self.filenum);
+        s.push('\n');
+        self.lexer.write_token_location(&mut s, self.lineno, self.colno);
         self.last_error = s;
     }
 
@@ -1425,6 +1687,163 @@ impl CParse {
     /// `getResultDeclarations`.
     pub fn take_result_declarations(&mut self) -> Option<Vec<TypeDeclarator>> {
         self.last_decls.take()
+    }
+
+    // Ghidra: grammar.cc:2961 CParse::lookupIdentifier
+    /// Reclassify an identifier token to its bison-level category. Faithful to
+    /// `lookupIdentifier(const string &)`:
+    ///   * A reserved storage-class keyword (`typedef`/`extern`/`static`/`auto`/
+    ///     `register`) → `STORAGE_CLASS_SPECIFIER`.
+    ///   * A type-qualifier keyword (`const`/`restrict`/`volatile`) →
+    ///     `TYPE_QUALIFIER`.
+    ///   * `inline` → `FUNCTION_SPECIFIER`.
+    ///   * `struct`/`union`/`enum` → `STRUCT`/`UNION`/`ENUM`.
+    ///   * An identifier bound to a `Datatype` in `glb->types` (via
+    ///     `findByName`) → `TYPE_NAME` (and `yylval.type` is set).
+    ///   * An identifier naming a `ProtoModel` (via `glb->hasModel`) →
+    ///     `FUNCTION_SPECIFIER`.
+    ///   * Otherwise → `IDENTIFIER`.
+    ///
+    /// Rugra note: this method requires the parser to be constructed via
+    /// `new_with_arch`; without an architecture handle it cannot resolve
+    /// `TYPE_NAME` or `FUNCTION_SPECIFIER` (those paths fall through to
+    /// `IDENTIFIER`). The keyword paths always work because they consult the
+    /// local `keywords` table.
+    pub fn lookup_identifier(&mut self, nm: &str) -> i32 {
+        if let Some(&flag) = self.keywords.get(nm) {
+            match flag {
+                cparse_flags::F_TYPEDEF
+                | cparse_flags::F_EXTERN
+                | cparse_flags::F_STATIC
+                | cparse_flags::F_AUTO
+                | cparse_flags::F_REGISTER => return bison_token::STORAGE_CLASS_SPECIFIER,
+                cparse_flags::F_CONST | cparse_flags::F_RESTRICT | cparse_flags::F_VOLATILE => {
+                    return bison_token::TYPE_QUALIFIER
+                }
+                cparse_flags::F_INLINE => return bison_token::FUNCTION_SPECIFIER,
+                cparse_flags::F_STRUCT => return bison_token::STRUCT,
+                cparse_flags::F_UNION => return bison_token::UNION,
+                cparse_flags::F_ENUM => return bison_token::ENUM,
+                _ => {}
+            }
+        }
+        // `glb->types->findByName(nm)` — consult the architecture's TypeFactory
+        // if one is attached. Faithful to `Datatype *tp = glb->types->findByName(nm)`.
+        if let Some(glb) = &self.glb {
+            if let Some(tf_rwlock) = glb.types.as_ref() {
+                if let Ok(tf) = tf_rwlock.read() {
+                    if let Some(tp) = tf.find_by_name(nm) {
+                        // yylval.type = tp; return TYPE_NAME.
+                        self.yylval_type = Some(tp);
+                        return bison_token::TYPE_NAME;
+                    }
+                }
+            }
+            // `if (glb->hasModel(nm)) return FUNCTION_SPECIFIER;`
+            if glb.has_model(nm) {
+                return bison_token::FUNCTION_SPECIFIER;
+            }
+        }
+        // Unknown identifier.
+        bison_token::IDENTIFIER
+    }
+
+    // Ghidra: grammar.cc:2999 CParse::lex
+    /// Pull the next bison-level token from the lexer and reclassify it.
+    /// Faithful to `int4 CParse::lex(void)`. Returns a `bison_token` code and
+    /// populates the `yylval_*` fields so subsequent grammar actions can read
+    /// the value (mirroring the C++ `yylval.i` / `yylval.str` / `yylval.type`
+    /// union).
+    ///
+    /// Behaviour mapping:
+    ///   * `firsttoken` return: the start token (`DECLARATION_RESULT` /
+    ///     `PARAM_RESULT`) is returned once at the start of the parse, then
+    ///     cleared (grammar.cc:3004-3008).
+    ///   * A pending `lasterror` short-circuits to `BADTOKEN` (3009-3010).
+    ///   * `GrammarToken::integer` / `charconstant` → `NUMBER`, with
+    ///     `yylval.i = tok.getInteger()` (3016-3020).
+    ///   * `GrammarToken::identifier` → reclassify via `lookupIdentifier`,
+    ///     with `yylval.str = tok.getString()` (3021-3024).
+    ///   * `GrammarToken::stringval` → `BADTOKEN` with "Illegal string
+    ///     constant" (3025-3028).
+    ///   * `GrammarToken::dotdotdot` → `DOTDOTDOT` (3029-3030).
+    ///   * `GrammarToken::badtoken` → `BADTOKEN` carrying the lexer's error
+    ///     (3031-3033).
+    ///   * `GrammarToken::endoffile` → `-1` (3034-3035).
+    ///   * punctuation tokens pass through as their ASCII value (3036-3037).
+    pub fn lex(&mut self) -> i32 {
+        // firsttoken return path.
+        if self.first_token != -1 {
+            let retval = self.first_token;
+            self.first_token = -1;
+            return retval;
+        }
+        if !self.last_error.is_empty() {
+            return bison_token::BADTOKEN;
+        }
+        let tok = self.lexer.get_next_token();
+        self.lineno = tok.get_line_no();
+        self.colno = tok.get_col_no();
+        self.filenum = tok.get_file_num();
+        match tok.get_type() {
+            token_type::INTEGER | token_type::CHAR_CONSTANT => {
+                // yylval.i = new uintb(tok.getInteger()); num_alloc.push_back(yylval.i);
+                self.yylval_int = tok.get_integer();
+                self.num_alloc.push(self.yylval_int);
+                bison_token::NUMBER
+            }
+            token_type::IDENTIFIER => {
+                // yylval.str = tok.getString(); string_alloc.push_back(yylval.str);
+                let s = tok.get_string().to_string();
+                self.string_alloc.push(s.clone());
+                self.yylval_str = s.clone();
+                // return lookupIdentifier(*yylval.str);
+                self.lookup_identifier(&s)
+            }
+            token_type::STRING_VAL => {
+                // delete tok.getString(); setError("Illegal string constant");
+                self.set_error("Illegal string constant");
+                bison_token::BADTOKEN
+            }
+            token_type::DOTDOTDOT => bison_token::DOTDOTDOT,
+            token_type::BAD_TOKEN => {
+                // setError(lexer.getError()); — error from the lexer. The
+                // immutable borrow of `self.lexer.get_error()` is cloned to an
+                // owned `String` first to avoid the `&self`/`&mut self` clash.
+                let lexer_err = self.lexer.get_error().to_string();
+                self.set_error(&lexer_err);
+                bison_token::BADTOKEN
+            }
+            token_type::END_OF_FILE => bison_token::END_OF_STREAM,
+            other => other as i32,
+        }
+    }
+
+    // Ghidra: grammar.cc:3076 CParse::parseFile
+    /// Parse a C document from a file. Faithful to `parseFile(const string &,
+    /// uint4)`. Reads the file contents into a string, pushes it onto the
+    /// lexer's file stack (so `writeLocation` can name the file in diagnostics),
+    /// then runs the parser. Returns `true` on success.
+    ///
+    /// Ghidra opens the file as an `ifstream` and throws `LowlevelError` if the
+    /// open fails; Rugra returns `Err(message)` from the IO error so callers
+    /// can distinguish parse failure (`Ok(false)`) from IO failure (`Err(..)`).
+    pub fn parse_file(&mut self, filename: &str, doctype: DocType) -> std::io::Result<bool> {
+        use std::io::Read;
+        // clear() — Clear out any old parsing.
+        self.clear();
+        let mut file = std::fs::File::open(filename)?;
+        let mut body = String::new();
+        file.read_to_string(&mut body)?;
+        // lexer.pushFile(nm, &s); — inform the lexer of filename and body.
+        self.lexer.push_file(filename, &body);
+        // The lexer's push_file installs the body as the active input, so the
+        // recursive-descent driver reads from it directly.
+        let res = self.run_parse(doctype);
+        // s.close() — Rust closes the file on drop; nothing to do.
+        // lexer.popFile() — unwind the stack to mirror the C++ scope exit.
+        self.lexer.pop_file();
+        Ok(res)
     }
 
     // Ghidra: grammar.cc:3091 CParse::parseStream
@@ -2396,5 +2815,217 @@ mod tests {
         assert!(ok);
         let decls = p.take_result_declarations().expect("decls");
         assert_eq!(decls.len(), 2);
+    }
+
+    // ---- new tests for the ported bison-bridge / modifier methods ----
+
+    #[test]
+    fn test_bison_token_constants() {
+        // Faithful to the grammartokentype enum (grammar.cc:153-165).
+        assert_eq!(bison_token::DOTDOTDOT, 258);
+        assert_eq!(bison_token::BADTOKEN, 259);
+        assert_eq!(bison_token::STRUCT, 260);
+        assert_eq!(bison_token::UNION, 261);
+        assert_eq!(bison_token::ENUM, 262);
+        assert_eq!(bison_token::DECLARATION_RESULT, 263);
+        assert_eq!(bison_token::PARAM_RESULT, 264);
+        assert_eq!(bison_token::NUMBER, 265);
+        assert_eq!(bison_token::IDENTIFIER, 266);
+        assert_eq!(bison_token::STORAGE_CLASS_SPECIFIER, 267);
+        assert_eq!(bison_token::TYPE_QUALIFIER, 268);
+        assert_eq!(bison_token::FUNCTION_SPECIFIER, 269);
+        assert_eq!(bison_token::TYPE_NAME, 270);
+        assert_eq!(bison_token::END_OF_STREAM, -1);
+    }
+
+    #[test]
+    fn test_lookup_identifier_keywords() {
+        // Without an architecture handle, only keyword paths resolve.
+        let mut p = CParse::new(1024);
+        // Storage-class keywords → STORAGE_CLASS_SPECIFIER.
+        assert_eq!(p.lookup_identifier("typedef"), bison_token::STORAGE_CLASS_SPECIFIER);
+        assert_eq!(p.lookup_identifier("extern"), bison_token::STORAGE_CLASS_SPECIFIER);
+        assert_eq!(p.lookup_identifier("static"), bison_token::STORAGE_CLASS_SPECIFIER);
+        assert_eq!(p.lookup_identifier("auto"), bison_token::STORAGE_CLASS_SPECIFIER);
+        assert_eq!(p.lookup_identifier("register"), bison_token::STORAGE_CLASS_SPECIFIER);
+        // Type-qualifier keywords → TYPE_QUALIFIER.
+        assert_eq!(p.lookup_identifier("const"), bison_token::TYPE_QUALIFIER);
+        assert_eq!(p.lookup_identifier("restrict"), bison_token::TYPE_QUALIFIER);
+        assert_eq!(p.lookup_identifier("volatile"), bison_token::TYPE_QUALIFIER);
+        // inline → FUNCTION_SPECIFIER.
+        assert_eq!(p.lookup_identifier("inline"), bison_token::FUNCTION_SPECIFIER);
+        // struct / union / enum → STRUCT / UNION / ENUM.
+        assert_eq!(p.lookup_identifier("struct"), bison_token::STRUCT);
+        assert_eq!(p.lookup_identifier("union"), bison_token::UNION);
+        assert_eq!(p.lookup_identifier("enum"), bison_token::ENUM);
+        // Unknown identifier (no glb) → IDENTIFIER.
+        assert_eq!(p.lookup_identifier("foo"), bison_token::IDENTIFIER);
+    }
+
+    #[test]
+    fn test_lex_dispatches_tokens() {
+        // CParse::lex (grammar.cc:2999): INTEGER→NUMBER, IDENTIFIER→keyword
+        // reclassification, DOTDOTDOT→DOTDOTDOT, EOF→-1, punctuation passes
+        // through as its ASCII value.
+        let mut p = CParse::new(1024);
+        p.lexer.set_input("... foo ;");
+        // The first lex() returns the firsttoken seed if set; clear it so the
+        // first real token comes through.
+        p.first_token = -1;
+        let t1 = p.lex();
+        assert_eq!(t1, bison_token::DOTDOTDOT); // "..."
+        // "foo" is an unknown identifier → IDENTIFIER.
+        let t2 = p.lex();
+        assert_eq!(t2, bison_token::IDENTIFIER);
+        assert_eq!(p.yylval_str, "foo");
+        // ";" is punctuation → its ASCII value 0x3b = 59.
+        let t3 = p.lex();
+        assert_eq!(t3, token_type::SEMICOLON as i32);
+        assert_eq!(t3, 0x3b);
+        // Next lex() is EOF → -1.
+        let t4 = p.lex();
+        assert_eq!(t4, bison_token::END_OF_STREAM);
+    }
+
+    #[test]
+    fn test_lex_number_and_firsttoken_seed() {
+        let mut p = CParse::new(1024);
+        p.lexer.set_input("42");
+        // Seed the firsttoken; the first lex() returns it then clears.
+        p.first_token = bison_token::DECLARATION_RESULT;
+        assert_eq!(p.lex(), bison_token::DECLARATION_RESULT);
+        assert_eq!(p.first_token, -1);
+        // Next lex() reads the actual input: 42 → NUMBER, yylval_int set.
+        assert_eq!(p.lex(), bison_token::NUMBER);
+        assert_eq!(p.yylval_int, 42);
+    }
+
+    #[test]
+    fn test_lex_string_val_is_badtoken() {
+        // A string literal is illegal in a type grammar → BADTOKEN with error.
+        let mut p = CParse::new(1024);
+        p.lexer.set_input("\"oops\"");
+        p.first_token = -1;
+        assert_eq!(p.lex(), bison_token::BADTOKEN);
+        assert!(p.get_error().contains("Illegal string constant"));
+    }
+
+    #[test]
+    fn test_lex_pending_error_short_circuits() {
+        // A pending lasterror short-circuits lex() to BADTOKEN.
+        let mut p = CParse::new(1024);
+        p.lexer.set_input("foo");
+        p.first_token = -1;
+        p.set_error("prior failure");
+        assert_eq!(p.lex(), bison_token::BADTOKEN);
+    }
+
+    #[test]
+    fn test_lexer_write_location_format() {
+        // GrammarLexer::writeLocation mirrors the C++ " at line N in <file>".
+        let mut lex = GrammarLexer::new(1024);
+        lex.push_file("test.c", "");
+        let mut s = String::from("err");
+        lex.write_location(&mut s, 7, 0);
+        assert_eq!(s, "err at line 7 in test.c");
+    }
+
+    #[test]
+    fn test_lexer_push_pop_file_stack() {
+        // push_file installs the body as active input; pop_file restores the
+        // previous stream or marks EOF when the stack empties.
+        let mut lex = GrammarLexer::new(1024);
+        assert!(lex.filestack.is_empty());
+        lex.push_file("a.c", "int a");
+        assert!(!lex.filestack.is_empty());
+        assert!(!lex.end_of_file);
+        // The pushed body is the active input.
+        let t = lex.get_next_token();
+        assert_eq!(t.get_string(), "int");
+        // pop_file on a single-entry stack marks EOF.
+        lex.pop_file();
+        assert!(lex.end_of_file);
+        assert!(lex.filestack.is_empty());
+    }
+
+    #[test]
+    fn test_type_modifier_get_in_types_and_names() {
+        // TypeModifier::get_in_types / get_in_names method-form wrappers
+        // delegate to collect_param_types / collect_param_names.
+        let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let int_type = tf.get_base(4, crate::type_system::datatype::TypeMetatype::Int).unwrap();
+        let mut param = TypeDeclarator::new();
+        param.basetype = Some(int_type);
+        param.ident = "argc".to_string();
+        let func = TypeModifier::Function {
+            params: vec![Some(param)],
+            dotdotdot: false,
+        };
+        let mut intypes: Vec<Arc<Datatype>> = Vec::new();
+        let mut innames: Vec<String> = Vec::new();
+        if let TypeModifier::Function { params, .. } = &func {
+            func.get_in_types(&mut intypes, &mut tf, params);
+            func.get_in_names(&mut innames, params);
+        }
+        assert_eq!(intypes.len(), 1);
+        assert_eq!(innames, vec!["argc".to_string()]);
+        assert!(!func.is_dotdotdot());
+    }
+
+    #[test]
+    fn test_type_modifier_is_dotdotdot() {
+        let func_va = TypeModifier::Function {
+            params: vec![],
+            dotdotdot: true,
+        };
+        assert!(func_va.is_dotdotdot());
+        let ptr = TypeModifier::Pointer { flags: 0 };
+        assert!(!ptr.is_dotdotdot());
+    }
+
+    #[test]
+    fn test_pointer_mod_type_builds_ptr() {
+        // PointerModifier::modType (grammar.cc:2403): wraps the base in a ptr.
+        // Dispatched via the `mod_type` helper that implements all three
+        // virtuals; the pointer branch is exercised here.
+        let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let base = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .unwrap();
+        let decl = TypeDeclarator::new();
+        let ptr_mod = TypeModifier::Pointer { flags: 0 };
+        let res = mod_type(&ptr_mod, base, &decl, &mut tf).expect("ptr");
+        assert_eq!(res.get_metatype(), crate::type_system::datatype::TypeMetatype::Pointer);
+    }
+
+    #[test]
+    fn test_array_mod_type_builds_array() {
+        // ArrayModifier::modType (grammar.cc:2412): wraps the base in an array.
+        let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let base = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .unwrap();
+        let decl = TypeDeclarator::new();
+        let arr_mod = TypeModifier::Array { flags: 0, array_size: 5 };
+        let res = mod_type(&arr_mod, base, &decl, &mut tf).expect("array");
+        assert_eq!(res.get_metatype(), crate::type_system::datatype::TypeMetatype::Array);
+    }
+
+    #[test]
+    fn test_function_mod_type_builds_code() {
+        // FunctionModifier::modType (grammar.cc:2465): builds a TypeCode from a
+        // PrototypePieces (outtype + empty intypes), mirroring Ghidra's
+        // getTypeCode(proto).
+        let mut tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let base = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .unwrap();
+        let decl = TypeDeclarator::new();
+        let func_mod = TypeModifier::Function {
+            params: vec![],
+            dotdotdot: false,
+        };
+        let res = mod_type(&func_mod, base, &decl, &mut tf).expect("code");
+        assert_eq!(res.get_metatype(), crate::type_system::datatype::TypeMetatype::Code);
     }
 }
