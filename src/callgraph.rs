@@ -12,6 +12,16 @@
 
 use std::collections::BTreeMap;
 
+use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
+
+// Ghidra: callgraph.cc:21 ELEM_CALLGRAPH, ELEM_NODE, ELEM_EDGE
+/// Element id for `<callgraph>`. Faithful to `ELEM_CALLGRAPH` (callgraph.cc:21).
+pub fn elem_callgraph() -> ElementId { ElementId::new("callgraph", 226) }
+/// Element id for `<node>`. Faithful to `ELEM_NODE` (callgraph.cc:22).
+pub fn elem_node() -> ElementId { ElementId::new("node", 227) }
+/// Element id for `<edge>`. Faithful to `ELEM_EDGE` (block.cc:31, reused).
+pub fn elem_edge() -> ElementId { ElementId::new("edge", 105) }
+
 /// Edge flags.
 pub mod edge_flags {
     pub const CYCLE: u32 = 1;
@@ -47,6 +57,39 @@ impl CallGraphEdge {
     }
     // Ghidra: callgraph.hh:32 CallGraphEdge::isCycle
     pub fn is_cycle(&self) -> bool { self.flags & edge_flags::CYCLE != 0 }
+
+    // Ghidra: callgraph.cc:24 CallGraphEdge::encode
+    /// Encode this edge as an `<edge>` element containing `<addr>` children
+    /// for the caller, callee, and call site. Faithful to
+    /// `CallGraphEdge::encode` (callgraph.cc:24).
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem_edge());
+        encode_addr_element(encoder, self.from_addr);
+        encode_addr_element(encoder, self.to_addr);
+        encode_addr_element(encoder, self.callsite_addr);
+        encoder.close_element(&elem_edge());
+    }
+
+    // Ghidra: callgraph.cc:34 CallGraphEdge::decode
+    /// Decode an edge from an `<edge>` element: three `<addr>` children
+    /// (from, to, call-site), then register the edge in `graph`. Faithful to
+    /// `CallGraphEdge::decode` (callgraph.cc:34). Throws if either endpoint
+    /// node is not present in the graph.
+    pub fn decode(decoder: &mut dyn Decoder, graph: &mut CallGraph) {
+        let elem_id = decoder.open_element_matching(&elem_edge());
+        let from_addr = decode_addr_element(decoder);
+        let to_addr = decode_addr_element(decoder);
+        let site_addr = decode_addr_element(decoder);
+        decoder.close_element(elem_id);
+        if graph.find_node(from_addr).is_none() {
+            // Ghidra throws LowlevelError("Could not find from node").
+            panic!("CallGraphEdge::decode: Could not find from node {:#x}", from_addr);
+        }
+        if graph.find_node(to_addr).is_none() {
+            panic!("CallGraphEdge::decode: Could not find to node {:#x}", to_addr);
+        }
+        graph.add_edge(from_addr, to_addr, site_addr);
+    }
 }
 
 /// A function node in the call graph.
@@ -63,12 +106,22 @@ pub struct CallGraphNode {
     pub out_edges: Vec<CallGraphEdge>,
     /// Node flags
     pub flags: u32,
+    /// Address of the backing `Funcdata`, if any (Ghidra stores a `Funcdata*`;
+    /// Rugra keeps only the address to avoid a borrow-cycle).
+    pub funcdata_addr: Option<u64>,
 }
 
 impl CallGraphNode {
     // Ghidra: callgraph.hh:26 CallGraphNode::new
     pub fn new(addr: u64, name: String) -> Self {
-        Self { entry_addr: addr, name, in_edges: Vec::new(), out_edges: Vec::new(), flags: 0 }
+        Self {
+            entry_addr: addr,
+            name,
+            in_edges: Vec::new(),
+            out_edges: Vec::new(),
+            flags: 0,
+            funcdata_addr: None,
+        }
     }
 
     // Ghidra: callgraph.hh:26 CallGraphNode::numInEdge
@@ -79,6 +132,68 @@ impl CallGraphNode {
     pub fn is_mark(&self) -> bool { self.flags & node_flags::MARK != 0 }
     // Ghidra: callgraph.hh:26 CallGraphNode::clearMark
     pub fn clear_mark(&mut self) { self.flags &= !node_flags::MARK; }
+
+    // Ghidra: callgraph.hh:54 CallGraphNode::getFuncdata
+    /// Get the backing function's address, if set.
+    pub fn get_funcdata_addr(&self) -> Option<u64> { self.funcdata_addr }
+
+    // Ghidra: callgraph.cc:55 CallGraphNode::setFuncdata
+    /// Attach a backing `Funcdata` (by address) to this node. Faithful to
+    /// `CallGraphNode::setFuncdata` (callgraph.cc:55): throws if a different
+    /// function is already attached or if `f`'s address disagrees with this
+    /// node's entry address.
+    pub fn set_funcdata(&mut self, f_addr: u64) -> Result<(), String> {
+        if let Some(existing) = self.funcdata_addr {
+            if existing != f_addr {
+                return Err(
+                    "Multiple functions at one address in callgraph".to_string(),
+                );
+            }
+        }
+        if f_addr != self.entry_addr {
+            return Err(
+                "Setting function data at wrong address in callgraph".to_string(),
+            );
+        }
+        self.funcdata_addr = Some(f_addr);
+        Ok(())
+    }
+
+    // Ghidra: callgraph.cc:66 CallGraphNode::encode
+    /// Encode this node as a `<node>` element with a `name` attribute (if any)
+    /// and an `<addr>` child for the entry address. Faithful to
+    /// `CallGraphNode::encode` (callgraph.cc:66).
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem_node());
+        if !self.name.is_empty() {
+            encoder.write_string(&AttributeId::new("name", 0), &self.name);
+        }
+        encode_addr_element(encoder, self.entry_addr);
+        encoder.close_element(&elem_node());
+    }
+
+    // Ghidra: callgraph.cc:76 CallGraphNode::decode
+    /// Decode this node from a `<node>` element: an optional `name` attribute
+    /// and an `<addr>` child. The node is added to `graph`. Faithful to
+    /// `CallGraphNode::decode` (callgraph.cc:76).
+    pub fn decode(decoder: &mut dyn Decoder, graph: &mut CallGraph) {
+        let elem_id = decoder.open_element_matching(&elem_node());
+        let mut name = String::new();
+        loop {
+            let aid = decoder.next_attribute_id();
+            if aid == 0 {
+                break;
+            }
+            if decoder.attribute_name(aid).as_deref() == Some("name") {
+                name = decoder.read_string();
+            } else {
+                let _ = decoder.read_string();
+            }
+        }
+        let addr = decode_addr_element(decoder);
+        decoder.close_element(elem_id);
+        graph.add_node(addr, name);
+    }
 }
 
 /// The call graph container.
@@ -334,6 +449,117 @@ impl CallGraph {
         }
         result
     }
+
+    // Ghidra: callgraph.cc:432 CallGraph::encode
+    /// Encode this call graph as a `<callgraph>` element: one `<node>` child
+    /// per node, followed by all "in" edges (encoded as `<edge>` elements).
+    /// Faithful to `CallGraph::encode` (callgraph.cc:432).
+    pub fn encode(&self, encoder: &mut dyn Encoder) {
+        encoder.open_element(&elem_callgraph());
+        // Dump all nodes.
+        for node in self.nodes.values() {
+            node.encode(encoder);
+        }
+        // Dump all "in" edges.
+        for node in self.nodes.values() {
+            for e in &node.in_edges {
+                e.encode(encoder);
+            }
+        }
+        encoder.close_element(&elem_callgraph());
+    }
+
+    // Ghidra: callgraph.cc:453 CallGraph::decoder
+    /// Decode this call graph from a `<callgraph>` element, dispatching each
+    /// child to `CallGraphNode::decode` or `CallGraphEdge::decode`. Faithful
+    /// to `CallGraph::decoder` (callgraph.cc:453).
+    pub fn decode(&mut self, decoder: &mut dyn Decoder) {
+        let elem_id = decoder.open_element_matching(&elem_callgraph());
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            if sub_name == "edge" {
+                CallGraphEdge::decode(decoder, self);
+            } else {
+                CallGraphNode::decode(decoder, self);
+            }
+        }
+        decoder.close_element(elem_id);
+    }
+
+    // Ghidra: callgraph.cc:372 CallGraph::iterateScopesRecursive
+    /// Recursively walk global scopes (and their children), adding every
+    /// function symbol as a node. Faithful to
+    /// `CallGraph::iterateScopesRecursive` (callgraph.cc:372).
+    pub fn iterate_scopes_recursive(&mut self, scope: &crate::database::Scope, db: &crate::database::Database) {
+        if !scope.is_global() {
+            return;
+        }
+        self.iterate_functions_addr_order(scope);
+        // Recurse into child scopes.
+        let child_ids: Vec<u64> = scope.children.clone();
+        for cid in child_ids {
+            if let Some(child) = db.scopes.get(&cid) {
+                self.iterate_scopes_recursive(child, db);
+            }
+        }
+    }
+
+    // Ghidra: callgraph.cc:385 CallGraph::iterateFunctionsAddrOrder
+    /// Add a node for every `FunctionSymbol` in `scope`. Faithful to
+    /// `CallGraph::iterateFunctionsAddrOrder` (callgraph.cc:385). Rugra
+    /// identifies function symbols by `type_name == "func"` (see
+    /// `ScopeInternal::findFunction`); the entry address serves as the node
+    /// address and the symbol name as the node name.
+    pub fn iterate_functions_addr_order(&mut self, scope: &crate::database::Scope) {
+        for entry in &scope.entries {
+            let sym = entry.symbol.read().unwrap();
+            if sym.type_name == "func" {
+                self.add_node(entry.addr.as_u64(), sym.get_display_name().to_string());
+            }
+        }
+    }
+
+    // Ghidra: callgraph.cc:400 CallGraph::buildAllNodes
+    /// Make every global function symbol into a node. Faithful to
+    /// `CallGraph::buildAllNodes` (callgraph.cc:400).
+    pub fn build_all_nodes(&mut self, db: &crate::database::Database) {
+        if let Some(global) = db.get_global_scope() {
+            self.iterate_scopes_recursive(global, db);
+        }
+    }
+}
+
+// Ghidra: address.cc:289 (helper) Address::encode as <addr offset=...>
+/// Encode an address as an `<addr>` element with an `offset` attribute, matching
+/// the Rugra marshaling convention (see `SymbolEntry::encode` in database.rs).
+fn encode_addr_element(encoder: &mut dyn Encoder, addr: u64) {
+    encoder.open_element(&ElementId::new("addr", 0));
+    encoder.write_unsigned_integer(&AttributeId::new("offset", 0), addr);
+    encoder.close_element(&ElementId::new("addr", 0));
+}
+
+// Ghidra: address.cc:205 Address::decode (helper)
+/// Decode an address from the current `<addr>` element. Returns the offset.
+fn decode_addr_element(decoder: &mut dyn Decoder) -> u64 {
+    let addr_id = decoder.open_element();
+    let mut off = 0u64;
+    loop {
+        let aid = decoder.next_attribute_id();
+        if aid == 0 {
+            break;
+        }
+        if decoder.attribute_name(aid).as_deref() == Some("offset") {
+            off = decoder.read_unsigned_integer();
+        } else {
+            let _ = decoder.read_string();
+        }
+    }
+    decoder.close_element(addr_id);
+    off
 }
 
 #[cfg(test)]
