@@ -2913,6 +2913,61 @@ impl ParamActive {
         }
         self.trial = new_trials;
     }
+
+    // Ghidra: fspec.cc:1995 ParamActive::freePlaceholderSlot
+    /// Decrement the slot of every trial above the stack placeholder, then
+    /// retire the placeholder. Faithful to `freePlaceholderSlot`
+    /// (fspec.cc:1995). Sets `stackplaceholder = -2`, decrements `slotbase`,
+    /// and zeroes `maxpass` (so the next analysis pass is the last chance for
+    /// any location to show up).
+    pub fn free_placeholder_slot(&mut self) {
+        for t in self.trial.iter_mut() {
+            if t.get_slot() > self.stackplaceholder {
+                t.set_slot(t.get_slot() - 1);
+            }
+        }
+        self.stackplaceholder = -2;
+        self.slotbase -= 1;
+        self.maxpass = 0;
+    }
+
+    // Ghidra: fspec.cc:2063 ParamActive::joinTrial
+    /// Join the trial at `slot` with the trial in the next slot into a single
+    /// trial covering `(addr, sz)`. Faithful to `joinTrial` (fspec.cc:2063).
+    /// Panics if the placeholder has not been recovered (`stackplaceholder >= 0`)
+    /// or if the joined sizes do not sum to `sz` (mirroring the C++
+    /// `LowlevelError` throws).
+    pub fn join_trial(&mut self, slot: i32, addr: Address, sz: i32) {
+        if self.stackplaceholder >= 0 {
+            panic!("Cannot join parameters when the placeholder has not been removed");
+        }
+        let mut new_trials: Vec<ParamTrial> = Vec::new();
+        let mut sizecheck = 0i32;
+        for cur in self.trial.iter() {
+            let curslot = cur.get_slot();
+            if curslot < slot {
+                new_trials.push(cur.clone());
+            } else if curslot == slot {
+                sizecheck += cur.get_size();
+                let mut joined = ParamTrial::new(addr, sz, slot);
+                joined.mark_used();
+                joined.mark_active();
+                new_trials.push(joined);
+            } else if curslot == slot + 1 {
+                // this slot is thrown out
+                sizecheck += cur.get_size();
+            } else {
+                let mut clone = cur.clone();
+                clone.set_slot(curslot - 1);
+                new_trials.push(clone);
+            }
+        }
+        if sizecheck != sz {
+            panic!("Size mismatch when joining parameters");
+        }
+        self.slotbase -= 1;
+        self.trial = new_trials;
+    }
 }
 
 // ======================================================================
