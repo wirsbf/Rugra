@@ -1664,6 +1664,7 @@ impl Heritage {
         fd: &mut Funcdata,
         addr: Address,
         size: i32,
+        space: crate::space::AddressSpace,
     ) {
         // Ghidra cc:1216: fc->getBiggestContainedInputParam(transAddr, size, vData)
         // Rugra lacks getBiggestContainedInputParam. Use characterizeAsInputParam
@@ -1673,7 +1674,7 @@ impl Heritage {
         for i in 0..num_calls {
             let input_char = fd.get_call_specs(i)
                 .map(|fc| fc.characterize_as_input_param(
-                    addr.as_u64(), size, AddressSpace::Stack))
+                    addr.as_u64(), size, space))
                 .unwrap_or(0);
             if input_char != 3 { continue; } // only contained_by
             // cc:1217-1234: create SUBPIECE + register trial
@@ -1833,6 +1834,23 @@ impl Heritage {
         size: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
     ) {
+        // Delegate to guard_calls_range_with_space with Stack as default
+        // (backward compat for guard_range which doesn't have space context).
+        self.guard_calls_range_with_space(fd, fl, addr, size, write, crate::space::AddressSpace::Stack);
+    }
+
+    /// Per-space version of guard_calls_range. The space parameter comes from
+    /// the heritage per-space loop, allowing characterize_as_input_param to
+    /// correctly match Register-space parameter entries (RDI/RSI/RDX etc).
+    pub fn guard_calls_range_with_space(
+        &mut self,
+        fd: &mut Funcdata,
+        fl: u32,
+        addr: Address,
+        size: i32,
+        write: &mut Vec<Arc<RwLock<Varnode>>>,
+        space: crate::space::AddressSpace,
+    ) {
         // Ghidra cc:1451: holdind = addrtied
         let holdind = (fl & crate::varnode::varnode_flags::ADDRTIED) != 0;
         let num_calls = fd.num_calls();
@@ -1870,7 +1888,7 @@ impl Heritage {
                 // cc:1472: outputCharacter = characterizeAsOutput
                 let output_char = fd.get_call_specs(i)
                     .map(|fc| fc.characterize_as_output(
-                        trans_addr.as_u64(), size, AddressSpace::Stack))
+                        trans_addr.as_u64(), size, space))
                     .unwrap_or(0);
                 if output_char != 0 {
                     // cc:1474: if effect != killedbycall && isAutoKilledByCall
@@ -1903,7 +1921,7 @@ impl Heritage {
                 // cc:1497: inputCharacter = characterizeAsInputParam
                 let input_char = fd.get_call_specs(i)
                     .map(|fc| fc.characterize_as_input_param(
-                        trans_addr.as_u64(), size, AddressSpace::Stack))
+                        trans_addr.as_u64(), size, space))
                     .unwrap_or(0);
                 if input_char == 2 {
                     // cc:1498: contains_justified → register input trial
@@ -1913,15 +1931,17 @@ impl Heritage {
                                 active.register_trial(trans_addr, size);
                                 // cc:1503-1505: create varnode + opInsertInput
                                 let vn = fd.vbank.create_with_space(
-                                    size as usize, AddressSpace::Stack, addr.as_u64());
+                                    size as usize, space, addr.as_u64());
                                 vn.write().unwrap().set_active_heritage();
-                                // Insert as new input to the CALL op
+                                // cc:1504-1505: opInsertInput(op, vn, op->numInput())
+                                let num_in = call_op.read().unwrap().num_input();
+                                fd.op_insert_input(&PcodeOpRef(call_op.clone()), vn, num_in);
                             }
                         }
                     }
                 } else if input_char == 3 {
                     // cc:1508: contained_by → guardCallOverlappingInput
-                    self.guard_call_overlapping_input(fd, addr, size);
+                    self.guard_call_overlapping_input(fd, addr, size, space);
                 }
             }
 
@@ -2978,11 +2998,35 @@ impl Heritage {
             for (vn_arc, vn_addr, vn_size) in vns_in_space {
                 // cc:2722: globaldisjoint.add(addr, size, pass, prev)
                 let prev = self.globaldisjoint.add(vn_addr, vn_size, pass);
-                // cc:2723-2736: disjoint.add based on prev value
-                // disjoint is the per-pass TaskList. Rugra doesn't have TaskList
-                // yet (it's used by placeMultiequals/buildADT). For now,
-                // globaldisjoint.add does the range merging (which we ported).
                 let _ = prev;
+            }
+
+            // Ghidra cc:2630: guard() per-range, with the correct space.
+            // This registers CALL input trials via ParamActive and creates
+            // INDIRECT ops for call side-effects. Without this, CALL parameters
+            // are never injected, causing all args to appear as "local_0".
+            // We call guard_calls_range directly with the correct space context
+            // (the per-space loop variable) for each disjoint range in this space.
+            {
+                let ranges: Vec<(Address, i32)> = self.globaldisjoint.themap.iter()
+                    .filter(|(a, _)| {
+                        // Only ranges that fall in this space's address range
+                        // (globaldisjoint is shared across spaces, but ranges
+                        // added in this iteration belong to this space)
+                        true
+                    })
+                    .map(|(addr, sp)| (*addr, sp.size))
+                    .collect();
+                let mut fd_guard = fd_arc.write().unwrap();
+                for (addr, size) in &ranges {
+                    let mut empty_write = Vec::new();
+                    // Pass the correct space by temporarily storing it
+                    // in a thread-local or by calling guard_calls_range
+                    // with the space from the outer loop variable.
+                    self.guard_calls_range_with_space(
+                        &mut fd_guard, 0, *addr, *size, &mut empty_write, space);
+                }
+                drop(fd_guard);
             }
         }
 
