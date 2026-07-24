@@ -833,7 +833,9 @@ impl ActionDatabase {
 
         // --- Top-level Actions (coreaction.cc:5477-5485) ---
         universal.add_action(Box::new(ActionStart::new()));
-        universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478 — stub (NO_CHANGE), safe
+        universal.add_action(Box::new(crate::coreaction::ActionConstbase::new())); // :5478
+        universal.add_action(Box::new(crate::coreaction::ActionNormalizeSetup::new())); // :5479
+        universal.add_action(Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
         // Wire in additional implemented Actions from coreaction (Ghidra
         // coreaction.cc:5479-5485: NormalizeSetup/DefaultParams/PrototypeTypes/
@@ -842,6 +844,7 @@ impl ActionDatabase {
             universal.add_action(extra);
         }
         universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
+        universal.add_action(Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
 
         // --- fullloop (coreaction.cc:5487, repeatapply) ---
         // NOTE: fullloop kept on ActionGroup::new (no RULE_REPEATAPPLY).
@@ -875,8 +878,14 @@ impl ActionDatabase {
         // ActionUnreachable runs AFTER ActionBlockStructure (see below) where
         // the CFG is complete. It was moved from here (Ghidra :5490) to avoid
         // false-positive unreachable detection when bblocks are incomplete.
-        mainloop.add_action(Box::new(ActionHeritage::new()));
+        mainloop.add_action(Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
+        mainloop.add_action(Box::new(ActionHeritage::new())); // :5492
+        mainloop.add_action(Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
+        mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497
+        mainloop.add_action(Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
+        mainloop.add_action(Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
         mainloop.add_action(Box::new(crate::coreaction::ActionSpacebase::new()));
+        mainloop.add_action(Box::new(crate::coreaction::ActionNonzeroMask::new())); // :5507
         mainloop.add_action(Box::new(ActionStackPtrFlow::new()));
         // Rugra-local Actions (TODO: replace with Ghidra mechanisms once
         // ActionActiveParam / ActionDefaultParams / ActionDirectWrite are wired).
@@ -944,8 +953,13 @@ impl ActionDatabase {
         // fullloop post-mainloop Actions (coreaction.cc:5679-5688) — registered
         // but some may need maturity before enabling.
         fullloop.add_action(Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
+        fullloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5680
         fullloop.add_action(Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
+        fullloop.add_action(Box::new(crate::coreaction::ActionSwitchNorm::new())); // :5684
         fullloop.add_action(Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685
+        fullloop.add_action(Box::new(crate::coreaction::ActionUnjustifiedParams::new())); // :5686
+        fullloop.add_action(Box::new(crate::coreaction::ActionStartTypes::new())); // :5687
+        fullloop.add_action(Box::new(crate::coreaction::ActionActiveReturn::new())); // :5688
         fullloop.add_action(Box::new(ActionDeadCode::new())); // :5687
 
         universal.add_action(Box::new(fullloop));
@@ -961,26 +975,28 @@ impl ActionDatabase {
         // before the merge actions, assigning HighVariables to all Varnodes.
         universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(ActionNormalizeBranches::new()));
-        // Post-normalize structure Actions (coreaction.cc:5714-5715, 5724-5733)
-        // — disabled: cause regression. Need implementation maturity before enabling.
-        universal.add_action(Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714 — stub, safe
-        universal.add_action(Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715 — stub, safe
-        // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
-        // Merge::merge_all (see ActionMergeType). ActionAssignHigh (:5717) is
-        // already registered in build_full_pipeline_actions (line ~7084), runs
-        // before the merge actions, assigning HighVariables to all Varnodes.
-        universal.add_action(Box::new(ActionMergeType::new()));
-        universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new()));
-        universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new()));
+        // Post-normalize structure Actions (coreaction.cc:5714-5715)
+        universal.add_action(Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
+        universal.add_action(Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
+        // Merge stage (coreaction.cc:5717-5729) — faithful order:
+        universal.add_action(Box::new(crate::coreaction::ActionMergeRequired::new())); // :5718
+        universal.add_action(Box::new(crate::coreaction::ActionMarkExplicit::new())); // :5719
+        universal.add_action(Box::new(crate::coreaction::ActionMarkImplied::new())); // :5720
+        universal.add_action(Box::new(crate::coreaction::ActionMergeMultiEntry::new())); // :5721
+        universal.add_action(Box::new(crate::coreaction::ActionMergeCopy::new())); // :5722
         universal.add_action(Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725
+        universal.add_action(Box::new(crate::coreaction::ActionMergeAdjacent::new())); // :5726
+        universal.add_action(Box::new(ActionMergeType::new())); // :5727
+        universal.add_action(Box::new(crate::coreaction::ActionHideShadow::new())); // :5728
         // ActionOutputPrototype + ActionInputPrototype (coreaction.cc:5730-5731)
         // — finalize the function prototype from RETURN ops (return type) and
         // input varnodes (param count/types). Run after merge + MarkExplicit/
         // Implied, before SetCasts (5735) and FinalStructure (5736).
         universal.add_action(Box::new(crate::coreaction::ActionOutputPrototype::new()));
         universal.add_action(Box::new(crate::coreaction::ActionInputPrototype::new()));
-        universal.add_action(Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732 — stub, safe
-        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733 — stub, safe
+        universal.add_action(Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732
+        universal.add_action(Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733
+        universal.add_action(Box::new(crate::coreaction::ActionNameVars::new())); // :5734
         // ActionSetCasts (coreaction.cc:5735) — inserts CPUI_CAST ops so the
         // printer emits explicit C type casts. Runs after ActionInferTypes
         // (mainloop) and ActionMarkExplicit/Implied so input/output types are
