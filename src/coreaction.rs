@@ -4054,6 +4054,24 @@ impl Action for ActionVarnodeProps {
             }
 
             // ---- Branch 3: NZMask & Consume == 0  (cc:1327-1345) ----
+            // DISABLED: Rugra's ActionDeadCode clears consume at the start of
+            // each apply(), so consume==0 when VarnodeProps runs (before
+            // DeadCode in the pipeline). This makes the condition vacuously
+            // true for ALL varnodes, causing totalReplaceConstant(vn,0) to
+            // replace every varnode with 0 — destroying all CALL targets,
+            // parameters, and return values.
+            //
+            // Ghidra avoids this because Heritage (which calls clearConsume)
+            // and ActionDeadCode (which sets consume) run in the SAME pass,
+            // and on repeatapply iterations the consume from the PREVIOUS
+            // iteration persists. Rugra's ActionDeadCode unconditionally
+            // clears consume, so this persistence doesn't happen.
+            //
+            // Fix: re-enable once ActionDeadCode stops clearing consume
+            // (move the clear to Heritage, matching Ghidra's design).
+            // For now, branches 1 (auto-live-hold) and 2 (readonly/volatile)
+            // are active; branch 3 (dead-value zeroing) is deferred.
+            /*
             let (nz_mask, consume) = {
                 let r = vn_arc.read().unwrap();
                 (r.get_nz_mask(), r.get_consume())
@@ -4098,6 +4116,7 @@ impl Action for ActionVarnodeProps {
                     count += 1;
                 }
             }
+            */
         }
 
         // Ghidra returns 0 from apply(); the member `count` is read by the
