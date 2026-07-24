@@ -3906,59 +3906,205 @@ impl ActionVarnodeProps {
 impl Action for ActionVarnodeProps {
     // Ghidra: coreaction.cc:1282 ActionVarnodeProps::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial implementation of ActionVarnodeProps (coreaction.cc).
-        // The full Ghidra algorithm sets Varnode properties like readonly
-        // propagation, autolive-hold clearing, and action-property handling.
+        // Faithful port of ActionVarnodeProps::apply (coreaction.cc:1282-1348).
         //
-        // Simplified: iterate all Varnodes, clear autolive-hold flags on
-        // Varnodes defined by LOAD from constant/readonly pointers.
-        let mut change_count = 0;
-        use crate::opcodes::OpCode;
+        // The algorithm walks every Varnode in loc-tree order and, for each,
+        // performs exactly one of four mutually-exclusive branches
+        // (Ghidra uses an `else if` chain):
+        //
+        //   1. If vn->isAutoLiveHold() && pass>0:
+        //        - if vn is the output of a LOAD whose pointer (possibly via a
+        //          single COPY) is constant/readonly, KEEP the hold (continue).
+        //        - otherwise clearAutoLiveHold() and count it.
+        //
+        //   2. else if vn->hasActionProperty()  (i.e. readonly OR volatile):
+        //        - readonly + cachereadonly -> fillinReadOnly(vn)
+        //        - volatile                 -> replaceVolatile(vn)
+        //
+        //   3. else if (vn->getNZMask() & vn->getConsume())==0 && size<=8:
+        //        - skip true constants
+        //        - skip a COPY of the constant 0 (would recurse)
+        //        - if vn still has descendants: totalReplaceConstant(vn, 0)
+        //
+        // Snapshotting the varnodes up-front mirrors Ghidra's pre-increment
+        // iterator (`vn = *iter++`): we never revisit varnodes inserted by the
+        // mutating helpers below, which is exactly Ghidra's behaviour.
+        use crate::varnode::varnode_flags;
 
-        let varnodes: Vec<_> = fd
+        // Ghidra: bool cachereadonly = glb->readonlypropagate;
+        let cachereadonly = fd
+            .get_arch()
+            .map(|a| a.readonlypropagate)
+            .unwrap_or(false);
+        // Ghidra: int4 pass = data.getHeritagePass();
+        let pass = fd.heritage.pass;
+
+        // Snapshot all live Varnodes (loc-tree, addr-sorted).
+        let varnodes: Vec<Arc<RwLock<crate::varnode::Varnode>>> = fd
             .vbank
             .loc_tree
             .iter()
             .map(|v| v.0.clone())
             .collect();
 
+        let mut count: i32 = 0;
+
         for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            // Skip annotations.
-            if vn_rg.is_annotation() {
+            // cc:1294: if (vn->isAnnotation()) continue;
+            if vn_arc.read().unwrap().is_annotation() {
                 continue;
             }
-            // Check readonly Varnodes.
-            if vn_rg.is_read_only() {
-                // In full Ghidra: if readonlypropagate, try fillinReadOnly
-                // to replace vn with its LoadImage value.
-                // L3 gap: requires LoadImage + Architecture integration.
-            }
-            // Check if defined by LOAD from a constant pointer.
-            if vn_rg.is_written() {
-                if let Some(def) = vn_rg.get_def() {
-                    let def_rg = def.read().unwrap();
-                    if def_rg.opcode == OpCode::CPUI_LOAD {
-                        // Check if the pointer input is constant or readonly.
-                        if let Some(ptr) = def_rg.get_in(1) {
-                            let ptr_rg = ptr.read().unwrap();
-                            if ptr_rg.is_constant() || ptr_rg.is_read_only() {
-                                // This LOAD is from a known address —
-                                // the Varnode can potentially be replaced.
-                                // Full implementation: fillinReadOnly.
-                                change_count += 1;
-                            }
+            // cc:1295: int4 vnSize = vn->getSize();
+            let vn_size = vn_arc.read().unwrap().get_size();
+
+            // ---- Branch 1: isAutoLiveHold (cc:1296-1317) ----
+            if vn_arc.read().unwrap().is_auto_live_hold() {
+                if pass > 0 {
+                    // Determine whether this auto-live-hold varnode is the
+                    // output of a LOAD from a known (constant/readonly) addr.
+                    // If so we KEEP the hold (Ghidra: continue); otherwise we
+                    // clearAutoLiveHold() and count it.
+                    //
+                    // Clone the Arc<PcodeOp>/Arc<Varnode> out of the read
+                    // guards so the temporaries outlive the borrow.
+                    let load_op_arc = {
+                        let vn_rg = vn_arc.read().unwrap();
+                        if vn_rg.is_written() {
+                            vn_rg.get_def()
+                        } else {
+                            None
                         }
+                    };
+                    let is_load = load_op_arc
+                        .as_ref()
+                        .map(|o| o.read().unwrap().opcode == OpCode::CPUI_LOAD)
+                        .unwrap_or(false);
+
+                    let keep_hold = if is_load {
+                        let load_op_arc = load_op_arc.unwrap();
+                        // ptr = loadOp->getIn(1). Bind the guard so the &Arc outlives the use.
+                        let load_g = load_op_arc.read().unwrap();
+                        let ptr0 = load_g.get_in(1);
+                        if let Some(ptr0) = ptr0 {
+                            let ptr_is_known = {
+                                let p0 = ptr0.read().unwrap();
+                                p0.is_constant() || p0.is_read_only()
+                            };
+                            if ptr_is_known {
+                                true
+                            } else {
+                                // Follow a single COPY chain:
+                                //   copyOp = ptr->getDef()
+                                //   if (copyOp->code()==COPY) ptr = copyOp->getIn(0)
+                                let copy_op_arc = ptr0.read().unwrap().get_def();
+                                let is_copy_of_known = match copy_op_arc {
+                                    Some(co) => {
+                                        let co_g = co.read().unwrap();
+                                        if co_g.opcode != OpCode::CPUI_COPY {
+                                            false
+                                        } else {
+                                            match co_g.get_in(0) {
+                                                Some(p2) => {
+                                                    let p2r = p2.read().unwrap();
+                                                    p2r.is_constant() || p2r.is_read_only()
+                                                }
+                                                None => false,
+                                            }
+                                        }
+                                    }
+                                    None => false,
+                                };
+                                is_copy_of_known
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !keep_hold {
+                        // cc:1314: vn->clearAutoLiveHold();
+                        vn_arc.write().unwrap().flags &= !varnode_flags::AUTOLIVE_HOLD;
+                        count += 1;
                     }
+                }
+                // (auto-live-hold branch handled; continue to next vn)
+                continue;
+            }
+
+            // ---- Branch 2: hasActionProperty (cc:1318-1326) ----
+            // Ghidra: hasActionProperty() == (readonly || volatile).
+            let is_ro = vn_arc.read().unwrap().is_read_only();
+            let is_vol = vn_arc.read().unwrap().is_volatile();
+            if is_ro || is_vol {
+                if cachereadonly && is_ro {
+                    // cc:1320: if (data.fillinReadOnly(vn)) count += 1;
+                    if fd.fillin_read_only(vn_arc) {
+                        count += 1;
+                    }
+                } else if is_vol {
+                    // cc:1323-1325: else if (vn->isVolatile())
+                    //                 if (data.replaceVolatile(vn)) count += 1;
+                    if fd.replace_volatile(vn_arc) {
+                        count += 1;
+                    }
+                }
+                continue;
+            }
+
+            // ---- Branch 3: NZMask & Consume == 0  (cc:1327-1345) ----
+            let (nz_mask, consume) = {
+                let r = vn_arc.read().unwrap();
+                (r.get_nz_mask(), r.get_consume())
+            };
+            if (nz_mask & consume) == 0 && vn_size <= std::mem::size_of::<u64>() {
+                // cc:1329: if (vn->isConstant()) continue; -- don't replace a constant
+                if vn_arc.read().unwrap().is_constant() {
+                    continue;
+                }
+                // cc:1330-1340: if written by a COPY of constant 0, skip.
+                let skip_copy_zero = {
+                    let vn_rg = vn_arc.read().unwrap();
+                    if vn_rg.is_written() {
+                        match vn_rg.get_def() {
+                            Some(def) => {
+                                let def_g = def.read().unwrap();
+                                if def_g.opcode != OpCode::CPUI_COPY {
+                                    false
+                                } else {
+                                    match def_g.get_in(0) {
+                                        Some(in0) => {
+                                            let i0 = in0.read().unwrap();
+                                            i0.is_constant() && i0.get_offset() == 0
+                                        }
+                                        None => false,
+                                    }
+                                }
+                            }
+                            None => false,
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if skip_copy_zero {
+                    continue;
+                }
+                // cc:1341-1344: if (!vn->hasNoDescend())
+                //                 data.totalReplaceConstant(vn,0); count += 1;
+                if !vn_arc.read().unwrap().has_no_descend() {
+                    fd.total_replace_constant(vn_arc, 0);
+                    count += 1;
                 }
             }
         }
 
-        if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra returns 0 from apply(); the member `count` is read by the
+        // framework. Rugra merges status+count into the apply return value
+        // (action.rs perform(): state.count += res). Return the change count so
+        // repeatapply converges exactly as in Ghidra.
+        Ok(count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "varnodeprops" mirrors ctor at coreaction.hh:222
     fn get_name(&self) -> &str { "varnodeprops" }
@@ -7336,85 +7482,325 @@ impl Action for ActionLaneDivide {
 /// Attach return values to RETURN ops. Faithful to `ActionReturnRecovery`
 /// (coreaction.cc:1908-1955) + `buildReturnOutput` (coreaction.cc:1836-1906).
 ///
-/// Ghidra's full algorithm uses `ParamActive` + `AncestorRealistic` for
-/// multi-pass trial-based liveness of return registers. Rugra implements
-/// the common single-register (RAX/EAX) case: for each RETURN with no
-/// return-value input (num_input <= 1), scan its block backwards for the
-/// last op writing RAX (Register 0x0) and attach that output as RETURN
-/// input slot 1. This makes the function's return type recoverable.
+/// This is a port of Ghidra's active-output protocol:
+/// 1. `data.getActiveOutput()` yields the `ParamActive` (populated earlier by
+///    `ActionPrototypeTypes`::initActiveOutput + `Heritage::guardReturns`).
+/// 2. For each RETURN op and each unchecked trial, run
+///    `AncestorRealistic::execute` + `Funcdata::ancestorOpUse`; if both
+///    succeed the trial is `markActive` (the return register really carries a
+///    computed value into this RETURN).
+/// 3. `finishPass`; once `maxPass` is exceeded, `markFullyChecked`.
+/// 4. When fully checked, `FuncProto::deriveOutputMap(active)` resolves which
+///    trials survive as USED, then `buildReturnOutput` is applied to every
+///    RETURN (assembling its return-value input(s), with PIECE concatenation
+///    for multi-register returns).
+/// 5. `clearActiveOutput`.
+///
+/// Rugra gap: the function-level `guardReturns` heritage pass that registers
+/// RETURN trials is still a stub (see heritage.rs `guard_returns`), so
+/// `active_output` frequently arrives empty. To keep behaviour faithful AND
+/// functional we seed the active-output trials from the calling-convention
+/// model's `output_entries` (Rugra's `ProtoModel::default_x86_64`) when the
+/// container is present but empty. This replaces the previous hard-coded
+/// "scan for any write of Register offset 0x0" heuristic with the model-driven
+/// trial list while preserving the same end effect on the common RAX case.
 pub struct ActionReturnRecovery { pub count: i32 }
 impl ActionReturnRecovery {
     // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
     pub fn new() -> Self { Self { count: 0 } }
+
+    // Ghidra: coreaction.cc:1836 ActionReturnRecovery::buildReturnOutput
+    /// Assemble the final input list for a RETURN op from the USED trials.
+    /// Faithful port. Handles:
+    ///   - 0/1 trial   -> trivial opSetAllInput,
+    ///   - 2 trials    -> single PIECE join (constructJoinAddress),
+    ///   - >2 trials   -> iterative PIECE concatenation of contiguous pieces.
+    fn build_return_output(
+        fd: &mut Funcdata,
+        active: &crate::fspec::ParamActive,
+        retop: &crate::op::PcodeOpRef,
+    ) {
+        use crate::opcodes::OpCode as OC;
+        use crate::address::Address as Addr;
+        // Ghidra cc:1839: newparam = [ retop->getIn(0) ]  (keep the
+        // indirect/return-address input slot 0).
+        let mut newparam: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        let in0 = { retop.0.read().unwrap().get_in(0).cloned() };
+        if let Some(vn) = in0 { newparam.push(vn); }
+
+        let num_input = retop.0.read().unwrap().num_input();
+        // Ghidra cc:1842-1847: gather retop->getIn(trial.getSlot()) for each
+        // USED trial, in order, until the slot falls outside the op inputs.
+        for i in 0..active.get_num_trials() {
+            let curtrial = active.get_trial(i);
+            if !curtrial.is_used() { break; }
+            let slot = curtrial.get_slot() as usize;
+            if slot >= num_input { break; }
+            let vn = retop.0.read().unwrap().get_in(slot).cloned();
+            newparam_push_unique(&mut newparam, vn);
+        }
+
+        if newparam.len() <= 2 {
+            // Ghidra cc:1848-1849: zero or one return varnode — opSetAllInput.
+            fd.op_set_all_input(retop, &newparam);
+        } else if newparam.len() == 3 {
+            // Ghidra cc:1850-1868: two-piece concatenation.
+            let lovn = newparam[1].clone();
+            let hivn = newparam[2].clone();
+            let triallo = active.get_trial(0);
+            let trialhi = active.get_trial(1);
+            // Rugra has no constructJoinAddress; the joined address is cosmetic
+            // (it labels the synthetic whole varnode). Use the min of the two
+            // piece offsets, which matches little-endian RAX:RDX layout.
+            let lo_off = lovn.read().unwrap().get_offset();
+            let hi_off = hivn.read().unwrap().get_offset();
+            let join_off = lo_off.min(hi_off);
+            let total_size = (trialhi.get_size() + triallo.get_size()) as usize;
+            let ret_addr = retop.0.read().unwrap().get_addr();
+            let newop = fd.new_op(2, ret_addr);
+            fd.op_set_opcode(&newop, OC::CPUI_PIECE);
+            // Ghidra cc:1860: newVarnodeOut(size, joinaddr, newop). Register space.
+            let join_vn = fd.new_varnode_out(total_size, Addr::new(join_off), &newop);
+            // Ghidra cc:1861: newwhole->setWriteMask().
+            join_vn.write().unwrap().set_write_mask();
+            // Ghidra cc:1862: opInsertBefore(newop, retop).
+            fd.op_insert_before(&newop, retop);
+            // Ghidra cc:1863-1865: pop back, replace with newwhole, opSetAllInput.
+            newparam.pop();
+            newparam.push(join_vn.clone());
+            fd.op_set_all_input(retop, &newparam);
+            // Ghidra cc:1866-1867: opSetInput(hi,0) opSetInput(lo,1).
+            fd.op_set_input(&newop, hivn, 0);
+            fd.op_set_input(&newop, lovn, 1);
+        } else {
+            // Ghidra cc:1869-1905: >2 pieces — iterative PIECE concatenation
+            // of contiguous trials.
+            newparam.clear();
+            let in0 = retop.0.read().unwrap().get_in(0).cloned();
+            if let Some(vn) = in0 { newparam.push(vn); }
+            let mut offmatch: i32 = 0;
+            let mut preexist: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+            for i in 0..active.get_num_trials() {
+                let curtrial = active.get_trial(i);
+                if !curtrial.is_used() { break; }
+                let slot = curtrial.get_slot() as usize;
+                if slot >= num_input { break; }
+                let vn = retop.0.read().unwrap().get_in(slot).cloned();
+                let vn = match vn { Some(v) => v, None => break };
+                if preexist.is_none() {
+                    // Ghidra cc:1879-1881.
+                    preexist = Some(vn);
+                    offmatch = curtrial.get_offset() + curtrial.get_size();
+                } else if offmatch == curtrial.get_offset() {
+                    // Ghidra cc:1883-1897: contiguous — concatenate.
+                    offmatch += curtrial.get_size();
+                    let pre = preexist.unwrap();
+                    let ret_addr = retop.0.read().unwrap().get_addr();
+                    let newop = fd.new_op(2, ret_addr);
+                    fd.op_set_opcode(&newop, OC::CPUI_PIECE);
+                    let pre_size = pre.read().unwrap().get_size();
+                    let vn_size = vn.read().unwrap().get_size();
+                    let pre_off = pre.read().unwrap().get_offset();
+                    let vn_off = vn.read().unwrap().get_offset();
+                    let addr = Addr::new(pre_off.min(vn_off));
+                    let newout = fd.new_varnode_out(pre_size + vn_size, addr, &newop);
+                    newout.write().unwrap().set_write_mask();
+                    fd.op_set_input(&newop, vn, 0);   // most sig
+                    fd.op_set_input(&newop, pre, 1);  // least sig
+                    fd.op_insert_before(&newop, retop);
+                    preexist = Some(newout);
+                } else {
+                    // Ghidra cc:1899-1900: non-contiguous — stop.
+                    break;
+                }
+            }
+            if let Some(pre) = preexist { newparam.push(pre); }
+            fd.op_set_all_input(retop, &newparam);
+        }
+    }
 }
 impl Action for ActionReturnRecovery {
     // Ghidra: coreaction.cc:1908 ActionReturnRecovery::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        use crate::space::AddressSpace;
-        use crate::op::PcodeOp;
-        type OpArc = std::sync::Arc<std::sync::RwLock<PcodeOp>>;
-        // Collect RETURN ops with no return value (num_input <= 1).
-        let mut work: Vec<OpArc> = Vec::new();
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if op.opcode == OpCode::CPUI_RETURN && op.num_input() <= 1 {
-                work.push(op_ref.0.clone());
-            }
+        // Ghidra cc:4637-4651: if the output is type-locked the prototype is
+        // authoritative and return-value recovery must not run.
+        if fd.funcp.output_type_locked {
+            return Ok(action_status::NO_CHANGE);
         }
 
-        let mut changed = 0;
-        for op_arc in work {
-            // Scan the RETURN's parent block backwards for last RAX write.
-            let rax_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
-                let op = op_arc.read().unwrap();
-                let parent_weak_opt: Option<&std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = op.parent.as_ref();
-                parent_weak_opt.and_then(|pw| pw.upgrade()).and_then(|parent_arc| {
-                    let block = parent_arc.read().unwrap();
-                    let mut found: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
-                    for op_ref in block.get_ops().iter().rev() {
-                        if std::sync::Arc::ptr_eq(&op_ref.0, &op_arc) { continue; }
-                        let o = op_ref.0.read().unwrap();
-                        if let Some(ref out_arc) = o.output {
-                            let ov = out_arc.read().unwrap();
-                            if ov.get_space() == AddressSpace::Register
-                                && ov.get_offset() == 0x0 && ov.get_size() >= 4
-                            {
-                                found = Some(out_arc.clone());
-                                break;
+        // Ghidra cc:1911: active = data.getActiveOutput(). If absent,
+        // ActionPrototypeTypes did not initialise it — but in Ghidra that
+        // action always calls initActiveOutput() when output is unlocked.
+        // Rugra's prototypetypes only initialises when a RETURN already has a
+        // value, so we ensure the container exists here to match Ghidra.
+        if fd.active_output.is_none() {
+            fd.init_active_output();
+        }
+
+        // Seed trials from the calling-convention model when the container is
+        // empty. This substitutes for the (stub) function-level guardReturns
+        // pass that, in Ghidra, calls `active->registerTrial(addr, size)` for
+        // each candidate return storage location.
+        let need_seed = fd.active_output.as_ref().map(|a| a.get_num_trials() == 0).unwrap_or(true);
+        if need_seed {
+            seed_output_trials(fd);
+        }
+
+        let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
+
+        // Snapshot RETURN ops (cc:1919-1921 iterates beginOp/endOp(CPUI_RETURN)).
+        let return_ops: Vec<crate::op::PcodeOpRef> = fd.obank.returnlist.iter()
+            .filter(|r| !r.0.read().unwrap().is_dead())
+            .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
+            .cloned()
+            .collect();
+        if return_ops.is_empty() {
+            // Nothing to do. Leave active_output in place; Ghidra's driver
+            // re-enters this action across passes until fully checked, then
+            // clears it.
+            return Ok(action_status::NO_CHANGE);
+        }
+
+        // Ghidra cc:1919-1935: per-RETURN, per-trial liveness analysis.
+        let trial_count = fd.active_output.as_ref().map(|a| a.get_num_trials()).unwrap_or(0);
+        if trial_count > 0 {
+            let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
+            for retop in &return_ops {
+                // Gather unchecked trial indices first so we never hold a
+                // borrow on active while mutating trials or fd.
+                let pending: Vec<usize> = (0..trial_count)
+                    .filter(|&i| !fd.active_output.as_ref().unwrap().get_trial(i).is_checked())
+                    .collect();
+                for i in pending {
+                    let slot = fd.active_output.as_ref().unwrap().get_trial(i).get_slot();
+                    // The trial varnode for a RETURN is the op input at the
+                    // trial's slot. If absent (RETURN has no return-value
+                    // operand yet), synthesise a candidate varnode at the
+                    // trial address so the ancestor walk has something to
+                    // chase — mirroring guardReturns' opInsertInput of a fresh
+                    // varnode. Only insert when the slot is missing.
+                    let op_num_input = retop.0.read().unwrap().num_input();
+                    if slot as usize >= op_num_input {
+                        let (addr, size) = {
+                            let t = fd.active_output.as_ref().unwrap().get_trial(i);
+                            (t.get_address(), t.get_size())
+                        };
+                        let cand = fd.vbank.create_with_space(
+                            size as usize, crate::space::AddressSpace::Register, addr.as_u64());
+                        cand.write().unwrap().set_active_heritage();
+                        fd.op_insert_input(retop, cand, slot as usize);
+                    }
+                    let success_real = {
+                        let active = fd.active_output.as_mut().unwrap();
+                        ancestor_real.execute(retop, slot, active.get_trial_mut(i), false)
+                    };
+                    if success_real {
+                        // Ghidra cc:1931-1932: ancestorOpUse(op, vn) -> markActive.
+                        let vn_opt = retop.0.read().unwrap().get_in(slot as usize).cloned();
+                        if let Some(vn) = vn_opt {
+                            let used = crate::funcdata::ancestor_op_use(
+                                true, maxancestor, &vn, retop, slot, 0, 0,
+                            );
+                            if used {
+                                fd.active_output.as_mut().unwrap().get_trial_mut(i).mark_active();
                             }
                         }
                     }
-                    found
-                })
-            };
-
-            // Fallback: scan alivelist for any RAX write before this RETURN.
-            let rax_vn = rax_vn.or_else(|| {
-                let ret_order = op_arc.read().unwrap().start.order;
-                let mut found = None;
-                for op_ref in &fd.obank.alivelist {
-                    let o = op_ref.0.read().unwrap();
-                    if o.start.order > ret_order { break; }
-                    if let Some(ref out_arc) = o.output {
-                        let ov = out_arc.read().unwrap();
-                        if ov.get_space() == AddressSpace::Register
-                            && ov.get_offset() == 0x0 && ov.get_size() >= 4
-                        { found = Some(out_arc.clone()); }
-                    }
                 }
-                found
-            });
-
-            if let Some(rax) = rax_vn {
-                fd.op_set_input(&crate::op::PcodeOpRef(op_arc), rax, 1);
-                changed += 1;
             }
         }
-        self.count += changed;
-        Ok(action_status::NO_CHANGE)
+
+        // Ghidra cc:1937-1939: finishPass + maxPass check.
+        let fully_checked = {
+            let active = fd.active_output.as_mut().unwrap();
+            active.finish_pass();
+            if active.get_num_passes() > active.get_max_pass() {
+                active.mark_fully_checked();
+            }
+            active.is_fully_checked()
+        };
+
+        let mut count = 0;
+        if fully_checked {
+            // Ghidra cc:1942: deriveOutputMap resolves USED trials.
+            derive_func_output_map(fd);
+            // Ghidra cc:1943-1949: buildReturnOutput for every RETURN.
+            let return_ops_again: Vec<crate::op::PcodeOpRef> = fd.obank.returnlist.iter()
+                .filter(|r| !r.0.read().unwrap().is_dead())
+                .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
+                .cloned()
+                .collect();
+            // Take the active container out of fd so we can read its final
+            // USED-trial state while mutating fd inside buildReturnOutput.
+            let active = fd.active_output.take().unwrap();
+            for retop in &return_ops_again {
+                Self::build_return_output(fd, &active, retop);
+                count += 1;
+            }
+            // Ghidra cc:1950: clearActiveOutput (taken == cleared).
+            count += 1;
+        } else {
+            // Not done yet: signal the driver that another pass is needed.
+            count += 1;
+        }
+
+        self.count += count;
+        if count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     // RUGRA-GLUE: Rust Action trait get_name; "returnrecovery" mirrors ctor at coreaction.hh:799
     fn get_name(&self) -> &str { "returnrecovery" }
+}
+
+// Push a varnode into newparam unless it duplicates the current last element
+// (guards against copying slot 0 twice). Mirrors Ghidra's vector push_back
+// inside buildReturnOutput's trial loop (cc:1846), which never duplicates
+// because trial slots are strictly increasing.
+fn newparam_push_unique(
+    newparam: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+) {
+    if let Some(v) = vn {
+        let already_last = newparam.last()
+            .map(|last| std::sync::Arc::ptr_eq(last, &v))
+            .unwrap_or(false);
+        if !already_last { newparam.push(v); }
+    }
+}
+
+// Ghidra analogue: Heritage::guardReturns (heritage.cc:1653-1676) registers a
+// ParamActive trial for each candidate return storage location described by
+// the calling-convention model. Rugra's function-level guardReturns is a stub,
+// so we perform the equivalent registration here, driven by
+// ProtoModel::output_entries (the x86-64 SysV default's sole output entry is
+// RAX at Register offset 0x0, size 8).
+fn seed_output_trials(fd: &mut Funcdata) {
+    use crate::address::Address;
+    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
+    let active = match fd.active_output.as_mut() {
+        Some(a) => a,
+        None => return,
+    };
+    for entry in &model.output_entries {
+        let addr = Address::new(entry.base);
+        if active.which_trial(addr, entry.size) < 0 {
+            active.register_trial(addr, entry.size);
+        }
+    }
+}
+
+// Ghidra analogue: data.getFuncProto().deriveOutputMap(active) (coreaction.cc:1942)
+// delegates to ProtoModel::deriveOutputMap -> ParamListStandard::fillinMap.
+// Rugra's FuncProto has no ProtoModel pointer, so resolve the default model
+// directly and call its derive_output_map.
+fn derive_func_output_map(fd: &mut Funcdata) {
+    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
+    if let Some(active) = fd.active_output.as_mut() {
+        model.derive_output_map(active);
+    }
 }
 
 /// Calculate the non-zero mask property on all Varnode objects. Faithful
