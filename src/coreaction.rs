@@ -4054,76 +4054,58 @@ impl Action for ActionVarnodeProps {
             }
 
             // ---- Branch 3: NZMask & Consume == 0  (cc:1327-1345) ----
-            // DISABLED: Rugra's ActionDeadCode clears consume at the start of
-            // each apply(), so consume==0 when VarnodeProps runs (before
-            // DeadCode in the pipeline). This makes the condition vacuously
-            // true for ALL varnodes, causing totalReplaceConstant(vn,0) to
-            // replace every varnode with 0 — destroying all CALL targets,
-            // parameters, and return values.
-            //
-            // Ghidra avoids this because Heritage (which calls clearConsume)
-            // and ActionDeadCode (which sets consume) run in the SAME pass,
-            // and on repeatapply iterations the consume from the PREVIOUS
-            // iteration persists. Rugra's ActionDeadCode unconditionally
-            // clears consume, so this persistence doesn't happen.
-            //
-            // Fix: re-enable once ActionDeadCode stops clearing consume
-            // (move the clear to Heritage, matching Ghidra's design).
-            // For now, branches 1 (auto-live-hold) and 2 (readonly/volatile)
-            // are active; branch 3 (dead-value zeroing) is deferred.
-            /*
-            let (nz_mask, consume) = {
-                let r = vn_arc.read().unwrap();
-                (r.get_nz_mask(), r.get_consume())
-            };
-            if (nz_mask & consume) == 0 && vn_size <= std::mem::size_of::<u64>() {
-                // cc:1329: if (vn->isConstant()) continue; -- don't replace a constant
-                if vn_arc.read().unwrap().is_constant() {
-                    continue;
-                }
-                // cc:1330-1340: if written by a COPY of constant 0, skip.
-                let skip_copy_zero = {
-                    let vn_rg = vn_arc.read().unwrap();
-                    if vn_rg.is_written() {
-                        match vn_rg.get_def() {
-                            Some(def) => {
-                                let def_g = def.read().unwrap();
-                                if def_g.opcode != OpCode::CPUI_COPY {
-                                    false
-                                } else {
-                                    match def_g.get_in(0) {
-                                        Some(in0) => {
-                                            let i0 = in0.read().unwrap();
-                                            i0.is_constant() && i0.get_offset() == 0
+            // Guard on pass>0: On the first mainloop iteration (pass=0),
+            // DeadCode hasn't run yet so consume==0 for all varnodes.
+            // On subsequent iterations, DeadCode from the PREVIOUS iteration
+            // has set consume, and this iteration's DeadCode hasn't cleared
+            // it yet (VarnodeProps runs first). This matches Ghidra exactly.
+            if pass > 0 {
+                let (nz_mask, consume) = {
+                    let r = vn_arc.read().unwrap();
+                    (r.get_nz_mask(), r.get_consume())
+                };
+                if (nz_mask & consume) == 0 && vn_size <= std::mem::size_of::<u64>() {
+                    if vn_arc.read().unwrap().is_constant() {
+                        continue;
+                    }
+                    let skip_copy_zero = {
+                        let vn_rg = vn_arc.read().unwrap();
+                        if vn_rg.is_written() {
+                            match vn_rg.get_def() {
+                                Some(def) => {
+                                    let def_g = def.read().unwrap();
+                                    if def_g.opcode != OpCode::CPUI_COPY {
+                                        false
+                                    } else {
+                                        match def_g.get_in(0) {
+                                            Some(in0) => {
+                                                let i0 = in0.read().unwrap();
+                                                i0.is_constant() && i0.get_offset() == 0
+                                            }
+                                            None => false,
                                         }
-                                        None => false,
                                     }
                                 }
+                                None => false,
                             }
-                            None => false,
+                        } else {
+                            false
                         }
-                    } else {
-                        false
+                    };
+                    if skip_copy_zero {
+                        continue;
                     }
-                };
-                if skip_copy_zero {
-                    continue;
-                }
-                // cc:1341-1344: if (!vn->hasNoDescend())
-                //                 data.totalReplaceConstant(vn,0); count += 1;
-                if !vn_arc.read().unwrap().has_no_descend() {
-                    fd.total_replace_constant(vn_arc, 0);
-                    count += 1;
+                    if !vn_arc.read().unwrap().has_no_descend() {
+                        fd.total_replace_constant(vn_arc, 0);
+                        count += 1;
+                    }
                 }
             }
-            */
         }
 
-        // Ghidra returns 0 from apply(); the member `count` is read by the
-        // framework. Rugra merges status+count into the apply return value
-        // (action.rs perform(): state.count += res). Return the change count so
-        // repeatapply converges exactly as in Ghidra.
-        Ok(count)
+        // Ghidra returns 0 (NO_CHANGE) from apply() — the internal count
+        // is for statistics only and does NOT drive repeatapply.
+        Ok(0)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "varnodeprops" mirrors ctor at coreaction.hh:222
     fn get_name(&self) -> &str { "varnodeprops" }
