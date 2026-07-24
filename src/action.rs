@@ -938,7 +938,7 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
         mainloop.add_action(Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
         mainloop.add_action(Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674
-        mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — stub, safe
+        mainloop.add_action(Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676 — enabled (once-per-func guarded)
 
         fullloop.add_action(Box::new(mainloop));
         // fullloop post-mainloop Actions (coreaction.cc:5679-5688) — registered

@@ -117,6 +117,14 @@ pub struct Funcdata {
     pub arch: Option<Arc<crate::arch::Architecture>>,
     /// Restart-pending flag for ActionRestartGroup (funcdata.hh).
     pub restart_pending: bool,
+    /// Once-per-function guard for ActionConditionalConst. The conditional
+    /// constant propagation is useful but, under Rugra's repeatapply mainloop,
+    /// re-running it after the first mutation can interact poorly with
+    /// downstream ActionConditionalExe/branch-folding and fail to converge for
+    /// some functions (5/24 curl timeouts). This flag ensures the IR-mutating
+    /// propagation runs at most once per function (reset on restart). It is a
+    /// Rugra-specific convergence guard with no Ghidra counterpart.
+    pub cond_const_done: bool,
     /// Jump tables recovered for this function. Faithful to
     /// `Funcdata::jumpvec` (funcdata.hh:89). Populated by JumpTable recovery.
     pub jump_tables: Vec<std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>>,
@@ -184,6 +192,7 @@ impl Funcdata {
             active_output: None,
             arch: None,
             restart_pending: false,
+            cond_const_done: false,
             jump_tables: Vec::new(),
             union_map: std::collections::BTreeMap::new(),
             laned_map: std::collections::BTreeMap::new(),
