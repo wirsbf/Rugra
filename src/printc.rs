@@ -972,10 +972,10 @@ impl PrintC {
     /// re-entrant deadlock on this arc.
     pub fn emit_block_basic_rpn(
         &mut self,
-        ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
+        ops: &[crate::op::PcodeOpRef],
     ) {
-        for op_arc in ops {
-            let op_guard = op_arc.read().unwrap();
+        for op_ref in ops {
+            let op_guard = op_ref.0.read().unwrap();
             // printc.cc:2696: if (inst->notPrinted()) continue;
             if op_guard.is_dead() {
                 continue;
@@ -1064,6 +1064,11 @@ impl PrintC {
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
     /// dead flag outputs (not referenced by any other op), and post-return dead code.
     fn emit_block_ops(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool) {
+        if self.rpn_enabled {
+            let ops = block_arc.read().unwrap().get_ops();
+            self.emit_block_basic_rpn(&ops);
+            return;
+        }
         use crate::opcodes::OpCode;
         use std::collections::HashSet;
 
