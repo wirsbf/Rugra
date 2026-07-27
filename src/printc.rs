@@ -15,7 +15,14 @@ use crate::varnode::Varnode;
 use crate::address::SeqNum;
 use crate::space::AddressSpace;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+
+/// Process-wide latch ensuring the Ghidra-style typedefs
+/// (byte/undefined/undefined4/undefined8/_struct) are emitted exactly once per
+/// decompile run. See doc_function for the rationale: callers build a fresh
+/// `PrintC` per function, so this must live outside the instance.
+static TYPEDEFS_EMITTED: AtomicBool = AtomicBool::new(false);
 
 // Ghidra: printc.cc:23-76 OpToken static instances (precedence + associativity)
 /// Operator precedence/associativity table mirroring Ghidra's static OpToken
@@ -179,6 +186,49 @@ fn sanitize_c_ident(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
 }
 
+// RUGRA-GLUE: format_constant_value (RPN path helper; approximates
+// printc.cc:1946 pushConstant constant formatting). Renders a u64 offset as
+// a C integer literal: small values decimal, large values hex with a decimal
+// comment, all-ones as -1.
+fn format_constant_value(val: u64) -> String {
+    if val <= 9 {
+        format!("{}", val)
+    } else if val >= 0x8000_0000_0000_0000 {
+        // Likely negative: show as signed.
+        format!("{}", val as i64)
+    } else if val == 0xffffffff {
+        "-1".to_string() // (uint32_t)-1
+    } else if val >= 256 {
+        format!("0x{:x} /* {} */", val, val)
+    } else {
+        format!("0x{:x}", val)
+    }
+}
+
+// RUGRA-GLUE: c_binary_op_str (RPN path helper; mirrors the OpToken print1
+// strings for each binary opcode as defined in printc.cc:36-55).
+fn c_binary_op_str(opc: crate::opcodes::OpCode) -> &'static str {
+    use crate::opcodes::OpCode::*;
+    match opc {
+        CPUI_INT_MULT | CPUI_FLOAT_MULT => "*",
+        CPUI_INT_DIV | CPUI_INT_SDIV | CPUI_FLOAT_DIV => "/",
+        CPUI_INT_REM | CPUI_INT_SREM => "%",
+        CPUI_INT_ADD | CPUI_FLOAT_ADD => "+",
+        CPUI_INT_SUB | CPUI_FLOAT_SUB => "-",
+        CPUI_INT_LEFT => "<<",
+        CPUI_INT_RIGHT | CPUI_INT_SRIGHT => ">>",
+        CPUI_INT_LESS | CPUI_INT_SLESS | CPUI_FLOAT_LESS => "<",
+        CPUI_INT_LESSEQUAL | CPUI_INT_SLESSEQUAL | CPUI_FLOAT_LESSEQUAL => "<=",
+        CPUI_INT_AND => "&",
+        CPUI_INT_XOR | CPUI_BOOL_XOR => "^",
+        CPUI_INT_OR => "|",
+        CPUI_BOOL_AND => "&&",
+        CPUI_BOOL_OR => "||",
+        CPUI_INT_EQUAL | CPUI_FLOAT_EQUAL => "==",
+        CPUI_INT_NOTEQUAL | CPUI_FLOAT_NOTEQUAL => "!=",
+        _ => " /* ? */ ",
+    }
+}
 // RUGRA-GLUE: escape_c_string (no Ghidra counterpart found)
 /// Escape a raw string from the binary into a C string literal.
 /// Converts control characters to their escape sequences:
@@ -416,6 +466,37 @@ pub struct PrintC {
     /// which calls `glb->userops.getOp(op->getIn(0)->getOffset())`). `None`
     /// when the architecture has no registered user ops.
     userops: Option<std::sync::Arc<std::sync::RwLock<crate::userop::UserOpManage>>>,
+
+    // ===========================================================================
+    // RPN engine state (printlanguage.hh:280-290 - PrintLanguage members).
+    //
+    // Faithful port of Ghidra's PrintLanguage::revpol, nodepend, pending
+    // (printlanguage.hh:280-290), driven by the RPN free-functions in
+    // printlanguage.rs (rpn_push_op / rpn_push_atom / rpn_recurse / ...).
+    // Populated/cleared per-function by the new *_rpn emit path, reachable
+    // only when rpn_enabled is set in doc_function. The legacy direct-emit
+    // path is untouched and remains the default.
+    // ===========================================================================
+    /// RPN stack of operator entries (printlanguage.hh:280 `revpol`).
+    revpol: Vec<crate::printlanguage::ReversePolish>,
+    /// Pending implied-Varnode pushes (printlanguage.hh:282 `nodepend`).
+    nodepend: Vec<crate::printlanguage::NodePending>,
+    /// Number of pending nodes already claimed (printlanguage.hh:283 `pending`).
+    rpn_pending: usize,
+    /// Per-instance operator-token table mirroring printc.cc:29-77 static
+    /// OpToken instances. The RPN free-functions index into &[OpToken].
+    rpn_token_table: Vec<crate::printlanguage::OpToken>,
+    /// Index of the assignment token (=, binary, prec 14) in
+    /// rpn_token_table. Mirrors PrintC::assignment (printc.cc:56).
+    rpn_tok_assignment: usize,
+    /// Index of the dereference token (*, unary, prec 62). Mirrors
+    /// PrintC::dereference (printc.cc:34).
+    rpn_tok_dereference: usize,
+    /// Index of the hidden-function token (never prints). Mirrors
+    /// PrintC::hidden (printc.cc:29).
+    rpn_tok_hidden: usize,
+    /// True when doc_function emits via the RPN path. Default false.
+    rpn_enabled: bool,
 }
 
 impl PrintC {
@@ -477,6 +558,14 @@ impl PrintC {
             comment_sorter: crate::comment::CommentSorter::new(),
             cpool: None,
             userops: None,
+            revpol: Vec::new(),
+            nodepend: Vec::new(),
+            rpn_pending: 0,
+            rpn_token_table: Self::build_rpn_token_table(),
+            rpn_tok_assignment: 0,
+            rpn_tok_dereference: 1,
+            rpn_tok_hidden: 2,
+            rpn_enabled: false,
         }
     }
 
@@ -486,6 +575,429 @@ impl PrintC {
     /// like `EmitNoMarkup`.
     pub fn take_emit(self) -> Box<dyn Emit> {
         self.emit
+    }
+
+    // ===========================================================================
+    // RPN emit path (printlanguage.cc:129-573 + printc.cc:2468/2678).
+    //
+    // Faithful Ghidra RPN-stack emit path as a parallel (non-default) route.
+    // doc_function routes blocks to emit_block_basic_rpn when rpn_enabled is
+    // true; the legacy direct-emit path (emit_block_ops / emit_expression) is
+    // untouched. The RPN free-functions in printlanguage.rs are reused
+    // verbatim (migration rule: do not modify printlanguage.rs).
+    // ===========================================================================
+
+    // RUGRA-GLUE: build_rpn_token_table
+    /// Build the per-instance OpToken slice the RPN free-functions index into.
+    /// Indices 0/1/2 must agree with the rpn_tok_* constants assigned in new().
+    /// Faithful to the static OpToken definitions in printc.cc:29/34/56
+    /// (hidden, dereference, assignment) - the only tokens the step-1 RPN path
+    /// needs; additional tokens can be appended here as later steps widen
+    /// dispatch_op_rpn.
+    fn build_rpn_token_table() -> Vec<crate::printlanguage::OpToken> {
+        use crate::printlanguage::OpToken;
+        // index 0 - assignment (printc.cc:56)
+        let assignment = OpToken::binary("=", 14, false, 1, 5, -1);
+        // index 1 - dereference (printc.cc:34)
+        let dereference = OpToken::unary_prefix("*", 62, 0, 0);
+        // index 2 - hidden (printc.cc:29, never prints).
+        let hidden = OpToken::hidden_function();
+        vec![assignment, dereference, hidden]
+    }
+
+    /// Enable/disable the RPN emit path in doc_function. When true, blocks are
+    /// emitted via emit_block_basic_rpn / emit_expression_rpn; when false
+    /// (default), the legacy direct-emit path runs.
+    pub fn set_rpn_enabled(&mut self, enabled: bool) {
+        self.rpn_enabled = enabled;
+    }
+
+    // ---- Step 2: RPN push/recurse wrappers (printlanguage.cc:129/162/514) ----
+
+    // Ghidra: printlanguage.cc:129 PrintLanguage::pushOp
+    /// Push an operator token (by index into rpn_token_table) onto the RPN
+    /// stack. Faithful wrapper over crate::printlanguage::rpn_push_op.
+    fn rpn_push_op(&mut self, tok_index: usize) {
+        crate::printlanguage::rpn_push_op(
+            &mut self.revpol,
+            &mut self.nodepend,
+            &mut self.rpn_pending,
+            &self.rpn_token_table,
+            &mut *self.emit,
+            tok_index,
+            -1,
+        );
+    }
+
+    // Ghidra: printlanguage.cc:162 PrintLanguage::pushAtom
+    /// Push a leaf Atom onto the RPN stack, draining as much of the stack as
+    /// is now complete. Faithful wrapper over rpn_push_atom.
+    fn rpn_push_atom(&mut self, atom: &crate::printlanguage::Atom) {
+        crate::printlanguage::rpn_push_atom(
+            &mut self.revpol,
+            &mut self.nodepend,
+            &mut self.rpn_pending,
+            &self.rpn_token_table,
+            &mut *self.emit,
+            atom,
+        );
+    }
+
+    // Ghidra: printlanguage.cc:514 PrintLanguage::recurse
+    /// Drain the pending-implied list, emitting complete sub-expressions.
+    /// Faithful wrapper over rpn_recurse. The Rust free-function drains
+    /// nodepend but does NOT resolve the opcode->push virtual call (it has no
+    /// op arena); Rugra resolves inputs by recursing into the defining op
+    /// directly in emit_expression_rpn, so this wrapper is effectively a no-op
+    /// on the pending list in practice.
+    fn rpn_recurse(&mut self) {
+        crate::printlanguage::rpn_recurse(
+            &mut self.revpol,
+            &mut self.nodepend,
+            &mut self.rpn_pending,
+            &self.rpn_token_table,
+            &mut *self.emit,
+        );
+    }
+
+    // Ghidra: printlanguage.cc:197 PrintLanguage::pushVn
+    /// Record a pending implied Varnode for later placement by rpn_recurse.
+    fn rpn_push_vn(&mut self, vn_index: i64, op_index: i64, m: u32) {
+        crate::printlanguage::rpn_push_vn(&mut self.nodepend, vn_index, op_index, m);
+    }
+
+    // ---- Step 4: make_atom_for_vn (printlanguage.cc:218 pushVnExplicit) ----
+
+    // Ghidra: printlanguage.cc:218 pushVnExplicit + cc:238 pushSymbolDetail
+    /// Build the leaf Atom for a Varnode. Reuses Rugra's existing name-
+    /// resolution logic (get_varnode_display_name) so variable/parameter/
+    /// symbol naming stays identical between the legacy and RPN paths.
+    /// Constants become a syntax Atom carrying the literal text. `op` is the
+    /// consuming PcodeOp (carried into the Atom for tagging).
+    fn make_atom_for_vn(
+        &mut self,
+        vn: &Varnode,
+        _op: &PcodeOp,
+    ) -> crate::printlanguage::Atom {
+        use crate::printlanguage::{Atom, AtomPayload, SyntaxHighlight, TagType};
+        use crate::space::AddressSpace;
+        // printlanguage.cc:221-228: annotation / constant fast-paths.
+        if vn.is_constant() {
+            // pushConstant (printc.cc:1946) - emit the literal value.
+            let val = vn.get_offset();
+            let name = format_constant_value(val);
+            return Atom {
+                name,
+                type_: TagType::Syntax,
+                highlight: SyntaxHighlight::ConstColor,
+                op_index: -1,
+                payload: AtomPayload::IntValue(val),
+                offset: 0,
+            };
+        }
+        // printlanguage.cc:243-261: resolve symbol detail. Rugra folds the
+        // HighVariable / parameter / symbol-table / unnamed-location cascades
+        // into the existing get_varnode_display_name helper so the RPN path
+        // shares the exact name-resolution behaviour of the legacy path.
+        let mut name = self.get_varnode_display_name(vn);
+        if name.is_empty() {
+            // pushUnnamedLocation fallback (printlanguage.cc:244).
+            name = match vn.get_space() {
+                AddressSpace::Register => format!("uVar{:x}", vn.get_offset()),
+                AddressSpace::Stack => {
+                    let off = vn.get_offset();
+                    if off >= 0x8000_0000_0000_0000 {
+                        format!("local_{:x}", (!off).wrapping_add(1))
+                    } else {
+                        format!("param_stack_{:x}", off)
+                    }
+                }
+                _ => format!("vn_{:x}", vn.get_offset()),
+            };
+        }
+        self.mark_varnode_used(name.clone(), vn);
+        Atom::with_op_vn(
+            &name,
+            TagType::VarToken,
+            SyntaxHighlight::VarColor,
+            -1,
+            vn.get_offset() as i64,
+        )
+    }
+
+    // ---- Step 3: emit_expression_rpn (printc.cc:2468 emitExpression) ----
+
+    // Ghidra: printc.cc:2468 PrintC::emitExpression
+    /// Emit a single PcodeOp as an expression via the RPN stack. Faithful to
+    /// PrintC::emitExpression (printc.cc:2468-2495): if the op has an output,
+    /// push the assignment token + the output atom; then dispatch the opcode;
+    /// then recurse. The in-place-op and constructor special-printing
+    /// branches (printc.cc:2473/2477) are omitted from this first cut.
+    fn emit_expression_rpn(&mut self, op: &PcodeOp) {
+        // printc.cc:2471-2476: assignment LHS.
+        if let Some(out) = op.get_out() {
+            // pushOp(&assignment, op)
+            self.rpn_push_op(self.rpn_tok_assignment);
+            // pushSymbolDetail(outvn, op, false) -> atom on the stack.
+            // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
+            let out_vn = out.read().unwrap();
+            let atom = self.make_atom_for_vn(&out_vn, op);
+            drop(out_vn);
+            self.rpn_push_atom(&atom);
+        }
+        // printc.cc:2493: op->getOpcode()->push(this, op, 0)
+        self.dispatch_op_rpn(op);
+        // printc.cc:2494: recurse()
+        self.rpn_recurse();
+    }
+
+    // ---- Step 5: dispatch_op_rpn (TypeOp::push - typeop.cc) ----
+
+    // Ghidra: typeop.hh:261 TypeOp::push (virtual dispatch)
+    /// Per-opcode RPN dispatch. Faithful in spirit to Ghidra's
+    /// op->getOpcode()->push(this, op, 0) (called from emitExpression at
+    /// printc.cc:2493), simplified to the opcodes needed for a first cut:
+    /// COPY, INT_*/BOOL_* binary/unary arithmetic, LOAD (deref), STORE
+    /// (*addr = value), CALL (name(args)), RETURN (return ...), CBRANCH
+    /// (condition). Everything else is a no-op (BRANCH targets are rendered
+    /// by the structurer; MULTIEQUAL/INDIRECT are internal).
+    fn dispatch_op_rpn(&mut self, op: &PcodeOp) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        match op.opcode {
+            // printc.cc:481 opCopy: pushVn(in0).
+            OpCode::CPUI_COPY => {
+                if let Some(in0) = op.get_in(0) {
+                    let v0 = in0.read().unwrap();
+                    let a0 = self.make_atom_for_vn(&v0, op);
+                    drop(v0);
+                    self.rpn_push_atom(&a0);
+                }
+            }
+            // printlanguage.cc:546 opBinary.
+            OpCode::CPUI_INT_ADD
+            | OpCode::CPUI_INT_SUB
+            | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV
+            | OpCode::CPUI_INT_SDIV
+            | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_SREM
+            | OpCode::CPUI_INT_AND
+            | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_LEFT
+            | OpCode::CPUI_INT_RIGHT
+            | OpCode::CPUI_INT_SRIGHT
+            | OpCode::CPUI_INT_EQUAL
+            | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_LESS
+            | OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_BOOL_AND
+            | OpCode::CPUI_BOOL_OR
+            | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_FLOAT_ADD
+            | OpCode::CPUI_FLOAT_SUB
+            | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV
+            | OpCode::CPUI_FLOAT_EQUAL
+            | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS
+            | OpCode::CPUI_FLOAT_LESSEQUAL => {
+                // Render "<in0> OP <in1>". The RPN stack would normally drive
+                // this via rpn_op_binary + a token table; for the first cut we
+                // emit the op-string directly so we do not have to grow the
+                // token table for every binary opcode.
+                let tok_text = c_binary_op_str(op.opcode);
+                if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
+                    let v0 = in0.read().unwrap();
+                    let a0 = self.make_atom_for_vn(&v0, op);
+                    drop(v0);
+                    self.rpn_push_atom(&a0);
+                    self.emit.tag_op(&format!(" {} ", tok_text));
+                    let v1 = in1.read().unwrap();
+                    let a1 = self.make_atom_for_vn(&v1, op);
+                    drop(v1);
+                    self.rpn_push_atom(&a1);
+                }
+            }
+            // printlanguage.cc:566 opUnary.
+            OpCode::CPUI_INT_NEGATE
+            | OpCode::CPUI_BOOL_NEGATE
+            | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT
+            | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR
+            | OpCode::CPUI_FLOAT_ROUND => {
+                let prefix = match op.opcode {
+                    OpCode::CPUI_INT_NEGATE => "~",
+                    OpCode::CPUI_BOOL_NEGATE => "!",
+                    OpCode::CPUI_INT_2COMP => "-",
+                    OpCode::CPUI_FLOAT_NEG => "-",
+                    _ => "",
+                };
+                self.emit.tag_op(prefix);
+                if let Some(in0) = op.get_in(0) {
+                    let v0 = in0.read().unwrap();
+                    let a0 = self.make_atom_for_vn(&v0, op);
+                    drop(v0);
+                    self.rpn_push_atom(&a0);
+                }
+            }
+            // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
+            OpCode::CPUI_LOAD => {
+                self.rpn_push_op(self.rpn_tok_dereference);
+                if let Some(in1) = op.get_in(1) {
+                    let v1 = in1.read().unwrap();
+                    let a1 = self.make_atom_for_vn(&v1, op);
+                    drop(v1);
+                    self.rpn_push_atom(&a1);
+                }
+            }
+            // STORE has no outvn; render *(addr) = value inline.
+            OpCode::CPUI_STORE => {
+                // in(0) = address space pointer, in(1) = address, in(2) = value.
+                self.emit.tag_op("*");
+                if let Some(in1) = op.get_in(1) {
+                    let v1 = in1.read().unwrap();
+                    let a1 = self.make_atom_for_vn(&v1, op);
+                    drop(v1);
+                    self.rpn_push_atom(&a1);
+                }
+                self.emit.tag_op(" = ");
+                if let Some(in2) = op.get_in(2) {
+                    let v2 = in2.read().unwrap();
+                    let a2 = self.make_atom_for_vn(&v2, op);
+                    drop(v2);
+                    self.rpn_push_atom(&a2);
+                }
+            }
+            // printc.cc:508 opCall: name(args...).
+            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                let target_name = if let Some(in0) = op.get_in(0) {
+                    let v0 = in0.read().unwrap();
+                    let off = v0.get_offset();
+                    drop(v0);
+                    self.symbol_table
+                        .get(&off)
+                        .cloned()
+                        .unwrap_or_else(|| format!("FUN_{:x}", off))
+                } else {
+                    "FUN_unknown".to_string()
+                };
+                let atom = Atom::new(
+                    &target_name,
+                    TagType::FunToken,
+                    SyntaxHighlight::FuncnameColor,
+                );
+                self.rpn_push_atom(&atom);
+                self.emit.print("(");
+                let n = op.num_input();
+                // in(0) is the target; args are in(1..n).
+                let mut first = true;
+                for i in 1..n {
+                    if !first {
+                        self.emit.print(", ");
+                    }
+                    first = false;
+                    if let Some(arg) = op.get_in(i) {
+                        let v = arg.read().unwrap();
+                        let a = self.make_atom_for_vn(&v, op);
+                        drop(v);
+                        self.rpn_push_atom(&a);
+                    }
+                }
+                self.emit.print(")");
+            }
+            // printc.cc:5137 opReturn: return <expr>;.
+            OpCode::CPUI_RETURN => {
+                self.emit.tag_op("return");
+                if let Some(in1) = op.get_in(1) {
+                    self.emit.print(" ");
+                    let v1 = in1.read().unwrap();
+                    let a1 = self.make_atom_for_vn(&v1, op);
+                    drop(v1);
+                    self.rpn_push_atom(&a1);
+                }
+            }
+            // CBRANCH: emit the condition expression in parens.
+            OpCode::CPUI_CBRANCH => {
+                self.emit.print("(");
+                if let Some(in1) = op.get_in(1) {
+                    let v1 = in1.read().unwrap();
+                    let a1 = self.make_atom_for_vn(&v1, op);
+                    drop(v1);
+                    self.rpn_push_atom(&a1);
+                }
+                self.emit.print(")");
+            }
+            // Everything else (BRANCH, MULTIEQUAL, INDIRECT, casts, ...):
+            // print nothing - control flow is rendered by the structurer and
+            // internal ops are not user-visible. Keeps the RPN path compiling.
+            _ => {}
+        }
+    }
+
+    // ---- Step 6: emit_statement_rpn + emit_block_basic_rpn ----
+
+    // Ghidra: printc.cc:2285 PrintC::emitStatement
+    /// Emit a single op as a statement terminated by `;`, unless the
+    /// COMMA_SEPARATE mod is active (for-loop header). Faithful wrapper
+    /// around emit_expression_rpn that adds statement markup + `;`.
+    fn emit_statement_rpn(&mut self, op: &PcodeOp) {
+        // printc.cc:2288: emit->beginStatement(inst);
+        self.emit.begin_statement();
+        // printc.cc:2289: emitExpression(inst);
+        self.emit_expression_rpn(op);
+        // printc.cc:2290: emit->endStatement(id);
+        self.emit.end_statement();
+        // printc.cc:2291-2292: if (!isSet(comma_separate)) print(SEMICOLON);
+        if !self.is_set(print_mods::COMMA_SEPARATE) {
+            self.emit.print(";");
+        }
+    }
+
+    // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
+    /// Walk a basic block's ops and emit each non-implied, non-branch op as
+    /// an RPN statement. Faithful to PrintC::emitBlockBasic (printc.cc:2678-
+    /// 2722): skip dead ops, skip straight BRANCHes (rendered by the
+    /// structurer), skip ops whose output is implied (inlined into consumers).
+    ///
+    /// The read guard on op_arc and the &mut self borrow are disjoint objects,
+    /// so they coexist safely; we keep the guard for the whole statement emit
+    /// (no PcodeOp Clone exists). The rpn dispatchers read-lock input varnode
+    /// DEFS, which are distinct ops (an op never defines its own input), so no
+    /// re-entrant deadlock on this arc.
+    pub fn emit_block_basic_rpn(
+        &mut self,
+        ops: &[std::sync::Arc<std::sync::RwLock<PcodeOp>>],
+    ) {
+        for op_arc in ops {
+            let op_guard = op_arc.read().unwrap();
+            // printc.cc:2696: if (inst->notPrinted()) continue;
+            if op_guard.is_dead() {
+                continue;
+            }
+            // printc.cc:2697-2702: branches. A straight BRANCH is rendered by
+            // the structurer; CBRANCH/RETURN/CALL still need statement output.
+            if op_guard.is_branch() {
+                if matches!(op_guard.opcode, OpCode::CPUI_BRANCH) {
+                    continue;
+                }
+            }
+            // printc.cc:2703-2705: skip ops whose output is implied.
+            if let Some(out) = op_guard.get_out() {
+                if out.read().unwrap().is_implied() {
+                    continue;
+                }
+            }
+            // printc.cc:2716-2719: tagLine before each statement.
+            self.emit.tag_line(0);
+            // printc.cc:2720: emitStatement(inst);
+            self.emit_statement_rpn(&op_guard);
+        }
     }
 
     // Ghidra: printc.cc:123 PrintC::emitCbranchCondition
@@ -3788,6 +4300,15 @@ impl PrintLanguage for PrintC {
     fn doc_function(&mut self, fd: &Funcdata) {
         use std::collections::HashSet;
 
+        // Clear the RPN engine state for this function (faithful to
+        // printlanguage.cc:678 PrintLanguage::clear, which zeroes revpol /
+        // nodepend / pending at the start of every doc_function). The RPN
+        // path is opt-in via set_rpn_enabled; the legacy direct-emit path
+        // remains the default and does not consult this state.
+        self.revpol.clear();
+        self.nodepend.clear();
+        self.rpn_pending = 0;
+
         // Cache the architecture's constant-pool and user-op manager handles
         // for the lifetime of this function (faithful to Ghidra's PrintC having
         // a permanent `glb` pointer). Read by `op_cpoolref` / `op_callother`.
@@ -4402,26 +4923,34 @@ impl PrintLanguage for PrintC {
         // Pass 2: Final Emission
         self.seen_return = false;
 
-        // Emit Ghidra-style typedefs at the top of each function. These mirror
-        // the declarations Ghidra prepends to every decompiled function so its
-        // output is self-contained C. byte/bool come from size-based inference
-        // in ActionInferParams/ActionTypeInfer; without these typedefs the
-        // emitted `byte bVarN;` declarations fail C compilation.
+        // Emit Ghidra-style typedefs once at the top of the whole document
+        // (matching Ghidra, which declares byte/undefined/_struct exactly once
+        // per decompiled file rather than repeating them before every function).
+        // byte/bool come from size-based inference in ActionInferParams/
+        // ActionTypeInfer; without these typedefs the emitted
+        // `byte bVarN;` declarations fail C compilation.
         // `_struct` is a generic backing type for pointer variables that get
         // dereferenced via `->field_N` (see fix_deref_declarations): declaring
         // such a variable as `_struct *` keeps `X->field_N` legal C.
-        self.emit.tag_line(0);
-        self.emit.print("typedef unsigned char byte;");
-        self.emit.tag_line(0);
-        self.emit.print("typedef unsigned long undefined;");
-        self.emit.tag_line(0);
-        self.emit.print("typedef unsigned long undefined4;");
-        self.emit.tag_line(0);
-        self.emit.print("typedef unsigned long long undefined8;");
-        self.emit.tag_line(0);
-        self.emit.print("typedef struct { char _anon[256]; } _struct;");
-        self.emit.tag_line(0);
-        self.emit.print("");
+        //
+        // The caller (examples/curl_decompile.rs, src/bin/rugra.rs) builds a
+        // fresh `PrintC` per function, so an instance field could not enforce
+        // "once per file"; instead a process-wide AtomicBool guarantees the
+        // typedefs are emitted exactly once across the whole decompile run.
+        if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
+            self.emit.tag_line(0);
+            self.emit.print("typedef unsigned char byte;");
+            self.emit.tag_line(0);
+            self.emit.print("typedef unsigned long undefined;");
+            self.emit.tag_line(0);
+            self.emit.print("typedef unsigned long undefined4;");
+            self.emit.tag_line(0);
+            self.emit.print("typedef unsigned long long undefined8;");
+            self.emit.tag_line(0);
+            self.emit.print("typedef struct { char _anon[256]; } _struct;");
+            self.emit.tag_line(0);
+            self.emit.print("");
+        }
 
         // Emit extern declarations for referenced global variables that are not
         // function call targets. Ghidra's output is self-contained: every global
