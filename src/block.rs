@@ -1858,55 +1858,99 @@ impl BlockGraph {
 
     /// Calculate dominance frontiers for all blocks
     ///
-    /// Corresponds to the algorithm in "A Simple, Fast Dominator Algorithm"
+    /// Implements the Cooper-Harvey-Kennedy dominance-frontier algorithm from
+    /// "A Simple, Fast Dominator Algorithm". For a join-point `b` (a block with
+    /// more than one predecessor, OR the function entry when it also has a
+    /// back-edge — i.e. a loop header that doubles as the entry), each
+    /// predecessor `p` runs up the dominator tree adding `b` to every runner's
+    /// frontier until it reaches `idom(b)`.
+    ///
+    /// Note: the function-entry flow is intentionally NOT modelled as an
+    /// explicit predecessor edge (matching Ghidra's `FlowBlock` in-edge model),
+    /// so the entry block's recorded `incoming` edges only reflect real CFG
+    /// edges. A loop header that is also the entry therefore has
+    /// `incoming.len() == 1` (just the back-edge). To keep CHK correct in that
+    /// case we additionally treat `entry && incoming.len() >= 1` as a
+    /// join-point, and — because `build_dom_tree` leaves the entry's `idom`
+    /// as `None` — we use `b` itself as the runner stop node (the entry
+    /// dominates itself). Without this, every loop whose header is the entry
+    /// gets an empty dominance frontier, no MULTIEQUAL (phi) is placed for the
+    /// loop-carried flag varnode, and the CBRANCH condition read is left
+    /// unresolved (root cause of the `while(local_0==local_0)` dead-loop).
     // RUGRA-GLUE: Rugra-only dom-frontier calculation (Ghidra has no dom-frontier field on FlowBlock)
     pub fn calc_dom_frontier(&mut self) {
         for i in 0..self.blocks.len() {
             let b_ref = self.blocks[i].clone();
 
-            // Gather incoming edges
-            let size_in = b_ref.read().unwrap().size_in();
-            let mut incoming = Vec::new();
-            for j in 0..size_in {
-                if let Some(edge) = b_ref.read().unwrap().get_in(j) {
-                    incoming.push(edge);
+            // Gather incoming edges + entry flag + idom while holding one read lock.
+            let (incoming, is_entry, b_index, b_idom_ref) = {
+                let b = b_ref.read().unwrap();
+                let size_in = b.size_in();
+                let mut incoming = Vec::new();
+                for j in 0..size_in {
+                    if let Some(edge) = b.get_in(j) {
+                        incoming.push(edge);
+                    }
                 }
+                let b_idom_ref = b.get_immed_dom().and_then(|w| w.upgrade());
+                // `b` is the function entry iff it has the ENTRY_POINT flag, has
+                // no recorded predecessors (size_in==0), OR — the most reliable
+                // signal — `build_dom_tree` left its `idom` as None (the entry
+                // dominates itself and is never assigned an idom). The idom-None
+                // case is what catches a loop header that doubles as the entry:
+                // its only recorded predecessor is the back-edge (size_in==1)
+                // and ENTRY_POINT may not be set, so the flag/size checks alone
+                // miss it.
+                let is_entry = (b.get_flags() & block_flags::ENTRY_POINT) != 0
+                    || size_in == 0
+                    || b_idom_ref.is_none();
+                let b_index = b.get_index();
+                (incoming, is_entry, b_index, b_idom_ref)
+            };
+
+            // Join-point: ≥2 predecessors, OR the entry block reached by a
+            // back-edge (incoming.len() >= 1) — the implicit entry flow is the
+            // "second" predecessor in CHK terms.
+            let is_join = incoming.len() >= 2
+                || (is_entry && incoming.len() >= 1);
+            if !is_join {
+                continue;
             }
 
-            if incoming.len() >= 2 {
-                let b_index = b_ref.read().unwrap().get_index();
-                let b_idom_ref = b_ref
-                    .read()
-                    .unwrap()
-                    .get_immed_dom()
-                    .and_then(|w| w.upgrade());
+            // CHK runner stop node = idom(b). For the entry block idom is None
+            // (buildDomTree leaves it unset), but the entry dominates itself,
+            // so the correct stop node is `b` itself.
+            let stop_ref: Arc<RwLock<dyn FlowBlock + Send + Sync>> = match &b_idom_ref {
+                Some(idom) => idom.clone(),
+                None if is_entry => b_ref.clone(),
+                None => continue,
+            };
 
-                for edge in incoming {
-                    let mut runner_ref = edge.point.clone();
+            for edge in incoming {
+                let mut runner_ref = edge.point.clone();
 
-                    if let Some(ref idom) = b_idom_ref {
-                        let max_steps = self.blocks.len() + 2;
-                        let mut steps = 0;
-                        while !Arc::ptr_eq(&runner_ref, idom) && steps < max_steps {
-                            steps += 1;
-                            runner_ref
-                                .write()
-                                .unwrap()
-                                .add_to_dom_frontier(b_index);
+                let max_steps = self.blocks.len() + 2;
+                let mut steps = 0;
+                while !Arc::ptr_eq(&runner_ref, &stop_ref) && steps < max_steps {
+                    steps += 1;
+                    runner_ref
+                        .write()
+                        .unwrap()
+                        .add_to_dom_frontier(b_index);
 
-                            let next_runner = runner_ref
-                                .read()
-                                .unwrap()
-                                .get_immed_dom()
-                                .and_then(|w| w.upgrade());
+                    let next_runner = runner_ref
+                        .read()
+                        .unwrap()
+                        .get_immed_dom()
+                        .and_then(|w| w.upgrade());
 
-                            if let Some(nr) = next_runner {
-                                if Arc::ptr_eq(&nr, &runner_ref) { break; } // self-loop
-                                runner_ref = nr;
-                            } else {
-                                break;
-                            }
+                    if let Some(nr) = next_runner {
+                        if Arc::ptr_eq(&nr, &runner_ref) {
+                            break; // self-loop
                         }
+                        runner_ref = nr;
+                    } else {
+                        break;
                     }
                 }
             }
