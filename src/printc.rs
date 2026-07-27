@@ -1029,7 +1029,11 @@ impl PrintC {
                 let t = text.trim();
                 // Same malformed-condition guard as emit_block_condition: detect
                 // cast-concat and variable-name-concat (BOOL_OR/AND operator dropped
-                // during emit_condition's nested emit-swap). Fall back to `1`.
+                // during emit_condition's nested emit-swap), plus degenerate
+                // self-comparisons `X == X` / `X != X` from a CBRANCH whose
+                // condition varnode lost its SSA def (x86-flags recovery failure).
+                // All fall back to `1` (always-true) per the malformed-condition
+                // policy (R50).
                 let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
                     + t.matches("(char)").count() + t.matches("(bool)").count()
                     + t.matches("(short)").count();
@@ -1038,10 +1042,12 @@ impl PrintC {
                     || t.contains(" <= ") || t.contains(" >= ");
                 let has_concat_cast = cast_count >= 2 && !has_bool_op;
                 let has_concat_varname = Self::regex_concat_varname(t);
+                let has_self_comparison = Self::is_self_comparison(t);
                 let looks_valid = !t.is_empty()
                     && t.chars().any(|c| c.is_alphanumeric() || c == '_')
                     && !has_concat_cast
-                    && !has_concat_varname;
+                    && !has_concat_varname
+                    && !has_self_comparison;
                 if looks_valid {
                     self.emit.print(&text);
                 } else {
@@ -1706,7 +1712,46 @@ impl PrintC {
                     if let Some(last_op_ref) = ops.last() {
                         let last_op = last_op_ref.0.read().unwrap();
                         if let Some(cond_vn) = last_op.get_in(1) {
+                            // Capture the condition into a throwaway buffer first so
+                            // we can apply the same malformed-condition guard used
+                            // by emit_block_condition / emit_cbranch_condition
+                            // (cast-concat, varname-concat, degenerate self-compare
+                            // `X == X`/`X != X`). The do-while CBRANCH's condition
+                            // varnode can lose its SSA def under Rugra's x86-flags
+                            // recovery, leaving a tautology like `local_0 == local_0`
+                            // — fold it to `1` rather than emitting a nonsense
+                            // `while (X == X);`. (Audit: R50.)
+                            let cond_vn = cond_vn.clone();
+                            drop(last_op);
+                            let orig_emit = std::mem::replace(&mut self.emit,
+                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
                             self.emit_condition(&cond_vn);
+                            let text = {
+                                let buf = std::mem::replace(&mut self.emit, orig_emit);
+                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+                                    .map(|b| b.get_output()).unwrap_or_default()
+                            };
+                            let t = text.trim();
+                            let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
+                                + t.matches("(char)").count() + t.matches("(bool)").count()
+                                + t.matches("(short)").count();
+                            let has_bool_op = t.contains(" || ") || t.contains(" && ")
+                                || t.contains(" == ") || t.contains(" != ")
+                                || t.contains(" < ") || t.contains(" > ")
+                                || t.contains(" <= ") || t.contains(" >= ");
+                            let has_concat_cast = cast_count >= 2 && !has_bool_op;
+                            let has_concat_varname = Self::regex_concat_varname(t);
+                            let has_self_comparison = Self::is_self_comparison(t);
+                            let looks_valid = !t.is_empty()
+                                && t.chars().any(|c| c.is_alphanumeric() || c == '_')
+                                && !has_concat_cast
+                                && !has_concat_varname
+                                && !has_self_comparison;
+                            if looks_valid {
+                                self.emit.print(&text);
+                            } else {
+                                self.emit.print("1");
+                            }
                         }
                     }
                     self.emit.print(");");
@@ -3632,10 +3677,18 @@ impl PrintC {
         // identifier containing two Var-prefix+number runs). Detected by
         // regex: an identifier with two `Var<digits>` segments.
         let has_concat_varname = Self::regex_concat_varname(t);
+        // Degenerate self-comparison `X == X` / `X != X` (both operands the
+        // same identifier). The signature of a CBRANCH whose condition
+        // varnode lost its SSA def (x86-flags recovery failure) so the
+        // value-based scan picked a comparison whose inputs folded to the
+        // same garbage placeholder. Fold to `1` per the malformed-condition
+        // policy (R50). See is_self_comparison for the full rationale.
+        let has_self_comparison = Self::is_self_comparison(t);
         let looks_valid = !t.is_empty()
             && t.chars().any(|c| c.is_alphanumeric() || c == '_')
             && !has_concat_cast
-            && !has_concat_varname;
+            && !has_concat_varname
+            && !has_self_comparison;
         if looks_valid {
             self.emit.print(&produced);
         } else {
@@ -3720,6 +3773,55 @@ impl PrintC {
             let lhs = t[..idx].trim();
             let rhs = t[idx + 3..].trim();
             return !lhs.is_empty() && lhs == rhs;
+        }
+        false
+    }
+
+    /// Detect a degenerate textual self-comparison `X == X`, `X != X`,
+    /// `X < X`, `X <= X`, `X > X`, or `X >= X`, where the two operands are
+    /// the same identifier token. This is the signature of a CBRANCH whose
+    /// condition varnode has a missing/dead SSA def (a common x86-flags
+    /// recovery failure in Rugra): emit_block_condition_inner's value-based
+    /// scan picks the wrong comparison op, whose inputs have already been
+    /// folded to the same garbage Const/Stack-0 placeholder, producing a
+    /// tautology like `local_0 == local_0`. The real control-flow intent is
+    /// lost at the SSA layer (out of scope here), so we treat the condition
+    /// as malformed and let emit_block_condition fall back to `1`.
+    ///
+    /// Only matches a single full binary comparison (the form emitted by
+    /// emit_condition's Case 2). Tolerates optional surrounding parentheses
+    /// and leading/trailing whitespace. Does NOT match compound conditions
+    /// containing `||`/`&&` (those are left to the BOOL_OR/BOOL_AND path).
+    // RUGRA-GLUE: print-time textual predicate (no Ghidra counterpart;
+    // Ghidra's SSA recovery never produces self-comparisons).
+    fn is_self_comparison(text: &str) -> bool {
+        // Strip outer parens and whitespace, e.g. "(local_0 == local_0)".
+        let mut t = text.trim();
+        while t.starts_with('(') && t.ends_with(')') {
+            t = t[1..t.len() - 1].trim();
+        }
+        // Reject compound conditions — only handle a single binary comparison.
+        if t.contains("||") || t.contains("&&") { return false; }
+        for op in [" == ", " != ", " <= ", " >= ", " < ", " > "].iter() {
+            if let Some(idx) = t.find(op) {
+                let lhs = t[..idx].trim();
+                let rhs = t[idx + op.len()..].trim();
+                // Both sides must be a single identifier token and identical.
+                let is_ident = |s: &str| -> bool {
+                    let mut it = s.bytes();
+                    match it.next() {
+                        Some(b) if b.is_ascii_alphabetic() || b == b'_' => {}
+                        _ => return false,
+                    }
+                    it.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                };
+                if !lhs.is_empty() && !rhs.is_empty()
+                    && is_ident(lhs) && is_ident(rhs)
+                    && lhs == rhs
+                {
+                    return true;
+                }
+            }
         }
         false
     }
@@ -9509,6 +9611,25 @@ mod tests {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
 
         printer.doc_function(&fd);
+    }
+
+    #[test]
+    fn test_is_self_comparison() {
+        // Degenerate self-comparisons (the `while (local_0 == local_0)` dead-loop
+        // pattern from a CBRANCH whose condition varnode lost its SSA def).
+        assert!(PrintC::is_self_comparison("local_0 == local_0"));
+        assert!(PrintC::is_self_comparison("local_0 != local_0"));
+        assert!(PrintC::is_self_comparison("(local_0 == local_0)"));
+        assert!(PrintC::is_self_comparison("  Var5 == Var5  "));
+        assert!(PrintC::is_self_comparison("param_3 <= param_3"));
+        // Distinct operands → not a self-comparison.
+        assert!(!PrintC::is_self_comparison("a == b"));
+        assert!(!PrintC::is_self_comparison("local_0 == local_1"));
+        // Compound conditions (||/&&) are left to the BOOL_OR/BOOL_AND path.
+        assert!(!PrintC::is_self_comparison("a && local_0 == local_0"));
+        assert!(!PrintC::is_self_comparison("local_0 == local_0 || x"));
+        // Compound expression operands (not a bare identifier) → not matched.
+        assert!(!PrintC::is_self_comparison("a + 1 == a + 1"));
     }
 
     #[test]
