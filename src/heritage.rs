@@ -3283,6 +3283,9 @@ impl Heritage {
 
         let op_ref = obank.create(crate::opcodes::OpCode::CPUI_MULTIEQUAL, num_in, start_addr);
         block_arc.write().unwrap().insert_op(0, op_ref.clone());
+        // Ghidra heritage.cc:233: op->setParent(block)
+        // Set parent back-pointer so rename can traverse this phi.
+        op_ref.0.write().unwrap().parent = Some(std::sync::Arc::downgrade(&block_arc) as std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
 
         // Query globaldisjoint LocationMap for precise size (note: LocationMap also uses Address only, which is a broader bug, but we fallback to vbank)
         let size = self
