@@ -645,25 +645,110 @@ impl PrintC {
 
     // Ghidra: printlanguage.cc:514 PrintLanguage::recurse
     /// Drain the pending-implied list, emitting complete sub-expressions.
-    /// Faithful wrapper over rpn_recurse. The Rust free-function drains
-    /// nodepend but does NOT resolve the opcode->push virtual call (it has no
-    /// op arena); Rugra resolves inputs by recursing into the defining op
-    /// directly in emit_expression_rpn, so this wrapper is effectively a no-op
-    /// on the pending list in practice.
+    ///
+    /// Faithful port of `PrintLanguage::recurse` (printlanguage.cc:514-540).
+    /// Pops each `NodePending`, then either:
+    ///   - recurses into the defining op if `vn.is_implied()` (Ghidra's
+    ///     `defOp->getOpcode()->push(this, defOp, op)` at printlanguage.cc:532),
+    ///     or
+    ///   - emits the Varnode as a leaf via `pushVnExplicit` (printlanguage.cc:
+    ///     218-230) if not implied.
+    ///
+    /// **Why this is a PrintC method, not the printlanguage.rs free fn:**
+    /// the free fn has no opcode dispatch table (Ghidra's
+    /// `defOp->getOpcode()->push` virtual call needs the per-opcode dispatcher
+    /// and `&mut self`). PrintC owns both, so we do the real dispatch here. The
+    /// free fn is left as a structure-preserving no-op for the
+    /// `rpn_push_op` / `rpn_push_atom` internal recursion trigger (see
+    /// printlanguage.cc:133/166).
+    ///
+    /// **pushVnExplicit faithfulness:** Ghidra's pushVnExplicit (218-230)
+    /// handles annotation / constant fast-paths then calls
+    /// `pushSymbolDetail(vn, op, true)` (238-262), which falls back through
+    /// symbol / partial-symbol / unnamed-location resolution. Rugra's
+    /// `make_atom_for_vn` covers the same cascade (constant, named symbol via
+    /// get_varnode_display_name, unnamed-location fallback), so pushing its
+    /// Atom via rpn_push_atom is the Rugra equivalent of pushVnExplicit.
+    ///
+    /// **Implied-field branch:** Ghidra's `vn->hasImpliedField()` /
+    /// `pushImpliedField` (printlanguage.cc:528-529) handles a partial-symbol
+    /// implied field. Rugra has no implied-field machinery yet, so we treat the
+    /// branch as the no-op it would be (hasImpliedField returns false) and go
+    /// straight to the def-op dispatch — matches Ghidra behaviour for any
+    /// implied Varnode whose high-symbol offset is the base.
+    ///
+    /// Borrow safety: we hold a read-lock on `def_op` only for the duration of
+    /// `dispatch_op_rpn`. `dispatch_op_rpn` read-locks its inputs' defs (which
+    /// are *different* PcodeOps — an op never defines its own input), so there
+    /// is no re-entrant deadlock on a single arc.
     fn rpn_recurse(&mut self) {
-        crate::printlanguage::rpn_recurse(
-            &mut self.revpol,
-            &mut self.nodepend,
-            &mut self.rpn_pending,
-            &self.rpn_token_table,
-            &mut *self.emit,
-        );
+        // printlanguage.cc:517
+        let modsave = self.mods;
+        let last_pending = self.rpn_pending;
+        // printlanguage.cc:518: claim the rest.
+        self.rpn_pending = self.nodepend.len();
+        // printlanguage.cc:519: while (lastPending < pending)
+        while last_pending < self.rpn_pending {
+            // printlanguage.cc:520-522: pop back + read fields.
+            let np = self.nodepend.pop().unwrap();
+            // Read the implied Varnode + consuming op arcs. These guards live
+            // only for this loop iteration; we drop them before any &mut self
+            // dispatch call below.
+            let vn_guard = np.vn.read().unwrap();
+            let op_guard = np.op.read().unwrap();
+            self.mods = np.vnmod;
+            // printlanguage.cc:523: pending -= 1
+            self.rpn_pending -= 1;
+            let is_implied = vn_guard.is_implied();
+            // printlanguage.cc:525-534: implied-vs-explicit dispatch.
+            if is_implied {
+                // Rugra has no pushImpliedField / hasImpliedField yet — Ghidra
+                // only takes that branch when a partial-symbol implied field
+                // exists, which Rugra's symbol model does not produce, so we
+                // go straight to defOp->getOpcode()->push(this, defOp, op).
+                if let Some(def_op_arc) = vn_guard.get_def() {
+                    // Drop the locks on np.vn / np.op before any &mut self call
+                    // that might re-lock a PcodeOp (def_op_arc is a distinct op
+                    // from np.op, but dropping keeps the borrow graph simple).
+                    drop(vn_guard);
+                    drop(op_guard);
+                    let def_guard = def_op_arc.read().unwrap();
+                    // printlanguage.cc:532: defOp->getOpcode()->push(this, defOp, op)
+                    self.dispatch_op_rpn(&def_guard);
+                    drop(def_guard);
+                } else {
+                    drop(vn_guard);
+                    drop(op_guard);
+                }
+            } else {
+                // printlanguage.cc:538: pushVnExplicit(vn, op) — annotation /
+                // constant fast-paths (218-226) then pushSymbolDetail (238-262).
+                // Rugra's make_atom_for_vn covers the same cascade; pushing its
+                // Atom via rpn_push_atom is the faithful equivalent.
+                let atom = self.make_atom_for_vn(&vn_guard, &op_guard);
+                drop(vn_guard);
+                drop(op_guard);
+                self.rpn_push_atom(&atom);
+            }
+            // printlanguage.cc:535: pending = nodepend.size()
+            self.rpn_pending = self.nodepend.len();
+        }
+        // printlanguage.cc:537
+        self.mods = modsave;
     }
 
     // Ghidra: printlanguage.cc:197 PrintLanguage::pushVn
     /// Record a pending implied Varnode for later placement by rpn_recurse.
-    fn rpn_push_vn(&mut self, vn_index: i64, op_index: i64, m: u32) {
-        crate::printlanguage::rpn_push_vn(&mut self.nodepend, vn_index, op_index, m);
+    /// Stores the actual `Arc<Varnode>` + `Arc<PcodeOp>` (matching Ghidra's
+    /// `nodepend.emplace_back(vn, op, m)` at printlanguage.cc:210) so that
+    /// `rpn_recurse` can later dispatch off the captured arcs.
+    fn rpn_push_vn(
+        &mut self,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+        m: u32,
+    ) {
+        crate::printlanguage::rpn_push_vn(&mut self.nodepend, vn, op, m);
     }
 
     // ---- Step 4: make_atom_for_vn (printlanguage.cc:218 pushVnExplicit) ----
@@ -3664,10 +3749,16 @@ impl PrintC {
             let op = op_ref.0.read().unwrap();
             if op.opcode == OpCode::CPUI_CBRANCH {
                 if let Some(cond_vn) = op.get_in(1) {
+                    // printc.cc opCbranch: pushVn(getIn(1), op, mods) + recurse().
+                    // Pass the consuming-op arc (the CBRANCH) and the condition
+                    // varnode arc. rpn_recurse then expands the condition's def
+                    // if it is implied (e.g. an INT_EQUAL producing the bool),
+                    // or pushes it as a leaf otherwise.
                     let cond_arc = cond_vn.clone();
+                    let op_arc = op_ref.0.clone();
                     drop(op);
                     drop(block);
-                    self.rpn_push_vn(cond_arc, 0, self.mods);
+                    self.rpn_push_vn(cond_arc, op_arc, self.mods);
                     self.rpn_recurse();
                     return;
                 }
