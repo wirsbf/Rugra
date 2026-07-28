@@ -3896,14 +3896,12 @@ fn seed_global_struct_pointers(
     let known: std::collections::HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>> =
         globals.into_iter().collect();
 
+    // 1. Search loc_tree for direct address constants
     for vn_ref in &fd.vbank.loc_tree {
         let vn = vn_ref.0.read().unwrap();
         if vn.is_annotation() || vn.is_free() {
             continue;
         }
-        // A global's address surfaces as either a constant varnode (the
-        // address literal) or a Ram-space varnode (the memory location
-        // itself). Accept either.
         let off = vn.get_offset();
         let matches = match vn.get_space() {
             crate::space::AddressSpace::Const => known.contains_key(&off),
@@ -3913,6 +3911,33 @@ fn seed_global_struct_pointers(
         if matches {
             if let Some(dt) = known.get(&off) {
                 temps.insert(vn_id(&vn), dt.clone());
+            }
+        }
+    }
+    // 2. Search COPY ops: if COPY(Const/Ram@addr) → output, stamp output
+    // This catches Heritage-renamed varnodes where the address constant
+    // was folded into a COPY input but the output (in Register space)
+    // carries the global's address value.
+    for op_ref in &fd.obank.alivelist {
+        let op = op_ref.0.read().unwrap();
+        if op.opcode != crate::opcodes::OpCode::CPUI_COPY {
+            continue;
+        }
+        if let Some(in0) = op.get_in(0) {
+            if let Some(ref out_arc) = op.output {
+            let src = in0.read().unwrap();
+            let off = src.get_offset();
+            let matches = match src.get_space() {
+                crate::space::AddressSpace::Const => known.contains_key(&off),
+                crate::space::AddressSpace::Ram => known.contains_key(&off),
+                _ => false,
+            };
+            if matches {
+                let out_vn = out_arc.read().unwrap();
+                if let Some(dt) = known.get(&off) {
+                    temps.insert(vn_id(&out_vn), dt.clone());
+                }
+            }
             }
         }
     }
