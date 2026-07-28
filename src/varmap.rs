@@ -1687,7 +1687,7 @@ impl ScopeLocal {
             }
             let size = (endpoint - addr + 1) as i32;
             self.symbols.push(LocalSymbol {
-                name: format!("param_{:x}", addr),
+                name: format!("in_stack_{:x}", addr),
                 start: addr,
                 size,
                 dtype: Some(Arc::new(Datatype::Base(
