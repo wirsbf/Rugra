@@ -3557,12 +3557,21 @@ impl Heritage {
                                 }
                             }
                             // Ghidra cc:2519: fd->opSetInput(op, vnnew, slot);
-                            // Preserve v_type from old varnode to new varnode
-                            // so struct pointer types survive Heritage rename.
+                            // Preserve v_type AND mapentry from old varnode to
+                            // new varnode so struct pointer types and the
+                            // SymbolEntry (carrying the global field address)
+                            // survive Heritage rename (b754fca + this patch).
                             {
-                                let old_vt = vnin_arc.read().unwrap().v_type.clone();
+                                let (old_vt, old_mapentry) = {
+                                    let vnin_r = vnin_arc.read().unwrap();
+                                    (vnin_r.v_type.clone(), vnin_r.mapentry.clone())
+                                };
+                                let mut vnnew_w = vnnew.write().unwrap();
                                 if old_vt.is_some() {
-                                    vnnew.write().unwrap().v_type = old_vt;
+                                    vnnew_w.v_type = old_vt;
+                                }
+                                if old_mapentry.is_some() {
+                                    vnnew_w.mapentry = old_mapentry;
                                 }
                             }
                             op.inrefs[i] = vnnew.clone();
@@ -3642,6 +3651,21 @@ impl Heritage {
                                     vnnew = stack.last().unwrap().clone();
                                 }
                                 // Ghidra cc:2548: opSetInput(multiop, vnnew, slot)
+                                // Preserve v_type AND mapentry (phi-input variant,
+                                // mirroring the op-input preservation above).
+                                {
+                                    let (old_vt, old_mapentry) = {
+                                        let vnin_r = vnin_arc.read().unwrap();
+                                        (vnin_r.v_type.clone(), vnin_r.mapentry.clone())
+                                    };
+                                    let mut vnnew_w = vnnew.write().unwrap();
+                                    if old_vt.is_some() {
+                                        vnnew_w.v_type = old_vt;
+                                    }
+                                    if old_mapentry.is_some() {
+                                        vnnew_w.mapentry = old_mapentry;
+                                    }
+                                }
                                 op.inrefs[my_in_idx] = vnnew.clone();
                                 vnnew
                                     .write()
