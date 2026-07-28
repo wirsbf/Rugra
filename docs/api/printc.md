@@ -619,6 +619,21 @@ COPY 是语义上的 no-op 赋值，内联其源始终正确。
 ### 2026-06-29：BlockIf if-goto emit（goto_target.is_some()）
 - printc.rs BlockType::If emit 新增 if-goto 分支：当 `if_data.goto_target.is_some()` 时，emit condition block 的 ops（CBRANCH 处理分支），不 emit 占位 body。对应 Ghidra newBlockIfGoto 的 emit 语义。
 
+### 2026-07-28：if-goto 的 BlockIf::goto_type → CBRANCH branch_type 映射
+- Ghidra `emitBlockIf`（printc.cc:2914-2916）读取 BlockIf 的 gototype
+  （由 `BlockIf::scopeBreak` block.cc:3075-3084 设置）并调用
+  `emitGotoStatement(condBlock, gototarget, gototype)`。
+- Rugra 的 if-goto 发射通过 `emit_block_ops` 到达 CBRANCH op，其中
+  `op_cbranch` 读 `op.branch_type`（由 ActionNormalizeBranches 设置）来决定
+  break/continue/goto。为忠实映射 `BlockIf::goto_type → CBRANCH branch_type`，
+  `emit_structured_if` 在 `emit_block_ops(&condition, false)` 之前，从
+  `if_data.goto_type` 设置 condition block 末尾 CBRANCH op 的 branch_type
+  （BREAK_GOTO→BREAK，CONTINUE_GOTO→CONTINUE）。
+- 这是 scope_break（blockaction.cc:2193）的 printc 侧对应物，使
+  f_break_goto / f_continue_goto 打印为 `break` / `continue` 而非
+  `goto code_r0x...;`。condition block 是 BlockBasic，需 downcast 调用
+  其 inherent `last_op()`（FlowBlock::last_op trait 默认返回 None）。
+
 ### 2026-07-01：while→for 发射
 WhileDo 块检查 for_init/for_iter：有则 `for(init;cond;iter)`，否则 `while(cond)`。
 

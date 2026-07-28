@@ -5484,6 +5484,16 @@ impl Action for ActionFinalStructure {
 
         let mut changed = 0;
 
+        // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
+        // Walk the structure tree (sblocks) reclassifying any unstructured
+        // goto whose target is the enclosing loop's exit as f_break_goto, so
+        // emitBlockGoto (printc.cc:2766) prints `break;` instead of
+        // `goto code_r0x...;`. This is the entry point for goto→break/continue
+        // conversion; without it, every BlockGoto keeps its default
+        // f_goto_goto and emits a `code_r0x` label.
+        fd.sblocks.scope_break(-1, -1);
+        changed += 1;
+
         // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
         // by ActionNormalizeBranches)
         for op_ref in &fd.obank.alivelist {

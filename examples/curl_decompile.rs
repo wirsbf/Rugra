@@ -327,6 +327,12 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("[STEP] {} action done {:?}", func_name, t0.elapsed());
 
             let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+            // EXPERIMENTAL: enable the RPN emit path (printc.rs build_rpn_token_table /
+            // emit_block_basic_rpn / dispatch_op_rpn). NOTE: as of this experiment
+            // `rpn_enabled` is only ever written, never read — doc_function does NOT
+            // gate on it, so this call is expected to be a no-op. Kept here to verify
+            // that hypothesis end-to-end.
+            printer.set_rpn_enabled(true);
             let fd_read = fd_arc.read().unwrap();
             printer.doc_function(&fd_read);
             drop(fd_read);

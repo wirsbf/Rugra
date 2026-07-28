@@ -1003,6 +1003,28 @@ getExitLeaf / lastOp / encodeHeader 等）。Rugra 因 struct-with-specific-fiel
   构造点（blockaction.rs:3715）添加 `goto_type: GOTO_GOTO` 字段
   （由并发会话在 commit 4b5584f 中完成）。
 
+**scope_break 接入主管线（block.rs / blockaction.rs）：**
+- 新增 `BlockGraph::scope_break(cur_exit, cur_loop_exit)`（block.cc:1270-1288
+  `BlockGraph::scopeBreak`）：按顺序遍历 `blocks`，对每个子块调用
+  `scope_break_trait(ind, cur_loop_exit)`，其中 `ind` 是下一个兄弟块的
+  index（最后一个子块继承传入的 `cur_exit`）。这是 `ActionFinalStructure::apply`
+  的入口（blockaction.cc:2193 `graph.scopeBreak(-1,-1)`）。
+- `FlowBlock::scope_break_trait` 在 7 个结构化子类型中重写，dispatch 到
+  已有的 inherent 辅助方法（之前定义但从未被调用，导致所有 BlockGoto/BlockIf
+  保留默认 `GOTO_GOTO`，emit 阶段打印 `goto code_r0x...;`）：
+  - `BlockGoto` → `scope_break_goto_type`（block.cc:2866）
+  - `BlockIf` → `scope_break_goto_type`（block.cc:3075）
+  - `BlockWhileDo` → `scope_break_children`（block.cc:3324）
+  - `BlockDoWhile` → `scope_break_body`（block.cc:3434）
+  - `BlockInfLoop` → `scope_break_body`（block.cc:3462）
+  - `BlockCondition` → `scope_break_children`（block.cc:3034）
+  - `BlockSwitch` → `scope_break_break_cases`（block.cc:3613）
+  - `BlockList` → 内联 `BlockGraph::scopeBreak` 遍历（Ghidra 中 BlockList
+    继承 BlockGraph，不重写 scopeBreak）
+- `ActionFinalStructure::apply`（blockaction.rs）在标记 BRANCH/CBRANCH
+  之前调用 `fd.sblocks.scope_break(-1, -1)`，把目标 == 内层循环 exit 的
+  goto 重分类为 `BREAK_GOTO`，emit 阶段打印 `break;` 而非 `goto code_r0x...;`。
+
 **验证：** `cargo check` 通过（block.rs / blockaction.rs / coreaction.rs 零错误；
 剩余 4 个 E0308 错误位于 printc.rs / typefactory.rs，属其他并发会话的进行中工作）。
 每个移植方法上方均有 `// Ghidra: block.cc:<行号> <函数名>` 注释；Rust 粘合代码

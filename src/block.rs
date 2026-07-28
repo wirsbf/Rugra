@@ -1505,6 +1505,38 @@ impl BlockGraph {
         self.blocks.retain(|b| !Arc::ptr_eq(b, bl));
     }
 
+    /// Ghidra `BlockGraph::scopeBreak` (block.cc:1270-1288): walk this graph's
+    /// child list in order and recurse `scopeBreak(cur_exit, cur_loop_exit)`
+    /// into each child. For every child except the last, `cur_exit` is the
+    /// next child's index (its fall-thru successor); for the last child,
+    /// `cur_exit` is the value passed in (the enclosing scope's exit, or -1
+    /// at the function top-level). `cur_loop_exit` is propagated unchanged
+    /// (it is the innermost enclosing loop's exit, or -1 outside any loop).
+    ///
+    /// This is the entry point invoked by `ActionFinalStructure::apply`
+    /// (blockaction.cc:2193: `graph.scopeBreak(-1,-1)`) to reclassify
+    /// unstructured gotos whose target is an enclosing loop's exit as
+    /// `break;` (BlockGoto::gototype = f_break_goto).
+    // Ghidra: block.cc:1270 BlockGraph::scopeBreak
+    pub fn scope_break(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        // cc:1277-1287: iter = list.begin(); while (iter != list.end()) {
+        //          curbl = *iter; ++iter;
+        //          if (iter == list.end()) ind = curexit; else ind = (*iter)->getIndex();
+        //          curbl->scopeBreak(ind, curloopexit);
+        //        }
+        let n = self.blocks.len();
+        for i in 0..n {
+            // Look ahead to determine this child's exit (= next child's index,
+            // or the inherited cur_exit for the last child).
+            let ind = if i + 1 < n {
+                self.blocks[i + 1].read().unwrap().get_index()
+            } else {
+                cur_exit
+            };
+            self.blocks[i].write().unwrap().scope_break_trait(ind, cur_loop_exit);
+        }
+    }
+
     /// Find the nearest common ancestor (dominator) of two blocks in the
     /// dominator tree. Faithful to `FlowBlock::findCommonBlock`
     /// (block.cc:736-795). Used by `PcodeOp::compareOrder` (op.cc:778) to
@@ -2232,6 +2264,12 @@ impl FlowBlock for BlockGoto {
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // Ghidra: block.cc:2866 BlockGoto::scopeBreak — delegate to the inherent
+    // helper which holds the faithful port (cc:2869 recurse, cc:2872-2873
+    // reclassify as f_break_goto when target == curloopexit).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_goto_type(cur_exit, cur_loop_exit);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockGoto virtual overrides)
@@ -2394,6 +2432,12 @@ impl FlowBlock for BlockIf {
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         // Return condition block ops for the conditional test
         self.condition.read().unwrap().get_ops()
+    }
+    // Ghidra: block.cc:3075 BlockIf::scopeBreak — delegate to the inherent
+    // helper which holds the faithful port (cc:3078 condition recurse,
+    // cc:3080-3081 body recurse, cc:3082-3083 if-goto reclassify).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_goto_type(cur_exit, cur_loop_exit);
     }
 }
 
@@ -2620,6 +2664,12 @@ impl FlowBlock for BlockWhileDo {
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.condition.read().unwrap().get_ops()
     }
+    // Ghidra: block.cc:3324 BlockWhileDo::scopeBreak — delegate to the
+    // inherent helper which holds the faithful port (cc:3328 condition
+    // recurse with new cur_exit, cc:3329 body recurse exiting into header).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_children(cur_exit, cur_loop_exit);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockWhileDo virtual overrides)
@@ -2777,6 +2827,12 @@ impl FlowBlock for BlockDoWhile {
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.condition.read().unwrap().get_ops()
     }
+    // Ghidra: block.cc:3434 BlockDoWhile::scopeBreak — delegate to the
+    // inherent helper which holds the faithful port (cc:3438 fused-body
+    // recurse with cur_exit=-1, this block establishes a new loop scope).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_body(cur_exit, cur_loop_exit);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockDoWhile virtual overrides)
@@ -2884,6 +2940,12 @@ impl FlowBlock for BlockInfLoop {
     // RUGRA-GLUE: Rust helper (structured blocks delegate ops to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.body.read().unwrap().get_ops()
+    }
+    // Ghidra: block.cc:3462 BlockInfLoop::scopeBreak — delegate to the
+    // inherent helper which holds the faithful port (cc:3466 body recurse
+    // exiting into itself, this block establishes a new loop scope).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_body(cur_exit, cur_loop_exit);
     }
 }
 
@@ -3083,6 +3145,24 @@ impl FlowBlock for BlockList {
         }
         all_ops
     }
+    // Ghidra: BlockList inherits BlockGraph::scopeBreak (block.cc:1270-1288)
+    // — there is no override, so a BlockList walks its children exactly like
+    // a BlockGraph: each child's exit is the next child's index (or the
+    // inherited cur_exit for the last child), and cur_loop_exit propagates
+    // unchanged. Rugra's BlockList is a separate struct (not a BlockGraph
+    // subclass), so we replicate the traversal here.
+    // Ghidra: block.cc:1270 BlockGraph::scopeBreak (inherited by BlockList)
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        let n = self.children.len();
+        for i in 0..n {
+            let ind = if i + 1 < n {
+                self.children[i + 1].read().unwrap().get_index()
+            } else {
+                cur_exit
+            };
+            self.children[i].write().unwrap().scope_break_trait(ind, cur_loop_exit);
+        }
+    }
 }
 
 /// Boolean operator type for `BlockCondition`.
@@ -3171,6 +3251,12 @@ impl FlowBlock for BlockCondition {
         let mut ops = self.first.read().unwrap().get_ops();
         ops.extend(self.second.read().unwrap().get_ops());
         ops
+    }
+    // Ghidra: block.cc:3034 BlockCondition::scopeBreak — delegate to the
+    // inherent helper which holds the faithful port (cc:3037-3038 recurse
+    // into both sub-conditions with cur_exit=-1, no fixed exit).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_children(cur_exit, cur_loop_exit);
     }
 }
 
@@ -3354,6 +3440,12 @@ impl FlowBlock for BlockSwitch {
     // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.control.read().unwrap().get_ops()
+    }
+    // Ghidra: block.cc:3613 BlockSwitch::scopeBreak — delegate to the
+    // inherent helper which holds the faithful port (cc:3617 control recurse
+    // with cur_exit=-1, cc:3618-3629 per-case recurse with cur_exit=curexit).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_break_cases(cur_exit, cur_loop_exit);
     }
 }
 

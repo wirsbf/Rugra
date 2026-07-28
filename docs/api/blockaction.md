@@ -49,6 +49,17 @@ Corresponds to Ghidra's `ActionFinalStructure`
 
 Create a new ActionFinalStructure instance
 
+### 2026-07-28：接入 `graph.scopeBreak(-1,-1)`（blockaction.cc:2193）
+
+- `ActionFinalStructure::apply` 在标记 BRANCH/CBRANCH 为 GOTO 之前，先调用
+  `fd.sblocks.scope_break(-1, -1)`，遍历结构树把目标 == 内层循环 exit
+  的 BlockGoto/BlockIf goto 重分类为 `BREAK_GOTO`（block.cc:2866/3075）。
+- 这是 Ghidra `ActionFinalStructure::apply`（blockaction.cc:2186-2197）
+  的忠实第 3 步：`graph.orderBlocks()` → `graph.finalizePrinting()` →
+  `graph.scopeBreak(-1,-1)` → `graph.markUnstructured()` → `graph.markLabelBumpUp(false)`。
+- 之前 Rugra 跳过了 `scopeBreak` 调用，导致所有 BlockGoto 保留默认
+  `GOTO_GOTO`，emit 阶段打印 `goto code_r0x...;` 而非 `break;`。
+
 ### `pub struct ActionNormalizeBranches`
 
 Action for normalizing branches (e.g., converting goto to break/continue)
