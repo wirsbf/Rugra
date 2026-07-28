@@ -3367,7 +3367,19 @@ impl ActionInferTypes {
         // than the current temp type.
         let better = match &cur {
             None => true,
-            Some(c) => newtype.type_order(c) < 0,
+            Some(c) => {
+                // Struct pointer priority: a Pointer(Struct) is more
+                // informative than a bare scalar, so:
+                //  - if cur is Pointer(Struct), don't let scalars overwrite it
+                //  - if newtype is Pointer(Struct) and cur is a scalar, allow
+                //    the struct pointer to take over.
+                use crate::type_system::datatype::Datatype;
+                match (c.as_ref(), newtype.as_ref()) {
+                    (Datatype::Pointer(ctp), _) if matches!(ctp.ptr_to.as_ref(), Datatype::Struct(_)) => false,
+                    (_, Datatype::Pointer(ntp)) if matches!(ntp.ptr_to.as_ref(), Datatype::Struct(_)) => true,
+                    _ => newtype.type_order(c) < 0,
+                }
+            }
         };
         if better {
             Some(out_vn_arc)
@@ -3609,7 +3621,18 @@ impl ActionInferTypes {
                     let oid = vn_id(&out_vn_arc.read().unwrap());
                     let improved = match temps.get(&oid) {
                         None => true,
-                        Some(c) => nt.type_order(c) < 0,
+                        Some(c) => {
+                            // Struct pointer priority (mirrors propagate_type_edge):
+                            // a Pointer(Struct) is more informative than a
+                            // scalar, so a struct pointer always wins over a
+                            // scalar, and never lets a scalar overwrite it.
+                            use crate::type_system::datatype::Datatype;
+                            match (c.as_ref(), nt.as_ref()) {
+                                (Datatype::Pointer(ctp), _) if matches!(ctp.ptr_to.as_ref(), Datatype::Struct(_)) => false,
+                                (_, Datatype::Pointer(ntp)) if matches!(ntp.ptr_to.as_ref(), Datatype::Struct(_)) => true,
+                                _ => nt.type_order(c) < 0,
+                            }
+                        }
                     };
                     if improved && !visited.contains(&oid) {
                         temps.insert(oid, nt);
@@ -3662,7 +3685,7 @@ impl ActionInferTypes {
         let mut changed = false;
         for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
             let id = vn_id(&vn_arc.read().unwrap());
-            
+
             if let Some(ct) = temps.get(&id) {
                 let mut vn = vn_arc.write().unwrap();
                 if vn.is_annotation() {
@@ -3670,6 +3693,24 @@ impl ActionInferTypes {
                 }
                 if !vn.is_written() && vn.has_no_descend() {
                     continue;
+                }
+                // Struct pointer protection: don't let a scalar temp type
+                // overwrite an existing Pointer(Struct) v_type. Across multiple
+                // ActionInferTypes passes, the DFS reachability of the global
+                // seed can vary (visited-set, dead-code between passes), so a
+                // later pass may compute a scalar temp for a varnode that an
+                // earlier pass correctly typed as a struct pointer. Guard the
+                // write-back so the struct pointer survives.
+                use crate::type_system::datatype::Datatype;
+                if let Some(ref existing) = vn.v_type {
+                    if let Datatype::Pointer(etp) = existing.as_ref() {
+                        if matches!(etp.ptr_to.as_ref(), Datatype::Struct(_))
+                            && !matches!(ct.as_ref(), Datatype::Pointer(_))
+                        {
+                            // Keep the existing struct pointer; skip overwrite.
+                            continue;
+                        }
+                    }
                 }
                 if vn.update_type(ct.clone()) {
                     changed = true;
@@ -3874,7 +3915,6 @@ impl Action for ActionInferTypes {
         for root in &roots {
             // Only seed roots that actually have a temp type.
             if temps.contains_key(&vn_id(&root.read().unwrap())) {
-                
                 self.propagate_one_type(root, &mut temps, &int_types, ptr_size);
             }
         }
@@ -3927,7 +3967,7 @@ fn seed_global_struct_pointers(
         let vn = vn_ref.0.read().unwrap();
         if vn.is_annotation() || vn.is_free() { continue; }
         let off = vn.get_offset();
-        
+
         // Match known global addresses in both Const and Ram spaces.
         // SLEIGH's ram space (index 0) maps to Rugra's Const, so global
         // addresses like 0x17520 surface as Const@0x17520.
@@ -3948,7 +3988,7 @@ fn seed_global_struct_pointers(
         if op.opcode != crate::opcodes::OpCode::CPUI_COPY {
             continue;
         }
-        if let Some(in0) = op.get_in(0) {
+            if let Some(in0) = op.get_in(0) {
             if let Some(ref out_arc) = op.output {
             let src = in0.read().unwrap();
             let off = src.get_offset();
