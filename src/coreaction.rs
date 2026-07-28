@@ -3899,10 +3899,9 @@ fn seed_global_struct_pointers(
     // 1. Search loc_tree for direct address constants
     for vn_ref in &fd.vbank.loc_tree {
         let vn = vn_ref.0.read().unwrap();
-        if vn.is_annotation() || vn.is_free() {
-            continue;
-        }
+        if vn.is_annotation() || vn.is_free() { continue; }
         let off = vn.get_offset();
+        
         // Match known global addresses in both Const and Ram spaces.
         // SLEIGH's ram space (index 0) maps to Rugra's Const, so global
         // addresses like 0x17520 surface as Const@0x17520.
