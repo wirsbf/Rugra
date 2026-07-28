@@ -5058,7 +5058,22 @@ impl PrintLanguage for PrintC {
                         if let Some(ref out_arc) = op.output {
                             let out_ptr = Arc::as_ptr(out_arc) as usize;
                             let src = op.inrefs[0].clone();
-                            self.copy_map.insert(out_ptr, src);
+                            self.copy_map.insert(out_ptr, src.clone());
+                            // Stamp global struct pointer type on COPY output
+                            // if input matches a known global address
+                            if !fd.global_struct_ptrs.is_empty() {
+                                let src_vn = src.read().unwrap();
+                                let src_off = src_vn.get_offset();
+                                if let Some(dt) = fd.global_struct_ptrs.get(&src_off) {
+                                    if matches!(src_vn.get_space(),
+                                        crate::space::AddressSpace::Const
+                                        | crate::space::AddressSpace::Ram)
+                                    {
+                                        drop(src_vn);
+                                        out_arc.write().unwrap().v_type = Some(dt.clone());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -5164,6 +5179,32 @@ impl PrintLanguage for PrintC {
                 if let Some(dt) = resolve_global_ptr(&vn, &globals) {
                     drop(vn);
                     vn_ref.0.write().unwrap().v_type = Some(dt);
+                }
+            }
+            // Also stamp via copy_map: if resolved input matches global addr,
+            // stamp the output varnode (the one in loc_tree that inherits it)
+            for (out_ptr, src_arc) in &self.copy_map {
+                let src = src_arc.read().unwrap();
+                let src_off = src.get_offset();
+                if globals.iter().any(|(a, _)| *a == src_off)
+                    && matches!(src.get_space(), crate::space::AddressSpace::Const
+                        | crate::space::AddressSpace::Ram)
+                {
+                    if let Some(dt) = globals.iter().find(|(a,_)| *a == src_off).map(|(_,d)| d.clone()) {
+                                                // Find the output varnode by pointer and stamp it
+                                                for vn_ref in &fd.vbank.loc_tree {
+                            if Arc::as_ptr(&vn_ref.0) as usize == *out_ptr {
+                               
+                                let mut vn = vn_ref.0.write().unwrap();
+                                if vn.v_type.is_none() {
+                                    vn.v_type = Some(dt.clone());
+                                                                    }
+                                break;
+                            }
+                        }
+                        if false {
+                                                    }
+                    }
                 }
             }
         }
