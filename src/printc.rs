@@ -1835,7 +1835,7 @@ impl PrintC {
                 // Structured do-while loop
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
-                if let Some(_dowhile_data) = dowhile_block {
+                if let Some(dowhile_data) = dowhile_block {
                     self.emit.tag_line(0);
                     self.emit.print("do ");
                     self.emit.begin_block();
@@ -1852,53 +1852,61 @@ impl PrintC {
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
-                    
+
                     self.emit.print(" while (");
-                    let ops = block.get_ops();
-                    if let Some(last_op_ref) = ops.last() {
-                        let last_op = last_op_ref.0.read().unwrap();
-                        if let Some(cond_vn) = last_op.get_in(1) {
-                            // Capture the condition into a throwaway buffer first so
-                            // we can apply the same malformed-condition guard used
-                            // by emit_block_condition / emit_cbranch_condition
-                            // (cast-concat, varname-concat, degenerate self-compare
-                            // `X == X`/`X != X`). The do-while CBRANCH's condition
-                            // varnode can lose its SSA def under Rugra's x86-flags
-                            // recovery, leaving a tautology like `local_0 == local_0`
-                            // — fold it to `1` rather than emitting a nonsense
-                            // `while (X == X);`. (Audit: R50.)
-                            let cond_vn = cond_vn.clone();
-                            drop(last_op);
-                            let orig_emit = std::mem::replace(&mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                            self.emit_condition(&cond_vn);
-                            let text = {
-                                let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
-                            };
-                            let t = text.trim();
-                            let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
-                                + t.matches("(char)").count() + t.matches("(bool)").count()
-                                + t.matches("(short)").count();
-                            let has_bool_op = t.contains(" || ") || t.contains(" && ")
-                                || t.contains(" == ") || t.contains(" != ")
-                                || t.contains(" < ") || t.contains(" > ")
-                                || t.contains(" <= ") || t.contains(" >= ");
-                            let has_concat_cast = cast_count >= 2 && !has_bool_op;
-                            let has_concat_varname = Self::regex_concat_varname(t);
-                            let has_self_comparison = Self::is_self_comparison(t);
-                            let looks_valid = !t.is_empty()
-                                && t.chars().any(|c| c.is_alphanumeric() || c == '_')
-                                && !has_concat_cast
-                                && !has_concat_varname
-                                && !has_self_comparison;
-                            if looks_valid {
-                                self.emit.print(&text);
-                            } else {
-                                self.emit.print("1");
-                            }
-                        }
+                    // Faithful to Ghidra emitBlockDoWhile (printc.cc:3088-3094):
+                    //   op = bl->getBlock(0)->lastOp();
+                    //   setMod(only_branch);
+                    //   bl->getBlock(0)->emit(this);   // emits the CBRANCH cond
+                    // The condition is emitted via the SAME RPN path used by
+                    // emit_structured_whiledo -> emit_block_condition, so the
+                    // do-while condition resolves identically to a while-do
+                    // condition (pushVn(in(1)) + recurse()).
+                    //
+                    // Capture into a throwaway buffer first so we can apply the
+                    // same malformed-condition guard used by emit_block_condition
+                    // / emit_cbranch_condition (cast-concat, varname-concat,
+                    // degenerate self-compare `X == X`/`X != X`). The do-while
+                    // CBRANCH's condition varnode can lose its SSA def under
+                    // Rugra's x86-flags recovery, leaving a tautology like
+                    // `local_0 == local_0` — fold it to `1` rather than emitting
+                    // a nonsense `while (X == X);`. (Audit: R50.)
+                    let cond_block = dowhile_data.condition.clone();
+                    drop(block);
+                    // Capture emit_block_condition's output (which routes to the
+                    // RPN path when rpn_enabled, matching emit_structured_whiledo)
+                    // into a throwaway buffer so the malformed-condition guard
+                    // below can inspect it. Mirrors capture_block_condition's
+                    // emit-swap, but calls emit_block_condition (RPN-aware)
+                    // rather than emit_block_condition_inner (legacy only).
+                    let orig_emit = std::mem::replace(&mut self.emit,
+                        Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                    self.emit_block_condition(&cond_block);
+                    let text = {
+                        let buf = std::mem::replace(&mut self.emit, orig_emit);
+                        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+                            .map(|b| b.get_output()).unwrap_or_default()
+                    };
+                    let t = text.trim();
+                    let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
+                        + t.matches("(char)").count() + t.matches("(bool)").count()
+                        + t.matches("(short)").count();
+                    let has_bool_op = t.contains(" || ") || t.contains(" && ")
+                        || t.contains(" == ") || t.contains(" != ")
+                        || t.contains(" < ") || t.contains(" > ")
+                        || t.contains(" <= ") || t.contains(" >= ");
+                    let has_concat_cast = cast_count >= 2 && !has_bool_op;
+                    let has_concat_varname = Self::regex_concat_varname(t);
+                    let has_self_comparison = Self::is_self_comparison(t);
+                    let looks_valid = !t.is_empty()
+                        && t.chars().any(|c| c.is_alphanumeric() || c == '_')
+                        && !has_concat_cast
+                        && !has_concat_varname
+                        && !has_self_comparison;
+                    if looks_valid {
+                        self.emit.print(&text);
+                    } else {
+                        self.emit.print("1");
                     }
                     self.emit.print(");");
                 } else {
