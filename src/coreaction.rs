@@ -3938,6 +3938,30 @@ fn seed_global_struct_pointers(
             }
         }
     }
+    // 3. Search block ops for COPY(Const/Ram@addr) → output
+    for i in 0..fd.bblocks.get_size() {
+        if let Some(block_arc) = fd.bblocks.get_block(i) {
+            for op_ref in &block_arc.read().unwrap().get_ops() {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode != crate::opcodes::OpCode::CPUI_COPY { continue; }
+                if let Some(in0) = op.get_in(0) {
+                    if let Some(ref out_arc) = op.output {
+                        let src = in0.read().unwrap();
+                        let off = src.get_offset();
+                        if known.contains_key(&off)
+                            && matches!(src.get_space(), crate::space::AddressSpace::Const
+                                | crate::space::AddressSpace::Ram)
+                        {
+                            let out_vn = out_arc.read().unwrap();
+                            if let Some(dt) = known.get(&off) {
+                                temps.insert(vn_id(&out_vn), dt.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let _ = ptr_size;
 }
 
