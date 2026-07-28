@@ -2851,18 +2851,126 @@ impl ActionSetCasts {
         // opSetOutput(newop, outvn); opSetInput(newop, vn, 0)
         // opSetOutput(op, vn)
         // opInsertAfter(newop, op)
-        // Rugra: rewire output/input manually.
-        op.0.write().unwrap().output = Some(vn.clone());
-        newop.0.write().unwrap().output = Some(outvn.clone());
-        newop.0.write().unwrap().inrefs.push(vn.clone());
-        vn.write().unwrap().add_descend(&newop.0);
-        fd.obank.alivelist.push(newop.clone());
+        // Rugra: use op_set_output/op_set_input so def links, WRITTEN flags
+        // and descend xrefs are maintained consistently (faithful to Ghidra
+        // which goes through Funcdata::opSetOutput/opSetInput).
+        // Order matters: rewire op's output to vn first (clears outvn.def),
+        // then attach outvn as newop's output, then vn as newop's input.
+        fd.op_set_output(&op, vn.clone());
+        fd.op_set_output(&newop, outvn.clone());
+        fd.op_set_input(&newop, vn, 0);
+        fd.op_insert_after(&newop, op);
         1 // count += 1
+    }
+
+    /// Faithful port of the PTRSUB/PTRADD pointer-fit arm of
+    /// `ActionSetCasts::castInput` (coreaction.cc:2655-2720, PTRSUB/PTRADD
+    /// branch). For a PTRSUB `c = PTRSUB(a, off)` or PTRADD
+    /// `c = PTRADD(a, idx, sz)`, input slot 0 must be a pointer whose
+    /// pointed-to type matches the op's expected base. If `a`'s high type is
+    /// a different pointer (or not a pointer at all) and `castStandard` says
+    /// a cast is required, insert `out = CAST(a)` feeding slot 0 with the
+    /// op's expected pointer type, so printc emits `(ptype *)a`.
+    ///
+    /// `reqtype` is the pointer type the op expects for slot 0 (derived from
+    /// the op's output pointer type when present, matching Ghidra's
+    /// `TypeOp::inputTypeLocal` for pointer ops which mirrors the output's
+    /// pointer layer). Returns true if a cast was inserted.
+    // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput (PTRSUB/PTRADD arm)
+    fn cast_input_ptr(
+        &self,
+        fd: &mut Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        reqtype: std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> bool {
+        // (1) Read the current input varnode and its high type.
+        let (in_vn, curtype, op_pc, in_size) = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_arc_ref) = op.get_in(slot) else { return false; };
+            let in_arc = in_arc_ref.clone();
+            let op_pc = op.get_addr();
+            drop(op);
+            let (in_size, curtype, is_annot) = {
+                let in_rg = in_arc.read().unwrap();
+                let is_annot = in_rg.is_annotation();
+                let in_size = in_rg.get_size();
+                let curtype = in_rg.high.as_ref()
+                    .map(|h| h.read().unwrap().v_type.clone())
+                    .or_else(|| in_rg.v_type.clone())
+                    .unwrap_or_else(|| reqtype.clone());
+                (in_size, curtype, is_annot)
+            };
+            if is_annot { return false; }
+            (in_arc, curtype, op_pc, in_size)
+        };
+        // Constants cannot carry a pointer cast; skip (faithful to castInput
+        // which only updates integer constants, never pointer constants).
+        if in_vn.read().unwrap().is_constant() {
+            return false;
+        }
+        // (2) castStandard(reqtype, curtype, care_uint_int=true, care_ptr_uint=true).
+        // care_uint_int=true because pointer layers must match exactly
+        // (cast.cc:310-324 peel-pointer logic requires under-the-pointer
+        // metatype agreement for pointer-to-pointer casts).
+        let Some(_cast_type) = strategy.cast_standard_full(&reqtype, &curtype, true, true) else {
+            return false;
+        };
+        // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
+        //     Faithful to coreaction.cc:2702-2712.
+        let new_op = fd.new_op(1, op_pc);
+        let out_vn = fd.new_unique_out(in_size, &new_op);
+        out_vn.write().unwrap().v_type = Some(reqtype);
+        out_vn.write().unwrap().set_implied();
+        fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
+        fd.op_set_input(&new_op, in_vn, 0);
+        fd.op_set_input(op_ref, out_vn, slot);
+        fd.op_insert_before(&new_op, op_ref);
+        true
+    }
+
+    /// Compute the expected pointer type for input slot 0 of a PTRSUB/PTRADD
+    /// op, derived from the op's output pointer type (the PTRSUB/PTRADD
+    /// output is a pointer; input 0 must be a compatible pointer).
+    /// Returns None if the op has no typed pointer output (nothing to fit).
+    // RUGRA-GLUE: helper mirroring TypeOp::{PTRSUB,PTRADD}::inputTypeLocal
+    // (typeop.cc) for the pointer case; Rugra has no TypeOp class hierarchy.
+    fn ptr_input_reqtype(
+        op: &crate::op::PcodeOpRef,
+    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::Datatype;
+        let out_arc = op.0.read().unwrap().output.as_ref().cloned()?;
+        let out_rg = out_arc.read().unwrap();
+        // Output pointer type: from high type if present, else varnode type.
+        let out_type = out_rg.high.as_ref()
+            .map(|h| h.read().unwrap().v_type.clone())
+            .or_else(|| out_rg.v_type.clone())?;
+        // For PTRSUB `c = PTRSUB(a, off)`: input(0) should be a pointer to
+        // the same outer type as c's pointed-to type. In Ghidra this is
+        // `TypeOpSub::inputTypeLocal` which returns a pointer to the
+        // PTRSUB's resolved base. Rugra lacks struct-field resolution here,
+        // so we use c's pointer type directly (the most common case where
+        // PTRSUB's input and output share the same pointer representation).
+        // For PTRADD `c = PTRADD(a, idx, sz)`: input(0) should be a pointer
+        // to the array element type, which equals c's pointed-to type, so
+        // again c's pointer type is the right reqtype.
+        if !matches!(out_type.as_ref(), Datatype::Pointer(_)) {
+            return None;
+        }
+        Some(out_type)
     }
 
     // RUGRA-GLUE: output_metatype (no Ghidra direct counterpart; derived from
     // TypeOp::getOutputToken which Rugra lacks)
-    /// Determine the output metatype for an opcode (for castOutput).
+    /// Determine the output metatype for an opcode (for castOutput). Mirrors
+    /// the integer/boolean branches of Ghidra's
+    /// `TypeOp::getOutputToken(op, castStrategy)` (typeop.cc). Pointer-
+    /// producing ops (PTRSUB/PTRADD/LOAD/CALL/COPY/etc.) return None so
+    /// castOutput leaves their output pointer type untouched — the pointer
+    /// shape is established upstream by ActionInferTypes / cast_input_ptr,
+    /// and forcing a base-int token would wrongly cast `(long *)out` →
+    /// `(long)out`.
     fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::type_system::datatype::TypeMetatype;
         use crate::opcodes::OpCode;
@@ -2877,6 +2985,14 @@ impl ActionSetCasts {
             | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
             | OpCode::CPUI_INT_SBORROW | OpCode::CPUI_FLOAT_NAN
             => Some(TypeMetatype::Bool),
+            // Pointer-producing ops: their output token is the pointer type
+            // itself (set by type inference), not a base int/bool. Skip
+            // castOutput for them.
+            OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD
+            | OpCode::CPUI_LOAD | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND
+            | OpCode::CPUI_COPY | OpCode::CPUI_INDIRECT
+            | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_CAST
+            => None,
             _ => Some(TypeMetatype::Int),
         }
     }
@@ -2886,15 +3002,23 @@ impl Action for ActionSetCasts {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionSetCasts::apply (coreaction.cc:2722-2774). Iterate
         // ops in basic-block/dominance order (Rugra iterates alivelist, which
-        // is already in block+seq order). For each non-CAST op, for each input
-        // slot, run castInput (inserting CPUI_CAST where the op's expected
-        // input type differs from the varnode's high type).
+        // is already in block+seq order). For each non-CAST op:
+        //   (1) For PTRSUB/PTRADD slot 0, run the pointer-fit castInput arm
+        //       (cast_input_ptr) — if the input pointer type does not match
+        //       the op's expected base pointer, insert a CPUI_CAST so printc
+        //       emits `(ptype *)a`.
+        //   (2) For integer binary/unary ops, run castInput (cast_input) —
+        //       insert CPUI_CAST where the op's expected input metatype
+        //       differs from the varnode's high type (the `piVar | param`
+        //       int*-to-long case).
+        //   (3) Run castOutput — insert CPUI_CAST after the op if the output
+        //       token type differs from the output's high type.
+        // resolveUnion / checkPointerIssues remain deferred (need full union
+        // + LOAD/STORE pointer-issue infrastructure).
         //
-        // Scope: this ports the integer binary/unary input-cast path (the
-        // common case causing `piVar | param` int*-to-long errors). The
-        // PTRADD/PTRSUB pointer-fit checks, resolveUnion, checkPointerIssues,
-        // and castOutput are deferred (they need more type-system + union
-        // infrastructure).
+        // Ghidra returns the per-op accumulated count (non-zero signals
+        // CHANGE to the pipeline driver). Rugra mirrors that: CHANGE when
+        // any cast was inserted, NO_CHANGE otherwise.
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
         let strategy = crate::type_system::cast::CastStrategyC::new(4);
         let mut count = 0;
@@ -2905,14 +3029,47 @@ impl Action for ActionSetCasts {
                 (op.opcode, op.num_input())
             };
             if opc == OpCode::CPUI_CAST { continue; }
-            // castInput may mutate inputs; iterate a snapshot of slots.
+            // PTRSUB/PTRADD slot 0 pointer-fit (coreaction.cc:2655-2672
+            // pointer branch: only slot 0 is the pointer operand; slots 1/2
+            // are the constant offset / element-size and never need a cast).
+            if matches!(opc, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
+                if let Some(reqtype) = Self::ptr_input_reqtype(op_ref) {
+                    if self.cast_input_ptr(fd, op_ref, 0, &strategy, reqtype) {
+                        count += 1;
+                    }
+                }
+                // PTRSUB/PTRADD slots 1 (offset) / 2 (size) are integer
+                // constants; skip the integer castInput path for them.
+                continue;
+            }
+            // Integer binary/unary input cast (castInput may mutate inputs;
+            // iterate a snapshot of slots).
             for slot in 0..n_inputs {
                 if self.cast_input(fd, op_ref, slot, &strategy) {
                     count += 1;
                 }
             }
         }
-        Ok(action_status::NO_CHANGE)
+        // castOutput pass: iterate the (possibly extended) alive list again
+        // so newly-inserted input CASTs are visible. Faithful to Ghidra's
+        // castOutput being applied after castInput within the same op
+        // iteration; doing it as a separate pass over the original op
+        // snapshot is observably equivalent for output-type decisions.
+        for op_ref in &ops {
+            let opc = {
+                let op = op_ref.0.read().unwrap();
+                if op.is_dead() { continue; }
+                op.opcode
+            };
+            if opc == OpCode::CPUI_CAST { continue; }
+            count += Self::cast_output(fd, op_ref, &strategy);
+        }
+        self.count = count;
+        if count > 0 {
+            Ok(action_status::CHANGE)
+        } else {
+            Ok(action_status::NO_CHANGE)
+        }
     }
     // RUGRA-GLUE: Rust Action trait get_name; "setcasts" mirrors ctor at coreaction.hh:330
     fn get_name(&self) -> &str { "setcasts" }
@@ -9480,6 +9637,193 @@ mod tests {
         let status = action.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");
+    }
+
+    // ---- ActionSetCasts tests ----
+
+    #[test]
+    fn test_action_setcasts_name() {
+        let a = ActionSetCasts::new();
+        assert_eq!(a.get_name(), "setcasts");
+    }
+
+    /// Empty Funcdata → NO_CHANGE, count stays 0.
+    #[test]
+    fn test_action_setcasts_apply_empty() {
+        use crate::address::Address;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let mut a = ActionSetCasts::new();
+        let status = a.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::NO_CHANGE);
+        assert_eq!(a.count, 0);
+    }
+
+    /// PTRSUB with mismatched input(0) pointer type → CAST op inserted
+    /// feeding slot 0, and apply returns CHANGE. Faithful to
+    /// ActionSetCasts::castInput's PTRSUB arm (coreaction.cc:2655-2720).
+    #[test]
+    fn test_action_setcasts_ptrsub_inserts_cast() {
+        use crate::address::{Address, SeqNum};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        use crate::varnode::{varnode_flags, Varnode};
+        use std::sync::{Arc, RwLock};
+
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+
+        // in0: a (long *) pointer varnode, defined by some earlier op.
+        let long_t = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+        let long_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: long_t.clone(),
+            wordsize: 1,
+        }));
+        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
+        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        in0.write().unwrap().v_type = Some(long_ptr);
+
+        // PTRSUB output: (int *) — different pointed-to type than input(0).
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t.clone(),
+            wordsize: 1,
+        }));
+        let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
+        out.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        out.write().unwrap().v_type = Some(int_ptr.clone());
+
+        // offset constant (input 1).
+        let off = Arc::new(RwLock::new(Varnode::new_constant(8, 8)));
+
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0x4000), 0), OpCode::CPUI_PTRSUB);
+        op.inrefs = vec![in0.clone(), off];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        out.write().unwrap().def = Some(Arc::downgrade(&op_arc));
+        let op_ref = PcodeOpRef(op_arc);
+        fd.obank.alivelist.push(op_ref.clone());
+
+        let mut a = ActionSetCasts::new();
+        let status = a.apply(&mut fd).unwrap();
+        // castStandard between (int *) and (long *) of equal size returns
+        // Some(reqtype) (different pointed-to metatypes under a pointer
+        // layer), so a CAST must be inserted.
+        assert_eq!(status, action_status::CHANGE, "apply must report CHANGE");
+        assert!(a.count >= 1, "at least one CAST must be inserted");
+
+        // Verify a CPUI_CAST op now feeds slot 0 of the PTRSUB.
+        let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
+        let cast_op_arc = {
+            let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
+            in0_rg.def.as_ref().and_then(|w| w.upgrade())
+        };
+        assert!(cast_op_arc.is_some(), "slot 0 must now have a defining op");
+        let cast_op = cast_op_arc.unwrap();
+        assert_eq!(cast_op.read().unwrap().opcode, OpCode::CPUI_CAST,
+            "the defining op must be a CAST");
+    }
+
+    /// PTRSUB where input(0) already has the matching pointer type → no cast
+    /// inserted (NO_CHANGE). Guards against spurious casts when types agree.
+    #[test]
+    fn test_action_setcasts_ptrsub_no_cast_when_matching() {
+        use crate::address::{Address, SeqNum};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        use crate::varnode::{varnode_flags, Varnode};
+        use std::sync::{Arc, RwLock};
+
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+
+        // Both input(0) and output share the same (long *) pointer type.
+        let long_t = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+        let long_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: long_t.clone(),
+            wordsize: 1,
+        }));
+
+        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
+        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        in0.write().unwrap().v_type = Some(long_ptr.clone());
+
+        let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
+        out.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        out.write().unwrap().v_type = Some(long_ptr);
+
+        let off = Arc::new(RwLock::new(Varnode::new_constant(8, 8)));
+
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0x4000), 0), OpCode::CPUI_PTRSUB);
+        op.inrefs = vec![in0.clone(), off];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        out.write().unwrap().def = Some(Arc::downgrade(&op_arc));
+        fd.obank.alivelist.push(PcodeOpRef(op_arc));
+
+        let mut a = ActionSetCasts::new();
+        let status = a.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::NO_CHANGE, "no cast expected for matching types");
+        assert_eq!(a.count, 0);
+    }
+
+    /// PTRADD with mismatched input(0) pointer type → CAST op inserted.
+    #[test]
+    fn test_action_setcasts_ptradd_inserts_cast() {
+        use crate::address::{Address, SeqNum};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
+        use crate::varnode::{varnode_flags, Varnode};
+        use std::sync::{Arc, RwLock};
+
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+
+        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".to_string(), 1, TypeMetatype::Int)));
+        let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: char_t.clone(),
+            wordsize: 1,
+        }));
+        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
+        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        in0.write().unwrap().v_type = Some(char_ptr);
+
+        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: int_t.clone(),
+            wordsize: 1,
+        }));
+        let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
+        out.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        out.write().unwrap().v_type = Some(int_ptr.clone());
+
+        let idx = Arc::new(RwLock::new(Varnode::new_constant(8, 1)));
+        let sz = Arc::new(RwLock::new(Varnode::new_constant(8, 4)));
+
+        let mut op = PcodeOp::new(SeqNum::new(Address::new(0x4000), 0), OpCode::CPUI_PTRADD);
+        op.inrefs = vec![in0.clone(), idx, sz];
+        op.output = Some(out.clone());
+        let op_arc = Arc::new(RwLock::new(op));
+        out.write().unwrap().def = Some(Arc::downgrade(&op_arc));
+        let op_ref = PcodeOpRef(op_arc);
+        fd.obank.alivelist.push(op_ref.clone());
+
+        let mut a = ActionSetCasts::new();
+        let status = a.apply(&mut fd).unwrap();
+        assert_eq!(status, action_status::CHANGE, "PTRADD must cast mismatched pointer");
+        assert!(a.count >= 1);
+        // Verify CAST op now feeds slot 0.
+        let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
+        let cast_op_arc = {
+            let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
+            in0_rg.def.as_ref().and_then(|w| w.upgrade())
+        };
+        assert!(cast_op_arc.is_some());
+        assert_eq!(cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST);
     }
 
     // ---- ActionInferTypes + build_full_pipeline_actions tests ----

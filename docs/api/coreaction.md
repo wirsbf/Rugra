@@ -1,8 +1,18 @@
 # `coreaction.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-07-16 ActionSetCasts castOutput 已实现（缺 union resolution））
+**状态**: 已核对（当前有效，2026-07-27 ActionSetCasts 指针适配接入 apply() — PTRSUB/PTRADD slot0 CAST 插入 + castOutput 接入 + CHANGE 返回修正）
 **源代码路径**: `src/coreaction.rs`
 **2026-07-16**: 测试构造的 BlockWhileDo 加 `overflow_syntax: false` 字段（配合 printc P7-overflow_syntax，对齐 Ghidra hasOverflowSyntax block.hh:692）。
+
+### 2026-07-27：ActionSetCasts 指针适配接入 apply()（解锁 CPUI_CAST 在 PTRSUB/PTRADD 上产生）
+
+- **背景**：此前 `ActionSetCasts::apply` 只走 integer binary/unary input-cast 路径（`cast_input`），`cast_output` 方法已实现但**从未被 apply 调用**，PTRSUB/PTRADD 的 pointer-fit 检查完全缺失。结果：`CPUI_CAST` op 在 curl 中从不产生，printc 的 `(type)x` dispatch（包括 2026-07-27 新增的 RPN PTRSUB/CAST 路径）永不触发。
+- **修复（cast_input_ptr，coreaction.cc:2655-2720 PTRSUB/PTRADD arm）**：新增 `cast_input_ptr` 方法 + `ptr_input_reqtype` 辅助——对 PTRSUB `c = PTRSUB(a, off)` / PTRADD `c = PTRADD(a, idx, sz)`，slot 0（指针操作数）若 high-type 与 op 期望的指针类型（取自 output pointer 类型）不匹配，按 `castStandard(reqtype, curtype, care_uint_int=true, care_ptr_uint=true)` 判定是否需要 cast，需要则在 slot 0 前插入 `out = CAST(a)`（out implied，printc 内联为 `(ptype *)a`）。常量输入跳过（pointer-cast 不适用于常量）。
+- **修复（castOutput 接入 + 重写）**：apply 现在第二轮遍历对每个非 CAST op 调用 `cast_output`。`cast_output` 的 op 重写改用 `fd.op_set_output` / `fd.op_set_input` / `fd.op_insert_after`（替代旧的手动 rewire），保证 def-link/WRITTEN flag/descend xref 一致（对齐 Ghidra `Funcdata::opSetOutput/opSetInput/opInsertAfter`）。
+- **修复（output_metatype 排除指针产生 op）**：`output_metatype` 新增 PTRSUB/PTRADD/LOAD/CALL/CALLIND/COPY/INDIRECT/MULTIEQUAL/CAST → None 分支。这些 op 的 output token 是指针类型本身（由类型推断设置），强制 base-int token 会错误地把 `(long *)out` cast 成 `(long)out`。
+- **修复（apply 返回值 bug）**：apply 此前无论 count 是否 >0 都返回 `NO_CHANGE`。现按 Ghidra 行为：count>0 返回 `CHANGE`，否则 `NO_CHANGE`。
+- **测试**：新增 5 个单元测试（empty fd NO_CHANGE / PTRSUB mismatched → CAST + CHANGE / PTRSUB matching → NO_CHANGE / PTRADD mismatched → CAST / name 断言）。全部通过，全套 1292 单元测试无回归。
+- **限制（诚实声明）**：`ptr_input_reqtype` 用 output 指针类型作为 slot-0 reqtype（最常见情形：PTRSUB input/output 共享指针表示）。Ghidra 完整版用 struct-field resolution（`TypeOpSub::inputTypeLocal` 返回 pointer to outer struct），Rugra 的 Datatype 暂无该机制，待 `findTruncation`/struct 字段解析接入后升级。`resolveUnion`/`checkPointerIssues` 仍延后。
 
 ## 模块说明 (Module Doc)
 

@@ -520,7 +520,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 > **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` faithful port（见 docs/api/printc.md），但实测 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。解锁需补以下两条底层 infra：
 
 10. **`RulePtrsub` 创建规则缺失** (L1→L3) — Rugra 只移植了消费现有 PTRSUB 的规则（`RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo`，见 action.rs:680-681,723），**缺** Ghidra 的 `RulePtrsub`（INT_ADD(指针,常量)→PTRSUB 的创建规则）与 `RulePtradd`。补齐后 curl 结构体字段访问 `ptr->field` 才能产生 PTRSUB op，printc dispatch 即生效。
-11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (L2→L3) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
+11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (✅ 已 L3, 2026-07-27) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
+
+    **✅ 2026-07-27 已修复**：新增 `cast_input_ptr`（PTRSUB/PTRADD slot-0 pointer-fit + CAST 插入）+ `ptr_input_reqtype`（从 output pointer 类型派生 slot-0 reqtype）+ apply 接入 `cast_output` 第二轮遍历 + `output_metatype` 排除指针产生 op（PTRSUB/PTRADD/LOAD/CALL/COPY/etc. → None）+ apply 返回值修正（count>0 → CHANGE）+ 5 新单元测试（1292 全过）。剩余 `resolveUnion`/`checkPointerIssues`/完整 struct-field resolution 仍延后。
 
 10. **`transform.cc`** (已 L3) — P-code 变换基础设施（已完成）
 
