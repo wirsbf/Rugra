@@ -6289,10 +6289,51 @@ impl PrintLanguage for PrintC {
                 return;
             }
 
-            self.is_lhs = true;
-            self.push_varnode(&out.read().unwrap(), Some(op));
-            self.is_lhs = false;
-            self.emit.tag_op(" = ");
+            // Struct field access: INT_ADD(ptr, offset) where ptr is Struct*
+            if op.opcode == OpCode::CPUI_INT_ADD && op.inrefs.len() >= 2 {
+                let i0 = &op.inrefs[0];
+                let i1 = &op.inrefs[1];
+                let v0 = i0.read().unwrap();
+                let v1 = i1.read().unwrap();
+                let offset = if v1.get_space() == crate::space::AddressSpace::Const
+                    && v1.get_offset() > 0 && v1.get_offset() < 0x10000
+                    && v0.get_space() != crate::space::AddressSpace::Const {
+                    Some((v1.get_offset(), 0usize)) // (offset, base_idx)
+                } else if v0.get_space() == crate::space::AddressSpace::Const
+                    && v0.get_offset() > 0 && v0.get_offset() < 0x10000
+                    && v1.get_space() != crate::space::AddressSpace::Const {
+                    Some((v0.get_offset(), 1usize))
+                } else {
+                    None
+                };
+                drop(v0);
+                drop(v1);
+                if let Some((off, base_idx)) = offset {
+                    let base_vn = op.inrefs[base_idx].read().unwrap();
+                    let field_match = if let Some(ref vt) = base_vn.v_type {
+                        if let crate::type_system::datatype::Datatype::Pointer(ref tp) = vt.as_ref() {
+                            if let crate::type_system::datatype::Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                                ts.fields.iter().find(|f| f.offset == off as usize)
+                                    .map(|f| f.name.clone())
+                            } else { None }
+                        } else { None }
+                    } else { None };
+                    drop(base_vn);
+                    if let Some(fname) = field_match {
+                        let base_vn2 = op.inrefs[base_idx].read().unwrap();
+                        let base_text = self.get_varnode_display_name(&base_vn2);
+                        drop(base_vn2);
+                        self.is_lhs = true;
+                        self.push_varnode(&out.read().unwrap(), Some(op));
+                        self.is_lhs = false;
+                        self.emit.tag_op(" = ");
+                        self.emit.print(&base_text);
+                        self.emit.print("->");
+                        self.emit.print(&fname);
+                        return;
+                    }
+                }
+            }
 
             // Boolean comparison folding: BOOL_OR(EQ(A,B), LT(A,B)) → A <= B
             if self.try_fold_bool_comparison(op) {
