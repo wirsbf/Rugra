@@ -4,6 +4,7 @@
 use goblin::Object;
 use std::fs;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rugra::action::ActionDatabase;
 use rugra::disasm::{Disassembler, X86_64Disassembler, X86Lifter};
@@ -12,6 +13,128 @@ use rugra::printc::PrintC;
 use rugra::prettyprint::EmitNoMarkup;
 use rugra::printlanguage::PrintLanguage;
 use rugra::address::Address;
+use rugra::type_system::typefactory::TypeFactory;
+use rugra::type_system::datatype::{Datatype, TypeField};
+
+/// Build the DWARF-derived struct types for the curl binary and return a map
+/// from global-variable address → struct-pointer Datatype. The driver seeds
+/// each per-function Funcdata's `global_struct_ptrs` with this map so that
+/// `type_infer::propagate_types` stamps the struct-pointer types onto the
+/// constant varnodes that reference these globals.
+///
+/// The struct layouts are extracted from the curl ELF's DWARF debug_info via
+/// `tools/extract_dwarf_structs.py`. This stands in for the Architecture/
+/// TypeFactory layer that Ghidra populates from .cspec/.specfile; Rugra's
+/// driver has no Architecture layer, so we register the types here.
+fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
+    let mut tf = TypeFactory::new(8);
+
+    // Helper field type: a pointer-sized long (the DWARF extraction reports
+    // every member as `long`, which is the pointer-sized slot). Using `long`
+    // for char*/long/int members keeps field offsets accurate for PTRSUB
+    // generation without needing the full DWARF type tree.
+    let long8 = tf.get_base(8, rugra::type_system::datatype::TypeMetatype::Int)
+        .expect("long base type");
+    let field = |name: &str, off: usize| -> TypeField {
+        TypeField { name: name.to_string(), offset: off, type_ptr: long8.clone() }
+    };
+
+    // struct Configurable { ... 304 bytes ... }  (DWARF DW_AT_byte_size: 304)
+    // Global `::config` lives at 0x17520.
+    tf.create_struct("Configurable");
+    tf.set_fields("Configurable", vec![
+        field("useragent", 0),
+        field("cookie", 8),
+        field("use_resume", 16),
+        field("resume_from", 20),
+        field("postfields", 24),
+        field("referer", 32),
+        field("timeout", 40),
+        field("outfile", 48),
+        field("headerfile", 56),
+        field("remotefile", 64),
+        field("ftpport", 72),
+        field("porttouse", 80),
+        field("range", 88),
+        field("low_speed_limit", 96),
+        field("low_speed_time", 100),
+        field("showerror", 104),
+        field("infile", 112),
+        field("userpwd", 120),
+        field("proxyuserpwd", 128),
+        field("proxy", 136),
+        field("configread", 144),
+        field("conf", 152),
+        field("cert", 168),
+        field("cert_passwd", 176),
+        field("crlf", 184),
+        field("cookiefile", 192),
+        field("customrequest", 200),
+        field("progressmode", 208),
+        field("nobuffer", 209),
+        field("writeout", 216),
+        field("errors", 224),
+        field("quote", 232),
+        field("postquote", 240),
+        field("ssl_version", 248),
+        field("timecond", 256),
+        field("condtime", 264),
+        field("headers", 272),
+        field("httppost", 280),
+        field("last_post", 288),
+        field("httpreq", 296),
+    ]);
+
+    // struct OutStruct { char *filename; FILE *stream; }  (16 bytes)
+    // Used as a local `OutStruct outs;` on the stack — no single global, but
+    // we register the type so propagated pointers can resolve to it.
+    tf.create_struct("OutStruct");
+    tf.set_fields("OutStruct", vec![
+        field("filename", 0),
+        field("stream", 8),
+    ]);
+
+    // struct ProgressData { long total; long prev; long point; long width; }
+    tf.create_struct("ProgressData");
+    tf.set_fields("ProgressData", vec![
+        field("total", 0),
+        field("prev", 8),
+        field("point", 16),
+        field("width", 24),
+    ]);
+
+    // struct HttpPost { ... } — chain node used by multipart post handling.
+    tf.create_struct("HttpPost");
+    tf.set_fields("HttpPost", vec![
+        field("next", 0),
+        field("name", 8),
+        field("contents", 16),
+        field("contenttype", 24),
+        field("more", 32),
+        field("flags", 40),
+    ]);
+
+    // Build the struct and pointer types and the address→type map.
+    let configurable = tf.find_by_name("Configurable").expect("Configurable struct");
+    let configurable_ptr = tf.get_ptr(configurable.clone());
+    let _outstruct = tf.find_by_name("OutStruct").expect("OutStruct struct");
+    let _progressdata = tf.find_by_name("ProgressData").expect("ProgressData struct");
+    let _httppost = tf.find_by_name("HttpPost").expect("HttpPost struct");
+
+    let mut map: HashMap<u64, Arc<Datatype>> = HashMap::new();
+    // ::config @ 0x17520 (from DWARF DW_AT_location DW_OP_addr: 0x17520).
+    // The Ram-space varnode at this address IS the global Configurable struct,
+    // so stamp the struct type (not a pointer) on it. Field accesses
+    // (::config.useragent at offset 0) then resolve via getSubType.
+    map.insert(0x17520, configurable);
+    // Also expose the struct-pointer type for code that takes `&::config`
+    // (the IR surfaces this via RIP-relative lea into a register). The
+    // pointer type is registered in the TypeFactory under "Configurable *"
+    // so propagation consumers can find it; we don't map an address to it.
+    let _ = configurable_ptr;
+    map
+}
+
 
 /// Information about one function in the ELF
 struct FuncInfo {
@@ -240,6 +363,10 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_success = 0;
     let mut total_fail = 0;
 
+    // Build the DWARF-derived struct-pointer map once; it is cloned into each
+    // function's Funcdata below to seed type propagation.
+    let global_struct_ptrs = build_dwarf_struct_pointers();
+
     for func in &functions {
         // Skip very tiny functions (< 5 bytes) and _start
         if func.size < 5 || func.name == "_start" {
@@ -298,6 +425,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         let func_vaddr = func.vaddr;
         let func_size = func.size;
         let proto_db = prototype_db.clone();
+        let gsp = global_struct_ptrs.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let t0 = std::time::Instant::now();
@@ -305,6 +433,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
             fd.external_prototypes = proto_db;
+            fd.global_struct_ptrs = gsp;
             for (&addr, name) in &sym_table {
                 fd.add_symbol(addr, name.clone());
             }

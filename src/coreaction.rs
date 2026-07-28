@@ -3826,6 +3826,15 @@ impl Action for ActionInferTypes {
         let mut temps: TempTypes = HashMap::new();
         self.build_localtypes(fd, &mut temps, &int_types, ptr_size);
 
+        // 3b. Seed struct-pointer types from DWARF-known globals. Stamp the
+        // address of any known global (e.g. `::config` @ 0x17520 →
+        // Configurable*) onto the varnode that holds that address, then the
+        // standard COPY/INT_ADD/PTRSUB propagation diffuses it. Mirrors
+        // Ghidra's SymbolEntry→Datatype linkage that Rugra's driver populates
+        // via `Funcdata::global_struct_ptrs` (Rugra has no Architecture/
+        // SymbolTable layer).
+        seed_global_struct_pointers(fd, &mut temps, ptr_size);
+
         // 4. For each eligible varnode, propagate its type via DFS.
         let roots: Vec<_> = fd
             .vbank
@@ -3856,6 +3865,60 @@ impl Action for ActionInferTypes {
     // RUGRA-GLUE: Rust Action trait get_name; "infertypes" mirrors ctor at coreaction.hh:960
     fn get_name(&self) -> &str { "infertypes" }
 }
+
+// RUGRA-GLUE: seed_global_struct_pointers (no Ghidra counterpart found)
+/// Stamp struct-pointer types from `Funcdata::global_struct_ptrs` into the
+/// ActionInferTypes temp-type map. This is Rugra's stand-in for Ghidra's
+/// SymbolEntry→Datatype linkage (database.cc): when the decompiler sees a
+/// varnode holding the address of a DWARF-known global, that global's
+/// struct-pointer type flows onto it. Without this seed, Rugra can only
+/// synthesise a field-less `_struct *`, which never yields `->field` accesses
+/// nor drives RulePtrArith with a sized pointee.
+///
+/// Because Rugra runs without an Architecture/SymbolTable layer, the driver
+/// (curl_decompile.rs) registers the known globals in
+/// `Funcdata::global_struct_ptrs` first. We scan every live varnode and, when
+/// a constant or Ram-space varnode's offset matches a known global address,
+/// seed its temp type with the struct pointer.
+fn seed_global_struct_pointers(
+    fd: &Funcdata,
+    temps: &mut TempTypes,
+    ptr_size: usize,
+) {
+    if fd.global_struct_ptrs.is_empty() {
+        return;
+    }
+    let globals: Vec<(u64, std::sync::Arc<crate::type_system::datatype::Datatype>)> = fd
+        .global_struct_ptrs
+        .iter()
+        .map(|(addr, dt)| (*addr, dt.clone()))
+        .collect();
+    let known: std::collections::HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>> =
+        globals.into_iter().collect();
+
+    for vn_ref in &fd.vbank.loc_tree {
+        let vn = vn_ref.0.read().unwrap();
+        if vn.is_annotation() || vn.is_free() {
+            continue;
+        }
+        // A global's address surfaces as either a constant varnode (the
+        // address literal) or a Ram-space varnode (the memory location
+        // itself). Accept either.
+        let off = vn.get_offset();
+        let matches = match vn.get_space() {
+            crate::space::AddressSpace::Const => known.contains_key(&off),
+            crate::space::AddressSpace::Ram => known.contains_key(&off),
+            _ => false,
+        };
+        if matches {
+            if let Some(dt) = known.get(&off) {
+                temps.insert(vn_id(&vn), dt.clone());
+            }
+        }
+    }
+    let _ = ptr_size;
+}
+
 
 /// Name variables. Faithful to `ActionNameVars`
 /// (coreaction.cc).

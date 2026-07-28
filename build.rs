@@ -17,8 +17,20 @@ fn main() {
         .join("Decompiler").join("src").join("decompile").join("cpp");
     let shim_dir = manifest.join("sleigh_shim");
 
-    // Skip if SLEIGH cpp source not present
+    // Skip compiling SLEIGH from source if the vendored Ghidra cpp tree is
+    // not present. As a fallback, search for a prebuilt `librugra_sleigh`
+    // (produced by a prior build on this or a sibling worktree at the same
+    // commit) and link against it so the FFI symbols resolve. This keeps
+    // `cargo build` working in worktrees that lack the large vendored tree.
     if !cpp_dir.join("sleigh.cc").exists() {
+        let found = find_prebuilt_sleigh(&manifest);
+        if let Some(prebuilt_dir) = found {
+            println!("cargo:rustc-link-search=native={}", prebuilt_dir.display());
+            println!("cargo:rustc-link-lib=static=rugra_sleigh");
+            println!("cargo:rustc-cfg=has_sleigh");
+        } else {
+            println!("cargo:warning=SLEIGH cpp source not present and no prebuilt librugra_sleigh found; FFI symbols will be unresolved");
+        }
         return;
     }
 
@@ -98,6 +110,65 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=sleigh_shim/rugra_sleigh.cpp");
+}
+
+/// Locate a directory containing a prebuilt `librugra_sleigh` (`.a`/`.lib`)
+/// from a prior build on this crate or a sibling worktree sharing the same
+/// `target/` tree. Returns the directory holding the archive so the caller
+/// can emit a `rustc-link-search` for it.
+fn find_prebuilt_sleigh(manifest: &PathBuf) -> Option<PathBuf> {
+    // The manifest dir for a worktree is `<repo>.wt-*`; the main checkout is
+    // `<repo>`. Look in both `target` trees. We also honour an explicit
+    // `CARGO_TARGET_DIR` / `RUGRA_SLEIGH_LIB_DIR` override.
+    if let Ok(dir) = std::env::var("RUGRA_SLEIGH_LIB_DIR") {
+        let p = PathBuf::from(dir);
+        if sleigh_archive_in(&p).is_some() {
+            return Some(p);
+        }
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(td) = std::env::var("CARGO_TARGET_DIR") {
+        candidates.push(PathBuf::from(td));
+    }
+    candidates.push(manifest.join("target"));
+    // Sibling main checkout (strip a leading "<name>-wt-" worktree suffix).
+    if let Some(parent) = manifest.parent() {
+        let main_repo = parent.join("rugra");
+        if main_repo != *manifest {
+            candidates.push(main_repo.join("target"));
+        }
+    }
+
+    for target in &candidates {
+        if let Some(dir) = sleigh_archive_in(target) {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// Walk `<target>/release/build/rugra-*/out/` (and the debug/profile variants)
+/// looking for a `librugra_sleigh.a` or `rugra_sleigh.lib`. Returns the
+/// directory containing it.
+fn sleigh_archive_in(target: &PathBuf) -> Option<PathBuf> {
+    let profiles = ["release", "debug", "profile"];
+    for prof in &profiles {
+        let rugra_build = target.join(prof).join("build");
+        let entries = match std::fs::read_dir(&rugra_build) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let out = entry.path().join("out");
+            for name in &["librugra_sleigh.a", "rugra_sleigh.lib"] {
+                if out.join(name).exists() {
+                    return Some(out);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn find_zlib(manifest: &PathBuf) -> Option<PathBuf> {

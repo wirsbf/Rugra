@@ -89,6 +89,14 @@ pub struct Funcdata {
     pub symbol_table: HashMap<u64, String>,
     /// Address → string literal mapping (populated from ELF .rodata)
     pub string_table: HashMap<u64, String>,
+    /// Address → struct-pointer Datatype for known global variables derived
+    /// from DWARF debug_info (e.g. `::config` at 0x17520 → `Configurable *`).
+    /// Populated by the decompiler driver before analysis; read by
+    /// `type_infer::propagate_types` to seed struct-pointer types on the
+    /// constant varnodes that reference these globals. Mirrors Ghidra's
+    /// SymbolEntry type assignment (database.cc) which the Rugra driver
+    /// lacks an Architecture/SymbolTable layer to populate automatically.
+    pub global_struct_ptrs: HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>,
     /// Function prototype (return type, parameters)
     pub funcp: FuncProto,
     /// External function prototypes: maps callee address → param count.
@@ -180,6 +188,7 @@ impl Funcdata {
             self_ref: None,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
+            global_struct_ptrs: HashMap::new(),
             funcp: FuncProto::new(
                 name.to_string(),
                 std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
