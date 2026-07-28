@@ -519,11 +519,12 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 > **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` faithful port（见 docs/api/printc.md），但实测 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。解锁需补以下两条底层 infra：
 
-10. **`RulePtrsub` 创建规则缺失** (🔧 L2→L3，2026-07-27 调查更新) — ~~Rugra 缺 RulePtrsub~~ **实际上 RulePtrArith 已存在**（ruleaction.rs:15041, AddTreeState port），已在 oppool2 注册（action.rs:760）。但实测 curl 不产生 PTRSUB，原因链已定位：
+10. **`RulePtrsub` 创建规则缺失** (🔧 L2→L3，2026-07-27 完整诊断) — ~~Rugra 缺 RulePtrsub~~ **实际上 RulePtrArith 已存在**（ruleaction.rs:15041, AddTreeState port），已在 oppool2 注册（action.rs:760）。但实测 curl 不产生 PTRSUB，原因链已完整定位：
     - ✅ ActionInferTypes 成功传播 Configurable* 从 Ram@0x17520 经 COPY 链到 INT_ADD output（commit b754fca seed + 2ae2e38 type-priority 保护）
     - ✅ oppool2 已移到 ActionInferTypes 之后（commit a1ed0c8）—— RulePtrArith 理论上能看到 Pointer 类型
-    - 🔧 **剩余阻塞**：INT_ADD(struct_ptr, off) op 在 oppool2 运行前已被 dead-code/simplify 移出 `obank.alivelist`。census 显示 main 函数 loc_tree 中有 12 个 Configurable* varnode 是 INT_ADD input，但 oppool2 的 alivelist 快照里只有 3 个 INT_ADD，且**零个**带 Pointer input。这意味着简化规则（oppool1 simplify pool 中的 RulePropagateCopy 等）在 type 赋值之前就把 INT_ADD 折叠/内联了。
-    - **下一步**：调查 oppool1 simplify 哪条 Rule 把 INT_ADD(config_ptr, off) 移除了；或考虑将 RulePtrArith 提前到 oppool1（但这与 Ghidra 顺序冲突）；或确认 Ghidra 中 INT_ADD 如何在 simplify 后存活（Ghidra 的 dead-code 不会移除唯一定义 STORE 地址的 INT_ADD）。
+    - ✅ DeadCode descend 跟踪正常：94 个 INT_ADD with 0 descendants 都确实无消费者（in_storelist=false），不是 descend bug
+    - 🔧 **最终根因**：curl main() 中**不存在** `INT_ADD(Configurable*, off)` alive op。Configurable* 在 119 个 varnode 上（COPY 链终点），但**没有任何 alive INT_ADD 的 input 是 Configurable***。全局地址+偏移在 simplify 阶段被常量折叠成单一常量地址，STORE 变成 `STORE(0x17558, val)` 而非 `STORE(INT_ADD(config, 0x38), val)`。
+    - **下一步方向**：(a) 在 simplify 常量折叠之前，让 RulePtrArith 或 RuleStructOffset0 把全局地址+偏移模式识别为 PTRSUB；(b) 或在 printc 阶段，对 `STORE(const_addr, val)` 检查 const_addr 是否落在已知全局 struct 范围内，若是则渲染为 `global->field = val`；(c) 或阻止全局地址常量的折叠（让 COPY(global_addr) 保留为指针 varnode）。方向 (c) 最接近 Ghidra：Ghidra 的 database.cc SymbolEntry 阻止全局地址被当作普通常量折叠。
 11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (✅ 已 L3, 2026-07-27) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
 
     **✅ 2026-07-27 已修复**：新增 `cast_input_ptr`（PTRSUB/PTRADD slot-0 pointer-fit + CAST 插入）+ `ptr_input_reqtype`（从 output pointer 类型派生 slot-0 reqtype）+ apply 接入 `cast_output` 第二轮遍历 + `output_metatype` 排除指针产生 op（PTRSUB/PTRADD/LOAD/CALL/COPY/etc. → None）+ apply 返回值修正（count>0 → CHANGE）+ 5 新单元测试（1292 全过）。剩余 `resolveUnion`/`checkPointerIssues`/完整 struct-field resolution 仍延后。
