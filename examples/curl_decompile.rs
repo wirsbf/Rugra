@@ -123,10 +123,12 @@ fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
 
     let mut map: HashMap<u64, Arc<Datatype>> = HashMap::new();
     // ::config @ 0x17520 (from DWARF DW_AT_location DW_OP_addr: 0x17520).
-    // The Ram-space varnode at this address IS the global Configurable struct,
-    // so stamp the struct type (not a pointer) on it. Field accesses
-    // (::config.useragent at offset 0) then resolve via getSubType.
-    map.insert(0x17520, configurable);
+    // The global is accessed via RIP-relative lea which puts the ADDRESS
+    // (a Configurable*) into a register. So stamp the POINTER type on the
+    // address constant, not the struct itself. This lets ActionInferTypes
+    // propagate Configurable* through COPY/INT_ADD chains to reach the
+    // STORE address base varnode, triggering ->field rendering.
+    map.insert(0x17520, configurable_ptr.clone());
     // Also expose the struct-pointer type for code that takes `&::config`
     // (the IR surfaces this via RIP-relative lea into a register). The
     // pointer type is registered in the TypeFactory under "Configurable *"
