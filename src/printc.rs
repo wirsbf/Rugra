@@ -5365,7 +5365,43 @@ impl PrintLanguage for PrintC {
                     }
                 }
             }
-            // Pass 2: field entries from INT_ADD(base_with_entry, const_off).
+            // Pass 2b-FIRST: propagate base entries through COPY chains BEFORE
+            // the INT_ADD field scan, so that INT_ADD inputs (which often read
+            // the config pointer via a COPY chain) have entries available.
+            // Original order (Pass 2 then 2b) failed because Pass 2 ran before
+            // COPY propagation gave the INT_ADD base input its entry.
+            for _iteration in 0..6 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_COPY || op.inrefs.is_empty() {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) {
+                                continue;
+                            }
+                            let src_key = {
+                                let s = op.inrefs[0].read().unwrap();
+                                (s.get_space(), s.get_offset())
+                            };
+                            if let Some(entry) = entry_by_key.get(&src_key).cloned() {
+                                entry_by_key.insert(out_key, entry);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
+            // Pass 2: field entries from INT_ADD/PTRSUB(base_with_entry, const_off).
             // Iterate to a fixed point so chained INT_ADDs (base itself an
             // INT_ADD output) also resolve.
             for _iteration in 0..4 {
@@ -5375,7 +5411,13 @@ impl PrintLanguage for PrintC {
                         let block = block_arc.read().unwrap();
                         for op_ref in &block.get_ops() {
                             let op = op_ref.0.read().unwrap();
-                            if op.opcode != OpCode::CPUI_INT_ADD || op.inrefs.len() != 2 {
+                            // Agent A finding: RulePtrArith converts INT_ADD(ptr,off)
+                            // to PTRSUB(ptr,off) before printing. Pass 2 must accept
+                            // BOTH opcodes — PTRSUB has the same shape (slot 0 = base
+                            // pointer, slot 1 = constant offset).
+                            if !matches!(op.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB)
+                                || op.inrefs.len() != 2
+                            {
                                 continue;
                             }
                             let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
