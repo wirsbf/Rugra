@@ -299,6 +299,10 @@ pub struct PrintC {
     symbol_table: HashMap<u64, String>,
     /// Address → string literal lookup (borrowed from Funcdata during doc_function)
     string_table: HashMap<u64, String>,
+    /// Snapshot of global struct pointers (addr → Pointer(Struct)) borrowed
+    /// from Funcdata during doc_function. Used to resolve const-address
+    /// STORE/LOAD into `globalname->fieldname` at print time.
+    global_struct_ptrs_snapshot: HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>,
     /// Function address range for local label detection
     func_start: u64,
     func_end: u64,
@@ -519,6 +523,7 @@ impl PrintC {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
+            global_struct_ptrs_snapshot: HashMap::new(),
             func_start: 0,
             func_end: 0,
             copy_map: HashMap::new(),
@@ -3832,6 +3837,40 @@ impl PrintC {
         None
     }
 
+    /// Resolve a constant address to a global struct field access.
+    /// If `addr` falls within a known global struct (e.g. ::config at 0x17520,
+    /// size 304 bytes), returns `(global_name, field_name, field_offset)`.
+    ///
+    /// This mirrors Ghidra's SymbolEntry→Datatype field resolution (database.cc)
+    /// done at print time. Rugra lacks the full SymbolEntry infrastructure, so
+    /// we use the `global_struct_ptrs` map populated by the driver as a stand-in.
+    /// The global name is derived from the pointed-to struct's name lowercased
+    /// (e.g. Configurable → configurable), matching Ghidra's default global
+    /// naming for anonymous DWARF symbols.
+    fn resolve_global_struct_field(
+        globals: &HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>,
+        addr: u64,
+    ) -> Option<(String, String, usize)> {
+        use crate::type_system::datatype::Datatype;
+        for (&base_addr, ptr_dt) in globals {
+            if let Datatype::Pointer(ref tp) = ptr_dt.as_ref() {
+                if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                    let struct_size = ts.base.size as u64;
+                    if addr >= base_addr && addr < base_addr + struct_size {
+                        let field_off = (addr - base_addr) as usize;
+                        // Find the field at this exact offset
+                        if let Some(field) = ts.fields.iter().find(|f| f.offset == field_off) {
+                            let gname = ts.base.name.to_lowercase();
+                            return Some((gname, field.name.clone(), field_off));
+                        }
+                        // Offset doesn't match a field exactly — fall through
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // RUGRA-GLUE: push_input (no Ghidra counterpart found)
     /// Push an op's input varnode, resolving through the copy chain.
     fn push_input(&mut self, op: &PcodeOp, index: usize) {
@@ -4971,6 +5010,7 @@ impl PrintLanguage for PrintC {
             .map(|(k, v)| (*k, sanitize_c_ident(v)))
             .collect();
         self.string_table = fd.string_table.clone();
+        self.global_struct_ptrs_snapshot = fd.global_struct_ptrs.clone();
 
         // Restructure the local-variable scope (faithful varmap.cc port).
         // If ActionRestructureVarnode already built it on fd.scope, reuse it
@@ -6245,6 +6285,22 @@ impl PrintLanguage for PrintC {
                 // Fix 7: Resolve global address to symbol name
                 // Check if the address constant matches a known symbol
                 if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
+                    // Struct field resolution: if the address falls within a known
+                    // global struct (e.g. ::config at 0x17520, size 304), render
+                    // as `globalname->fieldname` instead of `*(long *)addr`.
+                    // This mirrors Ghidra's SymbolEntry→field resolution in
+                    // database.cc, done at print time without needing PTRSUB ops.
+                    if let Some((gname, field_name, _field_off)) =
+                        Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, addr_offset)
+                    {
+                        drop(addr_vn);
+                        self.emit.tag_variable(&gname, 0);
+                        self.emit.print("->");
+                        self.emit.print(&field_name);
+                        self.emit.tag_op(" = ");
+                        self.push_input(op, 2);
+                        return;
+                    }
                     if let Some(sym_name) = self.symbol_table.get(&addr_offset) {
                         drop(addr_vn);
                         // *(long *)sym — cast makes dereference legal regardless of sym's type
@@ -6254,19 +6310,52 @@ impl PrintLanguage for PrintC {
                         self.push_input(op, 2);
                         return;
                     }
-                    // Synthetic BSS/data variable name for unmapped addresses
-                    // Typical ELF data sections are in the range 0x10000..0x1000000
-                    if addr_offset >= 0x10000 && addr_offset < 0x1000000 {
-                        let syn_name = format!("DAT_{:05x}", addr_offset);
-                        // Mark as used so an extern declaration is emitted (self-contained output)
-                        self.mark_variable_used(syn_name.clone(), addr_space, addr_offset, "long".to_string());
-                        drop(addr_vn);
-                        self.emit.print("*(long *)");
-                        self.emit.tag_variable(&syn_name, 0);
-                        self.emit.tag_op(" = ");
-                        self.push_input(op, 2);
-                        return;
+                }
+                // Register address that holds a constant global address (common
+                // after COPY propagation folds `config + offset` into a register).
+                // Resolve through the copy chain and try struct field resolution.
+                if addr_space == crate::space::AddressSpace::Register {
+                    // Chase the def chain: if this register is defined by a
+                    // COPY of a constant (e.g. config+offset folded), resolve
+                    // the constant and try struct field resolution.
+                    if let Some(def_op_arc) = Self::get_defining_op(&addr_arc) {
+                        let def_op = def_op_arc.read().unwrap();
+                        // The def op might be COPY(const) after folding
+                        if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
+                            let src = def_op.inrefs[0].clone();
+                            drop(def_op);
+                            let src_vn = src.read().unwrap();
+                            if src_vn.is_constant() || matches!(src_vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
+                                let r_off = src_vn.get_offset();
+                                if let Some((gname, field_name, _field_off)) =
+                                    Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, r_off)
+                                {
+                                    drop(src_vn); drop(addr_vn);
+                                    self.emit.tag_variable(&gname, 0);
+                                    self.emit.print("->");
+                                    self.emit.print(&field_name);
+                                    self.emit.tag_op(" = ");
+                                    self.push_input(op, 2);
+                                    return;
+                                }
+                            }
+                        }
                     }
+                }
+                // Synthetic BSS/data variable name for unmapped addresses
+                // Typical ELF data sections are in the range 0x10000..0x1000000
+                if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+                    && addr_offset >= 0x10000 && addr_offset < 0x1000000
+                {
+                    let syn_name = format!("DAT_{:05x}", addr_offset);
+                    // Mark as used so an extern declaration is emitted (self-contained output)
+                    self.mark_variable_used(syn_name.clone(), addr_space, addr_offset, "long".to_string());
+                    drop(addr_vn);
+                    self.emit.print("*(long *)");
+                    self.emit.tag_variable(&syn_name, 0);
+                    self.emit.tag_op(" = ");
+                    self.push_input(op, 2);
+                    return;
                 }
                 drop(addr_vn);
 
