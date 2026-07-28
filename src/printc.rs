@@ -1448,13 +1448,25 @@ impl PrintC {
             return;
         }
 
-        // Emit label if this block is a goto target
+        // Emit label if this block is an unstructured goto target.
+        // Faithful to Ghidra emitLabelStatement (printc.cc:3198-3214): in
+        // structured mode a `code_r0x` label is printed only for a BlockBasic
+        // (t_copy) whose front leaf carries f_unstructured_targ — i.e. it is
+        // the destination of a genuine unstructured goto (set by
+        // BlockGoto/BlockIf/BlockSwitch::markUnstructured via markCopyBlock).
+        // Loop backedges and structured-branch targets never receive this
+        // flag, so they never get a label. (The flat-mode `isJumpTarget` path
+        // is not used by Rugra's structured emitter.)
         {
             let block = block_arc.read().unwrap();
-            let ops = block.get_ops();
-            if let Some(first_op) = ops.first() {
-                let addr = first_op.0.read().unwrap().start.addr.as_u64();
-                if self.goto_targets.contains(&addr) {
+            let bt = block.get_type();
+            let is_target = (block.get_flags()
+                & crate::block::block_flags::UNSTRUCTURED_TARG) != 0;
+            // Only BlockBasic can be an unstructured target leaf.
+            if is_target && bt == crate::block::BlockType::Basic {
+                let ops = block.get_ops();
+                if let Some(first_op) = ops.first() {
+                    let addr = first_op.0.read().unwrap().start.addr.as_u64();
                     self.emit.tag_line(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }

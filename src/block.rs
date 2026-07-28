@@ -634,6 +634,17 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.hh:266 FlowBlock::scopeBreak
     fn scope_break_trait(&mut self, _cur_exit: i32, _cur_loop_exit: i32) {}
 
+    /// Ghidra `FlowBlock::markUnstructured` (block.hh, virtual; default in
+    /// block.cc is a no-op for leaf blocks like BlockBasic/BlockCopy). The
+    /// `BlockGraph` override recurses into all children (block.cc:1238-1245);
+    /// `BlockGoto`/`BlockIf`/`BlockSwitch` recurse then mark their goto
+    /// targets (if still `f_goto_goto`) as `f_unstructured_targ`
+    /// (block.cc:2811, 3022, 3558). Rugra's structured blocks provide
+    /// inherent helpers; the default no-op covers BlockBasic (BlockGoto marks
+    /// via its inherent `mark_unstructured_target`).
+    // Ghidra: block.hh FlowBlock::markUnstructured
+    fn mark_unstructured_trait(&mut self) {}
+
     /// Ghidra `FlowBlock::getExitLeaf` (block.hh, virtual): the leaf block
     /// that flow exits through, if there is a single one. Default: null.
     /// BlockList/BlockIf override (block.cc:2953, 3111).
@@ -1537,6 +1548,24 @@ impl BlockGraph {
         }
     }
 
+    /// Ghidra `BlockGraph::markUnstructured` (block.cc:1238-1245): recurse
+    /// `markUnstructured()` into every child. Each structured block subtype
+    /// (BlockGoto/BlockIf/BlockSwitch) further marks its unconverted
+    /// (`f_goto_goto`) goto target as `f_unstructured_targ`, so
+    /// `emitLabelStatement` (printc.cc:3198-3214) prints a `code_r0x` label
+    /// only for blocks that are genuine unstructured goto destinations —
+    /// never for loop backedges or structured-branch targets. This is the
+    /// entry point invoked by `ActionFinalStructure::apply`
+    /// (blockaction.cc:2194: `graph.markUnstructured()`).
+    // Ghidra: block.cc:1238 BlockGraph::markUnstructured
+    pub fn mark_unstructured(&mut self) {
+        // cc:1241-1244: for each child in list, call markUnstructured().
+        let n = self.blocks.len();
+        for i in 0..n {
+            self.blocks[i].write().unwrap().mark_unstructured_trait();
+        }
+    }
+
     /// Find the nearest common ancestor (dominator) of two blocks in the
     /// dominator tree. Faithful to `FlowBlock::findCommonBlock`
     /// (block.cc:736-795). Used by `PcodeOp::compareOrder` (op.cc:778) to
@@ -2270,6 +2299,14 @@ impl FlowBlock for BlockGoto {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_goto_type(cur_exit, cur_loop_exit);
     }
+    // Ghidra: block.cc:2811 BlockGoto::markUnstructured — delegate to the
+    // inherent helper (cc:2814 recurses into the wrapped child via
+    // BlockGraph::markUnstructured, but Rugra's BlockGoto wraps a BlockBasic
+    // with no structured children, so only the target-marking cc:2815-2818
+    // step is needed).
+    fn mark_unstructured_trait(&mut self) {
+        self.mark_unstructured_target();
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockGoto virtual overrides)
@@ -2438,6 +2475,21 @@ impl FlowBlock for BlockIf {
     // cc:3080-3081 body recurse, cc:3082-3083 if-goto reclassify).
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_goto_type(cur_exit, cur_loop_exit);
+    }
+    // Ghidra: block.cc:3022 BlockIf::markUnstructured — recurse into
+    // condition/then/else (cc:3025 BlockGraph::markUnstructured), then if this
+    // is an if-goto whose goto is still f_goto_goto, mark its target as
+    // f_unstructured_targ (cc:3026-3027). Rugra delegates target-marking to
+    // the inherent helper.
+    fn mark_unstructured_trait(&mut self) {
+        // cc:3025: recurse into all sub-blocks (condition + bodies).
+        self.condition.write().unwrap().mark_unstructured_trait();
+        self.if_body.write().unwrap().mark_unstructured_trait();
+        if let Some(else_b) = &self.else_body {
+            else_b.write().unwrap().mark_unstructured_trait();
+        }
+        // cc:3026-3027: mark the if-goto target.
+        self.mark_unstructured_target();
     }
 }
 
@@ -2670,6 +2722,12 @@ impl FlowBlock for BlockWhileDo {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_children(cur_exit, cur_loop_exit);
     }
+    // Ghidra: block.cc BlockWhileDo::markUnstructured — only recurses (via
+    // BlockGraph::markUnstructured). Rugra recurses into its two children.
+    fn mark_unstructured_trait(&mut self) {
+        self.condition.write().unwrap().mark_unstructured_trait();
+        self.body.write().unwrap().mark_unstructured_trait();
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockWhileDo virtual overrides)
@@ -2833,6 +2891,11 @@ impl FlowBlock for BlockDoWhile {
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_body(cur_exit, cur_loop_exit);
     }
+    // Ghidra: block.cc BlockDoWhile::markUnstructured — only recurses (via
+    // BlockGraph::markUnstructured). Rugra recurses into condition.
+    fn mark_unstructured_trait(&mut self) {
+        self.condition.write().unwrap().mark_unstructured_trait();
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockDoWhile virtual overrides)
@@ -2946,6 +3009,11 @@ impl FlowBlock for BlockInfLoop {
     // exiting into itself, this block establishes a new loop scope).
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_body(cur_exit, cur_loop_exit);
+    }
+    // Ghidra: block.cc BlockInfLoop::markUnstructured — only recurses (via
+    // BlockGraph::markUnstructured). Rugra recurses into body.
+    fn mark_unstructured_trait(&mut self) {
+        self.body.write().unwrap().mark_unstructured_trait();
     }
 }
 
@@ -3163,6 +3231,13 @@ impl FlowBlock for BlockList {
             self.children[i].write().unwrap().scope_break_trait(ind, cur_loop_exit);
         }
     }
+    // Ghidra: block.cc BlockList inherits BlockGraph::markUnstructured
+    // (block.cc:1238-1245) — recurse into every child.
+    fn mark_unstructured_trait(&mut self) {
+        for child in &self.children {
+            child.write().unwrap().mark_unstructured_trait();
+        }
+    }
 }
 
 /// Boolean operator type for `BlockCondition`.
@@ -3257,6 +3332,12 @@ impl FlowBlock for BlockCondition {
     // into both sub-conditions with cur_exit=-1, no fixed exit).
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_children(cur_exit, cur_loop_exit);
+    }
+    // Ghidra: block.cc BlockCondition::markUnstructured — only recurses (via
+    // BlockGraph::markUnstructured). Rugra recurses into first/second.
+    fn mark_unstructured_trait(&mut self) {
+        self.first.write().unwrap().mark_unstructured_trait();
+        self.second.write().unwrap().mark_unstructured_trait();
     }
 }
 
@@ -3446,6 +3527,18 @@ impl FlowBlock for BlockSwitch {
     // with cur_exit=-1, cc:3618-3629 per-case recurse with cur_exit=curexit).
     fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         self.scope_break_break_cases(cur_exit, cur_loop_exit);
+    }
+    // Ghidra: block.cc:3558 BlockSwitch::markUnstructured — recurse via
+    // BlockGraph::markUnstructured (cc:3561), then mark each case whose
+    // gototype is f_goto_goto (cc:3562-3565). Rugra recurses into the control
+    // and every case; per-case goto target marking is a conservative no-op
+    // (Rugra does not yet track per-case gototype).
+    fn mark_unstructured_trait(&mut self) {
+        self.control.write().unwrap().mark_unstructured_trait();
+        for case in &self.cases {
+            case.write().unwrap().mark_unstructured_trait();
+        }
+        self.mark_unstructured_targets();
     }
 }
 

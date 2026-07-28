@@ -5492,6 +5492,16 @@ impl Action for ActionFinalStructure {
         // conversion; without it, every BlockGoto keeps its default
         // f_goto_goto and emits a `code_r0x` label.
         fd.sblocks.scope_break(-1, -1);
+        // Ghidra blockaction.cc:2194: graph.markUnstructured();
+        // Recurse the structure tree marking, for each unconverted
+        // (f_goto_goto) goto / if-goto / switch-case-goto, its target block's
+        // front leaf with f_unstructured_targ. Only blocks carrying this flag
+        // get a `code_r0x` label in emitLabelStatement (printc.cc:3198-3214) —
+        // loop backedges and structured-branch targets never do. Without this
+        // call, Rugra's label emission fell back to a coarse scan of every
+        // BRANCH/CBRANCH target (printc.rs goto_targets) and emitted dozens of
+        // spurious unreferenced labels.
+        fd.sblocks.mark_unstructured();
         changed += 1;
 
         // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
