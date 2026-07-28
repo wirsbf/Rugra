@@ -5097,19 +5097,68 @@ impl PrintLanguage for PrintC {
             let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
                 .map(|(a, d)| (*a, d.clone()))
                 .collect();
+            // Helper: check if a varnode's COPY def chain leads to Ram@addr
+            // where addr matches a known global. Returns the struct pointer type.
+            fn resolve_global_ptr(
+                vn: &crate::varnode::Varnode,
+                globals: &[(u64, std::sync::Arc<Datatype>)],
+            ) -> Option<std::sync::Arc<Datatype>> {
+                // Direct Ram/Const match
+                let space = vn.get_space();
+                let off = vn.get_offset();
+                if space == crate::space::AddressSpace::Ram || space == crate::space::AddressSpace::Const {
+                    for &(addr, ref dt) in globals {
+                        if off == addr { return Some(dt.clone()); }
+                    }
+                }
+                // Follow COPY def chain: if vn = COPY(src), check src
+                if let Some(ref def_weak) = vn.def {
+                    if let Some(def_arc) = def_weak.upgrade() {
+                        let def_op = def_arc.read().unwrap();
+                        if def_op.opcode == crate::opcodes::OpCode::CPUI_COPY {
+                            if let Some(in0) = def_op.get_in(0) {
+                                let src = in0.read().unwrap();
+                                let src_space = src.get_space();
+                                let src_off = src.get_offset();
+                                if src_space == crate::space::AddressSpace::Ram
+                                    || src_space == crate::space::AddressSpace::Const
+                                {
+                                    for &(addr, ref dt) in globals {
+                                        if src_off == addr { return Some(dt.clone()); }
+                                    }
+                                }
+                                // Also check INT_ADD(Ram@addr, offset) → struct field access
+                                // by following src's def chain one more level
+                                drop(src);
+                                if let Some(ref src_def_weak) = in0.read().unwrap().def {
+                                    if let Some(src_def_arc) = src_def_weak.upgrade() {
+                                        let src_def = src_def_arc.read().unwrap();
+                                        if src_def.opcode == crate::opcodes::OpCode::CPUI_COPY {
+                                            if let Some(src_in0) = src_def.get_in(0) {
+                                                let s0 = src_in0.read().unwrap();
+                                                for &(addr, ref dt) in globals {
+                                                    if s0.get_space() == crate::space::AddressSpace::Ram
+                        && s0.get_offset() == addr {
+                                                        return Some(dt.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
             for vn_ref in &fd.vbank.loc_tree {
                 let vn = vn_ref.0.read().unwrap();
                 if vn.is_annotation() { continue; }
-                let off = vn.get_offset();
-                let space = vn.get_space();
-                for &(addr, ref dt) in &globals {
-                    if (space == crate::space::AddressSpace::Ram || space == crate::space::AddressSpace::Const)
-                        && off == addr
-                    {
-                        drop(vn);
-                        vn_ref.0.write().unwrap().v_type = Some(dt.clone());
-                        break;
-                    }
+                if vn.v_type.is_some() { continue; } // Already typed
+                if let Some(dt) = resolve_global_ptr(&vn, &globals) {
+                    drop(vn);
+                    vn_ref.0.write().unwrap().v_type = Some(dt);
                 }
             }
         }
