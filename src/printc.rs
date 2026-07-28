@@ -274,6 +274,47 @@ fn is_label_symbol(sym: &crate::database::Symbol) -> bool {
     sym.type_name == "label"
 }
 
+// Ghidra: funcdata_varnode.cc:1653 Funcdata::mapGlobals (Symbol-entry stamp)
+/// Build a minimal `SymbolEntry` linking a global address to its Symbol.
+///
+/// This is the printc-side twin of `coreaction::make_global_symbol_entry`,
+/// needed because Rugra's COPY ops (which carry a global-address value into a
+/// register) are block-local and are not seen by `ActionTypeInfer`'s
+/// alivelist-based mapentry propagation. The printc copy-map builder (which
+/// DOES iterate blocks) stamps this entry on COPY outputs whose input is a
+/// known global address, so `op_store` can later render `gname->field` from
+/// `entry.addr` at print time. The Symbol name is the lowercased struct type
+/// name, matching `resolve_global_struct_field`. Returns `None` when `dt` is
+/// not a `Pointer(Struct)`.
+fn make_global_symbol_entry_printc(
+    addr: u64,
+    dt: std::sync::Arc<crate::type_system::datatype::Datatype>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> {
+    use crate::address::{Address, RangeList};
+    use crate::database::{Symbol, SymbolEntry};
+    use crate::type_system::datatype::Datatype;
+    let struct_name = match dt.as_ref() {
+        Datatype::Pointer(tp) => match tp.ptr_to.as_ref() {
+            Datatype::Struct(s) => Some(s.base.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    let gname = struct_name.to_lowercase();
+    let mut sym = Symbol::new(0, &gname, "");
+    sym.set_dtype(dt);
+    let symbol = std::sync::Arc::new(std::sync::RwLock::new(sym));
+    let entry = SymbolEntry::new_static(
+        symbol,
+        0,
+        Address::new(addr),
+        0,
+        8,
+        RangeList::new(),
+    );
+    Some(std::sync::Arc::new(std::sync::RwLock::new(entry)))
+}
+
 /// Represents a detected struct on the stack frame.
 /// When a stack address is passed to a function call (via lea reg, [rsp+X]),
 /// it indicates a struct/buffer at that offset.
@@ -1050,47 +1091,94 @@ impl PrintC {
                 // Check INT_ADD(struct_ptr, field_offset) -> ptr->field
                 let mut field_access = false;
                 if let Some(in1) = op.get_in(1) {
-                    let addr_vn = in1.read().unwrap();
-                    if let Some(ref def_weak) = addr_vn.def {
-                        if let Some(def_arc) = def_weak.upgrade() {
-                            let def_op = def_arc.read().unwrap();
-                            if def_op.opcode == OpCode::CPUI_INT_ADD && def_op.inrefs.len() >= 2 {
-                                let i0 = def_op.inrefs[0].read().unwrap();
-                                let i1 = def_op.inrefs[1].read().unwrap();
-                                let (base_arc, offset) = if i1.get_space() == crate::space::AddressSpace::Const
-                                    && i0.get_space() != crate::space::AddressSpace::Const
-                                    && i1.get_offset() > 0 && i1.get_offset() < 0x10000 {
-                                    (def_op.inrefs[0].clone(), i1.get_offset())
-                                } else if i0.get_space() == crate::space::AddressSpace::Const
-                                    && i1.get_space() != crate::space::AddressSpace::Const
-                                    && i0.get_offset() > 0 && i0.get_offset() < 0x10000 {
-                                    (def_op.inrefs[1].clone(), i0.get_offset())
-                                } else {
-                                    (def_op.inrefs[0].clone(), 0u64)
-                                };
-                                drop(i0); drop(i1); drop(def_op); drop(addr_vn);
-                                if offset > 0 {
-
-                                    let bv = base_arc.read().unwrap();
-                                    if let Some(ref vt) = bv.v_type {
-                                        use crate::type_system::datatype::Datatype;
-                                        if let Datatype::Pointer(ref tp) = vt.as_ref() {
-                                            if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
-                                                for field in &ts.fields {
-                                                    if field.offset == offset as usize {
-                                                        let bt = self.get_varnode_display_name(&bv);
-                                                        self.emit.print(&bt);
-                                                        self.emit.print("->");
-                                                        self.emit.print(&field.name);
-                                                        field_access = true;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                    // Collect address facts up front so the read-guard is
+                    // dropped before any emission (the guard cannot be split
+                    // across the early-return-style field_access branches).
+                    let (mapentry, has_int_add_def) = {
+                        let addr_vn = in1.read().unwrap();
+                        let me = addr_vn.mapentry.clone();
+                        let hdef = addr_vn.def.as_ref().and_then(|w| w.upgrade()).map(|d| {
+                            let r = d.read().unwrap();
+                            r.opcode == OpCode::CPUI_INT_ADD && r.inrefs.len() >= 2
+                        }).unwrap_or(false);
+                        (me, hdef)
+                    };
+                    // SymbolEntry (mapentry) shortcut: ActionHeritage stamps
+                    // a mapentry on global-address varnodes and ActionTypeInfer
+                    // propagates it through INT_ADD/COPY chains, recomputing
+                    // the FULL field address (base+offset) on each INT_ADD
+                    // output. So entry.addr is already the field address
+                    // (e.g. 0x17598 for ::config.conf) and we can render
+                    // `gname->fieldname` directly without chasing the def chain.
+                    if !field_access {
+                        if let Some(ref entry) = mapentry {
+                            let base_addr = entry.read().unwrap().addr.as_u64();
+                            let resolved = Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, base_addr);
+                            if let Some((gname, fname, _)) = resolved {
+                                self.emit.tag_variable(&gname, 0);
+                                self.emit.print("->");
+                                self.emit.print(&fname);
+                                field_access = true;
                             }
+                        }
+                    }
+                    // SSA-def INT_ADD path: addr_vn.def points at the INT_ADD
+                    // that computed base+offset. Requires the def pointer to be
+                    // live (works for in-alivelist address computations).
+                    if !field_access && has_int_add_def {
+                        let def_arc = in1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()).unwrap();
+                        let def_op = def_arc.read().unwrap();
+                        let i0 = def_op.inrefs[0].read().unwrap();
+                        let i1 = def_op.inrefs[1].read().unwrap();
+                        let (base_arc, offset) = if i1.get_space() == crate::space::AddressSpace::Const
+                            && i0.get_space() != crate::space::AddressSpace::Const
+                            && i1.get_offset() > 0 && i1.get_offset() < 0x10000 {
+                            (def_op.inrefs[0].clone(), i1.get_offset())
+                        } else if i0.get_space() == crate::space::AddressSpace::Const
+                            && i1.get_space() != crate::space::AddressSpace::Const
+                            && i0.get_offset() > 0 && i0.get_offset() < 0x10000 {
+                            (def_op.inrefs[1].clone(), i0.get_offset())
+                        } else {
+                            (def_op.inrefs[0].clone(), 0u64)
+                        };
+                        drop(i0); drop(i1); drop(def_op);
+                        if offset > 0 {
+                            // Snapshot the field name (if any) before releasing
+                            // the base read-guard, then render.
+                            let field_name_opt = {
+                                let bv = base_arc.read().unwrap();
+                                if let Some(ref vt) = bv.v_type {
+                                    use crate::type_system::datatype::Datatype;
+                                    if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                                        if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                                            ts.fields.iter().find(|f| f.offset == offset as usize)
+                                                .map(|f| f.name.clone())
+                                        } else { None }
+                                    } else { None }
+                                } else { None }
+                            };
+                            if let Some(fname) = field_name_opt {
+                                let bv = base_arc.read().unwrap();
+                                let bt = self.get_varnode_display_name(&bv);
+                                drop(bv);
+                                self.emit.print(&bt);
+                                self.emit.print("->");
+                                self.emit.print(&fname);
+                                field_access = true;
+                            }
+                        }
+                    }
+                    // value_def_map fallback: the SSA `def` pointer is often
+                    // None for promoted-input address varnodes, but the
+                    // value-defining INT_ADD is recoverable via value_def_map
+                    // (keyed by space+offset). Reconstruct the full field
+                    // address (global_base + offset) and resolve to gname->field.
+                    if !field_access {
+                        if let Some((gname, fname)) = self.resolve_store_struct_field(&in1) {
+                            self.emit.tag_variable(&gname, 0);
+                            self.emit.print("->");
+                            self.emit.print(&fname);
+                            field_access = true;
                         }
                     }
                 }
@@ -3871,6 +3959,77 @@ impl PrintC {
         None
     }
 
+    // RUGRA-GLUE: resolve_store_struct_field (no direct Ghidra counterpart)
+    /// Resolve a STORE address varnode to a `(global_name, field_name)` pair by
+    /// reconstructing the full field address from the address computation.
+    ///
+    /// After Heritage + simplify, a STORE address is often a Unique/Register
+    /// varnode whose SSA `def` pointer is None (it was promoted to a function
+    /// input during rename), but whose value-defining op is recoverable via
+    /// `value_def_map` (keyed by (space, offset)). That defining op is
+    /// typically `INT_ADD(global_base, field_offset)`. This helper:
+    ///   1. Looks up the address varnode in `value_def_map` to find INT_ADD.
+    ///   2. Splits the INT_ADD inputs into a Const offset and a base varnode.
+    ///   3. Resolves the base through `copy_map`; if it lands on a Const/Ram
+    ///      varnode at a known global address, computes `field_addr = base +
+    ///      offset` and delegates to `resolve_global_struct_field`.
+    ///
+    /// This is the pragmatic Rugra equivalent of Ghidra's SymbolEntry→field
+    /// resolution at print time, needed because Rugra's COPY/INT_ADD ops are
+    /// block-local (not in `obank.alivelist`), so the ActionTypeInfer mapentry
+    /// propagation does not reach these address varnodes.
+    fn resolve_store_struct_field(
+        &self,
+        addr_arc: &Arc<RwLock<Varnode>>,
+    ) -> Option<(String, String)> {
+        use crate::space::AddressSpace;
+        let (space, off) = {
+            let vn = addr_arc.read().unwrap();
+            (vn.get_space(), vn.get_offset())
+        };
+        // 1. Find the value-defining op for this address varnode.
+        let def_op_arc = self.value_def_map.get(&(space, off)).cloned()?;
+        let def_op = def_op_arc.read().unwrap();
+        if def_op.opcode != OpCode::CPUI_INT_ADD || def_op.inrefs.len() != 2 {
+            return None;
+        }
+        // 2. Split into Const offset + base.
+        let i0 = def_op.inrefs[0].clone();
+        let i1 = def_op.inrefs[1].clone();
+        let (base_arc, offset) = {
+            let v0 = i0.read().unwrap();
+            let v1 = i1.read().unwrap();
+            if v1.get_space() == AddressSpace::Const
+                && v0.get_space() != AddressSpace::Const
+                && v1.get_offset() < 0x10000
+            {
+                (i0.clone(), v1.get_offset())
+            } else if v0.get_space() == AddressSpace::Const
+                && v1.get_space() != AddressSpace::Const
+                && v0.get_offset() < 0x10000
+            {
+                (i1.clone(), v0.get_offset())
+            } else {
+                return None;
+            }
+        };
+        drop(def_op);
+        // 3. Resolve the base through copy_map to a Const/Ram global address.
+        let resolved_base = self.resolve_varnode(&base_arc).unwrap_or_else(|| base_arc.clone());
+        let rb = resolved_base.read().unwrap();
+        let base_space = rb.get_space();
+        let base_off = rb.get_offset();
+        if !matches!(base_space, AddressSpace::Const | AddressSpace::Ram) {
+            return None;
+        }
+        let base_addr = base_off;
+        drop(rb);
+        // 4. Compute the full field address and resolve to (gname, fname).
+        let field_addr = base_addr.wrapping_add(offset);
+        Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, field_addr)
+            .map(|(g, f, _)| (g, f))
+    }
+
     // RUGRA-GLUE: push_input (no Ghidra counterpart found)
     /// Push an op's input varnode, resolving through the copy chain.
     fn push_input(&mut self, op: &PcodeOp, index: usize) {
@@ -5167,6 +5326,199 @@ impl PrintLanguage for PrintC {
             }
             self.copy_map.insert(*key, current);
         }
+        // Stamp global SymbolEntries (mapentry) on varnodes that carry a global
+        // struct address, keyed by (space, offset). SSA renaming can create
+        // several Arc<Varnode> instances sharing the same (space, offset), so
+        // we collect a (space, offset) → entry map first, then apply it to
+        // every matching varnode in loc_tree. This is the block-local twin of
+        // ActionHeritage' stamping, needed because Rugra's COPY/INT_ADD address
+        // math lives in block op-lists, not in obank.alivelist.
+        if !fd.global_struct_ptrs.is_empty() {
+            use crate::space::AddressSpace;
+            use std::collections::HashMap as StdHashMap;
+            // Pass 1: base entries from COPY(global_addr → reg).
+            let mut entry_by_key: StdHashMap<(AddressSpace, u64), std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> = StdHashMap::new();
+            for i in 0..fd.bblocks.get_size() {
+                if let Some(block_arc) = fd.bblocks.get_block(i) {
+                    let block = block_arc.read().unwrap();
+                    for op_ref in &block.get_ops() {
+                        let op = op_ref.0.read().unwrap();
+                        if op.opcode != OpCode::CPUI_COPY || op.inrefs.is_empty() {
+                            continue;
+                        }
+                        let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                        let src = &op.inrefs[0];
+                        let src_vn = src.read().unwrap();
+                        if !matches!(src_vn.get_space(), AddressSpace::Const | AddressSpace::Ram) {
+                            continue;
+                        }
+                        let src_off = src_vn.get_offset();
+                        if let Some(dt) = fd.global_struct_ptrs.get(&src_off) {
+                            if let Some(entry) = make_global_symbol_entry_printc(src_off, dt.clone()) {
+                                let key = {
+                                    let o = out_arc.read().unwrap();
+                                    (o.get_space(), o.get_offset())
+                                };
+                                entry_by_key.entry(key).or_insert(entry);
+                            }
+                        }
+                    }
+                }
+            }
+            // Pass 2: field entries from INT_ADD(base_with_entry, const_off).
+            // Iterate to a fixed point so chained INT_ADDs (base itself an
+            // INT_ADD output) also resolve.
+            for _iteration in 0..4 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_INT_ADD || op.inrefs.len() != 2 {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) {
+                                continue;
+                            }
+                            let i0 = &op.inrefs[0];
+                            let i1 = &op.inrefs[1];
+                            let k0 = { let v = i0.read().unwrap(); (v.get_space(), v.get_offset()) };
+                            let k1 = { let v = i1.read().unwrap(); (v.get_space(), v.get_offset()) };
+                            // Identify (base_key, offset) where one input is a
+                            // Const and the other matches a known base entry.
+                            let (base_key, off_val) =
+                                if k1.0 == AddressSpace::Const && k0.0 != AddressSpace::Const && k1.1 < 0x10000 {
+                                    (k0, k1.1)
+                                } else if k0.0 == AddressSpace::Const && k1.0 != AddressSpace::Const && k0.1 < 0x10000 {
+                                    (k1, k0.1)
+                                } else {
+                                    continue;
+                                };
+                            if let Some(base_entry) = entry_by_key.get(&base_key) {
+                                let (base_addr, dt) = {
+                                    let eg = base_entry.read().unwrap();
+                                    let addr = eg.addr.as_u64();
+                                    let dt = eg.symbol.read().unwrap().dtype.clone();
+                                    (addr, dt)
+                                };
+                                if let Some(dt) = dt {
+                                    let field_addr = base_addr.wrapping_add(off_val);
+                                    if let Some(entry) = make_global_symbol_entry_printc(field_addr, dt) {
+                                        entry_by_key.entry(out_key).or_insert(entry);
+                                        added = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
+            // Pass 2b: propagate entries through COPY chains. A COPY(reg_with_entry
+            // → tmp) makes tmp carry the same field address. SSA renaming often
+            // inserts such COPYs between the config register and the STORE
+            // address, so without this the STORE address (a Unique temporary)
+            // would not inherit the field-address mapentry. Iterate to a fixed
+            // point so multi-hop COPY chains resolve.
+            for _iteration in 0..6 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_COPY || op.inrefs.is_empty() {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) {
+                                continue;
+                            }
+                            let src_key = {
+                                let s = op.inrefs[0].read().unwrap();
+                                (s.get_space(), s.get_offset())
+                            };
+                            if let Some(entry) = entry_by_key.get(&src_key).cloned() {
+                                entry_by_key.insert(out_key, entry);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
+            // Pass 2c: propagate entries through MULTIEQUAL (phi) nodes. A
+            // config pointer reaching a join via different predecessor blocks
+            // is merged into a phi output; that output must inherit the same
+            // field-address mapentry so downstream INT_ADDs/STOREs resolve.
+            // Also propagate phi-output → phi-input for the reverse direction.
+            for _iteration in 0..6 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_MULTIEQUAL {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            let in_keys: Vec<(AddressSpace, u64)> = op.inrefs.iter().map(|a| {
+                                let v = a.read().unwrap();
+                                (v.get_space(), v.get_offset())
+                            }).collect();
+                            // out → in: if out has an entry, push to all inputs.
+                            if let Some(entry) = entry_by_key.get(&out_key).cloned() {
+                                for ik in &in_keys {
+                                    if !entry_by_key.contains_key(ik) {
+                                        entry_by_key.insert(*ik, entry.clone());
+                                        added = true;
+                                    }
+                                }
+                            }
+                            // in → out: if any input has an entry, push to out.
+                            if !entry_by_key.contains_key(&out_key) {
+                                for ik in &in_keys {
+                                    if let Some(entry) = entry_by_key.get(ik).cloned() {
+                                        entry_by_key.insert(out_key, entry);
+                                        added = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
+            // Pass 3: apply the collected entries to every matching varnode.
+            for vn_ref in &fd.vbank.loc_tree {
+                let key = {
+                    let vn = vn_ref.0.read().unwrap();
+                    (vn.get_space(), vn.get_offset())
+                };
+                if let Some(entry) = entry_by_key.get(&key) {
+                    let mut vn_w = vn_ref.0.write().unwrap();
+                    if vn_w.mapentry.is_none() {
+                        vn_w.mapentry = Some(entry.clone());
+                    }
+                }
+            }
+        }
 
         // Build defining-op map: for each op, map output varnode ptr -> op Arc
         // Include BOTH alivelist ops AND block-level ops (comparisons, booleans, etc.)
@@ -6138,6 +6490,29 @@ impl PrintLanguage for PrintC {
 
     // Ghidra: printc.cc:500 PrintC::opStore
     fn op_store(&mut self, op: &PcodeOp) {
+        // SymbolEntry (mapentry) shortcut, applied uniformly to ALL address
+        // spaces (Register/Unique/Ram/Const). The printc copy-map builder
+        // stamps a mapentry carrying the FULL field address (global_base +
+        // field_offset) on every varnode that holds a config field address,
+        // propagating through COPY/INT_ADD/MULTIEQUAL chains. When the STORE
+        // address carries such an entry, render `gname->field = value` directly
+        // without any def-chain chase.
+        if let Some(addr_arc) = op.get_in(1) {
+            let entry_opt = addr_arc.read().unwrap().mapentry.clone();
+            if let Some(ref entry) = entry_opt {
+                let base_addr = entry.read().unwrap().addr.as_u64();
+                if let Some((gname, fname, _)) =
+                    Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, base_addr)
+                {
+                    self.emit.tag_variable(&gname, 0);
+                    self.emit.print("->");
+                    self.emit.print(&fname);
+                    self.emit.tag_op(" = ");
+                    self.push_input(op, 2);
+                    return;
+                }
+            }
+        }
         // Try to inline address computation: *(base + off) = val
         let mut inlined_addr = false;
         if let Some(addr_arc) = op.get_in(1) {
@@ -6315,6 +6690,30 @@ impl PrintLanguage for PrintC {
                 // after COPY propagation folds `config + offset` into a register).
                 // Resolve through the copy chain and try struct field resolution.
                 if addr_space == crate::space::AddressSpace::Register {
+                    // Consult the address varnode's SymbolEntry (mapentry).
+                    // ActionHeritage stamps this on global-address varnodes and
+                    // ActionTypeInfer propagates it through INT_ADD/COPY chains,
+                    // recomputing the FULL field address (base+offset) on each
+                    // INT_ADD output. So entry.addr is already the field address
+                    // (e.g. 0x17598 for ::config.conf), and we can resolve it
+                    // directly to `gname->fieldname`.
+                    {
+                        let entry_opt = addr_vn.mapentry.clone();
+                        if let Some(ref entry) = entry_opt {
+                            let base_addr = entry.read().unwrap().addr.as_u64();
+                            if let Some((gname, field_name, _field_off)) =
+                                Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, base_addr)
+                            {
+                                drop(addr_vn);
+                                self.emit.tag_variable(&gname, 0);
+                                self.emit.print("->");
+                                self.emit.print(&field_name);
+                                self.emit.tag_op(" = ");
+                                self.push_input(op, 2);
+                                return;
+                            }
+                        }
+                    }
                     // Chase the def chain: if this register is defined by a
                     // COPY of a constant (e.g. config+offset folded), resolve
                     // the constant and try struct field resolution.
