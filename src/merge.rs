@@ -716,7 +716,7 @@ impl Merge {
                             format!("{}{:02x}", cap, vn_offset)
                         }
                     }
-                } else if is_input && matches!(vn_space, AddressSpace::Register) {
+                } else if is_input && matches!(vn_space, AddressSpace::Register) && vn_offset != 0x20 {
                     // cc:2480-2482: regular parameter (Register space only)
                     // param_N where N is the parameter index (based on offset)
                     let param_idx = match vn_space {
