@@ -910,8 +910,6 @@ impl ActionDatabase {
 
         mainloop.add_action(Box::new(stackstall));
 
-        // oppool2 (coreaction.cc:5662) — type-recovery / stack-variable Rules.
-        mainloop.add_action(Box::new(build_oppool2()));
         // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
         // A2 ActionTypeInfer DELETED: redundant with mainloop+fullloop
         // repeatapply. Ghidra's type inference is ActionInferTypes
@@ -933,6 +931,14 @@ impl ActionDatabase {
         // across data-flow so HighVariables get typed prefixes (pcVar/iVar/...)
         // instead of falling back to uVar. Self-limited to 7 passes.
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
+        // oppool2 (coreaction.cc:5662, actprop2) — type-recovery Rules that
+        // CONSUME the Datatypes produced by ActionInferTypes (RulePtrArith,
+        // RuleStructOffset0, RuleLoadVarnode, RuleStoreVarnode). Must run
+        // AFTER InferTypes so RulePtrArith sees Pointer(Struct) on INT_ADD
+        // inputs and can convert INT_ADD(ptr,off) → PTRSUB(ptr,off), which
+        // drives ->field rendering. (Previously registered before InferTypes,
+        // which left inputs untyped so the rule never fired.)
+        mainloop.add_action(Box::new(build_oppool2()));
         mainloop.add_action(Box::new(crate::condexe::ActionConditionalExe::new()));
         // Ghidra coreaction.cc:5658-5659: ActionRedundBranch runs BEFORE
         // ActionBlockStructure. The dead-branch splice must settle the CFG
