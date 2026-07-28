@@ -328,8 +328,24 @@ impl X86Lifter {
             "lea" => {
                 if inst.operands.len() == 2 {
                     if let Some((dst, _)) = self.parse_dest_operand(&inst.operands[0], &mut ops) {
-                        if let Some((addr_vn, _)) =
-                            self.parse_dest_operand(&inst.operands[1], &mut ops)
+                        // Check for RIP-relative addressing: lea reg, [rip+disp]
+                        // In PIE binaries, this is how global variables are addressed.
+                        // Resolve to absolute address = inst_addr + inst_len + disp
+                        // so that seed_global_struct_pointers can match known globals.
+                        let resolved_addr_vn = match &inst.operands[1] {
+                            crate::disasm::Operand::Memory { base, displacement, .. } => {
+                                if base.as_deref() == Some("rip") && *displacement != 0 {
+                                    let next_rip = inst.address.as_u64() + inst.length as u64;
+                                    let abs_addr = next_rip.wrapping_add(*displacement as u64);
+                                    Some(VarnodeRaw::new(AddressSpace::Ram, abs_addr, 8))
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some(addr_vn) = resolved_addr_vn.or_else(||
+                            self.parse_dest_operand(&inst.operands[1], &mut ops).map(|(v,_)| v))
                         {
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
                             op.add_input(addr_vn);
