@@ -1489,6 +1489,49 @@ impl PrintC {
                     // If-goto (newBlockIfGoto style): emit `if (cond) goto target;`
                     // The goto_target is set, body is external (not embedded).
                     if if_data.goto_target.is_some() {
+                        // Ghidra printc.cc:2914-2916: emitBlockIf reads the
+                        // BlockIf's gototype (set by BlockIf::scopeBreak,
+                        // block.cc:3075-3084) and calls emitGotoStatement with
+                        // it. Rugra's if-goto emission reaches the CBRANCH op
+                        // via emit_block_ops, where op_cbranch reads
+                        // `op.branch_type` (set by ActionNormalizeBranches) to
+                        // decide break/continue/goto. To faithfully map
+                        // BlockIf::goto_type → CBRANCH branch_type, we set the
+                        // condition block's terminal CBRANCH op branch_type
+                        // here, just before emission, from the BlockIf's
+                        // gototype. This is the printc-side counterpart to
+                        // scope_break (blockaction.cc:2193) and lets
+                        // f_break_goto / f_continue_goto print as `break` /
+                        // `continue` instead of `goto code_r0x...`.
+                        let gt = if_data.goto_type;
+                        if gt != crate::block::goto_type::GOTO_GOTO {
+                            // The condition block is a BlockBasic holding the
+                            // CBRANCH. downcast to reach its op list
+                            // (FlowBlock::last_op trait default returns None;
+                            // the real impl is BlockBasic::last_op inherent).
+                            let cond_arc = if_data.condition.clone();
+                            let last_op = {
+                                let cond_rg = cond_arc.read().unwrap();
+                                if let Some(bb) = cond_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                                    bb.last_op()
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(last) = last_op {
+                                let op_arc = last.0.clone();
+                                let mut op = op_arc.write().unwrap();
+                                if op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH {
+                                    op.branch_type = match gt {
+                                        crate::block::goto_type::BREAK_GOTO =>
+                                            crate::op::branch_type::BREAK,
+                                        crate::block::goto_type::CONTINUE_GOTO =>
+                                            crate::op::branch_type::CONTINUE,
+                                        _ => crate::op::branch_type::GOTO,
+                                    };
+                                }
+                            }
+                        }
                         // Emit the condition block's ops (including the CBRANCH
                         // which becomes the if-condition), then a goto to the
                         // target. The body (fallthrough) continues after.
@@ -2382,9 +2425,16 @@ impl PrintC {
         // Only renumber during the real emit pass (not discovery), and only
         // for auto-local names matching {prefix}{hexdigits} or {prefix}_{hexdigits}.
         if self.discovery_pass { return None; }
+        // All prefixes producible by Datatype::print_name_base (type.cc) + "Var":
+        // single-letter scalars (l/u/i/b/s/f/d/c/e) and their pointer forms
+        // p{scalar} (pi/pc/ps/pp/pv/pl/pb/pu/pf/pd/pe). Pointer prefixes must
+        // precede their scalar tail so "piVar3" matches "piVar" not "iVar".
+        // Without the full pointer set, Merge::assign_names-generated names
+        // like "plVar5" (long*) would fall through unrenumbered.
         const PREFIXES: &[&str] = &[
             "piVar", "pcVar", "psVar", "ppVar", "pvVar",
-            "lVar", "uVar", "iVar", "bVar", "sVar", "fVar", "dVar",
+            "plVar", "pbVar", "puVar", "pfVar", "pdVar", "peVar",
+            "lVar", "uVar", "iVar", "bVar", "sVar", "fVar", "dVar", "cVar", "eVar",
         ];
         // Check if this is an auto-local name we should renumber.
         let mut matched_prefix: Option<&'static str> = None;

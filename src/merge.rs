@@ -744,16 +744,39 @@ impl Merge {
                 } else {
                     // cc:2501-2517: local variable — printNameBase + "Var" + index++
                     // Ghidra: ct->printNameBase(s); s << "Var" << dec << index++;
-                    // Rugra: printNameBase returns "" for most types (no per-type
-                    // prefix in simplified type system). So name = "Var" + base++.
-                    let prefix = ""; // TODO: printNameBase when Datatype supports it
-                    let candidate = format!("{}Var{}", prefix, base);
+                    // printNameBase writes a type-indicator character(s) for the
+                    // HighVariable's Datatype (i/l/b/c/p/u...), matching Ghidra's
+                    // virtual dispatch on Datatype. This produces names like
+                    // "lVar1", "iVar2", "bVar3", "pVar4" instead of bare "Var1".
+                    // (Mirrors PrintC::var_prefix in printc.rs — single source of
+                    // truth for the printNameBase logic.)
+                    let high_ro = high_arc.read().unwrap();
+                    let mut type_prefix = String::new();
+                    high_ro.v_type.print_name_base(&mut type_prefix);
+                    if type_prefix.is_empty() {
+                        // Size-based fallback when the Datatype has no name
+                        // (Rugra-specific; Ghidra always carries a Datatype).
+                        match vn_size {
+                            8 => type_prefix.push('l'),
+                            4 => type_prefix.push('i'),
+                            2 => type_prefix.push('s'),
+                            1 => type_prefix.push('b'),
+                            _ => type_prefix.push('u'),
+                        }
+                    }
+                    if type_prefix.is_empty() {
+                        // Unnamed/void type — fall back to 'u' so the variable
+                        // still gets a non-empty prefix.
+                        type_prefix.push('u');
+                    }
+                    drop(high_ro);
+                    let candidate = format!("{}Var{}", type_prefix, base);
                     base += 1;
                     // cc:2505: makeNameUnique — try bumping index up to 10 times.
                     let mut final_name = candidate.clone();
                     if used_names.contains(&final_name) {
                         for _ in 0..10 {
-                            let candidate2 = format!("{}Var{}", prefix, base);
+                            let candidate2 = format!("{}Var{}", type_prefix, base);
                             base += 1;
                             if !used_names.contains(&candidate2) {
                                 final_name = candidate2;
