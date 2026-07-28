@@ -565,7 +565,7 @@ impl PrintC {
             rpn_tok_assignment: 0,
             rpn_tok_dereference: 1,
             rpn_tok_hidden: 2,
-            rpn_enabled: false,
+            rpn_enabled: true,
         }
     }
 
