@@ -5495,8 +5495,23 @@ impl PrintLanguage for PrintC {
     /// `tagLine` (newline + indent) that Rugra's block walker relies on, since
     /// Rugra does not run Ghidra's per-op `emitCommentGroup` → `tagLine` chain.
     fn doc_statement(&mut self, op: &PcodeOp) {
+        if matches!(op.opcode, crate::opcodes::OpCode::CPUI_INDIRECT
+            | crate::opcodes::OpCode::CPUI_MULTIEQUAL) {
+            return;
+        }
+        // Capture output to skip empty statements
+        let orig_emit = std::mem::replace(&mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        op.push(self);
+        let produced = {
+            let buf = std::mem::replace(&mut self.emit, orig_emit);
+            buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+                .map(|b| b.get_output().trim().to_string())
+                .unwrap_or_default()
+        };
+        if produced.is_empty() { return; }
         self.emit.tag_line(0);
-        op.push(self); // opcode dispatch (see emit_expression)
+        self.emit.print(&produced);
         if !self.is_set(print_mods::COMMA_SEPARATE) {
             self.emit.print(";");
         }
