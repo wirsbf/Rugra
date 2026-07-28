@@ -9,6 +9,47 @@ use crate::error::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+// Ghidra: funcdata_varnode.cc:1653 Funcdata::mapGlobals (Symbol-entry stamp)
+/// Build a minimal `SymbolEntry` linking a global address to its Symbol.
+///
+/// Rugra does not port `Scope::queryProperties` / `discoverScope`, so this
+/// helper fabricates the smallest Symbol+SymbolEntry pair that lets printc
+/// resolve `gname->field` from the entry's address at print time. The
+/// Symbol's `dtype` is set to the registered pointer type (e.g.
+/// `Configurable *`) and its name is the lowercased struct type name, which
+/// matches `resolve_global_struct_field`'s global-name derivation in
+/// printc.rs. Returns `None` if the registered type is not a Pointer(Struct).
+fn make_global_symbol_entry(
+    addr: u64,
+    dt: std::sync::Arc<crate::type_system::datatype::Datatype>,
+) -> Option<std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> {
+    use crate::address::{Address, RangeList};
+    use crate::database::{Symbol, SymbolEntry};
+    use crate::type_system::datatype::Datatype;
+    // Derive the global name from the pointed-to struct (matches
+    // printc::resolve_global_struct_field, which lowercases ts.base.name).
+    let struct_name = match dt.as_ref() {
+        Datatype::Pointer(tp) => match tp.ptr_to.as_ref() {
+            Datatype::Struct(s) => Some(s.base.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    let gname = struct_name.to_lowercase();
+    let mut sym = Symbol::new(0, &gname, "");
+    sym.set_dtype(dt);
+    let symbol = std::sync::Arc::new(std::sync::RwLock::new(sym));
+    let entry = SymbolEntry::new_static(
+        symbol,
+        0,
+        Address::new(addr),
+        0,
+        8, // pointer-sized storage for the global address
+        RangeList::new(),
+    );
+    Some(std::sync::Arc::new(std::sync::RwLock::new(entry)))
+}
+
 /// Action for performing SSA construction (Heritage)
 ///
 /// Corresponds to Ghidra's `ActionHeritage`
@@ -36,6 +77,18 @@ impl Action for ActionHeritage {
         // Stamp global struct pointer types BEFORE Heritage rename.
         // This ensures Configurable* type survives rename via the
         // v_type preservation code in rename_direct (535560e).
+        //
+        // We ALSO stamp a SymbolEntry (mapentry) on the global address
+        // varnode. The entry records the global's base address + a Symbol
+        // whose name is the lowercased struct type (e.g. "Configurable" →
+        // "configurable"). This mapentry flows through INT_ADD / COPY
+        // propagation (ActionTypeInfer) — where the FULL field address
+        // (base+offset) is recomputed per-output — and is finally read by
+        // printc::op_store to render `configurable->useragent = ...`.
+        // Faithful to Ghidra's `Scope::queryProperties`/`mapGlobals`
+        // (funcdata_varnode.cc:1653) which links a Symbol to every
+        // persistent global Varnode. Rugra has no full Scope port, so the
+        // pragmatic pre-step here stamps the entry directly.
         if !fd.global_struct_ptrs.is_empty() && fd.heritage.pass == 0 {
             use crate::type_system::datatype::Datatype;
             let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
@@ -51,8 +104,18 @@ impl Action for ActionHeritage {
                         | crate::space::AddressSpace::Ram)
                     {
                         drop(vn);
-                        vn_ref.0.write().unwrap().v_type = Some(dt.clone());
-                                                break;
+                        let mut vn_w = vn_ref.0.write().unwrap();
+                        vn_w.v_type = Some(dt.clone());
+                        // Build a minimal SymbolEntry that points back at
+                        // the global base address and carries the struct
+                        // pointer type on the Symbol, so printc can resolve
+                        // `gname->field` from entry.addr at print time.
+                        if vn_w.mapentry.is_none() {
+                            if let Some(entry) = make_global_symbol_entry(addr, dt.clone()) {
+                                vn_w.set_symbol_entry(entry);
+                            }
+                        }
+                        break;
                     }
                 }
             }
@@ -1713,6 +1776,26 @@ impl Action for ActionTypeInfer {
                             }
                             _ => {}
                         }
+                        // COPY carries the same value, so the output inherits
+                        // the input's SymbolEntry (and vice-versa), independent
+                        // of the v_type match above. Mirrors Varnode::copySymbol
+                        // (varnode.cc:493). Decoupling this from the v_type arm
+                        // is necessary because the output may already carry a
+                        // pointer v_type from another inference rule (e.g. the
+                        // STORE Rule 5 synthesised pointer), in which case the
+                        // `_ => {}` arm above skips v_type but we still need the
+                        // global-address mapentry to flow through.
+                        if out_arc.read().unwrap().mapentry.is_none() {
+                            if let Some(me) = in_vn_arc.read().unwrap().mapentry.clone() {
+                                out_arc.write().unwrap().mapentry = Some(me);
+                                iter_changed += 1;
+                            }
+                        } else if in_vn_arc.read().unwrap().mapentry.is_none() {
+                            if let Some(me) = out_arc.read().unwrap().mapentry.clone() {
+                                in_vn_arc.write().unwrap().mapentry = Some(me);
+                                iter_changed += 1;
+                            }
+                        }
                     }
                 }
 
@@ -1727,15 +1810,18 @@ impl Action for ActionTypeInfer {
                         let out_type = out_arc.read().unwrap().v_type.clone();
 
                         let mut ptr_type = None;
+                        let mut ptr_input_idx: Option<usize> = None;
                         if let Some(ref t) = in0_type {
                             if matches!(t.as_ref(), Datatype::Pointer(_)) {
                                 ptr_type = Some(t.clone());
+                                ptr_input_idx = Some(0);
                             }
                         }
                         if ptr_type.is_none() {
                             if let Some(ref t) = in1_type {
                                 if matches!(t.as_ref(), Datatype::Pointer(_)) {
                                     ptr_type = Some(t.clone());
+                                    ptr_input_idx = Some(1);
                                 }
                             }
                         }
@@ -1744,6 +1830,36 @@ impl Action for ActionTypeInfer {
                             if out_type.is_none() {
                                 out_arc.write().unwrap().v_type = Some(pt);
                                 iter_changed += 1;
+                            }
+                            // Stamp a mapentry on the INT_ADD output carrying
+                            // the FULL field address (base + const_offset). The
+                            // pointer input carries the base mapentry (stamped
+                            // by ActionHeritage on the global address varnode);
+                            // the other input is a Const holding the field
+                            // offset. printc reads entry.addr → resolves to
+                            // `gname->field` at print time.
+                            if out_arc.read().unwrap().mapentry.is_none() {
+                                if let Some(p_idx) = ptr_input_idx {
+                                    let off_idx = 1 - p_idx;
+                                    let ptr_in_arc = &op.inrefs[p_idx];
+                                    let off_in_arc = &op.inrefs[off_idx];
+                                    let (base_entry, off_val) = {
+                                        let pe = ptr_in_arc.read().unwrap();
+                                        let oe = off_in_arc.read().unwrap();
+                                        (pe.mapentry.clone(),
+                                         if oe.is_constant() { Some(oe.get_offset()) } else { None })
+                                    };
+                                    if let (Some(entry), Some(off)) = (base_entry, off_val) {
+                                        let base_addr = entry.read().unwrap().addr.as_u64();
+                                        // Build a new entry with the field address.
+                                        if let Some(dt) = ptr_in_arc.read().unwrap().v_type.clone() {
+                                            let field_addr = base_addr.wrapping_add(off);
+                                            if let Some(new_entry) = make_global_symbol_entry(field_addr, dt) {
+                                                out_arc.write().unwrap().mapentry = Some(new_entry);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else if let Some(ot) = out_type {
                             if matches!(ot.as_ref(), Datatype::Pointer(_)) {
