@@ -3557,6 +3557,14 @@ impl Heritage {
                                 }
                             }
                             // Ghidra cc:2519: fd->opSetInput(op, vnnew, slot);
+                            // Preserve v_type from old varnode to new varnode
+                            // so struct pointer types survive Heritage rename.
+                            {
+                                let old_vt = vnin_arc.read().unwrap().v_type.clone();
+                                if old_vt.is_some() {
+                                    vnnew.write().unwrap().v_type = old_vt;
+                                }
+                            }
                             op.inrefs[i] = vnnew.clone();
                             vnnew
                                 .write()
