@@ -1064,6 +1064,7 @@ impl PrintC {
     /// Skips: COPY ops (folded via copy_map), terminal branches (when skip_terminal),
     /// dead flag outputs (not referenced by any other op), and post-return dead code.
     fn emit_block_ops(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool) {
+        // Route to RPN path if enabled
         if self.rpn_enabled {
             let ops = block_arc.read().unwrap().get_ops();
             self.emit_block_basic_rpn(&ops);
@@ -3648,10 +3649,43 @@ impl PrintC {
     ///
     /// If the block is a `BlockCondition`, recursively emits `(a) && (b)` or `(a) || (b)`.
     /// Otherwise, reads the last CBRANCH's condition input and emits it via `emit_condition`.
+    /// Emit a block condition using the RPN path. Finds the CBRANCH in the
+    /// condition block, then uses pushVn(in(1)) + recurse() to auto-expand
+    /// the implied condition expression (e.g. INT_EQUAL output -> "a == b").
+    /// Faithful to Ghidra opCbranch (printc.cc:536).
+    fn emit_block_condition_rpn(
+        &mut self,
+        block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        use crate::opcodes::OpCode;
+        let block = block_arc.read().unwrap();
+        let ops = block.get_ops();
+        for op_ref in &ops {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode == OpCode::CPUI_CBRANCH {
+                if let Some(cond_vn) = op.get_in(1) {
+                    let cond_arc = cond_vn.clone();
+                    drop(op);
+                    drop(block);
+                    self.rpn_push_vn(cond_arc, 0, self.mods);
+                    self.rpn_recurse();
+                    return;
+                }
+            }
+        }
+        drop(block);
+        self.emit.print("1");
+    }
+
     fn emit_block_condition(
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
+        // RPN path: emit condition via CBRANCH pushVn+recurse
+        if self.rpn_enabled {
+            self.emit_block_condition_rpn(block_arc);
+            return;
+        }
         use crate::block::{BlockType, BlockCondition, BoolOp};
 
         // Capture the condition text into a temporary buffer so we can detect
