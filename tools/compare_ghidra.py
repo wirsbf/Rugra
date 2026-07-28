@@ -14,8 +14,11 @@ compare_ghidra.py — Rugra vs Ghidra 反编译输出的多维度结构化对比
 
   2. 变量名编号连续性检查 (check_numbering_continuity)
      不比较 Rugra iVar1 == Ghidra iVar1 (两套坐标系不重叠: Rugra=StackX_N,
-     Ghidra=类型化连续编号), 只验证 "同前缀内编号单调连续" 这一不变量。
-     直接检测 181538f 类 bug (per-prefix 计数器 + push 顺序导致 bVar1→bVar10→bVar2)。
+     Ghidra=类型化连续编号), 只验证 "单一共享计数器" 这一不变量: Ghidra
+     buildVariableName 用单一共享 int4 base, 所有前缀共用, 故函数内所有声明
+     变量的编号集合应近似稠密且 max(num) ≈ 声明总数。直接检测 181538f 类 bug
+     (per-prefix 各自从 1 计数 → 大量小数字重复, max(num) << 声明总数)。
+     只统计声明行 (`  <type> <name>;`), 不统计表达式中的使用。
 
 为什么不用计数: 计数是极度有损投影。for↔while 等价变换时计数不同但结构对齐;
 Rugra 空 else{} + 调用丢失时计数可能凑巧相同但结构完全不对齐。
@@ -30,7 +33,6 @@ import difflib
 import re
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 
 # ---------------------------------------------------------------------------
@@ -182,62 +184,85 @@ def normalize_skeleton(body):
 # ---------------------------------------------------------------------------
 
 # 匹配 [a-z]Var 后跟数字 (iVar1/lVar2/bVar3/pcVar7...)。Ghidra 风格。
+# 仅用于历史/外部引用; 编号检查现在只统计声明, 见 VARDECL_LINE_RE。
 VARDECL_RE = re.compile(r'\b([a-z]+Var)(\d+)\b')
+
+# 声明行: <缩进> <C 类型> <指针/空格>* <Var 名> (; | =)。
+# 必须锚定到行首 + 要求 Var 名前有一个真正的 C 类型关键字, 这样:
+#   - 表达式中的 *使用* (如 `return pcVar1;`, `if (bVar5)`, `sVar8 = ...`)
+#     不会被误判为声明;
+#   - `return pcVar1;` 里的 `return` 不是类型关键字 → 不匹配;
+#   - 赋值 `sVar8 = ...;` 行首直接是名字(无类型) → 不匹配。
+# 这是旧 checker 的核心 bug 修复: 旧版用 VARDECL_RE 扫整个函数体, 把
+# 每一次 *使用* 当 *声明* 计数, 导致 Ghidra 的正确黄金输出也报 995 个问题。
+_TYPE_TOKENS = (r'(?:unsigned\s+|signed\s+|const\s+)*'
+                r'(?:char|short|int|long|float|double|bool|void|byte|'
+                r'size_t|wchar_t|FILE|time_t|undefined\d*|_struct|'
+                r'struct\s+\w+|enum\s+\w+)')
+VARDECL_LINE_RE = re.compile(
+    r'^[ \t]+' + _TYPE_TOKENS + r'(?:\s|\*)*\b([a-z]+Var)(\d+)\b\s*(?:;|=)',
+    re.MULTILINE,
+)
 
 
 def check_numbering_continuity(body):
     """
     检查变量名编号连续性。返回 issues 列表。
-    不比较跨坐标系(不要求 Rugra iVar1 == Ghidra iVar1), 只验证不变量:
-      - 同前缀(iVar/lVar/bVar...)内, 按声明顺序编号应单调递增 (不倒退)
-      - 同前缀内不应有大间隔 (gap > 3, 可能是编号重置 bug)
-    注意: 跨前缀共享 base 是 Ghidra 正确行为 (cVar1,lVar2,bVar3,iVar4...),
-          不算 bug — 181538f 的错误是 per-prefix 独立计数, 本检查通过
-          "单调性" 和 "无大跳号" 间接抓取其引发的乱序。
+
+    只统计**声明**(`  <type> <name>;` 行), 不统计表达式中的使用。旧版扫整个
+    函数体把使用当声明, 导致单变量被引用 N 次就报 N 个 "duplicate" — 对
+    Ghidra 正确输出也误报 995 个问题。
+
+    检测的不变量 (181538f 类 per-prefix 计数 bug 的真实特征):
+      - 重复声明: 同一全名 (prefix+num) 在一个函数里被声明两次 (Rugra/Ghidra
+        正常都不该出现, 单变量只声明一次)。
+      - 共享计数器: Ghidra buildVariableName 用单一共享 `int4 base`
+        (database.cc:2850 assignDefaultNames), 所有前缀共用一个从 1 单调递增的
+        计数器 → 函数内所有声明变量 (跨前缀) 的编号集合应近似稠密, 且
+        max(num) ≈ 声明变量总数。181538f 错误是 per-prefix 各自从 1 计数 →
+        大量小数字重复出现, max(num) << 声明总数。判据:
+        声明数 >= 5 且 max(num) < 声明数 * 0.6 时报告 per_prefix_counter。
+
+    不再检查 "per-prefix 文本序单调/无大跳号": 该启发式被声明字母序输出
+    (Rugra BTreeMap) 干扰, 对正确编号也误报 (如 bVar27,bVar30,bVar4 在字母序
+    下非单调, 但底层共享计数器完全正确)。共享计数器不变量更直接抓 181538f。
+
     返回 [{'prefix':..., 'type':..., 'detail':...}, ...]
     """
     issues = []
-    # 按出现顺序记录每个前缀的编号序列
-    prefix_numbers = defaultdict(list)
-    for m in VARDECL_RE.finditer(body):
+    # 收集声明 (按出现顺序), 同时跟踪重复
+    decls = []  # [(prefix, num)] in declaration order
+    seen = set()
+    duplicate_reported = set()
+    for m in VARDECL_LINE_RE.finditer(body):
         prefix, num = m.group(1), int(m.group(2))
-        prefix_numbers[prefix].append(num)
+        decls.append((prefix, num))
+        key = (prefix, num)
+        if key in seen and key not in duplicate_reported:
+            issues.append({
+                'prefix': prefix,
+                'type': 'duplicate',
+                'detail': f'{prefix}{num} declared twice',
+            })
+            duplicate_reported.add(key)
+        seen.add(key)
 
-    for prefix, nums in prefix_numbers.items():
-        if not nums:
-            continue
-        seen = set()
-        for idx, n in enumerate(nums):
-            if n in seen:
-                issues.append({
-                    'prefix': prefix,
-                    'type': 'duplicate',
-                    'detail': f'{prefix}{n} declared twice',
-                })
-            seen.add(n)
-        # 单调性: 后一个 >= 前一个 (允许跳号但不应倒退)
-        for i in range(1, len(nums)):
-            if nums[i] < nums[i-1]:
-                issues.append({
-                    'prefix': prefix,
-                    'type': 'non_monotonic',
-                    'detail': f'{prefix} sequence {nums[max(0,i-2):i+1]} '
-                              f'(went backwards at pos {i})',
-                })
-                break  # 每个前缀只报一次倒退
-        # 跳号检查: 同前缀内不应有大于 1 的间隔
-        # (Ghidra 单一共享 base 时, 同前缀的编号可能不连续如 iVar4,iVar5,iVar8,
-        #  但不会倒退。这里只报明显的内部跳号 > 3, 避免误报 Ghidra 正常行为)
-        if len(nums) >= 2:
-            gaps = [nums[i] - nums[i-1] for i in range(1, len(nums))]
-            big_gaps = [g for g in gaps if g > 3]
-            if big_gaps:
-                issues.append({
-                    'prefix': prefix,
-                    'type': 'gap',
-                    'detail': f'{prefix} has gap(s) > 3 in numbering '
-                              f'(sequence head: {nums[:6]})',
-                })
+    # 共享计数器不变量 (181538f 检测器)
+    if decls:
+        total = len(decls)
+        max_num = max(n for _, n in decls)
+        # 共享计数器: max_num 应接近 total (允许少量参数/跳号导致偏小)。
+        # per-prefix 计数器: max_num 远小于 total。阈值 0.6 经验值, 区分明显
+        # (正确共享: max/total ≈ 0.9-1.0; 181538f: max/total ≈ 0.3-0.4)。
+        if total >= 5 and max_num < total * 0.6:
+            issues.append({
+                'prefix': '*',
+                'type': 'per_prefix_counter',
+                'detail': f'shared-counter invariant violated: '
+                          f'{total} declared locals but max number is only '
+                          f'{max_num} (Ghidra single shared base would give '
+                          f'max~={total}); suggests per-prefix restart bug',
+            })
     return issues
 
 
@@ -392,7 +417,7 @@ def main():
     print(f'Total Rugra numbering issues: {total_numbering}')
     print(f'\nNOTE: skeleton diff > 0 不一定是对齐缺陷 (for↔while 等价变换).')
     print(f'      defects > 0 是真实质量缺陷 (空else/寄存器泄漏/调用丢失).')
-    print(f'      numbering issues > 0 是 181538f 类编号 bug.')
+    print(f'      numbering issues > 0 是 181538f 类编号 bug (per-prefix 计数器 / 重复声明).')
 
 
 if __name__ == '__main__':
