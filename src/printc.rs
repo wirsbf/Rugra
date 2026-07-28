@@ -1010,13 +1010,61 @@ impl PrintC {
             // inline correctly). Wiring STORE through the assignment/dereference
             // RPN tokens is tracked as a follow-up.
             OpCode::CPUI_STORE => {
-                // in(0) = address space pointer, in(1) = address, in(2) = value.
-                self.emit.tag_op("*");
+                // Check INT_ADD(struct_ptr, field_offset) -> ptr->field
+                let mut field_access = false;
                 if let Some(in1) = op.get_in(1) {
-                    let v1 = in1.read().unwrap();
-                    let a1 = self.make_atom_for_vn(&v1, op);
-                    drop(v1);
-                    self.rpn_push_atom(&a1);
+                    let addr_vn = in1.read().unwrap();
+                    if let Some(ref def_weak) = addr_vn.def {
+                        if let Some(def_arc) = def_weak.upgrade() {
+                            let def_op = def_arc.read().unwrap();
+                            if def_op.opcode == OpCode::CPUI_INT_ADD && def_op.inrefs.len() >= 2 {
+                                let i0 = def_op.inrefs[0].read().unwrap();
+                                let i1 = def_op.inrefs[1].read().unwrap();
+                                let (base_arc, offset) = if i1.get_space() == crate::space::AddressSpace::Const
+                                    && i0.get_space() != crate::space::AddressSpace::Const
+                                    && i1.get_offset() > 0 && i1.get_offset() < 0x10000 {
+                                    (def_op.inrefs[0].clone(), i1.get_offset())
+                                } else if i0.get_space() == crate::space::AddressSpace::Const
+                                    && i1.get_space() != crate::space::AddressSpace::Const
+                                    && i0.get_offset() > 0 && i0.get_offset() < 0x10000 {
+                                    (def_op.inrefs[1].clone(), i0.get_offset())
+                                } else {
+                                    (def_op.inrefs[0].clone(), 0u64)
+                                };
+                                drop(i0); drop(i1); drop(def_op); drop(addr_vn);
+                                if offset > 0 {
+
+                                    let bv = base_arc.read().unwrap();
+                                    if let Some(ref vt) = bv.v_type {
+                                        use crate::type_system::datatype::Datatype;
+                                        if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                                            if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                                                for field in &ts.fields {
+                                                    if field.offset == offset as usize {
+                                                        let bt = self.get_varnode_display_name(&bv);
+                                                        self.emit.print(&bt);
+                                                        self.emit.print("->");
+                                                        self.emit.print(&field.name);
+                                                        field_access = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !field_access {
+                    self.emit.tag_op("*");
+                    if let Some(in1) = op.get_in(1) {
+                        let v1 = in1.read().unwrap();
+                        let a1 = self.make_atom_for_vn(&v1, op);
+                        drop(v1);
+                        self.rpn_push_atom(&a1);
+                    }
                 }
                 self.emit.tag_op(" = ");
                 if let Some(in2) = op.get_in(2) {
