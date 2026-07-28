@@ -33,6 +33,30 @@ impl Action for ActionHeritage {
         if fd.heritage.pass >= 2 {
             return Ok(0);
         }
+        // Stamp global struct pointer types BEFORE Heritage rename.
+        // This ensures Configurable* type survives rename via the
+        // v_type preservation code in rename_direct (535560e).
+        if !fd.global_struct_ptrs.is_empty() && fd.heritage.pass == 0 {
+            use crate::type_system::datatype::Datatype;
+            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
+                .map(|(a, d)| (*a, d.clone()))
+                .collect();
+            for vn_ref in &fd.vbank.loc_tree {
+                let vn = vn_ref.0.read().unwrap();
+                if vn.is_annotation() { continue; }
+                let off = vn.get_offset();
+                for &(addr, ref dt) in &globals {
+                    if off == addr && matches!(vn.get_space(),
+                        crate::space::AddressSpace::Const
+                        | crate::space::AddressSpace::Ram)
+                    {
+                        drop(vn);
+                        vn_ref.0.write().unwrap().v_type = Some(dt.clone());
+                                                break;
+                    }
+                }
+            }
+        }
         // Ghidra heritage.cc:2677-2771 runs a multi-pass heritage where:
         //   pass 1: discoverIndexedStackPointers (marks STOREs) + place + rename
         //   The rename in pass 1 connects the op graph (rewrites STORE input
@@ -3850,6 +3874,7 @@ impl Action for ActionInferTypes {
         for root in &roots {
             // Only seed roots that actually have a temp type.
             if temps.contains_key(&vn_id(&root.read().unwrap())) {
+                
                 self.propagate_one_type(root, &mut temps, &int_types, ptr_size);
             }
         }
