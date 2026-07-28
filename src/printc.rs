@@ -495,6 +495,18 @@ pub struct PrintC {
     /// Index of the hidden-function token (never prints). Mirrors
     /// PrintC::hidden (printc.cc:29).
     rpn_tok_hidden: usize,
+    /// Index of the pointer-member token (->, binary, prec 66). Mirrors
+    /// PrintC::pointer_member (printc.cc:26).
+    rpn_tok_pointer_member: usize,
+    /// Index of the object-member token (., binary, prec 66). Mirrors
+    /// PrintC::object_member (printc.cc:25).
+    rpn_tok_object_member: usize,
+    /// Index of the typecast token ( presurround, prec 62). Mirrors
+    /// PrintC::typecast (printc.cc:35).
+    rpn_tok_typecast: usize,
+    /// Index of the address-of token (&, unary prefix, prec 62). Mirrors
+    /// PrintC::addressof (printc.cc:33).
+    rpn_tok_addressof: usize,
     /// True when doc_function emits via the RPN path. Default false.
     rpn_enabled: bool,
 }
@@ -565,6 +577,10 @@ impl PrintC {
             rpn_tok_assignment: 0,
             rpn_tok_dereference: 1,
             rpn_tok_hidden: 2,
+            rpn_tok_pointer_member: 3,
+            rpn_tok_object_member: 4,
+            rpn_tok_typecast: 5,
+            rpn_tok_addressof: 6,
             rpn_enabled: true,
         }
     }
@@ -589,11 +605,11 @@ impl PrintC {
 
     // RUGRA-GLUE: build_rpn_token_table
     /// Build the per-instance OpToken slice the RPN free-functions index into.
-    /// Indices 0/1/2 must agree with the rpn_tok_* constants assigned in new().
-    /// Faithful to the static OpToken definitions in printc.cc:29/34/56
-    /// (hidden, dereference, assignment) - the only tokens the step-1 RPN path
-    /// needs; additional tokens can be appended here as later steps widen
-    /// dispatch_op_rpn.
+    /// Indices 0..=6 must agree with the rpn_tok_* constants assigned in new().
+    /// Faithful to the static OpToken definitions in printc.cc:25/26/33/34/35/56
+    /// plus the hidden token (printc.cc:29). Field-for-field copies of the
+    /// aggregate-init form: { print1, print2, stage, precedence, associative,
+    /// type, spacing, bump, negate }.
     fn build_rpn_token_table() -> Vec<crate::printlanguage::OpToken> {
         use crate::printlanguage::OpToken;
         // index 0 - assignment (printc.cc:56)
@@ -602,7 +618,23 @@ impl PrintC {
         let dereference = OpToken::unary_prefix("*", 62, 0, 0);
         // index 2 - hidden (printc.cc:29, never prints).
         let hidden = OpToken::hidden_function();
-        vec![assignment, dereference, hidden]
+        // index 3 - pointer_member "->" (printc.cc:26): binary, prec 66, assoc.
+        let pointer_member = OpToken::binary("->", 66, true, 0, 0, -1);
+        // index 4 - object_member "." (printc.cc:25): binary, prec 66, assoc.
+        let object_member = OpToken::binary(".", 66, true, 0, 0, -1);
+        // index 5 - typecast "(" ")" (printc.cc:35): presurround, prec 62.
+        let typecast = OpToken::presurround("(", ")", 62, 0);
+        // index 6 - addressof "&" (printc.cc:33): unary prefix, prec 62.
+        let addressof = OpToken::unary_prefix("&", 62, 0, 0);
+        vec![
+            assignment,
+            dereference,
+            hidden,
+            pointer_member,
+            object_member,
+            typecast,
+            addressof,
+        ]
     }
 
     /// Enable/disable the RPN emit path in doc_function. When true, blocks are
@@ -714,7 +746,7 @@ impl PrintC {
                     drop(op_guard);
                     let def_guard = def_op_arc.read().unwrap();
                     // printlanguage.cc:532: defOp->getOpcode()->push(this, defOp, op)
-                    self.dispatch_op_rpn(&def_guard);
+                    self.dispatch_op_rpn(&def_op_arc, &def_guard);
                     drop(def_guard);
                 } else {
                     drop(vn_guard);
@@ -749,6 +781,34 @@ impl PrintC {
         m: u32,
     ) {
         crate::printlanguage::rpn_push_vn(&mut self.nodepend, vn, op, m);
+    }
+
+    // Ghidra: printlanguage.cc:197 PrintLanguage::pushVn (slot-based helper)
+    /// Faithful in-spirit equivalent of `pushVn(op->getIn(slot), op, m)`: record
+    /// the input Varnode at `slot` into `nodepend`. `rpn_recurse` then either
+    /// inlines its defining op (if the Varnode is implied) — which is what makes
+    /// implied PTRSUB/CAST sub-expressions render as `ptr->field` / `(type)x` —
+    /// or emits it as a leaf Atom via `pushVnExplicit` (make_atom_for_vn).
+    ///
+    /// **Why record instead of push a leaf directly:** the previous dispatch
+    /// branches built a leaf Atom via `make_atom_for_vn` and pushed it, which
+    /// corresponds only to Ghidra's `pushVnExplicit` path. That skipped implied-
+    /// def inlining entirely, so PTRSUB/CAST (always implied when consumed)
+    /// never reached their dispatch. Recording into `nodepend` restores the
+    /// full `pushVn` semantics; the subsequent `rpn_push_op`/`rpn_push_atom`
+    /// call (or `emit_expression_rpn`'s trailing `rpn_recurse`) drains it.
+    ///
+    /// No-op if the slot is absent, so callers can use it unconditionally.
+    fn rpn_push_in(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+        slot: usize,
+        m: u32,
+    ) {
+        if let Some(vn_arc) = op.get_in(slot) {
+            self.rpn_push_vn(vn_arc.clone(), op_arc.clone(), m);
+        }
     }
 
     // ---- Step 4: make_atom_for_vn (printlanguage.cc:218 pushVnExplicit) ----
@@ -818,7 +878,11 @@ impl PrintC {
     /// push the assignment token + the output atom; then dispatch the opcode;
     /// then recurse. The in-place-op and constructor special-printing
     /// branches (printc.cc:2473/2477) are omitted from this first cut.
-    fn emit_expression_rpn(&mut self, op: &PcodeOp) {
+    fn emit_expression_rpn(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
         // printc.cc:2471-2476: assignment LHS.
         if let Some(out) = op.get_out() {
             // pushOp(&assignment, op)
@@ -831,7 +895,7 @@ impl PrintC {
             self.rpn_push_atom(&atom);
         }
         // printc.cc:2493: op->getOpcode()->push(this, op, 0)
-        self.dispatch_op_rpn(op);
+        self.dispatch_op_rpn(op_arc, op);
         // printc.cc:2494: recurse()
         self.rpn_recurse();
     }
@@ -846,17 +910,18 @@ impl PrintC {
     /// (*addr = value), CALL (name(args)), RETURN (return ...), CBRANCH
     /// (condition). Everything else is a no-op (BRANCH targets are rendered
     /// by the structurer; MULTIEQUAL/INDIRECT are internal).
-    fn dispatch_op_rpn(&mut self, op: &PcodeOp) {
+    fn dispatch_op_rpn(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         match op.opcode {
             // printc.cc:481 opCopy: pushVn(in0).
             OpCode::CPUI_COPY => {
-                if let Some(in0) = op.get_in(0) {
-                    let v0 = in0.read().unwrap();
-                    let a0 = self.make_atom_for_vn(&v0, op);
-                    drop(v0);
-                    self.rpn_push_atom(&a0);
-                }
+                // pushVn(in0): record so an implied in0 (PTRSUB/CAST/etc.)
+                // inlines as `ptr->field` / `(type)x` instead of a bare leaf.
+                self.rpn_push_in(op_arc, op, 0, self.mods);
             }
             // printlanguage.cc:546 opBinary.
             OpCode::CPUI_INT_ADD
@@ -934,14 +999,16 @@ impl PrintC {
             // printc.cc:487 opLoad: pushOp(&dereference); pushVn(in1).
             OpCode::CPUI_LOAD => {
                 self.rpn_push_op(self.rpn_tok_dereference);
-                if let Some(in1) = op.get_in(1) {
-                    let v1 = in1.read().unwrap();
-                    let a1 = self.make_atom_for_vn(&v1, op);
-                    drop(v1);
-                    self.rpn_push_atom(&a1);
-                }
+                self.rpn_push_in(op_arc, op, 1, self.mods);
             }
             // STORE has no outvn; render *(addr) = value inline.
+            // NOTE: This branch uses direct atom emission (not nodepend
+            // recording) because the `*`/` = ` operator text is emitted inline
+            // via emit.tag_op, which does not compose with deferred implied-def
+            // inlining. As a consequence a PTRSUB write address renders as its
+            // leaf variable name here (the read path via COPY/LOAD/PTRSUB does
+            // inline correctly). Wiring STORE through the assignment/dereference
+            // RPN tokens is tracked as a follow-up.
             OpCode::CPUI_STORE => {
                 // in(0) = address space pointer, in(1) = address, in(2) = value.
                 self.emit.tag_op("*");
@@ -1018,11 +1085,216 @@ impl PrintC {
                 }
                 self.emit.print(")");
             }
-            // Everything else (BRANCH, MULTIEQUAL, INDIRECT, casts, ...):
+            // printc.cc:448 opTypeCast: (type)in0, or &in0 for array->pointer decay.
+            // Faithful port of `PrintC::opTypeCast(const PcodeOp*)`
+            // (printc.cc:448-464). Order is exactly:
+            //   if (dt->isPointerToArray() && checkAddressOfCast(op)) {
+            //     pushOp(&addressof,op); pushVn(in0); return; }
+            //   if (!option_nocasts) { pushOp(&typecast,op); pushType(dt); }
+            //   pushVn(in0);
+            // `typecast` is a presurround token (printc.cc:35), so the RPN
+            // emit machinery prints "(typename)" then the operand.
+            OpCode::CPUI_CAST => {
+                use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
+                // Datatype + TypeMetatype are in scope at file level.
+                let out_dt = op.get_out()
+                    .and_then(|o| o.read().unwrap().get_high_type_def_facing());
+                // printc.cc:452-458: array-decay address-of shortcut.
+                // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
+                // does not port; we take the common case where in0 is itself an
+                // array lvalue decaying into the pointer-to-array target. This
+                // matches the legacy op_type_cast behaviour.
+                let mut took_shortcut = false;
+                if let Some(ref dt) = out_dt {
+                    if Self::is_pointer_to_array(dt) {
+                        let in0_is_array = op.get_in(0).map(|a| {
+                            a.read().unwrap().get_high_type_read_facing(op, 0)
+                                .map(|t| t.get_metatype() == TypeMetatype::Array)
+                                .unwrap_or(false)
+                        }).unwrap_or(false);
+                        if in0_is_array {
+                            // pushOp(&addressof,op); pushVn(in0).
+                            self.rpn_push_op(self.rpn_tok_addressof);
+                            self.rpn_push_in(op_arc, op, 0, self.mods);
+                            took_shortcut = true;
+                        }
+                    }
+                }
+                if took_shortcut {
+                    return;
+                }
+                // printc.cc:459-462: if (!option_nocasts) {
+                //   pushOp(&typecast,op); pushType(dt); }
+                if !self.option_nocasts {
+                    self.rpn_push_op(self.rpn_tok_typecast);
+                    if let Some(ref dt) = out_dt {
+                        // pushType(dt) renders the type's display name as a
+                        // TypeToken syntax Atom (printc.cc:2013 pushType).
+                        let type_name = dt.get_name().to_string();
+                        let type_atom = Atom::with_type(
+                            &type_name,
+                            TagType::TypeToken,
+                            SyntaxHighlight::TypeColor,
+                            0,
+                        );
+                        self.rpn_push_atom(&type_atom);
+                    } else {
+                        // No resolved type: cast renders as (long), the
+                        // generic integer cast (mirrors castInput default).
+                        let type_atom = Atom::with_type(
+                            "long",
+                            TagType::TypeToken,
+                            SyntaxHighlight::TypeColor,
+                            0,
+                        );
+                        self.rpn_push_atom(&type_atom);
+                    }
+                }
+                // printc.cc:463: pushVn(op->getIn(0),op,mods).
+                self.rpn_push_in(op_arc, op, 0, self.mods);
+            }
+            // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
+            // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
+            // Faithful port of `PrintC::opPtrsub(const PcodeOp*)`
+            // (printc.cc:929-1143). Rugra has no TypePointerRel, so the
+            // `ptrel` formal-relative branches collapse to the plain
+            // `ct = ptype->getPtrTo()` arm, exactly as the legacy op_ptrsub
+            // does. The four struct/union emit shapes (printc.cc:1018-1052)
+            // and the two array shapes (1098-1137) are reproduced via the
+            // RPN stack using the pointer_member/object_member/dereference/
+            // addressof tokens defined above.
+            OpCode::CPUI_PTRSUB => {
+                use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+                // printc.cc:940-942: in0 = op->getIn(0); in1const = in1 offset.
+                let in1const: u64 = op.get_in(1)
+                    .map(|a| a.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
+                let ptype = op.get_in(0)
+                    .and_then(|a| a.read().unwrap().get_high_type_read_facing(op, 0));
+                // printc.cc:955-956: valueon = (mods & (load|store value)) != 0.
+                let valueon = self.is_set(
+                    print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE,
+                );
+                // printc.cc:951-954: ct = ptype->getPtrTo() (no TypePointerRel).
+                let ct = ptype.as_ref().and_then(|pt| match &**pt {
+                    Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+                    _ => None,
+                });
+                // printc.cc:959-1056: struct/union field access.
+                let meta = ct.as_ref().map(|c| c.get_metatype());
+                if let Some(meta) = meta {
+                    if matches!(meta, TypeMetatype::Struct | TypeMetatype::Union) {
+                        // printc.cc:991-1010: resolve the field name via
+                        // findTruncation(suboff,0). Rugra uses find_partial_field
+                        // (same offset/size containment test). Default fallback
+                        // name is "field_0x<hex>" (DataTypeComponent::getDefaultFieldName).
+                        let fieldname = Self::find_partial_field(&ct.unwrap(), in1const as usize, 0)
+                            .map(|(name, _, _)| name)
+                            .unwrap_or_else(|| format!("field_0x{:x}", in1const));
+                        let field_atom = Atom::with_field(
+                            &fieldname,
+                            TagType::FieldToken,
+                            SyntaxHighlight::NoColor,
+                            0,
+                            0,
+                            -1,
+                        );
+                        // printc.cc:1018-1034 (!valueon, !flex):
+                        //   pushOp(&addressof); pushOp(&pointer_member);
+                        //   pushVn(in0); pushAtom(fieldname)
+                        // printc.cc:1046-1052 (valueon, !flex):
+                        //   pushOp(&pointer_member); pushVn(in0); pushAtom(fieldname)
+                        // Rugra has no isValueFlexible; we treat flex as false
+                        // (the common case for typed pointer dereferences),
+                        // selecting the pointer_member (`->`) shape rather than
+                        // the object_member (`.`) shape.
+                        if !valueon {
+                            self.rpn_push_op(self.rpn_tok_addressof);
+                        }
+                        self.rpn_push_op(self.rpn_tok_pointer_member);
+                        // pushVn(in0): record into nodepend so an implied in0
+                        // (e.g. nested PTRSUB/CAST) is inlined by rpn_recurse.
+                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        // pushAtom(fieldname) drains the pending in0 first.
+                        self.rpn_push_atom(&field_atom);
+                        return;
+                    }
+                    if meta == TypeMetatype::Array {
+                        // printc.cc:1098-1137: PTRSUB(*,0) switches to element-
+                        // pointer view. !valueon,!flex (printc.cc:1113-1117):
+                        //   pushOp(&dereference); pushVn(in0)
+                        // valueon,!flex (1129-1135):
+                        //   pushOp(&subscript); pushOp(&dereference);
+                        //   pushVn(in0); push_integer(0)
+                        // Rugra has no subscript token wired yet; for the common
+                        // !valueon case (a bare PTRSUB producing a pointer) we
+                        // emit `*in0` faithfully. The valueon arm falls back to
+                        // the same `*in0` shape to stay correct.
+                        self.rpn_push_op(self.rpn_tok_dereference);
+                        // pushVn(in0): record so implied in0 inlines.
+                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        return;
+                    }
+                    // Spacebase or other typed pointer: fall through to the
+                    // generic field-name rendering below (Rugra lacks the
+                    // TypeSpacebase symbol resolution at printc.cc:1078-1094).
+                }
+                // printc.cc:1139-1142 throws "PTRSUB off of non structured
+                // pointer type"; Rugra cannot throw, so fall back to the
+                // generic `in0->field_<hex>` (constant) / `in0[in1]` (variable)
+                // rendering, matching the legacy op_ptrsub fallback.
+                let in1 = op.get_in(1).map(|a| a.read().unwrap());
+                let variable_offset = in1.as_ref()
+                    .map(|v| !v.is_constant())
+                    .unwrap_or(false);
+                if variable_offset {
+                    // in0[off] subscript shape — print in0 then [off] inline.
+                    if let Some(in0) = op.get_in(0) {
+                        let v0 = in0.read().unwrap();
+                        let a0 = self.make_atom_for_vn(&v0, op);
+                        drop(v0);
+                        self.rpn_push_atom(&a0);
+                    }
+                    let off_atom = self.make_atom_for_vn(in1.as_ref().unwrap(), op);
+                    drop(in1);
+                    self.rpn_emit_subscript(&off_atom);
+                    return;
+                }
+                // Constant offset (or none): in0->field_0x<hex>.
+                self.rpn_push_op(self.rpn_tok_pointer_member);
+                // pushVn(in0): record so implied in0 inlines.
+                self.rpn_push_in(op_arc, op, 0, self.mods);
+                let off_val = in1.as_ref().map(|v| v.get_offset()).unwrap_or(0);
+                drop(in1);
+                let field_atom = Atom::with_field(
+                    &format!("field_0x{:x}", off_val),
+                    TagType::FieldToken,
+                    SyntaxHighlight::NoColor,
+                    0,
+                    0,
+                    -1,
+                );
+                self.rpn_push_atom(&field_atom);
+            }
+            // Everything else (BRANCH, MULTIEQUAL, INDIRECT, ...):
             // print nothing - control flow is rendered by the structurer and
             // internal ops are not user-visible. Keeps the RPN path compiling.
             _ => {}
         }
+    }
+
+    // RUGRA-GLUE: rpn_emit_subscript (printlanguage.cc postsurround emit)
+    /// Emit a subscript `op[atom]` via direct text, matching the legacy
+    /// `in0[off]` fallback shape for variable-offset PTRSUB. This is a
+    /// text-level helper because the RPN token table does not yet carry a
+    /// subscript token; it prints `[`, the offset atom, then `]`.
+    fn rpn_emit_subscript(&mut self, idx_atom: &crate::printlanguage::Atom) {
+        use crate::printlanguage::rpn_emit_atom;
+        self.emit.print("[");
+        rpn_emit_atom(&mut *self.emit, idx_atom);
+        self.emit.print("]");
     }
 
     // ---- Step 6: emit_statement_rpn + emit_block_basic_rpn ----
@@ -1031,11 +1303,15 @@ impl PrintC {
     /// Emit a single op as a statement terminated by `;`, unless the
     /// COMMA_SEPARATE mod is active (for-loop header). Faithful wrapper
     /// around emit_expression_rpn that adds statement markup + `;`.
-    fn emit_statement_rpn(&mut self, op: &PcodeOp) {
+    fn emit_statement_rpn(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) {
         // printc.cc:2288: emit->beginStatement(inst);
         self.emit.begin_statement();
         // printc.cc:2289: emitExpression(inst);
-        self.emit_expression_rpn(op);
+        self.emit_expression_rpn(op_arc, op);
         // printc.cc:2290: emit->endStatement(id);
         self.emit.end_statement();
         // printc.cc:2291-2292: if (!isSet(comma_separate)) print(SEMICOLON);
@@ -1081,7 +1357,7 @@ impl PrintC {
             // printc.cc:2716-2719: tagLine before each statement.
             self.emit.tag_line(0);
             // printc.cc:2720: emitStatement(inst);
-            self.emit_statement_rpn(&op_guard);
+            self.emit_statement_rpn(&op_ref.0, &op_guard);
         }
     }
 
@@ -1835,7 +2111,7 @@ impl PrintC {
                 // Structured do-while loop
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
-                if let Some(dowhile_data) = dowhile_block {
+                if let Some(_dowhile_data) = dowhile_block {
                     self.emit.tag_line(0);
                     self.emit.print("do ");
                     self.emit.begin_block();
@@ -1852,61 +2128,53 @@ impl PrintC {
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
-
+                    
                     self.emit.print(" while (");
-                    // Faithful to Ghidra emitBlockDoWhile (printc.cc:3088-3094):
-                    //   op = bl->getBlock(0)->lastOp();
-                    //   setMod(only_branch);
-                    //   bl->getBlock(0)->emit(this);   // emits the CBRANCH cond
-                    // The condition is emitted via the SAME RPN path used by
-                    // emit_structured_whiledo -> emit_block_condition, so the
-                    // do-while condition resolves identically to a while-do
-                    // condition (pushVn(in(1)) + recurse()).
-                    //
-                    // Capture into a throwaway buffer first so we can apply the
-                    // same malformed-condition guard used by emit_block_condition
-                    // / emit_cbranch_condition (cast-concat, varname-concat,
-                    // degenerate self-compare `X == X`/`X != X`). The do-while
-                    // CBRANCH's condition varnode can lose its SSA def under
-                    // Rugra's x86-flags recovery, leaving a tautology like
-                    // `local_0 == local_0` — fold it to `1` rather than emitting
-                    // a nonsense `while (X == X);`. (Audit: R50.)
-                    let cond_block = dowhile_data.condition.clone();
-                    drop(block);
-                    // Capture emit_block_condition's output (which routes to the
-                    // RPN path when rpn_enabled, matching emit_structured_whiledo)
-                    // into a throwaway buffer so the malformed-condition guard
-                    // below can inspect it. Mirrors capture_block_condition's
-                    // emit-swap, but calls emit_block_condition (RPN-aware)
-                    // rather than emit_block_condition_inner (legacy only).
-                    let orig_emit = std::mem::replace(&mut self.emit,
-                        Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                    self.emit_block_condition(&cond_block);
-                    let text = {
-                        let buf = std::mem::replace(&mut self.emit, orig_emit);
-                        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                            .map(|b| b.get_output()).unwrap_or_default()
-                    };
-                    let t = text.trim();
-                    let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
-                        + t.matches("(char)").count() + t.matches("(bool)").count()
-                        + t.matches("(short)").count();
-                    let has_bool_op = t.contains(" || ") || t.contains(" && ")
-                        || t.contains(" == ") || t.contains(" != ")
-                        || t.contains(" < ") || t.contains(" > ")
-                        || t.contains(" <= ") || t.contains(" >= ");
-                    let has_concat_cast = cast_count >= 2 && !has_bool_op;
-                    let has_concat_varname = Self::regex_concat_varname(t);
-                    let has_self_comparison = Self::is_self_comparison(t);
-                    let looks_valid = !t.is_empty()
-                        && t.chars().any(|c| c.is_alphanumeric() || c == '_')
-                        && !has_concat_cast
-                        && !has_concat_varname
-                        && !has_self_comparison;
-                    if looks_valid {
-                        self.emit.print(&text);
-                    } else {
-                        self.emit.print("1");
+                    let ops = block.get_ops();
+                    if let Some(last_op_ref) = ops.last() {
+                        let last_op = last_op_ref.0.read().unwrap();
+                        if let Some(cond_vn) = last_op.get_in(1) {
+                            // Capture the condition into a throwaway buffer first so
+                            // we can apply the same malformed-condition guard used
+                            // by emit_block_condition / emit_cbranch_condition
+                            // (cast-concat, varname-concat, degenerate self-compare
+                            // `X == X`/`X != X`). The do-while CBRANCH's condition
+                            // varnode can lose its SSA def under Rugra's x86-flags
+                            // recovery, leaving a tautology like `local_0 == local_0`
+                            // — fold it to `1` rather than emitting a nonsense
+                            // `while (X == X);`. (Audit: R50.)
+                            let cond_vn = cond_vn.clone();
+                            drop(last_op);
+                            let orig_emit = std::mem::replace(&mut self.emit,
+                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                            self.emit_condition(&cond_vn);
+                            let text = {
+                                let buf = std::mem::replace(&mut self.emit, orig_emit);
+                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+                                    .map(|b| b.get_output()).unwrap_or_default()
+                            };
+                            let t = text.trim();
+                            let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
+                                + t.matches("(char)").count() + t.matches("(bool)").count()
+                                + t.matches("(short)").count();
+                            let has_bool_op = t.contains(" || ") || t.contains(" && ")
+                                || t.contains(" == ") || t.contains(" != ")
+                                || t.contains(" < ") || t.contains(" > ")
+                                || t.contains(" <= ") || t.contains(" >= ");
+                            let has_concat_cast = cast_count >= 2 && !has_bool_op;
+                            let has_concat_varname = Self::regex_concat_varname(t);
+                            let has_self_comparison = Self::is_self_comparison(t);
+                            let looks_valid = !t.is_empty()
+                                && t.chars().any(|c| c.is_alphanumeric() || c == '_')
+                                && !has_concat_cast
+                                && !has_concat_varname
+                                && !has_self_comparison;
+                            if looks_valid {
+                                self.emit.print(&text);
+                            } else {
+                                self.emit.print("1");
+                            }
+                        }
                     }
                     self.emit.print(");");
                 } else {

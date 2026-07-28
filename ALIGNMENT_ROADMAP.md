@@ -514,6 +514,14 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 7. **`jumptable.cc`** (已 L3) — Switch 跳转表分析（已完成，需回归验证）
 8. **`condexe.cc`** (L2→L3) — 条件执行图重写（**核心算法全部缺失**，首个攻坚目标）
 9. **`type.cc` typegrp** (L2→L3) — 类型约束求解
+
+### P0.5（2026-07-27 新增，解锁 printc PTRSUB/CAST 发射）
+
+> **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` faithful port（见 docs/api/printc.md），但实测 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。解锁需补以下两条底层 infra：
+
+10. **`RulePtrsub` 创建规则缺失** (L1→L3) — Rugra 只移植了消费现有 PTRSUB 的规则（`RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo`，见 action.rs:680-681,723），**缺** Ghidra 的 `RulePtrsub`（INT_ADD(指针,常量)→PTRSUB 的创建规则）与 `RulePtradd`。补齐后 curl 结构体字段访问 `ptr->field` 才能产生 PTRSUB op，printc dispatch 即生效。
+11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (L2→L3) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
+
 10. **`transform.cc`** (已 L3) — P-code 变换基础设施（已完成）
 
 ### P2（🟢 L2.5 — 代码完整，最高 ROI 解锁路径）

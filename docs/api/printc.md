@@ -114,6 +114,16 @@ raw semantics / P-code-like IR
 - **修复**：删除"末尾分支 → 非空"的提前 return；改为逐 op 扫描，精确镜像 `emit_block_ops` 的跳过集——CBRANCH/BRANCH/BRANCHIND/COPY/MULTIEQUAL/INDIRECT（emit_block_ops:315-323）、`is_implied()` 输出（emit_block_ops:334-338）、RIP-relative、stack-setup、inlined_ops、dead-output 纯计算 op。CALL/CALLIND 不在跳过集里，所以真正含 call 的 body 仍正确判为非空。
 - **效果**：curl defect 12（5/24 函数）→ 0（0/24 函数）；curl+httpd 空 else{} 均为 0；main defect 7→0、glob_word 2→0、getparameter/next_url/match_url 各 1→0。剩余 numbering/expression 问题是独立根因。
 
+### RPN 路径 dispatch_op_rpn：PTRSUB/CAST + 隐式内联（2026-07-27 新增）
+
+- **背景**：RPN 发射路径（`dispatch_op_rpn` / `emit_expression_rpn` / `emit_block_basic_rpn`）此前只实现了 COPY、二元/一元算术、LOAD、STORE、CALL、RETURN、CBRANCH；PTRSUB 与 CAST 落入 `_ => {}` 兜底分支不发射任何文本。Ghidra 对应实现是 `PrintC::opPtrsub`（printc.cc:929-1143，结构体字段 `ptr->field`）与 `PrintC::opTypeCast`（printc.cc:448-464，`(type)x`）。
+- **本改动（faithful port）**：
+  - 扩展 `build_rpn_token_table`，新增 4 个 OpToken（字段逐项对齐 printc.cc:25/26/33/35）：`pointer_member`（`->`，binary prec 66 assoc）、`object_member`（`.`，binary prec 66 assoc）、`typecast`（`(`/`)` presurround prec 62）、`addressof`（`&` unary prefix prec 62）。
+  - 在 `dispatch_op_rpn` 新增 `CPUI_PTRSUB` 分支：忠实移植 opPtrsub 的 struct/union（`[&]ptr->field`）、array（`*ptr`）、spacebase/无类型回退（`ptr->field_0x<hex>` / `ptr[off]`）四类发射形态；Rugra 无 TypePointerRel，`ptrel` 分支塌缩为 `ct = ptype->getPtrTo()`（与 legacy `op_ptrsub` 一致）。
+  - 在 `dispatch_op_rpn` 新增 `CPUI_CAST` 分支：忠实移植 opTypeCast 的 array-decay `&in0` 短路与 `(type)in0` 主路径；`typecast` 是 presurround，RPN emit 机制自动产生 `(typename)operand`。
+- **隐式内联打通**：为让 PTRSUB/CAST（消费时一定是 implied）真正进入 dispatch，引入 `rpn_push_in(op_arc, op, slot, m)`——忠实 `PrintLanguage::pushVn`（printlanguage.cc:197）的 nodepend 记录语义。`COPY`/`LOAD`/`PTRSUB`/`CAST` 的操作数改为走 `rpn_push_in`，由 `rpn_recurse`（printlanguage.cc:514）按 implied 标志决定内联 def 或推叶子 atom。此前各 dispatch 分支直接 `make_atom_for_vn + rpn_push_atom`，等价于只走 `pushVnExplicit` 叶子路径，导致所有 implied def（含 PTRSUB/CAST）永不被内联。
+- **当前生效限制（诚实声明）**：`CPUI_PTRSUB`/`CPUI_CAST` op 目前在 curl/httpd 中**不被产生**——Rugra 缺少 `RulePtrsub`（INT_ADD→PTRSUB 的创建规则，ruleaction.cc，仅移植了 `RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo` 这类消费现有 op 的规则），且 `ActionSetCasts::castInput` 的 PTRADD/PTRSUB pointer-fit 检查与 castOutput 延后（coreaction.rs:2893-2897 注释），故 CAST 创建对 curl 当前类型推断结果不触发（`cast_standard_full` 返回 None）。本 PR 的 dispatch 分支已就位且经过 Ghidra 行逐行核对，待上述底层 infra 补齐后即生效。
+- **效果（curl diff 门禁）**：skeleton diff 2880→2873（轻微改善，来自 implied 算术 def 现在内联），defects 0→0，numbering 0→0，1287/1287 单元测试通过。无回归。
 
 
 ---
