@@ -1038,8 +1038,8 @@ fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
         // glob_* disabled — param_1 conflicts in optimized binary (used as int in some paths)
         // "glob_url" | "glob_set" | "glob_range" | "glob_word" => Some(vec!["ptr", "ptr"]),
         "next_url" => Some(vec!["ptr"]),  // URLGlob*
-        "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "ptr"]),  // const char*, Configurable*
-        "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"]),
+        "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "configurable_ptr"]),  // const char*, Configurable*
+        "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "configurable_ptr"]),  // ..., Configurable*
         "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
         "progressbarinit" => Some(vec!["ptr"]),  // void*
         // httpd functions — only ones we're confident about
@@ -1548,6 +1548,23 @@ impl Action for ActionInferParams {
                                 wordsize: 1,
                             }))
                         }
+                        // Interprocedural struct-pointer param: resolve the
+                        // actual Pointer(Struct) type from global_struct_ptrs so
+                        // downstream ->field rendering can fire. The driver
+                        // registers Configurable* at 0x17520; this lets callee
+                        // params inherit the struct-pointer type without each
+                        // function needing its own COPY(0x17520→reg).
+                        "configurable_ptr" => {
+                            fd.global_struct_ptrs.values().next().cloned()
+                                .unwrap_or_else(|| {
+                                    let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                                    Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                        base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                        ptr_to: base,
+                                        wordsize: 1,
+                                    }))
+                                })
+                        }
                         "int" => Arc::new(match size {
                             1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
                             2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
@@ -1618,6 +1635,16 @@ impl Action for ActionInferParams {
                                     base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
                                     ptr_to: base, wordsize: 1,
                                 }))
+                            }
+                            "configurable_ptr" => {
+                                fd.global_struct_ptrs.values().next().cloned()
+                                    .unwrap_or_else(|| {
+                                        let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                                        Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                            base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                            ptr_to: base, wordsize: 1,
+                                        }))
+                                    })
                             }
                             _ => Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int))),
                         }

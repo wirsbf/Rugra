@@ -5365,6 +5365,36 @@ impl PrintLanguage for PrintC {
                     }
                 }
             }
+            // Pass 1b: seed entries from INPUT parameter varnodes that carry
+            // a Pointer(Struct) type. When config is passed as a function
+            // parameter (parseconfig/getparameter), the parameter's INPUT
+            // varnode has v_type = Configurable* (set by known_param_types
+            // "configurable_ptr"). Stamp a base mapentry on it so downstream
+            // COPY/INT_ADD chains can inherit the field address.
+            for vn_ref in &fd.vbank.loc_tree {
+                let vn = vn_ref.0.read().unwrap();
+                if !vn.is_input() { continue; }
+                if let Some(ref vt) = vn.v_type {
+                    use crate::type_system::datatype::Datatype;
+                    if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                        if matches!(tp.ptr_to.as_ref(), Datatype::Struct(_)) {
+                            // This input param is a struct pointer — find the
+                            // matching global address from global_struct_ptrs.
+                            for (&gaddr, gdt) in &self.global_struct_ptrs_snapshot {
+                                if gdt.get_name() == vt.get_name() {
+                                    let key = (vn.get_space(), vn.get_offset());
+                                    if !entry_by_key.contains_key(&key) {
+                                        if let Some(entry) = make_global_symbol_entry_printc(gaddr, gdt.clone()) {
+                                            entry_by_key.insert(key, entry);
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // Pass 2b-FIRST: propagate base entries through COPY chains BEFORE
             // the INT_ADD field scan, so that INT_ADD inputs (which often read
             // the config pointer via a COPY chain) have entries available.
