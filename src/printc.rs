@@ -5155,7 +5155,12 @@ impl PrintLanguage for PrintC {
             for vn_ref in &fd.vbank.loc_tree {
                 let vn = vn_ref.0.read().unwrap();
                 if vn.is_annotation() { continue; }
-                if vn.v_type.is_some() { continue; } // Already typed
+                if vn.v_type.is_some() { continue; }
+                // Debug: check if 0x17520 appears in any space
+                let off = vn.get_offset();
+                if off == 0x17520 {
+                    eprintln!("[FOUND-0x17520] space={:?} off=0x{:x} has_def={}", vn.get_space(), off, vn.def.as_ref().and_then(|w| w.upgrade()).is_some());
+                } // Already typed
                 if let Some(dt) = resolve_global_ptr(&vn, &globals) {
                     drop(vn);
                     vn_ref.0.write().unwrap().v_type = Some(dt);

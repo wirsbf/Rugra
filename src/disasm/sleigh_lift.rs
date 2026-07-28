@@ -18,20 +18,8 @@ fn get_sla_path() -> &'static str {
 }
 
 // RUGRA-GLUE: map_space
-// SLEIGH space indices differ from Rugra's SpaceId enum:
-// SLEIGH: 0=ram, 1=register, 2=unique, 3=const, 4=iop, 5=fspec, 6=join, 7=stack
-// Rugra:  0=const, 1=other, 2=unique, 3=ram, 4=register, 5=stack, 6=join, 7=iop
 fn map_space(space_idx: i32) -> AddressSpace {
-    match space_idx {
-        0 => AddressSpace::Ram,       // SLEIGH default code/data space
-        1 => AddressSpace::Register,  // SLEIGH register space
-        2 => AddressSpace::Unique,    // SLEIGH unique space
-        3 => AddressSpace::Const,     // SLEIGH constant space
-        4 => AddressSpace::Iop,       // SLEIGH iop space
-        6 => AddressSpace::Join,      // SLEIGH join space
-        7 => AddressSpace::Stack,     // SLEIGH stack space
-        _ => AddressSpace::Other(space_idx as u8),
-    }
+    AddressSpace::from_id(space_idx as u8)
 }
 
 // RUGRA-GLUE: map_vn
