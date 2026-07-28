@@ -5971,10 +5971,37 @@ impl PrintLanguage for PrintC {
                             // use `->field`; otherwise wrap as `*(long *)(<expr> + off)`.
                             let base_text = self.capture_varnode_text(&base.read().unwrap());
                             let is_bare_ident = base_text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !base_text.is_empty();
+                            // Try struct field access: base->fieldname
+                            let mut field_rendered = false;
                             if is_bare_ident {
-                                self.emit.print("*(long *)(");
-                                self.emit.print(&base_text);
-                                self.emit.print(&format!(" + 0x{:x})", off));
+                                let base_vn_guard = base.read().unwrap();
+                                if let Some(ref vt) = base_vn_guard.v_type {
+                                    use crate::type_system::datatype::Datatype;
+                                    if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                                        if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                                            for field in &ts.fields {
+                                                if field.offset == off as usize {
+                                                    self.emit.print(&base_text);
+                                                    self.emit.print("->");
+                                                    self.emit.print(&field.name);
+                                                    field_rendered = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !field_rendered {
+                                if is_bare_ident {
+                                    self.emit.print("*(long *)(");
+                                    self.emit.print(&base_text);
+                                    self.emit.print(&format!(" + 0x{:x})", off));
+                                } else {
+                                    self.emit.print("*(long *)(");
+                                    self.emit.print(&base_text);
+                                    self.emit.print(&format!(" + 0x{:x})", off));
+                                }
                             } else {
                                 // Compound base: wrap whole address in *(long *)( base + off )
                                 self.emit.print("*(long *)(");
