@@ -3903,12 +3903,12 @@ fn seed_global_struct_pointers(
             continue;
         }
         let off = vn.get_offset();
-        let matches = match vn.get_space() {
-            crate::space::AddressSpace::Const => known.contains_key(&off),
-            crate::space::AddressSpace::Ram => known.contains_key(&off),
-            _ => false,
-        };
-        if matches {
+        // Match known global addresses in both Const and Ram spaces.
+        // SLEIGH's ram space (index 0) maps to Rugra's Const, so global
+        // addresses like 0x17520 surface as Const@0x17520.
+        if known.contains_key(&off)
+            && matches!(vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+        {
             if let Some(dt) = known.get(&off) {
                 temps.insert(vn_id(&vn), dt.clone());
             }
@@ -3927,12 +3927,9 @@ fn seed_global_struct_pointers(
             if let Some(ref out_arc) = op.output {
             let src = in0.read().unwrap();
             let off = src.get_offset();
-            let matches = match src.get_space() {
-                crate::space::AddressSpace::Const => known.contains_key(&off),
-                crate::space::AddressSpace::Ram => known.contains_key(&off),
-                _ => false,
-            };
-            if matches {
+            if known.contains_key(&off)
+                && matches!(src.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+            {
                 let out_vn = out_arc.read().unwrap();
                 if let Some(dt) = known.get(&off) {
                     temps.insert(vn_id(&out_vn), dt.clone());
