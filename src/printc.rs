@@ -954,10 +954,42 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_NOTEQUAL
             | OpCode::CPUI_FLOAT_LESS
             | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                // Render "<in0> OP <in1>". The RPN stack would normally drive
-                // this via rpn_op_binary + a token table; for the first cut we
-                // emit the op-string directly so we do not have to grow the
-                // token table for every binary opcode.
+                // Struct field access: INT_ADD(ptr, offset) → ptr->field
+                if op.opcode == OpCode::CPUI_INT_ADD {
+                    if let (Some(i0), Some(i1)) = (op.get_in(0), op.get_in(1)) {
+                        let v0 = i0.read().unwrap();
+                        let v1 = i1.read().unwrap();
+                        let (off, bidx) = if v1.get_space() == crate::space::AddressSpace::Const
+                            && v1.get_offset() > 0 && v1.get_offset() < 0x10000
+                            && v0.get_space() != crate::space::AddressSpace::Const {
+                            (v1.get_offset(), 0usize)
+                        } else if v0.get_space() == crate::space::AddressSpace::Const
+                            && v0.get_offset() > 0 && v0.get_offset() < 0x10000
+                            && v1.get_space() != crate::space::AddressSpace::Const {
+                            (v0.get_offset(), 1usize)
+                        } else { (0u64, 0usize) };
+                        let bv = op.inrefs[bidx].read().unwrap();
+                        let fm = if off > 0 {
+                            if let Some(ref vt) = bv.v_type {
+                                use crate::type_system::datatype::Datatype;
+                                if let Datatype::Pointer(ref tp) = vt.as_ref() {
+                                    if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
+                                        ts.fields.iter().find(|f| f.offset == off as usize).map(|f| f.name.clone())
+                                    } else { None }
+                                } else { None }
+                            } else { None }
+                        } else { None };
+                        if let Some(fn_) = fm {
+                            let bt = self.get_varnode_display_name(&bv);
+                            drop(bv); drop(v0); drop(v1);
+                            self.emit.print(&bt);
+                            self.emit.print("->");
+                            self.emit.print(&fn_);
+                            return;
+                        }
+                        drop(bv); drop(v0); drop(v1);
+                    }
+                }
                 let tok_text = c_binary_op_str(op.opcode);
                 if let (Some(in0), Some(in1)) = (op.get_in(0), op.get_in(1)) {
                     let v0 = in0.read().unwrap();

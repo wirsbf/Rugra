@@ -3638,6 +3638,7 @@ impl ActionInferTypes {
         let mut changed = false;
         for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
             let id = vn_id(&vn_arc.read().unwrap());
+            
             if let Some(ct) = temps.get(&id) {
                 let mut vn = vn_arc.write().unwrap();
                 if vn.is_annotation() {
