@@ -5091,6 +5091,28 @@ impl PrintLanguage for PrintC {
                 self.def_map.insert(out_ptr, op_ref.0.clone());
             }
         }
+        // Stamp global struct pointer types onto address varnodes.
+        if !fd.global_struct_ptrs.is_empty() {
+            use crate::type_system::datatype::Datatype;
+            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
+                .map(|(a, d)| (*a, d.clone()))
+                .collect();
+            for vn_ref in &fd.vbank.loc_tree {
+                let vn = vn_ref.0.read().unwrap();
+                if vn.is_annotation() { continue; }
+                let off = vn.get_offset();
+                let space = vn.get_space();
+                for &(addr, ref dt) in &globals {
+                    if (space == crate::space::AddressSpace::Ram || space == crate::space::AddressSpace::Const)
+                        && off == addr
+                    {
+                        drop(vn);
+                        vn_ref.0.write().unwrap().v_type = Some(dt.clone());
+                        break;
+                    }
+                }
+            }
+        }
         // Also add block-level ops (many comparisons/booleans live only in blocks)
         for i in 0..fd.bblocks.get_size() {
             if let Some(block_arc) = fd.bblocks.get_block(i) {

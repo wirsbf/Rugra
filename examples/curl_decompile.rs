@@ -369,6 +369,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     // function's Funcdata below to seed type propagation.
     let global_struct_ptrs = build_dwarf_struct_pointers();
 
+
     for func in &functions {
         // Skip very tiny functions (< 5 bytes) and _start
         if func.size < 5 || func.name == "_start" {
