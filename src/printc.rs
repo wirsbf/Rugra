@@ -3935,6 +3935,48 @@ impl PrintC {
     /// The global name is derived from the pointed-to struct's name lowercased
     /// (e.g. Configurable → configurable), matching Ghidra's default global
     /// naming for anonymous DWARF symbols.
+    /// Chase the COPY def chain to find a varnode with a mapentry.
+    /// SSA rename (Heritage) creates intermediate COPY ops whose outputs
+    /// may lose the mapentry stamp. This traces back through COPY inputs
+    /// (up to 10 hops) to find a varnode that carries a SymbolEntry mapentry.
+    /// Returns the mapentry if found, None otherwise.
+    fn chase_mapentry_through_copy_chain(
+        vn_arc: &Arc<RwLock<Varnode>>,
+    ) -> Option<Arc<RwLock<crate::database::SymbolEntry>>> {
+        let mut current = vn_arc.clone();
+        for _ in 0..10 {
+            // Check if current varnode has a mapentry
+            let me = current.read().unwrap().mapentry.clone();
+            if let Some(ref entry) = me {
+                return Some(entry.clone());
+            }
+            // Get the defining op
+            let def_op = {
+                let vn = current.read().unwrap();
+                vn.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let def_op = match def_op { Some(o) => o, None => return None };
+            let op = def_op.read().unwrap();
+            // Only chase through COPY ops
+            if op.opcode == OpCode::CPUI_COPY && !op.inrefs.is_empty() {
+                current = op.inrefs[0].clone();
+                drop(op);
+                continue;
+            }
+            // Also chase through INT_ADD if one input has a mapentry
+            // (field offset computation: INT_ADD(base_with_entry, const_off))
+            if op.opcode == OpCode::CPUI_INT_ADD && op.inrefs.len() == 2 {
+                for in_arc in &op.inrefs {
+                    if let Some(ref entry) = in_arc.read().unwrap().mapentry {
+                        return Some(entry.clone());
+                    }
+                }
+            }
+            return None;
+        }
+        None
+    }
+
     fn resolve_global_struct_field(
         globals: &HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>,
         addr: u64,
@@ -5926,7 +5968,15 @@ impl PrintLanguage for PrintC {
                 };
                 // Arc-identity first (handles SSA-disambiguated Register varnodes)
                 let entry = entry_by_arc.get(&arc_id).cloned()
-                    .or_else(|| entry_by_key.get(&key).cloned());
+                    .or_else(|| {
+                        // For Register space, DON'T use (space,offset) fallback —
+                        // multiple SSA varnodes share the same physical register
+                        // and key-based matching stamps the wrong ones.
+                        if matches!(key.0, AddressSpace::Register) {
+                            return None;
+                        }
+                        entry_by_key.get(&key).cloned()
+                    });
                 if let Some(entry) = entry {
                     let mut vn_w = vn_ref.0.write().unwrap();
                     if vn_w.mapentry.is_none() {
@@ -6913,8 +6963,17 @@ impl PrintLanguage for PrintC {
         // propagating through COPY/INT_ADD/MULTIEQUAL chains. When the STORE
         // address carries such an entry, render `gname->field = value` directly
         // without any def-chain chase.
+        //
+        // If the STORE address has no direct mapentry, chase the COPY def
+        // chain (SSA rename may have inserted intermediate COPYs whose
+        // outputs lost the mapentry during Heritage renaming).
         if let Some(addr_arc) = op.get_in(1) {
+            // Direct mapentry check
             let entry_opt = addr_arc.read().unwrap().mapentry.clone();
+            // If no direct mapentry, chase COPY def chain
+            let entry_opt = entry_opt.or_else(|| {
+                Self::chase_mapentry_through_copy_chain(&addr_arc)
+            });
             if let Some(ref entry) = entry_opt {
                 let base_addr = entry.read().unwrap().addr.as_u64();
                 if let Some((gname, fname, _)) =
