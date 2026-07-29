@@ -4156,8 +4156,8 @@ impl Funcdata {
                 std::collections::HashMap::new();
             // config_writers: Register offset → written varnode that came from
             // COPY(Ram@config_addr). These are safe to wire cross-block.
-            let mut config_writers: std::collections::HashMap<u64, Arc<RwLock<crate::varnode::Varnode>>> =
-                std::collections::HashMap::new();
+            let mut config_writers: std::collections::BTreeMap<u64, Arc<RwLock<crate::varnode::Varnode>>> =
+                std::collections::BTreeMap::new();
             let mut rewired = 0i32;
 
             for (op_idx, op_ref) in op_refs.iter().enumerate() {
