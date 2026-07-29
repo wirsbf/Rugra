@@ -4031,6 +4031,33 @@ impl PrintC {
                 drop(op);
                 continue;
             }
+            // INT_ADD(base, const_off): recursively chase base, add offset
+            if op.opcode == OpCode::CPUI_INT_ADD && op.inrefs.len() == 2 {
+                let i0 = op.inrefs[0].clone();
+                let i1 = op.inrefs[1].clone();
+                let v0 = i0.read().unwrap();
+                let v1 = i1.read().unwrap();
+                if v1.get_space() == crate::space::AddressSpace::Const
+                    && v0.get_space() != crate::space::AddressSpace::Const
+                {
+                    let off = v1.get_offset();
+                    drop(v0); drop(v1); drop(op);
+                    if let Some(base) = Self::chase_constant_address(&i0) {
+                        return Some(base.wrapping_add(off));
+                    }
+                    return None;
+                }
+                if v0.get_space() == crate::space::AddressSpace::Const
+                    && v1.get_space() != crate::space::AddressSpace::Const
+                {
+                    let off = v0.get_offset();
+                    drop(v0); drop(v1); drop(op);
+                    if let Some(base) = Self::chase_constant_address(&i1) {
+                        return Some(base.wrapping_add(off));
+                    }
+                    return None;
+                }
+            }
             return None;
         }
         None
