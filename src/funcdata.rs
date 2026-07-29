@@ -4149,7 +4149,14 @@ impl Funcdata {
             };
 
             // Per-block writer map: block_idx → (Register offset → written varnode)
+            // Also: global writer map for cross-block config wiring.
+            // When a COPY output at Register@off is from a COPY(Ram@config_addr),
+            // we wire cross-block free reads at the same offset to this output.
             let mut block_writers: std::collections::HashMap<usize, std::collections::HashMap<u64, Arc<RwLock<crate::varnode::Varnode>>>> =
+                std::collections::HashMap::new();
+            // config_writers: Register offset → written varnode that came from
+            // COPY(Ram@config_addr). These are safe to wire cross-block.
+            let mut config_writers: std::collections::HashMap<u64, Arc<RwLock<crate::varnode::Varnode>>> =
                 std::collections::HashMap::new();
             let mut rewired = 0i32;
 
@@ -4158,6 +4165,7 @@ impl Funcdata {
                 let writers = block_writers.entry(blk_idx).or_default();
 
                 // Process inputs: rewire free inputs to block-local writer
+                // OR cross-block config writer
                 let inrefs_snapshot: Vec<Arc<RwLock<crate::varnode::Varnode>>> = {
                     let op = op_ref.0.read().unwrap();
                     op.inrefs.clone()
@@ -4170,11 +4178,22 @@ impl Funcdata {
                             && !vn.is_written()
                             && !vn.is_input()
                             && !vn.is_constant()
-                            && writers.contains_key(&vn.get_offset())
+                            && (writers.contains_key(&vn.get_offset())
+                                || config_writers.contains_key(&vn.get_offset()))
                     };
                     if needs_rewire {
                         let off = in_arc.read().unwrap().get_offset();
+                        // Try block-local first
                         if let Some(written) = writers.get(&off) {
+                            if !Arc::ptr_eq(written, in_arc) {
+                                written.write().unwrap().descend.push(Arc::downgrade(&op_ref.0));
+                                new_inrefs.push(written.clone());
+                                rewired += 1;
+                                continue;
+                            }
+                        }
+                        // Try cross-block config writer
+                        if let Some(written) = config_writers.get(&off) {
                             if !Arc::ptr_eq(written, in_arc) {
                                 written.write().unwrap().descend.push(Arc::downgrade(&op_ref.0));
                                 new_inrefs.push(written.clone());
@@ -4199,6 +4218,20 @@ impl Funcdata {
                         let off = ov.get_offset();
                         drop(ov);
                         writers.insert(off, out_arc.clone());
+                        // If this op is COPY(Ram@config → Reg), track as
+                        // cross-block config writer. Only config-range
+                        // addresses get cross-block wiring.
+                        if op.opcode == crate::opcodes::OpCode::CPUI_COPY {
+                            if let Some(in0) = op.get_in(0) {
+                                let iv = in0.read().unwrap();
+                                if matches!(iv.get_space(), AddressSpace::Ram | AddressSpace::Const)
+                                    && iv.get_offset() >= 0x17500
+                                    && iv.get_offset() <= 0x17800
+                                {
+                                    config_writers.insert(off, out_arc.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
