@@ -207,6 +207,19 @@ impl Rule for RulePropagateCopy {
             let mut descendant = descendant_arc.write().unwrap();
             for i in 0..descendant.inrefs.len() {
                 if std::sync::Arc::ptr_eq(&descendant.inrefs[i], &out_vn_arc) {
+                    // Ghidra: opSetInput already handles mapentry propagation
+                    // for constants via copySymbol. For non-constants (Ram/Reg),
+                    // Ghidra's single-Varnode model means mapentry is shared.
+                    // Rugra needs explicit propagation: copy mapentry from
+                    // COPY input to the descendant's input slot (which is now
+                    // the COPY input varnode itself — so mapentry is already
+                    // there). BUT if the COPY output had a mapentry and the
+                    // COPY input doesn't, we should copy it.
+                    if let Some(ref me) = out_vn_arc.read().unwrap().mapentry {
+                        if in_vn_arc.read().unwrap().mapentry.is_none() {
+                            in_vn_arc.write().unwrap().mapentry = Some(me.clone());
+                        }
+                    }
                     descendant.inrefs[i] = in_vn_arc.clone();
                     changed = true;
 
