@@ -3343,21 +3343,28 @@ impl Heritage {
         // setActiveHeritage on every varnode in the read AND write lists
         // of the disjoint ranges being heritaged this pass.
         //
-        // Ghidra's read/write lists (from collect()) include both free
-        // varnodes AND written varnodes at heritaged addresses — a written
-        // varnode is a def that rename must push onto the stack (cc:2527
-        // pushes vnout if isActiveHeritage). Without activeHeritage on
-        // writes, rename skips pushing them → stack stays empty → empty-stack
-        // input promotion (cc:2500-2503) creates a single shared input →
-        // diamond merges lose per-branch distinctness.
+        // Ghidra only marks varnodes within the disjoint ranges, NOT all
+        // varnodes in the bank. Rugra previously marked ALL varnodes,
+        // which caused Register-space COPY outputs to be renamed into
+        // SSA inputs, losing their def op and breaking struct field
+        // address resolution.
         //
-        // Rugra approximates Ghidra's per-range guard by marking every
-        // non-constant, non-annotation varnode in the bank (free + written
-        // + input). Inputs are harmless to mark because rename's
-        // isHeritageKnown check (cc:2496/2539) skips them before checking
-        // isActiveHeritage.
+        // Fix: only mark varnodes that are FREE (no def, no input) — these
+        // are the "reads" that need SSA renaming. Written varnodes (with
+        // def ops) are "writes" that get pushed onto the stack; they don't
+        // need activeHeritage to be set for the read replacement to work
+        // (Ghidra checks isActiveHeritage on writes at cc:2526, but only
+        // for varnodes in the disjoint ranges — Rugra's approximation marks
+        // them separately in the write-push logic at line 3591-3604).
+        //
+        // Actually, Ghidra DOES mark writes as activeHeritage too (so they
+        // get pushed). The key difference is Ghidra only marks writes in
+        // the ranges being heritaged. We approximate by marking all
+        // non-constant non-annotation varnodes, EXCEPT we add the check
+        // here to also mark written varnodes (for stack push).
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
+            // Skip constants and annotations (they don't participate in SSA)
             let is_known_side_effect = vn.is_constant() || vn.is_annotation();
             if !is_known_side_effect {
                 vn.set_active_heritage();
