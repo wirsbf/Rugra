@@ -99,6 +99,7 @@ impl Action for ActionHeritage {
                 if vn.is_annotation() { continue; }
                 let off = vn.get_offset();
                 for &(addr, ref dt) in &globals {
+                    // Case 1: exact match on global struct pointer base address
                     if off == addr && matches!(vn.get_space(),
                         crate::space::AddressSpace::Const
                         | crate::space::AddressSpace::Ram)
@@ -116,6 +117,32 @@ impl Action for ActionHeritage {
                             }
                         }
                         break;
+                    }
+                    // Case 2: field address within struct range (e.g. 0x17588
+                    // = ::config.showerror at offset 0x68). SLEIGH resolves
+                    // RIP-relative `lea reg, [rip+disp_to_field]` to
+                    // COPY(Ram@field_addr). Stamp the mapentry with the field
+                    // address so Heritage rename preserves it and printc can
+                    // resolve ->field at STORE time.
+                    if let Datatype::Pointer(tp) = dt.as_ref() {
+                        if let Datatype::Struct(ts) = tp.ptr_to.as_ref() {
+                            let struct_size = ts.base.size as u64;
+                            if off >= addr && off < addr + struct_size && off != addr
+                                && matches!(vn.get_space(),
+                                    crate::space::AddressSpace::Const
+                                    | crate::space::AddressSpace::Ram)
+                            {
+                                drop(vn);
+                                let mut vn_w = vn_ref.0.write().unwrap();
+                                vn_w.v_type = Some(dt.clone());
+                                if vn_w.mapentry.is_none() {
+                                    if let Some(entry) = make_global_symbol_entry(off, dt.clone()) {
+                                        vn_w.set_symbol_entry(entry);
+                                    }
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
