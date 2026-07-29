@@ -3491,7 +3491,15 @@ impl Heritage {
                         for i in 0..op.inrefs.len() {
                             let should_skip = {
                                 let vn_read = op.inrefs[i].read().unwrap();
-                                vn_read.is_heritage_known() || !vn_read.is_active_heritage()
+                                let is_addr_const = !vn_read.is_written()
+                                    && !vn_read.is_constant()
+                                    && matches!(vn_read.address_space,
+                                        crate::space::AddressSpace::Ram
+                                        | crate::space::AddressSpace::Const)
+                                    && !vn_read.has_no_descend();
+                                vn_read.is_heritage_known()
+                                    || !vn_read.is_active_heritage()
+                                    || is_addr_const
                             };
                             if should_skip {
                                 continue;
@@ -3631,7 +3639,13 @@ impl Heritage {
                                 let vnin_arc = op.inrefs[my_in_idx].clone();
                                 let should_skip = {
                                     let vn_read = vnin_arc.read().unwrap();
-                                    vn_read.is_heritage_known()
+                                    let is_addr_const = !vn_read.is_written()
+                                        && !vn_read.is_constant()
+                                        && matches!(vn_read.address_space,
+                                            crate::space::AddressSpace::Ram
+                                            | crate::space::AddressSpace::Const)
+                                        && !vn_read.has_no_descend();
+                                    vn_read.is_heritage_known() || is_addr_const
                                 };
                                 if should_skip {
                                     continue;
