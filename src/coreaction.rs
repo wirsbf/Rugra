@@ -8742,41 +8742,98 @@ impl ActionMapGlobals {
 impl Action for ActionMapGlobals {
     // Ghidra: coreaction.hh:885 ActionMapGlobals::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra (funcdata_varnode.cc:1653-1719): vbank.beginLoc..endLoc;
-        // skip free; skip non-persist; for each overlapping group build a
-        // Symbol via localmap->queryProperties / discoverScope.
+        // Ghidra (funcdata_varnode.cc:1733-1790): mapGlobals()
+        //   for each persist varnode in Ram space:
+        //     queryProperties(addr) → SymbolEntry
+        //     if found: set mapentry on varnode
         //
-        // Pragmatic Rugra port: we cannot create Symbols yet, but we can
-        // enforce the persistent-global flag invariant on RAM-space
-        // persistent varnodes, which is the observable side-effect other
-        // Actions rely on (map_type_def / print globals).
+        // Rugra lacks a Database/Scope layer, but global_struct_ptrs
+        // (populated by the driver from DWARF) serves the same purpose:
+        // it maps global addresses to their struct pointer types. We
+        // stamp a SymbolEntry (mapentry) on every Ram/Const varnode
+        // whose address falls within a known global struct's range,
+        // mirroring Ghidra's queryProperties(addr) → setMapEntry().
         use crate::space::AddressSpace;
-        use crate::varnode::varnode_flags;
-        let varnodes: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .collect();
-        for vn_arc in &varnodes {
-            let vn_rg = vn_arc.read().unwrap();
-            if vn_rg.is_free() {
-                continue;
+        use crate::type_system::datatype::Datatype;
+        let mut count = 0i32;
+        if !fd.global_struct_ptrs.is_empty() {
+            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
+                .map(|(a, d)| (*a, d.clone()))
+                .collect();
+            let varnodes: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = fd
+                .vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
+            for vn_arc in &varnodes {
+                let vn = vn_arc.read().unwrap();
+                if vn.is_free() || vn.is_annotation() { continue; }
+                // Only Ram and Const spaces hold global addresses
+                if !matches!(vn.get_space(), AddressSpace::Ram | AddressSpace::Const) { continue; }
+                let off = vn.get_offset();
+                if vn.mapentry.is_some() { continue; } // Already mapped
+                // Ghidra: queryProperties(addr) — check if addr falls within
+                // any known global struct's range
+                for &(base_addr, ref dt) in &globals {
+                    if off == base_addr {
+                        // Exact base address match
+                        drop(vn);
+                        if let Some(entry) = make_global_symbol_entry(off, dt.clone()) {
+                            vn_arc.write().unwrap().set_symbol_entry(entry);
+                            count += 1;
+                        }
+                        break;
+                    }
+                    // Field address within struct range
+                    if let Datatype::Pointer(tp) = dt.as_ref() {
+                        if let Datatype::Struct(ts) = tp.ptr_to.as_ref() {
+                            let struct_size = ts.base.size as u64;
+                            if off >= base_addr && off < base_addr + struct_size && off != base_addr {
+                                drop(vn);
+                                if let Some(entry) = make_global_symbol_entry(off, dt.clone()) {
+                                    vn_arc.write().unwrap().set_symbol_entry(entry);
+                                    count += 1;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            if !vn_rg.is_persist() {
-                continue; // Skip code refs / locals.
-            }
-            // Only the default data space (RAM) holds mapped globals.
-            if vn_rg.get_space() != AddressSpace::Ram {
-                continue;
-            }
-            drop(vn_rg);
-            let mut vn_w = vn_arc.write().unwrap();
-            // Address-tied globals are read-only storage references.
-            vn_w.set_flags(varnode_flags::PERSIST);
-            vn_w.set_flags(varnode_flags::READONLY);
         }
         // Ghidra always returns 0.
+        if fd.name == "main" {
+            let mut ram_config = 0i32;
+            let mut ram_free = 0i32;
+            let mut ram_has_me = 0i32;
+            let mut ram_as_store_addr = 0i32;
+            let mut const_config = 0i32;
+            for vn_ref in &fd.vbank.loc_tree {
+                let vn = vn_ref.0.read().unwrap();
+                let off = vn.get_offset();
+                if off >= 0x17520 && off < 0x17650 {
+                    match vn.get_space() {
+                        AddressSpace::Ram => {
+                            ram_config += 1;
+                            if vn.is_free() { ram_free += 1; }
+                            if vn.mapentry.is_some() { ram_has_me += 1; }
+                            // Check if this vn is used as STORE address
+                            for dop in vn.descend_iter() {
+                                let d = dop.read().unwrap();
+                                if d.opcode == crate::opcodes::OpCode::CPUI_STORE {
+                                    if let Some(a) = d.get_in(1) {
+                                        if std::sync::Arc::ptr_eq(&a, &vn_ref.0) {
+                                            ram_as_store_addr += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        AddressSpace::Const => const_config += 1,
+                        _ => {}
+                    }
+                }
+            }
+            eprintln!("[DBG-MAPG] fn=main Ram={} free={} has_me={} as_store={} Const={}",
+                ram_config, ram_free, ram_has_me, ram_as_store_addr, const_config);
+        }
         Ok(action_status::NO_CHANGE)
     }
 
@@ -10408,49 +10465,41 @@ mod tests {
 
     #[test]
     fn test_action_mapglobals_marks_persistent_ram_varnodes() {
-        // ActionMapGlobals must flag persistent RAM-space varnodes as
-        // read-only globals (the pragmatic Rugra side-effect of
-        // funcdata_varnode.cc:1653 mapGlobals, which in Ghidra builds a
-        // Symbol; Rugra sets PERSIST+READONLY instead).
+        // ActionMapGlobals (Ghidra funcdata_varnode.cc:1733 mapGlobals):
+        // stamps SymbolEntry (mapentry) on Ram/Const varnodes whose address
+        // falls within a registered global struct's range.
         use crate::address::Address;
         use crate::varnode::{varnode_flags, Varnode};
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer, TypeStruct};
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
-        // A persistent RAM (global) varnode, attached (not free) via WRITTEN.
+        // Register a global struct pointer at 0x4000
+        let struct_dt = std::sync::Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("MyStruct".into(), 8, TypeMetatype::Struct),
+            fields: Vec::new(),
+        }));
+        let ptr_dt = std::sync::Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("MyStruct *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: struct_dt, wordsize: 1,
+        }));
+        fd.global_struct_ptrs.insert(0x4000, ptr_dt);
+        // A RAM varnode at the global address
         let g = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x4000, 4)));
-        g.write().unwrap().set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
-        // A non-persistent RAM varnode (local) — must be left untouched.
+        g.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        // A non-global RAM varnode (local)
         let local = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x100, 4)));
         local.write().unwrap().set_flags(varnode_flags::WRITTEN);
-        // A persistent but non-RAM varnode — must be skipped.
-        let reg = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_register(0x10, 4)));
-        reg.write().unwrap().set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
-        fd.vbank
-            .loc_tree
-            .insert(crate::varnode::VarnodeLocRef(g.clone()));
-        fd.vbank
-            .loc_tree
-            .insert(crate::varnode::VarnodeLocRef(local.clone()));
-        fd.vbank
-            .loc_tree
-            .insert(crate::varnode::VarnodeLocRef(reg.clone()));
+        fd.vbank.loc_tree.insert(crate::varnode::VarnodeLocRef(g.clone()));
+        fd.vbank.loc_tree.insert(crate::varnode::VarnodeLocRef(local.clone()));
 
         let status = ActionMapGlobals::new().apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE, "mapglobals returns 0");
         assert!(
-            g.read().unwrap().is_read_only(),
-            "persistent RAM varnode must be flagged read-only"
+            g.read().unwrap().mapentry.is_some(),
+            "global RAM varnode at registered address must get a mapentry"
         );
         assert!(
-            g.read().unwrap().is_persist(),
-            "persistent RAM varnode keeps its persist flag"
-        );
-        assert!(
-            !local.read().unwrap().is_read_only(),
-            "non-persistent local must not be flagged"
-        );
-        assert!(
-            !reg.read().unwrap().is_read_only(),
-            "non-RAM persistent varnode must be skipped"
+            local.read().unwrap().mapentry.is_none(),
+            "non-global local must not get a mapentry"
         );
     }
 

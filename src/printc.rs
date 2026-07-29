@@ -1097,6 +1097,23 @@ impl PrintC {
                     let (mapentry, has_int_add_def) = {
                         let addr_vn = in1.read().unwrap();
                         let me = addr_vn.mapentry.clone();
+                        // Ghidra alignment: pushSymbolDetail → getHigh() →
+                        // getSymbol() → updateSymbol() which scans HighVariable
+                        // instances for any with a SymbolEntry. If this varnode
+                        // has no direct mapentry, check its HighVariable's
+                        // instances (COPY-related varnodes share a HighVariable
+                        // after Merge — Ram addr-tied + Register SSA copy).
+                        let me = me.or_else(|| {
+                            if let Some(ref high) = addr_vn.high {
+                                let high_r = high.read().unwrap();
+                                for inst_arc in &high_r.instances {
+                                    if let Some(ref entry) = inst_arc.read().unwrap().mapentry {
+                                        return Some(entry.clone());
+                                    }
+                                }
+                            }
+                            None
+                        });
                         let hdef = addr_vn.def.as_ref().and_then(|w| w.upgrade()).map(|d| {
                             let r = d.read().unwrap();
                             r.opcode == OpCode::CPUI_INT_ADD && r.inrefs.len() >= 2
@@ -1179,6 +1196,24 @@ impl PrintC {
                             self.emit.print("->");
                             self.emit.print(&fname);
                             field_access = true;
+                        }
+                    }
+                    // Constant-address chase: if the address varnode's def
+                    // chain leads to a Const/Ram@addr, resolve it directly
+                    // against global_struct_ptrs. This catches the common case
+                    // where Heritage stamping didn't reach the STORE address
+                    // but the address was computed from a global field address
+                    // constant via a COPY chain.
+                    if !field_access {
+                        if let Some(field_addr) = Self::chase_constant_address(&in1) {
+                            if let Some((gname, fname, _)) =
+                                Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, field_addr)
+                            {
+                                self.emit.tag_variable(&gname, 0);
+                                self.emit.print("->");
+                                self.emit.print(&fname);
+                                field_access = true;
+                            }
                         }
                     }
                 }
@@ -3935,6 +3970,37 @@ impl PrintC {
     /// The global name is derived from the pointed-to struct's name lowercased
     /// (e.g. Configurable → configurable), matching Ghidra's default global
     /// naming for anonymous DWARF symbols.
+    /// Chase the def chain to find a constant address value.
+    /// Returns the constant offset if the varnode's def chain leads to a
+    /// COPY(Const/Ram@addr) within 10 hops. Used by op_store to resolve
+    /// field addresses when the mapentry system fails.
+    fn chase_constant_address(vn_arc: &Arc<RwLock<Varnode>>) -> Option<u64> {
+        let mut current = vn_arc.clone();
+        for _ in 0..10 {
+            {
+                let vn = current.read().unwrap();
+                // Check if current is a Const/Ram constant
+                if matches!(vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
+                    return Some(vn.get_offset());
+                }
+            }
+            // Get the defining op
+            let def_op = {
+                let vn = current.read().unwrap();
+                vn.def.as_ref().and_then(|w| w.upgrade())
+            };
+            let def_op = match def_op { Some(o) => o, None => return None };
+            let op = def_op.read().unwrap();
+            if op.opcode == OpCode::CPUI_COPY && !op.inrefs.is_empty() {
+                current = op.inrefs[0].clone();
+                drop(op);
+                continue;
+            }
+            return None;
+        }
+        None
+    }
+
     /// Chase the COPY def chain to find a varnode with a mapentry.
     /// SSA rename (Heritage) creates intermediate COPY ops whose outputs
     /// may lose the mapentry stamp. This traces back through COPY inputs
@@ -6981,6 +7047,24 @@ impl PrintLanguage for PrintC {
             let entry_opt = entry_opt.or_else(|| {
                 Self::chase_mapentry_through_copy_chain(&addr_arc)
             });
+            // If still no mapentry, try to find the constant address through
+            // the def chain and resolve it directly against global_struct_ptrs.
+            // This bypasses the mapentry system entirely for the common case
+            // where Heritage stamping didn't reach the STORE address.
+            if entry_opt.is_none() {
+                if let Some(field_addr) = Self::chase_constant_address(&addr_arc) {
+                    if let Some((gname, fname, _)) =
+                        Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, field_addr)
+                    {
+                        self.emit.tag_variable(&gname, 0);
+                        self.emit.print("->");
+                        self.emit.print(&fname);
+                        self.emit.tag_op(" = ");
+                        self.push_input(op, 2);
+                        return;
+                    }
+                }
+            }
             if let Some(ref entry) = entry_opt {
                 let base_addr = entry.read().unwrap().addr.as_u64();
                 if let Some((gname, fname, _)) =
