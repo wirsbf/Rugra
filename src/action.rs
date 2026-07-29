@@ -473,25 +473,6 @@ impl Action for ActionPool {
             .map(|v| v == "1")
             .unwrap_or(false);
 
-        // Debug: count config-range STORE addresses before this pool pass
-        let config_before = if fd.name == "main" {
-            let mut c = 0i32;
-            for op_ref in &fd.obank.alivelist {
-                let o = op_ref.0.read().unwrap();
-                if o.opcode == crate::opcodes::OpCode::CPUI_STORE {
-                    if let Some(addr) = o.get_in(1) {
-                        let av = addr.read().unwrap();
-                        if av.get_offset() >= 0x17520 && av.get_offset() < 0x17650
-                            && matches!(av.get_space(), crate::space::AddressSpace::Ram | crate::space::AddressSpace::Const)
-                        {
-                            c += 1;
-                        }
-                    }
-                }
-            }
-            c
-        } else { -1 };
-
         let mut pass_changes = 0;
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
         for op_ref in ops {
@@ -534,26 +515,6 @@ impl Action for ActionPool {
             }
         }
         self.total += pass_changes;
-        // Debug: count config-range STORE addresses after this pool pass
-        if config_before >= 0 {
-            let mut c = 0i32;
-            for op_ref in &fd.obank.alivelist {
-                let o = op_ref.0.read().unwrap();
-                if o.opcode == crate::opcodes::OpCode::CPUI_STORE {
-                    if let Some(addr) = o.get_in(1) {
-                        let av = addr.read().unwrap();
-                        if av.get_offset() >= 0x17520 && av.get_offset() < 0x17650
-                            && matches!(av.get_space(), crate::space::AddressSpace::Ram | crate::space::AddressSpace::Const)
-                        {
-                            c += 1;
-                        }
-                    }
-                }
-            }
-            if c != config_before {
-                eprintln!("[DBG-POOL-CONFIG] fn=main pool={} before={} after={}", self.name, config_before, c);
-            }
-        }
         // Print stats on each pass if enabled.
         if want_stats && pass_changes > 0 {
             let fn_name = fd.name.as_str();
@@ -740,12 +701,6 @@ pub fn build_simplify_pool() -> ActionPool {
     // Rule2Comp2Mult (which does the reverse) causes an infinite ping-pong;
     // Ghidra avoids it by PHASE SEPARATION (main pool converges first, then
     // cleanup pool runs once).
-    // Rugra-local: RulePtrArith in simplify pool (before RulePropagateCopy)
-    // to convert INT_ADD(Pointer(Struct), const) → PTRSUB before COPY
-    // propagation dead-codes the INT_ADD. Requires InferTypes to have
-    // run (types must be set), which is why StartTypes+InferTypes are
-    // now placed before stackstall in the mainloop.
-    pool.add_rule(Box::new(RulePtrArith::new()));
 
     pool
 }
@@ -957,7 +912,7 @@ impl ActionDatabase {
 
         // Faithful to coreaction.cc:5508: ActionInferTypes runs in mainloop
         // BEFORE stackstall (Ghidra cc:5508 before cc:5509). Types must be
-        // available for RulePtrArith in simplify pool.
+        // available for RulePtrArith in oppool2 (coreaction.cc:5882).
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
 
         // --- stackstall (coreaction.cc:5509, repeatapply) ---

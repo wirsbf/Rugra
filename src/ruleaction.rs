@@ -14950,7 +14950,7 @@ impl Rule for RulePushPtr {
             let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue };
             let is_ptr = in_vn.read().unwrap()
                 .get_type_read_facing()
-                .map(|dt| dt.get_name().contains("Configurable"))
+                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if is_ptr {
                 slot = s;
@@ -15079,14 +15079,14 @@ impl RulePtrArith {
         let pre_is_ptr_0 = pre_op.read().unwrap()
             .get_in(0)
             .and_then(|v| v.read().unwrap().get_type_read_facing())
-            .map(|dt| dt.get_name().contains("Configurable"))
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if !pre_is_ptr_0 {
             preslot = 1;
             let pre_is_ptr_1 = pre_op.read().unwrap()
                 .get_in(1)
                 .and_then(|v| v.read().unwrap().get_type_read_facing())
-                .map(|dt| dt.get_name().contains("Configurable"))
+                .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
             if !pre_is_ptr_1 {
                 return true;
@@ -15120,7 +15120,7 @@ impl RulePtrArith {
         let other_is_ptr = op.read().unwrap()
             .get_in(other_slot)
             .and_then(|v| v.read().unwrap().get_type_read_facing())
-            .map(|dt| dt.get_name().contains("Configurable"))
+            .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if other_is_ptr {
             res = 2;
@@ -15142,7 +15142,7 @@ impl RulePtrArith {
                 }
                 let ov_is_ptr = other_vn.read().unwrap()
                     .get_type_read_facing()
-                    .map(|dt| dt.get_name().contains("Configurable"))
+                    .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                     .unwrap_or(false);
                 if ov_is_ptr {
                     res = 2; // Do not push in the presence of other pointers.
