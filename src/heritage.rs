@@ -3338,36 +3338,40 @@ impl Heritage {
     /// both of which mutate the bank. Rugra ports these as
     /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
-        // Mark all read+write varnodes as active heritage, faithful to
-        // Ghidra's guard() (heritage.cc:1175/1182) which calls
-        // setActiveHeritage on every varnode in the read AND write lists
-        // of the disjoint ranges being heritaged this pass.
+        // Ghidra heritage.cc:2702-2732: build disjoint ranges from varnodes
+        // in each space, then call guard() to set activeHeritage ONLY on
+        // varnodes within the disjoint ranges.
         //
-        // Ghidra only marks varnodes within the disjoint ranges, NOT all
-        // varnodes in the bank. Rugra previously marked ALL varnodes,
-        // which caused Register-space COPY outputs to be renamed into
-        // SSA inputs, losing their def op and breaking struct field
-        // address resolution.
+        // Ghidra's key filtering (cc:2704):
+        //   if ((!vn->isWritten()) && vn->hasNoDescend() && (!vn->isUnaffected()) && (!vn->isInput()))
+        //     continue;
+        // This skips dead free varnodes. All others are added to ranges.
         //
-        // Fix: only mark varnodes that are FREE (no def, no input) — these
-        // are the "reads" that need SSA renaming. Written varnodes (with
-        // def ops) are "writes" that get pushed onto the stack; they don't
-        // need activeHeritage to be set for the read replacement to work
-        // (Ghidra checks isActiveHeritage on writes at cc:2526, but only
-        // for varnodes in the disjoint ranges — Rugra's approximation marks
-        // them separately in the write-push logic at line 3591-3604).
+        // Then guard() (cc:1164-1175) sets activeHeritage on:
+        //   - reads (free varnodes with exactly 1 descendant)
+        //   - writes (written varnodes in the range)
         //
-        // Actually, Ghidra DOES mark writes as activeHeritage too (so they
-        // get pushed). The key difference is Ghidra only marks writes in
-        // the ranges being heritaged. We approximate by marking all
-        // non-constant non-annotation varnodes, EXCEPT we add the check
-        // here to also mark written varnodes (for stack push).
+        // Rugra approximation: instead of full disjoint ranges, we mark
+        // only varnodes that Ghidra's cc:2704 would NOT skip — i.e.,
+        // varnodes that are either written, have descendants, are inputs,
+        // or are unaffected. This is equivalent because Ghidra adds ALL
+        // non-dead varnodes to ranges, and guard() sets activeHeritage on
+        // ALL of them (reads and writes).
+        //
+        // The cc:2704 filter skips: !written && noDescend && !unaffected && !input
+        // So we skip the SAME varnodes.
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
-            let is_known_side_effect = vn.is_constant() || vn.is_annotation();
-            if !is_known_side_effect {
-                vn.set_active_heritage();
+            // Skip constants and annotations (they don't participate in SSA)
+            if vn.is_constant() || vn.is_annotation() {
+                continue;
             }
+            // Ghidra cc:2704: skip dead free varnodes
+            // (!written && noDescend && !unaffected && !input)
+            if !vn.is_written() && vn.has_no_descend() && !vn.is_input() {
+                continue;
+            }
+            vn.set_active_heritage();
         }
 
         let mut stacks: BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>> = BTreeMap::new();

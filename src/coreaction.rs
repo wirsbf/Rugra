@@ -8803,11 +8803,15 @@ impl Action for ActionMapGlobals {
                 .vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
             for vn_arc in &varnodes {
                 let vn = vn_arc.read().unwrap();
-                if vn.is_free() || vn.is_annotation() { continue; }
-                // Only Ram and Const spaces hold global addresses
+                if vn.is_annotation() { continue; }
+                // Don't skip free varnodes — Heritage creates SSA inputs
+                // at the same (space, offset) as the original Ram varnode.
+                // These SSA inputs may be free (no def) but still carry
+                // the global address. Stamp mapentry on ALL Ram/Const
+                // varnodes in config range.
                 if !matches!(vn.get_space(), AddressSpace::Ram | AddressSpace::Const) { continue; }
                 let off = vn.get_offset();
-                if vn.mapentry.is_some() { continue; } // Already mapped
+                if vn.mapentry.is_some() { continue; }
                 // Ghidra: queryProperties(addr) — check if addr falls within
                 // any known global struct's range
                 for &(base_addr, ref dt) in &globals {
