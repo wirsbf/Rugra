@@ -3480,10 +3480,31 @@ impl ActionInferTypes {
             }
             let id = vn_id(&vn);
             if !temps.contains_key(&id) {
-                if let Some(t) = vn.v_type.clone() {
+                // Ghidra alignment: for COPY outputs, inherit the input's
+                // v_type if it has a struct pointer type.
+                let copy_in_type = vn.def.as_ref().and_then(|w| w.upgrade()).and_then(|def| {
+                    let def_op = def.read().unwrap();
+                    if def_op.opcode == OpCode::CPUI_COPY {
+                        def_op.get_in(0).and_then(|in0| {
+                            let in_vn = in0.read().unwrap();
+                            if let Some(ref t) = in_vn.v_type {
+                                use crate::type_system::datatype::Datatype;
+                                if let Datatype::Pointer(_) = t.as_ref() {
+                                    return Some(t.clone());
+                                }
+                            }
+                            None
+                        })
+                    } else { None }
+                });
+                drop(vn);
+                if let Some(t) = copy_in_type {
+                    temps.insert(id, t);
+                } else if let Some(t) = vn_arc.read().unwrap().v_type.clone() {
                     temps.insert(id, t);
                 } else {
-                    temps.insert(id, int_types.sized(vn.get_size()));
+                    let sz = vn_arc.read().unwrap().get_size();
+                    temps.insert(id, int_types.sized(sz));
                 }
             }
         }
