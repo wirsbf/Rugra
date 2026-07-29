@@ -708,3 +708,17 @@ Phase 3.5 只在同一基本块内 wiring（防止破坏 Heritage Phi 放置）�
 ——这是栈帧操作，不是 config 字段访问。
 config 字段的 INT_ADD (base=RAX from COPY(Ram→RAX)) 在不同的块中，
 Phase 3.5 无法连接。
+
+## P4（2026-07-30 Heritage over-renaming 完整诊断）
+
+### INT_ADD dead-code 机制确认
+INT_ADD count in main(): 7→5→3 (DeadCode removes 4 INT_ADDs across 2 mainloop iterations).
+
+### Ghidra vs Rugra Heritage 关键差异（从源码确认）
+1. **Ghidra guard() cc:1164-1175**: 只对有**恰好1个descendant**的free read设置activeHeritage。多descendant的free read不设置（且Ghidra会throw error）。
+2. **Ghidra guard() cc:1177-1182**: 对write list中的varnode设置activeHeritage（用于stack push）。
+3. **Ghidra disjoint range**: 从所有非dead varnode构建范围，guard()只对范围内的varnode设置activeHeritage。
+4. **Rugra**: 标记所有非dead varnode为activeHeritage（包括多descendant free reads）。
+
+### 核心阻塞
+Heritage stack-based rename 使STORE的地址从INT_ADD output变为COPY output（stack.top()），导致INT_ADD output失去descendant被DeadCode移除。这是Heritage over-renaming的直接后果，需要disjoint-range基础设施解决。
