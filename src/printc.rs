@@ -5577,6 +5577,249 @@ impl PrintLanguage for PrintC {
                 }
                 if !added { break; }
             }
+            // Pass 2d: STORE→LOAD stack-spill propagation. In Ghidra a
+            // SymbolEntry is attached to the ADDRESS (Stack@offset), so a
+            // STORE of a symbol-linked value to Stack@X and a later LOAD of
+            // Stack@X both carry the symbol. Rugra keys entries by
+            // (AddressSpace, offset).
+            //
+            // KEY DESIGN: keep a SEPARATE `spill_map` of (address → entry)
+            // for memory locations, consulted ONLY by LOAD. We do NOT insert
+            // these address keys into `entry_by_key`, because a stack address
+            // (esp. a Unique-space stack-slot proxy) is reused as the address
+            // operand of many unrelated STOREs, and stamping it as "value with
+            // entry" would make op_store render every such STORE as
+            // `gname->field`. Only LOAD OUTPUTS (genuine Unique temporaries
+            // holding the reloaded value) are added to `entry_by_key`, so the
+            // bridge never leaks to STORE-address varnodes.
+            // Iterate to a fixed point with COPY re-propagation so the
+            // reloaded value reaches COPY/INT_ADD consumers and a re-spill of
+            // the reloaded value resolves too.
+            // Ghidra: database.cc SymbolEntry address-linked scope resolution.
+            let mut spill_map: StdHashMap<(AddressSpace, u64), std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> = StdHashMap::new();
+            for _spill_iter in 0..8 {
+                let mut spill_added = false;
+                // STORE-side: value-with-entry spills its entry onto the
+                // memory location (recorded in spill_map only).
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_STORE || op.inrefs.len() < 3 {
+                                continue;
+                            }
+                            // inrefs[1] = address, inrefs[2] = value.
+                            let val_key = {
+                                let v = op.inrefs[2].read().unwrap();
+                                (v.get_space(), v.get_offset())
+                            };
+                            let val_entry = match entry_by_key.get(&val_key).cloned() {
+                                Some(e) => e,
+                                None => continue,
+                            };
+                            let addr_key = {
+                                let a = op.inrefs[1].read().unwrap();
+                                (a.get_space(), a.get_offset())
+                            };
+                            // Only bridge through storable address spaces
+                            // (Stack/Register/Unique). Const/Ram addresses are
+                            // either literals or true globals already handled.
+                            if !matches!(addr_key.0,
+                                AddressSpace::Stack | AddressSpace::Register
+                                | AddressSpace::Unique)
+                            {
+                                continue;
+                            }
+                            if !spill_map.contains_key(&addr_key) {
+                                spill_map.insert(addr_key, val_entry);
+                                spill_added = true;
+                            }
+                        }
+                    }
+                }
+                // LOAD-side: address in spill_map propagates its entry to the
+                // LOAD output (a Unique temp), registered in entry_by_key so
+                // downstream COPY/INT_ADD/op_store see it.
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_LOAD || op.inrefs.len() < 2 {
+                                continue;
+                            }
+                            // inrefs[1] = address; output = loaded value.
+                            let addr_key = {
+                                let a = op.inrefs[1].read().unwrap();
+                                (a.get_space(), a.get_offset())
+                            };
+                            let addr_entry = match spill_map.get(&addr_key).cloned() {
+                                Some(e) => e,
+                                None => continue,
+                            };
+                            let out_arc = match op.output.as_ref() {
+                                Some(o) => o,
+                                None => continue,
+                            };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if !entry_by_key.contains_key(&out_key) {
+                                entry_by_key.insert(out_key, addr_entry);
+                                spill_added = true;
+                            }
+                        }
+                    }
+                }
+                // COPY re-propagation so reloaded values reach their COPY
+                // consumers (and any re-spill of those copies resolves on the
+                // next outer iteration).
+                for _copy_iter in 0..4 {
+                    let mut copy_added = false;
+                    for i in 0..fd.bblocks.get_size() {
+                        if let Some(block_arc) = fd.bblocks.get_block(i) {
+                            let block = block_arc.read().unwrap();
+                            for op_ref in &block.get_ops() {
+                                let op = op_ref.0.read().unwrap();
+                                if op.opcode != OpCode::CPUI_COPY || op.inrefs.is_empty() {
+                                    continue;
+                                }
+                                let out_arc = match op.output.as_ref() {
+                                    Some(o) => o,
+                                    None => continue,
+                                };
+                                let out_key = {
+                                    let o = out_arc.read().unwrap();
+                                    (o.get_space(), o.get_offset())
+                                };
+                                if entry_by_key.contains_key(&out_key) {
+                                    continue;
+                                }
+                                let src_key = {
+                                    let s = op.inrefs[0].read().unwrap();
+                                    (s.get_space(), s.get_offset())
+                                };
+                                if let Some(entry) = entry_by_key.get(&src_key).cloned() {
+                                    // Never propagate onto the stack-pointer
+                                    // registers (RSP=0x20, RBP=0x28): these are
+                                    // reused as STORE addresses for arg setup
+                                    // and locals, so a struct-pointer entry here
+                                    // could make a later `STORE(RSP, x)` falsely
+                                    // render as `gname->field = x`. (The spill
+                                    // isolation in spill_map already prevents
+                                    // the STORE-address leak; this is a belt-
+                                    // and-suspenders guard against register-key
+                                    // collisions on the frame pointer.)
+                                    if out_key.0 == AddressSpace::Register
+                                        && matches!(out_key.1, 0x20 | 0x28)
+                                    {
+                                        continue;
+                                    }
+                                    entry_by_key.insert(out_key, entry);
+                                    copy_added = true;
+                                }
+                            }
+                        }
+                    }
+                    if !copy_added { break; }
+                }
+                if !spill_added { break; }
+            }
+            // Pass 2e: post-spill INT_ADD field scan. The spill pass (2d)
+            // seeds entries onto reloaded pointer temps (e.g. the config ptr
+            // reloaded from its stack slot). Those temps feed
+            // INT_ADD/PTRSUB(ptr, field_offset) computations whose outputs
+            // need field-address entries so op_store renders `gname->field`.
+            // Pass 2 ran before 2d, so re-run the field scan now, iterated
+            // with COPY so chained offsets and copies resolve.
+            for _iteration in 0..6 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if !matches!(op.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB)
+                                || op.inrefs.len() != 2
+                            {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) {
+                                continue;
+                            }
+                            let i0 = &op.inrefs[0];
+                            let i1 = &op.inrefs[1];
+                            let k0 = { let v = i0.read().unwrap(); (v.get_space(), v.get_offset()) };
+                            let k1 = { let v = i1.read().unwrap(); (v.get_space(), v.get_offset()) };
+                            let (base_key, off_val) =
+                                if k1.0 == AddressSpace::Const && k0.0 != AddressSpace::Const && k1.1 < 0x10000 {
+                                    (k0, k1.1)
+                                } else if k0.0 == AddressSpace::Const && k1.0 != AddressSpace::Const && k0.1 < 0x10000 {
+                                    (k1, k0.1)
+                                } else {
+                                    continue;
+                                };
+                            if let Some(base_entry) = entry_by_key.get(&base_key) {
+                                let (base_addr, dt) = {
+                                    let eg = base_entry.read().unwrap();
+                                    let addr = eg.addr.as_u64();
+                                    let dt = eg.symbol.read().unwrap().dtype.clone();
+                                    (addr, dt)
+                                };
+                                if let Some(dt) = dt {
+                                    let field_addr = base_addr.wrapping_add(off_val);
+                                    if let Some(entry) = make_global_symbol_entry_printc(field_addr, dt) {
+                                        entry_by_key.entry(out_key).or_insert(entry);
+                                        added = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // COPY re-propagation so field-offset outputs reach consumers.
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_COPY || op.inrefs.is_empty() {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) {
+                                continue;
+                            }
+                            let src_key = {
+                                let s = op.inrefs[0].read().unwrap();
+                                (s.get_space(), s.get_offset())
+                            };
+                            if let Some(entry) = entry_by_key.get(&src_key).cloned() {
+                                // Never propagate onto RSP/RBP (see Pass 2d).
+                                if out_key.0 == AddressSpace::Register
+                                    && matches!(out_key.1, 0x20 | 0x28)
+                                {
+                                    continue;
+                                }
+                                entry_by_key.insert(out_key, entry);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
             // Pass 3: apply the collected entries to every matching varnode.
             for vn_ref in &fd.vbank.loc_tree {
                 let key = {
