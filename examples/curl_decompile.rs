@@ -114,21 +114,23 @@ fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
         field("flags", 40),
     ]);
 
-    // struct URLGlob { int size; int urllen; ...; } (malloc'd as 0x130 = 304
-    // bytes in glob_url). Holds the parsed URL glob expansion. Layout inferred
-    // from Ghidra golden output: `glob->size` is the first field (offset 0),
-    // the count of URL parts; `urllen` follows at offset 4. The inline
-    // `literal`/`pattern` arrays sit further in (Ghidra renders up to
-    // `glob.pattern[8]` and `glob._296_8_`), but for `->field` rendering only
-    // the early scalar fields need exact offsets; the remaining slots are
-    // represented with 8-byte longs at representative offsets so the struct
-    // size (304) is preserved for Pointer(Struct) PTRSUB analysis.
+    // struct URLGlob { int size; int urllen; GlobCode *literal; GlobCode *pattern;
+    //   int beenhere; ... } (malloc'd as 0x130 = 304 bytes in glob_url).
+    // Field layout inferred from curl urlglob.c source + Ghidra golden:
+    //   size@0 (int, 4 bytes)
+    //   urllen@4 (int, 4 bytes)
+    //   literal@8 (pointer, 8 bytes)
+    //   pattern@16 (pointer, 8 bytes)
+    //   beenhere@24 (int, 4 bytes) + 4 bytes padding
+    //   glob_buffer@32 (0x20) — separate global but falls in malloc range
     tf.create_struct("URLGlob");
     tf.set_fields("URLGlob", vec![
         field("size", 0),
         field("urllen", 4),
         field("literal", 8),
-        field("pattern", 72),
+        field("pattern", 16),
+        field("beenhere", 24),
+        field("glob_buffer", 32),
         field("trailer_296", 296),
     ]);
 
