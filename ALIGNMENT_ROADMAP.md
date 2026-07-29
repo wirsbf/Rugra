@@ -677,3 +677,34 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 实现 Heritage disjoint-range 基础设施（heritage.cc:2702-2732 的忠实移植），
 让 activeHeritage 只设置在 free varnode 上。这是修复 over-renaming 的
 根本方案，但需要 LocationMap + TaskList + MemRange 数据结构。
+
+## P3.5（2026-07-30 Phase 3.5 intra-block wiring + main()诊断）
+
+### Phase 3.5 intra-block use-def wiring（139b072）
+在 inject_raw_ops Phase 3（input marking）之后添加 Phase 3.5：
+按基本块内指令顺序，将 Register 空间的 free input varnode 替换为
+同地址的 written output varnode。每个块的 writer map 独立。
+
+效果：
+- 1292/1292 tests pass（零回归）
+- ->field 从 7 增长到 8
+- 新增覆盖：next_url, match_url 函数
+- 字段名：configurable->postfields, urlglob->glob_buffer
+
+### main() 零覆盖的最终根因
+main() 的 `lea rip+disp; mov [rax+off], val` 模式中：
+- `lea` 在 block A，产生 COPY(Ram@config_base → RAX)
+- `mov` 在 block B，产生 INT_ADD(RAX, off) → tmp; STORE(tmp, val)
+- block A ≠ block B
+
+Phase 3.5 只在同一基本块内 wiring（防止破坏 Heritage Phi 放置）。
+跨块 wiring 需要要么：
+1. Ghidra 的 VarnodeBank::xref 去重（单一 Varnode per address）
+2. 或更精细的跨块 SSA 处理
+
+### INT_ADD-aware chase_constant_address（00f78ab）
+在 def-chain 追踪中支持 INT_ADD(base, const_off) 模式。
+但在 main() 中不生效，因为 INT_ADD 的 base 是 Register@0x20 (RSP)
+——这是栈帧操作，不是 config 字段访问。
+config 字段的 INT_ADD (base=RAX from COPY(Ram→RAX)) 在不同的块中，
+Phase 3.5 无法连接。
