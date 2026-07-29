@@ -643,3 +643,37 @@ Ghidra `collapseAll`（blockaction.cc:1877-1893）5 步：orderLoopBodies → co
 ### op/varnode 死代码（已标注，低优先级直到接入）
 
 `update_cover`（cover->rebuild 是 no-op TODO）、`set_num_inputs`（保留已有 slot 非 Ghidra 全清零）、`next_op_in_flow`/`previous_op_in_block`/`target_sp`（全局 alivelist 扫描非 block-local）、`print_info`/`print_cover`（debug 用，无调用者）。均为零调用者，待接入主管线时再对齐。
+
+## P3（2026-07-29 最终根因确认）
+
+### struct field access (->field) 的最终根因
+
+**根因链**（从 Ghidra 源码确认）：
+
+1. PIE binary 的 `mov [rip+disp], reg` 被 SLEIGH lift 为
+   `STORE(Ram@abs_addr, val)` — 地址直接在 Ram 空间。
+
+2. Heritage rename 的 activeHeritage 过度标记（heritage.rs:3359-3364
+   标记所有 varnode）导致 Ram@abs_addr 被 rename 为 SSA input。
+
+3. Ghidra 的 disjoint-range 机制（heritage.cc:2702-2732）只标记 FREE
+   varnode（无 def、无 input）为 activeHeritage。有 descendant 的
+   Ram@abs_addr 不在 disjoint range 中，不被 rename。
+
+4. Rugra 缺少 disjoint-range 基础设施。添加的 is_addr_const guard
+   （2d6ab48）部分缓解但不完全对齐 Ghidra。
+
+**已完成的对齐基础设施**（全部已推送）：
+- ActionMapGlobals 对齐 Ghidra mapGlobals（90f4b86）
+- mergeTestBasic 对齐 Ghidra hasCover（7fb8be3）
+- type_order submeta keying（4b511de, a157110）
+- COPY output 类型继承（f94ec3f）
+- pushSymbolDetail for constant atoms（4307657）
+- seed_global_struct_pointers 字段地址匹配（887dacc）
+- Heritage addr-const skip（2d6ab48）
+- SLEIGH RIP-relative resolver（eaa7330）
+
+**最终修复方向**：
+实现 Heritage disjoint-range 基础设施（heritage.cc:2702-2732 的忠实移植），
+让 activeHeritage 只设置在 free varnode 上。这是修复 over-renaming 的
+根本方案，但需要 LocationMap + TaskList + MemRange 数据结构。
