@@ -8,6 +8,7 @@ use crate::funcdata::Funcdata;
 use crate::space::AddressSpace;
 use crate::type_system::{Datatype, TypeBase, TypeMetatype};
 use crate::variable::HighVariable;
+use crate::variable::high_internal_flags;
 use crate::varnode::{Varnode, varnode_flags};
 use std::sync::{Arc, RwLock};
 
@@ -601,6 +602,12 @@ impl Merge {
                     let h2_read = h2.read().unwrap();
                     h2_read.instances.clone()
                 };
+                // Ghidra variable.cc:644: highflags |= (flagsdirty|namerepdirty|typedirty|coverdirty)
+                h1.write().unwrap().highflags |=
+                    high_internal_flags::FLAGSDIRTY
+                    | high_internal_flags::NAMEREPDIRTY
+                    | high_internal_flags::TYPEDIRTY
+                    | high_internal_flags::COVERDIRTY;
                 for inst in instances {
                     h1.write().unwrap().add_instance(inst.clone());
                     inst.write().unwrap().high = Some(h1.clone());

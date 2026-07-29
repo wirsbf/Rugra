@@ -392,8 +392,8 @@ impl HighVariable {
                 }
             } else {
                 let vn_type = vn.get_type().unwrap_or_else(|| self.v_type.clone());
-                // Faithful to variable.cc:392: 0 > vn->getType()->typeOrderBool(*rep->getType())
-                if vn_type.type_order_bool(&rep_type) < 0 {
+                // Ghidra variable.cc:392: vn->getType()->typeOrderFormal(*rep->getType())
+                if vn_type.type_order_formal(&rep_type) < 0 {
                     rep_idx = i;
                     rep_is_typelock = vn_is_typelock;
                     rep_type = vn_type;

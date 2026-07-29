@@ -571,16 +571,50 @@ impl Datatype {
         if std::ptr::eq(self, other) {
             return 0;
         }
-        // metatype (submeta) ordering first.
-        let mt_a = self.get_metatype() as u8;
-        let mt_b = other.get_metatype() as u8;
-        if mt_a != mt_b {
-            return if mt_a < mt_b { -1 } else { 1 };
+        // Ghidra uses submeta (type.hh:102-128) for comparison, where
+        // SUB_PTR_STRUCT=4 < SUB_PTR=6 < SUB_INT_PLAIN=17.
+        // Rugra lacks submeta, so we approximate: Pointer(Struct) gets
+        // a lower sort key than plain Pointer, which is lower than Int.
+        // This makes getTypeRepresentative prefer Pointer(Struct) over
+        // Int, so COPY output inherits Configurable* type → RulePtrArith
+        // triggers → PTRSUB → ->field rendering.
+        let key = |dt: &Datatype| -> u8 {
+            match dt {
+                Datatype::Pointer(p) => {
+                    // Pointer to Struct/Union: submeta 4 (SUB_PTR_STRUCT)
+                    match p.ptr_to.as_ref() {
+                        Datatype::Struct(_) | Datatype::Union(_) => 4,
+                        _ => 6, // Plain pointer: SUB_PTR
+                    }
+                }
+                _ => dt.get_metatype() as u8,
+            }
+        };
+        let ka = key(self);
+        let kb = key(other);
+        if ka != kb {
+            return if ka < kb { -1 } else { 1 };
         }
         // Then size: Ghidra returns (op.size - size), i.e. smaller size first.
         let sa = self.get_size();
         let sb = other.get_size();
         (sb as i32) - (sa as i32)
+    }
+
+    // Ghidra: type.hh:981 Datatype::typeOrderFormal
+    /// Like type_order but for selecting formal high-level types.
+    /// Ghidra prefers partialunion least, then bool less than int.
+    /// Delegates to type_order for the general case.
+    pub fn type_order_formal(&self, other: &Datatype) -> i32 {
+        if std::ptr::eq(self, other) { return 0; }
+        // Ghidra type.hh:985-986: prefer partialunion the least
+        if matches!(self, Datatype::PartialUnion(_)) { return 1; }
+        if matches!(other, Datatype::PartialUnion(_)) { return -1; }
+        // Ghidra type.hh:987-988: prefer bool less than integers
+        if self.get_metatype() == TypeMetatype::Bool { return 1; }
+        if other.get_metatype() == TypeMetatype::Bool { return -1; }
+        // Fall through to type_order (which now uses submeta-like keying)
+        self.type_order(other)
     }
 
     // Ghidra: type.hh:916 Datatype::typeOrderBool
