@@ -2281,6 +2281,31 @@ impl VarnodeBank {
         self.create_with_space(size, space, offset)
     }
 
+    /// Find the most recently created WRITTEN varnode at (size, space, offset).
+    /// Used by inject_raw_ops to wire use-def chains: when an op reads a
+    /// register that was previously written by another op, return THAT
+    /// written varnode so the descend link connects them.
+    pub fn find_written(
+        &self,
+        size: usize,
+        space: AddressSpace,
+        offset: u64,
+    ) -> Option<Arc<RwLock<Varnode>>> {
+        let mut best: Option<Arc<RwLock<Varnode>>> = None;
+        for entry in self.loc_tree.iter() {
+            let g = entry.0.read().unwrap();
+            if g.address_space == space
+                && g.get_offset() == offset
+                && g.get_size() == size
+                && g.is_written()
+            {
+                // Return the most recently created written varnode
+                best = Some(entry.0.clone());
+            }
+        }
+        best
+    }
+
     // Ghidra: varnode.cc:1218 VarnodeBank::findByLoc
     /// Find any varnode at (size, loc), regardless of create_index.
     ///
