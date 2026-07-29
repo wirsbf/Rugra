@@ -3338,38 +3338,42 @@ impl Heritage {
     /// both of which mutate the bank. Rugra ports these as
     /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
-        // Ghidra heritage.cc:2702-2732: build disjoint ranges from varnodes
-        // in each space, then call guard() to set activeHeritage ONLY on
-        // varnodes within the disjoint ranges.
-        //
-        // Ghidra's key filtering (cc:2704):
-        //   if ((!vn->isWritten()) && vn->hasNoDescend() && (!vn->isUnaffected()) && (!vn->isInput()))
-        //     continue;
-        // This skips dead free varnodes. All others are added to ranges.
-        //
-        // Then guard() (cc:1164-1175) sets activeHeritage on:
-        //   - reads (free varnodes with exactly 1 descendant)
-        //   - writes (written varnodes in the range)
-        //
-        // Rugra approximation: instead of full disjoint ranges, we mark
-        // only varnodes that Ghidra's cc:2704 would NOT skip — i.e.,
-        // varnodes that are either written, have descendants, are inputs,
-        // or are unaffected. This is equivalent because Ghidra adds ALL
-        // non-dead varnodes to ranges, and guard() sets activeHeritage on
-        // ALL of them (reads and writes).
-        //
-        // The cc:2704 filter skips: !written && noDescend && !unaffected && !input
-        // So we skip the SAME varnodes.
+        // Ghidra heritage.cc guard() cc:1156-1198 sets activeHeritage:
+        //   - reads (cc:1164-1175): FREE varnodes (not written, not input)
+        //     with EXACTLY 1 live descendant → activeHeritage
+        //     Multi-descendant free reads throw error in Ghidra (cc:1170-1171).
+        //     Rugra approximation: skip multi-descendant free reads instead
+        //     of throwing. This prevents over-renaming that causes INT_ADD
+        //     outputs to lose descendants and get DeadCode'd.
+        //   - writes (cc:1177-1182): WRITTEN varnodes → activeHeritage
+        //     (for stack push in renameRecurse cc:2524-2530).
+        //   - inputs: always activeHeritage (for initial stack seeding).
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
-            // Skip constants and annotations (they don't participate in SSA)
+            // Skip constants and annotations
             if vn.is_constant() || vn.is_annotation() {
                 continue;
             }
             // Ghidra cc:2704: skip dead free varnodes
-            // (!written && noDescend && !unaffected && !input)
             if !vn.is_written() && vn.has_no_descend() && !vn.is_input() {
                 continue;
+            }
+            // Ghidra guard() cc:1164-1175: for FREE reads (not written,
+            // not input), only set activeHeritage if they have EXACTLY 1
+            // live descendant. Ghidra throws LowlevelError for multi-desc.
+            // Rugra: skip multi-descendant free reads in Ram/Const space
+            // (address constants that shouldn't be over-renamed), but allow
+            // Register-space multi-descendant reads (needed for correct SSA
+            // of register uses across blocks).
+            if !vn.is_written() && !vn.is_input() {
+                if matches!(vn.address_space, crate::space::AddressSpace::Ram | crate::space::AddressSpace::Const) {
+                    let live_desc: usize = vn.descend.iter()
+                        .filter(|w| w.strong_count() > 0)
+                        .count();
+                    if live_desc != 1 {
+                        continue;
+                    }
+                }
             }
             vn.set_active_heritage();
         }
