@@ -1041,7 +1041,7 @@ fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
         "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "configurable_ptr"]),  // const char*, Configurable*
         "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "configurable_ptr"]),  // ..., Configurable*
         "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
-        "progressbarinit" => Some(vec!["ptr"]),  // void*
+        "progressbarinit" => Some(vec!["progressdata_ptr"]),  // ProgressData*
         // httpd functions — only ones we're confident about
         "ap_fini_vhost_config" => Some(vec!["ptr", "ptr"]),
         "ap_parse_vhost_addrs" => Some(vec!["ptr", "ptr"]),
@@ -1565,6 +1565,19 @@ impl Action for ActionInferParams {
                                     }))
                                 })
                         }
+                        // ProgressData* — resolved from known_struct_ptr_types
+                        // (ProgressData has no global address; it's stack/heap)
+                        "progressdata_ptr" => {
+                            fd.known_struct_ptr_types.get("ProgressData").cloned()
+                                .unwrap_or_else(|| {
+                                    let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                                    Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                        base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                        ptr_to: base,
+                                        wordsize: 1,
+                                    }))
+                                })
+                        }
                         "int" => Arc::new(match size {
                             1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
                             2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
@@ -1638,6 +1651,16 @@ impl Action for ActionInferParams {
                             }
                             "configurable_ptr" => {
                                 fd.global_struct_ptrs.values().next().cloned()
+                                    .unwrap_or_else(|| {
+                                        let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+                                        Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
+                                            base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                            ptr_to: base, wordsize: 1,
+                                        }))
+                                    })
+                            }
+                            "progressdata_ptr" => {
+                                fd.known_struct_ptr_types.get("ProgressData").cloned()
                                     .unwrap_or_else(|| {
                                         let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
                                         Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {

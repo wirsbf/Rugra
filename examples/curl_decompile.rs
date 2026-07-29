@@ -114,9 +114,29 @@ fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
         field("flags", 40),
     ]);
 
+    // struct URLGlob { int size; int urllen; ...; } (malloc'd as 0x130 = 304
+    // bytes in glob_url). Holds the parsed URL glob expansion. Layout inferred
+    // from Ghidra golden output: `glob->size` is the first field (offset 0),
+    // the count of URL parts; `urllen` follows at offset 4. The inline
+    // `literal`/`pattern` arrays sit further in (Ghidra renders up to
+    // `glob.pattern[8]` and `glob._296_8_`), but for `->field` rendering only
+    // the early scalar fields need exact offsets; the remaining slots are
+    // represented with 8-byte longs at representative offsets so the struct
+    // size (304) is preserved for Pointer(Struct) PTRSUB analysis.
+    tf.create_struct("URLGlob");
+    tf.set_fields("URLGlob", vec![
+        field("size", 0),
+        field("urllen", 4),
+        field("literal", 8),
+        field("pattern", 72),
+        field("trailer_296", 296),
+    ]);
+
     // Build the struct and pointer types and the address→type map.
     let configurable = tf.find_by_name("Configurable").expect("Configurable struct");
     let configurable_ptr = tf.get_ptr(configurable.clone());
+    let urlglob = tf.find_by_name("URLGlob").expect("URLGlob struct");
+    let urlglob_ptr = tf.get_ptr(urlglob.clone());
     let _outstruct = tf.find_by_name("OutStruct").expect("OutStruct struct");
     let _progressdata = tf.find_by_name("ProgressData").expect("ProgressData struct");
     let _httppost = tf.find_by_name("HttpPost").expect("HttpPost struct");
@@ -134,6 +154,41 @@ fn build_dwarf_struct_pointers() -> HashMap<u64, Arc<Datatype>> {
     // pointer type is registered in the TypeFactory under "Configurable *"
     // so propagation consumers can find it; we don't map an address to it.
     let _ = configurable_ptr;
+    // glob_expand @ 0x17660 (readelf symbol: OBJECT GLOBAL, 8 bytes). This is
+    // a GLOBAL `URLGlob *` pointer; code reads it (`pUVar = glob_expand`),
+    // then dereferences with `->size`/`->pattern[...]`. Stamp the URLGlob*
+    // type on the address constant so ActionInferTypes propagates it through
+    // the LOAD (which reads the pointer value) and subsequent PTRSUB/INT_ADD
+    // chains, yielding `glob_expand->size` rendering. Matches how ::config's
+    // Configurable* is handled above.
+    map.insert(0x17660, urlglob_ptr.clone());
+    let _ = urlglob_ptr;
+    map
+}
+
+/// Build a name→Pointer(Struct) map for structs that have no global address
+/// (stack/heap-allocated like ProgressData). Used by known_param_types tokens
+/// like "progressdata_ptr" to resolve the actual struct-pointer type.
+fn build_known_struct_ptr_types() -> HashMap<String, Arc<Datatype>> {
+    let mut tf = TypeFactory::new(8);
+    let long8 = tf.get_base(8, rugra::type_system::datatype::TypeMetatype::Int)
+        .expect("long base type");
+    let field = |name: &str, off: usize| -> TypeField {
+        TypeField { name: name.to_string(), offset: off, type_ptr: long8.clone() }
+    };
+
+    // ProgressData { long total; long prev; long point; long width; }
+    tf.create_struct("ProgressData");
+    tf.set_fields("ProgressData", vec![
+        field("total", 0),
+        field("prev", 8),
+        field("point", 16),
+        field("width", 24),
+    ]);
+
+    let mut map = HashMap::new();
+    let pd = tf.find_by_name("ProgressData").expect("ProgressData struct");
+    map.insert("ProgressData".to_string(), tf.get_ptr(pd));
     map
 }
 
@@ -368,6 +423,9 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the DWARF-derived struct-pointer map once; it is cloned into each
     // function's Funcdata below to seed type propagation.
     let global_struct_ptrs = build_dwarf_struct_pointers();
+    // Build a name→Pointer(Struct) map for structs that have no global address
+    // (stack/heap-allocated). Used by known_param_types "progressdata_ptr" etc.
+    let known_struct_ptr_types = build_known_struct_ptr_types();
 
 
     for func in &functions {
@@ -429,6 +487,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         let func_size = func.size;
         let proto_db = prototype_db.clone();
         let gsp = global_struct_ptrs.clone();
+        let kspt = known_struct_ptr_types.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let t0 = std::time::Instant::now();
@@ -437,6 +496,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
             fd.external_prototypes = proto_db;
             fd.global_struct_ptrs = gsp;
+            fd.known_struct_ptr_types = kspt;
             for (&addr, name) in &sym_table {
                 fd.add_symbol(addr, name.clone());
             }

@@ -97,6 +97,11 @@ pub struct Funcdata {
     /// SymbolEntry type assignment (database.cc) which the Rugra driver
     /// lacks an Architecture/SymbolTable layer to populate automatically.
     pub global_struct_ptrs: HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    /// Struct pointer types keyed by struct name (e.g. "ProgressData" →
+    /// Pointer(ProgressData)). Used for parameter type resolution when a
+    /// struct has no global address (stack/heap-allocated). Populated by
+    /// the driver from DWARF struct definitions.
+    pub known_struct_ptr_types: HashMap<String, std::sync::Arc<crate::type_system::datatype::Datatype>>,
     /// Function prototype (return type, parameters)
     pub funcp: FuncProto,
     /// External function prototypes: maps callee address → param count.
@@ -189,6 +194,7 @@ impl Funcdata {
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
             global_struct_ptrs: HashMap::new(),
+            known_struct_ptr_types: HashMap::new(),
             funcp: FuncProto::new(
                 name.to_string(),
                 std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
