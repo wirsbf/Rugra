@@ -519,11 +519,19 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 > **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` faithful port（见 docs/api/printc.md），但实测 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。解锁需补以下两条底层 infra：
 
-10. **`RulePtrsub` 创建规则 / SymbolEntry 结构体字段访问** (✅ 已 L3, 2026-07-29 完整实现) — ~~Rugra 缺 RulePtrsub~~ **实际上 RulePtrArith 已存在**（ruleaction.rs:15041），且 **struct field access 通过 SymbolEntry 路径已实现**（非 RulePtrArith 路径）：
-    - ✅ Configurable* 类型传播到 119 个 varnode（b754fca + 2ae2e38）
-    - ✅ oppool2 已在 ActionInferTypes 之后（a1ed0c8）
-    - ✅ **排除常量折叠假设**：RulePropagateCopy 和 RuleCollapseConstants 在 main() 中从未见过 0x17520 地址
-    - ✅ **SymbolEntry stamp**（2de756d）：ActionHeritage::apply 为 Ram@global_addr varnode 设置 mapentry（make_global_symbol_entry），链接到 SymbolEntry 携带全局基址+符号名+Pointer(Struct) 类型
+10. **`RulePtrsub` 创建规则 / SymbolEntry 结构体字段访问** (🔧 L2→L3, 2026-07-29 Ghidra源码阅读确认) — **Ghidra源码已clone** (`ghidra-src/`)，阅读了完整的 field-access 机制：
+    - ✅ **Ghidra heritage.cc:2684**: Ram (IPTR_PROCESSOR) 参与 heritage；Const 不参与（space.hh:409 `isHeritaged` flag）
+    - ✅ **Ghidra funcdata_varnode.cc:1733 mapGlobals**: Heritage后扫描 Ram persist varnode，通过 `queryProperties(addr)` 地址查询设 SymbolEntry。**不传播 mapentry 跨 SSA rename**。
+    - ✅ **Ghidra variable.cc:418 updateSymbol**: print时通过 `HighVariable::getSymbol()` → `updateSymbol()` → 遍历 instance 找 SymbolEntry。COPY相关varnode通过`mergeOpcode(CPUI_COPY)`(merge.cc:326)合并到同一HighVariable。
+    - ✅ **Ghidra merge.cc:255 mergeTestBasic**: 只检查 `hasCover()`/`isImplied()`/`isProtoPartial()`/`isSpacebase()`。`hasCover()` (varnode.hh:286) 对 constant 返回 false。
+    - ✅ **Ghidra printlanguage.cc:518 recurse**: implied varnode 递归到 def op。COPY implied → 递归到 input。非implied → `pushVnExplicit` → `pushSymbolDetail`。
+    - 🔧 **Rugra已对齐**（90f4b86 + 7fb8be3）：
+      - ActionMapGlobals 改为 Ghidra mapGlobals 模式（地址查询设 mapentry）
+      - mergeTestBasic 对齐 Ghidra（用 hasCover 检查）
+      - mergeOpcode COPY 改 must-merge
+      - printc STORE handler 加 HighVariable instance scan
+    - 🔧 **剩余**：Ghidra 中 COPY output 不 implied 时走 `pushSymbolDetail` → `getHigh()->getSymbol()`。但 COPY 的 constant input **不**在 HighVariable instance（merge跳过constant）。Ghidra 实际靠 **implied COPY 递归** 到 COPY input → `pushVnExplicit(constant)` → `pushConstant` 渲染数值。`::config.conf` 的字段名渲染不通过 mapentry，而通过 **PTRSUB op**（RulePtrArith 产生）。Rugra 中 RulePtrArith 不触发（INT_ADD input 无 Pointer 类型），所以没有 PTRSUB，所以没有字段渲染。
+    - **下一步**：让 RulePtrArith 触发——需要 INT_ADD input 有 Pointer(Struct) 类型。当前在 merge 阶段 COPY output 没有从 COPY input 继承 Pointer 类型。Ghidra 中类型继承通过 `HighVariable::updateType()`（variable.cc:410）遍历 instance 选 best type。
     - ✅ **mapentry 跨 SSA rename 保留**（c95ec5a）：heritage.rs rename_direct 在 op-input 和 MULTIEQUAL phi-input 两处保留 mapentry
     - ✅ **printc 接入**（1ae9d04）：doc_function Pass 1/2/2b/2c/3 构建 (space,offset)→entry 映射，从 COPY(global_addr→reg)、INT_ADD(base,const_off) 固定点、COPY 链传播、MULTIEQUAL phi 传播；op_store 早期 mapentry shortcut 渲染 `gname->field = value`
     - ✅ **验证**：`grep -c -- "->" result/curl_cur.c` 返回 **2**（`configurable->useragent = lVar9;` × 2 在 getparameter_constprop_0），1292/1292 tests pass，defects=0 numbering=0
