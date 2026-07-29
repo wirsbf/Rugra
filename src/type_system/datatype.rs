@@ -581,10 +581,14 @@ impl Datatype {
         let key = |dt: &Datatype| -> u8 {
             match dt {
                 Datatype::Pointer(p) => {
-                    // Pointer to Struct/Union: submeta 4 (SUB_PTR_STRUCT)
+                    // Pointer to Struct/Union: should be preferred over Int
+                    // for getTypeRepresentative. Ghidra uses SUB_PTR_STRUCT=4
+                    // which is less than SUB_INT_PLAIN=17. In Rugra's metatype
+                    // enum, Int=3 and Struct=8, so we need a key < 3 to make
+                    // Pointer(Struct) win. Use key=1 (below all metatypes).
                     match p.ptr_to.as_ref() {
-                        Datatype::Struct(_) | Datatype::Union(_) => 4,
-                        _ => 6, // Plain pointer: SUB_PTR
+                        Datatype::Struct(_) | Datatype::Union(_) => 1,
+                        _ => 6, // Plain pointer: SUB_PTR equivalent
                     }
                 }
                 _ => dt.get_metatype() as u8,
