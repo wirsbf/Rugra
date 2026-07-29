@@ -3364,7 +3364,6 @@ impl Heritage {
         // here to also mark written varnodes (for stack push).
         for vn_ref in &vbank.loc_tree {
             let mut vn = vn_ref.0.write().unwrap();
-            // Skip constants and annotations (they don't participate in SSA)
             let is_known_side_effect = vn.is_constant() || vn.is_annotation();
             if !is_known_side_effect {
                 vn.set_active_heritage();
