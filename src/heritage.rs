@@ -3521,12 +3521,20 @@ impl Heritage {
                             // (SEMANTIC #1)
                             let mut vnnew: Arc<RwLock<Varnode>>;
                             if stack.is_empty() {
-                                let (vnin_size, vnin_space, vnin_off) = {
+                                let (vnin_size, vnin_space, vnin_off, vnin_mapentry) = {
                                     let r = vnin_arc.read().unwrap();
-                                    (r.size, r.address_space, r.loc.as_u64())
+                                    (r.size, r.address_space, r.loc.as_u64(), r.mapentry.clone())
                                 };
                                 let new_vn = vbank.create_with_space(vnin_size, vnin_space, vnin_off);
                                 let promoted = vbank.set_input_varnode(new_vn);
+                                // Preserve mapentry from the original free read
+                                // varnode onto the promoted SSA input. This
+                                // ensures mapGlobals-stamped mapentries survive
+                                // Heritage rename, enabling ->field rendering
+                                // at print time.
+                                if vnin_mapentry.is_some() {
+                                    promoted.write().unwrap().mapentry = vnin_mapentry;
+                                }
                                 stack.push(promoted.clone());
                                 vnnew = promoted;
                             } else {
@@ -3561,12 +3569,15 @@ impl Heritage {
                                 if stack.len() == 1 {
                                     // cc:2510-2513: stack has only the INDIRECT entry;
                                     // create new input and insert at bottom.
-                                    let (vnin_size, vnin_space, vnin_off) = {
+                                    let (vnin_size, vnin_space, vnin_off, vnin_mapentry) = {
                                         let r = vnin_arc.read().unwrap();
-                                        (r.size, r.address_space, r.loc.as_u64())
+                                        (r.size, r.address_space, r.loc.as_u64(), r.mapentry.clone())
                                     };
                                     let new_vn = vbank.create_with_space(vnin_size, vnin_space, vnin_off);
                                     let promoted = vbank.set_input_varnode(new_vn);
+                                    if vnin_mapentry.is_some() {
+                                        promoted.write().unwrap().mapentry = vnin_mapentry;
+                                    }
                                     stack.insert(0, promoted.clone());
                                     vnnew = promoted;
                                 } else {

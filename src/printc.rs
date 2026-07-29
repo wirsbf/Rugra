@@ -4157,7 +4157,12 @@ impl PrintC {
             (vn.get_space(), vn.get_offset())
         };
         // 1. Find the value-defining op for this address varnode.
-        let def_op_arc = self.value_def_map.get(&(space, off)).cloned()?;
+        //    Try both value_def_map (block-level ops) AND direct def (SSA).
+        let def_op_arc = self.value_def_map.get(&(space, off)).cloned()
+            .or_else(|| {
+                addr_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade())
+            });
+        let def_op_arc = def_op_arc?;
         let def_op = def_op_arc.read().unwrap();
         if def_op.opcode != OpCode::CPUI_INT_ADD || def_op.inrefs.len() != 2 {
             return None;
@@ -4188,15 +4193,21 @@ impl PrintC {
         let rb = resolved_base.read().unwrap();
         let base_space = rb.get_space();
         let base_off = rb.get_offset();
-        if !matches!(base_space, AddressSpace::Const | AddressSpace::Ram) {
-            return None;
+        if matches!(base_space, AddressSpace::Const | AddressSpace::Ram) {
+            // Direct Const/Ram base
+            let field_addr = base_off.wrapping_add(offset);
+            drop(rb);
+            return Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, field_addr)
+                .map(|(g, f, _)| (g, f));
         }
-        let base_addr = base_off;
+        // Base is Register/Unique — chase its COPY def to find Ram address
         drop(rb);
-        // 4. Compute the full field address and resolve to (gname, fname).
-        let field_addr = base_addr.wrapping_add(offset);
-        Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, field_addr)
-            .map(|(g, f, _)| (g, f))
+        if let Some(field_addr) = Self::chase_constant_address(&resolved_base) {
+            let full_addr = field_addr.wrapping_add(offset);
+            return Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, full_addr)
+                .map(|(g, f, _)| (g, f));
+        }
+        None
     }
 
     // RUGRA-GLUE: push_input (no Ghidra counterpart found)
