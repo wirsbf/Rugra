@@ -359,25 +359,21 @@ impl Merge {
     ///   - is not implied,
     ///   - is not a proto-partial (CONCAT piece), and
     ///   - is not a spacebase (stack/register pointer).
+    /// Ghidra: merge.cc:255 Merge::mergeTestBasic
+    /// Faithful port. Ghidra checks: hasCover, isImplied, isProtoPartial,
+    /// isSpacebase. NOT constant/free (Rugra previously skipped those,
+    /// losing COPY merges for global address constants).
     fn merge_test_basic(vn: &Varnode) -> bool {
-        if vn.is_constant() {
-            return false;
-        }
-        if vn.flags & varnode_flags::ANNOTATION != 0 {
-            return false;
-        }
-        if vn.is_free() {
-            return false;
-        }
-        if vn.is_implied() {
-            return false;
-        }
-        if vn.flags & varnode_flags::PROTO_PARTIAL != 0 {
-            return false;
-        }
-        if vn.is_spacebase() {
-            return false;
-        }
+        // Ghidra cc:259: if (!vn->hasCover()) return false;
+        // hasCover = insert && !annotation && !externalrt
+        if vn.flags & varnode_flags::INSERT == 0 { return false; }
+        if vn.flags & varnode_flags::ANNOTATION != 0 { return false; }
+        // Ghidra cc:260: if (vn->isImplied()) return false;
+        if vn.is_implied() { return false; }
+        // Ghidra cc:261: if (vn->isProtoPartial()) return false;
+        if vn.flags & varnode_flags::PROTO_PARTIAL != 0 { return false; }
+        // Ghidra cc:262: if (vn->isSpacebase()) return false;
+        if vn.is_spacebase() { return false; }
         true
     }
 
@@ -1030,11 +1026,36 @@ impl Merge {
                     if !self.merge_test_required(&high_out, &high_in) {
                         continue;
                     }
-                    // merge(high_out, high_in, false) — cover intersection
-                    // returns false (skip), never snips (merge.cc:1565-1575).
-                    // merge_speculative mirrors Merge::merge exactly:
-                    // ptr_eq->true, cover intersect->false(skip), else merge.
-                    let _ = self.merge_speculative(&high_out, &high_in);
+                // Ghidra merge.cc:346: merge(high_out, high_in, false) —
+                // this is a REQUIRED merge (non-speculative). Cover check
+                // is NOT done for mergeOpcode. Ghidra's Merge::merge does
+                // check cover, but mergeOpcode calls it after
+                // mergeTestRequired (which already passed). If cover
+                // intersects, Ghidra's merge does snip/trim, but does NOT
+                // skip the merge entirely. For Rugra's data model, use
+                // merge_speculative (which skips on cover intersect) is
+                // WRONG here — it loses Symbol propagation. Use must-merge.
+                if std::sync::Arc::ptr_eq(&high_out, &high_in) {
+                    continue; // Already same HighVariable
+                }
+                // Must-merge: merge instances without cover check.
+                // Mirrors Ghidra's HighVariable::mergeInternal (variable.cc:639-679).
+                let instances2 = high_in.read().unwrap().instances.clone();
+                let anchor = {
+                    let h1 = high_out.read().unwrap();
+                    h1.instances.first().cloned()
+                };
+                if let Some(anchor) = anchor {
+                    for inst in instances2 {
+                        let same = {
+                            let i = inst.read().unwrap();
+                            i.high.as_ref().map(|h| Arc::ptr_eq(h, &high_out)).unwrap_or(false)
+                        };
+                        if !same {
+                            self.merge_force(anchor.clone(), inst);
+                        }
+                    }
+                }
                 }
             }
         }
