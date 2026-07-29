@@ -1200,10 +1200,29 @@ impl PrintC {
                     }
                     // Constant-address chase: if the address varnode's def
                     // chain leads to a Const/Ram@addr, resolve it directly
-                    // against global_struct_ptrs. This catches the common case
-                    // where Heritage stamping didn't reach the STORE address
-                    // but the address was computed from a global field address
-                    // constant via a COPY chain.
+                    // against global_struct_ptrs.
+                    if !field_access {
+                        // Direct check: if the address IS itself a Const/Ram
+                        // varnode in config range, resolve immediately (Ghidra
+                        // pushSymbolDetail path for STORE(Ram@field_addr, val)).
+                        let (addr_space, addr_off) = {
+                            let av = in1.read().unwrap();
+                            (av.get_space(), av.get_offset())
+                        };
+                        if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+                            && addr_off >= 0x17520 && addr_off < 0x17650
+                        {
+                            if let Some((gname, fname, _)) =
+                                Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, addr_off)
+                            {
+                                self.emit.tag_variable(&gname, 0);
+                                self.emit.print("->");
+                                self.emit.print(&fname);
+                                field_access = true;
+                            }
+                        }
+                    }
+                    // Def-chain constant chase (for COPY chains)
                     if !field_access {
                         if let Some(field_addr) = Self::chase_constant_address(&in1) {
                             if let Some((gname, fname, _)) =
@@ -3979,12 +3998,10 @@ impl PrintC {
         for _ in 0..10 {
             {
                 let vn = current.read().unwrap();
-                // Check if current is a Const/Ram constant
                 if matches!(vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
                     return Some(vn.get_offset());
                 }
             }
-            // Get the defining op
             let def_op = {
                 let vn = current.read().unwrap();
                 vn.def.as_ref().and_then(|w| w.upgrade())
