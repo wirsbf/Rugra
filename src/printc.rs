@@ -1229,7 +1229,6 @@ impl PrintC {
                             (av.get_space(), av.get_offset())
                         };
                         if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
-                            && addr_off >= 0x17520 && addr_off < 0x17650
                         {
                             if let Some((gname, fname, _)) =
                                 Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, addr_off)
