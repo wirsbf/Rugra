@@ -5337,6 +5337,10 @@ impl PrintLanguage for PrintC {
             use crate::space::AddressSpace;
             use std::collections::HashMap as StdHashMap;
             // Pass 1: base entries from COPY(global_addr → reg).
+            // Handles BOTH the struct base address (0x17520) and field
+            // addresses (0x17588, 0x175b8, etc.) that SLEIGH resolves via
+            // RIP-relative addressing. SLEIGH generates COPY(Ram@field_addr)
+            // for `lea reg, [rip+disp]` where disp points directly to a field.
             let mut entry_by_key: StdHashMap<(AddressSpace, u64), std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> = StdHashMap::new();
             for i in 0..fd.bblocks.get_size() {
                 if let Some(block_arc) = fd.bblocks.get_block(i) {
@@ -5353,6 +5357,7 @@ impl PrintLanguage for PrintC {
                             continue;
                         }
                         let src_off = src_vn.get_offset();
+                        // Case 1: exact match on global struct pointer base address
                         if let Some(dt) = fd.global_struct_ptrs.get(&src_off) {
                             if let Some(entry) = make_global_symbol_entry_printc(src_off, dt.clone()) {
                                 let key = {
@@ -5360,6 +5365,31 @@ impl PrintLanguage for PrintC {
                                     (o.get_space(), o.get_offset())
                                 };
                                 entry_by_key.entry(key).or_insert(entry);
+                            }
+                        }
+                        // Case 2: address falls within a known global struct's
+                        // range (field address). SLEIGH resolves RIP-relative
+                        // `lea reg, [rip+disp_to_field]` to COPY(Ram@field_addr).
+                        // We check if field_addr is in [base, base+struct_size)
+                        // and stamp the struct pointer type on it.
+                        if !fd.global_struct_ptrs.is_empty() {
+                            use crate::type_system::datatype::Datatype;
+                            for (&base_addr, ptr_dt) in &self.global_struct_ptrs_snapshot {
+                                if let Datatype::Pointer(tp) = ptr_dt.as_ref() {
+                                    if let Datatype::Struct(ts) = tp.ptr_to.as_ref() {
+                                        let struct_size = ts.base.size as u64;
+                                        if src_off >= base_addr && src_off < base_addr + struct_size && src_off != base_addr {
+                                            // Field address — stamp the struct pointer type
+                                            if let Some(entry) = make_global_symbol_entry_printc(src_off, ptr_dt.clone()) {
+                                                let key = {
+                                                    let o = out_arc.read().unwrap();
+                                                    (o.get_space(), o.get_offset())
+                                                };
+                                                entry_by_key.entry(key).or_insert(entry);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
