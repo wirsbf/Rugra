@@ -5342,6 +5342,12 @@ impl PrintLanguage for PrintC {
             // RIP-relative addressing. SLEIGH generates COPY(Ram@field_addr)
             // for `lea reg, [rip+disp]` where disp points directly to a field.
             let mut entry_by_key: StdHashMap<(AddressSpace, u64), std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> = StdHashMap::new();
+            // Arc-identity map: distinguishes SSA-renamed varnodes that share
+            // the same physical (space, offset) but represent different values.
+            // Critical for Register space where multiple field addresses
+            // (0x17588, 0x175b8, ...) all COPY to RSI (Register@0x38) but each
+            // COPY output is a distinct Arc<Varnode> holding a different address.
+            let mut entry_by_arc: StdHashMap<usize, std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>> = StdHashMap::new();
             for i in 0..fd.bblocks.get_size() {
                 if let Some(block_arc) = fd.bblocks.get_block(i) {
                     let block = block_arc.read().unwrap();
@@ -5364,7 +5370,10 @@ impl PrintLanguage for PrintC {
                                     let o = out_arc.read().unwrap();
                                     (o.get_space(), o.get_offset())
                                 };
-                                entry_by_key.entry(key).or_insert(entry);
+                                entry_by_key.entry(key).or_insert(entry.clone());
+                                // Also record by Arc identity for SSA disambiguation
+                                let arc_id = Arc::as_ptr(out_arc) as usize;
+                                entry_by_arc.entry(arc_id).or_insert(entry);
                             }
                         }
                         // Case 2: address falls within a known global struct's
@@ -5385,7 +5394,11 @@ impl PrintLanguage for PrintC {
                                                     let o = out_arc.read().unwrap();
                                                     (o.get_space(), o.get_offset())
                                                 };
-                                                entry_by_key.entry(key).or_insert(entry);
+                                                entry_by_key.entry(key).or_insert(entry.clone());
+                                                // Arc-identity keying: each COPY output is a
+                                                // distinct SSA varnode even if same physical reg
+                                                let arc_id = Arc::as_ptr(out_arc) as usize;
+                                                entry_by_arc.insert(arc_id, entry);
                                             }
                                         }
                                     }
@@ -5466,6 +5479,7 @@ impl PrintLanguage for PrintC {
             // the config pointer via a COPY chain) have entries available.
             // Original order (Pass 2 then 2b) failed because Pass 2 ran before
             // COPY propagation gave the INT_ADD base input its entry.
+            // Also propagates Arc-identity entries for SSA disambiguation.
             for _iteration in 0..6 {
                 let mut added = false;
                 for i in 0..fd.bblocks.get_size() {
@@ -5477,19 +5491,33 @@ impl PrintLanguage for PrintC {
                                 continue;
                             }
                             let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_arc_id = Arc::as_ptr(out_arc) as usize;
+                            if entry_by_arc.contains_key(&out_arc_id) {
+                                continue;
+                            }
                             let out_key = {
                                 let o = out_arc.read().unwrap();
                                 (o.get_space(), o.get_offset())
                             };
-                            if entry_by_key.contains_key(&out_key) {
+                            if entry_by_key.contains_key(&out_key) && !matches!(out_key.0, AddressSpace::Register) {
                                 continue;
                             }
-                            let src_key = {
-                                let s = op.inrefs[0].read().unwrap();
-                                (s.get_space(), s.get_offset())
-                            };
-                            if let Some(entry) = entry_by_key.get(&src_key).cloned() {
-                                entry_by_key.insert(out_key, entry);
+                            // Check both Arc-identity and (space,offset) for source
+                            let src_arc = &op.inrefs[0];
+                            let src_arc_id = Arc::as_ptr(src_arc) as usize;
+                            let entry = entry_by_arc.get(&src_arc_id).cloned()
+                                .or_else(|| {
+                                    let src_key = {
+                                        let s = src_arc.read().unwrap();
+                                        (s.get_space(), s.get_offset())
+                                    };
+                                    entry_by_key.get(&src_key).cloned()
+                                });
+                            if let Some(entry) = entry {
+                                entry_by_arc.insert(out_arc_id, entry.clone());
+                                if !matches!(out_key.0, AddressSpace::Register) {
+                                    entry_by_key.entry(out_key).or_insert(entry);
+                                }
                                 added = true;
                             }
                         }
@@ -5887,15 +5915,22 @@ impl PrintLanguage for PrintC {
                 if !added { break; }
             }
             // Pass 3: apply the collected entries to every matching varnode.
+            // For Register-space varnodes, prefer Arc-identity match (each SSA
+            // varnode is distinct even if same physical register). For other
+            // spaces, use (space, offset) match.
             for vn_ref in &fd.vbank.loc_tree {
+                let arc_id = Arc::as_ptr(&vn_ref.0) as usize;
                 let key = {
                     let vn = vn_ref.0.read().unwrap();
                     (vn.get_space(), vn.get_offset())
                 };
-                if let Some(entry) = entry_by_key.get(&key) {
+                // Arc-identity first (handles SSA-disambiguated Register varnodes)
+                let entry = entry_by_arc.get(&arc_id).cloned()
+                    .or_else(|| entry_by_key.get(&key).cloned());
+                if let Some(entry) = entry {
                     let mut vn_w = vn_ref.0.write().unwrap();
                     if vn_w.mapentry.is_none() {
-                        vn_w.mapentry = Some(entry.clone());
+                        vn_w.mapentry = Some(entry);
                     }
                 }
             }
