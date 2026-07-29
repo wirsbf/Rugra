@@ -874,6 +874,25 @@ impl PrintC {
         use crate::space::AddressSpace;
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
+            // Ghidra pushSymbolDetail: if this constant is a global struct
+            // field address (Ram/Const@addr in config range), render as
+            // gname->fieldname instead of a bare number. This handles LOAD
+            // reads like LOAD(Ram@0x17558) → ::config.headerfile.
+            let off = vn.get_offset();
+            if matches!(vn.get_space(), AddressSpace::Const | AddressSpace::Ram) {
+                if let Some((gname, fname, _)) =
+                    Self::resolve_global_struct_field(&self.global_struct_ptrs_snapshot, off)
+                {
+                    return Atom {
+                        name: format!("{}->{}", gname, fname),
+                        type_: TagType::FieldToken,
+                        highlight: SyntaxHighlight::NoColor,
+                        op_index: -1,
+                        payload: AtomPayload::IntValue(off),
+                        offset: 0,
+                    };
+                }
+            }
             // pushConstant (printc.cc:1946) - emit the literal value.
             let val = vn.get_offset();
             let name = format_constant_value(val);
