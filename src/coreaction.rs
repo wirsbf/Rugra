@@ -4185,14 +4185,32 @@ fn seed_global_struct_pointers(
             if let Some(ref out_arc) = op.output {
             let src = in0.read().unwrap();
             let off = src.get_offset();
+            // Match exact global base address (e.g. 0x17520 = ::config)
             if known.contains_key(&off)
                 && matches!(src.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
             {
-                let out_vn = out_arc.read().unwrap();
                 if let Some(dt) = known.get(&off) {
+                    let out_vn = out_arc.read().unwrap();
                     temps.insert(vn_id(&out_vn), dt.clone());
                 }
             }
+            // Also match field addresses within struct range
+            // (e.g. 0x17588 = ::config.showerror at offset 0x68)
+            use crate::type_system::datatype::Datatype;
+            for (&base_addr, dt) in &known {
+                if let Datatype::Pointer(tp) = dt.as_ref() {
+                    if let Datatype::Struct(ts) = tp.ptr_to.as_ref() {
+                        let sz = ts.base.size as u64;
+                        if off >= base_addr && off < base_addr + sz && off != base_addr
+                            && matches!(src.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+                        {
+                            let out_vn = out_arc.read().unwrap();
+                            temps.insert(vn_id(&out_vn), dt.clone());
+                        }
+                    }
+                }
+            }
+            drop(src);
             }
         }
     }
