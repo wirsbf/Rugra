@@ -740,6 +740,13 @@ pub fn build_simplify_pool() -> ActionPool {
     // Rule2Comp2Mult (which does the reverse) causes an infinite ping-pong;
     // Ghidra avoids it by PHASE SEPARATION (main pool converges first, then
     // cleanup pool runs once).
+    // Rugra-local: RulePtrArith in simplify pool (before RulePropagateCopy)
+    // to convert INT_ADD(Pointer(Struct), const) → PTRSUB before COPY
+    // propagation dead-codes the INT_ADD. Requires InferTypes to have
+    // run (types must be set), which is why StartTypes+InferTypes are
+    // now placed before stackstall in the mainloop.
+    pool.add_rule(Box::new(RulePtrArith::new()));
+
     pool
 }
 
@@ -919,6 +926,11 @@ impl ActionDatabase {
         // the CFG is complete. It was moved from here (Ghidra :5490) to avoid
         // false-positive unreachable detection when bblocks are incomplete.
         mainloop.add_action(Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
+        // StartTypes: flip has_type_recovery_started so InferTypes can work
+        // from the first mainloop iteration. Ghidra runs StartTypes in
+        // fullloop (cc:5687), but Rugra needs it earlier so RulePtrArith
+        // can fire before Heritage over-renaming dead-codes INT_ADDs.
+        mainloop.add_action(Box::new(crate::coreaction::ActionStartTypes::new()));
         mainloop.add_action(Box::new(ActionHeritage::new())); // :5492
         mainloop.add_action(Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
         mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497
@@ -943,6 +955,11 @@ impl ActionDatabase {
         // oppool1 (simplifypool) + convergence handles all simplification.
         // Verified redundant: cargo test 952/952, compare_ghidra defects=0.
 
+        // Faithful to coreaction.cc:5508: ActionInferTypes runs in mainloop
+        // BEFORE stackstall (Ghidra cc:5508 before cc:5509). Types must be
+        // available for RulePtrArith in simplify pool.
+        mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
+
         // --- stackstall (coreaction.cc:5509, repeatapply) ---
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         // oppool1 (coreaction.cc:5511, repeatapply)
@@ -966,11 +983,7 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
         mainloop.add_action(Box::new(ActionDeadCode::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
-        // Faithful to coreaction.cc:5508: ActionInferTypes runs in mainloop
-        // after RestructureVarnode/Spacebase/NonzeroMask. Propagates Datatype
-        // across data-flow so HighVariables get typed prefixes (pcVar/iVar/...)
-        // instead of falling back to uVar. Self-limited to 7 passes.
-        mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
+        // ActionInferTypes already runs above (before stackstall).
         // oppool2 (coreaction.cc:5662, actprop2) — type-recovery Rules that
         // CONSUME the Datatypes produced by ActionInferTypes (RulePtrArith,
         // RuleStructOffset0, RuleLoadVarnode, RuleStoreVarnode). Must run
