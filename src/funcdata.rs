@@ -4123,6 +4123,89 @@ impl Funcdata {
             }
         }
         eprintln!("[INJECT] {} phase3 done marked_input={}", self.name, marked_input.len());
+
+        // Phase 3.5: Use-def wiring pass (Ghidra VarnodeBank::xref dedup).
+        // Wire Register-space free inputs to prior written outputs at the
+        // same offset, but ONLY within the same basic block. Cross-block
+        // wiring would prevent Heritage from placing Phi nodes correctly.
+        {
+            // Map each op to its block index
+            let op_block: std::collections::HashMap<usize, usize> = {
+                let mut map = std::collections::HashMap::new();
+                for (blk_idx, block_arc) in self.bblocks.blocks.iter().enumerate() {
+                    let block = block_arc.read().unwrap();
+                    for op_ref in &block.get_ops() {
+                        // Find op index in op_refs
+                        let op_ptr = Arc::as_ptr(&op_ref.0) as usize;
+                        for (i, o) in op_refs.iter().enumerate() {
+                            if Arc::as_ptr(&o.0) as usize == op_ptr {
+                                map.insert(i, blk_idx);
+                                break;
+                            }
+                        }
+                    }
+                }
+                map
+            };
+
+            // Per-block writer map: block_idx → (Register offset → written varnode)
+            let mut block_writers: std::collections::HashMap<usize, std::collections::HashMap<u64, Arc<RwLock<crate::varnode::Varnode>>>> =
+                std::collections::HashMap::new();
+            let mut rewired = 0i32;
+
+            for (op_idx, op_ref) in op_refs.iter().enumerate() {
+                let blk_idx = op_block.get(&op_idx).copied().unwrap_or(0);
+                let writers = block_writers.entry(blk_idx).or_default();
+
+                // Process inputs: rewire free inputs to block-local writer
+                let inrefs_snapshot: Vec<Arc<RwLock<crate::varnode::Varnode>>> = {
+                    let op = op_ref.0.read().unwrap();
+                    op.inrefs.clone()
+                };
+                let mut new_inrefs = Vec::with_capacity(inrefs_snapshot.len());
+                for in_arc in &inrefs_snapshot {
+                    let needs_rewire = {
+                        let vn = in_arc.read().unwrap();
+                        vn.get_space() == AddressSpace::Register
+                            && !vn.is_written()
+                            && !vn.is_input()
+                            && !vn.is_constant()
+                            && writers.contains_key(&vn.get_offset())
+                    };
+                    if needs_rewire {
+                        let off = in_arc.read().unwrap().get_offset();
+                        if let Some(written) = writers.get(&off) {
+                            if !Arc::ptr_eq(written, in_arc) {
+                                written.write().unwrap().descend.push(Arc::downgrade(&op_ref.0));
+                                new_inrefs.push(written.clone());
+                                rewired += 1;
+                                continue;
+                            }
+                        }
+                    }
+                    new_inrefs.push(in_arc.clone());
+                }
+                let changed = new_inrefs.len() != inrefs_snapshot.len()
+                    || new_inrefs.iter().zip(inrefs_snapshot.iter())
+                        .any(|(n, o)| !Arc::ptr_eq(n, o));
+                if changed {
+                    op_ref.0.write().unwrap().inrefs = new_inrefs;
+                }
+                // Track output as block-local writer
+                let op = op_ref.0.read().unwrap();
+                if let Some(ref out_arc) = op.output {
+                    let ov = out_arc.read().unwrap();
+                    if ov.get_space() == AddressSpace::Register {
+                        let off = ov.get_offset();
+                        drop(ov);
+                        writers.insert(off, out_arc.clone());
+                    }
+                }
+            }
+            if rewired > 0 {
+                eprintln!("[INJECT] {} phase3.5 rewired {} intra-block use-def links", self.name, rewired);
+            }
+        }
         // NOTE: Phase 4 global use-def linking is disabled — it correctly
         // resolves stack symbols (verified) but perturbs typeop inference
         // (struct-pointer types leak into switch/arith contexts). varmap's
