@@ -528,10 +528,16 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
     - ✅ **printc 接入**（1ae9d04）：doc_function Pass 1/2/2b/2c/3 构建 (space,offset)→entry 映射，从 COPY(global_addr→reg)、INT_ADD(base,const_off) 固定点、COPY 链传播、MULTIEQUAL phi 传播；op_store 早期 mapentry shortcut 渲染 `gname->field = value`
     - ✅ **验证**：`grep -c -- "->" result/curl_cur.c` 返回 **2**（`configurable->useragent = lVar9;` × 2 在 getparameter_constprop_0），1292/1292 tests pass，defects=0 numbering=0
     - ✅ **COPY 传播提前 + PTRSUB 支持**（83c5113）：Pass 2b (COPY链传播) 移到 Pass 2 (INT_ADD扫描) 之前；Pass 2 接受 PTRSUB 操作码
-    - 🔧 **覆盖率限制根因**（并发 Agent A + B 诊断）：
-      - **Agent A**：打印时 curl 中**无 PTRSUB 操作**（全部是 INT_ADD），RulePtrArith 未触发转换。Pass 2 的 INT_ADD 基址输入是 `Register@0x20`（RSP 栈指针）和 `Register@0x110`，**不是 config 指针寄存器**。main() 中 config 字段通过栈访问（RSP+offset），非 INT_ADD(config_ptr, off)。
-      - **Agent B**：2 处 `->field` 渲染在 `getparameter_constprop_0`（config 指针直接可用），不在 main()。parseconfig/getparameter 中 config 经**函数参数**传递（RSI），非 `COPY(0x17520→reg)`。`known_param_types` 标记为 `"ptr"`（→ `void *`），不是 `Configurable *`。
-      - **扩大覆盖度需要**：(a) interprocedural 参数类型传播——从调用点 `COPY(0x17520)` 传播到被调用者的 INPUT 参数 varnode；(b) 或在 driver 中为每个函数的参数设置 struct pointer 类型（`fd.param_struct_ptrs: HashMap<usize, Arc<Datatype>>`）。这是 Ghidra `ActionPrototypeTypes` + `Funcdata::linkSymbolReference` 的跨函数版本。
+    - 🔧 **覆盖率限制根因**（并发 Agent A + B + 二轮 Agent 1 + 2 诊断）：
+      - **Agent A**：打印时 curl 中**无 PTRSUB 操作**（全部是 INT_ADD），RulePtrArith 未触发转换。Pass 2 的 INT_ADD 基址输入是 `Register@0x20`（RSP 栈指针），不是 config 指针寄存器。main() 中 config 字段通过栈访问。
+      - **Agent B**：2 处 `->field` 渲染在 `getparameter_constprop_0`。parseconfig/getparameter 中 config 经**函数参数**传递。`known_param_types` 已更新为 `configurable_ptr`（c36b867）。
+      - **STORE→LOAD 栈 spill 传播**（9a573ac）：Pass 2d/2e 处理 config 指针经栈 spill 的链路，`->field` 从 2 增至 **6**。
+      - **二轮 Agent 2 诊断**：剩余 80 个 `->` 缺口的三个类别：
+        - **Gap 1 (~25-30)**：main() 的全局 STORE 操作（`::config.conf = 0` 等）在上游管线中丢失——main 函数体渲染不完整（`*piVar5 = 0x2855` 占位符），config 字段 STORE 未到达 printc。修复需要 main 函数体渲染管线改进。
+        - **Gap 2 (~14)**：`local_5b8->useragent` — local_5b8 是 nextarg 参数（char*），非 spilled config_ptr。getparameter 函数体渲染损坏（35 参数 + `(bVar);` 占位符）。
+        - **Gap 3 (~7)**：`bar->` (ProgressData) — progressbarinit 参数截断已修复（known_n=1），但函数体仍渲染 `*piVar1`。ProgressData 类型已注册（cafce53），`progressdata_ptr` param type 已添加。
+      - **URLGlob**（cafce53）：`glob_expand` @ 0x17660 已注册为 URLGlob* 全局指针。LOAD 输出传播已添加（0f3d1f4）。但 glob_* 函数体渲染损坏（`*piVar1 = ...`），0x17660 未出现在 glob_word 的 LOAD 地址中。
+      - **扩大覆盖度的真正瓶颈**：不是类型传播基础设施（已完备），而是**函数体渲染质量**——多个函数（main, getparameter, glob_*）的 STORE/LOAD 操作渲染为 `*piVar = ...` 占位符，而非结构化输出。需要改进 ActionBlockStructure/ActionNodeJoin/控制流结构化以正确渲染函数体。
 11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (✅ 已 L3, 2026-07-27) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
 
     **✅ 2026-07-27 已修复**：新增 `cast_input_ptr`（PTRSUB/PTRADD slot-0 pointer-fit + CAST 插入）+ `ptr_input_reqtype`（从 output pointer 类型派生 slot-0 reqtype）+ apply 接入 `cast_output` 第二轮遍历 + `output_metatype` 排除指针产生 op（PTRSUB/PTRADD/LOAD/CALL/COPY/etc. → None）+ apply 返回值修正（count>0 → CHANGE）+ 5 新单元测试（1292 全过）。剩余 `resolveUnion`/`checkPointerIssues`/完整 struct-field resolution 仍延后。
