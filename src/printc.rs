@@ -3964,7 +3964,6 @@ impl PrintC {
                 continue;
             }
             // Also chase through INT_ADD if one input has a mapentry
-            // (field offset computation: INT_ADD(base_with_entry, const_off))
             if op.opcode == OpCode::CPUI_INT_ADD && op.inrefs.len() == 2 {
                 for in_arc in &op.inrefs {
                     if let Some(ref entry) = in_arc.read().unwrap().mapentry {
@@ -5750,7 +5749,15 @@ impl PrintLanguage for PrintC {
                                 let v = op.inrefs[2].read().unwrap();
                                 (v.get_space(), v.get_offset())
                             };
-                            let val_entry = match entry_by_key.get(&val_key).cloned() {
+                            // Check both entry_by_key (from Pass 1/2 COPY chains)
+                            // AND the value varnode's direct mapentry (from
+                            // Heritage stamping). Heritage stamps mapentries on
+                            // global field-address varnodes that may be STOREd
+                            // to stack as part of config field access setup.
+                            let val_arc = &op.inrefs[2];
+                            let val_entry = entry_by_key.get(&val_key).cloned()
+                                .or_else(|| val_arc.read().unwrap().mapentry.clone());
+                            let val_entry = match val_entry {
                                 Some(e) => e,
                                 None => continue,
                             };
