@@ -5395,6 +5395,42 @@ impl PrintLanguage for PrintC {
                     }
                 }
             }
+            // Pass 1c: seed entries from LOAD of a global pointer address.
+            // When code does `LOAD(Ram@0x17660)` to read the global pointer
+            // value (e.g. glob_expand), the LOAD output holds the pointer.
+            // Stamp the global's mapentry on the LOAD output so downstream
+            // INT_ADD/COPY chains can resolve field accesses.
+            // Iterate to fixed point with COPY re-propagation below.
+            for _iteration in 0..4 {
+                let mut added = false;
+                for i in 0..fd.bblocks.get_size() {
+                    if let Some(block_arc) = fd.bblocks.get_block(i) {
+                        let block = block_arc.read().unwrap();
+                        for op_ref in &block.get_ops() {
+                            let op = op_ref.0.read().unwrap();
+                            if op.opcode != OpCode::CPUI_LOAD || op.inrefs.len() < 2 {
+                                continue;
+                            }
+                            let out_arc = match op.output.as_ref() { Some(o) => o, None => continue };
+                            let out_key = {
+                                let o = out_arc.read().unwrap();
+                                (o.get_space(), o.get_offset())
+                            };
+                            if entry_by_key.contains_key(&out_key) { continue; }
+                            // Check if the LOAD address is a known global struct ptr
+                            let addr_vn = op.inrefs[1].read().unwrap();
+                            let addr_off = addr_vn.get_offset();
+                            if let Some(dt) = fd.global_struct_ptrs.get(&addr_off) {
+                                if let Some(entry) = make_global_symbol_entry_printc(addr_off, dt.clone()) {
+                                    entry_by_key.insert(out_key, entry);
+                                    added = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !added { break; }
+            }
             // Pass 2b-FIRST: propagate base entries through COPY chains BEFORE
             // the INT_ADD field scan, so that INT_ADD inputs (which often read
             // the config pointer via a COPY chain) have entries available.
