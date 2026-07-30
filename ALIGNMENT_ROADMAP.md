@@ -940,3 +940,35 @@ write output at same space/offset/size），找不到再 `find_or_create_input_s
 做唯一性 —— 每个 op output 是新 varnode（新 create_index），input 通过 xref 找
 "最近定义"。Rugra 的 find_or_create_input_space 永远找 create_index=0 的 input，
 跳过了中间的 written 定义。
+
+### P5 Step 2 最终成果（2026-07-30）— leaks 155→0 ✅
+
+**关键澄清**：之前所有 "leaks=155" 分析基于**旧文件** result/curl_cur.c
+（06:36, is_dead 修复前的 build）。curl_decompile.rs 只 print 到 stdout，
+不写 result/curl_cur.c。重新用最新 build 生成后：
+
+| 指标 | 修复前 | 修复后 | 变化 |
+|---|---|---|---|
+| `*pVar=0xADDR` 泄漏 | 155 | **0** | **完全消除 ✅** |
+| `->field` | 9 | 9 | 保留 ✅ |
+| defects | 0 | 0 | 无回归 ✅ |
+| numbering | 0 | 0-1 (非确定) | 见下 |
+| 1292 tests | pass | pass | 无回归 ✅ |
+
+**实现 (d791ee8)**:
+1. emit_block_ops 加 is_dead() check (对齐 emit_block_basic_rpn +
+   printc.cc:2696)。之前 emit_block_ops 遍历 bblock op list (非 alivelist),
+   不检查 DEAD flag, 导致 ActionDeadCode 标记的 return-addr STORE 仍被渲染。
+2. ActionDeadCode 加 return-addr STORE 保守消除 (CONSERVATIVE DOWNGRADE
+   per 铁律 1.5): 按 value=Const@[.text] 模式消除 push88 STORE。SLEIGH FFI
+   把 \$(STACKPTR) 解析成 Register@0x20 而非 Stack spacebase, 导致
+   RuleStoreVarnode 失败; 在 SLEIGH spacebase 基础设施补齐前, 这是必要的
+   保守降级。
+
+**预先存在的非确定性 (不是我引入的)**:
+- 禁用 ret-addr elimination 后, 两次 curl 运行仍 NON-DETERMINISTIC
+  (变量名编号 bVar21↔bVar22 等变化)。
+- leaks=0 和 ->field=9 在 3 次运行中**完全稳定** (确定的)。
+- 非确定性源: HighVariable 命名顺序的 HashMap 迭代 (待定位)。
+- 这是 P5 之前就存在的问题, eb0e70b (BTreeMap for config_writers) 只修了
+  一部分, 还有其他 HashMap 非确定性源。
