@@ -774,3 +774,34 @@ config 访问 (114 个 `::config.X`) 全部丢失，因为：
 ### 当前状态锁定
 - `->field=9` (4 函数, deterministic), 1292/1292 tests, defects=0, numbering=0 (1b3c406)。
 - main() 的 `->field` / `::config.field` 覆盖**不是 printc bug**，是 IR 上游多子系统缺口。本轮锁定诊断 + 修复顺序，禁止 lifter 捷径。
+
+### P5 Step 1 构建清单（2026-07-30 sub-agent gap analysis）
+
+**关键发现**：`src/heritage.rs:1105` 的 `guard_calls` stub 是**死代码**（无人调用）。真正实现是 `guard_calls_range_with_space` (`src/heritage.rs:1845-1979`)，由 `guard_range` (:1331) 和 per-space heritage loop (:3026) 调用。它有 **3 个 load-bearing 缺口**：
+
+| 缺口 | Ghidra (file:line) | Rugra (file:line) | 影响 |
+|---|---|---|---|
+| `has_effect` 返回 0 (stub) | fspec.cc:4236-4243 | src/fspec.rs:1564 | 所有 stack slot 被判 unknown_effect，killedbycall/return_address/unaffected 永不触发 |
+| 缺 `killedbycall` 分支 | heritage.cc:1521-1525 | src/heritage.rs:1948-1977 (只有 unknown_effect) | 证明 push88 slot 被 call kill 的 INDIRECT-creation 永不创建 → dead-store elim 无依据 |
+| `transAddr` 翻译缺失 | heritage.cc:1461-1466 | src/heritage.rs:1876-1877 (hardcode `trans_addr=addr`) | 多 call 函数的 stack effect 计算错误 |
+
+### P5 Step 1 最小可行修复（4 步）
+
+1. **`FuncCallSpecs::has_effect`** (`src/fspec.rs:1564`): if `self.prototype.effects` 非空，二分查找 (`EffectRecord::compare_by_address` 已存在于 `:143`)；else delegate to `proto_model.has_effect`。需补 `ProtoModel::has_effect`。
+2. **加 `killedbycall` 分支** 到 `guard_calls_range_with_space` (`src/heritage.rs:1948-1977`): 镜像 heritage.cc:1521-1525，调 `fd.new_indirect_creation(call_op, addr, size, possibleoutput)`。
+3. **修 `new_indirect_creation` 输出 space** (`src/funcdata.rs:2355`): `AddressSpace::Unique` → 用 heritage 地址 (`create_with_space(sz, caller_space, addr)`)。否则创建的 vn 在 Unique space，dead-store pass 匹配不到 STORE 的目标。
+4. **加 `transAddr` 翻译** (`src/heritage.rs:1876-1877`): 用 `fc.get_spacebase_offset()` per cc:1461-1466。
+
+### 已有的 FuncCallSpecs 基础设施（无需新增）
+- `num_calls`/`get_call_specs`/`get_call_specs_mut` (`src/funcdata.rs:683,690,696`)
+- `FuncCallSpecs.op_addr/active_input/active_output/stackoffset` (`src/fspec.rs:1442-1507`)
+- `is_output_active`/`is_input_active`/`is_auto_killed_by_call`/`is_stack_output_lock` (`src/fspec.rs:1691-1583`)
+- `characterize_as_output`/`characterize_as_input_param` (stub-ish, `:1530,1540`)
+- `ParamActive::which_trial/register_trial` (`:3022,3030`)
+- `Varnode` flags: `ADDRTIED`/`ADDRFORCE`/`RETURN_ADDRESS`/`ACTIVE_HERITAGE`/`INDIRECT_CREATION` 全在 (`src/varnode.rs:43-65,477,664,1028`)
+- `Funcdata::new_indirect_op/new_indirect_creation/op_insert_input` 全在 (`:2184,2339,945`)
+
+### 风险评估
+- 修 `has_effect` 需要补 `ProtoModel::has_effect`（需读 Ghidra ProtoModel effect list 数据结构）。
+- 修 `new_indirect_creation` 输出 space 可能影响其他 caller（需 audit Unique-space 依赖）。
+- 4 步必须一起改（任一缺失都不收敛），单步 commit 不可行。建议先在一个 branch 上实现 + 1292 测试 + curl 差分门禁，全绿后再合并。
