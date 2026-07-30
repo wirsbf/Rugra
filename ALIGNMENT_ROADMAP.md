@@ -1018,3 +1018,34 @@ place multiequals (phi placement) → rename (SSA rename, 创建 INDIRECT/MULTIE
 Rugra 的 rename_direct 跳过了 place_multiequals 的完整版 + rename 的 INDIRECT 创建。
 
 **当前状态**：leaks=0 稳定（elimination 成功），但 SSA 模型对齐是下一个大目标。
+
+### P5 Step 4 — MULTIEQUAL/INDIRECT 创建调查（2026-07-30）
+
+**调查发现（多层 bug）**：
+
+1. **dom_frontier 在 place_multiequals_direct 时为空**：
+   - `ActionHeritage::apply` 在 `place_multiequals_direct` 之前没调 `build_dom_tree`。
+   - 加 `build_dom_tree` 后，dom_frontier 正确生成（main: 262 entries）。
+   - 但 PREPASS (`curl_decompile.rs:409 run_heritage_direct`) 也在调
+     `place_multiequals_direct`（dom tree 未建），创建 0 phi，干扰诊断。
+
+2. **Heritage infolist 未初始化**：
+   - `place_multiequals_direct` 用 `self.infolist` 查 per-space delay。
+   - `ActionHeritage::apply` 没调 `fd.heritage.build_info_list()`，infolist=0。
+   - 加 `build_info_list` 后 infolist 正确初始化，但 phi 仍 0。
+
+3. **phi 创建后 ->field 链断裂（回归）**：
+   - 加 `build_dom_tree` + `build_info_list` 后，phi 仍为 0（创建逻辑有更深层 bug）。
+   - 但该改动导致 ->field 从 9 降到 0（rename_direct 没正确处理新 phi 结构，
+     Phase 3.5 wiring + mapentry 传播链断裂）。
+   - 已回退该改动，->field 恢复 9。
+
+**结论**：MULTIEQUAL/INDIRECT 创建是一个**多层子系统**工作，需要：
+1. 在 ActionHeritage 里调 build_dom_tree + build_info_list（已验证 dom_frontier=262）。
+2. 修复 place_multiequals_direct 的 phi 创建逻辑（当前 0 phi，原因待定位）。
+3. 让 rename_direct 正确处理 phi 节点（避免 ->field 链断裂）。
+4. 让 INDIRECT 创建接 guardCalls（heritage.cc:guardStores/guardCalls → INDIRECT）。
+5. 全部完成后验证 ->field ≥ 9 + MULTIEQUAL > 0 + INDIRECT > 0。
+
+**当前状态锁定**：leaks=0, ->field=9, defects=0, 1292 tests（build_dom_tree 改动已回退）。
+MULTIEQUAL/INDIRECT 缺口是最大的单一对齐目标，但需要专门 session 的多步实现。
