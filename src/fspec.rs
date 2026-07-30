@@ -1557,15 +1557,47 @@ impl FuncCallSpecs {
 
     // Ghidra: fspec.cc:4234 FuncProto::hasEffect
     /// Determine the effect of this function on the given address range.
-    /// Faithful to `FuncProto::hasEffect` (fspec.cc:4234-4241).
+    /// Faithful to `FuncProto::hasEffect` (fspec.cc:4234-4241):
+    ///   if (effectlist.empty()) return model->hasEffect(addr,size);
+    ///   return ProtoModel::lookupEffect(effectlist,addr,size);
     /// Returns effect type:
     ///   0 = unknown_effect, 1 = unaffected, 2 = killedbycall,
     ///   3 = return_address, 4 = reload
-    pub fn has_effect(&self, _addr: u64, _size: i32) -> u32 {
-        // cc:4237-4240: if effectlist empty, delegate to model->hasEffect
-        // Rugra's ProtoModel doesn't have hasEffect yet.
-        // Conservative: return unknown_effect (0) for all ranges.
-        0
+    ///
+    /// The caller must pass the full address (space + offset) so the lookup
+    /// can match against EffectRecords (keyed by space,offset) and so the
+    /// System V default return-address slot (Stack@[0,8)) can be recognized
+    /// when the model has no explicit effectlist. The default return-address
+    /// modeling mirrors `ProtoModel::decode` (fspec.cc:2689-2691): if the
+    /// arch's `defaultReturnAddr` is set and the .cspec did not declare a
+    /// specific return-address effect, the model's effectlist is augmented
+    /// with `EffectRecord(defaultReturnAddr, return_address)`. Rugra's slim
+    /// ProtoModel has no effectlist, so we model the System V default inline.
+    pub fn has_effect(&self, addr_space: crate::space::AddressSpace, addr: u64, size: i32) -> u32 {
+        // cc:4237: if effectlist empty, delegate to model.
+        if !self.prototype.effects.is_empty() {
+            // cc:4242: return ProtoModel::lookupEffect(effectlist, addr, size);
+            // Reuse ProtoModelFull's faithful lookup_effect over our explicit
+            // effectlist (sorted by compare_by_address at decode time).
+            let eff = ProtoModelFull::lookup_effect(
+                &self.prototype.effects, addr_space, addr, size);
+            return effect_to_u32(eff);
+        }
+        // Model path. Rugra's slim ProtoModel carries no effectlist, so we
+        // model the System V x86-64 default return-address effect here:
+        //   defaultReturnAddr = Stack@[0,8)  (x86-64-gcc.cspec:31-33)
+        //   ProtoModel::decode (fspec.cc:2689-2691) auto-inserts
+        //   EffectRecord(defaultReturnAddr, return_address) when the .cspec
+        //   did not declare its own return-address effect.
+        if addr_space == crate::space::AddressSpace::Stack
+            && addr == 0 && size >= 8
+        {
+            return effect_to_u32(EffectType::ReturnAddress);
+        }
+        // No explicit effect and not the default return-address slot:
+        // unknown_effect (Ghidra's lookupEffect returns unknown_effect when
+        // no record overlaps the range).
+        effect_to_u32(EffectType::UnknownEffect)
     }
 
     // Ghidra: fspec.hh:1630 FuncCallSpecs::isAutoKilledByCall
@@ -2503,7 +2535,7 @@ impl FuncCallSpecs {
         //         if (spc->getType() != IPTR_SPACEBASE) return hasEffect(addr, size);
         if addr_space != crate::space::AddressSpace::Stack {
             // has_effect returns the raw uint4 effect value; cast to the enum.
-            let raw = self.has_effect(addr_offset, size);
+            let raw = self.has_effect(addr_space, addr_offset, size);
             return effect_from_u32(raw);
         }
         // Ghidra: if (stackoffset == offset_unknown) return unknown_effect;
@@ -2513,7 +2545,7 @@ impl FuncCallSpecs {
         // Ghidra: newoff = spc->wrapOffset(addr.getOffset() - stackoffset);
         let newoff = (addr_offset as i128 - self.stackoffset as i128) as u64;
         // Ghidra: return hasEffect(Address(spc, newoff), size);
-        let raw = self.has_effect(newoff, size);
+        let raw = self.has_effect(addr_space, newoff, size);
         effect_from_u32(raw)
     }
 
@@ -5935,6 +5967,19 @@ fn effect_from_u32(raw: u32) -> EffectType {
         2 => EffectType::KilledByCall,
         3 => EffectType::ReturnAddress,
         _ => EffectType::UnknownEffect,
+    }
+}
+
+// RUGRA-GLUE: effect_to_u32 — the inverse of `effect_from_u32`. Maps a typed
+// `EffectType` back to the raw `uint4` Ghidra encoding used throughout
+// `FuncCallSpecs::has_effect` (matching fspec.hh:393-398): 0=unknown_effect,
+// 1=unaffected, 2=killedbycall, 3=return_address, 4=reload.
+fn effect_to_u32(eff: EffectType) -> u32 {
+    match eff {
+        EffectType::Unaffected => 1,
+        EffectType::KilledByCall => 2,
+        EffectType::ReturnAddress => 3,
+        EffectType::UnknownEffect => 0,
     }
 }
 

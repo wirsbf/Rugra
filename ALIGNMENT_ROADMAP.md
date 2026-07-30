@@ -805,3 +805,25 @@ config 访问 (114 个 `::config.X`) 全部丢失，因为：
 - 修 `has_effect` 需要补 `ProtoModel::has_effect`（需读 Ghidra ProtoModel effect list 数据结构）。
 - 修 `new_indirect_creation` 输出 space 可能影响其他 caller（需 audit Unique-space 依赖）。
 - 4 步必须一起改（任一缺失都不收敛），单步 commit 不可行。建议先在一个 branch 上实现 + 1292 测试 + curl 差分门禁，全绿后再合并。
+
+### P5 Step 1 实现状态（2026-07-30）
+
+**已实现**（4 步全完成，语法正确，1292/1292 tests, defects=0 numbering=0）：
+- ✅ Step 1: `FuncCallSpecs::has_effect(space, addr, size)` (`src/fspec.rs:1564`)：查 `prototype.effects`（二分 lookup_effect）→ 空则查 System V 默认 `Stack@[0,8)` → `return_address`（模拟 `ProtoModel::decode` cc:2689-2691 的 defaultReturnAddr 自动插入）。新增 `effect_to_u32` 辅助函数。更新 `has_effect_translate` 两个 caller 传 space。
+- ✅ Step 2: `guard_calls_range_with_space` 加 `killedbycall` 分支（`src/heritage.rs:2037`）调 `fd.new_indirect_creation(call_op, space, addr, size, possibleoutput)`，镜像 heritage.cc:1521-1525。同时加 `return_address` → `set_return_address()` 分支（cc:1518-1519），early-skip for CALL output 覆盖范围（cc:1453-1456），`possibleoutput` 标记（cc:1482）。
+- ✅ Step 3: `new_indirect_creation` 加 `space` 参数（`src/funcdata.rs:2339`），输出 vn 从 `Unique` 改为 `create_with_space(sz, space, addr)`，镜像 cc:719 `newVarnodeOut(sz, addr, newop)`。两个 caller 更新（`src/heritage.rs:2039` + `src/ruleaction.rs:11863` 用 `vn_space`）。
+- ✅ Step 4: transAddr 翻译（`src/heritage.rs:1893`）用 `fc.stackoffset` per cc:1461-1466，`tryregister` flag per cc:1464。
+
+**🚨 关键发现：移植代码目前是 dead code**（语法正确但从未执行）：
+- `guard_calls_range_with_space` 由 `heritage()` 入口点（`src/heritage.rs:3018`）的 per-space 循环调用。
+- **但 Rugra 的 `ActionHeritage::apply`（`src/coreaction.rs:65`）从不调 `heritage.heritage()`**！它直接调 `place_multiequals_direct` + `rename_direct`（Rugra-specific shortcuts）+ 手动 `pass += 1`。
+- 诊断证实：`[DBG-GUARD]` 永不触发（heritage 的 per-space 循环从执行）。
+- 所以 main() 的 `*piVar4=0xADDR` 泄漏仍是 155，没减少。
+
+**WIRING GAP（解锁移植代码的下一步）**：
+需要在 Rugra 实际执行的 heritage 路径（`ActionHeritage::apply` 的 pass 2，`discover_and_guard_stack_stores_fd` 之后）显式调 `guard_calls_range_with_space` for Stack space。但需要：
+1. 枚举 Stack 空间的 disjoint ranges（per-call return-address slot）。
+2. 解析每个 call site 的 RSP-at-call 值（`resolveSpacebaseRelative`），即 `FuncCallSpecs::set_spacebase_offset` 的 caller（当前 `set_spacebase_offset` 全无 caller，stackoffset 永远是 OFFSET_UNKNOWN）。
+3. 有了 stackoffset，transAddr 翻译才能正确，`has_effect` 才能匹配 System V 默认 return-address slot。
+
+**结论**：P5 Step 1 的 4 步代码移植完成且 faithful，但 wiring 需补 `resolveSpacebaseRelative`（另一个 L2 缺口）才能激活。当前 commit 锁定移植代码 + 标注 wiring gap，禁止丢弃已完成的 faithful 移植（铁律 5）。

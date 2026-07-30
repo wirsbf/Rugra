@@ -11832,6 +11832,7 @@ impl Rule for RulePullsubIndirect {
         // the original base varnode. (The indirect-creation branch above uses
         // Funcdata::new_indirect_creation.)
         let is_big_endian = vn.read().unwrap().space().is_big_endian();
+        let vn_space = vn.read().unwrap().space();
         let vn_addr = vn.read().unwrap().get_offset();
         let vn_size = vn.read().unwrap().get_size();
         let smalladdr2 = if !is_big_endian {
@@ -11862,6 +11863,7 @@ impl Rule for RulePullsubIndirect {
             };
             let new_ind = fd.new_indirect_creation(
                 &targ_op,
+                vn_space,
                 smalladdr2.as_u64(),
                 new_size as usize,
                 possibleout,

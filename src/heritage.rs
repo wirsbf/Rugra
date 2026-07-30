@@ -1872,64 +1872,117 @@ impl Heritage {
             };
             let call_op = match call_op_arc { Some(o) => o, None => continue };
 
-            // cc:1458-1466: compute transAddr
-            let off = addr.as_u64();
-            let trans_addr = addr; // Simplified: no spacebase offset translation
+            // cc:1453-1456: if fc->getOp()->isAssignment() && out.addr==addr
+            // && out.size==size: skip (the CALL's own output covers this range).
+            {
+                let skip = {
+                    let op = call_op.read().unwrap();
+                    if op.is_assignment() {
+                        op.output.as_ref().and_then(|out| {
+                            let o = out.read().unwrap();
+                            if *o.get_addr() == addr && o.get_size() as i32 == size {
+                                Some(())
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                };
+                if skip.is_some() { continue; }
+            }
 
-            // cc:1468: effecttype = fc->hasEffect(transAddr, size)
-            let effecttype: u32 = fd.get_call_specs(i)
-                .map(|fc| fc.has_effect(trans_addr.as_u64(), size))
+            // cc:1458-1466: compute transAddr.
+            // Ghidra: off = addr.offset; tryregister = true;
+            //         if (spc->getType()==IPTR_SPACEBASE) {
+            //           if (fc->getSpacebaseOffset() != offset_unknown)
+            //               off = spc->wrapOffset(off - fc->getSpacebaseOffset());
+            //           else tryregister = false;
+            //         }
+            //         transAddr = Address(spc, off);
+            let mut tryregister = true;
+            let trans_off: u64 = if space.is_stack() {
+                let sbo = fd.get_call_specs(i)
+                    .map(|fc| fc.stackoffset)
+                    .unwrap_or(crate::fspec::OFFSET_UNKNOWN);
+                if sbo != crate::fspec::OFFSET_UNKNOWN {
+                    // cc:1462: off = spc->wrapOffset(off - fc->getSpacebaseOffset());
+                    // wrapOffset on a 64-bit space is just wrapping_sub.
+                    addr.as_u64().wrapping_sub(sbo as u64)
+                } else {
+                    // cc:1464: tryregister = false;
+                    tryregister = false;
+                    addr.as_u64()
+                }
+            } else {
+                addr.as_u64()
+            };
+            let trans_addr = Address::new(trans_off);
+
+            // cc:1467: effecttype = fc->hasEffect(transAddr, size)
+            // Faithful: pass the full (space, offset) so has_effect can match
+            // against EffectRecords and recognize the System V default
+            // return-address slot (Stack@[0,8)).
+            let mut effecttype: u32 = fd.get_call_specs(i)
+                .map(|fc| fc.has_effect(space, trans_addr.as_u64(), size))
                 .unwrap_or(0); // 0 = unknown_effect
+            let mut possibleoutput = false;
 
-            // cc:1470-1486: output trial registration
+            // cc:1469-1486: output trial registration
             let is_output_active = fd.get_call_specs(i)
                 .map(|fc| fc.is_output_active()).unwrap_or(false);
-            if is_output_active {
+            if is_output_active && tryregister {
                 // cc:1472: outputCharacter = characterizeAsOutput
                 let output_char = fd.get_call_specs(i)
                     .map(|fc| fc.characterize_as_output(
                         trans_addr.as_u64(), size, space))
                     .unwrap_or(0);
                 if output_char != 0 {
-                    // cc:1474: if effect != killedbycall && isAutoKilledByCall
-                    let mut eff = effecttype;
+                    // cc:1473-1474: if effect != killedbycall && isAutoKilledByCall
                     let auto_kill = fd.get_call_specs(i)
                         .map(|fc| fc.is_auto_killed_by_call())
                         .unwrap_or(true);
-                    if eff != 2 && auto_kill { eff = 2; } // killedbycall
-                    // cc:1476: contained_by → tryOutputOverlapGuard
-                    // cc:1481: else → registerTrial
+                    if effecttype != 2 && auto_kill { effecttype = 2; } // killedbycall
+                    // cc:1475-1478: contained_by → tryOutputOverlapGuard
+                    // cc:1479-1484: else → registerTrial
                     if output_char == 3 {
-                        // contained_by: try overlap guard (stub)
+                        // contained_by: try overlap guard (stub — try_output_overlap_guard
+                        // exists but is not yet wired; faithful skip).
                     } else if output_char == 2 {
                         // contains_justified: register trial
                         if let Some(fc) = fd.get_call_specs_mut(i) {
                             if let Some(active) = &mut fc.active_output {
                                 if active.which_trial(trans_addr, size) < 0 {
                                     active.register_trial(trans_addr, size);
+                                    possibleoutput = true;
                                 }
                             }
                         }
                     }
                 }
+            } else {
+                // cc:1487-1494: isStackOutputLock && tryregister branch.
+                // Rugra's is_stack_output_lock() is currently hardcoded false
+                // (no stack-output-locked ABI in scope), so this branch is dead.
             }
 
-            // cc:1496-1509: input trial registration
+            // cc:1495-1509: input trial registration
             let is_input_active = fd.get_call_specs(i)
                 .map(|fc| fc.is_input_active()).unwrap_or(false);
-            if is_input_active {
-                // cc:1497: inputCharacter = characterizeAsInputParam
+            if is_input_active && tryregister {
+                // cc:1496: inputCharacter = characterizeAsInputParam
                 let input_char = fd.get_call_specs(i)
                     .map(|fc| fc.characterize_as_input_param(
                         trans_addr.as_u64(), size, space))
                     .unwrap_or(0);
                 if input_char == 2 {
-                    // cc:1498: contains_justified → register input trial
+                    // cc:1497: contains_justified → register input trial
                     if let Some(fc) = fd.get_call_specs_mut(i) {
                         if let Some(active) = &mut fc.active_input {
                             if active.which_trial(trans_addr, size) < 0 {
                                 active.register_trial(trans_addr, size);
-                                // cc:1503-1505: create varnode + opInsertInput
+                                // cc:1502-1505: create varnode + opInsertInput
                                 let vn = fd.vbank.create_with_space(
                                     size as usize, space, addr.as_u64());
                                 vn.write().unwrap().set_active_heritage();
@@ -1940,20 +1993,22 @@ impl Heritage {
                         }
                     }
                 } else if input_char == 3 {
-                    // cc:1508: contained_by → guardCallOverlappingInput
+                    // cc:1507-1508: contained_by → guardCallOverlappingInput
                     self.guard_call_overlapping_input(fd, addr, size, space);
                 }
             }
 
-            // cc:1512-1527: create INDIRECT based on effect type
-            // unknown_effect (0) → newIndirectOp
-            if effecttype == 0 {
-                // cc:1513: indop = newIndirectOp(fc->getOp(), addr, size, 0)
+            // cc:1510-1525: create INDIRECT based on effect type.
+            //   unknown_effect || return_address → newIndirectOp (+ setReturnAddress if RA)
+            //   killedbycall                   → newIndirectCreation
+            //   unaffected / reload            → no guard
+            if effecttype == 0 || effecttype == 3 {
+                // cc:1512: indop = newIndirectOp(fc->getOp(), addr, size, 0)
                 let indop = fd.new_indirect_op(
                     &PcodeOpRef(call_op.clone()),
                     addr.as_u64(), size as usize,
                 );
-                // cc:1514-1515: setActiveHeritage on in[0] and out
+                // cc:1513-1514: setActiveHeritage on in[0] and out
                 {
                     let ind_r = indop.0.read().unwrap();
                     if let Some(invn) = ind_r.get_in(0).cloned() {
@@ -1966,15 +2021,37 @@ impl Heritage {
                     if let Some(outvn) = ind_r.output.as_ref().cloned() {
                         drop(ind_r);
                         outvn.write().unwrap().set_active_heritage();
-                        // cc:1517-1518: if holdind, setAddrForce
+                        // cc:1516-1517: if holdind, setAddrForce
                         if holdind {
                             outvn.write().unwrap().set_flags(
                                 crate::varnode::varnode_flags::ADDRFORCE);
                         }
+                        // cc:1518-1519: if effecttype == return_address, setReturnAddress
+                        if effecttype == 3 {
+                            outvn.write().unwrap().set_return_address();
+                        }
+                        // cc:1515: write.push(indop->getOut())
+                        write.push(outvn);
+                    }
+                }
+            } else if effecttype == 2 {
+                // cc:1521-1525: killedbycall → newIndirectCreation
+                let indop = fd.new_indirect_creation(
+                    &PcodeOpRef(call_op.clone()),
+                    space,
+                    addr.as_u64(), size as usize, possibleoutput,
+                );
+                // cc:1523-1524: setActiveHeritage on out; write.push
+                {
+                    let ind_r = indop.0.read().unwrap();
+                    if let Some(outvn) = ind_r.output.as_ref().cloned() {
+                        drop(ind_r);
+                        outvn.write().unwrap().set_active_heritage();
                         write.push(outvn);
                     }
                 }
             }
+            // else: unaffected / reload → no guard (cc:1510 comment)
         }
     }
 

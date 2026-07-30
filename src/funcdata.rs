@@ -2336,9 +2336,17 @@ impl Funcdata {
     /// `Funcdata::newIndirectCreation` (funcdata_op.cc:710-728). Unlike
     /// `new_indirect_op`, the input is a constant zero, and both the op and
     /// output carry the indirect_creation flag.
+    ///
+    /// The output varnode is created at `(space, addr)` via
+    /// `newVarnodeOut(sz, addr, newop)` (cc:719) — i.e. it lives in the
+    /// heritage range's space (Stack, Register, Ram), NOT Unique. This is
+    /// load-bearing for `Heritage::guardCalls`'s `killedbycall` branch: the
+    /// created varnode must be matchable against the killed stack slot so
+    /// dead-store elimination can remove the corresponding STORE.
     pub fn new_indirect_creation(
         &mut self,
         indeffect: &crate::op::PcodeOpRef,
+        space: crate::space::AddressSpace,
         addr: u64,
         sz: usize,
         possibleout: bool,
@@ -2351,8 +2359,8 @@ impl Funcdata {
         let indeffect_addr = indeffect.0.read().unwrap().get_seq_num().get_addr();
         let newop = self.new_op(2, indeffect_addr);
         newop.0.write().unwrap().flags |= pcodeop_flags::INDIRECT_CREATION;
-        // output: varnode at addr, defined by newop.
-        let newout = self.vbank.create_with_space(sz, crate::space::AddressSpace::Unique, addr);
+        // cc:719: newout = newVarnodeOut(sz, addr, newop) — varnode at (space, addr).
+        let newout = self.vbank.create_with_space(sz, space, addr);
         self.vbank.set_def(newout.clone(), std::sync::Arc::downgrade(&newop.0));
         newop.0.write().unwrap().output = Some(newout.clone());
         // indirect_creation flags on input (if !possibleout) and output.
