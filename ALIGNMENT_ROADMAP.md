@@ -827,3 +827,37 @@ config 访问 (114 个 `::config.X`) 全部丢失，因为：
 3. 有了 stackoffset，transAddr 翻译才能正确，`has_effect` 才能匹配 System V 默认 return-address slot。
 
 **结论**：P5 Step 1 的 4 步代码移植完成且 faithful，但 wiring 需补 `resolveSpacebaseRelative`（另一个 L2 缺口）才能激活。当前 commit 锁定移植代码 + 标注 wiring gap，禁止丢弃已完成的 faithful 移植（铁律 5）。
+
+### P5 Step 1 WIRING 完成（2026-07-30，本轮）
+
+**已实现 WIRING**：guardCalls 移植代码（39fbc27）从 dead code 激活为执行代码。
+- 在 `discover_and_guard_stack_stores_fd` (src/heritage.rs) 的 BFS 收集到
+  return-address STORE 后，Phase 2a 顺序扫描：
+  1. 识别 return-address STORE（value=Const@[0x2500-0x4000] = .text inst_next）
+  2. 找下一个 CALL，设 `fc.set_spacebase_offset(stack_off)` — 解决了
+     `set_spacebase_offset` 全无 caller、`stackoffset` 永远 OFFSET_UNKNOWN 的
+     L2 缺口（替代 Ghidra 的 resolveSpacebaseRelative，后者只处理 stack-param
+     placeholder 路径，return-address 路径在 Ghidra 里是 RuleStoreVarnode
+     触发的）。
+  3. 调 `guard_calls_range_with_space(Stack, ret_addr_off=stack_off, 8)` —
+     WIRING 移植代码到 Rugra 实际执行的 Heritage 路径。
+- **诊断验证**：所有 211 个 call sites 现在返回 `effect=3 (return_address)`，
+  has_effect 的 Stack@[0,8) 默认匹配 + transAddr 翻译都正确触发。
+  main 的 105 calls 全部 resolved（104+1）。
+
+**剩余阻塞（ELIMINATION GAP，下一个 L2 缺口）**：
+- *pVar=0xADDR 泄漏仍为 155（未减少）。guardCalls 创建了 setReturnAddress()
+  标记的 INDIRECT，但 Rugra 的 ActionDeadCode 不移除 STORE（STORE 无 output）。
+- Ghidra 的实际消除路径：ActionRestrictLocal::apply (coreaction.cc:2052-2107)
+  遍历 funcp 效果列表，对 return_address effect 的 input vn 调
+  `ScopeLocal::markNotMapped` (varmap.cc:511)，把 return-address slot 标记为
+  non-local，varmap 不为其生成 local symbol，STORE 最终在
+  varmap/scope 分析阶段被丢弃（不渲染）。
+- Rugra 缺 `ScopeLocal::markNotMapped` + 完整的 ScopeLocal/MapState 移植。
+  这是 P5 Step 2 的目标。
+
+**本轮锁定**（不可回退，铁律 5）：
+- 4 步 guardCalls 移植 (39fbc27) + WIRING 激活，1292/1292 tests,
+  defects=0, numbering=0, ->field=9 deterministic。
+- 211 call sites 的 return_address effect 现在正确建模（之前全部 unknown）。
+- 剩余 *pVar=0xADDR 消除需要 ScopeLocal::markNotMapped（P5 Step 2）。

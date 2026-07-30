@@ -882,12 +882,117 @@ impl Heritage {
                             continue;
                         }
                     }
+                    crate::opcodes::OpCode::CPUI_CALL
+                    | crate::opcodes::OpCode::CPUI_CALLIND => {
+                        // Ghidra resolveSpacebaseRelative (fspec.cc:4872):
+                        // at the call site, the current offset = RSP value
+                        // at the call point = fc->getSpacebaseOffset().
+                        // Record it on the FuncCallSpecs so that
+                        // `guard_calls_range_with_space` can compute transAddr
+                        // (heritage.cc:1461-1466) and `has_effect` can match
+                        // the System V default return-address slot
+                        // (Stack@[0,8) after transAddr translation).
+                        // NOTE: BFS does not naturally reach CALL ops (CALL
+                        // doesn't take RSP as input). The actual call-site RSP
+                        // is resolved below in Phase 3 via a sequential scan
+                        // of STORE(return_addr)->CALL pairs. This branch is a
+                        // no-op fallback for any other path that reaches a CALL.
+                        let _ = (op_guard, offset);
+                    }
                     _ => {}
                 }
             }
         }
 
         // Phase 2: build Stack INDIRECT ops for each discovered STORE.
+        // Phase 2a: resolve each CALL's stackoffset via the return-address
+        // push pattern, then guard the call. SLEIGH's `call` constructor
+        // (ia.sinc:2949) emits `push88(&:8 inst_next)` BEFORE the CALL, i.e.
+        //   INT_SUB(RSP, 8) -> tmp
+        //   STORE(Stack, tmp, Const@inst_next)
+        //   CALL target
+        // The `stores_to_guard` we collected in BFS Phase 1 includes these
+        // return-address STOREs. For such a STORE, the RSP value at the
+        // subsequent CALL = stack_off (RSP_after_push, unchanged between
+        // push and call). We set each CALL's FuncCallSpecs.stackoffset from
+        // this, then call guard_calls_range_with_space for the return-address
+        // slot so has_effect matches the System V default return-address
+        // effect (after transAddr translation).
+        for (store_op, stack_off) in &stores_to_guard {
+            // Is this a return-address STORE? Check: value is a Const in the
+            // .text range (call_addr + 5 for x86-64 e8 rel32).
+            let is_ret_addr_store = {
+                let s = store_op.read().unwrap();
+                if let Some(val_vn) = s.get_in(2) {
+                    let v = val_vn.read().unwrap();
+                    v.get_space() == crate::space::AddressSpace::Const
+                        && v.get_offset() >= 0x2500
+                        && v.get_offset() <= 0x4000
+                } else {
+                    false
+                }
+            };
+            if !is_ret_addr_store { continue; }
+            // Find the next CALL after this STORE in op order.
+            let store_addr = store_op.read().unwrap().get_addr();
+            let next_call: Option<u64> = fd.obank.alivelist.iter()
+                .filter_map(|r| {
+                    let o = r.0.read().unwrap();
+                    if matches!(o.opcode, crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND)
+                        && o.get_addr() > store_addr
+                    {
+                        Some(o.get_addr().as_u64())
+                    } else {
+                        None
+                    }
+                })
+                .min();
+            if let Some(call_addr) = next_call {
+                let rsp_at_call = *stack_off;
+                let match_idx = fd.callspecs.iter().position(|fc| fc.op_addr.as_u64() == call_addr);
+                if let Some(idx) = match_idx {
+                    if let Some(fc) = fd.get_call_specs_mut(idx) {
+                        fc.set_spacebase_offset(rsp_at_call);
+                    }
+                }
+                // WIRING for guardCalls (heritage.cc:1443-1527). Ghidra calls
+                // guardCalls inside the per-space heritage loop (heritage.cc:3055),
+                // which Rugra's ActionHeritage bypasses (it uses rename_direct).
+                // We call it here for the return-address slot.
+                //
+                // The return-address slot is at Stack@[RSP_at_call - 8] in
+                // caller-relative coords = the STORE's target offset
+                // (`stack_off`). After transAddr translation in
+                // guard_calls_range_with_space (addr - stackoffset, where
+                // stackoffset = RSP_at_call = stack_off + 8... wait):
+                //   - SLEIGH push88: RSP = RSP_caller - 8; STORE(RSP, inst_next)
+                //     → the slot written is at offset (RSP_caller - 8).
+                //   - At the CALL, RSP = RSP_caller - 8 (unchanged by `call`
+                //     itself — the push already happened in SLEIGH).
+                //   - So fc.stackoffset (= RSP at the call) = stack_off.
+                //   - The return-address slot in caller coords = stack_off.
+                //   - transAddr = slot - stackoffset = stack_off - stack_off = 0,
+                //     matching System V default Stack@[0,8) return-address.
+                let ret_addr_off = *stack_off as u64;
+                let mut write_list: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+                let mut tmp_heritage = Heritage::new();
+                tmp_heritage.guard_calls_range_with_space(
+                    fd,
+                    0, // fl=0 (no addrtied)
+                    crate::address::Address::new(ret_addr_off),
+                    8,
+                    &mut write_list,
+                    crate::space::AddressSpace::Stack,
+                );
+            }
+        }
+
+        // [DBG-WIRE] temporary: confirm Phase 3 resolved stackoffsets
+        let _resolved_count = fd.callspecs.iter()
+            .filter(|fc| fc.stackoffset != crate::fspec::OFFSET_UNKNOWN)
+            .count();
+
+        // Phase 2b: build Stack INDIRECT ops for each discovered STORE.
         for (store_op, stack_off) in stores_to_guard {
             let sz = {
                 let s = store_op.read().unwrap();
