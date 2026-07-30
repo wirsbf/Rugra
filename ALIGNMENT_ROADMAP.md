@@ -972,3 +972,49 @@ write output at same space/offset/size），找不到再 `find_or_create_input_s
 - 非确定性源: HighVariable 命名顺序的 HashMap 迭代 (待定位)。
 - 这是 P5 之前就存在的问题, eb0e70b (BTreeMap for config_writers) 只修了
   一部分, 还有其他 HashMap 非确定性源。
+
+### P5 Step 3 — Ghidra vs Rugra 节点级 IR diff（2026-07-30，Ghidra 12.1.2 headless）
+
+**工具链就位**：
+- Ghidra IR: `analyzeHeadless + DumpPcodeIR.java` (postScript, .ghidra_install/ghidra_12.1.2_PUBLIC)
+- Rugra IR: `dump_ir.rs --post`
+- diff: `ghidra_proj/diff_ir.py` (地址归一化 + opcode 映射)
+
+**决定性差异（main 函数 post-analysis IR）**：
+
+| 指标 | Ghidra | Rugra | 差距 |
+|---|---|---|---|
+| 总 ops | 7753 | 2981 | -61% |
+| **alive ops** | **7753** | **250** | **-97%** ⚠️ |
+| **MULTIEQUAL (phi)** | **1628** | **0** | **完全缺失** |
+| **INDIRECT** | **5436** | **0** | **完全缺失** |
+| PTRSUB | 20 | 0 | 完全缺失 |
+| CALL | 105 | 105 | 一致 ✓ |
+| STORE | 2 | 31 | Rugra 多 29 个 |
+
+**根本性问题：Rugra 的 Heritage SSA 完全缺失 INDIRECT + MULTIEQUAL 建模**：
+
+Ghidra 的正确模型（BB 0x25ef，每个 call 之后）：
+```
+INDIRECT   out=ram@0x174e0#8  in=[ram@0x174e0#8[in], const@0x48]  // call 可能改了这个全局
+MULTIEQUAL out=ram@0x174e0#8  in=[ram@0x174e0#8[in], ram@0x174e0#8]  // phi 合并 call 前后版本
+```
+Ghidra 为每个可能被 call 修改的内存位置（全局变量、栈位置）生成 INDIRECT + MULTIEQUAL 对。这是 Heritage SSA rename 的正确结果。
+
+Rugra 完全没有这些 → SSA 严重不完整。根因：Rugra 的 ActionHeritage 用 rename_direct shortcut
+（src/coreaction.rs:65），不调 heritage() 入口点的 per-space SSA 循环（src/heritage.rs:3018），
+所以 INDIRECT/MULTIEQUAL 从未被创建。
+
+**这解释了之前所有现象**：
+1. main 函数体坍缩（160 vs 470 行）：SSA 不完整，大量代码路径丢失。
+2. ::config. 访问为 0：config 字段访问的 MULTIEQUAL/INDIRECT 链不存在。
+3. 变量名非确定性：没有 SSA phi 节点，HighVariable 合并退化。
+4. leaks=0 但函数体残缺：elimination 消除了 return-addr STORE，但底层 SSA 模型远未对齐。
+
+**修复方向（最大的单一缺口）**：
+让 ActionHeritage 调用完整的 heritage() 入口点（per-space SSA 循环），而非 rename_direct shortcut。
+这是 Ghidra Heritage 的核心：per-space disjoint range → guard (guardCalls/guardStores/guardLoads) →
+place multiequals (phi placement) → rename (SSA rename, 创建 INDIRECT/MULTIEQUAL)。
+Rugra 的 rename_direct 跳过了 place_multiequals 的完整版 + rename 的 INDIRECT 创建。
+
+**当前状态**：leaks=0 稳定（elimination 成功），但 SSA 模型对齐是下一个大目标。
