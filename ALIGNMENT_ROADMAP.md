@@ -861,3 +861,43 @@ config 访问 (114 个 `::config.X`) 全部丢失，因为：
   defects=0, numbering=0, ->field=9 deterministic。
 - 211 call sites 的 return_address effect 现在正确建模（之前全部 unknown）。
 - 剩余 *pVar=0xADDR 消除需要 ScopeLocal::markNotMapped（P5 Step 2）。
+
+### P5 Step 2 — IR dump 工具 + push88 泄漏根因决定性确认（2026-07-30）
+
+**新增工具 `examples/dump_ir.rs`**：dump Rugra per-function IR（pre/post pipeline），
+格式对齐 Ghidra `print raw`，用于节点级 diff。用法：
+  cargo run --release --example dump_ir -- examples/curl main [--post]
+
+**根因决定性确认（dump_ir PRE-pipeline + SLEIGH lifter）**：
+每个 CALL 前的 STORE 模式（这是原始 SLEIGH p-code，未经任何 pass）：
+```
+[0x25f2] STORE  in0=const@0x3[spaceid]  in1=reg@0x20[RSP]#8[in]  in2=const@0x25f7[call+5]
+[0x25f2] CALL   in0=ram@0x2490
+```
+- `in1=reg@0x20[in]` — 地址直接是 **RSP 输入 varnode**，**没有 INT_SUB(RSP,8)**。
+- `in2=const@0x25f7` — 值是 call_addr+5（return address = inst_next）。
+
+**SLEIGH `push88` 宏展开 bug**：ia.sinc:2003 的
+  `macro push88(x) { mysave:8 = x; $(STACKPTR) = $(STACKPTR) - 8; *:8 $(STACKPTR) = mysave; }`
+应当展开为 3 个 op：`COPY(mysave, x)` + `INT_SUB(RSP, 8)→RSP` + `STORE(Stack, RSP, mysave)`。
+但 Rugra 的 SLEIGH FFI (`sleigh_shim/rugra_sleigh.cpp` + `src/disasm/sleigh_lift.rs`) **只 emit 了 STORE，
+丢失了 INT_SUB(RSP,8)**，且 STORE 的地址是原 RSP（不是 RSP-8）。
+
+**连锁影响（解释了之前所有现象）**：
+1. RuleStoreVarnode (`src/ruleaction.rs:14568 vn_spacebase`) 找 INT_ADD/INT_SUB 失败 →
+   STORE 不被转成 COPY → 不被 DeadCode 消除。
+2. ActionDeadCode 的 return-addr 模式匹配 `STORE(RSP, Const@[.text])` 在早期 pass 命中并
+   mark_dead，但 print 路径 (`emit_block_ops`) 之前不检查 is_dead（已在本次修复加 check）。
+3. 后续 pass 里地址 RSP 经 SSA rename/merge 变成 `piVar4`，mark_dead 的 RSP 模式匹配不到，
+   最终 155 个泄漏残留。
+
+**真正的修复方向（自底向上，禁止 Rule/lifter 层绕过）**：
+修 SLEIGH FFI 的 push88 展开，让它完整 emit `INT_SUB(RSP,8)→RSP` + `STORE(Stack, RSP-8, inst_next)`。
+这需要查 `sleigh_shim/rugra_sleigh.cpp` 的 pcode 转换逻辑，确认为何 INT_SUB 被丢。
+修好后 RuleStoreVarnode 的 vn_spacebase 自然能匹配（INT_SUB 经 RuleSub2Add→INT_ADD+(-8)→
+RuleCollapseConstants fold 成 INT_ADD(RSP, Const@-8)），STORE 被转成 COPY，DeadCode 消除。
+
+**Ghidra IR 对比工具链（已就位，待 Ghidra 安装）**：
+- Rugra: `dump_ir.rs --post` → rugra_ir.txt
+- Ghidra: `.ghidra_install/DumpPcodeIR.java` (headless postScript) → ghidra_ir.txt
+- diff: 节点级对比 opcode + in/out varnode

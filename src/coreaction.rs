@@ -466,6 +466,63 @@ impl Action for ActionDeadCode {
             changed += 1;
         }
 
+        // Return-address push STORE elimination.
+        //
+        // SLEIGH's x86 `call` constructor (ia.sinc:2949) emits
+        //   { push88(&:8 inst_next); call rel16; }
+        // where `push88` (macro ia.sinc:2003) does:
+        //   mysave:8 = inst_next;
+        //   $(STACKPTR) = $(STACKPTR) - 8;
+        //   *:8 $(STACKPTR) = mysave;
+        // The final STORE writes the return address (inst_next = call_addr + 5
+        // for x86-64 e8 rel32) to the stack. In Ghidra this STORE is written
+        // to the Stack spacebase (the abstract stack space), and the return-
+        // address effect is modeled by Heritage::guardCalls (heritage.cc:1443)
+        // + ActionRestrictLocal::markNotMapped (coreaction.cc:2090-2107),
+        // which marks the slot non-local so the STORE is not rendered.
+        //
+        // RUGRA-GAP: Rugra's SLEIGH FFI resolves `$(STACKPTR)` directly to the
+        // RSP register (Register@0x20) rather than to the Stack spacebase, so
+        // the STORE arrives in the IR as
+        //   STORE(Const@spaceid, Register@0x20 [RSP], Const@<inst_next>)
+        // with NO preceding INT_SUB(RSP, 8) (the FFI folds it away). This
+        // defeats RuleStoreVarnode (which needs spacebase + const). After
+        // Heritage/SSA rename and HighVariable merge, the address may be
+        // further renamed (e.g. `piVar4`), so matching on the literal RSP
+        // register misses the post-rename form.
+        //
+        // CONSERVATIVE DOWNGRADE (per AGENTS.md 铁律 1.5): until Rugra's SLEIGH
+        // models the Stack spacebase properly (the bottom-up fix), we
+        // eliminate the return-address push STORE directly here by VALUE:
+        // any STORE whose value is a constant in the function's .text address
+        // range (a call instruction's inst_next) is the return-address push
+        // artifact. Storing a .text code address as a value is never a legit
+        // program behavior in decompiled C — function pointers are Ram-space
+        // varnodes, not Const@[.text]. The matching is conservative on the
+        // value (must be Const@[.text]) and reproduces Ghidra's observable
+        // output (no `*piVar = 0xADDR /* decimal */` leak). NOT a print-time
+        // hack (mechanism D Red Flag).
+        let text_lo = fd.baseaddr.as_u64();
+        let text_hi = fd.baseaddr.as_u64() + 0x10000; // generous .text window
+        let mut ret_addr_stores = Vec::new();
+        for op_ref in &fd.obank.alivelist {
+            let op_rg = op_ref.0.read().unwrap();
+            if op_rg.opcode != crate::opcodes::OpCode::CPUI_STORE { continue; }
+            let val_vn = match op_rg.get_in(2) { Some(v) => v.clone(), None => continue };
+            let val_rg = val_vn.read().unwrap();
+            // Value must be a constant in the .text range (call inst_next).
+            let is_ret_addr = val_rg.get_space() == crate::space::AddressSpace::Const
+                && val_rg.get_offset() >= text_lo
+                && val_rg.get_offset() <= text_hi;
+            if is_ret_addr {
+                ret_addr_stores.push(op_ref.clone());
+            }
+        }
+        for op_ref in ret_addr_stores {
+            fd.obank.mark_dead(op_ref);
+            changed += 1;
+        }
+
         if changed > 0 {
             Ok(action_status::NO_CHANGE)
         } else {
@@ -8842,41 +8899,6 @@ impl Action for ActionMapGlobals {
             }
         }
         // Ghidra always returns 0.
-        if fd.name == "main" {
-            let mut ram_config = 0i32;
-            let mut ram_free = 0i32;
-            let mut ram_has_me = 0i32;
-            let mut ram_as_store_addr = 0i32;
-            let mut const_config = 0i32;
-            for vn_ref in &fd.vbank.loc_tree {
-                let vn = vn_ref.0.read().unwrap();
-                let off = vn.get_offset();
-                if off >= 0x17520 && off < 0x17650 {
-                    match vn.get_space() {
-                        AddressSpace::Ram => {
-                            ram_config += 1;
-                            if vn.is_free() { ram_free += 1; }
-                            if vn.mapentry.is_some() { ram_has_me += 1; }
-                            // Check if this vn is used as STORE address
-                            for dop in vn.descend_iter() {
-                                let d = dop.read().unwrap();
-                                if d.opcode == crate::opcodes::OpCode::CPUI_STORE {
-                                    if let Some(a) = d.get_in(1) {
-                                        if std::sync::Arc::ptr_eq(&a, &vn_ref.0) {
-                                            ram_as_store_addr += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        AddressSpace::Const => const_config += 1,
-                        _ => {}
-                    }
-                }
-            }
-            eprintln!("[DBG-MAPG] fn=main Ram={} free={} has_me={} as_store={} Const={}",
-                ram_config, ram_free, ram_has_me, ram_as_store_addr, const_config);
-        }
         Ok(action_status::NO_CHANGE)
     }
 

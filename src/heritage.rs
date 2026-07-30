@@ -987,7 +987,6 @@ impl Heritage {
             }
         }
 
-        // [DBG-WIRE] temporary: confirm Phase 3 resolved stackoffsets
         let _resolved_count = fd.callspecs.iter()
             .filter(|fc| fc.stackoffset != crate::fspec::OFFSET_UNKNOWN)
             .count();

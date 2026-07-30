@@ -1702,6 +1702,17 @@ impl PrintC {
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
 
+            // Ghidra printc.cc:2696: if (inst->notPrinted()) continue;
+            // Skip dead ops. This matches emit_block_basic_rpn's is_dead()
+            // check and is load-bearing for the return-address push STORE
+            // elimination (ActionDeadCode marks them dead, but emit_block_ops
+            // previously rendered them anyway because it iterates the bblock
+            // op list, not the alivelist). Without this, dead STOREs leak as
+            // `*piVar = 0xADDR /* decimal */` in the output.
+            if op.is_dead() {
+                continue;
+            }
+
             // Update block-local register def map: track last op writing to each register
             if let Some(ref out_arc) = op.output {
                 let out_vn = out_arc.read().unwrap();

@@ -14733,8 +14733,11 @@ impl Rule for RuleStoreVarnode {
         let mut offoff: u64 = 0;
         let baseoff = match RuleLoadVarnode::check_spacebase(op_arc, &mut offoff) {
             Some(s) => s,
-            None => return Ok(action_status::NO_CHANGE),
+            None => {
+                return Ok(action_status::NO_CHANGE);
+            }
         };
+        let _ = ();
 
         // size = op->getIn(2)->getSize();
         let val_size = {

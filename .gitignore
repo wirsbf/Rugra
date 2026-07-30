@@ -64,3 +64,4 @@ tools/__pycache__/
 # Vendored Ghidra source (reference only, do not commit; huge tree)
 /ghidra/
 ghidra-src
+.ghidra_install/
