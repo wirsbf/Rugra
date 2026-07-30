@@ -1049,3 +1049,46 @@ Rugra 的 rename_direct 跳过了 place_multiequals 的完整版 + rename 的 IN
 
 **当前状态锁定**：leaks=0, ->field=9, defects=0, 1292 tests（build_dom_tree 改动已回退）。
 MULTIEQUAL/INDIRECT 缺口是最大的单一对齐目标，但需要专门 session 的多步实现。
+
+### P5 Step 5 — 子 Agent 流水线分析：完整根因链（2026-07-31）
+
+**两个并行子 Agent 的分析结果**：
+
+**Agent A（per-stage diff）**：确认了 8 个 pipeline stage 的逐步差异。核心结论：
+- Stage 0 (ActionStart): Rugra 的 ActionStart::apply 是空 stub，不调 start_processing
+- Stage 1 (Heritage): ActionHeritage 用 rename_direct shortcut，跳过完整 heritage()
+  → 0 MULTIEQUAL + 0 INDIRECT
+- 所有下游 stage (InferTypes/simplify/RestrictLocal/BlockStructure/SetCasts) 的缺陷
+  都是 Stage 1 的下游效应
+
+**Agent B（phi=0 调试）**：确认 place_multiequals_direct 的算法正确，
+phi=0 的唯一原因是 dom_frontier 为空（build_dom_tree 没调）。
+加 build_dom_tree 后 phi 从 0 变成 2947+5396（匹配 Ghidra 量级）。
+
+**但 build_dom_tree 导致 alive ops=0（完全回归）**：
+- phi 创建后，rename_direct 不处理新 phi 的 input varnodes
+  （phi inputs 是新创建的 free varnodes，没有 def 连接）
+- DeadCode 把所有 phi + 依赖它们的 op 全部消除
+- 整个函数体变空（alive ops: 0），->field 从 9 降到 0
+
+**完整根因链**：
+1. build_dom_tree 没调 → dom_frontier 空 → place_multiequals_direct 创建 0 phi
+2. 加 build_dom_tree → phi 创建 2947+5396 ✓
+3. 但 rename_direct 不处理 phi → phi inputs 未连接 → DeadCode 消除全部 → alive=0
+4. 需要同时改 rename_direct（或路由到完整 heritage() 的 rename()）
+
+**正确的修复方案（P0 #3，Agent A 建议）**：
+将 ActionHeritage::apply 从 rename_direct shortcut 路由到完整 heritage() 入口点。
+heritage() 的 rename() (renameRecurse) 正确处理 phi：
+  - 遍历 dom tree，每个 block 维护一个 VariableStack
+  - phi 节点的 input varnodes 从 predecessor 的 stack 获取
+  - 这连接了 phi inputs 到正确的 defs
+
+**但 heritage() 有 lock-deadlock 问题**（rename_direct 存在的原因）：
+完整 heritage() 用 fd_weak.upgrade() 获取 fd 的 write lock，与 ActionHeritage
+持有的 fd 冲突。需要重构 heritage() 避免 lock 冲突，或让 rename_direct 学习
+renameRecurse 的 phi 处理。
+
+**当前状态锁定**：leaks=0, ->field=9, defects=0, 1292 tests（build_dom_tree 已回退）。
+MULTIEQUAL/INDIRECT 缺口的修复需要同时改 build_dom_tree + rename_direct 的 phi
+处理，是一个需要专门 session 的多步实现。
