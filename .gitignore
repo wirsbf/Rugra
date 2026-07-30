@@ -65,3 +65,7 @@ tools/__pycache__/
 /ghidra/
 ghidra-src
 .ghidra_install/
+curl_run_stderr.txt
+curl_run_stdout.txt
+rdf_main.err
+rdf_main.out
