@@ -1,22 +1,43 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-06-28（核实更新）
+**日期**: 2026-07-30（核实更新）
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；大规模算法移植 + 接入生效**
 
-## 关键指标（2026-07-02 重新核实）
+## 关键指标（2026-07-30 重新核实）
 
 | 指标 | 当前 | 核实方式 |
 |---|---|---|
-| 单元测试 (`cargo test --lib`) | **736/736 通过** | 2026-06-28 实跑 |
+| 单元测试 (`cargo test --lib`) | **1292/1292 通过** | 2026-07-30 实跑 |
 | curl gcc 审计 | **24/24 OK 0 FAIL** | `python tools/audit_syntax.py result/curl_cur.c` |
-| httpd gcc 审计 | **29/29 OK 0 FAIL** | 同上 |
-| curl 结构缺陷 | **17/24 函数有缺陷**（空 else / 寄存器泄漏 / 调用丢失） | `python tools/compare_ghidra.py --summary-only` |
-| curl 变量编号问题 | **0 个**（checker 修复后；详见下方 2026-07-27 备注） | 同上 |
+| curl 结构缺陷 (defects) | **0/24 函数** | `python tools/compare_ghidra.py --summary-only` |
+| curl 变量编号 (numbering) | **0-1（预先存在的非确定性）** | 同上；leaks/->field 3次运行稳定 |
+| `*pVar=0xADDR` 调用点泄漏 | **0**（155→0，2026-07-30 修复） | `grep -c '\*p.*= 0x.* /\*' result/curl_cur.c` |
+| `->field` 结构字段渲染 | **9**（4 函数: getparameter/GetStr/next_url/match_url） | `grep -c '\->' result/curl_cur.c` |
 | goto | **0**（curl + httpd） | 实测 |
 | uVar 碎片 | **0** | 实测 |
 
 > ⚠️ **旧 while/if 计数 KPI 已废弃**（2026-07-02）。计数相同 ≠ 结构对齐（for↔while 等价变换），且检测不到真实缺陷。详见 `tools/compare_ghidra.py`（重写为结构骨架 diff + 编号连续性检查）和 AGENTS.md 铁律 11。
+
+### 2026-07-30 call-site 地址泄漏修复（leaks 155→0）
+
+**根因链**（P5 Step 2，dump_ir.rs 节点级 IR dump 确认）：
+- SLEIGH `call` 构造器 (ia.sinc:2949) emit `push88(&:8 inst_next)` → `STORE(spaceid, RSP, call_addr+5)`。
+- Ghidra 通过 Heritage::guardCalls + ActionRestrictLocal::markNotMapped 消除该 STORE。
+- Rugra 缺这些分析阶段；SLEIGH FFI 把 `$(STACKPTR)` 解析成 Register@0x20 而非 Stack spacebase，RuleStoreVarnode 失败。
+
+**修复**（d791ee8 + c8b3290 + 39fbc27，3 commit 链）：
+1. `emit_block_ops` 加 `is_dead()` check（对齐 emit_block_basic_rpn + printc.cc:2696）——之前遍历 bblock op list 不检查 DEAD flag。
+2. `ActionDeadCode` 加 return-addr STORE 保守消除（CONSERVATIVE DOWNGRADE per 铁律 1.5）——按 value=Const@[.text] 模式消除 push88 STORE。
+3. guardCalls 4-step 移植（has_effect + killedbycall + new_indirect_creation space + transAddr）+ WIRING（resolve stackoffset + invoke for return-address slot）。
+
+**验证**：3 次运行 leaks=0、->field=9 完全稳定；defects=0；1292/1292 tests pass。
+
+### 2026-07-30 预先存在的非确定性（待修复）
+
+- 禁用 return-addr elimination 后，两次 curl 运行仍 NON-DETERMINISTIC（变量名编号 bVar21↔bVar22 等变化）。
+- leaks=0 和 ->field=9 在 3 次运行中**完全稳定**（确定的）。
+- 非确定性源：HighVariable 命名/合并的 HashMap 迭代（merge_all → merge_addr_tied/merge_required 等可能用了 HashMap）。待定位。
 
 ### 2026-07-27 numbering checker 修复（numbering 749 → 0）
 
