@@ -728,3 +728,49 @@ INT_ADD count in main(): 7→5→3 (DeadCode removes 4 INT_ADDs across 2 mainloo
 
 ### 核心阻塞
 Heritage stack-based rename 使STORE的地址从INT_ADD output变为COPY output（stack.top()），导致INT_ADD output失去descendant被DeadCode移除。这是Heritage over-renaming的直接后果，需要disjoint-range基础设施解决。
+
+## P5（2026-07-30 main() call-site 地址泄漏 + 函数体坍缩 — 多子系统根因）
+
+### 决定性证据（Rugra vs Ghidra main() 对比）
+| 指标 | Ghidra | Rugra | 差距 |
+|---|---|---|---|
+| main() 行数 | 470 | 160 | -66% (函数体坍缩) |
+| `*pVar=0xADDR` 泄漏 | 0 | 9 (main) / 155 (全文件) | **关键 bug** |
+| `->` 字段访问 | 4 | 0 | -100% |
+| `::config.` 字段访问 | 114 | 0 | -100% (整个 config 访问丢失) |
+
+### 泄漏根因（sub-agent trace + 独立核实）
+1. **泄漏的 `0xADDR` 是 x86 `call` 指令的 `inst_next`**（call_addr + 5）。来源：SLEIGH `ia.sinc:2949` `{ push88(&:8 inst_next); call rel16; }`，`push88` 宏 (:2003) 展开为 `STORE(spaceid, RSP, inst_next)`。
+2. **SleighLifter (`src/disasm/sleigh_lift.rs:37-68`) 忠实地保留了 push+call 序列**；`X86Lifter` (`src/disasm/x86_lift.rs:596-617`) 只发 CPUI_CALL（注释错误声称 faithful，实际是 shortcut）。
+3. **Ghidra 也收到相同的 push STORE**（同样 ia.sinc），但通过分析阶段移除。Rugra 缺这个分析。
+
+### Ghidra 移除机制（已 trace，Rugra 缺对应基础设施）
+Ghidra 不在 `ActionDeadCode` 直接移除（coreaction.cc:4235-4276 只处理有 output 的 written varnode；STORE 无 output）。实际路径：
+- **Heritage::guardCalls** (heritage.cc:1443-1527): 对每个 CALL，根据 FuncCallSpecs 的 effect characterization 创建 INDIRECT op。当 effect==`return_address` (:1511,1518)，INDIRECT output 调 `setReturnAddress()`，使返回地址槽成为有模型化 effect 的 Stack varnode。
+- **Stack spacebase Heritage + 别名分析**: push STORE 写 RSP-8（调用者栈帧）。经 Stack Heritage rename 后，该 Stack 位置被识别为**非局部**（在函数本地 frame 之外）。
+- **dead-store elimination / non-local-write 折叠**: 非局部 STORE 不进入本地 scope，最终被丢弃（不渲染）。
+
+Rugra 缺口：
+- `Heritage::guard_calls` 是 no-op stub（`src/heritage.rs:1105`）。
+- Rugra `guard_stores` (`src/heritage.rs:944`) 对 spacebase STORE 创建 INDIRECT，但**不识别返回地址 effect**，**不移除非局部 STORE**。
+- Rugra 无 stack-frame 本地 scope 分析（`varmap.rs` ScopeLocal 部分实现，`src/printc.rs:5358-5361` 注释 RSP-relative 访问未完整）。
+
+### 函数体坍缩（160 vs 470 行）的连锁效应
+config 访问 (114 个 `::config.X`) 全部丢失，因为：
+- main() 的 config 字段 STORE/LOAD 在 IR 阶段就被返回地址 STORE 污染（`*piVar4 = 0xADDR` 占位符）。
+- 调用实参错误（`argc, argv` 而非 `lVar13, &outs`）— param-recovery 失败。
+- 整个 main 函数体结构坍缩（多余 `return;` 后跟 ~190 行，重复 `while (bVar7)` 循环）。
+
+### 修复顺序（自底向上，禁止 lifter-strip 捷径 — 违反铁律 1.4）
+**禁止**：在 `SleighLifter` 里 strip push88（这是机制 D Red Flag："因 Rugra 缺基础设施就在上层绕过"）。即使 `X86Lifter` 已经这么做了（注释是错的），也不能让两个 lifter 都走捷径。
+
+**正确的自底向上顺序**：
+1. **Port `Heritage::guardCalls`** (`src/heritage.rs:1105` ← `heritage.cc:1443-1527`): 需要先补 `FuncCallSpecs` 的 effect characterization 方法（`hasEffect`, `characterizeAsOutput`, `characterizeAsInputParam`）。`EffectRecord`/`EffectType::ReturnAddress` 数据模型已在 `src/fspec.rs:20` 存在，但未接入 Heritage。
+2. **Stack spacebase 非局部 STORE 识别**: 让 Heritage rename 区分返回地址槽（caller frame）vs 局部 spill slot。
+3. **Dead-store elimination for non-local stack writes**: 扩展 Rugra `ActionDeadCode` 或新增 Action，移除写非局部 caller-frame 的 STORE。
+4. **ActionNameVars::linkSpacebaseSymbol + Funcdata::linkSymbolReference + Scope::queryContainer**: 解锁 `::config.field` 渲染（P0.5 item 10 已记）。
+5. **printc opPtrsub TYPE_SPACEBASE 分支** (`src/printc.rs:8943-8950` 当前是 stub): port `printc.cc:1076-1116`。
+
+### 当前状态锁定
+- `->field=9` (4 函数, deterministic), 1292/1292 tests, defects=0, numbering=0 (1b3c406)。
+- main() 的 `->field` / `::config.field` 覆盖**不是 printc bug**，是 IR 上游多子系统缺口。本轮锁定诊断 + 修复顺序，禁止 lifter 捷径。
