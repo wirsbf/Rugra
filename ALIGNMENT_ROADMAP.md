@@ -901,3 +901,42 @@ RuleCollapseConstants fold 成 INT_ADD(RSP, Const@-8)），STORE 被转成 COPY�
 - Rugra: `dump_ir.rs --post` → rugra_ir.txt
 - Ghidra: `.ghidra_install/DumpPcodeIR.java` (headless postScript) → ghidra_ir.txt
 - diff: 节点级对比 opcode + in/out varnode
+
+### P5 Step 2 根因修正（2026-07-30，dump_ir 完整 BB 输出）
+
+**之前结论 "SLEIGH FFI 丢失 push88 的 INT_SUB" 是错的**。dump_ir PRE-pipeline
+完整 BB 输出显示 INT_SUB **是有的**：
+```
+[0x25f2] INT_SUB  out=reg@0x20[RSP]#8[w]  in0=reg@0x20[RSP][in]  in1=const@0x8
+[0x25f2] STORE    in0=const@0x3[spaceid]  in1=reg@0x20[RSP]#8[in]  in2=const@0x25f7
+[0x25f2] CALL     in0=ram@0x2490
+```
+
+**真正根因：inject_raw_ops 的 input varnode 复用 bug（SSA 违规）**：
+- INT_SUB 的 output 用 `create_with_space` 创建（新 Arc，标记 `[w]`）。
+- STORE 的 input 用 `find_or_create_input_space` 创建，该方法 (`src/varnode.rs:2270-2280`)
+  **只找 `!is_written()` 的 varnode**（free/input），永远返回原始 RSP input varnode
+  （`reg@0x20[in]`），**不复用 INT_SUB 刚创建的 written output**（`reg@0x20[w]`）。
+- 结果：STORE 读的是旧 RSP（input），而非 INT_SUB 的 output（new RSP）。
+  这是 **SSA 违规** —— read-after-write 应该读到 write 的 output。
+
+**连锁影响（解释所有现象）**：
+1. STORE 地址 varnode 的 `def` 是 None（它是 input，非 INT_SUB output）→
+   RuleStoreVarnode::vn_spacebase 找 INT_ADD/INT_SUB def 失败 → STORE 不转 COPY。
+2. ActionDeadCode 的 RSP 模式匹配在早期 pass 命中，但后续 SSA rename 把 RSP
+   重命名成 piVar4，模式匹配不到 → 155 个泄漏残留。
+3. 这是 ALIGNMENT_ROADMAP 反复提到的 "Rugra VarnodeBank per-Arc model vs
+   Ghidra single-Varnode-per-address" + "Phase 3.5 intra-block wiring" 问题的
+   根源 —— inject_raw_ops 阶段就没有正确建立 use-def。
+
+**真正的修复方向（自底向上）**：
+inject_raw_ops Phase 1 创建 input varnode 时，应先 `find_written`（找最近的
+write output at same space/offset/size），找不到再 `find_or_create_input_space`。
+`find_written` 方法已存在 (`src/varnode.rs:2288`)，但 inject_raw_ops 没用它。
+这是 read-after-write 的正确 SSA 语义，影响面大（所有 register reads），需要
+小心 + 充分测试。
+
+**与 Ghidra 的关键差异**：Ghidra 的 VarnodeBank 用 (space, offset, size, create_index)
+做唯一性 —— 每个 op output 是新 varnode（新 create_index），input 通过 xref 找
+"最近定义"。Rugra 的 find_or_create_input_space 永远找 create_index=0 的 input，
+跳过了中间的 written 定义。
