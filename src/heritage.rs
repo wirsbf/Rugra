@@ -3342,7 +3342,6 @@ impl Heritage {
         let mut has_phi_node = std::collections::HashSet::new();
 
         let mut defs_by_loc: BTreeMap<(AddressSpace, Address), Vec<i32>> = BTreeMap::new();
-        let mut has_reads: std::collections::HashSet<(AddressSpace, Address)> = std::collections::HashSet::new();
         for vn_ref in &vbank.loc_tree {
             let vn = vn_ref.0.read().unwrap();
             let space = vn.get_space();
@@ -3392,20 +3391,10 @@ impl Heritage {
                         .or_default()
                         .push(entry_block_idx);
                 }
-            } else if !vn.has_no_descend() && !vn.is_constant() {
-                has_reads.insert((space, vn.loc));
             }
         }
 
-        // Precompute block index → position map for O(1) lookup
-        let block_by_idx: std::collections::HashMap<i32, &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> =
-            bblocks.blocks.iter().map(|b| (b.read().unwrap().get_index(), b)).collect();
-
         for ((space, addr), blocks) in defs_by_loc {
-            // Ghidra heritage.cc:2619-2624: skip phi for write-only Unique-space
-            if !has_reads.contains(&(space, addr)) && space == crate::space::AddressSpace::Unique {
-                continue;
-            }
             worklist.clear();
             ever_on_worklist.clear();
             has_phi_node.clear();
@@ -3416,7 +3405,10 @@ impl Heritage {
             }
 
             while let Some(x_idx) = worklist.pop_front() {
-                let df = block_by_idx.get(&x_idx)
+                let df = bblocks
+                    .blocks
+                    .iter()
+                    .find(|b| b.read().unwrap().get_index() == x_idx)
                     .map(|b| b.read().unwrap().get_dom_frontier())
                     .unwrap_or_default();
 
@@ -3557,18 +3549,18 @@ impl Heritage {
             // Ghidra guard() cc:1164-1175: for FREE reads (not written,
             // not input), only set activeHeritage if they have EXACTLY 1
             // live descendant. Ghidra throws LowlevelError for multi-desc.
-            // Rugra: skip multi-descendant free reads in ALL spaces (not
-            // just Ram/Const). This matches Ghidra guard() cc:1170 which
-            // throws for multi-desc free varnodes. Previously Rugra only
-            // skipped Ram/Const, allowing Register/Unique multi-desc frees
-            // to be set activeHeritage → incorrect SSA rename → DeadCode
-            // removes everything.
+            // Rugra: skip multi-descendant free reads in Ram/Const space
+            // (address constants that shouldn't be over-renamed), but allow
+            // Register-space multi-descendant reads (needed for correct SSA
+            // of register uses across blocks).
             if !vn.is_written() && !vn.is_input() {
-                let live_desc: usize = vn.descend.iter()
-                    .filter(|w| w.strong_count() > 0)
-                    .count();
-                if live_desc != 1 {
-                    continue;
+                if matches!(vn.address_space, crate::space::AddressSpace::Ram | crate::space::AddressSpace::Const) {
+                    let live_desc: usize = vn.descend.iter()
+                        .filter(|w| w.strong_count() > 0)
+                        .count();
+                    if live_desc != 1 {
+                        continue;
+                    }
                 }
             }
             vn.set_active_heritage();
@@ -3701,14 +3693,9 @@ impl Heritage {
                                         crate::space::AddressSpace::Ram
                                         | crate::space::AddressSpace::Const)
                                     && !vn_read.has_no_descend();
-                                // Ghidra cc:2495-2496: skip if isHeritageKnown OR not activeHeritage.
-                                // BUT phi input placeholders (created by insert_multiequal_direct)
-                                // are free (not written/input) with 1 descendant. They don't have
-                                // activeHeritage because guard() never ran on them. Ghidra's
-                                // renameRecurse cc:2538 only checks !isHeritageKnown for phi inputs.
-                                // So: skip only if heritageKnown. For free varnodes, process them
-                                // even without activeHeritage (matching Ghidra cc:2538).
-                                vn_read.is_heritage_known() || is_addr_const
+                                vn_read.is_heritage_known()
+                                    || !vn_read.is_active_heritage()
+                                    || is_addr_const
                             };
                             if should_skip {
                                 continue;
@@ -3813,7 +3800,6 @@ impl Heritage {
                             //   2. new_vn->addDescend(op)
                             //   3. op->inrefs[slot] = vnnew
                             vnin_arc.write().unwrap().erase_descend(&op_ref.0);
-                            vnin_arc.write().unwrap().erase_descend(&op_ref.0);
                             op.inrefs[i] = vnnew.clone();
                             vnnew
                                 .write()
@@ -3916,7 +3902,6 @@ impl Heritage {
                                 //   1. old_vn->eraseDescend(op)  ← was missing
                                 //   2. new_vn->addDescend(op)
                                 //   3. op->inrefs[slot] = vnnew
-                                vnin_arc.write().unwrap().erase_descend(&op_ref.0);
                                 vnin_arc.write().unwrap().erase_descend(&op_ref.0);
                                 op.inrefs[my_in_idx] = vnnew.clone();
                                 vnnew

@@ -6045,12 +6045,7 @@ impl ActionFuncLink {
         } else if is_known_function(callee_name) {
             known_param_count(callee_name)
         } else {
-            // Ghidra funcLinkInput cc:1548: unknown → initActiveInput()
-            // then Heritage guard() → guardCalls connects params.
-            // Rugra skips guard(), so default to 1 param (RDI) to keep
-            // COPY(param_reg, const) alive (prevents DeadCode removal).
-            // This enables RulePtrArith → PTRSUB → ->field rendering.
-            1
+            0
         };
         if n_args > 0 {
             // Known prototype: build parameter varnodes via opInsertInput.
