@@ -160,7 +160,6 @@ impl Action for ActionHeritage {
         //           then handles the new Stack varnodes)
         {
             let mut heritage = std::mem::take(&mut fd.heritage);
-            fd.bblocks.build_dom_tree();
             heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
             heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
             heritage.pass += 1;
@@ -180,7 +179,6 @@ impl Action for ActionHeritage {
         crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
         {
             let mut heritage = std::mem::take(&mut fd.heritage);
-            fd.bblocks.build_dom_tree();
             heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
             heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
             heritage.pass += 1;
