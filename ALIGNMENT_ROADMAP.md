@@ -1092,3 +1092,25 @@ renameRecurse 的 phi 处理。
 **当前状态锁定**：leaks=0, ->field=9, defects=0, 1292 tests（build_dom_tree 已回退）。
 MULTIEQUAL/INDIRECT 缺口的修复需要同时改 build_dom_tree + rename_direct 的 phi
 处理，是一个需要专门 session 的多步实现。
+
+### P5 Step 6 — idom 算法 bug 定位（2026-07-31）
+
+**逐层定位结果**：
+1. `build_dom_tree` 加到 ActionHeritage 后：`dom_frontier=262` ✓
+2. `place_multiequals_direct` 的 CHK 循环 pop 了 1688 次，但 **每次 `df_len=0`**
+3. 所有 def blocks 的 `has_idom=false`
+4. `build_dom_tree` 诊断：`blocks=152 rpo_len=152 idom_set=115 idom_neg1=37`
+5. **37 个可达 blocks 没有 idom**，包括 idx=0(entry), 1,2,3,...,9
+
+**idom=-1 的 blocks 特征**：idx=0 size_in=0（entry），idx=1 size_in=2, idx=6 size_in=3, 
+idx=9 size_in=4 — 这些是 join-points，应该有 idom。
+
+**根因**：`build_dom_tree` 的 Cooper-Harvey-Kennedy idom 算法 (src/block.rs:1758-1820)
+没有正确收敛。37/152 blocks 的 idom 保持 -1。这导致 `calc_dom_frontier` 无法为这些
+blocks 计算 frontier → CHK 从这些 blocks 开始时 `df_len=0` → 0 phi。
+
+**修复方向**：
+1. 检查 CHK idom 算法的 entry node 设置（line 1766: `idom_indices[start_node_index] = 
+   start_node_index`，但 `start_node_index` 可能不是 0）
+2. 检查 `intersect` 函数（line 1841）在 self-loop/back-edge 上的行为
+3. 可能需要增加迭代次数或修复 RPO 的 entry 选择
