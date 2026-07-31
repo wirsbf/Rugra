@@ -1762,8 +1762,34 @@ impl BlockGraph {
             rpo_indices[node.read().unwrap().get_index() as usize] = i as i32;
         }
 
-        let start_node_index = rpo[0].read().unwrap().get_index() as usize;
-        idom_indices[start_node_index] = start_node_index as i32;
+        // Seed every root of the CFG as its own immediate dominator. A root
+        // is any block with no incoming edges, or any block carrying the
+        // ENTRY_POINT flag. This mirrors Ghidra's `calcForwardDominator`
+        // (block.cc:1974-1991), which introduces a virtual root dominating
+        // every entry and then excises it — leaving each real root dominating
+        // itself. Seeding only `rpo[0]` (as the previous code did) is
+        // incorrect when `calc_rpo` produces multiple DFS roots: the
+        // non-first roots end up at RPO positions > 0 with `idom = -1`, so
+        // their successors can never find a processed predecessor and the
+        // whole reachable region cascades to `idom = -1`.
+        for node in &rpo {
+            let n = node.read().unwrap();
+            let is_root = n.size_in() == 0
+                || (n.get_flags() & block_flags::ENTRY_POINT) != 0;
+            if is_root {
+                let idx = n.get_index() as usize;
+                idom_indices[idx] = idx as i32;
+            }
+        }
+
+        // If no root was found (e.g. a bare cycle with no size_in==0 block
+        // and no ENTRY_POINT flag), fall back to the first RPO block, as
+        // Ghidra's findSpanningTree does when there is no obvious entry
+        // (block.cc:1036-1038: `rootlist.push_back(list[0])`).
+        if idom_indices.iter().all(|&v| v == -1) {
+            let idx = rpo[0].read().unwrap().get_index() as usize;
+            idom_indices[idx] = idx as i32;
+        }
 
         let mut changed = true;
         let max_dom_iters = self.blocks.len() * 3 + 10;

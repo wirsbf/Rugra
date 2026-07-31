@@ -3489,13 +3489,20 @@ impl Heritage {
 
         let out_vn = vbank.create_with_space(size, space, addr.as_u64());
         vbank.set_def(out_vn.clone(), Arc::downgrade(&op_ref.0));
+        // Ghidra heritage.cc:2635: vnout->setActiveHeritage();
+        out_vn.write().unwrap().set_active_heritage();
 
         {
             let mut op = op_ref.0.write().unwrap();
             op.output = Some(out_vn);
-            // Initialize inrefs with placeholders so they can be filled by index
+            // Initialize inrefs with placeholders so they can be filled by index.
+            // Ghidra cc:2638-2639: fd->opSetInput(multiop,vnin,j) — the newVarnode
+            // call creates the varnode and opSetInput wires it as input (adds descend).
+            // We must add the descend link so rename_direct's guard() sees these as
+            // free reads with descendants (not skipped by has_no_descend check).
             for _ in 0..num_in {
                 let placeholder = vbank.create_with_space(size, space, addr.as_u64());
+                placeholder.write().unwrap().descend.push(Arc::downgrade(&op_ref.0));
                 op.inrefs.push(placeholder);
             }
         }
