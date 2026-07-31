@@ -3795,6 +3795,11 @@ impl Heritage {
                                     vnnew_w.mapentry = old_mapentry;
                                 }
                             }
+                            // Ghidra cc:2518: fd->opSetInput(op, vnnew, slot) does 3 things:
+                            //   1. old_vn->eraseDescend(op)  ← was missing (caused SSA corruption)
+                            //   2. new_vn->addDescend(op)
+                            //   3. op->inrefs[slot] = vnnew
+                            vnin_arc.write().unwrap().erase_descend(&op_ref.0);
                             op.inrefs[i] = vnnew.clone();
                             vnnew
                                 .write()
@@ -3893,6 +3898,11 @@ impl Heritage {
                                         vnnew_w.mapentry = old_mapentry;
                                     }
                                 }
+                                // Ghidra cc:2547: fd->opSetInput(multiop, vnnew, slot) does 3 things:
+                                //   1. old_vn->eraseDescend(op)  ← was missing
+                                //   2. new_vn->addDescend(op)
+                                //   3. op->inrefs[slot] = vnnew
+                                vnin_arc.write().unwrap().erase_descend(&op_ref.0);
                                 op.inrefs[my_in_idx] = vnnew.clone();
                                 vnnew
                                     .write()
