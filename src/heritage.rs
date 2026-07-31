@@ -3636,6 +3636,11 @@ impl Heritage {
         }
 
         let mut work: Vec<WorkItem> = vec![WorkItem::Enter(block_arc)];
+        // Track visited blocks to prevent dom-tree cycles from causing
+        // infinite work-stack growth. Ghidra's dom-tree is acyclic by
+        // construction, but Rugra's build_dom_subtree can create cycles
+        // if idom has a self-reference bug.
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // Guard against dom-tree cycles (which would grow the work stack unboundedly).
         let max_work = 100000usize;
 
@@ -3648,6 +3653,13 @@ impl Heritage {
                 WorkItem::Enter(block_arc) => {
                     // Skip dead blocks.
                     if (block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD) != 0 {
+                        continue;
+                    }
+                    // Skip already-visited blocks (dom-tree cycle protection).
+                    let block_ptr = Arc::as_ptr(&block_arc) as *const () as usize;
+                    if !visited.insert(block_ptr) {
+                        // Already visited — dom-tree has a cycle. Skip to prevent
+                        // infinite work-stack growth.
                         continue;
                     }
 
@@ -3923,8 +3935,15 @@ impl Heritage {
                     let children = block_arc.read().unwrap().get_dom_children();
                     work.push(WorkItem::Leave(defined_here));
                     // Push children in reverse order so they process in original order.
+                    // GHIDRA cc:2555: domchild[i] are the dominator-tree children.
+                    // A block should NEVER be its own dom-child (that's a cycle).
+                    // Skip self-references to prevent infinite work-stack growth.
                     for child in children.into_iter().rev() {
-                        work.push(WorkItem::Enter(child));
+                        // Skip if child is the same block (dom-tree self-cycle bug)
+                        let is_self = Arc::ptr_eq(&child, &block_arc);
+                        if !is_self {
+                            work.push(WorkItem::Enter(child));
+                        }
                     }
                 }
                 WorkItem::Leave(defined_here) => {

@@ -491,7 +491,9 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         let gsp = global_struct_ptrs.clone();
         let kspt = known_struct_ptr_types.clone();
 
-        let handle = std::thread::spawn(move || -> Option<String> {
+        let handle = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || -> Option<String> {
             let t0 = std::time::Instant::now();
             eprintln!("[STEP] {} START raw_ops={}", func_name, raw_ops.len());
 
@@ -536,19 +538,25 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
             let c_code = output_buffer.get_output();
 
             if c_code.trim().is_empty() { None } else { Some(c_code) }
-        });
+        })
+        .expect("failed to spawn worker thread");
 
         // Wait with 10-second timeout using channel
         let (tx, rx) = std::sync::mpsc::channel();
         let vaddr = func.vaddr;
         let name_copy = func.name.clone();
         let size = func.size;
-        std::thread::spawn(move || {
-            let result = handle.join();
-            let _ = tx.send(result);
-        });
+        // Use explicit stack size: Rugra's deep recursion (Heritage rename,
+        // block structuring) needs more than the default 2MB Windows stack.
+        let watcher = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024) // 256MB like Ghidra
+            .spawn(move || {
+                let result = handle.join();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn watcher thread");
 
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        match rx.recv_timeout(std::time::Duration::from_secs(60)) {
             Ok(Ok(Some(c_code))) => {
                 println!("/* ---- 0x{:x}: {} ({} bytes) ---- */", vaddr, name_copy, size);
                 println!("{}", c_code);
@@ -569,7 +577,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 total_fail += 1;
             }
             Err(_) => {
-                println!("/* ---- 0x{:x}: {} TIMEOUT (>10s) ---- */", vaddr, name_copy);
+                println!("/* ---- 0x{:x}: {} TIMEOUT (>60s) ---- */", vaddr, name_copy);
                 total_fail += 1;
             }
         }

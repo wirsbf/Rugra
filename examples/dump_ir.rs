@@ -200,7 +200,9 @@ fn main() {
     db.set_default_actions();
     if let Some(action) = db.get_action_mut("decompile") {
         let mut fd_write = fd_arc.write().unwrap();
+        eprintln!("[PIPE] {} action apply START", fd_write.name);
         let _ = action.apply(&mut *fd_write);
+        eprintln!("[PIPE] {} action apply DONE", fd_write.name);
     }
     let fd_read = fd_arc.read().unwrap();
     println!("# Rugra IR (POST-pipeline, after full decompile):");
