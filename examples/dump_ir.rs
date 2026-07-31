@@ -138,7 +138,7 @@ fn main() {
             if let Some(name) = elf.strtab.get_at(sym.st_name).or_else(|| elf.dynstrtab.get_at(sym.st_name)) {
                 if name == target {
                     func_addr = Some(sym.st_value);
-                    func_size = sym.st_size.max(0x100);
+                    func_size = sym.st_size;
                     func_name = name.to_string();
                     break;
                 }
