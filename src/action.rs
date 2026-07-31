@@ -290,12 +290,23 @@ impl Action for ActionGroup {
     fn perform(&mut self, fd: &mut Funcdata, state: &mut ActionState) -> Result<i32> {
         state.count = 0;
         state.count_tests += 1;
+        let grp_name = self.get_name().to_string();
+        let fd_name = fd.name.clone();
+        let mut iters = 0;
         loop {
+            iters += 1;
             state.lcount = state.count;
             let res = self.apply(fd)?;
             state.count += res;
             let flags = if state.flags != 0 { state.flags } else { self.flags };
             if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
+                break;
+            }
+            if iters % 50 == 0 && (fd_name == "glob_url" || fd_name == "glob_word" || fd_name == "myprogress") {
+                eprintln!("[LOOP] {} group '{}' iter {} count={}", fd_name, grp_name, iters, state.count);
+            }
+            if iters > 500 {
+                eprintln!("[STALL2] {} group '{}' hit {} iterations, breaking", fd_name, grp_name, iters);
                 break;
             }
         }
@@ -374,8 +385,16 @@ impl Action for ActionRestartGroup {
         if self.curstart == -1 {
             return Ok(0); // Already completed
         }
+        let _fd_name = fd.name.clone();
+        let mut _restart_count = 0;
         loop {
+            _restart_count += 1;
+            let _rt = std::time::Instant::now();
             let res = self.group.apply(fd)?;
+            let _elapsed = _rt.elapsed();
+            if _elapsed.as_secs() > 2 && (_fd_name == "glob_url" || _fd_name == "glob_word" || _fd_name == "myprogress") {
+                eprintln!("[RESTART] {} restart {} took {:?} res={}", _fd_name, _restart_count, _elapsed, res);
+            }
             if res < 0 {
                 return Ok(res); // Bubble up partial completion / breakpoint
             }
@@ -393,6 +412,11 @@ impl Action for ActionRestartGroup {
             self.curstart += 1;
             if self.curstart > self.maxrestarts {
                 fd.warning_header("Exceeded maximum restarts with more pending");
+                self.curstart = -1;
+                return Ok(0);
+            }
+            if _restart_count > 5 && (_fd_name == "glob_url" || _fd_name == "glob_word" || _fd_name == "myprogress") {
+                eprintln!("[RESTART] {} exceeded 5 restarts, breaking", _fd_name);
                 self.curstart = -1;
                 return Ok(0);
             }
@@ -472,6 +496,9 @@ impl Action for ActionPool {
         let want_stats = std::env::var("RUGRA_RULE_STATS")
             .map(|v| v == "1")
             .unwrap_or(false);
+        // [PINGPONG] Track per-rule hits per apply() call to detect cycling.
+        let track_pingpong = matches!(fd.name.as_str(), "glob_url" | "glob_word" | "myprogress");
+        let mut pp_hits: std::collections::HashMap<usize, i32> = Default::default();
 
         let mut pass_changes = 0;
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
@@ -498,6 +525,9 @@ impl Action for ActionPool {
                     if res > 0 {
                         pass_changes += res;
                         applied_any = true;
+                        if track_pingpong {
+                            *pp_hits.entry(ridx).or_insert(0) += res;
+                        }
                         if want_stats {
                             *self.rule_hits.entry(ridx).or_insert(0) += res;
                         }
@@ -515,6 +545,16 @@ impl Action for ActionPool {
             }
         }
         self.total += pass_changes;
+        // [PINGPONG] Print per-rule hits to find cycling Rules.
+        if track_pingpong && pass_changes > 0 {
+            let mut sorted: Vec<_> = pp_hits.iter().collect();
+            sorted.sort_by(|a, b| b.1.cmp(a.1));
+            let hits_str: Vec<String> = sorted.iter().take(5).map(|(ridx, cnt)| {
+                let name = self.rules.get(**ridx).map(|r| r.get_name().to_string()).unwrap_or_default();
+                format!("{}={}", name, cnt)
+            }).collect();
+            eprintln!("[PP] {} pool={} changes={} top: {}", fd.name, self.name, pass_changes, hits_str.join(", "));
+        }
         // Print stats on each pass if enabled.
         if want_stats && pass_changes > 0 {
             let fn_name = fd.name.as_str();
