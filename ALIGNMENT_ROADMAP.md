@@ -1114,3 +1114,25 @@ blocks 计算 frontier → CHK 从这些 blocks 开始时 `df_len=0` → 0 phi�
    start_node_index`，但 `start_node_index` 可能不是 0）
 2. 检查 `intersect` 函数（line 1841）在 self-loop/back-edge 上的行为
 3. 可能需要增加迭代次数或修复 RPO 的 entry 选择
+
+### P5 Step 7 — idom fix + phi 创建进展（2026-07-31）
+
+**已修复 (commit 4d11707)**：
+1. **idom root-seeding bug**: `build_dom_tree` 只 seed `rpo[0]` 作为 idom=self，
+   漏了其他 CFG 入口 blocks。修复：seed 所有 `size_in==0` 或 `ENTRY_POINT` 的 blocks。
+   结果：idom_neg1 从 37/152 降到 **0**（所有 blocks 都有 idom）。
+   4 个回归测试在 `tests/dom_repro.rs`。
+2. **build_dom_tree 时机**: 在 `ActionHeritage::apply` 的 pass 1 + pass 2 之前调
+   `fd.bblocks.build_dom_tree()`，让 dom_frontier 非空。
+3. **phi output active_heritage**: `insert_multiequal_direct` 设
+   `out_vn.set_active_heritage()`（heritage.cc:2635）。
+4. **phi input descend links**: phi input placeholders 加 descend link，
+   让 rename_direct 的 guard 看到它们为 free reads with descendants。
+
+**结果**: phi 节点**现在创建了**（stderr 充满 SSA warnings），但 rename_direct
+产生 SSA corruption（`free varnode gets multiple descendants`,
+`erase_descend op not in descend list`）→ DeadCode 消除全部 → alive=0, ->field=0。
+
+**下一个修复**: rename_direct 的 SSA rename 在处理 phi nodes 时创建不一致的
+SSA（varnodes 被错误共享）。需要深入调试 rename_direct 的 phi-input 替换逻辑，
+特别是 VariableStack 在 dominator-tree 遍历中的 push/pop 时机。
