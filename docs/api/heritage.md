@@ -555,6 +555,25 @@ Heritage 过程往往并不是简单线性扫描，而是要考虑：
 
 3. **deleteVarnode of consumed frees**（cc:2520-2521 / cc:2549-2550）—— 替换后若 `vnin->hasNoDescend()` 则 `fd->deleteVarnode(vnin)`。Rugra 此前从不删除 → 死 varnode 留在 loc_tree 污染后续 pass。现通过 `VarnodeBank::destroy_varnode` 移植。
 
+### 2026-07-27 死锁修正（destroy_varnode 延后执行）
+
+`visit_rename_direct` 的 op 处理循环持 `op_ref.0.write().unwrap()`（op 写锁）期间，
+原先直接调用 `vbank.destroy_varnode(&vnin_arc)`。`destroy_varnode` 内部对
+`vbank.def_tree` / `loc_tree` 做 `BTreeSet::remove`，其 `Ord` 实现
+（`VarnodeDefRef::Ord` varnode.rs:1778；`VarnodeLocRef::Ord` varnode.rs:1727）
+对 WRITTEN varnode 取 `def.upgrade().read().unwrap()` 读其 defining op 的 SeqNum。
+BTreeSet 比较时若遇到当前 op 的 output varnode（`def` Weak 指向当前 op），尝试
+`op.read()` → 同一线程在已持写锁时再读 → **死锁**（`std::sync::RwLock` 非重入）。
+
+**症状**：7 个函数（myprogress/getparameter/glob_word/glob_set/glob_range/glob_url/next_url）
+在 `ActionHeritage::apply` 的 `rename_direct` 中无限挂起，导致 curl_decompile 全部超时。
+
+**修复**：收集每个 op 处理期间需要销毁的 varnode 到 `pending_destroys: Vec`，
+待 op 写锁释放（op 循环迭代结束）后再统一 `destroy_varnode`。SSA 语义不变
+（Ghidra 即时删除的唯一可观察效果是 bank mutation，这里仍是确定性的）。
+
+效果：24/24 函数全部完成，0 超时，差分门禁 defects=0 / numbering=0。
+
 同时修正 `rename_direct` 开头的 marker：原来只对 `!is_heritage_known()` 的 varnode 设 `activeHeritage`（即只标 free，跳过 written），但 Ghidra `guard()`（cc:1175/1182）对 **read+write** 两个 list 都设。written varnode 漏标导致 rename 的 `if (!vnout->isActiveHeritage()) continue;`（cc:2527）跳过 push → stack 空 → empty-stack promotion 触发 → set_input_varnode 把多分支 input 去重成同一个 → diamond merge 丢失分支独立性。现按 Ghidra 语义对非常量/非 annotation 的所有 varnode（含 written）设 activeHeritage。
 
 ---

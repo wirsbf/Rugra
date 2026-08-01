@@ -3664,6 +3664,22 @@ impl Heritage {
                     }
 
                     let mut defined_here: Vec<(AddressSpace, Address)> = Vec::new();
+                    // DEADLOCK FIX (heritage.rs): destroy_varnode calls
+                    // BTreeSet::remove on vbank.def_tree/loc_tree, whose Ord
+                    // implementations (VarnodeDefRef::Ord at varnode.rs:1778 and
+                    // VarnodeLocRef::Ord at varnode.rs:1727) READ the defining
+                    // op's SeqNum via `def.upgrade().read().unwrap()`. If that
+                    // op is currently WRITE-locked by the op-processing loop
+                    // (`let mut op = op_ref.0.write().unwrap()`), the read
+                    // attempt deadlocks (std::sync::RwLock is non-reentrant).
+                    //
+                    // We therefore collect consumed free varnodes per-op and
+                    // destroy them AFTER the op write-guard is dropped, in
+                    // `pending_destroys`. This is purely a Rust-lock-ordering
+                    // fix; the SSA semantics are unchanged (Ghidra deletes the
+                    // varnode immediately, but the bank mutation is the only
+                    // observable effect and remains deterministic here).
+                    let mut pending_destroys: Vec<Arc<RwLock<Varnode>>> = Vec::new();
 
                     // 1. Process Phis (MULTIEQUAL) - only their outputs.
                     // Ghidra cc:2525-2530: push output if isActiveHeritage, clear flag.
@@ -3819,9 +3835,10 @@ impl Heritage {
                                 .descend
                                 .push(Arc::downgrade(&op_ref.0));
                             // Ghidra cc:2520-2521: if (vnin->hasNoDescend()) fd->deleteVarnode(vnin);
-                            // (SEMANTIC #3)
+                            // (SEMANTIC #3) — DEFERRED to after op write-guard
+                            // release (see DEADLOCK FIX above).
                             if vnin_arc.read().unwrap().has_no_descend() {
-                                vbank.destroy_varnode(&vnin_arc);
+                                pending_destroys.push(vnin_arc.clone());
                             }
                         }
 
@@ -3922,12 +3939,22 @@ impl Heritage {
                                     .descend
                                     .push(Arc::downgrade(&op_ref.0));
                                 // Ghidra cc:2549-2550: deleteVarnode if no descend.
-                                // (SEMANTIC #3, phi-input variant)
+                                // (SEMANTIC #3, phi-input variant) — DEFERRED
+                                // (see DEADLOCK FIX above).
                                 if vnin_arc.read().unwrap().has_no_descend() {
-                                    vbank.destroy_varnode(&vnin_arc);
+                                    pending_destroys.push(vnin_arc.clone());
                                 }
                             }
                         }
+                    }
+
+                    // DEADLOCK FIX: now that all op write-guards from the
+                    // op-processing and phi-filling loops above have been
+                    // dropped, it is safe to mutate vbank.{loc,def}_tree —
+                    // the Ord impls can read any op's SeqNum without
+                    // contending with our (released) op write-guards.
+                    for vn in pending_destroys {
+                        vbank.destroy_varnode(&vn);
                     }
 
                     // 4. Schedule: Leave (pop) AFTER all children.
