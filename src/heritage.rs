@@ -3636,6 +3636,7 @@ impl Heritage {
         }
 
         let mut work: Vec<WorkItem> = vec![WorkItem::Enter(block_arc)];
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // Track visited blocks to prevent dom-tree cycles from causing
         // infinite work-stack growth. Ghidra's dom-tree is acyclic by
         // construction, but Rugra's build_dom_subtree can create cycles

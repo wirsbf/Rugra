@@ -491,93 +491,60 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         let gsp = global_struct_ptrs.clone();
         let kspt = known_struct_ptr_types.clone();
 
-        let handle = std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024)
-            .spawn(move || -> Option<String> {
-            let t0 = std::time::Instant::now();
-            eprintln!("[STEP] {} START raw_ops={}", func_name, raw_ops.len());
+        // Run directly in main thread (no thread spawn) to avoid
+        // thread-related timeout issues on Windows.
+        let t0 = std::time::Instant::now();
+        eprintln!("[STEP] {} START raw_ops={}", func_name, raw_ops.len());
 
-            let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
-            fd.external_prototypes = proto_db;
-            fd.global_struct_ptrs = gsp;
-            fd.known_struct_ptr_types = kspt;
-            for (&addr, name) in &sym_table {
-                fd.add_symbol(addr, name.clone());
-            }
-            for (&addr, s) in &str_table {
-                fd.add_string(addr, s.clone());
-            }
+        let mut fd = Funcdata::new(&func_name, Address::new(func_vaddr), func_size as i32);
+        fd.external_prototypes = proto_db;
+        fd.global_struct_ptrs = gsp;
+        fd.known_struct_ptr_types = kspt;
+        for (&addr, name) in &sym_table {
+            fd.add_symbol(addr, name.clone());
+        }
+        for (&addr, s) in &str_table {
+            fd.add_string(addr, s.clone());
+        }
 
-            fd.inject_raw_ops(&raw_ops);
-            eprintln!("[STEP] {} inject done {:?} bblocks={}", func_name, t0.elapsed(), fd.bblocks.get_size());
+        fd.inject_raw_ops(&raw_ops);
+        eprintln!("[STEP] {} inject done {:?} bblocks={}", func_name, t0.elapsed(), fd.bblocks.get_size());
 
-            let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
-            fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
+        let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
+        fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
 
-            let mut db = ActionDatabase::new();
-            db.set_default_actions();
-            if let Some(action) = db.get_action_mut("decompile") {
-                let mut fd_write = fd_arc.write().unwrap();
-                let _ = action.apply(&mut *fd_write);
-            }
-            eprintln!("[STEP] {} action done {:?}", func_name, t0.elapsed());
+        let mut db = ActionDatabase::new();
+        db.set_default_actions();
+        if let Some(action) = db.get_action_mut("decompile") {
+            let mut fd_write = fd_arc.write().unwrap();
+            let _ = action.apply(&mut *fd_write);
+        }
+        eprintln!("[STEP] {} action done {:?}", func_name, t0.elapsed());
 
-            let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
-            // EXPERIMENTAL: enable the RPN emit path (printc.rs build_rpn_token_table /
-            // emit_block_basic_rpn / dispatch_op_rpn). NOTE: as of this experiment
-            // `rpn_enabled` is only ever written, never read — doc_function does NOT
-            // gate on it, so this call is expected to be a no-op. Kept here to verify
-            // that hypothesis end-to-end.
-            printer.set_rpn_enabled(true);
-            let fd_read = fd_arc.read().unwrap();
-            printer.doc_function(&fd_read);
-            drop(fd_read);
-            eprintln!("[STEP] {} print done {:?}", func_name, t0.elapsed());
+        let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+        printer.set_rpn_enabled(true);
+        let fd_read = fd_arc.read().unwrap();
+        printer.doc_function(&fd_read);
+        drop(fd_read);
+        eprintln!("[STEP] {} print done {:?}", func_name, t0.elapsed());
 
-            let output_buffer = printer.take_emit().into_any().downcast::<EmitNoMarkup>().unwrap();
-            let c_code = output_buffer.get_output();
+        let output_buffer = printer.take_emit().into_any().downcast::<EmitNoMarkup>().unwrap();
+        let c_code = output_buffer.get_output();
+        let result_str: Option<String> =
+            if c_code.trim().is_empty() { None } else { Some(c_code) };
 
-            if c_code.trim().is_empty() { None } else { Some(c_code) }
-        })
-        .expect("failed to spawn worker thread");
-
-        // Wait with 10-second timeout using channel
-        let (tx, rx) = std::sync::mpsc::channel();
         let vaddr = func.vaddr;
         let name_copy = func.name.clone();
         let size = func.size;
-        // Use explicit stack size: Rugra's deep recursion (Heritage rename,
-        // block structuring) needs more than the default 2MB Windows stack.
-        let watcher = std::thread::Builder::new()
-            .stack_size(256 * 1024 * 1024) // 256MB like Ghidra
-            .spawn(move || {
-                let result = handle.join();
-                let _ = tx.send(result);
-            })
-            .expect("failed to spawn watcher thread");
 
-        match rx.recv_timeout(std::time::Duration::from_secs(60)) {
-            Ok(Ok(Some(c_code))) => {
+        match result_str {
+            Some(c_code) => {
                 println!("/* ---- 0x{:x}: {} ({} bytes) ---- */", vaddr, name_copy, size);
                 println!("{}", c_code);
                 total_success += 1;
             }
-            Ok(Ok(None)) => {
-                total_fail += 1;
-            }
-            Ok(Err(e)) => {
-                let msg = if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    format!("{:?}", e)
-                };
-                println!("/* ---- 0x{:x}: {} PANICKED: {} ---- */", vaddr, name_copy, msg);
-                total_fail += 1;
-            }
-            Err(_) => {
-                println!("/* ---- 0x{:x}: {} TIMEOUT (>60s) ---- */", vaddr, name_copy);
+            None => {
+                println!("/* ---- 0x{:x}: {} EMPTY ---- */", vaddr, name_copy);
                 total_fail += 1;
             }
         }
