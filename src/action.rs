@@ -249,11 +249,8 @@ impl Action for ActionGroup {
     /// via `apply_all` or calls `get_action_mut().perform()`.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         let mut total = 0;
-        let _fn_name = fd.name.clone();
         for i in 0..self.actions.len() {
             let child_flags = self.child_states[i].flags;
-            let _child_name = self.actions[i].get_name().to_string();
-            let _ct = std::time::Instant::now();
             // If the child has its own repeatapply flag, call its perform()
             // (which loops internally). Otherwise call apply() directly.
             // This avoids deep perform→perform recursion: only leaf-level
@@ -264,12 +261,6 @@ impl Action for ActionGroup {
             } else {
                 self.actions[i].apply(fd)?
             };
-            {
-                let _elapsed = _ct.elapsed();
-                if _elapsed.as_secs() >= 1 {
-                    eprintln!("[SLOW1] {} action '{}' took {:?}", _fn_name, _child_name, _elapsed);
-                }
-            }
             if res > 0 {
                 total += res;
             }
