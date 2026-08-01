@@ -577,7 +577,7 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
                 total_fail += 1;
             }
             Err(_) => {
-                println!("/* ---- 0x{:x}: {} TIMEOUT (>60s) ---- */", vaddr, name_copy);
+                println!("/* ---- 0x{:x}: {} TIMEOUT (>10s) ---- */", vaddr, name_copy);
                 total_fail += 1;
             }
         }
