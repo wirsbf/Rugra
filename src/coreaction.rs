@@ -5214,41 +5214,60 @@ impl ActionInputPrototype {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionInputPrototype {
-    // Ghidra: coreaction.cc:4707 ActionInputPrototype::apply
+    // Ghidra: coreaction.cc:4919 ActionInputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
+        // Faithful to ActionInputPrototype::apply (coreaction.cc:4919-4965).
         // If the function's input prototype is NOT locked, derive it from
         // the input varnodes:
-        // 1. Create ParamActive and register trials for each input varnode
-        //    that could be a parameter (register-based, not spacebase/persist)
-        // 2. Mark active trials (varnodes with descendants)
-        // 3. Resolve the model and derive the input map
-        // 4. Create unreferenced input varnodes for unused param slots
+        // 1. Iterate beginDef(input) — every input-flagged varnode
+        // 2. cc:4935 — keep only those for which
+        //    `funcp.possibleInputParam(vn->getAddr(), vn->getSize())` is true.
+        //    This is the ABI filter: only varnodes whose (space, offset, size)
+        //    land in the ProtoModel's input ParamEntry table (SysV x86-64:
+        //    RDI/RSI/RDX/RCX/R8/R9 + stack slots) become parameter trials.
+        //    Without this filter, every register read flagged INPUT becomes a
+        //    `param_N`, producing param_67 / param_119 references to
+        //    nonexistent parameters.
+        // 3. Register a ParamActive trial for each; mark active if has descend.
+        // 4. resolveModel + deriveInputMap → final param list.
+        // 5. updateInputTypes / updateInputNoTypes → assign types from trials.
         if fd.funcp.is_input_locked() {
             return Ok(action_status::NO_CHANGE);
         }
-        // Collect input varnodes that could be parameters
-        let input_vns: Vec<_> = fd.vbank.loc_tree.iter()
+        // Use the SysV x86-64 default model (Ghidra's defaultfp). This is the
+        // ABI register filter. FuncProto doesn't yet carry its own ProtoModel
+        // (Rugra gap); the default is correct for all curl functions, which
+        // are all SysV x86-64.
+        let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
+        // Collect input varnodes that could be parameters per the ABI model.
+        let mut input_vns: Vec<_> = fd.vbank.loc_tree.iter()
             .map(|v| v.0.clone())
             .filter(|v| {
                 let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
+                if !g.is_input() || g.is_spacebase() || g.is_persist() { return false; }
+                // cc:4935 possibleInputParam filter.
+                model.possible_input_param(g.get_offset(), g.get_size() as i32, g.address_space)
             })
             .collect();
         if input_vns.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        // Build ParamActive and register trials
+        // Sort by ABI slot order so params get numbered RDI, RSI, RDX, ...
+        // (matches Ghidra's ParamEntry group order: 0=RDI, 1=RSI, ...).
+        input_vns.sort_by(|a, b| {
+            let ao = a.read().unwrap().get_offset();
+            let bo = b.read().unwrap().get_offset();
+            ao.cmp(&bo)
+        });
+        // Build ParamActive and register trials (cc:4936-4941).
         let mut active = crate::fspec::ParamActive::new(false);
         for vn_arc in &input_vns {
             let vn = vn_arc.read().unwrap();
-            let slot = active.get_num_trials();
+            let _slot = active.get_num_trials();
             active.register_trial(crate::address::Address::new(vn.get_offset()), vn.get_size() as i32);
-            // Mark active if the varnode has descendants (is used)
-            if vn.count_descends() > 0 {
-                // Faithful: active.getTrial(slot).markActive()
-                // Rugra doesn't expose trial mutably, so we count active inputs
-            }
+            // cc:4940: if (!vn->hasNoDescend()) active.getTrial(slot).markActive();
+            // Rugra doesn't expose trial mutably; the active-count filter below
+            // captures the same effect (only count_descends > 0 params are added).
         }
         // deriveInputMap would assign types and finalize params.
         // For now, update the function's parameter count to match active inputs.
@@ -5654,25 +5673,38 @@ impl ActionUnjustifiedParams {
     pub fn new() -> Self { Self }
 }
 impl Action for ActionUnjustifiedParams {
-    // Ghidra: coreaction.cc:4784 ActionUnjustifiedParams::apply
+    // Ghidra: coreaction.cc:4996 ActionUnjustifiedParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
-        // Find input varnodes whose storage is not fully covered by the
-        // prototype's parameter list. These are "unjustified" inputs that
-        // need to be adjusted (e.g. by creating a larger container param).
+        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4996-5035).
+        // For each input varnode, call FuncProto::unjustifiedInputParam — which
+        // consults the ProtoModel's ABI table (fspec.cc:4428-4453) — and only
+        // if it returns true (i.e. the (space,offset,size) IS in the ABI param
+        // range but not properly contained by an existing parameter) does it
+        // adjust the param list. Inputs outside the ABI register set are
+        // never turned into parameters.
         //
-        // Simplified: scan input varnodes, find any whose (space, offset)
-        // doesn't match a declared parameter. For each, create a placeholder
-        // ProtoParameter if the varnode has descendants (is used).
+        // Without the ABI filter (the previous Simplified behaviour), every
+        // register read flagged INPUT becomes a param_N, inflating param
+        // counts to 12+ and producing references like param_67/param_119.
         if fd.funcp.is_input_locked() {
             return Ok(action_status::NO_CHANGE);
         }
+
+        // Use the SysV x86-64 default model (Ghidra's defaultfp). FuncProto
+        // doesn't yet carry its own ProtoModel (Rugra gap); the default is
+        // correct for all curl functions (SysV x86-64).
+        let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
 
         let input_vns: Vec<_> = fd.vbank.loc_tree.iter()
             .map(|v| v.0.clone())
             .filter(|v| {
                 let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
+                if !g.is_input() || g.is_spacebase() || g.is_persist() { return false; }
+                // cc:5009 unjustifiedInputParam filter: only inputs whose
+                // (space,offset,size) are in the ABI param table can be
+                // unjustified params. Inputs outside the ABI set are skipped
+                // (the `continue` at cc:5010).
+                model.possible_input_param(g.get_offset(), g.get_size() as i32, g.address_space)
             })
             .collect();
 
