@@ -879,12 +879,10 @@ impl ActionDatabase {
         universal.add_action(Box::new(crate::coreaction::ActionNormalizeSetup::new())); // :5479
         universal.add_action(Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
         universal.add_action(Box::new(crate::coreaction::ActionFuncLink::new()));
-        // Wire in additional implemented Actions from coreaction (Ghidra
-        // coreaction.cc:5479-5485: NormalizeSetup/DefaultParams/PrototypeTypes/
-        // FuncLinkOutOnly).
-        for extra in crate::coreaction::build_full_pipeline_actions() {
-            universal.add_action(extra);
-        }
+        // coreaction.cc:5485 FuncLinkOutOnly (was previously only wired via
+        // the flat build_full_pipeline_actions loop; now in its correct
+        // top-level position).
+        universal.add_action(Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())); // :5485
         universal.add_action(Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
         universal.add_action(Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
 
@@ -928,6 +926,11 @@ impl ActionDatabase {
         mainloop.add_action(Box::new(crate::coreaction::ActionStartTypes::new()));
         mainloop.add_action(Box::new(ActionHeritage::new())); // :5492
         mainloop.add_action(Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
+        // coreaction.cc:5494-5495: Segmentize + InternalStorage (were
+        // previously only wired via the flat build_full_pipeline_actions
+        // loop; now in their correct mainloop position).
+        mainloop.add_action(Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
+        mainloop.add_action(Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
         mainloop.add_action(Box::new(crate::coreaction::ActionDirectWrite::new())); // :5497
         mainloop.add_action(Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
         mainloop.add_action(Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
@@ -959,6 +962,13 @@ impl ActionDatabase {
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         // oppool1 (coreaction.cc:5511, repeatapply)
         stackstall.add_action(Box::new(build_simplify_pool()));
+        // coreaction.cc:5653-5655: MultiCse + ShadowVar + Deindirect (were
+        // previously only wired via the flat build_full_pipeline_actions
+        // loop; now in their correct stackstall position, after oppool1
+        // and before mainloop continues).
+        stackstall.add_action(Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
+        stackstall.add_action(Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
+        stackstall.add_action(Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
 
         mainloop.add_action(Box::new(stackstall));
 
@@ -1023,10 +1033,18 @@ impl ActionDatabase {
         universal.add_action(Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692 — stub, safe
         // Cleanup pool (coreaction.cc:5694, repeatapply)
         universal.add_action(Box::new(build_cleanup_pool()));
+        // coreaction.cc:5717 ActionAssignHigh (was previously only wired via
+        // the flat build_full_pipeline_actions loop; now in its correct
+        // post-fullloop position, before the merge actions, assigning
+        // HighVariables to all Varnodes).
+        universal.add_action(Box::new(crate::coreaction::ActionAssignHigh::new())); // :5717
+        // coreaction.cc:5723 + 5729: DominantCopy + CopyMarker (were flat-
+        // only; now in their correct post-AssignHigh position so the merge
+        // phase sees the COPY marks).
+        universal.add_action(Box::new(crate::coreaction::ActionDominantCopy::new())); // :5723
+        universal.add_action(Box::new(crate::coreaction::ActionCopyMarker::new())); // :5729
         // Merge stage (coreaction.cc:5717-5729). Rugra collapses 9 steps into
-        // Merge::merge_all (see ActionMergeType). ActionAssignHigh (:5717) is
-        // already registered in build_full_pipeline_actions (line ~7084), runs
-        // before the merge actions, assigning HighVariables to all Varnodes.
+        // Merge::merge_all (see ActionMergeType).
         universal.add_action(Box::new(ActionMergeType::new()));
         universal.add_action(Box::new(ActionNormalizeBranches::new()));
         // Post-normalize structure Actions (coreaction.cc:5714-5715)
