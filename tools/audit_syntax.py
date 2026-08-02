@@ -80,10 +80,13 @@ def split_functions(text: str):
             body = "\n".join(lines[start:j])
             name_match = re.search(r'\b(\w+)\s*\(', line)
             name = name_match.group(1) if name_match else f"func_{i}"
-            # Prepend accumulated typedefs so size-based type names (byte etc.) resolve
+            # Prepend accumulated typedefs so size-based type names (byte etc.)
+            # resolve in EVERY function. typedefs are file-scoped in Rugra's
+            # output (emitted once at the top), but audit_syntax compiles each
+            # function in isolation, so each needs its own copy. Do NOT clear
+            # pending_typedefs after prepending — they apply to all functions.
             if pending_typedefs:
                 body = "\n".join(pending_typedefs) + "\n" + body
-                pending_typedefs = []
             funcs.append((name, body))
             i = j
         else:

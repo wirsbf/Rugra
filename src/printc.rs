@@ -3207,7 +3207,17 @@ impl PrintC {
                         // Accept hex offset names (lVar_a8, uVar_b0) as well as
                         // decimal renumbered names (lVar1, iVar2). The display
                         // name generator uses {:x} for offsets (printc.rs:1652).
-                        rest.starts_with(|c: char| c.is_ascii_hexdigit() || c == '_')
+                        // For `in_*` (irregular input registers like in_R12,
+                        // in_RBX, in_R15) accept any alphanumeric/register-name
+                        // character following the underscore, matching Ghidra's
+                        // buildVariableName irregular-input naming
+                        // (database.cc:2573-2577 uses register names which can
+                        // be R12/RBX/etc — uppercase letters not in [0-9a-f]).
+                        if *p == "in_" {
+                            rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                        } else {
+                            rest.starts_with(|c: char| c.is_ascii_hexdigit() || c == '_')
+                        }
                     } else {
                         false
                     }

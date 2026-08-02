@@ -720,24 +720,34 @@ impl Merge {
                         }
                     }
                 } else if is_input && matches!(vn_space, AddressSpace::Register) && vn_offset != 0x20 {
-                    // cc:2480-2482: regular parameter (Register space only)
-                    // param_N where N is the parameter index (based on offset)
-                    let param_idx = match vn_space {
-                        AddressSpace::Register => {
-                            // SysV AMD64 param register order: RDI=0, RSI=1, RDX=2, RCX=3, R8=4, R9=5
-                            match vn_offset {
-                                0x38 => 0, // RDI
-                                0x30 => 1, // RSI
-                                0x10 => 2, // RDX
-                                0x08 => 3, // RCX
-                                0x80 => 4, // R8
-                                0x88 => 5, // R9
-                                _ => { base += 1; (base - 1) }
+                    // cc:2571-2582: input varnode. Two cases per Ghidra:
+                    //   - regular parameter (in FuncProto's param list): `param_N`
+                    //   - irregular input (NOT a declared param, e.g. callee-saved
+                    //     register reads RBX/R12/R13/R14/R15): `in_{regname}`
+                    // Rugra's previous code assigned `param_N` to EVERY Register-
+                    // input with a monotonically increasing index, producing
+                    // param_51 / param_824 references to nonexistent parameters.
+                    // Now mirror Ghidra: only the 6 SysV ABI arg registers get
+                    // `param_N` (matching FuncProto parameter slots); all other
+                    // Register-inputs get `in_{regname}` (irregular input).
+                    match vn_offset {
+                        0x38 => "param_0".to_string(), // RDI
+                        0x30 => "param_1".to_string(), // RSI
+                        0x10 => "param_2".to_string(), // RDX
+                        0x08 => "param_3".to_string(), // RCX
+                        0x80 => "param_4".to_string(), // R8
+                        0x88 => "param_5".to_string(), // R9
+                        _ => {
+                            // cc:2573-2577: irregular input → in_{regname} or
+                            // in_{space}_{offset}. Use register_name if known.
+                            let reg_name = register_name(vn_offset, vn_size);
+                            match reg_name {
+                                Some(rn) => format!("in_{}", rn),
+                                None => format!("in_{}_{}",
+                                    vn_space.name(), vn_offset),
                             }
                         }
-                        _ => { base += 1; (base - 1) }
-                    };
-                    format!("param_{}", param_idx)
+                    }
                 } else if is_addrtied {
                     // cc:2483-2490: addr-tied global
                     let space_name = vn_space.name();
