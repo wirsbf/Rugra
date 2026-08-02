@@ -658,28 +658,92 @@ impl PrintC {
     /// type, spacing, bump, negate }.
     fn build_rpn_token_table() -> Vec<crate::printlanguage::OpToken> {
         use crate::printlanguage::OpToken;
-        // index 0 - assignment (printc.cc:56)
-        let assignment = OpToken::binary("=", 14, false, 1, 5, -1);
-        // index 1 - dereference (printc.cc:34)
-        let dereference = OpToken::unary_prefix("*", 62, 0, 0);
-        // index 2 - hidden (printc.cc:29, never prints).
-        let hidden = OpToken::hidden_function();
-        // index 3 - pointer_member "->" (printc.cc:26): binary, prec 66, assoc.
-        let pointer_member = OpToken::binary("->", 66, true, 0, 0, -1);
-        // index 4 - object_member "." (printc.cc:25): binary, prec 66, assoc.
-        let object_member = OpToken::binary(".", 66, true, 0, 0, -1);
-        // index 5 - typecast "(" ")" (printc.cc:35): presurround, prec 62.
-        let typecast = OpToken::presurround("(", ")", 62, 0);
-        // index 6 - addressof "&" (printc.cc:33): unary prefix, prec 62.
-        let addressof = OpToken::unary_prefix("&", 62, 0, 0);
+        // Index map (kept stable — op dispatch references these by index).
+        //   0 assignment          printc.cc:56
+        //   1 dereference         printc.cc:34
+        //   2 hidden              printc.cc:29
+        //   3 pointer_member      printc.cc:26
+        //   4 object_member       printc.cc:25
+        //   5 typecast            printc.cc:35
+        //   6 addressof           printc.cc:33
+        //   7 multiply            printc.cc:36
+        //   8 divide              printc.cc:37
+        //   9 modulo              printc.cc:38
+        //  10 binary_plus         printc.cc:39
+        //  11 binary_minus        printc.cc:40
+        //  12 shift_left          printc.cc:41
+        //  13 shift_right         printc.cc:42
+        //  14 shift_sright        printc.cc:43
+        //  15 less_than           printc.cc:44   negate=17
+        //  16 less_equal          printc.cc:45   negate=18
+        //  17 greater_than        printc.cc:46   negate=16
+        //  18 greater_equal       printc.cc:47   negate=15
+        //  19 equal               printc.cc:48   negate=20
+        //  20 not_equal           printc.cc:49   negate=19
+        //  21 bitwise_and         printc.cc:50
+        //  22 bitwise_xor         printc.cc:51
+        //  23 bitwise_or          printc.cc:52
+        //  24 boolean_and         printc.cc:53
+        //  25 boolean_xor         printc.cc:54
+        //  26 boolean_or          printc.cc:55
+        //  27 comma               printc.cc:57
         vec![
-            assignment,
-            dereference,
-            hidden,
-            pointer_member,
-            object_member,
-            typecast,
-            addressof,
+            // 0
+            OpToken::binary("=", 14, false, 1, 5, -1),
+            // 1
+            OpToken::unary_prefix("*", 62, 0, 0),
+            // 2
+            OpToken::hidden_function(),
+            // 3
+            OpToken::binary("->", 66, true, 0, 0, -1),
+            // 4
+            OpToken::binary(".", 66, true, 0, 0, -1),
+            // 5
+            OpToken::presurround("(", ")", 62, 0),
+            // 6
+            OpToken::unary_prefix("&", 62, 0, 0),
+            // 7 multiply
+            OpToken::binary("*", 54, true, 1, 0, -1),
+            // 8 divide
+            OpToken::binary("/", 54, false, 1, 0, -1),
+            // 9 modulo
+            OpToken::binary("%", 54, false, 1, 0, -1),
+            // 10 binary_plus
+            OpToken::binary("+", 50, true, 1, 0, -1),
+            // 11 binary_minus
+            OpToken::binary("-", 50, false, 1, 0, -1),
+            // 12 shift_left
+            OpToken::binary("<<", 46, false, 1, 0, -1),
+            // 13 shift_right
+            OpToken::binary(">>", 46, false, 1, 0, -1),
+            // 14 shift_sright
+            OpToken::binary(">>", 46, false, 1, 0, -1),
+            // 15 less_than    negate=17 (greater_equal)
+            OpToken::binary("<", 42, false, 1, 0, 17),
+            // 16 less_equal   negate=18 (greater_than)
+            OpToken::binary("<=", 42, false, 1, 0, 18),
+            // 17 greater_than negate=16 (less_equal)
+            OpToken::binary(">", 42, false, 1, 0, 16),
+            // 18 greater_equal negate=15 (less_than)
+            OpToken::binary(">=", 42, false, 1, 0, 15),
+            // 19 equal        negate=20 (not_equal)
+            OpToken::binary("==", 38, false, 1, 0, 20),
+            // 20 not_equal    negate=19 (equal)
+            OpToken::binary("!=", 38, false, 1, 0, 19),
+            // 21 bitwise_and
+            OpToken::binary("&", 34, true, 1, 0, -1),
+            // 22 bitwise_xor
+            OpToken::binary("^", 30, true, 1, 0, -1),
+            // 23 bitwise_or
+            OpToken::binary("|", 26, true, 1, 0, -1),
+            // 24 boolean_and
+            OpToken::binary("&&", 22, false, 1, 0, -1),
+            // 25 boolean_xor
+            OpToken::binary("^^", 20, false, 1, 0, -1),
+            // 26 boolean_or
+            OpToken::binary("||", 18, false, 1, 0, -1),
+            // 27 comma
+            OpToken::binary(",", 2, true, 0, 0, -1),
         ]
     }
 
