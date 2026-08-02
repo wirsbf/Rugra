@@ -1555,19 +1555,79 @@ impl ScopeLocal {
     }
 
     // Ghidra: varmap.cc:617 ScopeLocal::createEntry
-    /// Create a symbol entry from a RangeHint.
-    /// Corresponds to ScopeLocal::createEntry (varmap.cc:617).
+    /// Create a symbol entry from a RangeHint. Faithful to
+    /// `ScopeLocal::createEntry` (varmap.cc:618-629): concretize the hint's
+    /// type, compute `num = size / ct.getAlignSize()`, and if `num > 1`
+    /// wrap `ct` in `TypeArray(num, ct)`. Without this array wrapping, an
+    /// open RangeHint surviving `restructure` with size=40 and a 1-byte
+    /// element type is stored as a 40-byte scalar — producing `char` instead
+    /// of `char format[40]`, `bool` instead of `bool line[256]`, etc.
     fn create_entry(&mut self, hint: &RangeHint) {
         if hint.size <= 0 { return; }
 
         // Build variable name
         let name = self.build_variable_name(hint.start);
 
+        // Ghidra cc:621-625: concretize + array-wrap if num>1.
+        // TypeFactory::concretize is a no-op for non-Code types (Rugra's
+        // impl at typefactory.rs:1107), so we skip the explicit call and
+        // use the hint dtype directly (or fall back to a 1-byte char so
+        // the array element has a concrete size for the num calculation).
+        let elem_dt = hint.dtype.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                crate::type_system::datatype::TypeBase::new(
+                    "char".to_string(),
+                    1,
+                    crate::type_system::datatype::TypeMetatype::Int,
+                ),
+            ))
+        });
+        let elem_size = elem_dt.get_size() as i32;
+        let final_dt = if elem_size > 0 && hint.size > elem_size {
+            let num = (hint.size / elem_size) as usize;
+            if num > 1 {
+                let arr_size = elem_size * num as i32;
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Array(
+                    crate::type_system::datatype::TypeArray {
+                        base: crate::type_system::datatype::TypeBase::new(
+                            elem_dt.get_name().to_string(),
+                            arr_size as usize,
+                            elem_dt.get_metatype(),
+                        ),
+                        array_of: elem_dt,
+                        num_elements: num,
+                    },
+                ))
+            } else {
+                // num == 1: scalar of the element type.
+                hint.dtype.clone().unwrap_or_else(|| {
+                    std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                        crate::type_system::datatype::TypeBase::new(
+                            "char".to_string(),
+                            hint.size as usize,
+                            crate::type_system::datatype::TypeMetatype::Int,
+                        ),
+                    ))
+                })
+            }
+        } else {
+            // elem_size == 0 or hint.size <= elem_size: scalar.
+            hint.dtype.clone().unwrap_or_else(|| {
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                    crate::type_system::datatype::TypeBase::new(
+                        "char".to_string(),
+                        hint.size as usize,
+                        crate::type_system::datatype::TypeMetatype::Int,
+                    ),
+                ))
+            })
+        };
+
         self.symbols.push(LocalSymbol {
             name,
             start: hint.start,
             size: hint.size,
-            dtype: hint.dtype.clone(),
+            dtype: Some(final_dt),
             unaliased: false,
             is_param: false,
         });
