@@ -1044,7 +1044,11 @@ pub fn rpn_push_atom(
                     emit.close_paren();
                     let _ = id; // Ghidra passes id to closeParen
                 } else {
-                    let _ = id; // Ghidra calls closeGroup(id)
+                    // printlanguage.cc:180: emit->closeGroup(id). No literal
+                    // character — closes the abstract group opened by the
+                    // matching pushOp's openGroup branch.
+                    emit.close_group();
+                    let _ = id;
                 }
                 revpol.pop();
             } else {
@@ -1083,10 +1087,13 @@ pub fn rpn_push_op(
     let paren: bool;
     let id: i32;
     if revpol.is_empty() {
-        // printlanguage.cc:138-140
+        // printlanguage.cc:138-140: empty stack → no paren, just openGroup.
+        // Ghidra uses emit->openGroup() which is a non-printing grouping
+        // boundary; only openParen emits a literal '('. Rugra's previous
+        // code called open_paren() unconditionally here, injecting a
+        // spurious '(' for every RPN expression start.
         paren = false;
-        emit.open_paren(); // Ghidra: emit->openGroup(); Rugra Emit has no
-                           // openGroup returning id, so we approximate.
+        emit.open_group();
         id = 0;
     } else {
         // printlanguage.cc:142-148
@@ -1096,10 +1103,13 @@ pub fn rpn_push_op(
         let new_tok = &token_table[tok_index];
         paren = parentheses(top_tok, stage, new_tok);
         if paren {
+            // printlanguage.cc:146: emit->openParen(OPEN_PAREN) — this is
+            // the ONLY path that emits a literal '('.
             emit.open_paren();
-            id = 0; // Ghidra: emit->openParen(OPEN_PAREN)
+            id = 0;
         } else {
-            emit.open_paren(); // openGroup
+            // printlanguage.cc:148: emit->openGroup() — no literal char.
+            emit.open_group();
             id = 0;
         }
     }

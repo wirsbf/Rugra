@@ -24,6 +24,17 @@ pub trait Emit {
     // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
     /// Emit a close parenthesis ')'
     fn close_paren(&mut self);
+    // RUGRA-GLUE: open_group / close_group (Ghidra: prettyprint.hh Emit::openGroup/closeGroup)
+    /// Begin an abstract emission group. Faithful to Ghidra's
+    /// `Emit::openGroup()` (prettyprint.hh): creates a grouping boundary
+    /// for parenthesization/line-breaking decisions WITHOUT emitting any
+    /// literal character. The RPN engine uses this for non-parenthesized
+    /// operator groupings; only `open_paren` emits a literal '('. The
+    /// default implementation is a no-op, matching Ghidra's base class.
+    fn open_group(&mut self) {}
+    /// Close an abstract emission group opened by `open_group`. Faithful
+    /// to Ghidra's `Emit::closeGroup()`. Default no-op.
+    fn close_group(&mut self) {}
 
     // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     /// Start a function definition
