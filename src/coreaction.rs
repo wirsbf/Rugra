@@ -2875,6 +2875,17 @@ impl ActionMarkImplied {
         let def_op = def_op_arc.read().unwrap();
         let def_opc = def_op.opcode;
 
+        // Marker ops (MULTIEQUAL/INDIRECT) must NEVER be implied — their
+        // output is always a named variable (Ghidra baseExplicit returns -1
+        // for markers at coreaction.cc:3162, which prevents marking them
+        // implied). Without this guard, a phi output with a single descendant
+        // gets marked implied, then rpn_recurse tries to dispatch its def op
+        // via dispatch_op_rpn, which has no MULTIEQUAL case → emits nothing
+        // → the RPN stack has an empty atom → broken output like `(bVar9);`.
+        if def_op.is_marker() {
+            return false;
+        }
+
         // (1) LOAD def crossing STORE: simplified — forbid if any alive STORE
         // shares the def op's basic block. Full Ghidra uses cover.contain +
         // isPossibleAlias; this is a conservative substitute.

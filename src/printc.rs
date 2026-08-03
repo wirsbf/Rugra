@@ -1850,6 +1850,18 @@ impl PrintC {
                 }
             }
 
+            // Skip ops whose output has no descendants — these are dead
+            // assignments that ActionDeadCode didn't remove (phi-era
+            // performance cap lets some dead ops survive). Without this,
+            // printc emits `(bVar3);` — a variable name with no expression —
+            // because the op's expression has no consumer to drive the
+            // assignment syntax.
+            if let Some(ref out_arc) = op.output {
+                if out_arc.read().unwrap().descend.is_empty() {
+                    continue;
+                }
+            }
+
             // Skip RIP-relative INT_ADD ops — they create symbol aliases resolved via Priority 1.5
             if self.get_rip_relative_operand(&op).is_some() {
                 continue;
