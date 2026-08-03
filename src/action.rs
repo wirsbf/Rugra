@@ -113,6 +113,18 @@ pub trait Action {
             if res > 0 {
                 state.count_apply += 1;
             }
+            // DEBUG: detect non-convergence.
+            if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() {
+                state.lcount_test = state.lcount_test.saturating_add(1);
+                if state.lcount_test > 10000 {
+                    eprintln!("[STALL] {} {} perform() exceeded {} iters count={} lcount={}",
+                        fd.name, self.get_name(), state.lcount_test, state.count, state.lcount);
+                    break;
+                }
+                if state.lcount_test % 1000 == 0 {
+                    eprintln!("[LOOP] {} {} iter {} count={}", fd.name, self.get_name(), state.lcount_test, state.count);
+                }
+            }
             // Loop condition (action.cc:350): repeat only if THIS iteration
             // made a change (lcount < count) AND repeatapply is set.
             let flags = if state.flags != 0 { state.flags } else { self.get_flags() };
@@ -146,6 +158,8 @@ pub struct ActionState {
     pub count_apply: u32,
     /// Rule flags for this Action (repeatapply / onceperfunc).
     pub flags: u32,
+    /// DEBUG iteration counter (RUGRA_TRACE_PIPELINE).
+    pub lcount_test: u32,
 }
 
 impl ActionState {
@@ -158,6 +172,7 @@ impl ActionState {
             count_tests: 0,
             count_apply: 0,
             flags,
+            lcount_test: 0,
         }
     }
 
@@ -248,9 +263,14 @@ impl Action for ActionGroup {
     /// repeated via their own perform when called from a parent that delegates
     /// via `apply_all` or calls `get_action_mut().perform()`.
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        let dbg = std::env::var("RUGRA_TRACE_PIPELINE").is_ok();
+        let fdname = if dbg { fd.name.clone() } else { String::new() };
         let mut total = 0;
         for i in 0..self.actions.len() {
             let child_flags = self.child_states[i].flags;
+            let child_name = if dbg { self.actions[i].get_name().to_string() } else { String::new() };
+            let grp = if dbg { self.get_name().to_string() } else { String::new() };
+            let _t = if dbg { Some(std::time::Instant::now()) } else { None };
             // If the child has its own repeatapply flag, call its perform()
             // (which loops internally). Otherwise call apply() directly.
             // This avoids deep perform→perform recursion: only leaf-level
@@ -261,6 +281,10 @@ impl Action for ActionGroup {
             } else {
                 self.actions[i].apply(fd)?
             };
+            if let Some(t) = _t {
+                let dt = t.elapsed();
+                eprintln!("[PIPE] {}.{}.{} -> {}ms", fdname, grp, child_name, dt.as_millis());
+            }
             if res > 0 {
                 total += res;
             }
@@ -293,10 +317,16 @@ impl Action for ActionGroup {
         let grp_name = self.get_name().to_string();
         let fd_name = fd.name.clone();
         let mut iters = 0;
+        let dbg = std::env::var("RUGRA_TRACE_PIPELINE").is_ok();
         loop {
             iters += 1;
             state.lcount = state.count;
+            let _t = if dbg { Some(std::time::Instant::now()) } else { None };
             let res = self.apply(fd)?;
+            if let Some(t) = _t {
+                let dt = t.elapsed();
+                eprintln!("[PPERF] {}.{} iter={} -> {}ms res={}", fd_name, grp_name, iters, dt.as_millis(), res);
+            }
             state.count += res;
             let flags = if state.flags != 0 { state.flags } else { self.flags };
             if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
@@ -497,7 +527,7 @@ impl Action for ActionPool {
             .map(|v| v == "1")
             .unwrap_or(false);
         // [PINGPONG] Track per-rule hits per apply() call to detect cycling.
-        let track_pingpong = matches!(fd.name.as_str(), "glob_url" | "glob_word" | "myprogress");
+        let track_pingpong = matches!(fd.name.as_str(), "glob_url" | "glob_word" | "myprogress" | "my_fwrite");
         let mut pp_hits: std::collections::HashMap<usize, i32> = Default::default();
 
         let mut pass_changes = 0;

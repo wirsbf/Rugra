@@ -435,6 +435,10 @@ fn run_main() -> Result<(), Box<dyn std::error::Error>> {
         if func.size < 5 || func.name == "_start" {
             continue;
         }
+        // Debug filter: RUGRA_ONLY_FUNC=name runs only that function.
+        if let Ok(fname) = std::env::var("RUGRA_ONLY_FUNC") {
+            if func.name != fname { continue; }
+        }
 
         eprintln!("[SYMS] {} entries; targets 0x2000-0x5000:", symbol_table.len());
         for (&addr, name) in symbol_table.iter() {

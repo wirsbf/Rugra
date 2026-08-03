@@ -158,10 +158,24 @@ impl Action for ActionHeritage {
         //   pass 2: discover + place + rename (discover on connected graph
         //           finds stack STOREs, builds Stack INDIRECTs; place/rename
         //           then handles the new Stack varnodes)
+        //
+        // Ghidra heritage.cc:2674: `if (maxdepth == -1) buildADT();` builds
+        // the dominator tree + dominator frontiers inside Heritage::heritage
+        // before placing phi nodes. Rugra's place_multiequals_direct reads
+        // bblocks[i].get_dom_frontier() (heritage.rs:3412) which is populated
+        // by `build_dom_tree` (block.rs:1745, calls calc_dom_frontier at
+        // block.rs:1858). Without this call the dom_frontier sets are empty
+        // and ZERO MULTIEQUAL (phi) nodes get placed — verified by IR dump
+        // (main: 0 MULTIEQUAL vs Ghidra's 1628).
+        fd.bblocks.build_dom_tree();
         {
             let mut heritage = std::mem::take(&mut fd.heritage);
+            let _t = std::time::Instant::now();
             heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
+            eprintln!("[HA-PHI] {} place_multiequals {}ms", fd.name, _t.elapsed().as_millis());
+            let _t = std::time::Instant::now();
             heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
+            eprintln!("[HA-RN] {} rename_direct {}ms", fd.name, _t.elapsed().as_millis());
             heritage.pass += 1;
             fd.heritage = heritage;
         }
@@ -5908,14 +5922,16 @@ impl Action for ActionShadowVar {
                     fd.op_set_opcode(op, OpCode::CPUI_COPY);
                     // Ghidra: opSetAllInput(op, {prev_out}). In Rugra, we
                     // truncate inputs to 1 and set slot 0.
-                    while op.0.read().unwrap().inrefs.len() > 1 {
-                        fd.op_remove_input(op, op.0.read().unwrap().inrefs.len() - 1);
+                    // NOTE: must compute len in a separate scope so the read
+                    // guard is dropped BEFORE calling op_remove_input (which
+                    // acquires a write guard on the same op). Holding the
+                    // read guard across the call deadlocks std::sync::RwLock.
+                    loop {
+                        let n = { op.0.read().unwrap().inrefs.len() };
+                        if n <= 1 { break; }
+                        fd.op_remove_input(op, n - 1);
                     }
-                    if op.0.read().unwrap().inrefs.is_empty() {
-                        fd.op_set_input(op, prev_out, 0);
-                    } else {
-                        fd.op_set_input(op, prev_out, 0);
-                    }
+                    fd.op_set_input(op, prev_out, 0);
                     local_count += 1;
                 }
                 break;

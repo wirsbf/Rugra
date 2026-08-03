@@ -7500,6 +7500,7 @@ impl Rule for RuleMultiCollapse {
             for vn in &skiplist {
                 vn.write().unwrap().clear_mark();
             }
+            let mut actual_changes = 0;
             if func_eq {
                 // Functional equality only: for each MULTIEQUAL in skiplist,
                 // try to collapse. Rugra lacks cseFindInBlock/earliestUse, so
@@ -7512,6 +7513,7 @@ impl Rule for RuleMultiCollapse {
                         let dc = defcopyr.as_ref().unwrap();
                         fd.total_replace(vn, dc.clone());
                         fd.op_destroy(&def_ref);
+                        actual_changes += 1;
                     }
                 }
             } else {
@@ -7524,6 +7526,7 @@ impl Rule for RuleMultiCollapse {
                         let dc = defcopyr.as_ref().unwrap();
                         fd.total_replace(vn, dc.clone());
                         fd.op_destroy(&def_ref);
+                        actual_changes += 1;
                     }
                 }
             }
@@ -7531,7 +7534,18 @@ impl Rule for RuleMultiCollapse {
             for vn in &skiplist {
                 vn.write().unwrap().clear_mark();
             }
-            return Ok(action_status::CHANGE);
+            // Only report a change if we actually destroyed at least one op.
+            // Otherwise the Rule pingpongs forever: each pass reports CHANGE
+            // (driving the parent perform() loop) but mutates nothing, so the
+            // next pass sees the same MULTIEQUAL and "succeeds" again.
+            // Ghidra's applyOp returns 1 unconditionally because its collapse
+            // path always destroys the MULTIEQUAL (op); Rugra's port can skip
+            // every element of skiplist when their defs are already dead or
+            // not MULTIEQUAL outputs, so we must guard explicitly.
+            if actual_changes > 0 {
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE);
         }
         // Clear marks on failure.
         for vn in &skiplist {
