@@ -185,16 +185,26 @@ impl Action for ActionHeritage {
         // = (1 > 1) = false → Stack INDIRECT varnodes are marked consumed and
         // survive. Register/Unique varnodes are dead-coded normally.
         {
+            let _t = std::time::Instant::now();
             let mut dc = ActionDeadCode::new();
             let _ = dc.apply(fd);
+            eprintln!("[HA-DC1] {} deadcode1 {}ms", fd.name, _t.elapsed().as_millis());
         }
         // Pass 2: discover stack STOREs on the connected graph, then
         // place + rename to SSA the new Stack-space INDIRECT varnodes.
-        crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
+        {
+            let _t = std::time::Instant::now();
+            crate::heritage::Heritage::discover_and_guard_stack_stores_fd(fd);
+            eprintln!("[HA-DISC] {} discover {}ms", fd.name, _t.elapsed().as_millis());
+        }
         {
             let mut heritage = std::mem::take(&mut fd.heritage);
+            let _t = std::time::Instant::now();
             heritage.place_multiequals_direct(&mut fd.vbank, &mut fd.obank, &fd.bblocks, &fd.sblocks);
+            eprintln!("[HA-PHI2] {} place2 {}ms", fd.name, _t.elapsed().as_millis());
+            let _t = std::time::Instant::now();
             heritage.rename_direct(&mut fd.vbank, &fd.bblocks);
+            eprintln!("[HA-RN2] {} rename2 {}ms", fd.name, _t.elapsed().as_millis());
             heritage.pass += 1;
             fd.heritage = heritage;
         }
@@ -393,6 +403,9 @@ impl Action for ActionDeadCode {
         // STORE, and ops whose output has no descendants).
         // (worklist already initialized in Step 1.5)
 
+        if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() {
+            eprintln!("[DC-S2] {} alivelist={}", fd.name, fd.obank.alivelist.len());
+        }
         for op_ref in &fd.obank.alivelist {
             let op_rg = op_ref.0.read().unwrap();
             let opc = op_rg.opcode;
@@ -425,10 +438,22 @@ impl Action for ActionDeadCode {
             }
             let _ = opc;
         }
+        if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() {
+            eprintln!("[DC-S2] {} worklist={}", fd.name, worklist.len());
+        }
 
         // Step 3: Propagate consumed bits backward through the data-flow.
+        let _t = std::time::Instant::now();
+        let mut _iter = 0u64;
         while !worklist.is_empty() {
+            _iter += 1;
+            if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() && _iter % 100000 == 0 {
+                eprintln!("[DC-LOOP] {} iter={} wl={} elapsed={}ms", fd.name, _iter, worklist.len(), _t.elapsed().as_millis());
+            }
             Self::propagate_consumed(&mut worklist);
+        }
+        if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() {
+            eprintln!("[DC-DONE] {} iters={} {}ms", fd.name, _iter, _t.elapsed().as_millis());
         }
 
         // Step 3.5 (Ghidra coreaction.cc:3985-3990): lastChanceLoad — mark

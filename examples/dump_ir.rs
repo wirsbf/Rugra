@@ -51,6 +51,13 @@ fn format_vn(vn: &rugra::varnode::Varnode) -> String {
     if vn.is_input() { s.push_str("[in]"); }
     if vn.is_constant() { s.push_str("[c]"); }
     if vn.is_written() { s.push_str("[w]"); }
+    // Append type metatype (if any) so type-propagation gaps are visible.
+    if let Some(ct) = vn.get_type_read_facing() {
+        let mt = format!("{:?}", ct.get_metatype())
+            .trim_start_matches("TypeMetatype::")
+            .to_string();
+        s.push_str(&format!(":{}", mt));
+    }
     s
 }
 
@@ -193,6 +200,13 @@ fn main() {
         return;
     }
 
+    // Optionally seed DWARF struct-pointer types so the POST IR matches what
+    // the real driver (curl_decompile.rs) produces. Without this, ActionInferTypes
+    // has no Pointer(Struct) roots and RulePtrArith never fires.
+    if args.iter().any(|a| a == "--seed") {
+        seed_global_struct_ptrs(&mut fd);
+    }
+
     // Run the full pipeline, then dump.
     let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
     fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
@@ -206,5 +220,55 @@ fn main() {
     }
     let fd_read = fd_arc.read().unwrap();
     println!("# Rugra IR (POST-pipeline, after full decompile):");
+    println!("# type_recovery_started={} global_struct_ptrs={}",
+        fd_read.has_type_recovery_started(), fd_read.global_struct_ptrs.len());
     dump_funcdata_ir(&fd_read);
 }
+
+/// Seed the same DWARF struct-pointer map the real driver
+/// (curl_decompile.rs::build_dwarf_struct_pointers) uses, so the POST IR
+/// reflects Pointer(Struct) propagation and RulePtrArith can fire.
+fn seed_global_struct_ptrs(fd: &mut Funcdata) {
+    use rugra::type_system::typefactory::TypeFactory;
+    use rugra::type_system::datatype::{Datatype, TypeField, TypeMetatype};
+    let mut tf = TypeFactory::new(8);
+    let long8 = tf.get_base(8, TypeMetatype::Int).expect("long base type");
+    let field = |name: &str, off: usize| -> TypeField {
+        TypeField { name: name.to_string(), offset: off, type_ptr: long8.clone() }
+    };
+    tf.create_struct("Configurable");
+    tf.set_fields("Configurable", vec![
+        field("useragent", 0), field("cookie", 8), field("use_resume", 16),
+        field("resume_from", 20), field("postfields", 24), field("referer", 32),
+        field("timeout", 40), field("outfile", 48), field("headerfile", 56),
+        field("remotefile", 64), field("ftpport", 72), field("porttouse", 80),
+        field("range", 88), field("low_speed_limit", 96), field("low_speed_time", 100),
+        field("showerror", 104), field("infile", 112), field("userpwd", 120),
+        field("proxyuserpwd", 128), field("proxy", 136), field("configread", 144),
+        field("conf", 152), field("cert", 168), field("cert_passwd", 176),
+        field("crlf", 184), field("cookiefile", 192), field("customrequest", 200),
+        field("progressmode", 208), field("nobuffer", 209), field("writeout", 216),
+        field("errors", 224), field("quote", 232), field("postquote", 240),
+        field("ssl_version", 248), field("timecond", 256), field("condtime", 264),
+        field("headers", 272), field("httppost", 280), field("last_post", 288),
+        field("httpreq", 296),
+    ]);
+    tf.create_struct("URLGlob");
+    tf.set_fields("URLGlob", vec![
+        field("size", 0), field("urllen", 4), field("literal", 8),
+        field("pattern", 16), field("beenhere", 24), field("glob_buffer", 32),
+        field("trailer_296", 296),
+    ]);
+    tf.create_struct("ProgressData");
+    tf.set_fields("ProgressData", vec![
+        field("total", 0), field("prev", 8), field("point", 16), field("width", 24),
+    ]);
+    let configurable = tf.find_by_name("Configurable").expect("Configurable struct");
+    let configurable_ptr = tf.get_ptr(configurable.clone());
+    let urlglob = tf.find_by_name("URLGlob").expect("URLGlob struct");
+    let urlglob_ptr = tf.get_ptr(urlglob.clone());
+    // ::config @ 0x17520, glob_expand @ 0x17660
+    fd.global_struct_ptrs.insert(0x17520, configurable_ptr);
+    fd.global_struct_ptrs.insert(0x17660, urlglob_ptr);
+}
+
