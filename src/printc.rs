@@ -744,6 +744,8 @@ impl PrintC {
             OpToken::binary("||", 18, false, 1, 0, -1),
             // 27 comma
             OpToken::binary(",", 2, true, 0, 0, -1),
+            // 28 function_call (postsurround: "(" args ")")
+            OpToken::postsurround("(", ")", 80, 0, 0),
         ]
     }
 
@@ -1356,7 +1358,6 @@ impl PrintC {
                 self.rpn_push_atom(&atom);
                 self.emit.print("(");
                 let n = op.num_input();
-                // in(0) is the target; args are in(1..n).
                 let mut first = true;
                 for i in 1..n {
                     if !first {
