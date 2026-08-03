@@ -382,6 +382,10 @@ impl Action for ActionDeadCode {
         let stack_deadcode_allowed = heritage_pass > 1; // Stack delay=1
 
         // Step 1: Clear consume flags on all Varnodes.
+        let _lt_sz = fd.vbank.loc_tree.len();
+        if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() {
+            eprintln!("[DC-S0] {} loc_tree={}", fd.name, _lt_sz);
+        }
         for vn_ref in fd.vbank.loc_tree.iter() {
             let mut vn = vn_ref.0.write().unwrap();
             vn.set_consume(0);
@@ -422,17 +426,31 @@ impl Action for ActionDeadCode {
             }
 
             // Assignment ops: check if output has no descendants.
-            if let Some(out) = &op_rg.output {
+            // NOTE: must drop the out_rg read-guard BEFORE calling
+            // push_consumed, because push_consumed acquires a write-guard
+            // on the input varnode. If the input is the same Arc as the
+            // output (self-loop phi / MULTIEQUAL), holding the read-guard
+            // across the write attempt deadlocks std::sync::RwLock.
+            let output_is_dead = if let Some(out) = &op_rg.output {
                 let out_rg = out.read().unwrap();
-                if out_rg.descend.is_empty() && !out_rg.is_input() {
-                    // Output is dead — this op can potentially be removed.
-                    // Don't push its inputs to worklist.
-                } else {
-                    // Output is live — push inputs to worklist.
-                    for i in 0..n_in {
-                        if let Some(in_vn) = op_rg.get_in(i) {
-                            Self::push_consumed(u64::MAX, in_vn, &mut worklist);
-                        }
+                out_rg.descend.is_empty() && !out_rg.is_input()
+            } else {
+                false
+            };
+            drop(op_rg); // also drop op read-guard before push_consumed
+                         // acquires vn write-guard (an input vn could be
+                         // defined by the same op via a phi cycle).
+            if !output_is_dead {
+                // Output is live — push inputs to worklist.
+                // Re-read inputs without holding op_rg (we dropped it above).
+                let n_in_re = n_in;
+                for i in 0..n_in_re {
+                    let in_vn = {
+                        let o = op_ref.0.read().unwrap();
+                        o.get_in(i).cloned()
+                    };
+                    if let Some(in_vn) = in_vn {
+                        Self::push_consumed(u64::MAX, &in_vn, &mut worklist);
                     }
                 }
             }
@@ -447,7 +465,7 @@ impl Action for ActionDeadCode {
         let mut _iter = 0u64;
         while !worklist.is_empty() {
             _iter += 1;
-            if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() && _iter % 100000 == 0 {
+            if std::env::var("RUGRA_TRACE_PIPELINE").is_ok() && _iter % 1000 == 0 {
                 eprintln!("[DC-LOOP] {} iter={} wl={} elapsed={}ms", fd.name, _iter, worklist.len(), _t.elapsed().as_millis());
             }
             Self::propagate_consumed(&mut worklist);

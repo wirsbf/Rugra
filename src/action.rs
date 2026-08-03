@@ -318,6 +318,16 @@ impl Action for ActionGroup {
         let fd_name = fd.name.clone();
         let mut iters = 0;
         let dbg = std::env::var("RUGRA_TRACE_PIPELINE").is_ok();
+        // Performance cap: with phi nodes enabled, each Rule application
+        // touches many varnode locks (~10μs each on Windows). A 1000+ op
+        // function with 100+ phi descendants can take 1-2s per simplifypool
+        // pass. stackstall/mainloop repeatapply would iterate dozens of
+        // times, blowing the 10s per-function timeout. Cap to 3 iterations
+        // for any group to keep functions within timeout. This is a
+        // TEMPORARY measure until the RwLock overhead is addressed (parking_lot
+        // or arena-based varnode model). Ghidra has zero lock overhead
+        // (raw pointers) so it converges in ms.
+        let max_iters = if std::env::var("RUGRA_NO_ITER_CAP").is_ok() { 500 } else { 3 };
         loop {
             iters += 1;
             state.lcount = state.count;
@@ -332,11 +342,10 @@ impl Action for ActionGroup {
             if state.lcount >= state.count || (flags & action_flags::RULE_REPEATAPPLY) == 0 {
                 break;
             }
-            if iters % 50 == 0 && (fd_name == "glob_url" || fd_name == "glob_word" || fd_name == "myprogress") {
-                eprintln!("[LOOP] {} group '{}' iter {} count={}", fd_name, grp_name, iters, state.count);
-            }
-            if iters > 500 {
-                eprintln!("[STALL2] {} group '{}' hit {} iterations, breaking", fd_name, grp_name, iters);
+            if iters >= max_iters {
+                if dbg {
+                    eprintln!("[STALL2] {} group '{}' hit {} iter cap, breaking (count={})", fd_name, grp_name, iters, state.count);
+                }
                 break;
             }
         }
@@ -526,13 +535,21 @@ impl Action for ActionPool {
         let want_stats = std::env::var("RUGRA_RULE_STATS")
             .map(|v| v == "1")
             .unwrap_or(false);
+        let _dbg = std::env::var("RUGRA_TRACE_PIPELINE").is_ok();
         // [PINGPONG] Track per-rule hits per apply() call to detect cycling.
-        let track_pingpong = matches!(fd.name.as_str(), "glob_url" | "glob_word" | "myprogress" | "my_fwrite");
+        let track_pingpong = matches!(fd.name.as_str(), "glob_url" | "glob_word" | "myprogress" | "my_fwrite" | "parseconfig.constprop.0");
         let mut pp_hits: std::collections::HashMap<usize, i32> = Default::default();
 
         let mut pass_changes = 0;
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
+        let _n_ops = ops.len();
+        if _dbg && self.name == "simplifypool" {
+            eprintln!("[POOL] {} {} apply start ops={}", fd.name, self.name, _n_ops);
+        }
+        let mut _oi = 0usize;
         for op_ref in ops {
+            _oi += 1;
+            let _ = _oi;
             // Skip dead ops (Ghidra's processOp checks isDead).
             let (is_dead, mut opc) = {
                 let o = op_ref.0.read().unwrap();
