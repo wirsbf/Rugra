@@ -6158,6 +6158,12 @@ impl ActionFuncLink {
             for (i, &reg_off) in sysv_offsets.iter().enumerate() {
                 if i >= n_args { break; }
                 let vn = fd.vbank.create_with_space(8, AddressSpace::Register, reg_off);
+                // Mark as INPUT so Heritage rename can connect this varnode
+                // to the correct SSA version of the register. Without this
+                // flag, Heritage's guard() skips it and the CALL arg stays
+                // as an unconnected placeholder → wrong/garbage argument
+                // values in the output.
+                vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
                 fd.op_insert_input(op, vn, 1 + i);
             }
         }
