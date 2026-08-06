@@ -1014,17 +1014,25 @@ impl PrintC {
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
     ) {
-        // printc.cc:2471-2476: assignment LHS.
+        // printc.cc:2468-2495 emitExpression: if the op has an output,
+        // emit `outname = ` via direct text, then emit the RHS expression
+        // via the RPN stack. This avoids the nested-assignment problem
+        // where pushing assignment as an RPN token causes the LHS text
+        // to interleave with RHS operator emission.
         if let Some(out) = op.get_out() {
-            // pushOp(&assignment, op)
-            self.rpn_push_op(self.rpn_tok_assignment);
-            // pushSymbolDetail(outvn, op, false) -> atom on the stack.
-            // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
             let out_vn = out.read().unwrap();
-            let atom = self.make_atom_for_vn(&out_vn, op);
+            let name = self.get_varnode_display_name(&out_vn);
             drop(out_vn);
-            self.rpn_push_atom(&atom);
+            if !name.is_empty() {
+                self.emit.tag_variable(&name, 0);
+                self.emit.tag_op(" = ");
+            }
+            self.mark_variable_used(name, crate::space::AddressSpace::Register, 0, "long".to_string());
         }
+        // Clear any stale RPN state before dispatching the RHS.
+        self.revpol.clear();
+        self.nodepend.clear();
+        self.rpn_pending = 0;
         // printc.cc:2493: op->getOpcode()->push(this, op, 0)
         self.dispatch_op_rpn(op_arc, op);
         // printc.cc:2494: recurse()
@@ -1339,6 +1347,14 @@ impl PrintC {
             }
             // printc.cc:508 opCall: name(args...).
             OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                // Faithful to printc.cc:612 PrintC::opCall:
+                //   pushOp(&function_call)
+                //   pushAtom(funcname)
+                //   if (count > 0):
+                //     push count-1 comma operators
+                //     pushVn(args) in REVERSE order (N-1 down to 1)
+                //   else:
+                //     pushAtom(EMPTY)
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
                     let off = v0.get_offset();
@@ -1350,28 +1366,36 @@ impl PrintC {
                 } else {
                     "FUN_unknown".to_string()
                 };
+                // pushOp(&function_call) — postsurround stage=2.
+                self.rpn_push_op(28);
+                // pushAtom(funcname).
                 let atom = Atom::new(
                     &target_name,
                     TagType::FunToken,
                     SyntaxHighlight::FuncnameColor,
                 );
                 self.rpn_push_atom(&atom);
-                self.emit.print("(");
                 let n = op.num_input();
-                let mut first = true;
-                for i in 1..n {
-                    if !first {
-                        self.emit.print(", ");
+                let count = if n > 1 { n - 1 } else { 0 }; // args excluding in(0)=target
+                if count > 0 {
+                    // Push count-1 comma operators BEFORE the atoms.
+                    for _ in 0..(count - 1) {
+                        self.rpn_push_op(27); // comma
                     }
-                    first = false;
-                    if let Some(arg) = op.get_in(i) {
-                        let v = arg.read().unwrap();
-                        let a = self.make_atom_for_vn(&v, op);
-                        drop(v);
-                        self.rpn_push_atom(&a);
+                    // Push args in REVERSE order (highest to lowest index).
+                    for i in (1..n).rev() {
+                        if let Some(arg) = op.get_in(i) {
+                            let v = arg.read().unwrap();
+                            let a = self.make_atom_for_vn(&v, op);
+                            drop(v);
+                            self.rpn_push_atom(&a);
+                        }
                     }
+                } else {
+                    // Push empty token for void.
+                    let empty = Atom::new("", TagType::Syntax, SyntaxHighlight::NoColor);
+                    self.rpn_push_atom(&empty);
                 }
-                self.emit.print(")");
             }
             // printc.cc:5137 opReturn: return <expr>;.
             OpCode::CPUI_RETURN => {
