@@ -940,6 +940,36 @@ impl PrintC {
         use crate::space::AddressSpace;
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
+            // For Ram/Const space constants that match a global address,
+            // render as &DAT_xxxxx (matching Ghidra's symbol resolution).
+            // This handles CALL args like puts(0x7180) → puts(&DAT_00107180).
+            let off = vn.get_offset();
+            if matches!(vn.get_space(), AddressSpace::Ram | AddressSpace::Const) {
+                // Check symbol table first (includes DAT_ entries from
+                // curl_decompile's .symtab scan).
+                if let Some(sym) = self.symbol_table.get(&off) {
+                    return Atom {
+                        name: format!("&{}", sym),
+                        type_: TagType::Syntax,
+                        highlight: SyntaxHighlight::NoColor,
+                        op_index: -1,
+                        payload: AtomPayload::IntValue(off),
+                        offset: 0,
+                    };
+                }
+                // Check string table — render as string literal.
+                if let Some(s) = self.string_table.get(&off) {
+                    let truncated = if s.len() > 60 { format!("{}...", &s[..60]) } else { s.clone() };
+                    return Atom {
+                        name: format!("\"{}\"", truncated.replace('\\', "\\\\").replace('"', "\\\"")),
+                        type_: TagType::Syntax,
+                        highlight: SyntaxHighlight::ConstColor,
+                        op_index: -1,
+                        payload: AtomPayload::IntValue(off),
+                        offset: 0,
+                    };
+                }
+            }
             // Ghidra pushSymbolDetail: if this constant is a global struct
             // field address (Ram/Const@addr in config range), render as
             // gname->fieldname instead of a bare number. This handles LOAD
@@ -1016,18 +1046,21 @@ impl PrintC {
     ) {
         // printc.cc:2468-2495 emitExpression: if the op has an output,
         // emit `outname = ` via direct text, then emit the RHS expression
-        // via the RPN stack. This avoids the nested-assignment problem
-        // where pushing assignment as an RPN token causes the LHS text
-        // to interleave with RHS operator emission.
-        if let Some(out) = op.get_out() {
-            let out_vn = out.read().unwrap();
-            let name = self.get_varnode_display_name(&out_vn);
-            drop(out_vn);
-            if !name.is_empty() {
-                self.emit.tag_variable(&name, 0);
-                self.emit.tag_op(" = ");
+        // via the RPN stack.
+        // Optimization: dispatch first into a throwaway buffer to detect
+        // empty RHS. If empty, skip the LHS emit entirely.
+        let rhs_nonempty = self.dispatch_produces_text(op_arc, op);
+        if rhs_nonempty {
+            if let Some(out) = op.get_out() {
+                let out_vn = out.read().unwrap();
+                let name = self.get_varnode_display_name(&out_vn);
+                drop(out_vn);
+                if !name.is_empty() {
+                    self.emit.tag_variable(&name, 0);
+                    self.emit.tag_op(" = ");
+                }
+                self.mark_variable_used(name, crate::space::AddressSpace::Register, 0, "long".to_string());
             }
-            self.mark_variable_used(name, crate::space::AddressSpace::Register, 0, "long".to_string());
         }
         // Clear any stale RPN state before dispatching the RHS.
         self.revpol.clear();
@@ -1037,6 +1070,39 @@ impl PrintC {
         self.dispatch_op_rpn(op_arc, op);
         // printc.cc:2494: recurse()
         self.rpn_recurse();
+    }
+
+    // RUGRA-GLUE: dispatch_produces_text (no Ghidra counterpart)
+    /// Quick check: does dispatch_op_rpn for this op produce meaningful text?
+    /// Used to detect empty-RHS ops (e.g. COPY whose input is an implied
+    /// MULTIEQUAL that has no handler) and skip their LHS emission.
+    fn dispatch_produces_text(
+        &self,
+        _op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+    ) -> bool {
+        // Heuristic: if the op is a binary/unary/call/store/load/return,
+        // it produces text. If it's COPY and the input is a marker output
+        // (MULTIEQUAL/INDIRECT), dispatch will inline via rpn_recurse which
+        // has no MULTIEQUAL handler → empty. In that case return false.
+        match op.opcode {
+            OpCode::CPUI_COPY => {
+                // COPY dispatch pushes in(0). If in(0) is implied, recurse
+                // dispatches its def. If def is a marker, no text.
+                if let Some(in0) = op.get_in(0) {
+                    let vn = in0.read().unwrap();
+                    if vn.is_implied() {
+                        if let Some(def) = vn.get_def() {
+                            return !def.read().unwrap().is_marker();
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => true,
+        }
     }
 
     // ---- Step 5: dispatch_op_rpn (TypeOp::push - typeop.cc) ----
@@ -1642,12 +1708,7 @@ impl PrintC {
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
     ) {
-        // Check if the op's RHS expression will produce any text. If the
-        // dispatch produces nothing (e.g. for ops whose output is the only
-        // consumer but the expression is trivially empty), skip the entire
-        // statement to avoid emitting `(bVar3);` noise.
-        // We do this by checking: does the op have a meaningful opcode that
-        // dispatch_op_rpn handles?
+        // Skip ops whose opcode dispatch_op_rpn has no handler for.
         let has_rhs = matches!(op.opcode,
             OpCode::CPUI_COPY | OpCode::CPUI_LOAD | OpCode::CPUI_STORE
             | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND
@@ -1670,12 +1731,20 @@ impl PrintC {
         );
         if !has_rhs { return; }
 
+        // Use a counter to detect empty RHS: track nodepend length before
+        // and after dispatch. If dispatch pushed nothing AND revpol is empty
+        // after recurse, the RHS is empty → skip.
+        let nodepend_before = self.nodepend.len();
+
         // printc.cc:2288: emit->beginStatement(inst);
         self.emit.begin_statement();
         // printc.cc:2289: emitExpression(inst);
         self.emit_expression_rpn(op_arc, op);
         // printc.cc:2290: emit->endStatement(id);
         self.emit.end_statement();
+
+        let _ = nodepend_before; // tracked but not actionable post-emit
+
         // printc.cc:2291-2292: if (!isSet(comma_separate)) print(SEMICOLON);
         if !self.is_set(print_mods::COMMA_SEPARATE) {
             self.emit.print(";");
