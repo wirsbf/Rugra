@@ -1642,6 +1642,34 @@ impl PrintC {
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
     ) {
+        // Check if the op's RHS expression will produce any text. If the
+        // dispatch produces nothing (e.g. for ops whose output is the only
+        // consumer but the expression is trivially empty), skip the entire
+        // statement to avoid emitting `(bVar3);` noise.
+        // We do this by checking: does the op have a meaningful opcode that
+        // dispatch_op_rpn handles?
+        let has_rhs = matches!(op.opcode,
+            OpCode::CPUI_COPY | OpCode::CPUI_LOAD | OpCode::CPUI_STORE
+            | OpCode::CPUI_CALL | OpCode::CPUI_CALLIND
+            | OpCode::CPUI_RETURN | OpCode::CPUI_CBRANCH
+            | OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_SREM | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
+            | OpCode::CPUI_INT_SRIGHT | OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR
+            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_INT_2COMP
+            | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD | OpCode::CPUI_SUBPIECE
+            | OpCode::CPUI_CAST | OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT
+            | OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
+            | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG
+            | OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
+            | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
+        );
+        if !has_rhs { return; }
+
         // printc.cc:2288: emit->beginStatement(inst);
         self.emit.begin_statement();
         // printc.cc:2289: emitExpression(inst);
