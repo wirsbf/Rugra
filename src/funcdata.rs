@@ -4117,6 +4117,16 @@ impl Funcdata {
                     && !defined_reg_offsets.contains(&vn.get_offset())
                     && marked_input.insert(vn.get_offset())
                 {
+                    // Exclude x86-64 flag registers (RFLAGS bits at offsets
+                    // 0x200=RIP, 0x201=ZF, 0x202=SF, 0x203=CF, 0x206=PF,
+                    // 0x207=ZF2, 0x20b=OF). These are set by arithmetic ops
+                    // and consumed by CBRANCH. They should NOT be marked INPUT
+                    // (they're internal processor state, not function params),
+                    // so DeadCode can remove unused flag-computation chains.
+                    // Ghidra handles this via the SLEIGH pspec's
+                    // `noinherit` flag on these registers.
+                    let is_flag_reg = (0x200..=0x20f).contains(&vn.get_offset());
+                    if is_flag_reg { continue; }
                     drop(vn); // Release read lock before write
                     self.vbank.set_input(in_arc.clone());
                 }
@@ -4131,6 +4141,127 @@ impl Funcdata {
             }
         }
         eprintln!("[INJECT] {} phase3 done marked_input={}", self.name, marked_input.len());
+
+        // Phase 3.1: Remove unused flag-register computation chains.
+        // SLEIGH generates flag ops (INT_SBORROW/INT_SLESS/POPCOUNT/...) for
+        // every arithmetic instruction. Ghidra's SLEIGH .pspec marks flag
+        // registers as `noinherit`, so DeadCode removes unused chains. Rugra
+        // has no .pspec noinherit mechanism; instead we mark flag-register
+        // outputs (offset 0x200-0x20f) as dead if they're NOT consumed by a
+        // CBRANCH.
+        //
+        // Only run if the function has flag-register outputs (SLEIGH-lifted
+        // functions have them; hand-crafted test inputs usually don't).
+        let has_flag_regs = op_refs.len() > 50 && op_refs.iter().any(|r| {
+            let op = r.0.read().unwrap();
+            if let Some(ref out) = op.output {
+                let vn = out.read().unwrap();
+                vn.get_space() == AddressSpace::Register
+                    && (0x200..=0x20f).contains(&vn.get_offset())
+            } else { false }
+        }) && op_refs.iter().any(|r| {
+            r.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
+        });
+        if has_flag_regs {
+            // Collect flag-register offsets that ARE used by a CBRANCH.
+            let mut used_flag_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            for op_ref in &op_refs {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_CBRANCH {
+                    if let Some(in1) = op.get_in(1) {
+                        let vn = in1.read().unwrap();
+                        if vn.get_space() == AddressSpace::Register
+                            && (0x200..=0x20f).contains(&vn.get_offset())
+                        {
+                            used_flag_offsets.insert(vn.get_offset());
+                        }
+                    }
+                }
+            }
+
+            // Mark ops whose output is a flag register NOT in used_flag_offsets.
+            // These are dead flag computations. Mark their outputs with a
+            // special flag so DeadCode removes them (they have no INPUT flag
+            // after Phase 3's exclusion, and their outputs have no terminal
+            // consumer, so DeadCode should already remove them — but the
+            // iter cap may prevent full convergence).
+            //
+            // Direct removal: destroy the op if its output has no descendants
+            // other than other flag ops (which will also be removed).
+            let mut to_destroy: Vec<crate::op::PcodeOpRef> = Vec::new();
+            for op_ref in &op_refs {
+                let op = op_ref.0.read().unwrap();
+                if let Some(ref out_arc) = op.output {
+                    let out_vn = out_arc.read().unwrap();
+                    if out_vn.get_space() == AddressSpace::Register
+                        && (0x200..=0x20f).contains(&out_vn.get_offset())
+                        && !used_flag_offsets.contains(&out_vn.get_offset())
+                    {
+                        // This op writes to an unused flag register.
+                        to_destroy.push(op_ref.clone());
+                    }
+                }
+            }
+            // Also collect ops that ONLY feed into the to-destroy ops
+            // (transitive flag chain cleanup). We do a simple fixpoint:
+            // keep destroying ops whose only descendants are already-destroyed.
+            let mut changed = true;
+            while changed {
+                changed = false;
+                let destroyed_ptrs: std::collections::HashSet<usize> = to_destroy.iter()
+                    .map(|r| Arc::as_ptr(&r.0) as usize).collect();
+                // Collect outputs of destroyed ops
+                let dead_outputs: std::collections::HashSet<usize> = to_destroy.iter()
+                    .filter_map(|r| {
+                        let op = r.0.read().unwrap();
+                        op.output.as_ref().map(|v| Arc::as_ptr(v) as usize)
+                    }).collect();
+                // Find new candidates: ops whose all descendants are destroyed
+                'outer: for op_ref in &op_refs {
+                    let ptr = Arc::as_ptr(&op_ref.0) as usize;
+                    if destroyed_ptrs.contains(&ptr) { continue; }
+                    let op = op_ref.0.read().unwrap();
+                    // Skip side-effect ops (CALL, STORE, RETURN, CBRANCH, BRANCH)
+                    if matches!(op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND
+                        | OpCode::CPUI_STORE | OpCode::CPUI_RETURN
+                        | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH
+                        | OpCode::CPUI_BRANCHIND) { continue; }
+                    if let Some(ref out_arc) = op.output {
+                        let out_vn = out_arc.read().unwrap();
+                        // Check if ALL descendants are destroyed
+                        let live_descends: Vec<_> = out_vn.descend.iter()
+                            .filter_map(|w| w.upgrade())
+                            .collect();
+                        if live_descends.is_empty() { continue; }
+                        let all_dead = live_descends.iter().all(|d| {
+                            destroyed_ptrs.contains(&(Arc::as_ptr(d) as usize))
+                        });
+                        if all_dead {
+                            // Also require output is not used by non-destroyed ops
+                            // via checking the descend list (which we just did)
+                            to_destroy.push(op_ref.clone());
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            // Destroy the collected ops
+            let n_destroyed = to_destroy.len();
+            for op_ref in &to_destroy {
+                self.op_destroy_raw(op_ref);
+            }
+            // Rebuild bblocks from surviving alivelist ops (the destroyed
+            // ops are removed from alivelist by obank.destroy, but bblocks.ops
+            // still references them). Rebuild from scratch using address ranges.
+            if n_destroyed > 0 {
+                let surviving: Vec<PcodeOpRef> = self.obank.alivelist.iter()
+                    .map(|r| PcodeOpRef(r.0.clone()))
+                    .collect();
+                self.bblocks.clear();
+                self.build_blocks_from_ops(&surviving);
+            }
+            eprintln!("[INJECT] {} phase3.1 removed {} unused flag ops", self.name, n_destroyed);
+        } // end if has_flag_regs
 
         // Phase 3.5: Use-def wiring pass (Ghidra VarnodeBank::xref dedup).
         // Wire Register-space free inputs to prior written outputs at the
