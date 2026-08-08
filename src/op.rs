@@ -390,6 +390,9 @@ impl PcodeOp {
     /// Is this op's output a boolean? Faithful to `PcodeOp::isBoolOutput`
     /// (op.hh:190).
     // Ghidra: op.hh:184 PcodeOp::isBoolOutput
+    pub fn is_return_copy(&self) -> bool {
+        (self.flags & pcodeop_flags::RETURN_COPY) != 0
+    }
     pub fn is_bool_output(&self) -> bool {
         (self.flags & pcodeop_flags::BOOLOUTPUT) != 0
     }

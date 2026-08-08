@@ -175,76 +175,95 @@ impl RulePropagateCopy {
 
 impl Rule for RulePropagateCopy {
     // Ghidra: ruleaction.cc:3946 RulePropagateCopy::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
-        let op = op_arc.read().unwrap();
-        if op.opcode != OpCode::CPUI_COPY {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let in_vn_arc = match op.inrefs.get(0) {
-            Some(vn) => vn.clone(),
-            None => return Ok(action_status::NO_CHANGE),
+    // Faithful port: applies to ALL opcodes (Ghidra has no getOpList).
+    // For each input of the op, if that input is the output of a COPY,
+    // replace it with the COPY's input (propagation).
+    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+        let num_inputs = {
+            let op = op_arc.read().unwrap();
+            // Ghidra cc:3954: skip return copies (op->isReturnCopy())
+            if op.is_return_copy() { return Ok(action_status::NO_CHANGE); }
+            op.num_input()
         };
 
-        let out_vn_arc = match &op.output {
-            Some(vn) => vn.clone(),
-            None => return Ok(action_status::NO_CHANGE),
-        };
+        for i in 0..num_inputs {
+            let (vn_arc, copyop_arc, invn_arc) = {
+                let op = op_arc.read().unwrap();
+                let vn = match op.get_in(i) { Some(v) => v.clone(), None => continue };
+                // Varnode must be written to be from a COPY.
+                let vn_rg = vn.read().unwrap();
+                if !vn_rg.is_written() { continue; }
+                let copyop_weak = match &vn_rg.def { Some(d) => d.clone(), None => continue };
+                drop(vn_rg);
+                let copyop_arc = match copyop_weak.upgrade() { Some(a) => a, None => continue };
+                let copyop = copyop_arc.read().unwrap();
+                if copyop.opcode != OpCode::CPUI_COPY { continue; }
+                let invn = match copyop.get_in(0) { Some(v) => v.clone(), None => continue };
+                drop(copyop);
+                (vn, copyop_arc, invn)
+            };
 
-        let mut changed = false;
-        let mut to_update = Vec::new();
+            // invn must be heritage-known (not a free varnode)
+            if !invn_arc.read().unwrap().is_heritage_known() { continue; }
 
-        {
-            let out_vn = out_vn_arc.read().unwrap();
-            for descendant_weak in &out_vn.descend {
-                if let Some(descendant_arc) = descendant_weak.upgrade() {
-                    to_update.push(descendant_arc);
-                }
-            }
-        }
-
-        for descendant_arc in to_update {
-            let mut descendant = descendant_arc.write().unwrap();
-            for i in 0..descendant.inrefs.len() {
-                if std::sync::Arc::ptr_eq(&descendant.inrefs[i], &out_vn_arc) {
-                    // Ghidra: opSetInput already handles mapentry propagation
-                    // for constants via copySymbol. For non-constants (Ram/Reg),
-                    // Ghidra's single-Varnode model means mapentry is shared.
-                    // Rugra needs explicit propagation: copy mapentry from
-                    // COPY input to the descendant's input slot (which is now
-                    // the COPY input varnode itself — so mapentry is already
-                    // there). BUT if the COPY output had a mapentry and the
-                    // COPY input doesn't, we should copy it.
-                    if let Some(ref me) = out_vn_arc.read().unwrap().mapentry {
-                        if in_vn_arc.read().unwrap().mapentry.is_none() {
-                            in_vn_arc.write().unwrap().mapentry = Some(me.clone());
+            // Check marker op constraints (Ghidra cc:3967-3975)
+            let is_marker = op_arc.read().unwrap().is_marker();
+            if is_marker {
+                if invn_arc.read().unwrap().is_constant() { continue; }
+                // Don't propagate addr-tied across different addresses
+                if vn_arc.read().unwrap().is_addr_tied() {
+                    if let Some(out_vn) = &op_arc.read().unwrap().output {
+                        if out_vn.read().unwrap().is_addr_tied()
+                            && out_vn.read().unwrap().get_addr() != invn_arc.read().unwrap().get_addr() {
+                            continue;
                         }
                     }
-                    descendant.inrefs[i] = in_vn_arc.clone();
-                    changed = true;
-
-                    // Update descend list for the new input
-                    in_vn_arc.write().unwrap().descend.push(std::sync::Arc::downgrade(&descendant_arc));
                 }
             }
-        }
 
-        if changed {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+            // Ghidra cc:3977: data.opSetInput(op, invn, i)
+            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+            fd.op_set_input(&op_ref, invn_arc.clone(), i);
+            return Ok(action_status::CHANGE);
         }
+        Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
-    fn get_name(&self) -> &str {
-        "propagate_copy"
-    }
-
-    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
+    // Ghidra: RulePropagateCopy has NO getOpList — applies to all opcodes.
+    // Returning an empty vec means "no opcodes" in Rugra's ActionPool model,
+    // which would prevent the rule from ever firing. Instead, we return all
+    // opcodes that have inputs (everything except CPUI_MULTIEQUAL which is
+    // handled separately). Ghidra's Rule base class dispatches to applyOp
+    // for every op in the alive list; Rugra's per-opcode indexing needs an
+    // explicit list.
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_COPY]
+        use crate::opcodes::OpCode;
+        vec![
+            OpCode::CPUI_COPY, OpCode::CPUI_LOAD, OpCode::CPUI_STORE,
+            OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB, OpCode::CPUI_INT_MULT,
+            OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SDIV, OpCode::CPUI_INT_REM,
+            OpCode::CPUI_INT_SREM, OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR,
+            OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT,
+            OpCode::CPUI_INT_SRIGHT, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL,
+            OpCode::CPUI_INT_LESS, OpCode::CPUI_INT_SLESS,
+            OpCode::CPUI_INT_LESSEQUAL, OpCode::CPUI_INT_SLESSEQUAL,
+            OpCode::CPUI_BOOL_AND, OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_XOR,
+            OpCode::CPUI_INT_NEGATE, OpCode::CPUI_BOOL_NEGATE, OpCode::CPUI_INT_2COMP,
+            OpCode::CPUI_PTRSUB, OpCode::CPUI_PTRADD, OpCode::CPUI_SUBPIECE,
+            OpCode::CPUI_CAST, OpCode::CPUI_INT_ZEXT, OpCode::CPUI_INT_SEXT,
+            OpCode::CPUI_CBRANCH, OpCode::CPUI_BRANCHIND,
+            OpCode::CPUI_INT_CARRY, OpCode::CPUI_INT_SCARRY, OpCode::CPUI_INT_SBORROW,
+            OpCode::CPUI_FLOAT_ADD, OpCode::CPUI_FLOAT_SUB, OpCode::CPUI_FLOAT_MULT,
+            OpCode::CPUI_FLOAT_DIV, OpCode::CPUI_FLOAT_NEG,
+            OpCode::CPUI_FLOAT_EQUAL, OpCode::CPUI_FLOAT_NOTEQUAL,
+            OpCode::CPUI_FLOAT_LESS, OpCode::CPUI_FLOAT_LESSEQUAL,
+            OpCode::CPUI_CALL, OpCode::CPUI_CALLIND, OpCode::CPUI_RETURN,
+            OpCode::CPUI_CALLOTHER,
+        ]
     }
+
+    // Ghidra: ruleaction.cc:3944 RulePropagateCopy
+    fn get_name(&self) -> &str { "propagate_copy" }
 }
 
 /// Rule for eliminating redundant zero-extensions
