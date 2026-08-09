@@ -484,54 +484,58 @@ impl Action for ActionDeadCode {
             changed += 1;
         }
 
-        // Step 4: Remove dead ops (output consume == 0 and not input).
-        // Ghidra: coreaction.cc:4038-4044 — when an op's output is never
-        // consumed (!vacflag), Ghidra distinguishes calls from other ops:
-        //   if (op->isCall()) data.opUnsetOutput(op);  // keep the CALL (side effects!), drop only the unused return value
-        //   else               data.opDestroy(op);      // completely remove the op
-        // A CALL has side effects (it writes memory / does I/O), so it must
-        // NEVER be removed just because its return value is unused. Previously
-        // Rugra mark_dead'd calls with dead outputs, which killed fwrite/fopen/
-        // malloc/etc. wholesale and collapsed every if/else body containing a
-        // call — the §3.2 body-collapse root cause.
-        let mut to_remove = Vec::new();
-        let mut calls_to_unset = Vec::new();
-        for op_ref in &fd.obank.alivelist {
-            let op_rg = op_ref.0.read().unwrap();
-            if let Some(out) = &op_rg.output {
-                let out_rg = out.read().unwrap();
-                if out_rg.get_consume() == 0 && !out_rg.is_input() {
-                    if matches!(op_rg.opcode, crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND) {
-                        // Faithful to Ghidra: keep the call, drop only its dead output.
-                        calls_to_unset.push(op_ref.clone());
+        // Step 4: Per-space dead varnode elimination.
+        // Faithful to Ghidra coreaction.cc:4234-4270. For each address space
+        // where deadRemovalAllowed is true, iterate all written varnodes.
+        // If !isConsumeVacuous → opDestroy (or opUnsetOutput for calls).
+        // If consume==0 → neverConsumed: replace reads with 0, then opDestroy.
+        let heritage_pass = fd.heritage.pass;
+        for space in [
+            crate::space::AddressSpace::Register,
+            crate::space::AddressSpace::Unique,
+            crate::space::AddressSpace::Stack,
+        ] {
+            // Ghidra cc:4236: deadRemovalAllowed = (pass > deadcodedelay).
+            let deadcodedelay = space.get_deadcode_delay();
+            if heritage_pass <= deadcodedelay { continue; }
+
+            // Collect written varnodes in this space.
+            let vns: Vec<_> = fd.vbank.loc_tree.iter()
+                .map(|v| v.0.clone())
+                .filter(|v| {
+                    let r = v.read().unwrap();
+                    r.get_space() == space && r.is_written()
+                })
+                .collect();
+
+            for vn_arc in vns {
+                // Skip if already dead (destroyed in a prior iteration).
+                if vn_arc.read().unwrap().get_consume() == 0
+                    && !vn_arc.read().unwrap().is_input()
+                {
+                    // Ghidra cc:4256-4261: !vacflag → not even vacuously consumed.
+                    let def_op = vn_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+                    let Some(def_op_arc) = def_op else { continue };
+
+                    // Skip if def op already dead.
+                    if def_op_arc.read().unwrap().is_dead() { continue; }
+
+                    let is_call = matches!(def_op_arc.read().unwrap().opcode,
+                        crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND);
+                    let def_ref = crate::op::PcodeOpRef(def_op_arc);
+                    if is_call {
+                        // Ghidra cc:4259: data.opUnsetOutput(op).
+                        fd.op_unset_output(&def_ref);
                     } else {
-                        to_remove.push(op_ref.clone());
+                        // Ghidra cc:4261: data.opDestroy(op).
+                        fd.op_destroy(&def_ref);
                     }
+                    changed += 1;
                 }
             }
         }
 
-        for op_ref in to_remove {
-            // Ghidra coreaction.cc:4041: data.opDestroy(op).
-            // op_destroy removes the op from bblocks + alivelist + severs
-            // data-flow links. mark_dead only moves alivelist→deadlist
-            // without removing from bblocks, leaving dead ops visible to
-            // subsequent passes.
-            fd.op_destroy(&op_ref);
-            changed += 1;
-        }
-        // Calls: unset output (clears the unused return-value varnode) but the
-        // op stays alive so its side effects still emit. opUnsetOutput also
-        // detaches the varnode's def back-edge (funcdata.cc opUnsetOutput).
-        for op_ref in calls_to_unset {
-            fd.op_unset_output(&op_ref);
-            changed += 1;
-        }
-
         // Ghidra coreaction.cc:4273-4274: clearDeadVarnodes() + clearDeadOps()
-        // Physically remove dead ops and varnodes so subsequent Rules and
-        // Actions don't see them. Without this, 102 dead ops remain in
-        // alivelist (marked [DEAD]) and pollute every subsequent pass.
         fd.clear_dead_varnodes();
         fd.obank.destroy_dead();
 
