@@ -4071,11 +4071,27 @@ impl Funcdata {
                 let in_vn = if input_raw.space == AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank.find_or_create_input_space(
-                        input_raw.size,
-                        input_raw.space,
-                        input_raw.offset,
-                    )
+                    // Ghidra PcodeEmitFd::dump (funcdata.cc:902):
+                    //   vn = fd->newVarnode(vars[i].size, vars[i].space, vars[i].offset);
+                    // Each input creates a NEW free Varnode. Ghidra's
+                    // newVarnode → vbank.create → xref. xref inserts into
+                    // loc_tree using the VarnodeCompareLocDef comparator,
+                    // which distinguishes free vs written varnodes at the
+                    // same address. So a free input and a written output
+                    // at the same (space, offset, size) are DIFFERENT
+                    // objects in the tree.
+                    //
+                    // This is critical for Heritage rename: INT_AND(x,x)
+                    // where both inputs read the same register MUST be
+                    // different Varnode objects, so activeHeritage can be
+                    // tracked and cleared independently per input.
+                    //
+                    // Previously Rugra used find_or_create_input_space which
+                    // returned the SAME Arc for both inputs → second input's
+                    // activeHeritage was already cleared by the first →
+                    // second input not renamed → TrivialArith's ptr_eq fails.
+                    self.vbank.create_with_space(
+                        input_raw.size, input_raw.space, input_raw.offset)
                 };
                 // Add use-def link
                 in_vn

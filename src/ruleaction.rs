@@ -412,6 +412,10 @@ impl Rule for RuleTrivialArith {
             let v0 = in0.read().unwrap();
             let v1 = in1.read().unwrap();
             if Arc::ptr_eq(&in0, &in1) {
+                if std::env::var("RUGRA_TRACE_TRIVIAL").is_ok() {
+                    eprintln!("[TRIVIAL-FIRE] {} opc={:?} space={:?} off={:#x}",
+                        fd.name, op.opcode, v0.address_space, v0.get_offset());
+                }
                 true
             } else if v0.is_written() && v1.is_written() {
                 // Compare defining ops via is_cse_match.

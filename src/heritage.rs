@@ -3576,13 +3576,14 @@ impl Heritage {
 
         let mut stacks: BTreeMap<(AddressSpace, Address), Vec<Arc<RwLock<Varnode>>>> = BTreeMap::new();
 
-        // Push initial/input varnodes to stacks
-        for vn_ref in &vbank.def_tree {
-            let vn = vn_ref.0.read().unwrap();
-            if vn.is_input() {
-                stacks.entry((vn.address_space, vn.loc)).or_default().push(vn_ref.0.clone());
-            }
-        }
+        // Ghidra cc:2590: VariableStack varstack; (初始空)
+        // Do NOT pre-seed stacks with input varnodes. Ghidra creates
+        // input varnodes on-demand when a free read is encountered with
+        // an empty stack (cc:2497-2502). Pre-seeding causes the first
+        // free read to get the pre-seeded value instead of creating a
+        // fresh input varnode, which can break TrivialArith's Arc::ptr_eq
+        // check (two reads of the same register may get different Arc
+        // clones instead of the same Arc).
 
         // Find entry blocks
         let entry_blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = bblocks
