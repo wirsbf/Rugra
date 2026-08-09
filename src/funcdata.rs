@@ -4182,6 +4182,7 @@ impl Funcdata {
         }) && op_refs.iter().any(|r| {
             r.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH
         });
+
         if has_flag_regs {
             // Collect flag-register offsets that ARE used by a CBRANCH.
             let mut used_flag_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();

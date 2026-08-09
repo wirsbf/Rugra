@@ -272,6 +272,7 @@ impl ActionDeadCode {
         use crate::opcodes::OpCode;
         let Some(vn) = worklist.pop() else { return };
         let outc = vn.read().unwrap().get_consume();
+        vn.write().unwrap().clear_consume_vacuous();
         let Some(def) = vn.read().unwrap().get_def() else { return };
         let opc = def.read().unwrap().opcode;
         match opc {
@@ -307,6 +308,90 @@ impl ActionDeadCode {
                 let a = if sz >= 8 { 0 } else { outc << (sz * 8) };
                 if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
                     Self::push_consumed(a, &in0, worklist);
+                }
+            }
+            // Faithful to Ghidra coreaction.cc:3848-3852.
+            OpCode::CPUI_COPY | OpCode::CPUI_INT_NEGATE => {
+                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                    Self::push_consumed(outc, &in0, worklist);
+                }
+            }
+            // Faithful to Ghidra cc:3854-3858. XOR/OR: both inputs get full outc.
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_OR => {
+                for slot in 0..2 {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(outc, &in_vn, worklist);
+                    }
+                }
+            }
+            // Faithful to Ghidra cc:3859-3868. AND with const mask: propagate
+            // masked bits. AND with non-const: both inputs get full outc.
+            OpCode::CPUI_INT_AND => {
+                let in1_is_const = def.read().unwrap().get_in(1)
+                    .map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                if in1_is_const {
+                    let val = def.read().unwrap().get_in(1)
+                        .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                        Self::push_consumed(outc & val, &in0, worklist);
+                    }
+                    if let Some(in1) = def.read().unwrap().get_in(1).cloned() {
+                        Self::push_consumed(outc, &in1, worklist);
+                    }
+                } else {
+                    for slot in 0..2 {
+                        if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                            Self::push_consumed(outc, &in_vn, worklist);
+                        }
+                    }
+                }
+            }
+            // Faithful to Ghidra cc:3869-3871. MULTIEQUAL: all inputs get outc.
+            OpCode::CPUI_MULTIEQUAL => {
+                let n_in = def.read().unwrap().num_input();
+                for slot in 0..n_in {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(outc, &in_vn, worklist);
+                    }
+                }
+            }
+            // Faithful to Ghidra cc:3872-3874. ZEXT: propagate outc.
+            OpCode::CPUI_INT_ZEXT => {
+                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                    Self::push_consumed(outc, &in0, worklist);
+                }
+            }
+            // Faithful to Ghidra cc:3875-3882. SEXT: propagate masked outc
+            // with sign bit forced.
+            OpCode::CPUI_INT_SEXT => {
+                let b = calc_mask(def.read().unwrap().get_in(0)
+                    .map(|v| v.read().unwrap().get_size()).unwrap_or(8));
+                let a = (outc & b) | if outc > b { b ^ (b >> 1) } else { 0 };
+                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                    Self::push_consumed(a, &in0, worklist);
+                }
+            }
+            // Faithful to Ghidra cc:3953-3961. Comparisons: if outc!=0,
+            // propagate NZMask union; if outc==0, propagate 0.
+            OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            | OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                let a = if outc == 0 { 0 } else {
+                    let nz0 = def.read().unwrap().get_in(0)
+                        .map(|v| v.read().unwrap().get_nzm()).unwrap_or(0);
+                    let nz1 = def.read().unwrap().get_in(1)
+                        .map(|v| v.read().unwrap().get_nzm()).unwrap_or(0);
+                    nz0 | nz1
+                };
+                for slot in 0..2 {
+                    if let Some(in_vn) = def.read().unwrap().get_in(slot).cloned() {
+                        Self::push_consumed(a, &in_vn, worklist);
+                    }
+                }
+            }
+            // Faithful to Ghidra cc:3883-3903. INDIRECT: propagate to in(0).
+            OpCode::CPUI_INDIRECT => {
+                if let Some(in0) = def.read().unwrap().get_in(0).cloned() {
+                    Self::push_consumed(outc, &in0, worklist);
                 }
             }
             _ => {
