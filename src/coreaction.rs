@@ -512,7 +512,12 @@ impl Action for ActionDeadCode {
         }
 
         for op_ref in to_remove {
-            fd.obank.mark_dead(op_ref);
+            // Ghidra coreaction.cc:4041: data.opDestroy(op).
+            // op_destroy removes the op from bblocks + alivelist + severs
+            // data-flow links. mark_dead only moves alivelist→deadlist
+            // without removing from bblocks, leaving dead ops visible to
+            // subsequent passes.
+            fd.op_destroy(&op_ref);
             changed += 1;
         }
         // Calls: unset output (clears the unused return-value varnode) but the
@@ -522,6 +527,13 @@ impl Action for ActionDeadCode {
             fd.op_unset_output(&op_ref);
             changed += 1;
         }
+
+        // Ghidra coreaction.cc:4273-4274: clearDeadVarnodes() + clearDeadOps()
+        // Physically remove dead ops and varnodes so subsequent Rules and
+        // Actions don't see them. Without this, 102 dead ops remain in
+        // alivelist (marked [DEAD]) and pollute every subsequent pass.
+        fd.clear_dead_varnodes();
+        fd.obank.destroy_dead();
 
         // Return-address push STORE elimination.
         //

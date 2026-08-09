@@ -80,6 +80,8 @@ fn dump_funcdata_ir(fd: &Funcdata) {
         let block_arc = match fd.bblocks.get_block(i) { Some(b) => b, None => continue };
         let block = block_arc.read().unwrap();
         let mut ops: Vec<_> = block.get_ops();
+        // Filter out dead ops so dump shows only alive IR.
+        ops.retain(|o| !o.0.read().unwrap().is_dead());
         ops.sort_by_key(|o| o.0.read().unwrap().get_addr().as_u64());
         println!();
         println!("BB 0x{:x} ({} ops):", start, ops.len());

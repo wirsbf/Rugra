@@ -1004,7 +1004,11 @@ impl Funcdata {
             });
         }
         op.0.write().unwrap().inrefs.clear();
-        // Mark the op dead.
+        // Mark the op dead (moves from alivelist to deadlist).
+        // NOTE: Ghidra also calls op->getParent()->removeOp(op) here to
+        // remove from bblock.ops. Rugra can't do this safely because other
+        // code holds indices into bblock.ops that would become stale.
+        // Instead, printc and dump_ir filter dead ops via is_dead().
         self.obank.mark_dead(op.clone());
     }
 
@@ -2169,6 +2173,22 @@ impl Funcdata {
             None => self.obank.alivelist.len(),
         };
         self.obank.alivelist.insert(insert_idx, op.clone());
+
+        // Ghidra funcdata_op.cc:345-362: opInsertBefore also inserts the op
+        // into the bblock's ops list (via opInsert). Rugra previously only
+        // inserted into alivelist, leaving the op invisible to bblock
+        // traversal (dump_ir, emit_block_basic_rpn, etc.).
+        let follow_ptr = std::sync::Arc::as_ptr(&follow.0) as usize;
+        let op_clone = op.clone();
+        for block_arc in &self.bblocks.blocks {
+            let mut block = block_arc.write().unwrap();
+            if let Some(bb) = block.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if let Some(bblock_idx) = bb.ops.iter().position(|o| std::sync::Arc::as_ptr(&o.0) as usize == follow_ptr) {
+                    bb.ops.insert(bblock_idx, op_clone.clone());
+                    break;
+                }
+            }
+        }
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::newIndirectOp
