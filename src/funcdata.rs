@@ -974,15 +974,20 @@ impl Funcdata {
     /// Set the output varnode for an op (replacing any existing output).
     /// Faithful to `Funcdata::opSetOutput`. Marks the varnode WRITTEN and sets
     /// its def link to this op; clears the old output's def if present.
-    pub fn op_set_output(&self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+    pub fn op_set_output(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
         let mut o = op.0.write().unwrap();
         if let Some(old) = o.output.take() {
             // Clear the old output's def (best-effort).
             old.write().unwrap().def = None;
         }
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&op.0));
-        o.output = Some(vn);
+        drop(o); // Release op write-lock before vbank mutation.
+        // Ghidra funcdata_op.cc:83: vn = vbank.setDef(vn, op)
+        // setDef → xref → sets INSERT flag (varnode.cc:1330).
+        // INSERT flag is required for is_heritage_known() to return true,
+        // which RulePropagateCopy checks (ruleaction.cc:3964). Without it,
+        // COPY propagation fails and dead varnodes accumulate.
+        self.vbank.set_def(vn.clone(), std::sync::Arc::downgrade(&op.0));
+        op.0.write().unwrap().output = Some(vn);
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opDestroy
