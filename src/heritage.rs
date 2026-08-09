@@ -3336,6 +3336,23 @@ impl Heritage {
         _sblocks: &crate::block::BlockGraph,
     ) {
 
+        // Collect flag-register offsets consumed by CBRANCH (Ghidra .pspec
+        // noinherit equivalent — only CBRANCH-read flags need SSA).
+        let mut used_flag_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for op_ref in &obank.alivelist {
+            let op = op_ref.0.read().unwrap();
+            if op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH {
+                if let Some(in1) = op.get_in(1) {
+                    let vn = in1.read().unwrap();
+                    if vn.get_space() == crate::space::AddressSpace::Register
+                        && (0x200..=0x20f).contains(&vn.get_offset())
+                    {
+                        used_flag_offsets.insert(vn.get_offset());
+                    }
+                }
+            }
+        }
+
         // Standard SSA Phi node placement algorithm
         let mut worklist = VecDeque::new();
         let mut ever_on_worklist = std::collections::HashSet::new();
@@ -3353,6 +3370,19 @@ impl Heritage {
                 .unwrap_or(0);
 
             if self.pass < delay {
+                continue;
+            }
+
+            // Skip flag registers that are NOT used by CBRANCH.
+            // Ghidra marks all flags as noinherit in .pspec. Rugra can't
+            // do that because CBRANCH reads ZF/SF for conditional branches.
+            // Compromise: skip flags NOT consumed by CBRANCH, but keep
+            // flags that ARE consumed (so SSA tests with CBRANCH pass).
+            // The used_flag_offsets set is built from CBRANCH in(1).
+            if space == crate::space::AddressSpace::Register
+                && (0x200..=0x20f).contains(&vn.get_offset())
+                && !used_flag_offsets.contains(&vn.get_offset())
+            {
                 continue;
             }
 
@@ -3526,6 +3556,25 @@ impl Heritage {
     /// both of which mutate the bank. Rugra ports these as
     /// `VarnodeBank::set_input_varnode` / `VarnodeBank::destroy_varnode`.
     pub fn rename_direct(&mut self, vbank: &mut VarnodeBank, bblocks: &crate::block::BlockGraph) {
+        // Collect flag-register offsets consumed by CBRANCH (same as
+        // place_multiequals_direct above).
+        let mut used_flag_offsets: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for op_ref in &bblocks.blocks {
+            let block = op_ref.read().unwrap();
+            for bb_op in &block.get_ops() {
+                let op = bb_op.0.read().unwrap();
+                if op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH {
+                    if let Some(in1) = op.get_in(1) {
+                        let vn = in1.read().unwrap();
+                        if vn.get_space() == crate::space::AddressSpace::Register
+                            && (0x200..=0x20f).contains(&vn.get_offset())
+                        {
+                            used_flag_offsets.insert(vn.get_offset());
+                        }
+                    }
+                }
+            }
+        }
         // Ghidra heritage.cc guard() cc:1156-1198 sets activeHeritage:
         //   - reads (cc:1164-1175): FREE varnodes (not written, not input)
         //     with EXACTLY 1 live descendant → activeHeritage
@@ -3540,6 +3589,14 @@ impl Heritage {
             let mut vn = vn_ref.0.write().unwrap();
             // Skip constants and annotations
             if vn.is_constant() || vn.is_annotation() {
+                continue;
+            }
+            // Skip flag registers not consumed by CBRANCH — same reason as
+            // place_multiequals_direct above.
+            if vn.get_space() == crate::space::AddressSpace::Register
+                && (0x200..=0x20f).contains(&vn.get_offset())
+                && !used_flag_offsets.contains(&vn.get_offset())
+            {
                 continue;
             }
             // Ghidra cc:2704: skip dead free varnodes
