@@ -487,19 +487,19 @@ impl Action for ActionDeadCode {
         // Step 4: Per-space dead varnode elimination.
         // Faithful to Ghidra coreaction.cc:4234-4270. For each address space
         // where deadRemovalAllowed is true, iterate all written varnodes.
-        // If !isConsumeVacuous → opDestroy (or opUnsetOutput for calls).
-        // If consume==0 → neverConsumed: replace reads with 0, then opDestroy.
+        // Two cases:
+        //   !vacflag (consume==0, no descendants read it) → opDestroy
+        //   vacflag && consume==0 (descendants read it but don't consume)
+        //     → neverConsumed: replace all reads with 0, then opDestroy
         let heritage_pass = fd.heritage.pass;
         for space in [
             crate::space::AddressSpace::Register,
             crate::space::AddressSpace::Unique,
             crate::space::AddressSpace::Stack,
         ] {
-            // Ghidra cc:4236: deadRemovalAllowed = (pass > deadcodedelay).
             let deadcodedelay = space.get_deadcode_delay();
             if heritage_pass <= deadcodedelay { continue; }
 
-            // Collect written varnodes in this space.
             let vns: Vec<_> = fd.vbank.loc_tree.iter()
                 .map(|v| v.0.clone())
                 .filter(|v| {
@@ -509,29 +509,54 @@ impl Action for ActionDeadCode {
                 .collect();
 
             for vn_arc in vns {
-                // Skip if already dead (destroyed in a prior iteration).
-                if vn_arc.read().unwrap().get_consume() == 0
-                    && !vn_arc.read().unwrap().is_input()
-                {
-                    // Ghidra cc:4256-4261: !vacflag → not even vacuously consumed.
-                    let def_op = vn_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-                    let Some(def_op_arc) = def_op else { continue };
+                let (consume, has_descend, vn_size, is_input, def_op) = {
+                    let vn = vn_arc.read().unwrap();
+                    let consume = vn.get_consume();
+                    let has_descend = !vn.descend.is_empty();
+                    let size = vn.get_size();
+                    let is_input = vn.is_input();
+                    let def = vn.def.as_ref().and_then(|w| w.upgrade());
+                    (consume, has_descend, size, is_input, def)
+                };
 
-                    // Skip if def op already dead.
-                    if def_op_arc.read().unwrap().is_dead() { continue; }
+                if consume != 0 || is_input { continue; }
 
-                    let is_call = matches!(def_op_arc.read().unwrap().opcode,
-                        crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND);
-                    let def_ref = crate::op::PcodeOpRef(def_op_arc);
-                    if is_call {
-                        // Ghidra cc:4259: data.opUnsetOutput(op).
-                        fd.op_unset_output(&def_ref);
-                    } else {
-                        // Ghidra cc:4261: data.opDestroy(op).
-                        fd.op_destroy(&def_ref);
+                let Some(def_op_arc) = def_op else { continue; };
+                if def_op_arc.read().unwrap().is_dead() { continue; }
+
+                let def_ref = crate::op::PcodeOpRef(def_op_arc.clone());
+                let is_call = matches!(def_op_arc.read().unwrap().opcode,
+                    crate::opcodes::OpCode::CPUI_CALL | crate::opcodes::OpCode::CPUI_CALLIND);
+
+                if has_descend && vn_size <= 8 {
+                    // Ghidra cc:4032-4044 neverConsumed: replace all reads
+                    // of this varnode with 0 constant, then destroy the op.
+                    let descendants: Vec<_> = vn_arc.read().unwrap().descend.iter()
+                        .filter_map(|w| w.upgrade())
+                        .collect();
+                    for desc_arc in descendants {
+                        let desc_ref = crate::op::PcodeOpRef(desc_arc.clone());
+                        if desc_arc.read().unwrap().is_dead() { continue; }
+                        // Find the slot(s) that reference vn_arc.
+                        let slots: Vec<usize> = {
+                            let d = desc_arc.read().unwrap();
+                            (0..d.inrefs.len()).filter(|&i| {
+                                std::sync::Arc::ptr_eq(&d.inrefs[i], &vn_arc)
+                            }).collect()
+                        };
+                        for slot in slots {
+                            let zero = fd.new_constant(vn_size, 0);
+                            fd.op_set_input(&desc_ref, zero, slot);
+                        }
                     }
-                    changed += 1;
                 }
+
+                if is_call {
+                    fd.op_unset_output(&def_ref);
+                } else {
+                    fd.op_destroy(&def_ref);
+                }
+                changed += 1;
             }
         }
 
