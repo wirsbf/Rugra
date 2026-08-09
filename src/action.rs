@@ -318,16 +318,13 @@ impl Action for ActionGroup {
         let fd_name = fd.name.clone();
         let mut iters = 0;
         let dbg = std::env::var("RUGRA_TRACE_PIPELINE").is_ok();
-        // Performance cap: with phi nodes enabled, each Rule application
-        // touches many varnode locks (~10μs each on Windows). A 1000+ op
-        // function with 100+ phi descendants can take 1-2s per simplifypool
-        // pass. stackstall/mainloop repeatapply would iterate dozens of
-        // times, blowing the 10s per-function timeout. Cap to 3 iterations
-        // for any group to keep functions within timeout. This is a
-        // TEMPORARY measure until the RwLock overhead is addressed (parking_lot
-        // or arena-based varnode model). Ghidra has zero lock overhead
-        // (raw pointers) so it converges in ms.
-        let max_iters = if std::env::var("RUGRA_NO_ITER_CAP").is_ok() { 500 } else { 10 };
+        // Ghidra action.cc:350: do { } while(lcount<count && repeatapply)
+        // — unbounded. Rugra previously capped at 10 for performance
+        // (Windows RwLock overhead), but this prevents COPY propagation
+        // + DeadCode from fully converging (needs ~20-30 rounds for
+        // complex functions). Remove the cap and rely on the natural
+        // convergence condition (lcount >= count) as Ghidra does.
+        let max_iters = if std::env::var("RUGRA_NO_ITER_CAP").is_ok() { 100000 } else { 100000 };
         loop {
             iters += 1;
             state.lcount = state.count;
@@ -1005,35 +1002,26 @@ impl ActionDatabase {
         // available for RulePtrArith in oppool2 (coreaction.cc:5882).
         mainloop.add_action(Box::new(crate::coreaction::ActionInferTypes::new()));
 
+        // Ghidra coreaction.cc:5501-5503: ActionRestrictLocal + ActionDeadCode
+        // run BEFORE stackstall (and before InferTypes). DeadCode cleans up
+        // dead ops from Heritage, giving simplifypool a clean IR to work on.
+        // Previously Rugra had DeadCode AFTER stackstall, which caused a race:
+        // TrivialArith → COPY → DeadCode deletes COPY → RulePropagateCopy
+        // can't propagate because COPY.def is gone.
+        mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
+        mainloop.add_action(Box::new(ActionDeadCode::new()));
+
         // --- stackstall (coreaction.cc:5509, repeatapply) ---
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         // oppool1 (coreaction.cc:5511, repeatapply)
         stackstall.add_action(Box::new(build_simplify_pool()));
-        // coreaction.cc:5653-5655: MultiCse + ShadowVar + Deindirect (were
-        // previously only wired via the flat build_full_pipeline_actions
-        // loop; now in their correct stackstall position, after oppool1
-        // and before mainloop continues).
+        // coreaction.cc:5653-5655: MultiCse + ShadowVar + Deindirect.
         stackstall.add_action(Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
         stackstall.add_action(Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
         stackstall.add_action(Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
 
         mainloop.add_action(Box::new(stackstall));
 
-        // Rugra-local type/copy propagation (TODO: replace with ActionInferTypes).
-        // A2 ActionTypeInfer DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's type inference is ActionInferTypes
-        // (coreaction.cc:5508) + oppool2 + fullloop convergence.
-        // Verified: 952/952, defects=0.
-        // A3 ActionCopyPropagate DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's copy propagation is RulePropagateCopy
-        // (oppool1:5566) + fullloop convergence. Verified: 952/952, defects=0.
-        // A4 ActionTypePropagate DELETED: redundant with mainloop+fullloop
-        // repeatapply. Ghidra's type propagation is part of ActionInferTypes
-        // (coreaction.cc:5508); the self-invented ActionTypePropagate
-        // duplicated a subset of that work. Verified: 952/952, defects=0.
-
-        mainloop.add_action(Box::new(crate::coreaction::ActionRestrictLocal::new()));
-        mainloop.add_action(Box::new(ActionDeadCode::new()));
         mainloop.add_action(Box::new(crate::coreaction::ActionRestructureVarnode::new()));
         // ActionInferTypes already runs above (before stackstall).
         // oppool2 (coreaction.cc:5662, actprop2) — type-recovery Rules that
