@@ -327,7 +327,7 @@ impl Action for ActionGroup {
         // TEMPORARY measure until the RwLock overhead is addressed (parking_lot
         // or arena-based varnode model). Ghidra has zero lock overhead
         // (raw pointers) so it converges in ms.
-        let max_iters = if std::env::var("RUGRA_NO_ITER_CAP").is_ok() { 500 } else { 3 };
+        let max_iters = if std::env::var("RUGRA_NO_ITER_CAP").is_ok() { 500 } else { 10 };
         loop {
             iters += 1;
             state.lcount = state.count;
