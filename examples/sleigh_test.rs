@@ -1,53 +1,37 @@
-//! Minimal SLEIGH integration test — verify jingle_sleigh can decode x86-64
-//! instructions into P-code using the compiled x86-64.sla spec.
+//! Minimal smoke test for Rugra's direct Ghidra SLEIGH FFI.
 
-use jingle_sleigh::context::SleighContextBuilder;
+use anyhow::{ensure, Context, Result};
+use rugra::sleigh_ffi::SleighCtx;
 
-fn main() {
-    let specs_dir = std::path::Path::new("sleigh_specs");
-    println!("Loading SLEIGH specs from {:?}...", specs_dir);
+fn main() -> Result<()> {
+    let mut ctx = SleighCtx::new().context("failed to load sleigh_specs/x86-64.sla")?;
+    ctx.load_pspec("sleigh_specs/x86-64.pspec");
 
-    let builder = SleighContextBuilder::load_folder(specs_dir)
-        .expect("Failed to load SLEIGH specs");
+    // MOV RAX,RDI; RET.  In x86-64 context the first instruction is three
+    // bytes and produces a COPY.  Without pspec defaults it decodes as a
+    // one-byte instruction, so this also checks context initialization.
+    let code = [0x48, 0x89, 0xf8, 0xc3];
+    ctx.set_image(&code, 0);
+    let length = ctx
+        .instruction_length(0)
+        .context("SLEIGH rejected the first instruction")?;
+    let ops = ctx.decode(0);
 
-    let lang_ids = builder.get_language_ids();
-    println!("Available languages: {:?}", lang_ids);
+    ensure!(
+        length == 3,
+        "expected x86-64 instruction length 3, got {length}"
+    );
+    ensure!(!ops.is_empty(), "expected MOV RAX,RDI to emit p-code");
 
-    let ctx = builder.build("x86:LE:64:default")
-        .expect("Failed to build SLEIGH context");
-
-    println!("SLEIGH context created!");
-    println!("Spaces: {}", ctx.spaces().len());
-
-    // Print some known registers
-    for name in &["RAX", "RSP", "RBP", "RDI", "RSI"] {
-        if let Some(vn) = ctx.arch_info().register(name) {
-            println!("  {} = offset=0x{:x} size={}", name, vn.offset(), vn.size());
-        }
+    println!("sleigh.context=x86:LE:64:default");
+    println!("sleigh.spaces={}", ctx.num_spaces());
+    println!("sleigh.registers={}", ctx.num_registers());
+    println!("instruction.length={length}");
+    for (index, op) in ops.iter().enumerate() {
+        println!(
+            "op[{index}].opcode={}:inputs={}:output={}",
+            op.opcode, op.num_inputs, op.has_output
+        );
     }
-
-    let code: &[u8] = &[
-        0x55,                                           // PUSH RBP
-        0x48, 0x89, 0xe5,                               // MOV RBP, RSP
-        0x48, 0x89, 0xf8,                               // MOV RAX, RDI
-        0xe8, 0x10, 0x00, 0x00, 0x00,                   // CALL rel32
-    ];
-
-    let loaded = ctx.initialize_with_image(code)
-        .expect("Failed to initialize with image");
-
-    let mut offset = 0u64;
-    while offset < code.len() as u64 {
-        match loaded.instruction_at(offset) {
-            Some(inst) => {
-                println!("=== 0x{:x} ({} bytes) ===", inst.address, inst.length);
-                println!("  Disasm: {}", inst.disassembly);
-                for (i, op) in inst.ops.iter().enumerate() {
-                    println!("  [{}] {}", i, op);
-                }
-                offset = inst.next_addr();
-            }
-            None => { println!("Cannot decode at 0x{:x}", offset); break; }
-        }
-    }
+    Ok(())
 }

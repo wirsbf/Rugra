@@ -228,9 +228,20 @@ render C-like output with PrintC
 
 ### 构建
 
+构建真实 CLI 需要在仓库内提供锁定的 Ghidra Decompiler C++ 源码树：
+
+```text
+ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/
+```
+
+Linux 使用系统 C++ 工具链和 `libz`；Windows 使用 MSVC 的原生 Win32
+分支。缺少源码或 SLEIGH 编译失败时，构建会立即失败，不会生成一个到最终
+链接阶段才暴露 FFI 缺符号的半成品。
+
 ```bash
 cargo build
 cargo build --release
+cargo run --example sleigh_test
 ```
 
 ### 测试
