@@ -21,6 +21,7 @@
 | `PCODE-0001` | P0 | DONE | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | `3762e22`；oracle MATCH；1294/0/3；Cross-Review APPROVE | 2026-08-11 |
 | `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` 桥 | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, API/路线图 | 逐 opcode 对拍 `opflags/addlflags/getBehavior`；禁止继续用残缺 flags 或手写旁路 | 2026-08-11 |
 | `PARSER-0001` | P0 | READY | root | `PcodeSnippet` 必选标点与失败状态 | `src/pcodeparse.rs`, tests, API/审计文档 | 当前 27 个 `expect_punct` 结果被丢弃且 3 个 local 分支静默漏 `;`；标点删除矩阵 + 失败时无 result + Ghidra parser oracle | 2026-08-11 |
+| `PARSER-0002` | P0 | REVIEW | root | `UserOpSymbol::getIndex` → `CPUI_CALLOTHER` input 0 | `src/pcodeparse.rs`, API/路线图 | statement/expression 两路径保留非零 index；定向测试通过，待原子 commit 后关单 | 2026-08-11 |
 | `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 6 个 public API → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC 源文件闭包；替换 native `u128` 旁路；cross-review+differential | 2026-08-11 |
 | `RANGE-0001` | P0 | READY | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | `PCODE-0001` 已完成并释放租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
 | `PIPE-0001` | P0 | READY | unassigned | `ActionDatabase::universalAction` 阶段/唯一性 | `src/action.rs`, `src/coreaction.rs`, API/路线图 | Action tree 顺序与唯一性 fixture + cross-review + differential | 2026-08-11 |

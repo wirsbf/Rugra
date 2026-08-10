@@ -1176,8 +1176,9 @@ fn parse_number_token_checked(s: &str) -> (bool, u64) {
 pub enum SleightSymbolKind {
     /// `space_symbol` — a named `AddressSpace`. Maps to SPACESYM.
     Space(AddressSpace),
-    /// `userop_symbol` — a user-defined p-code op. Maps to USEROPSYM.
-    UserOp(String),
+    /// `userop_symbol` — a user-defined p-code op. Maps to USEROPSYM and
+    /// carries `UserOpSymbol::getIndex()`, the CALLOTHER selector.
+    UserOp(u32),
     /// `varnode_symbol` — a named fixed varnode. Maps to VARSYM.
     Varnode(VarnodeData),
     /// `operand_symbol` — a constructor operand. Maps to OPERANDSYM.
@@ -3413,11 +3414,11 @@ impl PcodeSnippet {
         let userop_index = self
             .symbols
             .get(&ident)
-            .map(|s| match &s.kind {
-                SleightSymbolKind::UserOp(_) => 0u64, // index not stored; use 0
-                _ => 0u64,
+            .and_then(|s| match &s.kind {
+                SleightSymbolKind::UserOp(index) => Some(u64::from(*index)),
+                _ => None,
             })
-            .unwrap_or(0);
+            .ok_or_else(|| format!("Unknown user-op symbol: {}", ident))?;
         self.advance(); // consume UserOpSym
         self.expect_punct('(');
         let params = self.parse_paramlist()?;
@@ -3893,11 +3894,11 @@ impl PcodeSnippet {
                 let userop_index = self
                     .symbols
                     .get(&ident)
-                    .map(|s| match &s.kind {
-                        SleightSymbolKind::UserOp(_) => 0u64,
-                        _ => 0u64,
+                    .and_then(|s| match &s.kind {
+                        SleightSymbolKind::UserOp(index) => Some(u64::from(*index)),
+                        _ => None,
                     })
-                    .unwrap_or(0);
+                    .ok_or_else(|| format!("Unknown user-op symbol: {}", ident))?;
                 self.advance();
                 self.expect_punct('(')?;
                 let params = self.parse_paramlist()?;
@@ -4619,11 +4620,11 @@ mod tests {
         let mut snip = PcodeSnippet::new();
         snip.add_symbol(SleighSymbol {
             name: "dup".to_string(),
-            kind: SleightSymbolKind::UserOp("dup".to_string()),
+            kind: SleightSymbolKind::UserOp(3),
         });
         snip.add_symbol(SleighSymbol {
             name: "dup".to_string(),
-            kind: SleightSymbolKind::UserOp("dup".to_string()),
+            kind: SleightSymbolKind::UserOp(4),
         });
         assert!(snip.has_errors());
         assert!(snip.get_error_message().contains("Duplicate symbol name: dup"));
@@ -4636,7 +4637,7 @@ mod tests {
         let base_count = snip.num_symbols();
         snip.add_symbol(SleighSymbol {
             name: "tmp".to_string(),
-            kind: SleightSymbolKind::UserOp("tmp".to_string()),
+            kind: SleightSymbolKind::UserOp(7),
         });
         snip.report_error("boom");
         snip.clear();
@@ -4693,6 +4694,54 @@ mod tests {
             snip.get_error_message()
         );
         assert!(!snip.has_errors());
+    }
+
+    #[test]
+    fn test_parse_userops_preserve_symbol_indices() {
+        let mut snip = PcodeSnippet::new();
+        snip.add_symbol(SleighSymbol {
+            name: "notify".to_string(),
+            kind: SleightSymbolKind::UserOp(37),
+        });
+        snip.add_symbol(SleighSymbol {
+            name: "transform".to_string(),
+            kind: SleightSymbolKind::UserOp(91),
+        });
+
+        assert!(
+            snip.parse_stream(
+                "notify(0x1:4, 0x2:4); local result:4 = transform(0x3:4, 0x4:4);"
+            ),
+            "{}",
+            snip.get_error_message()
+        );
+        let ct = snip.release_result().expect("result set");
+        let callother: Vec<&OpTpl> = ct
+            .get_opvec()
+            .iter()
+            .filter(|op| op.opc == OpCode::CPUI_CALLOTHER)
+            .collect();
+        assert_eq!(callother.len(), 2);
+        assert_eq!(callother[0].inputs.len(), 3);
+        assert_eq!(
+            callother[0].inputs[0].space,
+            ConstTpl::SpaceId(AddressSpace::Const)
+        );
+        assert_eq!(callother[0].inputs[0].offset, ConstTpl::Real(37));
+        assert_eq!(callother[0].inputs[0].size, ConstTpl::Real(4));
+        assert_eq!(callother[0].inputs[1].offset, ConstTpl::Real(1));
+        assert_eq!(callother[0].inputs[2].offset, ConstTpl::Real(2));
+        assert!(callother[0].out.is_none());
+        assert_eq!(callother[1].inputs.len(), 3);
+        assert_eq!(
+            callother[1].inputs[0].space,
+            ConstTpl::SpaceId(AddressSpace::Const)
+        );
+        assert_eq!(callother[1].inputs[0].offset, ConstTpl::Real(91));
+        assert_eq!(callother[1].inputs[0].size, ConstTpl::Real(4));
+        assert_eq!(callother[1].inputs[1].offset, ConstTpl::Real(3));
+        assert_eq!(callother[1].inputs[2].offset, ConstTpl::Real(4));
+        assert!(callother[1].out.is_some());
     }
 
     #[test]

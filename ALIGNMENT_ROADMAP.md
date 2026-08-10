@@ -332,7 +332,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 45 | `pcodeinject.cc` | `pcodeinject.rs` (272行) | 🟢 **L2.5（代码完整，被 Sleigh 架构初始化阻塞）** | InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**接入阻塞**：Ghidra 在架构初始化（architecture.cc:638 `buildPcodeInjectLibrary`）构建 inject 库，被 ActionConstbase（coreaction.cc:686-690 `getInjectUponEntry` + `doLiveInject`）消费。Rugra 缺 Sleigh 架构初始化 + .cspec 解析（decodeInject at architecture.cc:1287） | `pcodeinject.cc` |
-| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` (485行) | 🟢 **L2.5（代码完整，Ghidra 设计上非主管线模块）** | PcodeToken（12 token 类型）+ PcodeLexer（完整状态机：标识符/dec-hex 整数/标点/字符串/注释/EOF）+ PcodeSnippet（symbol 管理/allocate_temp/add_symbol/lookup_symbol/resolve_symbol/add_operand/lex/parse_stream/add_op_template/num_symbols/num_errors + error 报告）。15 单元测试。**设计上不属于主管线**：Ghidra 的 pcodeparse 是 p-code 片段解析器，在架构初始化时解析 .cspec/.pspec 的 inject payload（inject_sleigh.cc:373 `PcodeSnippet compiler`），非反编译运行时 Action。与 pcodeinject 同属 Sleigh 基础设施链 | `pcodecompile.cc`, `pcodeparse.cc` |
+| 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` | 🔧 **L2（解析失败语义未对齐，且未接 Sleigh 架构初始化）** | Lexer、模板构造与递归下降语法主体已存在；`UserOpSymbol` 的非零 index 现会进入 `CPUI_CALLOTHER` input 0。仍有 27 个必选标点错误被丢弃、3 个 `local` 分支可静默漏分号，失败时 result 状态也未与 Bison 对齐（`PARSER-0001`）。Ghidra 在 inject 初始化链调用该解析器，Rugra 尚未接入同等 Sleigh 架构初始化。 | `pcodecompile.cc`, `pcodeparse.cc`, `pcodeparse.y` |
 
 ---
 

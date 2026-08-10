@@ -1,6 +1,6 @@
 # pcodeparse.rs — P-code snippet parser & `<op>`/`<varnode>` XML decode API
 
-Faithful port of Ghidra's `pcodeparse.hh` / `pcodeparse.cc` (3303 lines,
+Partial port of Ghidra's `pcodeparse.hh` / `pcodeparse.cc` (3303 lines,
 Bison-generated) + `pcodeparse.y` (805 lines, grammar source). This module
 also ports the `<op>` / `<varnode>` XML decode path that Ghidra spreads across
 `pcoderaw.cc` (`PcodeOpRaw::decode`, `VarnodeData::decode`) and `translate.cc`
@@ -59,8 +59,20 @@ The Bison lexer states (pcodeparse.hh:33-45): `Start`, `Special2`, `Special3`,
 ### `SleightSymbolKind`
 Tagged enum mirroring the `SleighSymbol` type switch in
 `PcodeSnippet::lex` (pcodeparse.y:730-758): `Space(AddressSpace)`,
-`UserOp(String)`, `Varnode(VarnodeData)`, `Operand(String, i32)`,
+`UserOp(u32)`, `Varnode(VarnodeData)`, `Operand(String, i32)`,
 `JumpTarget(String)`, `Label(String, u32)`.
+
+The `UserOp` payload is the `UserOpSymbol::getIndex()` value, not the symbol
+name. Both statement and expression forms place that value in the 4-byte
+constant input 0 of `CPUI_CALLOTHER`, matching `createUserOpNoOut`
+(`pcodecompile.cc:529`).
+
+`tools/run_userop_index_oracle.sh` compiles the locked Ghidra 12.0.4
+`SleighCompile`/`PcodeCompile` implementation and verifies the observable
+contract: user-op indices increase globally across declaration batches,
+parameter expressions and inputs keep source order, input 0 is
+`const/index/4`, and only the expression form has an output. The paired Rust
+test exercises both parser paths with distinct non-zero indices.
 
 ## Structs
 
@@ -151,9 +163,8 @@ Faithful to `PcodeEmit::decodeOp` (translate.cc:996-1016): opens `<op>`, reads
 Binary search of `PCODE_IDENTS` (pcodeparse.y:278).
 
 ## L3 gaps
-- Full ConstructTpl assembly: the Bison grammar's semantic actions
-  (`createOp`, `createLoad`, `createStore`, `assignBitRange`, `placeLabel`,
-  ...) require SLEIGH's `PcodeCompile` base + `OpTpl`/`VarnodeTpl`.
+- Mandatory punctuation and parser failure state are not yet equivalent to
+  the Bison grammar; see `PARSER-0001` and the syntax audit.
 - SLEIGH integration (`SleighBase`/`SymbolTree`) for global symbol lookup
   beyond the local scope.
 - Register name resolution in `decode_varnode_from_attributes` (needs a
