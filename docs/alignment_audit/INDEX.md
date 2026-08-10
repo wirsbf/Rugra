@@ -13,6 +13,10 @@ order, counter scope, comparison key) — not just the surface annotation.
 
 - [`PcodeSnippet` mandatory punctuation and failure state](PCODEPARSE_SYNTAX_2026-08-11.md)
   — confirmed Rugra accepts malformed snippets that the locked Bison grammar rejects.
+- [Foundation and pipeline audit](FOUNDATION_PIPELINE_2026-08-11.md)
+  — records deterministic Action-tree/executor, callspec, opcode/flags, SLEIGH,
+  compression, multiprecision, ledger, and gate failures without promoting
+  source-only evidence to runtime MATCH.
 
 ## Per-module report files
 

@@ -13,18 +13,24 @@
 | ID | P | 状态 | owner | Ghidra ↔ Rugra | write-set | 依赖 / 验收 | 更新 |
 |---|---:|---|---|---|---|---|---|
 | `ORACLE-0001` | P0 | DONE | root | 本地参考树 | 忽略的 `ghidra/` | HEAD=`e40ed13`, 114 `.cc` | 2026-08-11 |
-| `ORACLE-0002` | P0 | BLOCKED | unassigned | 12.0.4 curl/httpd golden | `tests/golden/*`, oracle metadata | 依赖可运行 12.0.4 headless distribution + 锁定 analysis options；重生后 compare 零未解释差异 | 2026-08-11 |
-| `LEDGER-0001` | P0 | READY | unassigned | 114 `.cc/.hh` 全函数 ↔ `src/**/*.rs` | `tools/`, `docs/alignment_audit/FUNCTION_MAP*` | 生成唯一分母，消除 `~2055` vs `~5200+` 冲突 | 2026-08-11 |
-| `GATE-0001` | P0 | READY | unassigned | 提交/编辑门禁 | `.githooks/`, `.zcode/`, `tools/check_*` | hooksPath+可执行+repo path+python3+4/4语义+strict refs 全通过 | 2026-08-11 |
-| `SLEIGH-0001` | P0 | READY | unassigned | Linux SLEIGH source build + FFI link | `build.rs`, `sleigh_shim/`, build/verification docs | 12.0.4 源树存在时不得使用 `/EHa` 或 Windows `unistd.h`；curl/httpd release examples 必须可链接运行 | 2026-08-11 |
+| `ORACLE-0002` | P0 | BLOCKED | unassigned | 12.0.4 curl/httpd golden | `tests/golden/*`, oracle metadata | 依赖 `SLEIGH-0001` + 可运行 12.0.4 headless distribution + 锁定 analysis options；重生后 compare 零未解释差异 | 2026-08-11 |
+| `LEDGER-0001` | P0 | READY | unassigned | 114 `.cc/.hh` 全函数 ↔ `src/**/*.rs` | `tools/`, `docs/alignment_audit/FUNCTION_MAP*` | ctags 基线：5691 `.cc` definitions + 101 prototypes；3803 `.hh` inline definitions + 6216 prototypes；生成稳定 ID 唯一分母 | 2026-08-11 |
+| `GATE-0001` | P0 | IN_PROGRESS | root | 提交/编辑门禁 | `.githooks/`, `.zcode/`, `tools/check_*` | hooksPath 未设、hook 不可执行/路径错、Evidence 非严格；247 annotations + 19 strict refs 未清零前不得宣称绿 | 2026-08-11 |
+| `SLEIGH-0001` | P0 | READY | unassigned | Linux SLEIGH source build + FFI link | `build.rs`, `sleigh_shim/`, `examples/sleigh_test.rs`, build/verification docs | 修 Windows shim `/EHa`/吞错/缺 vendored zlib/过期 example；22 TU + lib/bin/examples 全链接 | 2026-08-11 |
+| `SLEIGH-0002` | P0 | BLOCKED | unassigned | `SleighLifter::lift_from_func` pspec context | `src/disasm/sleigh_lift.rs`, API/tests | 依赖 `SLEIGH-0001`；`48 89 f8 c3` 首指令必须 length=3 且产生 COPY | 2026-08-11 |
 | `ANN-0001` | P0 | BLOCKED | root | 247 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | graph String wrappers 已确认 GLUE；其余依赖 `LEDGER-0001`，禁止机械标注 | 2026-08-11 |
 | `PCODE-0001` | P0 | DONE | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | `3762e22`；oracle MATCH；1294/0/3；Cross-Review APPROVE | 2026-08-11 |
-| `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` 桥 | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, API/路线图 | 逐 opcode 对拍 `opflags/addlflags/getBehavior`；禁止继续用残缺 flags 或手写旁路 | 2026-08-11 |
+| `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` + PcodeOpBank opcode mutation | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, `src/funcdata.rs`, API/路线图 | 72 descriptors + 72x72 mutation + code-list oracle；当前 clear mask `0x2008084e` vs `0x200fc8de`，仅 1/72 COPY-origin 结果正确 | 2026-08-11 |
+| `OPCODE-0001` | P0 | READY | unassigned | OpCode 文本/wire 表 + reverse + reserved raw values | `src/opcodes.rs`, `src/marshal.rs`, `src/ffi.rs`, `src/unify.rs`, API/路线图 | 10 个协议名不符；缺 reverse；packed 0/45 raw round-trip；72 正式 discriminants 保持不变 | 2026-08-11 |
 | `PARSER-0001` | P0 | READY | root | `PcodeSnippet` 必选标点与失败状态 | `src/pcodeparse.rs`, tests, API/审计文档 | 当前 27 个 `expect_punct` 结果被丢弃且 3 个 local 分支静默漏 `;`；标点删除矩阵 + 失败时无 result + Ghidra parser oracle | 2026-08-11 |
-| `PARSER-0002` | P0 | REVIEW | root | `UserOpSymbol::getIndex` → `CPUI_CALLOTHER` input 0 | `src/pcodeparse.rs`, API/路线图 | statement/expression 两路径保留非零 index；定向测试通过，待原子 commit 后关单 | 2026-08-11 |
-| `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 6 个 public API → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC 源文件闭包；替换 native `u128` 旁路；cross-review+differential | 2026-08-11 |
+| `PARSER-0002` | P0 | DONE | root | `UserOpSymbol::getIndex` → `CPUI_CALLOTHER` input 0 | `src/pcodeparse.rs`, API/路线图, oracle fixture | `c1e799a`；锁定 runtime oracle MATCH；statement/expression+两参数顺序；1295/0/3；Cross-Review APPROVE | 2026-08-11 |
+| `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 16 functions / 7 public operations → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC limb engine；先修 extended PIECE 布局再替换 native `u128`；cross-review+differential | 2026-08-11 |
+| `COMP-0001` | P1 | READY | unassigned | `Decompress` 五函数闭包 | `src/compression.rs`, error/API/oracle fixture | persistent z_stream、remaining-capacity return、input replace/alias、status/error oracle；整个 compression 仍保持 L2 | 2026-08-11 |
 | `RANGE-0001` | P0 | READY | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | `PCODE-0001` 已完成并释放租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
-| `PIPE-0001` | P0 | READY | unassigned | `ActionDatabase::universalAction` 阶段/唯一性 | `src/action.rs`, `src/coreaction.rs`, API/路线图 | Action tree 顺序与唯一性 fixture + cross-review + differential | 2026-08-11 |
+| `PIPE-0000` | P0 | READY | unassigned | `Action::{reset,perform}` + group/CLI execution | `src/action.rs`, `src/bin/rugra.rs`, API/路线图 | 子 Action 一律走 perform；root 统一 reset→perform；status/count/repeat oracle + cross-review+differential | 2026-08-11 |
+| `PIPE-0001` | P0 | BLOCKED | unassigned | `ActionDatabase::universalAction` + six default groups | `src/action.rs`, `src/coreaction.rs`, API/路线图 | 依赖 `PIPE-0000`；oracle universal=76 leaves/default decompile=71，当前=90；有序树 fixture + cross-review+differential | 2026-08-11 |
+| `CALLSPEC-0001` | P0 | READY | unassigned | stable Fspec/callspec identity → normal CALL/CALLIND flow | `src/space.rs`, `src/fspec.rs`, `src/funcdata.rs`, `src/flow.rs`, x86 lift, API/路线图 | 禁止按机器地址去重；direct/indirect/inject/inline/truncate 全路径 oracle；再统一入口和消费者 | 2026-08-11 |
+| `PRINTC-0001` | P1 | READY | unassigned | integer display wire values | `src/printc.rs`, API/oracle/differential | 当前 CHAR/OCT/BIN=3/4/5，oracle OCT/BIN/CHAR=3/4/5；不可只修注释行 | 2026-08-11 |
 | `SSA-0001` | P0 | BLOCKED | unassigned | `ValueSetSolver` constraints → Heritage guards | `src/rangeutil.rs`, `src/heritage.rs`, API/路线图 | 依赖 `RANGE-0001`；先底层 constraints 再 guard integration | 2026-08-11 |
 
 ### 已完成发现审计（本 wave）
@@ -36,6 +42,9 @@
 - 路线图至少 9 个模块存在“代码自承 stub/简化，但文档标 L3”的反证；未复核前不得沿用这些 L3 声明。
 - `PcodeSnippet` 实测会接受缺失 `]`/`;` 的非法语句并返回成功；反例和完整修复边界见
   `docs/alignment_audit/PCODEPARSE_SYNTAX_2026-08-11.md`。
+- Action executor/tree、callspec、Pcode flags/opcode protocol、SLEIGH、compression、multiprecision、ledger 与 gate 的
+  确定性反例见 `docs/alignment_audit/FOUNDATION_PIPELINE_2026-08-11.md`；未带 runtime fixture 的项目保持
+  `MISMATCH / NO_ORACLE`，不冒充 MATCH。
 
 ---
 
