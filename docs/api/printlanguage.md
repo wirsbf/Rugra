@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L3（2026-07-22 RPN 引擎完整对齐）**——PrintLanguage base-class 基础设施 1:1 移植：RPN 数据类型（`OpToken`/`ReversePolish`/`NodePending`/`Atom`）、括号化算法（`parentheses`）、格式化工具（`most_natural_base`/`format_binary`/`unnamed_field`/`unicode_needs_escape`）、RPN push/recurse/emit 函数（`rpn_push_op`/`rpn_push_atom`/`rpn_recurse`/`rpn_emit_op`/`rpn_emit_atom`/`rpn_op_binary`/`rpn_op_unary`）。25 单元测试。
+- **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——token 表、递归与 group identity 不完整，自由 `rpn_recurse` 可丢 pending node；真实 op/vn/type/highlight/field/case payload、namespace 策略及多个虚方法缺失。25 个本地单测不是锁定 oracle 证据，正式门禁 `NO_ORACLE`。
 
 **源代码路径**: `src/printlanguage.rs`
 
@@ -12,7 +12,7 @@ Base language printing interface — Reverse Polish Notation (RPN) engine.
 
 对应 Ghidra 的 `printlanguage.hh` / `printlanguage.cc`。本模块移植了共享基类 `PrintLanguage` 的基础设施：RPN token 栈、运算符优先级/括号化算法、Atom/OpToken 数据类型，以及格式化工具。
 
-Rugra 的 `PrintC` 目前为了输出质量直接通过 `Emit` 发射，但本模块提供了忠实的 Ghidra 基类算法接口，使得：
+Rugra 的 `PrintC` 目前为了输出质量直接通过 `Emit` 发射；本模块只提供了部分 Ghidra 基类算法接口：
 1. 括号化算法（`parentheses()`）可作为 1:1 参考使用。
 2. RPN 数据类型（`OpToken`/`ReversePolish`/`Atom`/`NodePending`）作为 Ghidra 对齐的规范定义存在。
 3. 纯格式化工具可以针对 Ghidra 行为进行单元测试。

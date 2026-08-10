@@ -1,6 +1,9 @@
 # jumptable.rs — Jump-table recovery API
 
-Faithful port of Ghidra's `jumptable.hh` / `jumptable.cc` (2883 lines).
+对应 Ghidra `jumptable.hh` / `jumptable.cc`。**当前状态：🔧 L2
+（2026-08-11 锁定 12.0.4 审计）**。Override 的 start-op/trial normalization、
+PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
+model selection 与 SwitchNorm 调用闭包均未闭合；正式行为门禁为 `NO_ORACLE`。
 
 ## 2026-07-16：checkUnrolledGuard + checkCommonCbranch + findMultiequal
 
@@ -8,9 +11,9 @@ Faithful port of Ghidra's `jumptable.hh` / `jumptable.cc` (2883 lines).
 - `check_common_cbranch(var_array, bl)`（jumptable.cc:1324-1346）：验证所有 in-edge 来自相同 boolean-flip/out-slot 的 CBRANCH 块，收集 boolean 输入 varnode。
 - `find_multiequal(bl, var_array)`（block.cc:2753-2772）：查找输入匹配 varArray 的 MULTIEQUAL op。
 
-**Status:** L1 → L2. All public classes present with full data structures; the
-data-flow / CFG-rewriting algorithms that depend on `Varnode::def`,
-`EmulateFunction`, and branch-editing primitives are documented as L3 gaps.
+**Status:** L2. Public class coverage does not establish behavior parity; the
+data-flow and CFG-rewriting algorithms still depend on broken Address,
+Varnode/PcodeOp, Block, Range, injection, and emulation foundations.
 
 Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.{hh,cc}`.
 
@@ -218,7 +221,7 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 
 剩余 L3 缺：CFG 重写（foldInGuards/switchOver via Funcdata::pushBranch）。
 
-## 2026-06-27（续 4）：CFG 重写完成 — jumptable.rs 达到 L3
+## 2026-06-27 历史实现记录（“达到 L3”结论已于 2026-08-11 撤回）
 
 **Funcdata 新增方法**（funcdata_block.cc）：
 - `push_branch(bb, slot, bbnew)`（funcdata_block.cc:404）：将 CBRANCH 转为 BRANCH，重定向 out-edge 到 BRANCHIND 块。

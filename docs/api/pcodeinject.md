@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/pcodeinject.rs`
 **Ghidra 对应**: `pcodeinject.hh` / `pcodeinject.cc` (638行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary 全部方法覆盖（含 register_call_fixup/call_other_fixup/call_mechanism/get_payload_id）。9 单元测试。
+**状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——decoder、参数 index、script/id-vector/tempbase、dynamic payload 与 duplicate-error 契约不全；Architecture 无 inject library，Flow 不排队 CALLOTHER 也不调用 injection，直接 API 还从 HashMap 非确定取首项。生产闭包不可达，正式门禁 `NO_ORACLE`。
 
 ## 模块说明
 

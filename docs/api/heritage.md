@@ -4,7 +4,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L3（2026-07-16 heritage() 零 TODO：PreferSplitManager 已接入）**——Heritage 核心 SSA 全覆盖，所有 Ghidra cc:2690-2770 步骤均已接入主管线。
+- **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——canonical `Heritage::heritage` 没有生产调用且会重入写锁；主管线改走未建 dominator 的 direct phi/rename 两遍。pass、def-use、IOP、block membership、refinement 与 guard 闭包均不等价，正式行为门禁为 `NO_ORACLE`。详见 `docs/alignment_audit/CONTROL_OUTPUT_PIPELINES_2026-08-11.md`。
 - **文档目标**: 说明 Rugra 当前 `heritage.rs` 在 SSA 构造与相关中间状态管理中的职责、边界与公开接口
 - **可信边界**: 本文档围绕“当前架构中的 SSA / Heritage 责任分工”进行说明，不把“结构存在”写成“已完成与 Ghidra 的运行时一致性验证”
 - **阅读建议**: 请结合以下模块一起理解：
@@ -19,7 +19,7 @@
 
 > 重要提醒：  
 > `heritage.rs` 对应的是 Rugra 当前 SSA / heritage 相关核心层之一。  
-> 这说明项目已经围绕 Ghidra 风格对象构建 SSA 机制，但**不等于**当前 SSA 行为已经完成运行时 1:1 对拍。
+> 结构存在不等于生产接线正确；修复前不得把 direct 算法单测当作 Ghidra 运行时 1:1 对拍。
 
 ---
 

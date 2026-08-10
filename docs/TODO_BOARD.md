@@ -47,6 +47,15 @@
 | `FSPEC-0001` | P0 | READY | unassigned | FuncProto lock/void/model state | `src/fspec.rs`, API/oracle | 空 params 不等于 input-locked；精确 copy/clear/lock 联动 | 2026-08-11 |
 | `FSPEC-0002` | P0 | BLOCKED | unassigned | ParamActive/Trial ordering and assignment | `src/fspec.rs`, `src/type_system/protomodel.rs`, API/oracle | 依赖 `FSPEC-0001` + `ADDRESS-0001`；slotbase=1、overlap trial、used prefix、ParamEntry alignment/groups | 2026-08-11 |
 | `TYPE-0001` | P0 | BLOCKED | unassigned | exact Datatype model + stable TypeFactory identity | `src/type_system/datatype.rs`, `typefactory.rs`, consumers/API/oracle | 依赖 `SPACE-0001`；submeta/virtual compare、arena、dual indices、findAdd、recursive completion、exact-piece、codec | 2026-08-11 |
+| `HERITAGE-0001` | P0 | BLOCKED | unassigned | canonical single-pass SSA driver + ActionStart/ActionHeritage | `src/heritage.rs`, `src/coreaction.rs`, `src/funcdata.rs`, API/oracle/differential | 依赖 `ADDRESS/BLOCK/VARNODE/OPBANK/COVER`；先消除 canonical 锁重入，再补 collect/refinement/guards/ADT，最后删除 direct 双 pass | 2026-08-11 |
+| `CONDEXE-0001` | P0 | BLOCKED | unassigned | ConditionalExecution/RuleOrPredicate exact CFG rewrite | `src/condexe.rs`, `src/expression.rs`, Funcdata/Block API/oracle/differential | 依赖 `OPBANK-0001` + `BLOCK-0001` + `HERITAGE-0001`；true/false slots、异常、storage/order、Action stage/count | 2026-08-11 |
+| `PATHMELD-0001` | P0 | BLOCKED | unassigned | parent/SeqNum ordered path meld + cutoff/truncate | `src/jumptable.rs`, op/block API/oracle | 依赖 `BLOCK-0001` + `OPBANK-0001`；MARK 必须进 PcodeOp flags，删除自创 LOAD 例外 | 2026-08-11 |
+| `JUMPTABLE-0001` | P0 | BLOCKED | unassigned | Override/Basic/Basic2/Assisted model recovery closure | `src/jumptable.rs`, flow/action/emulate/userop API/oracle/differential | 依赖 `RANGE-0001` + `PATHMELD-0001` + `ADDRESS/BLOCK/OPBANK` + `INJECT-0001`；先 trialNorm/findStartOp，再 model selection/guards/normalization | 2026-08-11 |
+| `PRINT-RPN-0001` | P0 | READY | unassigned | invisible groups + complete OpToken/RPN/CFG emission | `src/printlanguage.rs`, `src/printc.rs`, API/token oracle/differential | exact group IDs；全部算术/CALL/subscript/STORE走 RPN；terminal mask 生效；删除 fresh-loop 重发；主管线 cross-review | 2026-08-11 |
+| `PRETTY-0001` | P1 | BLOCKED | unassigned | TokenSplit/Oppen queue + semantic markup payload | `src/prettyprint.rs`, `src/printlanguage.rs`, API/oracle/differential | 依赖 `PRINT-RPN-0001`；保留 op/vn/type/field/case identity、spaces+bump、line-width break/indent | 2026-08-11 |
+| `ARCH-0001` | P0 | BLOCKED | unassigned | production Architecture ownership/init/decode | `src/arch.rs`, Funcdata/Flow/CLI/examples/API/oracle | 依赖 `SPACE-0001` + `SLEIGH-0001` + `TYPE-0001`；必须安装 loader/types/userops/cpool/pcodeinjectlib，禁止裸 None 容器冒充接线 | 2026-08-11 |
+| `USEROP-0001` | P0 | BLOCKED | unassigned | exact derived userop registry + Segment/JumpAssist consumers | `src/userop.rs`, `src/coreaction.rs`, API/oracle/differential | 依赖 `ARCH-0001`；全局 selector/name冲突、builtin flags、架构特定 segment execute、真实 ActionSegmentize | 2026-08-11 |
+| `INJECT-0001` | P0 | BLOCKED | unassigned | payload decode/registry/temp allocation + Flow injection | `src/pcodeinject.rs`, `src/flow.rs`, `src/arch.rs`, API/oracle | 依赖 `ARCH-0001` + `USEROP-0001` + `OPBANK-0001`；CALL/CALLOTHER/entry/return 全路径有序注入，禁止 HashMap 首项 | 2026-08-11 |
 
 ### 已完成发现审计（本 wave）
 
@@ -62,6 +71,8 @@
   `MISMATCH / NO_ORACLE`，不冒充 MATCH。
 - Space/Address/SeqNum、Block、Varnode/PcodeOp、Cover、Database/Fspec、Marshal 与 TypeFactory 的底向上依赖图见
   `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`；这些模块的历史 L3 已撤回。
+- Heritage/CondExe/PathMeld/JumpTable、Print RPN/PrettyPrint、Architecture/UserOp/PcodeInject 的生产可达性与输出链审计见
+  `docs/alignment_audit/CONTROL_OUTPUT_PIPELINES_2026-08-11.md`；无锁定同输入 fixture 的结论统一保持 `NO_ORACLE`。
 
 ---
 

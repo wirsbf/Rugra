@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/condexe.rs`
 **Ghidra 对应**: `condexe.hh` / `condexe.cc` (712 行)
-**状态**: ✅ **L3（2026-06-27 condexe.cc 全部算法移植完毕：ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch）**
+**状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——底层 op/block 生命周期与双向 edge 已破坏变换前提；`remove_from_flow_split` 映射相反且一支可越界，true/false 被重复翻转，Action guard/count/stage、pullback storage/order 与异常路径均未对齐。正式门禁 `NO_ORACLE`。
 
 ## 模块说明
 

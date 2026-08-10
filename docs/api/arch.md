@@ -1,11 +1,14 @@
 # arch.rs — Architecture manager API
 
-Faithful port of Ghidra's `architecture.hh` / `architecture.cc` (1570 lines).
+Architecture manager corresponding to Ghidra's `architecture.hh` /
+`architecture.cc`.
 
-**Status:** L1 → L2. The configuration container with all fields and defaults
-is complete. The virtual factory hooks (`buildTranslator`/`buildLoader`/…) and
-XML decode/parse methods are L3 gaps pending Translate/LoadImage/
-DocumentStorage infrastructure.
+**Status:** L2 (locked 12.0.4 audit, 2026-08-11). The configuration container
+exists, but production `Funcdata.arch` remains unset and the default
+Architecture owns no loader/types/userops/cpool or pcode-injection library.
+Factory/decode/init and consumer wiring are required before this can be a
+pipeline component rather than a detached container. Formal behavior status is
+`NO_ORACLE`.
 
 This is the Ghidra `Architecture` class — distinct from `types::Architecture`
 (which is the target CPU enum). It holds all configuration parameters and owns
@@ -102,7 +105,7 @@ Manager for all the major decompiler subsystems. Faithful to `Architecture`
 - `AddrSpaceManager` integration (`getSpaceBySpacebase`, `getSegmentOp`).
 - `DocumentStorage` for `init`/`restoreXml`.
 
-## 2026-06-27（续）：虚拟工厂钩子 + 子组件集成 + init/encode — arch.rs 达到 L3
+## 2026-06-27 历史实现记录（“达到 L3”结论已于 2026-08-11 撤回）
 
 - **Architecture 新增子组件字段**：symboltab (Database)、loader (LoadImage)、commentdb、string_manager、cpool、context_db、options_db、split_records、lane_records。
 - **虚拟工厂钩子等价物**：`set_symboltab`/`set_loader`/`set_commentdb`/`set_string_manager`/`set_cpool`/`set_context_db`/`set_options_db`/`set_split_records`/`set_lane_records` — 替代 Ghidra 的 buildXxx 虚函数。

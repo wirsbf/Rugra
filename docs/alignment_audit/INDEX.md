@@ -20,6 +20,9 @@ order, counter scope, comparison key) — not just the surface annotation.
 - [Core identity and state foundations](CORE_FOUNDATIONS_2026-08-11.md)
   — records the Space/Address/SeqNum, Block, Varnode/PcodeOp, Cover,
   Database/Fspec, and Marshal dependency DAG with locked-source counterexamples.
+- [Control, recovery, and output pipelines](CONTROL_OUTPUT_PIPELINES_2026-08-11.md)
+  — records production reachability and state-order failures in Heritage,
+  CondExe/PathMeld, JumpTable, Print, Architecture, UserOp, and PcodeInject.
 
 ## Per-module report files
 

@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L3（2026-06-28 完整对齐）**——Emit trait 覆盖全部 Ghidra Emit 虚方法（含 begin/end Document/ReturnType/VarDecl/Statement/FuncProto）。
+- **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——Emit 表面方法不能替代 `TokenSplit`/Oppen scan queue；当前 API 丢失 semantic object identity、group/paren ID、spaces+bump 和 line-width break/indent 状态，且 legacy 文本后处理仍在生产路径。正式门禁 `NO_ORACLE`。
 - **对应源码**: 当前 `rugra/src/prettyprint.rs`
 
 **源代码路径**: `src/prettyprint.rs`

@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/userop.rs`
 **Ghidra 对应**: `userop.hh` / `userop.cc` (1009行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 UserPcodeOp/UserOpManage 方法覆盖（含 get_op_by_name/manual_call_other_fixup）。7 单元测试。
+**状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——派生 userop 类型/selector/conflict/builtin 契约未闭合；SegmentOp 硬编码 `base<<4`，JumpAssist consumer 与真实 ActionSegmentize 缺失，Architecture/Flow 生产路径未安装 userops。正式门禁 `NO_ORACLE`。
 
 ## 模块说明
 

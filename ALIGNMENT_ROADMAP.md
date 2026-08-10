@@ -92,7 +92,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 11 | `action.cc` | `action.rs` | ✅ L3 | Action/ActionGroup/ActionDatabase 框架对齐 | `action.cc` |
-| 12 | `heritage.cc` | `heritage.rs` (620行) | ✅ **L3（2026-06-28 完整对齐）** | Heritage 覆盖核心 SSA 方法：LocationMap/SizePass + PriorityQueue（depth-based）+ HeritageInfo + LoadGuard + StackNode + heritage/place_multiequals/place_multiequals_direct/insert_multiequal/insert_multiequal_direct/rename/rename_direct/visit_rename/visit_rename_direct/visit_rename_impl + num_heritage_passes（cc:2793）/dead_removal_allowed（cc:2843）/set/get_dead_code_delay（cc:2829/2817）/seen_dead_code（cc:2805）+ heritage_flags。3 单元测试 | `heritage.cc` |
+| 12 | `heritage.cc` | `heritage.rs` | 🔧 L2 | 2026-08-11 锁定审计拒绝 L3：canonical `Heritage::heritage` 无生产调用且重入 `RwLock` 会死锁；ActionStart 未建 dominator，live Action 改走自创 direct phi/rename 两遍并把 pass 加两次，def-use/IOP/block membership/refinement/guards 均未闭合。正式门禁 `NO_ORACLE`，见 `CONTROL_OUTPUT_PIPELINES_2026-08-11.md` | `heritage.cc` |
 | 13 | `merge.cc` | `merge.rs` | ✅ **L3（2026-07-04 完整对齐）** | merge 子系统全部 public/private 方法已移植（mergeOpcode/mergeTestRequired/snip 子系统/dominant-copy/SUBPIECE 影子/hideShadows/mergeOp per-op forced-merge/redundant-copy 标记）。已知简化：build_dominant_copy/allocate_copy_trim 的 union 解析路径省略（需 inheritResolution/forceFacingType/getUnionField 基础设施）；mergeRangeMust 用 merge_test_must+merge_force 近似（Ghidra 失败 throw，Rugra 跳过）。 | `merge.cc` |
 | 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 未原子建立 VN↔High 关系，annotation/后建 VN 挂接错误，强 Arc 形成环，instances 未按 compareJustLoc 维持顺序，销毁与 dirty 传播未闭合 | `variable.cc` |
 | 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | **RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐**；已接入 printc；**Stack-spacebase 解析**已实现（gather_spacebase 递归解析 RSP/frame_base 链）。**2026-06-29 重大进展**：ActionSpacebase 接入主管线（coreaction.cc:5506），标记 RSP 输入为 SPACEBASE → varmap/printc 正确识别栈指针 → **curl uVar 碎片 149→0**。**剩余**：alias_block_level、LoadGuard addGuard；部分 LOAD/STORE 为 RIP-relative 全局（非栈）仍需类型传播配合 | `varmap.cc` |
@@ -106,9 +106,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 |---|---|---|---|---|---|
 | 17 | `blockaction.cc` (2366行) | `blockaction.rs` (4560行) | 🔧 **L2（orderLoopBodies 完整 + ruleBlockWhileDo 移植，剩 collapseInternal 架构迁移）** | identifyInternal/selfIdentify ✅；ruleBlockCat/ProperIf/IfElse/WhileDo/DoWhile/Goto ✅；**2026-06-29 进展**：①`order_loop_bodies` + LoopBody 全管道（find_base/merge_identical_heads/label_containments/find_exit/order_tails/extend/label_exit_edges）实测生效（parseconfig 12 回边→7 loops, depth 至 5）②新增 `rule_block_while_do`（blockaction.cc:1518-1549）1:1 移植含 isGotoOut 检查 ③修复 `is_goto_out` 读取 block 级 GOTO_EDGE_0/1 标志（此前 TraceDAG 标的 goto 查询不到）④findSpanningTree DFS 回边检测 + CFG 跳转目标分裂 + reconcile 类型修复链（循环回边检测恢复，审计 24/24；旧 while 计数 4→28 已废弃为 KPI）。**剩余 L2 缺口**：staged→collapseInternal 架构迁移——Ghidra 的 ruleBlockGoto 在每轮 collapseInternal 中"消费"goto 边（重连而非仅标记），使 break 边从结构化视图中消失，ruleBlockWhileDo 才能看到 2 条非 goto 边。Rugra 目前只标记不重连，故 break 循环的 WhileDo 形成受限 | `blockaction.cc` |
 | 18 | TraceDAG (blockaction.cc 内) | `tracedag.rs` | 🟢 **L2.5（2026-07-04 check_open 修复）** | BranchPoint/BlockTrace/BadEdgeScore 完整移植。**check_open 已修复 3 个差异**：(1) finishblock 守卫（对齐 blockaction.cc:822）；(2) loop-DAG in-edge 分母（对齐 :826-831）；(3) isLoopDAGOut 极性修正。`opened` HashSet 保留为保守安全网（Ghidra 无此机制，标 TODO 待移除——需验证 visit-count 终止性）。 | `blockaction.cc:499-1014` |
-| 19 | `condexe.cc` (712行) | `condexe.rs` (1422行) | ✅ **L3（2026-06-27 全部移植）** | ConditionalExecution 18 方法 + RuleOrPredicate 7 方法 + BooleanMatch/BooleanExpressionMatch 全部 1:1 移植。底层原语 find_common_block/compare_order/remove_from_flow_split 已补。接入主管线（ActionConditionalExe + ActionSimplify→RuleOrPredicate）。9 单元测试 + curl/httpd 回归 | `condexe.cc` |
+| 19 | `condexe.cc` | `condexe.rs` | 🔧 L2 | 依赖的 op destroy/insert 与双向 CFG 边不变量已破坏；removeFromFlowSplit 两支映射相反且一支可越界，CBRANCH true/false 被重复翻转，pullback storage/顺序、异常、Action guard/count/stage 与 PathMeld 均不等价 | `condexe.cc`, `expression.cc` |
 | 20 | `subflow.cc` (4130行) | `subflow.rs` (3400+行) | 🟢 **L2.5→近 L3（2026-07-01：8/9 Rule 已移植+接入 oppool1/cleanup）** | SubvariableFlow 引擎完整 1:1（trace_forward/backward/sext, do_replacement, create_link/compare_bridge, patches, process_next_work）。**8 个 subvar/split Rule 已移植并注册进 oppool1(5621-5628)/cleanup(5706-5708)**：RuleSubvarAnd/Subpiece/SplitFlow/CompZero/Shift/Zext/Sext + RuleSplitCopy/Load/Store。29 单元测试。**唯一剩余缺口**：RulePtrFlow(5624, ruleaction.cc:9177)——重（trialSetPtrFlow/propagateFlowToDef/Reads/truncatePointer + arch 构造）。另：RuleSubfloatConvert 的 TransformManager.apply 待补。基础设施 TODO：Varnode::isPtrFlow/isZeroExpanded | `subflow.cc` |
-| 21 | **`jumptable.cc`** | `jumptable.rs` | ✅ L3 | **完整实现**：全部数据结构 + 全部算法（find_determining_varnodes DFS 深度遍历、quasi_copy 链、get_max_value、isLoadInPath、CircleRange::pullBack 全套、analyze_guards pullBack 扩展、backup2_switch 反向模拟、find_unnormalized 链遍历、flows_only_to_model、emulate_path 地址计算、build_addresses/build_labels 使用真实模拟、fold_in_one_guard + fold_in_guards CFG 重写 via Funcdata::push_branch/force_goto）。Funcdata 新增 push_branch/force_goto/set_goto_branch/move_out_edge。所有 L3 缺口已关闭 | `jumptable.cc` |
+| 21 | **`jumptable.cc`** | `jumptable.rs` | 🔧 L2 | JumpBasicOverride::findStartOp 缺失且 trialNorm 恒 -1；PathMeld 不按 parent/SeqNum 归并截断；EmulateFunction 无 loader/LOAD/MULTIEQUAL；JumpBasic guard/range、Basic2 subtype、JumpAssisted 与 model selection/ActionSwitchNorm 闭包均未对齐 | `jumptable.cc` |
 
 ---
 
@@ -120,7 +120,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 23 | `ruleaction.cc` (11016行) | `ruleaction.rs` (10968行) | 🔧 L2 | **2026-06-29**：新增 `RuleSubCommute`（ruleaction.cc:4534-4673）——SUBPIECE 与二元算术的 commute（SUBPIECE(INT_ADD(a,b),0) → INT_ADD(SUBPIECE(a,0),SUBPIECE(b,0))），注册进 oppool1（5577）。2 单元测试（含 loneDescend 守卫验证）。**2026-06-28 实测**：~100 个 Rule struct，其中 **98 个已注册进 `build_simplify_pool`**（oppool1）+ cleanup 池（actcleanup），**接入主管线并实测生效**（curl 515 次触发/21 Rule）。**剩余 L3 差距**：① 仍缺 ~11 个 Ghidra Rule（见 action.rs skip 注释，已从~30修正——许多此前标"缺失"的其实已实现并注册）；② 部分 Rule 的 `get_opcodes` 覆盖不全或 apply 分支不完整；③ 需逐 Rule 与 ruleaction.cc 比对确保 1:1 | `ruleaction.cc` |
 | 24 | `constseq.cc` | `constseq.rs` (395行) | ✅ **L3（2026-06-29 接入主管线）** | WriteNode + ArraySequence（form_byte_array/select_string_copy_function/interfere_between/check_interference/is_valid_string/get_string）+ StringSequence（空壳，需 Funcdata op 集成）+ HeapSequence（空壳，需 heap pointer analysis）+ RuleStringCopy（COPY 检测 + select_string_copy_function 调用）+ RuleStringStore（STORE 检测，constseq.cc:974-1002 的检测阶段）。4 单元测试。**2026-06-29 接入 build_cleanup_pool（coreaction.cc:5709-5710）**——RuleStringCopy/RuleStringStore 现在实际跑在 cleanup 池。transform 阶段（替换为 CALLOTHER）待 userop 基础设施。验证：curl 24/24 + httpd 29/29 无回归 | `constseq.cc` |
 | 25 | `transform.cc` | `transform.rs` | ✅ L3 | **完整实现**：LanedRegister（lane 尺寸位掩码 + parse_sizes）+ LaneDescription（uniform/two_lane/subset/get_boundary/restriction/extension）+ TransformVar（6 类型 + create_replacement）+ TransformOp（createReplacement/attemptInsertion/inheritIndirect）+ TransformManager 完整 apply 生命周期（createOps/createVarnodes/removeOld/transformInputVarnodes/placeInputs）。Arena 风格 ID 索引替代 Ghidra 原始指针。19 个单元测试。已知限制：transferVarnodeProperties/deleteVarnode/setInputVarnode/markIndirectCreation 用 best-effort 替代 | `transform.cc` |
-| 26 | `userop.cc` | `userop.rs` (440行) | 🟢 **L2.5（代码完整，被 Sleigh 架构初始化阻塞）** | **全部 UserPcodeOp + UserOpManage 方法覆盖**：UserPcodeOp（new/get_name/get_type/get_index/get_display/get_operator_name/extract_annotation_size/is_volatile_read/write/is_segment/is_jump_assist/is_injected/is_string_data）+ DatatypeUserOp（get_output_local/get_input_local）+ VolatileReadOp/VolatileWriteOp（extract_annotation_size）+ SegmentOp + JumpAssistOp + UserOpManage（new/register_op/get_op/get_op_by_name/get_index_by_name/num_ops/register_builtin/initialize_builtins/get_op_mut/is_volatile_read/write/manual_call_other_fixup）+ 工厂函数（create_unspecialized/injected/volatile_read/volatile_write/segment/jump_assist）+ BUILTIN 常量（MEMCPY/STRNCPY/WCSNCPY/STRINGDATA/VOLATILE_READ/WOLATILE_WRITE）。7 单元测试。**接入阻塞**：Ghidra 在架构初始化（architecture.cc:635 `userops.initialize`）填充 UserOpManage，被 ActionSegmentize（coreaction.cc:624-649）消费。Rugra 缺 Sleigh 架构初始化 + .pspec CALLOTHER 注册 | `userop.cc` |
+| 26 | `userop.cc` | `userop.rs` | 🔧 L2 | derived UserPcodeOp 类型被扁平化，selector/index/conflict/builtin 契约不全；SegmentOp 被硬编码 `base<<4`（不适用于 HCS12/Z80/x86 protected），JumpAssist consumer 缺失，ActionSegmentize 仅计数 no-op；生产 Architecture/Flow 链未安装或读取 userops | `userop.cc` |
 | 27 | `unify.cc` | `unify.rs` (2595行) | 🟢 **L2.5（代码完整，Ghidra 设计上非主管线模块）** | **全部 unify 方法覆盖**：UnifyDatatype + RHSConstant 系列（ConstantNamed/Absolute/NZMask/Consumed/Offset/IsConstant/HeritageKnown/VarnodeSize/Expression）+ TraverseConstraint 系列（Descend/Count/Group）+ UnifyConstraint 系列（20 个 Constraint 类型：Boolean/VarConst/NamedExpression/OpCopy/Opcode/OpCompare/OpInput/OpInputAny/OpOutput/ParamConstVal/ParamConst/VarnodeCopy/VarCompare/Def/Descend/LoneDescend/OtherInput/ConstCompare/Group/Or）+ UnifyState（数据存储/op/vn 初始化/count/descend 管理）+ UnifyCPrinter（initialize_basic/add_names/print/print_get_op_list/print_rule_header/print_var_decls）。111 个 pub fn。16 单元测试。无 TODO。**设计上不属于主管线**：Ghidra 的 unify 引擎是**规则编译器代码生成工具**（rulecompile.cc/ruleparse.y）的一部分，用于在**构建时**生成自定义 Rule 的 C++ 代码，运行时不被 universalAction 调用。Rugra 的 Rule 全部手写（不经过 unify 引擎），与 Ghidra 的内置 Rule 一致 | `unify.cc` |
 
 ### coreaction.cc Action 列表（L1 → L2 → L3）— 2026-06-26 按 Ghidra 源码核对
@@ -222,9 +222,9 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 33 | `printc.cc` (~2500行) | `printc.rs` (4500行) | ✅ **L3（2026-06-28 完整对齐）** | PrintC 覆盖全部 Ghidra PrintC 方法：doc_function/doc_all_proto/doc_variable_decl/doc_variable_decls_from_funcdata + emit_block_structured/emit_block_ops + op emission（push_input/push_output/emit_inline_expr/emit_block_condition）+ varnode display name + type prefix + var_type_if_meaningful（LOAD 检测）+ mark_varnode_used + pointer_type_for + copy_map + get_stack_variable_name + try_fold_bool_comparison + is_stack_frame_setup + get_rip_relative_operand + emit_goto_target + extern 声明 + typedef。curl 24/24 + httpd 29/29 gcc 审计通过。5 单元测试 | `printc.cc` |
-| 34 | `printlanguage.cc` | `printlanguage.rs` (120行) | ✅ **L3（2026-06-28 完整对齐）** | PrintLanguage trait 覆盖全部 Ghidra PrintLanguage 虚方法（doc_function/doc_all_proto/doc_variable_decl/doc_statement/op_copy/load/store/binary/unary/multiequal/indirect/call/return/cbranch/branch/push_type/push_varnode + reset_defaults/clear/set_packed_output/set_flat/pop_scope/emit_line_comment）+ escape_character_data（cc:498）+ PrintLanguageCapability。2 单元测试 | `printlanguage.cc` |
-| 35 | `prettyprint.cc` | `prettyprint.rs` (3020行) | 🔧 **L2（2026-07-04）** | **Emit trait 层对齐**（print/begin_block/end_block/tag_* 等）。**post_process_output** 保留 27+ 趟文本后处理（违反铁律 5.5，但在 Rugra emit/Action 层完整前是必要补偿——移除后 gcc 从 23/24 降到 5/24）。每个 pass 在下方表中标注对应的 Ghidra Action 机制，待移植后逐个移除。`post_process_output_legacy` 保留全部旧代码。 | `prettyprint.cc` |
+| 33 | `printc.cc` | `printc.rs` | 🔧 L2 | 默认 RPN 根 invisible group 被发成未闭合字面 `(`；大多数算术/CALL/STORE 绕过 RPN，block walker 忽略 terminal mask，doc_function 又用 fresh set 重发所有循环；当前 11.3.2 最终 C golden 不能证明 12.0.4 token/markup parity | `printc.cc` |
+| 34 | `printlanguage.cc` | `printlanguage.rs` | 🔧 L2 | RPN token 表/递归/括号 identity 不完整，自由 `rpn_recurse` 可丢 pending node；真实 PcodeOp/Varnode/Datatype 与 group ID/highlight payload 丢失，namespace 三种策略和多个虚方法仍为空 | `printlanguage.cc` |
+| 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | Emit 签名无法携带 oracle markup identity；TokenSplit/Oppen scan queue、line width、spaces+bump、group break/indent 状态机缺失，27+ 文本后处理仍在实际路径 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 空参数列表被 `all()` 误判 input-locked，lock/void/model 联动缺失；ParamActive slot 应从 1 而非 0，whichTrial/getNumUsed/split/comparator 与 ParamEntry 分配均有确定差异，storage 部分依赖 ADDRESS-0001 | `fspec.cc` |
 | 37 | `options.cc` | `options.rs` | ✅ L3 | **完整实现**：ArchOption trait + OptionDatabase 分发器 + 37 个注册选项（9 个完全功能化）+ XML decode（decode_one/decode）。所有 L3 缺口已关闭 | `options.cc` |
 | 38 | `comment.cc` | `comment.rs` | ✅ L3 | **完整实现**：Comment + comment_type + CommentDatabaseInternal（add/clear/query/encode/decode）+ CommentSorter（find_position 完整基本块关联 via Funcdata op 遍历 + setup_function_list/setup_block_list/setup_op_list）。所有 L3 缺口已关闭 | `comment.cc` |
@@ -331,7 +331,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 45 | `pcodeinject.cc` | `pcodeinject.rs` (272行) | 🟢 **L2.5（代码完整，被 Sleigh 架构初始化阻塞）** | InjectPayload/InjectContext/PcodeEmitArray/PcodeInjectLibrary + register_call_fixup/call_other_fixup/call_mechanism/get_payload_id。9 单元测试。**接入阻塞**：Ghidra 在架构初始化（architecture.cc:638 `buildPcodeInjectLibrary`）构建 inject 库，被 ActionConstbase（coreaction.cc:686-690 `getInjectUponEntry` + `doLiveInject`）消费。Rugra 缺 Sleigh 架构初始化 + .cspec 解析（decodeInject at architecture.cc:1287） | `pcodeinject.cc` |
+| 45 | `pcodeinject.cc` | `pcodeinject.rs` | 🔧 L2 | decoder/参数索引/tempbase/script/id-vector/dynamic payload/duplicate-error 契约不全；Architecture 无 pcodeinjectlib，Flow 不收集 CALLOTHER injection、也不调用 injectPcode，直接 API 又从 HashMap 非确定地取首项，故生产闭包不可达 | `pcodeinject.cc` |
 | 46 | `pcodecompile.cc` + `pcodeparse.cc` | `pcodeparse.rs` | 🔧 **L2（解析失败语义未对齐，且未接 Sleigh 架构初始化）** | Lexer、模板构造与递归下降语法主体已存在；`UserOpSymbol` 的非零 index 现会进入 `CPUI_CALLOTHER` input 0。仍有 27 个必选标点错误被丢弃、3 个 `local` 分支可静默漏分号，失败时 result 状态也未与 Bison 对齐（`PARSER-0001`）。Ghidra 在 inject 初始化链调用该解析器，Rugra 尚未接入同等 Sleigh 架构初始化。 | `pcodecompile.cc`, `pcodeparse.cc`, `pcodeparse.y` |
 
 ---
@@ -341,7 +341,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 47 | Sleigh (20+ 文件) | `iced-x86` (仅 x86-64) | 🔧 L2 | **仅支持 x86-64**；不支持 ARM/MIPS/RISC-V/PowerPC | `sleigh*.cc`, `slgh*.cc` |
-| 48 | `architecture.cc` | `arch.rs` | ✅ L3 | **完整实现**：Ghidra Architecture 配置容器（全部字段 + 默认值 + resetDefaultsInternal）+ 子组件字段（symboltab/loader/commentdb/string_manager/cpool/context_db/options_db/split_records/lane_records）+ 虚拟工厂钩子等价物（set_* 方法）+ init/clear_analysis/read_loader_symbols/encode。所有 L3 缺口已关闭 | `architecture.cc` |
+| 48 | `architecture.cc` | `arch.rs` | 🔧 L2 | 配置容器存在，但 `Funcdata.arch` 生产路径始终 None，裸 Architecture 的 loader/types/userops/cpool 也为空；缺 pcodeinjectlib 及 build/init/decode 闭包，使 userop/injection/type/cpool consumers 全不可达 | `architecture.cc` |
 | 49 | `translate.cc` | `disasm/x86_lift.rs` | 🔧 L2 | 仅 x86-64 提升 | `translate.cc` |
 | 50 | `grammar.cc` + `expression.cc` | `grammar.rs` (753行) + `expression.rs` (818行) | 🟢 **L2.5（grammar 代码完整，设计上非主管线模块）** | grammar.rs: GrammarToken（token 类型/位置/值）+ GrammarLexer（完整状态机词法分析：标点/标识符/dec-hex-oct 整数/字符串/字符/注释/EOF）+ TypeModifier/TypeDeclarator AST + parse_type/parse_to_separator。expression.rs: AdditiveEdge + TermOrder（collect/sort_terms/get_sort）+ AddExpression（gather_two_terms_add/subtract/root/is_equivalent）+ boolean_match_evaluate + functional_equality_level0/functional_equality_level。functional_equality 在 address.rs。28 单元测试。**grammar 设计上不属于主管线**：Ghidra 的 grammar 是 .cspec/.pspec 解析器，在架构初始化时解析编译器规范（非反编译运行时 Action）。expression.rs **已接入**主管线（printc 排序用 TermOrder）。注意：lib.rs:68 标注 grammar 已接入，但实际 parse_type/parse_to_separator 无外部调用方 | `grammar.cc`, `expression.cc` |
 
@@ -369,23 +369,14 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 ---
 
-## 统计汇总（2026-06-29 依赖分析 + L2.5 细分）
+## 统计汇总
 
-> ⚠️ **2026-07-02 19:29 校对注**：下表「数量」反映 **2026-06-27 模块级逐行核实 + 06-29 依赖分析**，此后虽 204 commit，但多为 Rule/Action 补全与输出质量修复，未推翻模块级 L 分级（需重新逐行读 Ghidra 方可升降级）。表中数字暂保留，**不代表测试数/输出质量**——后者见 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节（测试 960/960；curl goto=2 语法错 / httpd uVar=262）。
-
-| 级别 | 数量 | 说明 |
-|---|---|---|
-| ✅ **L3（已完成 + 接入主管线 + 验证）** | **~14** | 核心算法 1:1 移植 + **实际在反编译流程中被调用** + 测试/输出验证。底层 IR/数据模型（address/varnode/op/block/opcodes/space/rangeutil/transform）+ 主管线模块（heritage/opbehavior/expression/printc/prettyprint/constseq 等）。**2026-06-29 收紧**：代码完整但从未被调用的模块不再算 L3。|
-| 🟢 **L2.5（代码完整未接入）** | **~9** | 核心算法 1:1 移植完成 + 有测试，但**尚未接入主管线**。详见下方"L2.5 模块接入阻塞分析"。|
-| 🔧 **L2（算法不完整）** | **~16** | 有骨架但核心算法缺失/未对齐。典型：condexe(只检测不重写)、unionresolve(scoreTrialDown/Up 缺失)、varmap(stack spacebase 未通)、blockaction(嵌套循环未完成) |
-| 📋 **L1（计划/仅骨架）** | **~30** | 仅有 struct 占位或完全缺失 |
-| **战略排除** | **~34** | Sleigh 编译器 + GUI 桥 + BFD 加载器（见〇节） |
-
-> ⚠️ **2026-06-29 接入审计发现**：此前标 L3 的 21 个模块中，**9 个代码完整但从未在反编译流程中被调用**（死代码）。
-> 经核实 Ghidra `coreaction.cc` 接入点后分类处理：
-> - **1 个（constseq）已接入** cleanup 池 → 真 L3。
-> - **9 个代码完整但未接入的 → 重新细分为 L2.5**（区分"算法未完成"的 L2 与"代码完成仅缺接入"的 L2.5）。
-> L3 标准现明确要求"实际接入主管线"。数字下降反映标准变严，非能力下降。
+> **2026-08-11：旧汇总已撤销。** 2026-06/07 的计数把结构存在、Rust
+> 单测通过或局部接线误当成了 Ghidra 1:1 运行验证，并且在模块状态修改后没有
+> 重新计数。当前唯一有效状态是上方逐模块行及
+> `docs/alignment_audit/*_2026-08-11.md` 的锁定审计结论。在完成全量函数账本、
+> 主管线可达性证明和 12.0.4 同输入直接差分前，不再发布 L1/L2/L2.5/L3
+> 聚合数量。
 
 ---
 
