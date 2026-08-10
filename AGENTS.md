@@ -6,7 +6,22 @@
 
 `二进制解析 → 汇编提升(iced-x86/SLEIGH) → P-code IR → SSA/Heritage → 控制流结构化 → C 代码生成`
 
-Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`(114 个 `.cc` 文件)。
+Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`。项目的唯一源码 oracle 锁定为
+**Ghidra 12.0.4** tag `Ghidra_12.0.4_build`，commit
+`e40ed13014025f82488b1f8f7bca566894ac376b`(114 个 `.cc` 文件)。不得用 `master`、其他 tag
+或网页最新行号与该 oracle 混用。
+
+## 对齐 Oracle 与唯一完成定义
+
+- 所有 golden、函数 fixture、差分报告和 Alignment Evidence 必须记录 oracle commit、架构、
+  compiler spec、analysis options 与输入指纹。任一项缺失即为 `NO_ORACLE`。
+- `docs/alignment_audit/FUNCTION_MAP.md` 是逐函数账本入口；每个 Ghidra `.cc/.hh` 函数必须有
+  稳定 ID、完整签名、Rugra 对应物、状态和行为证据。当前账本的 `~2055` 与旧报告
+  `~5200+` 分母冲突，在生成器重建并核对前，**全局完成度一律视为未证明**。
+- “替代实现”或“战略排除”不会自动算对齐。除纯 UI/控制台桥接外，必须证明同一可观测输入下
+  行为等价，否则记 `MISSING`、`MISMATCH` 或 `UNTESTED`。
+- 全局完成的唯一判定：函数账本无 `MISSING/MISMATCH/NO_ORACLE/UNTESTED`，所有映射函数
+  通过真实 Ghidra oracle 行为门禁，主管线与回归语料零未解释差异。
 
 ---
 
@@ -35,11 +50,28 @@ Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`(114 �
 
 任何 bug / 失败 / 非收敛 / 输出错误,**第一步是读 Ghidra 对应源码看它怎么处理,第二步才是改 Rugra**。Ghidra 能跑就有解法,找不到说明读得不够细。
 
+### 铁律 2.1 — 逐函数同输入同输出
+
+- “同输入”包括参数、引用对象/别名关系、全局与 `Architecture` 状态、地址空间、选项、
+  初始 IR/CFG/SSA、随机种子和错误注入条件。
+- “同输出”包括返回值/异常、所有输出参数及对象突变、创建/删除/重排的
+  Varnode/PcodeOp/边、flags/type/symbol 状态、迭代顺序以及最终文本/字节。
+- 只允许规范化已证明无语义的临时 ID；规范化不得删除顺序、别名、控制流或状态差异。
+- 每个被修改的映射函数必须用同一 fixture 分别运行 Ghidra oracle 与 Rugra，对比完整观察结果。
+  仅 Rust 自测、手写 expected、代码形似或 curl 单样本通过，均不能证明函数对齐。
+
 ### 铁律 3 — 原子化提交 + 文档同步
 
 - 每个逻辑自洽的改动单元立即 `git commit`。禁止积累未提交改动。
 - `src/*.rs` 改动 → 同 commit 更新 `docs/api/*.md`(pre-commit hook 强制)。
 - 模块状态变更 → 同 commit 更新 `ALIGNMENT_ROADMAP.md`(L1→L2→L3)。
+- `docs/TODO_BOARD.md` 是活动任务队列，`ALIGNMENT_ROADMAP.md` 是模块状态账本，二者不得混用。
+- 任一缺口被发现、认领、阻塞、解锁、送审或验证完成时，当轮立即更新 TODO；
+  代码状态变化必须同 commit 更新。
+- 每项 TODO 必须包含稳定 ID、Ghidra/Rugra 函数、状态、owner agent、依赖、精确 write-set、
+  验收命令、证据 commit 和最后更新时间。
+- 代码中的 `TODO/stub/placeholder/simplified/no-op` 必须引用 TODO ID；未登记缺口禁止存在。
+- 差分非零可提交修复进度，但每个剩余差异必须绑定 TODO ID，模块最高保持 L2，禁止宣称已对齐。
 
 ### 铁律 4 — 禁止空轮
 
@@ -48,6 +80,21 @@ Ghidra 源码位于 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/`(114 �
 ### 铁律 5 — 禁止随意回退已验证的工作
 
 已通过 build + 测试 + curl/httpd 验证的改动,禁止因后续步骤受阻就 `git checkout`/回退。已验证成果必须立即原子化提交锁定(铁律 3)。**并发 agent 协作警示**:后台 agent 可能跑 `git restore`/`checkout` 清工作区 — 同一文件的 edit 必须串行,关键编辑后立即 build + commit。
+
+### 铁律 6 — 依赖图驱动的并行开发
+
+- 主 Agent 先根据函数账本构建依赖 DAG，优先修复高扇出地基，再启动上层 wave；吞吐指标是
+  “本 wave 新增真实 oracle 验证通过函数数”，不是 LOC、commit 数或 Rust 测试总数。
+- Agent 编辑前必须在 TODO 看板认领稳定 ID、精确函数和 write-set。同一文件同一时刻只能有
+  一个 writer，`src/foo.rs` 与 `docs/api/foo.md` 视为同一租约。
+- 只有 write-set 无重叠且依赖已满足的任务才能并行。源码审计、独立模块实现、golden 生成、
+  文档和只读复核可并行。
+- reviewer 必须是独立 Agent，自己打开并逐行读 Ghidra 函数；复核期间只读。实现变更后旧批准
+  自动失效，必须重审。
+- 每个 Agent 交付必须包含 commit hash、改动文件、验证命令结果、剩余差异 ID 与 TODO 更新。
+- 提交只允许显式 `git add <owned files>`；提交前核对 staged 文件，禁止 `git add -A`、
+  `restore/checkout/stash` 干扰其他 Agent。
+- 每个 wave 结束由主 Agent 串行集成 commit、运行全量与差分门禁，再更新下一 wave。
 
 ---
 
@@ -99,6 +146,23 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 - `defects>0 或 numbering>0`:commit message 必须含 `## Differential` 块,逐处解释每个缺陷(对齐缺陷 / 已知限制 / 待修)。**未解释的缺陷 = 不可提交。**
 - `skeleton diff>0`:不一定是对齐缺陷(for↔while 等价变换),但需在 `## Differential` 块说明。
 
+> 当前 `tests/golden/ghidra_curl.c` 来自 Ghidra 11.3.2，与锁定的 12.0.4 源码 oracle 不同版。
+> 在 TODO `ORACLE-0002` 重生 12.0.4 golden 前，该文件只是回归信号，不能作为最终对齐证据。
+
+### 机制 B2 — 逐函数行为差分门禁
+
+任何 `src/*.rs` 映射函数的行为改动都必须产生一个以锁定 oracle 运行的函数 fixture，状态只能是：
+
+| 状态 | 含义 | 是否允许 L3 |
+|---|---|---|
+| `MATCH` | 完整观察结果零差异 | 是 |
+| `MISMATCH` | 已有真实 oracle，仍有已登记差异 | 否 |
+| `NO_ORACLE` | 没有真实 Ghidra 运行结果或版本/选项不同 | 否 |
+| `UNTESTED` | 分支、边界、错误路径或状态突变未覆盖 | 否 |
+
+低层函数改动还必须验证受影响调用闭包与端到端语料。手写 expected 只能作为 Rugra 回归测试，
+不能将 `NO_ORACLE/UNTESTED` 升为 `MATCH`。
+
 ### 机制 C — 强制独立复核(Cross-Review)
 
 **核心算法模块的"对齐"改动,单 agent 自检不可信,必须由另一个 agent 独立复核。**
@@ -135,6 +199,19 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 - **手动补回执**:`python .zcode/record_receipt.py <ghidra_file> <line_start> <line_end>`。
 - **紧急逃生** `ZCODE_ALIGN_GATE=0`(必须记录理由)。⚠ 配置仅在新 session 加载,中途改不生效。
 
+### 机制 F — 门禁健康自检
+
+每个 session 首次编辑前必须验证：
+
+1. `ghidra/` 存在且 HEAD 等于锁定 oracle commit。
+2. `git config core.hooksPath` 指向版本化 hook 目录，`pre-commit` 与 `commit-msg` 存在且可执行。
+3. hook 使用当前 repo root 与 `python3`，不得硬编码 Windows/子目录路径。
+4. `check_ghidra_annotations.py --all`、`check_ghidra_refs.py --all --strict` 与
+   `check_alignment_evidence.py` 四类语义 dry-run 全部通过。
+
+任一项失败时，不得宣称该门禁“强制”或任何模块 L3；必须立即登记 P0 基础设施 TODO 并优先修复。
+本地 hook 不是最终信任边界；同样检查必须进入版本化 CI。
+
 ---
 
 ## 📋 L1/L2/L3 路线图
@@ -143,7 +220,7 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 
 | 级别 | 含义 |
 |---|---|
-| ✅ L3 | 已完整实现 + 接入主管线 + 对齐验证 |
+| ✅ L3 | 账本内所有函数/分支/状态影响完整实现 + 接入主管线 + 12.0.4 oracle `MATCH` |
 | 🟢 L2.5 | 核心算法 1:1 移植完成 + 有测试,但未接入主管线 |
 | 🔧 L2 | 核心算法缺失/未对齐 |
 | 📋 L1 | 完全缺失,需从零实现 |
@@ -157,6 +234,8 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --fu
 | 文档 | 内容 |
 |---|---|
 | `ALIGNMENT_ROADMAP.md` | L1/L2/L3 全量模块对齐路线图 |
+| `docs/TODO_BOARD.md` | 当前 wave 活动任务、owner/write-set/依赖/验收证据 |
+| `docs/alignment_audit/FUNCTION_MAP.md` | 锁定 oracle 的逐函数权威账本入口 |
 | `CURRENT_STATUS.md` | 项目整体状态、可靠性评估、当前反编译质量数据 |
 | `GAP_ANALYSIS.md` | 功能鸿沟对比 |
 | `ALIGNMENT_PROGRESS.md` | 类/算法层面的 Ghidra 映射进度 |

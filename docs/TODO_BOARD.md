@@ -1,7 +1,34 @@
 # Todo Board (任务看板)
 
-本文档跟踪当前未竟的开发、验证与文档修复任务。  
-现阶段的首要目标不是继续放大功能宣称，而是先完成**文档去失真、索引重建、事实校验闭环**，让仓库说明与真实代码状态重新一致。
+本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
+
+## 活跃 wave：`W-2026-08-11-A` — oracle 与高扇出地基
+
+**锁定 oracle**：Ghidra 12.0.4 / `Ghidra_12.0.4_build` /
+`e40ed13014025f82488b1f8f7bca566894ac376b`。
+
+**状态机**：`BACKLOG → READY → IN_PROGRESS → REVIEW → DONE`。`BLOCKED` 必须指向一个更底层 TODO ID；
+`DONE` 必须同时有 commit、四类语义、验收命令和 oracle 状态。
+
+| ID | P | 状态 | owner | Ghidra ↔ Rugra | write-set | 依赖 / 验收 | 更新 |
+|---|---:|---|---|---|---|---|---|
+| `ORACLE-0001` | P0 | DONE | root | 本地参考树 | 忽略的 `ghidra/` | HEAD=`e40ed13`, 114 `.cc` | 2026-08-11 |
+| `ORACLE-0002` | P0 | BLOCKED | unassigned | 12.0.4 curl/httpd golden | `tests/golden/*`, oracle metadata | 依赖可运行 12.0.4 headless distribution + 锁定 analysis options；重生后 compare 零未解释差异 | 2026-08-11 |
+| `LEDGER-0001` | P0 | READY | unassigned | 114 `.cc/.hh` 全函数 ↔ `src/**/*.rs` | `tools/`, `docs/alignment_audit/FUNCTION_MAP*` | 生成唯一分母，消除 `~2055` vs `~5200+` 冲突 | 2026-08-11 |
+| `GATE-0001` | P0 | READY | unassigned | 提交/编辑门禁 | `.githooks/`, `.zcode/`, `tools/check_*` | hooksPath+可执行+repo path+python3+4/4语义+strict refs 全通过 | 2026-08-11 |
+| `ANN-0001` | P0 | BLOCKED | unassigned | 249 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | 依赖 `LEDGER-0001`；禁止机械标 GLUE | 2026-08-11 |
+| `PCODE-0001` | P0 | IN_PROGRESS | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | 边界 1/2/3/4/7/8/16 + 调用者 + Rust 全测；真 oracle fixture 状态必填 | 2026-08-11 |
+| `RANGE-0001` | P0 | BLOCKED | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | 依赖 `PCODE-0001` 释放 `ruleaction.rs` 租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
+| `PIPE-0001` | P0 | READY | unassigned | `ActionDatabase::universalAction` 阶段/唯一性 | `src/action.rs`, `src/coreaction.rs`, API/路线图 | Action tree 顺序与唯一性 fixture + cross-review + differential | 2026-08-11 |
+| `SSA-0001` | P0 | BLOCKED | unassigned | `ValueSetSolver` constraints → Heritage guards | `src/rangeutil.rs`, `src/heritage.rs`, API/路线图 | 依赖 `RANGE-0001`；先底层 constraints 再 guard integration | 2026-08-11 |
+
+### 已完成发现审计（本 wave）
+
+- `cargo test --lib`：1292 passed / 0 failed / 3 ignored；`cargo check --lib` 通过。该证据只证明 Rugra 回归基线，不是 oracle parity。
+- 注释门禁：22 个文件、249 个非测试函数缺 `Ghidra/RUGRA-GLUE` 注释。
+- 门禁健康：`core.hooksPath` 未配置，`pre-commit` 不可执行且路径错，缺 `commit-msg`，
+  Alignment Evidence 实际只要求 3/4 类语义。
+- 路线图至少 9 个模块存在“代码自承 stub/简化，但文档标 L3”的反证；未复核前不得沿用这些 L3 声明。
 
 ---
 
