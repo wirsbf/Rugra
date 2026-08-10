@@ -9,6 +9,11 @@ order, counter scope, comparison key) — not just the surface annotation.
 自定义函数都必须解释为什么不和 ghidra 对齐；解释不合理的都必须与 ghidra 做到完全对齐；
 不应该存在任何理由和 ghidra 不对齐。"
 
+## 2026-08-11 targeted audits (Ghidra 12.0.4)
+
+- [`PcodeSnippet` mandatory punctuation and failure state](PCODEPARSE_SYNTAX_2026-08-11.md)
+  — confirmed Rugra accepts malformed snippets that the locked Bison grammar rejects.
+
 ## Per-module report files
 
 | Module | File | Rule-12? | Total | OK | MISMATCH | PARTIAL | MISSING/STUB | GLUE-UNJUSTIFIED | CITED-LINE-DRIFT |

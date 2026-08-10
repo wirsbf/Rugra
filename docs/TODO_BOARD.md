@@ -20,6 +20,7 @@
 | `ANN-0001` | P0 | BLOCKED | root | 247 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | graph String wrappers 已确认 GLUE；其余依赖 `LEDGER-0001`，禁止机械标注 | 2026-08-11 |
 | `PCODE-0001` | P0 | DONE | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | `3762e22`；oracle MATCH；1294/0/3；Cross-Review APPROVE | 2026-08-11 |
 | `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` 桥 | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, API/路线图 | 逐 opcode 对拍 `opflags/addlflags/getBehavior`；禁止继续用残缺 flags 或手写旁路 | 2026-08-11 |
+| `PARSER-0001` | P0 | READY | root | `PcodeSnippet` 必选标点与失败状态 | `src/pcodeparse.rs`, tests, API/审计文档 | 当前 27 个 `expect_punct` 结果被丢弃且 3 个 local 分支静默漏 `;`；标点删除矩阵 + 失败时无 result + Ghidra parser oracle | 2026-08-11 |
 | `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 6 个 public API → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC 源文件闭包；替换 native `u128` 旁路；cross-review+differential | 2026-08-11 |
 | `RANGE-0001` | P0 | READY | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | `PCODE-0001` 已完成并释放租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
 | `PIPE-0001` | P0 | READY | unassigned | `ActionDatabase::universalAction` 阶段/唯一性 | `src/action.rs`, `src/coreaction.rs`, API/路线图 | Action tree 顺序与唯一性 fixture + cross-review + differential | 2026-08-11 |
@@ -32,6 +33,8 @@
 - 门禁健康：`core.hooksPath` 未配置，`pre-commit` 不可执行且路径错，缺 `commit-msg`，
   Alignment Evidence 实际只要求 3/4 类语义。
 - 路线图至少 9 个模块存在“代码自承 stub/简化，但文档标 L3”的反证；未复核前不得沿用这些 L3 声明。
+- `PcodeSnippet` 实测会接受缺失 `]`/`;` 的非法语句并返回成功；反例和完整修复边界见
+  `docs/alignment_audit/PCODEPARSE_SYNTAX_2026-08-11.md`。
 
 ---
 
