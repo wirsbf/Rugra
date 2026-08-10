@@ -11,6 +11,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Main error type for Rugra
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Low-level decompiler failure that aborts the current operation.
+    #[error("{0}")]
+    Lowlevel(String),
+
     /// Binary parsing errors
     #[error("Failed to parse binary: {0}")]
     BinaryParse(String),

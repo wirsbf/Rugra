@@ -1,0 +1,15 @@
+{
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "architecture-independent compression.cc unit fixture",
+  "compiler_spec": "N/A: Decompress does not inspect a compiler specification",
+  "analysis_options": "direct locked-source execution; one inflate call per recorded step",
+  "host_compression": "system libz.so.1 selected by both binaries",
+  "host_compression_version": "1.2.11",
+  "input": "fixed zlib streams for hello/world; empty, invalid, replacement, mid-stream replacement, caller mutation, and same-address input/output cases",
+  "cpp_fixture_sha256": "9dc74277645c62cef5781e896b3a795a43a7e80fa80c1d85ceee252fff61f847",
+  "rust_fixture_sha256": "7eca5ca75a1dc23a9a72d02ae542852a4ed3c79656a3dbf6bd966ae864747c80",
+  "expected_stdout_sha256": "f4ecf1ff6a0e6d64d09375c8562c2be9db8dc38b0164545b5c09d5d044732855"
+}

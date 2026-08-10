@@ -20,6 +20,9 @@ Result type alias for Rugra operations
 
 Main error type for Rugra
 
+- `Lowlevel(String)` represents Ghidra's aborting `LowlevelError` category and
+  preserves its explanatory message.
+
 ### `pub trait ErrorContext<T>`
 
 Helper trait for adding context to errors

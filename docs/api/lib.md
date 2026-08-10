@@ -527,7 +527,7 @@
 ## 2026-06-27（续 12）：新增 crc32 + compression 模块
 
 - `pub mod crc32;` — 对应 `crc32.hh`，CRC32 表 + crc_update + crc32/crc32_with_init。完全自包含（L3）。解锁 stringmanage::calcInternalHash + marshal Packed 格式。
-- `pub mod compression;` — 对应 `compression.hh`，Compress + Decompress deflate/inflate 包装器。L3 缺 flate2 集成（当前为 pass-through stub）。
+- `pub mod compression;` — 对应 `compression.hh`。`Decompress` 使用持久低层 inflate 状态；`Compress` 与缺失的 `CompressBuffer` 仍使模块保持 L2。
 
 ## 2026-06-27（续 13）：新增 paramid 模块
 

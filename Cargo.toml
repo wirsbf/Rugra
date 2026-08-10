@@ -36,6 +36,7 @@ bincode = "1.3"
 
 # Compression
 flate2 = "1.0"
+libz-sys = "=1.1.29"
 
 # Logging
 log = "0.4"
@@ -71,6 +72,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "rugra"
 required-features = ["cli"]
+
+[[example]]
+name = "decompress_1204_oracle"
+path = "tests/oracle/decompress_1204.rs"
 
 [profile.release]
 opt-level = 3

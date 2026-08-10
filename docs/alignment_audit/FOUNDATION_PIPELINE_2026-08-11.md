@@ -22,7 +22,7 @@ future fix.
 | `OPCODE-0001` | Opcode wire protocol | ten protocol names differ, reverse lookup is missing, and packed decode rejects reserved values accepted by Ghidra | MISMATCH / NO_ORACLE |
 | `SLEIGH-0001` | Linux source build | the build probe swallows a failing C++ compilation, producing a false-green library check and later undefined FFI symbols | MISMATCH; temporary build probe reproduced |
 | `SLEIGH-0002` | SLEIGH context | `lift_from_func` omits pspec context; an x86-64 instruction decodes as length 1 instead of length 3 | MISMATCH; temporary runtime probe reproduced |
-| `COMP-0001` | `Decompress` | return value, stream lifetime, input aliasing, completion, and errors differ from zlib-backed Ghidra behavior | MISMATCH; locked runtime probe reproduced |
+| `COMP-0001` | `Decompress` | the initial implementation differed in return value, stream lifetime, input aliasing, completion, and errors | PARTIAL MATCH; durable direct stdout diff covers normal/replacement/alias/data-error paths, fault injection remains untested |
 | `MULTI-0001` | Multiprecision | the complete 16-function limb engine is absent; mainline RuleDiv code uses native `u128` and diverges above 64 bits | MISMATCH; locked runtime counterexample reproduced |
 | `LEDGER-0001` | Function denominator | the historical 2,055 estimate covers only 26 `.cc` files; locked source has 5,691 `.cc` definitions before header-inline accounting | inventory complete; ledger not implemented |
 | `GATE-0001` | Enforcement | hooks are not installed/executable, paths are wrong, evidence validation is weak, and 19 strict refs plus 247 annotations currently fail | FAIL |
@@ -183,23 +183,29 @@ the first instruction is length 3 and emits one COPY.
 
 ### `Decompress`
 
-Locked runtime probes establish these differences:
+The initial locked probes established five differences: no-input completion,
+remaining-capacity return polarity, persistence across output-limited calls,
+`Z_DATA_ERROR`, and caller-owned input aliasing. `COMP-0001` now uses one
+stable-address system `z_stream`, performs one `inflate(..., Z_NO_FLUSH)` per
+call, returns `avail_out`, and preserves the caller-owned `next_in` pointer.
 
-| Case | Ghidra 12.0.4 | Current Rugra |
-|---|---|---|
-| no input, 8-byte output | return 8; unfinished | return 0; finished |
-| zlib `hello`, 1-byte output | writes `h`, return 0; unfinished | writes `h`, return 1; finished |
-| second call after that | writes `ello`, return 60; finished | no output; finished |
-| input `deadbeef` | throws `LowlevelError` | silently returns 0 |
-| caller mutates input after `input()` | persistent stream observes mutation | copied Vec hides mutation |
+`tools/run_decompress_oracle.sh` builds both the locked C++ source and a Rust
+mirror. It verifies that both binaries resolve the same `libz.so.1` and runtime
+version, then directly diffs their common stdout schema. The durable fixture
+now matches for:
 
-Ghidra keeps one `z_stream`, performs exactly one `inflate(..., Z_NO_FLUSH)` per
-call, returns remaining output capacity, and sets finished only on
-`Z_STREAM_END`. Current Rugra creates a fresh decoder per call, loops to a
-terminal state, returns bytes written, copies/accumulates input, and collapses
-errors. `COMP-0001` can repair the five-function `Decompress` closure
-independently, but the whole compression module must remain L2 because
-`Compress` also differs and `CompressBuffer` is missing.
+- no-input and output-limited calls;
+- continuation on the same input;
+- clean and mid-stream input replacement;
+- mutation of the caller-owned input between calls;
+- identical input/output pointers with in-place decompression;
+- stream completion and `Z_DATA_ERROR`.
+
+This is deliberately a partial closure, not a module promotion. Runtime fault
+injection for constructor failure, `Z_NEED_DICT`, `Z_MEM_ERROR`,
+`Z_STREAM_ERROR`, and destructor cleanup remains untested. `COMP-0001`
+therefore stays `IN_PROGRESS`, and the whole compression module remains L2:
+`Compress` still differs and `CompressBuffer` is missing.
 
 ### Multiprecision
 
