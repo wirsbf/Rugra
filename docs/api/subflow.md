@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/subflow.rs`
 **Ghidra 对应**: `subflow.hh` / `subflow.cc` (4589行)
-**状态**: ✅ **L2.5（2026-07-01 核心算法 1:1 移植完成）**——SubvariableFlow 引擎 + subvar/split 族 Rule 完整移植 + 29 单元测试。待接入主管线（已注册进 oppool1/cleanup pool）。
+**状态**: 🟢 **L2.5（部分逐函数核对）**——SubvariableFlow 引擎 + subvar/split 族 Rule 已实现并注册；尚未完成模块全函数 oracle 对拍，不能宣称 L3。
 
 ## 模块说明
 
@@ -79,4 +79,13 @@ FLOAT_FLOAT2FLOAT 常量输入→op_float2_float fold→COPY(constant)（subflow
 
 ### 2026-07-01（续 5）：SubfloatConvert 非 const 精度追踪
 非 const 路径：widening→root=outvn+insize，narrowing→root=invn+outsize。update_type 标记有效精度 float 类型。5 新测试。
+
+### 2026-08-11：INT2FLOAT patch 宽度边界
+
+`try_int2float_pull`（Ghidra `subflow.cc:341-367`）和 `do_replacement` 的
+`int2float_patch` 分支（`subflow.cc:1531-1542`）现在共享
+`TypeOpFloatInt2Float::preferred_zext_size`。旧的 `<=4 ? 4 : 8` 会在输入恰为
+4 字节时返回 4、在 8 字节时返回 8；Ghidra 的严格 `<4`/`<8` 边界分别返回
+8 和 9。直接编译锁定 Ghidra 12.0.4 `typeop.cc` 的 fixture 与 Rust 边界测试均
+覆盖这些转折点。
 <!-- annotation-pass: 2026-07-04 -->

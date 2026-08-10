@@ -9,6 +9,15 @@ Rule-based transformations for P-code operations
 Corresponds to Ghidra's `ruleaction.hh`. Rules are small, local
 transformations that target specific opcodes to simplify the IR.
 
+## 2026-08-11：FLOAT_INT2FLOAT 零扩展宽度
+
+`RuleUnsigned2Float::apply_op` 和 `RuleInt2FloatCollapse::apply_op` 不再维护局部
+宽度近似；两者现在与 Ghidra `ruleaction.cc:9822/9888` 一样调用
+`TypeOpFloatInt2Float::preferred_zext_size`。这修正了 1 字节输入（旧值 2、正确值 4）
+和 8 字节输入（旧值 8、正确值 9），并由直接编译 Ghidra 12.0.4
+`typeop.cc` 的 oracle fixture 验证。此次只确认共享宽度语义；两个 Rule 的完整
+CFG/IR 变换仍按各自既有状态管理，不能由本项单独升级为 L3。
+
 ## 导出的公共 API (Public API)
 
 ### `pub struct RuleCollapseConstants`

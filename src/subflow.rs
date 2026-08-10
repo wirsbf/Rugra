@@ -850,7 +850,7 @@ impl SubvariableFlow {
         true
     }
 
-    // Ghidra: subflow.cc:1372 SubvariableFlow::tryInt2floatPull
+    // Ghidra: subflow.cc:341 SubvariableFlow::tryInt2FloatPull
     /// Determine if the subgraph variable flows naturally into a terminal
     /// FLOAT_INT2FLOAT operation. Faithful to `SubvariableFlow::tryInt2FloatPull`
     /// (subflow.cc:341-367).
@@ -880,9 +880,8 @@ impl SubvariableFlow {
         if is_written {
             if let Some(def) = &def_op {
                 if def.read().unwrap().opcode == OpCode::CPUI_INT_ZEXT {
-                    // TypeOpFloatInt2Float::preferredZextSize(flowsize) — Ghidra
-                    // returns 4 for flowsize<=4 else 8. Reproduced literally.
-                    let preferred = if self.flowsize <= 4 { 4 } else { 8 };
+                    let preferred =
+                        crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(self.flowsize);
                     if vn_size as i32 == preferred {
                         if lone_descend.map(|d| Arc::as_ptr(&d) == Arc::as_ptr(op)).unwrap_or(false) {
                             pull_modification = false;
@@ -2511,8 +2510,9 @@ impl SubvariableFlow {
                     fd.op_set_opcode(&zext_op, OpCode::CPUI_INT_ZEXT);
                     let invn = Self::get_replace_varnode(fd, &mut self.newvarlist, self.flowsize, patch.in1);
                     fd.op_set_input(&zext_op, invn.clone(), 0);
-                    // TypeOpFloatInt2Float::preferredZextSize(invn->getSize())
-                    let sizeout = if invn.read().unwrap().get_size() <= 4 { 4 } else { 8 };
+                    let sizeout = crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(
+                        invn.read().unwrap().get_size() as i32,
+                    ) as usize;
                     let outvn = fd.new_unique_out(sizeout, &zext_op);
                     fd.op_insert_before(&zext_op, &pullop_ref);
                     fd.op_set_input(&pullop_ref, outvn, 0);
@@ -5306,5 +5306,4 @@ mod tests {
         assert_eq!(res, action_status::NO_CHANGE);
     }
 }
-
 

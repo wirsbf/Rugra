@@ -12322,33 +12322,19 @@ impl Rule for RuleFuncPtrEncoding {
 /// Simplify unsigned-int → float conversion:
 /// `T = int2float((X >> 1) | (X & 1)); T + T ⇒ int2float(zext(X))`.
 ///
-/// Faithful to `RuleUnsigned2Float` (ruleaction.cc:9795-9855). Detects the
+/// Corresponds to `RuleUnsigned2Float` (ruleaction.cc:9777-9831). Detects the
 /// x86-style unsigned-to-float idiom and collapses the `T + T` into a single
 /// `FLOAT_INT2FLOAT(zext(X))`.
-///
-/// NOTE: Uses `TypeOpFloatInt2Float::preferredZextSize`, which Rugra does not
-/// expose. We approximate the preferred zext size as `base_size * 2` (capped to
-/// 8) — this is the standard value for the supported base sizes (1→2, 2→4,
-/// 4→8). Otherwise the pattern/recognition is 1:1.
 pub struct RuleUnsigned2Float;
 
 impl RuleUnsigned2Float {
-    // Ghidra: ruleaction.cc:9784 RuleUnsigned2Float
+    // Ghidra: ruleaction.hh:1471 RuleUnsigned2Float::RuleUnsigned2Float
     pub fn new() -> Self { Self }
-
-    /// Approximation of `TypeOpFloatInt2Float::preferredZextSize` (see
-    /// opfloat.cc). The reference returns base_size*2 for the relevant sizes.
-    // Ghidra: typeop.cc:1891 TypeOpFloatInt2Float::preferredZextSize
-    fn preferred_zext_size(base_size: usize) -> usize {
-        // Standard: 1→2, 2→4, 4→8. Cap at 8 bytes.
-        if base_size >= 4 { 8 } else { base_size * 2 }
-    }
 }
 
 impl Rule for RuleUnsigned2Float {
-    // Ghidra: ruleaction.cc:9795 RuleUnsigned2Float::applyOp
+    // Ghidra: ruleaction.cc:9777 RuleUnsigned2Float::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleUnsigned2Float::applyOp (ruleaction.cc:9795-9855).
         let invn = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -12452,7 +12438,10 @@ impl Rule for RuleUnsigned2Float {
                     let zextop = fd.new_op(1, add_addr);
                     fd.op_set_opcode(&zextop, OpCode::CPUI_INT_ZEXT);
                     let base_size = basevn.read().unwrap().get_size();
-                    let zextout = fd.new_unique_out(Self::preferred_zext_size(base_size), &zextop);
+                    let zext_size = crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(
+                        base_size as i32,
+                    ) as usize;
+                    let zextout = fd.new_unique_out(zext_size, &zextop);
                     let add_ref = crate::op::PcodeOpRef(addop.clone());
                     fd.op_set_opcode(&add_ref, OpCode::CPUI_FLOAT_INT2FLOAT);
                     fd.op_remove_input(&add_ref, 1);
@@ -12467,16 +12456,16 @@ impl Rule for RuleUnsigned2Float {
         Ok(action_status::NO_CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:9784 RuleUnsigned2Float
+    // Ghidra: ruleaction.hh:1471 RuleUnsigned2Float::RuleUnsigned2Float
     fn get_name(&self) -> &str { "unsigned_2_float" }
-    // Ghidra: ruleaction.cc:9789 RuleUnsigned2Float::getOpList
+    // Ghidra: ruleaction.cc:9771 RuleUnsigned2Float::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
 
 /// Collapse equivalent FLOAT_INT2FLOAT computations along converging data-flow
 /// paths.
 ///
-/// Faithful to `RuleInt2FloatCollapse` (ruleaction.cc:9863-9918). When an
+/// Corresponds to `RuleInt2FloatCollapse` (ruleaction.cc:9845-9894). When an
 /// unsigned `FLOAT_INT2FLOAT(zext(V))` and a signed `FLOAT_INT2FLOAT(V)` merge
 /// via a MULTIEQUAL guarded by `V < 0`, collapse to a single unsigned
 /// `FLOAT_INT2FLOAT(zext(V))`.
@@ -12490,14 +12479,13 @@ impl Rule for RuleUnsigned2Float {
 pub struct RuleInt2FloatCollapse;
 
 impl RuleInt2FloatCollapse {
-    // Ghidra: ruleaction.cc:9851 RuleInt2FloatCollapse
+    // Ghidra: ruleaction.hh:1482 RuleInt2FloatCollapse::RuleInt2FloatCollapse
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleInt2FloatCollapse {
-    // Ghidra: ruleaction.cc:9863 RuleInt2FloatCollapse::applyOp
+    // Ghidra: ruleaction.cc:9845 RuleInt2FloatCollapse::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to RuleInt2FloatCollapse::applyOp (ruleaction.cc:9863-9918).
         let in0 = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -12599,7 +12587,9 @@ impl Rule for RuleInt2FloatCollapse {
         fd.op_remove_input(&multiop_ref, 0);
         let newzext = fd.new_op(1, multiop.read().unwrap().get_addr());
         fd.op_set_opcode(&newzext, OpCode::CPUI_INT_ZEXT);
-        let pref_size = RuleUnsigned2Float::preferred_zext_size(basevn.read().unwrap().get_size());
+        let pref_size = crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(
+            basevn.read().unwrap().get_size() as i32,
+        ) as usize;
         let newout = fd.new_unique_out(pref_size, &newzext);
         fd.op_set_input(&newzext, basevn, 0);
         fd.op_set_input(&multiop_ref, newout, 0);
@@ -12609,9 +12599,9 @@ impl Rule for RuleInt2FloatCollapse {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:9851 RuleInt2FloatCollapse
+    // Ghidra: ruleaction.hh:1482 RuleInt2FloatCollapse::RuleInt2FloatCollapse
     fn get_name(&self) -> &str { "int_2_float_collapse" }
-    // Ghidra: ruleaction.cc:9857 RuleInt2FloatCollapse::getOpList
+    // Ghidra: ruleaction.cc:9839 RuleInt2FloatCollapse::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_FLOAT_INT2FLOAT] }
 }
 
@@ -19623,6 +19613,71 @@ mod tests {
         let rule = RuleUnsigned2Float::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+    }
+
+    fn assert_rule_unsigned_2_float_zext_size(base_size: usize, expected_size: usize) {
+        let addr = Address::new(0x1000);
+        let mut fd = Funcdata::new("test_unsigned2float", addr, 0x10);
+        let base = fd.vbank.create_with_space(
+            base_size,
+            crate::space::AddressSpace::Register,
+            0x20,
+        );
+        base.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+
+        let shift = fd.new_op(2, addr);
+        fd.op_set_opcode(&shift, OpCode::CPUI_INT_RIGHT);
+        let shift_out = fd.new_unique_out(base_size, &shift);
+        let shift_amount = fd.new_constant(4, 1);
+        fd.op_set_input(&shift, base.clone(), 0);
+        fd.op_set_input(&shift, shift_amount, 1);
+
+        let and = fd.new_op(2, addr);
+        fd.op_set_opcode(&and, OpCode::CPUI_INT_AND);
+        let and_out = fd.new_unique_out(base_size, &and);
+        let one = fd.new_constant(base_size, 1);
+        fd.op_set_input(&and, base.clone(), 0);
+        fd.op_set_input(&and, one, 1);
+
+        let or = fd.new_op(2, addr);
+        fd.op_set_opcode(&or, OpCode::CPUI_INT_OR);
+        let or_out = fd.new_unique_out(base_size, &or);
+        fd.op_set_input(&or, shift_out, 0);
+        fd.op_set_input(&or, and_out, 1);
+
+        let conversion = fd.new_op(1, addr);
+        fd.op_set_opcode(&conversion, OpCode::CPUI_FLOAT_INT2FLOAT);
+        let conversion_out = fd.new_unique_out(8, &conversion);
+        fd.op_set_input(&conversion, or_out, 0);
+
+        let add = fd.new_op(2, addr);
+        fd.op_set_opcode(&add, OpCode::CPUI_FLOAT_ADD);
+        fd.new_unique_out(8, &add);
+        fd.op_set_input(&add, conversion_out.clone(), 0);
+        fd.op_set_input(&add, conversion_out, 1);
+
+        let result = RuleUnsigned2Float::new()
+            .apply_op(&conversion.0, &mut fd)
+            .unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(add.0.read().unwrap().opcode, OpCode::CPUI_FLOAT_INT2FLOAT);
+        let zext_out = add.0.read().unwrap().get_in(0).cloned().unwrap();
+        assert_eq!(zext_out.read().unwrap().get_size(), expected_size);
+        let zext = zext_out.read().unwrap().get_def().unwrap();
+        assert_eq!(zext.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT);
+        assert!(Arc::ptr_eq(
+            zext.read().unwrap().get_in(0).unwrap(),
+            &base
+        ));
+    }
+
+    #[test]
+    fn test_rule_unsigned_2_float_uses_preferred_zext_boundaries() {
+        assert_rule_unsigned_2_float_zext_size(1, 4);
+        assert_rule_unsigned_2_float_zext_size(4, 8);
+        assert_rule_unsigned_2_float_zext_size(8, 9);
     }
 
     /// RulePtrsubUndo helpers: getConstOffsetBack on a pure constant returns

@@ -1015,6 +1015,21 @@ functional_unary_op!(
     typeop_flags::FLOATINGPOINT_OP,
     "i2f"
 );
+
+impl TypeOpFloatInt2Float {
+    /// Return the preferred zero-extension size for an unsigned integer input.
+    // Ghidra: typeop.cc:1891 TypeOpFloatInt2Float::preferredZextSize
+    pub fn preferred_zext_size(in_size: i32) -> i32 {
+        if in_size < 4 {
+            4
+        } else if in_size < 8 {
+            8
+        } else {
+            in_size + 1
+        }
+    }
+}
+
 functional_unary_op!(
     TypeOpFloatTrunc,
     CPUI_FLOAT_TRUNC,
@@ -2815,5 +2830,18 @@ mod tests {
         assert!(TypeOpBranch.get_output_metatype().is_none());
         let t = int_t();
         assert!(TypeOpBranch.propagate_type(&t, &op, -1, 0).is_none());
+    }
+
+    #[test]
+    fn float_int2float_preferred_zext_size_matches_ghidra_boundaries() {
+        let cases = [(1, 4), (2, 4), (3, 4), (4, 8), (7, 8), (8, 9), (16, 17)];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                TypeOpFloatInt2Float::preferred_zext_size(input),
+                expected,
+                "input size {input}"
+            );
+        }
     }
 }
