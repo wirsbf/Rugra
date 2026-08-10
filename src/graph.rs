@@ -795,6 +795,8 @@ pub fn dump_dataflow_graph_string(data: &Funcdata) -> String {
 }
 
 /// Convenience wrapper around [`dump_controlflow_graph`] that returns a `String`.
+// RUGRA-GLUE: Rust String-return adapter for Ghidra's ostream-based
+// dump_controlflow_graph; it only allocates a sink and forwards unchanged.
 pub fn dump_controlflow_graph_string(name: &str, graph: &BlockGraph) -> String {
     let mut out = String::new();
     dump_controlflow_graph(name, graph, &mut out);
@@ -802,6 +804,8 @@ pub fn dump_controlflow_graph_string(name: &str, graph: &BlockGraph) -> String {
 }
 
 /// Convenience wrapper around [`dump_dom_graph`] that returns a `String`.
+// RUGRA-GLUE: Rust String-return adapter for Ghidra's ostream-based
+// dump_dom_graph; it only allocates a sink and forwards unchanged.
 pub fn dump_dom_graph_string(name: &str, graph: &BlockGraph) -> String {
     let mut out = String::new();
     dump_dom_graph(name, graph, &mut out);
@@ -857,4 +861,3 @@ mod tests {
         assert!(!is_fspec_space(&AddressSpace::Register));
     }
 }
-

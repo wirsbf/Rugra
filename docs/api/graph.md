@@ -58,11 +58,13 @@ Convenience wrapper around `dump_dataflow_graph` that returns a `String`.
 
 ### `pub fn dump_controlflow_graph_string(name: &str, graph: &BlockGraph) -> String`
 
-Convenience wrapper around `dump_controlflow_graph` that returns a `String`.
+RUGRA-GLUE：Ghidra 通过 `ostream` 接收结果；此函数只新建 `String` sink 并
+原样转发给 `dump_controlflow_graph`。
 
 ### `pub fn dump_dom_graph_string(name: &str, graph: &BlockGraph) -> String`
 
-Convenience wrapper around `dump_dom_graph` that returns a `String`.
+RUGRA-GLUE：Ghidra 通过 `ostream` 接收结果；此函数只新建 `String` sink 并
+原样转发给 `dump_dom_graph`。
 
 ## 内部辅助函数 (Private Helpers)
 

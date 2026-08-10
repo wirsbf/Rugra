@@ -17,7 +17,7 @@
 | `LEDGER-0001` | P0 | READY | unassigned | 114 `.cc/.hh` 全函数 ↔ `src/**/*.rs` | `tools/`, `docs/alignment_audit/FUNCTION_MAP*` | 生成唯一分母，消除 `~2055` vs `~5200+` 冲突 | 2026-08-11 |
 | `GATE-0001` | P0 | READY | unassigned | 提交/编辑门禁 | `.githooks/`, `.zcode/`, `tools/check_*` | hooksPath+可执行+repo path+python3+4/4语义+strict refs 全通过 | 2026-08-11 |
 | `SLEIGH-0001` | P0 | READY | unassigned | Linux SLEIGH source build + FFI link | `build.rs`, `sleigh_shim/`, build/verification docs | 12.0.4 源树存在时不得使用 `/EHa` 或 Windows `unistd.h`；curl/httpd release examples 必须可链接运行 | 2026-08-11 |
-| `ANN-0001` | P0 | BLOCKED | unassigned | 249 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | 依赖 `LEDGER-0001`；禁止机械标 GLUE | 2026-08-11 |
+| `ANN-0001` | P0 | BLOCKED | root | 247 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | graph String wrappers 已确认 GLUE；其余依赖 `LEDGER-0001`，禁止机械标注 | 2026-08-11 |
 | `PCODE-0001` | P0 | DONE | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | `3762e22`；oracle MATCH；1294/0/3；Cross-Review APPROVE | 2026-08-11 |
 | `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` 桥 | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, API/路线图 | 逐 opcode 对拍 `opflags/addlflags/getBehavior`；禁止继续用残缺 flags 或手写旁路 | 2026-08-11 |
 | `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 6 个 public API → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC 源文件闭包；替换 native `u128` 旁路；cross-review+differential | 2026-08-11 |
