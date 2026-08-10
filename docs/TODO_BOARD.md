@@ -18,10 +18,10 @@
 | `GATE-0001` | P0 | READY | unassigned | 提交/编辑门禁 | `.githooks/`, `.zcode/`, `tools/check_*` | hooksPath+可执行+repo path+python3+4/4语义+strict refs 全通过 | 2026-08-11 |
 | `SLEIGH-0001` | P0 | READY | unassigned | Linux SLEIGH source build + FFI link | `build.rs`, `sleigh_shim/`, build/verification docs | 12.0.4 源树存在时不得使用 `/EHa` 或 Windows `unistd.h`；curl/httpd release examples 必须可链接运行 | 2026-08-11 |
 | `ANN-0001` | P0 | BLOCKED | unassigned | 249 个缺注释函数 | 22 个 `src/*.rs` 及配对 `docs/api/*` | 依赖 `LEDGER-0001`；禁止机械标 GLUE | 2026-08-11 |
-| `PCODE-0001` | P0 | REVIEW | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | oracle MATCH；1294/0/3；Cross-Review APPROVE；待原子 commit 后回填 hash | 2026-08-11 |
+| `PCODE-0001` | P0 | DONE | root | `TypeOpFloatInt2Float::preferredZextSize` | `src/typeop.rs`, `src/ruleaction.rs`, `src/subflow.rs`, 对应 API 文档 | `3762e22`；oracle MATCH；1294/0/3；Cross-Review APPROVE | 2026-08-11 |
 | `PCODE-0002` | P0 | READY | unassigned | `TypeOp` flags + `OpBehavior` 桥 | `src/typeop.rs`, `src/opbehavior.rs`, `src/op.rs`, API/路线图 | 逐 opcode 对拍 `opflags/addlflags/getBehavior`；禁止继续用残缺 flags 或手写旁路 | 2026-08-11 |
 | `MULTI-0001` | P0 | READY | unassigned | `multiprecision.cc` 6 个 public API → RuleDiv* | 新 `src/multiprecision.rs`, `src/ruleaction.rs`, API/路线图 | 完整 334 LoC 源文件闭包；替换 native `u128` 旁路；cross-review+differential | 2026-08-11 |
-| `RANGE-0001` | P0 | BLOCKED | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | 依赖 `PCODE-0001` 释放 `ruleaction.rs` 租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
+| `RANGE-0001` | P0 | READY | unassigned | `CircleRange::{intersect,circleUnion,translate2Op}` + `RuleRangeMeld` | `src/rangeutil.rs`, `src/ruleaction.rs`, API/路线图 | `PCODE-0001` 已完成并释放租约；8-bit exhaustive + cross-review + differential | 2026-08-11 |
 | `PIPE-0001` | P0 | READY | unassigned | `ActionDatabase::universalAction` 阶段/唯一性 | `src/action.rs`, `src/coreaction.rs`, API/路线图 | Action tree 顺序与唯一性 fixture + cross-review + differential | 2026-08-11 |
 | `SSA-0001` | P0 | BLOCKED | unassigned | `ValueSetSolver` constraints → Heritage guards | `src/rangeutil.rs`, `src/heritage.rs`, API/路线图 | 依赖 `RANGE-0001`；先底层 constraints 再 guard integration | 2026-08-11 |
 
