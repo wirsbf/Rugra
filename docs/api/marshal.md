@@ -1,14 +1,17 @@
 # marshal.rs — Serialization / marshaling API
 
-Faithful port of Ghidra's `marshal.hh` / `marshal.cc` (1273 lines) + `xml.hh` /
-`xml.cc` (2510 lines, the in-memory DOM tree).
+Serialization layer corresponding to Ghidra's `marshal.hh` / `marshal.cc` and
+`xml.hh` / `xml.cc`.
 
 **Status:** L1 → L2. The registry, DOM tree, and Encoder/Decoder traits are
 present with a working in-memory `TreeEncoder`/`TreeDecoder` round-trip. The
 registry is not protocol-compatible: locked 12.0.4 uses explicit process-wide
 IDs and zero as an iteration sentinel, while Rugra allocates per-instance IDs
-and treats zero as unknown. Packed state/error behavior and XML text parsing
-also remain L3 gaps.
+and treats zero as unknown. PackedDecode's single `pos+pending` model also
+differs from the locked start/cur/end/attributeRead state machine: unread
+attributes, nested close/skip, typed errors, EOF, and raw strings have concrete
+counterexamples. The Decoder trait has no error channel. See
+`docs/alignment_audit/MARSHAL_PACKED_2026-08-11.md`.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{marshal,xml}.{hh,cc}`.

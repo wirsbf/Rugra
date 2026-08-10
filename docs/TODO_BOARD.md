@@ -33,6 +33,7 @@
 | `PRINTC-0001` | P1 | READY | unassigned | integer display wire values | `src/printc.rs`, API/oracle/differential | 当前 CHAR/OCT/BIN=3/4/5，oracle OCT/BIN/CHAR=3/4/5；不可只修注释行 | 2026-08-11 |
 | `SSA-0001` | P0 | BLOCKED | unassigned | `ValueSetSolver` constraints → Heritage guards | `src/rangeutil.rs`, `src/heritage.rs`, API/路线图 | 依赖 `RANGE-0001`；先底层 constraints 再 guard integration | 2026-08-11 |
 | `MARSHAL-ID-0001` | P0 | READY | unassigned | 12.0.4 AttributeId/ElementId 全表 + reverse | `src/marshal.rs`, `src/translate.rs`, API/oracle | 固定进程级 ID；0=end sentinel；UNKNOWN=159/289；Translate 复用 SPACE=20/SIZE=19 | 2026-08-11 |
+| `MARSHAL-PACKED-0001` | P0 | BLOCKED | unassigned | Decoder error channel + four-position packed state machine | `src/marshal.rs`, all codec callers, API/oracle | 依赖 `MARSHAL-ID-0001` + `SPACE-0001`；strict close/skip/type/EOF/raw bytes/space/opcode，禁止 self-roundtrip 冒充 wire parity | 2026-08-11 |
 | `SPACE-0001` | P0 | READY | unassigned | architecture-owned AddrSpace registry/handle | `src/space.rs`, arch/translate API/oracle | 稳定 index/type/name/addrsize/wordsize/endian/flags/invalid；是 Address 等所有 storage 键前置 | 2026-08-11 |
 | `ADDRESS-0001` | P0 | BLOCKED | unassigned | `Address=(SpaceId, byte offset)` | `src/address.rs`, 全部直接消费者/API/oracle | 依赖 `SPACE-0001`；跨 space equality/order、wrap、word conversion、invalid | 2026-08-11 |
 | `SEQNUM-0001` | P0 | BLOCKED | unassigned | immutable uniq/time identity + mutable order | `src/address.rs`, `src/op.rs`, bank/CFG API/oracle | 依赖 `ADDRESS-0001`；setOrder 不得改 Eq/Ord/BTree 键 | 2026-08-11 |
@@ -73,6 +74,8 @@
   `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`；这些模块的历史 L3 已撤回。
 - Heritage/CondExe/PathMeld/JumpTable、Print RPN/PrettyPrint、Architecture/UserOp/PcodeInject 的生产可达性与输出链审计见
   `docs/alignment_audit/CONTROL_OUTPUT_PIPELINES_2026-08-11.md`；无锁定同输入 fixture 的结论统一保持 `NO_ORACLE`。
+- PackedDecode 的四位置状态机、嵌套 close/skip、typed error/EOF 与 raw string 反例见
+  `docs/alignment_audit/MARSHAL_PACKED_2026-08-11.md`；现有 happy-path self-roundtrip 测试不构成 wire 证据。
 
 ---
 
