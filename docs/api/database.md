@@ -1,12 +1,14 @@
 # database.rs — Symbol database API
 
-Faithful port of Ghidra's `database.hh` / `database.cc` (3430 lines).
+Rust symbol database corresponding to Ghidra's `database.hh` / `database.cc`.
 
-**Status:** ✅ L3 (per ALIGNMENT_ROADMAP #52). 2026-07-22: Full Symbol/Scope/Database/SymbolEntry XML encode/decode ported from database.cc (SymbolEntry::decode, FunctionSymbol/EquateSymbol/LabSymbol/ExternRefSymbol/UnionFacetSymbol encode/decode, Scope::encode/add_map_sym/assign_default_names/decode_hole/decode_collision, Database::parse_parent_tag/decode_scope/decode_scope_path). All public classes (`SymbolEntry`,
+**Status:** L2. The 2026-08-11 locked audit rejects the prior L3 claim:
+Symbol flags use an incompatible bit namespace; `Scope::addMap`, rangemap/
+usepoint selection, specialized Symbol identity, and ScopeLocal-to-Funcdata
+property propagation are not equivalent. All public classes (`SymbolEntry`,
 `Symbol`, `FunctionSymbol`, `EquateSymbol`, `LabSymbol`, `ExternRefSymbol`,
 `UnionFacetSymbol`, `Scope`, `Database`)
-are present with full data structures, the in-memory query/insert algorithms,
-AND XML encode/decode via `marshal.rs`'s `Encoder`/`Decoder` traits.
+are present, but API presence and Rust-only round trips are not parity evidence.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/database.{hh,cc}`.

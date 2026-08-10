@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: 部分有效（需对照源码）
+- **状态**: L2（2026-08-11 锁定审计）。当前单名称 map 不等价于 Ghidra 结构主树 + `(name,id)` 树；canonical findAdd、递归 stub 身份、exact-piece、hashSize 和严格 codec 未闭合。
 
 
 **源代码路径**: `src/type_system/typefactory.rs`

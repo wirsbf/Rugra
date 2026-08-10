@@ -1,7 +1,10 @@
 # `cover.rs` API Reference
 
-**状态**: 已核对（当前有效）  
+**状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/cover.rs`
+
+> Null/End/Input/Op endpoint 身份、`start>stop` 回绕 cover、CFG 前驱递归、
+> dirty rebuild 与 PcodeOpSet/HighIntersectTest 尚未对齐。
 
 ## 模块说明 (Module Doc)
 

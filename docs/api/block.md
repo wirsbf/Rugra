@@ -5,6 +5,7 @@
 ## 文档状态
 
 - **状态**: 已核对（当前有效）
+- **Ghidra 12.0.4 对齐级别**: L2；edge flags、双向 reverse-index、parent、RPO/loop/dominator 与 marshal 均有已复现反例
 - **文档目标**: 说明 Rugra 当前控制流块模型、CFG 相关对象和结构化块表示
 - **可信边界**: 本文档描述的是当前 `block.rs` 在工程中的职责与公开接口角色，不代表“控制流恢复已经与 Ghidra 完全一致”
 - **阅读建议**: 建议与以下文档配合阅读：

@@ -17,6 +17,9 @@ order, counter scope, comparison key) — not just the surface annotation.
   — records deterministic Action-tree/executor, callspec, opcode/flags, SLEIGH,
   compression, multiprecision, ledger, and gate failures without promoting
   source-only evidence to runtime MATCH.
+- [Core identity and state foundations](CORE_FOUNDATIONS_2026-08-11.md)
+  — records the Space/Address/SeqNum, Block, Varnode/PcodeOp, Cover,
+  Database/Fspec, and Marshal dependency DAG with locked-source counterexamples.
 
 ## Per-module report files
 

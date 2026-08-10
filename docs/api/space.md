@@ -1,7 +1,10 @@
 # `space.rs` API Reference
 
-**状态**: 已核对（当前有效）  
+**状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/space.rs`
+
+> 固定枚举尚不能保存 Ghidra 架构动态 space index/type/name/
+> address-size/wordsize/endianness/flags；跨空间 Address/Varnode 键因此不完整。
 
 ## 模块说明 (Module Doc)
 

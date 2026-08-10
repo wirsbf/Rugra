@@ -1,7 +1,11 @@
 # `address.rs` API Reference
 
-**状态**: 已核对（当前有效）  
+**状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/address.rs`
+
+> 2026-08-11 锁定审计：当前仅保存数值 offset，无法表达
+> AddrSpace 身份、架构宽度/字宽环绕，SeqNum 也混合不可变身份与可变 order。
+> 详见 `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`。
 
 ## 模块说明 (Module Doc)
 

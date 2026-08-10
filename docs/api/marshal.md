@@ -4,9 +4,11 @@ Faithful port of Ghidra's `marshal.hh` / `marshal.cc` (1273 lines) + `xml.hh` /
 `xml.cc` (2510 lines, the in-memory DOM tree).
 
 **Status:** L1 → L2. The registry, DOM tree, and Encoder/Decoder traits are
-complete with a working in-memory `TreeEncoder`/`TreeDecoder` round-trip. The
-Packed binary format (`PackedEncode`/`PackedDecode`) and actual XML text
-parsing are L3 gaps.
+present with a working in-memory `TreeEncoder`/`TreeDecoder` round-trip. The
+registry is not protocol-compatible: locked 12.0.4 uses explicit process-wide
+IDs and zero as an iteration sentinel, while Rugra allocates per-instance IDs
+and treats zero as unknown. Packed state/error behavior and XML text parsing
+also remain L3 gaps.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{marshal,xml}.{hh,cc}`.

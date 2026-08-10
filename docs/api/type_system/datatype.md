@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/type_system/datatype.rs`
 **Ghidra 对应**: `type.hh` / `type.cc` (`Datatype` 类层次)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 Datatype 方法覆盖（含 compare/compare_dependency/get_stripped/is_primitive_whole/print_raw）。9 单元测试。
+**状态**: 🔧 **L2（2026-08-11 锁定审计）**——submeta、派生 compare/compareDependency、alignment、Pointer spaceid/PointerRel/Spacebase/FuncProto 完整状态与 codec 尚未对齐；方法名覆盖与 Rust 单测不能支撑 L3。
 
 ## 模块说明
 

@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- **状态**: ✅ **L4（2026-07-22 完整对齐）**——HighVariable 全部 Ghidra variable.cc 方法覆盖（mergeInternal/merge/copySymbol/setSymbol/getSymbol/getSymbolOffset/detach/printRaw/updateCover/hasCopyIn1/transferPiece/stripType/groupWith/establishGroupSymbolOffset/finalizeDatatype/encode/markExpression 等）。VariableGroup + VariablePiece 全部方法。high_internal_flags 11 位。18 单元测试。
+- **状态**: 🔧 **L2（2026-08-11 锁定审计）**——方法覆盖不等于行为对齐；VN↔High 挂接/销毁、annotation/后建节点、Arc 所有权环、instances 排序及 cover/flags dirty 传播均未闭合。
 
 **源代码路径**: `src/variable.rs`
 

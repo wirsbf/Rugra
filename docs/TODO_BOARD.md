@@ -32,6 +32,21 @@
 | `CALLSPEC-0001` | P0 | READY | unassigned | stable Fspec/callspec identity → normal CALL/CALLIND flow | `src/space.rs`, `src/fspec.rs`, `src/funcdata.rs`, `src/flow.rs`, x86 lift, API/路线图 | 禁止按机器地址去重；direct/indirect/inject/inline/truncate 全路径 oracle；再统一入口和消费者 | 2026-08-11 |
 | `PRINTC-0001` | P1 | READY | unassigned | integer display wire values | `src/printc.rs`, API/oracle/differential | 当前 CHAR/OCT/BIN=3/4/5，oracle OCT/BIN/CHAR=3/4/5；不可只修注释行 | 2026-08-11 |
 | `SSA-0001` | P0 | BLOCKED | unassigned | `ValueSetSolver` constraints → Heritage guards | `src/rangeutil.rs`, `src/heritage.rs`, API/路线图 | 依赖 `RANGE-0001`；先底层 constraints 再 guard integration | 2026-08-11 |
+| `MARSHAL-ID-0001` | P0 | READY | unassigned | 12.0.4 AttributeId/ElementId 全表 + reverse | `src/marshal.rs`, `src/translate.rs`, API/oracle | 固定进程级 ID；0=end sentinel；UNKNOWN=159/289；Translate 复用 SPACE=20/SIZE=19 | 2026-08-11 |
+| `SPACE-0001` | P0 | READY | unassigned | architecture-owned AddrSpace registry/handle | `src/space.rs`, arch/translate API/oracle | 稳定 index/type/name/addrsize/wordsize/endian/flags/invalid；是 Address 等所有 storage 键前置 | 2026-08-11 |
+| `ADDRESS-0001` | P0 | BLOCKED | unassigned | `Address=(SpaceId, byte offset)` | `src/address.rs`, 全部直接消费者/API/oracle | 依赖 `SPACE-0001`；跨 space equality/order、wrap、word conversion、invalid | 2026-08-11 |
+| `SEQNUM-0001` | P0 | BLOCKED | unassigned | immutable uniq/time identity + mutable order | `src/address.rs`, `src/op.rs`, bank/CFG API/oracle | 依赖 `ADDRESS-0001`；setOrder 不得改 Eq/Ord/BTree 键 | 2026-08-11 |
+| `RANGEADDR-0001` | P0 | BLOCKED | unassigned | space-aware Range/RangeList | `src/address.rs`, API/oracle | 依赖 `ADDRESS-0001`；相邻不合并、跨 space 分离、完整区间 inRange | 2026-08-11 |
+| `BLOCK-0001` | P0 | BLOCKED | unassigned | FlowBlock core + atomic bidirectional edges | `src/block.rs`, `src/funcdata.rs`, API/oracle | 依赖 `ADDRESS-0001` + `SEQNUM-0001`；exact flags/parent/reverse-index/false-first/RPO/loop/dom/marshal | 2026-08-11 |
+| `VARNODE-0001` | P0 | BLOCKED | unassigned | VarnodeBank keys/canonicalization/query | `src/varnode.rs`, API/oracle | 依赖 `ADDRESS-0001` + `SEQNUM-0001`；unique base、constructor、loc/def comparator、xref/makeFree/destroy | 2026-08-11 |
+| `OPBANK-0001` | P0 | BLOCKED | unassigned | nullable slots/occurrence reads/op lifecycle/IOP | `src/op.rs`, `src/funcdata.rs`, `src/varnode.rs`, API/oracle | 依赖 `VARNODE-0001`；transactional set/unset/output/destroy + deadandgone，移除 Arc::from_raw UAF | 2026-08-11 |
+| `VARIABLE-0001` | P0 | BLOCKED | unassigned | HighVariable attach/detach/ownership/order | `src/variable.rs`, `src/varnode.rs`, API/oracle | 依赖 `OPBANK-0001`；Weak ownership、annotation/later VN、sorted instances、dirty propagation | 2026-08-11 |
+| `COVER-0001` | P0 | BLOCKED | unassigned | endpoint identity + CFG cover rebuild | `src/cover.rs`, `src/varnode.rs`, `src/merge.rs`, API/oracle | 依赖 `BLOCK-0001` + `VARIABLE-0001`；wrapping cover、predecessor recursion、PcodeOpSet/HighIntersect | 2026-08-11 |
+| `DBSYM-FLAGS` | P0 | READY | unassigned | Symbol/Varnode canonical flag namespace | `src/database.rs`, `src/varnode.rs`, API/oracle | NAMELOCK|READONLY 必须是 0x2200，当前 0x6 被解释为 CONSTANT|ANNOTATION | 2026-08-11 |
+| `DATABASE-0001` | P0 | BLOCKED | unassigned | SymbolKind identity + addMap/rangemap/query + pipeline | `src/database.rs`, `src/rangemap.rs`, `src/funcdata.rs`, actions/API/oracle | 依赖 `DBSYM-FLAGS` + `ADDRESS-0001` + `TYPE-0001`；最后接 ScopeLocal/newVarnode/Dynamic Actions | 2026-08-11 |
+| `FSPEC-0001` | P0 | READY | unassigned | FuncProto lock/void/model state | `src/fspec.rs`, API/oracle | 空 params 不等于 input-locked；精确 copy/clear/lock 联动 | 2026-08-11 |
+| `FSPEC-0002` | P0 | BLOCKED | unassigned | ParamActive/Trial ordering and assignment | `src/fspec.rs`, `src/type_system/protomodel.rs`, API/oracle | 依赖 `FSPEC-0001` + `ADDRESS-0001`；slotbase=1、overlap trial、used prefix、ParamEntry alignment/groups | 2026-08-11 |
+| `TYPE-0001` | P0 | BLOCKED | unassigned | exact Datatype model + stable TypeFactory identity | `src/type_system/datatype.rs`, `typefactory.rs`, consumers/API/oracle | 依赖 `SPACE-0001`；submeta/virtual compare、arena、dual indices、findAdd、recursive completion、exact-piece、codec | 2026-08-11 |
 
 ### 已完成发现审计（本 wave）
 
@@ -45,6 +60,8 @@
 - Action executor/tree、callspec、Pcode flags/opcode protocol、SLEIGH、compression、multiprecision、ledger 与 gate 的
   确定性反例见 `docs/alignment_audit/FOUNDATION_PIPELINE_2026-08-11.md`；未带 runtime fixture 的项目保持
   `MISMATCH / NO_ORACLE`，不冒充 MATCH。
+- Space/Address/SeqNum、Block、Varnode/PcodeOp、Cover、Database/Fspec、Marshal 与 TypeFactory 的底向上依赖图见
+  `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`；这些模块的历史 L3 已撤回。
 
 ---
 

@@ -1,6 +1,6 @@
 # `fspec.rs` API Reference
 
-**状态**: ✅ **L3（2026-07-22 +is_model_unknown/print_model_in_decl for calling-convention emission）**——全部 FuncProto/FuncCallSpecs/ParamTrial/ParamActive 方法覆盖 + spacebase 占位符清理 + 调用约定模型查询。
+**状态**: 🔧 **L2（2026-08-11 锁定审计）**——空参列表 lock 语义、void/model lock 联动、ParamActive slot/counter、trial overlap/used-prefix/comparator 及 ParamEntry 分配与 12.0.4 不等价。
 **源代码路径**: `src/fspec.rs`
 
 ## 模块说明 (Module Doc)
@@ -234,4 +234,3 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - `Datatype::getAlignSize`/`getAlignment` —— 用 size/alignment=1 近似
 
 **验证**：cargo check --lib 0 错误；cargo test --lib fspec:: 12/12 通过（6 原有 + 6 新增：ParamEntry exclusion/aligned/justified_contain + ParamListStandard new/possible_param）。repo 中 6 个预存失败（pcodeparse/unionresolve）与本移植无关。
-
