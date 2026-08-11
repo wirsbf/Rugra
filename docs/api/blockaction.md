@@ -752,6 +752,21 @@ ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current o
 ### 2026-07-03：修正 collapse_cbranch_cascades 的错误注释
 - 该函数的注释曾错误声称 "Corresponds to Ghidra's ruleBlockSwitch"，但 Ghidra `ruleBlockSwitch`（blockaction.cc:1649）只对 `isSwitchOut()` 块触发（由 CPUI_BRANCHIND 设置 f_switch_out），从不从 CBRANCH if/else-if 链造 switch。此函数是 fabricated logic（无 Ghidra 对应），已修正注释明确说明。函数仍禁用（:695）。**未改名**为 rule_block_switch——那会给 fabricated logic 披上 Ghidra 对应的外衣。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-12：ANN-M expanded-scanner 溯源
+
+本轮只补函数来源标注，不改变运行时行为。源码 oracle 固定为 Ghidra 12.0.4
+commit `e40ed13014025f82488b1f8f7bca566894ac376b`。
+
+- `CollapseStructure::new` 映射 `blockaction.cc:1870
+  CollapseStructure::CollapseStructure`。Rust 额外接收诊断名并初始化若干缓存、
+  switch 与 iterator 状态；这些扩展不把构造器变成无 oracle 对应物的胶水。
+- `CollapseStructure::collapse_all` 映射 `blockaction.cc:1877
+  CollapseStructure::collapseAll`。当前 Rust 仍包含 `RUGRA_7PHASE` 分流、额外
+  TraceDAG/loop/switch 阶段、deadline 和 fallback，因此 provenance 注释不代表
+  逐函数行为已经 `MATCH`。
+
+ANN-M 不提升本模块的对齐状态，也不替代锁定 oracle 的函数级差分验证。
  
  
  

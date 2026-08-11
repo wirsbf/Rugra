@@ -744,6 +744,7 @@ pub(crate) struct CollapseStructure<'a> {
 }
 
 impl<'a> CollapseStructure<'a> {
+    // Ghidra: blockaction.cc:1870 CollapseStructure::CollapseStructure
     pub(crate) fn new(graph: &'a mut BlockGraph, name: &str) -> Self {
         Self {
             graph,
@@ -961,6 +962,7 @@ impl<'a> CollapseStructure<'a> {
     /// Collapse all structured patterns until fixpoint
     ///
     /// Corresponds to Ghidra's `CollapseStructure::collapseAll`
+    // Ghidra: blockaction.cc:1877 CollapseStructure::collapseAll
     pub(crate) fn collapse_all(&mut self) {
         // Default: the Ghidra-faithful 5-step collapseAll (blockaction.cc:1877-
         // 1893), verified to produce identical output to the legacy 7-phase
