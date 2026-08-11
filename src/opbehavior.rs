@@ -735,6 +735,7 @@ macro_rules! impl_eval_only {
 pub struct OpBehaviorCopy;
 
 impl OpBehaviorCopy {
+    // Ghidra: opbehavior.hh:130 OpBehaviorCopy::OpBehaviorCopy
     pub const fn new() -> Self {
         Self
     }
@@ -763,6 +764,7 @@ impl OpBehavior for OpBehaviorCopy {
 // Ghidra: opbehavior.hh:136 OpBehaviorEqual
 pub struct OpBehaviorEqual;
 impl OpBehaviorEqual {
+    // Ghidra: opbehavior.hh:138 OpBehaviorEqual::OpBehaviorEqual
     pub const fn new() -> Self {
         Self
     }
@@ -773,6 +775,7 @@ impl_eval_only!(OpBehaviorEqual, OpCode::CPUI_INT_EQUAL, false, binary, unary);
 // Ghidra: opbehavior.hh:143 OpBehaviorNotEqual
 pub struct OpBehaviorNotEqual;
 impl OpBehaviorNotEqual {
+    // Ghidra: opbehavior.hh:145 OpBehaviorNotEqual::OpBehaviorNotEqual
     pub const fn new() -> Self {
         Self
     }
@@ -793,6 +796,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:150 OpBehaviorIntSless
 pub struct OpBehaviorIntSless;
 impl OpBehaviorIntSless {
+    // Ghidra: opbehavior.hh:152 OpBehaviorIntSless::OpBehaviorIntSless
     pub const fn new() -> Self {
         Self
     }
@@ -809,6 +813,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:157 OpBehaviorIntSlessEqual
 pub struct OpBehaviorIntSlessEqual;
 impl OpBehaviorIntSlessEqual {
+    // Ghidra: opbehavior.hh:159 OpBehaviorIntSlessEqual::OpBehaviorIntSlessEqual
     pub const fn new() -> Self {
         Self
     }
@@ -829,6 +834,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:164 OpBehaviorIntLess
 pub struct OpBehaviorIntLess;
 impl OpBehaviorIntLess {
+    // Ghidra: opbehavior.hh:166 OpBehaviorIntLess::OpBehaviorIntLess
     pub const fn new() -> Self {
         Self
     }
@@ -839,6 +845,7 @@ impl_eval_only!(OpBehaviorIntLess, OpCode::CPUI_INT_LESS, false, binary, unary);
 // Ghidra: opbehavior.hh:171 OpBehaviorIntLessEqual
 pub struct OpBehaviorIntLessEqual;
 impl OpBehaviorIntLessEqual {
+    // Ghidra: opbehavior.hh:173 OpBehaviorIntLessEqual::OpBehaviorIntLessEqual
     pub const fn new() -> Self {
         Self
     }
@@ -859,6 +866,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:178 OpBehaviorIntZext
 pub struct OpBehaviorIntZext;
 impl OpBehaviorIntZext {
+    // Ghidra: opbehavior.hh:180 OpBehaviorIntZext::OpBehaviorIntZext
     pub const fn new() -> Self {
         Self
     }
@@ -886,6 +894,7 @@ impl OpBehavior for OpBehaviorIntZext {
 // Ghidra: opbehavior.hh:186 OpBehaviorIntSext
 pub struct OpBehaviorIntSext;
 impl OpBehaviorIntSext {
+    // Ghidra: opbehavior.hh:188 OpBehaviorIntSext::OpBehaviorIntSext
     pub const fn new() -> Self {
         Self
     }
@@ -922,6 +931,7 @@ impl OpBehavior for OpBehaviorIntSext {
 // Ghidra: opbehavior.hh:194 OpBehaviorIntAdd
 pub struct OpBehaviorIntAdd;
 impl OpBehaviorIntAdd {
+    // Ghidra: opbehavior.hh:196 OpBehaviorIntAdd::OpBehaviorIntAdd
     pub const fn new() -> Self {
         Self
     }
@@ -952,6 +962,7 @@ impl OpBehavior for OpBehaviorIntAdd {
 // Ghidra: opbehavior.hh:202 OpBehaviorIntSub
 pub struct OpBehaviorIntSub;
 impl OpBehaviorIntSub {
+    // Ghidra: opbehavior.hh:204 OpBehaviorIntSub::OpBehaviorIntSub
     pub const fn new() -> Self {
         Self
     }
@@ -991,6 +1002,7 @@ impl OpBehavior for OpBehaviorIntSub {
 // Ghidra: opbehavior.hh:210 OpBehaviorIntCarry
 pub struct OpBehaviorIntCarry;
 impl OpBehaviorIntCarry {
+    // Ghidra: opbehavior.hh:212 OpBehaviorIntCarry::OpBehaviorIntCarry
     pub const fn new() -> Self {
         Self
     }
@@ -1007,6 +1019,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:217 OpBehaviorIntScarry
 pub struct OpBehaviorIntScarry;
 impl OpBehaviorIntScarry {
+    // Ghidra: opbehavior.hh:219 OpBehaviorIntScarry::OpBehaviorIntScarry
     pub const fn new() -> Self {
         Self
     }
@@ -1023,6 +1036,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:224 OpBehaviorIntSborrow
 pub struct OpBehaviorIntSborrow;
 impl OpBehaviorIntSborrow {
+    // Ghidra: opbehavior.hh:226 OpBehaviorIntSborrow::OpBehaviorIntSborrow
     pub const fn new() -> Self {
         Self
     }
@@ -1043,6 +1057,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:231 OpBehaviorInt2Comp
 pub struct OpBehaviorInt2Comp;
 impl OpBehaviorInt2Comp {
+    // Ghidra: opbehavior.hh:233 OpBehaviorInt2Comp::OpBehaviorInt2Comp
     pub const fn new() -> Self {
         Self
     }
@@ -1066,6 +1081,7 @@ impl OpBehavior for OpBehaviorInt2Comp {
 // Ghidra: opbehavior.hh:239 OpBehaviorIntNegate
 pub struct OpBehaviorIntNegate;
 impl OpBehaviorIntNegate {
+    // Ghidra: opbehavior.hh:241 OpBehaviorIntNegate::OpBehaviorIntNegate
     pub const fn new() -> Self {
         Self
     }
@@ -1093,6 +1109,7 @@ impl OpBehavior for OpBehaviorIntNegate {
 // Ghidra: opbehavior.hh:247 OpBehaviorIntXor
 pub struct OpBehaviorIntXor;
 impl OpBehaviorIntXor {
+    // Ghidra: opbehavior.hh:249 OpBehaviorIntXor::OpBehaviorIntXor
     pub const fn new() -> Self {
         Self
     }
@@ -1103,6 +1120,7 @@ impl_eval_only!(OpBehaviorIntXor, OpCode::CPUI_INT_XOR, false, binary, unary);
 // Ghidra: opbehavior.hh:254 OpBehaviorIntAnd
 pub struct OpBehaviorIntAnd;
 impl OpBehaviorIntAnd {
+    // Ghidra: opbehavior.hh:256 OpBehaviorIntAnd::OpBehaviorIntAnd
     pub const fn new() -> Self {
         Self
     }
@@ -1113,6 +1131,7 @@ impl_eval_only!(OpBehaviorIntAnd, OpCode::CPUI_INT_AND, false, binary, unary);
 // Ghidra: opbehavior.hh:261 OpBehaviorIntOr
 pub struct OpBehaviorIntOr;
 impl OpBehaviorIntOr {
+    // Ghidra: opbehavior.hh:263 OpBehaviorIntOr::OpBehaviorIntOr
     pub const fn new() -> Self {
         Self
     }
@@ -1127,6 +1146,7 @@ impl_eval_only!(OpBehaviorIntOr, OpCode::CPUI_INT_OR, false, binary, unary);
 // Ghidra: opbehavior.hh:268 OpBehaviorIntLeft
 pub struct OpBehaviorIntLeft;
 impl OpBehaviorIntLeft {
+    // Ghidra: opbehavior.hh:270 OpBehaviorIntLeft::OpBehaviorIntLeft
     pub const fn new() -> Self {
         Self
     }
@@ -1168,6 +1188,7 @@ impl OpBehavior for OpBehaviorIntLeft {
 // Ghidra: opbehavior.hh:276 OpBehaviorIntRight
 pub struct OpBehaviorIntRight;
 impl OpBehaviorIntRight {
+    // Ghidra: opbehavior.hh:278 OpBehaviorIntRight::OpBehaviorIntRight
     pub const fn new() -> Self {
         Self
     }
@@ -1209,6 +1230,7 @@ impl OpBehavior for OpBehaviorIntRight {
 // Ghidra: opbehavior.hh:284 OpBehaviorIntSright
 pub struct OpBehaviorIntSright;
 impl OpBehaviorIntSright {
+    // Ghidra: opbehavior.hh:286 OpBehaviorIntSright::OpBehaviorIntSright
     pub const fn new() -> Self {
         Self
     }
@@ -1272,6 +1294,7 @@ impl OpBehavior for OpBehaviorIntSright {
 // Ghidra: opbehavior.hh:292 OpBehaviorIntMult
 pub struct OpBehaviorIntMult;
 impl OpBehaviorIntMult {
+    // Ghidra: opbehavior.hh:294 OpBehaviorIntMult::OpBehaviorIntMult
     pub const fn new() -> Self {
         Self
     }
@@ -1288,6 +1311,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:299 OpBehaviorIntDiv
 pub struct OpBehaviorIntDiv;
 impl OpBehaviorIntDiv {
+    // Ghidra: opbehavior.hh:301 OpBehaviorIntDiv::OpBehaviorIntDiv
     pub const fn new() -> Self {
         Self
     }
@@ -1312,6 +1336,7 @@ impl OpBehavior for OpBehaviorIntDiv {
 // Ghidra: opbehavior.hh:306 OpBehaviorIntSdiv
 pub struct OpBehaviorIntSdiv;
 impl OpBehaviorIntSdiv {
+    // Ghidra: opbehavior.hh:308 OpBehaviorIntSdiv::OpBehaviorIntSdiv
     pub const fn new() -> Self {
         Self
     }
@@ -1337,6 +1362,7 @@ impl OpBehavior for OpBehaviorIntSdiv {
 // Ghidra: opbehavior.hh:313 OpBehaviorIntRem
 pub struct OpBehaviorIntRem;
 impl OpBehaviorIntRem {
+    // Ghidra: opbehavior.hh:315 OpBehaviorIntRem::OpBehaviorIntRem
     pub const fn new() -> Self {
         Self
     }
@@ -1359,6 +1385,7 @@ impl OpBehavior for OpBehaviorIntRem {
 // Ghidra: opbehavior.hh:320 OpBehaviorIntSrem
 pub struct OpBehaviorIntSrem;
 impl OpBehaviorIntSrem {
+    // Ghidra: opbehavior.hh:322 OpBehaviorIntSrem::OpBehaviorIntSrem
     pub const fn new() -> Self {
         Self
     }
@@ -1388,6 +1415,7 @@ impl OpBehavior for OpBehaviorIntSrem {
 // Ghidra: opbehavior.hh:327 OpBehaviorBoolNegate
 pub struct OpBehaviorBoolNegate;
 impl OpBehaviorBoolNegate {
+    // Ghidra: opbehavior.hh:329 OpBehaviorBoolNegate::OpBehaviorBoolNegate
     pub const fn new() -> Self {
         Self
     }
@@ -1407,6 +1435,7 @@ impl OpBehavior for OpBehaviorBoolNegate {
 // Ghidra: opbehavior.hh:334 OpBehaviorBoolXor
 pub struct OpBehaviorBoolXor;
 impl OpBehaviorBoolXor {
+    // Ghidra: opbehavior.hh:336 OpBehaviorBoolXor::OpBehaviorBoolXor
     pub const fn new() -> Self {
         Self
     }
@@ -1423,6 +1452,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:341 OpBehaviorBoolAnd
 pub struct OpBehaviorBoolAnd;
 impl OpBehaviorBoolAnd {
+    // Ghidra: opbehavior.hh:343 OpBehaviorBoolAnd::OpBehaviorBoolAnd
     pub const fn new() -> Self {
         Self
     }
@@ -1439,6 +1469,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:348 OpBehaviorBoolOr
 pub struct OpBehaviorBoolOr;
 impl OpBehaviorBoolOr {
+    // Ghidra: opbehavior.hh:350 OpBehaviorBoolOr::OpBehaviorBoolOr
     pub const fn new() -> Self {
         Self
     }
@@ -1477,6 +1508,7 @@ macro_rules! float_binary_behavior {
         // Ghidra: opbehavior.hh:$ghidra_decl
         pub struct $ty;
         impl $ty {
+            // RUGRA-GLUE: one template emits eight zero-sized constructors; Ghidra defines distinct Translate-bearing constructors at opbehavior.hh:358,366,374,382,398,406,414,422
             pub const fn new() -> Self { Self }
         }
         impl OpBehavior for $ty {
@@ -1502,6 +1534,7 @@ macro_rules! float_unary_behavior {
         // Ghidra: opbehavior.hh:$ghidra_decl
         pub struct $ty;
         impl $ty {
+            // RUGRA-GLUE: one template emits seven zero-sized constructors; Ghidra defines distinct Translate-bearing constructors at opbehavior.hh:390,430,438,446,478,486,494
             pub const fn new() -> Self { Self }
         }
         impl OpBehavior for $ty {
@@ -1561,6 +1594,7 @@ float_unary_behavior!(OpBehaviorFloatRound, OpCode::CPUI_FLOAT_ROUND, op_round, 
 // Ghidra: opbehavior.hh:451 OpBehaviorFloatInt2Float
 pub struct OpBehaviorFloatInt2Float;
 impl OpBehaviorFloatInt2Float {
+    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatInt2Float; opbehavior.hh:454 requires and retains a Translate pointer omitted here
     pub const fn new() -> Self {
         Self
     }
@@ -1587,6 +1621,7 @@ impl OpBehavior for OpBehaviorFloatInt2Float {
 // Ghidra: opbehavior.hh:459 OpBehaviorFloatFloat2Float
 pub struct OpBehaviorFloatFloat2Float;
 impl OpBehaviorFloatFloat2Float {
+    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatFloat2Float; opbehavior.hh:462 requires and retains a Translate pointer omitted here
     pub const fn new() -> Self {
         Self
     }
@@ -1615,6 +1650,7 @@ impl OpBehavior for OpBehaviorFloatFloat2Float {
 // Ghidra: opbehavior.hh:467 OpBehaviorFloatTrunc
 pub struct OpBehaviorFloatTrunc;
 impl OpBehaviorFloatTrunc {
+    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatTrunc; opbehavior.hh:470 requires and retains a Translate pointer omitted here
     pub const fn new() -> Self {
         Self
     }
@@ -1644,6 +1680,7 @@ impl OpBehavior for OpBehaviorFloatTrunc {
 // Ghidra: opbehavior.hh:499 OpBehaviorPiece
 pub struct OpBehaviorPiece;
 impl OpBehaviorPiece {
+    // Ghidra: opbehavior.hh:501 OpBehaviorPiece::OpBehaviorPiece
     pub const fn new() -> Self {
         Self
     }
@@ -1663,6 +1700,7 @@ impl OpBehavior for OpBehaviorPiece {
 // Ghidra: opbehavior.hh:506 OpBehaviorSubpiece
 pub struct OpBehaviorSubpiece;
 impl OpBehaviorSubpiece {
+    // Ghidra: opbehavior.hh:508 OpBehaviorSubpiece::OpBehaviorSubpiece
     pub const fn new() -> Self {
         Self
     }
@@ -1686,6 +1724,7 @@ impl OpBehavior for OpBehaviorSubpiece {
 // Ghidra: opbehavior.hh:513 OpBehaviorPtradd
 pub struct OpBehaviorPtradd;
 impl OpBehaviorPtradd {
+    // Ghidra: opbehavior.hh:515 OpBehaviorPtradd::OpBehaviorPtradd
     pub const fn new() -> Self {
         Self
     }
@@ -1712,6 +1751,7 @@ impl OpBehavior for OpBehaviorPtradd {
 // Ghidra: opbehavior.hh:520 OpBehaviorPtrsub
 pub struct OpBehaviorPtrsub;
 impl OpBehaviorPtrsub {
+    // Ghidra: opbehavior.hh:522 OpBehaviorPtrsub::OpBehaviorPtrsub
     pub const fn new() -> Self {
         Self
     }
@@ -1728,6 +1768,7 @@ impl_eval_only!(
 // Ghidra: opbehavior.hh:527 OpBehaviorPopcount
 pub struct OpBehaviorPopcount;
 impl OpBehaviorPopcount {
+    // Ghidra: opbehavior.hh:529 OpBehaviorPopcount::OpBehaviorPopcount
     pub const fn new() -> Self {
         Self
     }
@@ -1747,6 +1788,7 @@ impl OpBehavior for OpBehaviorPopcount {
 // Ghidra: opbehavior.hh:534 OpBehaviorLzcount
 pub struct OpBehaviorLzcount;
 impl OpBehaviorLzcount {
+    // Ghidra: opbehavior.hh:536 OpBehaviorLzcount::OpBehaviorLzcount
     pub const fn new() -> Self {
         Self
     }
