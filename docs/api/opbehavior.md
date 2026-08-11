@@ -178,6 +178,6 @@ POPCOUNT/LZCOUNT。`get(opc)` 查表，`len()` 返回已注册条目数。
 
 ### ANN-K const constructor 注释 bootstrap（2026-08-12）
 
-- 为 expanded scanner 识别出的 42 个 `const fn new` 补齐直属 marker：37 个无参整数、布尔及 piece/pointer/count behavior constructor 映射到锁定 oracle 的内联 constructor 起始行。
-- 其余 5 个 float constructor 位置使用具体 `RUGRA-GLUE`：两个宏模板分别生成多种类型，三个显式 Rust unit constructor 均省略了 Ghidra 必需并保存的 `Translate *` 参数，不能声明为逐函数映射。
+- 为 expanded scanner 识别出的 42 个 `const fn new` 补齐直属 marker：40 个具体 behavior constructor 映射到锁定 oracle 的内联 constructor 起始行。
+- 其余 2 个 float 宏模板使用具体 `RUGRA-GLUE`，因为一个 Rust 源级函数模板会分别生成多种类型，不能绑定到单一 Ghidra constructor。三个显式 Rust float unit constructor仍映射真实 Ghidra constructor；它们省略了 Ghidra 必需并保存的 `Translate *`，属于已知行为缺口，而不是“无对应物”的胶水。
 - 此轮仅补注释，不改变对象构造或求值行为；未生成函数级 oracle fixture，因此不声明 `MATCH` 或提升模块等级。

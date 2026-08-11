@@ -1594,7 +1594,7 @@ float_unary_behavior!(OpBehaviorFloatRound, OpCode::CPUI_FLOAT_ROUND, op_round, 
 // Ghidra: opbehavior.hh:451 OpBehaviorFloatInt2Float
 pub struct OpBehaviorFloatInt2Float;
 impl OpBehaviorFloatInt2Float {
-    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatInt2Float; opbehavior.hh:454 requires and retains a Translate pointer omitted here
+    // Ghidra: opbehavior.hh:454 OpBehaviorFloatInt2Float::OpBehaviorFloatInt2Float
     pub const fn new() -> Self {
         Self
     }
@@ -1621,7 +1621,7 @@ impl OpBehavior for OpBehaviorFloatInt2Float {
 // Ghidra: opbehavior.hh:459 OpBehaviorFloatFloat2Float
 pub struct OpBehaviorFloatFloat2Float;
 impl OpBehaviorFloatFloat2Float {
-    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatFloat2Float; opbehavior.hh:462 requires and retains a Translate pointer omitted here
+    // Ghidra: opbehavior.hh:462 OpBehaviorFloatFloat2Float::OpBehaviorFloatFloat2Float
     pub const fn new() -> Self {
         Self
     }
@@ -1650,7 +1650,7 @@ impl OpBehavior for OpBehaviorFloatFloat2Float {
 // Ghidra: opbehavior.hh:467 OpBehaviorFloatTrunc
 pub struct OpBehaviorFloatTrunc;
 impl OpBehaviorFloatTrunc {
-    // RUGRA-GLUE: no-argument unit constructor for OpBehaviorFloatTrunc; opbehavior.hh:470 requires and retains a Translate pointer omitted here
+    // Ghidra: opbehavior.hh:470 OpBehaviorFloatTrunc::OpBehaviorFloatTrunc
     pub const fn new() -> Self {
         Self
     }
