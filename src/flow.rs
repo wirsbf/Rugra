@@ -61,62 +61,78 @@ pub mod flow_flags {
 /// `set_paramshift`, `cancel_inject_id`, `set_address`) delegate to the
 /// existing public fields/methods where possible.
 trait FuncCallSpecsExt {
-    /// Faithful to `FuncCallSpecs::isInline` (fspec.hh). RUGRA-GLUE: Rugra's
+    /// Flow-local adapter for `FuncCallSpecs::isInline` (fspec.hh). Rugra's
     /// `FuncCallSpecs` does not yet store the inline flag, so this returns
     /// false. Inline-driven injection (`check_for_flow_modification`) is a
-    /// no-op until the flag is wired in.
+    /// unavailable until the flag is wired in (`CALLSPEC-0001`).
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isInline directly and has no flow-local interface.
     fn is_inline(&self) -> bool;
-    /// Faithful to `FuncCallSpecs::isNoReturn` (fspec.hh). RUGRA-GLUE: same
+    /// Flow-local adapter for `FuncCallSpecs::isNoReturn` (fspec.hh), with the same
     /// caveat as `is_inline`.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::isNoReturn directly and has no flow-local interface.
     fn is_no_return(&self) -> bool;
-    /// Faithful to `FuncCallSpecs::getInjectId` (fspec.hh). Returns -1
+    /// Flow-local adapter for `FuncCallSpecs::getInjectId` (fspec.hh). Returns -1
     /// (Ghidra's "no injection" sentinel) until the id is stored.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration because flow.cc calls FuncCallSpecs::getInjectId directly and has no flow-local interface.
     fn get_inject_id(&self) -> i32;
-    /// Faithful to `FuncCallSpecs::getOp` (fspec.hh): the call op backing
+    /// Flow-local adapter for `FuncCallSpecs::getOp` (fspec.hh): the call op backing
     /// this spec. Rugra stores `op_addr` and resolves the op against the
     /// alive list (mirrors `FuncCallSpecs::find_call_op`).
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration for resolving a call op from Rugra's stored address instead of Ghidra's direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef>;
-    /// Faithful to `FuncCallSpecs::getName` (fspec.hh): the callee name.
+    /// Flow-local adapter for `FuncCallSpecs::getName` (fspec.hh): the callee name.
     /// Delegates to `FuncProto::get_name`.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration exposing the nested FuncProto name used where Ghidra inherits the accessor directly.
     fn get_name(&self) -> &str;
-    /// Faithful to `FuncCallSpecs::setParamshift` (fspec.hh). Delegates to
-    /// `FuncProto::param_shift`; no-op when `shift == 0`.
+    /// Flow-local adapter for `FuncCallSpecs::setParamshift` (fspec.hh). Delegates to
+    /// `FuncProto::param_shift`; leaves state unchanged when `shift == 0`.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration exposing nested FuncProto parameter shifting to flow-local code.
     fn set_paramshift(&mut self, shift: i32);
-    /// Faithful to `FuncCallSpecs::cancelInjectId` (fspec.hh). RUGRA-GLUE:
-    /// delegates to the existing no-op `FuncProto::cancel_inject_id`.
+    /// Flow-local adapter for `FuncCallSpecs::cancelInjectId` (fspec.hh):
+    /// delegates to the injection-state gap tracked by `INJECT-0001`.
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration exposing nested FuncProto injection cancellation to flow-local code.
     fn cancel_inject_id(&mut self);
-    /// Faithful to `FuncCallSpecs::setAddress` (fspec.hh). Clears the entry
+    /// Flow-local adapter for `FuncCallSpecs::setAddress` (fspec.hh). Clears the entry
     /// address to cancel an indirect override (flow.cc:713).
+    // RUGRA-GLUE: ANN-B; Rust extension-trait declaration representing Ghidra's setAddress(Address()) with Rugra's optional entry address.
     fn clear_entry_address(&mut self);
 }
 
 impl FuncCallSpecsExt for crate::fspec::FuncCallSpecs {
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra inline-state field.
     fn is_inline(&self) -> bool {
-        // TODO: depends on FuncCallSpecs storing an inline flag.
+        // TODO(CALLSPEC-0001): depends on FuncCallSpecs storing an inline flag.
         false
     }
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra no-return-state field.
     fn is_no_return(&self) -> bool {
-        // TODO: depends on FuncCallSpecs storing a noreturn flag.
+        // TODO(CALLSPEC-0001): depends on FuncCallSpecs storing a noreturn flag.
         false
     }
+    // RUGRA-GLUE: ANN-B; INJECT-0001 compatibility fallback because Rugra FuncCallSpecs has no Ghidra injection-id field.
     fn get_inject_id(&self) -> i32 {
-        // TODO: depends on FuncCallSpecs storing an inject id. -1 = none.
+        // TODO(INJECT-0001): depends on FuncCallSpecs storing an inject id. -1 = none.
         -1
     }
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter resolves Rugra's stored op address because Ghidra FuncCallSpecs keeps a direct PcodeOp pointer.
     fn get_op(&self, fd: &Funcdata) -> Option<crate::op::PcodeOpRef> {
         self.find_call_op(fd)
     }
+    // RUGRA-GLUE: ANN-B; Rust adapter reads the nested FuncProto field because Rugra FuncCallSpecs does not inherit Ghidra's name accessor.
     fn get_name(&self) -> &str {
         // FuncProto stores the callee name in a public `name` field; Rugra
         // has no FuncProto::get_name accessor, so we read the field directly.
         self.prototype.name.as_str()
     }
+    // RUGRA-GLUE: ANN-B; Rust adapter forwards flow-local parameter shifting to the nested FuncProto object.
     fn set_paramshift(&mut self, shift: i32) {
         self.prototype.param_shift(shift);
     }
+    // RUGRA-GLUE: ANN-B; INJECT-0001 adapter forwards flow-local injection cancellation to the nested FuncProto object.
     fn cancel_inject_id(&mut self) {
         self.prototype.cancel_inject_id();
     }
+    // RUGRA-GLUE: ANN-B; CALLSPEC-0001 adapter encodes flow.cc's setAddress(Address()) as Option::None in Rugra.
     fn clear_entry_address(&mut self) {
         self.entry_addr = None;
     }
@@ -2134,6 +2150,7 @@ pub fn follow_flow(
 /// not `#[repr(u32)]`, so we map the discriminants by hand. The numeric tag
 /// is only carried for diagnostic parity; Rugra's injection emit path is
 /// not yet wired to interpret it.
+// RUGRA-GLUE: ANN-B; INJECT-0001 maps a Rust AddressSpace enum into the temporary numeric injection tuple where Ghidra carries an AddrSpace pointer.
 fn address_space_as_u32(space: crate::space::AddressSpace) -> u32 {
     // Order matches Ghidra's IPTR_* constants (space.hh) for the spaces Rugra
     // models; values are stable discriminants, not memory offsets.
@@ -2171,7 +2188,7 @@ fn resolve_callother_payload_name(
     // cannot map index -> name here. As a structural shim we report the
     // single registered call-other payload, if any.
     //
-    // TODO: depends on Architecture::userops (UserOpManage) integration to
+    // TODO(INJECT-0001): depends on Architecture::userops (UserOpManage) integration to
     // map the CALLOTHER index to the user-op name and inject id.
     let mut found: Option<String> = None;
     for (name, _id) in &inject_lib.call_other_fixups {
@@ -2186,6 +2203,7 @@ fn resolve_callother_payload_name(
 /// (`FuncCallSpecs::getFspecFromConst`, flow.cc:1338); Rugra has no such
 /// constant-via-pointer scheme, so we match by the call op's address
 /// against each spec's `op_addr` (faithful to `FuncCallSpecs::find_call_op`).
+// RUGRA-GLUE: ANN-B; CALLSPEC-0001 linear-scan fallback because Rugra does not encode FuncCallSpecs pointer identity in CALL input(0).
 fn find_callspec_for_op(
     fd: &Funcdata,
     op: &crate::op::PcodeOpRef,

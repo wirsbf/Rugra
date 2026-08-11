@@ -65,6 +65,13 @@ not yet wired into main.rs; existing linear scan still active).
  
 **2026-07-22**: 23 missing flow.cc methods added (11→34 functions, +361 lines)
 
+## 2026-08-11：ANN-B 注释 provenance 审计
+
+- Oracle 固定为 Ghidra 12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`；完整读取 `flow.cc` 与 `flow.hh` 后分类。
+- 为 `FuncCallSpecsExt` 的 8 个 trait 声明和 8 个 Rust 实现补充具体 `RUGRA-GLUE: ANN-B`：这些是 flow-local 适配层，不是 Ghidra `FlowInfo` 函数。缺失的 callspec 状态/身份分别仍由 `CALLSPEC-0001` 与 `INJECT-0001` 跟踪。
+- `address_space_as_u32` 是 Rust `AddressSpace` 到临时注入元组的适配；`find_callspec_for_op` 是 callspec 指针身份尚未落地时的线性扫描回退，二者均无可诚实引用的 Ghidra 函数体。
+- 本轮仅补对齐来源注释，不改行为，也不产生逐函数 oracle `MATCH` 或 L3 证明。
+
 ## 2026-07-22（续）：FlowInfo 跳转表细节补齐 — Phase 2 完整化
 
 补齐 Ghidra `flow.cc` 中缺失的跳转表（jump-table）分析与基本块生成方法。每个
@@ -120,4 +127,3 @@ not yet wired into main.rs; existing linear scan still active).
 - 目标文件：`src/flow.rs`（778 → 1181 行，+403 行）。
 - 每个移植方法上方有 `// Ghidra: flow.cc:<行号> FlowInfo::<名>` 注释。
 - `cargo check --lib` 通过（flow.rs 零错误）。
-

@@ -17,9 +17,11 @@ use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 // Ghidra: callgraph.cc:21 ELEM_CALLGRAPH, ELEM_NODE, ELEM_EDGE
 /// Element id for `<callgraph>`. Faithful to `ELEM_CALLGRAPH` (callgraph.cc:21).
 pub fn elem_callgraph() -> ElementId { ElementId::new("callgraph", 226) }
-/// Element id for `<node>`. Faithful to `ELEM_NODE` (callgraph.cc:22).
+/// Element id value for `<node>`; Ghidra stores `ELEM_NODE` as a global (callgraph.cc:22).
+// RUGRA-GLUE: ANN-B; Rust constructs callgraph.cc's global ELEM_NODE on demand because the marshal API takes an owned ElementId value.
 pub fn elem_node() -> ElementId { ElementId::new("node", 227) }
-/// Element id for `<edge>`. Faithful to `ELEM_EDGE` (block.cc:31, reused).
+/// Element id value for `<edge>`; Ghidra stores `ELEM_EDGE` as a shared global (block.cc:31).
+// RUGRA-GLUE: ANN-B; Rust constructs the shared C++ ELEM_EDGE global on demand because the marshal API takes an owned ElementId value.
 pub fn elem_edge() -> ElementId { ElementId::new("edge", 105) }
 
 /// Edge flags.
