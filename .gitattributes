@@ -1,0 +1,2 @@
+# Locked upstream compiler spec is copied byte-for-byte, including its whitespace.
+sleigh_specs/x86-64-gcc.cspec whitespace=-trailing-space,-space-before-tab

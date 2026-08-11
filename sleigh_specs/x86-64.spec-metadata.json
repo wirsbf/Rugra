@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "target": {
+    "architecture": "x86:LE:64:default",
+    "compiler_spec_id": "gcc",
+    "analysis_options": "raw SLEIGH asset generation; default slgh_compile options; no behavior-analysis pass"
+  },
+  "inputs": {
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "slaspec_path": "Ghidra/Processors/x86/data/languages/x86-64.slaspec",
+    "slaspec_sha256": "9d66a01a4219ab0bee0697caf2d1ee389e094e927a857299cebb6182e40a4e6e",
+    "processor_spec_path": "Ghidra/Processors/x86/data/languages/x86-64.pspec",
+    "processor_spec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "compiler_spec_path": "Ghidra/Processors/x86/data/languages/x86-64-gcc.cspec",
+    "compiler_spec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "language_definitions_path": "Ghidra/Processors/x86/data/languages/x86.ldefs",
+    "language_definitions_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "outputs": {
+    "sla_path": "sleigh_specs/x86-64.sla",
+    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "sla_size": 487659,
+    "processor_spec_path": "sleigh_specs/x86-64.pspec",
+    "compiler_spec_path": "sleigh_specs/x86-64-gcc.cspec"
+  },
+  "generation": {
+    "script": "tools/build_locked_x86_64_sla.sh",
+    "compiler_target": "sleigh_opt",
+    "determinism_check": "compile twice in one clean temporary extraction and require byte-identical output",
+    "observed_toolchain": {
+      "platform": "Ubuntu 22.04 x86_64",
+      "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "make": "GNU Make 4.3",
+      "git": "2.34.1"
+    }
+  },
+  "scope": {
+    "oracle_status": "NO_ORACLE",
+    "statement": "This metadata proves asset provenance and deterministic generation only; it is not a raw decode or decompiler behavior fixture."
+  }
+}
