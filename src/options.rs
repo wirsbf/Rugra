@@ -88,6 +88,7 @@ impl ArchOption for OptionExtraPop {
 /// `OptionReadOnly::apply` (options.cc:251-260).
 pub struct OptionReadOnly;
 impl ArchOption for OptionReadOnly {
+    // Ghidra: options.hh:126 OptionReadOnly::OptionReadOnly
     fn name(&self) -> &str {
         "readonly"
     }
@@ -110,6 +111,7 @@ impl ArchOption for OptionReadOnly {
 /// `OptionDefaultPrototype::apply` (options.cc:266-274).
 pub struct OptionDefaultPrototype;
 impl ArchOption for OptionDefaultPrototype {
+    // Ghidra: options.hh:132 OptionDefaultPrototype::OptionDefaultPrototype
     fn name(&self) -> &str {
         "defaultprototype"
     }
@@ -130,6 +132,7 @@ impl ArchOption for OptionDefaultPrototype {
 /// `OptionInferConstPtr::apply` (options.cc:281-296).
 pub struct OptionInferConstPtr;
 impl ArchOption for OptionInferConstPtr {
+    // Ghidra: options.hh:138 OptionInferConstPtr::OptionInferConstPtr
     fn name(&self) -> &str {
         "inferconstptr"
     }
@@ -153,6 +156,7 @@ impl ArchOption for OptionInferConstPtr {
 /// (options.cc:307-314).
 pub struct OptionForLoops;
 impl ArchOption for OptionForLoops {
+    // Ghidra: options.hh:144 OptionForLoops::OptionForLoops
     fn name(&self) -> &str {
         "analyzeforloops"
     }
@@ -170,6 +174,7 @@ impl ArchOption for OptionForLoops {
 /// (options.cc:321-340).
 pub struct OptionInline;
 impl ArchOption for OptionInline {
+    // Ghidra: options.hh:150 OptionInline::OptionInline
     fn name(&self) -> &str {
         "inline"
     }
@@ -192,6 +197,7 @@ impl ArchOption for OptionInline {
 /// (options.cc:347-366).
 pub struct OptionNoReturn;
 impl ArchOption for OptionNoReturn {
+    // Ghidra: options.hh:156 OptionNoReturn::OptionNoReturn
     fn name(&self) -> &str {
         "noreturn"
     }
@@ -213,6 +219,7 @@ impl ArchOption for OptionNoReturn {
 /// (options.cc:373-389).
 pub struct OptionWarning;
 impl ArchOption for OptionWarning {
+    // Ghidra: options.hh:162 OptionWarning::OptionWarning
     fn name(&self) -> &str {
         "warning"
     }
@@ -235,6 +242,7 @@ impl ArchOption for OptionWarning {
 /// (options.cc:393-403).
 pub struct OptionNullPrinting;
 impl ArchOption for OptionNullPrinting {
+    // Ghidra: options.hh:168 OptionNullPrinting::OptionNullPrinting
     fn name(&self) -> &str {
         "printnull"
     }
@@ -254,6 +262,7 @@ impl ArchOption for OptionNullPrinting {
 /// (options.cc:411-421).
 pub struct OptionInPlaceOps;
 impl ArchOption for OptionInPlaceOps {
+    // Ghidra: options.hh:174 OptionInPlaceOps::OptionInPlaceOps
     fn name(&self) -> &str {
         "inplaceops"
     }
@@ -273,6 +282,7 @@ impl ArchOption for OptionInPlaceOps {
 /// (options.cc:428-438).
 pub struct OptionConventionPrinting;
 impl ArchOption for OptionConventionPrinting {
+    // Ghidra: options.hh:180 OptionConventionPrinting::OptionConventionPrinting
     fn name(&self) -> &str {
         "conventionprinting"
     }
@@ -289,6 +299,7 @@ impl ArchOption for OptionConventionPrinting {
 // ===========================================================================
 pub struct OptionNoCastPrinting;
 impl ArchOption for OptionNoCastPrinting {
+    // Ghidra: options.hh:186 OptionNoCastPrinting::OptionNoCastPrinting
     fn name(&self) -> &str {
         "nocastprinting"
     }
@@ -305,6 +316,7 @@ impl ArchOption for OptionNoCastPrinting {
 // ===========================================================================
 pub struct OptionHideExtensions;
 impl ArchOption for OptionHideExtensions {
+    // Ghidra: options.hh:192 OptionHideExtensions::OptionHideExtensions
     fn name(&self) -> &str {
         "hideextensions"
     }
@@ -321,6 +333,7 @@ impl ArchOption for OptionHideExtensions {
 // ===========================================================================
 pub struct OptionMaxLineWidth;
 impl ArchOption for OptionMaxLineWidth {
+    // Ghidra: options.hh:198 OptionMaxLineWidth::OptionMaxLineWidth
     fn name(&self) -> &str {
         "maxlinewidth"
     }
@@ -340,6 +353,7 @@ impl ArchOption for OptionMaxLineWidth {
 // ===========================================================================
 pub struct OptionIndentIncrement;
 impl ArchOption for OptionIndentIncrement {
+    // Ghidra: options.hh:204 OptionIndentIncrement::OptionIndentIncrement
     fn name(&self) -> &str {
         "indentincrement"
     }
@@ -357,6 +371,7 @@ impl ArchOption for OptionIndentIncrement {
 // ===========================================================================
 pub struct OptionCommentIndent;
 impl ArchOption for OptionCommentIndent {
+    // Ghidra: options.hh:210 OptionCommentIndent::OptionCommentIndent
     fn name(&self) -> &str {
         "commentindent"
     }
@@ -374,6 +389,7 @@ impl ArchOption for OptionCommentIndent {
 // ===========================================================================
 pub struct OptionCommentStyle;
 impl ArchOption for OptionCommentStyle {
+    // Ghidra: options.hh:216 OptionCommentStyle::OptionCommentStyle
     fn name(&self) -> &str {
         "commentstyle"
     }
@@ -390,6 +406,7 @@ impl ArchOption for OptionCommentStyle {
 // ===========================================================================
 pub struct OptionCommentHeader;
 impl ArchOption for OptionCommentHeader {
+    // Ghidra: options.hh:222 OptionCommentHeader::OptionCommentHeader
     fn name(&self) -> &str {
         "commentheader"
     }
@@ -404,6 +421,7 @@ impl ArchOption for OptionCommentHeader {
 // ===========================================================================
 pub struct OptionCommentInstruction;
 impl ArchOption for OptionCommentInstruction {
+    // Ghidra: options.hh:228 OptionCommentInstruction::OptionCommentInstruction
     fn name(&self) -> &str {
         "commentinstruction"
     }
@@ -422,6 +440,7 @@ impl ArchOption for OptionCommentInstruction {
 /// has no per-language emitter yet, so we record the request verbatim.
 pub struct OptionIntegerFormat;
 impl ArchOption for OptionIntegerFormat {
+    // Ghidra: options.hh:234 OptionIntegerFormat::OptionIntegerFormat
     fn name(&self) -> &str {
         "integerformat"
     }
@@ -441,6 +460,7 @@ impl ArchOption for OptionIntegerFormat {
 /// (options.cc:596-623).
 pub struct OptionBraceFormat;
 impl ArchOption for OptionBraceFormat {
+    // Ghidra: options.hh:240 OptionBraceFormat::OptionBraceFormat
     fn name(&self) -> &str {
         "braceformat"
     }
@@ -459,6 +479,7 @@ impl ArchOption for OptionBraceFormat {
 /// (options.cc:631-647).
 pub struct OptionSetAction;
 impl ArchOption for OptionSetAction {
+    // Ghidra: options.hh:246 OptionSetAction::OptionSetAction
     fn name(&self) -> &str {
         "setaction"
     }
@@ -476,6 +497,7 @@ impl ArchOption for OptionSetAction {
 /// `OptionCurrentAction::apply` (options.cc:654-674).
 pub struct OptionCurrentAction;
 impl ArchOption for OptionCurrentAction {
+    // Ghidra: options.hh:252 OptionCurrentAction::OptionCurrentAction
     fn name(&self) -> &str {
         "currentaction"
     }
@@ -498,6 +520,7 @@ impl ArchOption for OptionCurrentAction {
 /// `OptionAllowContextSet::apply` (options.cc:681-691).
 pub struct OptionAllowContextSet;
 impl ArchOption for OptionAllowContextSet {
+    // Ghidra: options.hh:258 OptionAllowContextSet::OptionAllowContextSet
     fn name(&self) -> &str {
         "allowcontextset"
     }
@@ -517,6 +540,7 @@ impl ArchOption for OptionAllowContextSet {
 /// `OptionIgnoreUnimplemented::apply` (options.cc:698-711).
 pub struct OptionIgnoreUnimplemented;
 impl ArchOption for OptionIgnoreUnimplemented {
+    // Ghidra: options.hh:264 OptionIgnoreUnimplemented::OptionIgnoreUnimplemented
     fn name(&self) -> &str {
         "ignoreunimplemented"
     }
@@ -540,6 +564,7 @@ impl ArchOption for OptionIgnoreUnimplemented {
 /// `OptionErrorUnimplemented::apply` (options.cc:715-728).
 pub struct OptionErrorUnimplemented;
 impl ArchOption for OptionErrorUnimplemented {
+    // Ghidra: options.hh:270 OptionErrorUnimplemented::OptionErrorUnimplemented
     fn name(&self) -> &str {
         "errorunimplemented"
     }
@@ -563,6 +588,7 @@ impl ArchOption for OptionErrorUnimplemented {
 /// to `OptionErrorReinterpreted::apply` (options.cc:731-744).
 pub struct OptionErrorReinterpreted;
 impl ArchOption for OptionErrorReinterpreted {
+    // Ghidra: options.hh:276 OptionErrorReinterpreted::OptionErrorReinterpreted
     fn name(&self) -> &str {
         "errorreinterpreted"
     }
@@ -586,6 +612,7 @@ impl ArchOption for OptionErrorReinterpreted {
 /// `OptionErrorTooManyInstructions::apply` (options.cc:747-760).
 pub struct OptionErrorTooManyInstructions;
 impl ArchOption for OptionErrorTooManyInstructions {
+    // Ghidra: options.hh:282 OptionErrorTooManyInstructions::OptionErrorTooManyInstructions
     fn name(&self) -> &str {
         "errortoomanyinstructions"
     }
@@ -609,6 +636,7 @@ impl ArchOption for OptionErrorTooManyInstructions {
 /// Faithful to `OptionProtoEval::apply` (options.cc:792-823).
 pub struct OptionProtoEval;
 impl ArchOption for OptionProtoEval {
+    // Ghidra: options.hh:288 OptionProtoEval::OptionProtoEval
     fn name(&self) -> &str {
         "protoeval"
     }
@@ -633,6 +661,7 @@ impl ArchOption for OptionProtoEval {
 /// `OptionSetLanguage::apply` (options.cc:824-831).
 pub struct OptionSetLanguage;
 impl ArchOption for OptionSetLanguage {
+    // Ghidra: options.hh:294 OptionSetLanguage::OptionSetLanguage
     fn name(&self) -> &str {
         "setlanguage"
     }
@@ -650,6 +679,7 @@ impl ArchOption for OptionSetLanguage {
 /// `OptionJumpTableMax::apply` (options.cc:833-846).
 pub struct OptionJumpTableMax;
 impl ArchOption for OptionJumpTableMax {
+    // Ghidra: options.hh:300 OptionJumpTableMax::OptionJumpTableMax
     fn name(&self) -> &str {
         "jumptablemax"
     }
@@ -671,6 +701,7 @@ impl ArchOption for OptionJumpTableMax {
 /// (options.cc:851-865).
 pub struct OptionJumpLoad;
 impl ArchOption for OptionJumpLoad {
+    // Ghidra: options.hh:306 OptionJumpLoad::OptionJumpLoad
     fn name(&self) -> &str {
         "jumpload"
     }
@@ -694,6 +725,7 @@ impl ArchOption for OptionJumpLoad {
 /// `OptionToggleRule::apply` (options.cc:873-903).
 pub struct OptionToggleRule;
 impl ArchOption for OptionToggleRule {
+    // Ghidra: options.hh:312 OptionToggleRule::OptionToggleRule
     fn name(&self) -> &str {
         "togglerule"
     }
@@ -716,6 +748,7 @@ impl ArchOption for OptionToggleRule {
 /// `OptionAliasBlock::apply` (options.cc:913-928).
 pub struct OptionAliasBlock;
 impl ArchOption for OptionAliasBlock {
+    // Ghidra: options.hh:318 OptionAliasBlock::OptionAliasBlock
     fn name(&self) -> &str {
         "aliasblock"
     }
@@ -752,6 +785,7 @@ impl ArchOption for OptionAliasBlock {
 /// `OptionMaxInstruction::apply` (options.cc:938-951).
 pub struct OptionMaxInstruction;
 impl ArchOption for OptionMaxInstruction {
+    // Ghidra: options.hh:324 OptionMaxInstruction::OptionMaxInstruction
     fn name(&self) -> &str {
         "maxinstruction"
     }
@@ -776,6 +810,7 @@ impl ArchOption for OptionMaxInstruction {
 /// `OptionNamespaceStrategy::apply` (options.cc:958-975).
 pub struct OptionNamespaceStrategy;
 impl ArchOption for OptionNamespaceStrategy {
+    // Ghidra: options.hh:330 OptionNamespaceStrategy::OptionNamespaceStrategy
     fn name(&self) -> &str {
         "namespacestrategy"
     }
@@ -798,6 +833,7 @@ impl ArchOption for OptionNamespaceStrategy {
 /// `OptionSplitDatatypes::apply` (options.cc:999-1022).
 pub struct OptionSplitDatatypes;
 impl ArchOption for OptionSplitDatatypes {
+    // Ghidra: options.hh:343 OptionSplitDatatypes::OptionSplitDatatypes
     fn name(&self) -> &str {
         "splitdatatypes"
     }
@@ -830,6 +866,7 @@ impl ArchOption for OptionSplitDatatypes {
 /// `OptionNanIgnore::apply` (options.cc:1030-1053).
 pub struct OptionNanIgnore;
 impl ArchOption for OptionNanIgnore {
+    // Ghidra: options.hh:349 OptionNanIgnore::OptionNanIgnore
     fn name(&self) -> &str {
         "nanignore"
     }
@@ -939,10 +976,14 @@ pub fn parse_int_any_base(s: &str) -> Option<i64> {
     parse_int_any_base_i64(s)
 }
 
+// RUGRA-GLUE: Public unsigned wrapper for Rust's shared any-base parser;
+// Ghidra repeats std::istringstream extraction at each integer option.
 pub fn parse_uint_any_base(s: &str) -> Option<u64> {
     parse_uint_any_base_u64(s)
 }
 
+// RUGRA-GLUE: Rust helper factoring signed std::istringstream-style parsing;
+// Ghidra performs the equivalent extraction inline in individual apply methods.
 fn parse_int_any_base_i64(s: &str) -> Option<i64> {
     let trimmed = s.trim();
     let bytes = trimmed.as_bytes();
@@ -972,6 +1013,8 @@ fn parse_int_any_base_i64(s: &str) -> Option<i64> {
     Some(if negative { -(magnitude as i64) } else { magnitude as i64 })
 }
 
+// RUGRA-GLUE: Rust helper factoring unsigned std::istringstream-style parsing;
+// Ghidra performs the equivalent extraction inline in individual apply methods.
 fn parse_uint_any_base_u64(s: &str) -> Option<u64> {
     let trimmed = s.trim();
     let bytes = trimmed.as_bytes();
@@ -1127,17 +1170,23 @@ impl OptionDatabase {
         self.register(OptionNanIgnore);
     }
 
-    /// Number of registered options. RUGRA-GLUE: not in Ghidra's API.
+    /// Number of registered options.
+    // RUGRA-GLUE: Rust-only registry introspection; OptionDatabase has no
+    // matching C++ method.
     pub fn num_options(&self) -> usize {
         self.options.len()
     }
 
-    /// Whether an option named `name` is registered. RUGRA-GLUE.
+    /// Whether an option named `name` is registered.
+    // RUGRA-GLUE: Rust-only registry introspection; OptionDatabase has no
+    // matching C++ method.
     pub fn has_option(&self, name: &str) -> bool {
         self.options.contains_key(name)
     }
 
-    /// Sorted iterator of registered option names. RUGRA-GLUE.
+    /// Sorted list of registered option names.
+    // RUGRA-GLUE: Rust-only deterministic registry view; OptionDatabase has
+    // no matching C++ method.
     pub fn option_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.options.keys().cloned().collect();
         names.sort();
@@ -1266,6 +1315,8 @@ impl OptionDatabase {
 }
 
 impl Default for OptionDatabase {
+    // RUGRA-GLUE: Rust Default trait adapter delegates to new(); C++ has no
+    // Default trait separate from OptionDatabase::OptionDatabase.
     fn default() -> Self {
         Self::new()
     }

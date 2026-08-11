@@ -1,28 +1,34 @@
 # options.rs — Architecture configuration options API
 
-Faithful port of Ghidra's `options.hh` / `options.cc` (1063 lines).
+Partial port of Ghidra's `options.hh` / `options.cc` (1063 lines).
 
-**Status:** L3. Complete `ArchOption` trait + `OptionDatabase` dispatcher +
-38 registered options (one per `OptionXxx` subclass in `options.cc`).
-Every option carries a `// Ghidra: options.cc:<line>` alignment comment.
-Options that target subsystems present in rugra (flow flags, prototype
-models, alias blocks, etc.) mutate real `Architecture` state. Options that
-target subsystems not yet ported (PrintLanguage emitter, ActionDatabase
-group manipulation, ContextCache) return the faithful Ghidra confirmation
-message and are tagged `// RUGRA-GLUE:`.
+**Status:** L2 / `MISMATCH` and `NO_ORACLE`. The `ArchOption` trait and an
+`OptionDatabase` dispatcher exist, but the 2026-08-11 audit found protocol,
+validation, registration-order, and state-mutation differences.
+Every option carries per-function `// Ghidra: options.hh/options.cc:<line>`
+mapping comments.
+Some options mutate Rugra `Architecture` state. Options targeting missing
+subsystems generally return a confirmation string without performing the
+corresponding Ghidra state transition.
 
 Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/options.{hh,cc}`.
 
+> **ANN-A annotation audit (2026-08-11):** This pass only added source-mapping
+> comments for the 44 functions reported by the annotation checker. It made no
+> runtime behavior change, produced no oracle `MATCH` evidence, and does not
+> upgrade or independently validate the module's alignment status.
+
 ## Free functions
-- `on_or_off(p) -> bool` — parse "on"/"off"/empty string. Faithful to
-  `ArchOption::onOrOff` (options.cc:69). Empty defaults to true.
+- `on_or_off(p) -> bool` — parse "on"/"off"/empty string. Empty defaults to
+  true, but Rugra currently accepts other values while Ghidra throws
+  `ParseError` (`OPTIONS-0001`).
 - `parse_int_any_base(s) -> Option<i64>` — replicate `std::istringstream`
   basefield-reset semantics: `0x..`→hex, leading `0`→octal, else decimal.
   Sign aware. `// RUGRA-GLUE` (no Ghidra counterpart; C++ uses streams).
 - `parse_uint_any_base(s) -> Option<u64>` — unsigned variant.
-- `alias_block_flag(name) -> Option<i32>` — symbolic token → alias-block bit
-  (struct=1, array=2, global=4, param1..param12, all, none). Mirrors the
-  inline bit mapping in `OptionAliasBlock::apply` (options.cc:982-995).
+- `alias_block_flag(name) -> Option<i32>` — Rugra symbolic token → bit mask.
+  This accepts tokens and combinations not present in Ghidra's four-level
+  `none/struct/array/all` model (`OPTIONS-0001`).
 - `get_split_datatype_bit(name) -> u32` — float/pointer → split-datatype bit.
 
 ## Module `split_datatype_option`
@@ -30,9 +36,8 @@ Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/options.{
   constants used by `OptionSplitDatatypes::apply` (options.cc:999).
 
 ## Module `elem_ids`
-`<optionslist>` XML element ids. `// RUGRA-GLUE` — Ghidra registers these
-via the runtime ElementId registry (options.cc:23-63); rugra holds them as
-plain `u32` constants because the `Decoder` trait keys off integer ids.
+`<optionslist>` XML element ids. Rugra currently holds private `u32` values;
+these do not match the locked wire IDs and depend on `MARSHAL-ID-0001`.
 - `ELEM_OPTIONSBODY = 174`, `ELEM_OPTIONSHEAD = 175`, `ELEM_OPTIONSLIST = 176`,
   `ELEM_PARAM1 = 177`, `ELEM_PARAM2 = 178`, `ELEM_PARAM3 = 179`.
 
@@ -50,8 +55,8 @@ trait resolves element ids to names.
 - `register<O: ArchOption>(opt)` — insert one option. Mirrors
   `registerOption` (options.cc:84).
 - `set(arch, name, p1, p2, p3) -> Option<String>` — execute an option
-  command. Faithful to `OptionDatabase::set` (options.cc:150). Returns
-  `None` for unknown options (Ghidra throws `ParseError`).
+  command. Returns `None` for unknown options, whereas Ghidra throws
+  `ParseError` (`OPTIONS-0001`).
 - `try_set(...) -> Result<String, String>` — non-panicking variant
   (`// RUGRA-GLUE`).
 - `has_option(name) -> bool`, `num_options() -> usize`,
@@ -64,7 +69,7 @@ trait resolves element ids to names.
   `<optionslist>` block. Faithful to `OptionDatabase::decode`
   (options.cc:192).
 
-## Fully functional options (mutate real Architecture state)
+## Implemented option surfaces (not oracle-verified)
 | Option | Field | Effect |
 |---|---|---|
 | `inferconstptr` | `infer_pointers` | Toggle pointer inference |
@@ -84,10 +89,9 @@ trait resolves element ids to names.
 | `jumpload` | `flowoptions & RECORD_JUMPLOADS` | Toggle flow flag |
 | `extrapop` | (deferred) | Parses int / "unknown"; ProtoModelEntry lacks extrapop field |
 
-## Faithful-message options (target subsystems not yet ported)
-These return the exact Ghidra confirmation string and are tagged
-`// RUGRA-GLUE` with the missing integration. They will become functional
-when the corresponding subsystem lands.
+## Message-only options (target subsystems not yet ported)
+These return a confirmation string but do not yet perform all Ghidra state
+mutations. They remain gaps tracked by `OPTIONS-0001`.
 
 - **PrintLanguage options** (require emitter integration):
   `nullprinting`, `inplaceops`, `conventionprinting`, `nocastprinting`,
@@ -109,16 +113,19 @@ action messages, allowcontextset, protoeval unknown/default, unknown-option
 rejection, and `parse_int_any_base`/`parse_uint_any_base` hex/octal/decimal
 parsing. Run with `cargo test --lib options::`.
 
-## L3 coverage
-- All 38 `OptionXxx` subclasses from `options.cc` are ported (OptionExtraCleanup
-  does not exist in this Ghidra version).
-- `registerOption` (options.cc:84), `OptionDatabase` ctor (options.cc:93),
-  `set` (options.cc:150), `decodeOne` (options.cc:163), `decode`
-  (options.cc:192) are all ported.
-- XML decode of `<optionslist>` works against the `Decoder` trait.
+## Coverage status
+
+The previous L3 claim is withdrawn. No locked 12.0.4 same-input fixture covers
+the dispatcher, XML protocol, validation failures, registration order, or all
+state mutations. Passing Rust unit tests therefore remains regression evidence,
+not parity evidence.
 
 ## Remaining gaps
 - `OptionExtraPop` parses its parameter but cannot store it —
   `ProtoModelEntry` has no `extrapop` field.
 - PrintLanguage / ActionDatabase / ContextCache / function-lookup hooks.
-<!-- annotation-pass: 2026-07-22 -->
+- `nullprinting` and `splitdatatype` names differ from Rugra's registered
+  spellings; the option element IDs and registration set/order differ.
+- Invalid toggles, numeric bounds, alias levels, split-datatype parameters,
+  NaN rule toggles, and `decode_one` error propagation differ from Ghidra.
+<!-- annotation-pass: 2026-08-11 (ANN-A, mapping comments only) -->

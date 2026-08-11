@@ -226,7 +226,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 34 | `printlanguage.cc` | `printlanguage.rs` | 🔧 L2 | RPN token 表/递归/括号 identity 不完整，自由 `rpn_recurse` 可丢 pending node；真实 PcodeOp/Varnode/Datatype 与 group ID/highlight payload 丢失，namespace 三种策略和多个虚方法仍为空 | `printlanguage.cc` |
 | 35 | `prettyprint.cc` | `prettyprint.rs` | 🔧 L2 | Emit 签名无法携带 oracle markup identity；TokenSplit/Oppen scan queue、line width、spaces+bump、group break/indent 状态机缺失，27+ 文本后处理仍在实际路径 | `prettyprint.cc` |
 | 36 | `fspec.cc` | `fspec.rs` | 🔧 L2 | 空参数列表被 `all()` 误判 input-locked，lock/void/model 联动缺失；ParamActive slot 应从 1 而非 0，whichTrial/getNumUsed/split/comparator 与 ParamEntry 分配均有确定差异，storage 部分依赖 ADDRESS-0001 | `fspec.cc` |
-| 37 | `options.cc` | `options.rs` | ✅ L3 | **完整实现**：ArchOption trait + OptionDatabase 分发器 + 37 个注册选项（9 个完全功能化）+ XML decode（decode_one/decode）。所有 L3 缺口已关闭 | `options.cc` |
+| 37 | `options.cc` | `options.rs` | 🔧 L2 | option name/wire ID/注册集合与顺序、非法参数异常与 numeric 边界、alias/split/nan 参数、decode 错误传播和多个 Architecture/Action/Print 状态突变均不等价；无 12.0.4 同输入 fixture | `options.cc` |
 | 38 | `comment.cc` | `comment.rs` | ✅ L3 | **完整实现**：Comment + comment_type + CommentDatabaseInternal（add/clear/query/encode/decode）+ CommentSorter（find_position 完整基本块关联 via Funcdata op 遍历 + setup_function_list/setup_block_list/setup_op_list）。所有 L3 缺口已关闭 | `comment.cc` |
 
 ### post_process 对齐缺口（2026-07-03 核实）— `prettyprint.rs::post_process_output`
