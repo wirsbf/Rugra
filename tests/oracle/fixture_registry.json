@@ -9,6 +9,28 @@
     "ghidra/**",
     "tests/oracle/fixture_registry.json"
   ],
+  "cache_defaults": {
+    "tools": {
+      "fixture_registry": "tests/oracle/fixture_registry.json",
+      "cargo_manifest": "Cargo.toml",
+      "cargo_lock": "Cargo.lock",
+      "build_script": "build.rs"
+    },
+    "comparands": {
+      "ghidra_cpp": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp",
+      "rugra_src": "src"
+    },
+    "environment": [
+      "AR",
+      "CC",
+      "CXX",
+      "RUSTC",
+      "RUSTFLAGS",
+      "CFLAGS",
+      "CXXFLAGS",
+      "RUSTUP_TOOLCHAIN"
+    ]
+  },
   "fixtures": [
     {
       "id": "decompress_1204",
@@ -17,6 +39,16 @@
       "timeout_seconds": 300,
       "always_tiers": ["wave", "nightly"],
       "evidence_status": "PARTIAL_MATCH",
+      "cache": {
+        "metadata": "tests/oracle/decompress_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/decompress_1204.cc",
+          "rust_fixture": "tests/oracle/decompress_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_decompress_oracle.sh"
+        }
+      },
       "impact": {
         "paths": [
           "src/compression.rs",
@@ -33,6 +65,15 @@
       "timeout_seconds": 300,
       "always_tiers": ["wave", "nightly"],
       "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/preferred_zext_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/preferred_zext_size.cc"
+        },
+        "tools": {
+          "runner": "tools/run_preferred_zext_oracle.sh"
+        }
+      },
       "impact": {
         "paths": [
           "tests/oracle/preferred_zext_size.cc",
@@ -54,6 +95,16 @@
       "timeout_seconds": 900,
       "always_tiers": ["wave", "nightly"],
       "evidence_status": "PARTIAL_MATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_display_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/printc_display_1204.cc",
+          "rust_fixture": "tests/oracle/printc_display_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_printc_display_oracle.sh"
+        }
+      },
       "impact": {
         "paths": [
           "src/printc.rs",
@@ -70,6 +121,15 @@
       "timeout_seconds": 900,
       "always_tiers": ["wave", "nightly"],
       "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/userop_index_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/userop_index_1204.cc"
+        },
+        "tools": {
+          "runner": "tools/run_userop_index_oracle.sh"
+        }
+      },
       "impact": {
         "paths": [
           "tests/oracle/userop_index_1204.*",
@@ -89,6 +149,21 @@
       "timeout_seconds": 1800,
       "always_tiers": ["wave", "nightly"],
       "evidence_status": "PARTIAL_MATCH",
+      "cache": {
+        "metadata": "tests/oracle/sleigh_decode_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/sleigh_decode_1204.cc",
+          "rust_fixture": "tests/oracle/sleigh_decode_1204.rs",
+          "sleigh_specs": "sleigh_specs"
+        },
+        "tools": {
+          "runner": "tools/run_sleigh_decode_oracle.sh"
+        },
+        "comparands": {
+          "sleigh_shim": "sleigh_shim",
+          "sleigh_example": "examples/sleigh_test.rs"
+        }
+      },
       "impact": {
         "paths": [
           "examples/sleigh_test.rs",

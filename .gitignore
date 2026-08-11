@@ -47,6 +47,9 @@ Thumbs.db
 # Decompilation output / debug artifacts (regenerable, do not commit)
 /result/
 
+# Content-addressed oracle outputs and pipeline snapshots (regenerable)
+/.rugra-cache/
+
 # Agent/tooling scratch dirs (session-local)
 .sisyphus/
 .agents/

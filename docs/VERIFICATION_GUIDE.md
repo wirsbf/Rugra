@@ -43,6 +43,11 @@ fresh-target canonical release 构建。每一级都可用 `--report` 保存结�
 门禁不会因 selector 未找到 fixture 而静默跳过：`commit` 以上层级对 coverage gap
 返回 2。`--dry-run` 可审计将执行的命令，但不能作为通过证据。
 
+昂贵 fixture 和 pipeline stage 可通过 `tools/oracle_cache.py` 内容寻址复用。cache key
+必须包含锁定 commit、architecture、compiler spec、analysis options、输入、runner 和
+两侧 comparand 的真实 hash；cache hit 仍重新验证 provenance 和 artifact hash。缓存只减少
+重复编译/执行，不改变 `MATCH/MISMATCH/NO_ORACLE/UNTESTED` 的判定，也不能补齐未覆盖分支。
+
 ---
 
 ## 1

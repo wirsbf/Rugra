@@ -177,8 +177,71 @@ def checks_for_tier(
     ]
 
 
+def merged_cache_group(
+    defaults: dict[str, object], fixture: dict[str, object], group: str
+) -> dict[str, str]:
+    merged = {
+        str(label): str(path)
+        for label, path in dict(defaults.get(group, {})).items()
+    }
+    for label, path in dict(fixture.get(group, {})).items():
+        label = str(label)
+        if label in merged:
+            raise ValueError(f"duplicate fixture cache {group} label: {label}")
+        merged[label] = str(path)
+    return dict(sorted(merged.items()))
+
+
+def cached_fixture_command(
+    python: str,
+    selection: dict[str, object],
+    fixture: dict[str, object],
+    force_run: bool,
+) -> list[str]:
+    config = fixture.get("cache")
+    if not isinstance(config, dict):
+        return [str(argument) for argument in fixture["runner"]]
+    defaults = dict(selection.get("cache_defaults", {}))
+    command = [
+        python,
+        "tools/oracle_cache.py",
+        "capture",
+        "--metadata",
+        str(config["metadata"]),
+        "--timeout",
+        str(int(fixture["timeout_seconds"])),
+    ]
+    for group, option in (
+        ("inputs", "--input"),
+        ("tools", "--tool"),
+        ("comparands", "--comparand"),
+    ):
+        for label, path in merged_cache_group(defaults, config, group).items():
+            command.extend([option, f"{label}={path}"])
+    context = {
+        "fixture_id": str(fixture["id"]),
+        "evidence_status": str(fixture["evidence_status"]),
+        **{str(key): str(value) for key, value in dict(config.get("context", {})).items()},
+    }
+    for key, value in sorted(context.items()):
+        command.extend(["--context", f"{key}={value}"])
+    environment = set(str(name) for name in defaults.get("environment", []))
+    environment.update(str(name) for name in config.get("environment", []))
+    for name in sorted(environment):
+        command.extend(["--env", name])
+    if force_run:
+        command.append("--force-run")
+    command.append("--")
+    command.extend(str(argument) for argument in fixture["runner"])
+    return command
+
+
 def fixture_checks(
-    selection: dict[str, object], requested: list[str]
+    selection: dict[str, object],
+    requested: list[str],
+    python: str,
+    use_cache: bool,
+    force_run: bool,
 ) -> list[Check]:
     selected = selection["selected_fixtures"]
     known = {str(fixture["id"]) for fixture in selected}
@@ -190,11 +253,16 @@ def fixture_checks(
         fixture_id = str(fixture["id"])
         if requested and fixture_id not in requested:
             continue
+        command = (
+            cached_fixture_command(python, selection, fixture, force_run)
+            if use_cache
+            else [str(argument) for argument in fixture["runner"]]
+        )
         checks.append(
             Check(
                 f"fixture:{fixture_id}",
-                [str(argument) for argument in fixture["runner"]],
-                int(fixture["timeout_seconds"]),
+                command,
+                int(fixture["timeout_seconds"]) + (60 if use_cache else 0),
                 "fixture",
             )
         )
@@ -299,6 +367,31 @@ def self_test() -> int:
     ]
     assert checks_for_tier("commit", python, root, selection)[-1].check_id == "fast-check-all"
     assert checks_for_tier("nightly", python, root, selection)[-1].check_id == "cold-release-all"
+    cache_selection = {
+        "cache_defaults": {
+            "tools": {"registry": "tests/oracle/fixture_registry.json"},
+            "comparands": {"rust": "src"},
+            "environment": ["RUSTFLAGS"],
+        }
+    }
+    cached = cached_fixture_command(
+        python,
+        cache_selection,
+        {
+            "id": "sample",
+            "runner": ["tools/run_decompress_oracle.sh"],
+            "timeout_seconds": 10,
+            "evidence_status": "MATCH",
+            "cache": {
+                "metadata": "tests/oracle/decompress_1204.metadata.json",
+                "inputs": {"fixture": "tests/oracle/decompress_1204.cc"},
+                "tools": {"runner": "tools/run_decompress_oracle.sh"},
+            },
+        },
+        False,
+    )
+    assert cached[:3] == [python, "tools/oracle_cache.py", "capture"]
+    assert cached[-2:] == ["--", "tools/run_decompress_oracle.sh"]
     environment = dict(os.environ)
     passing = run_check(
         root,
@@ -330,6 +423,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--function", action="append", default=[])
     parser.add_argument("--fixture", action="append", default=[])
     parser.add_argument("--no-fixtures", action="store_true")
+    cache = parser.add_mutually_exclusive_group()
+    cache.add_argument("--no-cache", action="store_true")
+    cache.add_argument("--refresh-fixtures", action="store_true")
     parser.add_argument("--keep-going", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
@@ -348,7 +444,15 @@ def main(argv: list[str]) -> int:
         selection = selection_document(root, selector_args(args))
         checks = checks_for_tier(args.tier, python, root, selection)
         if not args.no_fixtures and args.tier != "edit":
-            checks.extend(fixture_checks(selection, args.fixture))
+            checks.extend(
+                fixture_checks(
+                    selection,
+                    args.fixture,
+                    python,
+                    not args.no_cache,
+                    args.refresh_fixtures,
+                )
+            )
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
         print(f"rugra_gate: {error}", file=sys.stderr)
         return 1

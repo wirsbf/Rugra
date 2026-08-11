@@ -107,6 +107,18 @@ def validate_registry(root: Path, registry: dict[str, object]) -> None:
     fixture_ids = [str(fixture.get("id", "")) for fixture in registry.get("fixtures", [])]
     if not fixture_ids or len(fixture_ids) != len(set(fixture_ids)) or any(not item for item in fixture_ids):
         raise ValueError("fixture IDs must be non-empty and unique")
+    cache_defaults = registry.get("cache_defaults", {})
+    if not isinstance(cache_defaults, dict):
+        raise ValueError("fixture cache_defaults must be an object")
+    for group in ("tools", "comparands"):
+        records = cache_defaults.get(group, {})
+        if not isinstance(records, dict):
+            raise ValueError(f"fixture cache_defaults.{group} must be an object")
+        for label, relative in records.items():
+            if not label or not (root / str(relative)).exists():
+                raise ValueError(f"fixture cache default path is missing: {label}={relative}")
+    if not isinstance(cache_defaults.get("environment", []), list):
+        raise ValueError("fixture cache_defaults.environment must be a list")
     for fixture in registry["fixtures"]:
         runner = fixture.get("runner")
         if not isinstance(runner, list) or not runner:
@@ -116,6 +128,25 @@ def validate_registry(root: Path, registry: dict[str, object]) -> None:
             raise ValueError(f"fixture runner is missing or not executable: {executable}")
         if int(fixture.get("timeout_seconds", 0)) <= 0:
             raise ValueError(f"fixture {fixture['id']} has an invalid timeout")
+        cache = fixture.get("cache")
+        if cache is None:
+            continue
+        if not isinstance(cache, dict):
+            raise ValueError(f"fixture {fixture['id']} cache config must be an object")
+        metadata = root / str(cache.get("metadata", ""))
+        if not metadata.is_file():
+            raise ValueError(f"fixture {fixture['id']} cache metadata is missing: {metadata}")
+        for group in ("inputs", "tools", "comparands"):
+            records = cache.get(group, {})
+            if not isinstance(records, dict):
+                raise ValueError(f"fixture {fixture['id']} cache.{group} must be an object")
+            for label, relative in records.items():
+                if not label or not (root / str(relative)).exists():
+                    raise ValueError(
+                        f"fixture {fixture['id']} cache path is missing: {label}={relative}"
+                    )
+        if not isinstance(cache.get("context", {}), dict):
+            raise ValueError(f"fixture {fixture['id']} cache.context must be an object")
 
 
 def functions_by_path(
@@ -343,6 +374,7 @@ def selection_document(root: Path, args: argparse.Namespace) -> dict[str, object
         "tier": args.tier,
         "registry_sha256": sha256_file(registry_path),
         "ledger_sha256": sha256_file(ledger_path),
+        "cache_defaults": registry.get("cache_defaults", {}),
         "changed": changed,
         "explicit_functions": [
             {"id": entry["id"], "path": entry["path"], "name": entry["name"]} for entry in explicit

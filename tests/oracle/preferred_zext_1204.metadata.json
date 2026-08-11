@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "fixture_id": "preferred_zext_1204",
+  "oracle": {
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "tag": "Ghidra_12.0.4_build"
+  },
+  "architecture": "architecture-independent TypeOpFloatInt2Float unit fixture",
+  "compiler_spec": "N/A: preferredZextSize does not inspect a compiler specification",
+  "analysis_options": {
+    "api": "TypeOpFloatInt2Float::preferredZextSize",
+    "sizes": [1, 2, 3, 4, 7, 8, 16],
+    "decompiler_passes": "None"
+  },
+  "observation": "stdout size mapping from the locked C++ implementation",
+  "evidence_status": "MATCH"
+}

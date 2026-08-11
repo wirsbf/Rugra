@@ -74,4 +74,33 @@ python3 tools/rugra_gate.py commit --staged --dry-run
 ```
 
 `commit` 以上层级遇到 fixture coverage gap 会在运行前返回 2。`wave`/`nightly`
-固定运行 registry 中的全部 fixture；旧 11.3.2 golden 只保留 diagnostic 身份。
+固定运行 registry 中的全部 fixture；旧 11.3.2 golden 只保留 diagnostic 身份。fixture
+默认通过内容寻址缓存运行；`--no-cache` 强制直跑，`--refresh-fixtures` 重新执行并验证
+相同 provenance 不会产生不同结果。
+
+## Oracle 内容寻址缓存
+
+`oracle_cache.py` 保存昂贵 oracle runner 的 stdout/stderr、阶段 manifest 或其他产物。
+键不是“测试名”，而是锁定 oracle commit、architecture、compiler spec、analysis
+options、输入、工具、comparand、命令和显式环境的规范化 provenance hash。每次命中仍会
+重算这些输入并逐文件校验缓存内容；损坏或 provenance 漂移会 fail-closed。
+
+```bash
+# 查看键
+python3 tools/oracle_cache.py key \
+  --metadata tests/oracle/decompress_1204.metadata.json \
+  --input fixture=tests/oracle/decompress_1204.cc \
+  --tool runner=tools/run_decompress_oracle.sh \
+  --comparand rust=src/compression.rs
+
+# 缓存并重放成功 runner；失败结果不会进入缓存
+python3 tools/oracle_cache.py capture \
+  --metadata tests/oracle/decompress_1204.metadata.json \
+  --input fixture=tests/oracle/decompress_1204.cc \
+  --tool runner=tools/run_decompress_oracle.sh \
+  --comparand rust=src/compression.rs \
+  -- tools/run_decompress_oracle.sh
+```
+
+默认缓存位于 `.rugra-cache/oracle/`，不进入 Git。`store`/`verify`/`restore` 可用于
+阶段快照；restore 目标必须不存在，恢复文件为只读，避免把缓存对象当工作副本修改。
