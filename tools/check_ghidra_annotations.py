@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-check_ghidra_annotations.py — 铁律 5.5/6/9 执行工具。
+check_ghidra_annotations.py — AGENTS.md 铁律 1.3 执行工具。
 
 每个 src/*.rs 中的非测试函数定义上方，必须有一行 `// Ghidra:` 注释，
 引用其对应的 Ghidra 源码位置（file:line + 函数名）。
-没有该注释 = 自创函数 = 违反对齐原则（AGENTS.md 铁律 9）。
+没有该注释 = 自创函数 = 违反对齐原则（AGENTS.md 铁律 1.3）。
 
 豁免:
   - `#[test]` 标注的函数
@@ -290,7 +290,7 @@ def main():
     print(f"\n━━━ 共 {total_violations} 个自创函数（无 Ghidra 对齐注释）━━━")
     print("每个非测试函数上方必须有一行 `// Ghidra: <file>:<line> <ghidraFnName>`，")
     print("或对真正的语言结构胶水（构造器/访问器）标注 `// RUGRA-GLUE: <理由>`。")
-    print("详见 AGENTS.md 铁律 9 / 5.5。")
+    print("详见 AGENTS.md 铁律 1.3。")
     return 1
 
 

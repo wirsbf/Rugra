@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-align_gate.py — PreToolUse gate enforcing AGENTS.md 铁律 5.5/6:
+align_gate.py — PreToolUse gate enforcing AGENTS.md 铁律 1.2 / 机制 E:
 "修改一个函数的代码前,必须重新先看对应的 Ghidra 函数代码".
 
 Mechanism (two cooperating hooks, see HOOK_GUIDE.md):
@@ -317,7 +317,7 @@ def decide(file_rel: str, affected: list[dict], rec: dict, sess_ts: float) -> tu
             passed_gate_keys.append(gate_key)
 
     if missing:
-        lines = ["BLOCKED by align_gate (AGENTS.md 铁律 5.5/6): edit would modify "
+        lines = ["BLOCKED by align_gate (AGENTS.md 铁律 1.2 / 机制 E): edit would modify "
                  "Rust fn(s) whose corresponding Ghidra function was not re-read "
                  "in this session. Re-read FIRST, then retry the edit:"]
         for m in missing:
