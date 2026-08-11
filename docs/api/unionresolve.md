@@ -1,12 +1,14 @@
 # unionresolve.rs — Union resolution API
 
-Faithful port of Ghidra's `unionresolve.hh` / `unionresolve.cc` (1110 lines).
+Rust implementation corresponding to Ghidra's `unionresolve.hh` /
+`unionresolve.cc` (1110 lines).
 
-**Status:** L3. Full typed scoring algorithm ported with
+**Status:** The authoritative roadmap currently records this module as L2.
+The typed implementation uses
 `Arc<Datatype>` / `Arc<RwLock<PcodeOp>>` / `Arc<RwLock<Varnode>>` threading
-that mirrors Ghidra's raw `Datatype*` / `PcodeOp*` / `Varnode*` API. All
-scoring tables in `scoreTrialDown` / `scoreTrialUp` are 1:1 with
-unionresolve.cc:305-833.
+in place of Ghidra's raw `Datatype*` / `PcodeOp*` / `Varnode*` API, but the
+documented RUGRA-GLUE gaps and absence of a locked-oracle `MATCH` fixture
+preclude an L3 claim.
 
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/unionresolve.{hh,cc}`.
@@ -97,9 +99,18 @@ Constructors (all run the scoring loop internally):
   (SUBPIECE extraction + INT_AND mask), scores matching fields, then calls
   compute_best_index.
 
-## 2026-07-22: Full L3 scoring algorithm port
-- Ported all scoring methods from unionresolve.cc:88-926 with typed API.
+## 2026-07-22: Historical scoring implementation pass
+- Implemented scoring methods corresponding to unionresolve.cc:88-926 with typed API.
 - Fixed constants: THRESHOLD 10→256, MAX_PASSES 5→6, MAX_TRIALS 50→1024.
 - Fixed pointer encoding: +0x10000 → +0x1000 (cc:71).
 - 18 tests covering scoring semantics and typed API.
-<!-- annotation-pass: 2026-07-22 -->
+
+## 2026-08-11 ANN-I annotation bootstrap
+
+The six previously unannotated helpers are now explicitly classified as
+RUGRA-GLUE. `VisitMark::{eq,partial_cmp}` satisfy Rust trait requirements around
+the canonical `Ord::cmp` mapping to unionresolve.hh:130; the four pointer/union
+helpers replace repeated C++ casts and raw-pointer borrows with Rust enum
+downcasts or `Arc` ownership. No behavior changed and no status was promoted.
+
+<!-- annotation-pass: 2026-08-11 ANN-I; provenance-only -->

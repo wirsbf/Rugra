@@ -81,13 +81,13 @@ bits 52-54: total (碰撞总数，编码值 = 实际 - 1)
 - `clear_total_position(&mut h)` — 清 bits 49-54 (dynamic.cc:764)
 - `get_comparable(h)` — 取低 32 位用于比较 (dynamic.hh:103)
 
-## 2026-07-22 移植状态（完整移植）
+## 2026-07-22 历史实现记录（非 L3 证据）
 
 **19 个单元测试**，覆盖：translate_opcode 变体合并、ToOpEdge compare/hash、
 哈希解码全字段往返、calc_hash_vn/op、稳定性、gather_ops_at_address、
 dedup_varnodes、move_off_skip（含穿越 CAST）、find_varnode 往返。
 
-已移植全部 dynamic.cc 关键方法：transtable、ToOpEdge compare/hash、
+该历史记录覆盖了这些 dynamic.cc 关键方法：transtable、ToOpEdge compare/hash、
 buildVn{Up,Down}、buildOp{Up,Down}、gather{UnmarkedVn,UnmarkedOp}、
 calcHash（两重载）、pieceTogetherHash、moveOffSkip、dedupVarnodes、
 uniqueHash（两重载）、findVarnode、findOp、gatherFirstLevelVars、
@@ -103,4 +103,11 @@ gatherOpsAtAddress、所有哈希解码静态方法。
 **编译验证**：`cargo check --lib` 对 `src/dynamic.rs` 报 0 错误 0 警告。
 （工作树其他文件 variable.rs/unionresolve.rs/database.rs/merge.rs 等存在预先
 存在的编译错误，非本移植引入，按约束仅修改 dynamic.rs + 本文档。）
-<!-- annotation-pass: 2026-07-22 -->
+## 2026-08-11 ANN-I annotation bootstrap
+
+`DynamicHash::default` 现明确标为 RUGRA-GLUE：Rust `Default` 仅委托给
+`new()`，而锁定的 dynamic.hh:62 类声明没有显式构造器或 Default 风格方法。
+本次只增加 provenance 注释，没有行为改动、真实 Ghidra fixture 或状态提升；
+模块等级以 `ALIGNMENT_ROADMAP.md` 为准，不据此宣称 L3。
+
+<!-- annotation-pass: 2026-08-11 ANN-I; provenance-only -->

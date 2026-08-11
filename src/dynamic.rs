@@ -1012,6 +1012,8 @@ impl DynamicHash {
 }
 
 impl Default for DynamicHash {
+    // RUGRA-GLUE: Rust Default delegates to new(); Ghidra's DynamicHash class
+    // (dynamic.hh:62) declares no explicit constructor or Default-style method.
     fn default() -> Self {
         Self::new()
     }

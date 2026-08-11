@@ -243,14 +243,12 @@ Ghidra: variable.cc:872 `markExpression`. Returns bitset: 1=call, 2=LOAD.
 
 ## Legacy Rugra 便利方法
 
-### `pub fn get_name(&self) -> &str`
-### `pub fn set_name(&mut self, name: String)`
-### `pub fn get_type(&self) -> Arc<Datatype>`
-### `pub fn set_type(&mut self, v_type: Arc<Datatype>)`
-### `pub fn add_instance(&mut self, vn: Arc<RwLock<Varnode>>)`
-### `pub fn num_instances(&self) -> usize`
-### `pub fn get_instance(&self, i: usize) -> Option<Arc<RwLock<Varnode>>>`
-### `pub fn get_num_merge_classes(&self) -> i32`
+`get_type`, `num_instances`, `get_instance`, and `get_num_merge_classes` map to
+the inline Ghidra accessors at variable.hh:174, :179, :180, and :196.
+`get_name`, `set_name`, `set_type`, and `add_instance` are legacy
+RUGRA-GLUE APIs: Ghidra derives names through Symbol state, derives/finalizes
+types through dedicated methods, and changes membership through construction
+or merge rather than these direct field mutators.
 
 ---
 
@@ -320,9 +318,11 @@ all 11 high_internal_flags constants.
 
 ## 变更历史
 
-- 2026-06-28: L3 baseline (merge_internal/get_type_representative/strip_type).
+- 2026-06-28: Historical implementation baseline
+  (`merge_internal`/`get_type_representative`/`strip_type`); this was not a
+  locked-oracle `MATCH` and is not an L3 claim.
 - 2026-07-04: +instance-delegated accessors (is_input/is_extra_out/is_proto_partial).
-- 2026-07-22: **L4 full port** — mergeInternal, merge (group-aware), setSymbol,
+- 2026-07-22: Historical broad implementation pass — mergeInternal, merge (group-aware), setSymbol,
   getSymbol, getSymbolOffset, getSymbolEntry, setSymbolReference, transferPiece,
   stripType, updateCover, updateFlags, updateType, updateSymbol, finalizeDatatype,
   groupWith, establishGroupSymbolOffset, compareJustLoc, compareName,
@@ -332,3 +332,9 @@ all 11 high_internal_flags constants.
   high_internal_flags (11 bits), VariableGroup (8 methods), VariablePiece
   (15 methods). 18 unit tests. Property queries take &self for RwLockReadGuard
   callers.
+- 2026-08-11 (`ANN-I`): provenance-only annotation bootstrap for 14 functions.
+  Four direct inline mappings now cite variable.hh:174/:179/:180/:196; the ten
+  remaining legacy, ownership, and `Arc<RwLock>` entry points are explicitly
+  classified as RUGRA-GLUE. No behavior changed, no oracle fixture was added,
+  and the module status is not promoted; `ALIGNMENT_ROADMAP.md` remains
+  authoritative.

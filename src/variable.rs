@@ -919,6 +919,8 @@ impl HighVariable {
         true
     }
 
+    // RUGRA-GLUE: Static slice helper for has_name's shared-borrow path; Ghidra
+    // calls the throwing HighVariable::getInputVarnode member at variable.cc:740.
     /// Helper: find the first input member Varnode (static, no &mut self).
     fn find_input_varnode(
         instances: &[Arc<RwLock<Varnode>>],
@@ -1369,42 +1371,54 @@ impl HighVariable {
 
     // --- Legacy Rugra convenience methods kept for existing call-sites. -----
 
+    // RUGRA-GLUE: Legacy direct-name accessor; Ghidra HighVariable derives its
+    // name through Symbol/nameRepresentative and has no stored-name accessor.
     /// Get the name string (Rugra convenience).
     pub fn get_name(&self) -> &str {
         &self.name
     }
 
+    // RUGRA-GLUE: Legacy direct-name mutator; Ghidra changes the attached Symbol
+    // rather than storing a String on HighVariable.
     /// Set the name string and lock it (Rugra convenience).
     pub fn set_name(&mut self, name: String) {
         self.name = name;
         self.flags |= high_flags::NAMELOCK;
     }
 
+    // Ghidra: variable.hh:174 HighVariable::getType
     /// Get the data type.
     pub fn get_type(&self) -> Arc<Datatype> {
         self.v_type.clone()
     }
 
+    // RUGRA-GLUE: Legacy cached-type override; Ghidra HighVariable exposes
+    // getType/updateType/finalizeDatatype but no public setType method.
     /// Set the data type.
     pub fn set_type(&mut self, v_type: Arc<Datatype>) {
         self.v_type = v_type;
     }
 
+    // RUGRA-GLUE: Legacy membership mutator; Ghidra adds members only through
+    // construction/merge and has no public HighVariable::addInstance method.
     /// Add a varnode instance.
     pub fn add_instance(&mut self, vn: Arc<RwLock<Varnode>>) {
         self.instances.push(vn);
     }
 
+    // Ghidra: variable.hh:179 HighVariable::numInstances
     /// Number of instances.
     pub fn num_instances(&self) -> usize {
         self.instances.len()
     }
 
+    // Ghidra: variable.hh:180 HighVariable::getInstance
     /// Get a specific instance.
     pub fn get_instance(&self, i: usize) -> Option<Arc<RwLock<Varnode>>> {
         self.instances.get(i).cloned()
     }
 
+    // Ghidra: variable.hh:196 HighVariable::getNumMergeClasses
     /// Get the number of merge classes.
     pub fn get_num_merge_classes(&self) -> i32 {
         self.num_merge_classes
@@ -1606,6 +1620,8 @@ impl VariablePiece {
         self.high.clone()
     }
 
+    // RUGRA-GLUE: Clones the Arc owning a VariableGroup; Ghidra's getGroup at
+    // variable.hh:83 returns a borrowed raw pointer and needs no ownership clone.
     /// Get the group Arc (Rugra helper used where Ghidra returns a raw group ptr).
     pub fn get_group_arc(&self) -> Option<Arc<RwLock<VariableGroup>>> {
         self.group.clone()
@@ -1661,6 +1677,8 @@ impl VariablePiece {
         }
     }
 
+    // RUGRA-GLUE: Arc<RwLock> entry point for the mapped markIntersectionDirty;
+    // Ghidra's const member at variable.cc:119 needs no explicit lock wrapper.
     /// Read-lock variant of mark_intersection_dirty for use from HighVariable
     /// methods that hold `&self.piece` via clone (avoids re-borrowing).
     pub fn mark_intersection_dirty_read(piece_arc: &Arc<RwLock<VariablePiece>>) {
@@ -1698,6 +1716,8 @@ impl VariablePiece {
         }
     }
 
+    // RUGRA-GLUE: Arc<RwLock> entry point for the mapped markExtendCoverDirty;
+    // Ghidra's const member at variable.cc:128 needs no explicit lock wrapper.
     /// Read-lock variant of mark_extend_cover_dirty.
     pub fn mark_extend_cover_dirty_read(piece_arc: &Arc<RwLock<VariablePiece>>) {
         piece_arc.read().unwrap().mark_extend_cover_dirty();
@@ -1762,6 +1782,8 @@ impl VariablePiece {
         }
     }
 
+    // RUGRA-GLUE: Arc<RwLock> entry point for the mapped updateIntersections;
+    // Ghidra's const member at variable.cc:140 mutates mutable fields directly.
     /// Read-lock entry point for update_intersections used from HighVariable.
     pub fn update_intersections_read(piece_arc: &Arc<RwLock<VariablePiece>>) {
         VariablePiece::update_intersections(piece_arc);
@@ -1798,6 +1820,8 @@ impl VariablePiece {
         owner.highflags &= !high_internal_flags::EXTENDCOVERDIRTY;
     }
 
+    // RUGRA-GLUE: Splits VariablePiece::updateCover across owner and piece locks;
+    // Ghidra's const member at variable.cc:160 follows raw owner pointers.
     /// Read-lock entry point for update_cover used from HighVariable::update_cover.
     /// Snapshot the piece's intersection list under a read lock, then merge.
     pub fn update_cover_read(piece_arc: &Arc<RwLock<VariablePiece>>, owner: &mut HighVariable) {

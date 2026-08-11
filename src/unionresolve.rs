@@ -246,10 +246,14 @@ impl VisitMark {
 }
 
 impl PartialEq for VisitMark {
+    // RUGRA-GLUE: Rust Ord requires PartialEq; Ghidra defines only the
+    // component-wise VisitMark::operator< ordering at unionresolve.hh:130.
     fn eq(&self, other: &Self) -> bool { self.vn_key == other.vn_key && self.index == other.index }
 }
 impl Eq for VisitMark {}
 impl PartialOrd for VisitMark {
+    // RUGRA-GLUE: Rust Ord requires PartialOrd; this delegates to cmp(), which
+    // implements Ghidra's VisitMark::operator< key order (vn, then index).
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
 }
 impl Ord for VisitMark {
@@ -1455,21 +1459,29 @@ fn pointee_of(dt: &Datatype) -> &Datatype {
     match dt { Datatype::Pointer(p) => p.ptr_to.as_ref(), _ => dt }
 }
 
+// RUGRA-GLUE: Rust enum downcast for repeated TypePointer::getPtrTo uses;
+// Ghidra performs checked TYPE_PTR casts inline and has no such free helper.
 /// `Some(pointee)` if `dt` is a pointer, else `None`.
 fn pointer_pointee(dt: &Datatype) -> Option<&Datatype> {
     match dt { Datatype::Pointer(p) => Some(p.ptr_to.as_ref()), _ => None }
 }
 
+// RUGRA-GLUE: Rust enum downcast replacing Ghidra's inline TypeUnion pointer
+// casts; unionresolve.cc declares no standalone asUnion helper.
 /// `Some(&TypeUnion)` for union types.
 fn as_union(dt: &Datatype) -> Option<&TypeUnion> {
     match dt { Datatype::Union(u) => Some(u), _ => None }
 }
 
+// RUGRA-GLUE: Arc ownership helper for inline TypePointer::getPtrTo operations
+// such as unionresolve.cc:30 and :70; Ghidra returns borrowed raw pointers.
 /// Strip one pointer layer, returning a cloned Arc for ownership.
 fn strip_pointer_layer(dt: &Arc<Datatype>) -> Arc<Datatype> {
     match dt.as_ref() { Datatype::Pointer(p) => p.ptr_to.clone(), _ => dt.clone() }
 }
 
+// RUGRA-GLUE: Rust enum helper for the conditional getWordSize expression at
+// unionresolve.cc:995; Ghidra has no standalone pointeeWordSize function.
 /// Word size of a pointer type (0 if not a pointer).
 fn pointee_word_size(dt: &Datatype) -> usize {
     match dt { Datatype::Pointer(p) => p.wordsize, _ => 0 }
