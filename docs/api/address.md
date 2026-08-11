@@ -6,6 +6,10 @@
 > 2026-08-11 锁定审计：当前仅保存数值 offset，无法表达
 > AddrSpace 身份、架构宽度/字宽环绕，SeqNum 也混合不可变身份与可变 order。
 > 详见 `docs/alignment_audit/CORE_FOUNDATIONS_2026-08-11.md`。
+>
+> 2026-08-12 ANN-N 仅补 provenance：标量 `new` 是缺少 AddrSpace 参数的
+> Rust 兼容层胶水；`as_u64` 对应锁定 oracle 的 inline `Address::getOffset`。
+> 本次未改变行为或模块状态。
 
 ## 模块说明 (Module Doc)
 

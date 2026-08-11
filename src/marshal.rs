@@ -35,8 +35,9 @@ pub struct AttributeId {
 }
 
 impl AttributeId {
-    /// Construct given a name and id. Faithful to the constructor
-    /// (marshal.hh:47).
+    /// Construct a const placeholder with the numeric id.
+    /// The name cannot be retained by this const initializer.
+    // RUGRA-GLUE: Const placeholder; unlike Ghidra's constructor, it cannot retain the name or register globally.
     pub const fn new_static(nm: &'static str, id: u32) -> Self {
         Self {
             name: String::new(), // Will be set at runtime; const can't allocate.

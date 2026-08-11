@@ -24,11 +24,13 @@ pub struct Address(u64);
 
 impl Address {
     /// Create a new address
+    // RUGRA-GLUE: Scalar-address constructor; Ghidra also requires an AddrSpace, which this representation omits.
     pub const fn new(addr: u64) -> Self {
         Address(addr)
     }
 
     /// Get the raw address value
+    // Ghidra: address.hh:329 Address::getOffset
     pub const fn as_u64(&self) -> u64 {
         self.0
     }

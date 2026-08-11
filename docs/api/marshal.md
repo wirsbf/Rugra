@@ -13,6 +13,9 @@ attributes, nested close/skip, typed errors, EOF, and raw strings have concrete
 counterexamples. The Decoder trait has no error channel. See
 `docs/alignment_audit/MARSHAL_PACKED_2026-08-11.md`.
 
+2026-08-12 ANN-N 仅补 provenance：`AttributeId::new_static` 是 Rust const
+占位胶水；它不能保留名称或执行 Ghidra 构造器的全局注册。本次未改变行为或模块状态。
+
 Ghidra reference:
 `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{marshal,xml}.{hh,cc}`.
 

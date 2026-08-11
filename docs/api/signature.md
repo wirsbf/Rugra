@@ -16,6 +16,9 @@ ported function carries a `// Ghidra: signature.cc:<line> <name>` comment
 pointing at the exact Ghidra source line; pure Rust glue (arena indices,
 `Mutex` settings, disjoint-borrow helpers) is marked `// RUGRA-GLUE: <reason>`.
 
+2026-08-12 ANN-N 仅补 provenance：为 scanner 先前遗漏的两个 const holder
+构造器补充具体 Rust-glue 注释；本次未改变行为或模块状态。
+
 ### Key type-alignment note
 
 `hashword` is `uint8` (8-byte unsigned) in Ghidra, so the iterative hash slots

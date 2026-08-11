@@ -76,6 +76,7 @@ pub struct LazyAttrib {
     id: u32,
 }
 impl LazyAttrib {
+    // RUGRA-GLUE: Const holder constructor because Ghidra's static AttributeId objects call an allocating constructor directly.
     pub const fn new(name: &'static str, id: u32) -> Self { Self { name, id } }
     // RUGRA-GLUE: Materializes an AttributeId on demand because Rust statics cannot run its allocating constructor.
     pub fn get(&self) -> AttributeId { AttributeId::new(self.name, self.id) }
@@ -88,6 +89,7 @@ pub struct LazyElem {
     id: u32,
 }
 impl LazyElem {
+    // RUGRA-GLUE: Const holder constructor because Ghidra's static ElementId objects call an allocating constructor directly.
     pub const fn new(name: &'static str, id: u32) -> Self { Self { name, id } }
     // RUGRA-GLUE: Materializes an ElementId on demand because Rust statics cannot run its allocating constructor.
     pub fn get(&self) -> ElementId { ElementId::new(self.name, self.id) }

@@ -15,11 +15,13 @@ pub struct Address(u64);
 
 impl Address {
     /// Create a new address
+    // RUGRA-GLUE: Legacy scalar compatibility type; Ghidra Address stores both an AddrSpace pointer and an offset.
     pub const fn new(addr: u64) -> Self {
         Address(addr)
     }
 
     /// Get the raw address value
+    // RUGRA-GLUE: Accessor for the legacy scalar compatibility type, which has no separate Ghidra counterpart.
     pub const fn as_u64(&self) -> u64 {
         self.0
     }
@@ -105,6 +107,7 @@ pub enum Architecture {
 
 impl Architecture {
     /// Get the pointer size in bytes for this architecture
+    // RUGRA-GLUE: Hard-coded target-enum metadata; Ghidra derives pointer size from configured spaces and type data.
     pub const fn pointer_size(&self) -> usize {
         match self {
             Architecture::X86 => 4,
@@ -121,16 +124,19 @@ impl Architecture {
     }
 
     /// Get the pointer size in bits for this architecture
+    // RUGRA-GLUE: Rust convenience conversion over pointer_size; Ghidra has no equivalent target-enum helper.
     pub const fn pointer_bits(&self) -> usize {
         self.pointer_size() * 8
     }
 
     /// Check if this is a 64-bit architecture
+    // RUGRA-GLUE: Predicate over a compatibility enum; Ghidra Architecture is a configured subsystem manager.
     pub const fn is_64bit(&self) -> bool {
         self.pointer_size() == 8
     }
 
     /// Get the register count (approximate)
+    // RUGRA-GLUE: Approximate metadata; Ghidra obtains its register inventory from the active Translate/specification.
     pub const fn register_count(&self) -> usize {
         match self {
             Architecture::X86 => 8,
@@ -144,6 +150,7 @@ impl Architecture {
     }
 
     /// Get architecture name as string
+    // RUGRA-GLUE: Compatibility-enum label; Ghidra uses configured architecture and language identifiers.
     pub const fn name(&self) -> &'static str {
         match self {
             Architecture::X86 => "x86",
@@ -210,6 +217,7 @@ pub enum TypeKind {
 
 impl TypeKind {
     /// Get the size in bytes of this type (if fixed-size)
+    // RUGRA-GLUE: Coarse enum metadata; Ghidra Datatype stores size per instance instead of using this fixed table.
     pub const fn size_bytes(&self) -> Option<usize> {
         match self {
             TypeKind::Void => Some(0),
@@ -225,6 +233,7 @@ impl TypeKind {
     }
 
     /// Check if this is an integer type
+    // RUGRA-GLUE: Predicate over Rugra's coarse TypeKind enum; Ghidra classifies per-instance Datatype metatypes.
     pub const fn is_integer(&self) -> bool {
         matches!(
             self,
@@ -240,6 +249,7 @@ impl TypeKind {
     }
 
     /// Check if this is a signed integer type
+    // RUGRA-GLUE: Predicate over Rugra's coarse TypeKind enum; Ghidra represents signedness through Datatype metatypes.
     pub const fn is_signed(&self) -> bool {
         matches!(
             self,
@@ -248,11 +258,13 @@ impl TypeKind {
     }
 
     /// Check if this is a floating point type
+    // RUGRA-GLUE: Predicate over Rugra's coarse TypeKind enum; Ghidra tests a Datatype's stored metatype.
     pub const fn is_float(&self) -> bool {
         matches!(self, TypeKind::Float32 | TypeKind::Float64)
     }
 
     /// Check if this is a pointer type
+    // RUGRA-GLUE: Predicate over Rugra's coarse TypeKind enum; Ghidra uses Datatype subclasses and stored metatypes.
     pub const fn is_pointer(&self) -> bool {
         matches!(self, TypeKind::Pointer)
     }
@@ -331,6 +343,7 @@ pub enum Endianness {
 
 impl Endianness {
     /// Get the native endianness of the current system
+    // RUGRA-GLUE: Rust target_cfg wrapper; Ghidra exposes host endianness through HOST_ENDIAN, not a function.
     pub const fn native() -> Self {
         #[cfg(target_endian = "little")]
         return Endianness::Little;
