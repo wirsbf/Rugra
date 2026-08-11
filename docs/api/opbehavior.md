@@ -2,7 +2,10 @@
 
 **源代码路径**: `src/opbehavior.rs`
 **Ghidra 对应**: `opbehavior.hh` / `opbehavior.cc` (823 行)
-**状态**: L4（2026-07-22 全量对齐）—— 全部 40+ opcode 行为、reverse recoverInput、`OpBehavior` trait 子类层级、`OpBehaviorFactory` 注册表（对齐 `registerInstructions` cc:38）、`evaluateUnaryNoExc/evaluateBinaryNoExc`，每个 evaluate/recover 方法均带 `// Ghidra: opbehavior.cc:<行号>` 注释。
+**状态**: 🔧 L2 / NO_ORACLE——大量 opcode evaluator 与 trait 表面已实现，
+但没有覆盖完整分支、异常、输入别名和突变状态的锁定 12.0.4 同输入 fixture；
+`TypeOp`/`PcodeOp` flag 与 behavior 接线也仍由 `PCODE-0002` 跟踪。
+函数来源注释及 Rust 自测不构成 L3/L4 证据。
 
 ## 模块说明
 
@@ -167,3 +170,8 @@ POPCOUNT/LZCOUNT。`get(opc)` 查表，`len()` 返回已注册条目数。
    含 Ghidra 的精确范围校验。
 6. **新增全部 OOP 子类 + OpBehaviorFactory**，使注册表对齐 registerInstructions。
 <!-- annotation-pass: 2026-07-22 -->
+
+### ANN-H 注释 bootstrap（2026-08-11）
+
+- 为 36 个缺失 marker 的 Rust `Display`、宏模板、trait 元数据适配及 registry helper 补充具体 `RUGRA-GLUE` 说明；这些函数在 Ghidra 中没有单一同签名对应物。
+- 仅补注释，不改变行为；既有越界引用留待后续串行处理。未生成函数级 oracle fixture，因此不声明 `MATCH` 或提升模块等级。

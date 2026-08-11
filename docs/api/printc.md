@@ -769,3 +769,8 @@ model is not present in Rugra's print layer):
 + `depends_of` ported to `src/type_system/typefactory.rs` to support
 `docTypeDefinitions`'s dependency-sorted type emission (faithful to Ghidra's
 `Datatype::numDepend`/`getDepend` virtuals, type.hh:261-630).
+
+### ANN-H 注释 bootstrap（2026-08-11）
+
+- 为 6 个此前缺少函数级来源标记的 helper 补齐 4 个锁定-oracle 函数映射和 2 个具体 Rust glue 说明。
+- 仅补注释，不改变行为；既有越界引用留待后续串行处理。未生成函数级 oracle fixture，因此不声明 `MATCH` 或提升模块等级。

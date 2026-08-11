@@ -85,6 +85,7 @@ fn zero_extend(sres: i64, size_out: usize) -> u64 {
 pub struct EvaluationError(pub String);
 
 impl std::fmt::Display for EvaluationError {
+    // RUGRA-GLUE: Rust Display adapter for EvaluationError; Ghidra inherits LowlevelError and has no formatting override
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "EvaluationError: {}", self.0)
     }
@@ -696,6 +697,7 @@ pub fn evaluate_binary_no_exc(
 macro_rules! impl_eval_only {
     ($ty:ty, $opc:expr, $isunary:expr, $evalu:ident, $evalb:ident) => {
         impl OpBehavior for $ty {
+            // RUGRA-GLUE: declarative-macro template for per-subclass metadata; Ghidra stores these fields in separate inline constructors
             fn meta(&self) -> OpBehaviorMeta {
                 OpBehaviorMeta::new($opc, $isunary)
             }
@@ -703,12 +705,14 @@ macro_rules! impl_eval_only {
         }
     };
     (@method unary, binary) => {
+        // RUGRA-GLUE: declarative-macro template delegating generated unary trait methods; Ghidra defines separate subclass virtual functions
         fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
             evaluate_unary(self.opcode(), sizeout, sizein, in1)
                 .expect("evaluate_unary returned None for known unary behavior")
         }
     };
     (@method binary, unary) => {
+        // RUGRA-GLUE: declarative-macro template delegating generated binary trait methods; Ghidra defines separate subclass virtual functions
         fn evaluate_binary(
             &self,
             sizeout: usize,
@@ -737,6 +741,7 @@ impl OpBehaviorCopy {
 }
 
 impl OpBehavior for OpBehaviorCopy {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorCopy; Ghidra stores CPUI_COPY/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_COPY, true)
     }
@@ -859,6 +864,7 @@ impl OpBehaviorIntZext {
     }
 }
 impl OpBehavior for OpBehaviorIntZext {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntZext; Ghidra stores CPUI_INT_ZEXT/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_ZEXT, true)
     }
@@ -885,6 +891,7 @@ impl OpBehaviorIntSext {
     }
 }
 impl OpBehavior for OpBehaviorIntSext {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntSext; Ghidra stores CPUI_INT_SEXT/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SEXT, true)
     }
@@ -920,6 +927,7 @@ impl OpBehaviorIntAdd {
     }
 }
 impl OpBehavior for OpBehaviorIntAdd {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntAdd; Ghidra stores CPUI_INT_ADD/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_ADD, false)
     }
@@ -949,6 +957,7 @@ impl OpBehaviorIntSub {
     }
 }
 impl OpBehavior for OpBehaviorIntSub {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntSub; Ghidra stores CPUI_INT_SUB/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SUB, false)
     }
@@ -1039,6 +1048,7 @@ impl OpBehaviorInt2Comp {
     }
 }
 impl OpBehavior for OpBehaviorInt2Comp {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorInt2Comp; Ghidra stores CPUI_INT_2COMP/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_2COMP, true)
     }
@@ -1061,6 +1071,7 @@ impl OpBehaviorIntNegate {
     }
 }
 impl OpBehavior for OpBehaviorIntNegate {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntNegate; Ghidra stores CPUI_INT_NEGATE/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_NEGATE, true)
     }
@@ -1121,6 +1132,7 @@ impl OpBehaviorIntLeft {
     }
 }
 impl OpBehavior for OpBehaviorIntLeft {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntLeft; Ghidra stores CPUI_INT_LEFT/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_LEFT, false)
     }
@@ -1161,6 +1173,7 @@ impl OpBehaviorIntRight {
     }
 }
 impl OpBehavior for OpBehaviorIntRight {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntRight; Ghidra stores CPUI_INT_RIGHT/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_RIGHT, false)
     }
@@ -1201,6 +1214,7 @@ impl OpBehaviorIntSright {
     }
 }
 impl OpBehavior for OpBehaviorIntSright {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntSright; Ghidra stores CPUI_INT_SRIGHT/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SRIGHT, false)
     }
@@ -1279,6 +1293,7 @@ impl OpBehaviorIntDiv {
     }
 }
 impl OpBehavior for OpBehaviorIntDiv {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntDiv; Ghidra stores CPUI_INT_DIV/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_DIV, false)
     }
@@ -1302,6 +1317,7 @@ impl OpBehaviorIntSdiv {
     }
 }
 impl OpBehavior for OpBehaviorIntSdiv {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntSdiv; Ghidra stores CPUI_INT_SDIV/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SDIV, false)
     }
@@ -1326,6 +1342,7 @@ impl OpBehaviorIntRem {
     }
 }
 impl OpBehavior for OpBehaviorIntRem {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntRem; Ghidra stores CPUI_INT_REM/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_REM, false)
     }
@@ -1347,6 +1364,7 @@ impl OpBehaviorIntSrem {
     }
 }
 impl OpBehavior for OpBehaviorIntSrem {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorIntSrem; Ghidra stores CPUI_INT_SREM/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_INT_SREM, false)
     }
@@ -1375,6 +1393,7 @@ impl OpBehaviorBoolNegate {
     }
 }
 impl OpBehavior for OpBehaviorBoolNegate {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorBoolNegate; Ghidra stores CPUI_BOOL_NEGATE/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_BOOL_NEGATE, true)
     }
@@ -1461,6 +1480,7 @@ macro_rules! float_binary_behavior {
             pub const fn new() -> Self { Self }
         }
         impl OpBehavior for $ty {
+            // RUGRA-GLUE: macro-generated metadata adapter for binary float behaviors; Ghidra stores these fields in each Translate-bearing constructor and has no meta() virtual
             fn meta(&self) -> OpBehaviorMeta { OpBehaviorMeta::new($opc, false) }
             // Ghidra: opbehavior.cc:$ghidra_eval $ty::evaluateBinary
             fn evaluate_binary(&self, sizeout: usize, sizein: usize, in1: u64, in2: u64) -> u64 {
@@ -1485,6 +1505,7 @@ macro_rules! float_unary_behavior {
             pub const fn new() -> Self { Self }
         }
         impl OpBehavior for $ty {
+            // RUGRA-GLUE: macro-generated metadata adapter for unary float behaviors; Ghidra stores these fields in each Translate-bearing constructor and has no meta() virtual
             fn meta(&self) -> OpBehaviorMeta { OpBehaviorMeta::new($opc, true) }
             // Ghidra: opbehavior.cc:$ghidra_eval $ty::evaluateUnary
             fn evaluate_unary(&self, sizeout: usize, sizein: usize, in1: u64) -> u64 {
@@ -1545,6 +1566,7 @@ impl OpBehaviorFloatInt2Float {
     }
 }
 impl OpBehavior for OpBehaviorFloatInt2Float {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorFloatInt2Float; Ghidra stores CPUI_FLOAT_INT2FLOAT/unary/non-special in its Translate-bearing constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_INT2FLOAT, true)
     }
@@ -1570,6 +1592,7 @@ impl OpBehaviorFloatFloat2Float {
     }
 }
 impl OpBehavior for OpBehaviorFloatFloat2Float {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorFloatFloat2Float; Ghidra stores CPUI_FLOAT_FLOAT2FLOAT/unary/non-special in its Translate-bearing constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_FLOAT2FLOAT, true)
     }
@@ -1597,6 +1620,7 @@ impl OpBehaviorFloatTrunc {
     }
 }
 impl OpBehavior for OpBehaviorFloatTrunc {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorFloatTrunc; Ghidra stores CPUI_FLOAT_TRUNC/unary/non-special in its Translate-bearing constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_FLOAT_TRUNC, true)
     }
@@ -1625,6 +1649,7 @@ impl OpBehaviorPiece {
     }
 }
 impl OpBehavior for OpBehaviorPiece {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorPiece; Ghidra stores CPUI_PIECE/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_PIECE, false)
     }
@@ -1643,6 +1668,7 @@ impl OpBehaviorSubpiece {
     }
 }
 impl OpBehavior for OpBehaviorSubpiece {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorSubpiece; Ghidra stores CPUI_SUBPIECE/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_SUBPIECE, false)
     }
@@ -1665,6 +1691,7 @@ impl OpBehaviorPtradd {
     }
 }
 impl OpBehavior for OpBehaviorPtradd {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorPtradd; Ghidra stores CPUI_PTRADD/binary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_PTRADD, false)
     }
@@ -1706,6 +1733,7 @@ impl OpBehaviorPopcount {
     }
 }
 impl OpBehavior for OpBehaviorPopcount {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorPopcount; Ghidra stores CPUI_POPCOUNT/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_POPCOUNT, true)
     }
@@ -1724,6 +1752,7 @@ impl OpBehaviorLzcount {
     }
 }
 impl OpBehavior for OpBehaviorLzcount {
+    // RUGRA-GLUE: Rust OpBehavior::meta adapter for OpBehaviorLzcount; Ghidra stores CPUI_LZCOUNT/unary/non-special in its inline/base constructor and has no meta() virtual
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_LZCOUNT, true)
     }
@@ -1763,16 +1792,19 @@ impl OpBehaviorFactory {
     }
 
     /// Number of registered behaviors (excluding `None` placeholders).
+    // RUGRA-GLUE: Rust registry convenience accessor; Ghidra exposes the caller-owned behavior vector directly and has no registered-count method
     pub fn len(&self) -> usize {
         self.table.iter().filter(|b| b.is_some()).count()
     }
 
     /// Whether the registry is empty.
+    // RUGRA-GLUE: Rust registry convenience accessor; Ghidra exposes the caller-owned behavior vector directly and has no emptiness method
     pub fn is_empty(&self) -> bool {
         self.table.iter().all(|b| b.is_none())
     }
 
     /// Look up the behavior for `opc`, mirroring `inst[opc]`.
+    // RUGRA-GLUE: Rust trait-object table accessor replacing direct inst[opc] vector indexing in Ghidra
     pub fn get(&self, opc: OpCode) -> Option<&dyn OpBehavior> {
         self.table
             .get(opc as usize)
@@ -1780,6 +1812,7 @@ impl OpBehaviorFactory {
     }
 
     /// Register one behavior at its opcode slot.
+    // RUGRA-GLUE: Rust ownership helper for placing a boxed behavior in its opcode slot; Ghidra performs each inst[...] assignment inline
     fn register(&mut self, behavior: Box<dyn OpBehavior>) {
         let opc = behavior.opcode();
         self.table[opc as usize] = Some(behavior);
@@ -1794,6 +1827,7 @@ impl OpBehaviorFactory {
             meta: OpBehaviorMeta,
         }
         impl OpBehavior for SpecialBehavior {
+            // RUGRA-GLUE: local trait adapter for Ghidra's bare special OpBehavior(opc,false,true) objects; Ghidra has no meta() virtual
             fn meta(&self) -> OpBehaviorMeta {
                 self.meta
             }
@@ -1868,6 +1902,7 @@ impl OpBehaviorFactory {
             meta: OpBehaviorMeta,
         }
         impl OpBehavior for PtrBehavior {
+            // RUGRA-GLUE: local trait adapter for Ghidra's bare normal OpBehavior(opc,false) placeholders; Ghidra has no meta() virtual
             fn meta(&self) -> OpBehaviorMeta {
                 self.meta
             }
@@ -1920,6 +1955,7 @@ impl OpBehaviorFactory {
 }
 
 impl Default for OpBehaviorFactory {
+    // RUGRA-GLUE: Rust Default implementation delegating to OpBehaviorFactory::new; Ghidra has no factory type or Default constructor
     fn default() -> Self {
         Self::new()
     }

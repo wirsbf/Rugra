@@ -640,6 +640,7 @@ impl PrintC {
     /// Enable/disable the RPN emit path in doc_function. When true, blocks are
     /// emitted via emit_block_basic_rpn / emit_expression_rpn; when false
     /// (default), the legacy direct-emit path runs.
+    // RUGRA-GLUE: migration-only runtime switch; Ghidra always uses its RPN printer and exposes no equivalent toggle
     pub fn set_rpn_enabled(&mut self, enabled: bool) {
         self.rpn_enabled = enabled;
     }
@@ -4186,6 +4187,7 @@ impl PrintC {
         self.emit.print("1");
     }
 
+    // Ghidra: printc.cc:2836 PrintC::emitBlockCondition
     fn emit_block_condition(
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -5146,6 +5148,7 @@ impl PrintLanguage for PrintC {
                 .collect();
             // Helper: check if a varnode's COPY def chain leads to Ram@addr
             // where addr matches a known global. Returns the struct pointer type.
+            // RUGRA-GLUE: print-time COPY-chain type recovery for Rugra's split IR ownership; Ghidra relies on upstream symbol/type propagation and has no nested resolver
             fn resolve_global_ptr(
                 vn: &crate::varnode::Varnode,
                 globals: &[(u64, std::sync::Arc<Datatype>)],
@@ -9603,6 +9606,7 @@ impl PrintC {
     }
 
     // Helper: the default cast-then-hex-integer rendering at printc.cc:1806-1815.
+    // Ghidra: printc.cc:1744 PrintC::pushConstant
     fn emit_default_cast_constant(&mut self, val: u64, ct: &Datatype) {
         if !self.option_nocasts {
             // pushOp(&typecast,op); pushType(ct);
@@ -10231,6 +10235,7 @@ impl PrintC {
     /// (Ghidra's `CPUI_MAX`) if the opcode cannot be flipped. Faithful port of
     /// `get_booleanflip` (opcodes.cc:94-135). The `reorder` flag is dropped
     /// (printc.cc:2388-2398 never reads it).
+    // Ghidra: opcodes.cc:94 get_booleanflip
     fn boolean_flip_opcode(opc: OpCode) -> Option<OpCode> {
         use crate::opcodes::OpCode::*;
         Some(match opc {
@@ -10268,6 +10273,7 @@ impl PrintC {
     /// - If the other operand is not explicit, not implied (cast.cc:287-288).
     /// - If the other operand's metatype differs from the output's, not
     ///   implied (cast.cc:289-290).
+    // Ghidra: cast.cc:249 CastStrategyC::isExtensionCastImplied
     fn is_extension_cast_implied(&self, op: &PcodeOp, read_op: &PcodeOp) -> bool {
         let out_vn = match op.get_out() { Some(a) => a, None => return false };
         let out = out_vn.read().unwrap();
