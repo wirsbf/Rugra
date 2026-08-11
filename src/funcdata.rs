@@ -6389,6 +6389,8 @@ impl Funcdata {
     /// Returns `i32::MAX` if not found so the spec sorts to the end.
     /// (Adapts Ghidra's `op->getParent()->getIndex()` to Rugra's flat block
     /// list.)
+    // RUGRA-GLUE: Rugra call specs retain only an Address, so this scans the
+    // CFG; Ghidra retains PcodeOp pointers and reads their parent inline.
     fn block_index_for_op_addr(&self, op_addr: Address) -> i32 {
         let target = op_addr.as_u64();
         for (i, blk_arc) in self.bblocks.blocks.iter().enumerate() {
@@ -6406,6 +6408,7 @@ impl Funcdata {
 
     /// Find `parent`'s slot in `child`'s incoming list (Ghidra
     /// `FlowBlock::getInIndex`). Returns `None` if not present.
+    // Ghidra: block.cc:579 FlowBlock::getInIndex
     fn find_in_index(
         &self,
         child: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
@@ -6422,6 +6425,8 @@ impl Funcdata {
 
     /// Find a jump-table whose op-address matches `op`, returning a cloned
     /// Arc (mutable-self counterpart to [`find_jump_table`](Self::find_jump_table)).
+    // RUGRA-GLUE: Rust ownership form of the existing find_jump_table mapping;
+    // Ghidra returns one raw JumpTable pointer and has no Arc-cloning helper.
     fn find_jump_table_arc(
         &self,
         op: &PcodeOpRef,
@@ -6437,6 +6442,8 @@ impl Funcdata {
     /// `glb->loader->loadFill(buf, size, addr)` to Rugra's
     /// `LoadImage::load_fill(size, addr) -> Result<Vec<u8>, DataUnavailError>`.
     /// Returns `None` if the image has no data at `addr`.
+    // RUGRA-GLUE: Rust Result/buffer adapter around LoadImage::load_fill;
+    // Ghidra fills the caller's buffer directly and has no Funcdata helper.
     fn load_fill(&self, size: usize, addr: Address) -> Option<Vec<u8>> {
         let arch = self.arch.as_ref()?;
         let loader = arch.loader.as_ref()?;
@@ -6449,6 +6456,8 @@ impl Funcdata {
     /// model, so this always returns `EXTRAPOP_UNKNOWN_FULL` — which forces
     /// [`fillin_extrapop`](Self::fillin_extrapop) to attempt byte-level
     /// recovery rather than short-circuiting.
+    // RUGRA-GLUE: Adapter for the unported FuncProto extrapop field; Ghidra
+    // calls funcp.getExtraPop() directly and has no Funcdata wrapper.
     fn funcp_extrapop(&self) -> i32 {
         crate::fspec::EXTRAPOP_UNKNOWN_FULL
     }
@@ -6456,6 +6465,7 @@ impl Funcdata {
     /// Does this function have no code body (external/thunk)? Adapts Ghidra's
     /// `hasNoCode()`. RUGRA-GAP: Rugra has no explicit flag; approximate via
     /// an empty obank (no ops means no body).
+    // Ghidra: funcdata.hh:153 Funcdata::hasNoCode
     fn has_no_code(&self) -> bool {
         self.obank.alivelist.is_empty() && self.size == 0
     }
@@ -6463,6 +6473,8 @@ impl Funcdata {
     /// Get the user-op type for CALLOTHER id `id`. Adapts Ghidra's
     /// `glb->userops.getOp(id)->getType()`. Returns `Unspecialized` if the
     /// architecture or user-op table is unavailable.
+    // RUGRA-GLUE: Rust Option/lock adapter for the inline user-op lookup in
+    // Funcdata::earlyJumpTableFail; Ghidra has no Funcdata::useropType helper.
     fn userop_type(&self, id: usize) -> crate::userop::UserOpType {
         use crate::userop::UserOpType;
         let arch = match self.arch.as_ref() {
@@ -11878,5 +11890,3 @@ impl CloneBlockOps {
         }
     }
 }
-
-

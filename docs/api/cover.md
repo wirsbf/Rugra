@@ -95,3 +95,19 @@ Intersect another cover with this one
 - `CoverBlock::intersect_char(op2)`（对齐 cover.cc:59）：返回 0/1/2（无/边界/区间相交）。
 - `Cover::intersect_char(op2)`（对齐 cover.cc:269）：遍历两个 cover 的 block map，对共同 block 调 CoverBlock::intersect_char。返回 0/1/2。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-11：ANN-E 注释溯源
+
+本轮只补函数来源标注，不改变运行时行为。源码 oracle 固定为 Ghidra
+12.0.4 commit `e40ed13014025f82488b1f8f7bca566894ac376b`：
+
+- `PcodeOpSetImpl::populate` 与 `affects_test` 映射到 `cover.hh` 中的两个
+  pure-virtual 方法。
+- `Cover::{block_index_of_op, order_of_op, predecessors_of}` 是 Rust
+  所有权/锁释放适配；Ghidra 在对应调用点直接解引用 `PcodeOp*` 和
+  `FlowBlock*`，没有独立函数。
+- `PcodeOpSet` 的 `Debug`、四个只读访问器，以及临时 `NoOpOwner` 的两个
+  trait 方法属于 Rust 可见性、快照或借用检查胶水，不计作 Ghidra 函数映射。
+
+这些标注不提升模块对齐级别；文件头列出的 endpoint 身份、回绕 cover、CFG
+递归和 PcodeOpSet 交集缺口仍然存在。

@@ -481,6 +481,8 @@ impl Cover {
     /// Used by `rebuild`/`add_ref_point_full` to bridge PcodeOp -> block index
     /// for the order-based cover API. (Ghidra inlines this as
     /// `op->getParent()->getIndex()`.)
+    // RUGRA-GLUE: Rust ownership adapter; Ghidra keeps a PcodeOp pointer and
+    // calls op->getParent()->getIndex() inline, so it has no standalone helper.
     fn block_index_of_op(op: &crate::op::PcodeOp) -> Option<i32> {
         let parent = op.parent.as_ref()?.upgrade()?;
         let idx = parent.read().unwrap().get_index();
@@ -491,6 +493,8 @@ impl Cover {
     /// `CoverBlock::getUIndex` marker/sentinel rules. Returns None if the op
     /// is an INDIRECT whose target order must be resolved through Funcdata
     /// (callers may then fall back to the INDIRECT's own order).
+    // RUGRA-GLUE: Rust forwarding helper for the order-only endpoint model;
+    // Ghidra calls CoverBlock::getUIndex directly and has no separate wrapper.
     fn order_of_op(op: &crate::op::PcodeOp) -> u32 {
         CoverBlock::get_u_index(op)
     }
@@ -616,6 +620,8 @@ impl Cover {
     /// `addRefPoint`/`addRefRecurse`. Returns a Vec so the caller can iterate
     /// without holding the block's read lock (the recurse call needs to take
     /// child locks).
+    // RUGRA-GLUE: Rust lock-release snapshot helper; Ghidra walks FlowBlock
+    // incoming raw pointers inline in Cover::addRefPoint/addRefRecurse.
     fn predecessors_of(
         bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
@@ -847,6 +853,7 @@ pub trait PcodeOpSetImpl: std::fmt::Debug {
     /// intersection tests. Faithful to `PcodeOpSet::populate` (cover.hh:52,
     /// pure-virtual). Receives `&mut PcodeOpSet` so it can call the protected
     /// `add_op`/`finalize` helpers.
+    // Ghidra: cover.hh:52 PcodeOpSet::populate
     fn populate(&self, set: &mut PcodeOpSet);
 
     /// Secondary test that the given PcodeOp affects the Varnode. Called after
@@ -855,6 +862,7 @@ pub trait PcodeOpSetImpl: std::fmt::Debug {
     /// should be prevented. Faithful to `PcodeOpSet::affectsTest`
     /// (cover.hh:61, pure-virtual). Returns true if merging should be
     /// prevented.
+    // Ghidra: cover.hh:61 PcodeOpSet::affectsTest
     fn affects_test(
         &self,
         op: &crate::op::PcodeOp,
@@ -863,6 +871,8 @@ pub trait PcodeOpSetImpl: std::fmt::Debug {
 }
 
 impl std::fmt::Debug for PcodeOpSet {
+    // RUGRA-GLUE: Rust Debug-trait implementation; Ghidra has no corresponding
+    // PcodeOpSet debug formatter (Cover::print is a different API).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let n = self.op_list.read().unwrap().len();
         f.debug_struct("PcodeOpSet")
@@ -1002,24 +1012,32 @@ impl PcodeOpSet {
 
     /// Number of ops currently in the set. (Ghidra uses `opList.size()`;
     /// Rugra exposes this as a method since `op_list` is private.)
+    // RUGRA-GLUE: Rust visibility adapter for private RwLock storage; Ghidra
+    // accesses PcodeOpSet::opList directly and has no getNumOps method.
     pub fn get_num_ops(&self) -> usize {
         self.op_list.read().unwrap().len()
     }
 
     /// Get the i-th op in the sorted set. (Ghidra indexes `opList[i]`
     /// directly; Rugra exposes a method since `op_list` is private.)
+    // RUGRA-GLUE: Rust visibility/ownership adapter returning an Arc clone;
+    // Ghidra indexes the protected opList vector directly.
     pub fn get_op(&self, i: usize) -> Option<OpArc> {
         self.op_list.read().unwrap().get(i).cloned()
     }
 
     /// Read-only access to the op list snapshot. Used by `Cover::intersect`
     /// (cover.cc:342) to walk the set.
+    // RUGRA-GLUE: Rust lock-release snapshot for private RwLock storage;
+    // Ghidra's friend Cover reads PcodeOpSet::opList directly.
     pub fn op_list_snapshot(&self) -> Vec<OpArc> {
         self.op_list.read().unwrap().clone()
     }
 
     /// Read-only access to the block-start index snapshot. Used by
     /// `Cover::intersect` (cover.cc:342) to delimit ops per block.
+    // RUGRA-GLUE: Rust lock-release snapshot for private RwLock storage;
+    // Ghidra's friend Cover reads PcodeOpSet::blockStart directly.
     pub fn block_start_snapshot(&self) -> Vec<i32> {
         self.block_start.read().unwrap().clone()
     }
@@ -1031,7 +1049,11 @@ impl PcodeOpSet {
 struct NoOpOwner;
 
 impl PcodeOpSetImpl for NoOpOwner {
+    // RUGRA-GLUE: Borrow-checker placeholder used only during mem::replace;
+    // Ghidra virtual dispatch never installs a temporary owner object.
     fn populate(&self, _set: &mut PcodeOpSet) {}
+    // RUGRA-GLUE: Borrow-checker placeholder used only during mem::replace;
+    // Ghidra virtual dispatch never invokes a temporary affectsTest method.
     fn affects_test(&self, _op: &crate::op::PcodeOp, _vn: &crate::varnode::Varnode) -> bool {
         false
     }

@@ -904,6 +904,26 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `op_set_input`(funcdata_op.cc:104): 改 `&mut self`,4 类语义全对齐(early-out / const dedup / opUnsetInput erase_descend / addDescend)。修了 placeholder bug(用 vn 当 resize 占位会触发 early-out)。
 - `op_unset_input`(cc:92): erase_descend + clearInput(隐式)。
 - `total_replace` / `op_set_all_input`: 改 `&mut self`(Ghidra 是 mutable)。
+
+### 2026-08-11：ANN-E CFG/helper 注释溯源
+
+本轮只补来源标注，不改变运行时行为。源码 oracle 固定为 Ghidra 12.0.4
+commit `e40ed13014025f82488b1f8f7bca566894ac376b`。
+
+- `find_in_index` 映射 `block.cc:579 FlowBlock::getInIndex`；Rust 用
+  `Option<usize>` 表示 Ghidra 的 `-1` 未找到值。
+- `has_no_code` 映射 `funcdata.hh:153 Funcdata::hasNoCode`，但当前 Rust
+  仍以空 op-bank 加零 size 近似 Ghidra 的 `no_code` flag，因此该映射仍是
+  已知行为缺口，不能据此声明 `MATCH`。
+- `block_index_for_op_addr`、`find_jump_table_arc`、`load_fill`、
+  `funcp_extrapop`、`userop_type` 是 Rust 的地址查找、Arc 所有权、
+  `Result`/`Option` 或缺字段适配器；Ghidra 在 `compareCallspecs`、
+  `blockRemoveInternal`、`fillinExtrapop`、`earlyJumpTableFail` 内直接执行
+  对应表达式，没有这些独立的 `Funcdata` 函数。
+
+其中 `funcp_extrapop` 恒返 unknown、`userop_type` 的缺表 fallback、以及
+`block_index_for_op_addr` 用地址代替 PcodeOp 身份/顺序，都是既有差异；本轮
+仅如实分类，未将其伪装为 Ghidra 映射。
  
  
  
