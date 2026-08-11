@@ -814,6 +814,24 @@ Funcdata: +create_new_block。BlockBasic: +JOINED_BLOCK flag。
 <!-- delete-simplify: 1783145834.621112 -->
 <!-- activeparam-port: 1783158350.9445786 -->
 <!-- activeparam-integration: 1783160103.0862665 -->
+
+### 2026-08-11：ANN-F provenance 分类（无行为变更）
+
+以下三个函数在 Ghidra 12.0.4 中没有独立函数体，不能标成逐函数映射：
+
+- `newparam_push_unique` 是 `ActionReturnRecovery::buildReturnOutput`
+  (`coreaction.cc:1836-1906`) 内联 `vector::push_back` 的 Rust
+  `Option<Arc<_>>` 适配器；其末项去重依赖当前非 nullable input 模型，缺口由
+  `OPBANK-0001` / `FSPEC-0002` 跟踪。
+- `seed_output_trials` 是因 `Heritage::guardReturns`
+  (`heritage.cc:1652-1692`) 尚未接入而放到 return-recovery 阶段的 fallback；
+  该阶段迁移不构成行为对齐，由 `HERITAGE-0001` / `FSPEC-0002` 跟踪。
+- `derive_func_output_map` 因 Rugra `FuncProto` 尚未持有实际 `ProtoModel`，临时调用
+  `default_x86_64()`；Ghidra 在 `ActionReturnRecovery::apply`
+  (`coreaction.cc:1908-1955`) 直接调用当前函数原型的 `deriveOutputMap`，缺口由
+  `FSPEC-0001` / `FSPEC-0002` 跟踪。
+
+本轮只补 `RUGRA-GLUE` provenance；实现及 oracle 状态均未改变。
  
  
  

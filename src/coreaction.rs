@@ -8051,6 +8051,7 @@ impl Action for ActionReturnRecovery {
 // (guards against copying slot 0 twice). Mirrors Ghidra's vector push_back
 // inside buildReturnOutput's trial loop (cc:1846), which never duplicates
 // because trial slots are strictly increasing.
+// RUGRA-GLUE: ANN-F; Rust Option<Arc> adapter for Ghidra's inline push_back; duplicate suppression is tracked by OPBANK-0001/FSPEC-0002.
 fn newparam_push_unique(
     newparam: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
@@ -8069,6 +8070,7 @@ fn newparam_push_unique(
 // so we perform the equivalent registration here, driven by
 // ProtoModel::output_entries (the x86-64 SysV default's sole output entry is
 // RAX at Register offset 0x0, size 8).
+// RUGRA-GLUE: ANN-F; fallback seeds default-model outputs because Heritage::guardReturns is not wired; relocation is tracked by HERITAGE-0001/FSPEC-0002.
 fn seed_output_trials(fd: &mut Funcdata) {
     use crate::address::Address;
     let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
@@ -8088,6 +8090,7 @@ fn seed_output_trials(fd: &mut Funcdata) {
 // delegates to ProtoModel::deriveOutputMap -> ParamListStandard::fillinMap.
 // Rugra's FuncProto has no ProtoModel pointer, so resolve the default model
 // directly and call its derive_output_map.
+// RUGRA-GLUE: ANN-F; calls a default ProtoModel because FuncProto lacks oracle model ownership; replacement is tracked by FSPEC-0001/FSPEC-0002.
 fn derive_func_output_map(fd: &mut Funcdata) {
     let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
     if let Some(active) = fd.active_output.as_mut() {
@@ -10582,4 +10585,3 @@ mod tests {
         let _ = a.apply(&mut fd).unwrap();
         assert!(a.count >= 1, "diamond join candidate must be detected");
     }
-

@@ -1842,6 +1842,7 @@ impl Heritage {
     /// Per-space version of guard_calls_range. The space parameter comes from
     /// the heritage per-space loop, allowing characterize_as_input_param to
     /// correctly match Register-space parameter entries (RDI/RSI/RDX etc).
+    // RUGRA-GLUE: ANN-F; explicit-space adapter for guardCalls because Rugra Address lacks space identity; removal is tracked by ADDRESS-0001/HERITAGE-0001.
     pub fn guard_calls_range_with_space(
         &mut self,
         fd: &mut Funcdata,

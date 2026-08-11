@@ -716,6 +716,16 @@ place_multiequal_direct 的 block 查找从 .expect 改为优雅 return。
 ### 2026-07-01（续 3）：visit_rename 迭代化（消除递归栈深度）
 visit_rename_impl 从递归改为迭代式（显式 work stack + Enter/Leave 状态）。work stack 有 100000 上限防循环。消除 dominator-tree 递归深度。但 mainloop repeatapply 仍栈溢出（即使 cap=1+迭代 Heritage），根因待进一步调查。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-11：ANN-F provenance 分类（无行为变更）
+
+`guard_calls_range_with_space` 不是 Ghidra 的独立 overload。锁定 oracle 只有
+`Heritage::guardCalls(uint4, const Address &, int4, vector<Varnode *> &)`
+(`heritage.cc:1443-1527`)，其中 address-space 身份由 `Address` 自身携带。Rugra
+当前 `Address` 只有数值 offset，因此该 helper 额外传递 `AddressSpace`，属于
+临时参数适配层；由 `ADDRESS-0001` / `HERITAGE-0001` 跟踪并在 space-aware
+`Address` 与 canonical Heritage 接线完成后移除。本轮只补 `RUGRA-GLUE`
+provenance，不改变 guard 行为或对齐状态。
  
 
 ### 2026-07-05: HeritageInfo + dead-code 时序对齐 Ghidra cc:180/2793/2843
