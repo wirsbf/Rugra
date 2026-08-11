@@ -11,6 +11,30 @@ This module provides C-compatible interfaces to Rugra's core logic,
 allowing it to be integrated into Ghidra's C++ decompiler or used for
 comparison testing ("对拍").
 
+## 2026-08-12：ANN-L extern ABI provenance
+
+锁定 oracle 为 Ghidra 12.0.4 commit
+`e40ed13014025f82488b1f8f7bca566894ac376b`。本轮为 10 个导出的
+`extern "C"` / `unsafe extern "C"` 函数补充了逐入口 `RUGRA-GLUE`
+来源说明：这些函数是 Rugra 的 C/Python 对拍 ABI，不是 Ghidra 的一对一算法函数。
+
+- `rugra_evaluate_constant` 聚合桥接多个
+  `OpBehavior::evaluateUnary/evaluateBinary` 实现；Ghidra 没有相同的单一 C ABI
+  dispatcher。
+- `rugra_init_test_program` 与 `rugra_add_test_op` 构造 Rugra 专用的全局测试
+  fixture；它们不是 `Funcdata`、`PcodeOpBank` 或 `Varnode` 构造算法的映射。
+- `rugra_observe_jumptable`、`rugra_check_varnode_version`、
+  `rugra_check_block_structure` 与 `rugra_check_action_apply` 只消费并记录外部观察，
+  分别不等同于 `JumpTable::recoverAddresses`、`Heritage::rename`、`FlowBlock`
+  算法或 `Action::perform`。
+- `rugra_version`、`rugra_set_binary_data` 与 `rugra_compare_pcode` 分别是版本导出、
+  仅忽略外部指针并记录长度的诊断入口和跨引擎比较器，Ghidra 没有对应的 Rugra
+  ABI endpoint。Ghidra 的 `Varnode` 也没有 `rugra_check_varnode_version` 所接收的
+  数字 `version` 字段。
+
+本轮只增加 provenance 注释与文档，未改变 ABI 或运行行为；这些注释不构成
+Ghidra 函数行为 `MATCH` 证据，也不升级模块状态。
+
 ## 导出的公共 API (Public API)
 
 ### `pub struct VarnodeFFI`
@@ -21,7 +45,8 @@ C-compatible representation of a Varnode for FFI comparison
 
 FFI interface for constant folding evaluation
 
-This matches Ghidra's OpBehavior::evaluateBinary/Unary logic.
+This adapter covers a subset of Ghidra's distributed
+OpBehavior::evaluateBinary/Unary implementations; it is not a one-to-one mapping.
 
 # Arguments
 * `opcode` - The Ghidra OpCode integer
@@ -55,8 +80,8 @@ This allows Python/C++ to simulate Rugra's analysis state for comparison tests
 
 ### `pub extern "C" fn rugra_set_binary_data(_ptr: *const u8, len: usize)`
 
-Set the binary data context for FFI analysis
-Allows Rugra to perform memory-backed verification
+Report binary-buffer metadata received from an FFI caller.
+The pointer is currently ignored; only the supplied length is logged.
 
 ### `pub extern "C" fn rugra_observe_jumptable(op_addr: u64, table_addr: u64, size: usize)`
 
