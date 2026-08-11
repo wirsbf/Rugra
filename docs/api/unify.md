@@ -2,7 +2,9 @@
 
 **源代码路径**: `src/unify.rs`
 **Ghidra 对应**: `unify.hh` / `unify.cc` (2358行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 Ghidra unify 方法覆盖（20 Constraint 类型 + UnifyState + UnifyCPrinter）。111 pub fn，16 单元测试，无 TODO。
+**状态**: 🟢 **L2.5**，与 `ALIGNMENT_ROADMAP.md` 一致。现有实现覆盖主要
+类型与方法，但尚无锁定 12.0.4 oracle `MATCH` fixture；ANN-P 仅补 provenance，
+不构成 L3 证据。
 
 ## 模块说明
 
@@ -53,7 +55,20 @@ RHS 常量构造（Named/Absolute/NZMask/Consumed/Offset/IsConstant）。
 
 新增 evaluate_mut() 方法用于动作约束（OpOutput/OpInput 需修改 state）。
 4 个新单元测试：OpOutput、OpInput、VarnodeWritten、VarnodeConstant。
-### 2026-06-27：unify.cc L2->L3 完整移植（unify.cc 全文）
-- 从 ~460 行骨架扩展到 2415 行完整实现：43 个 struct 含完整约束层级（ConstantAbsolute/Consumed/Expression/NZMask, ConstraintOpcode/OpInput/OpOutput/Group/Or/VarCompare, UnifyState, RuleMatcher, UnifyCPrinter, TraverseGroupState/DescendState/CountState）。106 处 @// unify.cc:@ 源码标注。仅 1 处非关键 unimplemented（CPrinter 常量运算边缘）。对齐 Ghidra P-code 模式匹配框架。
-<!-- annotation-pass: 2026-07-04 -->
+### 2026-06-27：历史实现扩展记录（非 L3 证据）
+- 从 ~460 行骨架扩展到 2415 行：43 个 struct 覆盖约束层级（ConstantAbsolute/Consumed/Expression/NZMask, ConstraintOpcode/OpInput/OpOutput/Group/Or/VarCompare, UnifyState, RuleMatcher, UnifyCPrinter, TraverseGroupState/DescendState/CountState）。该历史记录没有锁定 oracle fixture，且保留 CPrinter 常量运算边缘缺口。
+
+### 2026-08-12：ANN-P expanded-scanner annotation bootstrap
+
+- 六个 RHS 常量构造器映射到 unify.hh:90/:99/:108/:117/:126/:135；三个
+  Dummy 构造器映射到 unify.hh:226/:238/:250。Dummy 的 Rust 实现额外把
+  `uniqid` 初始化为 0，而 Ghidra 留待 `setId` 写入；这是映射函数的既有状态差异，
+  不能以 `RUGRA-GLUE` 隐藏。
+- `ConstraintGroup::default` 标为 RUGRA-GLUE。Ghidra 没有 Rust `Default`
+  trait，并且 unify.cc:974 构造器把 `maxnum` 初始化为 -1，而当前 Rust
+  `ConstraintGroup::new()` 使用 0。这是既有行为差异，本轮未修改。
+- 只有 `ConstraintGroup::default` 是 Rust trait glue。本轮只做注释和单行函数格式
+  展开，不改变行为、不提升模块状态。
+
+<!-- annotation-pass: 2026-08-12 ANN-P; provenance-only -->
  

@@ -251,7 +251,12 @@ impl RHSConstant for ConstantAbsolute {
 #[derive(Debug, Clone)]
 pub struct ConstantNZMask { varindex: usize }
 
-impl ConstantNZMask { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantNZMask {
+    // Ghidra: unify.hh:90 ConstantNZMask::ConstantNZMask
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantNZMask {
     // Ghidra: unify.cc:169 ConstantNZMask::getConstant
@@ -275,7 +280,12 @@ impl RHSConstant for ConstantNZMask {
 #[derive(Debug, Clone)]
 pub struct ConstantConsumed { varindex: usize }
 
-impl ConstantConsumed { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantConsumed {
+    // Ghidra: unify.hh:99 ConstantConsumed::ConstantConsumed
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantConsumed {
     // Ghidra: unify.cc:182 ConstantConsumed::getConstant
@@ -299,7 +309,12 @@ impl RHSConstant for ConstantConsumed {
 #[derive(Debug, Clone)]
 pub struct ConstantOffset { varindex: usize }
 
-impl ConstantOffset { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantOffset {
+    // Ghidra: unify.hh:108 ConstantOffset::ConstantOffset
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantOffset {
     // Ghidra: unify.cc:195 ConstantOffset::getConstant
@@ -323,7 +338,12 @@ impl RHSConstant for ConstantOffset {
 #[derive(Debug, Clone)]
 pub struct ConstantIsConstant { varindex: usize }
 
-impl ConstantIsConstant { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantIsConstant {
+    // Ghidra: unify.hh:117 ConstantIsConstant::ConstantIsConstant
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantIsConstant {
     // Ghidra: unify.cc:208 ConstantIsConstant::getConstant
@@ -349,7 +369,12 @@ impl RHSConstant for ConstantIsConstant {
 #[derive(Debug, Clone)]
 pub struct ConstantHeritageKnown { varindex: usize }
 
-impl ConstantHeritageKnown { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantHeritageKnown {
+    // Ghidra: unify.hh:126 ConstantHeritageKnown::ConstantHeritageKnown
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantHeritageKnown {
     // Ghidra: unify.cc:221 ConstantHeritageKnown::getConstant
@@ -375,7 +400,12 @@ impl RHSConstant for ConstantHeritageKnown {
 #[derive(Debug, Clone)]
 pub struct ConstantVarnodeSize { varindex: usize }
 
-impl ConstantVarnodeSize { pub fn new(ind: usize) -> Self { Self { varindex: ind } } }
+impl ConstantVarnodeSize {
+    // Ghidra: unify.hh:135 ConstantVarnodeSize::ConstantVarnodeSize
+    pub fn new(ind: usize) -> Self {
+        Self { varindex: ind }
+    }
+}
 
 impl RHSConstant for ConstantVarnodeSize {
     // Ghidra: unify.cc:234 ConstantVarnodeSize::getConstant
@@ -693,7 +723,16 @@ fn copy_ids(tu: &mut usize, tm: &mut usize, src: &dyn UnifyConstraint) {
 /// (unify.hh:223-233).
 #[derive(Debug, Clone)]
 pub struct DummyOpConstraint { uniqid: usize, maxnum: usize, opindex: usize }
-impl DummyOpConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, opindex: ind } } }
+impl DummyOpConstraint {
+    // Ghidra: unify.hh:226 DummyOpConstraint::DummyOpConstraint
+    pub fn new(ind: usize) -> Self {
+        Self {
+            uniqid: 0,
+            maxnum: ind,
+            opindex: ind,
+        }
+    }
+}
 impl UnifyConstraint for DummyOpConstraint {
     // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
@@ -721,7 +760,16 @@ impl UnifyConstraint for DummyOpConstraint {
 /// (unify.hh:235-245).
 #[derive(Debug, Clone)]
 pub struct DummyVarnodeConstraint { uniqid: usize, maxnum: usize, varindex: usize }
-impl DummyVarnodeConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, varindex: ind } } }
+impl DummyVarnodeConstraint {
+    // Ghidra: unify.hh:238 DummyVarnodeConstraint::DummyVarnodeConstraint
+    pub fn new(ind: usize) -> Self {
+        Self {
+            uniqid: 0,
+            maxnum: ind,
+            varindex: ind,
+        }
+    }
+}
 impl UnifyConstraint for DummyVarnodeConstraint {
     // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
@@ -749,7 +797,16 @@ impl UnifyConstraint for DummyVarnodeConstraint {
 /// (unify.hh:247-257).
 #[derive(Debug, Clone)]
 pub struct DummyConstConstraint { uniqid: usize, maxnum: usize, constindex: usize }
-impl DummyConstConstraint { pub fn new(ind: usize) -> Self { Self { uniqid: 0, maxnum: ind, constindex: ind } } }
+impl DummyConstConstraint {
+    // Ghidra: unify.hh:250 DummyConstConstraint::DummyConstConstraint
+    pub fn new(ind: usize) -> Self {
+        Self {
+            uniqid: 0,
+            maxnum: ind,
+            constindex: ind,
+        }
+    }
+}
 impl UnifyConstraint for DummyConstConstraint {
     // Ghidra: unify.hh:209 UnifyConstraint::getId
     fn uniqid(&self) -> usize { self.uniqid }
@@ -1738,7 +1795,13 @@ impl std::fmt::Debug for ConstraintGroup {
     }
 }
 
-impl Default for ConstraintGroup { fn default() -> Self { Self::new() } }
+impl Default for ConstraintGroup {
+    // RUGRA-GLUE: Rust Default delegates to new(); Ghidra has no Default trait,
+    // and its constructor at unify.cc:974 sets maxnum=-1 rather than Rust's 0.
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ConstraintGroup {
     /// Faithful to `ConstraintGroup::ConstraintGroup` (unify.cc:960-979).
@@ -2996,8 +3059,5 @@ mod tests {
         assert_eq!(ConstantOffset::new(1).get_constant(&state), 0x10);
     }
 }
-
-
-
 
 
