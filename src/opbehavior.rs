@@ -132,9 +132,9 @@ pub fn evaluate_unary(opc: OpCode, size_out: usize, size_in: usize, in1: u64) ->
         OpCode::CPUI_INT_2COMP => uintb_negate(in1.wrapping_sub(1), size_in),
         // Ghidra: opbehavior.cc:570 OpBehaviorBoolNegate::evaluateUnary
         OpCode::CPUI_BOOL_NEGATE => in1 ^ 1,
-        // Ghidra: opbehavior.cc:811 OpBehaviorPopcount::evaluateUnary
+        // Ghidra: opbehavior.cc:782 OpBehaviorPopcount::evaluateUnary
         OpCode::CPUI_POPCOUNT => crate::utils::bits::popcount(in1) as u64,
-        // Ghidra: opbehavior.cc:817 OpBehaviorLzcount::evaluateUnary
+        // Ghidra: opbehavior.cc:788 OpBehaviorLzcount::evaluateUnary
         //
         // `count_leading_zeros(in1) - 8*(sizeof(uintb) - sizein)`. Ghidra's
         // `uintb` is 8 bytes, so the subtraction re-bases the host-level CLZ
@@ -337,11 +337,11 @@ pub fn evaluate_binary(
         OpCode::CPUI_BOOL_AND => in1 & in2,
         // Ghidra: opbehavior.cc:591 OpBehaviorBoolOr::evaluateBinary
         OpCode::CPUI_BOOL_OR => in1 | in2,
-        // Ghidra: opbehavior.cc:781 OpBehaviorPiece::evaluateBinary
+        // Ghidra: opbehavior.cc:752 OpBehaviorPiece::evaluateBinary
         // (in1<<((sizeout-sizein)*8)) | in2. Note Ghidra assumes sizein is the
         // size of *each* input piece.
         OpCode::CPUI_PIECE => (in1 << ((size_out - size_in) * 8)) | in2,
-        // Ghidra: opbehavior.cc:788 OpBehaviorSubpiece::evaluateBinary
+        // Ghidra: opbehavior.cc:759 OpBehaviorSubpiece::evaluateBinary
         // in2 is the truncated-byte offset (not a sized varnode value).
         OpCode::CPUI_SUBPIECE => {
             if in2 >= 8 {
@@ -350,7 +350,7 @@ pub fn evaluate_binary(
                 (in1 >> (in2 * 8)) & out_mask
             }
         }
-        // Ghidra: opbehavior.cc:804 OpBehaviorPtrsub::evaluateBinary
+        // Ghidra: opbehavior.cc:775 OpBehaviorPtrsub::evaluateBinary
         OpCode::CPUI_PTRSUB => (in1.wrapping_add(in2)) & out_mask,
         // CPUI_PTRADD is canonically ternary (opbehavior.hh:516); the binary
         // form used by older callers treats the missing wordsize as 1.
@@ -364,8 +364,8 @@ pub fn evaluate_binary(
 /// Evaluate a ternary P-code operation on constant inputs.
 ///
 /// Only `CPUI_PTRADD` has a ternary behavior (opbehavior.hh:516 /
-/// opbehavior.cc:797): `res = (in1 + in2 * in3) & mask(sizeout)`.
-// Ghidra: opbehavior.cc:797 OpBehaviorPtradd::evaluateTernary
+/// opbehavior.cc:768): `res = (in1 + in2 * in3) & mask(sizeout)`.
+// Ghidra: opbehavior.cc:768 OpBehaviorPtradd::evaluateTernary
 pub fn evaluate_ternary(
     opc: OpCode,
     size_out: usize,
@@ -376,7 +376,7 @@ pub fn evaluate_ternary(
 ) -> Option<u64> {
     let out_mask = calc_mask(size_out);
     let result = match opc {
-        // Ghidra: opbehavior.cc:797 OpBehaviorPtradd::evaluateTernary
+        // Ghidra: opbehavior.cc:768 OpBehaviorPtradd::evaluateTernary
         OpCode::CPUI_PTRADD => (in1.wrapping_add(in2.wrapping_mul(in3))) & out_mask,
         _ => return None,
     };
@@ -1653,7 +1653,7 @@ impl OpBehavior for OpBehaviorPiece {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_PIECE, false)
     }
-    // Ghidra: opbehavior.cc:781 OpBehaviorPiece::evaluateBinary
+    // Ghidra: opbehavior.cc:752 OpBehaviorPiece::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, sizein: usize, in1: u64, in2: u64) -> u64 {
         (in1 << ((sizeout - sizein) * 8)) | in2
     }
@@ -1672,7 +1672,7 @@ impl OpBehavior for OpBehaviorSubpiece {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_SUBPIECE, false)
     }
-    // Ghidra: opbehavior.cc:788 OpBehaviorSubpiece::evaluateBinary
+    // Ghidra: opbehavior.cc:759 OpBehaviorSubpiece::evaluateBinary
     fn evaluate_binary(&self, sizeout: usize, _sizein: usize, in1: u64, in2: u64) -> u64 {
         if in2 >= 8 {
             0
@@ -1695,7 +1695,7 @@ impl OpBehavior for OpBehaviorPtradd {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_PTRADD, false)
     }
-    // Ghidra: opbehavior.cc:797 OpBehaviorPtradd::evaluateTernary
+    // Ghidra: opbehavior.cc:768 OpBehaviorPtradd::evaluateTernary
     fn evaluate_ternary(
         &self,
         sizeout: usize,
@@ -1737,7 +1737,7 @@ impl OpBehavior for OpBehaviorPopcount {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_POPCOUNT, true)
     }
-    // Ghidra: opbehavior.cc:811 OpBehaviorPopcount::evaluateUnary
+    // Ghidra: opbehavior.cc:782 OpBehaviorPopcount::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, _sizein: usize, in1: u64) -> u64 {
         crate::utils::bits::popcount(in1) as u64
     }
@@ -1756,7 +1756,7 @@ impl OpBehavior for OpBehaviorLzcount {
     fn meta(&self) -> OpBehaviorMeta {
         OpBehaviorMeta::new(OpCode::CPUI_LZCOUNT, true)
     }
-    // Ghidra: opbehavior.cc:817 OpBehaviorLzcount::evaluateUnary
+    // Ghidra: opbehavior.cc:788 OpBehaviorLzcount::evaluateUnary
     fn evaluate_unary(&self, _sizeout: usize, sizein: usize, in1: u64) -> u64 {
         (count_leading_zeros(in1) - (8 * (8 - sizein.min(8))) as i32) as u64
     }

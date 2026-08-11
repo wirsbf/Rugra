@@ -41,7 +41,7 @@ PTRADD(binary)。除零返回 `None`（Ghidra 抛 `EvaluationError`）。
 
 #### `pub fn evaluate_ternary(opc, size_out, size_in, in1, in2, in3) -> Option<u64>`
 模拟三元 P-code 操作。仅 `CPUI_PTRADD`：`(in1 + in2*in3) & mask`。
-对齐 `OpBehaviorPtradd::evaluateTernary`（cc:797）。
+对齐 `OpBehaviorPtradd::evaluateTernary`（cc:768）。
 
 #### `pub fn recover_input_unary(opc, size_out, out, size_in) -> Option<u64>`
 一元操作的逆运算，从输出恢复输入。覆盖 COPY/ZEXT/SEXT/INT_NEGATE/
@@ -111,12 +111,12 @@ INT_2COMP。超范围返回 `None`（Ghidra 抛 `EvaluationError`）。
 | `OpBehaviorFloatInt2Float` | OpBehaviorFloatInt2Float | 451 | 718 |
 | `OpBehaviorFloatFloat2Float` | OpBehaviorFloatFloat2Float | 459 | 728 |
 | `OpBehaviorFloatTrunc` | OpBehaviorFloatTrunc | 467 | 741 |
-| `OpBehaviorPiece` | OpBehaviorPiece | 499 | 781 |
-| `OpBehaviorSubpiece` | OpBehaviorSubpiece | 506 | 788 |
-| `OpBehaviorPtradd` | OpBehaviorPtradd | 513 | 797 |
-| `OpBehaviorPtrsub` | OpBehaviorPtrsub | 520 | 804 |
-| `OpBehaviorPopcount` | OpBehaviorPopcount | 527 | 811 |
-| `OpBehaviorLzcount` | OpBehaviorLzcount | 534 | 817 |
+| `OpBehaviorPiece` | OpBehaviorPiece | 501 | 752 |
+| `OpBehaviorSubpiece` | OpBehaviorSubpiece | 508 | 759 |
+| `OpBehaviorPtradd` | OpBehaviorPtradd | 513 | 768 |
+| `OpBehaviorPtrsub` | OpBehaviorPtrsub | 520 | 775 |
+| `OpBehaviorPopcount` | OpBehaviorPopcount | 527 | 782 |
+| `OpBehaviorLzcount` | OpBehaviorLzcount | 534 | 788 |
 
 #### `pub struct OpBehaviorFactory`
 对应 `opbehavior.cc:38 OpBehavior::registerInstructions`。`OpBehaviorFactory::new()`
