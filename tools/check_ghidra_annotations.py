@@ -30,23 +30,21 @@ import os
 import subprocess
 from pathlib import Path
 
+try:  # ``python -m tools.check_ghidra_annotations``
+    from .rust_fn_scanner import RustFunction, run_self_test as run_scanner_self_test
+    from .rust_fn_scanner import scan_rust_functions
+except ImportError:  # ``python tools/check_ghidra_annotations.py``
+    from rust_fn_scanner import RustFunction, run_self_test as run_scanner_self_test
+    from rust_fn_scanner import scan_rust_functions
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
-
-# fn 定义正则：匹配 `pub fn name(`, `fn name(`, `async fn`, `unsafe fn`
-# 必须在行首（允许前导空白），捕获函数名。
-FN_RE = re.compile(r"^\s*(pub\s+)?(async\s+)?(unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*[<(]")
 
 # Ghidra 注释正则：`// Ghidra:` （允许前导空白和 // 后空格）
 GHIDRA_RE = re.compile(r"//\s*Ghidra:")
 
 # RUGRA-GLUE 豁免标记
 GLUE_RE = re.compile(r"//\s*RUGRA-GLUE:")
-
-# cfg(test) mod 开始/结束（粗略：顶格 `#[cfg(test)]` 后跟 `mod tests`）
-CFG_TEST_OPEN_RE = re.compile(r"^#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
-MOD_TESTS_OPEN_RE = re.compile(r"^\s*(pub\s+)?mod\s+(tests?|common)\s*\{")
-
 
 def detect_git_prefix() -> str:
     result = subprocess.run(
@@ -130,127 +128,104 @@ def get_all_rs_files() -> list[str]:
     return out
 
 
-def find_fn_violations(rs_abs: Path) -> list[tuple[int, str, str]]:
-    """
-    扫描一个 .rs 文件，返回所有违规的 (line_no_1based, fn_name, reason)。
+def _has_alignment_marker(lines: list[str], fn_line: int) -> bool:
+    """Check the comment/attribute block immediately above a function item."""
 
-    对每个 fn 定义：
-      - 若在 #[cfg(test)] mod tests { } 内部 → 豁免
-      - 若上方紧邻的注释块中有 #[test] → 豁免
-      - 若上方注释块中有 // Ghidra: → 通过
-      - 若上方注释块中有 // RUGRA-GLUE: → 豁免（但记录为 glue）
-      - 否则 → 违规
-    """
+    j = fn_line - 1
+    while j >= 0:
+        stripped = lines[j].strip()
+        if not stripped or stripped.startswith("#![") or stripped.startswith("#["):
+            j -= 1
+            continue
+        if stripped.startswith("//"):
+            if GHIDRA_RE.search(stripped) or GLUE_RE.search(stripped):
+                return True
+            j -= 1
+            continue
+        break
+    return False
+
+
+def _find_fn_violation_records(text: str) -> list[tuple[RustFunction, str]]:
+    lines = text.split("\n")
+    violations: list[tuple[RustFunction, str]] = []
+    records = scan_rust_functions(text)
+    first_item_on_line: dict[int, int] = {}
+    for record in records:
+        first_item_on_line.setdefault(record.start_line, record.start)
+    for record in records:
+        can_use_above_marker = first_item_on_line[record.start_line] == record.start
+        if record.is_test or (
+            can_use_above_marker and _has_alignment_marker(lines, record.start_line)
+        ):
+            continue
+        reason = "缺少 `// Ghidra: <file>:<line> <fn>` 对齐注释"
+        if record.name in ("main", "run", "default"):
+            reason = (
+                f"入口/语言胶水函数 `{record.name}` 缺少 `// RUGRA-GLUE:` "
+                "标注（说明为何 Ghidra 无对应物）"
+            )
+        violations.append((record, reason))
+    return violations
+
+
+def find_fn_violations(rs_abs: Path) -> list[tuple[int, str, str]]:
+    """Return unannotated, non-test Rust function items."""
+
     try:
         text = rs_abs.read_text(encoding="utf-8")
     except Exception:
         return []
-    lines = text.split("\n")
-    n = len(lines)
+    return [
+        (record.start_line + 1, record.name, reason)
+        for record, reason in _find_fn_violation_records(text)
+    ]
 
-    # 先标记每个 fn 的行号、是否在 test mod 内、是否有 #[test]
-    # 跟踪 test mod 嵌套深度
-    test_depth = 0  # 当前位于多少层 #[cfg(test)] mod 内
-    # 用花括号深度跟踪 mod 退出（粗略）
-    brace_stack = []  # 每项: ("test_mod", open_brace_line) 或 ("other", ...)
-    fn_records = []  # (fn_line_0based, name, in_test_mod)
 
-    i = 0
-    while i < n:
-        line = lines[i]
-        # 检测 #[cfg(test)] mod tests { 组合（可能跨两行或同行）
-        # 先看当前行是否是 cfg(test) 属性，下一行是 mod tests
-        if CFG_TEST_OPEN_RE.match(line):
-            # 找下一个非空非属性行，看是不是 mod tests
-            j = i + 1
-            while j < n and (lines[j].strip() == "" or lines[j].strip().startswith("#[")):
-                j += 1
-            if j < n and MOD_TESTS_OPEN_RE.match(lines[j]):
-                # 这是一个 test mod，开始跟踪
-                # 找该 mod 的开括号
-                k = j
-                while k < n and "{" not in lines[k]:
-                    k += 1
-                if k < n:
-                    brace_stack.append(("test_mod", k))
-                    test_depth += 1
-                    i = k + 1
-                    continue
+def run_self_test() -> None:
+    run_scanner_self_test()
+    fixture = r'''
+// Ghidra: test.cc:1 annotated
+pub const fn annotated() {}
+pub const fn const_item() {}
+pub(crate) fn restricted() {}
+pub extern "C" fn exported() {}
+pub unsafe extern "C" fn unsafe_exported() {}
+trait T { fn declared(&self); }
+struct Compact;
+impl Compact { pub fn compact() {} }
+// Ghidra: test.cc:2 first_on_line
+impl Pair { fn first_on_line() {} fn second_on_line() {} }
+#[cfg(test)]
+mod arbitrary_name { mod nested { fn nested_test() {} } }
+fn production_after_test() {}
+mod production_module {
+    #[cfg(test)]
+    mod fixtures { fn nested_test_two() {} }
+    fn nested_production() {}
+}
+#[cfg(not(test))]
+fn cfg_not_test() {}
+// fn fake_comment() {}
+const S: &str = "fn fake_string() {}";
+'''
+    violations = _find_fn_violation_records(fixture)
+    names = [record.name for record, _ in violations]
+    assert names == [
+        "const_item", "restricted", "exported", "unsafe_exported", "declared",
+        "compact", "second_on_line", "production_after_test", "nested_production",
+        "cfg_not_test",
+    ], names
+    assert "annotated" not in names and "nested_test" not in names
 
-        # 普通 mod 开括号（非 test）也跟踪，避免误把 mod 内 fn 当顶层
-        m_mod = re.match(r"^\s*(pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{", line)
-        if m_mod and not CFG_TEST_OPEN_RE.match(line):
-            brace_stack.append(("other_mod", i))
-
-        # 跟踪花括号增减（粗略：只数 { } 不在字符串/注释里的近似——
-        # 对本工具用途足够，因为我们只关心 mod 边界，fn 级 brace 不影响判定）
-        # 注：这种粗略计数对内嵌 { } 字符串可能误判，但 test_mod 退出靠的是
-        # 顶格 `}` 且与 mod 行缩进一致——简化起见，我们用栈匹配法：
-        # 只在遇到 **顶格** 的 `}` 且栈顶是 test_mod/other_mod 时弹出。
-        if line.rstrip() == "}" and brace_stack:
-            kind, _ = brace_stack[-1]
-            if kind in ("test_mod", "other_mod"):
-                brace_stack.pop()
-                if kind == "test_mod":
-                    test_depth -= 1
-
-        # 检测 fn 定义
-        m = FN_RE.match(line)
-        if m:
-            name = m.group(4)
-            in_test = test_depth > 0
-            fn_records.append((i, name, in_test))
-
-        i += 1
-
-    violations = []
-    for fn_idx, name, in_test in fn_records:
-        if in_test:
-            continue
-        # fn main / fn run (二进制入口) 也豁免，但需 // RUGRA-GLUE 标注
-        # 先向上扫描注释/属性块，收集标记
-        has_test_attr = False
-        has_ghidra = False
-        has_glue = False
-        j = fn_idx - 1
-        while j >= 0:
-            s = lines[j].rstrip()
-            stripped = s.strip()
-            if stripped == "":
-                j -= 1
-                continue
-            if stripped.startswith("#![") or stripped.startswith("#["):
-                if "test" in stripped:
-                    has_test_attr = True
-                j -= 1
-                continue
-            if stripped.startswith("//"):
-                if GHIDRA_RE.search(stripped):
-                    has_ghidra = True
-                if GLUE_RE.search(stripped):
-                    has_glue = True
-                j -= 1
-                continue
-            # 遇到代码行，停止
-            break
-
-        if has_test_attr:
-            continue
-        if has_ghidra:
-            continue
-        if has_glue:
-            continue
-
-        reason = "缺少 `// Ghidra: <file>:<line> <fn>` 对齐注释"
-        if name in ("main", "run", "default"):
-            reason = f"入口/语言胶水函数 `{name}` 缺少 `// RUGRA-GLUE:` 标注（说明为何 Ghidra 无对应物）"
-        violations.append((fn_idx + 1, name, reason))
-
-    return violations
 
 
 def main():
     args = sys.argv[1:]
+    if "--self-test" in args:
+        run_self_test()
+        print("✅ check_ghidra_annotations self-test passed")
+        return 0
     mode = "--all"
     explicit_files = []
     for a in args:
@@ -287,12 +262,19 @@ def main():
         if not rs_abs.exists():
             continue
         file_count += 1
-        vios = find_fn_violations(rs_abs)
+        text = rs_abs.read_text(encoding="utf-8")
+        violation_records = _find_fn_violation_records(text)
+        vios = [
+            (record.start_line + 1, record.name, reason)
+            for record, reason in violation_records
+        ]
         if mode == "--staged":
             added = staged_added_lines.get(rs_rel, set())
-            # Only keep violations whose fn definition line was added/modified
-            # in this staged diff. (line_no is 1-based; added lines are 1-based)
-            vios = [v for v in vios if v[0] in added]
+            vios = [
+                (record.start_line + 1, record.name, reason)
+                for record, reason in violation_records
+                if any(record.start_line + 1 <= line <= record.end_line + 1 for line in added)
+            ]
         if vios:
             total_violations += len(vios)
             print(f"\n❌ {rs_rel}  ({len(vios)} 个违规)")
