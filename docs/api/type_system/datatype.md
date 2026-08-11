@@ -10,6 +10,31 @@ Rugra 的数据类型系统，对应 Ghidra 的 `Datatype` 类层次
 （`TypeBase`/`TypePointer`/`TypeArray`/`TypeStruct`/`TypeUnion`/`TypeEnum`/`TypeCode`/`TypeSpacebase`）。
 采用 `enum Datatype` + 携带各自 `TypeBase` 的变体表示。
 
+## 2026-08-11 ANN-J annotation bootstrap
+
+This pass classified eighteen previously unanchored helpers without changing
+behavior:
+
+- The `elem::{element,attribute,type_,typeref,field,void_,val,def,off,
+  prototype}` helpers and `TypeXmlIdMap::{new,id_for_element,
+  id_for_attribute}` are `RUGRA-GLUE`. Ghidra declares fixed global
+  `AttributeId`/`ElementId` objects and registers them during static
+  initialization; it has no per-thread sequential allocator. Numeric ids are
+  observable in the packed protocol, so the glue is not codec `MATCH`.
+- `address_to_byte_int` and `byte_to_address_int` are anchored to
+  `space.hh:532/541`; they are source mappings only and still depend on
+  Rugra's incomplete address-space metadata.
+- `covering_mask` is anchored to `address.cc:800 coveringmask`; a locked
+  runtime boundary fixture, including the high-bit case, is still absent.
+- `cmp_u64` is Rust glue extracted from repeated inline id comparisons in the
+  concrete Ghidra `compare` methods; there is no standalone C++ function.
+- `TypeSpacebase::is_invalid` is Rust glue extracted from direct
+  `localframe.isInvalid()` calls. Rugra currently treats numeric address zero
+  as invalid, whereas Ghidra invalidity is a null address-space identity.
+
+These annotations provide provenance only. They do not raise the module above
+L2 or change its formal `NO_ORACLE` status.
+
 ## 2026-06-26 新增原语（解锁 varmap.cc 移植）
 
 以下方法对应 Ghidra `type.cc` 中的算法，是 `varmap.cc` 的
@@ -66,9 +91,9 @@ alignment map、calc_align_size、struct/array subtype、type_order（size & met
 - mark_equate/mark_un_equate/is_equated（Rugra 私有 EQUATED 位，Ghidra 对应 EquateSymbol）。
 - type_flags 补齐 CHARTYPE/ENUMTYPE/UTF16/UTF32/HAS_STRIPPED/IS_PTRREL/TYPE_INCOMPLETE/NEEDS_RESOLUTION。
 
-## 2026-07-22 新增 P0：TypePartialStruct / TypePartialEnum / TypePartialUnion + TypeSpacebase 完整对齐
+## 2026-07-22 新增 P0：TypePartialStruct / TypePartialEnum / TypePartialUnion + TypeSpacebase 结构补齐（非完整对齐）
 
-填补 `docs/alignment_audit/type_audit.md` 指出的 P0 缺口：三个 partial 子类此前完全缺失
+部分填补 `docs/alignment_audit/type_audit.md` 指出的 P0 缺口：三个 partial 子类此前完全缺失
 （被 `varmap.cc`/`printc.cc`/`ruleaction.cc` 大量使用），且 `TypeSpacebase::getMap/getSubType/getAddress`
 （栈帧/全局变量类型传播）未实现。本次按 `type.cc` 行号逐一忠实移植。
 

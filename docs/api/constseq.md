@@ -2,7 +2,7 @@
 
 **源代码路径**: `src/constseq.rs`
 **Ghidra 对应**: `constseq.hh` / `constseq.cc` (1146行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——ArraySequence 完整 + RuleStringCopy/Store 检测阶段实现。4 单元测试。transform 需 Funcdata op-edit API。
+**状态**: 🔧 **L2 / `NO_ORACLE`（2026-08-11 锁定源码复核）**——现有 Rust 测试与源码锚点不能证明 L3；地址单位、space identity 和块内 predecessor 仍有确定性结构差异。
 
 ## 模块说明
 
@@ -28,6 +28,28 @@
 **当前限制**：完整分析需要 Symbol/SymbolEntry + 堆指针分析。
 
 测试：constseq::tests 2 个。
+
+## 2026-08-11 ANN-J annotation bootstrap
+
+The five newly anchored helpers were annotation-only changes. Their current
+behavior must not be counted as oracle `MATCH`:
+
+- `byte_to_address_int` / `address_to_byte_int` map to
+  `space.hh:541/532`, where Ghidra divides/multiplies by `wordsize`. The current
+  `constseq.rs` helpers ignore the supplied word size and return the input.
+- `get_space_from_const` maps to `varnode.hh:426`. Ghidra recovers the encoded
+  `AddrSpace*`; Rugra decodes a flat numeric `SpaceId` and adds a non-constant
+  fallback absent from the oracle.
+- `calc_ptradd_offset_inner` maps to
+  `constseq.cc:604 HeapSequence::calcPtraddOffset`, but inherits the above
+  address-unit and space-model gaps.
+- `previous_op_in_block` maps to `op.cc:344 PcodeOp::previousOp`. Ghidra takes
+  the immediately preceding list iterator in the same block; Rugra scans the
+  global alive bank by mutable order. The current `best_order` comparison does
+  not establish equivalent predecessor selection.
+
+No behavior was changed in ANN-J. A locked 12.0.4 HeapSequence fixture is
+still required, so this module remains L2/`NO_ORACLE`.
 
 ## 2026-06-26（续）：constseq.rs 完善实现
 

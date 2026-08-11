@@ -1910,9 +1910,9 @@ impl TypeFactory {
         Ok(dt)
     }
 
-    // Rugra helper: insert a type into the flat map (mirrors findAdd's
-    // store-by-name behaviour without the ordering/dedup Ghidra's tree does,
-    // which Rugra's BTreeMap already provides).
+    // Ghidra: type.cc:3390 TypeFactory::insert
+    // Annotation anchor only: this flat name-map overwrite is a known MISMATCH,
+    // not coverage of Ghidra's structural tree plus (name,id) cross-reference.
     fn insert(&mut self, dt: Arc<Datatype>) {
         let name = dt.get_name().to_string();
         self.types.insert(name, dt);

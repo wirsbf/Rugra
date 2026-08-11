@@ -212,6 +212,8 @@ pub struct TruncationTag {
 }
 
 impl TruncationTag {
+    // RUGRA-GLUE: Explicit convenience constructor for Rust callers; Ghidra
+    // relies on TruncationTag's implicit C++ default construction.
     /// Construct an empty tag. Rugra convenience constructor.
     pub fn new() -> Self {
         Self::default()
@@ -867,9 +869,9 @@ impl JoinRecord {
 }
 
 // RUGRA-GLUE: varnode_less / is_contiguous (Ghidra defines VarnodeData::operator<
-// and VarnodeData::isContiguous in types.hh / varnode.hh. Rugra's VarnodeData
-// does not yet provide these, so we implement local equivalents that mirror
-// the Ghidra semantics exactly.)
+// and VarnodeData::isContiguous in pcoderaw.hh / pcoderaw.cc. Rugra's
+// VarnodeData does not yet provide these, so local helpers carry the intended
+// formulas; the flat AddressSpace model still prevents an equivalence claim.)
 //
 // Ghidra ordering on VarnodeData is by (space index, offset, size). Rugra's
 // AddressSpace enum derives Ord, so we delegate to that.
@@ -887,12 +889,13 @@ fn varnode_less(a: &VarnodeData, b: &VarnodeData) -> bool {
     }
 }
 
-/// `true` if `lo` immediately follows `hi` in memory (contiguous), mirroring
-/// Ghidra's `VarnodeData::isContiguous(const VarnodeData &lo)`.
+/// `true` if `lo` immediately follows `hi` in memory (contiguous), corresponding
+/// to Ghidra's `VarnodeData::isContiguous(const VarnodeData &lo)`.
 ///
 /// For big-endian spaces the high varnode precedes the low one at a lower
 /// offset; for little-endian it is the reverse. The two must share a space
 /// and the offsets must differ by exactly the high varnode's size.
+// Ghidra: pcoderaw.cc:73 VarnodeData::isContiguous
 fn is_contiguous(hi: &VarnodeData, lo: &VarnodeData) -> bool {
     // Different spaces can never be contiguous.
     if hi.space != lo.space {
@@ -975,6 +978,7 @@ pub struct AddrSpaceManager {
 // diagnostics. The `resolve_list` holds trait objects that have no Debug, so
 // we count resolvers instead of formatting them.)
 impl std::fmt::Debug for AddrSpaceManager {
+    // RUGRA-GLUE: Rust Debug formatting has no Ghidra behavioral counterpart.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AddrSpaceManager")
             .field("base_list", &self.base_list)
@@ -1686,6 +1690,8 @@ fn space_index_of(spc: AddressSpace) -> i32 {
 
 /// Bit mask for offsets within an address space, mirroring Ghidra's
 /// `AddrSpace::wrapOffset` mask.
+// RUGRA-GLUE: Flat-enum offset-mask bridge; Ghidra calls wrapOffset on the
+// concrete AddrSpace descriptor and has no standalone addr_mask_for helper.
 fn addr_mask_for(spc: AddressSpace) -> u64 {
     let addr_bits = (spc.addr_size() * 8) as u32;
     if addr_bits == 0 || addr_bits >= 64 {
@@ -1743,6 +1749,8 @@ pub trait Translate {
     /// Borrow the owned address-space manager. Faithful to the inherited
     /// `AddrSpaceManager` interface.
     fn manager(&self) -> &AddrSpaceManager;
+    // RUGRA-GLUE: Mutable half of the Rust composition adapter; Ghidra exposes
+    // AddrSpaceManager state through Translate's public inheritance instead.
     /// Mutably borrow the owned address-space manager.
     fn manager_mut(&mut self) -> &mut AddrSpaceManager;
 
@@ -1862,6 +1870,8 @@ pub trait Translate {
 /// configuration documents into [`Translate::initialize`]. Mirrors the
 /// minimal surface `Translate::initialize` actually relies on.
 pub trait DocumentStorage {
+    // RUGRA-GLUE: Iterator-shaped adapter for Rugra's local trait stub; Ghidra
+    // DocumentStorage exposes parse/open/registerTag/getTag, not nextDocument.
     /// Get the next configuration document, or `None` when exhausted.
     fn next_document(&mut self) -> Option<String>;
 }

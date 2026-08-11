@@ -17,33 +17,42 @@ pub mod stubs {
 // XML marshaling element/attribute constants (type.cc references ELEM_*/ATTRIB_*)
 // ---------------------------------------------------------------------------
 //
-// Ghidra declares these as global `ElementId`/`AttributeId` constants in
-// xml_arch.cc / sem&context files (e.g. `ELEM_TYPE`, `ATTRIB_NAME`). Rugra's
-// marshal.rs registers names dynamically, so we mirror the Ghidra constants
-// by constructing fresh `AttributeId`/`ElementId` values keyed on the same
-// canonical name strings. The numeric id is irrelevant to the round-trip
-// (TreeEncoder/TreeDecoder dispatch on the *name*); we assign sequential ids
-// that are stable within a process.
+// Ghidra declares these as fixed global `ElementId`/`AttributeId` constants.
+// Rugra's Tree codec currently constructs ids from names dynamically. This is
+// a local compatibility bridge only: numeric ids are protocol-significant for
+// PackedEncode/PackedDecode, so these helpers are not oracle-equivalent ids.
 
 // Ghidra: type.cc — element names used by the encode/decode methods.
 pub mod elem {
     use super::{AttributeId, ElementId, TYPE_XML_IDS};
+    // RUGRA-GLUE: Runtime ElementId-by-name adapter; Ghidra uses fixed global
+    // ELEM_* objects and has no per-call element constructor.
     pub fn element(name: &str) -> ElementId {
         let id = TYPE_XML_IDS.with(|m| m.borrow_mut().id_for_element(name));
         ElementId { name: name.to_string(), id }
     }
+    // RUGRA-GLUE: Runtime AttributeId-by-name adapter; Ghidra uses fixed global
+    // ATTRIB_* objects and has no per-call attribute constructor.
     pub fn attribute(name: &str) -> AttributeId {
         let id = TYPE_XML_IDS.with(|m| m.borrow_mut().id_for_attribute(name));
         AttributeId { name: name.to_string(), id }
     }
     // Convenience constructors for the names that appear in type.cc.
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_TYPE global.
     pub fn type_() -> ElementId { element("type") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_TYPEREF global.
     pub fn typeref() -> ElementId { element("typeref") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_FIELD global.
     pub fn field() -> ElementId { element("field") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_VOID global.
     pub fn void_() -> ElementId { element("void") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_VAL global.
     pub fn val() -> ElementId { element("val") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_DEF global.
     pub fn def() -> ElementId { element("def") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_OFF global.
     pub fn off() -> ElementId { element("off") }
+    // RUGRA-GLUE: Named Rust wrapper for Ghidra's fixed ELEM_PROTOTYPE global.
     pub fn prototype() -> ElementId { element("prototype") }
 }
 
@@ -71,6 +80,8 @@ pub(crate) struct TypeXmlIdMap {
 }
 
 impl TypeXmlIdMap {
+    // RUGRA-GLUE: Per-thread dynamic registry constructor; Ghidra registers
+    // fixed AttributeId/ElementId globals during static initialization.
     fn new() -> Self {
         let mut m = Self {
             next_id: 2,
@@ -102,6 +113,8 @@ impl TypeXmlIdMap {
         m
     }
 
+    // RUGRA-GLUE: Dynamic fallback allocation for Tree codec names; Ghidra's
+    // fixed ElementId table has no id_for_element operation.
     fn id_for_element(&mut self, name: &str) -> u32 {
         if let Some(&id) = self.elems.get(name) {
             return id;
@@ -112,6 +125,8 @@ impl TypeXmlIdMap {
         id
     }
 
+    // RUGRA-GLUE: Dynamic fallback allocation for Tree codec names; Ghidra's
+    // fixed AttributeId table has no id_for_attribute operation.
     fn id_for_attribute(&mut self, name: &str) -> u32 {
         if let Some(&id) = self.attrs.get(name) {
             return id;
@@ -1425,9 +1440,11 @@ pub fn decode_pointer_rel_offset(decoder: &mut dyn Decoder) -> i64 {
 /// `wordsize`-scaled helpers mirroring `AddrSpace::addressToByteInt` /
 /// `byteToAddressInt` (space.hh:532-543). Centralised here because Rugra's
 /// `AddressSpace` does not yet expose these as inherent methods.
+// Ghidra: space.hh:532 AddrSpace::addressToByteInt
 fn address_to_byte_int(val: i64, ws: usize) -> i64 {
     val.wrapping_mul(ws as i64)
 }
+// Ghidra: space.hh:541 AddrSpace::byteToAddressInt
 fn byte_to_address_int(val: i64, ws: usize) -> i64 {
     // Ghidra does integer division; wordsize is always >= 1.
     if ws == 0 {
@@ -1871,7 +1888,9 @@ fn enum_get_matches(parent: &Datatype, val: u64, rep: &mut EnumRepresentation) {
 
 /// `coveringmask(xor)`: the smallest mask covering the low bits of `xor` up to
 /// and including its most-significant set bit, i.e. `(1 << (msb+1)) - 1`.
-/// Mirrors Ghidra's `coveringmask` utility (used by `TypeEnum::getMatches`).
+/// Intended counterpart of Ghidra's `coveringmask` utility (used by
+/// `TypeEnum::getMatches`); high-bit behavior still lacks an oracle fixture.
+// Ghidra: address.cc:800 coveringmask
 fn covering_mask(xor: u64) -> u64 {
     if xor == 0 {
         return 0;
@@ -2396,6 +2415,8 @@ fn datatype_compare_base(
 
 /// Three-way compare of two `u64` ids returning -1/0/1. Used by the
 /// `level < 0` fallback in subclass `compare` overrides (type.cc:1765 etc.).
+// RUGRA-GLUE: Shared scalar helper extracted from repeated inline id comparisons
+// in Ghidra's TypePointer/Array/Struct/Union/Code compare methods.
 fn cmp_u64(a: u64, b: u64) -> i32 {
     if a < b {
         -1
@@ -3262,6 +3283,8 @@ impl TypeSpacebase {
 
     /// Sentinel for "no localframe" / global spacebase. Matches Ghidra's
     /// `Address::isInvalid()` (address.hh) as used by `getMap`/`getAddress`.
+    // RUGRA-GLUE: TypeSpacebase-local predicate extracted from Ghidra's direct
+    // localframe.isInvalid() calls; there is no TypeSpacebase::isInvalid method.
     pub fn is_invalid(&self) -> bool {
         self.localframe.as_u64() == 0
     }

@@ -56,6 +56,18 @@ Get the number of types currently managed
 
 Clear all non-core types
 
+### Internal `insert`
+
+Annotation anchor: `type.cc:3390 TypeFactory::insert`.
+
+This is a known `MISMATCH`, not completed coverage. Ghidra inserts into the
+structural `DatatypeSet tree`, rejects a duplicate comparator key with a
+`LowlevelError`, and adds non-zero-id types to the separate `nametree`
+cross-reference. Rugra currently overwrites one
+`BTreeMap<String, Arc<Datatype>>` entry by name. It therefore loses structural
+canonicalization, the `(name,id)` index, duplicate failure behavior, and
+multiple distinct unnamed/eponymous types.
+
 
 
 ### 2026-07-01：get_base(size, metatype)（type.cc:3631-3660）
@@ -81,3 +93,10 @@ get_type_void/char/unicode、get_type_union+set_union_fields、get_type_enum+set
   `Datatype::numDepend` + `Datatype::getDepend` virtual dispatch table
   (type.hh:261 base; overrides 422 Pointer, 455 Array, 526 Struct, 555 Union,
   629 Code). C++ uses virtual dispatch; Rust matches on the Datatype enum.
+
+## 2026-08-11 ANN-J annotation bootstrap
+
+`TypeFactory::insert` received its real locked-source start line only. No
+behavior changed, no runtime oracle was added, and the method/module remains
+L2 with formal status `NO_ORACLE`; the annotation must not be interpreted as
+`MATCH`.

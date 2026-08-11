@@ -479,23 +479,26 @@ impl IndirectPair {
     }
 }
 
-/// Convert byte offset to address units. Faithful to
-/// `AddrSpace::byteToAddressInt` (space.hh). With Rugra's `word_size == 1`
-/// across all spaces, this is the identity.
+/// Convert byte offset to address units. Intended counterpart of
+/// `AddrSpace::byteToAddressInt` (space.hh); the current identity body is a
+/// known mismatch for `word_size != 1`.
+// Ghidra: space.hh:541 AddrSpace::byteToAddressInt
 fn byte_to_address_int(byte_off: u64, _word_size: usize) -> u64 {
     byte_off
 }
 
-/// Convert address units to byte offset. Faithful to
-/// `AddrSpace::addressToByteInt` (space.hh). With Rugra's `word_size == 1`
-/// across all spaces, this is the identity.
+/// Convert address units to byte offset. Intended counterpart of
+/// `AddrSpace::addressToByteInt` (space.hh); the current identity body is a
+/// known mismatch for `word_size != 1`.
+// Ghidra: space.hh:532 AddrSpace::addressToByteInt
 fn address_to_byte_int(addr_off: u64, _word_size: usize) -> u64 {
     addr_off
 }
 
 /// Extract the destination AddressSpace of a STORE from its space-id constant
-/// input. Faithful to `Varnode::getSpaceFromConst` (varnode.hh): given the
-/// STORE's `input[0]` constant space-id Varnode, return the AddressSpace.
+/// input. Intended counterpart of `Varnode::getSpaceFromConst` (varnode.hh),
+/// but the current numeric SpaceId model is not Ghidra's encoded pointer.
+// Ghidra: varnode.hh:426 Varnode::getSpaceFromConst
 fn get_space_from_const(vn: &Arc<RwLock<Varnode>>) -> crate::space::AddressSpace {
     let r = vn.read().unwrap();
     if !r.is_constant() {
@@ -1033,6 +1036,7 @@ impl HeapSequence {
     /// Inner implementation of `calcPtraddOffset` taking scalar parameters so
     /// callers can avoid an `&self` borrow. See `calc_ptradd_offset` for the
     /// Ghidra-line attribution.
+    // Ghidra: constseq.cc:604 HeapSequence::calcPtraddOffset
     fn calc_ptradd_offset_inner(
         vn: &Arc<RwLock<Varnode>>,
         non_const: &mut Vec<Arc<RwLock<Varnode>>>,
@@ -1326,6 +1330,7 @@ impl HeapSequence {
     /// Rugra helper standing in for Ghidra's `PcodeOp::previousOp()`
     /// (op.cc:344). Scans the Funcdata op bank for the greatest order less than
     /// `op`'s order within the same parent block.
+    // Ghidra: op.cc:344 PcodeOp::previousOp
     fn previous_op_in_block(
         &self,
         op: &Arc<RwLock<PcodeOp>>,

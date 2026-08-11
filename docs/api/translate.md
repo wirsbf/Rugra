@@ -1,13 +1,14 @@
 # `translate.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-07-22）  
+**状态**: 🔧 L2 / `NO_ORACLE`（2026-08-11 ANN-J 注释 bootstrap；源码锚点不等于行为对齐）
 **源代码路径**: `src/translate.rs`  
 **Ghidra 对应**: `translate.hh` / `translate.cc`（1018 / 1018 行）
 
 ## 模块说明 (Module Doc)
 
-Instruction translation engine interfaces — faithful port of Ghidra's
-`translate.hh` / `translate.cc`.
+Instruction translation engine interfaces corresponding to Ghidra's
+`translate.hh` / `translate.cc`. Dynamic address-space identity and metadata
+remain a foundation gap, so this module is not claimed as a complete port.
 
 This module provides the core interfaces for disassembly and P-code
 generation for a single processor architecture. It is the bridge between a
@@ -283,6 +284,26 @@ Local trait abstraction over Ghidra's `DocumentStorage` (defined in
 to this minimal surface:
 
 - `fn next_document(&mut self) -> Option<String>`.
+
+## 2026-08-11 ANN-J annotation bootstrap
+
+This pass only added source provenance; it did not change behavior and does
+not establish `MATCH` or L3:
+
+- `is_contiguous` is anchored to `pcoderaw.cc:73
+  VarnodeData::isContiguous`. The oracle calls the concrete space's
+  `isBigEndian()` and `wrapOffset()`; Rugra still depends on its flat
+  `AddressSpace` model, so endian/wrap branches remain unproven.
+- `TruncationTag::new`, `AddrSpaceManager::fmt`, `addr_mask_for`,
+  `Translate::manager_mut`, and `DocumentStorage::next_document` are explicit
+  Rust glue. In particular, Ghidra's `DocumentStorage` exposes
+  `parseDocument/openDocument/registerTag/getTag`; it has no `nextDocument`.
+- `addr_mask_for` is not `AddrSpace::wrapOffset`: it derives a bit mask from
+  Rugra's current address-size accessor and cannot preserve all descriptor and
+  signed-remainder semantics.
+
+Canonical Ghidra 12.0.4 runtime fixtures for these paths are still missing;
+the formal behavior status is `NO_ORACLE`.
 
 ## 对齐说明 (Alignment Notes)
 
